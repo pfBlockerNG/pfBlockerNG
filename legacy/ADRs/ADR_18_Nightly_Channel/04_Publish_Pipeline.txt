@@ -1,0 +1,104 @@
+================================================================================
+PHASE 4 PROMPT — Gated nightly build+stage + unify the nightly subtree into repo-publish
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §2 "Hosting"/"Catalog = derived index
+     over pre-releases"/"Retention"/"Gate", §1 Context 2 & 6, §7 "Additive safety" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 4 of ADR-18 — the publish
+pipeline. Build the nightly `.pkg` from `devel` HEAD on a schedule (gated on `devel` having
+changed), stage it as a durable dated pre-release, and make ADR-17's SINGLE Pages deploy
+emit BOTH the release and the nightly catalog. Work in this ADR's worktree, one commit
+(touches CI → rebase-only PR).
+
+WHY THIS PHASE EXISTS
+GitHub Pages allows ONE deployment per repo (§1 Context 6) — a second publish workflow would
+clobber ADR-17's release catalog. So the nightly catalog MUST be produced by the SAME
+`repo-publish` deploy. The nightly has no Release to derive from, so the durable store is a
+dated pre-release (`nightly-YYYYMMDD`), mirroring ADR-17's "derive over durable Release
+assets" exactly. The "don't publish unless `devel` changed" rule reuses `repo-install.yml`'s
+existing last-successful-run gate (§1 Context 2).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_18_Nightly_Channel/RESULTS/03_Results.txt — it must record the exact
+  `/pfBlockerNG/nightly/${ABI}` subtree path the catalog must land at. If missing, STOP.
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§2 Hosting/Catalog/Retention/Gate; §7 reject/degrade
+  + "Additive safety"). Also RESULTS/02_Results.txt for the exact `--channel nightly`
+  invocation.
+- .github/workflows/repo-publish.yml — the release-catalog flow: the `publish` job
+  (`if: always()`, leaf), the release enumeration (`gh api "repos/$REPO/releases"
+  --paginate`, ~:142-185), the `build-repo-portable.py --in store --out site` call (~:190-195),
+  the `--print-conf` README step, `upload-pages-artifact`+`deploy-pages` (~:225-231), the
+  Pages concurrency group, and the scoped `pages: write`+`id-token: write` permissions.
+- .github/workflows/repo-install.yml — the `gate` job (anchor on `gh run list --workflow=…
+  --status=success --limit 1`, count `repos/$REPO/commits?since=…`); REUSE this gate shape.
+- .github/workflows/smoke.yml — the `pytest_marker` input + reusable-workflow wiring (for
+  the build-and-validate step).
+- scripts/build-pkg-portable.py (the Phase-2 `--channel nightly` surface) +
+  .github/actions/read-version-matrix — the per-ABI matrix dedup (build one nightly per
+  distinct ABI, like release per-major).
+- CLAUDE.md — CI rules (hooks-first on any commit/push job; least privilege).
+
+ACTION PLAN (ordered)
+1. NEW scheduled workflow (e.g. `.github/workflows/repo-nightly.yml`): cron + dispatch.
+   - GATE job: reuse `repo-install.yml`'s gate verbatim in spirit (anchor on the last
+     successful run of THIS workflow; if no `devel` commits since, skip). Dispatch always
+     runs.
+   - BUILD job (per distinct ABI from the matrix): `build-pkg-portable.py --channel nightly
+     --pkgversion "$(date -u +%Y%m%d)"` (a same-day re-run appends `.$(date -u +%H%M%S)` —
+     detect an existing same-day pre-release and switch to the `.HHMMSS` form) `--annotate
+     commit="$(git rev-parse --short HEAD)"`.
+   - VALIDATE (fail-closed): run the `repo` smoke against the freshly built nightly pkg
+     (reuse smoke.yml `pytest_marker=repo`) BEFORE staging — a broken nightly never ships.
+   - STAGE: upsert a dated pre-release `nightly-YYYYMMDD` (`gh release create/upload
+     --prerelease`) with the `.pkg` assets (the durable store).
+   - PRUNE: delete `nightly-*` pre-releases beyond the newest 14 (retention, §2).
+   - TRIGGER the unified `repo-publish` deploy.
+2. EXTEND `repo-publish.yml` (the SAME deploy): in addition to enumerating Releases for the
+   `…/<ABI>/` release catalog, enumerate the **last 14 `nightly-*` pre-releases**, download
+   their `.pkg`, and run `build-repo-portable.py` into a `nightly/<ABI>/` subtree staged
+   into the SAME Pages artifact (one `upload-pages-artifact` + `deploy-pages`). The release
+   and nightly subtrees coexist under one site root.
+3. ADDITIVE + ISOLATED: `repo-publish` stays an `if: always()` LEAF — nothing in
+   `release.yml` `needs:` it; a nightly build/stage/deploy failure cannot gate or break
+   `release`/`ports-pr`/`attach-pkgs` or the release catalog (which derives from Releases
+   independently). `pages: write`+`id-token: write` stay scoped to the deploy job;
+   `contents: write` ONLY on the nightly stage/prune job. Activate hooks first on any
+   commit/push job.
+4. Validate with a manual dispatch that builds a nightly, stages a `nightly-YYYYMMDD`
+   pre-release, and deploys a unified catalog a VM `pkg update` accepts at BOTH
+   `…/<ABI>/` and `…/nightly/<ABI>/`. (The live public deploy is post-merge — §7 — because a
+   new workflow is only dispatchable once on `devel`.)
+
+CONSTRAINTS
+- POSIX sh in `run:` steps where practical; quote expansions; `gh` for GitHub ops. No
+  secrets beyond `GITHUB_TOKEN` (least privilege).
+- Do NOT change ADR-09's matrix/builders or the release-catalog logic's behaviour (only ADD
+  the nightly subtree); do NOT touch src/ or the smoke test bodies (Phase 5 owns coverage).
+- The nightly `version` is a CI fact (`date -u`) — never computed inside the builder.
+
+VERIFICATION (must all pass before the phase is done)
+- actionlint / `sh -n` + shellcheck on `run:` scripts → clean; scripts/check_url_encoding.py
+  → clean. python -m pytest (default) → unchanged.
+- A dispatch run: gate works (skips with no `devel` change; runs on dispatch), builds the
+  nightly, the `repo` smoke passes against it, stages the pre-release, prunes past 14, and
+  the unified deploy serves both catalogs (capture the run id + page_url).
+
+EXPECTED RESULT
+A gated nightly build → validate → dated-pre-release → prune-to-14 → unified single Pages
+deploy emitting both the release and `…/nightly/${ABI}` catalogs, fully additive and isolated
+from the release flow.
+
+COMMIT (single)
+    ci: nightly build+stage + unify the nightly catalog into repo-publish (ADR-18 P4)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. Touches CI → rebase-only PR. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/04_Results.txt` (plain .txt)
+State: the new workflow's name + triggers + the gate behaviour; the exact build invocation
+(date version + `.HHMMSS` same-day rule + commit annotation); the pre-release tag scheme +
+the prune-to-14 logic; how `repo-publish` now stages the nightly subtree; the isolation proof
+(leaf + `if: always()` + scoped perms); the dispatch run id + page_url; the POST-MERGE
+dispatch Phase 6/§7 must run; the go-ahead for Phase 5.

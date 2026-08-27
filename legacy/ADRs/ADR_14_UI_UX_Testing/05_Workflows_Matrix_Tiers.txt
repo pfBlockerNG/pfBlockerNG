@@ -1,0 +1,81 @@
+================================================================================
+PHASE 5 PROMPT — Workflows: reusable, matrix-parametric, tiered triggers, diagnostics
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §2 "Workflows/Re-run/PR gate" + C1/B1 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 5 of ADR-14. This wires the tiers into
+GitHub Actions: a reusable, matrix-parametric `ui-tests.yml`, the per-PR Tier-A gate, and
+the daily/on-demand Tier-B schedule, with per-(tier x version) jobs and diagnostics
+upload. NO src/ change; default pytest unchanged. Work in this ADR's `adr/14` worktree;
+one commit for this phase.
+
+WHY THIS PHASE EXISTS
+The tests are only useful if they run at the right cadence with the right isolation:
+Tier A blocks PRs touching PHP/JS (3a), Tier B runs daily/on-demand, every (tier x
+version) leg is independently re-runnable (C1), and screenshots+logs are always uploaded.
+The smoke harness already proves this shape (workflow_call + matrix + content-keyed image
+cache + smoke-diagnostics upload).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_14_UI_UX_Testing/RESULTS/04_Results.txt — it must state the browser tier's
+  BLOCKING-vs-demote-vs-drop decision + the §7 numbers (this dictates how Tier B is wired
+  and whether it can ever gate). If missing, Phase 4 is not complete; STOP and report.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§2 Workflows/Re-run/PR gate rows; B1; C1; §4.6-4.7).
+- .github/workflows/smoke.yml — the template: on: workflow_dispatch + workflow_call (+
+  schedule); the build-pkg -> smoke job chain; image-ref resolution (input > secret >
+  variable); the content-keyed image cache; the `smoke-diagnostics` upload (if: always(),
+  :263-267).
+- .github/workflows/build-pkg-linux.yml — the branch .pkg build the UI jobs reuse.
+- .github/workflows/test.yml — the per-PR workflow + the "All tests passed" aggregate
+  that release.yml's verify-checks reads.
+- CLAUDE.md (the hooks-activation requirement for any workflow that commits code; here we
+  only run tests, but mirror the smoke conventions).
+
+ACTION PLAN (ordered)
+1. REUSABLE `ui-tests.yml`: on: workflow_call + workflow_dispatch + schedule. Inputs:
+   image-ref/version (matrix axis — built parametric, run the single existing CE image
+   now, B1) and `tier` (render | functional | browser | all). Build the branch .pkg via
+   build-pkg-linux.yml, boot the image (reuse the smoke boot path), install the deps
+   (incl. Playwright/Chromium for the browser tier), run `pytest -m <tier-marker>`.
+2. PER-(tier x version) JOBS (C1): one job per leg via the matrix, so GH "re-run failed
+   jobs" re-runs ONLY the flaky leg. NO auto-retry on assertions; a BOUNDED retry only on
+   infra steps (image pull / boot / login readiness — poll, don't sleep).
+3. DIAGNOSTICS: upload screenshots + logs (php_error.log, the page bodies on failure,
+   plus the existing smoke state snapshot) as a `ui-diagnostics` artifact, `if: always()`.
+4. PR GATE (3a): run Tier A on PRs touching `src/**/*.php`, `**/*.inc`, `src/**/*.js`
+   (paths filter), and fold it into the "All tests passed" aggregate so release.yml's
+   verify-checks already covers it. Tier A only on the PR path (cheap/hermetic).
+5. TIER B triggers: `schedule` (daily — guard to skip when there were no commits) +
+   `workflow_dispatch`. Wire its blocking-ness per the Phase-4 decision (default
+   non-blocking unless P4 proved it can gate).
+
+CONSTRAINTS
+- NO src/ change. Mirror smoke.yml conventions (image cache, secrets/inputs, KVM enable).
+  POSIX sh in any inline step; quote expansions. YAML must be valid. Do NOT touch the
+  release pipeline yet (Phase 6).
+- Keep default `python -m pytest` (and test.yml's existing jobs) byte-identical except the
+  added Tier-A gate job.
+
+VERIFICATION (must all pass before the phase is done)
+- YAML parses; `ui-tests.yml` exposes workflow_call inputs (image-ref/version, tier) and a
+  per-(tier x version) job matrix.
+- A workflow_dispatch run (or a documented dry-run) shows: Tier A green on the CE image;
+  diagnostics artifact present; a single forced leg failure is re-runnable in isolation.
+- The PR-path Tier-A job is paths-gated and part of the aggregate.
+- python -m pytest -> default count UNCHANGED; ruff/shellcheck clean on touched files.
+
+EXPECTED RESULT
+A reusable, matrix-parametric `ui-tests.yml` with per-leg re-run isolation and diagnostics
+upload; Tier A gating PHP/JS PRs; Tier B on schedule + dispatch.
+
+COMMIT (single)
+    ci: add reusable matrix-parametric UI test workflow + PR/schedule gates (ADR-14 P5)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/05_Results.txt`
+State: the ui-tests.yml inputs + the job matrix shape (tier x version); how Tier A is
+paths-gated + folded into the aggregate; how Tier B is triggered + whether it gates; the
+diagnostics artifact contents; the measured/dry-run evidence; the go-ahead for Phase 6.

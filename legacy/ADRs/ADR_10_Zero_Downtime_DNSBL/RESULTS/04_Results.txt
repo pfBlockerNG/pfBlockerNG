@@ -1,0 +1,264 @@
+================================================================================
+ADR-10 — PHASE 4 RESULTS — Reload-watcher daemon thread + background atomic swap
+  (zero-downtime DNSBL ACTIVE: a data update applies with NO Unbound restart)
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Files: src/usr/local/pkg/pfblockerng/pfb_unbound.py
+       tests/test_adr10_watcher.py (new, 21 tests)
+================================================================================
+
+OVERALL: ** DONE — GO for Phase 5 (PHP/shell). **
+  A reload-watcher daemon thread is started next to pfb_db_worker/pfb_async_worker
+  (gated on pfb["mod_threading"]). It waits on a reload SENTINEL via select.kqueue
+  EVFILT_VNODE on the sentinel's DIRECTORY (FreeBSD), with a low-frequency mtime-poll
+  fallback where kqueue is unavailable (Linux/CI — inotify is NOT used). On a
+  generation-id ADVANCE it runs the Phase-3 fail-closed rebuild_and_swap() OFF the
+  query threads — single-flight/coalesced, RAM-gated (declines fail-closed on a
+  constrained box, keeping the old snapshot). deinit joins it cleanly. The retained
+  ADR-06/07 + ADR-10 P2/P3 oracles pass UNCHANGED (1038 -> 1038) plus 21 new watcher
+  tests; ruff + mypy clean. No PHP/shell change (Phase 5 writes the sentinel).
+
+--------------------------------------------------------------------------------
+1. THE SENTINEL + GENERATION-ID CONTRACT  (Phase 5 / PHP MUST honour this verbatim)
+--------------------------------------------------------------------------------
+
+  SENTINEL PATH (chroot-correct):
+    In-module key:  pfb["pfb_py_reload"] = "pfb_py_reload"   (RELATIVE).
+    Unbound (and its pythonmod) is CHROOTED at /var/unbound and runs with CWD
+    /var/unbound, so every pfb_py_* path the module opens is relative to that root —
+    exactly like pfb_py_sources.json / pfb_py_hsts.txt / pfb_py_count today.
+    => The HOST absolute path PHP/shell writes is:   /var/unbound/pfb_py_reload
+       The IN-CHROOT path the module opens is:        pfb_py_reload  (== /var/unbound/pfb_py_reload)
+    (If Phase 5 ever needs a different name, change pfb["pfb_py_reload"] AND the PHP
+     writer together — they are the two ends of this one contract.)
+
+  GENERATION-ID REPRESENTATION:
+    A monotonically NON-DECREASING base-10 INTEGER written as the FIRST LINE of the
+    sentinel file (a trailing newline is fine; any lines after the first are ignored).
+    The module reads it with _reload_read_generation() (:299): first line .strip(),
+    int(); a missing / empty / non-integer sentinel reads as None ("no advance").
+
+  ADVANCE SEMANTICS (what triggers a swap):
+    The watcher keeps a ``last_gen``. A swap runs IFF the freshly-read generation is a
+    STRICT ADVANCE: ``cur is not None and (last_gen is None or cur > last_gen)``.
+    - Equal generation (a duplicate/best-effort event) -> NO rebuild.
+    - Lower generation -> NO rebuild (ignored; monotonic by contract).
+    - At watcher STARTUP the CURRENT sentinel generation (if any) is adopted as the
+      baseline WITHOUT a build — init_standard already loaded the lists synchronously,
+      so a sentinel already at gen N means gen N is the live set. Only a FUTURE advance
+      past the baseline triggers a background swap.
+
+  PHP/shell PUBLISH PROTOCOL Phase 5 must implement (the all-or-nothing commit):
+    1. Write the new manifest (pfb_py_sources.json) + per-feed raw into a STAGING dir.
+    2. fsync, then atomically rename/replace into place (the plugin only ever reads a
+       fully-written, immutable manifest set — this, not notify latency, is what
+       guarantees "never read a file mid-write").
+    3. ONLY THEN write generation N+1 into the sentinel — ATOMICALLY (write a temp file
+       in /var/unbound and os.rename/`mv` it over pfb_py_reload, so the watcher's
+       DIRECTORY watch sees a RENAME/WRITE and the integer is never read half-written).
+       Bump the generation by >= 1 each publish (a wall-clock epoch-seconds value also
+       works — it is monotonic and integer; just be consistent).
+    Notification is BEST-EFFORT: a missed/coalesced kqueue event only DELAYS the swap
+    (the next poll-interval re-check, or the next publish, picks it up). Correctness
+    rides on the atomic publish + the generation compare.
+
+  DIRECTORY WATCHED:
+    os.path.dirname(os.path.abspath("pfb_py_reload")) == /var/unbound  (the chroot
+    root). kqueue watches the DIR fd (EVFILT_VNODE: WRITE|EXTEND|RENAME|DELETE|ATTRIB),
+    NOT a file fd — so an atomic rename/replace of the sentinel is observed (a file fd
+    would go stale on the inode swap).
+
+  PHASE-5 RAM-GATE CONTRACT (the gate is layered — PHP is PRIMARY, Python is the net):
+    Phase 5 SHOULD gate on available RAM BEFORE flipping the sentinel: if the box
+    cannot fit the ~2x transient build (RESULTS/01 §2), take the RESTART fallback
+    (pfb_reload_unbound -> pfb_stop_start_unbound) instead of publish+flip. The Python
+    watcher independently re-checks the same gate (§3) and DECLINES the in-process build
+    if it would not fit — so even if PHP flips the sentinel on a constrained box, the
+    module never OOMs; it logs that the update needs the restart fallback and keeps the
+    old lists serving. Phase 5 owning the primary gate avoids a "sentinel flipped but
+    nothing happened" surprise: when PHP declines zero-downtime it MUST restart so the
+    new lists actually load.
+
+--------------------------------------------------------------------------------
+2. THE WATCHER DESIGN (mechanism + fallback + coalescing + deinit join)
+--------------------------------------------------------------------------------
+
+  THREAD: pfb_reload_watcher() (:425), started in init_standard next to the existing
+  workers (gated on pfb["mod_threading"] && not pfb.get("reload_watcher")), name
+  "pfb_reload_watcher", daemon=True. Stop handle: a module-level threading.Event
+  ``pfb_reload_stop`` created at the same site. ``pfb["reload_watcher"]`` tracks state
+  (defaulted False in init alongside ``async_worker``). builder is INJECTABLE
+  (default _build_swap_snapshot; tests pass a stub).
+
+  WATCH MECHANISM (best-effort notify):
+    - kqueue path (FreeBSD; hasattr(select, "kqueue")): _ReloadKqueueWaiter (:480) opens
+      the watch DIR read-only, registers one persistent EVFILT_VNODE kevent
+      (KQ_EV_ADD|KQ_EV_CLEAR, fflags WRITE|EXTEND|RENAME|DELETE|ATTRIB), and wait()
+      blocks on kq.control(None, 1, timeout). The timeout is RELOAD_POLL_INTERVAL (2.0s)
+      so the stop Event is observed promptly even with no file activity. Any kqueue
+      setup/wait error degrades to a timed wait (still correct via the generation
+      re-check). EINTR is ignored.
+    - mtime-poll FALLBACK (kqueue absent, e.g. Linux/CI): pfb_reload_stop.wait(interval)
+      sleeps on the stop Event (so deinit wakes it immediately); the per-loop generation
+      re-check is what drives the swap. inotify is Linux-only and NOT present on
+      pfSense — never used.
+
+  LOOP (:452): drain_and_swap() FIRST (acts on any already-pending advance — covers the
+  gap between baseline and the first wait, and the poll path), check stop, then wait for
+  the next change. drain_and_swap() reads the generation, returns if no strict advance,
+  else sets last_gen=cur and runs ONE _reload_run_swap, then LOOPS to re-check.
+
+  SINGLE-FLIGHT / COALESCING: there is exactly ONE watcher thread and _reload_run_swap
+  is called only from drain_and_swap, serially — so two builds NEVER run in parallel
+  (protects the ~2x-RAM ceiling). A trigger arriving DURING a build is coalesced: after
+  the (synchronous, blocking) build returns, drain_and_swap re-reads the generation and
+  builds ONCE MORE iff it advanced again. (Pinned by
+  test_single_flight_coalesces_concurrent_triggers: gen-2 build blocked, gen-3 published
+  mid-build, asserts no parallel build, then exactly one more build for gen-3.)
+
+  DEINIT JOIN (:2154): deinit sets pfb_reload_stop (which the kqueue/poll wait observes
+  within one RELOAD_POLL_INTERVAL via its timeout) and joins with timeout=5 (> the 2.0s
+  wait, so a clean exit always lands inside the join). The thread is a daemon, so even a
+  missed join cannot block interpreter shutdown. pfb["reload_watcher"] is reset to False.
+  (Pinned by test_deinit_joins_watcher_cleanly: thread alive BEFORE; deinit -> thread not
+  alive + flag False AFTER.)
+
+--------------------------------------------------------------------------------
+3. THE RAM GATE (mandatory — RESULTS/01 §2; fail-closed, stdlib-only, testable)
+--------------------------------------------------------------------------------
+
+  _reload_available_ram_bytes() (:261): available physical RAM via
+  os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") (free pages — present on
+  FreeBSD and Linux); returns None if the platform can't report it (-> the gate declines,
+  fail-closed). stdlib only, never raises.
+
+  _reload_ram_gate_ok(entry_count, *, available_ram=None) (:279): projects the
+  both-resident transient as 2 * entry_count * RELOAD_BYTES_PER_ENTRY (276 B/entry,
+  the ADR-05/ADR-10-P1 measured figure) and requires
+      available >= projected + RELOAD_RAM_HEADROOM_BYTES (64 MiB).
+  ``available_ram`` is injectable; when omitted it resolves the module probe at CALL
+  time (so it is monkeypatchable in tests). Unknown RAM -> DECLINE (fail-closed).
+
+  _reload_run_swap(builder) (:402): computes entry_count from the LIVE snapshot
+  (snap.counts + snap.regex_count) and consults the gate FIRST. If it would not fit, it
+  DECLINES — the builder is NEVER called (no transient build attempted), the OLD snapshot
+  stays live, and it logs clearly that the box is RAM-constrained and the update needs
+  the restart fallback. Otherwise it delegates to rebuild_and_swap(builder) (default
+  emit_counts=True so the UI counts refresh without a restart). On a successful swap it
+  logs "DNSBL lists reloaded with no restart (zero-downtime swap)".
+
+  RAM-GATE BEHAVIOUR SUMMARY: gate-fits -> build+swap; gate-declines -> old kept, builder
+  unused, restart-fallback log; RAM-unknown -> decline (fail-closed). All three branches
+  + the exact boundary are unit-pinned (TestRamGate, test_ram_gate_declines_keeps_old_
+  snapshot, test_gate_declines_keeps_old).
+
+--------------------------------------------------------------------------------
+4. THE BACKGROUND BUILDER (_build_swap_snapshot, :318)
+--------------------------------------------------------------------------------
+
+  The production builder the watcher uses by default. Build-new-then-rebind: it mutates
+  NO live dict and returns a BRAND-NEW Snapshot (or None to fail-closed):
+    a. dnsbl_build_from_manifest(pfb["pfb_py_sources"]) -> data/zone/feedGroupIndex/white
+       + FEED block-regex + @@/re/ allow-regex + the important_rules fast-path flag + the
+       loaded count. None (absent/unparseable manifest, build error) -> whole swap is a
+       no-op (rebuild_and_swap keeps the live snapshot).
+    b. USER REGEX-ini patterns merged on top into a FRESH regex dict (band
+       PRIO_USER_BLOCK — sovereign over feed allows), honouring the opt-in static cap —
+       so a swap NEVER drops user regex (mirrors init's REGEX-section load).
+    c. hstsDB reloaded from pfb_py_hsts.txt into a FRESH dict — RESULTS/03 watch-out (b):
+       hstsDB is NOT in the manifest; omitting it would ship an empty hsts_db and silently
+       flip HSTS NULL-vs-VIP behaviour.
+  Returns a fresh Snapshot off these fresh dicts. rebuild_and_swap then does the single
+  GIL-atomic rebind + decisionDB.clear() + _db_reset_cache() + count re-emit (Phase 3).
+
+--------------------------------------------------------------------------------
+5. ADR-07 REGEX-EVICTION vs THE SWAP — RECONCILIATION (no decision regression)
+--------------------------------------------------------------------------------
+
+  Re-affirmed, no decision change vs RESULTS/02 §4(a) / RESULTS/03 §5:
+    - ADR-07's runtime perf-eviction (_regex_evict_names in evaluate_domain) mutates the
+      CURRENT snapshot's regex_db dict IN PLACE — the matcher needs that to drop a too-slow
+      pattern off the response path. That is the ONE sanctioned in-place mutation; it is
+      per-pattern, not a swap.
+    - A background swap installs a brand-new Snapshot whose regex_db was FRESHLY built by
+      _build_swap_snapshot (manifest feed-regex + user REGEX-ini, recompiled, static-cap
+      filtered) — it does NOT carry over the live dict, so any evicted-pattern state is
+      REBUILT from the manifest + the static cap. The two never tear each other: a query
+      captures one snapshot ref (Phase 2) and reads its regex_db consistently; eviction
+      hits the dict that snapshot holds; the swap replaces the whole snapshot.
+    - After a swap a pattern previously evicted for being slow is present again (it is in
+      the manifest) — correct: the new build is the authoritative set, IDENTICAL to a fresh
+      init load, and the always-on runtime warn/evict timer re-evicts it if it is still too
+      slow under live load. The post-swap set is exactly what manifest + cap define. No
+      decision regression.
+
+--------------------------------------------------------------------------------
+6. HOW IT WAS UNIT-TESTED (no live Unbound — stubbed builder + temp sentinel)
+--------------------------------------------------------------------------------
+
+  tests/test_adr10_watcher.py — 21 tests. Every transition asserts BEFORE (old snapshot
+  live) and AFTER (new after a swap; old after a failed/declined build), and each branch
+  of every toggle is covered. The watcher does NOT auto-run in the suite — it is gated on
+  pfb["mod_threading"] and only the tests that explicitly start a thread run it.
+    - TestRamGate (5): fits / declines-insufficient / declines-unknown / exact boundary /
+      the real probe returns int-or-None.
+    - TestGenerationReader (5): absent / empty / non-integer -> None; integer parsed;
+      only-first-line used.
+    - TestRunSwap (3): gate-ok swaps old->new; gate-declines keeps old (builder NEVER run);
+      build-None keeps old (fail-closed).
+    - TestWatcherLoop (8) — real daemon thread + stub builder + temp sentinel + atomic
+      os.replace publish:
+        * generation-advance triggers swap (old live BEFORE, new AFTER) + clean join;
+        * no-advance (duplicate same generation) -> no rebuild;
+        * pre-existing generation adopted as baseline -> NO build, only a future advance
+          builds;
+        * single-flight coalescing (blocked gen-2 build, gen-3 published mid-build ->
+          no parallel build, then exactly one more build for gen-3, latest wins);
+        * build-fail (None) keeps the old snapshot;
+        * RAM-gate-declines keeps the old snapshot, builder unused;
+        * mtime-poll FALLBACK path (select.kqueue hidden) — same advance->swap holds +
+          clean join on the poll path;
+        * deinit joins the watcher cleanly (alive BEFORE; not alive + flag False AFTER).
+
+--------------------------------------------------------------------------------
+7. GATES
+--------------------------------------------------------------------------------
+  .venv/bin/python -m pytest -q   -> 1059 passed (1038 retained + 21 new), ~2.0s
+        - retained ADR-06 oracles: tests/test_adr06_*                       PASS, UNCHANGED
+        - retained ADR-07 oracles: tests/test_adr07_*                       PASS, UNCHANGED
+        - retained P2 equivalence: tests/test_adr10_snapshot_equivalence.py PASS, UNCHANGED
+        - retained P3 swap:        tests/test_adr10_swap.py                 PASS, UNCHANGED
+        - NEW:                     tests/test_adr10_watcher.py              21 PASS
+  .venv/bin/ruff check .          -> All checks passed!
+  .venv/bin/ruff format --check . -> 42 files already formatted
+  .venv/bin/mypy tests/           -> Success: no issues found in 18 source files
+  Single-rebind invariant still holds: the ONLY ``_snapshot = `` rebind in the module is
+  ``_snapshot = new_snapshot`` inside rebuild_and_swap (test_only_rebuild_and_swap_
+  rebinds_snapshot still green). The watcher calls rebuild_and_swap — it never rebinds
+  _snapshot directly. No PHP/shell touched. stdlib only; NO new injected Unbound symbol
+  (the watcher is pure select/os/threading/errno) — no stubs/python change needed.
+
+--------------------------------------------------------------------------------
+8. GO-AHEAD FOR PHASE 5 (PHP/shell)
+--------------------------------------------------------------------------------
+GO. The active zero-downtime machinery is in place and unit-proven: a generation advance
+on /var/unbound/pfb_py_reload triggers a single-flight, RAM-gated, fail-closed background
+rebuild_and_swap with no restart and zero rebound-snapshot leaks; deinit joins cleanly.
+Phase 5 (PHP/shell) must now:
+  - Stage -> fsync -> atomically rename the manifest + per-feed raw into /var/unbound,
+    THEN atomically write the next monotonic integer generation into
+    /var/unbound/pfb_py_reload (§1) — the all-or-nothing commit.
+  - Fork pfb_reload_unbound: a DNSBL-DATA update in Python mode (feed/cron AND the user
+    custom-list edits #51 — alerts Lock/Unlock + "add to whitelist") -> publish + flip
+    the sentinel, NO pfb_stop_start_unbound. A CONFIG change (unbound.conf/VIP/mode) ->
+    still restart. Restart is also the fallback when zero-downtime is unavailable
+    (RAM gate, feature off, or a swap errored).
+  - Gate on available RAM BEFORE flipping (PHP is the PRIMARY gate; the Python watcher
+    is the net) — when declining zero-downtime, RESTART so the new lists actually load
+    (don't flip-then-no-op).
+  - Compute the newly-blocked (allow->block) delta and flush ONLY those names from
+    Unbound's C-cache (unbound-control flush/flush_zone, coalesced, coordinated with the
+    DNSBL-queries-daemon .sync marker); block->allow needs no flush (blocks not cached
+    since #43 — the decisionDB clear on the swap suffices).
+Live proof (zero dropped queries through a swap under traffic; pid UNCHANGED) is the
+Phase-6 maintainer smoke.
+================================================================================

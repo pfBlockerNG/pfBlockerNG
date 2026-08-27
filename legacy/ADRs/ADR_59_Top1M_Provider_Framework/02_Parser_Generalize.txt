@@ -1,0 +1,58 @@
+================================================================================
+PHASE 2 PROMPT — Generalize pfblockerng_top1m() to the descriptor (behaviour-preserving)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §2.3, §6 Phase 2 first)
+================================================================================
+
+ROLE
+Branch adr/59-top1m-provider-framework. Phase 2 of 6. BEHAVIOUR-PRESERVING for
+tranco/cisco. Inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The builder hardcodes: domain @ column 1, numeric-rank required, CSV, .zip. New
+providers need a header-row skip, a variable domain column, and gz/plain
+containers. Make the builder read those knobs from the active descriptor so
+`rank_domain`/`zip` stays byte-identical, and the new knobs are ready for Phase 4.
+
+REQUIRED READING
+- FIRST read RESULTS/01_Results.txt — it must confirm the descriptor table shape +
+  that tranco/cisco URLs are pinned. If missing, STOP and report.
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§2.3)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfblockerng_top1m() (~8250, the
+  #886 preserve/temp-swap/numeric-rank version) AND the extract post-processor
+  (~10196, the zip→top-1m.csv path for type top1m).
+- tests/php/Top1mPreserveOnEmptyFeedTest.php (the oracle to keep green + extend).
+
+ACTION PLAN
+1. Look up the active descriptor via pfb_top1m_providers() in pfblockerng_top1m().
+   Drive: header-skip (skip the first data line when `parse.header`), domain
+   column (`parse.domain_col`, default 1), and keep the numeric-rank guard ONLY
+   for `parse == 'rank_domain'`. Preserve the #886 temp-file + atomic-swap +
+   preserve-on-empty + warn semantics EXACTLY.
+2. Make the extract post-processor honour `container`: `gz` and `plain` write the
+   body straight to top-1m.csv; `zip` behaves as today. Do not break geoip.
+3. No JSON path yet (Phase 5). No new provider yet.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, no die/exit. PFBL sniffs green.
+- Tranco/cisco output MUST be byte-identical — verify by stash-diff on the oracle.
+
+VERIFICATION
+- php -l clean; phpcs/phpstan clean.
+- vendor/bin/phpunit → green: Top1mPreserveOnEmptyFeedTest UNCHANGED-green (same
+  input → same pfbalexawhitelist.txt); ADD a unit case feeding a SYNTHETIC
+  descriptor {csv, domain_col:2, header:true} against a small fixture, asserting
+  the domain comes from col 2 and the header row is skipped (proves the knobs).
+- diff-read: builder reads the descriptor; rank_domain path unchanged.
+
+EXPECTED RESULT
+The builder is descriptor-driven; tranco/cisco identical; header/domain-col/gz/
+plain knobs proven on a synthetic descriptor; no live provider added.
+
+COMMIT (single)
+    pfblockerng: drive the TOP1M builder + extract from the provider descriptor (ADR-59 P2)
+Push directly; PR only if rejected.
+
+HANDOFF — RESULTS/02_Results.txt
+The parse knobs implemented + defaults; that tranco/cisco are byte-identical
+(cite the oracle); the container handling for gz/plain; go-ahead for Phase 3.

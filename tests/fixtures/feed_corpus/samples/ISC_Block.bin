@@ -1,0 +1,48 @@
+#
+#   DShield.org Recommended Block List 
+#    (c) $year DShield.org
+#   some rights reserved. Details http://creativecommons.org/licenses/by-nc-sa/2.5/
+#   use on your own risk. No warranties implied.
+#   primary URL: https://feeds.dshield.org/block.txt
+#     PGP Sign.: https://feeds.dshield.org/block.txt.asc
+#
+#   comments: systems@isc.sans.edu
+#    updated: 2026-07-04T11:30:33.738855
+#   
+#    This list summarizes the top 20 attacking class C (/24) subnets
+#   over the last three days. The number of 'attacks' indicates the 
+#   number of targets reporting scans from this subnet.
+#
+#
+#    Columns (tab delimited):
+#
+#    (1) start of netblock  
+#    (2) end of netblock
+#    (3) subnet (/24 for class C)
+#    (4) number of targets scanned
+#    (5) name of Network 
+#    (6) Country
+#    (7) contact email address
+#
+#    If a range is assigned to multiple users, the first one is listed. 
+#     
+45.33.41.0	45.33.41.255	24	580	AKAMAI-LINODE-AP Akamai Connected Cloud	SG	tasaro@linode.com
+69.5.169.0	69.5.169.255	24	349	OMNIS	US	abuse@omnis.com
+66.132.186.0	66.132.186.255	24	338	-	-	-
+147.185.132.0	147.185.132.255	24	338	GOOGLE-CLOUD-PLATFORM	US	None
+94.154.43.0	94.154.43.255	24	336	EKSENBILISIM	TR	abuse@ruyaserver.com
+45.205.1.0	45.205.1.255	24	333	MULTA-ASN1	US	abuse@multacom.com
+199.45.154.0	199.45.154.255	24	333	CENSYS-ARIN-03	US	None
+205.210.31.0	205.210.31.255	24	332	GOOGLE-CLOUD-PLATFORM	US	None
+45.148.10.0	45.148.10.255	24	328	PPTECHNOLOGY	GB	abuse@vegatele.com
+193.163.125.0	193.163.125.255	24	328	INTERNET-MEASUREMENT	GB	>>UNKNOWN<<
+198.235.24.0	198.235.24.255	24	328	GOOGLE-CLOUD-PLATFORM	US	None
+151.243.11.0	151.243.11.255	24	326	RASANA	IR	abuse@rasana.net
+195.184.76.0	195.184.76.255	24	326	EAJ-GLOBAL	GB	>>UNKNOWN<<
+45.198.224.0	45.198.224.255	24	324	OWS	US	CSOC@ontario.ca
+64.62.197.0	64.62.197.255	24	324	HURRICANE	US	abuse@he.net
+66.132.172.0	66.132.172.255	24	323	-	-	-
+78.128.114.0	78.128.114.255	24	323	TAMATIYA-AS	BG	noc@4vendeta.com
+167.94.145.0	167.94.145.255	24	323	CENSYS-ARIN-02	US	None
+194.88.98.0	194.88.98.255	24	323	ATT-INTERNET4	US	abuse@att.net
+64.62.156.0	64.62.156.255	24	321	HURRICANE	US	abuse@he.net

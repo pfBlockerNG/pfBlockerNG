@@ -1,0 +1,159 @@
+================================================================================
+ADR-17 — Phase 5 RESULTS (live-VM repo coverage: the `pkg upgrade` transition +
+                          the shipped add-repo.sh bootstrap)
+================================================================================
+
+VERDICT: GO. The live-VM `repo` flow (marker `repo`, file
+         tests/smoke/test_repo_install.py — DESELECTED from `-m smoke`) gains the
+         core missing coverage: a real `pkg upgrade` carries the box from a LOWER
+         to a HIGHER build of OUR repo (a true before != after version move), plus
+         a case that drives the SHIPPED scripts/add-repo.sh end-to-end against a
+         local file:// catalog (hermetic, via its existing --base-url). No DNS /
+         runtime probe is added (this DISTRIBUTION flow asserts install / precedence
+         / upgrade / files via `pkg query`/`pkg info` effective state only — runtime
+         behaviour stays the ADR-04 smoke suite's job). All 6 pre-existing repo
+         tests are byte-untouched and stay green. Live run 27040686824 SUCCESS
+         (7 passed, 1 skipped[gated], 230 deselected) — first dispatch, no flake.
+
+--------------------------------------------------------------------------------
+WHAT WAS ADDED (2 tests + 4 helpers; no src/ change)
+--------------------------------------------------------------------------------
+1. test_pkg_upgrade_moves_to_our_newer_build  (marker `repo`, @timeout(600)) — THE
+   CORE NEW COVERAGE. BDD Scenario "a newer build published to our repo upgrades an
+   installed box":
+     * GIVEN the package ABSENT, our repo carries ONLY the LOWER build <V>_1 (conf
+       priority pfSense+100, `pkg update`), `pkg install -y` (no -r/-f).
+       => asserts the BEFORE state: %v == <V>_1, %R == pfblockerng-devel.
+     * WHEN the SAME repo dir is rebuilt with the HIGHER build <V>_9
+       (build_guest_repo again), `pkg update -f`, `pkg upgrade -y`.
+       => asserts the AFTER state: %v == <V>_9, %R == pfblockerng-devel, no
+          "Missing dependency".
+     A real before != after transition (both versions asserted, not just the final
+     state), both from OUR repo. finally: pkg delete + rm the upgrade dir.
+
+2. test_shipped_add_repo_sh_bootstrap_installs  (marker `repo`, @timeout(600)) — the
+   OPTIONAL shipped-bootstrap case, wired in HERMETICALLY (it was clean — see "ADD-
+   REPO.SH WIRING"). Lays a build-repo.sh catalog under <root>/<ABI>/, runs the
+   SHIPPED add-repo.sh against it, then installs:
+     * GIVEN the package ABSENT and a <root>/<ABI>/ catalog,
+     * WHEN `add-repo.sh --base-url file://<root> devel` runs (writes the production
+       conf, `pkg update`, VERIFIES the package is visible from our repo) then
+       `pkg install -y` (no -r/-f),
+     * THEN add-repo.sh exits 0 and printed "available from 'pfblockerng-devel'", it
+       wrote /usr/local/etc/pkg/repos/pfblockerng-devel.conf, and the install came
+       from OUR repo (%R == pfblockerng-devel) with deps resolved.
+
+   HELPERS added (all in tests/smoke/test_repo_install.py):
+     * read_compact_version(src_pkg) — the .pkg's +COMPACT_MANIFEST `version`.
+     * reversion_pkg(src_pkg, new_version, out_dir) — re-version a built .pkg
+       SURGICALLY: a .pkg is a zstd tar with +COMPACT_MANIFEST + +MANIFEST first then
+       the payload at absolute paths; this edits ONLY the `version` string in BOTH
+       manifests (catalog reads compact, install reads full — must agree), copies
+       every other manifest field + every payload member VERBATIM, keeps the
+       manifests first, recompresses tzst. Proven surgical locally over a real branch
+       .pkg: 68 members preserved, payload file-checksums byte-identical, every
+       non-version manifest field unchanged. Writes <name>-<new_version>.pkg.
+     * pkg_upgrade(vm) — `pkg upgrade -y <name>` (no -f; -f would mask a real move).
+     * run_add_repo_sh(vm, base_url) — scp + run the shipped add-repo.sh (devel).
+
+--------------------------------------------------------------------------------
+RE-VERSION MACHINERY + smoke.yml (the one CI touch)
+--------------------------------------------------------------------------------
+reversion_pkg runs ON THE RUNNER and decodes/encodes the .pkg via the `zstd` BINARY
+(the .pkg framing is `packing_format = tzst`; zstd keeps it pkg-acceptable — xz via
+stdlib lzma was the fallback but zstd is the safe, format-faithful choice). The
+runner installs only tests/smoke/requirements.txt + pytest, which carry neither the
+`zstandard` module nor the zstd binary — so ONE justified line was added to
+smoke.yml's host-tools apt install: `... python3-venv zstd`. It is harmless to the
+default `smoke` marker (the helper is never called there). This is the "RE-ADD zstd
+to smoke.yml" path the Phase-5 brief sanctioned (the Phase-1 redesign had removed
+all re-version/zstd machinery; this resurrects a MINIMAL re-versioner).
+
+--------------------------------------------------------------------------------
+ADD-REPO.SH WIRING — done hermetically, NO add-repo.sh change
+--------------------------------------------------------------------------------
+WIRED IN, and it needed NO edit to add-repo.sh: the script already accepts
+`--base-url <url>` (Phase 4). Pointed at the local catalog ROOT
+(file://<SCRIPT_REPO_ROOT>), add-repo.sh's conf url becomes
+"file://<root>/${ABI}", and pkg(8) expands the literal ${ABI} to the box's ABI
+(FreeBSD:15:amd64) — which is exactly where build-repo.sh laid the <ABI>/ catalog.
+So the SHIPPED bootstrap drives end-to-end over file:// with zero production change;
+the proposed test-only PFB_REPO_BASE_URL env override was UNNECESSARY (the existing
+--base-url is the documented override). add-repo.sh ships priority 100, above the
+Netgate `pfSense` repo (0), so the cross-repo install picks ours — the production
+mechanism. Phase 4's --print-conf byte-match + its unit tests are untouched (no
+add-repo.sh edit), so they stay green.
+
+--------------------------------------------------------------------------------
+OS-MAJOR / CROSS-VERSION VERDICT
+--------------------------------------------------------------------------------
+DEGRADED-TO-CLI (documented), as the brief directs. A true OS-MAJOR jump (e.g.
+FreeBSD:15 -> FreeBSD:16, which changes ${ABI} and thus the served <ABI>/ subtree)
+is NOT reachable on a single CE image — the smoke image is one pfSense/FreeBSD
+version, and an in-place pfSense-upgrade across a major is image-refresh.yml's job
+(ADR-09), not this per-run flow. The SINGLE-IMAGE upgrade above (the _1 -> _9 move
+within one ABI) is the proof of the update path. The OS-major case degrades to the
+documented operator action: after a pfSense OS upgrade the box's ${ABI} follows it
+automatically (the conf url is the literal ${ABI}, ADR §2), so a plain CLI
+`pkg update -f && pkg upgrade` pulls our build for the NEW ABI once that ABI's
+catalog is published — recorded here per ADR §7. No test attempts it (it would
+fail-skip on one image); this is a deliberate, documented non-goal for the flow.
+
+--------------------------------------------------------------------------------
+LOCAL GATES (all green)
+--------------------------------------------------------------------------------
+  * ruff check tests/smoke/test_repo_install.py        -> All checks passed.
+  * ruff format --check tests/smoke/test_repo_install.py-> already formatted.
+  * mypy tests/                                          -> Success (29 files;
+                                                            tests/smoke excluded by
+                                                            pyproject, unchanged).
+  * python -m pytest (DEFAULT)                           -> 1335 passed (UNCHANGED;
+                                                            tests/smoke --ignore'd).
+  * scripts/check_url_encoding.py                        -> clean.
+  * actionlint .github/workflows/smoke.yml              -> 0 findings.
+  * -m repo --collect-only  -> 8 collected: the 6 prior + test_pkg_upgrade_moves_to_
+    our_newer_build + test_shipped_add_repo_sh_bootstrap_installs.
+  * -m smoke --collect-only -> 0 repo tests (repo stays deselected from smoke).
+  * reversion_pkg/read_compact_version exercised locally over a REAL branch .pkg
+    (3.2.16): forged 3.2.16_1 + 3.2.16_9, each verified version-only (68 members,
+    payload checksums byte-identical, only `version` changed in both manifests).
+
+--------------------------------------------------------------------------------
+LIVE VM RUN (the load-bearing proof)
+--------------------------------------------------------------------------------
+  Dispatch: gh workflow run smoke.yml --ref adr/17-pkg-repository -f pytest_marker=repo
+  RUN_ID:    27040686824  (conclusion SUCCESS; live pfSense CE VM; smoke job 4m14s).
+  Result:    "7 passed, 1 skipped, 230 deselected in 199.19s" (238 collected, 230
+             deselected, 8 selected). The 1 skip = test_install_from_live_pages_url
+             (gated on SMOKE_REPO_LIVE_URL, unset -> SKIP — dispatch-only, expected).
+  Per-test (all 8 selected repo tests, in order):
+     test_install_from_our_repo_lands_all_files            PASSED
+     test_pkg_upgrade_moves_to_our_newer_build             PASSED   <- Phase 5 (new)
+     test_precedence_ours_higher_priority_wins             PASSED
+     test_precedence_decoy_higher_priority_wins            PASSED
+     test_build_repo_script_catalog_is_accepted            PASSED
+     test_shipped_add_repo_sh_bootstrap_installs           PASSED   <- Phase 5 (new)
+     test_portable_catalog_is_accepted                     PASSED
+     test_install_from_live_pages_url                      SKIPPED  (gated; expected)
+  Base version built this run: 3.2.16 (the branch .pkg). The upgrade test forged
+  3.2.16_1 (lower) + 3.2.16_9 (higher).
+  Upgrade evidence (the transition, asserted IN the test that PASSED): %v == 3.2.16_1
+     from repo pfblockerng-devel BEFORE -> %v == 3.2.16_9 from repo pfblockerng-devel
+     AFTER the `pkg upgrade` (a real before != after move within our repo; both %R
+     pinned to pfblockerng-devel; no "Missing dependency").
+  add-repo.sh evidence: the shipped bootstrap exited 0, printed "available from
+     'pfblockerng-devel'", wrote pfblockerng-devel.conf, and the subsequent install
+     came from %R == pfblockerng-devel (asserted IN the test that PASSED).
+  Reliability: GREEN on the FIRST dispatch — no flake, no retry. Image cache hit
+     (no GHCR pull this run). The two new cases ran in ~40s + ~18s respectively.
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT (Phase 6)
+--------------------------------------------------------------------------------
+Phase 5 = GO. The live `repo` flow now covers install + both precedence directions
++ the build-repo.sh / build-repo-portable.py catalogs + the pkg-upgrade transition +
+the shipped add-repo.sh bootstrap. Phase 6 (docs reconciliation per ADR §6): correct
+ADR §1/§2 precedence text (priority dominates version, Phase-1 finding), fold in the
+post-deploy notes (the live andrebrait.github.io add-repo.sh run + the gated
+test_install_from_live_pages_url once repo-publish.yml is on devel and Pages serves),
+and record the OS-major degraded-to-CLI verdict above in ADR §7.

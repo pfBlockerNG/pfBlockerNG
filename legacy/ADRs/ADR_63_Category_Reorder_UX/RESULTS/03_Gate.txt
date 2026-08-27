@@ -1,0 +1,106 @@
+================================================================================
+ADR-63 PHASE 3 — ORCHESTRATOR GATE RECORD
+Wire pfblockerng_category.php (anchor-click added, drag preserved) — #1147
+Gate run: 2026-07-11 | Verdict: PASS (after landing-recovery) | commit 5e2810d7
+================================================================================
+
+ROUTE
+phase-step workflow wf_b28fafaa-079 (Brief: Opus 4.8 xhigh; Implement: Sonnet 5
+xhigh; Verify: Opus 4.8 xhigh). briefRecord OK / handoff DONE / workflow gateRecord
+FAIL (landing defects only) -> orchestrator RESOLVED the landing and re-gated PASS.
+
+RECOVERY CONTEXT (recorded deviation)
+The Sonnet implementer produced CORRECT, LIVE-PROVEN code but crashed on its final
+StructuredOutput emit (same failure class as Phase 2 attempt 1). It left three
+LANDING defects — all caught by the independent Verify stage (verdict FAIL):
+  (1) RESULTS/03_Results.txt UNTRACKED with unfilled Tier-B placeholders
+      (<<<A>>>..<<<PREEXIST>>>) — the live per-scenario evidence was never pasted.
+  (2) TWO commits (2b6490ef tests-only RED + 7d4d29f0 wiring) instead of one —
+      a committed RED state is a bisect hazard on this rebase-merge repo.
+  (3) scratch artifacts left in the worktree (.category_wiring.patch, 4x .log).
+Every CORRECTNESS item the verifier checked PASSED: gate-rerun (all static gates
+green), red-proof (freeze hash verified + executed RED artifact), diff-vs-plan
+items 1-9 (wiring correct), test-honesty, conventions. So the code was independently
+verified green; only the landing failed. The orchestrator completed the landing
+from the implementer's OWN executed artifact logs (not re-implementation):
+  - filled RESULTS/03's Tier-B section from .ui_browser_run.log (25 passed / 0
+    failed; all 15 reorder scenarios present) + reconciled the commit/deviation text;
+  - folded the two commits into ONE (soft-reset + re-commit code+tests+RESULTS/03
+    only; freeze preserved — test file git hash-object 76dd53bd... identical across
+    both transient commits and the folded commit);
+  - deleted the scratch artifacts;
+  - rebased onto the latest origin/devel (was 6 behind) -> 5e2810d7, force-pushed.
+No orphaned Monitor waits remained.
+
+COMMANDS + RESULTS (orchestrator re-ran post-rebase; verifier ran pre-rebase)
+- php -l pfblockerng_category.php -> No syntax errors
+- vendor/bin/phpunit -> OK; Tests: 3036, Assertions: 20257, Skipped: 4 (baseline)
+- composer phpstan -> [OK] No errors (pre-commit); composer phpcs src/ -> exit 0
+- python3 -m pytest -> 2672 passed, 4 skipped
+- ruff check . -> All checks passed!; ruff format --check . -> 223 formatted
+- mypy tests/ -> Success, 93 files; mypy the 2 new test files -> Success
+- ui collect-only (browser+render) -> 88 tests collected, 0 errors
+
+LIVE-VM EVIDENCE (implementer's executed artifacts; consolidated per the budget
+directive — the Phase-2 crash cause did not recur)
+- Tier-B ui_browser: 25 passed / 370 deselected / 0 failed (box .35). All 15 new
+  reorder scenarios green: drag-only[ipv4/ipv6/dnsbl], anchor-single[3],
+  anchor-straddle[3], mixed[3], roworderdragging_set, field-edit-only-Save,
+  geoip_injects_no_anchor_ui.
+- Tier-A ui_render: 10 passed / 385 deselected — test_category_page_renders_
+  reorder_wiring[ipv4/dnsbl] (component call + var + reorder <th> present),
+  [geoip] (<th> ABSENT — the $gtype!='geoip' negative branch), no new php_error.log.
+
+RED->GREEN (the #1147 anchor-click delta; live, per the origin-fetch harness)
+- RED (.red_run_b.log, commit 2b6490ef tests-only): 1 failed —
+  test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+  TimeoutError waiting for locator(".pfb-reorder-chk") — the control does not exist
+  because pfb_reorder_init was never called (no wiring). Failed for the exact reason
+  the change addresses; seed order asserted correct first (before==names passed).
+- GREEN (.green_run_b.log, wiring added): 1 passed, test file UNCHANGED.
+- FREEZE: test_browser_category.py git hash-object 76dd53bd... == red-time == in the
+  folded commit 5e2810d7. verify-red-proof.sh N/A (origin-fetch harness — same
+  architectural limitation recorded in 02_Gate.txt; a local HEAD~1 revert can't
+  change what the box builds).
+
+PER-ITEM DIFF VERDICTS (verifier read git show; orchestrator confirmed post-fold)
+- Server byte-identity: `git diff origin/devel -- pfblockerng_category.php` = 4 hunks
+  ALL at/after line 416 (thead <th>, pfb_drag_enabled var, sortable-init->
+  pfb_reorder_init, serialize->pfb_reorder_read_order). ids[] handler (:277-306) and
+  geoip per-row branch (:261) UNTOUCHED. No new $_POST field. PASS.
+- roworderdragging: read via config_path_enabled('system/webgui','roworderdragging'),
+  emitted as JS bool; SET disables .sortable(), anchor-only reorder+Save+reload
+  persists (§1.8 serialize-trap covered — read swapped to the sortable-independent
+  helper). PASS.
+- geoip: selector '#pfb_table' kept hardcoded (geoip table id is 'pfb_table_geoip'),
+  so init injects nothing, read_order '' — reorder UI correctly ABSENT, #1201 no-op
+  server path byte-identical. PASS.
+- #btnsave never gated (field-edit-only-Save test PASSED). PASS.
+
+TEST HONESTY: non-vacuous — every scenario asserts before-state, intermediate DOM
+order, THEN persisted config order (Semantics #1); negatives failable. PASS.
+CONVENTIONS: pfb_drag_enabled/pfb_reorder_* match pfb_* house pattern; comments are
+ADR-section pointers (no phase numbers); narration checker passed pre-commit. PASS.
+
+DEVIATIONS (all resolved/accepted)
+1. Implementer's two-commit landing + crashed handoff -> RESOLVED at gate (above).
+2. Single-row anchor case not run as its own scenario — justified deferral (reduces
+   to Phase-2's proven zero-checked contract; wiring doesn't alter it).
+3. Phase-1 geoip ui_e2e oracle not re-run live this phase (outside the ui_browser/
+   ui_render filter) — correctness proven by the empty server-side diff.
+
+WATCH-ITEM CLEARED: Phase-2's "onAfterMove fires on zero-checked click" is safe here —
+category.php passes onAfterMove=null (no dirty/gutter side-effect). Carried to Phase 4
+where a REAL onAfterMove (renumber+gutter) is needed — re-examine the zero-checked
+firing there (per RESULTS/03 CARRY-FORWARD).
+
+MATRIX: gtype {ipv4,ipv6,dnsbl}=UI + geoip=no-UI; roworderdragging unset/set; input
+drag/anchor-single/straddle/mixed; save-composition field-edit-only — all ticked to
+the live tests. Phase-1 ids[] oracles stay green unmodified (server byte-identical).
+
+SKIPPED
+- Orchestrator live re-dispatch: not needed — the implementer's consolidated live
+  runs are executed artifacts (25 Tier-B + 10 Tier-A passed), and the tip was
+  rebased+re-pushed with the test files byte-identical (freeze hash match), so the
+  green evidence holds for the current tip. verify-red-proof.sh: harness-incompatible
+  (see RED->GREEN).

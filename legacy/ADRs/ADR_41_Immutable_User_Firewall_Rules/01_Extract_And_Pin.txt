@@ -1,0 +1,89 @@
+================================================================================
+PHASE 1 PROMPT — Extract + oracle-pin the rule reconciliation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md   (read §1, §2, §6 Phase 1 first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session (inherit the same level); otherwise run /caveman. You are the Phase-1
+implementer for ADR-41, in the ADR's worktree on branch `adr/41-immutable-user-firewall-rules`.
+This phase is BEHAVIOUR-PRESERVING prep: extract the rule-emission logic into a pure, named helper
+and pin TODAY's exact output as an oracle — change no observable behaviour. You implement; you do
+NOT re-delegate. Full worktree + PR flow (this touches src/ + tests/).
+
+WHY THIS PHASE EXISTS
+The autorule reconciliation is inline in the giant `sync_package_pfblockerng()`: it buckets user
+rules and re-emits them interleaved with regenerated pfB rules through per-interface loops. Before
+replacing that with an immutable-user splice (Phase 3), extract the emission into one named helper
+and lock its current behaviour with tests, so the Phase-3 swap applies to a small, pinned surface
+and its diff is exact and visible. (ADR-01's prep phases were retained even after its core idea was
+rejected — prep has standalone value.)
+
+REQUIRED READING
+- .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md  (§1.1 Today, §1.3 facts, §2 table +
+  "Semantics that MUST be preserved", §6 Phase 1).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the "Assign Rules" region of
+  sync_package_pfblockerng():
+  * bucketing of surviving user rules: ~:14586–:14651 (pfB-strip :14601; DNS/DoT bypass keep
+    :14594–:14596; float vs non-float buckets; the order_0 special-case :14634–:14638).
+  * pfB-rule generation feeding the emission: the DNSBL ping/permit pair ~:14692; the inbound loop
+    ~:14729–:14778 and outbound loop ~:14782–:14820; the tail ~:14820–:14839.
+  * the write gate: ~:14844–:14857 ($orig_rules_nocreated != $new_rules_nocreated).
+  * pfb_firewall_rule() ~:8162 and the $pfb['permit_*']/$pfb['deny_*'] builders — understand, do
+    NOT move; the helper consumes their already-built arrays.
+- tests/php/README.md, tests/php/bootstrap.php, tests/php/pfsense_doubles.php — how the REAL
+  pfblockerng.inc loads off-appliance; add a faithful function_exists()-guarded double if the
+  extracted helper reaches a new pfSense function.
+- CLAUDE.md — PHP standards (tabs, PHP 8.3, no die/exit in lib code), test-coverage mandate,
+  commit style.
+
+ACTION PLAN (ordered — oracle tests FIRST; behaviour-preserving)
+1. Pin TODAY's behaviour FIRST. Write CHARACTERISATION (oracle) PHPUnit tests that capture the
+   exact emitted filter/rule list for a fixture matrix, run against UNMODIFIED code:
+     - single managed interface, inbound==outbound (the #532 / duplication shape);
+     - inbound != outbound;
+     - pfB Deny_* only, and a config with pfB Permit_* (so pfB pass/match rules exist);
+     - float = off and float = on;
+     - every pass_order: absent, order_0, order_1, order_2, order_3, order_4;
+     - a DNS-redirect / DoT-block bypass rule present (must survive).
+   Assert the FULL ordered list (descr|type|interface|floating). These pin the known-bad cases
+   (order_1/order_2 duplication, order_4 reorder) as "what it does today" — that is intentional.
+2. Extract the emission into a pure, named helper, e.g.
+   `pfb_build_autorule_list(array $existing_rules, array $pfb_generated, string $order, string
+   $float, array $in_ifaces, array $out_ifaces): array` — returns the new filter/rule array. It
+   does the bucketing + interleaving EXACTLY as today (no behaviour change). No pfctl, no I/O, no
+   config writes. `$pfb_generated` carries the already-built permit/match/deny + DNSBL-float rules.
+3. Rewire the call site in sync_package_pfblockerng() to call the helper and write its result —
+   byte-identical output to before.
+4. Run the suite; confirm the oracle tests pass against the refactor (same output) and nothing else
+   moved.
+
+CONSTRAINTS
+- BEHAVIOUR-PRESERVING. The emitted filter/rule list must be identical to before this phase for
+  every fixture. Do NOT fix the duplication/reorder here — that is Phase 3.
+- PHP: tabs; PHP 8.3; no die()/exit() in library code; match pfB_*/$pfb[...] naming. New pfSense
+  function reached by the helper → faithful double in tests/php/pfsense_doubles.php (+ shim if a
+  required include), never require_once a pfSense file in tests.
+- Do NOT touch: pfb_firewall_rule()/the pfB-rule builders' output, the alias-table reload path,
+  pfblockerng.sh, the DNSBL path, config.xml.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit          → green, incl. the new oracle tests
+- php -l on pfblockerng.inc    → clean
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  → clean
+- vendor/bin/phpstan          → no new errors
+- diff-read: `git diff origin/devel...HEAD` shows ONLY extraction + tests — no behavioural change.
+
+EXPECTED RESULT
+The autorule emission lives in one pure, off-appliance-tested helper; its current behaviour (incl.
+the known-bad order_1/2/4 cases) is pinned by oracle tests. No observable behaviour change.
+
+COMMIT (single)
+    pfblockerng: extract autorule emission into pinned pfb_build_autorule_list() (ADR-41 P1)
+Land via the full worktree + rebase-only PR flow (/pr-merge-flow).
+
+HANDOFF — write `.ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/01_Results.txt` (plain .txt)
+Record: the helper signature + file:line; the exact fixture matrix + where the oracle fixtures live;
+which cases the oracle pins as KNOWN-BAD (order_1/order_2 duplication, order_4 reorder) so Phase 3
+flips them; any pfSense double added; PHPUnit pass counts; and the go-ahead for Phase 2.

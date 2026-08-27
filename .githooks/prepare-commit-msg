@@ -1,0 +1,155 @@
+#!/bin/sh
+# prepare-commit-msg: agent worktree guard, then credit the human owner as a
+# Co-Authored-By trailer.
+#
+# In agent / managed-remote environments the *committer* is the agent (e.g.
+# Claude) and GitHub attributes the commit — and the contribution credit it
+# shows — to that committer. The human is recorded only as the git author,
+# which GitHub does NOT surface as a contributor on the commit. This hook
+# appends a Co-Authored-By trailer for the human so they are credited, while
+# the agent stays the committer/signer (e.g. for a Verified signature).
+#
+# The coauthor is resolved without hardcoding an identity. Provider-specific
+# coauthor.<provider>.* keys win. The legacy coauthor.* key remains the Claude
+# and human-session fallback, but is deliberately ignored in Codex sessions so
+# a clone configured to credit Claude cannot misattribute Codex work. Then:
+#   1. the matching provider-specific / legacy git config
+#   2. $CLAUDE_CODE_USER_EMAIL (managed-remote owner)
+#   3. the commit author, when it differs from the committer
+# The display name falls back to a prior commit by that email, then the email's
+# local-part. The hook is a NO-OP when the human is already the committer (a
+# developer signing their own commits), when no human can be resolved, or when
+# that co-author is already present — so it is safe in every environment.
+#
+# Enable: git config core.hooksPath .githooks
+
+set -u
+
+# Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
+# 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
+# agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
+# GROK_SESSION_ID (probed on 1.0.4, 2026-08-15: inherited by nested sh/bash).
+# OMP reads OMP_CLI=1 from its user .env and mirrors it to PI_CLI=1. The same
+# inherited-variable contract applies; no process tree is inspected.
+copilot_session() {
+	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
+}
+
+grok_session() {
+	[ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_AGENT:-}" ]
+}
+
+omp_session() {
+	[ -n "${OMP_CLI:-}" ] || [ -n "${PI_CLI:-}" ]
+}
+
+# Agent worktree guard (issue #1262): abort an agent commit in the primary
+# checkout (--git-dir == --git-common-dir; agents commit only in linked
+# worktrees). Lives in THIS hook because it still runs
+# when verification is skipped. Exempt: managed-remote sessions
+# (CLAUDE_CODE_USER_EMAIL set) or an explicit
+# `git config pfblockerng.allowprimarycommit true` (agent-dedicated).
+agent_runtime=0
+[ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
+[ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! grok_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! omp_session || agent_runtime=1
+if [ "$agent_runtime" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
+	[ "$(git config --bool --get pfblockerng.allowprimarycommit 2>/dev/null)" != "true" ]; then
+	unset CDPATH # a CDPATH hit makes cd echo the dir, corrupting $(cd ... && pwd -P)
+	git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
+	common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+	if [ "$git_dir" = "$common_dir" ]; then
+		echo "prepare-commit-msg: agent commit in the primary checkout blocked — agents commit only in a linked worktree (issue #1262)." >&2
+		echo "If this checkout is dedicated to the agent: git config pfblockerng.allowprimarycommit true" >&2
+		exit 1
+	fi
+fi
+unset agent_runtime
+
+msg_file=$1
+msg_type=${2:-}
+
+# Only touch ordinary commits — leave merge/squash messages alone.
+case "$msg_type" in
+	merge|squash) exit 0 ;;
+esac
+
+ident_email() {
+	# Extract the <email> from a "Name <email> ts tz" ident line.
+	printf '%s\n' "$1" | sed -n 's/.*<\(.*\)>.*/\1/p'
+}
+
+committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
+committer_email=$(ident_email "$committer_ident")
+
+# Credit EVERY client whose marker is present, not just one: an agent launched
+# from inside another agent's session inherits the outer marker while setting its
+# own, and both of them worked on the commit. Each client is credited only from
+# its OWN configured identity — no identity is ever invented for a client, and
+# the legacy `coauthor.*` key stays Claude's (and the human's) alone, so another
+# client with no configured identity is never misattributed to Claude.
+credited=0
+any_client=0
+
+append_trailer() {
+	pfb_email=$1
+	pfb_name=$2
+	[ -n "$pfb_email" ] || return 0
+	# The human IS the committer (already credited) → nothing to add.
+	[ "$pfb_email" != "$committer_email" ] || return 0
+	# Already credited in this message? (case-insensitive, literal email)
+	if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$pfb_email>"; then
+		credited=1
+		return 0
+	fi
+	# Resolve a display name (cosmetic — GitHub matches the co-author by email).
+	[ -n "$pfb_name" ] || pfb_name=$(git log -1 --author="$pfb_email" --format='%an' 2>/dev/null || true)
+	[ -n "$pfb_name" ] || pfb_name=${pfb_email%@*}
+	# Append as a real trailer (interpret-trailers handles the blank-line block);
+	# fall back to a plain append if interpret-trailers is unavailable.
+	git interpret-trailers --in-place \
+		--trailer "Co-Authored-By: $pfb_name <$pfb_email>" "$msg_file" 2>/dev/null \
+		|| printf '\nCo-Authored-By: %s <%s>\n' "$pfb_name" "$pfb_email" >>"$msg_file"
+	credited=1
+}
+
+for pfb_provider in claude codex copilot grok omp; do
+	case "$pfb_provider" in
+		claude) [ "${CLAUDECODE:-}" = "1" ] || continue ;;
+		codex) [ -n "${CODEX_THREAD_ID:-}" ] || continue ;;
+		copilot) copilot_session || continue ;;
+		grok) grok_session || continue ;;
+		omp) omp_session || continue ;;
+	esac
+	any_client=1
+	email=$(git config --get "coauthor.${pfb_provider}.email" 2>/dev/null || true)
+	name=$(git config --get "coauthor.${pfb_provider}.name" 2>/dev/null || true)
+	if [ "$pfb_provider" = claude ]; then
+		# The legacy key predates the per-provider ones and holds Claude's identity.
+		[ -n "$email" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
+		[ -n "$name" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
+	fi
+	append_trailer "$email" "$name"
+done
+
+# No client credited: a human session (the legacy key), the managed-remote owner,
+# or an author who differs from the committer. The legacy key holds Claude's
+# identity here, so it is read ONLY when no client marker was present at all —
+# otherwise an unconfigured agent commit could be credited to Claude.
+if [ "$credited" = "0" ]; then
+	email=''
+	[ "$any_client" = "1" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
+	[ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
+	if [ -z "$email" ]; then
+		author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
+		[ -n "$author_email" ] && [ "$author_email" != "$committer_email" ] && email=$author_email
+	fi
+	[ -n "$email" ] || exit 0
+	name=''
+	[ "$any_client" = "1" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
+	append_trailer "$email" "$name"
+fi
+
+exit 0

@@ -1,0 +1,219 @@
+================================================================================
+ADR-10 — PHASE 3 RESULTS — PREP (behaviour-preserving): extract the fail-closed
+  rebuild_and_swap() (atomic single-ref swap + decisionDB clear + Reports-cache
+  reset + recount), still called SYNCHRONOUSLY at init
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Files: src/usr/local/pkg/pfblockerng/pfb_unbound.py
+       tests/test_adr10_swap.py (new)
+================================================================================
+
+OVERALL: ** DONE — GO for Phase 4. **
+  The build->install step is now ONE reusable, fail-closed rebuild_and_swap() that
+  is the SINGLE place the _snapshot ref is rebound. init_standard calls it
+  synchronously (emit_counts=False), so net init behaviour is UNCHANGED: the retained
+  ADR-06 + ADR-07 oracles and the Phase-2 equivalence suite all pass UNCHANGED
+  (1028 -> 1028), plus 10 new test_adr10_swap tests. No background thread, no PHP/
+  shell change, no sentinel this phase (those are Phases 4-5).
+
+--------------------------------------------------------------------------------
+1. rebuild_and_swap — SIGNATURE + SEMANTICS
+--------------------------------------------------------------------------------
+
+  def rebuild_and_swap(build_snapshot: Callable[[], Snapshot | None],
+                       *, emit_counts: bool = True) -> bool
+
+  ``build_snapshot`` is a ZERO-ARG builder returning a BRAND-NEW Snapshot built off
+  the live one (the pure build()/dnsbl_build_from_manifest() layer + the HSTS file
+  load). The contract is build-new-then-rebind: the builder mutates NO live dict; the
+  function NEVER mutates the live snapshot's dicts as a swap mechanism (the one
+  sanctioned in-place mutation, ADR-07 regex eviction, is per-pattern, not a swap —
+  see §4). Returns True iff a swap happened.
+
+  ON SUCCESS (builder returns a non-None Snapshot), in order:
+    1. _snapshot = new_snapshot      — the single GIL-atomic STORE (RESULTS/01 §1:
+       shared __main__ dict + GIL → visible to every query worker, no hot-path lock).
+       This is the ONLY ``_snapshot = `` rebind in the module (verified §3).
+    2. decisionDB.clear()            — the unified per-name LRU query memo (#67/#70,
+       capped #72). Otherwise reset only by init re-creating it, so a no-restart swap
+       MUST clear it or operate() re-serves a STALE block/allow verdict on a cache
+       miss (newly-added name stays unblocked, newly-removed stays blocked).
+    3. _db_reset_cache()             — reset the DNSBL Reports sqlite (see §2), through
+       _db_run -> _db_lock (never an off-thread file touch).
+    4. emit pfb_py_count / pfb_py_regex_count from the NEW snapshot — the UI alias
+       DNSBL_Regex — so the UI reflects the live lists without a restart. SKIPPED when
+       emit_counts=False (init opts out — see below).
+
+  ON FAILURE (builder returns None OR raises): keep the OLD _snapshot, touch NEITHER
+  cache (decisionDB AND the Reports sqlite stay intact), log on the raise path, return
+  False. The early returns happen BEFORE any state is touched — fail-closed, mirroring
+  init's ``build_result is not None`` guard (ADR.md §2 "Fail-closed", :558). The swap
+  NEVER installs an empty/partial set on a build error; the resolver keeps serving the
+  last-good snapshot. (`except Exception` — no bare except.)
+
+  INIT WIRING (init_standard): the inline ``_snapshot = Snapshot(...)`` block from
+  Phase 2 is replaced by a local closure ``_init_build_snapshot()`` that wraps the
+  SAME scratch dicts init already populated (dataDB/zoneDB/whiteDB/regexDB/
+  allowRegexDB/feedGroupIndexDB/hstsDB + pfb["important_rules"] + the counts) into a
+  fresh Snapshot, then ``rebuild_and_swap(_init_build_snapshot, emit_counts=False)``.
+  ``_snapshot`` was removed from init_standard's ``global`` list (init no longer binds
+  it; rebuild_and_swap does). Net init behaviour UNCHANGED:
+    - same Snapshot object/contents as Phase 2 (same dict identities, no copy);
+    - the builder never returns None at init (the closure always builds), so the swap
+      always succeeds and a snapshot is always present for operate() — on BOTH the
+      python_enable path and the else (empty-defaultdicts) path;
+    - decisionDB.clear() is a NO-OP on the cache init just re-created empty;
+    - _db_reset_cache() matches init's earlier os.remove of pfb_py_cache.sqlite (the
+      file was just removed and the table is empty — see §2 for the one inert nuance);
+    - emit_counts=False keeps init's OWN existing path-specific inline emits: the
+      manifest-path pfb_py_count (:669) and the always-on pfb_py_regex_count (:789).
+      Routing the emit through rebuild_and_swap at init would have ADDED count writes
+      the CSV-fallback and else paths do NOT make today (a real behaviour change), so
+      init keeps its inline emits and opts out. Phase 4's background caller uses the
+      DEFAULT emit_counts=True (a no-restart reload MUST refresh the UI counts).
+
+--------------------------------------------------------------------------------
+2. REPORTS-CACHE RESET STRATEGY — CHOSEN: clear-through-_db_lock (option a)
+--------------------------------------------------------------------------------
+
+  Chosen: (a) destructive CLEAR through _db_lock, NOT (b) generation-key.
+
+  Implementation: a new helper
+
+      def _db_reset_cache() -> bool:
+          return _db_run(DB_CACHE, lambda con: con.execute("DELETE FROM dnsblcache"))
+
+  - Serializes via _db_lock. _db_run already wraps every op in ``with _db_lock:`` on
+    the SAME persistent WAL connection the off-thread pfb_db_worker uses, so the reset
+    can never race a worker mid-flush. It NEVER touches the sqlite file directly
+    off-thread (a host os.remove/reconnect off-thread would race the worker — the
+    Phase-1/2 watch-out). _db_run re-creates the table on a faulted reconnect.
+  - DELETE FROM (not DROP / os.remove): keeps the schema + WAL connection live so the
+    very NEXT enqueued block row (the kept per-block async write path) inserts cleanly
+    post-swap. Parity-in-spirit with today's restart wipe (os.remove at :376-377).
+
+  WHY (a) AND NOT (b), per the prompt's deliberate decision: this phase is Python-only
+  and behaviour-preserving. Generation-keying the log requires the PHP Reports-tab
+  reader to filter by the current generation — and that PHP reader change is NOT in
+  this phase's scope (Phase 5/PHP). The CURRENT PHP reader reads ALL rows (no
+  generation column), so a generation bump on the write side WITHOUT the reader change
+  would show stale rows from prior generations in the Reports tab — a behaviour
+  change. The destructive clear is the correct no-restart equivalent of today's
+  wipe-on-restart and reads cleanly with the unchanged PHP reader. Generation-keying
+  is recorded as a Phase-5/PHP enhancement (add a `generation` column + teach the
+  Reports reader to filter, then a swap becomes a metadata bump and history survives).
+
+  PER-BLOCK ASYNC WRITE PATH KEPT (Phase-1 Bonus 2). The pfb_db_enqueue(("cache", …))
+  write at :4263 is RETAINED — Phase 1 measured ~1.1 µs enqueue on the hot path and
+  recommended keeping it (it earns its keep for the Reports tab and is already
+  response-path-safe: enqueue + drop-on-full). Not dropped.
+
+  INERT INIT NUANCE (documented, not a regression): at init the cache file was just
+  os.remove'd (:376) and _db_conns is empty, so _db_reset_cache opens a fresh
+  connection (creating the file + empty table) and DELETEs nothing. Net: the empty
+  cache FILE now exists after init where today it would be (re)created lazily on the
+  first block write. This is inert — the Reports reader treats empty == absent
+  identically, and the file is WAL-created on first write regardless. No row content
+  differs; the cache is empty either way.
+
+--------------------------------------------------------------------------------
+3. THE DECISIONDB CLEAR + THE SINGLE-REBIND INVARIANT — VERIFIED BEFORE/AFTER
+--------------------------------------------------------------------------------
+
+  decisionDB clear (the unified _LruCache memo, §1 step 2) is proven on a POPULATED
+  cache, before AND after:
+    - test_swaps_ref_clears_decisiondb_resets_reports_recounts seeds a STALE
+      Decision (DnsblDecision is_found=True, feed/group="stale…") at
+      decisionDB["stale.example.com"], asserts it is PRESENT and the OLD _snapshot is
+      live and the Reports row is PRESENT (BEFORE), then rebuild_and_swap(->new) and
+      asserts: _snapshot is the NEW object (and is NOT old), the stale memo is GONE
+      (``not in`` + .get() is None + len()==0), the Reports row is GONE, and the UI
+      counts (42/7) were re-emitted from the new snapshot (AFTER).
+
+  Single-rebind invariant (test_only_rebuild_and_swap_rebinds_snapshot): a static
+  source scan asserts that the ONLY ``_snapshot = `` rebind line in the module is
+  ``_snapshot = new_snapshot`` (inside rebuild_and_swap). init reads/builds via the
+  closure but does not bind the ref; operate() only reads ``snap = _snapshot``.
+  Confirmed independently: ``grep -n "_snapshot =" pfb_unbound.py`` -> one rebind
+  (line 3397) + ``new_snapshot = build_snapshot()`` (a different variable).
+
+--------------------------------------------------------------------------------
+4. FAIL-CLOSED GUARANTEE + ITS TESTS (both failure shapes)
+--------------------------------------------------------------------------------
+
+  Both failure shapes are covered (branch coverage — None build AND raising build):
+    - test_builder_returns_none_keeps_everything: seed old snapshot + stale decisionDB
+      entry + a Reports row; assert all three present (BEFORE); rebuild_and_swap(->None)
+      returns False; assert _snapshot is STILL old, the stale memo SURVIVES, the
+      Reports row SURVIVES, and NO count was emitted (AFTER).
+    - test_builder_raises_keeps_everything: identical, with a builder that raises
+      RuntimeError — caught (no bare-except leak), fail-closed, same survivals.
+    - test_failed_build_does_not_touch_db_lock: instruments _db_lock with a counting
+      lock and asserts a None build acquires it ZERO times (the Reports reset never
+      runs on failure) and the row is still present.
+
+  Reports-reset-serializes-through-_db_lock is proven on the SUCCESS path
+  (test_reports_reset_serializes_through_db_lock): an instrumented _db_lock records >0
+  acquisitions during the swap while the populated table is emptied — so the reset is
+  provably under the db lock (no race). A unit test (test_db_reset_cache_empties_table
+  _via_db_run) shows _db_reset_cache empties a 2-row table via _db_run and that the
+  schema survives (a subsequent enqueue still inserts — DELETE, not DROP), and an
+  independent reader test (test_reset_then_real_reader_sees_empty) confirms the reset
+  is durable on the file, not just the cached connection.
+
+  emit_counts toggle (both branches): test_emit_counts_false_skips_recount (init's
+  path — swap + reset happen, NO recount) paired with test_emit_counts_true_recounts
+  (Phase-4 default — counts ARE re-emitted).
+
+  New tests: 10. Full suite: 1038 passed (1028 retained + 10 new).
+
+--------------------------------------------------------------------------------
+5. ADR-07 REGEX-EVICTION vs SWAP — RECONCILIATION (no decision regression)
+--------------------------------------------------------------------------------
+
+  ADR-07's runtime perf-eviction (_regex_evict_names, invoked inside evaluate_domain)
+  removes a slow pattern from the LIVE snapshot's regex_db dict IN PLACE — the matcher
+  needs that (a too-slow pattern is dropped to protect the response path). A swap
+  replaces the WHOLE snapshot with a freshly-compiled regex set, so any evicted-pattern
+  state is REBUILT from the manifest + the ADR-07 static cap (build() recompiles
+  regex_db/allow_regex_db from raw). Interaction:
+    - The two never tear each other: eviction mutates the dict the CURRENT snapshot
+      holds; the swap installs a brand-new snapshot with a brand-new regex_db. A query
+      captures one snapshot ref and reads its regex_db consistently (Phase 2).
+    - After a swap, a pattern previously evicted for being slow is present again (it is
+      in the manifest) — correct: the new build is the authoritative set, and the
+      always-on runtime warn/evict timer will re-evict it if it is still too slow under
+      the live load. No decision regression — the post-swap set is exactly what the
+      manifest + cap define, identical to a fresh init load. (ADR.md §2 line 112 / §"Add
+      a reload-watcher" line 170 foresee exactly this; the Snapshot docstring documents
+      it.) Phase 4's builder rebuilds regex_db via build(), so this holds for the
+      background swap unchanged.
+
+--------------------------------------------------------------------------------
+6. GATES
+--------------------------------------------------------------------------------
+  .venv/bin/python -m pytest -q   -> 1038 passed   (1028 retained + 10 new)
+        - retained ADR-06 oracles: tests/test_adr06_*                 PASS, UNCHANGED
+        - retained ADR-07 oracles: tests/test_adr07_*                 PASS, UNCHANGED
+        - Phase-2 equivalence:     tests/test_adr10_snapshot_equivalence.py PASS, UNCHANGED
+        - NEW:                     tests/test_adr10_swap.py           10 PASS
+  .venv/bin/ruff check .          -> All checks passed!
+  .venv/bin/ruff format --check . -> 41 files already formatted
+  .venv/bin/mypy tests/           -> Success: no issues found in 17 source files
+  No PHP/shell touched. No background thread, no sentinel (Phase 4).
+
+--------------------------------------------------------------------------------
+7. GO-AHEAD FOR PHASE 4
+--------------------------------------------------------------------------------
+GO. rebuild_and_swap() is the single fail-closed build->atomic-swap entry point and is
+the ONLY place _snapshot is rebound; decisionDB + the Reports cache are reset on a
+successful swap and left intact on a failed one; the UI counts are re-emittable
+(default on). Phase 4's background reload-watcher thread can now JUST call
+rebuild_and_swap(build_snapshot) (default emit_counts=True), where build_snapshot is a
+closure that runs dnsbl_build_from_manifest() AND reloads hstsDB from pfb_py_hsts.txt
+(watch-out (b) — hstsDB is NOT in the manifest; a builder that omits it would ship an
+empty hsts_db and silently change HSTS-NULL-vs-VIP behaviour) and recompiles regex_db
+(§5). Phase 4 adds only the thread + sentinel/generation trigger + the mandatory RAM
+gate (RESULTS/01 §2) + single-flight coalescing — NOT the swap semantics, which this
+phase pins. A failed reload is now a safe no-op (fail-closed), so a watcher trigger on
+a bad manifest cannot take the resolver down.
+================================================================================

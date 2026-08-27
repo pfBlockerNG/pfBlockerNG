@@ -1,0 +1,112 @@
+name: Redmine Issue Import
+
+# Manually-dispatched workflow to migrate open pfBlockerNG issues from the
+# pfSense Redmine tracker (https://redmine.pfsense.org) to GitHub issues on
+# this repository.
+#
+# Prerequisites:
+#   REDMINE_API_KEY — repo secret; your Redmine API key from
+#                     https://redmine.pfsense.org/my/account
+#   GITHUB_TOKEN   — the workflow's built-in token (issues: write is granted
+#                    below).  To author issues as a specific user instead of
+#                    github-actions[bot], replace GITHUB_TOKEN with a PAT
+#                    secret (e.g. MIGRATION_PAT) that has repo scope.
+#
+# Safety: dry_run defaults to "true" so the first run previews what WOULD be
+# migrated without writing anything.  Set dry_run to "false" to execute.
+#
+# Idempotency: re-runs are safe.  Issues already on GitHub are identified by a
+# hidden marker in the body; missing comments are filled in; nothing is
+# duplicated.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log what WOULD be migrated but make no writes to GitHub.
+          Defaults to 'true' — change to 'false' to actually migrate issues.
+        required: false
+        default: "true"
+      limit:
+        description: >
+          Maximum number of Redmine issues to process in this run.
+          Leave empty to process all open issues.
+        required: false
+        default: ""
+      updated_after:
+        description: >
+          Only process Redmine issues updated after this date (YYYY-MM-DD,
+          exclusive).  Leave empty to process all open issues regardless of
+          update date.
+        required: false
+        default: ""
+      issue_id:
+        description: >
+          Migrate a single Redmine issue by its numeric ID.  Useful for
+          testing the migration of one specific issue.  Leave empty to
+          process all open issues (subject to limit/updated_after).
+        required: false
+        default: ""
+      issue_ids:
+        description: >
+          Process ONLY this explicit comma/space-separated list of Redmine
+          issue IDs (skips fetching the open-issue list).  Use after triage
+          to import a curated set.  Leave empty to process all open issues.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialize runs: never let two dispatches race the "discover existing imports"
+# vs "create issue" window (which could duplicate issues). Queue, don't cancel.
+concurrency:
+  group: redmine-import
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Migrate Redmine issues to GitHub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Redmine → GitHub migration
+        env:
+          REDMINE_API_KEY: ${{ secrets.REDMINE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Pass dispatch inputs via env (not inline ${{ }} in the script) so an
+          # input value can never be substituted into the shell command itself.
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          UPDATED_AFTER: ${{ github.event.inputs.updated_after }}
+          ISSUE_ID: ${{ github.event.inputs.issue_id }}
+          ISSUE_IDS: ${{ github.event.inputs.issue_ids }}
+        run: |
+          set -eu
+          # Build argv as a bash array so each value stays one argument (handles the
+          # comma/space list in ISSUE_IDS) and never re-tokenizes the command.
+          ARGS=()
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          if [ -n "$LIMIT" ]; then
+            ARGS+=(--limit "$LIMIT")
+          fi
+          if [ -n "$UPDATED_AFTER" ]; then
+            ARGS+=(--updated-after "$UPDATED_AFTER")
+          fi
+          if [ -n "$ISSUE_ID" ]; then
+            ARGS+=(--issue "$ISSUE_ID")
+          fi
+          if [ -n "$ISSUE_IDS" ]; then
+            ARGS+=(--issue-ids "$ISSUE_IDS")
+          fi
+          python archive/redmine_to_github.py "${ARGS[@]}"

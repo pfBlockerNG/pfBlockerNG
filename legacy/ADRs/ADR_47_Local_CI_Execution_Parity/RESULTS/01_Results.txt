@@ -1,0 +1,14 @@
+ADR-47 Phase 1 — Results (LANDED IN BASE; retroactive marker)
+
+Phase 1 was implemented + merged to devel via PR #591 (devel a5ca1d90), NOT through /adr-phase,
+so this handoff is written retroactively to record completion for the resume model. This adr/47
+branch is cut from devel, so it ALREADY CONTAINS P1's code:
+
+- scripts/sparse-clone-ports.sh — idempotent shared "prepare the ports tree at REF" step
+  (absent DEST -> fresh blobless+sparse clone; existing git work-tree -> fetch+checkout REF;
+  non-git DEST -> refused; detection via `[ -e "${DEST}/.git" ]`).
+- tests/shell/sparse_clone_ports_spec.sh — the EXEMPLAR shellspec (fake-bin stub on PATH, the
+  mandatory GIT_* unset in setup(), before/after assertions, red-before proven).
+
+HANDOFF TO P2: mirror sparse_clone_ports_spec.sh's conventions; topology is ssh-only into a
+provided PFB_BOXES pool (no host, no lxc); see 02_Runid_Backbone_And_Lease.txt + ADR §5.2/§7.

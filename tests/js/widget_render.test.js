@@ -1,0 +1,265 @@
+// Unit coverage for the Dashboard widget's client-side render helpers.
+// Run: node --test tests/js/  (from repo root) — no browser / jQuery needed.
+//
+// These pin the escaping contract: col1 (count) and col3 (update) are escaped
+// by the client before DOM insertion; col0 (alias), col2 (packets), and col4 (img)
+// are server-rendered markup that passes through unescaped.
+
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const {
+	pfBlockerNG_escapeHtml,
+	pfBlockerNG_buildWidgetRow,
+	pfBlockerNG_fetch_new_widget_callback,
+} = require('../../src/usr/local/www/widgets/javascript/pfblockerng.js');
+
+// ── jQuery test double for pfBlockerNG_fetch_new_widget_callback ──────────────
+//
+// A minimal chainable stub: $(sel).attr(name, val).prop(name, val) records the
+// last class/title set for the given selector. Installed on global.$/jQuery
+// (the widget JS calls the bare `$` form) only for the lifetime of a test, and
+// removed afterwards so it cannot leak into a sibling test.
+function installJQueryStub() {
+	var state = {};
+	function stub(sel) {
+		if (!state[sel]) {
+			state[sel] = { class: null, title: null };
+		}
+		var record = state[sel];
+		var chain = {
+			attr: function(name, val) {
+				if (name === 'class') {
+					record.class = val;
+				}
+				return chain;
+			},
+			prop: function(name, val) {
+				if (name === 'title') {
+					record.title = val;
+				}
+				return chain;
+			},
+		};
+		return chain;
+	}
+	global.$ = stub;
+	global.jQuery = stub;
+	return state;
+}
+
+function uninstallJQueryStub() {
+	delete global.$;
+	delete global.jQuery;
+}
+
+// ── pfBlockerNG_escapeHtml ────────────────────────────────────────────────────
+
+test('pfBlockerNG_escapeHtml: escapes & to &amp;', () => {
+	assert.equal(pfBlockerNG_escapeHtml('a&b'), 'a&amp;b');
+});
+
+test('pfBlockerNG_escapeHtml: escapes < to &lt;', () => {
+	assert.equal(pfBlockerNG_escapeHtml('<script>'), '&lt;script&gt;');
+});
+
+test('pfBlockerNG_escapeHtml: escapes > to &gt;', () => {
+	assert.equal(pfBlockerNG_escapeHtml('x>y'), 'x&gt;y');
+});
+
+test('pfBlockerNG_escapeHtml: escapes " to &quot;', () => {
+	assert.equal(pfBlockerNG_escapeHtml('say "hi"'), 'say &quot;hi&quot;');
+});
+
+test("pfBlockerNG_escapeHtml: escapes ' to &#39;", () => {
+	assert.equal(pfBlockerNG_escapeHtml("it's"), 'it&#39;s');
+});
+
+test('pfBlockerNG_escapeHtml: leaves a plain string untouched', () => {
+	assert.equal(pfBlockerNG_escapeHtml('hello world'), 'hello world');
+});
+
+test('pfBlockerNG_escapeHtml: coerces non-string input via String()', () => {
+	// Numbers and booleans must not throw; they stringify cleanly.
+	assert.equal(pfBlockerNG_escapeHtml(42), '42');
+	assert.equal(pfBlockerNG_escapeHtml(true), 'true');
+	assert.equal(pfBlockerNG_escapeHtml(null), 'null');
+});
+
+// ── pfBlockerNG_buildWidgetRow ────────────────────────────────────────────────
+
+// Scenario: a row whose data columns contain HTML metacharacters.
+//
+// Given cols where col1 (count) and col3 (update) contain raw < > characters,
+// When pfBlockerNG_buildWidgetRow renders the row,
+// Then col1 and col3 appear HTML-escaped in the output (proving they cannot
+//   inject markup), AND col0 / col2 / col4 pass through verbatim (they are
+//   server-rendered markup — escaping them would corrupt the intentional HTML).
+
+test('pfBlockerNG_buildWidgetRow: col1 (count) is HTML-escaped before render', () => {
+	// Given: col1 contains a raw < character.
+	var cols = ['SafeAlias', '<b>1,234</b>', '0', 'Jan 01 00:00', '<i class="fa"></i>'];
+
+	// Before (regression anchor): verify the raw value is NOT already escaped in cols[1].
+	assert.ok(cols[1].includes('<'), 'precondition: col1 contains raw HTML metachar');
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then: the output must contain the escaped form, not the raw tag.
+	assert.ok(row.includes('&lt;b&gt;'), 'col1 metachar must be escaped in output');
+	assert.ok(!row.includes('<b>'), 'col1 raw tag must NOT appear in output');
+});
+
+test('pfBlockerNG_buildWidgetRow: col3 (update) is HTML-escaped before render', () => {
+	// Given: col3 contains a raw " character (e.g. a malformed timestamp).
+	var cols = ['SafeAlias', '999', '0', '"<script>alert(1)</script>"', '<i class="fa"></i>'];
+
+	// Before (regression anchor): verify the raw value is NOT already escaped in cols[3].
+	assert.ok(cols[3].includes('<'), 'precondition: col3 contains raw HTML metachar');
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then
+	assert.ok(row.includes('&lt;script&gt;'), 'col3 metachar must be escaped in output');
+	assert.ok(!row.includes('<script>'), 'col3 raw tag must NOT appear in output');
+});
+
+test('pfBlockerNG_buildWidgetRow: col0 (alias) passes through as server-rendered markup', () => {
+	// Given: col0 is a server-built anchor (popup enabled path).
+	var anchorHtml = '<a href="/firewall_aliases_edit.php?id=5" data-popover="true">pfB_Deny_v4</a>';
+	var cols = [anchorHtml, '1,234', '<a href="/alerts">500</a>', 'Jan 01 00:00', '<i class="fa-solid fa-turn-up"></i>'];
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then: the anchor in col0 must survive verbatim.
+	assert.ok(row.includes(anchorHtml), 'col0 server-rendered anchor must pass through unescaped');
+});
+
+test('pfBlockerNG_buildWidgetRow: col2 (packets) passes through as server-rendered markup', () => {
+	// Given: col2 is a server-built alerts link.
+	var packetLink = '<a href="/pfblockerng/pfblockerng_alerts.php?filterip=pfB_Deny_v4">500</a>';
+	var cols = ['pfB_Deny_v4', '1,234', packetLink, 'Jan 01 00:00', '<i class="fa-solid fa-turn-up"></i>'];
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then: the link in col2 must survive verbatim.
+	assert.ok(row.includes(packetLink), 'col2 server-rendered link must pass through unescaped');
+});
+
+test('pfBlockerNG_buildWidgetRow: col4 (img) passes through as server-rendered markup', () => {
+	// Given: col4 is a server-built icon.
+	var iconHtml = '<i class="fa-solid fa-turn-up text-success"></i>';
+	var cols = ['pfB_Deny_v4', '1,234', '500', 'Jan 01 00:00', iconHtml];
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then: the icon in col4 must survive verbatim.
+	assert.ok(row.includes(iconHtml), 'col4 server-rendered icon must pass through unescaped');
+});
+
+test('pfBlockerNG_buildWidgetRow: plain row (no metacharacters) renders correctly', () => {
+	// Given: a normal row with no special characters.
+	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa-solid fa-turn-down"></i>'];
+
+	// When
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	// Then: all five columns appear in the expected td structure, wrapped in a
+	// complete <tr>...</tr> (the row owns both its opening and closing tags).
+	assert.ok(row.startsWith('<tr>'), 'row starts with opening <tr>');
+	assert.ok(row.endsWith('</td></tr>'), 'row ends with closing </td></tr>');
+	assert.ok(row.includes('<td><small>pfB_Deny_v4</small></td>'), 'col0 present');
+	assert.ok(row.includes('<td><small>1,234</small></td>'), 'col1 present');
+	assert.ok(row.includes('<td><small>0</small></td>'), 'col2 present');
+	assert.ok(row.includes('<td><small>Jun 01 12:00</small></td>'), 'col3 present');
+	assert.ok(row.includes('<td><i class="fa-solid fa-turn-down"></i></td></tr>'), 'col4 present');
+});
+
+// Scenario: the row is self-contained — exactly one <tr>/</tr> pair, no nesting.
+//
+// Given any row built by the helper,
+// When its tag occurrences are counted,
+// Then there is exactly one opening <tr> and one closing </tr> (so the caller
+//   must NOT add its own wrapping tags — issue #288).
+
+test('pfBlockerNG_buildWidgetRow: emits exactly one <tr>/</tr> pair', () => {
+	var cols = ['pfB_Deny_v4', '1,234', '0', 'Jun 01 12:00', '<i class="fa"></i>'];
+
+	var row = pfBlockerNG_buildWidgetRow(cols);
+
+	assert.equal(row.split('<tr>').length - 1, 1, 'exactly one opening <tr>');
+	assert.equal(row.split('</tr>').length - 1, 1, 'exactly one closing </tr>');
+});
+
+// Scenario: multi-row assembly matches the caller's join('') (issue #288).
+//
+// Given several rows accumulated in an array (as the AJAX callback does),
+// When they are concatenated the way the caller now does — join('') —
+// Then the markup carries no stray comma (the old '<tr>' + array coercion
+//   inserted commas via Array.prototype.toString()) and contains exactly one
+//   <tr>/</tr> pair per row, with no leftover trailing tag.
+
+test('pfBlockerNG_buildWidgetRow: rows join into well-formed markup with no stray commas', () => {
+	// Given: two distinct rows.
+	var rowA = pfBlockerNG_buildWidgetRow(['AliasA', '1', '0', 'Jun 01 12:00', '<i></i>']);
+	var rowB = pfBlockerNG_buildWidgetRow(['AliasB', '2', '0', 'Jun 02 12:00', '<i></i>']);
+
+	// When: assembled the way the AJAX callback inserts them.
+	var assembled = [rowA, rowB].join('');
+
+	// Then: no comma artifact, and exactly one <tr>/</tr> per row (no extra trailing tag).
+	assert.ok(!assembled.includes(','), 'no stray comma between rows');
+	assert.equal(assembled.split('<tr>').length - 1, 2, 'one opening <tr> per row');
+	assert.equal(assembled.split('</tr>').length - 1, 2, 'one closing </tr> per row');
+});
+
+// ── pfBlockerNG_fetch_new_widget_callback: status-icon anchor class ───────────
+//
+// Scenario: the status icon must stay pollable across repeated AJAX refreshes.
+//
+// Given the initial server render anchors the status <i> with the class
+//   "PFBSTATUS <icon-classes>" (widget PHP php:906/912), and the AJAX payload
+//   sends only the icon classes (no anchor) as row_split[1],
+// When pfBlockerNG_fetch_new_widget_callback applies the payload,
+// Then the element's class is set back to "PFBSTATUS <icon-classes>" (anchor
+//   preserved) so a LATER poll's $('.PFBSTATUS') selector still matches it
+//   (issue #714: overwriting the whole class attribute with just the icon
+//   classes drops the anchor and freezes the icon after the first poll).
+
+test('pfBlockerNG_fetch_new_widget_callback: PFBSTATUS payload preserves the PFBSTATUS anchor class', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('PFBSTATUS||fa-solid fa-check-circle text-success||pfBlockerNG is Active.\n');
+
+		assert.equal(
+			state['.PFBSTATUS'].class,
+			'PFBSTATUS fa-solid fa-check-circle text-success',
+			'the PFBSTATUS anchor class must survive the AJAX class update',
+		);
+		assert.equal(state['.PFBSTATUS'].title, 'pfBlockerNG is Active.');
+	} finally {
+		uninstallJQueryStub();
+	}
+});
+
+test('pfBlockerNG_fetch_new_widget_callback: DNSBLSTATUS payload preserves the DNSBLSTATUS anchor class', () => {
+	var state = installJQueryStub();
+	try {
+		pfBlockerNG_fetch_new_widget_callback('DNSBLSTATUS||fa-solid fa-exclamation-circle text-warning||DNSBL is Inactive.\n');
+
+		assert.equal(
+			state['.DNSBLSTATUS'].class,
+			'DNSBLSTATUS fa-solid fa-exclamation-circle text-warning',
+			'the DNSBLSTATUS anchor class must survive the AJAX class update',
+		);
+		assert.equal(state['.DNSBLSTATUS'].title, 'DNSBL is Inactive.');
+	} finally {
+		uninstallJQueryStub();
+	}
+});

@@ -1,0 +1,121 @@
+================================================================================
+PHASE 3 PROMPT — Live-VM smoke + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §2.3 logging, §7 DoD FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 3 of
+ADR-22 — the final phase. It adds live-VM smoke cases for BOTH toggle states + the
+migration, asserts the strict-mode skip logging, and records the DoD evidence.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt — confirm Phase 2
+  is complete (toggle + validation + migration + logging wired, PHPUnit green, exact config
+  key/field names + the main-log function used for the WARNING). If missing, STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §2.3 (logging), §7 DoD.
+- tests/smoke/test_smoke_feeds.py — the existing feed smoke structure + helpers.
+- CLAUDE.md — "Smoke tests (ADR-04)": `helpers.unique_domain()` MANDATORY (never RFC 6761
+  TLDs / HSTS-preload names); probe ON-BOX via `drill @127.0.0.1`; the FIRST response after
+  reload is authoritative; block shape = NOERROR + sinkhole VIP or NULL, NEVER NXDOMAIN for
+  a feed match; leave the VM CLEAN in `finally`.
+
+ACTION PLAN
+
+1. ADD smoke cases to `tests/smoke/test_smoke_feeds.py` (`@pytest.mark.smoke` +
+   `@pytest.mark.timeout(300)`), each using `helpers.unique_domain()` for EVERY domain and
+   restoring config + custom list in `finally`. Set `pfb_dnsbl_lenient` via the pfSense
+   config API before each DNSBL update (same pattern other smoke tests use to set keys).
+
+   === Test A: `test_strict_skips_invalid_scheme_and_path_and_logs` (lenient OFF) ===
+   Background: pfb_dnsbl_lenient='off' (strict). Custom_List feed:
+     http://<uniq-http>      (valid scheme, no path → blocked)
+     evil://<uniq-evil>      (valid RFC 3986 custom scheme, no path → blocked)
+     123://<uniq-badscheme>  (digit-start → invalid → skipped + logged)
+     http://<uniq-haspath>/path  (path present → skipped + logged)
+   Given (assert BEFORE update): all four → NOERROR (not blocked yet).
+   When: write lenient='off'; load feed; DNSBL update; wait_unbound_ready.
+   Then (first response authoritative):
+     <uniq-http>      → sinkhole VIP or NULL (blocked)
+     <uniq-evil>      → sinkhole VIP or NULL (blocked)
+     <uniq-badscheme> → NOERROR (skipped)
+     <uniq-haspath>   → NOERROR (skipped)
+   And ASSERT THE LOGGING (ADR §2.3): the two skipped originals appear in the DNSBL
+     parse-error log on-box, AND a per-feed WARNING line for this feed (the "N line(s)
+     skipped — strict parsing..." text from Phase 2) is present in the main pfBlockerNG log.
+
+   === Test B: `test_lenient_blocks_invalid_scheme_and_path` (lenient ON) ===
+   Background: pfb_dnsbl_lenient='on'. Custom_List feed:
+     123://<uniq-badscheme>      (digit-start → stripped → blocked)
+     http://<uniq-haspath>/path  (path stripped downstream → blocked)
+   Given (assert BEFORE): both → NOERROR.
+   When: write lenient='on'; load feed; DNSBL update; wait_unbound_ready.
+   Then: both → sinkhole VIP or NULL (blocked — today's behaviour preserved).
+   And: no per-feed strict-skip WARNING for this feed in the main log (lenient is silent).
+
+   === Test C: `test_migration_sets_lenient_on_for_existing_install` ===
+   Prove the §2.2 migration on the live box: simulate an existing install lacking the key
+   (remove `pfb_dnsbl_lenient` from config), run the package upgrade/install hook that
+   carries the migration, then assert config now has `pfb_dnsbl_lenient='on'`. Assert the
+   BEFORE (key absent) and AFTER (key=='on'). Restore in `finally`.
+   (If the upgrade hook cannot be driven directly in the smoke harness, exercise the
+   migration function in the PHPUnit tier instead and record here that the live leg is a
+   documented out-of-CI limitation per CLAUDE.md — do NOT fake it.)
+
+   Implementation notes:
+   - `wait_unbound_ready` before asserting DNS; compare IPs by value (`::` == `::0`).
+   - Read the on-box parse-error log path from `$pfb['dnsbl_parse_err']` (Phase-2 handoff
+     records it) and the main pfBlockerNG log path from the smoke helpers.
+
+2. UPDATE the inline comment at the call site if Phase 2 left anything stale (it should
+   already state the ADR-22 behaviour).
+
+3. DISPATCH smoke: `gh workflow run smoke.yml -f pytest_marker=smoke`. Capture the run ID.
+   (Per CLAUDE.md the fan-out CE+Plus is the default validation — dispatch
+   `smoke-fanout.yml` too if validating for acceptance.)
+
+4. RECORD DoD evidence in `RESULTS/03_Results.txt`:
+   - Phase 1: helper + oracle tests, PHPUnit pass count.
+   - Phase 2: final helper body, toggle key/field, call-site + logging code, migration code,
+     PHPUnit pass count.
+   - Phase 3: smoke run ID + per-case PASS (A, B, C); exact `drill` outputs; the asserted
+     parse-error-log lines + the main-log WARNING text observed; migration before/after.
+   - All CI gates PASS.
+   - Acceptance: per CLAUDE.md "ADR acceptance — automated tests" — state whether the green
+     PHPUnit + smoke (fan-out) coverage suffices to flip the ADR to Accepted, and record any
+     documented out-of-CI limitation (e.g. the migration live leg, if applicable).
+
+CONSTRAINTS
+- `@pytest.mark.smoke` only (NOT `repo`).
+- `unique_domain()` MANDATORY for every domain.
+- VM left CLEAN in `finally` (config key + custom list restored; injected blocks cleared).
+- Do NOT leave `pfb_dnsbl_lenient` flipped as a permanent CI default — per-test only.
+- A test must ASSERT the behaviour (block shapes AND the log lines) — running the update
+  while asserting nothing that would fail on a regression is coverage theater (CLAUDE.md).
+
+VERIFICATION (must all pass)
+- `python -m pytest` (default, no smoke) → unchanged.
+- `ruff check . && ruff format .` → clean; `mypy tests/` → clean.
+- `php -l` → clean (comment-only change, if any).
+- `vendor/bin/phpunit` → green (Phases 1–2 all still pass).
+- Smoke: Tests A, B, C GREEN; existing smoke GREEN.
+- `git diff origin/devel...HEAD` shows ONLY the expected ADR-22 files + `tests/smoke/`.
+
+EXPECTED RESULT
+Live-VM evidence:
+- Lenient OFF (strict): `123://host` skipped + logged, `http://host/path` skipped + logged,
+  `evil://host` blocked, `http://host` blocked; per-feed WARNING in the main log.
+- Lenient ON: `123://host` blocked, `http://host/path` blocked (today's behaviour); no WARNING.
+- Migration: an existing install upgraded → `pfb_dnsbl_lenient='on'`.
+
+COMMIT (single)
+    tests: ADR-22 P3 smoke — lenient DNSBL parsing toggle + skip logging (ADR-22 P3)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/03_Results.txt`
+(plain .txt)
+Record: smoke run ID + per-case PASS (A, B, C); exact `drill` outputs; the parse-error-log
+lines + main-log WARNING observed; migration before/after; all CI gates PASS; the acceptance
+determination + any documented out-of-CI limitation. Final handoff — ADR-22 complete.

@@ -1,0 +1,88 @@
+================================================================================
+PHASE 3 PROMPT — Package <logging> registration + PHP IP-leg emit (flips IP on)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md   (read §1.2, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+Phase 3 of ADR-38 on the implementation branch. This phase FLIPS THE IP LEG ON
+(still default-off via the toggle). It is the first non-dormant phase but remains
+chroot-free (PHP is not chrooted). One commit, pushed on the branch.
+
+WHY THIS PHASE EXISTS
+The pfSense package <logging> registration is the single mechanism that gives us (a)
+a dedicated local file + system.log de-dup, and (b) — critically for Phase 4 — the
+`-l /var/unbound/var/run/log` chroot socket (only the static element installs it;
+see ADR §1.2.2). Landing it here, with the simpler PHP emitter, proves the local
+routing end-to-end before the chroot/python complexity.
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt — confirm the three settings are registered +
+  pinned and the token→constant map exists. If missing, STOP and report.
+- ADR §1.2 (syslog.d include, package <logging> element keys facilityname/
+  logfilename/logsocket, system.log de-dup, "Everything" remote), §2.1 (PHP emit
+  row, tag pfblockerng), §2.2 (contract: one record per line, off ⇒ none).
+- src/usr/local/pkg/pfblockerng/pfblockerng.xml — find any existing <logging> (there
+  is none today) and the install/sync hooks (custom_php_install_command /
+  resync). How the package restarts services.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the write site :9319-9324 and the
+  surrounding $l_type / $dup_entry / field context; pfb_global() if needed for the
+  field values feeding the Phase-1 formatter.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — pfb_syslog_format_ip() (P1),
+  the token→constant map (P2), logger() for openlog/syslog style.
+- CLAUDE.md → PFBL-01 RequirePfbFilter + RequireConfigGateway sniff scopes; the
+  "investigate, don't assume — chroot" notes; how pfSense system_syslogd_start() is
+  invoked after config change (resolve the real call — do not guess the function).
+- tests/php/ doubles (pfsense_doubles.php) for syslog/openlog stubbing.
+
+ACTION PLAN
+1. Add the <logging> block to pfblockerng.xml:
+     <logging><facilityname>pfblockerng</facilityname>
+       <logfilename>pfblockerng_syslog.log</logfilename>
+       <logsocket>/var/unbound/var/run/log</logsocket></logging>
+   In install/sync: ensure /var/unbound/var/run exists (mkdir -p, correct owner)
+   BEFORE syslogd is (re)generated, then trigger the real pfSense syslogd rebuild
+   (resolve the actual function, e.g. system_syslogd_start()) — idempotent, and only
+   doing the restart when something changed.
+2. Add `pfb_syslog_event(string $body): void` to pfblockerng_extra.inc:
+   read log_syslog/_facility/_priority via PfbConfig once (cache per process),
+   openlog('pfblockerng', LOG_PID, <facility-constant>), syslog(<severity-constant>,
+   $body), then closelog() per the surrounding pattern. No-op when toggle off.
+3. At pfblockerng.inc:9319-9324, after composing the CSV line, when
+   PfbConfig::read('log_syslog') is on, build the field array, call
+   pfb_syslog_format_ip(), and pfb_syslog_event() exactly once per event line
+   (mirror the file_put_contents gating; do NOT double-emit for the unified-log copy).
+4. Keep PFBL-01 (pfblockerng.inc) + RequireConfigGateway green — read via PfbConfig,
+   no raw config_get_path for the registered keys; if the write site is in a
+   PFBL-01-scoped function, ensure no new exec/path-build appears without the existing
+   validation (we add none — only a syslog() call).
+
+CONSTRAINTS
+- PHP 8.3, tabs, uppercase TRUE/FALSE, no die()/exit(). One syslog record per event
+  line; off ⇒ zero emission. Do NOT touch the CSV writes, rotation, or python here.
+- Do NOT implement remote-server logic (remote = pfSense "Everything", out of scope).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit  → green, incl. a new test asserting pfb_syslog_event emits iff
+  the toggle is on and passes the formatted body to syslog (mock via doubles); off ⇒
+  no syslog call.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  → clean (PFBL-01 + gateway)
+- vendor/bin/phpstan  → clean ; php -l on touched files
+- diff-read: <logging> block present; the emit is gated + single; install/sync orders
+  the socket dir before the syslogd rebuild.
+
+EXPECTED RESULT
+With the toggle ON, IP Block/Permit/Match events emit one pfblockerng key=value syslog
+record each, routed to /var/log/pfblockerng_syslog.log and excluded from system.log;
+with it OFF, nothing emits. The chroot log socket now exists for Phase 4.
+
+COMMIT (single)
+    pfblockerng: emit IP security events to syslog + register log facility (ADR-38 P3)
+Push on the branch.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/03_Results.txt`
+Record: the exact syslogd-rebuild function used + where it is called; the socket-dir
+creation (path/owner); the per-process caching choice for the facility/severity read;
+confirmation the emit is single per line; the new test name; verification numbers; and
+whether the chroot socket was observed/created. Carry the ADR-RESUME sentinel
+(next-phase=4) if pinned. Go-ahead for Phase 4.

@@ -1,0 +1,167 @@
+ADR-04 — Phase 6 (FINAL): wire the smoke workflow + finalise DoD
+================================================================
+
+Branch: adr/04   Phase: 6 of 6   Date: 2026-06-02
+Audience: the MAINTAINER (no next-phase agent).
+
+-------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------
+The Phase 3-5 pytest smoke layer is now a CI workflow. .github/workflows/smoke.yml
+replaces the Phase-1 shell round-trip spike (smoke-spike.yml, DELETED) with
+`pytest -m smoke`, keeping the spike's working scaffolding: build-pkg job ->
+.pkg artifact -> GHCR image pull (cached, by ref/digest) -> KVM-perms fix ->
+SSH-key-from-secret -> egress block (pull -> block -> run) -> pytest. Docs
+(README run/rebuild/extend + CE-bump checklist) and ADR §7 are finalised.
+ADR-04 is CODE-COMPLETE. Status set to "Implemented — pending maintainer
+live-smoke"; NOT flipped to Accepted (your call, gated on the two items below).
+
+src/ UNTOUCHED. Default `python -m pytest` byte-for-byte unchanged: 169 passed.
+test.yml + the default `python -m pytest` invocation untouched.
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase) — all dev-only, src/ untouched
+-------------------------------------------------------------------
+  .github/workflows/smoke.yml   NEW. Jobs:
+      build-pkg : uses ./.github/workflows/build-pkg.yml (channel devel,
+                  FreeBSD 15) -> emits the pfBlockerNG-pkg artifact.
+      smoke     : needs build-pkg. KVM-perms udev fix -> install qemu/oras/
+                  dnsutils/python -> resolve image ref (input > SMOKE_IMAGE_REF
+                  secret/variable) -> cache-restore/oras-pull the image ->
+                  write SMOKE_SSH_PRIV_KEY to a mode-600 file -> download the
+                  .pkg artifact -> locate the .pkg + the single .qcow2 ->
+                  pip install -r tests/smoke/requirements.txt -> BLOCK runner
+                  egress -> `pytest tests/smoke -m smoke --override-ini=
+                  "addopts=" -v` with SMOKE_* env -> upload diagnostics.
+  .github/workflows/smoke-spike.yml   DELETED (retired). The reusable boot/probe
+      helpers it used (tests/smoke/{boot_vm,wait_ready,roundtrip}.sh,
+      screendump.py) are KEPT — the pytest fixture + build-image.yml use them.
+  tests/smoke/conftest.py   +SMOKE_IMAGE_DIR support in the smoke_vm fixture
+      (small, justified): reuse an ALREADY-PULLED image dir (one .qcow2) instead
+      of pulling in-fixture, so the workflow can pull -> block egress -> run
+      hermetically without a second network pull. Falls back to oras pull by
+      SMOKE_IMAGE_REF (local-dev path). `oras` is no longer a required binary on
+      the pre-pulled path. No behaviour change for local runs that set only
+      SMOKE_IMAGE_REF.
+  README.md   +"Smoke tests (live pfSense VM)" section (run in CI / run locally /
+      rebuild image on a CE bump / add a matrix case); +image-rebuild note in the
+      stub-regen CE-bump block.
+  CLAUDE.md   +image-rebuild step appended to the "minimum supported CE version
+      changes" checklist (next to update-pfsense-stubs.py).
+  ADR.md      Status -> "Implemented — pending maintainer live-smoke"; §7 "DoD
+      outcome" subsection records CI-met vs PENDING per item + the GO/no-reject.
+
+No new .sh. No src/ change. pyproject.toml unchanged.
+
+-------------------------------------------------------------------
+TRIGGER — chosen + why
+-------------------------------------------------------------------
+GATED: workflow_dispatch + workflow_call only (a nightly `schedule` is present
+but COMMENTED). NOT every-PR.
+WHY: the per-run wall-time is UNMEASURED (RESULTS/05 left `pytest -m smoke`
+wall-time PENDING the first CI run; this environment has no /dev/kvm/image/
+secrets to measure it). ADR §7's budget is <= ~20 min/job. Shipping flaky/slow
+every-PR CI before measuring is exactly what §7 forbids. MOVE TO EVERY-PR by
+adding a `pull_request` trigger once a dispatched run confirms it fits the budget.
+FORWARD-COMPAT (ADR-09): the image ref is an INPUT (image_ref), defaulting to the
+single supported CE version's GHCR ref/secret. No version fan-out/matrix/schedule
+logic here — that is ADR-09. workflow_call-able so ADR-09 can drive it per version.
+
+-------------------------------------------------------------------
+HOW TO RUN / REBUILD / EXTEND (README pointers)
+-------------------------------------------------------------------
+RUN in CI:
+    gh workflow run smoke.yml
+    gh workflow run smoke.yml -f image_ref=ghcr.io/<org>/pfsense-ce@sha256:<digest>
+  Required Actions config (RESULTS/02): SMOKE_IMAGE_REF, SMOKE_GHCR_USER,
+  SMOKE_GHCR_TOKEN, SMOKE_SSH_PRIV_KEY; optional SMOKE_DNSBL_VIP4 /
+  SMOKE_CONTROL_NAME / SMOKE_CONTROL_IP to match the baked image.
+RUN locally: README "Smoke tests" -> needs /dev/kvm + qemu + oras + ssh + a .pkg;
+  pip install -r tests/smoke/requirements.txt; export SMOKE_IMAGE_REF /
+  SMOKE_SSH_KEY / SMOKE_PKG; oras login; `pytest tests/smoke -m smoke
+  --override-ini="addopts="`. Missing prereqs -> clean SKIP.
+REBUILD image on a CE bump: build-image.yml (upgrade-in-place patch/minor, fresh
+  seed on major; publish-on-pass, fail-closed; CE only; seed+snapshots retained,
+  never overwrite; GHCR private). RUNBOOK: IMAGE_RUNBOOK.md + RESULTS/02.
+EXTEND the matrix: tests/smoke/test_smoke_matrix.py recipe in README + the full
+  case_spec recipe in RESULTS/05 (register feed -> build DnsblCase/IpCase ->
+  CaseContext -> dns_probe/pfctl assertions; response-mode map NXDOMAIN/NULL/VIP).
+
+-------------------------------------------------------------------
+AUTOMATED DoD STATUS (ADR §7) — MET-in-CI vs PENDING
+-------------------------------------------------------------------
+  Default suite unaffected (169, no new deps)        : MET (verified locally).
+  ruff / ShellCheck / workflow YAML lint clean       : MET (verified locally).
+  Image builds + private GHCR + rebuild-on-bump doc  : MET (Phase 2 +
+                                                        checklist updated here).
+  README run/rebuild/extend                          : MET (this phase).
+  `pytest -m smoke` green / hermetic / false-green   : WIRED, PENDING the
+                                                        orchestrator `gh workflow
+                                                        run smoke.yml` dispatch.
+                                                        NOT run/measured here.
+  Status -> Accepted                                 : NOT done (intentionally;
+                                                        gated on CI + your live
+                                                        smoke below).
+
+PENDING is REAL, not fabricated: no /dev/kvm, no GHCR image, no secrets in this
+environment. No smoke pass/fail and NO wall-time are invented.
+
+-------------------------------------------------------------------
+OUTSTANDING MANUAL §7 SMOKE CHECKLIST (you, on a live box) before Accept
+-------------------------------------------------------------------
+  [ ] Exact DNSBL block returns the configured response (NXDOMAIN/null-IP/VIP)
+      and is logged.
+  [ ] Wildcard `zone` block catches a deep subdomain AND the parent.
+  [ ] A whitelisted domain resolves normally.
+  [ ] An IP feed populates the expected pf alias table and a rule references it.
+  [ ] DNSBL-IP fed both IPv4 + IPv6 -> BOTH pfB_DNSBLIP_v4 and pfB_DNSBLIP_v6
+      tables exist, distinct, each only its own family; inet/inet6 rules
+      reference the matching table (no v4/v6 overwrite).
+  [ ] The smoke workflow's pass/fail matches these observations (no false-green/
+      false-red).
+THEN: confirm the dispatched smoke.yml run is green, and flip ADR Status to
+Accepted.
+
+-------------------------------------------------------------------
+REJECT-CRITERION OUTCOMES
+-------------------------------------------------------------------
+None fired. Phase 1 spike was GO (GH-hosted KVM boots a real pfSense CE guest +
+round-trips). Packer-can't-build is the accepted fallback (no Packer used; image
+is hand-baked behind the published-qcow2 seam). Redistribution handled by the
+private GHCR package. No pivot to self-hosted needed at this time.
+
+-------------------------------------------------------------------
+CANDIDATE pfBlockerNG BEHAVIOURS SURFACED (NOT bugs to fix here)
+-------------------------------------------------------------------
+From RESULTS/05 (semantic gotcha, intended behaviour, pinned by
+test_dnsbl_exact_nxdomain): in DNSBL *python* mode WITHOUT the TLD feature, every
+feed domain is an EXACT (dataDB) entry — there is NO wildcard/subdomain blocking.
+Operators expecting a plain blocklist domain to also block its subdomains in
+python mode would be surprised; wildcard blocking needs Unbound mode (redirect
+zone) or the TLD feature. If a future ADR wants python-mode wildcards that is a
+src/ change for its own PR — OUT OF SCOPE here. No new behaviours surfaced this
+phase (no live run performed here).
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest -q                              : 169 passed (UNCHANGED).
+  smoke.yml YAML parse (yaml.safe_load)            : valid.
+  smoke-spike.yml                                  : removed (git rm).
+  pytest tests/smoke -m smoke --override-ini=
+     addopts= --collect-only                       : 17 collected (unchanged).
+  ruff check . / ruff format --check .             : clean.
+  ShellCheck                                       : no .sh changed this phase.
+  npx markdownlint-cli2 (README + ADR + 06_Results): clean.
+  test.yml / default pytest invocation             : untouched.
+  src/                                             : untouched (git status).
+
+-------------------------------------------------------------------
+HANDOFF
+-------------------------------------------------------------------
+ADR-04 is code-complete. Next actions are YOURS:
+  1. `gh workflow run smoke.yml` -> confirm green + record the wall-time.
+  2. If wall-time <= ~20 min/job, add a `pull_request` trigger (every-PR).
+  3. Run the manual §7 checklist on a live box.
+  4. Flip ADR Status to Accepted.
+No further agent phase.

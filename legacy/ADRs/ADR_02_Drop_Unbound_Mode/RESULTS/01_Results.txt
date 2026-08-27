@@ -1,0 +1,97 @@
+ADR-02 Phase 1 Results — Force Python-only DNSBL + Migrate Config
+=================================================================
+
+STATE AFTER THIS PHASE
+-----------------------
+$pfb['dnsbl_py_blacklist'] is now constant TRUE — assigned unconditionally at
+runtime regardless of stored config. Both legacy config states (dnsbl_unbound
+with any pfb_py_block, or dnsbl_python + pfb_py_block=off) are migrated at
+install/upgrade time to dnsbl_mode=dnsbl_python + pfb_py_block=on.
+Native Unbound code branches remain in-tree but are unreachable.
+
+EXACT CHANGES
+--------------
+
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+1. Line 844 — force dnsbl_mode at runtime (was: read from stored config):
+   BEFORE:
+       $pfb['dnsbl_mode']  = $pfb['dnsblconfig']['dnsbl_mode'];  // DNSBL Mode (Unbound/python mode)
+   AFTER:
+       $pfb['dnsbl_mode']  = 'dnsbl_python';                     // ADR-02: DNSBL is Python-only; native Unbound mode removed.
+
+2. Lines 860-864 — replace conditional with unconditional TRUE (was: FALSE + if-set-TRUE):
+   BEFORE:
+       // DNSBL Resolver mode (Unbound/Python)
+       $pfb['dnsbl_py_blacklist'] = FALSE;
+       if ($pfb['dnsbl_mode'] == 'dnsbl_python' && $pfb['dnsbl_py_block'] == 'on') {
+           $pfb['dnsbl_py_blacklist'] = TRUE;
+       }
+   AFTER:
+       // DNSBL Resolver mode (Unbound/Python)
+       // ADR-02: DNSBL is Python-only; native Unbound mode removed.
+       $pfb['dnsbl_py_blacklist'] = TRUE;
+
+File: src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+
+3. Lines 109-121 — migration block inserted after VIP migration block (after line 107):
+   // ADR-02: Migrate DNSBL mode to Python-only.
+   $cfg = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', []);
+   if (!empty($cfg) && ($cfg['dnsbl_mode'] !== 'dnsbl_python' || ($cfg['pfb_py_block'] ?? '') !== 'on')) {
+       $cfg['dnsbl_mode']    = 'dnsbl_python';
+       $cfg['pfb_py_block']  = 'on';
+       config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $cfg);
+       write_config('pfBlockerNG: migrated DNSBL to Python-only mode');
+   }
+   unset($cfg);
+
+VERIFICATION RESULTS
+--------------------
+
+php -l: NOT AVAILABLE in this environment (command not found: php).
+Correctness verified by careful diff-read. Both files have matching braces and no
+unclosed constructs. The conditional block was cleanly replaced with a single
+assignment; the migration block is syntactically simple.
+
+pytest: 163 passed in 0.14s (all green). pfb_unbound.py untouched; test suite
+confirms no regressions.
+
+python_blocking emission confirmed at pfblockerng.inc lines 2429-2432:
+    $python_blocking = 'off';
+    if ($pfb['dnsbl_py_blacklist']) {
+        $python_blocking = 'on';
+    }
+With $pfb['dnsbl_py_blacklist'] = TRUE unconditionally, $python_blocking will
+always be 'on'. Emitted at line 2496: "python_blocking = {$python_blocking}".
+
+MIGRATION REASONING
+--------------------
+State A: dnsbl_mode=dnsbl_unbound, pfb_py_block=anything
+  -> condition ($cfg['dnsbl_mode'] !== 'dnsbl_python') is TRUE -> migrate -> on.
+
+State B: dnsbl_mode=dnsbl_python, pfb_py_block=off
+  -> condition (($cfg['pfb_py_block'] ?? '') !== 'on') is TRUE -> migrate -> on.
+
+State C: dnsbl_mode=dnsbl_python, pfb_py_block=on
+  -> both conditions FALSE -> if-block skipped -> no-op. Idempotent.
+
+WATCH-OUTS / DEVIATIONS
+------------------------
+- php not available in dev environment; syntax verified by inspection only.
+- pfblockerng_install.inc line 520 still reads $pfb['dnsbl_mode'] == 'dnsbl_python'
+  to decide whether to copy pfb_unbound.py into unbound chroot. Since dnsbl_mode
+  is now always 'dnsbl_python' at runtime (pinned at line 844 of pfblockerng.inc),
+  that branch always evaluates TRUE at runtime. The install.inc migration block
+  at line 109 runs BEFORE pfb_global() is called in the normal install flow, so
+  stored config will be correct before the copy-decision check at line 520.
+- No UI, shell scripts, alerts, widget, or pfb_unbound.py touched.
+- $pfb['dnsbl_py_block'] is still read from stored config at pfblockerng.inc line
+  846; left intact per instructions (later phases prune it).
+
+GO-AHEAD FOR PHASE 2
+---------------------
+The UI selector/toggle (dnsbl_mode dropdown, pfb_py_block toggle) can now be
+safely removed from the DNSBL settings page. Both the runtime pin (pfblockerng.inc
+line 844 + 862) and the stored-config migration (pfblockerng_install.inc lines
+109-121) ensure no install can be in native Unbound mode. Removing the UI controls
+will not affect any live system behavior.

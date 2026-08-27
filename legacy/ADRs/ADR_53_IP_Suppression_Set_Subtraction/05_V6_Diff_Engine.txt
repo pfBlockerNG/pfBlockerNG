@@ -1,0 +1,115 @@
+================================================================================
+PHASE 5 PROMPT — v6 set-diff engine (pure PHP, TDD)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2 math + upstream facts, §2.1, §7 reject criteria)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 5 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. NEW code
+(no prior behaviour): tests written FIRST, red against the absent engine, green
+once it exists. You implement with Read/Edit/Write/Bash; you do NOT spawn
+further agents.
+
+WHY THIS PHASE EXISTS
+IPv6 suppression is impossible by host enumeration (/64 - /128 = 2^64 hosts)
+and iprange MANGLES v6 input (proven — parses '2001:db8::/64' as hostname
+'2001'; ADR §1.2). But covering-CIDR subtraction costs only (b - a) entries
+(/64 - /128 = 64), and pfSense already ships the emitter:
+ip_range_to_subnet_array() (util.inc; stubbed at stubs/pfsense/util.php:150)
+handles v6 natively via fixed-width binary-string math. This phase builds the
+pure engine; Phase 6 wires it.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/04_Results.txt. If
+  missing, STOP and report.
+- CLAUDE.md "Resolve pfSense-provided PHP functions from upstream" — you MUST
+  verify ip_range_to_subnet_array() (and any helper it needs, e.g. ip6_to_bin)
+  at the dated refs: min-CE 2.8.0, each newer CE, each Plus, master. Record the
+  refs checked in the handoff. It is ancient pfSense code — expect identical
+  bodies — but verify, don't assume.
+- tests/php/README.md + tests/php/pfsense_doubles.php — how faithful doubles
+  work. ip_range_to_subnet_array is PURE: vendor the verified upstream body as
+  a function_exists()-guarded faithful double (with an attribution comment
+  naming the ref), then PIN the double with known vectors so drift is caught.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — helper home + naming
+  conventions.
+- ADR §2.2 contract (set-equivalence, fail-safe publish, empty-is-legit) and
+  §7 (the 100k-line / <5 s reject bound this phase must MEASURE).
+
+ACTION PLAN
+1. Tests FIRST (red) — tests/php/V6CidrSubtractTest.php against the
+   not-yet-existing functions:
+   a. pfb_cidr_subtract_v6(array $cidrs, array $holes): array — known vectors:
+      - ['2001:db8::/64'] minus ['2001:db8::5353/128'] -> exactly 64 covering
+        CIDRs; the hole absent; a sibling (::5352, ::5354) covered;
+      - hole == entry -> entry removed entirely;
+      - hole outside every entry -> input set unchanged (set-wise);
+      - two adjacent /128 holes in one /64; two holes in different entries;
+      - hole CONTAINING an entry (suppress /48, feed /64 inside) -> entry gone;
+      - full suppression of every entry -> [] (legitimately empty);
+      - malformed token in either array -> token skipped + reported (return
+        shape/by-ref errors — design it, keep it simple), never a throw that
+        aborts the whole file.
+   b. SET-EQUIVALENCE property check on randomized-ish fixed-seed cases: verify
+      via an INDEPENDENT representation — expand result + holes + input to
+      (start,end) pairs using inet_pton hex strings compared lexically (NOT the
+      engine's own helpers) — result ∪ holes ⊇ input, result ∩ holes = ∅,
+      result ⊆ input.
+   c. pfb_suppress_file_v6(string $file, string $suppfile): bool — streaming
+      rewrite: atomic tmp+rename publish on success; missing/unreadable inputs
+      -> FALSE + previous file intact; empty result -> empty file published
+      (the §2.2 empty-is-legit contract); non-IP lines dropped + logged.
+   d. Vector-pin the ip_range_to_subnet_array double itself (e.g. the
+      documented pfSense behaviour on a v4 range and a v6 range) so a stale
+      double fails loudly.
+2. Verify the upstream functions at the dated refs (the protocol above); vendor
+   the faithful double(s) into pfsense_doubles.php; add stubs to
+   stubs/pfsense/ if a used helper is missing there (stub over baseline —
+   CLAUDE.md).
+3. Implement in pfblockerng_extra.inc:
+   - parse CIDR -> fixed-width 128-bit binary-string range (inet_pton +
+     per-byte bin conversion; no GMP dependency — mirror upstream's technique);
+   - subtract: sort holes, walk entries, split around intersecting holes,
+     collect remainder ranges;
+   - emit via ip_range_to_subnet_array(); on-appliance it is the REAL pfSense
+     function (the .inc must not redefine it — the double lives only in the
+     test harness).
+   - pfb_suppress_file_v6: stream the member file line-by-line, batch entries,
+     subtract, write temp, rename. Fail-safe per contract.
+4. Measure (informational, for §7): build a 100k-line synthetic v6 member file
+   + a 100-entry suppress list in a test marked/skipped-by-default or a small
+   harness note; record wall time in the handoff. If > 5 s on your machine,
+   flag LOUDLY in the handoff — the §7 bound is appliance-class, the
+   orchestrator decides.
+5. Full gates.
+
+CONSTRAINTS
+- Pure PHP 8.3; tabs; uppercase TRUE/FALSE; no die()/exit(); no config access
+  inside the engine (paths in, bool out).
+- NEVER route v6 through iprange or grepcidr in this engine.
+- Do NOT wire any caller yet (Phase 6) — no pfblockerng.inc changes beyond the
+  helper additions' home if that is where helpers live.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit -> green (new tests red-first against the absent engine —
+  record the red)
+- php -l ; PHPCS ; PHPStan -> clean
+- python -m pytest ; shellspec -> green
+- diff-read: the engine has NO side effects beyond the target file write.
+
+EXPECTED RESULT
+A proven, measured, fail-safe v6 CIDR-subtraction engine, unit-tested
+off-appliance, ready for Phase 6 wiring.
+
+COMMIT (single)
+    pfblockerng: add pure IPv6 CIDR set-subtraction engine (ADR-53 P5)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/05_Results.txt
+State: function signatures + error-reporting shape chosen; upstream refs
+verified (list them) + double vector pins; the perf measurement (input size,
+wall time, machine); test counts; go-ahead for Phase 6.

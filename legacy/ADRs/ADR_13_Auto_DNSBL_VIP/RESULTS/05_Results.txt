@@ -1,0 +1,129 @@
+ADR-13 — Phase 5 Results (Docs + smoke note + Definition of Done)
+=================================================================
+
+Status: DONE. All gates green. ADR-13 implementation complete; Status stays
+PROPOSED pending maintainer on-box manual smoke.
+
+What changed (one commit on adr/13)
+------------------------------------
+1. README.md
+   Added a new "DNSBL sinkhole VIP" subsection (under the existing "DNSBL list
+   build" section) documenting the "Create VIPs automatically" feature:
+   - The checkbox (pfb_dnsvip_auto, default off) and what it does.
+   - Address scheme: 10.10.10.53 / fd00::53, sweeping to the next free .53 on
+     conflict (X = 0..15 bounded sweep).
+   - Ownership marker: pfB_AUTO_VIP_v4 / pfB_AUTO_VIP_v6; only VIPs with that
+     exact marker are ever managed or removed.
+   - Enable/disable lifecycle: VIP created on enable, removed on disable
+     (including uninstall); the pfb_dnsvip_auto setting and address choice
+     persist across enable/disable cycles.
+   - "Range fills up" edge: if auto is on and the range later fills, the
+     checkbox renders disabled+unchecked with a warning; stored pfb_dnsvip_auto
+     stays 'on' until the next save; the lifecycle manager no-ops safely.
+   - IPv6 mandatory rule: auto mode provisions fd00::53; manual mode raises an
+     input error / force-disables DNSBL if no v6 VIP is present.
+   - HA / CARP: each node manages its own node-local lo0 VIP.
+   - Manual workflow (when auto is off): unchanged — pre-create VIP at
+     Firewall > Virtual IPs, select from dropdowns.
+   - Link to ADR-13 for full design.
+
+2. CLAUDE.md — Smoke tests section
+   Updated the "The image bakes only the deps + qemu-guest-agent" bullet to
+   note that the package CAN now auto-create the sinkhole VIP (pfb_dnsvip_auto
+   ON, ADR-13), but the default is OFF, so ensure_dnsbl_vip remains accurate
+   for the matrix (default-off => harness still injects the VIP).
+
+3. tests/smoke/helpers.py
+   - Module-level comment (lines ~86-91): "pfBlockerNG never auto-creates it"
+     corrected to "By default pfBlockerNG does NOT auto-create one
+     (pfb_dnsvip_auto is OFF by default; when ON, pfb_manage_dnsbl_vip
+     auto-creates it)".
+   - ensure_dnsbl_vip docstring: updated to say "By default (pfb_dnsvip_auto
+     OFF) it does not auto-create one" and note that when ON,
+     pfb_manage_dnsbl_vip creates a marked VIP automatically (ADR-13).
+
+4. tests/smoke/test_smoke_matrix.py
+   - deployed_vm fixture comment: "pfBlockerNG never auto-creates one" corrected
+     to "by default pfBlockerNG does NOT auto-create one (pfb_dnsvip_auto OFF;
+     pfb_manage_dnsbl_vip auto-creates it when ON — ADR-13)".
+
+5. src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+   - The pfb_auto_help string (the inline checkbox help) extended to mention:
+     * "including on uninstall" in the lifecycle sentence.
+     * "this setting and the address choice persist across enable/disable cycles."
+     * "Only VIPs carrying that marker are ever managed; manually-created VIPs
+       are never touched."
+     * "On a CARP/HA pair each node manages its own node-local VIP."
+   These additions make the in-UI help consistent with the README documentation.
+   No logic changed; php -l clean.
+
+6. .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md — §7 Definition of Done / Manual smoke
+   - Added a preamble: "Items verified in CI / by code inspection are noted."
+   - "No-op (default off)" item: added "(verified: save + render byte-identical
+     when pfb_dnsvip_auto is absent/off — Phase 4 trace)".
+   - Added a new smoke item: "Range fills up post-enable" — verifies the edge
+     where auto was on, range then fills, checkbox renders disabled+unchecked
+     with warning, stored pfb_dnsvip_auto stays 'on', manager no-ops safely.
+   - "IPv6 mandatory" item: added on-box note "(on-box needed: confirm
+     pfb_unbound_listens_v6() returns true when resolver uses
+     interface-automatic + box has real v6 — link-local vs global caveat from
+     Phase 1)".
+   - Status stays PROPOSED. No items ticked (all require on-box; the CI-
+     verified ones are annotated inline but not ticked as "done" since the
+     ADR's definition of "done" is the full manual smoke).
+
+Smoke case decision
+-------------------
+DEFERRED to manual smoke. A functional auto-create smoke case (flip
+pfb_dnsvip_auto on, assert pfB_AUTO_VIP_v4 appears, block sinks to it) would
+require driving the live pfSense PHP/pf/Unbound stack — beyond what the local
+pytest collection covers. Adding a skeleton that would be skipped locally
+(missing SMOKE_PKG) but exercise the matrix in CI was considered; deferred
+because:
+  - The existing matrix already tests the DNSBL VIP block path (via
+    ensure_dnsbl_vip, the manual-injection path).
+  - Adding an auto-create matrix case risks touching the enable/disable
+    lifecycle in ways that interact with the shared deployed_vm fixture.
+  - The ADR §7 manual smoke covers this explicitly.
+It is documented as the first item to add after on-box smoke confirms the
+feature works end-to-end.
+
+Gate results
+------------
+  - python -m pytest: 994 passed. Green/unchanged (no Python touched).
+  - ruff check .: All checks passed.
+  - npx markdownlint-cli2: 0 error(s) on all 32 matched files (README.md,
+    CLAUDE.md, ADR.md, all others).
+  - php -l (pfblockerng_dnsbl.php): No syntax errors detected.
+  - ShellCheck: no shell files touched -> N/A.
+
+Scope confirmation
+------------------
+  Documentation, comments, and settings help text only. NO production logic
+  changed. Specifically:
+  - pfblockerng.inc: NOT touched (Phases 1-3 wiring complete and untouched).
+  - pfblockerng_dnsbl.php: help TEXT only (pfb_auto_help string); no PHP
+    logic, no form element change, no new config key.
+  - Python plugin (pfb_unbound.py): NOT touched.
+  - tests/smoke/helpers.py, test_smoke_matrix.py: COMMENT-ONLY changes;
+    no test logic added or removed.
+
+ADR status
+----------
+Status = PROPOSED. Maintainer must confirm the manual smoke checklist on a
+live pfSense CE box (see §7) before flipping to Accepted. The "Range fills
+up post-enable" item is new in this phase; all other items were already in
+§7. The link-local v6 caveat (pfb_unbound_listens_v6 + interface-automatic)
+is flagged on the IPv6 mandatory item for on-box confirmation.
+
+Residual follow-ups (documented, not blocking)
+----------------------------------------------
+  - Default-on for fresh installs: explicitly out of scope for v1 (see ADR §2
+    "Explicitly kept / out of scope"). Revisit once the feature is proven in the
+    field as a separate ADR or minor update.
+  - Auto-create smoke matrix case: deferred to manual smoke first (see above).
+  - Link-local v6 caveat: if pfb_unbound_listens_v6() over-fires on
+    link-local-only setups, tighten the predicate (one-line change in Phase 1's
+    pfb_unbound_listens_v6) and ship a follow-up commit.
+
+ADR-13 implementation is complete. All 5 phases committed on adr/13.

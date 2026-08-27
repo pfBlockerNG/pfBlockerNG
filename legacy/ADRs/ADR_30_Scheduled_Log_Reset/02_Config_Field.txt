@@ -1,0 +1,69 @@
+================================================================================
+PHASE 2 PROMPT — Register the per-log log_rotate_<type> config fields
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md   (read §2.1, §5 first)
+================================================================================
+
+ROLE
+Branch adr/30-scheduled-log-reset. Phase 2 of 5. BEHAVIOUR-PRESERVING: register the new
+per-log config keys with defaults; no reader/writer wires them yet. One commit, push.
+
+WHY THIS PHASE EXISTS
+The schedule is a per-log setting that MIRRORS the existing per-log line cap
+(log_max_<type>): one log_rotate_<type> for every log type that has a log_max_<type>.
+Per ADR-29 every registered installedpackages/pfblockerng* scalar goes through PfbConfig
+— registry entry + sniff path + round-trip/rollback tests. Registering them dormant keeps
+this one reviewable commit and pins the config contract early.
+
+REQUIRED READING
+- FIRST read .ADRs/ADR_30_Scheduled_Log_Reset/RESULTS/01_Results.txt — confirm the
+  deciders + their vocabulary landed. If missing, Phase 1 incomplete; STOP and report.
+- .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (§2.1 config-fields row, §2.2 item 5)
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — pfb_cfg_registry(); copy the shape
+  of an existing plain-string (NULL/NULL adapter) entry. Determine the EXACT config.xml
+  section the log_max_<type> keys live in (trace log_max_* via pfblockerng_general.php
+  $pfb['gconfig'] save + pfb_global() in pfblockerng.inc); register log_rotate_<type> in
+  that SAME section.
+- The 10 log types (from pfb_log_mgmt(), pfblockerng.inc:1750): log, errlog, extraslog,
+  ip_blocklog, ip_permitlog, ip_matchlog, dnslog, dnsbl_parse_err, dnsreplylog, unilog.
+- CLAUDE.md "Config gateway — PfbConfig" ("Adding a new registered field" + sniff steps) and
+  "Since-version convention".
+- tests/php/CfgGatewayTest.php, tests/php/RollbackContractTest.php,
+  tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php ($registeredPaths).
+
+ACTION PLAN
+1. For EACH of the 10 log types, add a pfb_cfg_registry() entry: key 'log_rotate_<type>',
+   the resolved section path, default 'off', identity adapter (NULL/NULL — plain string),
+   vocabulary {'off','daily','weekly','monthly'}, 'since' = the in-flight devel release
+   version (if unsure, match the newest 'since' already in the registry and note it in the
+   handoff for the maintainer to confirm). Keep it DRY where the registry style allows
+   (e.g. a small loop building the 10 entries), matching how log_max_<type> is handled.
+2. Add each registered path to $registeredPaths in RequireConfigGatewaySniff.php.
+3. Extend CfgGatewayTest: round-trip write(read(v))==v for every vocabulary value +
+   default-on-absent returns 'off', driven by a data provider over all 10 keys. Update the
+   $inventory completeness test (all 10 keys accounted for).
+4. Extend RollbackContractTest: the log_rotate_<type> vocabulary + since-version pattern.
+
+CONSTRAINTS
+- config.xml stored values frozen: only ADD the new keys; never alter an existing value.
+- Identity round-trip MUST hold for all four tokens; absent ⇒ 'off', for every key.
+- Do NOT add UI or any reader/cron call this phase.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit  (CfgGateway + RollbackContract + inventory)  -> green
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> 0 errors (sniff still green)
+- vendor/bin/phpstan analyse <edited files>         -> OK
+- php -l on edited .inc
+
+EXPECTED RESULT
+All 10 log_rotate_<type> keys are first-class registered fields (default 'off'), round-trip
++ rollback pinned; nothing reads them yet.
+
+COMMIT (single)
+    pfblockerng: register per-log log_rotate schedule fields (ADR-30 P2)
+Push to adr/30-scheduled-log-reset.
+
+HANDOFF — write RESULTS/02_Results.txt
+State: the resolved section path; the exact 10 PfbConfig keys; the 'since' value chosen
+(+ whether the maintainer must confirm it); how you kept the registration DRY; test
+additions; confirm sniff + suite green. Go-ahead for Phase 3.

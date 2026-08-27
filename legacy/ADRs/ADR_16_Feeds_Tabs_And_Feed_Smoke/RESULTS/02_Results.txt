@@ -1,0 +1,132 @@
+ADR-16 — Phase 2 Results
+PREP (test-first): pin the CURRENT per-type Feeds save semantics
+
+STATUS: DONE (local gates green; live ui-tests CI run PENDING — see below).
+Tests only. Only tests/smoke/ui/test_feeds.py changed (+151/-3). NO src/ change.
+
+================================================================================
+WHAT THIS PHASE PINS
+================================================================================
+The CURRENT (pre-split) single all-types Feeds page persists a per-type rename for
+EACH type to config.xml. These live-VM ui_e2e oracle tests are the green bar that
+Phase 3's type-scoped save MUST keep green. They pin TODAY's behaviour ONLY — they
+do NOT pre-encode the Phase-3 sub-tab split (no ?type, no partial single-type POST).
+
+On the current page the save loops EVERY type, and WebUI.post() re-scrapes + re-POSTs
+every other feed_* field at its present value, so a one-field override here does NOT
+clobber the other types. The cross-type NON-clobber case only becomes possible once
+Phase 3's split makes a partial, single-type POST exist — it is added BESIDE these
+in Phase 3 (save IPv4 tab -> DNSBL renames intact, and vice-versa).
+
+================================================================================
+EXACT CONFIG NODES TARGETED (the oracle reads these via helpers.config_get)
+================================================================================
+Aliasnames are the per-type top-level keys in pfblockerng_feeds.json; the page
+renders feed_<lower(aliasname)> and the save writes
+installedpackages/pfblockerngglobal/feed_<lower(aliasname)>.
+
+  IPv4  (pre-existing, unchanged):
+    alias  PRI1
+    field  feed_pri1
+    node   installedpackages/pfblockerngglobal/feed_pri1
+
+  IPv6  (NEW this phase):
+    alias  PRI1_6   (IPv6 Primary Tier collection — IPv6 sibling of PRI1; no status flag)
+    field  feed_pri1_6
+    node   installedpackages/pfblockerngglobal/feed_pri1_6
+
+  DNSBL (NEW this phase):
+    alias  ADs      (collection of advertisement domain feeds; no status flag, plain word)
+    field  feed_ads
+    node   installedpackages/pfblockerngglobal/feed_ads
+
+Both new aliases are stable across the support matrix (shipped in the JSON, no
+"discontinued" status). PRI1_6 mirrors the already-pinned IPv4 PRI1 exactly; ADs is
+a stable DNSBL group.
+
+================================================================================
+NEW TEST FUNCTION NAMES (tests/smoke/ui/test_feeds.py, marker ui_e2e)
+================================================================================
+  test_feed_rename_ipv6_save_changes_effective_config
+      IPv6 PRI1_6 rename round-trip (empty -> word-only name -> empty), both ways.
+
+  test_feed_rename_dnsbl_save_changes_effective_config
+      DNSBL ADs rename round-trip (empty -> word-only name -> empty), both ways.
+
+  test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged
+      DNSBL reject branch: seed a valid override, POST "ADs bad" (space -> /\W/),
+      assert config UNCHANGED (save aborts before write_config).
+
+Pre-existing (unchanged) IPv4 oracles, kept green:
+  test_feed_rename_save_changes_effective_config
+  test_feed_rename_invalid_alias_is_rejected_config_unchanged
+
+Each NEW test is a TRUE transition test (CLAUDE.md): asserts the BEFORE-state
+(empty/default, or the seeded value for the reject case) FIRST, drives the CSRF
+form POST, asserts the AFTER-state via config.xml, then RESTORES in finally
+(_config_del). The oracle is config.xml over SSH, never the POST response body.
+
+Branch coverage: per-type accept path (valid rename persists) for IPv6 + DNSBL,
+PLUS the DNSBL reject path (invalid alias rejected, config unchanged). The IPv6
+reject path is NOT separately re-pinned — the rename validator (preg_match "/\W/")
+is shared verbatim across all three types and is already pinned by the IPv4 and
+DNSBL reject cases; a third copy would be redundant, not a distinct branch.
+
+================================================================================
+SAVE-HANDLER QUIRKS OBSERVED (read END TO END, pfblockerng_feeds.php :69-130)
+================================================================================
+- TYPE-BLIND save (the Phase-3 trap): the save loops
+  `foreach ($pfb['feeds_list'] as $type => $data)` over ALL types and writes each
+  rename as `$_POST['feed_'.$l] ?: ''` -> config_set_path. An ABSENT field is
+  written as ''. So a future per-type tab POSTing only its own fields would reset
+  every OTHER type's rename to empty — this is exactly what Phase 3 fixes and what
+  the cross-type non-clobber test will catch. On the CURRENT page this is harmless
+  because WebUI.post re-POSTs all fields at present value.
+
+- LENGTH GUARD is per-type: the >24-char "Alternate Aliasname" length check is
+  SKIPPED for DNSBL aliases via `!in_array(..., $feeds_list['dnsbl'])`. So the DNSBL
+  reject branch is exercised via the shared `preg_match "/\W/"` (non-word char) path,
+  NOT a length error. The new DNSBL valid value ("ADsRenamed") and IPv6 value
+  ("PRI16renamed") are both word-only and <=24 chars to stay clear of both guards.
+
+- ALT-URL save (alt_selected CSV) is intentionally NOT covered here (as in the
+  pre-existing file) — it needs a browser-faithful multi-value same-name POST
+  (hidden "" + checked radio) that scrape_form_fields cannot reproduce; it is the
+  browser tier's job. NOTE for Phase 3: the hidden `alt_selected` <input> is emitted
+  by the page AFTER the predefined-feeds loop (Phase-1 handoff §HOISTED STATE), so
+  when the body renders ONE type the CSV is naturally scoped to that type — that is
+  what A3's type-scoped save relies on. No "alt_selected always present" surprise
+  observed; the save's alt block is gated on `isset($_POST['alt_selected'])`.
+
+================================================================================
+VERIFICATION GATES
+================================================================================
+- python -m pytest -q : 1115 passed (UNCHANGED — the whole tests/smoke tree is
+  --ignore'd in default collection, so the new smoke tests don't perturb it).
+- ruff check . : All checks passed.
+- ruff format --check . : 69 files already formatted (the new test file formatted).
+- pytest --collect-only tests/smoke/ui/test_feeds.py -m ui_e2e --override-ini="addopts="
+  : 5 tests collected cleanly (3 new + 2 pre-existing), no syntax/import error.
+
+LIVE-VM PASS STATUS: **PENDING** the `ui-tests`-labeled CI run on the ADR-04 live
+pfSense VM. The live VM is NOT available on the implementer's machine, so the
+authoritative pass was NOT produced locally and is NOT fabricated here. The new
+DNSBL + IPv6 rename oracles describe TODAY's behaviour on the current page; the
+ui-tests CI leg is the authoritative green and is a DoD step. Best-effort local
+validation (default suite unchanged + ruff clean + well-formed collect) is green.
+
+================================================================================
+GO-AHEAD FOR PHASE 3
+================================================================================
+Cleared. The per-type save (IPv4 already pinned; IPv6 PRI1_6 + DNSBL ADs pinned now)
+round-trips to config.xml on the single all-types page — the oracle Phase 3's
+type-scoped save must preserve. Phase 3:
+  - split into ?type sub-tabs (copy category.php), type-filter the body via the
+    Phase-1 helpers (one-arg change), and TYPE-SCOPE the save (hidden `type` field;
+    loop only $pfb['feeds_list'][$type]);
+  - retarget test_render_smoke.py PAGE_TABLE -> feeds_ipv4/feeds_ipv6/feeds_dnsbl
+    and test_feeds.py / test_browser_misc.py to the typed URLs;
+  - ADD the cross-type non-clobber ui_e2e test BESIDE these five (save IPv4 tab ->
+    PRI1_6 + ADs renames intact; save DNSBL tab -> PRI1 intact), now possible because
+    a partial single-type POST exists. Keep all five Phase-2 oracles green on the
+    typed URLs.

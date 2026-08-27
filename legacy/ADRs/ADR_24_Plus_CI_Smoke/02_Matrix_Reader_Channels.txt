@@ -1,0 +1,76 @@
+================================================================================
+PHASE 2 PROMPT — Matrix reader: ci-only filter + per-entry image_name/mac
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_24_Plus_CI_Smoke/ADR.md   (read §1.1, §2.1, §2.2 items 1+3+6 first)
+================================================================================
+
+ROLE
+You are on `adr/24-pfsense-plus-in-the-ci-smoke` performing Phase 2 of ADR-24.
+Behaviour-preserving for the CURRENT matrix content (the live Plus entry is
+ci:false, so today's CI matrix output is unchanged). One commit, push directly.
+
+WHY THIS PHASE EXISTS
+read-version-matrix.sh:123 filters the CI matrix to `.ci == true and
+.channel == "CE"` — Plus can never enter CI even when flipped. The fan-out also
+needs per-leg image_name + mac, sourced from the matrix entry (single source of
+truth) with defaults so existing CE entries need no edit.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_24_Plus_CI_Smoke/RESULTS/01_Results.txt — confirm Phase 1
+  complete. If missing: STOP and report.
+- .ADRs/ADR_24_Plus_CI_Smoke/ADR.md — §2.1 table rows 3–4, §2.2.
+- scripts/read-version-matrix.sh — the BUILD/CI matrix jq (~lines 110–130),
+  outputs (~lines 170–185), --variant handling.
+- .github/actions/read-version-matrix/ — the composite action (does it name
+  fields, or pass JSON through?).
+- git show origin/ci-metadata:supported-versions.json — current schema/content.
+- scripts/README.md § "Supported-version matrix".
+
+ACTION PLAN (ordered)
+1. WRITE tests FIRST: new tests/test_read_version_matrix.py. Build a fixture by
+   creating a temp git repo (tmp_path) containing a synthetic
+   supported-versions.json on a ref, then run scripts/read-version-matrix.sh with
+   --ref/--file pointed at it (subprocess, like other script-driving tests in
+   tests/). Scenarios:
+   a. ci_matrix excludes a Plus entry with ci:false              (passes today — pin)
+   b. ci_matrix INCLUDES a Plus entry with ci:true               (RED today)
+   c. included entries carry image_name + mac, with defaults
+      pfsense-ce / BC:24:11:37:9C:AC when the JSON omits them    (RED today)
+   d. explicit image_name/mac in the JSON pass through verbatim   (RED today)
+   e. build_matrix / python_versions / php_versions outputs unchanged by the new
+      fields (regression pin)
+   Record the red run for b–d against the unmodified script.
+2. CHANGE scripts/read-version-matrix.sh:
+   - CI filter: `[.[] | select(.ci == true)]` (channel no longer filters).
+   - Each CI-matrix entry gains resolved fields:
+       image_name: (.image_name // "pfsense-ce")
+       mac:        (.mac // "BC:24:11:37:9C:AC")
+   - Header comment + Outputs doc updated (CI matrix = "the ci:true entries").
+3. CHECK .github/actions/read-version-matrix/: update only if it enumerates
+   fields; if it passes JSON opaquely, change nothing (note it).
+4. RUN: python -m pytest; ruff/mypy; sh -n + shellcheck on the script.
+
+CONSTRAINTS
+- Touch ONLY scripts/read-version-matrix.sh, the composite action (if needed),
+  and the new test file. POSIX sh; jq available.
+- Do NOT edit supported-versions.json itself (that is Phase 4, on ci-metadata).
+- build_matrix and the derived test matrices must be byte-identical (§2.2.6).
+
+VERIFICATION (must all pass before the phase is done)
+- Red recorded for scenarios b–d pre-change; all green after.
+- python -m pytest → green; ruff/mypy → clean; shellcheck → clean.
+- Manual: run the script against the REAL origin/ci-metadata — ci_matrix output
+  identical to today (live Plus entry is still ci:false). Paste both outputs in
+  the handoff.
+
+EXPECTED RESULT
+CI matrix = all ci:true entries, each with resolved image_name/mac; current live
+output unchanged.
+
+COMMIT (single)
+    scripts: CI matrix admits any ci:true channel + image_name/mac fields (ADR-24 P2)
+Push directly to `adr/24-pfsense-plus-in-the-ci-smoke`.
+
+HANDOFF — write `.ADRs/ADR_24_Plus_CI_Smoke/RESULTS/02_Results.txt` (plain .txt)
+Record: the new jq; red→green evidence; the live-matrix before/after outputs
+(identical); whether the composite action changed; go-ahead for Phase 3.

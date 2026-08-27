@@ -1,0 +1,156 @@
+ADR-08 — Phase 5 Results (wire the analyzer into the matcher; Confusable mode LIVE)
+===================================================================================
+Status: DONE. The Phase-4 pure analyzer (pfb_idn_analyzer.classify_idn) is now wired
+into evaluate_domain's IDN branch. Confusable mode is LIVE; Off and All-IDN are
+byte-identical to today (the Phase-3 no-regression golden still pins them, unchanged).
+One commit on adr/08-homoglyph-protection (pushed).
+
+Gates green: python -m pytest = 1303 passed (1258 prior + 45 new, all ADR-08);
+ruff check . clean; ruff format --check . clean; mypy tests/ clean (27 files).
+
+
+1. WHAT CHANGED (matcher ONLY; PHP/UI untouched — Phase 6)
+---------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+  a) New sibling import (top): `import pfb_idn_analyzer as idn_analyzer` (stdlib-only,
+     Unbound-symbol-free; ships alongside pfb_unbound.py so its dir is on Unbound's
+     sys.path at runtime, and conftest adds it for the suite).
+  b) New Confusable-tier surface, just after idn_mode_decision (UNCHANGED — still the
+     All/Off gate, returns True only for IDN_MODE_ALL on an xn-- query):
+       - feed/group label constants (section 3);
+       - IDN_ACT_NONE / IDN_ACT_ALERT / IDN_ACT_BLOCK;
+       - _idn_dual_form(verdict) — the actionable log string (section 4);
+       - idn_confusable_action(q_name, *, block_malicious, escalate_suspicious)
+         -> (action, NameVerdict|None). Gated by is_idn_domain (a non-xn-- query pays
+         NOTHING, returns (NONE, None)); calls classify_idn (decode-safe, NEVER raises);
+         maps severity->action exactly like the Phase-2 oracle's action(...).
+  c) evaluate_domain IDN branch: the All-IDN/Off arm (`if idn_mode_decision(...): feed=
+     "IDN"; group="DNSBL_IDN"`) is BYTE-IDENTICAL. A new `elif idn_mode ==
+     IDN_MODE_CONFUSABLE:` arm runs the analyzer:
+       BLOCK -> is_found=True, Homoglyph (malicious) or Homoglyph_Suspect feed/group,
+                dual-form b_eval.
+       ALERT -> is_found STAYS False (name resolves); the (feed, group, b_eval) is
+                recorded on the new DnsblDecision.idn_alert field.
+       NONE  -> no IDN action (resolve).
+  d) DnsblDecision: new field `idn_alert: Any = None` (default — every existing
+     construction site, prod + 3 tests, is unchanged). Carries a non-blocking alert's
+     attribution; None on the block/allow path.
+  e) operate(): cfg now passes python_idn_block_malicious / python_idn_escalate_suspicious;
+     on a fresh evaluation an `elif dnsbl.idn_alert is not None:` emits the alert via the
+     new _log_idn_alert() (same CSV columns as a block; b_type "Homoglyph_Alert").
+  f) init defaults + ini reads for the two sub-toggles (section 2).
+
+src/usr/local/pkg/pfblockerng/pfb_idn_analyzer.py: trivial tidy only — classify_idn's
+  `worst` is initialised non-Optional (q_name.split(".") is always non-empty), removing a
+  spurious Optional. Behaviour-identical (75 analyzer tests + oracle still green).
+
+
+2. THE CONFIG FIELDS DRIVING MODE + THE TWO SUB-TOGGLES (for Phase 6 UI/PHP)
+---------------------------------------------------------------------------
+  Mode selector (Phase 3, unchanged):  pfb["idn_mode"]  in {IDN_MODE_OFF "off",
+    IDN_MODE_ALL "all", IDN_MODE_CONFUSABLE "confusable"}. Still DERIVED from the legacy
+    python_idn this phase (PHP writes only python_idn=on|off); Phase 6 must emit an
+    explicit `idn_mode` MAIN ini key + the "confusable" UI value.
+
+  NEW sub-toggles (read in IDN_MODE_CONFUSABLE only):
+    pfb["python_idn_block_malicious"]      default TRUE  (ON)  — malicious homograph blocks.
+    pfb["python_idn_escalate_suspicious"]  default FALSE (opt-in) — suspicious/flagged
+                                                                    escalates alert->block.
+  Names follow the file's python_* IDN-config convention (sibling: python_idn, python_tld,
+  python_hsts). The matcher reads them via cfg.get(key, default) so a pfb/ini predating
+  them keeps the shipped policy (malicious ON, escalate OFF) — no KeyError.
+
+  Ini wiring (pfb_unbound side, READY for Phase 6's PHP writer):
+    [MAIN] python_idn_block_malicious = on|off
+    [MAIN] python_idn_escalate_suspicious = on|off
+  Both are config.has_option-guarded reads (init_standard ~875); absent => defaults stand.
+  PHASE 6 TODO: pfblockerng.inc must emit these two MAIN keys (+ idn_mode) from the new
+  UI controls; default-render block-malicious ON, escalate OFF.
+
+
+3. FEED/GROUP LABELS EMITTED (distinct from the blunt All-IDN "IDN"/"DNSBL_IDN")
+-------------------------------------------------------------------------------
+  Malicious (and a malicious-with-block-disabled alert):
+      feed  IDN_FEED_MALICIOUS  = "Homoglyph"
+      group IDN_GROUP_MALICIOUS = "DNSBL_Homoglyph"
+  Suspicious / Flagged (and their escalated block):
+      feed  IDN_FEED_SUSPECT  = "Homoglyph_Suspect"
+      group IDN_GROUP_SUSPECT = "DNSBL_Homoglyph_Suspect"
+  All-IDN mode still emits exactly feed="IDN"/group="DNSBL_IDN" (untouched).
+  PHASE 6 TODO: extend the PHP DNSBL_IDN alias/count machinery (pfblockerng.inc:8305) to
+  also create/count the two new groups so Reports/alerts render the homoglyph counts.
+
+
+4. THE DUAL-FORM LOG LINE (xn-- + decoded + offending script)
+-------------------------------------------------------------
+  _idn_dual_form(verdict) picks the WORST label (first label whose severity == the name
+  verdict's — name severity is the most-severe label) and formats:
+      "<a_label> [<decoded>] <offending scripts, space-joined, sorted>"
+  Examples (verified):
+      xn--pple-43d.com           -> "xn--pple-43d [аpple] Cyrillic Latin"
+      xn--ypal-43d9g.example.com -> "xn--ypal-43d9g [раypal] Cyrillic Latin"  (subdomain
+                                     homograph — per-label, never unioned across the dot)
+      a FLAGGED decode error     -> "<a_label> [decode-error:UnicodeDecodeError]"
+  This string is the b_eval on a BLOCK (overrides the bare A-label after the generic
+  `b_eval=q_name`, only on the homoglyph path) AND the b_eval inside idn_alert on an ALERT.
+  It mirrors the alerts page's existing idn_to_utf8 "domain [decoded]" display so the
+  dnsbl.log/unified.log line + the alerts page render it actionably.
+  Block line: get_details_dnsbl's existing CSV (p_type,b_type,group,b_eval,feed) — b_eval
+  carries the dual form. Alert line: _log_idn_alert emits the SAME columns with b_type
+  "Homoglyph_Alert" so a non-block alert is distinguishable.
+
+
+5. SEVERITY -> ACTION (reproduces the Phase-2 oracle action(); section 3 of RESULTS/02)
+---------------------------------------------------------------------------------------
+  LEGIT      -> NONE   (single-script, Latin+CJK, IDN-ccTLD per-label) — resolves untouched.
+  MALICIOUS  -> BLOCK  when block_malicious (default-ON); -> ALERT when disabled
+               (still attributed to the Homoglyph/malicious feed, just not blocked).
+  SUSPICIOUS -> ALERT  by default; -> BLOCK when escalate_suspicious (opt-in).
+  FLAGGED    -> ALERT  by default; -> BLOCK on escalate. NEVER block-by-default; the
+               undecodable case is caught inside classify_idn so it NEVER crashes the
+               resolver (asserted: an evaluate_domain over an undecodable xn-- returns
+               normally with an alert).
+
+
+6. GATES + CONTRACTS CONFIRMED
+------------------------------
+  - Off/All golden GREEN, Off/All assertions BYTE-IDENTICAL (tests/test_adr08_mode_baseline.py).
+    The ONLY two tests touched there are the Phase-3 *Confusable-INERT* pins, which Phase 5
+    intentionally supersedes (their own docstrings called them tripwires that go red when
+    Confusable activates): the unit one is re-described as "idn_mode_decision is the All-gate
+    only" (still green — the Confusable tier lives in idn_confusable_action, NOT that gate);
+    the e2e one now pins that Confusable blocks ONLY the homograph, not block-all. No Off or
+    All-IDN assertion changed.
+  - Confusable oracle GREEN: NEW tests/test_adr08_confusable_matcher.py grades PRODUCTION
+    evaluate_domain + idn_confusable_action against the Phase-2 oracle's action() over the
+    corpus, EVERY tier (malicious block, suspicious alert, FLAGGED-scriptless AND
+    FLAGGED-decode-error alert, CJK/accented/IDN-ccTLD legit resolve) x BOTH sub-toggle
+    states (block_malicious on/off, escalate on/off) — with before/after transitions for
+    each toggle (block->alert when malicious disabled; alert->block when escalated).
+  - WHITELIST-WINS tested: a user-whitelisted malicious homograph still trips is_found
+    (the analyzer feeds is_found like any block source) but the existing whiteDB override
+    flips in_whitelist=True AFTER (un-blocked) — NOT special-cased
+    (TestConfusableWhitelistWins, with the before-state un-whitelisted block asserted first).
+  - Non-IDN pays nothing: idn_confusable_action returns (NONE, None) without decode/script
+    work; analysis stays gated behind is_idn_domain.
+  - Decode-safe: classify_idn never raises into operate(); the FLAGGED-decode-error case
+    is exercised end-to-end through evaluate_domain.
+
+
+7. GO-AHEAD FOR PHASE 6 (UI + PHP config)
+-----------------------------------------
+  PROCEED. The matcher is fully wired and tested; everything below is PHP/UI only:
+    - Replace the pfb_idn on/off control with the Off|All-IDN|Confusable mode selector +
+      the two sub-toggles (block-malicious default-ON, suspicious-alert<->block opt-in).
+      Backward-compat: existing 'on' -> All-IDN (already handled Python-side; keep it).
+    - pfblockerng.inc: emit the MAIN ini keys this phase reads — `idn_mode` (off|all|
+      confusable) + `python_idn_block_malicious` + `python_idn_escalate_suspicious` — from
+      the new controls (section 2). Until then idn_mode is still derived from python_idn,
+      so a config WITHOUT the new keys comes up exactly as today (Off or All-IDN).
+    - Extend the DNSBL_IDN alias/count machinery (pfblockerng.inc:8305) for the two new
+      groups DNSBL_Homoglyph / DNSBL_Homoglyph_Suspect so the alerts page + Reports render
+      the homoglyph + suspect counts; alerts display tie-in via idn_to_utf8 (the dual-form
+      b_eval already carries the decoded Unicode + offending script).
+    - Help text must spell out the documented limitation (whole-script confusables + ASCII
+      typosquats NOT covered) per ADR-08 section 2 / DoD.
+  No Python/matcher change is needed in Phase 6 — only the PHP must start emitting the keys.

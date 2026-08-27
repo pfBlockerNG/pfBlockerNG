@@ -1,0 +1,81 @@
+================================================================================
+PHASE 3 PROMPT — `add-repo.sh nightly` channel + README one-liner
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §2 "Client bootstrap", §2 "Hosting",
+     "Explicitly kept / out of scope" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 3 of ADR-18. Add the
+client-side opt-in for the nightly channel: a `nightly` channel in `scripts/add-repo.sh`
+pointing at the `…/pfBlockerNG/nightly/${ABI}` subtree, plus the README one-liner + caveat.
+Work in this ADR's worktree, one commit (touches scripts/+docs → rebase-only PR; the README
+half is doc-only).
+
+WHY THIS PHASE EXISTS
+A user opts into the nightly stream the same way ADR-17 made them opt into the release repo:
+a one-time repo conf. The nightly catalog lives at a SEPARATE subtree
+(`…/pfBlockerNG/nightly/${ABI}`) on the SAME Pages site (§2 Hosting), and the package has a
+SEPARATE name that conflicts with the release builds — so the bootstrap + README must make
+the "bleeding edge / conflicts with release / switch back via the release channel" contract
+explicit.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_18_Nightly_Channel/RESULTS/02_Results.txt — it must record the nightly package
+  NAME and that the builder emits it. If it is missing, STOP and report.
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§2 Client bootstrap / Hosting / out-of-scope).
+- scripts/add-repo.sh — the existing `devel|stable` channel handling, the conf it writes
+  (`url:` with `${ABI}`, `signature_type: none`, `priority:` above the `pfSense` repo,
+  `enabled: yes`), `--print-conf`, `--base-url`, and how it runs `pkg update` + verifies.
+- scripts/build-repo.sh `--print-conf` / scripts/build-repo-portable.py `--print-conf` —
+  the conf template the nightly must stay byte-consistent with (same fields; only the
+  `url:` path gains `/nightly`).
+- README.md — the ADR-17 install section to extend.
+- CLAUDE.md — Shell standards (POSIX sh, quoted expansions, absolute binary paths), the
+  URL-encoding gate (static URLs only), and "Web UI help text"/doc style.
+
+ACTION PLAN (ordered)
+1. Add a `nightly` channel to `add-repo.sh`: write
+   `/usr/local/etc/pkg/repos/pfblockerng-nightly.conf` with the SAME fields as the
+   devel/stable confs except `url:` = `<base>/pfBlockerNG/nightly/${ABI}` and a distinct
+   repo NAME (`pfblockerng-nightly`). `signature_type: none`, `priority:` above the
+   `pfSense` repo, `enabled: yes`. Idempotent (re-running rewrites cleanly). `--print-conf`
+   supports the nightly channel; `--base-url` override still works.
+2. Run `pkg update` and verify the NIGHTLY package is visible from our repo
+   (`pkg rquery -r pfblockerng-nightly '%n'` shows `pfSense-pkg-pfBlockerNG-NIGHTLY`), with
+   a clear error if not.
+3. README: a nightly install one-liner (`add-repo.sh nightly` → `pkg install
+   pfSense-pkg-pfBlockerNG-NIGHTLY`) and a short caveat block — nightly = current `devel`
+   tip, unreviewed; it CONFLICTS with the stable/`-devel` packages (installing one removes
+   the other); switch back with `pkg install pfSense-pkg-pfBlockerNG-devel`; updates track
+   the newest build date via `pkg upgrade`. Match the neighbouring help-text length/style.
+4. Keep the conf `url:` STATIC (no query interpolation — the URL-encoding gate scans shell
+   + md fences).
+
+CONSTRAINTS
+- POSIX sh, `#!/bin/sh`, quoted expansions, absolute binary paths; ShellCheck-clean
+  (justify any suppression). No bash-isms.
+- Do NOT add CI (Phase 4) or the smoke cases (Phase 5); do NOT touch src/. Do NOT change
+  the devel/stable channel behaviour (only ADD the nightly channel).
+
+VERIFICATION (must all pass before the phase is done)
+- shellcheck scripts/add-repo.sh + `sh -n` → clean; scripts/check_url_encoding.py → clean.
+- `add-repo.sh --print-conf nightly` prints a conf whose only diff vs devel is the repo
+  name + the `/nightly` url path; markdownlint clean on README.
+- python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+`add-repo.sh nightly` writes a correct, idempotent nightly repo conf and verifies the
+nightly package is visible; the README documents the one-liner + the conflict/switch-back
+caveat.
+
+COMMIT (single)
+    scripts: add nightly channel to add-repo.sh + README one-liner (ADR-18 P3)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. Touches scripts/+docs → rebase-only PR. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/03_Results.txt` (plain .txt)
+State: the nightly repo NAME + conf path + the exact `url:` (`…/pfBlockerNG/nightly/${ABI}`),
+the `--print-conf nightly` output, the verify command used, and the go-ahead for Phase 4
+(which must publish the catalog to exactly that `/nightly/${ABI}` subtree).

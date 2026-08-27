@@ -1,0 +1,69 @@
+# Agent-config gates (issues #1387, #2473) — a standalone workflow, NOT a
+# test.yml job: test.yml's global `paths-ignore` ('**/*.md') would skip that
+# entire workflow for an md-only change to the registry doc
+# (.agents/policy/agent-roles.md) or to a skill (SKILL.md) — the exact files
+# these gates guard. Both triggers are wired, because dev-only classes (skills,
+# agent configuration, policy docs) land as direct pushes to devel, not only
+# through PRs. The `paths` lists mirror both checkers' trigger surfaces plus this
+# file itself, so an edit to the triggers or the steps re-runs both gates; they
+# are pinned by
+# tests/test_agent_roles_check.py::test_ci_workflow_paths_match_checker_triggers.
+# Semantic fields only — tier vocabulary, mutation boundaries, binding targets,
+# model pins, discovery routing — never textual identity.
+name: Agent config
+
+on:
+  push:
+    branches: [main, devel]
+    paths:
+      - '.agents/policy/agent-roles.md'
+      - '.agents/model-tiers.conf'
+      - 'scripts/check_agent_roles.py'
+      - 'scripts/agent/check-agent-config-parity.sh'
+      - '.codex/agents/**'
+      - '.github/agents/**'
+      - '.claude/workflows/**'
+      - '.claude/skills/**'
+      - '.agents/skills/**'
+      - '.agents/policy/**'
+      - '.github/workflows/agent-config.yml'
+  pull_request:
+    paths:
+      - '.agents/policy/agent-roles.md'
+      - '.agents/model-tiers.conf'
+      - 'scripts/check_agent_roles.py'
+      - 'scripts/agent/check-agent-config-parity.sh'
+      - '.codex/agents/**'
+      - '.github/agents/**'
+      - '.claude/workflows/**'
+      - '.claude/skills/**'
+      - '.agents/skills/**'
+      - '.agents/policy/**'
+      - '.github/workflows/agent-config.yml'
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  agent-config:
+    name: Agent config (role registry + skill/workflow parity)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate the role registry against vendor role definitions
+        # --all, not --diff: the workflow's own path filter already scopes when
+        # this runs, and --all needs no base ref — the push mode has none. A
+        # deliberate model pin on an exempt line carries `roles-ok: <reason>`.
+        run: python3 scripts/check_agent_roles.py --all
+
+      - name: Verify canonical skill/workflow sources against their Codex adapters
+        run: sh scripts/agent/check-agent-config-parity.sh

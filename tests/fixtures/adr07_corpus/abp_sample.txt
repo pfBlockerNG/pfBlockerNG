@@ -1,0 +1,75 @@
+[Adblock Plus 2.0]
+! Title: ADR-07 representative ABP DNS sample (trimmed, hand-curated)
+! Homepage: see tests/fixtures/adr07_corpus/README.md
+! This is a syntactic exemplar set, not a verbatim feed.
+!
+! --- plain ||domain^ blocks (the only class today's lite parser keeps) ---
+||ads.example.com^
+||tracker.example.net^
+||analytics.example.org^
+||pixel.adserver.example^
+||beacon.metrics.example^
+||doubleclick-proxy.example^
+||telemetry.vendor.example^
+||a.collect.example^
+||b.collect.example^
+||c.collect.example^
+!
+! --- ||domain^ with DNS-relevant options (in scope; precedence-bearing) ---
+||promo.example.com^$important
+||hard.block.example^$important
+||rewrite.example^$dnsrewrite=0.0.0.0
+||gone.example^$badfilter
+||stale.block.example^$badfilter
+!
+! --- @@ exceptions (dropped today -> the over-blocking the ADR fixes) ---
+@@||cdn.example.com^
+@@||static.example.net^
+@@||login.example.org^
+@@||api.vendor.example^
+@@||safe.collect.example^
+@@||allow.example^$important
+!
+! --- hosts-style lines (AdGuardHome accepts these in adblock feeds) ---
+0.0.0.0 tracker.hostsfmt.example
+0.0.0.0 ads.hostsfmt.example
+127.0.0.1 metrics.hostsfmt.example
+0.0.0.0 beacon.hostsfmt.example
+!
+! --- bare plain domains ---
+plain.bad.example
+another.plain.example
+third.plain.example
+!
+! --- IP-anchored / hosts-IP (PHP firewall path; Python returns None) ---
+||203.0.113.7^
+||198.51.100.42^
+0.0.0.0 203.0.113.99
+!
+! --- regex rules: see regex_reducible.txt / regex_irreducible.txt for the bulk;
+!     a couple inline here so the sample alone exercises the dispatch ---
+/^ads\d*\.tracker\.example$/
+@@/safe-cdn\.example/
+!
+! --- element-hiding / cosmetic (DNS-only scope SKIPS all of these) ---
+example.com##.ad-banner
+example.com##div[class^="sponsor"]
+##.global-ad
+example.net#@#.whitelisted-ad
+example.org#?#div:has(> .ad)
+!
+! --- path / URL rules (not a whole-domain DNS decision -> SKIP) ---
+||example.com/ads/*
+||cdn.example.net/track.js
+/banners/*.gif
+||shop.example^/affiliate?id=
+!
+! --- page-context $options (not DNS-meaningful -> SKIP) ---
+||widget.example^$third-party
+||script.example^$script
+||img.example^$image,third-party
+||frame.example^$subdocument
+||csp.example^$csp=script-src
+||domspecific.example^$domain=foo.com
+! underscore label (#723): DNS-legal, accepted by production and the oracle alike
+||_dmarc.underscore-corpus.com^

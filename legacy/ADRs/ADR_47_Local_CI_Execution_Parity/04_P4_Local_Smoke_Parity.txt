@@ -1,0 +1,200 @@
+ADR-47 Phase 4 — Local-smoke parity + shared SMOKE launcher (run ON the leased box)
+
+FIRST LINE FOR THE IMPLEMENTER: Run /ponytail:ponytail full
+
+OBJECTIVE
+Collapse the THREE drifting pytest invocations (smoke-single.yml, ui-tests.yml, local-smoke.sh)
+into ONE canonical launcher scripts/run-smoke.sh, and make a local smoke run isolate by leasing a
+box and running the ENTIRE suite ON that box (the boxes are the nested-KVM environment; the
+dev/CI machine only orchestrates). Add the on-box entrypoint scripts/smoke-on-box.sh; rewire
+local-smoke.sh to lease + drive it; fix the conftest bind(:0) TOCTOU by lane-striding and point
+diagnostics at the per-run dir; rewire the two CI workflows to mint RUN_ID + call run-smoke.sh.
+
+This phase was design-pre-verified (Map→Design→Verify) AND the execution-locus fork was resolved
+by the maintainer. The EXECUTION MODEL below (§5.4 of the ADR) and the AMENDMENTS are mandatory.
+
+READ FIRST
+- .ADRs/ADR_47_Local_CI_Execution_Parity/ADR.md — §5.1 (run-id/lease keying), §5.4 (THE smoke
+  execution locus — AUTHORITATIVE for this phase), §5.3 (parity-guard), §6 (P4 bullet), §7.
+- RESULTS/02_Results.txt — the select-box.sh contract. CRITICAL: default mode arms an EXIT trap
+  and SELF-RELEASES; the only lease-HOLDING form is `select-box.sh -- <cmd>` (runs <cmd> on the
+  leased box over ssh, trap-releases after). `--print-id` mints a ci- id with NO lease/ssh.
+- RESULTS/03_Results.txt — build-leg.sh contract (build ONE .pkg; stdout = only the .pkg path;
+  run-keyed OUT) + parity-guard rules. P4 calls build-leg.sh on the box.
+- scripts/local-smoke.sh (the orchestrator-to-be), tests/smoke/conftest.py (SMOKE_LANE at ~:73,
+  DIAG_DIR at ~:418, the bind(:0) `_alloc_free_tcp_port` at ~:466-480, lan_socket_port fixture
+  ~:483-498, _validate_lane ~:84-92, the SSH/WEB/CLIENT_SSH lane-port writebacks ~:133-135),
+  tests/smoke/boot_vm.sh (LAN_SOCKET_PORT default 12340 at ~:119), and the pytest steps in
+  .github/workflows/smoke-single.yml (~:601-623, nightly RUN_ID mint pattern ~:459-460) +
+  ui-tests.yml (~:603-617). Re-locate; line numbers are approximate.
+- docs/misc/local-smoke-debian.md — the current local-smoke contract (SMOKE_SSH_KEY/SMOKE_PKG/
+  SMOKE_IMAGE_DIR/SMOKE_CLIENT_IMAGE_DIR; needs /dev/kvm). You will update this doc.
+- CLAUDE.md — shell standards (POSIX sh, quoting, shellcheck), the test-coverage mandate, the
+  shared-bare-repo GIT_* scrub rule (every git-touching spec).
+
+EXECUTION MODEL (ADR §5.4 — the maintainer's resolved decision; build to THIS)
+- A local run leases a box and runs the WHOLE smoke ON it via `select-box.sh -- <on-box cmd>`
+  (lease-held form; default mode self-releases — do NOT use `eval "$(select-box.sh)"`).
+- Repos live under /root on each box (e.g. /root/pfBlockerNG, the FreeBSD-ports tree under /root).
+- THE RUN CHECKS OUT THE REF IT WANTS. The orchestrator passes a ref (commit/branch); the on-box
+  bootstrap `git fetch` + checks it out, THEN re-execs the now-at-ref entrypoint, so the run uses
+  that ref's own scripts/tests. The bootstrap one-liner (cd + fetch + checkout + exec) is
+  ref-stable. FreeBSD-ports (under /root) is brought up-to-date on pfblockerng/use-github via
+  sparse-clone-ports.sh (P1, idempotent).
+- Images live in /root/images, pre-baked into the LXC clones but possibly stale: `oras pull` to
+  REFRESH when the GHCR digest differs AND PULL when absent — do BOTH (digest-compare +
+  tolerate-missing). Then point SMOKE_IMAGE_DIR/SMOKE_CLIENT_IMAGE_DIR at /root/images (or the
+  per-kind subdirs; the harness needs exactly one *.qcow2 per dir — keep pfSense and civm in
+  SEPARATE dirs, see the runbook).
+- pkill qemu runs ON THE BOX (single-writer per lease) before boot — safe (never another box's
+  VMs) AND reaping (clears this box's stale qemu, incl. the fixed lane port).
+- CI is the degenerate case: the runner IS a pre-leased, already-checked-out box — it mints with
+  --print-id (no lease, no on-box bootstrap) and calls run-smoke.sh DIRECTLY. So run-smoke.sh +
+  the host prep are the shared surface; the lease + on-box bootstrap are the one legitimate
+  local-only orchestration divergence.
+
+DELIVERABLES (single commit)
+
+--- scripts/run-smoke.sh (NEW) — the one canonical pytest argv ---
+Emit ALWAYS, in order: <PYTHON> -m pytest <PATHS> -m <MARKER> --override-ini="addopts="
+  --override-ini="timeout_func_only=true" --timeout=<TIMEOUT> --timeout-method=signal -v
+  [-k <K>] [passthrough...]. This is the shared core all three copies already agree on.
+Params + defaults (defaults reproduce the LOCAL no-arg run; CI passes the others):
+  --paths P     default tests/smoke     (UI passes tests/smoke/ui)
+  -m/--marker M default smoke           (CI smoke: smoke|repo; UI: ui_render|ui_e2e|ui_browser)
+  --timeout N   default 30              (UI passes 300)
+  -k EXPR       optional, rides as ONE arg (never word-split); omit when empty
+  trailing passthrough after the known flags → forwarded to pytest verbatim
+Fold in from local-smoke.sh: the `-m` guard (if a `-m` is in the passthrough, do NOT inject the
+default `-m`; caller's marker wins — detect the bare `-m` form, same caveat as today); the PYTHON
+resolution (PYTHON env override; else $REPO_ROOT/.venv/bin/python if executable; else python3).
+AMENDMENT (bare-path parity): a caller-supplied positional PATH must REPLACE the default
+`--paths tests/smoke`, NOT be appended — else `local-smoke.sh -m ui_render tests/smoke/ui` runs
+the whole tree. (Translate a bare positional path into --paths, or suppress the default when a
+passthrough path is present.)
+AMENDMENT (PYTHON/CI parity): parity with CI's literal `python3` holds only because CI has no
+repo-root .venv. Either gate the .venv preference off when GITHUB_ACTIONS is set, OR add a spec
+asserting PYTHON falls to python3 when no .venv exists — and document the coupling.
+run-smoke.sh is the pytest argv ONLY — no sysctl/pkill/oras/civm (those are the caller's/box's
+job). Reads RUN_ID/PFB_DIAG_DIR/SMOKE_LANE from env only to let them reach pytest by inheritance.
+
+--- scripts/smoke-on-box.sh (NEW) — the on-box entrypoint (local path only) ---
+Runs ON the leased box (invoked by local-smoke.sh via `select-box.sh -- "sh .../smoke-on-box.sh
+<args>"`). Single-writer on its box. Responsibilities, in order:
+  1. Ref: cd the /root pfBlockerNG repo; `git fetch` + checkout the requested ref; re-exec the
+     now-at-ref smoke-on-box.sh once (guard against infinite re-exec, e.g. a PFB_ONBOX_REEXEC=1
+     sentinel). The cd+fetch+checkout+exec bootstrap is ref-stable.
+  2. Ports: ensure the /root FreeBSD-ports tree is current on pfblockerng/use-github via
+     sparse-clone-ports.sh (idempotent; it fetches + checks out the REF).
+  3. Images: oras pull into /root/images — refresh when the remote GHCR digest differs from the
+     local, pull when absent; tolerate a missing dir/file. Set SMOKE_IMAGE_DIR/
+     SMOKE_CLIENT_IMAGE_DIR (separate dirs, one *.qcow2 each).
+  4. Host prep ON the box: the stub-:53 relay + the ip_unprivileged_port_start sysctl (moved here
+     from local-smoke.sh) + `pkill -9 -f qemu-system-x86_64` (lease-gated — this box only).
+  5. Build: build-leg.sh → SMOKE_PKG (the branch .pkg for this ref).
+  6. Run: run-smoke.sh with the lane/diag/marker/-k from the lease + caller.
+  Use SMOKE_LANE/PFB_DIAG_DIR from the lease env. Quote everything; POSIX sh; shellcheck clean.
+
+--- scripts/local-smoke.sh (REWIRE) — the orchestrator ---
+KEEP: required-var validation; the -k/-m passthrough (now delegated to run-smoke.sh).
+CHANGE: require PFB_BOXES; lease + drive the on-box entrypoint via `select-box.sh -- "<bootstrap
+that cd /root/pfBlockerNG && git fetch && git checkout <REF> && exec sh scripts/smoke-on-box.sh
+<args>>"` (lease-held; trap-release is automatic in the `-- <cmd>` form). The orchestrator decides
+the REF (default: the current HEAD/branch under test) and forwards the smoke args + any SMOKE_*
+overrides the box needs. MOVE the host prep (stub-:53, sysctl, civm pull, pkill) ONTO the box
+(smoke-on-box.sh) — drop the unconditional local `pkill qemu`. Beware select-box.sh's `-- <cmd>`
+space-joins argv over ssh (RESULTS/02_Results.txt): pass the on-box command as a single carefully
+quoted `sh -c '...'` string; a `-k "a and not b"` must survive remote re-tokenisation as one arg.
+If running the whole workload through one ssh command string proves too fragile, the fallback is a
+lease-and-hold mode on select-box.sh (emit KEY=value, suppress auto-release) + a local --release
+trap — but PREFER the `-- <cmd>` form (no change to the P2-frozen select-box.sh); if you must add
+the mode, add its spec case and flag it in the handoff.
+
+--- tests/smoke/conftest.py (CHANGE) ---
+- DIAG_DIR: `Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag")` — empty-safe (an exported-empty
+  PFB_DIAG_DIR must fall back to the relative default, NOT become Path("")==cwd, or diagnostics
+  escape the CI upload globs). Default relative "smoke-diag" keeps the CI globs working (CI leaves
+  PFB_DIAG_DIR unset). SMOKE_LANE untouched.
+- bind(:0) TOCTOU: DELETE `_alloc_free_tcp_port()` (the bind-0→getsockname→close→return race).
+  Lane-stride the LAN-socket port off boot_vm.sh's base 12340: add
+  DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT","12340")),
+  _LANE) next to the other ports; write it back at import (os.environ["SMOKE_LAN_SOCKET_PORT"]=...)
+  alongside the SSH/WEB/CLIENT_SSH writebacks; the lan_socket_port fixture yields it (no allocator).
+  Invariant: lane 0 → 12340 (boot_vm.sh's historical default). The port becomes DETERMINISTIC
+  (was OS-ephemeral) — so the lease/pkill must free 12340 before boot (it does, on-box).
+- _validate_lane: 12340 is now the HIGHEST base, so re-base the ceiling (12340 + lane*10 ≤ 65535 →
+  lanes 0..5319). Update the bound, the error string, and the docstring, or a high lane silently
+  exceeds 65535.
+
+--- .github/workflows/smoke-single.yml + ui-tests.yml (REWIRE) ---
+Each per-leg pytest step: mint RUN_ID via `RUN_ID="$(sh scripts/select-box.sh --print-id)"; export
+RUN_ID` (slug LEG from the per-leg coords — ABI for smoke; tier+variant+version for UI — as the
+nightly build step already does), then REPLACE the inline `set -- ...; [-k splice]; python3 -m
+pytest "$@"` argv block with a single run-smoke.sh call:
+  smoke: sh scripts/run-smoke.sh --paths tests/smoke -m "$PYTEST_MARKER" --timeout 30 ${PYTEST_K:+-k "$PYTEST_K"}
+  UI:    sh scripts/run-smoke.sh --paths tests/smoke/ui -m "$MARKER" --timeout 300 ${PYTEST_K:+-k "$PYTEST_K"}
+KEEP the workflow-side :53 sysctl/stub on smoke-single (the runner is the box; moving it behind a
+shared launcher is a P5 item — note it). PFB_DIAG_DIR stays UNSET in CI → DIAG_DIR keeps the
+relative "smoke-diag" → the existing upload globs (smoke-diag/**) work byte-for-byte. Delete the
+duplicated argv blocks (the three-way drift). NOTE in the handoff: the parity-guard's TEST-path
+teeth are a P5 item — until then nothing mechanically blocks re-inlining the argv.
+
+CONSTRAINTS
+- POSIX sh; shellcheck clean; quote every expansion; absolute paths only for privileged bins.
+- run-smoke.sh, smoke-on-box.sh, local-smoke.sh changes are behaviour-EXPANDING for local (local
+  GAINS -v + --timeout=30 + signal timeout it never had — the ADR §5.3/§6 drift-kill, NOT a
+  regression; document it so a now-fast-failing >30s local case isn't mistaken for a new bug).
+- Do NOT modify select-box.sh unless you must add the lease-and-hold fallback (prefer `-- <cmd>`).
+- Every new git-touching shellspec MUST carry the GIT_* unset scrub (shared-bare-repo rule).
+
+TEST MANDATE (CLAUDE.md — red→green where behaviour changes; oracle where preserving)
+- tests/shell/run_smoke_spec.sh (PR gate, hermetic): fake pytest/python on PATH recording argv;
+  assert the EXACT canonical argv for each of the 3 reproductions (local default; UI; CI-smoke
+  `repo`), the single-arg `-k`, the `-m` passthrough guard (default `-m` NOT appended when caller
+  gives one — assert ABSENCE), the bare-path REPLACE (caller path replaces tests/smoke, the
+  amendment), and PYTHON resolution. RED→GREEN: red while any caller inlines its own argv / before
+  run-smoke.sh exists; green once it emits the canonical argv.
+- a conftest lane-stride/DIAG pytest unit test (PR gate): import conftest under controlled
+  SMOKE_LANE and assert lan_socket_port is DETERMINISTIC + lane-keyed (lane N → 12340+N*10; lane 0
+  → 12340; distinct lanes → distinct ports; NO bind(:0)); SMOKE_LAN_SOCKET_PORT written back at
+  import; DIAG_DIR honours PFB_DIAG_DIR when set, defaults when unset/empty; _validate_lane rejects
+  >5319. RED→GREEN: against pre-change conftest, "deterministic per lane" fails (OS-ephemeral) and
+  "DIAG_DIR honours PFB_DIAG_DIR" fails (hardcoded); green after.
+- record the red result for both in the handoff.
+
+GATES (all green before the handoff)
+- shellcheck on every new/changed shell file → clean.
+- shellspec tests/shell/run_smoke_spec.sh → green (incl. the red→green noted).
+- /Users/andre/git/pfBlockerNG/.venv/bin/python -m pytest <the conftest lane-stride test> → green;
+  ruff check . && ruff format --check . → clean.
+- shellspec (full suite) → green, no regressions (pre-existing skips unchanged).
+- actionlint on the two rewired workflows (or a careful manual diff: only the delete-and-replace
+  described; orchestration preserved); parity-guard (P3) still 0 violations on all workflows.
+- LIVE §8 acceptance (boxes are UP: pfb-box-1 root@10.0.0.23, pfb-box-2 root@10.0.0.24; shared
+  ZFS lease mount): a 2-box CONCURRENT local smoke — two local-smoke.sh runs at once with
+  PFB_BOXES="root@10.0.0.23 root@10.0.0.24" → distinct PFB_BOX + RUN_ID + PFB_DIAG_DIR, no
+  :53/forward-port/pkill cross-kill, both green, both leases released. This is the real proof the
+  on-box model works concurrently. If a full 2-box smoke is too slow/heavy to complete in this
+  phase, run at minimum the lease+bootstrap+oras-refresh+build legs concurrently and record the
+  outcome; do NOT silently skip — say exactly what ran (CLAUDE.md "no silent caps").
+
+EXPECTED RESULT
+One pytest argv (run-smoke.sh) used by all three sites; local runs lease a box and run the whole
+suite on it at the ref they choose, with images oras-refreshed and ports on use-github; the
+bind(:0) TOCTOU is gone (deterministic lane-strided port); diagnostics land in the per-run dir;
+two concurrent local runs do not collide. CI unchanged in behaviour (runner = pre-leased box,
+run-smoke.sh directly, diagnostics globs intact).
+
+COMMIT
+adr-47: shared run-smoke.sh + on-box smoke launcher; lane-stride TOCTOU fix (P4)
+
+HANDOFF (write 04_Results.txt)
+Deliverables; gate results incl. both red→green evidences + what the live 2-box run actually
+exercised; the run-smoke.sh + smoke-on-box.sh contracts as shipped; the lease-hold mechanism used
+(`-- <cmd>` vs the fallback) + the ref-checkout/re-exec + oras-refresh approach; the conftest
+lane-stride invariant (ephemeral→deterministic) + the _validate_lane new ceiling; open risks for
+P5 (the test-path parity-guard teeth; moving the :53 sysctl behind the shared launcher; the
+select-box `-- <cmd>` quoting). End with:
+  RESUME: branch=adr/47-local-ci-execution-parity, next-phase=5
+P5 = CI collapse to dispatch + resolve-legs.sh + generalize the parity-guard (build AND test legs)
++ the shared git-env-scrub.sh chokepoint + docs.

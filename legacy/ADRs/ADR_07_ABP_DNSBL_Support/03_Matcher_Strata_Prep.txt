@@ -1,0 +1,86 @@
+================================================================================
+PHASE 3 PROMPT — PREP (behaviour-preserving): matcher -> priority/strata + payload widening
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 precedence + query-time rows first)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 3 of ADR-07. STRICTLY BEHAVIOUR-PRESERVING: this
+is the de-risking refactor — reshape the matcher into the 6-band/strata form and widen the
+dict payloads, WITHOUT changing a single decision for today's inputs. No ABP rule is parsed
+yet. Work inline on `adr/07`, one commit, push directly. Standalone-valuable: like ADR-01's
+Phase 1-3 prep, this is kept even if later scope is trimmed.
+
+WHY THIS PHASE EXISTS
+The later phases add @@-allow-regex + $important precedence to evaluate_domain. Doing that
+on top of today's "block found -> whitelist overrides" 2-step risks silently changing the
+no-ABP behaviour. So FIRST restructure into the priority form + add the (defaulted) fields,
+proven identical to today by the RETAINED ADR-06 oracle, then later phases only POPULATE the
+new structures. The `important_rules` fast path is what guarantees zero added cost for the
+common (no-important) deployment.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/02_Results.txt — the decision-label driver + band
+  table. If missing, STOP and report.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 precedence/query-time rows; §2 contract
+  "No regression when no ABP feature is present").
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    * evaluate_domain ~2251-2349 (block check, regex scan ~2312, allow override ~2324).
+    * whitelist_check_domain ~2201; resolve_feed_group ~2214; DnsblDecision ~2237.
+    * init load of dataDB/zoneDB/whiteDB/regexDB (~479, ~535-660); pfb[...] flags ~300-310.
+- tests/test_adr06_golden_oracle.py + tests/test_pfb_unbound.py (the no-regression guard).
+- tests/test_adr07_decision_spec.py (the future target — DO NOT make it pass yet; only the
+  no-ABP subset must already pass).
+- CLAUDE.md.
+
+ACTION PLAN (oracle-pinned — ADR-06 oracle must stay green at every step)
+1. Widen the payload/containers WITHOUT changing decisions:
+   - dataDB[d] / zoneDB[z] payloads gain `important: bool` (default False).
+   - whiteDB[d]: bare-bool wildcard -> {"wildcard": bool, "important": bool}. Update the
+     loader (_dnsbl_normalise_whitelist + init) AND whitelist_check_domain to the new shape;
+     USER whitelist + TOP1M load as important=True (sovereignty, fact 7) — but since today an
+     allow already beats every block, this changes NO decision now.
+   - Add an empty `allowRegexDB` container + its pfb flag (False today).
+   - Add `pfb["important_rules"]` flag (False today).
+2. Refactor evaluate_domain into the strata/priority resolution:
+   - Step A: user-allow hit -> resolve. Step B: user-block hit -> block. Step C: feed rules.
+   - When pfb["important_rules"] is False (today): keep the EXISTING early-exit path
+     (feed block found -> feed @@/allow overrides) byte-for-byte. The numeric 6-band
+     resolution is the `important_rules == True` branch and is currently UNREACHABLE (no
+     important rules loaded) — shape it now, exercise it via unit tests with synthetic
+     payloads, but it must not alter any real decision.
+   - Today there is no user-vs-feed distinction in the data; until later phases tag
+     provenance, treat all loaded entries as today (the refactor is structural).
+3. Keep DnsblDecision's external shape; only internal resolution changes.
+4. Unit-test: (a) ADR-06 oracle + existing matcher tests UNCHANGED-green; (b) new tests that
+   feed SYNTHETIC important/allow-regex payloads directly into evaluate_domain and assert the
+   6-band numeric resolution matches the Phase-2 band table (proves the branch is correct
+   before any parser feeds it).
+
+CONSTRAINTS
+- ZERO decision change for non-ABP input — the ADR-06 oracle is the gate; if any case flips,
+  STOP and fix before committing.
+- Do NOT parse ABP, do NOT touch PHP/shell, do NOT wire build(). Matcher + loader shapes only.
+- stdlib only, no new Unbound symbols (if you add one, declare it in
+  stubs/python/unboundmodule.py). 4-space, type hints, no bare except.
+
+VERIFICATION
+- python -m pytest → green: tests/test_adr06_* and tests/test_pfb_unbound.py UNCHANGED-green;
+  new strata tests green. ruff check . / ruff format . clean.
+- Diff-read evaluate_domain: confirm the important_rules==False branch is the old logic.
+
+EXPECTED RESULT
+evaluate_domain in the 6-band/strata form with widened payloads + the important_rules fast
+path, provably identical to today for all non-ABP inputs, with the numeric branch unit-tested
+on synthetic data — ready for later phases to populate.
+
+COMMIT (single)
+    pfb_unbound: ADR-07 P3 — matcher strata refactor + payload widening (behaviour-preserving)
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/03_Results.txt`
+For Phase 4. Include: the new payload/container shapes (dataDB/zoneDB/whiteDB/allowRegexDB +
+flags); how the important_rules fast path gates the old vs numeric path; the synthetic-payload
+test entry points; confirmation the ADR-06 oracle is unchanged-green; and the go-ahead to
+build the Rule model + parser.

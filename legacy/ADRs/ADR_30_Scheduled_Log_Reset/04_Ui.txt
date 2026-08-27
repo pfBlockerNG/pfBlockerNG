@@ -1,0 +1,65 @@
+================================================================================
+PHASE 4 PROMPT — Log Settings per-log schedule controls
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md   (read §2.1 UI row first)
+================================================================================
+
+ROLE
+Branch adr/30-scheduled-log-reset. Phase 4 of 5. Expose the per-log schedule in the GUI.
+One commit, push to branch.
+
+WHY THIS PHASE EXISTS
+The reset logic is live (P3) but only settable by hand-editing config. Add a schedule
+control PER LOG, next to that log's existing max-lines select, loading/saving like its
+line-limit sibling but reading through PfbConfig (ADR-29).
+
+REQUIRED READING
+- FIRST read RESULTS/03_Results.txt — confirm the reset path + the 10 config keys. If
+  missing, STOP and report.
+- .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (§2.1 UI row, §3 negative note re: data loss)
+- src/usr/local/www/pfblockerng/pfblockerng_general.php:
+    * the Log Settings (max lines) Form_Section (~:354) and how it builds the per-log
+      max-lines selects (~:364 — likely a loop/group over the 10 log types);
+    * the $pconfig load (~:79) and the $_POST save (~:191) for log_max_<type>;
+  mirror those for log_rotate_<type>, but route the read through PfbConfig::read and the
+  write through PfbConfig::write.
+- CLAUDE.md (PHP rules; web UI help-text rule — brief, match neighbours; RequireConfigGateway).
+- tests/smoke/ui/ (Tier A ui_render) for how a page render is asserted.
+
+ACTION PLAN
+1. For each log row in the Log Settings section, add a schedule Form_Select named
+   'log_rotate_<type>': options Off/Daily/Weekly/Monthly mapped to {'off','daily','weekly',
+   'monthly'}; default 'off'. Place it adjacent to that log's max-lines select; match the
+   markup + id/name conventions (extend the existing loop/group rather than hand-coding 10).
+2. Help text (brief, neighbour-matched), shown once for the schedule column/control: that it
+   resets that log on the chosen calendar boundary so its statistics reflect only the current
+   period; that it is independent of the per-log max-lines limit; and that a reset DISCARDS
+   that period's data (export first if you need history).
+3. Load each $pconfig['log_rotate_<type>'] via PfbConfig::read; persist on save via
+   PfbConfig::write + the existing write_config flow the other Log Settings keys use. Do NOT
+   call config_*_path directly for these keys (sniff).
+
+CONSTRAINTS
+- Read/write log_rotate_<type> ONLY via PfbConfig. No new config_*_path on the registered keys.
+- Brief help text; don't out-prose the neighbours; don't repeat it 10x.
+- Do NOT change the reset logic or the deciders this phase.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit / vendor/bin/phpcs (src/) / vendor/bin/phpstan -> green / 0 errors / OK
+- php -l on pfblockerng_general.php
+- ui_render proof (if SMOKE creds available): the General page returns 200, no
+  Fatal/Parse/Warning/Notice/Uncaught, and the new controls are present; else note it for the
+  Phase-5 smoke and verify by static read + php -l.
+
+EXPECTED RESULT
+General -> Log Settings shows, per log, a schedule (Off/Daily/Weekly/Monthly) select beside its
+max-lines control; values persist and drive pfb_log_reset().
+
+COMMIT (single)
+    www: add per-log rotation schedule controls to Log Settings (ADR-30 P4)
+Push to adr/30-scheduled-log-reset.
+
+HANDOFF — write RESULTS/04_Results.txt
+State: the control id/name pattern + option mapping; how you extended the existing per-log
+loop/group; the load/save wiring; help-text wording; render proof (or why deferred to Phase
+5); confirm sniffs + suite green. Go-ahead for Phase 5.

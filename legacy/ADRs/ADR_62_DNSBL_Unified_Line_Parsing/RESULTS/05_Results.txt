@@ -1,0 +1,521 @@
+ADR-62 Phase 5 -- Delete the ABP classifier + retire the .abp marker -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 9 at session start
+(9 unrelated commits: DNSBL-IPv4-recogniser hardening #1071 in pfb_unbound.py,
+AWS-region-script dedup, ASN whoisconvert append, docstring-probe escape
+fixes). None touch pfblockerng.inc's ABP/TLD-analysis area or pfb_unbound.py's
+ABP-related code -- confirmed via `git show --stat` on each. Rebased cleanly
+onto origin/devel (no conflicts), force-with-lease pushed. rev-list count = 0
+after. All work in this phase is against the freshly-rebased base.
+
+PLANNER RE-SCOPE (verbatim from the brief, followed): commit 1 targets the
+SURVIVING #1060 defect only -- PR #1066 (already on this branch, commits
+65526e28/3dee8fe4) had already made the comma-prefix guard unconditional
+(inc:7887 pre-phase); what remained was the `$abp_feeds` marker-glob gate
+(@7872-7875) and its `isset($abp_feeds[$lfeed])` arm (@7891-7896), gating the
+empty-feed-column skip on `!empty($abp_feeds)`. Verified this exact state by
+reading the live tree before editing (see COMMIT 1 below) -- no contradiction
+with the re-scope, no STOP triggered.
+
+WHAT CHANGED -- COMMIT 1 (d0abc77d848fea3c5a2c7bea36eb47c8b81ff2f0)
+------------------------------------------------------------------------
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc (tld_analysis(), inc:~7859-7891
+  pre-edit): deleted the `$abp_feeds` glob (`glob("{$pfb['dnsdir']}/*.abp")`)
+  and its gate (`if (!empty($abp_feeds)) { ... isset($abp_feeds[$lfeed]) ... }`);
+  the empty/unset-feed-column skip (`$lfeed === ''`) now runs UNCONDITIONALLY
+  on every comma-first row. Rewrote the stale 11-line header comment (still
+  describing the marker mechanism) to a 4-line comment stating the current
+  rule: comma-prefix guard for verbatim shapes + unconditional empty-feed-
+  column skip.
+- tests/php/Adr62TldAnalysisCorpusTest.php: +1 new test
+  (testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent) -- a
+  comma-first 6-col row with an EMPTY feed column, appended to the existing
+  fixture (which also has a real ZONE-producing row, so the test is
+  non-vacuous), with the '.abp' marker file UNLINKED (zero markers on disk).
+- tests/php/TldAnalysisAbpVerbatimTest.php (pre-existing PR-#1066 regression
+  test, NOT an ADR-62 file): its second test
+  (testMarkedAbpFeedLineStillSkippedByFeedName) pinned exactly the
+  marker-matching arm this commit deletes -- a synthetic scenario (a marked
+  feed's comma-bearing row) the real manifest writer never produces for an
+  ABP feed (verbatim ABP lines carry no comma), so it was DEFENSE-IN-DEPTH,
+  not a real path. Rewrote it to
+  testStrayAbpMarkerNoLongerGatesClassification: same fixture, INVERTED
+  assertion -- a stray marker on disk must NOT suppress a row with a
+  non-empty feed column (proves the marker glob is genuinely gone, not just
+  untested).
+
+Commit hash: d0abc77d848fea3c5a2c7bea36eb47c8b81ff2f0
+
+COMMIT-1 RED->GREEN (EXECUTED, pasted)
+-------------------------------------------
+RED (pre-fix code, new test, non-vacuous):
+  $ vendor/bin/phpunit --filter 'Adr62TldAnalysisCorpusTest::testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent'
+  1) Adr62TldAnalysisCorpusTest::testEmptyFeedColumnRowSkippedUnconditionallyWithNoAbpMarkerPresent
+  Failed asserting that ',www.biz.co.zzsuffix,,1,tld_plain_feed,tld_plain_feed
+  ,twolabelzone.example,,1,tld_plain_feed,tld_plain_feed
+  ,biz.co.zzsuffix,,1,tld_plain_feed,tld_plain_feed
+  ,tldbad.example,,1,,agroup
+  ' [ASCII](length: 186) does not contain "tldbad" [ASCII](length: 6).
+  Tests: 1, Assertions: 2, Failures: 1.
+  (twolabelzone.example present in the SAME output -> not a vacuous test: a
+  real row classified normally, only the empty-feed-column row leaked through)
+
+GREEN (post-fix code, same test):
+  $ vendor/bin/phpunit --filter 'Adr62TldAnalysisCorpusTest'
+  OK (4 tests, 9 assertions)
+
+WHAT CHANGED -- COMMIT 2 (50f7d9c95644864aff1b048f82606ff7cee16646)
+------------------------------------------------------------------------
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  1. Deleted pfb_dnsbl_is_abp_header() (inc:6621-6640 pre-edit) + its
+     preceding ADR-21 header comment; fixed pfb_dnsbl_strip_bom()'s comment
+     (dangling reference to the deleted function).
+  2. Deleted the `$validate_header` scan window (the whole
+     `if (!$validate_header) { if (pfb_dnsbl_is_abp_header($line)) {...} }`
+     block, 16 lines).
+  3. Deleted `$easylist = $validate_header = FALSE;` init + its stale ADR-07
+     comment block.
+  4. Collapsed the two verbatim-write paths into ONE: the ADR-21 capture
+     guard drops its `!$easylist &&` prefix (now unconditional
+     `pfb_dnsbl_is_abp_rule_line($line)`); the ENTIRE `if ($easylist) {...}
+     else {...}` structure is deleted, with:
+     - the IP-extraction block (`pfb_dnsbl_abp_extract_ip` + guard +
+       `pfb_dnsbl_collect_feed_ip` + `continue`) HOISTED to run
+       UNCONDITIONALLY, BEFORE the capture guard (preserves today's
+       precedence: IP-extraction won over verbatim-capture inside the old
+       $easylist branch; Semantics #2 -- see dedicated section below);
+     - the $easylist branch's own duplicate control-skip
+       (`$line===''||starts('!')||starts('[')`) DELETED as dead code --
+       superseded by Phase 4's universal `pfb_dnsbl_is_skippable_control_line()`
+       skip, which now runs for every feed;
+     - the former else-body (tab/%20 replace, '#'-classifier, universal skip,
+       CSV-sniff init) UNWRAPPED (dedented one level, zero logic change --
+       every corpus row not carrying the D1 delta stayed BYTE-IDENTICAL,
+       proven by the regen diff below).
+  5. Deleted the `if (!$easylist) { <host-extraction prep> }` guard
+     (inc:~16648 pre-edit) -- it was ALREADY always-true at that point (the
+     $easylist branch never fell through to it, every one of its paths
+     `continue`d) -- unwrapped, zero logic change.
+  6. Manifest-row tag: `$easylist ? 'abp' : 'plain'` -> unconditional
+     `'plain'`; deleted the `if ($easylist) { @touch(...) } else {
+     unlink_if_exists(...) }` marker writer, replaced with an unconditional
+     `unlink_if_exists("{$pfbfolder}/{$header}.abp")` sweep (opportunistic
+     cleanup of a leftover marker from a pre-upgrade build).
+  7. Reuse path (a feed whose .txt already exists, not re-parsed):
+     `file_exists("{$pfbfolder}/{$header}.abp") ? 'abp' : 'plain'` ->
+     unconditional `'plain'`; added the SAME opportunistic sweep
+     (`unlink_if_exists`) here too (my call -- a reused feed is never
+     re-downloaded, so without this sweep its stale marker would never be
+     cleaned; stated per the brief's explicit "your call, state it").
+  8. DELETED tests/php/DnsblIsAbpHeaderTest.php (the deleted function's own
+     test).
+- tests/fixtures/dnsbl_corpus/feeds.json: abp_feed's "format" flips
+  'abp'->'plain' (the manifest row a fresh/reused parse of this feed now
+  actually produces) + updated "row" description.
+- tests/fixtures/dnsbl_corpus/txt/abp_feed.txt: hand-traced the 8th line
+  ('bare-domain.abp.example') through the COLLAPSED loop (per the corpus
+  README's documented methodology -- no off-appliance driver for the loop
+  itself): `pfb_dnsbl_is_abp_rule_line('bare-domain.abp.example')` is FALSE
+  (no ||/@@/##/regex shape) -> falls through the plain extraction pipeline ->
+  a valid domain -> written as a 6-col CSV row. ADDED a second bare line,
+  'abproot.example' (2-label, registrable-parent shape -- the ADR §1.3
+  nuance's OTHER required case), also 6-col-CSV. The 7 ABP-shape lines
+  (||/@@/regex/$important/$badfilter/##) are UNCHANGED (all still match
+  is_abp_rule_line, still verbatim-captured).
+- tests/fixtures/dnsbl_corpus/raw/abp_feed.raw: REGENERATED via the REAL
+  pfb_unbound_python_sources() (throwaway PHP script mirroring
+  Adr62DnsblCorpusManifestTest's setUp(), discarded after use -- see CORPUS
+  EVIDENCE). Every OTHER corpus feed's raw confirmed byte-UNCHANGED by the
+  same run.
+- tests/php/Adr62DnsblCorpusManifestTest.php: doc-only -- class docstring's
+  stale "D1 asserts TODAY's behaviour" line reconciled (D1 now asserts its
+  NEW outcome too, same as D2/D4).
+- tests/php/Adr62TldAnalysisCorpusTest.php: doc-only + fixture-setup cleanup
+  -- class docstring + 2 test docstrings reconciled (no more marker-mechanism
+  language); removed the now-INERT `.abp` marker `touch()` from setUp() (the
+  marker glob it fed no longer exists after commit 1) and the correspondingly
+  now-unnecessary `unlink()` in my commit-1 test.
+- tests/test_adr62_byte_identity_corpus.py: the single D1 test
+  (test_abp_feed_bare_domain_is_wildcard_zone_delta_d1) RENAMED and SPLIT into
+  TWO tests per the ADR §1.3 nuance: test_abp_feed_bare_registrable_parent_
+  stays_zone_delta_d1 ('abproot.example' in zone_db -- same observable as
+  before) and test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1
+  ('bare-domain.abp.example' now in data_db, NOT zone_db -- the REAL
+  observable flip); module docstring reconciled.
+- tests/test_adr62_parity_oracle.py: Section 1's `_GOLDEN_PER_FEED['abp_feed']`
+  gains 'abproot.example' (blocked set); module + golden-set comment + the
+  hostile-row cross-reference comment reconciled (no more "D1 still does not
+  move" / stale test-name pointer).
+- tests/smoke/helpers.py: 3 comment/docstring fixes (abp_feed()'s block
+  header + docstring, the ABP_BOM comment, abp_feed_bom()'s docstring) --
+  all previously described the deleted $easylist/pfb_dnsbl_is_abp_header
+  mechanism as live; rewritten to state the CURRENT per-line-capture
+  mechanism truthfully. NO functional/test-behavior change -- comment-only,
+  required by the mandatory `git grep -n 'is_abp_header'` proof (this file's
+  comment was the ONE live non-docs hit) and by CLAUDE.md's stale-comment
+  gate item. Smoke-row AUTHORING (new/extended cases) stays Phase 7's charter
+  per the ADR's own action plan -- not touched here.
+
+Commit hash: 50f7d9c95644864aff1b048f82606ff7cee16646
+
+GATES (exact commands + pasted tails, run AFTER both commits)
+--------------------------------------------------------------------
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(same pre-existing "Optional parameter declared before required" deprecation
+notices prior phases already flagged as unrelated; ZERO new ones)
+
+$ vendor/bin/phpunit
+Tests: 2629, Assertions: 19363, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(2629 = Phase-4's 2650 baseline - 22 (DnsblIsAbpHeaderTest.php deleted, its
+own tests) + 1 (my new TLD test) = 2629; the 1 warning is the SAME
+pre-existing $tlds-uninitialised notice prior phases already flagged; 0
+failures/errors)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations)
+
+$ python3 -m pytest -q
+2620 passed, 4 skipped in 53.64s
+(2620 = Phase-4's 2619 local baseline + 1 net-new (D1 test split 1->2, minus
+nothing removed elsewhere); 0 failures)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+211 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 90 source files
+
+$ git add -A && python3 scripts/check_comment_narration.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_retired_tokens.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_version_literals.py --staged ; echo exit:$?
+exit:0
+
+CORPUS EVIDENCE -- REGENERATION (EXECUTED, pasted)
+--------------------------------------------------------
+Throwaway PHP script (bootstrap.php + real pfb_unbound_python_sources() over
+ALL 14 corpus feeds, byte-diff against golden BEFORE overwriting):
+  CHANGED: abp_feed
+  --- golden (OLD) ---
+  '||anchor.abp.example^
+  @@||exception.abp.example^
+  /^regexblock\.abp\.example$/
+  @@/^regexallow\.abp\.example$/
+  ||important.abp.example^$important
+  ||badf.abp.example^$badfilter
+  some.abp.example##.ad-banner
+  bare-domain.abp.example
+  '
+  --- produced (NEW) ---
+  '||anchor.abp.example^
+  @@||exception.abp.example^
+  /^regexblock\.abp\.example$/
+  @@/^regexallow\.abp\.example$/
+  ||important.abp.example^$important
+  ||badf.abp.example^$badfilter
+  some.abp.example##.ad-banner
+  abproot.example
+  bare-domain.abp.example
+  '
+  UNCHANGED (13): plain_hosts, csv_pt, csv_bbc, csv_h3x, csv_otx, csv_pon,
+  csv_et, custom_list, mixed_plain, permit_feed, oversized_feed,
+  wirecap_feed, reused_manifest_abp
+  CHANGED (1): abp_feed
+-> copied produced abp_feed.raw back over the golden fixture; re-ran:
+  $ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest'
+  OK (4 tests, 96 assertions)
+This is the delta-budget proof at the manifest-writer surface: the ONLY
+corpus feed whose PHP-produced output changed is abp_feed (D1's target);
+every other row (including D2/D4's mixed_plain/permit_feed, which Phase 4
+already flipped) is byte-UNCHANGED by this phase.
+
+D1 RED->GREEN -- BOTH depth cases (EXECUTED, pasted)
+------------------------------------------------------------
+RED (OLD test assertion against the NEW/regenerated raw bytes -- run BEFORE
+editing the test file):
+  $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py::test_abp_feed_bare_domain_is_wildcard_zone_delta_d1 -v
+  FAILED
+  AssertionError: delta D1: TODAY a bare domain inside an ABP feed must be a
+  wildcard ZONE key (parse_abp wildcard=True), not a classify()-derived
+  registrable parent
+  assert 'bare-domain.abp.example' in {... (zone_db keys, no
+  'bare-domain.abp.example') ...}
+  ... BuildResult(data_db={'bare-domain.abp.example': {...}, ...}, ...)
+  1 failed
+  (proves BOTH halves at once: 'abproot.example' already landed in zone_db,
+  'bare-domain.abp.example' landed in data_db instead of zone_db -- exactly
+  the ADR SS1.3 nuance's two cases)
+
+GREEN (after splitting into the two NEW-outcome tests):
+  $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py -v
+  test_abp_feed_bare_registrable_parent_stays_zone_delta_d1 PASSED
+  test_abp_feed_bare_deeper_subdomain_flips_zone_to_data_delta_d1 PASSED
+  23 passed
+
+D2-D5 UNCHANGED PROOF (EXECUTED, pasted)
+----------------------------------------------
+$ python3 -m pytest tests/test_adr62_byte_identity_corpus.py tests/test_adr62_parity_oracle.py -v
+46 passed in 0.07s
+(every D2/D4 test Phase 4 flipped -- test_mixed_plain_feed_hash_truncation_
+false_positive_fixed_delta_d2, test_mixed_plain_feed_regex_rule_now_honoured_
+delta_d2, test_mixed_plain_feed_regex_important_flag_carried_delta_d2,
+test_mixed_plain_feed_bare_at_allow_regex_now_honoured_delta_d2,
+test_permit_feed_hash_truncation_accidental_allow_fixed_delta_d4, plus
+Section 1's aggregate/per-format corpus-set assertions and every Section-2
+hostile-input row -- stayed green with ZERO assertion changes this phase,
+confirmed by reading the diff: only the abp_feed golden-set entry gained
+'abproot.example'; no D2/D4 line was touched)
+
+Corpus domain-set aggregate/per-format (Semantics #1), re-run after the full
+regen:
+  $ python3 -m pytest tests/test_adr62_parity_oracle.py::test_corpus_domain_set_is_byte_identical_aggregate tests/test_adr62_parity_oracle.py::test_corpus_domain_set_is_byte_identical_per_format -v
+  2 passed
+
+REUSE / STALE-MANIFEST ROWS (Semantics #7, EXECUTED, pasted)
+-------------------------------------------------------------------
+$ python3 -m pytest tests/test_adr62_byte_identity_corpus.py::test_stale_abp_format_hint_manifest_still_parses tests/test_adr62_parity_oracle.py::test_stale_format_hint_abp_still_routes_to_parse_abp -v
+2 passed
+(reused_manifest_abp corpus fixture -- format='abp' in feeds.json, UNTOUCHED
+by this phase -- still routes through parse_abp() unchanged; a manifest row
+hand-built with format_hint='abp' still parses identically, proving Python's
+stale-hint tolerance the ADR requires. pfb_unbound_python_sources() itself:
+its `if ($format === 'abp')` branch (inc:~7141) is UNTOUCHED this phase --
+every LIVE caller now always passes 'plain' (both call sites edited in
+commit 2), so the branch is provably dead code from a live-caller's
+perspective, but left in place per the ADR's own Phase 6 charter ("Remove
+now-dead code surfaced by the Phase-4/5 diffs") -- confirmed via
+`grep -n 'pfb_unbound_python_sources(' src/.../pfblockerng.inc`: the only 2
+live call sites (inc:17141 with $pfb_py_feeds, inc:17169 with array()) both
+feed rows this phase makes always 'plain'.)
+
+$ vendor/bin/phpunit --filter 'UnboundPythonSourcesTest'
+OK (20 tests, 55 assertions)
+(this test drives pfb_unbound_python_sources() directly with hand-built rows
+including format='abp' -- still exercises the untouched 'abp' branch as a
+pure-function-level test; its own fixtures only use '||ads.example^'/
+'@@||good.example^', already-captured shapes, unaffected -- confirmed by
+`git diff --stat -- tests/php/UnboundPythonSourcesTest.php` being EMPTY.)
+
+GREP-CLEAN PROOFS (ADR Requirement 2, EXECUTED, pasted)
+----------------------------------------------------------------
+$ grep -rn '\$easylist\|pfb_dnsbl_is_abp_header\|\$validate_header' src/
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:624:	foreach (array_get_path($ex_easylists, 'row', []) as $easylist) {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:625:		if ($easylist['state'] == 'Enabled') {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:626:				$enabled[$easylist['header']] = '';
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:640:			foreach ($feed_info_raw['dnsbl']['EasyList'] as $easylists) {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:641:				if (is_array($easylists)) {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:642:					foreach ($easylists as $easylist) {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:643:						if (isset($enabled[$easylist['header']])) {
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:646:										'url'		=> $easylist['url'],
+src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:647:										'header'	=> $easylist['header']);
+(a DIFFERENT, unrelated `$easylist` -- a foreach-loop var over the LEGACY
+pfblockerngdnsbleasylist config-section rows in a config-MIGRATION function
+(pfblockerng_install.inc, "Upgrade EasyList to new Format"), never the DNSBL
+download-loop's deleted flag. Read the surrounding function: confirmed a
+different symbol/context, coincidentally named for the same underlying
+"EasyList" domain concept -- matches the ADR's own carve-out note about the
+pfblockerngdnsbleasylist config-section name surviving. ZERO hits for
+pfb_dnsbl_is_abp_header or $validate_header anywhere.)
+
+$ grep -rn '\.abp' src/
+src/usr/local/pkg/pfblockerng/pfblockerng.inc:16306:								unlink_if_exists("{$pfbfolder}/{$header}.abp");
+src/usr/local/pkg/pfblockerng/pfblockerng.inc:16859:								// ADR-62: the '.abp' marker is retired -- sweep any leftover
+src/usr/local/pkg/pfblockerng/pfblockerng.inc:16862:								unlink_if_exists("{$pfbfolder}/{$header}.abp");
+(exactly the 2 INTENTIONAL opportunistic-sweep unlinks + their comment --
+the ADR's own Decision 5 text says "Stale markers are swept
+opportunistically", explicitly anticipating a surviving reference to the
+path for cleanup. Neither site READS the marker's existence to make a
+decision (no more file_exists/glob branch anywhere) nor WRITES it to
+persist state (no more @touch) -- both remaining sites are pure one-way
+deletes. This satisfies "no live marker read/write [as a gating mechanism]",
+matching the brief's own worked distinction.)
+
+$ git grep -n 'is_abp_header' -- . ':!.ADRs'
+(no live matches outside .ADRs)
+(before this fix, ONE live non-docs hit existed: tests/smoke/helpers.py's
+comment on ABP_BOM, naming the deleted function -- fixed as part of this
+commit, see WHAT CHANGED above. All remaining is_abp_header hits are inside
+.ADRs/ -- ADR history text, explicitly exempted by the brief.)
+
+SEMANTICS #2 TEST -- ABP-anchored IP still collected (EXECUTED, pasted)
+------------------------------------------------------------------------------
+Executed probe against the live bootstrap, tracing the two pure functions in
+their NEW call order (IP-extraction runs BEFORE the verbatim-capture guard,
+unconditionally, per the collapse):
+  $ php -r '... pfb_dnsbl_abp_extract_ip($l), pfb_dnsbl_is_abp_rule_line($l) for each $l ...'
+  line='||1.2.3.4^'             abp_extract_ip='1.2.3.4'      is_abp_rule_line=TRUE
+  line='||2604:2dc0::^'         abp_extract_ip='2604:2dc0::'  is_abp_rule_line=TRUE
+  line='||anchor.abp.example^'  abp_extract_ip=(empty)        is_abp_rule_line=TRUE
+  line='0.0.0.0 5.6.7.8'        abp_extract_ip='5.6.7.8'      is_abp_rule_line=FALSE
+Both '||1.2.3.4^' and '||2604:2dc0::^' -- an ABP-anchored IPv4 AND IPv6
+literal -- return a NON-EMPTY abp_extract_ip result. Since IP-extraction now
+runs FIRST in the collapsed path (source order: IP-extraction block, THEN
+the capture guard, THEN the plain pipeline), either line is caught and
+`continue`s at the IP-extraction step, collected to $domain_data_ip/_ip6,
+and NEVER reaches the verbatim-capture guard -- exactly matching TODAY's
+$easylist-branch precedence (which also ran IP-extraction before its own
+control-skip/verbatim-write). '||anchor.abp.example^' (a domain anchor, not
+an IP) falls through IP-extraction (empty result) to the capture guard
+(TRUE) -- verbatim-captured, unchanged. '0.0.0.0 5.6.7.8' (hosts-line shape,
+target itself an IP) is ALSO caught by IP-extraction's second branch
+(abp_extract_ip non-empty) -- collected the same way a plain feed's
+equivalent line would eventually be collected further downstream via the
+existing is_ipaddrv4 check (same final IP, same pfb_dnsbl_collect_feed_ip
+call shape -- provably equivalent, not a new observable).
+
+Pure-function oracle re-run (unchanged this phase -- only call sites moved):
+  $ vendor/bin/phpunit --filter 'Adr62DnsblIsSkippableControlLineTest|Adr62DnsblIsAbpRuleLineTest|Adr62DnsblCollectFeedIpTest|AbpExtractIpTest'
+  OK (64 tests, 85 assertions)
+
+ADR RECONCILIATION NOTE
+----------------------------
+ADR.md SS1.5/SS6-Phase-5's text ("First commit: the issue #1060 TLD-pass gate
+fix -- skip on an empty/unset feed column unconditionally (drop the
+`!empty($abp_feeds)` gate + marker glob, @7723-7744)") PREDATES PR #1066
+(already merged to devel before this phase's session, commits
+65526e28/3dee8fe4), which independently fixed the CSV-mangling half of
+issue #1060 via an unconditional comma-prefix guard. Only the marker-glob
+gate itself remained live at session start -- verified by reading the live
+tree before any edit (see PLANNER RE-SCOPE above), matching the planner's
+own re-scope instructions exactly. Per the phase brief, I have NOT edited
+ADR.md SS1.5/SS6 myself -- that amendment is Phase 7's doc-pass charter
+(CLAUDE.md SS8 "Post-merge amendments" / the ADR's own action plan). Carried
+forward below for Phase 7 to action.
+
+COVERAGE MATRIX (this phase's brief items, ticked)
+-------------------------------------------------------
+1. Commit-1 TLD-pass fix, red->green: test
+   Adr62TldAnalysisCorpusTest::testEmptyFeedColumnRowSkippedUnconditionally
+   WithNoAbpMarkerPresent (RED/GREEN pasted above).
+2. Classifier deletion ($easylist/pfb_dnsbl_is_abp_header/$validate_header):
+   grep-clean proof pasted above; DnsblIsAbpHeaderTest.php deleted.
+3. IP-extract survives the collapse (Semantics #2): php -r probe pasted
+   above; pure-function oracle (64 tests) unchanged/re-run green.
+4. .abp marker retirement (Decision 5): reuse path + download/update path
+   both emit 'plain' unconditionally + sweep; grep-clean proof pasted above.
+5. format_hint collapse ('plain' for every feed): confirmed via both PHP
+   call-site edits + pfb_unbound_python_sources()'s $format derivation
+   (unchanged function, always resolves 'plain' now since its input always
+   is) + UnboundPythonSourcesTest.php still green (20 tests).
+6. Python stale-'abp'-manifest tolerance (Semantics #7): re-ran Phase 3's
+   test, pasted above (2 tests, both green); reused_manifest_abp fixture
+   untouched and still passes.
+7. Corpus regeneration (never hand-edit raw/*.raw): regen script diff
+   pasted above -- ONLY abp_feed changed, 13 other feeds byte-unchanged.
+8. D1 flip, BOTH depth cases (ADR SS1.3 nuance): registrable-parent
+   ('abproot.example') stays ZONE; deeper-sub ('bare-domain.abp.example')
+   flips ZONE->DATA. Red->green pasted above for both, in one combined RED
+   run + a combined GREEN run.
+9. D2-D5 unchanged: 46-test combined run pasted above, zero assertion
+   changes to any D2/D4 test this phase.
+10. Delta budget exactly D1 (+ commit-1's TLD skip): the regen script's own
+    byte-diff (item 7) is the authoritative proof -- no OTHER corpus row's
+    PHP-produced raw changed.
+
+DEVIATIONS
+------------
+1. Extended the opportunistic '.abp' marker sweep to the REUSE path
+   (inc:16306) in addition to the download/update path (inc:16862) -- the
+   brief named the download/update path as the example ("e.g. unlink at the
+   reuse/update path") and left the exact site(s) to my judgment ("your call,
+   state it"). Justification: a feed that is NEVER re-downloaded (the common
+   steady-state case for a `pfbreuse=on` list) would otherwise carry its
+   stale marker forever with no cleanup path at all.
+2. Did NOT delete pfb_unbound_python_sources()'s now-dead `if ($format ===
+   'abp')` branch (inc:~7141) -- confirmed unreachable from any live caller
+   (both call sites now always pass 'plain'), but the ADR's own Phase 6 text
+   explicitly charters "Remove now-dead code surfaced by the Phase-4/5
+   diffs" as THAT phase's job, not this one's. Flagged, not silently
+   dropped -- see REUSE/STALE-MANIFEST ROWS section above and CARRY-FORWARD
+   below.
+3. Rewrote 3 tests/smoke/helpers.py comments/docstrings (no functional
+   change) to remove the ONE live non-docs `is_abp_header` reference the
+   brief's own mandatory grep proof requires be gone. Smoke-row AUTHORING
+   itself (new/extended cases per ADR SS7) stays untouched, deferred to
+   Phase 7 per the ADR's own action plan -- this was a comment-correctness
+   fix only, required by both the grep gate and CLAUDE.md's stale-comment
+   rule (gate item 5), not a scope expansion into Phase 7's charter.
+4. Rewrote 2 pre-existing (non-ADR-62) test methods that pinned marker-gated
+   behavior now deleted: TldAnalysisAbpVerbatimTest::
+   testMarkedAbpFeedLineStillSkippedByFeedName (commit 1) and
+   Adr62TldAnalysisCorpusTest's setUp() marker touch()/its dependent test
+   (commit 2, cleanup once the marker glob was fully gone) -- both were
+   testing/scaffolding a mechanism this phase's own action plan explicitly
+   retires; left un-updated they would have gone red for a reason ORTHOGONAL
+   to a real regression (testing dead functionality), which is worse than
+   updating them to prove the NEW guarantee (a stray marker no longer
+   matters) -- not silently skipped, both still assert something meaningful.
+Per CLAUDE.md's ESCALATE contract, none of the above required inventing an
+unnamed mechanism -- all four are either the brief's own explicit "your
+call" clause, an explicitly-chartered-elsewhere deferral, or a directly-
+required grep/comment-correctness fix. No STOP triggered.
+
+CARRY-FORWARD for Phase 6
+------------------------------
+1. pfb_unbound_python_sources()'s `if ($format === 'abp')` branch
+   (inc:~7141-7150) is now DEAD CODE from every live caller's perspective
+   (both call sites in sync_package_pfblockerng() always pass 'plain') --
+   this is EXACTLY the "dead code surfaced by the Phase-4/5 diffs" Phase 6's
+   own action-plan text names for removal. UnboundPythonSourcesTest.php
+   directly exercises this branch with a hand-built format='abp' row (a
+   pure-function-level test, independent of any live caller) -- Phase 6
+   should decide whether to keep that test as "the function still SUPPORTS
+   an abp format_hint if ever handed one" or delete both the branch and its
+   test together.
+2. The perf benchmark (Phase 6's own charter) should include the abp_feed
+   shape class (now going through the SAME unconditional IP-extraction +
+   capture-guard checks as every other feed) in its representative mix --
+   this phase's own corpus proof (13/14 feeds byte-unchanged) already shows
+   zero OUTPUT change, but Phase 6 measures wall-clock/RSS, not output.
+3. Two pre-existing dead-code candidates noted but NOT touched (out of this
+   phase's exact scope): the `$rev_format`/CSV-header-sniff machinery and
+   the `$liteparser`/`$lite` distinction were not simplified even though the
+   collapse removed one caller-context ($easylist) that used to bypass them
+   entirely -- still load-bearing for every OTHER feed format, unrelated to
+   Phase 5/6's dead-code scope.
+
+CARRY-FORWARD for Phase 7
+------------------------------
+1. ADR RECONCILIATION (see dedicated section above): ADR.md SS1.5/SS6-Phase-5
+   text predates PR #1066 -- needs the doc-pass amendment per CLAUDE.md SS8
+   "Post-merge amendments" (this phase intentionally did NOT edit ADR.md
+   itself, per its own brief's explicit instruction).
+2. docs/misc/architecture-notes.md "DNSBL/ABP pipeline" section still
+   describes the retired $easylist/header-sniff/marker mechanism as live --
+   Phase 7's own action-plan item ("update docs/misc/architecture-notes.md
+   ... for the retired classifier + the per-line capture boundary") --
+   intentionally left untouched this phase (docs updates are Phase 7's
+   charter, confirmed via `grep -rln` showing this is the ONLY docs/ file
+   with a live mention).
+3. tests/smoke/ needs its own §7 acceptance-row update (ADR SS7 criterion 2:
+   "ABP feed content ... with NO '.abp' marker present") -- the helpers.py
+   comment fixes this phase made are TRUTH-CORRECTIONS only; no new smoke
+   assertion was added. The existing abp_feed()/abp_feed_bom() helpers still
+   build a syntactically-identical body (the header line is now just an
+   ordinary skipped bracket line, not a classifier trigger) so EXISTING
+   smoke tests calling them should still pass unmodified on the live VM --
+   but this claim is UNVERIFIED off-appliance (no live-VM dispatch this
+   phase, matching every prior phase's own DEFERRED-to-Phase-7 convention).
+4. Release-notes delta table (Phase 7's own charter) should record D1's
+   final shape from this phase: a bare domain line in a former-ABP feed now
+   takes the plain classify() path (registrable parent -> ZONE, same as
+   before; deeper sub-domain -> exact DATA, changed from wildcard ZONE).
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean
+against --staged for BOTH commits (see GATES above and the commit-1 section).

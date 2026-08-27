@@ -1,0 +1,191 @@
+ADR-29 Phase 7 — www Group B (SafeSearch / Feeds / Blacklist / Category-Edit pages)
+=====================================================================================
+
+## Status: DONE — gates green; go-ahead for Phase 8
+
+---
+
+## Pages routed
+
+### pfblockerng_safesearch.php
+
+Section: `installedpackages/pfblockerngsafesearch` (flat, all keys registered).
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngsafesearch', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngsafesearch')`
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerngsafesearch', $pfb['bconfig'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerngsafesearch', $pfb['bconfig'])`
+
+Page-local defaults (`?: 'Disable'`) for `safesearch_enable`, `safesearch_youtube`,
+`safesearch_doh` and `safesearch_doh_list` match registry defaults but were left in-place:
+the section-blob approach does not call `PfbConfig::read()` per field, so the defaults are
+applied only when the key is absent from the loaded array. Removing them would change
+behaviour if the config key is present but empty — kept to preserve exact prior logic.
+
+### pfblockerng_reputation.php
+
+Does not exist in the codebase. The "Reputation" tab is a link rendered from pfblockerng_ip.php.
+No routing work required.
+
+### pfblockerng_blacklist.php
+
+Section: `installedpackages/pfblockerngblacklist` — NOT in registry (foreign section).
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngblacklist', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngblacklist')`
+
+SAVE:
+- Live-update path (enable/lang dropdowns): per-key `config_set_path` calls retained as
+  foreign keys — annotated:
+  ```
+  // foreign key: pfblockerngblacklist not in registry; write directly
+  ```
+- Full save path scalar fields (`blacklist_selected`, `blacklist_freq`, `blacklist_logging`):
+  per-key `config_set_path` calls retained as foreign keys — annotated.
+- Item structure write:
+  ```
+  // foreign structure: pfblockerngblacklist/item is a dynamic per-type list blob, not in registry
+  ```
+  `config_set_path('installedpackages/pfblockerngblacklist/item', ...)` retained.
+
+No per-field adapter applicable (foreign section). Section-blob load only.
+
+### pfblockerng_feeds.php
+
+Section loaded: `installedpackages/pfblockerngglobal` — NOT in registry (foreign section).
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngglobal', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngglobal')`
+
+SAVE:
+- Per-key `config_set_path` for `feed_{l_aliasname}` and `feed_alt_{value}` dynamic keys —
+  retained as foreign keys:
+  ```
+  // foreign key: pfblockerngglobal/feed_* are dynamic alias-name keys, not in registry
+  ```
+
+RENDER:
+- `config_get_path("installedpackages/{$conf_type}/config", [])` in the predefined-feeds
+  table loop — retained as foreign:
+  ```
+  // foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
+  ```
+
+### pfblockerng_category_edit.php
+
+Sections: `installedpackages/pfblockernglistsv4/config`, `pfblockernglistsv6/config`,
+`pfblockerngdnsbl/config` — dynamic, NOT in registry.
+
+Two separate LOAD sites:
+
+LOAD 1 (add/addgroup action branch, line ~192):
+- `config_get_path("installedpackages/{$conf_type}/config", [])` →
+  `PfbConfig::readSection("installedpackages/{$conf_type}/config")`
+
+LOAD 2 (normal display branch, line ~837):
+- `config_get_path("installedpackages/{$conf_type}/config", [])` →
+  `PfbConfig::readSection("installedpackages/{$conf_type}/config")`
+
+SAVE:
+- Main save block `config_set_path(...)` for the per-row data structure — retained as
+  foreign:
+  ```
+  // foreign structure: pfblockernglistsv4/v6/dnsbl per-row keys are not in registry
+  ```
+- `config_get_path('installedpackages/pfblockerngglobal/feed_alt_' ...)` at custom-field
+  block — retained as foreign:
+  ```
+  // foreign key: pfblockerngglobal/feed_alt_* are dynamic alias-name keys, not in registry
+  ```
+- `config_get_path('aliases/alias', [])` — retained as foreign:
+  ```
+  // foreign section: aliases/alias is a pfSense core section, not in registry
+  ```
+- Move-row `config_set_path` for row reordering — retained as foreign.
+- Custom field `config_get_path` for base64-decode read — retained as foreign.
+
+---
+
+## Section-blob fields with no per-field adapter (structure round-trips)
+
+The following structures have no per-field adapter and are treated as plain blobs. Their
+byte-identity round-trip is proven by dedicated tests:
+
+| Structure | Section | Round-trip test |
+| --- | --- | --- |
+| `pfblockerngblacklist/item` | pfblockerngblacklist | `testBlacklistItemStructureRoundTripsByteIdentically` |
+| `pfblockernglistsv4/config` (per-row keys) | pfblockernglistsv4/config | `testCategoryListSectionRowStructureRoundTripsByteIdentically` |
+| `pfblockerngglobal/feed_*` + `feed_alt_*` | pfblockerngglobal | `testFeedsGlobalSectionWithDynamicKeysRoundTrip` |
+
+All tests assert `writeSection` then `readSection` returns byte-identical array (strict
+`assertSame`).
+
+---
+
+## Foreign keys documented
+
+- `pfblockerngblacklist` — entire section is foreign (no registry entry); load via
+  `readSection`, all writes annotated.
+- `pfblockerngglobal` — foreign section; load via `readSection`, per-key writes annotated.
+- `pfblockernglistsv4/config`, `pfblockernglistsv6/config`, `pfblockerngdnsbl/config` — dynamic
+  list sections; load via `readSection`, saves annotated.
+- `aliases/alias` — pfSense core section, entirely foreign.
+- `pfblockerngglobal/feed_alt_*` — dynamic alias-name keys, not in registry.
+
+---
+
+## Test suite
+
+New file: `tests/php/WwwGroupBGatewayTest.php`
+
+Tests added (13 new):
+
+Group A — Load default parity (SafeSearch keys in registry):
+1. `testSafeSearchEnableAbsentDefaultMatchesPriorPageDefault` — absent → 'Disable'
+2. `testSafeSearchYoutubeAbsentDefaultMatchesPriorPageDefault` — absent → 'Disable'
+3. `testSafeSearchDohAbsentDefaultMatchesPriorPageDefault` — absent → 'Disable'
+4. `testSafeSearchDohListAbsentDefaultIsEmptyString` — absent → '' (CSV string; explains explode guard)
+5. `testForeignSectionKeysAreNotInRegistry` — `blacklist_enable` throws `InvalidArgumentException`
+
+Group B — Save round-trip identity:
+6. `testSafeSearchSectionWriteReadRoundTrip` — full SafeSearch section with CSV doh_list
+7. `testSafeSearchEnableToggleRoundTrips` — before 'Disable', set 'Enable', assert 'Enable'
+8. `testBlacklistSectionScalarFieldsRoundTrip` — scalar fields
+9. `testBlacklistItemStructureRoundTripsByteIdentically` — two-provider `item` array with xml/selected/username/password
+10. `testBlacklistEnableToggleRoundTrips` — before/after state
+11. `testFeedsGlobalSectionWithDynamicKeysRoundTrip` — `feed_*` and `feed_alt_*` dynamic keys
+12. `testCategoryListSectionRowStructureRoundTripsByteIdentically` — list with `row` sub-arrays (state/url/header)
+13. `testCategoryDnsblSectionWithCustomFieldRoundTrips` — base64 `custom` field preservation
+
+### Gate results
+
+- `vendor/bin/phpunit`: 754 tests, 2729 assertions — OK (baseline was 741/2690; +13 tests, +39 assertions)
+- `vendor/bin/phpstan analyse`: No errors
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/`: Clean (no output)
+- `php -l` on all 4 group-B pages: No syntax errors
+- `python -m pytest`: 1733 passed
+- `ruff check .` + `ruff format --check .`: All checks passed
+
+---
+
+## Diff scope confirmation
+
+Changed files:
+- `src/usr/local/www/pfblockerng/pfblockerng_safesearch.php` — 2 gateway calls
+- `src/usr/local/www/pfblockerng/pfblockerng_blacklist.php` — 1 readSection + 5 foreign annotations
+- `src/usr/local/www/pfblockerng/pfblockerng_feeds.php` — 1 readSection + 3 foreign annotations
+- `src/usr/local/www/pfblockerng/pfblockerng_category_edit.php` — 2 readSection + 5 foreign annotations
+- `tests/php/WwwGroupBGatewayTest.php` — new test file (13 tests)
+
+No markup/help-text changes. No UI or stored-value changes. No changes outside group-B pages.
+
+---
+
+## Go-ahead for Phase 8
+
+Phase 7 complete. All gates green. Phase 8 may proceed.

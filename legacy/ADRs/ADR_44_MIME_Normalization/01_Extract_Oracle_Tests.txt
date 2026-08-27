@@ -1,0 +1,110 @@
+================================================================================
+PHASE 1 PROMPT — Extract and oracle-pin the current pfb_filter() MIME path
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_44_MIME_Normalization/ADR.md   (read §1 and §6 Phase 1 first)
+================================================================================
+
+ROLE
+Branch: adr/44-mime-normalisation (off devel)
+Phase 1 of 4 — behaviour-preserving preparatory phase.
+Inline on adr/44-mime-normalisation, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The MIME-type validation logic in pfb_filter() (constants 16–18) currently
+rejects valid ZIP feeds because `file(1)` returns variant strings like
+`application/x-zip-compressed` that are not in $pfb['mime_types']. Before
+introducing normalisation (Phase 2), we must:
+  1. Extract the MIME-string handling into clearly named helper functions so
+     the normalisation has a clean insertion point.
+  2. Pin the CURRENT behaviour with oracle/regression tests — including
+     explicitly recording that `application/x-zip-compressed` currently FAILS
+     (this is the bug we fix in Phase 2; the red result belongs in the handoff).
+
+This phase is behaviour-preserving: no functional change to pfb_filter().
+
+REQUIRED READING
+- .ADRs/ADR_44_MIME_Normalization/ADR.md  (§1 Context, §2 Decision, §5 Constraints, §6 Phase 1)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    pfb_filter() — constants PFB_FILTER_FILE_MIME (17), PFB_FILTER_FILE_MIME_COMPRESSED (18),
+    PFB_FILTER_FILE_MIME_COMPARE (16), and $pfb['mime_types'] array definition.
+- CLAUDE.md  (commit style, branch policy, test coverage non-negotiables)
+- Existing PHPUnit test suite (discover path from CLAUDE.md or composer.json)
+
+ACTION PLAN (ordered — oracle tests FIRST)
+
+1. Read pfb_filter() in full. Locate the three MIME filter constants (16, 17, 18)
+   and understand the allow-list lookup against $pfb['mime_types'].
+
+2. Extract a pure helper:
+       pfb_mime_in_allowlist(string $mime, array $allowlist): bool
+   that encapsulates the array_key_exists / isset lookup currently inline in
+   constant-17 and constant-18 branches. This is a behaviour-preserving refactor;
+   callers pass the same $pfb['mime_types'] they do today.
+
+3. Write oracle/regression PHPUnit tests (these must ALL pass on the current code
+   with NO changes to pfb_filter() logic — they pin today's behaviour):
+
+   a. test_pfb_mime_allowlist_accepts_canonical_zip()
+      — 'application/zip' is in the allow-list → true.
+
+   b. test_pfb_mime_allowlist_rejects_x_zip_compressed()
+      — 'application/x-zip-compressed' is NOT in the allow-list → false.
+      *** Record the failure (false/rejected) in the handoff as the baseline.
+          This is the bug; Phase 2 fixes it via normalisation, not allow-list change. ***
+
+   c. test_pfb_mime_allowlist_rejects_x_zip()
+      — 'application/x-zip' → false. Record in handoff.
+
+   d. test_pfb_mime_allowlist_accepts_canonical_gzip()
+      — 'application/gzip' → true.
+
+   e. test_pfb_mime_allowlist_accepts_x_gzip()
+      — 'application/x-gzip' → true (it IS in the current allow-list; confirm this).
+
+   f. test_pfb_mime_allowlist_rejects_octet_stream()
+      — 'application/octet-stream' → false.
+
+   g. test_pfb_mime_allowlist_accepts_text_plain()
+      — 'text/plain' → true.
+
+4. Confirm all existing pfBlockerNG PHPUnit tests still pass (no regressions from
+   the extract refactor).
+
+CONSTRAINTS
+- Do NOT change any logic in pfb_filter() beyond extracting pfb_mime_in_allowlist().
+- Do NOT modify $pfb['mime_types'].
+- Do NOT touch PFB_FILTER_FILE_MIME_COMPARE (16) logic.
+- Do NOT add normalisation in this phase — that is Phase 2.
+- Hostname exception paths in pfb_filter() are untouched.
+- PHP 8.3; no new Composer production dependencies.
+
+VERIFICATION (must all pass before this phase is done)
+- vendor/bin/phpunit                → green (all existing + new oracle tests)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc  → no syntax errors
+- git diff --stat                   → only pfblockerng.inc and the new test file(s)
+
+EXPECTED RESULT
+- pfb_mime_in_allowlist() exists in pfblockerng.inc, called from constant-17 and
+  constant-18 branches.
+- Oracle test suite exists and is green.
+- Handoff records the confirmed-red results for x-zip-compressed and x-zip
+  (the baseline evidence the Phase 2 tests will flip to green).
+- No functional change to pfb_filter() behaviour.
+
+COMMIT (single)
+    pfb_filter: extract pfb_mime_in_allowlist() + oracle tests (ADR-44 P1)
+Push directly to adr/44-mime-normalisation.
+Open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_44_MIME_Normalization/RESULTS/01_Results.txt
+Include:
+- Confirmation that pfb_mime_in_allowlist() was extracted and wired.
+- Full list of oracle test names and their results (green/red as appropriate).
+- Explicit record of the red baselines:
+    application/x-zip-compressed → allowlist result: FALSE (bug; Phase 2 fixes)
+    application/x-zip            → allowlist result: FALSE (bug; Phase 2 fixes)
+- PHPUnit summary line (X tests, Y assertions, 0 failures — except the deliberate
+  red-baseline items which should be noted, not left as test failures; use
+  assertFalse to pin them as expected-false).
+- Commit hash and push confirmation.
+- Any deviation or watch-out for Phase 2.

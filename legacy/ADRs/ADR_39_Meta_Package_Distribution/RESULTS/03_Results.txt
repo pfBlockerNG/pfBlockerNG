@@ -1,0 +1,171 @@
+ADR-39 Phase 3 — Results
+========================
+
+Branch: adr/39-meta-package-distribution
+Spec:   .ADRs/ADR_39_Meta_Package_Distribution/03_Retire_Worker_And_Metapkg.txt
+
+
+DELETED PATHS
+-------------
+
+- scripts/worker/                              (entire directory — Cloudflare routing Worker)
+- .github/workflows/deploy-worker.yml          (Worker deploy workflow)
+- tests/test_pfblockerng_repo_pkg.py           (15 off-box meta-package build tests)
+
+
+EDITED WORKFLOWS
+----------------
+
+.github/workflows/test.yml
+  - Removed entire `worker-tests:` job block (Node/`node --test` runner)
+  - Removed `worker-tests` from `all-tests-passed.needs` list
+  - Removed `worker-tests.result` check from `all-tests-passed` bash gate
+  - needs: graph after: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests,
+    php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint,
+    widget-js-tests, ui-suite]
+  - No remaining job references a deleted job.
+
+.github/workflows/release.yml
+  - Removed `deploy-worker:` job (the "Redeploy the Cloudflare routing Worker" block)
+  - No other job in release.yml had `deploy-worker` in its `needs:` — removal was clean.
+  - Updated release-flow comment and dry_run comment to remove Worker references.
+
+
+BUILD-PKG-PORTABLE.PY META-PACKAGE REVERT
+------------------------------------------
+
+Commit 5d69ce3 added:
+  - `_gh_wrksrc_subdir(mk, workdir)` helper
+  - Modified `acquire_source()` to call `_gh_wrksrc_subdir()` and handle `subdir=""`
+    (for repo-root WRKSRC, i.e. the abandoned pfblockerng-repo meta-package)
+
+Reverted to pre-5d69ce3 state:
+  - `_gh_wrksrc_subdir()` removed entirely
+  - `acquire_source()` restored to the original direct `src/`-subdir logic:
+    local: copies `{local}/src` if present, else `{local}` (with usr/ check)
+    fetch: copies the `src/` dir from the tarball top — no subdir detection
+
+All general SUB_FILES / post-install machinery kept intact.
+
+
+ROUTING.JSON REMOVAL (build-repo-portable.py)
+----------------------------------------------
+
+Functions removed:
+  - `generate_routing_json(entries, path)` — wrote {"routes": [...]} JSON file
+  - `_ua_pattern(variant, version)` — generated "pfSense/2.8" / "Netgate pfSense Plus/26.03"
+  - `_dedup_routes(routes)` — collapsed and ordered routing entries
+
+Call sites removed from `build_repo_matrix()`:
+  - `routes: list[dict] = []` initialization
+  - `status = entry.get("status", "active")` (now unused)
+  - `routes.append(...)` per-entry accumulation
+  - `routes = _dedup_routes(routes)` post-loop
+  - `generate_routing_json(routes, str(out_dir / "routing.json"))` post-loop
+  - `sys.stderr.write(f"==> wrote routing.json ...")` log line
+  - Return changed from `{"routes": routes, "built": built}` to `{"built": built}`
+
+CLI args removed:
+  - `--generate-routing-json`, `--routing-entries`, `--routing-json-path`
+  - The --generate-routing-json handler block
+
+Docstring/comment updates:
+  - Module-level usage block: removed "ROUTING MANIFEST (ADR-20 Phase 3)" section
+    and the --generate-routing-json usage example
+  - `build_repo_matrix()` docstring: removed routing.json reference
+
+Tests removed from tests/test_build_repo_portable.py:
+  - test_routing_json_correct_entries
+  - test_routing_json_legacy_retained
+  - test_ua_pattern_ce_vs_plus
+  - test_dedup_routes_collapses_and_orders_most_specific_first
+  - test_build_matrix_routing_json
+  - test_build_matrix_routing_status_passthrough
+  - test_route_only_routing_entries_for_all_entries
+  - Updated test_build_matrix_no_nightly: removed routing.json assertion
+  - Updated section comment blocks to remove routing.json/Worker references
+
+
+SMOKE TEST REMOVAL (test_repo_install.py)
+-----------------------------------------
+
+Removed from tests/smoke/test_repo_install.py:
+  - `WORKER_LIVE_ENV` constant + comment block
+  - `WORKER_BASE_URL` constant + comment
+  - `test_routing_url_delivers_variant_catalog()` function (the ADR-20 Case-4 leg)
+  - Updated comments referencing "routing-Worker cases"
+
+
+MATRIX-COLLISION GUARD (new)
+-----------------------------
+
+File: tests/test_matrix_collision_guard.py
+
+Functions:
+  _load_build_matrix() — runs `sh scripts/read-version-matrix.sh --print-build`;
+    returns None when script/ref unavailable; callers skip gracefully.
+  _collision_pairs(matrix) — returns pairs sharing (freebsd_major, arch) with
+    DIFFERENT (php_version, py_flavor). ADR-39 §1.3 invariant: ABI is NOT 1:1 with
+    a pfSense version, so two matrix entries may share an ABI — but MUST carry the
+    same (php, py) or the catalog keying is ambiguous.
+
+Tests:
+  test_real_matrix_has_no_abi_php_py_collision — PASSES on the real matrix (or
+    pytest.skip when ci-metadata unavailable). GREEN on current supported-versions.json.
+  test_collision_guard_detects_colliding_fixture — proves the guard is live:
+    BEFORE: clean_matrix (same php+py) → _collision_pairs() returns [] (no collision)
+    AFTER:  colliding_matrix (freebsd_major=15/arch=amd64, php=8.3 vs php=8.5) →
+            _collision_pairs() returns exactly 1 pair — guard fires
+
+
+GREP GATE OUTPUT
+----------------
+
+Non-.ADRs hits after all fixes:
+
+  tests/test_add_repo_conf.py:46:_OLD_WORKER_URL = "https://pkg.pfblockerng.workers.dev"
+  tests/test_add_repo_conf.py:423:          contain pkg.pfblockerng.workers.dev (the retired Worker).
+
+JUSTIFIED: test_primary_url_is_pages_url_not_worker() is a NEGATIVE-ASSERTION regression
+guard that proves workers.dev is NOT in the emitted conf. The constant is the test fixture
+value for that guard. Keeping it is correct — it guards against re-introducing the retired URL.
+
+All other hits are in .ADRs/ historical documents (ADR-19, ADR-20, ADR-27, ADR-39) — all
+legitimate historical mentions of the now-deleted architecture.
+
+README.md and CLAUDE.md references were updated to reflect the current architecture (direct
+GitHub Pages URL, detect_variant.sh, self-heal hook — no Worker intermediary).
+
+tests/test_gen_landing.py: routing.json filename updated to meta.json in two autoindex
+tests that used it only as an arbitrary test filename.
+
+
+CI YAML NEEDS: GRAPHS
+---------------------
+
+test.yml:   all-tests-passed.needs has no reference to deleted jobs. Verified: grep for
+            'worker-tests|deploy-worker' in test.yml → empty.
+
+release.yml: no job references deploy-worker in needs:. The deleted job had no dependents.
+             Verified: grep for 'deploy-worker|worker' in release.yml → empty.
+
+
+TEST SUITE RESULTS
+------------------
+
+Full suite: 1917 passed, 2 skipped (tests/ --ignore=tests/smoke --ignore=tests/js)
+Collision guard: 2 passed (real matrix pass + fixture-collision detection)
+
+
+CROSS-REPO TODO
+---------------
+
+pfBlockerNG/pkg — publish.yml still contains a step that generates routing.json and
+commits it to the Pages deployment. That step must be removed separately in that repo's
+own PR. This is a SEPARATE cross-repo change; it is NOT part of this branch. The Pages
+site will simply stop having a routing.json file once that step is removed — no client
+behaviour is affected (no client software reads routing.json; the Worker that consumed
+it is already deleted by this phase).
+
+Action required: open a PR against pfBlockerNG/pkg removing the routing.json generation
+step from .github/workflows/publish.yml.

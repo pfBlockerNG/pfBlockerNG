@@ -1,0 +1,80 @@
+================================================================================
+PHASE 1 PROMPT — Shared on-box variant-detection helper (+ tests)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_39_Meta_Package_Distribution/ADR.md  (read §1.3 and §2 "Detection" first)
+================================================================================
+
+>>> FINAL-DESIGN NOTE (supersedes this prompt). The standalone
+>>> scripts/lib/detect_variant.sh prototyped here was FOLDED INTO the rc.d hook
+>>> (scripts/rc.d/pfblockerng_repo_generate.sh) and DELETED, along with its
+>>> detect_variant_spec.sh. Final detection is KISS: edition = "/etc/product_label
+>>> contains 'Plus'" (absent file => ce), version = major.minor of /etc/version,
+>>> arch = leaf of `pkg config abi`. It is exercised by tests/shell/generate_hook_spec.sh.
+>>> This prompt is kept as the historical Phase-1 record.
+
+ROLE
+You are on the `adr/39-meta-package-distribution` worktree performing Phase 1 of ADR-39.
+This phase is BEHAVIOUR-PRESERVING: it adds new, not-yet-wired code (a detection helper +
+its tests). No existing caller changes. Work in the worktree off `devel`; one commit; open a
+PR per the normal flow (this touches scripts/ + tests/, not the ADR-text carve-out).
+
+WHY THIS PHASE EXISTS
+The meta-package's pkg-post-install (Phase 2) and add-repo.sh (Phase 4) must BOTH compute the
+box's catalog subtree `<varver>/<arch>` (e.g. `ce-2.8/amd64`, `plus-26.03/aarch64`) on-box, in
+POSIX sh, with NO Worker. To avoid two divergent implementations, extract ONE shared helper and
+pin it first. The mapping must match the Python `catalog_name_from_version()` exactly, so a box
+resolves the same subtree the build pipeline created.
+
+REQUIRED READING
+- .ADRs/ADR_39_Meta_Package_Distribution/ADR.md  (§1.3 load-bearing facts; §2 Detection + contract item 3)
+- scripts/build-repo-portable.py — `catalog_name_from_version()` (~:389): the canonical
+  version→varver mapping (major.minor only; `<variant.lower()>-<major.minor>`); and how arch is
+  carried in the matrix (bare `amd64`/`aarch64`).
+- ADR-20 §1 + its 2026-06-09 Phase-1 finding: `globals.plus.inc` EXISTS on Plus, ABSENT on CE
+  (`.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/01_Results.txt`).
+- An existing in-repo shellspec test for style (search tests/ for `*.sh`/shellspec specs).
+- CLAUDE.md — Shell standards (POSIX sh, quoting, LC_ALL=C), test-coverage mandate.
+
+ACTION PLAN (golden cases FIRST)
+1. Decide the helper's home + interface: a sourceable POSIX-sh file (e.g.
+   `scripts/lib/detect_variant.sh`) exposing a function that prints `<varver>/<arch>` (and a
+   channel-aware variant if convenient) to stdout, plus small functions for edition/version/arch
+   so they are independently testable. Confirm `pkg config abi` yields `FreeBSD:<major>:<arch>`
+   and parse the arch leaf from it; do NOT hardcode the FreeBSD-major↔varver relationship —
+   varver comes from /etc/version + edition, arch from the ABI.
+2. Edition: Plus iff the pfSense `globals.plus.inc` file is present (resolve its real path from
+   pfSense source per CLAUDE.md "Resolve pfSense-provided … from upstream"; do NOT guess the
+   path). Version: read + trim `/etc/version`. Map to varver exactly as the Python helper does
+   (strip patch to major.minor; `ce-<mm>` / `plus-<mm>`).
+3. Write `tests/test_detect_variant.sh` (shellspec). Use the SAME case table as
+   `test_catalog_name_from_version()` (`2.8.1`+CE→`ce-2.8`, `26.03.1`+Plus→`plus-26.03`,
+   patch-stripping) PLUS: both edition branches via a `globals.plus.inc` present/absent fixture
+   (mock the path), and arch-leaf parsing from a stubbed `pkg config abi`. Assert the BEFORE
+   (CE, absent file) AND the flipped (Plus, present file) outcomes so green proves it is a real
+   branch, not an always-one-edition path.
+
+CONSTRAINTS
+- POSIX sh only; quote every expansion; `LC_ALL=C` on any sort/compare. No bash-isms.
+- Do NOT wire the helper into add-repo.sh yet (that is Phase 4) and do NOT touch the Worker.
+- Keep the mapping logic in ONE place; the per-field functions exist for testability.
+
+VERIFICATION (all must pass)
+- the new shellspec suite → green (both edition branches + the version→varver table).
+- `sh -n` + `shellcheck` on the new helper and any touched scripts → clean.
+- `python -m pytest` → green (unchanged).
+- diff-read: the sh varver mapping is line-for-line equivalent to `catalog_name_from_version()`.
+
+EXPECTED RESULT
+A sourceable POSIX-sh detection helper that prints the box's `<varver>/<arch>`, matching the
+Python catalog mapping, with a shellspec suite pinning both edition branches and the version map.
+No production caller uses it yet.
+
+COMMIT (single)
+    dev: add on-box pfSense variant-detection helper for the pkg repo conf
+Push to the branch; open a PR per the normal flow.
+
+HANDOFF — write `.ADRs/ADR_39_Meta_Package_Distribution/RESULTS/01_Results.txt`
+Record: the helper file path + function names + exact stdout contract; the resolved
+`globals.plus.inc` path and how edition is decided; how arch is parsed from `pkg config abi`;
+the test file + the case table; and the go-ahead for Phase 2 (which ships this helper inside the
+meta-package).

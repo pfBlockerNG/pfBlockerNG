@@ -1,0 +1,89 @@
+ADR-04 — Phase 8 results: python-mode-only smoke matrix GREEN on `next`
+=======================================================================
+
+Branch: next   Date: 2026-06-03
+Audience: maintainer + any future agent touching tests/smoke/.
+
+-------------------------------------------------------------------
+OUTCOME
+-------------------------------------------------------------------
+The live-VM smoke matrix is GREEN on `next` (python-mode-only DNSBL):
+  13 passed, 3 skipped, 1 xfailed  (run 26895418833, ~100s pytest).
+Passing: IP alias-table+rule; DNSBL config-immutability (include-aware +
+unbound-control); python exact block -> VIP; python exact block -> NULL
+(0.0.0.0 / ::); whitelist passthrough; all helper self-tests; strict
+false-green guard (xfail). Skipped: DNSBL-IP dual-stack (deferred, see below),
++ 2 env-gated helper skips.
+
+This phase adapted the devel matrix (which asserted UNBOUND mode + skipped the
+python shapes) to `next`, where Unbound mode is removed and python is the ONLY
+DNSBL mode.
+
+-------------------------------------------------------------------
+TWO PRODUCT FINDINGS THE LIVE SMOKE TEST SURFACED (unit tests could not)
+-------------------------------------------------------------------
+1. CHROOT FEED-LOAD BUG (FIXED, commit 69e5db8) — severe, next-only.
+   ADR-06 moved python DNSBL to a manifest build: pfblockerng.inc writes
+   pfb_py_sources.json with each feed's raw path; pfb_unbound.py builds dataDB
+   from it. The manifest stored HOST-ABSOLUTE paths
+   (/var/unbound/pfb_py_raw/<f>.raw, /usr/local/pkg/.../dnsbl_tld), but Unbound
+   runs CHROOTED at /var/unbound -> the module resolved them to
+   /var/unbound/var/unbound/... (and /usr/local/pkg is outside the chroot) ->
+   every feed failed to open -> dataDB empty -> DNSBL silently blocked NOTHING
+   (queries forwarded; SERVFAIL under the hermetic egress block).
+   python_enable/python_blocking were both 'on' — only the paths were wrong.
+   Fix: write the manifest 'raw' RELATIVE to the manifest dir (the chroot root;
+   pfb_unbound.py's _dnsbl_file_line_reader already joins relatives against it);
+   embed tld_master as LINES (the chrooted module can't read /usr/local/pkg).
+   *** PROPAGATION: confirm whether the ADR-06 manifest build is also on `devel`
+   *** (the bug would exist there too, just unexercised since devel's smoke used
+   *** unbound mode). If so, the fix belongs on devel and should cascade to next
+   *** per the linear-history dance. Raised for the maintainer to place.
+
+2. "(py)" / lightning-bolt UI markers removed (commit ec18247) — on `next`
+   python is the only mode, so the "Python-mode only" field markers + the JS
+   bolt substitution in pfblockerng_dnsbl.php are redundant; removed.
+
+-------------------------------------------------------------------
+HARD-WON SMOKE TRUTHS (now also in CLAUDE.md "Smoke tests" — read first)
+-------------------------------------------------------------------
+* NO localhost exemption: python DNSBL blocks a name even from 127.0.0.1.
+  Probe ON-BOX (drill @127.0.0.1 over SSH); the runner-side SLIRP WAN-hostfwd
+  DNS path is NOT answered in CI (that, not slow Unbound, caused the early
+  TIMEOUTs). First DNS response after wait_unbound_ready is authoritative —
+  assert it, never loop for the expected value.
+* Test domains: helpers.unique_domain() -> uuid-*.com. NEVER RFC 6761 TLDs
+  (.test/.example/...) — Unbound built-in local-zones shadow them before DNSBL
+  (this produced the "SOA test." red herring). NEVER HSTS-preload names — HSTS
+  (pfb_hsts, default ON) forces a VIP block to NULL.
+* Block shapes: NOERROR+VIP (dnsbl_ipv4) or NULL (0.0.0.0 / ::); never NXDOMAIN
+  for a feed match. Per-list `logging` is a LIST-level field ($list['logging']),
+  NOT per-row. Compare IPs by value (:: == ::0).
+* Unbound chroot = /var/unbound (HAProxy = /tmp/haproxy). Module-read paths must
+  be chroot-relative.
+* Enable chain: mode=='enabled' needs enable_cb=on + pfb_dnsbl=on + DNS Resolver
+  enabled (unbound_state). On next, dnsbl_mode/pfb_py_block are dead keys.
+* Image bakes only deps + qemu-guest-agent; harness injects the DNSBL VIP +
+  per-case config; pkg add is offline. Image caches are content-keyed (smoke
+  qcow2 by GHCR digest; FreeBSD base by published SHA256 + verified).
+* Every run uploads a full guest snapshot (smoke-diagnostics): all /var/log,
+  dmesg, pfctl -sa, unbound + pfBlockerNG state, /var/db/pfblockerng +
+  /var/db/aliastables, scrubbed config.xml. Read it on any failure.
+
+-------------------------------------------------------------------
+DEFERRED / FOLLOW-UPS
+-------------------------------------------------------------------
+* test_dnsblip_dual_stack_partition (SKIPPED): pfB_DNSBLIP_v4/v6 are populated
+  by filter_configure ASYNC after the CLI returns; needs a poll-based assertion
+  (like rule_references). The IP path itself is proven by
+  test_ip_alias_table_and_rule.
+* HSTS NULL test (not yet added): block a known HSTS-preload domain, assert it
+  flips VIP->NULL (0.0.0.0) with HSTS on. Recipe: point Unbound's forwarder at
+  the stub, assert the domain reaches the stub UNblocked; add to a block list;
+  Force Reload; assert 0.0.0.0. Two reloads; requires configure_upstream to
+  REPLACE (not append) the "." forward-zone.
+* Chroot-fix propagation to devel (see finding #1).
+
+-------------------------------------------------------------------
+MAINTAINER DoD (ADR.md §7) — still your call to flip Status -> Accepted.
+-------------------------------------------------------------------

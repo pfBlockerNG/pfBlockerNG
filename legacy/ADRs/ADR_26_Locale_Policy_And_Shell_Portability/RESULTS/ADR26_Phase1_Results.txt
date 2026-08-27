@@ -1,0 +1,45 @@
+ADR-26 — Phase 1 Results: Inline LC_ALL=C on the byte-exact machine-data sinks
+
+CHANGE
+src/usr/local/pkg/pfblockerng/pfblockerng.sh — prefixed each collation/set-op sink over
+machine data (IPs, punycode domains) with inline `LC_ALL=C`, matching the reference at L479.
+No global export (ADR §2.2). 7 sinks changed; diff = 7 insertions / 7 deletions.
+
+LINES CHANGED (before -> after; line numbers post-edit)
+HIGH (sort -u uniqueness is load-bearing — a dropped entry = a hole in the block set):
+- L282   data="$(sort -u "${pfbsuppression}")"
+      -> data="$(LC_ALL=C sort -u "${pfbsuppression}")"
+- L531   ...cut -d ' ' -f1 "${masterfile}" | sort -u)...
+      -> ...cut -d ' ' -f1 "${masterfile}" | LC_ALL=C sort -u)...
+         (only the sort collates; the cut is left bare per the phase prompt)
+- L543   sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv ...
+      -> LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv ...
+- L759   sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"
+      -> LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"
+- L853   sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv ...
+      -> LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"; mv ...
+         (L543 and L853 are byte-identical; applied together)
+- L1158  grep -aoEw '<ipv4>' ... | sort -u > "${pfborig}${alias}.orig"
+      -> grep -aoEw '<ipv4>' ... | LC_ALL=C sort -u > "${pfborig}${alias}.orig"
+MEDIUM (plain sort whose ORDER feeds a later compare/diff):
+- L1180  sort -o "${masterfile}" "${masterfile}"
+      -> LC_ALL=C sort -o "${masterfile}" "${masterfile}"
+
+LEFT UNCHANGED (by design — ADR §1.3)
+- L479: already correct (the reference idiom).
+- Collation-insensitive numeric sinks: L725 `sort -nu`, L1181 `sort -t . -k 1,1n...` (numeric
+  octet sort). `-n` parses numbers, so collation can't reorder/merge them.
+- Display-only: L1197/1201/1205/1209/1222/1255 `wc -l ... | sort -n -r` (count display).
+Adding LC_ALL=C to any of these is noise, not correctness.
+
+VALIDATION
+- `sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh` — OK.
+- `shellcheck` — clean (exit 0).
+- No extractable-helper pytest added: these are inline shell pipelines, not an extractable
+  pfBlockerNG helper. A Python test around them would exercise the OS `sort`/locale, not our
+  code (coverage theater) — and the phase prompt gates it on "without contorting production
+  code". Behavioural validation is shellcheck + the ADR-04 live-VM smoke (Phase 4 ties it off).
+
+STILL OUTSTANDING IN ADR-26
+- Phase 3 (§2.4): ls-column parses (L1226/1230) + jot (L327) portability rewrites.
+- Phase 4: DoD (shellcheck/sh -n clean [done for this file], smoke green, diff minimal).

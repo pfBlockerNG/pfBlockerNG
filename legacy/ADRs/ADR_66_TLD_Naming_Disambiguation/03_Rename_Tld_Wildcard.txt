@@ -1,0 +1,96 @@
+================================================================================
+PHASE 3 PROMPT -- Rename Feature B (Wildcard Blocking) to the `tld_wildcard` stem (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md   (read SS2.2 + Semantics 2,4,5,6 + delta R-B)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/66-tld-naming-disambiguation. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving -- the Phase-1 oracle MUST stay
+byte-identical GREEN across this rename (no test edits to make it pass).
+
+Blast-radius note for the gate: NONE (behaviour-preserving pure rename; delta budget R-B --
+the Feature-B identifier set ONLY). If this phase lands alone, Feature B is renamed end to end
+and every classify() decision is byte-identical; nothing else moves.
+
+WHY THIS PHASE EXISTS
+Feature B ("Wildcard Blocking (TLD)") uses generic bare `tld_*`/`classify` names that read as
+either feature. This phase gives it the self-describing `tld_wildcard` stem, including the
+manifest bridge keys, so the name states the feature and no longer collides with TLD Allow.
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt AND RESULTS/01_Results.txt -- the oracle + manifest-bridge
+  round-trip this rename must keep green, and the Feature-A carry-forward. If either is missing,
+  the previous phase is not complete; STOP and report.
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/ADR.md -- SS2.2 (the Feature-B rename map), Semantics
+  2 (classify decisions unchanged), 4 (manifest bridge atomic), 5 (no stored-key change), 6
+  (no substring over-reach -- classify must NOT catch classify_idn; dnsbl_tld must NOT catch
+  dnsbl_tld_data/_remove/_txt), delta budget R-B.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- classify (~:4297), _dnsbl_load_tld_master
+  (~:4265), _dnsbl_tld_search (~:4288), tld_master usages, _dnsbl_config_from_manifest reader
+  (~:5285-5324), the classify() call site (~:5162).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['dnsbl_tld'] (:16005 assign + all
+  readers), the manifest config WRITER embedding tld_exclusion/tld_blacklist (~:7937-7954;
+  NO tld_master key -- #1255: the oracle rides the shipped pfb_py_tld file, loaded
+  reader-side in _dnsbl_config_from_manifest).
+- CLAUDE.md -- Naming, Python/PHP standards, the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+prior RESULTS files and the live tree override this prompt on any conflict -- verify before
+acting and flag contradictions in the handoff. The ADR-65-doomed PHP writers (tld_analysis,
+pfb_dnsbl_py_swap) are NOT renamed (SS1.2) -- but their readers of $pfb['dnsbl_tld'] DO get the
+variable rename; if a reader is ambiguous, ESCALATE rather than guess.
+
+ACTION PLAN (ordered)
+1. Re-grep every Feature-B occurrence FROM SOURCE. For the substring-hazard names use EXACT
+   matching: `$pfb['dnsbl_tld']` exactly (list `dnsbl_tld_data`/`_remove`/`_txt` and confirm
+   they are EXCLUDED); `classify(` the wildcard classifier only (confirm classify_idn/
+   classify_label/classify_upstream_block are EXCLUDED).
+2. Rename per SS2.2: $pfb['dnsbl_tld']->$pfb['dnsbl_tld_wildcard'] (every reader, incl. the
+   ADR-65-doomed ones until 65 deletes them); classify->tld_wildcard_classify;
+   _dnsbl_load_tld_master->_dnsbl_load_tld_wildcard_master; _dnsbl_tld_search->
+   _dnsbl_tld_wildcard_search; tld_master->tld_wildcard_master; tld_exclusion->
+   tld_wildcard_exclusion; tld_blacklist->tld_wildcard_blacklist (a sub-feature of Wildcard
+   Blocking -- SS2.2). Rename the manifest keys (tld_exclusion, tld_blacklist) on BOTH the
+   writer (.inc) AND the reader (_dnsbl_config_from_manifest) in this SAME commit (Semantic 4).
+   tld_master is NOT a manifest key (#1255) -- rename the internal build-blob key + variable
+   reader-side only (_dnsbl_config_from_manifest's returned dict + build()'s read).
+3. Do NOT touch: config.tld_wildcard (already the stem, #1255), the stored keys (pfb_tld,
+   tldexclusion, tldblacklist), TOP1M/safesearch/hsts, or any Feature-A identifier (delta R-B).
+   Do NOT rename the doomed function names tld_analysis/pfb_dnsbl_py_swap (SS1.2).
+4. Reconcile comments/docstrings mentioning the renamed Feature-B symbols (esp. the "mirrors
+   PHP's tld_analysis()" docstrings on the renamed py functions).
+
+CONSTRAINTS
+- Delta budget R-B ONLY. No behaviour change; no stored-key/POST change; no Feature-A edits.
+- Exact-identifier edits (never a blind substring sed) -- Semantic 6.
+- Match house naming; no new narration comments.
+
+VERIFICATION (executed -- paste output)
+- test mode: behaviour-preserving -- the Phase-1 oracle re-run UNCHANGED is GREEN (paste); the
+  manifest-bridge round-trip passes with the NEW keys; the Semantic-6 guard confirms
+  dnsbl_tld_data/classify_idn were NOT mutated.
+- grep proof: zero surviving Feature-B old names (bare classify(/tld_master/_dnsbl_tld_search/
+  tld_exclusion/tld_blacklist/$pfb['dnsbl_tld']) in production EXCEPT the intentionally-kept
+  doomed writers; the stored keys + config.tld_wildcard STILL present unchanged.
+- `python3 -m pytest`, `ruff check .`, `ruff format --check .`, `mypy tests/`;
+  `php -l` on touched files; `vendor/bin/phpunit`; `composer phpstan`;
+  `composer phpcs -- --standard=phpcs.xml.dist src/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: pure rename; classify_idn/dnsbl_tld_data untouched; no behaviour line changed.
+
+EXPECTED RESULT
+Feature B is `tld_wildcard` end to end; classify() decisions byte-identical; the manifest bridge
+renamed atomically; no substring over-reach.
+
+COMMIT (single)
+    pfblockerng: rename the Wildcard Blocking feature to the tld_wildcard stem (ADR-66 P3)
+Push directly to adr/66-tld-naming-disambiguation; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/03_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted
+tails); the oracle-unchanged-green proof + the manifest-bridge round-trip + the Semantic-6
+guard proof; Coverage-matrix (every SS2.2 row renamed, every "stays"/"doomed-kept" row
+confirmed by grep); Deviations / judgment calls (or "none"); Carry-forward for Phase 4.

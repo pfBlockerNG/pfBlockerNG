@@ -1,0 +1,114 @@
+================================================================================
+PHASE 1 PROMPT — KILL-GATE: User-Agent visibility + local variant detection
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §1.3 "Premise to falsify cheaply" and §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 1 of
+ADR-20 — the KILL-GATE. This phase has NO code changes; its only product is
+`RESULTS/01_Results.txt` with a GO or REJECT verdict for the dynamic routing
+approach. The entire Phase 5 (Cloudflare Worker) is conditioned on this verdict.
+Work in a worktree off `devel`; this phase produces NO commit.
+
+WHY THIS PHASE EXISTS
+ADR-20's primary mechanism (dynamic routing: a Cloudflare Worker reads the
+pkg-injected User-Agent to route CE vs Plus requests to the correct catalog subtree)
+rests on one unverified premise: does the pfSense-injected `User-Agent` header
+reach a server behind HTTPS and CDN layers, or is it stripped/replaced? GitHub Pages
+is behind Fastly; a Cloudflare Worker sits in front. If the UA is absent or a
+generic CDN string when the Worker sees it, the dynamic routing approach is REJECTED
+before any Worker code is written. The ADR-01 guard: falsify the premise cheaply
+before building on it.
+
+The secondary premise — `globals.plus.inc` EXISTS on Plus and is ABSENT on CE — is
+already confirmed by the live probe (2026-06-09) and needs only to be recorded as GO
+in the handoff; no further verification is required.
+
+REQUIRED READING
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §1.3 (the UA premise),
+  §1.4 (globals.plus.inc local discriminator), §2 "Dynamic routing (primary)",
+  §7 "Reject / redesign criteria".
+- scripts/probe-pfsense-env.sh — the probe that confirmed globals.plus.inc and
+  the UA values (sections 4 and 6).
+- Probe output (CE 2.8.1): HTTP_USER_AGENT = pfSense/2.8.1-RELEASE:<uid>
+- Probe output (Plus 26.03.1): HTTP_USER_AGENT = Netgate pfSense Plus/26.03.1-RELEASE:<uid>
+- pfSense source: src/etc/inc/pkg-utils.inc `pkg_env()` — how the UA is injected
+  (read at a dated ref per CLAUDE.md "Resolving pfSense-provided PHP functions").
+- CLAUDE.md — "Investigating the live system", "Worktrees (mandatory for AI agents)".
+
+ACTION PLAN (ordered)
+1. DEPLOY a minimal HTTPS logging endpoint. The simplest option:
+   - A Cloudflare Worker (free tier, no KV) at a `*.workers.dev` URL whose handler
+     is: `return new Response(request.headers.get('User-Agent') ?? '(absent)')`.
+     Deploy via `wrangler deploy` from a minimal `wrangler.toml` project (no account
+     secrets needed for a free Worker returning the header). The response body IS
+     the UA string; no log aggregation needed — the requester sees it in the body.
+   - Alternatively: a `requestbin`-style service or any HTTPS endpoint that echoes
+     the `User-Agent` header in the response body. The requirement is HTTPS (pkg
+     refuses HTTP for repo fetches) and that the endpoint is NOT GitHub Pages /
+     Fastly (we need to isolate the CDN variable).
+   Record the endpoint URL in the handoff.
+
+2. HIT the endpoint from BOTH a CE box and a Plus box using pkg's network stack
+   (not curl — pkg is what sets the UA). Method: write a minimal `pkg.conf` pointing
+   the `pfblockerng-test` repo to the endpoint URL and run `pkg update -r
+   pfblockerng-test`. The endpoint returns the UA in the response body; pkg will error
+   (not a valid repo), but the RESPONSE BODY (UA string) is visible in `pkg -d update`
+   verbose output or by reading the raw HTTP response from the Worker logs /
+   requestbin. Alternatively, wrap the Worker to return a valid but empty `meta.conf`
+   so pkg doesn't error — whichever approach makes the UA value readable.
+   If live CE/Plus boxes are not available for this test, document the constraint and
+   use the `pkg -d` verbose output from a test repo fetch (the UA is sent on every
+   pkg HTTPS request; check `pkg -vv` to confirm CURLOPT_USERAGENT is set from
+   `PKG_ENV["HTTP_USER_AGENT"]`).
+
+3. READ the UA value from the endpoint or verbose pkg output. Classify:
+   - GO: the string reaching the endpoint matches the pfSense-injected format
+     (`pfSense/...` or `Netgate pfSense Plus/...`), with the `Plus` token present
+     on Plus and absent on CE. The CDN/HTTPS path did NOT replace it with a generic
+     string (e.g. `Fastly/...`, `CF-Worker/...`, `pkg/1.21`, or `(absent)`).
+   - REJECT: the UA is absent, replaced, or identical on both CE and Plus. Document
+     the actual observed string and the network path.
+
+4. RECORD the `globals.plus.inc` verdict: the live probe already confirmed
+   EXISTS on Plus / ABSENT on CE. Mark as GO; no re-verification needed. Quote the
+   probe output section (§6 "CE VS PLUS FILESYSTEM DISCRIMINATORS") in the handoff.
+
+5. WRITE `RESULTS/01_Results.txt` with:
+   - `USER_AGENT_VISIBLE: GO` or `USER_AGENT_VISIBLE: REJECT`
+   - `GLOBALS_PLUS_INC: GO` (already proven)
+   - The exact UA strings observed on CE and on Plus (or the error if unreadable)
+   - The endpoint URL used and the method (Worker / requestbin / pkg verbose)
+   - Per §7: if USER_AGENT_VISIBLE = REJECT, note that Phase 5 is SKIPPED and
+     the static-variant-URL from Phase 4 is the sole mechanism. If GO, all phases
+     proceed as written.
+
+CONSTRAINTS
+- NO code changes to any tracked file. NO commit.
+- The test endpoint is a throwaway (free Workers.dev URL or requestbin) — do not
+  provision anything persistent or billed.
+- Do NOT test against GitHub Pages / the actual pfblockerng.github.io URL in this
+  phase — the goal is to isolate whether the UA survives HTTPS/CDN in general, not
+  to test the specific deployment (which doesn't exist yet).
+
+VERIFICATION (before the handoff is written)
+- `RESULTS/01_Results.txt` exists with an unambiguous GO/REJECT verdict on
+  `USER_AGENT_VISIBLE` and the supporting evidence (observed UA strings).
+- No tracked file has been modified; `git diff` is clean.
+
+EXPECTED RESULT
+A `RESULTS/01_Results.txt` with a clear GO or REJECT verdict backed by the
+observed UA strings from both CE and Plus, so Phase 2 can start immediately
+and Phase 5 knows whether to proceed.
+
+COMMIT
+None — this phase has no commit.
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/01_Results.txt`
+(plain .txt)
+Record: USER_AGENT_VISIBLE (GO/REJECT) + GLOBALS_PLUS_INC (GO); the exact UA
+strings observed; the endpoint URL and method; if REJECT, which phase is affected
+(Phase 5 skipped); if GO, the go-ahead for Phase 2 and all phases. Quote the probe
+output for globals.plus.inc.

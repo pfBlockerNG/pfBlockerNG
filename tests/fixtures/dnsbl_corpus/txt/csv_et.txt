@@ -1,0 +1,1 @@
+{"kind":"domain","domain":"etfeed.example","log":"1","feed":"csv_et","group":"grp_csv"}

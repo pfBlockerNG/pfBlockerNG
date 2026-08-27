@@ -1,0 +1,343 @@
+# ADR-32: Add IPinfo as an alternative GeoIP/ASN provider behind an abstraction
+
+- **Status:** **Proposed** (2026-06-20; facts + anchors refreshed 2026-07-03 against `devel` —
+  the consumer inventory was corrected to FIVE consumers across three languages (the original
+  PHP-interface seam cannot serve them), `maxmind_account` added to the credential set, and
+  the fetch re-routed onto the existing extras pipeline; the seam-level decision is the
+  **§2.0 open fork** and blocks Phases 2–4)
+- **Date:** 2026-06-20
+- **Branch:** `adr/32-ipinfo-geoip` (off `devel`)
+- **Folds in:** issue #291 ("Add IPinfo GeoIP")
+- **Prerequisite (blocking) — ADR-64:** the country/continent truth moves in-tree
+  (`.ADRs/ADR_64_GeoIP_Truth_Table/ADR.md`, folding in the closed issue #1235). **ADR-64 must land
+  before Phase 2.** Until it does, this ADR's §2.1 rows for the country build and locale names are
+  unsound: they let the *provider* define which countries exist and what they are called, so
+  switching provider (or a provider dropping a country) would silently change a user's configured
+  aliases. §2.5 summarises the consequences for this ADR; **ADR-64 is the record** — read it.
+- **Component(s):** `src/usr/local/www/pfblockerng/pfblockerng.php` (GeoIP/Reputation/ASN
+  build + IP-tab settings), `src/usr/local/pkg/pfblockerng/pfblockerng.inc` (MMDB log
+  enrichment, ASN, reputation), `src/usr/local/pkg/pfblockerng/pfblockerng.sh` (DB
+  download/convert), `config.xml` keys (`maxmind_key`, `asn_token`, …)
+- **Target runtime:** PHP 8.3 (pfSense CE 2.8); POSIX sh for the download/convert path
+- **Test suite:** `tests/php/` (PHPUnit, off-appliance), `tests/smoke/` (live-VM, ADR-04)
+
+## 1. Context
+
+GeoIP and ASN data are sourced from two vendors today, each wired directly into many call
+sites with no abstraction layer:
+
+- **MaxMind** is the GeoIP source — country databases drive the per-continent GeoIP block
+  pages (`pfblockerng.php`), the **MMDB** lookup enriches firewall + DNSBL logs
+  (PHP daemon: `pfblockerng.inc` ~`:11129` `mmdblookup`; **shell**: `pfblockerng.sh` reads
+  the same MMDB via `$pathmmdblookup` for the reputation + ASN paths), and the IP
+  **Reputation** feature consumes it. Credentials are **`maxmind_account` + `maxmind_key`**
+  (both required upstream now — the account id was missing from this ADR's original
+  inventory; see `pfb_maxmind_credential_notice()` ~`:1970` and the username/password
+  download args in `pfblockerng.php`). MaxMind also carries **locale/language** country
+  names and the legacy flags `is_anonymous_proxy` / `is_satellite_provider` / `is_anycast`
+  (some now deprecated upstream). The `geoname` id is the key used to read the MaxMind DB
+  and build the per-country GeoIP option lists.
+- **IPinfo** is used **only for ASN** today (`asn_token`, `pfblockerng.inc` ~`:2038`,
+  ~`:11513`, ~`:16012`; the `ipinfo.io` MIME carve-out at ~`:1258`). Note the in-tree
+  precedent: the IPinfo ASN product is **already delivered as `asn.mmdb`** (+ `asn.csv.gz`)
+  via `$pfb['extras']` in `pfblockerng.php` and read by the **same `mmdblookup`** as
+  MaxMind's DBs. IPinfo now also ships GeoIP in **CIDR** IPv4/IPv6 form — and in **MMDB**
+  form — so it is a viable GeoIP source; the delivery-format choice is part of the §2.0
+  fork.
+
+Load-bearing facts:
+
+- **Storage follows the ADR-28 §2.2 behaviour-not-bytes rule** (corrected 2026-07-03 — the
+  original "hard-frozen, stored values never change" wording predates the reconciled policy):
+  there is no versioned migration routine, and behaviour must be preserved on upgrade. The
+  operative conclusion stands — issue #291's "clean up users' config.xml … if features are
+  removed" is a **notice**, not a migration (see §2.3).
+- GeoIP/ASN data is consumed in **FIVE** distinct places (corrected 2026-07-03 — the original
+  count of four missed one that **cannot consume a PHP seam**): (a) GeoIP country-block alias
+  build (PHP), (b) firewall-log enrichment (PHP daemon), (c) DNSBL-log **reply** enrichment —
+  **`pfb_unbound.py` opens `GeoLite2-Country.mmdb` directly via the Python `maxminddb`
+  module inside Unbound's chroot** (`pfb["maxminddb"]` → `maxminddb.open_database` →
+  `maxmindReader.get(r_addr)`), (d) IP Reputation (**POSIX sh** — `pfblockerng.sh` calls
+  `mmdblookup` directly), and (e) the shell ASN lookup (`pfblockerng.sh`). Three languages
+  reach the vendor data independently — there is no single *code* seam to swap; see the §2.0
+  fork.
+- Real DB downloads need **vendor credentials** (a MaxMind account+key / an IPinfo token),
+  so the end-to-end download+convert path **cannot run in CI** — a documented out-of-CI
+  limitation (per CLAUDE.md "ADR acceptance"), validated on a maintainer box.
+- **`Top Spammers` is not supplied by MaxMind.** pfBlockerNG owns one fixed ordered set of
+  20 ISO codes and currently uses MaxMind's country outputs to materialize their networks.
+  Provider selection changes those networks, never the group definition or availability.
+
+## 2. Decision
+
+Introduce a **provider abstraction** for GeoIP and ASN data, with **MaxMind and IPinfo as
+two alternative implementations behind one normalized seam** — so the active provider is a
+**single setting applied uniformly**, and switching it is trivial.
+
+### 2.0 OPEN DESIGN FORKS (recorded 2026-07-03 — block Phases 2–4; maintainer's call)
+
+1. **Seam level.** A PHP `GeoipProvider` interface (§2.1) cannot serve the §1 consumer set:
+   reputation + shell-ASN are POSIX sh (`mmdblookup` direct) and DNSBL reply-enrichment is
+   Python (`maxminddb` in the chroot, stdlib+maxminddb only) — neither can call a PHP
+   interface per lookup. The alternative that leaves all five consumers untouched: **the MMDB
+   file is the seam** — "provider" selects which vendor DB gets downloaded/normalised into
+   the `GeoLite2-Country.mmdb`-shaped file every consumer already reads (strong precedent:
+   IPinfo ASN already ships as `asn.mmdb` read by the same `mmdblookup`; IPinfo offers
+   MMDB-format GeoIP). Choosing MMDB-as-seam likely collapses Phases 2–4 dramatically.
+   Decide before Phase 2.
+2. **Fetch routing.** Phase 3's fresh POSIX-sh token-authenticated downloader duplicates an
+   existing, gated pipeline: vendor DBs are fetched via `$pfb['extras']` →
+   `pfblockerng_download_extras()` → `pfb_download()`, which already carries the ADR-42
+   conditional GET/304 + xxh128 sidecars, the ADR-44 MIME allowlist (incl. the existing
+   `ipinfo.io` carve-out), and the ADR-45 structural gates — and refresh scheduling is the
+   ADR-43 tick's daily-jittered `dcc` job. The IPinfo GeoIP fetch should ride that pipeline
+   (and state its refresh schedule); a parallel downloader needs an explicit justification.
+3. **Parser home language** (if the CIDR form is chosen over MMDB): PHP vs Python for the
+   CIDR→normalised-record conversion is left open by Phase 3's "whichever hosts the parse
+   tests" — pick one (remember: no Python interpreter on the appliance outside
+   `pfb_unbound.py`). *Recommended (2026-07-03, non-binding): PHP — the conversion runs on the
+   appliance as `pfb_download()` post-processing like the other extras, where Python is
+   unavailable by hard constraint; moot if fork 1 resolves to MMDB-as-seam.*
+
+**No per-consumer mix-and-match** (the maintainer's explicit call on #291): a provider is
+selected once per data domain and used by *every* consumer of that domain. We do **not**
+support "MaxMind for logs but IPinfo for reputation". Concretely:
+
+- **One `geoip_provider` setting** (`maxmind` | `ipinfo`, default `maxmind`) drives **all**
+  GeoIP consumers (country build, FW-log enrichment, DNSBL-log enrichment, Reputation)
+  uniformly.
+- **One `asn_provider` setting** (`maxmind` | `ipinfo`, default `ipinfo` — today's
+  behaviour) drives ASN uniformly. GeoIP and ASN are independent databases (they already
+  differ today), so they keep independent provider settings — but neither is mixed *within*
+  itself.
+
+### 2.1 Per-area decision
+
+| Area | Today | Decision |
+| --- | --- | --- |
+| Lookup seam | direct `mmdblookup` / IPinfo calls scattered | a `GeoipProvider` interface returning a **normalized record** (`country_iso`, `country_name`, `continent`, `asn`, `as_org`, flags map); MaxMind + IPinfo implementations |
+| GeoIP source | MaxMind only | `geoip_provider` setting selects one provider for **all** GeoIP consumers |
+| ASN source | IPinfo only | `asn_provider` setting selects one provider for ASN (default `ipinfo` = today) |
+| Country/continent build | MaxMind `geoname` | **ADR-64 owns it** — identity (which countries exist, their names, their continent) comes from the in-tree truth table; the provider supplies only **network → ISO**. See §2.5. |
+| `Top Spammers` | fixed 20-code pfBlockerNG group materialized from MaxMind country files | always-available, provider-independent system group; exact membership stays pfBlockerNG-owned and is projected onto the active provider's country outputs; no provider capability flag |
+| Deprecated MaxMind flags | `is_anonymous_proxy`/`is_satellite_provider`/`is_anycast` | provider-adapter concern, never the truth table (ADR-64 §2.5); exposed only when the active provider supplies them — absent providers report "unavailable", never a fatal. Note #1221: real GeoLite2 ships **zero** flagged rows. |
+| Locale country names | MaxMind only | **ADR-64 owns it** — names and locales come from the truth table, so the UI language does not depend on the provider. The `supports_locale` capability flag is therefore **dropped**. |
+| `config.xml` deprecated fields | n/a | **kept inert, never migrated** (ADR-28); a GUI/`file_notice` flags settings that the active provider can't honour |
+
+### 2.2 Semantics that MUST be preserved (the contract — pin with tests before any swap)
+
+- **`geoip_provider = maxmind` ⇒ byte-identical behaviour to today** — the GeoIP option
+  lists, MMDB log-enrichment strings, Reputation inputs, and per-continent alias membership
+  are unchanged for existing MaxMind users. This is the regression oracle for Phases 1–2.
+- **No stored key is renamed, removed, or rewritten by this ADR** (ADR-28 behaviour-not-bytes:
+  the new provider keys default to today's behaviour, so no grandfather seed is needed).
+  `maxmind_account`/`maxmind_key`/`asn_token` keep their exact stored vocabulary.
+- **Absent/unsupported capability degrades, never crashes** — a provider that lacks a flag,
+  locale, or field reports "unavailable"; consumers fall back to a neutral value.
+- **`Top Spammers` is never an absent capability.** Its exact ordered country membership,
+  existing per-family selections, page/config, and `pfB_Top` binding stay fixed; each
+  provider supplies the selected countries' v4/v6 networks through the ordinary normalized
+  country outputs. A provider switch atomically replaces the network content without mixing
+  providers or rewriting configuration.
+- **No live DB download in CI** — the abstraction is unit-tested against committed sample
+  fixtures; real downloads are manual smoke.
+
+### 2.3 `config.xml` "cleanup" → notice, not migration
+
+Issue #291 asks to clean up config that references removed/deprecated GeoIP features (e.g.
+firewall rules using a continent/flag the active provider no longer supplies). Because the
+config store is frozen (ADR-28), this ADR **does not mutate `config.xml`**. Instead it
+**detects** such references at build time and emits a `file_notice` naming the affected
+setting/rule and the reason ("the selected GeoIP provider does not provide
+`is_anonymous_proxy`; this option is inert"). The user decides whether to change it. The
+stored value is preserved for roll-forward/rollback.
+
+### 2.4 Explicitly kept / out of scope
+
+- **Per-consumer provider mixing** — out (maintainer's call). One provider per data domain.
+- **Dropping MaxMind** — out; it stays the default and a first-class provider (locale
+  support, existing keys).
+- **A new GeoIP UI redesign** — out; reuse the existing IP-tab settings + per-continent
+  pages, adding only the provider selectors + capability notices.
+- **`config.xml` migration / field removal** — out (frozen store); notices only.
+
+### 2.5 The country/continent truth is NOT this ADR's to define — see ADR-64
+
+**ADR-64 ("Own the GeoIP country/continent truth in-tree") is a blocking prerequisite for Phase 2
+and the single source of truth for everything below. Read it; do not restate it here.**
+
+The short version, and the only part this ADR needs: a provider abstraction that lets each provider
+define *which countries exist* and *what they are called* leaks the vendor into the user's
+configuration — a country a provider drops can silently empty a configured alias, and names and
+locales would move with the provider. So the country set, the display/localized names, the
+ISO→continent mapping, the frozen structural bindings (`pfB_NAmerica`, the config-section roots,
+the page filenames) and the per-continent unknown-country buckets all come from the **in-tree
+truth table**, keyed by ISO 3166-1 alpha-2.
+
+**What that changes for THIS ADR:**
+
+1. **The GeoIP seam shrinks to one thing: `network → ISO code`.** MaxMind's Locations CSV degrades
+   to a `geoname_id → ISO` lookup; IPinfo emits ISO directly and needs none. Country identity is
+   never asked of a provider — which makes the §2.0 fork (MMDB-as-seam vs a PHP interface) a purely
+   mechanical question about lookups, not about data ownership.
+2. **`supports_locale` is deleted from §2.1.** Localized names come from the table, so an IPinfo
+   user gets the same localized UI as a MaxMind user. There is no "IPinfo → English only"
+   degradation to design, and no reason to download MaxMind's locale files for an IPinfo install.
+3. **Provider disagreement is a notice, never a silent change** (ADR-64 §2.3): a configured country
+   the active provider dropped, an ISO code it emits that the table does not know, or a
+   continent-level row for a continent the table does not surface. Runtime never invents a country.
+   This ADR's §2.3 (`config.xml` "cleanup" → notice, not migration) is the same rule, applied to
+   the same surface.
+4. **`A1`/`A2` (anonymous proxy / satellite) are provider constructs, not countries** — they live in
+   the MaxMind adapter, not the table (and per #1221 they are provably empty on real GeoLite2 data).
+5. **`Top Spammers` is a fixed system group, not provider data.** Its 20 ISO codes are validated
+   against truth and projected onto whichever provider supplies the normalized country outputs.
+   MaxMind and IPinfo therefore expose the same group definition with provider-specific networks.
+6. **Phase ordering:** ADR-64 lands first. Any phase of this ADR that touches the country build
+   must read ADR-64's "Accepted user-visible deltas" — those deltas are ADR-64's to produce, and a
+   further change to a country name, alias name or config key from *this* ADR is a defect.
+
+## 3. Consequences
+
+**Positive**
+
+- Users can choose IPinfo or MaxMind for GeoIP (and for ASN) with a trivial, uniform switch.
+- A single normalized seam replaces scattered vendor calls — future providers are a new impl,
+  not a new set of call-site edits.
+- MaxMind users see **no change** (frozen config, identical output).
+
+**Negative / risks**
+
+- The five consumers (three languages) each reach the vendor directly today; routing them all through one seam
+  is a non-trivial refactor (mitigated by front-loaded extraction + golden tests, Phases 1–2).
+- IPinfo's field/flag set ≠ MaxMind's (deprecated flags, locale); the normalized record must
+  model "unavailable" cleanly or risk subtle log/UI regressions.
+- The real download+convert path is unverifiable in CI (credentials) — leans on manual smoke;
+  a kill-risk if IPinfo's CIDR DB proves too heavy to ingest on small boxes (see §7).
+
+## 4. Requirements (acceptance)
+
+- A `GeoipProvider`/`AsnProvider` seam with MaxMind + IPinfo implementations returning one
+  normalized record shape.
+- `geoip_provider` + `asn_provider` settings (default `maxmind`/`ipinfo`); each applied
+  uniformly to all consumers of its domain; no per-consumer mixing.
+- `geoip_provider = maxmind` is byte-identical to today (oracle test green).
+- IPinfo GeoIP ingests its CIDR v4/v6 DB and serves all five consumers.
+- `Top Spammers` remains available under both providers with the exact same ordered country
+  membership and existing configuration; fixture-specific country CIDRs prove that only its
+  network content changes when the provider changes.
+- Deprecated/unsupported capabilities degrade with a `file_notice`; `config.xml` is never
+  mutated.
+- All gates green (§5); manual smoke (§7) covers the credentialed download path.
+
+## 5. Constraints (from CLAUDE.md)
+
+- PHP tabs, PHP 8.3; no `die()`/`exit()` in library code; new pfSense fns stubbed + doubled.
+- ADR-28 behaviour-not-bytes storage; registered keys go through `PfbConfig` (ADR-29) —
+  add any new key to `pfb_cfg_registry()` (+ `since`) + the sniff's `$registeredPaths` + the
+  `docs/misc/config-gateway.md` inventory, with a round-trip test.
+- New input-handling (provider key/token, downloaded-DB paths) honours PFBL-01 (validate
+  before `exec`/path-build) and the URL-encoding gate for any HTTP client call.
+- POSIX sh for the download/convert path; `LC_ALL=C` on any sort over machine data (ADR-26).
+
+## 6. Action plan
+
+### Phase 1 — Prep: extract + pin the current MaxMind/ASN paths (behaviour-preserving)
+
+- Prompt: `01_Extract_And_Oracle.txt`
+- Enumerate every MaxMind/IPinfo call site (the **five** consumers per §1 — incl. the
+  `pfb_unbound.py` maxminddb reader and the `pfblockerng.sh` mmdblookup paths — + DB build);
+  extract the PHP read/lookup pieces into named pure-ish functions without changing output
+  (the sh/Python consumers are enumerated, not extracted).
+- Golden tests freezing today's GeoIP option lists, MMDB enrichment strings, ASN output, and
+  per-continent membership for a fixture corpus — the regression oracle for Phases 2–5.
+- Tests: oracle green; `geoip_provider` absent ⇒ identical output.
+
+### Phase 2 — Prep: define the normalized record + provider interface; wrap MaxMind behind it
+
+- Prompt: `02_Provider_Interface.txt`
+- **BLOCKED on §2.0 fork 1** (seam level — a PHP interface cannot serve the sh/Python
+  consumers; MMDB-as-seam may replace this phase). If the interface route is chosen: define
+  the normalized GeoIP/ASN record + `GeoipProvider`/`AsnProvider` interface; route the **PHP**
+  consumers through it with **MaxMind as the only implementation** — output byte-identical
+  (Phase-1 oracle stays green) — and state explicitly how the sh/Python consumers are served.
+  No IPinfo yet, no new setting yet.
+- Tests: oracle unchanged; interface unit tests (MaxMind impl returns the expected normalized
+  record for fixture inputs).
+
+### Phase 3 — IPinfo ingestion (download + parse the CIDR DB → normalized record)
+
+- Prompt: `03_IPinfo_Ingest.txt`
+- **Fetch rides the existing extras pipeline per §2.0 fork 2** (`$pfb['extras']` →
+  `pfb_download()`: ADR-42 conditional GET + sidecars, ADR-44/45 gates, ADR-43 `dcc`
+  refresh scheduling) — NOT a fresh POSIX-sh downloader. Parse IPinfo's DB into the
+  normalized form (format + parser language per §2.0 forks 1/3); map IPinfo fields; model
+  MaxMind-only flags/locale as "unavailable". Committed sample fixtures (inert,
+  RFC 5737/3849) drive parse tests.
+- Tests: parse fixtures → normalized record; malformed input rejected; capability flags
+  (`supports_locale=false`, deprecated flags absent) correct. **Red→green** for the new
+  behaviour (fail on pre-change code — this phase is not an oracle refactor).
+
+### Phase 4 — IPinfo provider for enrichment + ASN
+
+- Prompt: `04_IPinfo_Provider.txt`
+- Implement the IPinfo `GeoipProvider`/`AsnProvider`: log enrichment, Reputation inputs, ASN
+  lookups via the normalized seam. Keep block shapes/log formats stable.
+- Tests: IPinfo impl returns normalized records matching the parse fixtures; enrichment
+  strings well-formed; ASN parity with today where data permits. **Red→green** for every new
+  behaviour branch.
+
+### Phase 5 — UI: provider selectors + capability notices (config via PfbConfig)
+
+- Prompt: `05_UI_Settings.txt`
+- Add `geoip_provider` + `asn_provider` selectors to the IP tab — **the form is
+  `www/pfblockerng/pfblockerng_ip.php`** (corrected 2026-07-03; `pfblockerng.php` is the
+  argv-driven CLI/cron worker, not a settings page). Register both keys in
+  `pfb_cfg_registry()` under the ipsettings section (+ `since` + `$registeredPaths` + the
+  config-gateway.md inventory); show provider capabilities (locale, flags) and a notice when
+  a stored setting is inert under the active provider. Server-side validation (PFBL-01).
+- Tests: PHPUnit for the registry round-trip + the capability/notice decider; ADR-14
+  `ui_render` for the changed IP/Reputation pages **plus Tier B `ui_e2e` — REQUIRED per
+  CLAUDE.md test principle 4** (element addition + save/persist flow): select provider →
+  save → reload → persisted, and the switch applies uniformly. **Red→green** for the new
+  notice behaviour.
+
+### Phase 6 — Deprecated-field detection + notices (no config mutation)
+
+- Prompt: `06_Deprecation_Notices.txt`
+- At build, detect config/firewall-rule references to GeoIP features the active provider can't
+  supply; emit `file_notice` naming the setting + reason; **never write `config.xml`**.
+- Tests: PHPUnit — given a config with a deprecated reference, a notice is produced and the
+  store is untouched (assert byte-identical config before/after); **red→green** (the notice
+  test fails on pre-change code).
+
+### Phase 7 — Smoke + DoD + docs
+
+- Prompt: `07_Smoke_DoD_Docs.txt`
+- Live-VM smoke for the non-credentialed paths (provider-switch UI renders + persists,
+  MaxMind path unchanged) — green on the **CE + Plus fan-out** (the default ADR-acceptance
+  validation); the credentialed IPinfo download+convert and a small-box RAM check are
+  **documented out-of-CI limitations** validated on a maintainer box (not the Accept gate);
+  docs (`docs/misc/architecture-notes.md`, README) + stubs.
+
+## 7. Definition of done
+
+- [ ] Phase-1 oracle green; `geoip_provider = maxmind` byte-identical to today.
+- [ ] Provider seam + MaxMind/IPinfo impls; one provider per domain, applied uniformly.
+- [ ] IPinfo GeoIP serves all five consumers; deprecated capabilities degrade with a notice.
+- [ ] `config.xml` never mutated (asserted) — cleanup is notice-only.
+- [ ] All gates green: `vendor/bin/phpunit`, PHPStan, PHPCS, `php -l`, `python -m pytest`,
+      ADR-14 `ui_render`.
+
+**Manual smoke (owner: maintainer) — CI cannot cover credentialed downloads:**
+
+- [ ] With a real MaxMind key: provider=MaxMind downloads + builds GeoIP + ASN as today.
+- [ ] With a real IPinfo token: provider=IPinfo downloads the CIDR DB, builds GeoIP +
+      ASN, enriches FW/DNSBL logs, and per-continent aliases populate.
+- [ ] Switch provider both directions; confirm uniform application + inert-field notices.
+- [ ] Small-box RAM/time check ingesting the full IPinfo CIDR DB.
+
+**Reject criteria:** if ingesting IPinfo's CIDR DB blows the smallest-box RAM/time budget,
+or IPinfo's field set cannot serve the five consumers without behavioural regressions that
+can't be normalized away, **reduce** (IPinfo for ASN-only / log-enrichment-only) or
+**reject** the GeoIP half, recording the numbers.

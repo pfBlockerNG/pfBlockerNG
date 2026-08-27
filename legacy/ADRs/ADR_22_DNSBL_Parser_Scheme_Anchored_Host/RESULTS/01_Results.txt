@@ -1,0 +1,139 @@
+================================================================================
+ADR-22 Phase 1 — RESULTS
+Extract pfb_dnsbl_strip_scheme() helper + oracle tests (behaviour-preserving)
+================================================================================
+
+PREREQUISITE (ADR-21 Phase 2 merged to devel) — CONFIRMED
+    git log --oneline origin/devel | grep -i ADR-21 shows the full ADR-21 sequence
+    merged and Accepted, including:
+        b2f33b5  pfblockerng: PHP companion for per-line ABP detection (ADR-21 P2)
+        27973e9  pfb_unbound: per-line ABP detection in build() (ADR-21 P1)
+        118c530  adr: ADR-21 -> Accepted (validated by live CE+Plus smoke)
+    => safe to land ADR-22 Phase 1.
+
+--------------------------------------------------------------------------------
+1. HELPER FUNCTION (exact definition, 4 functional lines)
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+Definition at line 4012 (preceded by an ADR-22 explanatory comment block):
+
+    function pfb_dnsbl_strip_scheme(string $line): string {
+        if (strpos($line, '://') !== FALSE) {
+            return substr($line, strpos($line, '://') + 3);
+        }
+        return $line;
+    }
+
+(Tabs in source per CLAUDE.md; rendered with spaces here.)
+
+Phase-1 signature is `string` return ONLY — no string|false, no preg_match.
+This is a byte-identical extraction of the former inline logic: strpos() finds
+the FIRST '://' anywhere in the token and substr() strips up to and including
+'//' (the +3 covers ':' + '/' + '/'). Zero behaviour change.
+
+--------------------------------------------------------------------------------
+2. LOCATION IN FILE (near which function)
+--------------------------------------------------------------------------------
+Placed IMMEDIATELY AFTER pfb_strip_trailing_port() (that helper's def is at
+line 3997, closes at 4002). pfb_dnsbl_strip_scheme() def begins at line 4012,
+following the established named-helper pattern in that region.
+
+--------------------------------------------------------------------------------
+3. CALL SITE (exact line number)
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+Inside sync_package_pfblockerng(), the non-lite block (`if (!$lite) {`):
+
+    line 11237:   $line = pfb_dnsbl_strip_scheme($line);
+
+This replaces the former two inline lines:
+    // If 'http|https|telnet|ftp://' found, remove
+    if (strpos($line, '://') !== FALSE) {
+        $line = substr($line, strpos($line, '://') + 3);
+    }
+
+The surrounding `if (!$lite) { ... }` block and the downstream path/query/
+fragment/port strips (now lines 11239-11266; the prompt's 9679-9706) are
+UNCHANGED. The ADR-21 ||/@@|| guard is untouched.
+
+NOTE on line numbers: the ADR/prompt cited ~9675-9676 (call) and ~9706
+(pfb_strip_trailing_port). Those were approximate against an earlier devel tip;
+PFBL-03 and ADR-21 changes already merged shifted the file. The CODE REGION is
+exactly the one the ADR describes — verified by reading the non-lite block.
+
+--------------------------------------------------------------------------------
+4. PHPUNIT ORACLE TESTS
+--------------------------------------------------------------------------------
+New test class: tests/php/PfbDnsblStripSchemeTest.php
+Class name:     PfbDnsblStripSchemeTest  (final, declare(strict_types=1),
+                #[CoversFunction('pfb_dnsbl_strip_scheme')])
+
+Test methods (all `: void`, typed, intent-named, assert exact return value):
+    a. testHttpSchemeStripped               'http://evil.com/path' -> 'evil.com/path'
+    b. testHttpsSchemeStripped              'https://evil.com'     -> 'evil.com'
+    c. testFtpSchemeStripped                'ftp://evil.com'       -> 'evil.com'
+    d. testTelnetSchemeStripped             'telnet://evil.com'    -> 'evil.com'
+    e. testCustomValidSchemeStripped        'evil://evil.com'      -> 'evil.com'
+    f. testCompoundSchemeStripped           'pkg+https://fakepkg.com' -> 'fakepkg.com'
+    g. testNoSchemeUnchanged                'evil.com'             -> 'evil.com'
+    h. testDigitStartSchemeCurrentBehavior  '123://evil.com'       -> 'evil.com'  [BEFORE-STATE ORACLE]
+    i. testEmptySchemeCurrentBehavior       '://evil.com'          -> 'evil.com'  [BEFORE-STATE ORACLE]
+    j. testMidTokenValidSchemeCurrentBehavior 'evil.com://junk'    -> 'junk'
+
+BEFORE-STATE ORACLES for Phase 2 (their result CHANGES to false under strict):
+    - testDigitStartSchemeCurrentBehavior (h): digit-start scheme is NOT RFC 3986
+      valid; Phase 2 strict mode -> false (skip + log).
+    - testEmptySchemeCurrentBehavior (i): empty scheme prefix; Phase 2 strict
+      mode -> false (skip + log).
+Each carries an inline comment documenting the Phase-2 delta.
+
+UNCHANGED in Phase 2 (valid scheme / documented edge), pinned here as anchors:
+    - a/b/c/d/e/f (valid RFC 3986 schemes, no path) stay accepted.
+    - j (mid-token 'evil.com' is a valid scheme; 'junk' extracted, then rejected
+      downstream by pfb_filter for lacking a '.').
+    - http://evil.com/path (a): helper keeps the path; downstream strips it when
+      lenient ON. (Phase 2 strict mode rejects the path at the helper level.)
+
+--------------------------------------------------------------------------------
+5. VERIFICATION GATE OUTCOMES
+--------------------------------------------------------------------------------
+php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    => No syntax errors detected.
+php -l tests/php/PfbDnsblStripSchemeTest.php
+    => No syntax errors detected.
+vendor/bin/phpunit
+    => OK (525 tests, 1041 assertions). Includes the 10 new oracle tests.
+       (An incidental "/usr/bin/drill: not found" line is emitted by an unrelated
+        pre-existing test exercising a shell path; the suite passes.)
+python -m pytest
+    => 1611 passed. Unchanged — no Python touched this phase.
+ruff check .   => All checks passed!
+ruff format .  => 101 files left unchanged.
+
+Diff scope (git status / git diff origin/devel...HEAD): ONLY
+    M  src/usr/local/pkg/pfblockerng/pfblockerng.inc  (helper + call site)
+    A  tests/php/PfbDnsblStripSchemeTest.php           (oracle test class)
+No other file modified. Matches the Phase-1 constraint exactly.
+
+--------------------------------------------------------------------------------
+6. SELF-REVIEW VERDICT
+--------------------------------------------------------------------------------
+PASS. The helper is a pure, behaviour-preserving extraction (output byte-identical
+for every feed line); the call site replaces exactly the two former inline lines;
+all downstream strips and the ADR-21 guard are untouched; the oracle tests cover
+every input class including the three pathological before-state cases and assert
+exact return values (no coverage theater); the diff is limited to pfblockerng.inc
+and tests/php/. All gates green.
+
+--------------------------------------------------------------------------------
+7. GO-AHEAD FOR PHASE 2
+--------------------------------------------------------------------------------
+GO. The pure, testable seam pfb_dnsbl_strip_scheme() exists with its current
+behaviour pinned. Phase 2 may now: change the return type to string|false, add a
+$strict parameter (default false) doing RFC 3986 scheme validation + path
+rejection, wire the call site with `strict = (pfb_dnsbl_lenient !== 'on')`, add
+the pfb_dnsbl_lenient config key + DNSBL-tab checkbox, the upgrade migration in
+pfblockerng_install.inc (existing install lacking the key -> 'on'), and the
+per-line + per-feed skip logging. Oracle tests h and i are the before-state that
+Phase 2 will flip to false under strict mode.
+================================================================================

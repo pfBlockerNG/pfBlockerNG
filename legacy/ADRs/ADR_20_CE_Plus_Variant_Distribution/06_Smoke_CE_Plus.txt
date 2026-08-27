@@ -1,0 +1,126 @@
+================================================================================
+PHASE 6 PROMPT — Smoke: CE and Plus installs from variant repos
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §6 Phase 6, §2 "Semantics that MUST be preserved", §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 6 of
+ADR-20. This phase extends `tests/smoke/test_repo_install.py` with `repo`-marked
+live-VM cases. It lands as a rebase-only PR against `devel`.
+Use the existing `adr/20-ce-plus-variant-distribution` worktree.
+
+WHY THIS PHASE EXISTS
+Unit tests (Phases 2–3) prove the catalog structure is correct by construction;
+the live-VM smoke proves that a real `pkg install` / `pkg upgrade` from the variant
+catalogs actually works on a real pfSense CE VM and that the wrong-variant guard
+fires as a real dep error (not a theoretical one). The CE path runs in CI via the
+ADR-04 `repo`-marked dispatch; the Plus path is documented as a maintainer manual
+check (no licensed Plus CI image). The legacy path (ADR-17 CE-only `${ABI}/`) is
+also verified to still serve correctly during the transition window.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/05_Results.txt — note whether
+  Phase 5 proceeded (routing layer live) or was skipped (static URLs only). This
+  affects which tests to add for the routing path. If missing, Phase 5 is not
+  complete; STOP and report.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §6 Phase 6, §2 wrong-variant
+  failure mode, §7 DoD and manual smoke checklist.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md — RESULTS/05_Results.txt — the existing
+  `repo`-marked test structure, the `build_repo_via_portable()` hermetic catalog
+  helper, the `netgate-decoy` pattern, the `pkg query %R` / `pkg query %d` assertions.
+- tests/smoke/test_repo_install.py — the current `repo`-marked test file: study the
+  hermetic catalog setup, the `file://` repo conf, the `egress_open` fixture, how
+  versions are bumped for upgrade tests.
+- tests/smoke/helpers.py + tests/smoke/conftest.py — `smoke_vm`, on-box exec,
+  `@pytest.mark.timeout`.
+- CLAUDE.md — "Smoke tests (ADR-04)", "Test coverage" (branch coverage + before-state
+  asserts + BDD-style for multi-step journeys).
+
+ACTION PLAN (ordered — each case has befores AND afters, BDD-style spec)
+1. CASE: CE install from `ce/${ABI}` (CI-runnable, `repo` marker):
+   Scenario: CE package is installed from variant-correct `ce/${ABI}` catalog.
+   Background: hermetic `file://` CE catalog at `ce/FreeBSD:15:amd64/` (built by
+   `build_repo_via_portable(variant="CE", pkgs=[ce_pkg])`).
+   Given: conf pointing to `ce/${ABI}`, no package installed.
+   When: `pkg install -y <pkgname>` (via the CE catalog).
+   Then: `pkg query '%d %v' <pkgname>` confirms `php83` dep satisfied, version N
+         installed; `pkg query '%R' <pkgname>` shows our repo.
+   Assert BEFORE: package not installed (`pkg query '%n' <pkgname>` returns empty).
+   Assert AFTER: dep list contains `php83`, version matches catalog.
+
+2. CASE: wrong-variant guard — CE VM, Plus catalog (CI-runnable, `repo` marker):
+   Scenario: Installing a Plus package on a CE VM fails with unsatisfied dep.
+   Background: hermetic `file://` Plus catalog at `plus/FreeBSD:16:amd64/` (built
+   with `build_repo_via_portable(variant="Plus", pkgs=[plus_pkg])`).
+   Given: conf pointing to `plus/${ABI}` (note: ABI mismatch — CE VM has FreeBSD:15;
+          attempt install anyway to trigger the guard).
+   When: `pkg install -y <pkgname>` (from Plus catalog; pkg resolves whatever ABI
+         matches the repo URL).
+   Then: `pkg install` returns a non-zero exit code AND the error output contains
+         `php85` unsatisfied dep (or ABI mismatch error — either is an acceptable
+         wrong-variant guard failure; assert the install DID NOT succeed).
+   Assert BEFORE: CE package from `ce/${ABI}` installs CLEANLY (dep satisfied) —
+   this proves the CE path is correct and the failure in the AFTER is caused by the
+   variant mismatch, not an unrelated issue.
+   Assert AFTER: `pkg query '%n' <pkgname>` confirms the package is NOT installed.
+
+3. CASE: legacy `${ABI}/` path still serves CE build (CI-runnable, `repo` marker):
+   Scenario: Old-conf CE box (pointing to legacy `${ABI}` path) still upgrades.
+   Background: hermetic `file://` legacy catalog at `FreeBSD:15:amd64/` (no variant
+   prefix — the Phase 3 `build_repo_via_portable()` without `--variant`).
+   Given: conf pointing to legacy `${ABI}`, CE package version N installed.
+   When: catalog bumped to N+1; `pkg upgrade -y <pkgname>`.
+   Then: `pkg query '%v' <pkgname>` shows N+1; `pkg query '%R'` shows our repo.
+   Assert BEFORE: version N installed; version N+1 available from catalog.
+   Assert AFTER: version N+1 installed.
+
+4. CASE (if Phase 5 GO — routing layer live): routing URL delivers CE/Plus correctly:
+   Scenario: pkg fetch via routing URL gets variant-correct meta.conf.
+   Background: conf pointing to the routing URL (`pkg.pfblockerng.io/${ABI}`).
+   Given: CE VM; conf with routing URL; `pkg update -r <ourrepo>`.
+   Then: the fetched `meta.conf` or packagesite contains only the CE package (no
+         Plus package present). Verify by `pkg rquery -r <ourrepo> '%n' <pkg>` and
+         checking the dep list.
+   Note: this case requires network egress to the live routing URL — it is NOT hermetic.
+   Mark it `@pytest.mark.xfail(reason="routing URL not yet live")` if Phase 5 is
+   complete but the routing URL is not yet operational (so it does not break CI).
+
+5. DOCUMENT Plus manual smoke in `RESULTS/06_Results.txt`:
+   The Plus VM cases (§7 manual smoke checklist items 1–2) are documented here as
+   a checklist the maintainer runs on a real Plus box. Include the exact commands.
+
+CONSTRAINTS
+- Python 3.11+, 4-space indent, type hints; `@pytest.mark.repo` marker only (NOT
+  `smoke`). Deselected from default `python -m pytest` (smoke tree `--ignore`d).
+- Hermetic cases run with the `file://` repo pattern (no network egress needed for
+  cases 1–3). Case 4 requires egress; guard with `xfail` if the routing URL is down.
+- Use `unique_domain()` for any DNS; leave the VM CLEAN in `finally`; use
+  `@pytest.mark.timeout(300)` or as appropriate.
+- Assert dep satisfied by querying `pkg query '%d %v' <pkgname>` and checking the dep
+  name list — NOT just the exit code.
+- Do NOT add a new VM boot path; reuse `smoke_vm` fixture.
+
+VERIFICATION (must all pass before the phase is done)
+- Dispatch `gh workflow run smoke.yml -f pytest_marker=repo`; capture run id.
+  Cases 1–3 must be GREEN; case 4 may be xfail if routing not yet live.
+- `python -m pytest` (default, without smoke) → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `mypy tests/` → clean.
+
+EXPECTED RESULT
+Three CI-green `repo`-marked cases proving: CE install from `ce/${ABI}`, wrong-variant
+dep failure, and legacy path still works. Plus smoke documented as maintainer checklist.
+
+COMMIT (single)
+    tests: ADR-20 P6 repo smoke — CE variant install + wrong-variant guard (ADR-20 P6)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel`.
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/06_Results.txt`
+Record: the run id of the `repo`-marked smoke run + pass/fail per case; the exact
+`pkg query '%d %v'` output proving the dep; the wrong-variant error output (dep
+mismatch string); the legacy path upgrade output; whether case 4 (routing) was tested
+or xfail; the Plus manual smoke checklist (ready to run, with exact commands); go-ahead
+for Phase 7.

@@ -1,0 +1,179 @@
+================================================================================
+ADR-17 — Phase 3a RESULTS (PURE-PYTHON pkg catalog generator; no libpkg)
+================================================================================
+
+VERDICT: GO. scripts/build-repo-portable.py generates a per-ABI FreeBSD `pkg`
+         repository catalog (meta.conf + packagesite.pkg + data.pkg + the .pkg)
+         in PURE PYTHON — stdlib + the `zstd` binary, NO libpkg and NO `pkg`
+         invocation — the way the Phase-3b publish job will run on a plain Linux
+         runner. Its output is byte-structurally identical to real `pkg repo`
+         (diffed vs an oracle) and a REAL pfSense CE 2.8.1 VM accepts it:
+           smoke.yml -m repo on adr/17-pkg-repository -> RUN_ID 27035602221,
+           SUCCESS, "5 passed, 230 deselected in 264.07s":
+             test_install_from_our_repo_lands_all_files     PASSED
+             test_precedence_ours_higher_priority_wins      PASSED
+             test_precedence_decoy_higher_priority_wins     PASSED
+             test_build_repo_script_catalog_is_accepted     PASSED  (Phase 2, libpkg)
+             test_portable_catalog_is_accepted              PASSED  (Phase 3a, PURE PYTHON)  <-- NEW
+         The new test builds the catalog ON THE RUNNER with build-repo-portable.py
+         (this pytest process's python, no guest libpkg), ships only the <ABI>/
+         tree to the guest, then `pkg update` ACCEPTS it and `pkg install -y`
+         (NO -r, NO -f) installs from OUR repo (the test asserts `pkg query %R`
+         == "pfblockerng-devel"; a PASS is that equality holding live — a wrong
+         origin raises with the actual %R). Deps resolved, the .pkg checksum
+         (the catalog `sum`) validated. => Phase 3b (publish workflow) is cleared.
+
+         scripts/build-repo.sh (Phase 2, real `pkg repo`) is UNTOUCHED and REMAINS
+         the FreeBSD-VM fallback path.
+
+--------------------------------------------------------------------------------
+GENERATOR INTERFACE (scripts/build-repo-portable.py — pure Python, stdlib + zstd)
+--------------------------------------------------------------------------------
+  Build a catalog tree:
+      build-repo-portable.py --in <dir-of-.pkg> --out <dir>
+  Print the client repo-conf template (byte-identical to build-repo.sh --print-conf):
+      build-repo-portable.py --print-conf [--base-url <url>]
+
+  Inputs:  --in   a flat dir of .pkg (searched non-recursively, *.pkg).
+           --out  output root; one <ABI>/ catalog subtree per distinct ABI.
+  Env:     none required. Needs a zstd ENCODER on the runner — the `zstd` binary
+           OR the python `zstandard` module (same compressor contract as
+           scripts/build-pkg-portable.py). NO `pkg`/libpkg, NO ABI env var
+           (build-repo.sh's Linux path needs `ABI=...`; THIS tool reads ABI from
+           each .pkg's +COMPACT_MANIFEST, so no ABI forcing and no ambiguity).
+  Outputs: <out>/<ABI>/ holding the .pkg(s) + meta.conf + meta + packagesite.pkg
+           + data.pkg per distinct ABI. Deterministic (two runs byte-identical),
+           re-runnable (each ABI bucket is wiped+rebuilt so a removed .pkg never
+           lingers), NO network.
+  Exit:    non-zero on no-.pkg-input, an unreadable manifest, or a FLAVOR COLLISION
+           (same name+version+ABI, different php/py flavor — fail-loud, same
+           semantics as build-repo.sh; no silent drop).
+
+--------------------------------------------------------------------------------
+THE CATALOG FORMAT IT EMITS + HOW FIDELITY WAS VERIFIED
+--------------------------------------------------------------------------------
+Oracle: built freebsd/pkg from source in alpine:3.20 docker (the Phase-2 recipe:
+build-base autoconf automake libtool m4 bash bzip2-dev zlib-dev sqlite-dev
+libarchive-dev openssl-dev curl-dev linux-headers libbsd-dev libmd-dev xz-dev
+zstd-dev fts-dev; ./autogen.sh && ./configure && make -> src/pkg, v2.7.99.1).
+RUNTIME also needs the `fts` apk (musl fts). Then `pkg create` a synthetic .pkg
+and `pkg repo` it -> the REFERENCE catalog. Generated my portable catalog over
+the same .pkg and DIFFED the decompressed payloads:
+
+  * meta.conf  — BYTE-IDENTICAL. Exact content (and an identical copy named `meta`):
+      version = 2;
+      packing_format = "tzst";
+      manifests = "packagesite.yaml";
+      data = "data";
+      filesite = "files";
+      manifests_archive = "packagesite";
+      filesite_archive = "files";
+  * packagesite.pkg = zstd tar (USTAR) holding `packagesite.yaml` (NDJSON, one
+    object/package). Decompressed packagesite.yaml — BYTE-IDENTICAL. Each object =
+    the pkg's +COMPACT_MANIFEST with repo fields spliced in at libpkg's positions:
+      ...prefix, SUM, flatsize, PATH, REPOPATH, licenselogic, PKGSIZE, desc, deps, categories
+    (path == repopath == the .pkg filename; pkgsize == .pkg byte size; the object
+    DROPS files/directories/scripts — packagesite carries compact-manifest content
+    only). Compact JSON (no separator spaces). Trailing newline (NDJSON).
+  * data.pkg = zstd tar holding `data` = a SINGLE JSON object
+      {"groups":[],"expired_packages":[],"packages":[<the same objects>]}
+    Decompressed `data` — BYTE-IDENTICAL after one fix: `data` has NO trailing
+    newline (unlike packagesite.yaml). (Caught by the diff; fixed.)
+  * the .pkg itself — copied VERBATIM (byte-for-byte), never re-archived.
+
+Beyond the structural diff, the ULTIMATE offline check: a REAL `pkg` binary
+consumed MY pure-Python catalog over file:// — `pkg update` => "1 packages
+processed", and `pkg install -y` => "Installing depless-2.0 ... from
+portable-test", file landed on disk. So real libpkg accepts the pure-Python
+catalog AND validates the .pkg `sum`. Then the live pfSense VM confirmed it
+end-to-end (run 27035602221).
+
+THE `sum` FIELD — load-bearing, and the one place the brief's hint was WRONG.
+The brief said `sum` = hex sha256. It is NOT. libpkg catalog `sum` is checksum
+TYPE 2 = the literal prefix "2$" + z-base-32(blake2b(FILE BYTES)):
+  * blake2b, DEFAULT 64-byte digest (hashlib.blake2b(data).digest()).
+  * z-base-32, alphabet "ybndrfg8ejkmcpqxot1uwisza345h769", packed LSB-FIRST
+    within each byte (libpkg's pkg_checksum_encode_base32). 64 bytes -> 103 chars.
+Cracked by brute-forcing alphabet x bit-order against a real oracle sum, then
+PINNED in the unit suite by a golden (.pkg-bytes -> sum) vector emitted by the
+real `pkg repo`. `pkg install` validates the downloaded .pkg against this; a
+mismatch is fatal — so reproducing it exactly is mandatory, and it is.
+
+--------------------------------------------------------------------------------
+GOTCHAS PHASE 3b (the publish job) MUST RESPECT
+--------------------------------------------------------------------------------
+  1. zstd ENCODER on the runner: build-repo-portable.py needs the `zstd` binary
+     OR python `zstandard`. ubuntu-latest ships neither by default — `apt-get
+     install -y zstd` (or pip install zstandard) in the publish job. (Same
+     requirement scripts/build-pkg-portable.py already documents.)
+  2. NO `pkg`/libpkg and NO `ABI` env var needed (the divergence from Phase 2's
+     build-repo.sh, whose Linux path needs a source-built pkg + `ABI=...`). This
+     tool reads ABI from each .pkg manifest — so the publish job is just
+     `python scripts/build-repo-portable.py --in <dir> --out <site>`.
+  3. The collision guard ABORTS the publish (exit 1) on an unhandled php/py
+     flavor clash (same name+version+ABI, different flavor) — fail-closed, never
+     a silent drop. Today there is exactly ONE ABI (FreeBSD:15:amd64; CE 2.8 +
+     Plus 25.03 are both FreeBSD15/php83/py311), so one <ABI>/ subtree and no
+     clash. A future flavored layout (<out>/<ABI>-<php><py>/) is documented but
+     intentionally NOT implemented (teach the tool when a colliding combo exists).
+  4. The client repo-conf is emitted from the SAME single source as build-repo.sh
+     (`--print-conf` is byte-identical between the two): NONE-signed, mirror_type
+     none, the literal ${ABI} pkg variable, priority 100 (above the Netgate
+     `pfSense` repo). Phase 4's add-repo.sh + the README reuse it. The url is a
+     STATIC ${ABI} string (no shell/query interpolation) so the URL-encoding gate
+     passes.
+  5. `meta` and `meta.conf` are identical copies — emit BOTH (real `pkg repo`
+     does; the live test checks both are present).
+  6. mtime in the catalog tar members is deterministically 0 (real `pkg repo`
+     stamps the index clock; 0 keeps re-runs byte-identical and is client-
+     irrelevant — proven accepted). The zstd container framing differs from
+     libpkg's byte-for-byte (any valid zstd stream decompresses) but every
+     DECOMPRESSED payload matches the oracle exactly.
+
+--------------------------------------------------------------------------------
+DELIVERABLES + LOCAL VERIFICATION (all green)
+--------------------------------------------------------------------------------
+  * scripts/build-repo-portable.py — the pure-Python generator (type-hinted,
+    ruff-clean, stdlib-only + zstd binary). build-repo.sh UNTOUCHED.
+  * tests/test_build_repo_portable.py — hermetic non-VM unit suite (in the DEFAULT
+    pytest set): golden sum vector vs real pkg, independent blake2b/z-base-32
+    recompute, meta.conf byte-exactness, packagesite key ORDER + injected fields +
+    compact-JSON, data shape + no-trailing-newline + equals-packagesite, per-ABI
+    bucketing, determinism (two runs byte-identical) + wipe-removed-pkg, the
+    collision guard BOTH branches (collide->raise; same-flavor dup->pass),
+    flavor-signature classification, manifest roundtrip, empty-input error, and
+    the CLI (--print-conf / --base-url / arg validation). Branch + before/after
+    coverage per CLAUDE.md.
+  * tests/smoke/test_repo_install.py — added the `repo`-marked live test
+    test_portable_catalog_is_accepted (@pytest.mark.timeout(600)) + the helper
+    build_repo_via_portable (runs the generator on the runner, ships the <ABI>/
+    tree to the guest). The Phase 1+2 repo tests are UNCHANGED and still pass.
+
+  Gates:
+    * ruff check . / ruff format --check .   -> clean.
+    * python -m pytest (DEFAULT)             -> 1142 passed (was 1124; +18 new
+                                                unit tests). UNCHANGED otherwise.
+    * mypy tests/                            -> Success (23 source files).
+    * scripts/check_url_encoding.py          -> clean.
+    * pre-commit hook (ruff/pytest/mypy/markdownlint/sh/shellcheck/shellspec/php)
+                                             -> green.
+    * -m repo --collect-only                 -> 5 collected (Phase 1 trio + Phase 2
+                                                + the new Phase 3a test).
+    * local build-repo-portable.py over the branch/oracle .pkg -> valid <ABI>/ tree;
+      structural diff vs real `pkg repo` oracle = identical payloads; a real pkg
+      binary installs from the pure-Python catalog; collision guard fails loud;
+      multi-ABI bucketing works; deterministic across re-runs.
+    * LIVE: smoke.yml -m repo RUN_ID 27035602221 SUCCESS, 5/5 repo tests PASSED,
+      incl. test_portable_catalog_is_accepted (origin == pfblockerng-devel).
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT (Phase 3b)
+--------------------------------------------------------------------------------
+Phase 3a = GO. Wire the publish workflow using build-repo-portable.py as the
+PRIMARY generator (plain Linux runner; `apt-get install -y zstd` then
+`python scripts/build-repo-portable.py --in <dir-of-release-.pkg> --out <site>`;
+no pkg/libpkg, no ABI env), emit the client conf from `--print-conf`, and
+upload-pages-artifact + deploy-pages the <ABI>/ tree (additive + isolated, per
+ADR §6 Phase 3). Retain a FreeBSD-VM ALTERNATIVE workflow that runs the Phase-2
+scripts/build-repo.sh with the VM's stock `pkg` (the fidelity oracle / fallback).
+The collision guard fail-closes the publish on an unhandled flavor clash.

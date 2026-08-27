@@ -1,0 +1,6 @@
+# The samples are byte-exact snapshots of raw feed bytes, fed verbatim to a
+# byte-sensitive scanner. Most are NUL-free, so git would classify them as text and
+# a checkout with core.autocrlf=true would rewrite LF->CRLF — corrupting the bytes and
+# breaking the manifest's size/sha256 invariants. Pin them binary so every checkout is
+# byte-identical regardless of the client's eol/autocrlf settings.
+samples/*.bin binary

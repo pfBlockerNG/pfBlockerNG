@@ -1,0 +1,196 @@
+ADR-13 — Phase 3 Results (IPv6-mandatory validation when the resolver listens on IPv6)
+======================================================================================
+
+Status: DONE. All gates green. Manual-mode decision = HARD INPUT ERROR (mandatory).
+Only new failure path is (v6-listening, no v6 VIP, manual). Go-ahead for Phase 4.
+
+What landed (one commit on adr/13)
+----------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc  (+42 lines net)
+  - New pure helper pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool
+    — single source of truth for "is a v6 sinkhole VIP required?".
+  - pfb_validate_vips() signature extended: new 4th param ?bool $require_v6 = null
+    (tri-state, default null => compute the rule live). New v6-mandatory branch.
+  - pfb_global() force-disable call site now passes the auto-aware $require_v6.
+File: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php  (+6 lines)
+  - The save-time validator call now passes the auto-aware $require_v6 (manual mode
+    => null => enforce; auto mode => false => suppress, the package provisions it).
+File: tests/php/DnsblV6RequiredTest.php  (NEW, additive PHPUnit, +4 tests / +14 assert)
+File: tests/php/pfsense_doubles.php  (+2 doubles: get_configured_vip_interface,
+    convert_friendly_interface_to_friendly_descr — reached only by the new tests'
+    '_vip_test_*' sentinel paths; conservative, function_exists()-guarded).
+
+NOTE: the worktree's .venv symlink is intentionally NOT committed (untracked).
+
+How the v6-required error is signalled
+--------------------------------------
+The requirement is decided by ONE pure function and surfaced by the existing validator:
+
+  function pfb_dnsbl_v6_vip_required(bool $listens_v6, bool $auto): bool {
+      return $listens_v6 && !$auto;     // required iff resolver listens v6 AND manual mode
+  }
+
+pfb_validate_vips($interface, $vip4, $vip6, ?bool $require_v6 = null):
+  - $require_v6 === null (default)  -> the validator computes the requirement itself:
+        $require_v6 = pfb_unbound_listens_v6();   // manual-mode semantics
+    (pfb_unbound_listens_v6() is the Phase-1 predicate, verified vs upstream
+    unbound_generate_config_text() at RELENG_2_7_2 + master.)
+  - $require_v6 an explicit bool -> the CALLER decided (auto-mode callers pass false).
+  - New branch, placed BEFORE the generic "no VIP configured" early return so the
+    message is specific/actionable even when v4 is also absent:
+        if ($require_v6 && !$enabled6) {
+            return [false, gettext('IPv6 VIP required: the DNS Resolver is listening on IPv6')];
+        }
+  The branch returns the [bool, message] pair the validator already uses, so BOTH
+  consumers pick it up with no extra wiring:
+    * the DNSBL save handler pushes it as $input_errors[] = "DNSBL: {$error}"
+      (manual-mode input error on Save), and
+    * pfb_global() force-disables DNSBL on a false result (see next section).
+
+The pfb_global() force-disable wiring
+-------------------------------------
+pfb_global() already force-disables DNSBL when pfb_validate_vips() returns false
+(it sets $pfb['dnsbl'] = '' and logs the reason). Phase 3 makes the v6-missing case
+ONE of the false results that path consumes — no new disable mechanism, just a new
+trigger. The call site is made auto-aware:
+
+    if (!empty($pfb['dnsbl'])) {
+        $require_v6 = ($pfb['dnsbl_vip_auto'] === 'on') ? false : null;
+        $vips_valid_result = pfb_validate_vips($pfb['dnsbl_iface'],
+            $pfb['dnsblconfig']['pfb_dnsvip4'], $pfb['dnsblconfig']['pfb_dnsvip6'], $require_v6);
+        if (!$vips_valid_result[0]) {
+            $pfb['dnsbl'] = '';                                  // force-disable
+            pfb_logger("\nDNSBL disabled: {$vips_valid_result[1]}", 1);
+        }
+    }
+
+  - auto ON  -> require_v6 = false: the v6 rule is NOT enforced here, because
+    pfb_manage_dnsbl_vip() (Phase 2) runs earlier on the SAME pass
+    (pfb_create_dnsbl -> pfb_manage_dnsbl_vip BEFORE the NAT pass) and provisions the
+    v6 VIP. Forcing the requirement would race the provisioner and falsely disable.
+  - auto OFF (manual) -> require_v6 = null: the validator computes
+    pfb_unbound_listens_v6(); a v6-listening resolver with no v6 VIP => false result
+    => DNSBL force-disabled with the v6 message logged.
+  ($pfb['dnsbl_vip_auto'] is set a few lines above to 'on'|'' — never null — so the
+  === 'on' test is safe.)
+
+Auto v6-provision branch is LIVE (confirmed)
+--------------------------------------------
+Phase 2's pfb_manage_dnsbl_vip() already provisions v6 when:
+    $want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6();
+    v6 family 'managed' = ($mode === 'enabled' && $auto && $want_v6);
+So with the resolver listening on IPv6 AND auto on, $want_v6 is true and the v6 VIP
+(fd00::53-style, marker pfB_AUTO_VIP_v6) is created + interface_ipalias_configure()'d
+on the same enable pass, then pfb_global() is refreshed. The manager is called from
+pfb_create_dnsbl($mode) BEFORE the NAT pass (Phase 2), so by the time pfb_global()
+re-validates, the v6 id is stored. => Auto mode satisfies the new rule with zero user
+friction. No Phase-3 change to the manager was needed; the branch was already wired.
+
+Manual-mode decision: HARD INPUT ERROR (mandatory) — kept, with rationale
+-------------------------------------------------------------------------
+DECISION: implement the default = a hard input error / force-disable (NOT the softened
+warning). Implemented exactly ONCE (the single $require_v6 && !$enabled6 branch); the
+softened-warning pivot is NOT shipped.
+
+Rationale (evidence the disruption is narrow and recoverable):
+  - The rule fires for a TIGHTLY bounded population only: DNSBL enabled AND resolver
+    listening on IPv6 AND no v6 VIP AND manual mode. v4-only setups, IPv6-disabled
+    resolvers, and auto-mode users are all untouched.
+  - The predicate is conservative (Phase 1): resolver disabled => false; automatic-bind
+    => true only if the box actually has a v6 interface address; explicit list => true
+    only on a real v6 literal/interface. It does not over-fire on link-local-only or
+    v4-only boxes.
+  - Compliance is one click: turning on "Create VIPs automatically" (Phase 4) makes the
+    package provision the v6 VIP, clearing the error with no manual VIP creation.
+  - This lands on devel (the development/pre-release channel), the correct place to take
+    a documented behaviour change; it closes the real correctness gap the ADR calls out
+    (a blocked AAAA with no v6 sinkhole). The ADR's softening lever (§7) remains
+    available if field reports show it is too disruptive — flipping the default is a
+    one-line change (return a warning instead of an input_error/force-disable).
+
+No-regression argument (non-v6-listening cases are byte-identical)
+------------------------------------------------------------------
+The new branch is `if ($require_v6 && !$enabled6)`. $require_v6 is false in EVERY
+non-v6-listening case:
+  - manual mode (require_v6 = null): the validator computes pfb_unbound_listens_v6(),
+    which is false when the resolver is disabled / has no v6 interface -> branch skipped.
+  - auto mode (require_v6 = false): branch skipped unconditionally.
+With the branch skipped, control falls through to the IDENTICAL pre-Phase-3 code:
+the "no VIP configured" early return, the v4/v6 interface checks, and the
+where_is_ipaddr_configured overlap checks are unchanged. v6 stays OPTIONAL exactly as
+before. The two new pfsense_doubles are function_exists()-guarded and only resolve the
+new tests' sentinel ids — no production path change.
+
+Full matrix {resolver v6 on/off} x {auto on/off} x {v6 VIP present/absent}
+--------------------------------------------------------------------------
+  v6off, auto off, absent  -> require_v6=false  -> v6 optional, unchanged ("no VIP" only if v4 also absent)
+  v6off, auto off, present -> require_v6=false  -> unchanged
+  v6off, auto on,  absent  -> require_v6=false  -> no v6 error; manager provisions nothing v6 (want_v6 false)
+  v6off, auto on,  present -> require_v6=false  -> unchanged
+  v6on,  auto off, ABSENT  -> require_v6=true   -> *** v6-required ERROR + force-disable ***  (ONLY new failure)
+  v6on,  auto off, present -> require_v6=true   -> rule cleared (v6 present), normal validation
+  v6on,  auto on,  absent  -> require_v6=false  -> no error; manager PROVISIONS the v6 VIP (want_v6 true)
+  v6on,  auto on,  present -> require_v6=false  -> no error; normal validation
+=> The single new failure path is (v6-listening, no v6 VIP, manual mode). Auto mode
+   provisions the v6 VIP (no friction). Every non-v6-listening row is byte-identical.
+
+Callers of pfb_validate_vips (all three accounted for)
+------------------------------------------------------
+  - pfb_global() (inc)                 : passes auto-aware $require_v6 (above).
+  - pfblockerng_dnsbl.php save handler : passes auto-aware $require_v6 from POST.
+  - pfblockerng_wizard.inc:103         : LEFT at the 3-arg call (default null). The
+    wizard is manual-mode (no auto checkbox), so null => compute live => correct
+    manual-mode enforcement. Backward-compatible (new param is optional).
+
+Test coverage added (both branches + before-state, per CLAUDE.md)
+-----------------------------------------------------------------
+tests/php/DnsblV6RequiredTest.php (#[CoversFunction] pfb_dnsbl_v6_vip_required,
+pfb_validate_vips):
+  - pfb_dnsbl_v6_vip_required full truth table: (false,false)/(false,true)/(true,true)
+    => false; (true,false) => true. Both inputs, every combination.
+  - V6-OPTIONAL before-state (require_v6=false): empty v6 VIP yields the generic
+    "no VIP configured" (NOT the v6 message) — proves the rule does NOT fire when v6 is
+    optional. v4-only path's error is asserted to NOT be the v6-required message.
+  - V6-REQUIRED after-state (require_v6=true): empty v6 VIP yields exactly
+    "IPv6 VIP required: the DNS Resolver is listening on IPv6", and it wins over
+    "no VIP configured"; with a v4 VIP present the v6 message still fires.
+  - V6-required satisfied: with a v6 VIP present the v6-required branch does not fire.
+  The transition (optional -> required) asserts the BEFORE state (optional) AND the
+  AFTER state (required) so green proves the requirement CAUSED the change.
+
+Stubs added
+-----------
+  NONE in stubs/pfsense/. No new pfSense function is called: pfb_unbound_listens_v6 is
+  local (Phase 1), already-stubbed get_configured_vip_*/where_is_ipaddr_configured are
+  unchanged. (The two new entries are TEST doubles in pfsense_doubles.php, not stubs.)
+
+Gate results
+------------
+  - php -l (pfblockerng.inc, pfblockerng_dnsbl.php, the test + doubles): No syntax
+    errors. (The "Deprecated: Optional parameter ... before required" notices are
+    PRE-EXISTING, surface only under PHP 8.5 CLI; target is 8.3 — not from this change.)
+  - PHPStan (level 0, --memory-limit=1G): [OK] No errors (24 files).
+  - PHPUnit (full suite): OK (97 tests, 157 assertions) — incl. the new 4-test file
+    (was 93/143 after Phase 2).
+  - pytest (worktree .venv): 991 passed (green/unchanged; no Python touched).
+  - ruff check .: All checks passed.
+  - ShellCheck: no shell files touched -> N/A.
+
+Scope confirmation
+------------------
+  Only pfblockerng.inc (1 pure helper + 1 param + 1 new branch + 1 caller-wiring) and
+  pfblockerng_dnsbl.php (1 caller-wiring), plus additive tests (new test file + 2
+  function_exists-guarded doubles). No Python/Unbound, no UI layout (Phase 4), no
+  manager-logic change (the v6 auto-provision branch was already wired in Phase 2).
+
+Go-ahead for Phase 4
+--------------------
+GO. Phase 4 (Settings UI: the pfb_dnsvip_auto checkbox, prefill/disable, warning
+tooltip, save-time create) can build on:
+  - the validator already accepting/enforcing the v6 requirement (and already
+    suppressing it in auto mode — the checkbox's on-state POSTs pfb_dnsvip_auto=on,
+    which the save handler reads to pass require_v6=false),
+  - pfb_dnsbl_v6_vip_required() as the single rule the UI can mirror for its warning,
+  - the live auto-provision (Phase 2) + force-disable (Phase 3) plumbing.
+Carry forward the Phase-1 on-box caveat (link-local vs global v6; interface-automatic
+v6 accept) for the maintainer's manual smoke (ADR §7).

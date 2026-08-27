@@ -1,0 +1,7 @@
+# issue #760 §3 smoke fixture: v6 Suppression CIDR floor (suppression_cidr_v6)
+# (tests/smoke/test_smoke_suppression.py, Scenario E). Wide public /48 --
+# the floor-clamp target (network-aligned: the first 48 bits are exactly
+# 2606:4700:aaaa).
+2606:4700:aaaa::/48
+# Separate bare host, in a different /48 -- untouched by the floor.
+2606:4700:bbbb::99

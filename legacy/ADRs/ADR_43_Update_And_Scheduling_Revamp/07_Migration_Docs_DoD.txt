@@ -1,0 +1,73 @@
+================================================================================
+PHASE 7 PROMPT — Migration guide, docs, deprecation notices + live-VM DoD
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §6 Phase 7 + §7 DoD)
+================================================================================
+
+ROLE
+You implement Phase 7 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is DOCS + live-VM proof — it writes the verb→new-API migration guide, the deprecation
+notices, the new scheduling model, and finalises the live-VM fan-out + Definition of Done. Work
+inline on the branch, one commit, push directly (open a PR only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+The verbs are deprecated-then-remove: operators + external scripts need a clear migration guide and a
+removal timeline. The scheduling model changed fundamentally (one tick + due-ledger, apply-on-change)
+and must be documented where the next maintainer will read it. Finally, prove the whole thing on the
+live VM (CE + Plus) and close the DoD.
+
+REQUIRED READING
+- FIRST, read RESULTS/06_Results.txt (Update page done). If missing, STOP and report.
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§6 Phase 7, §7 DoD + the manual smoke checklist
+  + reject criteria) and ALL prior RESULTS/0N_Results.txt (for the exact mappings/knobs to document).
+- docs/misc/architecture-notes.md (the feed-update/scheduling section to extend) + the CLAUDE.md
+  feed-update/scheduling/verb-routing mechanics text.
+- The memory note on verb routing (reference_pfb_verb_routing_feed_change_detection) is the OLD model
+  — this phase supersedes it; ensure the docs reflect the NEW tick+ledger+API reality.
+- CLAUDE.md (docs are professional-but-terse, not caveman; markdownlint clean; docs-only CI carve-out).
+
+ACTION PLAN
+1. Write the MIGRATION GUIDE (docs/misc/, linked from architecture-notes + CLAUDE.md): a table mapping
+   each deprecated verb (cron/update/updateip/updatednsbl + Force) → the new {scope,force,trigger}
+   request, the deprecation-log text, and the REMOVAL timeline (which future release). Include the new
+   tick CLI verb and how to trigger a manual run.
+2. Document the NEW SCHEDULING MODEL: one ≈*/15 trigger-tick + the due-ledger (next-due + seeded
+   jitter), absent-⇒-due-now-jittered + #468 persistence, offline catch-up, apply-on-change +
+   quiet-hours window. Update/replace the old "verbs/cron/feed-change" prose so it is not contradicted.
+3. Confirm/insert the deprecation notices are user-visible (log line +, if appropriate, a one-line
+   note on the Update page or migration guide).
+4. Run the live-VM fan-out (CE + Plus) covering: cron tick fires + runs a due feed; offline catch-up;
+   no boot stampede (wiped ledger) + reboot persistence; reuse vs force; apply-on-change; the ADR-12
+   hook trigger value unchanged; the Update page Tier A + Tier B. Record results.
+5. Fill the §7 DoD + the manual smoke checklist outcomes in a final RESULTS file.
+
+CONSTRAINTS
+- Markdown: blank line around headings/lists/fences, a language on every fence, single trailing
+  newline (markdownlint clean). Docs professional + terse. Do NOT change src/ behaviour this phase
+  (docs + smoke only); if the smoke surfaces a real bug, FIX it in the relevant earlier-phase area
+  with its own test (do not paper over it in docs).
+
+VERIFICATION
+- npx markdownlint-cli2 → 0 errors
+- Live-VM fan-out (CE + Plus) → green for every §7 case
+- Re-run the full suite touched by the ADR: vendor/bin/phpunit, python -m pytest, ruff, php -l,
+  phpstan, phpcs, shellcheck → all green
+- diff-read: the migration guide + scheduling docs are accurate against the implemented code; the old
+  verb-routing prose no longer contradicts the new model.
+
+EXPECTED RESULT
+A published verb→API migration guide with a removal timeline; the new scheduling model documented;
+the live-VM fan-out green across all §7 cases; the DoD closed.
+
+COMMIT (single)
+    docs: ADR-43 verb migration guide + scheduling model; live-VM DoD (ADR-43 P7)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/07_Results.txt`
+Record: the migration-guide location + the removal release; the docs updated; the live-VM fan-out
+results per §7 case; the manual-smoke-checklist outcomes (or what remains for the maintainer); the
+final DoD status; and whether ADR-43 is ready to move from Proposed toward Accepted (per CLAUDE.md
+"ADR acceptance — automated tests, not a manual sign-off").

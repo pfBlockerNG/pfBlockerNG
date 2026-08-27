@@ -1,0 +1,163 @@
+================================================================================
+ADR-11 — Phase 4 RESULTS: effective-set & additive correctness (membership pinned)
+================================================================================
+Status: DONE. Membership decision pinned off-box (failable, mutation-checked PHPUnit);
+        the live-only legs written into §7 as runnable maintainer commands. NO P2/P3
+        code change was needed -- every correctness case was already correct, so this
+        phase's deliverable is the VERIFICATION, exactly as the prompt scoped it.
+Date:   2026-06-05
+Scope:  tests/php/AggregateMemberListTest.php   (NEW -- 11 tests, 53 assertions,
+                                                 against the REAL pfblockerng.inc)
+        .ADRs/ADR_11_Uber_Aliases/ADR.md §7      (Phase-4 runnable manual-smoke commands)
+        NO src/ change. NO Python/tests. NO stubs (helper is pure: glob + $pfb dirs,
+        no new pfSense fn). NO other ADRs. NO P2 helper / P3 wiring change.
+
+--------------------------------------------------------------------------------
+0. WHY NO CODE CHANGED (the phase's central question)
+--------------------------------------------------------------------------------
+The prompt says "Refine the Phase-2 helper / Phase-3 wiring ONLY if a case is actually
+wrong." I read the live code (NOT the handoff prose) for every correctness item and
+each was already correct:
+  * pfb_aggregate_member_list (inc:2094) -- type->dir map + '*_<fam>.txt' glob + sort()
+    -- is exactly the membership contract; verified branch-by-branch (see §1).
+  * Suppress ordering: the per-member `suppress` exec is inc:11002-11013, the build call
+    pfb_build_aggregate_aliases() is inc:11116 -- suppress PRECEDES the union, so denydir
+    files are post-suppression when read. CONFIRMED by line order, log-PROVEN by diff-read.
+  * DNSBLIP routing: injected as a list with action => $pfb['dnsbl_ip'] (inc:10917-10930),
+    so pfb_determine_list_detail routes it to denydir; the member loop deposits
+    DNSBLIP_<fam>.txt there as a plain member. CONFIRMED in source (not assumed).
+  * GeoIP-by-action: continents run through pfb_determine_list_detail($continent action)
+    (§1.5, inc:~9926) -> land in the dir of their action. CONFIRMED.
+  * Post-hook ordering: build/register/table-load (inc:11116 + the inline pfctl -T replace
+    at inc:2209-2213) all sit BEFORE pfb_run_hooks('post', ...) at inc:11894; a rebuilt
+    aggregate's name is appended to $pfb['changed_ip_aliases'] (inc:2219) which is emitted
+    as PFB_CHANGED_IP_ALIASES at inc:11900. CONFIRMED by diff-read.
+So nothing was "wrong" to fix; the deliverable is the off-box proof + the §7 live steps.
+
+--------------------------------------------------------------------------------
+1. MEMBERSHIP CORRECTNESS -- AUTO-VERIFIED off-box (tests/php/AggregateMemberListTest.php)
+--------------------------------------------------------------------------------
+The membership DECISION (which member files each aggregate unions) is the aggregate's
+correctness. pfb_aggregate_member_list is pure (reads $pfb per-type dirs off disk, globs,
+sorts) -> PHPUnit against the REAL .inc via the tests/php bootstrap. Each test seeds
+$GLOBALS['pfb'][{deny,permit,match,native}dir] to a fresh temp tree, drops member files,
+asserts the returned path list. 11 tests / 53 assertions, branch-by-branch:
+
+  ITEM (prompt)                         TEST                                        VERDICT
+  ----------------------------------    ----------------------------------------    ----------
+  DNSBLIP present in Deny               testDenyIncludesDnsblipAndDenyAction...     AUTO ✓
+  Deny-action GeoIP present in Deny     (same test -- Africa_v4.txt continent)      AUTO ✓
+  Permit/Match/Native = own-dir union   testNoCrossTypeLeakage...                   AUTO ✓
+  NO cross-type leakage                 testNoCrossTypeLeakage... (Permit cont.     AUTO ✓
+                                        in Permit, assertNotContains in Deny)
+  effective set = denydir members only  testDenyUnionsOnlyTheEffectiveMember...     AUTO ✓ (membership half)
+    (no raw/.orig re-introduction)
+  v4/v6 disjoint                        testFamilyFilterSelectsDisjoint...          AUTO ✓
+  glob excludes .update/.ip/foreign     testGlobExcludesUpdateMarkersIpFeeds...     AUTO ✓
+  single member                         testSingleMemberReturnsOneElementList       AUTO ✓
+  empty dir -> []                       testEmptyDirReturnsEmptyList                AUTO ✓
+  v4-only -> [] for v6                  testV4OnlyTypeIsEmptyForV6                   AUTO ✓
+  missing dir -> []                     testMissingDirReturnsEmptyList              AUTO ✓
+  unknown type/family -> []             testUnknownTypeOrFamilyReturnsEmptyList     AUTO ✓
+  sorted result                         testResultIsSorted                          AUTO ✓
+
+  NOT coverage theater -- MUTATION-PROVEN (each mutation restored after):
+    * glob '*_<fam>.txt' -> '*'           => 4 failures (exclusion + family + v6-only bite).
+    * type map Permit -> denydir          => 1 failure (cross-type-leak assertion bites).
+  Both prove the assertions FAIL on a regression. (A family-guard removal was benign --
+  glob("dir/*_.txt") still matches nothing -- so the guard is belt-and-suspenders, not
+  the load-bearing check; the glob suffix is. Noted, not a gap.)
+
+DENY EFFECTIVE-SET -- the LOG-PROVEN vs INFERRED split:
+  * MEMBERSHIP half (which FILES are unioned): AUTO-VERIFIED off-box. The helper returns
+    exactly the denydir '<header>_<fam>.txt' files and adds none of its own (it does not
+    re-read raw/orig feeds). testDenyUnionsOnlyTheEffectiveMemberFilesNotRawSiblings pins
+    this: a feedB_v4.orig / .raw sibling beside feedB_v4.txt is EXCLUDED -> a suppressed IP
+    cannot be re-introduced by the helper reading a raw source.
+  * CONTENT half (a suppressed IP's BYTES are absent from the union): the suppress action
+    (grepcidr -vf pfbsuppression.txt) rewrites the member file IN PLACE on the live box
+    before the union reads it. That byte-level effect is INFERRED from source ordering
+    off-box and DEFERRED to §7-A as a runnable `pfctl -T test` check (needs the real
+    suppress pass + a loaded pf table -- CI cannot do either).
+
+--------------------------------------------------------------------------------
+2. ADDITIVE INVARIANT across the power-set -- DEFERRED to §7-B (why)
+--------------------------------------------------------------------------------
+"Existing aliases/tables/rules byte-identical for every subset" is a property of the LIVE
+pf ruleset + loaded tables + alias-cache files after a real update pass. CI cannot load pf
+tables or run a full pfBlockerNG update, so this is DEFERRED to §7-B with EXACT commands:
+snapshot rules/tables/alias-file md5s with NOTHING selected, then for each subset
+{Deny},{Permit},{Match},{Native},{pairs},{all four} re-snapshot and `diff` the
+NON-aggregate sets -> expect NO diff; only the selected pfB_<Type>_Aggregated_{v4,v6}
+appear, and vanish on deselect. The all-off byte-identity is additionally guaranteed
+structurally (Phase 3): nothing selected => the loop's teardown existence-guard is false
+on a virgin box => zero files/pfctl/alias-append => byte-identical (re-confirmed by
+diff-read of pfb_build_aggregate_aliases). LOG-PROVEN structurally; the live byte-diff is
+the §7-B maintainer step.
+
+--------------------------------------------------------------------------------
+3. POST-HOOK ORDERING (ADR-12 coupling) -- AUTO (diff-read) + §7-D (live freshness)
+--------------------------------------------------------------------------------
+  * Ordering AUTO-confirmed by diff-read: suppress (11002-11013) -> build+register+inline
+    `pfctl -T replace -f` (11116 -> 2209-2213) -> config write (11140) -> reconcile ->
+    pfb_run_hooks('post', ...) (11894). The aggregate table is LIVE before any post-hook.
+  * Changed-name merge AUTO-confirmed: $rebuilt (aggout mtime advanced) => name appended to
+    $pfb['changed_ip_aliases'] (2219), emitted as PFB_CHANGED_IP_ALIASES (11900). An
+    mtime-gated (skipped) or unselected type adds nothing.
+  * The LIVE proof (a post hook actually READING the fresh table; mtime-gate not advancing
+    an unchanged type) is DEFERRED to §7-D (a post hook does `pfctl -T show > marker`, then
+    grep the newly-added IP) -- needs a real update pass + loaded table. INFERRED off-box,
+    PROVEN live by §7-D.
+
+--------------------------------------------------------------------------------
+4. EDGE CASES
+--------------------------------------------------------------------------------
+  * empty dir / v4-only / v6-only / single member / missing dir / unknown type+family:
+    AUTO-VERIFIED off-box (§1 tests).
+  * empty union => never-empty .lst (# placeholder) + NO pf table loaded: the helper end
+    (no members -> []) is AUTO; the placeholder-write + no-empty-table are in the shell
+    action (Phase 2, manually verified RUN 4) and the builder's filesize()>0 guard
+    (inc:2209-2213). The LIVE assertion (-s .lst && table absent) is §7-C.
+  * mtime-gate not skipping a real change / not rebuilding an unchanged type: the gate
+    lives inside the shell action (Phase 2 RUN 2/RUN 3 manually verified); the live
+    end-to-end (mtime unchanged across a no-change pass) is §7-D.
+
+--------------------------------------------------------------------------------
+5. GATES (all green)
+--------------------------------------------------------------------------------
+  * php -l pfblockerng.inc            -> No syntax errors. (1 pre-existing Deprecated in
+                                         pfb_unlock, UNRELATED, present before this phase.)
+  * PHPUnit (real .inc off-appliance) -> OK 164 tests / 332 assertions (was 153/279;
+                                         +11 tests / +53 assertions, the new suite).
+  * PHPStan (--memory-limit=1G)       -> [OK] No errors (level 1 + baseline).
+  * python -m pytest                  -> 1124 passed (UNCHANGED -- no Python touched).
+  * shellcheck -s sh pfblockerng.sh   -> CLEAN (no shell change this phase).
+  * markdownlint-cli2 (ADR.md)        -> 0 error(s).
+  * scripts/check_url_encoding.py     -> exit 0 (the §7 `${VAR}` interpolations ride
+                                         `pfctl -T test`, NOT an HTTP client -> out of scope).
+
+--------------------------------------------------------------------------------
+6. SCOPE / SELF-REVIEW
+--------------------------------------------------------------------------------
+  * git diff: ADR.md §7 (+87 lines) + NEW tests/php/AggregateMemberListTest.php. NO src/,
+    NO Unbound Python, NO other ADRs, NO P2/P3 code. (Confirmed: git diff --name-only HEAD
+    -- src/ is empty.)
+  * Every new test has a failable, meaningful assertion (mutation-proven, §1); branches
+    each covered (each type, each family, include/exclude, edges, bad input).
+  * The all-off byte-identity is structurally proven (Phase-3 teardown guard) AND given a
+    live byte-diff procedure in §7-B.
+  * §7 gained runnable commands + expected results for every live-only leg (A effective
+    content, B additive power-set, C empty-set, D lockstep+post-hook freshness,
+    E HAProxy, F teardown) -- NO silent gap.
+
+--------------------------------------------------------------------------------
+7. GO-AHEAD -> Phase 5
+--------------------------------------------------------------------------------
+GO. Membership + additive + post-hook-order correctness are pinned (off-box where possible,
+§7 runnable commands where live-only). Phase 5: settings-UI help text (already drafted in
+Phase 3's Form_Select -- finalise wording + the Native/no-rule + Permit "reference-only" +
+RAM caveat), README/CLAUDE.md docs, re-run the Phase-1 benchmark on the branch, finalise
+the §7 reject/pivot criteria, and note the ADR-12 hand-off (never-empty .lst + Native
+aliases are HAProxy's input; freshness = a pfBlockerNG-triggered graceful reload). Status
+-> Accepted only after the maintainer runs the §7 manual smoke (A-F) on a live box.
+================================================================================

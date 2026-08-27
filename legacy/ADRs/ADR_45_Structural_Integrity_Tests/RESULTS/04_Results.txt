@@ -1,0 +1,115 @@
+ADR-45 Phase 4 Results — live-VM smoke fixtures (corrupt + octet-stream recovery)
+===================================================================================
+
+## New test cases
+
+File: tests/smoke/test_smoke_feeds.py
+
+Five new cases added after the ADR-44 archive block (~L2091+):
+
+  test_corrupt_zip_rejected
+    Pins: truncated ZIP (first half of bytes; no EOCD) is rejected by the structural
+    probe before extraction. Alias absent BEFORE and AFTER Force Update. Paired with
+    test_zip_feed_imports (healthy ZIP imports) to prove the probe is a real branch.
+
+  test_corrupt_gzip_rejected
+    Pins: truncated gzip stream (first half of bytes; no checksum trailer) is rejected.
+    Alias absent BEFORE and AFTER Force Update. Paired with test_gzip_feed_imports.
+
+  test_corrupt_bzip2_rejected
+    Pins: truncated bzip2 stream (first half of bytes; incomplete block header) is
+    rejected. Alias absent BEFORE and AFTER Force Update. Paired with
+    test_bzip2_feed_imports.
+
+  test_octet_stream_zip_recovered
+    Pins: a valid ZIP with 8 NUL+ctrl bytes prepended (file(1) reports
+    application/octet-stream on the box) is recovered by pfb_octet_recover_type()
+    to application/zip and imported. Member 203.0.113.11 ABSENT before, PRESENT after.
+    On-box guard: _box_mime_type() uploads the bytes to a temp file on the box and
+    checks file(1) before running the feed case. If the box's magic-db does NOT report
+    octet-stream (different heuristic), the test still asserts IMPORT (normal zip branch)
+    and logs the observed verdict — not a failure. Real-world analogue: the Cisco
+    Umbrella / Popularity List top-1m.csv.zip.
+
+  test_junk_octet_stream_rejected
+    Pins: NUL+ctrl bytes (b"\x00\x01\x02\x03" * 256, no archive magic) that file(1)
+    reports as application/octet-stream are rejected — no structural probe passes,
+    pfb_octet_recover_type() returns NULL, pfb_filter() returns FALSE, alias stays
+    absent. MUST-ACCOMPANY counterpart to test_octet_stream_zip_recovered (both
+    branches). On-box guard: if file(1) does NOT report octet-stream for the junk blob,
+    the test is skipped as inconclusive.
+
+Also added:
+  _ADR45_BODY / _ADR45_MEMBER constants (distinct from _ADR44_BODY/_ADR44_MEMBER for
+  isolation: 203.0.113.11 / 198.51.100.33).
+  _box_mime_type() helper: uploads binary bytes to a temp path on the guest, runs
+  file -b --mime-type, cleans up, returns the MIME type string. Used by the two
+  octet-stream cases for the on-box guard.
+
+---
+
+## Format coverage
+
+  zip  — corrupt case added (test_corrupt_zip_rejected) ✓
+  gzip — corrupt case added (test_corrupt_gzip_rejected) ✓
+  bzip2 — corrupt case added (test_corrupt_bzip2_rejected) ✓
+  7z   — OUT-OF-CI. /usr/local/bin/7z is not present on the smoke image (the image
+         ships ldns, bind-tools, python311, unbound, php83, qemu-guest-agent only).
+         7z is only reachable via the octet-stream recovery path (Phase-3 probe order:
+         zip → gzip → bzip2 → 7z-compressed), so it requires a 7z binary on the box.
+         Documented as an out-of-CI limitation per the Phase 4 spec; not faked.
+
+---
+
+## Healthy-feed parity
+
+  test_zip_feed_imports   — existing, unchanged ✓ (valid pair for corrupt-zip)
+  test_gzip_feed_imports  — existing, unchanged ✓ (valid pair for corrupt-gzip)
+  test_bzip2_feed_imports — existing, unchanged ✓ (valid pair for corrupt-bzip2)
+
+All three confirmed still collected and cover the healthy (import) branch.
+
+---
+
+## Verification
+
+collect-only:
+  /Users/andre/git/pfBlockerNG/.venv/bin/python -m pytest \
+    tests/smoke/test_smoke_feeds.py --collect-only --override-ini="addopts=" \
+    -p no:cacheprovider
+  → 30 tests collected (was 25 before; +5 new)
+  → No collection ERRORs; PytestUnknownMarkWarning for mark.timeout is pre-existing
+    (the sibling ADR-44 archive cases carry the same mark, same warning).
+
+ruff check:
+  All checks passed!
+
+ruff format --check:
+  1 file already formatted
+
+PHPUnit:
+  Tests: 1580, Assertions: 14951, Skipped: 4, Failures: 0, Errors: 0
+  (Identical to Phase 3 — no production code changed in Phase 4.)
+
+diff stat:
+  tests/smoke/test_smoke_feeds.py | 262 ++++++++++++++++++++++++++++++++++++++++
+  1 file changed, 262 insertions(+)
+  (No production-code change, no ADR.md Status flip.)
+
+---
+
+## Commit + push
+
+  Message: smoke: corrupt-archive + octet-stream recovery cases (ADR-45 P4)
+  Branch:  adr/45-structural-integrity-tests
+  Push:    origin adr/45-structural-integrity-tests
+
+(Commit hash and push confirmation will be recorded after the commit is made.)
+
+---
+
+## Status note
+
+ADR.md Status is NOT flipped in this phase. The maintainer dispatches the CE + Plus
+smoke fan-out (see SMOKE_CHECKLIST.md); on green both legs they flip:
+  Status: Proposed → Accepted (YYYY-MM-DD)

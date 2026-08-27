@@ -1,0 +1,83 @@
+ADR-47 Phase 5 — CI Collapse to Dispatch + Parity-Guard Generalization + git-env-scrub + Docs
+===============================================================================================
+
+STATUS: COMPLETE — all gates green
+
+── Gates ────────────────────────────────────────────────────────────────────────────────────
+shellspec  : 189 examples, 0 failures, 4 skips (same 4 pre-existing skips; +32 new examples
+             from P5 tests: 6 git-env-scrub + 8 resolve-legs + 10 parity-guard rules 4/5 +
+             8 read-version-matrix backfill)
+shellcheck : clean on all new/modified scripts (lib/git-env-scrub.sh, git-env-scrub-guard.sh,
+             resolve-legs.sh, parity-guard.sh, build-leg.sh, select-box.sh, smoke-on-box.sh)
+actionlint : 0 errors on smoke.yml, smoke-single.yml, ui-tests.yml (same pre-existing
+             SC2129×2 + `if: false` allowed annotations — no new violations)
+parity-guard on .github/workflows: 0 violations (including test.yml — false-positive proof:
+             `python -m pytest` bare runner does NOT trigger Rule 4; only
+             `python -m pytest tests/smoke` does)
+markdownlint: 0 errors (full repo scan, 83 files)
+
+── New files ────────────────────────────────────────────────────────────────────────────────
+scripts/lib/git-env-scrub.sh          — sourceable lib; pfb_scrub_git_env() unsets 6 GIT_*
+scripts/git-env-scrub-guard.sh        — meta-assertion: no raw unset outside lib; every
+                                        git-using spec calls scrub_git_env; scoped to *.sh
+                                        only (excludes *.md, guard, lib, spec-for-guard)
+scripts/resolve-legs.sh               — 6 subcommands: legs / image-ref / digest /
+                                        exact-image-name / vm-identity / scrub
+                                        AMENDMENT B: --civm-mac defaults EMPTY (deny-by-default)
+                                        AMENDMENT B: scrub --keep protects ui-screenshots
+                                        AMENDMENT C: legs prints JSON to stdout; scope/k/matrix
+                                                     go to GITHUB_OUTPUT
+                                        AMENDMENT D: git-env-scrub sourced AFTER self-dir
+tests/shell/git_env_scrub_spec.sh     — 6 examples for lib + guard
+tests/shell/resolve_legs_spec.sh      — 20 examples: legs (scope ladder, numeric 2.8<2.10,
+                                        -k derivation, --test-dir scoping), image-ref,
+                                        exact-image-name
+
+── Modified files ───────────────────────────────────────────────────────────────────────────
+scripts/parity-guard.sh               — Rule 4 (python pytest+tests/smoke, AMENDMENT A false-
+                                        positive guard), Rule 5 (run-smoke.sh inline-derived)
+scripts/build-leg.sh                  — AMENDMENT D: SCRIPT_DIR first, then source lib + call
+scripts/select-box.sh                 — AMENDMENT D: self-dir first, then source lib + call
+scripts/smoke-on-box.sh               — AMENDMENT D: defaults first, then source lib + call
+tests/shell/spec_helper.sh            — adds pfb_scrub_git_env via lib; scrub_git_env alias
+tests/shell/build_leg_spec.sh         — unset → scrub_git_env; lib symlink in FAKE_LIB
+tests/shell/run_smoke_spec.sh         — unset → scrub_git_env
+tests/shell/sparse_clone_ports_spec.sh — unset → scrub_git_env
+tests/shell/select_box_spec.sh        — unset → scrub_git_env
+tests/shell/parity_guard_spec.sh      — unset → scrub_git_env; 10 new It blocks rules 4/5
+tests/shell/read_version_matrix_test_spec.sh — unset → scrub_git_env (2 subshells)
+.github/workflows/smoke.yml           — prepare step: resolve-legs.sh legs replaces 60-line
+                                        inline SCOPE+LEGS+K block
+.github/workflows/smoke-single.yml    — 5 inline blocks replaced:
+                                        ref → image-ref; digest → digest;
+                                        civm → image-ref+digest; vm-identity → vm-identity
+                                        (--civm-mac); scrub → scrub --root smoke-diag
+.github/workflows/ui-tests.yml        — gen step: nightly guard + tier inline, legs →
+                                        resolve-legs.sh legs; ref → image-ref (MATRIX_*
+                                        remapped to INPUT_*); vm-identity → vm-identity;
+                                        digest → digest; scrub → scrub --root "smoke-diag
+                                        test-results" --keep ui-screenshots
+docs/misc/architecture-notes.md       — "CI as parallel dispatch (ADR-47 P5)" section
+docs/misc/local-smoke-debian.md       — note on shared scripts + git-env-scrub.sh
+scripts/README.md                     — new "CI / local-smoke shared scripts (ADR-47)"
+                                        section with table of all new scripts
+
+── Key design decisions ─────────────────────────────────────────────────────────────────────
+AMENDMENT A: Rule 4 uses AFTER_PYTEST="${STRIPPED#*-m pytest }" and checks for tests/smoke in
+             AFTER_PYTEST; bare `python -m pytest` (no path) produces empty AFTER_PYTEST →
+             not flagged. test.yml's unit runner stays green.
+AMENDMENT B: --civm-mac defaults to empty; masking/redaction only fires when non-empty.
+             scrub --keep takes a pattern and preserves subtrees matching it via -not -path.
+AMENDMENT C: _rl_legs() prints filtered JSON to stdout (captured by callers needing LEGS);
+             scope=, ci_matrix=, pytest_k= go to GITHUB_OUTPUT via >> file.
+AMENDMENT D: all scripts compute self-dir first, then source the lib and call pfb_scrub_git_env.
+AMENDMENT E: guard Clause 1 greps --include='*.sh' (primary: bare git token not masked by lib);
+             allowlist is secondary (lib, guard, spec).
+
+── Guard self-exclusion fix ─────────────────────────────────────────────────────────────────
+Guard Clause 1 now uses --include='*.sh' to exclude Markdown files. scripts/README.md's new
+"CI / local-smoke shared scripts" table row describes the guard in prose containing "unset GIT_DIR"
+as documentation — that is not a production call and must not be flagged. Limiting the grep to
+*.sh files is the correct principled fix (Markdown is never a production call site).
+
+ADR-RESUME: branch=adr/47-local-ci-execution-parity next-phase=COMPLETE

@@ -1,0 +1,169 @@
+ADR-37 Phase 2 Results — Builder Implementation + ADR-35 Registration + Sync Wiring
+======================================================================================
+Branch: adr/37-dot-doq-block
+Committed by Phase 2 agent (Sonnet 4.6)
+
+
+1. BUILDER IMPLEMENTATION
+--------------------------
+Function: pfb_build_dot_block_rule(string $iface, string $exclude_alias): array
+File:     src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc
+Location: Replaces the Phase-1 skeleton (was the last function in the file; now
+          starts the ADR-37 section after the ADR-36 pfb_sync_dns_redirect_rules
+          function, at the bottom of the file).
+
+Also defines:
+  const PFB_DOT_BLOCK_DESCR_PFX = 'pfB_DoT_Block_'   (marker prefix)
+
+Rule shape built (all 10 golden tests green):
+  type        => 'block'
+  interface   => $iface
+  ipprotocol  => 'inet46'
+  protocol    => 'tcp/udp'
+  source      => ['any' => ''] when $exclude_alias === '';
+                 ['address' => $exclude_alias, 'not' => ''] when non-empty
+  destination => ['network' => '(self)', 'not' => '', 'port' => '853']
+  statetype   => 'keep state'
+  descr       => 'pfB_DoT_Block_' . $iface
+
+
+2. ADR-35 REGISTRATION
+-----------------------
+Function: pfb_fwobj_init_dot_block_registrations(): void
+File:     src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc
+Location: Immediately after pfb_build_dot_block_rule().
+
+$spec shape registered (one registration — filter/rule only; DoT/DoQ has no NAT rule):
+  'type'    => 'filter'
+  'section' => 'filter/rule'
+  'marker'  => PFB_DOT_BLOCK_DESCR_PFX  ('pfB_DoT_Block_')
+  'builder' => NULL   (seam-only; rules built by pfb_sync_dot_block_rules())
+  'guard'   => NULL
+
+Deviation from generic reconcile pattern: no builder (NULL = seam-only), matching
+exactly what ADR-36 uses for its NAT/filter registrations. pfb_fwobj_reconcile()
+would throw on this marker — callers use pfb_fwobj_find/remove directly, consistent
+with ADR-36's pattern. Noted in the docblock.
+
+The marker prefix 'pfB_DoT_Block_' starts with 'pfB_', so pfb_fwobj_is_owned()
+recognises every per-interface variant. Does NOT contain 'pfB DNSBL' (with space),
+so pfb_create_dnsbl() cannot accidentally remove these rules.
+
+
+3. SYNC FUNCTION
+-----------------
+Function: pfb_sync_dot_block_rules(): bool
+File:     src/usr/local/pkg/pfblockerng/pfblockerng_dns_bypass.inc
+Location: After pfb_fwobj_init_dot_block_registrations().
+
+Logic:
+  - Reads dnsbl_dot_block via PfbConfig::read('dnsbl_dot_block') → PfbToggle enum.
+  - Reads dnsbl_dot_block_int via PfbConfig::read('dnsbl_dot_block_int') → string.
+  - Reads dnsbl_dot_block_exclude via PfbConfig::read('dnsbl_dot_block_exclude') → string.
+  - When disabled (not PfbToggle::On): pfb_fwobj_remove('filter/rule',
+    PFB_DOT_BLOCK_DESCR_PFX) → removes all pfB_DoT_Block_* rules; return.
+  - When enabled: splits iface_raw by comma, validates each entry with
+    pfb_filter($entry, PFB_FILTER_WORD, 'pfb_sync_dot_block_rules'); invalid
+    names logged + skipped (defence-in-depth).
+  - If no valid interfaces remain: remove all pfB_DoT_Block_* rules; return.
+  - Stale-interface prune via pfb_fwobj_remove() with a guard closure that keeps
+    rules in the expected set and removes those whose descr starts with
+    PFB_DOT_BLOCK_DESCR_PFX but is not in the expected list.
+  - Idempotent upsert: pfb_fwobj_find('filter/rule', marker) check before appending.
+  - No write_config() — caller (sync_package_pfblockerng) decides when to flush.
+  - Returns bool: TRUE if filter/rule was changed.
+
+
+4. CALL SITE IN sync_package_pfblockerng()
+-------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+Location: Immediately after the ADR-36 block (around line 12500), same guard pattern.
+
+Wiring (lines ~12502-12510 in pfblockerng.inc):
+  if (function_exists('pfb_fwobj_init_dot_block_registrations') &&
+      function_exists('pfb_sync_dot_block_rules')) {
+      pfb_fwobj_init_dot_block_registrations();
+      if (pfb_sync_dot_block_rules()) {
+          write_config('pfBlockerNG: saving DoT/DoQ block rule changes');
+      }
+  }
+
+Also added pfb_fwobj_init_dot_block_registrations() to the deinstall sweep path
+(the pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule']) block), guarded
+with function_exists(), so pfB_DoT_Block_* entries are cleaned on package removal.
+
+
+5. NEW TEST METHODS
+--------------------
+File: tests/php/DotDoQBlockLifecycleTest.php (new)
+
+Test methods and intent:
+  test_reconcile_is_idempotent
+    — Two syncs with identical settings produce exactly 1 filter rule (no dupes);
+      before-state (0 rules) asserted before first sync.
+
+  test_disable_removes_all_dot_block_rules
+    — Enable → rule appears (asserted); disable → 0 pfB_DoT_Block_* rules;
+      before-state (0) asserted before first sync.
+
+  test_user_rule_survives_disable
+    — User filter rule with no pfB_ marker survives enable + disable cycle;
+      user rule present before enable, present after disable; descr/type unchanged.
+
+  test_stale_interface_pruned_on_reconcile  [BDD-style Given/When/Then]
+    — Enable lan+opt1 (both asserted present); reduce to lan only; opt1 rule gone,
+      lan rule remains; before-state (both rules) asserted before stale prune call.
+
+  testExceptionAliasBranchChangesSourceElement
+    — Empty alias → source=['any'=>'']; set alias → source negated-alias; clear →
+      reverts to <any/>.
+
+  testRegistrationSeamCoversFilterSection
+    — pfb_fwobj_init_dot_block_registrations() registers type='filter',
+      section='filter/rule', marker=PFB_DOT_BLOCK_DESCR_PFX, builder=NULL.
+      Idempotent (double-call safe).
+
+  testSyncWhenAlreadyDisabledAndNoRulesExistsReturnsFalse
+    — Sync when disabled + no rules → returns FALSE, no config change.
+
+
+6. VERIFICATION RESULTS
+------------------------
+  php -l (touched files)    CLEAN (no syntax errors; pre-existing deprecation warnings
+                              in pfblockerng.inc unchanged and unrelated)
+  PHPUnit:                  1234 tests total, 4992 assertions, 31 warnings (pre-existing),
+                            3 skipped (pre-existing) — ZERO failures / errors.
+                            All 10 DotDoQBlockRuleTest golden tests GREEN.
+                            All 7 DotDoQBlockLifecycleTest tests GREEN.
+                            ADR-36 DnsRedirectBuilderTest + DnsRedirectLifecycleTest
+                            still GREEN (unchanged).
+  PHPStan:                  OK — No errors
+  PHPCS:                    CLEAN (no output; RequireConfigGateway, UppercaseBooleanLiteral,
+                            and RequirePfbFilter all pass)
+  pytest:                   1930 passed, 2 skipped
+  ruff check:               All checks passed
+  ruff format --check:      128 files already formatted
+
+
+7. GO-AHEAD FOR PHASE 3
+------------------------
+Phase 3 (UI) may proceed. Key facts it needs:
+
+  Builder:      pfb_build_dot_block_rule() in pfblockerng_dns_bypass.inc
+  Marker pfx:   PFB_DOT_BLOCK_DESCR_PFX = 'pfB_DoT_Block_'
+  Config keys   (all registered via PfbConfig::read()):
+    dnsbl_dot_block           — toggle ('on'/''), adapter: pfb_cfg_toggle_read/write
+    dnsbl_dot_block_int       — plain string, NULL/NULL adapter (comma-sep ifaces)
+    dnsbl_dot_block_exclude   — plain string, NULL/NULL adapter (alias name or '')
+  Config section: installedpackages/pfblockerngdnsblsettings/config/0
+  Validator:    pfb_validate_dns_redirect_post() in pfblockerng_dns_bypass.inc is the
+                ADR-36 sibling; Phase 3 should add pfb_validate_dot_block_post()
+                with the same pattern (ifaces → pfb_build_if_list(), alias →
+                is_validaliasname()), in pfblockerng_dns_bypass.inc.
+  UI page:      Mirror the ADR-36 pfblockerng_dnsbl.php fields; the DoT/DoQ section
+                lives on the same DNSBL Settings tab.
+  No write_config() in builder/sync — caller (pfblockerng_dnsbl.php POST handler)
+  owns the flush, same as ADR-36.
+
+  Prior handoff: .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/01_Results.txt
+  This handoff:  .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/02_Results.txt

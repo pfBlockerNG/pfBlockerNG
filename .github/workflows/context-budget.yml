@@ -1,0 +1,71 @@
+# Context byte budgets + routing headers (map #1383, #1437) — a standalone
+# workflow, NOT a test.yml job: test.yml's global `paths-ignore` ('**/*.md')
+# would skip that entire workflow for an md-only change — the exact change
+# class this gate polices (the budgets gate re-accretion of the hot context,
+# and policy/docs edits land md-only, often pushed straight to devel). The
+# `paths` lists mirror scripts/check_context_budget.py's trigger surfaces and
+# are pinned by
+# tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
+name: Context budget
+
+on:
+  push:
+    branches: [main, devel]
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'GROK.md'
+      - '.github/copilot-instructions.md'
+      - '.claude/settings.json'
+      - 'scripts/check_context_budget.py'
+      - '.agents/policy/**'
+      - '.agents/context/**'
+      - 'docs/misc/**'
+      - '.claude/rules/**'
+      - '.grok/rules/**'
+      - '.claude/hooks/**'
+      - 'scripts/**'
+      - '**/AGENTS.md'
+      - '**/CLAUDE.md'
+      - '**/GROK.md'
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'GROK.md'
+      - '.github/copilot-instructions.md'
+      - '.claude/settings.json'
+      - 'scripts/check_context_budget.py'
+      - '.agents/policy/**'
+      - '.agents/context/**'
+      - 'docs/misc/**'
+      - '.claude/rules/**'
+      - '.grok/rules/**'
+      - '.claude/hooks/**'
+      - 'scripts/**'
+      - '**/AGENTS.md'
+      - '**/CLAUDE.md'
+      - '**/GROK.md'
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  context-budget:
+    name: Context byte budgets + routing headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Enforce context byte budgets + routing headers
+        # ubuntu-latest ships python3. --all: the workflow's own path filter
+        # already scopes when this runs; the check itself is sub-second.
+        run: python3 scripts/check_context_budget.py --all

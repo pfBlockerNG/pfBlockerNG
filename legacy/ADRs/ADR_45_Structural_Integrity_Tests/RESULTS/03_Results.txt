@@ -1,0 +1,170 @@
+ADR-45 Phase 3 Results — octet-stream structural recovery (pfb_filter PFB_FILTER_FILE_MIME)
+============================================================================================
+
+## Recovery insertion point
+
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+New helper pfb_octet_recover_type() inserted at the new L707 (after pfb_validate_archive()),
+immediately before the `// Function to filter/sanitize user input` comment.
+
+Recovery wired into the final `else` reject block of the PFB_FILTER_FILE_MIME case
+(case PFB_FILTER_FILE_MIME at new L1116–L1133, after Phase-1/2 line shift):
+
+    else {
+        $recovered = NULL;
+        if ($output[0] === 'application/octet-stream' || empty($output[0])) {
+            $recovered = pfb_octet_recover_type(
+                $input[1],
+                array('application/zip','application/gzip','application/x-bzip2','application/x-7z-compressed'),
+                'pfb_validate_archive'
+            );
+        }
+        if ($recovered !== NULL) {
+            pfb_logger("MIME recovered: octet-stream positively identified as \"..."\"", 5);
+            $output[0] = $recovered;
+        } else {
+            pfb_logger(...reject log..., 2);
+            unlink_if_exists($input[1]);
+            return FALSE;
+        }
+    }
+
+On a successful recovery, $output[0] is updated to the canonical type and falls through to
+$result = htmlspecialchars($output[0]) at the new L1135. On NULL (no probe passes), the
+original reject path fires unchanged.
+
+Hostname exceptions confirmed UNTOUCHED:
+  text/x-asm → easylist/easylist.to promotion at new L1109-1112 — unchanged ✓
+  application/octet-stream + ipinfo.io promotion at new L1113-1115 — unchanged ✓
+  Both match via if/elseif BEFORE the else block, so they never reach recovery ✓
+
+POSITIVE-ID ONLY confirmed:
+  Recovery only runs when $output[0] === 'application/octet-stream' || empty($output[0]).
+  pfb_octet_recover_type() returns NULL unless pfb_validate_archive() exits 0 for a type.
+  A NULL return → reject path (unlink + return FALSE). No blanket promotion. ✓
+
+Probe order: application/zip → application/gzip → application/x-bzip2 → application/x-7z-compressed
+  (zip first = the Top1M live case; 7z last = reachable for the first time via recovery)
+
+---
+
+## OctetRecoverTypeTest — names + results
+
+File: tests/php/OctetRecoverTypeTest.php  (#[CoversFunction('pfb_octet_recover_type')])
+
+  [PASS] test_recovers_first_matching_type
+         validator TRUE only for 'application/zip' → returns 'application/zip'
+
+  [PASS] test_returns_first_type_in_list_and_stops_probing
+         validator TRUE for all types → returns 'application/zip' (first in list),
+         and only called once (probing stops on first match; gzip never probed)
+
+  [PASS] test_returns_null_when_all_types_rejected
+         validator always FALSE (junk/HTML blob branch) → returns NULL
+         THIS IS THE "genuinely-unknown octet-stream still rejected" branch (ADR §7) ✓
+
+  [PASS] test_returns_null_on_empty_type_list
+         empty $supported_types → returns NULL immediately
+
+RED BASELINE for OctetRecoverTypeTest (pre-Phase-3):
+  All four tests fail with PHP Fatal Error:
+    "Call to undefined function pfb_octet_recover_type()"
+  The function did not exist before Phase 3. The red baseline is function-absent.
+
+---
+
+## OctetStreamRecoveryWiringTest — names + results
+
+File: tests/php/OctetStreamRecoveryWiringTest.php  (#[CoversFunction('pfb_filter')])
+
+  [PASS] test_octet_stream_archive_recovered_to_zip
+         Fixture: a valid ZipArchive ZIP with 8 NUL/control bytes prepended.
+         Host file(1) returned application/octet-stream for the junk-prefixed ZIP.
+         pfb_validate_archive($path, 'application/zip') → TRUE (bsdtar/libarchive
+         uses backward EOCD scanning + SFX-offset correction; tar -tf exits 0).
+         pfb_filter() returned 'application/zip' (recovered). ✓
+         Guard fired: host DID return application/octet-stream → test ran (not skipped).
+
+  [PASS] test_junk_octet_stream_still_rejected
+         Fixture: str_repeat("\x00\x01\x02\x03", 256) — NUL+ctrl bytes, no archive magic.
+         Host file(1) returned application/octet-stream for the blob.
+         All structural probes failed → pfb_octet_recover_type() returned NULL.
+         pfb_filter() returned FALSE. ✓
+         The "junk-octet-stream-rejected" branch is explicitly asserted:
+           $this->assertFalse($result, '... ADR §7 violation ...')
+         Guard fired: host DID return application/octet-stream → test ran (not skipped).
+
+RED BASELINE for OctetStreamRecoveryWiringTest (pre-Phase-3):
+  test_octet_stream_archive_recovered_to_zip: pfb_filter() returned FALSE
+    (the final else block unconditionally called unlink_if_exists + return FALSE;
+    no recovery path existed).
+  test_junk_octet_stream_still_rejected: pfb_filter() returned FALSE (same).
+    The junk-blob test would have passed pre-Phase-3 coincidentally, but the
+    recovery test is the red→green indicator.
+
+Note on junk blob bytes:
+  The initial attempt used str_repeat("\xDE\xAD\xBE\xEF", 256). On macOS, file(1)
+  returned 'text/plain' for that pattern (high-bytes non-UTF-8 but no NULs). Updated to
+  str_repeat("\x00\x01\x02\x03", 256) (NUL + ctrl bytes) which reliably produces
+  application/octet-stream on macOS and Linux.
+
+---
+
+## PHPUnit summary
+
+  Tests: 1580, Assertions: 14951, Skipped: 4, Failures: 0, Errors: 0
+  (Was 1574/14944/4 in Phase 2; added 6 new tests: 4 OctetRecoverTypeTest + 2 OctetStreamRecoveryWiringTest)
+  Full suite green.
+
+## php -l
+
+  No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  (Pre-existing PHP 8.3/8.5 Deprecated notices on optional-before-required params in
+  pfb_parsed_fail / pfb_download / pfb_dnsbl_parse / pfb_unlock — not introduced here.)
+
+## phpcs
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  → Clean (no output / exit 0).
+  RequirePfbFilter: pfb_octet_recover_type() IS the validation layer (delegates to
+  pfb_validate_archive) — no new exec() at the call site, sniff not triggered.
+  UppercaseBooleanLiteral: FALSE/NULL literals are uppercase throughout. No issues.
+
+---
+
+## Diff stat
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc          |  33 ++++++++++++++++++++++++---
+  tests/php/OctetRecoverTypeTest.php                     | 100 ++++++++++++++++++++++++++
+  tests/php/OctetStreamRecoveryWiringTest.php            | 153 ++++++++++++++++++++++++++++++++++++
+
+  3 files changed (pfblockerng.inc: 30 insertions / 3 deletions; two new test files)
+
+---
+
+## Commit + push
+
+  Commit: (see below — committed after this file)
+  Push:   adr/45-structural-integrity-tests → origin
+
+---
+
+## Watch-outs for Phase 4 (smoke test)
+
+1. Supported-type probe order: application/zip → application/gzip → application/x-bzip2 →
+   application/x-7z-compressed. The live Top1M case is application/zip (first probe, exits 0).
+
+2. Fixture shape for the live smoke: upload a valid ZIP with junk bytes prepended as a feed.
+   pfb_download() calls pfb_filter(PFB_FILTER_FILE_MIME) which now recovers it to
+   'application/zip', then enters the zip branch which runs pfb_validate_archive() (Phase 2 probe).
+   So the successful recovery of the Top1M-shaped case is the end-to-end path to exercise.
+
+3. The 7z branch (application/x-7z-compressed) is now reachable for the first time via recovery
+   — a feed whose file(1) returns octet-stream but structural probe confirms 7z. The Phase 2
+   probe is already wired at that branch's entry point.
+
+4. Red→green smoke: on a fix-reverted package, a junk-prefixed ZIP feed causes pfb_download()
+   to return FALSE (pfb_filter returns FALSE → file_type is ''/FALSE → pfb_download rejects).
+   On the patched package, same feed succeeds (recovered to application/zip, zip branch runs).
+   The pfb_logger "MIME recovered: octet-stream positively identified" line confirms the path.

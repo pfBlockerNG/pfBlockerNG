@@ -1,0 +1,59 @@
+================================================================================
+PHASE 1 PROMPT — Prep: pure catalog index (pfb_feeds_index) + tests
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS1, SS2.1 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management (off devel; create off the
+latest devel if absent). Phase 1 is BEHAVIOUR-PRESERVING: it adds a pure function + tests,
+wired to no caller. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Reconciliation needs a clean, header-keyed view of the catalog. pfblockerng_feeds.json is a
+dict: category (ipv4/ipv6/dnsbl) -> sub-category (PRI1...) -> feeds:[ {status, feed, website,
+url, header, alternate?, past_urls?} ]. This phase distils it into a map, defensively.
+
+REQUIRED READING
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md
+- src/usr/local/www/pfblockerng/pfblockerng_feeds.json (the real shape; note discontinued
+  rows, past_urls, alternate).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc (where feed/catalog parsing helpers live).
+- tests/php/ bootstrap.php + an existing parse test for style; CLAUDE.md — PHP standards,
+  Test coverage (branch + BDD).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered — tests FIRST)
+1. Add a pure function pfb_feeds_index($catalog_array) -> [ header => { url, status,
+   past_urls[], alternate[] } ], walking all categories/sub-categories. Missing keys default
+   safely (no past_urls -> []; no status -> ''). Malformed rows are skipped, never fatal.
+2. Add a small reader that loads + json-decodes the catalog file and hands the array to the
+   pure indexer (keep the pure core separate from the file read for testability).
+3. Tests (PHPUnit): index a fixture catalog containing a normal feed, a discontinued feed, a
+   feed with past_urls, a feed with alternate, and a malformed row; assert the map shape, the
+   skipped malformed row, and defaults.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Pure indexer takes an ARRAY (no file I/O); only the thin reader touches the filesystem.
+- Do NOT wire this into any caller (Phase 4 does). Do NOT change behaviour.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (indexer tests); php -l; PHPStan + phpcs clean.
+- python -m pytest -> green.
+- diff-read: additive; no caller wired.
+
+EXPECTED RESULT
+A pure, tested catalog indexer producing a header-keyed map; nothing consumes it yet.
+
+COMMIT (single)
+    pfblockerng: add pure feeds.json catalog indexer (ADR-33 P1)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/01_Results.txt (plain .txt)
+Record: pfb_feeds_index signature + the map shape; the reader entry point; the fixture catalog;
+verification numbers; go-ahead for Phase 2.
