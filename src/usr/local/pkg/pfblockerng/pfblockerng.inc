@@ -14871,9 +14871,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
-					$header_esc = escapeshellarg($top1m_stage);
+					$top1m_stage_esc = escapeshellarg($top1m_stage);
 					$retval = pfb_download_initial_retval();
-					exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}"), $output, $retval);
+					exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > {$top1m_stage_esc}"), $output, $retval);
 					if (!pfb_download_extraction_succeeded($retval)) {
 						unlink_if_exists($file_download);
 						unlink_if_exists($top1m_stage);
