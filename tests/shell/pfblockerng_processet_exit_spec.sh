@@ -29,8 +29,7 @@ Describe 'processet() exit contract (issue #2683)'
 		runner="${work}/run.sh"
 		mkdir -p "${orig}" "${match}" "${etdir}" "${scratch}"
 
-		# The downloaded ET feed, verbatim: two Block categories (1, 2) and one
-		# Match (3), as "IP,category,score" rows.
+		# The downloaded ET feed: two Block categories (1, 2) and one Match (3).
 		et_csv="$(printf '%s\n' '192.0.2.10,1,127' '198.51.100.20,2,88' '203.0.113.30,3,50')"
 
 		# `ls` sorts the category files, so the selected Block categories
@@ -86,11 +85,9 @@ RUNNER
 	}
 
 	# A child killed the way the appliance's ceiling kills one: SIGXFSZ, which a
-	# shell reports as 128 + 25. The shim stands in for the signal because a real
-	# RLIMIT_FSIZE overrun does not report 153 everywhere -- Darwin's awk catches
-	# the write error and exits 2 -- while the status this pins is the one
-	# pfb_extract_cap_note() keys on. The real ceiling gets its own example below,
-	# asserting refusal rather than a particular status.
+	# shell reports as 128 + 25. The shim stands in for the signal: a real
+	# RLIMIT_FSIZE overrun does not report 153 everywhere (Darwin's awk exits 2),
+	# while 153 is the status pfb_extract_cap_note() keys on.
 	plant_killed_awk() {
 		mkdir -p "${work}/shim"
 		printf '#!/bin/sh\nexit 153\n' > "${work}/shim/awk"
@@ -155,10 +152,8 @@ RUNNER
 			The status should be failure
 			The output should include 'ET processing failed'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
-			# The abort must not half-write the publication either. processet()
-			# rewrites the ".orig" in place, so this is the raw CSV the download
-			# left -- what pfb_download()'s refusal then has to drop, since the
-			# parser would otherwise read the unfiltered feed.
+			# processet() rewrites the ".orig" in place, so this is the raw CSV the
+			# download left -- the state pfb_download()'s refusal then has to drop.
 			The contents of file "${orig}${alias}.orig" should equal "${et_csv}"
 			The stderr should be present
 		End

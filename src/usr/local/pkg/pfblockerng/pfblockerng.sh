@@ -2244,8 +2244,7 @@ case "${1}" in
 		reputation_pmax
 		;;
 	et)
-		# issue #2683: same wiring as the `xlsx` arm below -- the tail's bare
-		# `exitnow` defaults to 0.
+		# issue #2683: same wiring as the `xlsx` arm below.
 		processet
 		exitnow "$?"
 		;;
