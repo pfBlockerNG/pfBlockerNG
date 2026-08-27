@@ -100,6 +100,15 @@ def _trigger_blocks(workflow: Path) -> tuple[str, str]:
     return _block("workflow_call"), _block("workflow_dispatch")
 
 
+def _input_block(trigger_block: str, name: str) -> str:
+    """The `name:` input's OWN sub-block, bounded at the next input key at the same
+    (6-space) indentation. A fixed-length suffix window instead reaches into a sibling
+    input, so an input that loses its own `default:` can pass on its neighbour's."""
+    body = extract_after(trigger_block, f"{name}:\n")
+    sibling = re.search(r"\n      [A-Za-z]", body)
+    return body[: sibling.start()] if sibling else body
+
+
 _JOB_KEY_RE = re.compile(r"^    [A-Za-z_-]+:")
 
 
@@ -148,9 +157,7 @@ def test_pkg_artifact_prefix_declared_in_both_trigger_blocks(workflow: Path) -> 
     call_block, dispatch_block = _trigger_blocks(workflow)
     for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
         assert "pkg_artifact_prefix:" in block, f"{workflow.name}: {name} is missing pkg_artifact_prefix"
-        # the input's own sub-block (description/required/type/default) ends well
-        # within a generous slice; scan that for the default line.
-        sub = extract_after(block, "pkg_artifact_prefix:\n")[:400]
+        sub = _input_block(block, "pkg_artifact_prefix")
         assert re.search(r"^\s*default:\s*\"\"\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s pkg_artifact_prefix must default to '' -- block was:\n{sub}"
         )
@@ -844,7 +851,7 @@ def test_checkout_ref_input_declared_in_both_trigger_blocks(workflow: Path) -> N
     call_block, dispatch_block = _trigger_blocks(workflow)
     for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
         assert "checkout_ref:" in block, f"{workflow.name}: {name} is missing checkout_ref"
-        sub = extract_after(block, "checkout_ref:\n")[:400]
+        sub = _input_block(block, "checkout_ref")
         assert re.search(r"^\s*default:\s*\"\"\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s checkout_ref must default to '' -- block was:\n{sub}"
         )
@@ -889,7 +896,7 @@ def test_release_gate_input_declared_in_both_trigger_blocks(workflow: Path) -> N
     call_block, dispatch_block = _trigger_blocks(workflow)
     for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
         assert "release_gate:" in block, f"{workflow.name}: {name} is missing release_gate"
-        sub = extract_after(block, "release_gate:\n")[:400]
+        sub = _input_block(block, "release_gate")
         assert re.search(r"^\s*default:\s*false\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s release_gate must default to false -- block was:\n{sub}"
         )
