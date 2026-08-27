@@ -178,6 +178,29 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
+	 * Issue #2738 — a successful gzip Blacklist update must drop leftover
+	 * `{feed}.orig` and hash sidecars the pre-#2735 fall-through wrote.
+	 * Nothing consumes them for a Blacklist feed; a zero-length orig is
+	 * the #2632-style misread. Pin the purge immediately before the
+	 * update marker so it cannot hide in the failure arm. Comments and
+	 * docblocks cannot define this scope.
+	 */
+	public function testGzipBlacklistSuccessArmUnlinksStaleOrigAndHashSidecars(): void
+	{
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $gzip === FALSE ? 0 : $gzip);
+		$end = strpos(self::$source, 'else { $reject_detail = array();', $blacklist === FALSE ? 0 : $blacklist);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($blacklist);
+		$this->assertNotFalse($end);
+		$scope = substr(self::$source, $blacklist, $end - $blacklist);
+		$this->assertMatchesRegularExpression(
+			'/foreach \(array\("\{\$file_dwn\}\.orig", "\{\$file_dwn\}\.xxhash128", "\{\$file_dwn\}\.md5"\) as \$blacklist_stale\) \{\s*unlink_if_exists\(\$blacklist_stale\);\s*\}\s*touch\("\{\$pfb\[.dbdir.\]\}\/\{\$filename\}\/\{\$filename\}\.update"\);\s*return PfbDownloadResult::success\(\);/',
+			$scope
+		);
+	}
+
+	/**
 	 * Issue #2635 — the uncompressed Blacklist branch must fail closed.
 	 * `$retval = 0` with no extract reports a successful update while
 	 * category files stay stale or missing. Comments/docblocks cannot
