@@ -23,5 +23,5 @@ def test_install_sh_is_executable_in_the_git_index() -> None:
         cwd=ROOT,
         text=True,
     )
-    mode = out.split()[0]
-    assert mode == "100755", out
+    lines = out.splitlines()
+    assert len(lines) == 1 and lines[0].split()[0] == "100755", out
