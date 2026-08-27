@@ -173,15 +173,23 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	 * pfb_software_check_save() and only then flush config.xml, and the page must carry no
 	 * second, untested write of this field.
 	 *
-	 * LIMITATION, stated rather than implied: this is a source-text gate and cannot prove
-	 * executed behaviour. The page's top-level handler is not executable under the
-	 * page-loader harnesses (they eval() function definitions out of a page), which is why
-	 * #2525 chose extraction in the first place; the executable proof lives in the cases
-	 * above, which drive the extracted function itself.
+	 * LIMITATION, stated rather than implied: this proves the wiring TEXT and cannot prove
+	 * reachability. A handler behind an inverted condition is caught, because the branch's
+	 * opening line is part of the pinned sequence, but a rewrite that keeps the sequence and
+	 * makes it unreachable -- the whole branch inside a dead `if (FALSE)`, or in a function
+	 * nobody calls, or after an unconditional exit -- survives this test. The executable
+	 * proof for this field is the cases above, which drive the extracted function itself.
+	 *
+	 * There is no executable proof of the page's DECISION to call it, because the page's
+	 * top-level handler cannot be run under this harness: including the page after
+	 * tests/php/bootstrap.php exits 255 at its line 31, `require_once('guiconfig.inc')`,
+	 * before any page logic -- the bootstrap's include path carries tests/php/shims and the
+	 * system path, and no guiconfig.inc. That is why #2525 chose extraction, and a runtime
+	 * shim for guiconfig.inc and what it pulls in is tracked separately.
 	 *
 	 * The branch is pinned as ONE literal sequence, with each of its three lines required to
-	 * occur exactly once on the page. Anything that resolves the handler's EXTENT — a scan
-	 * for a closing brace, a brace-matching walk — can select the wrong region and then pass
+	 * occur exactly once on the page. Anything that resolves the handler's EXTENT -- a scan
+	 * for a closing brace, a brace-matching walk -- can select the wrong region and then pass
 	 * against it, which is how review found this assertion vacuous twice: an indented closing
 	 * brace ran a literal scan past the handler, and a '${' interpolation, whose closer is a
 	 * plain '}' token, silently shortened a brace-matching walk. A literal sequence has no
