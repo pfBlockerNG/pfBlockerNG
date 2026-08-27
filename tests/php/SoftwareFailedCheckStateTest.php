@@ -205,11 +205,22 @@ final class SoftwareFailedCheckStateTest extends TestCase
 
 	/**
 	 * pfb_pkg_latest() reports the outcome to its CALLER, which it previously could not:
-	 * off-appliance there is no /usr/local/sbin/pkg, so both calls exit non-zero and the
-	 * attempt is a recorded FAILURE rather than an indistinguishable empty string.
+	 * with no pkg(8) to run, both calls exit non-zero and the attempt is a recorded FAILURE
+	 * rather than an indistinguishable empty string.
+	 *
+	 * This drives the real shellout, so it asserts a fixed outcome only where that shellout
+	 * cannot succeed. On a host that carries the port binary the result depends on that
+	 * host's repository configuration, which is not this case's subject: it skips there
+	 * rather than reporting a red for an environment difference.
 	 */
 	public function testPkgLatestReportsAFailedAttemptToItsCaller(): void
 	{
+		if (is_executable(PFB_PKG_BIN)) {
+			$this->markTestSkipped(
+				'host carries ' . PFB_PKG_BIN . ' — the live read outcome is then repository state, not this rule'
+			);
+		}
+
 		$readOk = NULL;
 		$latest = pfb_pkg_latest(self::NAME, self::REPO, $readOk);
 
@@ -724,9 +735,8 @@ final class SoftwareFailedCheckStateTest extends TestCase
 	 * and report a defect that is not there.
 	 *
 	 * This reads the tier's own constant rather than a phrase of its own, because the
-	 * coupling is the whole point: it is the tier's chosen string that has to discriminate.
-	 * Executed here because this is exactly what reddened all four Tier-A legs on the
-	 * previous head, and a hermetic gate catches it in a second instead of a VM round trip.
+	 * coupling is the whole point: it is the tier's chosen string that has to discriminate,
+	 * and a hermetic gate settles it without a live-VM round trip.
 	 */
 	public function testTheUiTiersFeedbackPhraseMatchesOnlyTheCheckNowBox(): void
 	{
@@ -851,14 +861,21 @@ final class SoftwareFailedCheckStateTest extends TestCase
 			$page,
 			'and gate the row on it — a gate rewritten to a constant renders the row never'
 		);
+		// Scoped to the feedback arm, not searched page-wide: the page happens to carry
+		// exactly one print_info_box and one 'warning' today, so a page-wide search still
+		// fails on a regression -- but it would go quietly vacuous the moment a second
+		// info box is added anywhere on the page.
+		$feedback_at = strpos($page, "(\$_GET['check'] ?? '') === 'failed'");
+		$this->assertNotFalse($feedback_at, 'the failure token must gate the feedback box');
+		$feedback = substr($page, $feedback_at, (int) strpos($page, "\n}\n", $feedback_at) - $feedback_at);
 		$this->assertMatchesRegularExpression(
 			'/print_info_box\(\s*gettext\(/',
-			$page,
+			$feedback,
 			'the Check now feedback renders through the house warning box'
 		);
 		$this->assertStringContainsString(
 			"'warning'",
-			$page,
+			$feedback,
 			'a failed forced check is a warning, not a silent redisplay'
 		);
 	}

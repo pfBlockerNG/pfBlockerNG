@@ -348,8 +348,8 @@ def test_software_failed_check_feedback_is_visible(
           the last-successful-check row rather than replacing it.
 
     The locator is scoped to this message, never to ``.alert-warning`` alone: pfBlockerNG's
-    pending-changes banner is also an alert-warning and whatever ran before this case may have
-    left it set, so a bare class assertion would be about that banner instead of this feedback.
+    pending-changes banner is also an alert-warning and may be set, so a bare class assertion
+    would be about that banner instead of this feedback.
     """
     failed_box = f".alert-warning:has-text('{SOFTWARE_CHECK_FAILED_TEXT}')"
     with software_panel_forced(smoke_vm, "on"):
