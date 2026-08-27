@@ -45,3 +45,8 @@ pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_
 pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present on the runner
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the runner is Linux
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the runner is Linux
+
+# ui -- observed on the live-VM Tier-B browser legs. The `ui-tests` label gates that fan-out,
+# so it runs seldom and this data-dependent skip had never been observed by the gate before;
+# the skip itself predates the PR that first surfaced it (it landed in 5792d6fb).
+ui:tests.smoke.ui.test_browser_misc::test_feeds_alt_radio_submit_wiring  # whether any pre-defined feed exposes an Alternate-URL radio is feed-data dependent; the case skips cleanly when none render

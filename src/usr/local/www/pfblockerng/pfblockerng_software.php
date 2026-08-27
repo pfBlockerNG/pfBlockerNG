@@ -124,8 +124,12 @@ if ($input_errors) {
 // sets this token, so a plain GET — including one served entirely off a stale cache (issue
 // #2379) — stays silent: this box says "the action you asked for failed", never "your cache is
 // old" (issue #2674). Fixed literal comparison, so a hostile or array-valued query is inert.
+//
+// It names the CONTROL the admin pressed, which both distinguishes it from the Status row's
+// standing-state help below and gives the UI tiers a phrase that matches this box alone: while
+// the two shared a sentence, the tiers' "a plain load stays silent" assertion tripped on the row.
 if (($_GET['check'] ?? '') === 'failed') {
-	print_info_box(gettext('The version check could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
+	print_info_box(gettext('Check now could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
 }
 
 // Tab bar (the Software tab is the active one here; gated like every page).
