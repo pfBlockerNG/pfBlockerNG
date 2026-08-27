@@ -812,6 +812,17 @@ jobs:
           /usr/bin/tar --version | grep -q '^bsdtar'
           tar --version | grep -q 'GNU tar'
 
+      - name: Put rsync at /usr/local/bin/rsync
+        # The code under test execs the absolute path /usr/local/bin/rsync (where the
+        # appliance ships it); Debian's package installs /usr/bin/rsync, so without the
+        # symlink the issue #2667 rsync cases skip on every matrix leg while the suite
+        # still reads green -- the same trap as the bsdtar step above.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rsync
+          sudo ln -sf "$(command -v rsync)" /usr/local/bin/rsync
+          /usr/local/bin/rsync --version | grep -qi '^rsync'
+
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2
         with:
