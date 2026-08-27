@@ -562,13 +562,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	 * only an exit gate makes safe. Without the gate an aborted pass reached
 	 * PfbDownloadResult::success() with the unfiltered CSV still published.
 	 *
-	 * The refusal also has to DROP that publication. processet() rewrites the
-	 * '.orig' in place rather than staging, so at the moment the helper fails the
-	 * '.orig' this pass just published is the raw ET CSV — and the apply loop's
-	 * fail-marker fallback parses a '.orig' that is still there. It goes with BOTH
-	 * sidecar families — the content hashes and the conditional-GET validators —
-	 * because a remote feed whose ETag survives answers the next pass with a 304
-	 * and never re-fetches, leaving the list dropped until the feed itself changes.
+	 * The refusal also has to DROP that publication: processet() rewrites the
+	 * '.orig' in place, so what it published is the raw ET CSV the apply loop's
+	 * fail-marker fallback parses — and a surviving ETag would 304 the next pass,
+	 * so both sidecar families go with it.
 	 */
 	public function testEtBodyCapturesAndChecksHelperExit(): void
 	{
@@ -580,23 +577,18 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringContainsString(
 			'exec(pfb_extract_cmd("{$pfb[\'script\']} et {$header_esc} x x x x x '
 			. '{$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}"), $output, $retval);', $scope);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
 		$fail = strpos($scope, 'if (!pfb_download_extraction_succeeded($retval)) {');
 		$this->assertNotFalse($fail, 'the ET branch must gate on the helper exit status');
 		$refusal = substr($scope, $fail);
 		$this->assertStringContainsString('unlink_if_exists("{$orig_download}', $refusal);
-		// The whole suffix SET, not four of five: the empty member is the one that
-		// drops the raw publication itself, which is the invariant the apply loop's
-		// fail-marker fallback turns on. Compared as a set, so reordering the list
-		// -- behaviour-neutral -- cannot fail this.
-		$this->assertSame(1, preg_match('/foreach \(array\((.*?)\) as \$et_sfx\)/', $refusal, $m),
-			'the refusal must sweep a suffix list over the published .orig');
-		$this->assertEqualsCanonicalizing(
-			array('', '.xxhash128', '.md5', '.etag', '.lastmod'),
-			array_map(static fn (string $s): string => trim(trim($s), "'"), explode(',', $m[1])),
-			"the refusal must drop the '.orig' itself and BOTH sidecar families — the content"
-			. ' hashes and the conditional-GET validators');
+		// The whole suffix SET, not four of five: the empty member is what drops the
+		// raw publication the fail-marker fallback would parse. Parsed and compared
+		// canonically so a behaviour-neutral reordering of the literal cannot fail it.
+		preg_match('/foreach \(array\((.*?)\) as \$et_sfx\)/', $refusal, $m);
+		$this->assertEqualsCanonicalizing(array('', '.xxhash128', '.md5', '.etag', '.lastmod'),
+			array_map(static fn (string $s): string => trim(trim($s), "'"), explode(',', $m[1] ?? '')),
+			"the refusal must drop the '.orig' itself and BOTH sidecar families");
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal);
 	}
 
