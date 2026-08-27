@@ -586,10 +586,17 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($fail, 'the ET branch must gate on the helper exit status');
 		$refusal = substr($scope, $fail);
 		$this->assertStringContainsString('unlink_if_exists("{$orig_download}', $refusal);
-		foreach (array('.xxhash128', '.md5', '.etag', '.lastmod') as $sidecar) {
-			$this->assertStringContainsString("'{$sidecar}'", $refusal,
-				"the refusal must drop the {$sidecar} sidecar, or the next pass reuses this one's baseline");
-		}
+		// The whole suffix SET, not four of five: the empty member is the one that
+		// drops the raw publication itself, which is the invariant the apply loop's
+		// fail-marker fallback turns on. Compared as a set, so reordering the list
+		// -- behaviour-neutral -- cannot fail this.
+		$this->assertSame(1, preg_match('/foreach \(array\((.*?)\) as \$et_sfx\)/', $refusal, $m),
+			'the refusal must sweep a suffix list over the published .orig');
+		$this->assertEqualsCanonicalizing(
+			array('', '.xxhash128', '.md5', '.etag', '.lastmod'),
+			array_map(static fn (string $s): string => trim(trim($s), "'"), explode(',', $m[1])),
+			"the refusal must drop the '.orig' itself and BOTH sidecar families — the content"
+			. ' hashes and the conditional-GET validators');
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal);
 	}
 
