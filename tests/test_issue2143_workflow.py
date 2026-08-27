@@ -7,6 +7,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests._workflow_steps import extract_after, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -33,8 +35,8 @@ def test_published_callback_dispatches_exact_release_identity() -> None:
 
 
 def _republish_validate_script() -> str:
-    block = REPUBLISH.split("      - name: Resolve exact immutable Release", 1)[1]
-    script = block.split("        run: |\n", 1)[1].split("\n          git fetch", 1)[0]
+    block = extract_after(REPUBLISH, "      - name: Resolve exact immutable Release")
+    script = extract_between(block, "        run: |\n", "\n          git fetch")
     return textwrap.dedent(script) + "\nexit 0\n"
 
 

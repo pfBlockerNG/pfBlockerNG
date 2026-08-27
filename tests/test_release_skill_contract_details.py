@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._workflow_steps import extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = (
     ROOT / ".agents/skills/release/SKILL.md",
@@ -98,7 +100,7 @@ def test_channel_targets_are_explicit_and_nightly_is_not_branch_bound() -> None:
 
 def test_scripts_readme_nightly_contract_is_branch_independent() -> None:
     content = _text(ROOT / "scripts/README.md")
-    paragraph = content.split("## Release channel contract", 1)[1].split("## ", 1)[0]
+    paragraph = extract_between(content, "## Release channel contract", "## ")
     assert "Nightly is an independent untagged" in paragraph
     assert "pinned source SHA" in paragraph
     assert not any(branch in paragraph for branch in ("`devel`", "`main`", "release/X.Y"))

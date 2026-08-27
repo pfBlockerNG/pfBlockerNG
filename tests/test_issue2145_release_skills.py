@@ -13,6 +13,7 @@ from scripts.release_version import (
     primary_channel_for_tag,
     select_previous_release_tag,
 )
+from tests._workflow_steps import extract_after
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".agents/skills/release/SKILL.md"
@@ -237,7 +238,7 @@ def test_workflow_propagates_trusted_release_contract_outputs() -> None:
 
 
 def test_draft_healthcheck_propagates_final_asset_handoff() -> None:
-    workflow = _text(WORKFLOW).split("  draft-healthcheck:", 1)[1]
+    workflow = extract_after(_text(WORKFLOW), "  draft-healthcheck:")
     for output in (
         "primary_kind:",
         "destination_tuple:",

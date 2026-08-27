@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after, extract_between
 from tests.gitenv import scrubbed_git_env
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -397,7 +398,7 @@ def test_downstream_publish_effects_do_not_run_in_the_draft_workflow() -> None:
 
 def test_the_published_workflow_triggers_on_a_published_release() -> None:
     text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
-    on_block = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    on_block = extract_between(text, "\non:\n", "\npermissions:\n")
     assert "release:" in on_block, on_block
     assert "types: [published]" in on_block, on_block
 
@@ -674,11 +675,11 @@ def test_the_published_workflow_reads_the_tag_from_the_release_payload() -> None
 
 def test_release_dispatch_requires_explicit_channel_and_source() -> None:
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    dispatch = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
-    channel = dispatch.split("      channel:\n", 1)[1].split("\n\n", 1)[0]
+    dispatch = extract_between(text, "\non:\n", "\npermissions:\n")
+    channel = extract_between(dispatch, "      channel:\n", "\n\n")
     assert re.search(r"^\s+type:\s*choice\s*$", channel, re.MULTILINE), channel
     assert re.search(r"^\s+options:\s*\[stable, testing, edge\]\s*$", channel, re.MULTILINE), channel
-    source = dispatch.split("      source:\n", 1)[1].split("\n\n", 1)[0]
+    source = extract_between(dispatch, "      source:\n", "\n\n")
     assert re.search(r"^\s+required:\s*true\s*$", source, re.MULTILINE), source
     assert "release/X.Y" in source, source
 
@@ -955,9 +956,9 @@ def test_release_33_decision_and_matrix_bindings_are_not_bypassed() -> None:
 
 def test_force_suites_input_is_declared_boolean_and_defaults_off() -> None:
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    dispatch = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    dispatch = extract_between(text, "\non:\n", "\npermissions:\n")
     assert "force_suites:" in dispatch, "release.yml must offer a force_suites dispatch input"
-    block = dispatch.split("      force_suites:\n", 1)[1].split("\n\n", 1)[0]
+    block = extract_between(dispatch, "      force_suites:\n", "\n\n")
     assert re.search(r"^\s+type:\s*boolean\s*$", block, re.MULTILINE), block
     assert re.search(r"^\s+default:\s*false\s*$", block, re.MULTILINE), block
 
@@ -1129,9 +1130,9 @@ def test_tag_step_refuses_existing_tags_without_exact_channel_metadata(tmp_path:
 
 def test_retag_input_is_declared_boolean_and_defaults_off() -> None:
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    dispatch = text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    dispatch = extract_between(text, "\non:\n", "\npermissions:\n")
     assert "retag:" in dispatch, "release.yml must offer a retag dispatch input"
-    block = dispatch.split("      retag:\n", 1)[1].split("\n\n", 1)[0]
+    block = extract_between(dispatch, "      retag:\n", "\n\n")
     assert re.search(r"^\s+type:\s*boolean\s*$", block, re.MULTILINE), block
     assert re.search(r"^\s+default:\s*false\s*$", block, re.MULTILINE), block
 
@@ -1155,7 +1156,7 @@ def test_only_the_pin_job_may_delete_and_it_says_why() -> None:
     must be justified in place rather than silently widened."""
     body = "\n".join(_jobs()["prepare-release"])
     assert "contents: write" in body, body
-    assert "retag" in body.split("contents: write", 1)[1][:300], (
+    assert "retag" in extract_after(body, "contents: write")[:300], (
         "the write scope must name the retag deletion as its reason"
     )
     deleting_jobs = {name for name, lines in _jobs().items() if "gh release delete" in "\n".join(lines)}

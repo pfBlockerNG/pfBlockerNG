@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 _LABEL = re.compile(r'--label "([^"]+)"')
@@ -33,7 +35,7 @@ def _issue_creation_steps(path: Path) -> list[str]:
 
 
 def _script(step: str) -> str:
-    return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+    return "\n".join(line[10:] for line in extract_after(step, "        run: |\n").splitlines())
 
 
 def _run_script(
@@ -46,7 +48,7 @@ def _run_script(
     extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     source = path.read_text(encoding="utf-8")
-    tail = source.split(f"      - name: {step_name}\n", 1)[1]
+    tail = extract_after(source, f"      - name: {step_name}\n")
     step = re.split(r"\n(?:      - name:|  [a-z][a-z0-9_-]*:)", tail, maxsplit=1)[0]
     script = _script(step).replace("${{ steps.report.outputs.body_file }}", str(tmp_path / "body.md"))
     log = tmp_path / "gh.log"

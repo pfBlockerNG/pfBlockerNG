@@ -23,6 +23,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from tests._workflow_steps import extract_after, extract_between, extract_job, extract_step
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "version-tracker.yml"
 
@@ -86,9 +88,9 @@ BETA_2607 = {
 
 def _step_script(step_name: str) -> str:
     source = WORKFLOW.read_text(encoding="utf-8")
-    step = source.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+    step = extract_step(source, step_name)
     body: list[str] = []
-    for line in step.split("        run: |\n", 1)[1].splitlines():
+    for line in extract_after(step, "        run: |\n").splitlines():
         if not line.strip():
             body.append("")
         elif line.startswith("          "):
@@ -262,7 +264,7 @@ exit 0
         # Review F2: a wedged guest command must not hold a runner for the
         # 360-minute default
         source = WORKFLOW.read_text(encoding="utf-8")
-        job = source.split("\n  reconcile:\n", 1)[1].split("\n    steps:", 1)[0]
+        job = extract_between(source, "\n  reconcile:\n", "\n    steps:")
         assert "timeout-minutes:" in job
 
 
@@ -513,7 +515,7 @@ class TestReconcileMatrixSource:
     def test_reconcile_steps_consume_the_route_matrix(self) -> None:
         # Wiring pin: every reconcile step reads the never-deduped view.
         source = WORKFLOW.read_text(encoding="utf-8")
-        reconcile = source.split("\n  reconcile:\n", 1)[1]
+        reconcile = extract_after(source, "\n  reconcile:\n")
         assert "BUILD_MATRIX" not in reconcile
         assert reconcile.count("ROUTE_MATRIX:") >= 3
 
@@ -558,18 +560,18 @@ class TestReconcileMatrixSource:
         # would skip this job); and the resolve step must degrade like every
         # other data step in this best-effort job.
         source = WORKFLOW.read_text(encoding="utf-8")
-        reconcile = source.split("\n  reconcile:\n", 1)[1].split("\n  probe:", 1)[0]
+        reconcile = extract_job(source, "reconcile")
         assert "needs: read-matrix" not in reconcile
-        resolve = reconcile.split("- name: Resolve the route matrix", 1)[1].split("\n      - name:", 1)[0]
+        resolve = extract_between(reconcile, "- name: Resolve the route matrix", "\n      - name:")
         assert "continue-on-error: true" in resolve
 
     def test_reconcile_uploads_the_facts_tree(self) -> None:
         # issue #1848: an intermittent boot failure is undiagnosable once the
         # runner is gone — the facts must outlive it.
         source = WORKFLOW.read_text(encoding="utf-8")
-        reconcile = source.split("\n  reconcile:\n", 1)[1]
+        reconcile = extract_after(source, "\n  reconcile:\n")
         assert "actions/upload-artifact" in reconcile
-        upload = reconcile.split("actions/upload-artifact", 1)[1][:400]
+        upload = extract_after(reconcile, "actions/upload-artifact")[:400]
         assert "facts" in upload
         # the window an intermittent failure gets investigated in
         assert "retention-days: 14" in upload

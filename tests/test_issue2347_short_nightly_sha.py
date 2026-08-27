@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts import release_version as rv
+from tests._workflow_steps import extract_between
 
 ROOT = Path(__file__).resolve().parent.parent
 NIGHTLY_WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
@@ -30,7 +31,7 @@ def test_nightly_workflow_shortens_only_the_package_version_sha() -> None:
 
 def test_smoke_fixture_keeps_full_sha_annotation() -> None:
     workflow = SMOKE_WORKFLOW.read_text(encoding="utf-8")
-    nightly = workflow.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
+    nightly = extract_between(workflow, "- name: Build a nightly .pkg", "\n      # ADR-24")
 
     assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in nightly
     assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHORT_SHA}"' in nightly

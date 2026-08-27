@@ -11,6 +11,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from tests._workflow_steps import extract_after
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # `pip` and `pip3` name the same installer, and both spellings are on a runner's PATH.
@@ -28,7 +30,7 @@ def _pinned_benchmark_packages() -> set[str]:
 
 def _benchmarks_job() -> str:
     """The `benchmarks` job of test.yml, sliced at the next job key."""
-    rest = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8").split("\n  benchmarks:\n", 1)[1]
+    rest = extract_after((ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8"), "\n  benchmarks:\n")
     end = re.search(r"^  [A-Za-z0-9_.-]+:\s*$", rest, re.MULTILINE)
     return rest[: end.start()] if end else rest
 

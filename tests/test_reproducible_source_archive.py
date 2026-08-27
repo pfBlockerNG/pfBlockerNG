@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 
+from tests._workflow_steps import extract_before, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build-source-archive.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
@@ -400,7 +402,7 @@ def test_resolved_output_directory_replacement_uses_opened_identity(
 
 def _release_job() -> str:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    return workflow.split("  release:", 1)[1].split("\n  # ── 2b", 1)[0]
+    return extract_between(workflow, "  release:", "\n  # ── 2b")
 
 
 def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
@@ -408,7 +410,7 @@ def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
     archive_name = "      - name: Build source archive"
     pin_start = release_job.index(pin_name)
     archive_start = release_job.index(archive_name)
-    pin_step = release_job[pin_start:].split("\n      - name:", 1)[0]
+    pin_step = extract_before(release_job[pin_start:], "\n      - name:")
 
     assert "uses: actions/setup-python@v6" in pin_step
     assert 'python-version: "3.11.15"' in pin_step
@@ -417,7 +419,7 @@ def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
 
 def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
     release_job = _release_job()
-    archive_step = release_job.split("      - name: Build source archive", 1)[1].split("\n      - name:", 1)[0]
+    archive_step = extract_between(release_job, "      - name: Build source archive", "\n      - name:")
 
     assert "runs-on: ubuntu-24.04" in release_job
     _assert_archive_tool_pin_precedes_build(release_job)

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
@@ -234,8 +236,8 @@ def test_the_release_draft_step_is_gated_on_an_explicit_false() -> None:
 def test_dry_run_input_is_declared_boolean() -> None:
     """The dispatch form itself must only offer two values, not free-form text."""
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
-    dispatch = workflow_text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
-    dry_run_block = dispatch.split("      dry_run:\n", 1)[1].split("\n\n", 1)[0]
+    dispatch = extract_between(workflow_text, "\non:\n", "\npermissions:\n")
+    dry_run_block = extract_between(dispatch, "      dry_run:\n", "\n\n")
     assert re.search(r"^        type:\s*boolean\s*$", dry_run_block, re.MULTILINE), (
         f"dry_run input must declare `type: boolean`; block was:\n{dry_run_block}"
     )
@@ -248,8 +250,8 @@ def test_dry_run_input_defaults_to_the_safe_value() -> None:
     false and a dispatch that simply omits the input publishes for real.
     """
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
-    dispatch = workflow_text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
-    dry_run_block = dispatch.split("      dry_run:\n", 1)[1].split("\n\n", 1)[0]
+    dispatch = extract_between(workflow_text, "\non:\n", "\npermissions:\n")
+    dry_run_block = extract_between(dispatch, "      dry_run:\n", "\n\n")
     assert re.search(r"^        default:\s*(true|'true'|\"true\")\s*$", dry_run_block, re.MULTILINE), (
         f"dry_run input must default to true (a dry run); block was:\n{dry_run_block}"
     )
@@ -262,7 +264,7 @@ def test_metadata_step_rejects_non_boolean_dry_run() -> None:
     never reaches a downstream job/output at all.
     """
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
-    meta_step = workflow_text.split("id: meta\n", 1)[1].split("\n      - name:", 1)[0]
+    meta_step = extract_between(workflow_text, "id: meta\n", "\n      - name:")
 
     guard_match = re.search(r'case "\$DRY_RUN" in\n(.*?)\n[ \t]*esac', meta_step, re.DOTALL)
     assert guard_match is not None, (
