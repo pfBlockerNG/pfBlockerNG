@@ -249,6 +249,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringContainsString("if (\$file_type == 'application/x-tar') {", $scope);
 		$this->assertStringContainsString('pfb_stage_publish_dir', $scope);
 		$this->assertStringContainsString('/usr/bin/tar -xf', $scope);
+		// issue #2632 smoke: downloadPath may end in .tar, not .tar.gz; WORD rejects a leftover dot.
+		$this->assertStringContainsString("basename(basename(\"{\$file_esc}\", '.tar.gz'), '.tar')", $scope);
 		$reject = strpos($scope, "pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);");
 		$tar = strpos($scope, "if (\$file_type == 'application/x-tar') {");
 		$this->assertNotFalse($reject);

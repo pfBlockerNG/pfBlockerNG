@@ -14933,7 +14933,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 					@rename("{$file_download}", strstr("{$file_download}", '.raw', TRUE));
 					$file_esc = trim(escapeshellarg("{$file_dwn}"), "'");
-					$filename = basename("{$file_esc}", '.tar.gz');
+					$filename = basename(basename("{$file_esc}", '.tar.gz'), '.tar');
 					if (empty(pfb_filter($filename, PFB_FILTER_WORD, 'pfb_download category'))) {
 						pfb_logger("\n Invalid filename [{$filename}]", 1);
 						return PfbDownloadResult::failure();
