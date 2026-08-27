@@ -34,6 +34,8 @@ phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWith
 phpunit:RsyncSizeRefusalTest::test_rsync_body_over_the_ceiling_is_refused_with_a_named_reason  # macOS host lacks /usr/local/bin/rsync (openrsync lives at /usr/bin); Linux CI installs it there (issue #2667)
 phpunit:RsyncSizeRefusalTest::test_rsync_body_under_the_ceiling_still_downloads  # macOS host lacks /usr/local/bin/rsync; Linux CI installs it there (issue #2667)
 phpunit:RsyncSizeRefusalTest::test_rsync_fetch_under_a_kernel_tiny_ceiling_never_succeeds  # macOS host lacks /usr/local/bin/rsync; Linux CI installs it there (issue #2667)
+phpunit:PfbTarMimeRejectionTest::test_tar_bzip2_is_accepted_at_inner_gate  # ext-bz2 absent on some host PHP builds; CI loads it
+phpunit:PfbTarMimeRejectionTest::test_plain_bzip2_remains_accepted  # ext-bz2 absent on some host PHP builds; CI loads it
 
 # ShellSpec -- macOS/BSD host lacks the GNU stat/date/touch branch exercised in Linux CI.
 shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3) lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)  # GNU-only off-box branch; BSD branch is covered live by ADR-04 smoke

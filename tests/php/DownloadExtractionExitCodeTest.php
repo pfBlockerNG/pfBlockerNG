@@ -56,7 +56,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($geoip);
 		$this->assertNotFalse($asn);
 		$scope = substr(self::$source, $geoip, $asn - $geoip);
-		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xzf .*\\$output, \\$retval\);/', $scope);
+		// issue #2638: bsdtar auto-detects compression; -xf serves gzip and plain tar.
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertStringContainsString('-C {$pfb[\'geoipshare\']}', $scope);
+		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
@@ -336,6 +339,53 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringNotContainsString('pfb_stage_publish', $reject_scope);
 		$this->assertStringNotContainsString('tar -xf', $reject_scope);
 		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $reject_scope);
+	}
+
+	/**
+	 * Issue #2638 B7 — uncompressed geoip x-tar must not tar -C a .mmdb file
+	 * path ($header). Disk-writing extract goes to geoipshare and keeps ADR-46.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testUncompressedGeoipTarDoesNotExtractIntoHeaderFile(): void
+	{
+		$uncomp = strpos(self::$source, "if (\$type == 'geoip' || \$type == 'asn')");
+		$top1m = strpos(self::$source, "if (\$type == 'top1m') {", $uncomp === FALSE ? 0 : $uncomp);
+		$this->assertNotFalse($uncomp);
+		$this->assertNotFalse($top1m);
+		$scope = substr(self::$source, $uncomp, $top1m - $uncomp);
+		$this->assertStringNotContainsString(
+			'-C {$header_esc}',
+			$scope,
+			'geoip tar -C must be geoipshare, not $header (.mmdb file)'
+		);
+	}
+
+	/**
+	 * Issue #2638 B9 — glob() matches directories, so a *domains directory
+	 * satisfies an empty($list) guard. Category publish must count files.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testBlacklistEmptyTreeGuardCountsFilesNotDirectories(): void
+	{
+		$this->assertStringContainsString(
+			"array_filter(\$list, 'is_file')",
+			self::$source,
+			'glob() of staged categories must drop directory hits before the empty-tree guard'
+		);
+	}
+
+	/**
+	 * Issue #2638 B2 — a plain-tar TOP1M body must extract, not copy-as-text.
+	 * Route into the zip/container archive branch. Comments/docblocks cannot
+	 * define this scope.
+	 */
+	public function testPlainTarTop1mRoutesThroughArchiveExtract(): void
+	{
+		$this->assertStringContainsString(
+			"\$file_type == 'application/x-tar' && \$type == 'top1m'",
+			self::$source,
+			'plain tar TOP1M must extract as a container archive, not copy-as-text'
+		);
 	}
 
 	/**
