@@ -46,5 +46,12 @@ Grok specifics:
   **not** arm it as background bash: that notifies only on process **exit**, and
   `serve` never exits on a message (probed 2026-08-27: unread piled for hours while
   the SSH serve stayed alive; the 10 h harness cap then killed it and that exit
-  finally woke the session). One-shot form is `pfb-msg watch`. See
-  [`.grok/rules/bus.md`](../../.grok/rules/bus.md) (always scanned).
+  finally woke the session). One-shot form is `pfb-msg watch`.
+  **Worktree-scope hole (same day, second stall):** `.grok/rules/` is loaded from
+  *cwd's* checkout. A detached/stale session tree does not contain `bus.md`, and
+  auto-compact does not re-fire SessionStart — so a docs-only rule in the repo is
+  not enough. Install `sh .grok/hooks/install-home` so `~/.grok/rules/bus.md`
+  and `~/.grok/hooks/bus.json` load on every Grok session on the box. PreToolUse
+  denies bash-`serve`; Stop blocks on missing monitor, bash-`serve`, or unread
+  peek. Owner off-switch: `~/.grok/pfb-msg-off`. Do not long-block the turn on
+  CI while the bus is live. See [`.grok/rules/bus.md`](../../.grok/rules/bus.md).
