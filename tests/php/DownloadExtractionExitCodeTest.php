@@ -554,6 +554,28 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}")', $scope);
 	}
 
+	/**
+	 * pfb_download() hands the ET IQRisk feed to the shell helper, which splits it
+	 * into per-category files and republishes the feed from the selected ones;
+	 * issue #2683 gave that helper an exit contract, so this branch is pinned like
+	 * its siblings — captured exec, nonzero-exit gate, and the ceiling wrap that
+	 * only an exit gate makes safe. Without the gate an aborted pass reached
+	 * PfbDownloadResult::success() with the unfiltered CSV still published.
+	 */
+	public function testEtBodyCapturesAndChecksHelperExit(): void
+	{
+		$start = strpos(self::$source, "if (strpos(\$list_url, 'iprepdata.txt') !== FALSE) {");
+		$this->assertNotFalse($start, 'the ET branch must still be in pfb_download()');
+		$brace = strpos(self::$source, '{', $start);
+		$this->assertNotFalse($brace);
+		$scope = substr(self::$source, $start, self::closingBraceExclusive(self::$source, $brace) - $start);
+		$this->assertStringContainsString(
+			'exec(pfb_extract_cmd("{$pfb[\'script\']} et {$header_esc} x x x x x '
+			. '{$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}"), $output, $retval);', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
+	}
+
 	/** Exclusive end index of the brace block whose `{` is at `$openBrace`. */
 	private static function closingBraceExclusive(string $source, int $openBrace): int
 	{
