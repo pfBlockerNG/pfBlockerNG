@@ -38,14 +38,14 @@ shell_id = ""
 for t in d.get("backgroundTasks") or []:
     if not isinstance(t, dict):
         continue
+    typ = str(t.get("type") or "")
     blob = " ".join(str(t.get(k) or "") for k in ("type", "command", "description"))
-    if "pfb-msg" in blob and "serve" in blob:
-        typ = str(t.get("type") or "")
-        if typ == "monitor":
-            has_monitor = 1
-        elif typ == "shell":
-            has_shell = 1
-            shell_id = str(t.get("id") or "")
+    # Monitor description is the human label (often "grok-dev bus"), not the argv.
+    if typ == "monitor" and ("pfb-msg" in blob or "grok-dev bus" in blob):
+        has_monitor = 1
+    elif typ == "shell" and "pfb-msg" in blob and "serve" in blob:
+        has_shell = 1
+        shell_id = str(t.get("id") or "")
 print("has_monitor=%d; has_shell_serve=%d; shell_id=%s" % (
     has_monitor, has_shell, json.dumps(shell_id)))
 ' 2>/dev/null)" || { has_monitor=0; has_shell_serve=0; shell_id=""; }
