@@ -94,12 +94,6 @@ CODEGRAPH
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 case "$1" in
-  extract)
-    [ "$#" -eq 3 ] && [ "$3" = --code-only ] || exit 9
-    printf 'graphify:%s:%s:%s\n' "$1" "$2" "$3" >> "$WB_DEFAULT_TOOL_LOG"
-    mkdir -p "$2/graphify-out"
-    true > "$2/graphify-out/graph.json"
-    ;;
   update)
     [ "$#" -eq 2 ] || exit 9
     printf 'graphify:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
@@ -155,7 +149,8 @@ GIT
     The stderr should include 'Preparing worktree'
     The stderr should include 'Initializing CodeGraph in'
     The contents of file "$events" should equal "$(printf 'fetch\nadd')"
-    The contents of file "$default_tool_log" should equal "$(printf 'codegraph:init:%s/default-init\ngraphify:extract:%s/default-init:--code-only' "$fixture" "$fixture")"
+    The contents of file "$default_tool_log" should equal "codegraph:init:$fixture/default-init"
+    The stderr should include 'run /graphify'
   End
 
   It 'aborts a configured origin fetch failure before add or initialization'

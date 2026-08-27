@@ -43,13 +43,6 @@ CODEGRAPH
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 case "$1" in
-  extract)
-    [ "$#" -eq 3 ] && [ "$3" = --code-only ] || exit 9
-    printf 'graphify:%s:%s:%s\n' "$1" "$2" "$3" >> "$WORKTREE_TOOL_LOG"
-    [ "${GRAPHIFY_RC:-0}" -eq 0 ] || exit "$GRAPHIFY_RC"
-    mkdir -p "$2/graphify-out"
-    true > "$2/graphify-out/graph.json"
-    ;;
   update)
     [ "$#" -eq 2 ] || exit 9
     printf 'graphify:%s:%s\n' "$1" "$2" >> "$WORKTREE_TOOL_LOG"
@@ -86,18 +79,20 @@ SERENA
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'runs CodeGraph then Graphify and skips Serena when OMP marks the invoking harness'
+  It 'runs CodeGraph, skips the first Graphify build, and skips Serena when OMP marks the invoking harness'
     When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only' "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "codegraph:init:$worktree"
     The stderr should include 'Initializing CodeGraph in'
+    The stderr should include 'run /graphify'
   End
 
-  It 'runs CodeGraph then Graphify and skips Serena when PI marks the invoking harness'
+  It 'runs CodeGraph, skips the first Graphify build, and skips Serena when PI marks the invoking harness'
     When run env PI_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only' "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "codegraph:init:$worktree"
     The stderr should include 'Initializing CodeGraph in'
+    The stderr should include 'run /graphify'
   End
 
   It 'refreshes an existing Graphify root graph instead of extracting it again'
@@ -129,31 +124,33 @@ SERENA
     The stderr should include 'graphify'
   End
 
-  It 'returns nonzero when initial Graphify extraction fails after CodeGraph succeeds'
+  It 'returns nonzero when refreshing an existing Graphify root graph fails'
+    mkdir -p "$worktree/graphify-out"
+    true > "$worktree/graphify-out/graph.json"
     When run env OMP_CLI=1 GRAPHIFY_RC=19 sh "$script_abs" "$worktree"
     The status should not equal 0
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only' "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:update:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
   End
 
   It 'runs Serena project indexing at the exact root outside OMP when Serena is present'
     When run sh "$script_abs" "$worktree"
     The status should equal 0
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only\nserena:project:index:%s' "$worktree" "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\nserena:project:index:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
   End
 
   It 'skips absent Serena outside OMP without weakening mandatory initialization'
     When run env PATH="$no_serena" sh "$script_abs" "$worktree"
     The status should equal 0
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only' "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "codegraph:init:$worktree"
     The stderr should include 'Initializing CodeGraph in'
   End
 
   It 'propagates Serena indexing failure'
     When run env SERENA_RC=23 sh "$script_abs" "$worktree"
     The status should equal 23
-    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:extract:%s:--code-only\nserena:project:index:%s' "$worktree" "$worktree" "$worktree")"
+    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\nserena:project:index:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
   End
 End
