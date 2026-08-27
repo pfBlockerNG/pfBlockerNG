@@ -15211,7 +15211,15 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
-				exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
+				// issue #2683: gated on processet()'s exit status -- which is what lets
+				// issue #2658's ceiling ride along here. A helper killed at the ceiling
+				// exits non-zero and the feed is refused instead of republished from a
+				// truncated category split.
+				exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $output, $retval);
+				if (!pfb_download_extraction_succeeded($retval)) {
+					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					return PfbDownloadResult::failure();
+				}
 			}
 				return PfbDownloadResult::success();
 		}

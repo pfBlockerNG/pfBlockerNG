@@ -291,7 +291,7 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *
 	 * The allow-list holds each exempt call's WHOLE statement, terminator included,
 	 * not a prefix of it. A prefix would exempt everything that merely starts the
-	 * same way, so `exec("{$pfb['script']} et" . $anything)` -- a genuinely
+	 * same way, so `exec("{$pfb['script']} asn_table" . $anything)` -- a genuinely
 	 * unguarded extraction wearing an exempt call's opening -- would pass. Changing
 	 * an exempt call means updating its entry here, which is the point: the
 	 * exemption is for that call as written, not for its first few characters.
@@ -302,11 +302,10 @@ final class DownloadSizeCeilingTest extends TestCase
 			// Helper-script calls that post-process an ALREADY-extracted text feed.
 			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
 			'exec("{$pfb[\'script\']} asn_table {$elog}");',
-			'exec("{$pfb[\'script\']} et {$header_esc} x x x x x {$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}");',
 			// Lists an archive; extracts nothing.
 			'exec("/usr/bin/tar -tf {$file_dwn_esc}");',
-			// Capped. This one stays a prefix: it covers ten call sites with ten
-			// different argument lists. So a command concatenated onto a capped call
+			// Capped. This one stays a prefix: it covers every capped call site, each
+			// with its own argument list. So a command concatenated onto a capped call
 			// is invisible HERE -- but not uncapped: ulimit is process-scoped, so the
 			// prefix pfb_extract_cmd() returns still bounds whatever follows it in the
 			// same exec(). Probed with a real over-ceiling tar appended to a wrapped
