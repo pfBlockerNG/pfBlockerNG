@@ -900,10 +900,6 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
-        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
-        # runner image's preinstalled Node, which satisfies npx/node --test here.
-        continue-on-error: true
         uses: actions/setup-node@v7
         with:
           node-version: '24.19.0'
@@ -930,10 +926,6 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
-        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
-        # runner image's preinstalled Node, which satisfies npm/esbuild here.
-        continue-on-error: true
         uses: actions/setup-node@v7
         with:
           node-version: '24.19.0'
