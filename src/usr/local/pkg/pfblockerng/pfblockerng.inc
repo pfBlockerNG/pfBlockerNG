@@ -15212,12 +15212,18 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
 				// issue #2683: gated on processet()'s exit status -- which is what lets
-				// issue #2658's ceiling ride along here. A helper killed at the ceiling
-				// exits non-zero and the feed is refused instead of republished from a
-				// truncated category split.
+				// issue #2658's ceiling ride along here.
 				exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					// The '.orig' this pass published is the raw ET CSV (processet() rewrites
+					// it in place), which the apply loop's fail-marker fallback would parse.
+					// Both sidecar families go too (pfb_force_clear_validators()' suffix set)
+					// or a remote feed answers the next pass with a 304 and never re-fetches.
+					foreach (array('', '.xxhash128', '.md5', '.etag', '.lastmod') as $et_sfx) {
+						unlink_if_exists("{$orig_download}{$et_sfx}");
+					}
+					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
 			}
