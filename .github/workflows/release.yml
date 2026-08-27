@@ -1263,7 +1263,8 @@ jobs:
             release/3.3) EXTRA_PKGS='[]' ;;
             *) EXTRA_PKGS="$MATRIX_EXTRA_PKGS" ;;
           esac
-          echo "extra_pkgs=${EXTRA_PKGS}" >> "$GITHUB_OUTPUT"
+          EXTRA_PKGS="$(printf '%s' "$EXTRA_PKGS" | jq -c .)"
+          printf 'extra_pkgs=%s\n' "$EXTRA_PKGS" >> "$GITHUB_OUTPUT"
 
       - name: Write the destination-bound build record
         env:

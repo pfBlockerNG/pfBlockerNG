@@ -826,6 +826,30 @@ def test_release_33_never_runs_live_suites(tmp_path: Path, tag: str, force_suite
     assert outputs["run_suites"] == "false", outputs
 
 
+def _parse_github_outputs(path: Path) -> dict[str, str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    outputs: dict[str, str] = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if "<<" in line.partition("=")[0]:
+            key, delimiter = line.split("<<", 1)
+            assert key and delimiter, f"invalid GitHub output record: {line!r}"
+            value_lines: list[str] = []
+            index += 1
+            while index < len(lines) and lines[index] != delimiter:
+                value_lines.append(lines[index])
+                index += 1
+            assert index < len(lines), f"unterminated GitHub output record for {key!r}"
+            outputs[key] = "\n".join(value_lines)
+        else:
+            key, separator, value = line.partition("=")
+            assert key and separator, f"invalid GitHub output record: {line!r}"
+            outputs[key] = value
+        index += 1
+    return outputs
+
+
 def _run_extra_pkgs_decision(tmp_path: Path, source: str, extra_pkgs: str) -> str:
     script = _step_run_script(_step(_jobs()["build-pkgs-portable"], "Resolve release-line extras"))
     output_file = tmp_path / "extra_pkgs_output"
@@ -843,16 +867,27 @@ def _run_extra_pkgs_decision(tmp_path: Path, source: str, extra_pkgs: str) -> st
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    return output_file.read_text().removeprefix("extra_pkgs=").strip()
+    outputs = _parse_github_outputs(output_file)
+    assert set(outputs) == {"extra_pkgs"}, outputs
+    return outputs["extra_pkgs"]
 
 
 def test_release_33_suppresses_matrix_extra_packages(tmp_path: Path) -> None:
     assert _run_extra_pkgs_decision(tmp_path, "release/3.3", '["textproc/py-charset-normalizer"]') == "[]"
 
 
-def test_other_release_lines_keep_matrix_extra_packages(tmp_path: Path) -> None:
-    extras = '["textproc/py-charset-normalizer"]'
-    assert _run_extra_pkgs_decision(tmp_path, "release/4.0", extras) == extras
+@pytest.mark.parametrize(
+    "extra_pkgs",
+    [
+        [],
+        ["textproc/py-charset-normalizer"],
+        ["textproc/py-charset-normalizer", "security/ca_root_nss"],
+        ["category/line\nbreak", "__EXTRA_PKGS__", "category/name<<__EXTRA_PKGS__", 'category/quote"and\\slash'],
+    ],
+)
+def test_other_release_lines_keep_matrix_extra_packages(tmp_path: Path, extra_pkgs: list[str]) -> None:
+    rendered = json.dumps(extra_pkgs, indent=2)
+    assert json.loads(_run_extra_pkgs_decision(tmp_path, "release/4.0", rendered)) == extra_pkgs
 
 
 def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -> None:
