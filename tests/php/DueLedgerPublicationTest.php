@@ -31,9 +31,16 @@ final class DueLedgerPublicationTest extends TestCase
 		], $this->dir);
 
 		$this->assertTrue($result, 'a valid ledger entry must report successful publication');
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model,
+			'harness: the writer needs a resolvable config generation to stamp against');
 		$this->assertSame(
-			['dcc' => ['last_run' => 100, 'next_due' => 200, 'jitter' => 0]],
-			json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE)
+			[
+				'_meta' => ['schema' => 1, 'config_hash' => $model['config_hash']],
+				'dcc' => ['last_run' => 100, 'next_due' => 200, 'jitter' => 0],
+			],
+			json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE),
+			'the published document must carry the row plus the stamp its own cache reader requires'
 		);
 	}
 
