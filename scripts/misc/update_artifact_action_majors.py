@@ -172,14 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="exit non-zero if _KNOWN_ARTIFACT_MAJORS is out of date vs a fresh fetch; changes nothing",
     )
-    parser.add_argument(
-        "--target",
-        type=Path,
-        default=None,
-        help="hygiene test path (default: tests/test_issue2231_workflow_hygiene.py)",
-    )
     args = parser.parse_args(argv)
-    target = args.target if args.target is not None else DEFAULT_HYGIENE_FILE
+    target = DEFAULT_HYGIENE_FILE
 
     majors = {kind: parse_tag_refs(fetch_tag_payload(kind)) for kind in KINDS}
     require_plausible(majors)
