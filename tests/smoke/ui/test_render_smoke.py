@@ -2967,7 +2967,10 @@ def test_software_actions_link_to_package_manager(
 _SOFTWARE_CHECKED_MARKER = "pfb-sw-checked"
 _SOFTWARE_FAILED_MARKER = "pfb-sw-check-failed"
 _SOFTWARE_CHECK_FAILED_QUERY = "?check=failed"
-_SOFTWARE_CHECK_FAILED_TEXT = "could not read the pfBlockerNG repository catalogue"
+# Matches the Check-now info box ALONE: the Status row's help text also says "could not read
+# the pfBlockerNG repository catalogue", so keying on that sentence made the "a plain load
+# stays silent" assertion trip on the row. SoftwareFailedCheckStateTest pins the uniqueness.
+_SOFTWARE_CHECK_FAILED_TEXT = "Check now could not read"
 
 
 def test_software_page_shows_a_failed_catalogue_check(

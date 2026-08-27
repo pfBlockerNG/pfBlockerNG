@@ -49,6 +49,9 @@ final class SoftwareFailedCheckStateTest extends TestCase
 	/** The shipped orchestrator + read helpers, read by the wiring case below. */
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
+	/** The Tier-A module, read for the phrase both live tiers key on (issue #2674). */
+	private const TIER_A = __DIR__ . '/../smoke/ui/test_render_smoke.py';
+
 	private const NAME = 'pfSense-pkg-pfBlockerNG';
 	private const REPO = 'pfblockerng-nightly';
 
@@ -708,6 +711,64 @@ final class SoftwareFailedCheckStateTest extends TestCase
 			pfb_software_failed_at(['last_failed' => '1700000000'], TRUE),
 			'a decimal integer string is the same time (json_decode can hand back either)'
 		);
+	}
+
+	/**
+	 * The phrase the UI tiers key on must identify the Check-now feedback and NOTHING ELSE
+	 * on the page.
+	 *
+	 * The page says two things about a failed read: the info box is about the action the
+	 * admin just took, the Status row is about standing state. Both tiers assert "the plain
+	 * page does not carry the Check-now feedback" by searching the rendered HTML for one
+	 * phrase, so a phrase the Status row ALSO contains makes that assertion trip on the row
+	 * and report a defect that is not there.
+	 *
+	 * This reads the tier's own constant rather than a phrase of its own, because the
+	 * coupling is the whole point: it is the tier's chosen string that has to discriminate.
+	 * Executed here because this is exactly what reddened all four Tier-A legs on the
+	 * previous head, and a hermetic gate catches it in a second instead of a VM round trip.
+	 */
+	public function testTheUiTiersFeedbackPhraseMatchesOnlyTheCheckNowBox(): void
+	{
+		$tier = (string) file_get_contents(self::TIER_A);
+		$phrase = $this->pageString($tier, '_SOFTWARE_CHECK_FAILED_TEXT = "', '"');
+		$this->assertNotSame('', $phrase, 'the Tier-A module must define the feedback phrase');
+
+		$page = (string) file_get_contents(self::PAGE);
+		$this->assertSame(
+			1,
+			substr_count($page, $phrase),
+			"the tiers key on '{$phrase}', which must appear EXACTLY once in the page — the "
+				. 'Status row restating it makes the plain-load assertion trip on the row'
+		);
+
+		// And the one occurrence is the info box, not something else that happens to match.
+		$box = $this->pageString($page, "print_info_box(gettext('", "')");
+		$this->assertStringContainsString(
+			$phrase,
+			$box,
+			'the single occurrence must be the Check now info box itself'
+		);
+
+		$row = $this->pageString($page, "))->setHelp('The most recent version check", "');");
+		$this->assertNotSame('', $row, 'the failed-attempt row must still carry its own help text');
+		$this->assertStringNotContainsString(
+			$phrase,
+			$row,
+			'the failed-attempt row must say its own thing, not restate the Check-now feedback'
+		);
+	}
+
+	/** The literal between $open and the next $close in $src, or '' when absent. */
+	private function pageString(string $src, string $open, string $close): string
+	{
+		$at = strpos($src, $open);
+		if ($at === FALSE) {
+			return '';
+		}
+		$from = $at + strlen($open);
+		$end = strpos($src, $close, $from);
+		return ($end === FALSE) ? '' : substr($src, $from, $end - $from);
 	}
 
 	/**
