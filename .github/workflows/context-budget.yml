@@ -69,3 +69,49 @@ jobs:
         # ubuntu-latest ships python3. --all: the workflow's own path filter
         # already scopes when this runs; the check itself is sub-second.
         run: python3 scripts/check_context_budget.py --all
+
+      - name: Red canary — the gate still rejects what it exists to reject
+        # This gate only ever runs green, so a disarmed checker (a budget check
+        # that stops firing, a rule wired out of run_checks) reads exactly like a
+        # clean tree, and today its failure mode surfaces only at commit time
+        # (#2829). Break the tree on purpose, twice, and require the matching
+        # violation each time. The workspace is throwaway; each canary is undone
+        # before the next one.
+        run: |
+          set -eu
+          expect_violation() {  # expect_violation <expected violation substring>
+            if python3 scripts/check_context_budget.py --all > canary.log 2>&1; then
+              echo "CANARY DID NOT FIRE — the gate passed a tree it must reject: $1"
+              cat canary.log
+              exit 1
+            fi
+            grep -qF "$1" canary.log || {
+              echo "CANARY fired for the wrong reason — wanted: $1"
+              cat canary.log
+              exit 1
+            }
+            echo "canary OK: $1"
+          }
+
+          # 1. An over-budget policy file (the 12,288-byte POLICY_BUDGET).
+          canary='.agents/policy/zz-budget-canary.md'
+          python3 -c "import sys; open(sys.argv[1], 'w').write('x' * 12289)" "$canary"
+          git add -- "$canary"
+          expect_violation "$canary: 12289 bytes > budget 12288"
+          git rm -q --cached -- "$canary"
+          rm -f -- "$canary"
+
+          # 2. A missed-review ledger entry back in narrative shape (#2829):
+          #    39 bytes of documented entry plus a 1,900-byte review story.
+          ledger='.agents/policy/coderabbit-misses.md'
+          python3 - "$ledger" <<'PY'
+          import sys
+
+          with open(sys.argv[1], "a", encoding="utf-8") as fh:
+              fh.write("- `deadbeef`  a canary entry  (#1) — " + "y" * 1900 + "\n")
+          PY
+          expect_violation "entry is 1939 bytes > cap 200"
+          git checkout -- "$ledger"
+
+          rm -f canary.log
+          python3 scripts/check_context_budget.py --all
