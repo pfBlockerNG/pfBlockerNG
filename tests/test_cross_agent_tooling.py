@@ -272,15 +272,13 @@ def test_omp_language_servers_route_php_include_files() -> None:
     # pfSense ships PHP include files as .inc, and OMP's built-in intelephense entry
     # claims only .php/.phtml -- so without this override every .inc file, including
     # the largest production file in the package, is invisible to lsp
-    # definition/references/rename/diagnostics (issue #2802). OMP merges server
-    # overrides shallowly, so an entry that omits command/args/rootMarkers drops the
-    # defaults it does not restate.
+    # definition/references/rename/diagnostics (issue #2802). Only the fields that
+    # differ from the built-in entry are overridden: OMP merges the built-in config
+    # under the override, so omitted top-level fields are inherited, while a field
+    # the override does supply replaces the built-in value whole.
     server = json.loads((ROOT / ".omp/lsp.json").read_text(encoding="utf-8"))["servers"]["intelephense"]
-    assert server["command"] == "intelephense"
-    assert server["args"] == ["--stdio"]
     assert set(server["fileTypes"]) == {".php", ".phtml", ".inc"}
     assert server["languageId"] == "php", "an inferred language id follows the extension, not PHP"
-    assert set(server["rootMarkers"]) == {"composer.json", "composer.lock", ".git"}
 
     # Routing didOpen is not enough: intelephense's own workspace scan is driven by
     # files.associations, and cross-file references come from that index.

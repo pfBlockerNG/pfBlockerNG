@@ -1,11 +1,8 @@
 {
   "servers": {
     "intelephense": {
-      "command": "intelephense",
-      "args": ["--stdio"],
       "fileTypes": [".php", ".phtml", ".inc"],
       "languageId": "php",
-      "rootMarkers": ["composer.json", "composer.lock", ".git"],
       "settings": {
         "intelephense": {
           "environment": { "phpVersion": "8.3" },
