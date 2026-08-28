@@ -403,3 +403,76 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
 
     assert findings() == 0, "semgrep gained .inc support; the documented flag is now misleading"
     assert findings("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
+
+
+def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
+    # Graphify's suffix map sends .inc to the Pascal extractor, so this repository's
+    # PHP includes extract as a handful of incidental nodes (issue #2810). The fix is
+    # upstream in Graphify-Labs/graphify#3075 and unreleased, so it rides as a patch
+    # applied to the installed package after every install. When upstream releases it,
+    # the patch, the script, its three call sites, and this test go away together.
+    patch = (ROOT / ".agents/patches/graphify-3075-language-overrides.patch").read_text(encoding="utf-8")
+    assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
+    assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
+
+    # Order is part of the contract at every call site, and each site is pinned by the
+    # line that RUNS the patch: patching a Graphify that a later step already used
+    # would leave that step's output Pascal-parsed.
+    for install, invocation, anchor, patch_first in (
+        (
+            "scripts/agent/setup-agent-tools.sh",
+            'sh "$patch_graphify" "$root"',
+            "uv tool install --upgrade graphifyy",
+            False,
+        ),
+        (
+            "scripts/agent/ensure-graphify-merge-driver.sh",
+            'sh "$patch_graphify" "$root"',
+            "graphify hook install",
+            True,
+        ),
+        (
+            "scripts/agent/init-worktree-tools.sh",
+            'sh "$(dirname "$0")/patch-graphify.sh" "$root"',
+            'graphify update "$root"',
+            True,
+        ),
+    ):
+        lines = (ROOT / install).read_text(encoding="utf-8").splitlines()
+        called = [index for index, line in enumerate(lines) if invocation in line]
+        anchored = [index for index, line in enumerate(lines) if anchor in line]
+        assert called, f"{install} does not run patch-graphify.sh"
+        assert anchored, f"{install} no longer runs: {anchor}"
+        assert (called[0] < anchored[0]) is patch_first, (
+            f"{install} must run patch-graphify.sh {'before' if patch_first else 'after'}: {anchor}"
+        )
+
+    rc = (ROOT / ".graphifyrc").read_text(encoding="utf-8").splitlines()
+    assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"
+
+    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    for contract in (
+        "scripts/agent/patch-graphify.sh",
+        "Graphify-Labs/graphify#3075",
+        "language.inc=php",
+        # The three probed facts a contributor needs: what reverts the patch, what an
+        # unpatched host sees, and when the whole arrangement is deleted.
+        "a bare `uv tool upgrade graphifyy` reverts it",
+        "inert on an unpatched Graphify",
+        "Delete the patch, the script, its three call sites",
+    ):
+        assert contract in routing, f"repository-intelligence routing lost: {contract}"
+
+
+def test_tracked_graph_carries_the_php_include_corpus() -> None:
+    # A Graphify without the vendored override parses all 21 .inc files with the Pascal
+    # extractor: extraction still succeeds, so the only visible symptom is a collapsed
+    # node count -- 30 across the corpus instead of roughly 755 (issue #2810). Nothing
+    # else catches an unattended `uv tool upgrade graphifyy` followed by a Graphify
+    # post-commit rebuild, which silently replaces site-packages and drops the patch.
+    graph = json.loads((ROOT / "graphify-out/graph.json").read_text(encoding="utf-8"))
+    include_nodes = [node for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")]
+    assert len(include_nodes) > 400, (
+        f"only {len(include_nodes)} graph nodes come from .inc files: the tracked graph was "
+        "rebuilt by a Graphify without .agents/patches/graphify-3075-language-overrides.patch"
+    )

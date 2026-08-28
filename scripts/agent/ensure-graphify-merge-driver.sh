@@ -28,6 +28,17 @@ main() {
 		echo "ensure-graphify-merge-driver.sh: Graphify installation failed" >&2
 		exit 1
 	}
+	# The hook this installs rebuilds the graph, so the override has to be on the
+	# freshly installed package first (issue #2810).
+	patch_graphify=$root/scripts/agent/patch-graphify.sh
+	[ -f "$patch_graphify" ] || {
+		echo "ensure-graphify-merge-driver.sh: required repository helper '$patch_graphify' is missing" >&2
+		exit 1
+	}
+	sh "$patch_graphify" "$root" || {
+		echo "ensure-graphify-merge-driver.sh: Graphify language-override patch failed for '$root'" >&2
+		exit 1
+	}
 	(cd "$root" && graphify hook install) || {
 		echo "ensure-graphify-merge-driver.sh: Graphify hook installation failed in '$root'" >&2
 		exit 1

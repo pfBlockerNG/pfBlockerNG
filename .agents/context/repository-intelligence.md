@@ -29,6 +29,22 @@ Load when: every agent session, from `AGENTS.md`.
   an AI assistant. Install or refresh Graphify in one command with
   `uv tool install --upgrade 'graphifyy>=0.9.51'` — a floor, never an exact pin, so a
   fresh host and an outdated one both land on the current release.
+- Graphify's suffix map parses `.inc` as Pascal, so this repository's PHP includes
+  extract as roughly 30 incidental nodes instead of roughly 755 while extraction still
+  reports success. Until upstream releases Graphify-Labs/graphify#3075, that fix rides
+  as `.agents/patches/graphify-3075-language-overrides.patch`, applied to the installed
+  package by `scripts/agent/patch-graphify.sh` from all three install paths:
+  `setup-agent-tools.sh`, `ensure-graphify-merge-driver.sh` (the entry point 8 CI
+  workflows use), and `init-worktree-tools.sh`, before it refreshes the graph. The
+  script no-ops when the installed Graphify already provides the override API, and
+  fails loudly rather than silently when the patch does not apply. Because it patches
+  the installed package, a bare `uv tool upgrade graphifyy` reverts it by replacing
+  site-packages; the next bootstrap, worktree cut, or CI run re-applies it. The tracked
+  `.graphifyrc` (`language.inc=php`) is inert on an unpatched Graphify — the key is
+  ignored and extraction runs unchanged — so a contributor who never runs these scripts
+  sees the old Pascal parse, not breakage.
+  Delete the patch, the script, its three call sites, and their tests once a released
+  graphifyy carries the change.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a

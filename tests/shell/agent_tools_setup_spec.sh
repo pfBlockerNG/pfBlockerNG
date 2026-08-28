@@ -51,6 +51,12 @@ SETUP_HOOKS
 #!/bin/sh
 printf 'init-worktree-tools:%s\n' "$1" >> "$DEBIAN_HELPER_LOG"
 INIT_WORKTREE
+    # The vendored .inc language-override patch (issue #2810): the bootstrap runs the
+    # requested checkout's copy, so the real installed Graphify is never touched here.
+    cat > "$repository/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf 'patch-graphify.sh:%s\n' "$1" >> "$DEBIAN_TOOL_LOG"
+PATCH_GRAPHIFY
 
     basebin="$fixture/base-bin"
     activebin="$fixture/active-bin"
@@ -380,6 +386,7 @@ GROK
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"
@@ -414,6 +421,7 @@ GROK
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"
@@ -453,6 +461,7 @@ GROK
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -477,6 +486,7 @@ UNMANAGED_UV
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -499,6 +509,7 @@ UNMANAGED_UV
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -510,6 +521,7 @@ UNMANAGED_UV
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -534,6 +546,7 @@ UNMANAGED_UV
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
+      "patch-graphify.sh:$repository" \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"

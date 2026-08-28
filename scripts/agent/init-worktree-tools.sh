@@ -23,6 +23,9 @@ main() {
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
+	# Before any extraction: an unpatched Graphify parses this repository's PHP .inc
+	# files as Pascal, and a bare `uv tool upgrade graphifyy` reverts the patch.
+	sh "$(dirname "$0")/patch-graphify.sh" "$root" || exit $?
 	# Refreshing an existing root graph is mechanical, so it stays automated. Building
 	# the FIRST graph is not: its scope (which trees, whether the semantic layer earns
 	# its cost, what .graphifyignore allows) is a judgement call, so defer it to an
