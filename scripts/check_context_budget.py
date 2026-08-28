@@ -93,8 +93,15 @@ FILE_BUDGETS = {
 # left 17 bytes of headroom (#2829); the narrative belongs in that PR's audit
 # comments, and the ledger carries the pointer newest first.
 LEDGER = ".agents/policy/coderabbit-misses.md"
+# The policy that mandates the ledger. Present without the ledger means the file
+# was deleted (staged or committed), which drops it out of `git ls-files` and so
+# out of check_sizes's reach — this check is the one that can still fail closed.
+LEDGER_OWNER = ".agents/policy/coderabbit.md"
 LEDGER_ENTRY_MAX = 200
 LEDGER_ENTRY_RE = re.compile(r"^- `(?P<sha>[0-9a-f]{7,40})`  (?P<title>\S.*\S)  \(#(?P<pr>\d+)\)(?: — \S.*)?$")
+# An entry hidden behind indentation or a U+FEFF still renders as a list item;
+# it is an entry for checking purposes, and a malformed one.
+_LEDGER_ENTRYISH_RE = re.compile(r"^[\s\ufeff]*- ")
 
 SETTINGS = ".claude/settings.json"
 
@@ -202,21 +209,27 @@ def check_ledger_entries(root: Path) -> list[str]:
     """One line per merged SHA, within LEDGER_ENTRY_MAX bytes, no SHA listed twice."""
     try:
         text = (root / LEDGER).read_text(encoding="utf-8")
-    except OSError:
-        # Not every checked root carries the ledger (scratch roots do not); a
-        # tracked-but-unreadable file is check_sizes's verdict, not this one's.
-        return []
+    except FileNotFoundError:
+        if (root / LEDGER_OWNER).exists():
+            return [f"{LEDGER}: missing — {LEDGER_OWNER} routes every recorded miss to it"]
+        return []  # a tree that never carried the ledger (scratch roots)
+    except (OSError, UnicodeDecodeError) as exc:
+        # A directory, a permission denial or a non-UTF-8 byte: fail closed with
+        # a verdict rather than a pass, and never a traceback out of main().
+        return [f"{LEDGER}: unreadable ({getattr(exc, 'strerror', None) or exc})"]
     violations: list[str] = []
     first_line_of: dict[str, int] = {}
     entries = 0
     for lineno, line in enumerate(text.splitlines(), 1):
-        if not line.startswith("- "):
-            continue
-        entries += 1
         match = LEDGER_ENTRY_RE.match(line)
         if match is None:
-            violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
+            # Header prose is only tolerated ABOVE the list: once entries have
+            # started, a narrative continuation line is drift like any other.
+            if (entries or _LEDGER_ENTRYISH_RE.match(line)) and line.strip():
+                violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
+                entries += 1
             continue
+        entries += 1
         size = len(line.encode("utf-8"))
         if size > LEDGER_ENTRY_MAX:
             violations.append(f"{LEDGER}:{lineno}: entry is {size} bytes > cap {LEDGER_ENTRY_MAX}")

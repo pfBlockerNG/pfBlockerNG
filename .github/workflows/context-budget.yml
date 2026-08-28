@@ -104,12 +104,7 @@ jobs:
           # 2. A missed-review ledger entry back in narrative shape (#2829):
           #    39 bytes of documented entry plus a 1,900-byte review story.
           ledger='.agents/policy/coderabbit-misses.md'
-          python3 - "$ledger" <<'PY'
-          import sys
-
-          with open(sys.argv[1], "a", encoding="utf-8") as fh:
-              fh.write("- `deadbeef`  a canary entry  (#1) — " + "y" * 1900 + "\n")
-          PY
+          python3 -c 'import sys; open(sys.argv[1], "a", encoding="utf-8").write("- `deadbeef`  a canary entry  (#1) — " + "y" * 1900 + "\n")' "$ledger"
           expect_violation "entry is 1939 bytes > cap 200"
           git checkout -- "$ledger"
 

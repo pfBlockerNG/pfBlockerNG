@@ -4,16 +4,14 @@ Append-only, newest first. One line per merged SHA whose only CodeRabbit
 engagement was a quota notice (or none) and that never got a later finished
 review of that SHA.
 
-Format — one line, at most 200 bytes:
-
-    - `SHA`  title  (#PR) — one clause
-
-Two spaces separate the fields. The clause is a pointer, never a narrative: the
-review story — legs, findings, quota windows — already lives in that PR's own
-audit comments, so record only the outcome here. The shape and the cap are
-enforced by `scripts/check_context_budget.py`, which also holds this file to the
-12,288-byte policy budget; the recorded SHAs and their order are pinned by
-`tests/test_context_budget.py`.
+Format, one line of at most 200 bytes: ``- `SHA`  title  (#PR) — one clause``.
+Two spaces separate the fields; the em-dash clause is optional. The clause is a
+pointer, never a narrative: the review story — legs, findings, quota windows —
+already lives in that PR's own audit comments, so record only the outcome here.
+Nothing but entries below this paragraph, and no bullets above it. The shape and
+the cap are enforced by `scripts/check_context_budget.py`, which also holds this
+file to the 12,288-byte policy budget; the recorded SHAs and their order are
+pinned by `tests/test_context_budget.py`.
 
 - `85bb57e3`  download: sanity-scan an archive's extracted payload  (#2819) — two quota notices, no review; 4 legs + verifier PASS.
 - `76b4ecc9`  download: stream the XLSX shared-strings part past the run tmpdir  (#2816) — one quota notice (999 min), no review; 4 legs over two rounds, three blockers fixed.
