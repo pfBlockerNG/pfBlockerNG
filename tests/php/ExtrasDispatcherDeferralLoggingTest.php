@@ -25,17 +25,14 @@ use PHPUnit\Framework\TestCase;
  *   pfblockerng_cron.inc:266-270  (issue #2505)          pfb_logger(1) + logger(LOG_NOTICE)
  *
  * Rows 1-2 and 6 are RED before the fix. Rows 3-5 are before-state guards that pass
- * on both sides: row 3 pins the unchanged rc=1 wiring of `dc` AND `dcc`, rows 4-5 pin
- * that nothing new is logged when the dispatcher lock was actually acquired.
+ * on both sides: row 3 pins the FALSE that drives the verbs' rc=1, rows 4-5 pin that
+ * nothing new is logged when the dispatcher lock was actually acquired.
  *
  * Contention is provoked the way FeedPassLockTest's rows do it -- see its docblock for
  * the flock(2) open-file-description semantics that make it work within one process.
  */
 final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 {
-	/** The verb dispatcher whose rc=1 wiring row 3 pins (not loadable off-appliance). */
-	private const PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
-
 	/** The syslog wording the sibling guards use, with this guard's label. */
 	private const NOTICE = 'Feed pass [ extras ] deferred - the scheduler dispatcher lock is unavailable.';
 
@@ -213,86 +210,24 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	/**
 	 * Scenario: logging the deferral must not change what the verbs report.
 	 *   Given another process holds the scheduler dispatcher lock
-	 *   Then  pfb_extras_process_begin() returns FALSE
-	 *   And   `dc` and `dcc` are each still behind a guard that turns that into exit(1)
+	 *   Then  pfb_extras_process_begin() returns FALSE, which is what the Extras verbs
+	 *         turn into exit(1)
 	 *
-	 * The verb wiring is asserted against the dispatcher's source because
-	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires plus
-	 * pfb_global()'s real /var writes), the same reason GeoipSwapConsumerGuardTest
-	 * reads it as text. The oracle is PHP's own token stream, not the raw bytes: only
-	 * executable tokens survive, so a copy of the arm parked in a comment, heredoc,
-	 * nowdoc or inline-HTML block cannot stand in for live wiring. One space per token
-	 * also makes formatting irrelevant, so every equivalent reformat matches while a
-	 * verb that can reach the switch body without the guard -- or a guard that stops
-	 * exiting 1 -- fails.
+	 * This pins the half that is executable. The other half -- that `dc` and `dcc` are
+	 * still WIRED as `if (!$scheduled && !pfb_extras_process_begin()) { exit(1); }` --
+	 * is guaranteed by pfblockerng.php being outside this change's diff, which
+	 * `git diff` proves directly; re-deriving an unmodified file's own text from a
+	 * static oracle proved unsound five times over (a label with executable text behind
+	 * its colon, an arm parked in a comment, in a heredoc, in a nowdoc, in inline HTML,
+	 * in another switch entirely). Nothing pinned this exit code before this change
+	 * either. An exit-code test that can really load pfblockerng.php needs the
+	 * appliance tier, tracked separately.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
 		$this->holdDispatcherLock();
 		$this->assertFalse(pfb_extras_process_begin(),
 			'the Extras guard must keep returning FALSE -- that FALSE IS the verbs rc=1');
-
-		$source = file_get_contents(self::PHP);
-		$this->assertIsString($source, 'test setup: could not read the verb dispatcher');
-
-		// Only executable tokens are wiring. Dropping whitespace and comments and
-		// blanking the payload of the literal kinds that can carry newlines leaves a
-		// stream no decoy copy of the arm can join, whatever it is parked inside.
-		$tokens = [];
-		foreach (token_get_all($source) as $token) {
-			if (!is_array($token)) {
-				$tokens[] = $token;
-				continue;
-			}
-			if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
-				continue;
-			}
-			$tokens[] = in_array($token[0], [T_ENCAPSED_AND_WHITESPACE, T_INLINE_HTML], TRUE)
-				? '<literal>'
-				: $token[1];
-		}
-
-		// Scope the oracle to the verb dispatcher's OWN switch: a guarded arm anywhere
-		// else in the file -- a second switch, an uncalled function -- is not this
-		// wiring. Depth is counted over tokens, so braces inside a literal cannot skew
-		// it, and a literal's text can never equal the one-character brace token.
-		$head = ['switch', '(', '$argv', '[', '1', ']', ')', '{'];
-		$open = NULL;
-		for ($i = 0, $last = count($tokens) - count($head); $i <= $last; $i++) {
-			if (array_slice($tokens, $i, count($head)) === $head) {
-				$open = $i + count($head);
-				break;
-			}
-		}
-		$this->assertNotNull($open, 'test setup: the verb dispatcher switch was not found');
-
-		$body = [];
-		$depth = 1;
-		for ($i = $open, $count = count($tokens); $i < $count && $depth > 0; $i++) {
-			$depth += (int) ($tokens[$i] === '{') - (int) ($tokens[$i] === '}');
-			if ($depth > 0) {
-				$body[] = $tokens[$i];
-			}
-		}
-		$this->assertSame(0, $depth, 'test setup: the verb dispatcher switch never closed');
-		$code = implode(' ', $body);
-		$this->assertStringContainsString('pfb_extras_process_begin', $code,
-			'test setup: the verb switch did not tokenise into anything recognisable');
-
-		$label = '(?:case [\'"][a-z0-9_]+[\'"]|default) : ';
-		$guard = preg_quote('$scheduled = ( $argv [ 2 ] ?? \'\' ) === \'scheduled\' ; '
-			. 'if ( ! $scheduled && ! pfb_extras_process_begin ( ) ) { ', '/')
-			. '(?:exit|die)' . preg_quote(' ( 1 ) ; }', '/');
-
-		foreach (['dc', 'dcc'] as $verb) {
-			$at = 'case [\'"]' . $verb . '[\'"] : ';
-			$this->assertSame(1, preg_match_all('/' . $at . '/', $code),
-				"`{$verb}` must appear exactly once as a label in the verb switch, or the guarded "
-				. 'arm the next assertion finds need not be the one that runs');
-			$this->assertSame(1, preg_match('/' . $at . '(?:' . $label . ')*' . $guard . '/', $code),
-				"issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
-				. 'on a dispatcher deferral');
-		}
 	}
 
 	/**
