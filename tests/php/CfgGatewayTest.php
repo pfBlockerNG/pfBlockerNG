@@ -1189,29 +1189,25 @@ final class CfgGatewayTest extends TestCase
 			'pfbextdns',
 
 			// pfblockerngipsettings — section read + sub-keys.
-			// (v4suppression is registered -- ADR-53 -- and lives in the registry, not here.)
+			// (v4suppression is registered -- ADR-53 -- and lives in the registry, not here.
+			// issue #2123 moved enable_dup / enable_agg / enable_log / enable_rdns /
+			// database_cc / enable_float / killstates off this list into the registry.)
 			'maxmind_key',
 			'maxmind_locale',
-			'database_cc',
 			'asn_reporting',
 			'asn_token',
 			'maxmind_account',
 			'inbound_deny_action',
 			'outbound_deny_action',
-			'enable_float',
-			'enable_dup',
-			'enable_agg',
 			'pass_order',
-			'enable_log',
 			'autorule_suffix',
-			'killstates',
 			'ip_placeholder',
 
 			// pfblockerngreputation sub-keys.
 			'et_header',
 
-			// pfblockerngsync sub-keys.
-			'syncinterfaces',
+			// pfblockerngsync sub-keys. (issue #2123 registered 'syncinterfaces' as
+			// 'sync/syncinterfaces'; its siblings here stay foreign.)
 			'varsynconchanges',
 			'varsynctimeout',
 			'varsyncdestinenable',

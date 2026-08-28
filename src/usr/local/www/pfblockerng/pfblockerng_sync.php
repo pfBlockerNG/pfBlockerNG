@@ -32,7 +32,10 @@ $pfb['sconfig'] = PfbConfig::readSection('installedpackages/pfblockerngsync/conf
 $pconfig = array();
 $pconfig['varsynconchanges']	= $pfb['sconfig']['varsynconchanges']	?: '';
 $pconfig['varsynctimeout']	= $pfb['sconfig']['varsynctimeout']	?: 150;
-$pconfig['syncinterfaces']	= $pfb['sconfig']['syncinterfaces']	?: '';
+// issue #2123: default owned by the registry (ADR-29). This page never replaces
+// $pconfig with raw $_POST -- a save either redirects or re-renders from the section
+// read above -- so the value stays a PfbToggle all the way to the render.
+$pconfig['syncinterfaces']	= PfbConfig::read('sync/syncinterfaces');
 
 // Select field options
 $options_varsynconchanges	= [ 'disabled' => 'Do not sync this package configuration', 'auto' => 'Sync to configured system backup server', 'manual' => 'Sync to host(s) defined below' ];
@@ -156,7 +159,7 @@ if ($_POST) {
 
 			$pfb['sconfig']['varsynconchanges']	= $_POST['varsynconchanges']						?: '';
 			$pfb['sconfig']['varsynctimeout']	= $_POST['varsynctimeout']						?: '';
-			$pfb['sconfig']['syncinterfaces']	= pfb_filter($_POST['syncinterfaces'], PFB_FILTER_ON_OFF, 'Sync')	?: '';
+			$pfb['sconfig']['syncinterfaces']	= pfb_filter($_POST['syncinterfaces'] ?? '', PFB_FILTER_ON_OFF, 'Sync')	?: '';
 
 			PfbConfig::writeSection('installedpackages/pfblockerngsync/config/0', $pfb['sconfig']);
 			write_config('[pfBlockerNG] save XMLRPC sync settings');
@@ -227,7 +230,7 @@ $section->addInput(new Form_Checkbox(
 	'syncinterfaces',
 	'Disable General/IP/DNSBL tab settings sync',
 	NULL,
-	pfb_cfg_toggle_read($pconfig['syncinterfaces']) === PfbToggle::On,
+	$pconfig['syncinterfaces'] === PfbToggle::On,
 	'on'
 ))->setHelp('When selected, the \'General\', \'IP\', and \'DNSBL\' tab customizations will not be sync\'d');
 $form->add($section);

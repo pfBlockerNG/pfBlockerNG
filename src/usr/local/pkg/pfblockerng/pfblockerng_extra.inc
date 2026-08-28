@@ -729,11 +729,17 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 // issue #1931: the one greppable home of every real config.xml section path. Registry
 // keys below are '<alias>/<bare-key>'; PfbConfig resolves the alias through this map.
 const PFB_SECTIONS = [
-	'gen'   => 'installedpackages/pfblockerng/config/0',
-	'dnsbl' => 'installedpackages/pfblockerngdnsblsettings/config/0',
-	'ss'    => 'installedpackages/pfblockerngsafesearch',
-	'ip'    => 'installedpackages/pfblockerngipsettings/config/0',
-	'rep'   => 'installedpackages/pfblockerngreputation/config/0',
+	'gen'    => 'installedpackages/pfblockerng/config/0',
+	'dnsbl'  => 'installedpackages/pfblockerngdnsblsettings/config/0',
+	'ss'     => 'installedpackages/pfblockerngsafesearch',
+	'ip'     => 'installedpackages/pfblockerngipsettings/config/0',
+	'rep'    => 'installedpackages/pfblockerngreputation/config/0',
+	// issue #2123: two sections that already hold static page scalars beside their
+	// dynamic/foreign siblings, the same arrangement 'rep' has -- registering one key
+	// in them does not make the rest of the section registered, and every unregistered
+	// sibling still passes a section write through byte-identical.
+	'global' => 'installedpackages/pfblockerngglobal',
+	'sync'   => 'installedpackages/pfblockerngsync/config/0',
 ];
 
 // issue #1921: dedicated map key standing for "key genuinely absent" inside a
@@ -1591,6 +1597,71 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-37 companion; inert while dnsbl_dot_block is off',
 		],
 
+		// issue #2123 -- the eight "DNSBL IPs - Advanced In/Outbound Firewall Rule
+		// Settings" checkboxes. The page renders them with a dynamic field name
+		// ('autoaddrnot_' . $advmode) over a STATIC stored key, so each direction is an
+		// ordinary dnsbl-section scalar and path addressing keeps it distinct from the
+		// per-feed-row and per-continent keys of the same bare name (those live under
+		// dynamic config paths and stay on the foreign-key exclusion list). All eight
+		// were off-by-default in pfblockerng_dnsbl.php's own `?: ''`, so the registered
+		// '' reproduces the page exactly. pfb_determine_list_detail() reads them off the
+		// section blob through a dynamic path, which registration leaves untouched.
+		'dnsbl/autoaddrnot_in' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:111\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autoports_in' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:112\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autoaddr_in' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:114\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autonot_in' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:115\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autoaddrnot_out' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:120\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autoports_out' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:121\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autoaddr_out' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:123\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'dnsbl/autonot_out' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_dnsbl.php:124\'s own off default into the registry; absent behaviour unchanged',
+		],
+
 		// -------------------------------------------------------------------
 		// ADR-38: syslog export settings (General / Log Settings section, $gen)
 		// -------------------------------------------------------------------
@@ -1682,6 +1753,68 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2 deliberate empty checkbox state is preserved by the owner-ruled storage contract',
 		],
 
+		// issue #2123 -- the seven IP-page checkboxes whose default used to be declared
+		// by pfblockerng_ip.php's own `?: ''` at the top of the file and whose stored
+		// vocabulary was decided at its save site. All seven were off-by-default there,
+		// so the registered '' reproduces the page exactly: absent reads Off, a stored
+		// '' reads Off, only 'on' reads On. Their runtime consumers read the ip section
+		// blob (pfblockerng_apply.inc's $pfb['ipconfig'] mirrors), which registration
+		// leaves untouched.
+		'ip/enable_dup' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:39\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'ip/enable_agg' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:40\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'ip/enable_log' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:59\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		// Reverse DNS lookups. Off for a new install; an install that predates the
+		// setting keeps the historical always-on behaviour through pfb_rdns_seed_value(),
+		// a CROSS-SECTION seed (it reads the General section to decide) that the registry
+		// pass cannot express as a per-section grandfather map. It stays hand-written in
+		// pfblockerng_install.inc and runs BEFORE the pass, which then sees the key
+		// present and leaves it alone -- so this entry's default governs new installs only.
+		'ip/enable_rdns' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#336 upgrade preservation is the cross-section pfb_rdns_seed_value() seed, ordered before the registry pass; a per-section map cannot see the General section it keys on',
+		],
+
+		'ip/database_cc' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:65\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'ip/enable_float' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:75\'s own off default into the registry; absent behaviour unchanged',
+		],
+
+		'ip/killstates' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:78\'s own off default into the registry; absent behaviour unchanged',
+		],
+
 		// -------------------------------------------------------------------
 		// Reputation section (pfblockerngreputation/config/0)
 		// -------------------------------------------------------------------
@@ -1710,6 +1843,42 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+		],
+
+		// -------------------------------------------------------------------
+		// Alerts display section (pfblockerngglobal — flat, no /config/0)
+		// -------------------------------------------------------------------
+
+		// issue #2123: the last toggle still arranged the 3.2 way -- default declared by
+		// pfblockerng_alerts.php:41's `isset(...) ? ... : 'on'`, stored vocabulary decided
+		// at its save site, comparison written inline at four render sites. Default ON,
+		// which is the reason this one mattered: an `isset()` fallback treats a stored ''
+		// as SET, so an operator's uncheck read Off while a never-configured install read
+		// On. The registry reproduces both -- absence takes this default, a present ''
+		// reaches the toggle adapter (issue #2120) -- and getting the default wrong here
+		// would invert the Alerts page's auto-refresh for every untouched install.
+		// Its dynamic siblings in this section (feed_*, feed_alt_*, widget-*) stay
+		// foreign and pass a section write through byte-identical.
+		'global/alertrefresh' => [
+			'default'       => 'on',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_alerts.php:41\'s own ON default into the registry; absent still reads On and a stored \'\' still reads Off',
+		],
+
+		// -------------------------------------------------------------------
+		// XMLRPC sync section (pfblockerngsync/config/0)
+		// -------------------------------------------------------------------
+
+		// issue #2123: "Sync interfaces" -- when On, the XMLRPC replication set drops the
+		// interface-bearing sections (pfblockerng_sync_sections()). Off by default, which
+		// pfblockerng_sync.php:35 declared with its own `?: ''`. The section's dynamic
+		// destination row blob (row/*) and its credentials stay foreign and unregistered.
+		'sync/syncinterfaces' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2123 relocated pfblockerng_sync.php:35\'s own off default into the registry; absent behaviour unchanged',
 		],
 	];
 

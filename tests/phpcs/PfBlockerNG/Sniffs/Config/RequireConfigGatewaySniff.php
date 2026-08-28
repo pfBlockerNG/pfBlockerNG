@@ -244,6 +244,30 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngreputation/config/0/enable_rep',
 		'installedpackages/pfblockerngreputation/config/0/enable_pdup',
 		'installedpackages/pfblockerngreputation/config/0/enable_dedup',
+		// issue #2123: the IP-page checkboxes whose default moved into the registry
+		'installedpackages/pfblockerngipsettings/config/0/enable_dup',
+		'installedpackages/pfblockerngipsettings/config/0/enable_agg',
+		'installedpackages/pfblockerngipsettings/config/0/enable_log',
+		'installedpackages/pfblockerngipsettings/config/0/enable_rdns',
+		'installedpackages/pfblockerngipsettings/config/0/database_cc',
+		'installedpackages/pfblockerngipsettings/config/0/enable_float',
+		'installedpackages/pfblockerngipsettings/config/0/killstates',
+		// issue #2123: the DNSBL "Advanced In/Outbound Firewall Rule Settings" checkboxes.
+		// The per-feed-row and per-continent keys of the same bare name live under
+		// DYNAMIC paths, so they are unreachable by this exact-path check and stay on the
+		// foreign-key exclusion list.
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoaddrnot_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoports_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoaddr_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autonot_in',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoaddrnot_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoports_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autoaddr_out',
+		'installedpackages/pfblockerngdnsblsettings/config/0/autonot_out',
+		// issue #2123: installedpackages/pfblockerngglobal (flat section, no /config/0)
+		'installedpackages/pfblockerngglobal/alertrefresh',
+		// issue #2123: installedpackages/pfblockerngsync/config/0
+		'installedpackages/pfblockerngsync/config/0/syncinterfaces',
 	];
 
 	/**

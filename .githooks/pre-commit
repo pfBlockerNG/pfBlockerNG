@@ -231,6 +231,23 @@ if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
 	fi
 fi
 
+# --- Forbid an on/off toggle declaring its default in the page (issue #2123):
+#     a PFB_FILTER_ON_OFF save into a registered section must name a registry entry,
+#     and a registered toggle's default must not be restated by the page. Relevant to
+#     the settings pages and to the registry itself, so it runs on staged PHP/.inc. ---
+if [ "$staged_php" = 1 ]; then
+	if exempted scripts/check_toggle_registry.py; then
+		exempt toggle-registry
+	elif [ -n "$py_bin" ]; then
+		step 'toggle-registry (on/off default belongs to pfb_cfg_registry())'
+		"$py_bin" scripts/check_toggle_registry.py --self-test > /dev/null \
+			|| failed 'toggle-registry (red canary)'
+		"$py_bin" scripts/check_toggle_registry.py || failed 'toggle-registry'
+	else
+		skip toggle-registry
+	fi
+fi
+
 # --- Forbid direct Python interpreter paths ON the pfSense appliance. Consumers
 #     invoke pfb_python.sh, the sole dependency-derived resolver. ---
 if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
