@@ -224,8 +224,9 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 * refusal ADR-46 relies on -- with the first member already written over the
 	 * served .mmdb. Staged, tar writes into a fresh directory that has no such
 	 * symlink, and the publication is what refuses: the staged `sub` directory
-	 * cannot replace the live symlink. Either way the extraction fails part-way and
-	 * the served bytes are the assertion.
+	 * cannot replace the live symlink -- so at head tar exits 0 and the publication
+	 * is the refusal. Either way the update lands part-way or not at all, and the
+	 * served bytes are the assertion.
 	 */
 	public function testExtractionThatFailsPartWayLeavesTheServedShareByteIdentical(): void
 	{
@@ -496,6 +497,27 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->assertStringContainsString('geoip publication failed', $log);
 		$this->assertStringNotContainsString('extraction failed (tar exit 0)', $log,
 			'a clean tar must never be reported as the reason a publication was refused');
+	}
+
+	/**
+	 * A ceiling kill must still be named as one. The wrapper composes the extractor
+	 * wording with pfb_extract_cap_note(), and dropping that composition loses the
+	 * "too large" the operator reads instead of a bare exit code (issue #2658).
+	 */
+	public function testTheFailureNoteStillNamesTheExtractionCeiling(): void
+	{
+		$this->assertStringContainsString('ceiling',
+			pfb_stage_publish_failure_note(PFB_EXTRACT_SIGXFSZ_EXIT),
+			'a child killed at the ceiling must be reported as too large, not as a bare exit code');
+		$this->assertStringContainsString((string) PFB_EXTRACT_SIGXFSZ_EXIT,
+			pfb_stage_publish_failure_note(PFB_EXTRACT_SIGXFSZ_EXIT));
+		$this->assertSame('publication failed', pfb_stage_publish_failure_note(0),
+			'a clean extractor status means the publication refused, and carries no ceiling note');
+		foreach (array(1, 2, 127) as $retval) {
+			$this->assertSame("extraction failed (tar exit {$retval})",
+				pfb_stage_publish_failure_note($retval),
+				"exit {$retval} is not a ceiling refusal and must not be labelled one");
+		}
 	}
 
 	/** The converse: a real extractor failure keeps naming its exit status. */
