@@ -1,0 +1,58 @@
+ADR-60 Phase 7 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit eb1f3121 (code) / 12017de5 (handoff):
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. php -l x2, vendor/bin/phpunit (2371 tests, 18572
+   assertions — down from Phase 6's 2563 by exactly the deleted ADR-30
+   tests), phpstan, phpcs, python3 -m pytest (2436 passed, unaffected),
+   ruff, mypy, 3 policy checkers — all clean, all matched.
+3. red-proof (grep-gate) — PASS. Independently re-derived the RED baseline
+   from a detached worktree at the pre-Phase-7 commit (3638c363): 278
+   matching lines. Re-ran the same grep on current HEAD (GREEN): exactly 5
+   residual lines — 3 UI test markers (explicitly Phase 8's job) + 2 dated
+   historical-audit-doc mentions — byte-identical to the handoff's claim.
+   Direct grep for both declarations and call sites of every deleted
+   function across src/: zero matches both ways — genuinely gone. Phase 6's
+   surviving oracle tests (LogMaxDaysTest, LogMgmtAgeCutoffTest, section J)
+   all stayed green.
+4. diff-vs-plan — PASS, all 13 plan items ticked against the full diff.
+   IMPORTANT FINDING surfaced by the verifier (not a plan violation — flagged
+   per gate duty): pfblockerng_general.php unconditionally calls
+   PfbConfig::read() on now-deregistered keys at the top of every page
+   request, before any POST branch — confirmed via an executed PHPUnit probe
+   that both calls throw InvalidArgumentException. This means the Log
+   Settings page is BROKEN NOW on this exact commit, not merely "after a
+   partial Phase 8 edit" as the handoff's carry-forward originally phrased
+   it. This is explicitly in-scope-for-Phase-8, already disclosed with exact
+   line numbers, and does not violate this phase's brief (UI removal was
+   explicitly out of scope here) — but the severity framing needed
+   correcting (see orchestrator fix below).
+5. test-honesty — PASS. TickEntrypointTest.php's fix (an unenumerated file
+   the implementer found via the RED grep) removed only the ADR-30-coupled
+   assertions/helper, leaving the real pfb_log_mgmt()-based assertions
+   (issue #573 Cases A/B/D) intact and still exercising real production
+   code — independently re-run standalone, 3/3 pass.
+6. conventions — PASS. Pure removal, no new symbols. Stale comments
+   reconciled (2 sites in pfblockerng_extra.inc, 1 in tests/smoke/helpers.py
+   — confirmed via diff that only prose changed there, unrelated pre-existing
+   Pyright param-unused warnings elsewhere in that large file are untouched
+   by this diff).
+
+Orchestrator fix after the gate: corrected RESULTS/07_Results.txt's
+carry-forward phrasing for the pfblockerng_general.php finding — it now
+states plainly that the page is broken on the CURRENT commit (with the
+verifier's probe evidence inline), not contingent on a future partial Phase
+8 landing. This ensures Phase 8's brief opens with the right urgency.
+
+Skipped: none.
+
+Commits this phase (in order):
+- eb1f3121 — pfblockerng: retire scheduled log reset (ADR-30), superseded by
+  age-based retention (ADR-60 P7)
+- 12017de5 — docs: ADR-60 phase 7 handoff
+- (this gate-fix commit) — carry-forward severity correction found by the
+  phase 7 gate

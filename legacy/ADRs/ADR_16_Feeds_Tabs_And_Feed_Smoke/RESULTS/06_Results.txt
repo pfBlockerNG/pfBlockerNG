@@ -1,0 +1,113 @@
+ADR-16 — Phase 6 Results
+DOCS + DEFINITION OF DONE (final phase)
+
+STATUS: DONE. Documentation updated; ADR-16 §7 finalised; Status set.
+No src/ or test behaviour change. markdownlint 0 errors; pytest 1115 passed (unchanged).
+
+================================================================================
+DOCS CHANGED
+================================================================================
+1) README.md
+   - Added "### HTTP feed-load smoke (ADR-16)" subsection under "Smoke tests"
+     → "Adding a matrix case": documents the fixtures dir, the six sample files,
+     how _MockFeedServer.register() serves them, how cases call
+     mock_feeds.feed_url("<name>"), how to add a new format fixture, and the
+     Part-C kill-gate / gate status (OPTIMISTIC-GO, PENDING-CI; demote switch).
+   - Added "### Feeds page — IPv4 / IPv6 / DNSBL sub-tabs (ADR-16)" subsection
+     inside "## Web UI tests (live pfSense VM)": documents that
+     pfblockerng_feeds.php is now organized into IPv4/IPv6/DNSBL sub-tabs
+     (?type=), matching IP/DNSBL/Reports; the Tier-A render entries are
+     feeds_ipv4/feeds_ipv6/feeds_dnsbl; the ui_browser tabs test is
+     tests/smoke/ui/test_browser_feeds.py.
+
+2) CLAUDE.md
+   - Added "### HTTP mock-feed load smoke (ADR-16 Part C)" subsection after the
+     Web UI tiers section under "## Smoke tests": documents the six fixture files
+     (tests/smoke/fixtures/), how _MockFeedServer.register() stores and serves
+     content, how the mock_feeds fixture auto-registers all files in fixtures/,
+     how to add a new format fixture (3-step: drop file, update README, add case),
+     and the kill-gate / gate status (OPTIMISTIC-GO, PENDING-CI).
+
+3) .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md
+   - Status changed: Proposed → Implemented (pending smoke test).
+   - §7 Definition of Done: updated to reflect all tests authored in-repo;
+     explicit statement that Accept rides on automated tests, no human gate.
+   - §7 Affected-flow UI tests: all four items ticked [x] with concrete test
+     names, markers, and PENDING-live-VM-green annotations (see below).
+
+================================================================================
+FINAL STATUS
+================================================================================
+Implemented (pending smoke test)
+
+Accept flips once the affected-flow UI tests below are confirmed green on the
+live VM (the ui-tests-labeled CI suite). There is NO human manual-smoke gate —
+Accept rides on the automated tests entirely.
+
+================================================================================
+PART-C OUTCOME
+================================================================================
+All 6 representative Phase-4 formats covered; none dropped.
+
+COVERED:
+  IP (IpCase):
+    test_ip_http_feed_loads         ip_plain_cidr.txt  v4  (KILL-GATE)
+    test_ip_http_range_feed_loads   ip_range.txt       v4 range
+    test_ipv6_http_feed_loads       ip_ipv6.txt        v6
+
+  DNSBL (DnsblCase):
+    test_dnsbl_http_feed_loads      dnsbl_plain.txt    (KILL-GATE)
+    test_dnsbl_http_hosts_feed_loads dnsbl_hosts.txt
+    test_dnsbl_http_abp_feed_loads  dnsbl_abp.txt      (ABP @@ allow proven)
+
+DROPPED: none from the Phase-4 representative set.
+
+GO/DEMOTE STATUS: OPTIMISTIC-GO, PENDING-CI.
+  Bar: >= 4/5 clean runs. If < 4/5 on the live CI run, demote
+  test_smoke_feeds.py to dispatch-only as a fast-follow (Part A still ships;
+  local-file load coverage in test_smoke_matrix.py / test_smoke_abp.py remains).
+  Update RESULTS/05_Results.txt with the numbers when CI reports them.
+
+================================================================================
+AFFECTED-FLOW UI TESTS THAT GATE ACCEPT
+================================================================================
+All authored in-repo on adr/16. PENDING live-VM green (no VM on this machine).
+
+[x] Tier-A render oracle (marker: ui_render) — PENDING live-VM green
+    tests/smoke/ui/test_render_smoke.py
+    Entries: feeds_ipv4 / feeds_ipv6 / feeds_dnsbl
+    Each: GET pfblockerng_feeds.php?type=<t> → 200, PHP-error-free, type marker
+    present, no new php_error.log line.
+
+[x] ui_browser tabs test (marker: ui_browser) — PENDING live-VM green
+    tests/smoke/ui/test_browser_feeds.py
+    ::test_feeds_subtab_row_active_and_type_scoped (parametrized ipv4/ipv6/dnsbl)
+    Asserts: second sub-tab row present; active tab highlighted, others not;
+    type's Feed Settings label in DOM, others absent; screenshots per tab.
+
+[x] Cross-type non-clobber (marker: ui_e2e) — PENDING live-VM green
+    tests/smoke/ui/test_feeds.py
+    ::test_feed_rename_cross_type_save_does_not_clobber
+    Save IPv4 tab → DNSBL renames intact; save DNSBL tab → IPv4 renames intact.
+    Transition test (before + after asserted).
+
+[x] HTTP-feed load smoke (marker: smoke) — PENDING live-VM green
+    tests/smoke/test_smoke_feeds.py (6 cases listed above under Part-C outcome)
+    Each: before-state proven, Force Update over mock_feeds.feed_url(<fixture>),
+    after-state proven (pfctl_table_members/rule_references or dns_probe).
+
+[x] Per-type rename/alt-URL regressions (marker: ui_e2e) — PENDING live-VM green
+    tests/smoke/ui/test_feeds.py
+    Retargeted per-type save flows on the typed URLs (?type=ipv4/ipv6/dnsbl).
+
+================================================================================
+IMPLEMENTATION COMPLETENESS
+================================================================================
+ADR-16 is FULLY IMPLEMENTED in-repo on adr/16. All six phases committed.
+No human manual-smoke gate remains — Accept rides on the automated tests above
+being green on the live VM (ui-tests label). The orchestrator opens the PR.
+
+LOCAL VERIFICATION GATES (Phase 6):
+  * markdownlint-cli2 README.md CLAUDE.md ADR.md : 0 errors
+  * python -m pytest -q : 1115 passed (UNCHANGED — docs-only phase)
+  * git diff --name-only HEAD : ADR.md CLAUDE.md README.md ONLY (no src/ no tests/)

@@ -1,0 +1,62 @@
+================================================================================
+PHASE 3 PROMPT — Settings UI (hooks table, admin-only)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_12_Update_Hooks/ADR.md   (read §2 Security/UI row + contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/12` branch performing Phase 3 of ADR-12 — the admin-only settings
+UI for managing hook entries. Work inline on `adr/12`, one commit, push directly (PR
+only if rejected).
+
+WHY THIS PHASE EXISTS
+Phases 1-2 made hooks work from config; admins need a UI to add/edit/enable/reorder/
+delete them, with help that documents the env vars + the run-as-root caveat.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_12_Update_Hooks/RESULTS/02_Results.txt — the env vars + context. If missing,
+  STOP and report.
+- Also RESULTS/01_Results.txt — the config schema.
+- .ADRs/ADR_12_Update_Hooks/ADR.md (§2 Security/UI, contract, §4).
+- The pfBlockerNG settings pages under src/usr/local/www/pfblockerng/ + the settings
+  schema (pfblockerng.xml or the relevant page) — mirror an existing list/table editor
+  in the package; the privilege defs in src/etc/inc/priv/ for admin-only gating.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. UI TABLE: add a hooks table editor (add/edit/enable/reorder/delete) with fields:
+   command, when (pre|post), enabled, description, timeout. Validate inputs (command
+   non-empty; timeout numeric).
+2. NAMING: label the feature to DISAMBIGUATE from the per-list `ip_pre_*.sh` pre-scripts
+   — e.g. "Update Hooks" / "Pre/Post Update Commands". Make clear these run once per
+   update pass, not per feed.
+3. HELP TEXT: document the env vars (PFB_TRIGGER, PFB_WHEN, PFB_IP_CHANGED,
+   PFB_DNSBL_CHANGED, PFB_STATUS, PFB_CHANGED_ALIASES — which are present for pre vs
+   post), the run-as-root caveat, the timeout/log-and-continue behaviour, and the HA-sync
+   note (runs on the node that updates).
+4. ADMIN-ONLY: ensure the page/section is admin-gated (consistent with the rest of the
+   package settings).
+
+CONSTRAINTS
+- PHP tabs/8.3, no die()/exit() in lib; pfSense fns via stubs. Reuse the package's
+  existing list-editor idioms; don't invent a new UI pattern. Do NOT touch Python/tests.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan → clean.
+- Manual: add a pre + a post hook via the UI → they persist in config in the Phase-1
+  schema and run on the next update; edit/disable/delete work.
+
+EXPECTED RESULT
+An admin-only hooks table that manages the entries Phases 1-2 consume, with clear help.
+
+COMMIT (single)
+    pfblockerng: ADR-12 P3 add update-hooks settings UI (ADR-12 P3)
+Push directly to `adr/12`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_12_Update_Hooks/RESULTS/03_Results.txt` (plain .txt)
+State: the UI location + the chosen feature name; the fields + validation; admin-gating;
+confirmation entries round-trip to the Phase-1 schema; the go-ahead for Phase 4 (recipe +
+docs + smoke).

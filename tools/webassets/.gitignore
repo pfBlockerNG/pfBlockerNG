@@ -1,0 +1,11 @@
+node_modules/
+
+# lezer-regexp/ build output (issue #1669 slice A) -- regenerate via
+# `npm run generate` from lezer-regexp/; never hand-edit.
+lezer-regexp/src/parser.js
+lezer-regexp/src/parser.terms.js
+
+# lezer-pfb-regex-list/ build output (issue #1669 slice B) -- regenerate via
+# `npm run generate` from lezer-pfb-regex-list/; never hand-edit.
+lezer-pfb-regex-list/src/parser.js
+lezer-pfb-regex-list/src/parser.terms.js

@@ -1,0 +1,286 @@
+ADR-66 PHASE 2 RESULTS -- rename Feature A ("TLD Allow") to the tld_allow stem
+
+VERDICT: DONE
+
+WHAT CHANGED (pure rename, zero logic-line changes, zero stored-config keys touched)
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- parse_python_tlds() ->
+  parse_tld_allow(); pfb["python_tld"]/pfb["python_tlds"] ->
+  pfb["tld_allow"]/pfb["tld_allow_list"] (defaults block, ini-load block,
+  the python_blacklist enable guard, the evaluate_domain TLD-Allow arm, the
+  operate() cfg snapshot dict); ini keys read as "tld_allow"/"tld_allow_list"
+  (was "python_tld"/"python_tlds"); comments referencing the old names
+  reconciled (docstring, #713/#720 breadcrumbs kept verbatim).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['dnsbl_pytld'] ->
+  $pfb['dnsbl_tld_allow'] (RHS $pfb['dnsblconfig']['pfb_pytld'] stored-key
+  read UNCHANGED); ini-writer locals $python_tld/$python_tlds ->
+  $tld_allow/$tld_allow_list; MAIN-ini heredoc keys python_tld/python_tlds
+  -> tld_allow/tld_allow_list (python_tld_seg = 1 heredoc line untouched);
+  $pytld_cnt -> $tld_allow_cnt, foreach loop local $pytld -> $tld_allow (the
+  quoted 'pfb_pytlds_' . prefix string untouched).
+- tests/test_adr66_tld_bridges.py -- seam constants TLD_ALLOW_ENABLE_KEY
+  "python_tld"->"tld_allow", TLD_ALLOW_LIST_KEY "python_tlds"->
+  "tld_allow_list"; one C1 doc-comment reconciled. G3/G4
+  (python_tld_wildcard survivor guards, lines 189-196) and the frozen oracle
+  import left byte-untouched per the brief's DO-NOT-TOUCH.
+- tests/php/TldBridgeEmitTest.php -- C1 docblock + the three structural
+  regex/string literals (writer-derivation regex, four-field read message,
+  both heredoc-key regexes) repointed to tld_allow/tld_allow_list/
+  dnsbl_tld_allow. Method names left as-is (already feature-language:
+  testIniWriterDerivesTldAllowFromDnsblPytld etc). :125 four pfb_pytlds_*
+  strings and :54/:56 dnsbl_tld_data/dnsbl_tld (Feature B) untouched.
+- tests/conftest.py -- reset_pfb_globals() fixture keys "python_tld"/
+  "python_tlds" -> "tld_allow"/"tld_allow_list"; adjacent comment
+  reconciled ("distinct from python_tld" -> "distinct from tld_allow").
+- tests/test_pfb_unbound.py -- import parse_python_tlds -> parse_tld_allow
+  (alphabetical position unchanged: "pa..." still sorts between
+  iter_domain_suffixes and python_control_duration); two RFC-4343 comments;
+  two CNAME-arm pfb[...] key writes; TestParsePythonTlds class renamed
+  TestParseTldAllow (house pattern: sibling test classes are named after
+  the function under test, e.g. TestParseIniInt/_parse_ini_int) with its
+  docstring/calls/local vars/comments updated; _make_cfg base-dict keys;
+  six _make_cfg(...) kwargs call sites; three in-test comments.
+- 12 sibling cfg-fixture files (test_adr06_golden_oracle.py,
+  test_adr07_emit_wire.py, test_adr07_matcher_strata.py [+kwargs +1
+  comment], test_adr07_php_boundary.py, test_adr07_regex_safety.py,
+  test_adr08_confusable_matcher.py, test_adr08_mode_baseline.py,
+  test_adr10_concurrency.py [+2 runtime pfb[...] read/write sites],
+  test_adr10_snapshot_equivalence.py, test_adr31_permit_build.py,
+  test_adr31_precedence_oracle.py, test_branch_coverage_gaps.py,
+  test_regex_literal_prefilter.py) -- the "python_tld": False /
+  "python_tlds": [] cfg-dict pair -> "tld_allow": False / "tld_allow_list":
+  [], each mechanically enumerated by the brief's master grep.
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/02_Results.txt -- this
+  handoff.
+
+Commit hash: self-referential (this file is part of the commit that creates
+  it) -- same disclosed chicken-and-egg P1 hit; obtain via
+  `git log -1 --format=%H` on branch adr/66-tld-naming-disambiguation-1783983455.
+Push: adr/66-tld-naming-disambiguation-1783983455
+
+BASE: rebased onto origin/devel at e353d13c (worktree was 1 commit behind
+  at brief time -- a72... workflow-only commit unrelated to src/tests;
+  rebase was clean, no conflicts). base_sha (pre-first-edit HEAD) =
+  e353d13ceee14c2af3ba7550b07caf6ddb6f6673.
+
+PRE-EDIT VERIFICATION (all brief factual claims CONFIRMED before any edit)
+$ git hash-object tests/test_adr66_tld_naming_oracle.py
+  4ae3ad286a18d60ea496d40e649eb9b11e3c672c  [matches brief]
+$ sed -n '38,45p' tests/test_adr66_tld_bridges.py
+  TLD_ALLOW_ENABLE_KEY = "python_tld" ... TLD_ALLOW_LIST_KEY = "python_tlds"
+  [confirmed at exactly the claimed lines]
+$ git grep -nE '(^|[^a-zA-Z0-9_])(python_tld|python_tlds|parse_python_tlds|
+  dnsbl_pytld|pytld_cnt|pytld)([^a-zA-Z0-9_]|$)' -- src/ | wc -l
+  46  [24 pfb_unbound.py + 22 pfblockerng.inc, exact line numbers matched
+  the brief's enumeration line-for-line]
+
+MASTER RENAME + BEHAVIOUR-PRESERVING EXCEPTION (CLAUDE.md Test coverage #1)
+This phase is a pure identifier rename (Semantics 1/3/5/6 of ADR.md SS2.3)
+-- no observable behaviour changes. Per the behaviour-PRESERVING exception,
+red->green test-first is N/A; the proof is the pre-pinned frozen oracle
+(tests/test_adr66_tld_naming_oracle.py, hash-locked, ZERO edits) staying
+byte-identical GREEN across the rename, plus the ini-bridge round-trip
+(C1/C2) now exercising the NEW key names end-to-end through the real
+production reader (init_standard()) -- proving the .inc writer and .py
+reader were renamed ATOMICALLY in this one commit (Semantic 3).
+
+GATES (all executed, pasted tails)
+
+$ git hash-object tests/test_adr66_tld_naming_oracle.py   [POST-edit]
+  4ae3ad286a18d60ea496d40e649eb9b11e3c672c  -- UNCHANGED, matches pre-edit.
+
+$ python3 -m pytest tests/test_adr66_tld_naming_oracle.py tests/test_adr66_tld_bridges.py -v
+  ... (all Oracle A1-A10/A5c, Oracle B1-B14, C1/C2, C3/C4, G1-G4 listed PASSED)
+  ======================== 37 passed in 0.56s =========================
+  (oracle-unchanged-green proof + ini-bridge round-trip proof under the
+  NEW key names -- this IS the atomic-rename evidence per the brief.)
+
+$ python3 -m pytest
+  ======================= 2876 passed, 4 skipped in 52.50s =======================
+  (identical to the P1 baseline: 2876 passed, 4 skipped.)
+
+$ ruff check .
+  All checks passed!
+
+$ ruff format --check .
+  238 files already formatted
+
+$ python3 -m mypy tests/
+  Success: no issues found in 102 source files
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  No syntax errors detected in .../pfblockerng.inc
+  (4 pre-existing PHP8.3 "optional-before-required-param" deprecation
+  notices unrelated to this diff, same as P1's baseline.)
+
+$ php -l tests/php/TldBridgeEmitTest.php
+  No syntax errors detected in tests/php/TldBridgeEmitTest.php
+
+$ vendor/bin/phpunit
+  Tests: 3338, Assertions: 21009, Deprecations: 1, Notices: 1, Skipped: 4.
+  OK, but there were issues!  [Skipped: 4 = the documented root
+  permission-guard baseline; matches P1's baseline of 3338 tests / Skipped 4.]
+
+$ composer phpstan
+  [OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+  exit 0, zero output (clean pass)
+
+$ python3 scripts/check_comment_narration.py --staged
+  (no output -- clean; no ADR-phase-number/RESULTS-ref/review-archaeology on
+  added src/scripts lines)
+
+$ python3 scripts/check_version_literals.py --staged
+  exit 0 (clean)
+
+$ python3 scripts/check_retired_tokens.py --staged
+  'python_tld': 22 site(s) remain (exit 1, ADVISORY per .githooks/pre-commit
+  line 256-267 -- issue #1059 rollout, warn-only, does not block commit).
+  Every reported survivor is a legitimate STAYS-class identifier this brief
+  explicitly forbids touching: python_tld_seg (9 .py + 1 .inc occurrences),
+  python_tld_wildcard (5 .py + 4 .inc), and the www element id
+  dnsbl_python_tld_allow_text (2 occurrences, a DIFFERENT token that merely
+  shares the "python_tld" substring). No action taken -- correct per
+  Semantic 6 (substring-over-reach) and the brief's explicit DO-NOT-TOUCH
+  list.
+
+SURVIVOR-COUNT VERIFICATION (stays rows, before == after)
+$ git grep -oE 'pfb_pytlds?(_sort|_gtld|_cctld|_itld|_bgtld)?' -- src/ | wc -l
+  50  [brief predicted 50 -- MATCH]
+$ git grep -c python_tld_seg -- src/usr/local/pkg/pfblockerng/pfb_unbound.py src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  pfb_unbound.py:9  pfblockerng.inc:1  [brief predicted 9+1 -- MATCH]
+$ git grep -c python_tld_wildcard -- src/usr/local/pkg/pfblockerng/pfb_unbound.py src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  pfb_unbound.py:5  pfblockerng.inc:4  [brief predicted 5+4 -- MATCH]
+
+DoD GREP (production) -- MUST be zero-hit
+$ git grep -nE '(^|[^a-zA-Z0-9_])(python_tld|python_tlds|parse_python_tlds|dnsbl_pytld|pytld_cnt|pytld)([^a-zA-Z0-9_]|$)' -- src/
+  (no output, exit 1) -- CONFIRMED zero survivors tree-wide in src/.
+
+DoD GREP (tests) -- brief predicted exactly ONE surviving line
+$ git grep -nE '(^|[^a-zA-Z0-9_])(python_tld|python_tlds|parse_python_tlds|dnsbl_pytld|pytld_cnt|pytld)([^a-zA-Z0-9_]|$)' -- tests/
+  tests/smoke/helpers.py:2521: ... "any IDN/pytld toggles" ...
+  tests/test_adr66_tld_bridges.py:190: # Planner addition: python_tld_wildcard contains python_tld as a
+  tests/test_adr66_tld_bridges.py:191: # prefix -- a naive Phase-2 substring rename of python_tld would
+  See Deviations below -- 3 lines, not the predicted 1; both discrepancies
+  are benign (see Deviations), neither is a missed rename.
+
+git show --stat (self-check before handoff)
+  19 files changed, 124 insertions(+), 124 deletions(-) -- perfectly
+  symmetric insert/delete count across every file, confirming a pure
+  rename with no line additions/removals/logic moves. Full diff read
+  file-by-file for pfb_unbound.py, pfblockerng.inc, test_adr66_tld_bridges.py,
+  TldBridgeEmitTest.php, conftest.py -- every hunk is exactly the mapped
+  identifier substitution, nothing else.
+
+COVERAGE MATRIX (every brief section-3 row, ticked)
+- pfb_unbound.py 24/24 lines (864,865,873,1249-1252,1254,1255,1258,
+  1475-1478,1548,1549,1553,2298,2326,6101,6102,6105,6704,6705): DONE --
+  test evidence: tests/test_adr66_tld_naming_oracle.py (Oracle A, all
+  branches) + tests/test_adr66_tld_bridges.py C1/C2 (real init_standard()
+  round-trip) + tests/test_pfb_unbound.py TestEvaluateDomainGolden TLD-Allow
+  rows + TestParseTldAllow.
+- pfblockerng.inc 22/22 lines (2726,8446-8465,8510-8511,17988-18000): DONE
+  -- test evidence: tests/php/TldBridgeEmitTest.php C1 (structural,
+  functionBody() brace extraction against the live source).
+- www/pfblockerng/pfblockerng_dnsbl.php: DONE (zero edits, confirmed by
+  the master enumeration's zero www hits and the DoD grep's zero www hits
+  post-edit).
+- Editable tests (test_adr66_tld_bridges.py, TldBridgeEmitTest.php,
+  conftest.py, test_pfb_unbound.py 32/32 lines, 12 sibling cfg-fixture
+  files): DONE -- full-suite pytest (2876 passed) + phpunit (3338 tests)
+  are the covering runs; the oracle+bridges 37-passed run is the targeted
+  proof.
+- FROZEN oracle (test_adr66_tld_naming_oracle.py): DONE -- zero edits,
+  hash-object confirmed identical pre/post (4ae3ad28...).
+- STAYS rows (pfb_pytld family, python_tld_seg, python_tld_wildcard,
+  Feature-B identifiers dnsbl_tld/tld_master/classify/
+  _dnsbl_tld_search/_dnsbl_load_tld_master/tld_exclusion/tld_blacklist):
+  DONE -- survivor counts identical before/after (see above); G1/G2/G3/G4
+  in test_adr66_tld_bridges.py stayed green UNEDITED.
+- Hostile-input rows 1-9 (section 4): all 9 covered by the existing
+  frozen-oracle + bridges + golden tests exercising exactly those
+  survival/adjacency/concatenation/missing-key/stale-ini/www-token/
+  Feature-B conditions -- no new test needed since this is a pure rename
+  of already-tested surfaces, not new logic.
+
+DEVIATIONS / JUDGMENT CALLS
+1. Rebased the worktree onto origin/devel (e353d13c) before the first
+   edit -- worktree was 1 commit behind at brief time (a17ecf2a,
+   workflows-only, no src/tests overlap). Required by CLAUDE.md's
+   "rebase onto the latest base" rule; not a brief deviation.
+2. Renamed the test class TestParsePythonTlds -> TestParseTldAllow
+   (tests/test_pfb_unbound.py). Not individually itemized in the brief's
+   per-line enumeration (which covered its body/docstring/calls under the
+   "2883-2914" range), but required by the house convention this file
+   already follows (sibling classes are named after the function under
+   test, e.g. TestParseIniInt tests _parse_ini_int) -- leaving it named
+   TestParsePythonTlds after the function renamed to parse_tld_allow()
+   would be a stale, off-pattern name. No other file/test references the
+   old class name (verified: `git grep -rn TestParsePythonTlds` zero hits
+   pre-edit).
+3. DoD grep (tests) discrepancy -- the brief predicted "exactly ONE
+   surviving line: tests/test_adr66_tld_bridges.py:190". Actual output is
+   THREE lines:
+     a) tests/test_adr66_tld_bridges.py:190 AND :191 (not just :190) --
+        both are within the SAME frozen G3 do-not-edit comment block
+        (lines 189-196, explicitly on the brief's DO-NOT-TOUCH list); the
+        comment prose happens to say "python_tld" twice across two
+        consecutive lines. Left untouched per the brief -- this is an
+        arithmetic undercount in the brief's own grep-line-count claim,
+        not a missed rename or a scope problem: the governing instruction
+        ("DO NOT edit :189-196") is unambiguous and was followed exactly.
+     b) tests/smoke/helpers.py:2521 -- a docstring in clear_dnsbl_settings()
+        reads "...and any IDN/pytld toggles -- STAYS on...", informal
+        prose grouping IDN and TLD-Allow config toggles together. This
+        file is OUTSIDE the brief's "EDITABLE TESTS" enumeration (which
+        does not list tests/smoke/helpers.py at all) and outside the R-A
+        delta budget (ADR SS2.4) as scoped by this brief. Left UNCHANGED:
+        (i) not on the editable-tests list, (ii) the word "pytld" here is
+        loose English shorthand, not a reference to any specific renamed
+        identifier (it most plausibly nods at the STILL-STAYS pfb_pytld
+        stored config family, which is accurate either way), (iii) editing
+        an unlisted file to satisfy the brief's own verification-count
+        claim would be scope creep beyond what was briefed. Per the
+        ESCALATE contract this was evaluated as a low-severity,
+        non-load-bearing discrepancy in a verification prediction (not a
+        contradicted BUILD premise) -- recorded here rather than a full
+        BLOCKED stop, since the underlying instructions (do-not-touch
+        :189-196; the editable-tests list excludes smoke/) were followed
+        exactly regardless of the miscount. Flagging for the gate/planner
+        to confirm this judgment call.
+4. `bash scripts/agent/run-gates.sh --diff origin/devel` requires a diff
+   against a COMMITTED HEAD (`git diff --name-only base...HEAD`, verified
+   by reading the script) -- it cannot be run, and its output cannot be
+   embedded in this file, before the commit that contains this very file
+   exists. Same chicken-and-egg P1 hit for the commit hash field. Ran
+   immediately after committing; result reported in the delegation
+   handoff (StructuredOutput) to the planner rather than pasted here, per
+   the same disclosed limitation.
+
+CARRY-FORWARD FOR PHASE 3
+- Frozen oracle hash UNCHANGED: 4ae3ad286a18d60ea496d40e649eb9b11e3c672c.
+- Feature-B seam lines (TLD_WILDCARD_INI_KEY, MANIFEST_TLD_KEYS,
+  tld_wildcard_classify, load_tld_wildcard_master) at
+  tests/test_adr66_tld_bridges.py:40-44 -- UNTOUCHED, Phase 3's to update.
+- G3/G4 (python_tld_wildcard survivor guards) still guard through Phase 3
+  -- python_tld_wildcard is UNCHANGED by P2 and must stay UNCHANGED by P3
+  too (it is Feature B's OWN flag name, not a Feature-A rename target).
+- TldBridgeEmitTest.php's corrected state: C1 (lines 112-147) now pins the
+  NEW Feature-A names (tld_allow/tld_allow_list/dnsbl_tld_allow); :54/:56
+  (dnsbl_tld_data/dnsbl_tld, Feature B) and :125 (four pfb_pytlds_* field
+  strings, permanent stays) remain untouched -- Phase 3 updates C3's
+  (manifest bridge) literals there if/when Feature B's manifest key names
+  change.
+- Phase 3 must NOT touch the now-renamed tld_allow/tld_allow_list/
+  dnsbl_tld_allow/parse_tld_allow/tld_allow_cnt identifiers -- they are
+  Feature A, out of Phase 3's R-B budget.
+- Per P1's carry-forward (still true, unverified by P2): ADR.md SS2.2's
+  "manifest config.tld_master -> tld_wildcard_master" row describes a
+  manifest key that does not exist in the live tree (the public-suffix
+  oracle rides a SHIPPED file gated by the python_tld_wildcard ini flag,
+  not a manifest key) -- Phase 3 (or the ADR owner before Phase 3 starts)
+  should amend ADR.md per "ADR amendments after merge" before renaming a
+  key that isn't there.
+- The two DoD-grep tests/ discrepancies above (Deviation 3) are
+  independent of Phase 3's Feature-B rename and need no Phase-3 action;
+  flagged for the planner's awareness only.

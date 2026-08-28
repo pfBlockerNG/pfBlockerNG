@@ -1,0 +1,103 @@
+================================================================================
+PHASE 10 PROMPT — Wider ISO-8601 sweep (follow-on, does not gate Accepted)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §1.8, §7 Phase-10 note first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 10 of 10 — a follow-on that lands AFTER
+Phase 9 flips Status to Accepted; this phase does not gate acceptance. Behaviour-CHANGING (format
+normalization) for two genuine latent-bug sites, cosmetic for the rest. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Once the "something might parse our old log format" excuse is gone for the 10 managed log types
+(Phases 2-4), it no longer applies anywhere else in this codebase either. §1.8's sweep found several
+more non-ISO date sites — two of which (`dnsbl_alias_update()`, `pfBlockerNG_clearsqlite()`) are
+genuine latent wrong-year bugs (a value updated in December and viewed in January renders with the
+wrong year), the rest are lower-risk normalization the user explicitly asked to fold into this ADR.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/09_Results.txt` — confirm Phase 9 landed
+  and ADR-60 is Accepted. If missing, STOP and report (Phase 10 can still proceed even if Phase 9 is
+  merged-but-pending live-VM confirmation, but not if Phase 9 itself didn't land).
+- ADR.md §1.8 (the full table, with exact file:line references and current formats), §7's Phase-10
+  paragraph.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `dnsbl_alias_update()` (~:5370, ~:5404),
+  `pfBlockerNG_clearsqlite()` (~:14133, ~:14137), the `/tmp` debug filename site (~:16534),
+  `pfb_iso_timestamp()` (~:702-:711, the widget's year-guessing reformatter — read it fully to
+  understand what it currently compensates for).
+- src/usr/local/www/pfblockerng/widget.php (~:390, where `pfb_iso_timestamp()` is called on the
+  `dnsbl_alias_update()` value; ~:797-:798, where `pfBlockerNG_clearsqlite()`'s value is displayed
+  RAW with no reformatter at all).
+- src/usr/local/pkg/pfblockerng/pfblockerng.php (~:843, the MaxMind version `gmdate` call; ~:524 in
+  widget.php where that value is displayed).
+- src/usr/local/www/pfblockerng/pfblockerng_update.php (~:291, ~:292, the schedule "Last/Next"
+  display).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py (~:893, ~:898, the unwritable-log rename filename).
+- src/usr/local/www/pfblockerng/www/index.php:101 — the hardcoded HTTP `Expires:` header. READ this
+  and understand WHY it's excluded (§1.8) before touching anything nearby — do not "fix" it.
+
+ACTION PLAN
+1. `dnsbl_alias_update()` (`:5370`/`:5404`): convert `date('M j H:i:s', ...)` to
+   `pfb_log_iso_timestamp()`'s format (or the equivalent call — this is a DNSBL group stat, not one
+   of the 10 managed logs, so use whatever this file's existing ISO-8601 helper convention is, per
+   ADR.md's note that 6 sites already use `'Y-m-d H:i:s'` directly).
+2. `widget.php:390`'s call to `pfb_iso_timestamp()`: now that `dnsbl_alias_update()`'s stored value is
+   already ISO with a real year, decide whether `pfb_iso_timestamp()` (the year-GUESSING reformatter)
+   can be simplified to a straight pass-through/removed entirely, or whether it still serves a purpose
+   (e.g. formatting old already-stored values from before this phase landed — a real upgrade
+   consideration: existing installs have old-format values sitting in their DNSBL stats table until
+   the next `dnsbl_alias_update()` call overwrites them). Your call, justify it in the handoff — don't
+   silently delete a function that still protects an upgrade window without saying so.
+3. `pfBlockerNG_clearsqlite()` (`:14133`/`:14137`): convert to the same ISO format. `widget.php:797`-
+   `:798` displays this raw — confirm it renders correctly with no further change needed (it's a
+   straight display of the stored string), or add a thin reformat if the display expects a specific
+   shape.
+4. `pfblockerng.inc:16534` (`/tmp` debug filename): convert `'M_j'` to `'Y-m-d'` (or similar
+   fixed-width, sortable, year-bearing shape) — zero external consumer, trivial.
+5. `pfblockerng.php:843` (MaxMind `gmdate('D, j M Y H:i:s T')`): this already has a year and is purely
+   cosmetic — convert to `'Y-m-d H:i:s'` for consistency, verify `widget.php:524`'s display of it
+   still reads sensibly.
+6. `pfblockerng_update.php:291`/`:292` (`'Y-m-d H:i'`): add seconds (`'Y-m-d H:i:s'`) for consistency
+   with every other ISO timestamp in the codebase.
+7. `pfb_unbound.py:893`/`:898` (`strftime("_%Y%m%-d%H%M%S.log")`): drop the `-` (`"_%Y%m%d%H%M%S.log"`)
+   so the filename is fixed-width and lexically sortable.
+8. Do NOT touch `www/index.php:101`'s HTTP `Expires:` header — RFC 7231/2822 is protocol-mandated;
+   confirm in the handoff that you looked at it and left it alone deliberately, not by oversight.
+
+CONSTRAINTS
+- PHP: tabs, uppercase `TRUE`/`FALSE`.
+- Python: stdlib only, `pfb_unbound.py` runs inside Unbound's embedded loader.
+- Do not touch any of the 10 managed log types' format (Phases 2-4 already did that) — this phase is
+  entirely outside that surface.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+VERIFICATION
+- `vendor/bin/phpunit` + `phpcs` + `phpstan` + `python -m pytest` green.
+- Red→green proof for the two genuine bugs: construct a `dnsbl_alias_update()` fixture (or
+  `pfBlockerNG_clearsqlite()`) where the stored no-year timestamp is from December and "now" is
+  January — show the OLD code (`pfb_iso_timestamp()`'s year-guess, or the raw `clearsqlite` display)
+  renders the WRONG year (red, the actual pre-existing bug), and the NEW code (year stored at write
+  time) renders the CORRECT year (green).
+- For the rest: straightforward before/after format assertions (the debug filename, the MaxMind
+  `gmdate`, the update-page seconds, the Python rename filename).
+- A test/assertion confirming `www/index.php:101`'s `Expires:` header is byte-for-byte unchanged.
+- Tier-A `ui_render` for any page whose displayed date format changed (the dashboard widget, the
+  Update page).
+- Diff-read: confirm nothing under the 10-managed-log-types surface (Phases 2-4's scope) was touched.
+
+EXPECTED RESULT
+Every §1.8 lower-priority site is ISO-8601 (or the closest fixed-width equivalent for a filename); the
+two genuine wrong-year bugs are fixed and proven so; the HTTP header is untouched.
+
+COMMIT (single)
+    pfblockerng: normalize remaining non-ISO timestamps outside the 10 managed logs (ADR-60 P10)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/10_Results.txt` with: verdict; every
+site changed + commit; gates + pasted output; the red→green proof for both genuine wrong-year bugs;
+the `pfb_iso_timestamp()` simplify-vs-keep decision and its justification; confirmation the HTTP
+header was deliberately left alone; deviations (or "none"). This is the final phase — no
+carry-forward needed.

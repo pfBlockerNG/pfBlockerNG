@@ -1,0 +1,271 @@
+================================================================================
+ADR-06 -- PHASE 5 RESULTS / HANDOFF FOR PHASE 6
+Slim shell/PHP to download+tag+manifest/raw; drop dead native + build-time passes
+Branch: adr/06   Commit: pfblockerng: ADR-06 P5 -- slim shell/PHP DNSBL preprocessing; drop dead native logic
+================================================================================
+
+VERDICT: GO for Phase 6 (final validation + DoD + manual smoke). PHP/shell now
+WRITE the per-feed manifest (/var/unbound/pfb_py_sources.json) + per-feed IP-
+stripped raw that Phase-4 init builds from; the dropped build-time optimisations
+(dnsbl_scrub, domaintldpy, tld_analysis collapse/remove-file) and the native-mode
+TLD-whitelist-resolve leftover are REMOVED; the DNSBL-IP firewall pass is KEPT
+entirely in PHP and Python never sees an IP. Gates: python -m pytest = 255 passed
+(+3 new boundary tests); ruff check + ruff format clean; php -l clean on both
+changed PHP files; sh -n + shellcheck clean on the changed shell. The PHP-written
+manifest was round-tripped through the PRODUCTION pfb_unbound.dnsbl_build_from_
+manifest() and produced correct data/zone/whiteDB/feedGroupIndex/counts.
+
+--------------------------------------------------------------------------------
+0. THE BOUNDARY ACTUALLY SHIPPED (read this first -- it differs from RESULTS/01's
+   first-pass sketch, deliberately, and is decision-equivalent + lower-risk)
+--------------------------------------------------------------------------------
+RESULTS/01/04 sketched two viable shapes: (a) hand Python the ORIGINAL raw feed
+lines per format (format_hint hosts/abp/csv:pon), or (b) keep the per-line tagged
+files. Phase 5 ships a THIRD, strictly-safer variant of (a):
+
+  PHP keeps its per-feed download + MULTI-FORMAT domain-extraction loop (hosts /
+  plain / basic-ABP / the CSV threat-feed sniffers pt|bbc|h3x|otx|pon|et / IDN).
+  That loop already writes one cleaned, lower-cased, IP-stripped domain per line
+  into each per-feed '.txt' (col1 of the 6-col CSV). pfb_unbound_python_sources()
+  then extracts col1 of each '.txt' into a per-feed raw file and references it in
+  the manifest with format_hint = "plain" for EVERY feed. Python's parse("plain")
+  only re-validates + lower-cases.
+
+WHY this variant (the key decision):
+  * Python's frozen Phase-3 parse() implements ONLY hosts/plain/abp/csv:pon. The
+    catalog also ships pt/bbc/h3x/otx/et CSV threat-feeds. Handing Python the raw
+    of THOSE with no matching parser would REGRESS them (lost blocks). Keeping the
+    PHP extraction and emitting the already-bare domain as "plain" keeps ALL feed
+    formats working with ZERO regression, and is decision-equivalent because PHP's
+    cleaned domain == what Python's per-format parse would have produced for the
+    formats it does implement.
+  * It also satisfies ADR-06 SS3b for free: the loop's IP detection already routes
+    embedded IPs to the firewall and EXCLUDES them from '.txt', so the raw handed
+    to Python is inherently IP-free (0 leak -- pinned).
+
+PINNED by a NEW test, tests/test_adr06_php_boundary.py (+3):
+  Simulates EXACTLY what PHP writes (runs the Phase-2 ReferencePipeline's per-
+  format _extract + _validate_domain over each fixture feed -> the bare domains
+  PHP's '.txt' col1 would hold), writes them as "plain" per-feed raw, builds a
+  plain-ONLY manifest, runs PRODUCTION dnsbl_build_from_manifest + evaluate_domain,
+  and asserts EVERY golden decision (both TOP1M scenarios) + no GOLDEN_EXTRACTED_IPS
+  leak. Green. This is the end-to-end proof the new PHP path is decision-equivalent.
+
+CONSEQUENCE FOR PHASE 6: if you ever want PHP to hand Python the ORIGINAL raw per
+format (so Python owns ABP/CSV too -- the eventual ABP-ADR shape), parse() must
+first gain the missing CSV parsers; test_adr06_init_from_raw.py already pins that
+hosts/abp/csv:pon path. Until then, "plain"-over-PHP-cleaned is the contract.
+
+--------------------------------------------------------------------------------
+1. WHAT WAS REMOVED (files / functions / blocks)
+--------------------------------------------------------------------------------
+SHELL (pfblockerng.sh):
+  * dnsbl_scrub() (was :357-461) DELETED -- within/cross-feed sort -u dedup,
+    user-whitelist removal (ggrep -vF pfbdnsblsuppression), TOP1M removal (ggrep
+    -vF pfbalexa). Pure build-time optimisations; Python dedups dict keys for free
+    and the whitelist/TOP1M are query-time whiteDB now.
+  * domaintldpy() (was :468-524) DELETED -- sort -u dedup + subdomain COLLAPSE
+    (ggrep -vF dnsbl_tld_remove) + the pfb_py_count write. Collapse is unnecessary
+    (a redundant sub-domain is matched by its parent zone); pfb_py_count is now
+    Python-emitted.
+  * Their case-dispatch arms (dnsbl_scrub) / (domaintldpy) DELETED.
+  * Now-dead var defs DELETED: domainmaster, dnsbl_tld_remove, dnsbl_python_data,
+    dnsbl_python_zone, dnsbl_python_count, pfbdnsblsuppression, pfbalexa (each only
+    fed the two removed functions; ShellCheck SC2034-clean after removal).
+
+PHP (pfblockerng.inc):
+  * tld_analysis(): the COLLAPSE/remove-file machinery DELETED -- the $p_tsp
+    (dnsbl_tld_remove) handle, its open/resource-check/close, both ".{dfound},,"
+    /".{tld},," fwrites, the unlink_if_exists of dnsbl_tld_remove, and the
+    `exec domaintldpy` (replaced by a direct .raw -> final rename of pfb_py_data/
+    pfb_py_zone, since there is no longer a collapse step between).
+  * tld_analysis(): the NATIVE-MODE leftover DELETED -- the "static local-zone"
+    TLD-whitelist resolver block (drill-resolve a whitelisted domain to a real/
+    user IP into $tld_whitelist). '$whitelist' was always empty (dead since native
+    mode was removed); "Not required for python mode blocking" per its own comment.
+  * The download loop: the dnsbl_scrub call site DELETED -- the $pfb_alexa /
+    $dup_mode setup + `exec dnsbl_scrub ...`. (The per-feed .bk is now renamed to
+    .txt un-scrubbed; Python dedups on load.)
+  * pfb_update_unbound() count sync-check (was inc:3149-3156) REWRITTEN -- the
+    `$dnsbl_cnt - $tld_cnt` subtraction + (data+zone line count) == comparison +
+    "OUT OF SYNC" branch are GONE. It now reads the Python-emitted pfb_py_count
+    (the LOADED entry total) and logs `[ feed lines: N | loaded entries: M ]`.
+    (See SS3 -- this reconciles the RESULTS/04-flagged semantics mismatch.)
+
+NOTE on the basic-ABP $e_replace pass: it was NOT removed (see SS5 INTENTIONALLY-
+LEFT). It still extracts ABP "||domain^" lines into the per-feed '.txt' that the
+manifest is derived from; removing it would break the '.txt'/CSV producer that the
+alerts/detail consumers (SS5) still read. Python's parse("abp") is exercised by
+test_adr06_init_from_raw.py but is NOT on the production "plain"-boundary path.
+
+--------------------------------------------------------------------------------
+2. WHAT REMAINS IN SHELL/PHP (the slimmed responsibilities)
+--------------------------------------------------------------------------------
+PHP/shell now: download each feed (unchanged: pfb_download, feeds.json, auth,
+scheduling, reuse/fail markers), per-format CLEAN each feed to one bare domain
+per line in '{header}.txt' (kept -- it is the format-light tag step + the source
+the manifest raw is derived from), run the INDEPENDENT DNSBL-IP pass (kept --
+SS4), tag feed/group/log, and WRITE the manifest + per-feed raw (NEW -- SS3). The
+data/zone CLASSIFICATION now lives in the Python build; the PHP tld_analysis copy
+is RETAINED ONLY to keep producing the legacy pfb_py_data/pfb_py_zone CSVs that
+non-build consumers still read (SS5) -- it is no longer on the Python load path.
+
+--------------------------------------------------------------------------------
+3. THE MANIFEST + RAW THE PHP NOW WRITES (matches what Phase-4 init READS)
+--------------------------------------------------------------------------------
+NEW fns in pfblockerng.inc:
+  * pfb_dnsbl_whitelist_lines() -> the raw user-suppression lines (Python's build
+    does the www-strip / leading-dot->wildcard normalisation, so PHP passes them
+    through verbatim).
+  * pfb_unbound_python_sources($feeds) -> writes:
+      - /var/unbound/pfb_py_sources.json  ($pfb['unbound_py_sources'])  -- manifest
+      - /var/unbound/pfb_py_raw/<feed>.raw ($pfb['unbound_py_rawdir'])  -- per-feed
+        IP-stripped bare-domain raw (col1 of each {dnsdir}/<feed>.txt)
+    Manifest shape (EXACTLY the keys pfb_unbound.dnsbl_build_from_manifest reads,
+    verified by a PHP->Python round-trip in this phase):
+      { "version":1,
+        "config": { "tld_master": "/usr/local/pkg/pfblockerng/dnsbl_tld",  # PATH
+                    "tld_blacklist": [...], "tld_exclusion": [...],
+                    "user_whitelist": [...], "top1m_list": [...],
+                    "top1m_enabled": <bool> },
+        "feeds":  [ { "raw": "/var/unbound/pfb_py_raw/<feed>.raw",
+                      "feed": "<header>", "group": "<alias>",
+                      "format_hint": "plain", "log_flag": "0|1|2" }, ... ] }
+    top1m_enabled = ($pfb['dnsbl_alexa']=='on' && pfbalexawhitelist.txt exists);
+    top1m_list = the lines of pfbalexawhitelist.txt when enabled. (Per-list
+    filter_alexa is finer-grained than the single global whiteDB toggle, so the
+    global dnsbl_alexa drives it -- see SS5 residuals.)
+  * pfb_unbound_python_sources_whitelist() -> rewrites ONLY config.user_whitelist
+    in the existing manifest (for whitelist edits that don't re-enumerate feeds).
+
+WIRED:
+  * pfb_unbound_python_sources($pfb_py_feeds) is called in the domain-update branch
+    (after the per-feed .txt are finalised). $pfb_py_feeds is accumulated at BOTH
+    feed-finalise spots (reuse-exists + post-download) as {header,group(=alias),
+    log(=logging_type)}.
+  * Disabled / clear-all branches unlink the manifest + rmdir the raw dir.
+
+COUNTS (RESULTS/04 SS3 / SS5 follow-through):
+  * Python emits /var/unbound/pfb_py_count = LOADED total (len(data)+len(zone)) via
+    dnsbl_emit_count() (Phase 4). PHP NO LONGER writes pfb_py_count (domaintldpy
+    did; it's deleted). The inc sync-check now READS pfb_py_count and reports it
+    (loaded entries) alongside the *.txt feed-line count -- no subtraction, no
+    false "OUT OF SYNC". The UI's per-alias visible counts come from PHP's
+    dnsbl_alias_update()/dnsbl_save_stats() off the *.txt line counts (unchanged,
+    independent of pfb_py_count).
+
+--------------------------------------------------------------------------------
+4. DNSBL-IP FIREWALL FEATURE -- KEPT IN PHP, RAW IS IP-FREE (SS3b)
+--------------------------------------------------------------------------------
+UNCHANGED and fully functional: the per-feed loop's IP detection (generic
+is_ipaddrv4 at inc ~:7950-:7973 and the csv:pon col0 IP at ~:7935-:7945) -> per-
+header {header}_v4.ip -> globbed into {dbdir}/DNSBLIP_v4.txt -> DNSBLIP_v4 pf alias
+with the configured action (inc ~:8301-:8334). I did NOT touch any of it.
+
+Because that detection already EXCLUDES bare-IP lines from the per-feed '.txt'
+(the domain sink), the per-feed RAW the manifest derives from '.txt' is inherently
+IP-FREE -- so Python never receives an IP. test_adr06_php_boundary.py asserts the
+diverted firewall-IP set == GOLDEN_EXTRACTED_IPS
+{198.51.100.23, 203.0.113.45, 198.51.100.77, 192.0.2.140} AND none leak into
+data/zone. The csv:pon row that yields BOTH a domain (col2) and a firewall IP
+(col0) is preserved (domain kept, IP diverted).
+
+DEVIATION (intentional, decision-equivalent): SS3b suggested PHYSICALLY refactoring
+the IP detection into a SEPARATE pass over the raw. I did NOT relocate the code --
+it already runs as a self-contained branch inside the per-feed loop and the raw
+Python sees is IP-free regardless, so the observable contract (DNSBLIP_v4 identical;
+0 IP leak) is met without the relocation. Relocating would risk the pon-col0 /
+generic-bare-IP handling for no behavioural gain. Phase 6 may relocate it as pure
+cleanup if desired; it is not required for correctness.
+
+--------------------------------------------------------------------------------
+5. WHITELIST + COUNTS + FEED/GROUP + DNSBL-IP UI PATHS -- STILL WORK
+--------------------------------------------------------------------------------
+USER WHITELIST (settings textarea):
+  * The suppression config is unchanged; pfb_unbound_python() still regenerates
+    pfb_py_whitelist.txt on change AND now also calls
+    pfb_unbound_python_sources_whitelist() so the manifest's config.user_whitelist
+    (the source of the query-time whiteDB) tracks a settings edit even when no feed
+    update rewrites the full manifest. Application stays query-time (whiteDB),
+    unchanged matcher.
+USER WHITELIST (alerts "add to whitelist" button, pfblockerng_alerts.php:899+):
+  * Still writes the suppression config + pfb_unbound_python_whitelist('alerts');
+    NOW also calls pfb_unbound_python_sources_whitelist() before the reload so the
+    next build's whiteDB un-blocks the domain. The legacy ggrep -vF removal on the
+    pfb_py_data/zone CSVs is RETAINED (it still operates on the CSV consumers'
+    files; harmless, and the query-time whiteDB is the real un-block now).
+FEED/GROUP attribution: flows at QUERY TIME through feedGroupIndexDB -> sqlite
+  rows + log lines (operate() untouched). The build assigns feedGroupIndexDB from
+  the manifest feed/group rows (proven by the round-trip + tests).
+DNSBL-IP: SS4 -- pf alias path untouched, IP-free raw to Python.
+
+INTENTIONALLY-LEFT (per the CONSTRAINT "do not remove what RESULTS/04 did not
+confirm redundant; when in doubt leave it and note it"):
+  * The PHP tld_analysis data/zone CLASSIFICATION COPY (and the basic-ABP
+    $e_replace pass, and the master-raw -> pfb_py_data rename) are RETAINED, NOT
+    deleted, even though classification now also runs in Python. RATIONALE: these
+    PHP-produced pfb_py_data.txt / pfb_py_zone.txt 6-col CSVs are STILL READ/WRITTEN
+    by runtime consumers RESULTS/04 did NOT list as redundant:
+      - inc pfb_dnsbl_parse() greps pfb_py_data/zone for blocked-domain feed/group
+        detail (inc ~:5487/:5509);
+      - pfblockerng_alerts.php APPENDS to / ggreps / reads pfb_py_data/zone for the
+        live "add domain to group", whitelist-removal and unlock/detail features
+        (alerts ~:859-861, :1021-1024, :1141/:1159, :1324-1339).
+    Deleting the producers would break those observable UI features. They are also
+    the legacy CSV LOAD FALLBACK Phase 4 kept (init prefers the manifest, falls back
+    to the CSVs). So the classification PHP copy stays as a compatibility producer;
+    it is simply no longer on the Python LOAD path (the manifest build is).
+    => PHASE 6 / FUTURE: to fully retire the PHP classification + CSV producers,
+       migrate those alerts/detail consumers onto the manifest/whiteDB/sqlite (a
+       UI-side change, out of ADR-06 P5 scope -- operate()/matcher untouched here).
+  * Residual native remnant: $pfb['dnsbl_tld_remove'] path key def (inc:126) is now
+    unused (its only writer/readers were removed) but LEFT as a harmless global
+    path entry; /tmp cleanup is glob-based (pfb_unbound_clear_work_files :/tmp/
+    dnsbl_tld*). Safe to drop in a later cleanup.
+  * top1m_enabled is a single GLOBAL manifest flag (whiteDB is global). The old
+    per-list filter_alexa (which TOP1M-pruned only opted-in lists at build time)
+    cannot be expressed in a global query-time whiteDB; with TOP1M enabled, popular
+    domains are un-blocked across ALL lists. This is an accepted ADR-06 behaviour
+    change (query-time whiteDB is global), flagged for the maintainer smoke.
+
+--------------------------------------------------------------------------------
+6. WHAT WAS NOT TOUCHED (scope guard)
+--------------------------------------------------------------------------------
+NOT touched: pfb_download / feeds.json / auth / headers / scheduling / reuse-fail
+markers; the IP-feed (standalone) pipeline; GeoIP/ASN/MaxMind; SafeSearch/noAAAA/
+HSTS inputs; the matcher (evaluate_domain et al.) and operate(); pfb_unbound.py
+(NO production Python change this phase -- only a new test file added).
+
+--------------------------------------------------------------------------------
+7. GO-AHEAD FOR PHASE 6 (validation + DoD + manual smoke)
+--------------------------------------------------------------------------------
+GO. Phase 6 should:
+  1. Full golden equivalence across formats incl. basic-ABP (test_adr06_golden_
+     oracle + _init_from_raw + the NEW _php_boundary all green = decision contract
+     met). Re-run the Phase-1 init/mem benchmark on adr/06; record vs threshold.
+  2. Finalise README/CLAUDE.md if the build/contract changed (the manifest +
+     /var/unbound/pfb_py_raw are new on-box artifacts; pfb_py_count semantics
+     changed to LOADED total).
+  3. Manual smoke (live box) -- the binding ones for THIS phase:
+       - settings-textarea whitelist AND alerts-button whitelist both un-block
+         (whiteDB), with NO build-time list removal;
+       - counts/alerts/feed-group render; pfb_py_count is the loaded total and may
+         be HIGHER than the old number (un-pruned -- expected);
+       - a DNSBL feed with embedded IPs still populates DNSBLIP_v4 (same IP set);
+       - TLD blacklist (whole-TLD block) + TLD exclusion behave; TOP1M enabled ->
+         a popular domain in a feed resolves, disabled -> it blocks;
+       - a reload picks up feed + whitelist changes.
+     ALSO smoke the RETAINED CSV consumers (SS5): alerts "add domain to group",
+     "add to whitelist", unlock/detail -- they still operate on pfb_py_data/zone.
+  4. CONSIDER (optional follow-up ADR/phase, NOT required for DoD): migrate the
+     alerts/detail CSV consumers off pfb_py_data/zone so the PHP classification +
+     CSV producers can finally be deleted; and add the missing CSV parsers to
+     pfb_unbound.parse() if the boundary should hand Python the original raw.
+
+GATES (this phase): python -m pytest = 255 passed (+3); ruff check + ruff format
+clean; php -l clean (pfblockerng.inc, pfblockerng_alerts.php; pre-existing
+unrelated pfb_unlock() Deprecated notice only); sh -n + shellcheck clean
+(pfblockerng.sh). PHP-written manifest round-tripped through the PRODUCTION
+pfb_unbound.dnsbl_build_from_manifest() -> correct data/zone/whiteDB/feedGroup/
+counts. No pfb_unbound.py production change; no Unbound symbol added.
+================================================================================

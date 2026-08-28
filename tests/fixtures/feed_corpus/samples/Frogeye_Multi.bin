@@ -1,0 +1,206 @@
+# First-party trackers host list
+# Variant: multi-party trackers
+#
+# About first-party trackers: https://hostfiles.frogeye.fr/#whats-a-first-party-tracker
+#
+# In case of false positives/negatives, or any other question,
+# contact me the way you like: https://geoffrey.frogeye.fr
+#
+# Latest versions and variants: https://hostfiles.frogeye.fr/#list-variants
+# Source code: https://git.frogeye.fr/geoffrey/eulaurarien
+# License: https://git.frogeye.fr/geoffrey/eulaurarien/src/branch/master/LICENSE
+# Acknowledgements: https://hostfiles.frogeye.fr/#acknowledgements
+#
+# Generation software: eulaurarien 
+# List generation date: 2026-06-28T18:33:49+02:00
+# Oldest record: 2026-06-28T13:30:09+02:00
+# Number of source websites: 873
+# Number of source subdomains: 1766504
+# Number of source DNS records: 1617036
+#
+# Input rules: asns: 6, zones: 99166
+# Subsequent rules: asns: 6, hostnames: 19172, ip4s: 77, zones: 99166
+# … no dupplicates: asns: 6, hostnames: 13923, zones: 78
+# Output rules: hostnames: 19172
+#
+
+0.0.0.0 00f6375dd2e616d73649085c58dfed384fabe07a.cws.conviva.com
+0.0.0.0 01e7836916a6e23234e672343850e49f6c3db014.cws.conviva.com
+0.0.0.0 023eqa.customdomains.litix.io
+0.0.0.0 02877f9dafd21826d2f5713e0ddb0fd17479a8f5.cws.conviva.com
+0.0.0.0 02877f9dafd21826d2f5713e0ddb0fd17479a8f5.ipv4.cws.conviva.com
+0.0.0.0 02877f9dafd21826d2f5713e0ddb0fd17479a8f5.ipv6.cws.conviva.com
+0.0.0.0 02d8299499e6f4ca14596f364485ef1aa2527bc4.cws.conviva.com
+0.0.0.0 0366h7.customdomains.litix.io
+0.0.0.0 03ee8899ec5746450ac4ba94c3ee35e0e666064f.cws.conviva.com
+0.0.0.0 03ee8899ec5746450ac4ba94c3ee35e0e666064f.ipv4.cws.conviva.com
+0.0.0.0 03ee8899ec5746450ac4ba94c3ee35e0e666064f.ipv6.cws.conviva.com
+0.0.0.0 077d7e2a5c43e5b2d954a4fea4e1f2fb3c3267ae.cws.conviva.com
+0.0.0.0 087e7b908badc02e88d336eec159b32008e89501.cws.conviva.com
+0.0.0.0 0c03b8bbf14bc87e6497b4f7d75ff5b4d35853b1.cws.conviva.com
+0.0.0.0 100001623.collect.igodigital.com
+0.0.0.0 100002066.collect.igodigital.com
+0.0.0.0 100002531.collect.igodigital.com
+0.0.0.0 100002884.collect.igodigital.com
+0.0.0.0 100002903.collect.igodigital.com
+0.0.0.0 100003732.collect.igodigital.com
+0.0.0.0 100004126.collect.igodigital.com
+0.0.0.0 100005813.collect.igodigital.com
+0.0.0.0 100006044.collect.igodigital.com
+0.0.0.0 100006977.collect.igodigital.com
+0.0.0.0 100007688.collect.igodigital.com
+0.0.0.0 100008224.collect.igodigital.com
+0.0.0.0 100009348.collect.igodigital.com
+0.0.0.0 100010421.collect.igodigital.com
+0.0.0.0 100010423.collect.igodigital.com
+0.0.0.0 100010555.collect.igodigital.com
+0.0.0.0 100011341.collect.igodigital.com
+0.0.0.0 100011473.collect.igodigital.com
+0.0.0.0 100014299.collect.igodigital.com
+0.0.0.0 100014458.collect.igodigital.com
+0.0.0.0 100015193.collect.igodigital.com
+0.0.0.0 100015501.collect.igodigital.com
+0.0.0.0 100015594.collect.igodigital.com
+0.0.0.0 100015609.collect.igodigital.com
+0.0.0.0 100016073.collect.igodigital.com
+0.0.0.0 100016075.collect.igodigital.com
+0.0.0.0 100016344.collect.igodigital.com
+0.0.0.0 100016400.collect.igodigital.com
+0.0.0.0 100017152.collect.igodigital.com
+0.0.0.0 100018296.collect.igodigital.com
+0.0.0.0 100018571.collect.igodigital.com
+0.0.0.0 100019051.collect.igodigital.com
+0.0.0.0 100019570.collect.igodigital.com
+0.0.0.0 100022219.collect.igodigital.com
+0.0.0.0 100024523.collect.igodigital.com
+0.0.0.0 100025316.collect.igodigital.com
+0.0.0.0 100026228.collect.igodigital.com
+0.0.0.0 100027443.collect.igodigital.com
+0.0.0.0 100027768.collect.igodigital.com
+0.0.0.0 100028400.collect.igodigital.com
+0.0.0.0 100028779.collect.igodigital.com
+0.0.0.0 100028781.collect.igodigital.com
+0.0.0.0 100030023.collect.igodigital.com
+0.0.0.0 100035900.collect.igodigital.com
+0.0.0.0 100037529.collect.igodigital.com
+0.0.0.0 100038566.collect.igodigital.com
+0.0.0.0 10012725.collect.igodigital.com
+0.0.0.0 100.c-ko.imedia.cz
+0.0.0.0 100.c-ng.imedia.cz
+0.0.0.0 100.c-oa.imedia.cz
+0.0.0.0 101230059950694.wt-eu02.net
+0.0.0.0 10267.redirect.appmetrica.yandex.com
+0.0.0.0 1036137.collect.igodigital.com
+0.0.0.0 1038135.redirect.appmetrica.yandex.com
+0.0.0.0 10510523.collect.igodigital.com
+0.0.0.0 1060694.collect.igodigital.com
+0.0.0.0 106075.genieessp.com
+0.0.0.0 1065837.collect.igodigital.com
+0.0.0.0 107006243521810.wt-eu02.net
+0.0.0.0 10745993.collect.igodigital.com
+0.0.0.0 1074743.collect.igodigital.com
+0.0.0.0 10760123.collect.igodigital.com
+0.0.0.0 108557.genieessp.com
+0.0.0.0 10883394.collect.igodigital.com
+0.0.0.0 10886939.collect.igodigital.com
+0.0.0.0 10930289.collect.igodigital.com
+0.0.0.0 10948010.collect.igodigital.com
+0.0.0.0 10958478.collect.igodigital.com
+0.0.0.0 10964987.collect.igodigital.com
+0.0.0.0 10966118.collect.igodigital.com
+0.0.0.0 10966174.collect.igodigital.com
+0.0.0.0 10966343.collect.igodigital.com
+0.0.0.0 10969108.collect.igodigital.com
+0.0.0.0 10970005.collect.igodigital.com
+0.0.0.0 10973357.collect.igodigital.com
+0.0.0.0 10975018.collect.igodigital.com
+0.0.0.0 10977635.collect.igodigital.com
+0.0.0.0 10979470.collect.igodigital.com
+0.0.0.0 10980052.collect.igodigital.com
+0.0.0.0 10981232.collect.igodigital.com
+0.0.0.0 10983160.collect.igodigital.com
+0.0.0.0 10.c-ko.imedia.cz
+0.0.0.0 10.c-oa.imedia.cz
+0.0.0.0 110004422.collect.igodigital.com
+0.0.0.0 110005026.collect.igodigital.com
+0.0.0.0 110005224.collect.igodigital.com
+0.0.0.0 110005372.collect.igodigital.com
+0.0.0.0 110005388.collect.igodigital.com
+0.0.0.0 110005626.collect.igodigital.com
+0.0.0.0 110005786.collect.igodigital.com
+0.0.0.0 110006457.collect.igodigital.com
+0.0.0.0 110006489.collect.igodigital.com
+0.0.0.0 110006516.collect.igodigital.com
+0.0.0.0 110006539.collect.igodigital.com
+0.0.0.0 110006555.collect.igodigital.com
+0.0.0.0 110006559.collect.igodigital.com
+0.0.0.0 110006712.collect.igodigital.com
+0.0.0.0 110006803.collect.igodigital.com
+0.0.0.0 110007893.collect.igodigital.com
+0.0.0.0 11-2-2.p.dpplr-g.rspcdn.net
+0.0.0.0 112686412066259.wt-eu02.net
+0.0.0.0 1128956adcfdf220aadffce3f73a851d1ed698c6.cws.conviva.com
+0.0.0.0 117490221505998.wt-eu02.net
+0.0.0.0 11.c-ko.imedia.cz
+0.0.0.0 11.c-ng.imedia.cz
+0.0.0.0 11.c-oa.imedia.cz
+0.0.0.0 127.demdex.net
+0.0.0.0 12.c-ko.imedia.cz
+0.0.0.0 12.c-ng.imedia.cz
+0.0.0.0 12.c-oa.imedia.cz
+0.0.0.0 1303591.collect.igodigital.com
+0.0.0.0 1314420.collect.igodigital.com
+0.0.0.0 133446f3fa16c4a2f02e9f45a1d9d640705b7b62.cws.conviva.com
+0.0.0.0 1338814.collect.igodigital.com
+0.0.0.0 1339402.collect.igodigital.com
+0.0.0.0 1341602.collect.igodigital.com
+0.0.0.0 1370143.collect.igodigital.com
+0.0.0.0 1378406.collect.igodigital.com
+0.0.0.0 1389598.redirect.appmetrica.yandex.com
+0.0.0.0 13.c-ko.imedia.cz
+0.0.0.0 1426658.collect.igodigital.com
+0.0.0.0 1429766.collect.igodigital.com
+0.0.0.0 1479718.collect.igodigital.com
+0.0.0.0 148749046266446.wt-eu02.net
+0.0.0.0 14.c-ko.imedia.cz
+0.0.0.0 14.c-ng.imedia.cz
+0.0.0.0 14.c-oa.imedia.cz
+0.0.0.0 1505393888.rasenexpert.com
+0.0.0.0 1514ec8923859126303de089a5cfca4df381f64b.cws.conviva.com
+0.0.0.0 15.c-ng.imedia.cz
+0.0.0.0 15.c-oa.imedia.cz
+0.0.0.0 1688-onclick.cn-shanghai.log.aliyuncs.com
+0.0.0.0 1688-onerror.cn-shanghai.log.aliyuncs.com
+0.0.0.0 16.c-ko.imedia.cz
+0.0.0.0 16.c-ng.imedia.cz
+0.0.0.0 16.c-oa.imedia.cz
+0.0.0.0 174640.redirect.appmetrica.yandex.com
+0.0.0.0 176652923057792.wt-eu02.net
+0.0.0.0 17.c-ng.imedia.cz
+0.0.0.0 17.c-oa.imedia.cz
+0.0.0.0 17fu5k1n8tpgcgaj3l8b3ppgu.litix.io
+0.0.0.0 1800contacts.demdex.net
+0.0.0.0 180629549208289.wt-eu02.net
+0.0.0.0 186015257614542.wt-eu02.net
+0.0.0.0 1898.demdex.net
+0.0.0.0 18.c-ko.imedia.cz
+0.0.0.0 18.c-ng.imedia.cz
+0.0.0.0 18.c-oa.imedia.cz
+0.0.0.0 18lus0524edvcif1pa0hruc0e.litix.io
+0.0.0.0 19531.redirect.appmetrica.yandex.com
+0.0.0.0 19534.redirect.appmetrica.yandex.com
+0.0.0.0 195357560818821.wt-eu02.net
+0.0.0.0 196380495960676.mateti.net
+0.0.0.0 1976.hallswindowcenter.com
+0.0.0.0 199a1a90b7386ad9b16f64c5b7000d466e4be861.cws.conviva.com
+0.0.0.0 19.c-ko.imedia.cz
+0.0.0.0 19.c-ng.imedia.cz
+0.0.0.0 19.c-oa.imedia.cz
+0.0.0.0 1and1internetag.demdex.net
+0.0.0.0 1.c-ko.imedia.cz
+0.0.0.0 1.c-ng.imedia.cz
+0.0.0.0 1.c-oa.imedia.cz
+0.0.0.0 1ef80c94c65fbc10d54a7ca3c.litix.io
+0.0.0.0 1ei965u9fpdb61fpmb3rtas34.litix.io
+0.0.0.0 1ff98d3f0df77fc9fdedf4209cc4db4cc1844a69.cws.conviva.com
+0.0.0.0 1ff98d3f0df77f

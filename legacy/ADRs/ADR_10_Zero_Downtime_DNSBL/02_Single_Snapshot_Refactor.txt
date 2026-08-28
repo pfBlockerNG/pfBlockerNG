@@ -1,0 +1,81 @@
+================================================================================
+PHASE 2 PROMPT — PREP (behaviour-preserving): bundle matcher strata into one Snapshot
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §2 "Atomic swap shape" + the
+     contract "idle decision-identity" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 2 of ADR-10. This is a PURE,
+BEHAVIOUR-PRESERVING refactor — it changes how the matcher structures are held
+(one immutable reference instead of four-plus separate globals) WITHOUT changing a
+single DNS decision. Standalone-valuable (atomic-swap-ready even if later phases are
+rejected). Work inline on `adr/10`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+Today the matcher reads several independent module globals per query
+(dataDB/zoneDB/whiteDB/regexDB + ADR-07's allowRegexDB/important_rules), assigned
+one-by-one at init. A background swap that reassigns them individually lets a mid-
+swap query read new-dataDB + old-whiteDB — a torn, inconsistent decision. Bundling
+them into ONE frozen Snapshot whose single reference is swapped atomically (one
+STORE under the GIL) makes the future swap consistent-by-construction, with no lock
+in the per-query hot path. This MUST land before any background swap exists.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/01_Results.txt — it must say GO (the
+  pythonmod shared-globals premise holds and the RAM cost is bounded). If it is
+  missing or NO-GO, STOP and report.
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (§2, the contract).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the globals (:87-96, init
+  :383-390), the build+assign site (:552-562), evaluate_domain (:2251) + the per-
+  query containers assembly (:2661-2675), and ADR-07's added strata (allowRegexDB,
+  the `important` payload fields, the `important_rules` flag).
+- tests/test_adr06_*.py and tests/test_adr07_*.py — the retained oracles that pin
+  idle decision-identity; these MUST stay green unchanged.
+- CLAUDE.md (Python standards; stdlib-only; unit-testable without live Unbound).
+
+ACTION PLAN (ordered — keep the oracle green at every step)
+1. Define a frozen `Snapshot` (e.g. a frozen dataclass / NamedTuple) bundling ALL
+   ADR-07 strata: dataDB, zoneDB, whiteDB, regexDB, allowRegexDB, feedGroupIndexDB,
+   the important_rules flag, and the counts. Stdlib only; typed.
+2. Replace the four-plus separate module globals with ONE module-level reference to
+   the current Snapshot. init_standard builds the Snapshot and assigns the single ref
+   (replacing the per-global assignment at :559-562).
+3. Rework evaluate_domain / op to capture the ONE reference per query and read every
+   field off it (replacing the per-query containers dict assembled at :2661-2675).
+   A query holds its captured snapshot for its whole evaluation → internally
+   consistent even if a swap lands mid-query.
+4. Add tests/test_adr10_snapshot_*.py proving field-for-field equivalence: the
+   Snapshot built from a manifest yields byte-identical decisions to the pre-refactor
+   globals on the ADR-06 + ADR-07 corpora.
+
+CONSTRAINTS
+- PURE REFACTOR. No DNS decision may change; no background thread, no swap, no PHP
+  change yet. The ADR-06 + ADR-07 oracles are the guard — do NOT modify them to pass.
+- Stdlib only, 4-space, type hints on new code, no bare except,
+  `from __future__ import annotations`. Any new injected Unbound symbol →
+  stubs/python/unboundmodule.py (none expected here).
+- Do NOT touch pfblockerng.inc / shell this phase.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green incl. the retained test_adr06_*/test_adr07_* AND the new
+  test_adr10_snapshot_* (equivalence).
+- ruff check . / ruff format . → clean.
+- diff-read: confirm evaluate_domain reads exactly one captured snapshot ref per
+  query; no remaining per-query re-assembly of containers from separate globals.
+
+EXPECTED RESULT
+The matcher structures are held as one immutable Snapshot behind a single module ref;
+decisions are byte-identical to before; the codebase is now atomic-swap-ready.
+
+COMMIT (single)
+    pfblockerng: ADR-10 P2 — bundle DNSBL strata into one immutable Snapshot (ADR-10 P2)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/02_Results.txt` (plain .txt)
+State: the Snapshot type + fields; where the single ref lives; how evaluate_domain/op
+now read it; confirmation the ADR-06+07 oracles pass unchanged + the new equivalence
+test; any watch-outs for the swap (e.g. ADR-07 regex-eviction still mutates the live
+regexDB in place — flag it for Phase 3/4); the go-ahead for Phase 3.

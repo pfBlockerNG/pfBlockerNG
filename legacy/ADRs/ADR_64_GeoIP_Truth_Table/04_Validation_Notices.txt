@@ -1,0 +1,71 @@
+================================================================================
+PHASE 4 PROMPT -- Provider validation + notices (delta D4)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/64-geoip-truth-table (off the
+latest devel; create if absent). You implement yourself with Read/Edit/Write/Bash -- you NEVER
+spawn sub-agents. Phase 4 makes provider/table disagreement visible instead of silent.
+Test mode: RED->GREEN per notice: each notice's test fails before its guard exists and passes after.
+Blast-radius note for the gate: Notices only. If this phase lands alone: users may see new file_notices; no data, alias or config changes.
+Follow CLAUDE.md in full.
+
+WHY THIS PHASE EXISTS
+A silently emptied alias is the worst failure this package has: a blocklist that quietly stops
+blocking. Once the table is the truth, every disagreement with a provider is detectable -- so
+detect it, and tell the user.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- especially SS1.3/SS1.4 (the measured facts),
+  SS2.1 (the table + its sources), SS2.2 (per-continent unknown buckets), SS2.3 (notices),
+  "Accepted user-visible deltas" (D1-D4: the ONLY permitted output changes) and "Semantics that
+  MUST be preserved".
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) -- the design
+  record this ADR was distilled from. Read it, not just the ADR summary.
+- CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
+- src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
+  $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
+  (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc -- pfblockerng_get_countries(),
+  pfb_build_reputation_tab() (package-owned generated-page writers).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
+  (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live
+tree and any prior RESULTS/ file override this prompt on any conflict -- verify each claim before
+acting, and flag contradictions loudly in the handoff. The ADR's measured facts came from a real
+licensed dataset on the maintainer's box; if the live code disagrees, the CODE wins and you
+ESCALATE rather than patch around it.
+
+ACTION PLAN (ordered)
+1. Read the Phase-3 RESULTS first. If missing, STOP.
+2. Implement the ADR SS2.3 notices, each via file_notice():
+   a. a CONFIGURED country the active provider no longer has networks for;
+   b. an ISO code the provider emits that the table does not know (its networks stay unassigned --
+      runtime NEVER invents a country);
+   c. a continent-level row for a continent the table does not surface.
+3. Each notice names the setting/code and the reason, in the house voice (see
+   pfb_maxmind_credential_notice()).
+4. NO config writes. ADR-28: detect and notify, never migrate.
+
+CONSTRAINTS
+- Notices are additive: no existing behaviour changes.
+- A notice must not fire on the healthy path (a country the provider simply has no networks for
+  renders (0) and is NOT a notice) -- test both sides of that boundary.
+
+VERIFICATION (executed -- paste the output, never "reasoned through")
+- Per notice: the RED run (guard absent -> no notice, test fails), the GREEN run (notice fires),
+  and a NEGATIVE test proving it does NOT fire on the healthy path. Paste all three.
+- `vendor/bin/phpunit`, `composer phpstan`, `composer phpcs`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+
+HANDOFF
+Write .ADRs/ADR_64_GeoIP_Truth_Table/RESULTS/04_Results.txt with the fixed fields from
+CLAUDE.md "THE HANDOFF": Verdict; What changed (files + one-line why each + commit hash); Gates
+(exact commands + pasted output tails); the RED->GREEN proof per notice, plus the negative (healthy-path) test for each; Coverage matrix (every row of this prompt's
+ACTION PLAN ticked, or an explicit justified deferral); Deviations / judgment calls (or "none");
+Carry-forward for the next phase.

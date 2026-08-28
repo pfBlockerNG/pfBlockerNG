@@ -1,0 +1,69 @@
+ADR-66 PHASE 2 — ORCHESTRATOR GATE RECORD
+==========================================
+
+VERDICT: PASS
+
+HISTORY
+-------
+- First brief stage returned BLOCKED (correct ESCALATE): ADR §2.1's
+  "python_tld_seg → tld_allow_seg" row refuted by code probes — python_tld_seg is the
+  whitelist wildcard suffix-walk gate (consumers pfb_unbound.py:5607/:5633/:5970; cfg reads
+  only at whitelist call sites :6019/:6224; ini writer emits it hardcoded = 1 per #1155;
+  pinned by PythonWhitelistTldSegTest.php). Orchestrator amended the ADR (commit
+  d00d55f7 → e353d13c after rebase): row moved to §1.2 out-of-scope, §7 DoD glob made
+  exact-token with two designed survivors (python_tld_wildcard, python_tld_seg), Phase-2
+  prompt reconciled.
+- Re-run brief OK → implementer commit cf2cce57 (parent e353d13c, single commit:
+  2 src + 17 tests + RESULTS/02_Results.txt), handoff DONE-WITH-DEVIATION (4 disclosed
+  non-blocking judgment calls incl. the pre-edit rebase onto origin/devel), verifier gate
+  PASS on all 14 items.
+
+COMMANDS + RESULTS (verifier-executed; orchestrator re-ran the src/ DoD grep — zero hits —
+and confirmed the frozen-oracle hash + remote tip)
+--------------------------------------------------
+- python3 -m pytest -> 2876 passed, 4 skipped; targeted oracle+bridges -> 37 passed
+- ruff check / format --check -> clean; python3 -m mypy tests/ -> clean
+- php -l (pfblockerng.inc, TldBridgeEmitTest.php) -> no syntax errors
+- vendor/bin/phpunit -> 3338 tests OK; composer phpstan -> no errors; phpcs -> exit 0
+- run-gates.sh --diff e353d13c -> 8 PASS + the documented bare-mypy PATH SKIP
+  (covered by the manual python3 -m mypy run)
+
+RED/GREEN
+---------
+Behaviour-preserving pure rename, confirmed genuine: the commit's src/ diff filtered to
+non-rename production lines is EMPTY (zero logic lines). Frozen oracle
+tests/test_adr66_tld_naming_oracle.py absent from the diff, hash 4ae3ad28 unchanged
+before==after, ran GREEN. Semantic-3 atomicity verified: .inc heredoc writes
+tld_allow/tld_allow_list AND the .py reader consumes them in the SAME commit; bridges C2
+proves it through real init_standard().
+
+PER-ITEM DIFF VERDICTS (verifier, full git show read)
+-----------------------------------------------------
+- .inc renames: dnsbl_pytld→dnsbl_tld_allow (:2726/:8446/:17988), writer locals, heredoc
+  keys :8510-8511; python_tld_seg = 1 (:8508) untouched; stored RHS pfb_pytld preserved. PASS
+- .py renames atomic: reader :1475-1478, defaults, enable gate :1553, evaluate_domain arm
+  :6101-6105, cfg snapshot :6704-6705, parse_python_tlds→parse_tld_allow (#713/#720
+  breadcrumbs kept). PASS
+- Editable tests: seam constants repointed; G3/G4 untouched; TldBridgeEmitTest C1 literals
+  updated, pfb_pytlds_* + Feature-B fixtures untouched; 13 cfg-fixture files +
+  conftest/test_pfb_unbound renames; no assertion weakened. PASS
+- Stays proven by before==after greps: pfb_pytld*=50, python_tld_seg 9+1,
+  python_tld_wildcard 5+4, zero Feature-B hunks, www/ absent from diff (master enumeration
+  had zero www hits — no Tier-A row applies). PASS
+- DoD greps: src/ zero survivors (exit 1); tests/ 3 residual hits all non-defects
+  (2 inside the frozen G3 do-not-edit block, 1 pre-existing smoke prose about the RETAINED
+  pfb_pytld stored-key family) — disclosed as Deviation 3. PASS
+- Test honesty + conventions: pure substitution, both branches kept everywhere;
+  parse_tld_allow/TestParseTldAllow match the house test-class-per-function pattern. PASS
+
+MATRIX CONFIRMATION
+-------------------
+All 24 pfb_unbound.py + 22 pfblockerng.inc enumerated lines renamed and covered; every
+stays row grep-confirmed unchanged; hostile rows 1-9 covered by the frozen oracle +
+bridges + golden tests.
+
+SKIPPED
+-------
+- verify-red-proof.sh revert dance: behaviour-preserving pure rename — no reproducible red
+  exists; the hash-pinned oracle staying byte-identical GREEN is the CLAUDE.md-sanctioned
+  substitute, re-verified by the verifier and the orchestrator.

@@ -1,0 +1,1 @@
+{"kind":"domain","domain":"customlist.example","log":"1","feed":"custom_list","group":"grp_custom"}

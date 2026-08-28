@@ -1,0 +1,196 @@
+================================================================================
+PHASE 3 RESULTS — Live-VM smoke: canonical reject line per wired stage
+ADR-48, Phase 3 of 4
+================================================================================
+
+SCOPE — TEST-ONLY, no src/ change.
+
+  git diff --stat:
+    tests/smoke/test_smoke_feeds.py | 281 ++++++++++++++++++++++++++++++++++
+    1 file changed, 281 insertions(+)
+
+No fixture files added — every stage is forced with fixtures/patterns already
+proven in the repo (see "NEW FIXTURES" below for why none were needed).
+
+NEW TESTS — one per wired stage + the healthy-feed guard
+
+All four live in tests/smoke/test_smoke_feeds.py, in a new "ADR-48" section
+appended after the existing ADR-45 7z block (end of file). Each is
+self-encapsulated (its own CaseContext, its own delta baseline — no ordering
+dependence on any sibling test) and delta-based (count the marker BEFORE the
+case's own Force Update, again AFTER, inside the CaseContext block, assert on
+the delta — never a global "count == 0").
+
+1. test_validate_log_structural_reject_line
+   Stage: structural. Fixture: fixtures/archive_corrupt.gz (existing ADR-45
+   corpus — FreeBSD-verified on-box file(1) verdict "application/gzip";
+   fixtures/README.md "Archive corpus"). The truncated gzip fails
+   pfb_validate_archive() (gunzip -t), same trigger as the existing
+   test_corrupt_gzip_rejected — this test adds ONLY the new log-line
+   assertion on top. detected= is deterministic from the header we choose:
+   "{file_type} " . basename($file_download), and $file_download's basename
+   is always "{header}.raw" (pfb_download() builds
+   $file_dwn = "{pfborig}/{header}" then appends ".raw" — confirmed by
+   reading pfblockerng.inc:14722/16390 + 8926). No on-box guard needed —
+   gzip-truncation corruption is deterministic across platforms (gunzip -t
+   is not a libmagic-classification question), matching the existing sibling
+   test's own lack of a guard.
+   Marker: "pfb_validate: REJECT feed=adr48stc stage=structural
+   reason=probe_failed detected=application/gzip adr48stc.raw"
+
+2. test_validate_log_mime_reject_line
+   Stage: mime. Fixture: fixtures/archive_junk_octet.bin (existing ADR-45
+   corpus — pure NUL/control bytes, FreeBSD-verified as
+   application/octet-stream, not archive-recoverable by
+   pfb_octet_recover_type() — same trigger as the existing
+   test_junk_octet_stream_rejected). The reject falls through to the OUTER
+   MIME gate (pfblockerng.inc:9298-9302): mime_raw=application/octet-stream,
+   retval=0 (file(1) itself succeeds; only the allow-list check fails).
+   Carries the SAME on-box guard as its ADR-45 sibling (skip, not fail, if
+   this box's file(1) does not report octet-stream for these exact bytes).
+   Marker: "pfb_validate: REJECT feed=adr48mim stage=mime
+   reason=mime_not_allowed detected=application/octet-stream rc=0"
+
+3. test_validate_log_inner_reject_line
+   Stage: inner — exercises the POST-EXTRACTION ZIP re-run sub-path
+   specifically (pfblockerng.inc:9459-9463), NOT the pre-extraction
+   compressed-peek sub-path (which only applies to the gz/bz2/7z branches,
+   per RESULTS/02_Results.txt's caller map — zip has no compressed-peek
+   call site). Built INLINE (io.BytesIO + zipfile.ZipFile, exactly like the
+   healthy test_zip_feed_imports / ADR-44 tests) rather than a committed
+   fixture: a valid zip is trivially cross-platform-portable (any zipfile
+   writer's output is a valid archive bsdtar reads fine on FreeBSD too — the
+   FreeBSD-sensitivity in this repo's corpus is specifically about CORRUPT
+   archives and octet-stream MIME misclassification, neither of which
+   applies to a plain valid container). The zip wraps one entry containing
+   the exact "%PDF-1.4\n" byte string tests/php/PfbFilterRejectDetailTest.php
+   already uses off-appliance (that test's own docblock records: file(1)
+   reliably reports application/pdf for it, whereas a BARE PNG/EXE magic
+   alone was found to read as application/octet-stream on that dev host —
+   confirmed independently on this session's own macOS host too via a local
+   `file --mime-type` probe: "%PDF-1.4\n" → application/pdf, a proper
+   hand-built valid PNG → image/png, but bare "MZ..." → octet-stream). The
+   entry has no comma bytes, so pfb_download()'s extraction pipe
+   (tar -xOf | sed 's/,[[:space:]]/; /g' | tr ',' '\n') passes it through
+   byte-for-byte. An ON-BOX GUARD (_box_mime_type on the raw entry bytes)
+   skips (not fails) the test if this box's file(1) does not report
+   application/pdf for them — the same "verify, don't assume" discipline the
+   ADR-45 octet-stream guards already use, applied here because FreeBSD
+   libmagic behaviour for less-common magics has already surprised this repo
+   once (README's image/x-tga note).
+   Marker: "pfb_validate: REJECT feed=adr48inr stage=inner
+   reason=inner_mime_not_allowed detected=application/pdf rc=0"
+
+4. test_validate_log_healthy_feed_no_spurious_reject
+   Reuses the Phase-4 ip_plain_cidr.txt fixture (already the KILL-GATE
+   healthy-load fixture for test_ip_http_feed_loads). Delta baseline is the
+   GENERIC "pfb_validate: REJECT" marker (module-wide on purpose — proves
+   nothing NEW appeared during this case's own Force Update window,
+   regardless of what any earlier test already logged; never depends on run
+   order). Asserts the member loads (genuine success, not "didn't crash")
+   AND the reject-marker count is unchanged across the case.
+
+DIAGNOSTICS (CLAUDE.md expected-vs-actual mandate)
+
+Every assertion above prints the expected condition next to the actual
+before/after counts. On a FAILING delta assertion specifically, the failure
+message additionally embeds the actual last-5 "pfb_validate:" lines found in
+the live pfB log (`_recent_validate_lines()`, new module-local helper) — the
+real log excerpt, not just a number. This helper is called ONLY from inside
+the failing `if not (...): raise AssertionError(...)` branch (never from an
+`assert`'s message expression, which Python evaluates unconditionally even on
+the passing path — that would cost an extra SSH round-trip on every green
+run).
+
+NEW FIXTURES: NONE.
+
+Every stage reuses an EXISTING FreeBSD-verified ADR-45 corpus fixture
+(archive_corrupt.gz, archive_junk_octet.bin) except the inner-stage test,
+which builds its zip INLINE (matching the established
+test_zip_feed_imports / ADR-44 precedent for VALID archives — only CORRUPT/
+octet-stream-classification fixtures need FreeBSD-side commitment in this
+repo, per fixtures/README.md's own rationale). Nothing new to verify on-box
+beyond the existing guards already built in (the on-box MIME/PDF guards
+above skip cleanly if a given box's file(1) ever disagrees).
+
+PYTEST -K FILTER (covers all 4 new tests; "validate_log" is a unique
+substring — grep-confirmed no other test name in the suite contains it):
+
+    python -m pytest tests/smoke/test_smoke_feeds.py -k validate_log -m smoke --override-ini="addopts="
+
+Collection-confirmed off-box: 4/38 selected, 34 deselected, no import errors.
+
+VERIFICATION (off-box)
+
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only
+  --override-ini="addopts=" -> 38 tests collected (34 pre-existing + 4 new),
+  no import errors.
+- python -m pytest tests/smoke/test_smoke_feeds.py -k validate_log
+  --collect-only --override-ini="addopts=" -> 4/38 selected exactly the 4
+  new tests.
+- python -m pytest (full unit suite) -> 2105 passed, 4 skipped (unchanged
+  skip set — pre-existing, unrelated to this phase).
+- ruff check tests/smoke/test_smoke_feeds.py -> All checks passed.
+- ruff format --check tests/smoke/test_smoke_feeds.py -> clean (one
+  reformat applied and re-verified during this phase — two f-strings that
+  exceeded the line-length target were rewrapped by `ruff format`).
+- mypy tests/ -> Success: no issues found in 66 source files.
+
+SELF-REVIEW (done before this handoff, against the phase prompt's checklist)
+
+- One test per wired stage (structural/mime/inner) + the healthy-feed guard —
+  exactly 4 new tests, no more no less.
+- Delta-based log assertions with an asserted before-state in every case
+  (alias-absence "Given" + the marker-count "before" captured prior to the
+  Force Update, matching the existing test_7z_missing_binary_rejected idiom
+  already established in this same file).
+- Fixture rules honoured: two stages reuse the committed FreeBSD-verified
+  ADR-45 corpus; the inner stage builds a plain VALID zip inline (no FreeBSD
+  risk — only corrupt/octet-stream fixtures need on-box commitment here);
+  no new fixture file added, so fixtures/README.md needed no new row.
+- Docstrings state the red-on-pre-ADR-48 intent explicitly for all three
+  reject-line tests (the pre-Phase-2 ad-hoc message contains no
+  "pfb_validate: REJECT" substring, so the assertion is unsatisfiable on that
+  code — a genuine red->green pin, not a test that was already green).
+- Diagnostics print expected-vs-actual (before/after counts) on every
+  assertion, PLUS the actual live log excerpt on a failing delta assertion
+  specifically (lazy-evaluated, no cost on the passing path).
+- Self-encapsulated: each test uses its own unique header/alias
+  (adr48stc/adr48mim/adr48inr/adr48hlt) and its own CaseContext; no test
+  reads another test's marker or relies on run order (the healthy-feed
+  guard's generic marker is explicitly module-wide BY DESIGN — it only
+  reads a DELTA across its own window, so prior tests' lines are inert).
+- git diff --stat matches the phase prompt's EXPECTED RESULT (tests/smoke/*
+  only; no fixture changes were needed).
+
+COMMIT
+  ba98106d — "tests/smoke: assert canonical pfb_validate REJECT line per
+  wired stage (ADR-48 P3)". NOTE: origin/devel advanced between Phase 2's
+  push and this phase's start (unrelated Suppression/Alerts work, PRs
+  #422/#796), so this commit was created on the prior Phase-1/2 tip
+  (c00fed30) and then the branch was rebased onto the fresh origin/devel —
+  a clean linear replay (no conflicts; the intervening commits touched
+  unrelated files). The rebase replayed Phase 1/2 too, so their hashes moved:
+  Phase 1 is now 499cd8c0 (was f25ccc58), Phase 2 is now a2e140a5 (was
+  c00fed30) — content unchanged, only the parent commit differs.
+
+PUSH
+  Pushed directly to adr/48-download-validation-logging (Phase 3 of 4; the PR
+  opens once Phase 4 lands too, per the worktree + rebase-only-PR flow).
+
+NOTE FOR THE ORCHESTRATOR
+
+Fan-out green (CE + Plus) on the filter above is the Accepted gate for
+Phases 1-3 (ADR.md §7's live-VM requirement: "a forced MIME / inner rejection
+emits the canonical line with the raw file(1) output; no healthy feed logs a
+spurious REJECT" — all four assertions map 1:1 onto that sentence). Suggested
+dispatch:
+
+    gh workflow run smoke.yml -f scope=full \
+      -f pytest_filter="validate_log"
+
+(or `-f scope=impacted` once this branch merges to devel, since selective
+dispatch auto-derives the changed-module filter from tests/smoke/test_smoke_feeds.py).
+Phase 4 (Python-side entry-reject accounting, issue #789) lands after with its
+own smoke leg and its own PHPUnit/pytest oracle gates — it is a SEPARATE
+acceptance track per ADR.md §6/§7 and does not block this phase's fan-out.

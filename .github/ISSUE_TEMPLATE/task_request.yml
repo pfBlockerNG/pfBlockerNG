@@ -1,0 +1,27 @@
+name: Improvement or maintenance task
+description: Propose an improvement to existing behavior or project maintenance.
+type: task
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: What should be improved?
+      description: Describe the existing behavior, workflow, documentation, or maintenance need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What outcome do you want?
+      description: Describe the observable completion condition.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, alternatives, or constraints if useful.
+    validations:
+      required: false

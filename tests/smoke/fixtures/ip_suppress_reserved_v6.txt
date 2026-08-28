@@ -1,0 +1,10 @@
+# issue #760 §1 smoke fixture: reserved-class exclusion under Suppression ON
+# (tests/smoke/test_smoke_suppression.py, Scenario D). Public (non-reserved)
+# entry -- must load.
+2606:4700:7777::1111
+# Documentation (RFC 3849, 2001:db8::/32) -- dropped.
+2001:db8::1
+# Multicast (ff00::/8) -- dropped.
+ff02::1
+# NAT64 well-known prefix (RFC 6052, 64:ff9b::/96) -- dropped.
+64:ff9b::1

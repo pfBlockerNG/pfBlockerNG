@@ -1,0 +1,5 @@
+interface:
+  display_name: "Release with Changelog"
+  short_description: "Cut a release with hand-authored notes"
+policy:
+  allow_implicit_invocation: false

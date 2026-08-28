@@ -1,0 +1,155 @@
+================================================================================
+PHASE 5 PROMPT — Live-VM smoke + DoD + docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md   (read §4, §5, §6 Phase 5, §7 DoD first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/35-managed-firewall-objects (off devel). Phase 5
+adds the ADR-04 live-VM smoke tests that prove the end-to-end add→remove→uninstall + orphan
+sweep contract on a real pfSense CE VM, updates architecture-notes.md with an ADR-35 blurb,
+and satisfies the §7 Definition of Done. One commit, push directly (open a PR only if the
+direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The unit suite (Phases 1–4) proves correctness against config.xml fixtures off-appliance. Only
+a live-VM smoke can prove that enable/disable actually creates/removes objects in a running
+pfSense config, that an orphan is swept during real uninstall, and that user-created objects
+survive. This phase is the final automated gate that flips ADR-35 to Accepted.
+
+REQUIRED READING
+FIRST, read the prior phase's handoff:
+.ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/04_Results.txt — it must confirm: the sweep is
+wired before pfb_remove_config_settings(), the registration seam is demonstrated, all PHPUnit
+phases are green, and the go-ahead for Phase 5. If it is missing, Phase 4 is not complete;
+STOP and report.
+
+Then read:
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — §7 DoD (every checkbox), §5 (constraints),
+  §2.2 (the semantics the smoke must prove).
+- CLAUDE.md — full "Smoke tests (ADR-04 — live pfSense VM)" section: probe ON-BOX via SSH;
+  test domains must be helpers.unique_domain(); block shapes; enable chain; the image bakes
+  only deps + qemu-guest-agent; diagnostics upload on failure.
+- tests/smoke/ — existing smoke tests for style + fixture patterns (test_smoke_dnsbl.py,
+  helpers.py, conftest.py); understand the smoke_vm fixture, how SSH commands are run, and how
+  config.xml is read back via SSH.
+- tests/smoke/test_smoke_dnsbl.py — how DNSBL enable/disable is toggled; how config.xml is
+  asserted via SSH (e.g. reading /conf/config.xml on-box and parsing it).
+- docs/misc/architecture-notes.md — existing structure; where to insert the ADR-35 blurb.
+- .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01_Results.txt through 04_Results.txt — the
+  complete picture of what was built and tested, to write accurate notes.
+
+ACTION PLAN
+1. Add tests/smoke/test_smoke_fwobj.py (new file; marker: smoke).
+   Three scenarios, each using the smoke_vm fixture:
+
+   Scenario A — enable → VIP + NAT present:
+   Given: pfBlockerNG installed + DNSBL enabled (use ensure_dnsbl_vip + existing enable helpers).
+   When: sync is triggered (or package load completes).
+   Then: SSH into the VM, read /conf/config.xml, assert:
+     - virtualip/vip[] contains at least one entry with descr='pfB_AUTO_VIP_v4' or
+       'pfB_AUTO_VIP_v6'.
+     - nat/rule[] contains at least one entry with descr='pfB DNSBL - DO NOT EDIT'.
+   Assert the BEFORE state too: before enabling, confirm neither is present (or confirm the
+   enable is what creates them, not a pre-existing state).
+
+   Scenario B — disable → VIP + NAT removed:
+   Given: DNSBL enabled (Scenario A state, or re-enable here).
+   When: DNSBL is disabled.
+   Then: assert virtualip/vip[] has NO entry with a pfBlockerNG marker; nat/rule[] has NO
+   entry with descr containing 'pfB DNSBL'. Assert before: both present. Assert after: both gone.
+
+   Scenario C — orphan + user objects survive/are-swept on uninstall:
+   Given:
+     - Seed an ORPHAN VIP directly into config.xml via SSH (write an entry with
+       descr='pfB_AUTO_VIP_v4' to virtualip/vip[] but clear the pfb_dnsvip4 reference so the
+       normal double-guard would skip it).
+     - Seed a USER VIP (descr='my-test-user-vip-do-not-delete') in virtualip/vip[].
+     - Seed a USER NAT rule (descr='my-test-user-nat-do-not-delete') in nat/rule[].
+     Assert before: all three present in config.xml.
+   When: pfBlockerNG is uninstalled (pkg delete pfSense-pkg-pfBlockerNG-devel or equivalent).
+   Then:
+     - The orphan VIP (pfB_AUTO_VIP_v4) is GONE from virtualip/vip[].
+     - The user VIP (my-test-user-vip-do-not-delete) STILL PRESENT.
+     - The user NAT rule (my-test-user-nat-do-not-delete) STILL PRESENT.
+     - installedpackages/pfblockerng* sections are GONE from config.xml
+       (pfb_remove_config_settings ran correctly).
+
+   Each scenario is a separate test function with a @pytest.mark.smoke decorator. Use
+   helpers.unique_domain() only where DNS probes are needed (Scenario A/B may probe DNSBL to
+   confirm enable state, but VIP/NAT assertions are config.xml reads, not DNS queries). Follow
+   the existing smoke_vm fixture pattern for SSH commands and config.xml reads.
+
+2. Update docs/misc/architecture-notes.md — add a concise "ADR-35: Managed firewall objects"
+   subsection (after the ADR-13 VIP section if one exists, or in the ownership/teardown area):
+   - One paragraph: the layer pfblockerng_fwobj.inc provides; the marker-recognition union
+     (pfB_ prefix + legacy strings); the sweep primitive and when it runs (disable + deinstall);
+     the registration seam (how ADR-36/37 plug in).
+   - Keep it professional and terse — match the style and length of neighbouring notes.
+   - Do NOT include security framing, vulnerability descriptions, or ADR numbers from private
+     ADRs.
+
+3. Mark ADR-35 as Accepted:
+   In .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md, change the Status line from Proposed to
+   Accepted:
+     - **Status:** **Accepted** (2026-06-20)
+   Tick all DoD checkboxes (§7) that the automated test suite now covers. Leave the manual smoke
+   checklist items (§7 "Manual smoke" block) as unchecked — they are documented out-of-CI
+   limitations, not acceptance blockers (per CLAUDE.md "ADR acceptance" policy).
+
+4. Diff-read the full branch diff (git diff origin/devel...HEAD) before committing. Confirm:
+   - No debug logging (log_info/print/DBG*) left in any src/ file.
+   - No temporary comments left in test files.
+   - The diff is the minimal intentional change: Phases 1–4 production + test changes + this
+     phase's smoke + docs + ADR status update.
+
+CONSTRAINTS
+- Smoke tests must use smoke_vm fixture; never hardcode the VM IP or credentials.
+- Config.xml reads must go via SSH cat /conf/config.xml + XML parse — follow the existing
+  smoke pattern; do not assume a REST API.
+- The orphan seeding in Scenario C must be done via SSH config.xml write + pfSense config
+  reload — follow how other smoke tests manipulate config.xml directly.
+- docs/misc/architecture-notes.md: professional grammar (documentation exception per CLAUDE.md
+  communication rules); no caveman register.
+- PHP + Python linting must still pass (no src/ change in this phase; but php -l and ruff
+  must be clean on the full tree).
+- The smoke tests carry @pytest.mark.smoke and are excluded from the default pytest run
+  (-m "not smoke") — they are workflow_dispatch/smoke.yml only. Confirm the existing
+  conftest.py marker registration covers 'smoke'; if not, add it.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (all phases: P1 FwobjCurrentBehaviourTest, P2 FwobjLayerTest,
+  P4 FwobjSweepSeamTest)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc and pfblockerng_fwobj.inc -> clean
+- PHPStan (vendor/bin/phpstan analyse) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (PFBL-01 + ADR-28 + ADR-29 sniffs)
+- python -m pytest (default, smoke excluded) -> green
+- python -m pytest tests/smoke/test_smoke_fwobj.py --collect-only -> collects 3 test functions
+  (no import errors)
+- npx markdownlint-cli2 docs/misc/architecture-notes.md -> 0 errors
+- npx markdownlint-cli2 .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md -> 0 errors
+- ADR status line reads "Accepted"
+- Dispatch smoke.yml (workflow_dispatch) on the branch; all three fwobj scenarios pass on
+  the live CE VM — this is the authoritative gate. If the live smoke fails, diagnose via the
+  smoke-diagnostics artifact (/var/log, pfctl -sa, config.xml) before concluding.
+
+EXPECTED RESULT
+Three live-VM smoke scenarios green: enable→VIP+NAT present; disable→removed; orphan swept on
+uninstall + user VIP/NAT survive. Architecture-notes updated. ADR-35 status Accepted. All §7
+DoD automated checkboxes ticked.
+
+COMMIT (single)
+    pfblockerng: add fwobj live-VM smoke, update docs, mark ADR-35 Accepted (ADR-35 P5)
+Push directly to adr/35-managed-firewall-objects; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/05_Results.txt (plain .txt)
+Record:
+- The three smoke test function names and what each scenario proves.
+- The orphan seeding method used in Scenario C (SSH command sequence).
+- The config.xml assertion method (SSH + XML parse; key paths checked).
+- The architecture-notes.md section title and location where the blurb was inserted.
+- Confirmation that ADR.md status is now Accepted and which §7 DoD checkboxes are ticked.
+- Live-VM smoke run outcome (job URL or pass/fail summary per scenario).
+- Verification output: phpunit count, phpstan clean, phpcs clean, pytest count, markdownlint.
+- Final branch diff summary: files changed, lines added/removed.
+- ADR-RESUME: branch=adr/35-managed-firewall-objects next-phase=COMPLETE

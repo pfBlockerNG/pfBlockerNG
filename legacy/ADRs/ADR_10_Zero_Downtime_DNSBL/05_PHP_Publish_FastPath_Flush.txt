@@ -1,0 +1,103 @@
+================================================================================
+PHASE 5 PROMPT — PHP/shell: atomic publish + sentinel + data fast-path + C-cache flush
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §2 "Publish protocol",
+     "PHP reload fork", "C-cache flip", FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 5 of ADR-10. Wire the PHP/shell side
+to the watcher: atomically PUBLISH the new manifest, FLIP the sentinel (the all-or-
+nothing commit), take the NO-RESTART path for a DNSBL-data update, and flush the
+Unbound C-cache for newly-blocked names — keeping the restart as the fallback. Work
+inline on `adr/10`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The watcher (Phase 4) is inert until something flips the sentinel safely. Today a
+DNSBL update calls pfb_reload_unbound -> pfb_stop_start_unbound -> TERM unbound
+(the downtime). This phase replaces that, for DATA-ONLY updates in Python mode, with:
+write-temp -> fsync -> atomic rename -> flip sentinel (generation advance). Config
+changes and any failure still restart (fail-safe). It also fixes the allow->block
+TTL-staleness the restart never addressed.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/04_Results.txt — the EXACT sentinel +
+  generation contract the PHP side must honour. If missing, STOP and report.
+- Also RESULTS/01_Results.txt — the chosen C-cache strategy (delta-flush vs TTL) and
+  Reports-log strategy.
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (§2 publish/fork/C-cache rows; §5).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_reload_unbound (:3095) +
+  pfb_stop_start_unbound (:3055-3061), dump_cache/load_cache (:3113/:3153), the
+  "Live sync" call site (:3258-3264), the DNSBL-queries-daemon control marker (:3211),
+  the chroot unbound-control cmd (:877), the manifest writer + paths (unbound_py_sources
+  :114; the per-feed raw writer). The Python manifest path (pfb["pfb_py_sources"]).
+  ALSO the user custom-list apply path (#51): pfb_unbound_python_sources_unlock() /
+  pfb_unbound_python_sources_whitelist() (in-place manifest patch of config.user_unlock /
+  config.user_whitelist) + pfb_dnsbl_unlock_lines(); the alerts Lock/Unlock handler that
+  calls them (pfblockerng_alerts.php / dnsbl_alert_lock_toggle) and the unlock resolver-
+  cache flush added by #51 -- these reloads must take the new no-restart fast path.
+- src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc + the shell that writes the
+  manifest/raw (where the atomic publish must live).
+- CLAUDE.md (PHP tabs/8.3, no die/exit in lib; POSIX sh, absolute paths, quoted).
+
+ACTION PLAN (ordered)
+1. ATOMIC PUBLISH. Change the manifest/raw writer to: write into a staging dir ->
+   fsync -> atomic rename into place -> flip the sentinel (advance the generation per
+   the Phase-4 contract). The rename + sentinel are the commit; the plugin never reads
+   a half-written manifest.
+2. DATA-ONLY FAST PATH. In pfb_reload_unbound, fork on update kind: a DNSBL-DATA
+   update in Python mode -> publish + flip sentinel, and DO NOT call
+   pfb_stop_start_unbound. A CONFIG change (unbound.conf/VIP/mode) -> keep the restart
+   (:3118). The restart also remains the FALLBACK when zero-downtime is unavailable
+   (Phase-1 RAM gate off / feature disabled / a prior swap errored). Update the
+   "Live sync" call site (:3258) to the fast path for Python mode.
+   DNSBL-DATA ALSO COVERS USER CUSTOM-LIST EDITS (#51): the alerts Lock/Unlock buttons
+   and "add to whitelist" patch the manifest in place
+   (pfb_unbound_python_sources_unlock() / pfb_unbound_python_sources_whitelist()) then
+   call pfb_reload_unbound, which today RESTARTS. Route these reloads through the SAME
+   no-restart fast path so a Lock/Unlock applies instantly (lock = allow->block needs the
+   newly-blocked C-cache flush of step 3; unlock = block->allow is immediate once the
+   swap clears decisionDB -- the existing #51 resolver-cache flush on unlock is then
+   redundant, since blocks were never C-cached, #43). PRESERVE #51's "re-lock on
+   Cron/Force" semantics: only the APPLY mechanism changes (swap, not restart); the
+   pfb_unlock store / manifest split and the full-build store-clear are unchanged.
+3. C-CACHE FLIP. Per Phase 1: compute the newly-blocked delta (allow->block) and flush
+   those names from Unbound's message cache (unbound-control flush / flush_zone via the
+   chroot cmd :877), coalesced; OR, if Phase 1 chose TTL, do nothing and document it.
+   block->allow needs no flush (no_cache_store). Coordinate with the DNSBL-queries-
+   daemon marker (:3211) to avoid control-socket collisions.
+4. STUBS/LINT. Any pfSense function newly used -> stubs/pfsense/. php -l + ShellCheck
+   clean.
+
+CONSTRAINTS
+- The publish MUST be atomic on the target FS (temp + rename on the same filesystem;
+  fsync the file and the dir as appropriate). POSIX sh only in shell; quoted; absolute
+  binary paths.
+- Do NOT regress the restart path for config changes or the fallback. No die()/exit()
+  in library code.
+- Default `python -m pytest` stays green/unchanged (no shipped Python change here; if
+  a tiny constant/contract is shared with Python, keep the Phase-4 tests green).
+
+VERIFICATION (must all pass before the phase is done)
+- php -l (changed files) + ShellCheck (changed shell) → clean.
+- python -m pytest → green/unchanged; ruff clean if any Python touched.
+- diff-read: the writer is atomic (temp->rename->sentinel); pfb_reload_unbound forks
+  data-vs-config and only restarts on config/fallback; the C-cache flip matches the
+  Phase-1 decision and coordinates with the daemon marker.
+
+EXPECTED RESULT
+A DNSBL-data update in Python mode publishes atomically + flips the sentinel + flips
+the C-cache delta with NO unbound restart; config changes and failures still restart.
+End-to-end zero-downtime path is now wired (live proof in Phase 6).
+
+COMMIT (single)
+    pfblockerng: ADR-10 P5 — atomic publish + data-only fast path + C-cache flush (ADR-10 P5)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/05_Results.txt` (plain .txt)
+State: the atomic-publish implementation (staging/rename/fsync/sentinel); the
+pfb_reload_unbound fork (what counts as data vs config; how the fallback engages); the
+C-cache flip as implemented (delta-flush vs TTL) + daemon-marker coordination; what the
+maintainer must verify live; the go-ahead for Phase 6.

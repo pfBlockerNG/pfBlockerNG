@@ -1,0 +1,13 @@
+# Repository-scoped Codex defaults. This layer is loaded only after the project
+# is trusted; keep machine-specific authentication and notification settings in
+# ~/.codex/config.toml.
+sandbox_mode = "workspace-write"
+web_search = "indexed"
+model_verbosity = "low"
+model_reasoning_summary = "concise"
+[agents]
+max_threads = 4
+max_depth = 2
+
+[sandbox_workspace_write]
+network_access = true

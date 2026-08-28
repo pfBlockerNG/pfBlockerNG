@@ -1,0 +1,278 @@
+================================================================================
+ADR-09 Phase 2 Results — Decoupled supported-version matrix + runtime reader
+================================================================================
+
+Status: GO — matrix seeded, reader implemented, build-image.yml repointed,
+lifecycle documented, self-test workflow added.
+
+
+--------------------------------------------------------------------------------
+1. WHERE THE MATRIX LIVES + HOW TO EDIT IT
+--------------------------------------------------------------------------------
+
+Storage: ci-metadata ORPHAN branch (its own history, off main/devel/next).
+Commit: f2bddd4 (root commit of ci-metadata)
+
+The matrix lives at:
+  origin/ci-metadata:supported-versions.json
+
+To edit: open a PR against `ci-metadata`. The branch is intended to be
+protected (PR-only) so every change has a git audit trail.
+
+To read at runtime (in any workflow):
+  git fetch origin ci-metadata
+  git show origin/ci-metadata:supported-versions.json
+
+Or use the composite action (which calls the shell reader):
+  uses: ./.github/actions/read-version-matrix
+
+Files added to ci-metadata (orphan):
+  supported-versions.json         (the matrix)
+  supported-versions.schema.json  (JSON Schema for validation)
+  README.md                       (lifecycle policy + how to read)
+
+IMPORTANT: supported-versions.json is NEVER a tracked file on adr/09 or
+any channel branch. It lives ONLY on ci-metadata.
+
+Future migration: if CI infrastructure grows, move the file to a dedicated
+public pfBlockerNG-ci-infra repo (read via raw URL, no token) — a mechanical
+swap in scripts/read-version-matrix.sh and build-image.yml.
+
+
+--------------------------------------------------------------------------------
+2. SCHEMA + SEED
+--------------------------------------------------------------------------------
+
+Schema per entry:
+  {
+    "pfsense_version": string,  // CE: "X.Y.x" (covers all X.Y.* minors)
+                                // Plus: release label (e.g. "25.03")
+    "channel":         "CE"|"Plus",
+    "freebsd_version": string,  // full FreeBSD version (build env), e.g. "15.0-RELEASE"
+    "freebsd_major":   string,  // major only, e.g. "15" (ABI dedup key, artifact suffix)
+    "php_version":     string,  // e.g. "8.3" (USES=php pin)
+    "py_flavor":       string,  // e.g. "py311" (for build-pkg-linux.yml)
+    "status":          "beta"|"GA",
+    "ci":              bool     // true = include in CI smoke fan-out (CE only; false for Plus for now — no licensed CI image)
+  }
+
+Seeded entries (as of ADR-09 P2):
+
+  1. CE 2.8.x (covers 2.8.0, 2.8.1, ...):
+     freebsd_version: "15.0-RELEASE"
+     freebsd_major:   "15"
+     php_version:     "8.3"
+     py_flavor:       "py311"
+     status:          "GA"
+     ci:              true
+
+  2. Plus 25.03:
+     freebsd_version: "15.0-RELEASE"
+     freebsd_major:   "15"
+     php_version:     "8.3"
+     py_flavor:       "py311"
+     status:          "GA"
+     ci:              false   (Plus is ALWAYS ci:false — no licensed CI image)
+
+Note: 2.7.x is NOT seeded — it is below MIN_PFSENSE_VERSION (2.8.0) and unsupported.
+
+
+--------------------------------------------------------------------------------
+3. READER INTERFACE (scripts/read-version-matrix.sh)
+--------------------------------------------------------------------------------
+
+Script: scripts/read-version-matrix.sh
+Composite action: .github/actions/read-version-matrix/action.yml
+
+Usage (standalone shell):
+
+  sh scripts/read-version-matrix.sh [OPTIONS]
+
+  Options:
+    --ref <git-ref>      Ref to read from (default: origin/ci-metadata)
+    --file <path>        Matrix file path (default: supported-versions.json)
+    --github-output      Write to $GITHUB_OUTPUT (step outputs format)
+    --print-build        Print BUILD matrix JSON to stdout
+    --print-ci           Print CI matrix JSON to stdout
+    --print-all          Print both (labelled)
+
+  When called with no flags: prints both matrices (--print-all default).
+
+Usage (GitHub Actions composite action):
+
+  - name: Read matrices
+    id: matrices
+    uses: ./.github/actions/read-version-matrix
+    # Optional inputs (defaults shown):
+    # with:
+    #   ref: "origin/ci-metadata"
+    #   matrix_file: "supported-versions.json"
+
+Outputs from the composite action (also from --github-output):
+
+  build_matrix:
+    JSON array of ALL entries (CE + Plus), each with:
+      pfsense_version, channel, freebsd_version, freebsd_major,
+      php_version, py_flavor, status, ci
+    Feed to release build jobs. Caller dedupes by freebsd_major
+    (one .pkg per ABI) before dispatching builds.
+    Example: ${{ steps.matrices.outputs.build_matrix }}
+
+  ci_matrix:
+    JSON array of ci:true CE entries ONLY (subset of build_matrix).
+    Feed directly to strategy.matrix for the smoke fan-out (Phase 6).
+    Example: ${{ steps.matrices.outputs.ci_matrix }}
+
+Requirements: git, jq (both present on ubuntu-latest GH runners).
+Pure read — no writes anywhere. Exits non-zero on error.
+
+Verified output (seed):
+
+  BUILD matrix (2 entries):
+    [{"pfsense_version":"2.8.x","channel":"CE","freebsd_version":"15.0-RELEASE",
+      "freebsd_major":"15","php_version":"8.3","py_flavor":"py311","status":"GA","ci":true},
+     {"pfsense_version":"25.03","channel":"Plus","freebsd_version":"15.0-RELEASE",
+      "freebsd_major":"15","php_version":"8.3","py_flavor":"py311","status":"GA","ci":false}]
+
+  CI matrix (1 entry):
+    [{"pfsense_version":"2.8.x","channel":"CE","freebsd_version":"15.0-RELEASE",
+      "freebsd_major":"15","php_version":"8.3","py_flavor":"py311","status":"GA","ci":true}]
+
+
+--------------------------------------------------------------------------------
+4. RECONCILE #22: build-image.yml resolve-version REPOINTED
+--------------------------------------------------------------------------------
+
+File: .github/workflows/build-image.yml (job: resolve-version)
+
+BEFORE: hardcoded case-map (case "$CE_VERSION" in 2.8.*) ...) with a comment
+  "Adding a new supported CE version REQUIRES a new case arm here."
+  Adding a version required a workflow file edit.
+
+AFTER: matrix lookup — fetches origin/ci-metadata, reads supported-versions.json
+  via jq, matches CE_VERSION against the "pfsense_version" pattern.
+
+Matching logic (jq):
+  CE versions use "X.Y.x" pattern — e.g. "2.8.x" matches "2.8.0", "2.8.1", etc.
+  The jq filter strips the trailing ".x" to get a prefix and tests startswith().
+  Exact matches (pattern == version) are also accepted.
+  Plus entries are excluded (select(.channel == "CE") guard).
+
+REJECT-UNKNOWN CONTRACT (from issue #22) — PRESERVED:
+  If no CE entry matches the input version, the step hard-fails with exit 1
+  and a ::error:: annotation pointing the operator to add a CI entry on ci-metadata.
+  This fires BEFORE the 90-min publish job starts (resolve-version runs first,
+  cheap, no KVM).
+
+Proof (verified locally):
+  - "2.8.1"  -> matches CE 2.8.x -> FreeBSD 15.0-RELEASE, PHP 8.3  [PASS]
+  - "2.8.0"  -> matches CE 2.8.x -> FreeBSD 15.0-RELEASE, PHP 8.3  [PASS]
+  - "9.9.9"  -> no match -> would hard-fail                          [PASS]
+  - "25.03"  -> Plus entry, not matched as CE -> would hard-fail     [PASS]
+
+ONE PLACE TO ADD A VERSION: edit supported-versions.json on ci-metadata.
+No workflow file change needed.
+
+
+--------------------------------------------------------------------------------
+5. LIFECYCLE POLICY
+--------------------------------------------------------------------------------
+
+Documented in:
+  - ci-metadata:README.md (authoritative, on the orphan branch)
+  - scripts/README.md § "Supported-version matrix" (static pointer for discoverability)
+  - CLAUDE.md § "Updating documentation" (added to the CE-version-change checklist)
+  - docs/misc/pfSense_versions.md (note updated to point to ci-metadata)
+
+Policy:
+  ADD:  When a new pfSense beta or GA lands (curated — human edits the JSON).
+        Set status="beta" until the release goes GA.
+  DROP: The oldest CE entry only when the newest CE goes GA.
+        Supported window is always (prev GA + current GA), transiently +1 during beta.
+  PLUS: Always ci=false. Track version + build .pkg artifacts; never run in CI.
+
+
+--------------------------------------------------------------------------------
+6. SELF-TEST WORKFLOW
+--------------------------------------------------------------------------------
+
+File: .github/workflows/test-version-matrix.yml (workflow_dispatch only)
+
+Assertions:
+  1. Reads BUILD + CI matrices via the composite action.
+  2. Verifies CE 2.8.x entry present with FreeBSD 15.0-RELEASE + PHP 8.3 + ci=true.
+  3. Verifies all Plus entries have ci=false.
+  4. Verifies CI matrix contains only CE entries.
+  5. Verifies reject-unknown: version "9.9.9" returns no match (the reject-unknown
+     contract from #22 is proven as a live assertion, not just by comment).
+
+
+--------------------------------------------------------------------------------
+7. GATE RESULTS
+--------------------------------------------------------------------------------
+
+python -m pytest:       1069 passed (unchanged) [GREEN]
+ruff check .:           All checks passed        [CLEAN]
+ruff format --check .:  54 files already formatted [CLEAN]
+sh -n (reader):         OK                       [CLEAN]
+shellcheck (reader):    No findings              [CLEAN]
+markdownlint-cli2:      0 error(s), 33 files     [CLEAN]
+
+resolve-version reject-unknown proof: see §4 above (four cases verified locally).
+
+adr/09 tree clean: git status shows no supported-versions.json or schema file
+on adr/09 — those files live ONLY on ci-metadata. Confirmed with git status.
+
+
+--------------------------------------------------------------------------------
+8. FILES CHANGED (adr/09 branch commit)
+--------------------------------------------------------------------------------
+
+New files:
+  .github/actions/read-version-matrix/action.yml  (composite action)
+  .github/workflows/test-version-matrix.yml       (self-test workflow)
+  scripts/read-version-matrix.sh                  (POSIX sh reader, shellcheck-clean)
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/02_Results.txt  (this file)
+
+Modified files:
+  .github/workflows/build-image.yml  (resolve-version repointed at matrix)
+  CLAUDE.md                           (CE-version-change checklist updated)
+  docs/misc/pfSense_versions.md       (note updated to point to ci-metadata)
+  scripts/README.md                   (static pointer + schema docs added)
+
+ci-metadata orphan branch (pushed separately, NOT on adr/09):
+  supported-versions.json
+  supported-versions.schema.json
+  README.md
+
+
+--------------------------------------------------------------------------------
+9. HANDOFF FOR PHASE 3
+--------------------------------------------------------------------------------
+
+Phase 3 (03_Release_Artifacts.txt) can consume the matrix as follows:
+
+  1. Read the BUILD matrix:
+       uses: ./.github/actions/read-version-matrix
+     or:
+       sh scripts/read-version-matrix.sh --print-build
+
+  2. The BUILD matrix is a JSON array. Each entry carries:
+       freebsd_version  — pass as freebsd_version to build-pkg.yml (FreeBSD builder)
+       freebsd_major    — construct ABI "FreeBSD:<major>:amd64" for build-pkg-linux.yml
+       php_version      — pass to both builders
+       py_flavor        — pass to build-pkg-linux.yml (portable builder)
+       pfsense_version  — for naming/logging
+
+  3. Dedupe by freebsd_major to get one .pkg per distinct ABI. With the current seed,
+     both CE 2.8.x and Plus 25.03 share freebsd_major="15" — so one .pkg build suffices.
+     The representative entry is the first CE entry for that major (or highest version).
+
+  4. Attach renamed .pkg files:
+       pfSense-pkg-pfBlockerNG-<channel>-<portversion>-FreeBSD-<major>.pkg
+
+  5. CI matrix (for Phase 6 fan-out):
+       ${{ steps.matrices.outputs.ci_matrix }}
+     Feed directly to strategy.matrix. Currently: 1 entry (CE 2.8.x).
+
+GO.

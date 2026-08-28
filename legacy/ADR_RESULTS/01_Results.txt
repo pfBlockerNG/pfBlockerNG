@@ -1,0 +1,408 @@
+================================================================================
+ADR-61 PHASE 1 — RESULTS
+Pin today's widget icon/reporting behavior + land the sync-status ledger
+library (behaviour-preserving, unwired)
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  Added the pfb_sync_status_{read_all,write_all,open,close,list_open}()
+  library (pure, clock-injectable, atomic tmp+rename write, downgrade-safe on
+  corrupt/absent file) mirroring pfb_due_ledger_*'s idiom, inserted after
+  pfblockerng_tick() and before the ADR-53 suppression-line section. No
+  production caller added — confirmed by grep (see KILL-GATES below).
+
+- tests/php/PfbSyncStatusLedgerTest.php (new)
+  Full-branch-coverage PHPUnit suite for the new ledger library.
+
+- tests/php/PfbWidgetOracleTest.php (new)
+  Golden oracles pinning TODAY's IP/DNSBL widget icon logic and
+  pfBlockerNG_get_failed()'s deep-link behaviour, via eval-extraction of the
+  REAL shipped widget source (WidgetAliasHiddenTest/WidgetSortTableTest's
+  established pattern) — zero bytes of pfblockerng.widget.php touched.
+
+- RESULTS/01_Results.txt (this file).
+
+Commit: (filled after `git commit` — see bottom of this file / the commit
+message; this file is committed IN the same commit).
+
+--------------------------------------------------------------------------------
+WIDGET EXTRACTION DECISION
+--------------------------------------------------------------------------------
+
+NO pfblockerng.widget.php refactor was needed or taken. Two prior tests
+(WidgetAliasHiddenTest.php, WidgetSortTableTest.php) already establish the
+precedent of eval-extracting a function/closure VERBATIM from the shipped
+widget source string at test setUpBeforeClass() time, then invoking the real
+extracted code against fixture $pfb arrays / $GLOBALS state — no widget source
+byte changes required. PfbWidgetOracleTest.php follows the exact same pattern:
+
+  - pfb_widget_oracle_status(array $pfb): array — wraps the two "Status
+    indicator" blocks (pfblockerng.widget.php:596-648 in the current tree)
+    verbatim, extracted via a regex anchored on the block's own leading
+    comment through to a lookahead on the next section's unique comment
+    ("// Collect folder/file counts"). Returns [$pfb_status, $pfb_msg,
+    $dnsbl_status, $dnsbl_msg].
+  - pfBlockerNG_get_failed() — the whole named function (widget.php:446-528
+    in the current tree) extracted verbatim via the same
+    function-signature-through-closing-brace regex WidgetAliasHiddenTest uses.
+
+`git diff` on pfblockerng.widget.php is EMPTY — confirmed by `git status`/
+`git diff --cached --stat` below. This trivially satisfies "do NOT change any
+existing widget-visible behavior in this phase": nothing in that file was
+touched at all.
+
+CARRY-FORWARD NOTE for Phase 6: this means Phase 6's rewrite does NOT inherit
+a pre-extracted, production-callable pure decision function from this phase —
+it still needs to decide its OWN extraction/refactor strategy when it rewrites
+the icon/list logic to read the merged ledger. This phase's oracle functions
+are eval-extracted TEST DOUBLES of the current inline code, not a reusable
+library Phase 6 can import.
+
+--------------------------------------------------------------------------------
+LEDGER LIBRARY — FUNCTION SIGNATURES + FILE PATH
+--------------------------------------------------------------------------------
+
+File: {$ledger_dir}/pfb_sync_status.json (ledger_dir passed by the caller,
+same pattern as pfb_due_ledger_*'s $ledger_dir — the production wiring in a
+later phase will pass $pfb['dbdir'], matching the due-ledger's own call sites;
+NOT hardcoded in the library itself, exactly like due-ledger).
+
+Shape (nested object, not due-ledger's flat map — avoids any delimiter
+collision in a composite string key):
+  { "<facility>": { "<item>": { "<stage>": {
+        "message": string, "first_seen": int, "last_seen": int
+  } } } }
+
+Functions (all in pfblockerng_extra.inc):
+  pfb_sync_status_read_all(string $ledger_dir): array
+  pfb_sync_status_write_all(array $data, string $ledger_dir): void
+  pfb_sync_status_open(string $facility, string $item, string $stage,
+                        string $message, string $ledger_dir,
+                        ?callable $clock_fn = null): void
+  pfb_sync_status_close(string $facility, string $item, string $stage,
+                         string $ledger_dir): void
+  pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
+
+No PfbConfig / config gateway involvement — confirmed: the ledger is its own
+JSON sidecar file under $pfb['dbdir'], not a registered config.xml scalar
+field, exactly like pfb_due_ledger.json already is. RequireConfigGateway sniff
+is a non-issue (no config_get_path/config_set_path/config_del_path calls
+added). PFBL-01 RequirePfbFilter sniff is scoped to an explicit function
+allow-list (tests/phpcs/PfBlockerNG/Sniffs/Validation/RequirePfbFilterSniff.php)
+that does not include any pfb_sync_status_* name, and none of the new
+functions exec()/build a path from unvalidated caller input — the
+$facility/$item/$stage/$message strings only ever reach json_encode() of an
+in-memory PHP array (never a shell/file-path build), so PFBL-01 does not
+apply here regardless.
+
+Unwritable-ledger-dir CHOSEN CONTRACT: silent no-op, never an uncaught
+exception. pfb_sync_status_write_all() uses @-suppressed file_put_contents()
+and @-suppressed rename(); on failure it simply returns without persisting.
+This is a DELIBERATE, DOCUMENTED deviation from pfb_due_ledger_write_entry()'s
+own write path, which does NOT @-suppress its file_put_contents()/rename()
+calls — but that due-ledger path has never actually been covered by a
+permission-denial test (grepped DueLedgerTest.php: no chmod/posix_getuid
+coverage exists), so its true behaviour under PHPUnit's error handler (which
+converts an unsuppressed E_WARNING into a thrown Warning exception unless the
+call is @-suppressed or error_reporting excludes it — verified empirically,
+see probe below) was never exercised. This phase's brief explicitly REQUIRES
+the unwritable-dir hostile-input row to "fail safely… never throw an uncaught
+exception up to the caller", so I chose @-suppression for the new library's
+write path specifically to satisfy that contract, rather than silently
+inheriting an unverified due-ledger assumption. See "Deviations" below.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX — re-derived from a FRESH grep against the live tree
+(current file:line for every row ADR-61 SS1.2/SS1.3 lists; ADR's original
+draft numbers in parentheses where they drifted)
+--------------------------------------------------------------------------------
+
+Row 1 — Feed download fail (IP + DNSBL):
+  pfb_download_failure() function def:  pfblockerng.inc:10500 (ADR: ~10494)
+  Its FAIL log call (level 2):          pfblockerng.inc:10527 (ADR: ~10519-10520)
+  Call site A — DNSBL branch, inside
+    `foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', [])
+    as $list)` (loop starts :15814):     pfblockerng.inc:15983 (ADR: ~15973-15977)
+  Call site B — IP branch (v4/v6),
+    inside `foreach (config_get_path("installedpackages/{$ip_type}/config", [])
+    as $key => $list)` (loop starts :17472): pfblockerng.inc:17700 (ADR: ~17690-17694)
+  CORRECTION vs ADR draft: the ADR's table did not specify WHICH call site is
+  IP vs DNSBL. Re-derivation confirms: the FIRST call site in file order
+  (:15983) is the DNSBL branch; the SECOND (:17700) is the IP branch — the
+  reverse of what a naive top-to-bottom reading might assume. Phase 2/3 must
+  wire the IP writer at :17700 and the DNSBL writer at :15983, not vice versa.
+
+Row 2 — DNSBL conf/build fail (pfb_stop_start_unbound() returns non-zero):
+  pfb_stop_start_unbound() function def: pfblockerng.inc:7738
+  pfb_reload_unbound() function def:      pfblockerng.inc:7845
+  The retval!=0 branch (conf/build fail): pfblockerng.inc:7943 (ADR: 7936-7952,
+    matches — inside the cited range).
+
+Row 3 — DNSBL swap-not-confirmed -> restart fallback (NOT itself terminal):
+  pfb_unbound_py_flip_sentinel() def:     pfblockerng.inc:6506
+  pfb_unbound_py_wait_applied() def:      pfblockerng.inc:6572
+  Timeout fallback log ("not confirmed
+    in time -- falling back..."):        pfblockerng.inc:7897 (ADR: 7886-7896,
+    close/in-range)
+  Sentinel-flip-failed fallback log:     pfblockerng.inc:7911 (same family,
+    not separately named in the ADR's table — flagged here since it is a
+    SIBLING fallback path a future writer/clearer must also consider).
+
+Row 4 — IP pfctl apply fail:
+  pfb_pfctl_table_op() function def:      pfblockerng.inc:4709
+  Its failure log (level 1, issue #980
+    tracks the level, not in scope here): pfblockerng.inc:4718 (ADR: 4703-4716,
+    matches)
+  pfb_write_canonical_alias() function
+    def (writes the mirror BEFORE apply): pfblockerng.inc:4959
+  Its (sole) call site:                   pfblockerng.inc:18338 (ADR: ~18332)
+  pfb_apply_alias_delta() function def:   pfblockerng.inc:5109 (calls
+    pfb_pfctl_table_op() at :5128/:5142/:5165/:5179 depending on
+    replace/add/delete branch)
+
+Row 5 — DNSBL Python parse/load exception sites (pfb_unbound.py):
+  Total sys.stderr.write(...) call sites TODAY: 75 (grep -c, fresh count —
+    the ADR's "~20" was an underestimate of the illustrative examples, not a
+    claimed total).
+  The ADR's five cited illustrative examples were re-verified and are EXACT,
+  zero-drift matches at today's line numbers: :1318, :1418, :1451, :1481,
+  :1492. Full per-site enumeration is explicitly deferred to the phase that
+  wires the Python-side status file (a later phase) — pinning today's total
+  count (75) here so that phase's own re-derivation has a sanity-check
+  baseline, per this phase's scope (library + oracles only, no Python-side
+  work).
+
+--------------------------------------------------------------------------------
+GATES — exact commands + pasted output tails
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+$ php -l tests/php/PfbSyncStatusLedgerTest.php
+No syntax errors detected in tests/php/PfbSyncStatusLedgerTest.php
+
+$ php -l tests/php/PfbWidgetOracleTest.php
+No syntax errors detected in tests/php/PfbWidgetOracleTest.php
+
+$ vendor/bin/phpunit   (full suite)
+............................................................. 2379 / 2461 ( 96%)
+............................................................. 2440 / 2461 ( 99%)
+.....................                                         2461 / 2461 (100%)
+
+Time: 00:09.984, Memory: 38.00 MB
+
+OK, but there were issues!
+Tests: 2461, Assertions: 19099, PHPUnit Deprecations: 2, Skipped: 4.
+(The 2 deprecations and 4 skips are PRE-EXISTING — reproduced identically by
+running an unrelated file alone, e.g. `vendor/bin/phpunit --filter
+BootstrapSmokeTest` also reports "PHPUnit Deprecations: 2" with zero tests of
+mine in scope. Not introduced by this change.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output; EXIT=0 — the default 128M memory_limit is insufficient to scan
+the full src/ tree and must be raised, same as CI presumably already does;
+recorded here since a bare `vendor/bin/phpcs --standard=phpcs.xml.dist src/`
+fatals with an out-of-memory error on this machine, which could otherwise read
+as a false failure)
+
+Python/Shell/Markdown canonical gates: SKIPPED — no .py/.sh/.md files touched
+this phase (confirmed via `git status --short`, all three changed files are
+.inc/.php).
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF (ledger library, executed both directions)
+--------------------------------------------------------------------------------
+
+RED (pfblockerng_extra.inc reverted to its origin/devel pre-phase state via
+`git show origin/devel:src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`
+copied over the working file, tests left in place):
+
+$ vendor/bin/phpunit --filter PfbSyncStatusLedgerTest
+There were 11 errors:
+1) PfbSyncStatusLedgerTest::testOpenNewKeyCreatesOneEntry
+Error: Call to undefined function pfb_sync_status_open()
+...
+(all 11 tests error with "Call to undefined function pfb_sync_status_open()"
+or "...pfb_sync_status_close()" / "...pfb_sync_status_list_open()")
+ERRORS!
+Tests: 11, Assertions: 0, Errors: 11, PHPUnit Deprecations: 2.
+
+GREEN (working file restored to this phase's implementation):
+
+$ vendor/bin/phpunit --filter PfbSyncStatusLedgerTest
+...........                                                       11 / 11 (100%)
+Time: 00:00.068, Memory: 34.00 MB
+OK, but there were issues!
+Tests: 11, Assertions: 31, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+KILL-GATE REHEARSAL (own rehearsal per the brief; orchestrator repeats
+independently)
+--------------------------------------------------------------------------------
+
+Mutated pfb_sync_status_open() to always create a NEW stage-slot keyed by
+`$stage . '_' . $now` instead of refreshing `$data[$facility][$item][$stage]`
+in place (the nested-object equivalent of "skip the idempotent-refresh check"
+for this ledger's keying scheme — a flat-map "always append" mutation doesn't
+apply 1:1 to a nested structure, so this is the faithful analogue: every
+open() call creates a distinct entry instead of refreshing one).
+
+$ vendor/bin/phpunit --filter PfbSyncStatusLedgerTest   (MUTATED)
+FF.F.F.....                                                       11 / 11 (100%)
+There were 4 failures:
+1) PfbSyncStatusLedgerTest::testOpenNewKeyCreatesOneEntry
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+-'download'
++'download_1000'
+2) PfbSyncStatusLedgerTest::testOpenExistingKeyRefreshesWithoutDuplicating
+reopening the SAME key must refresh, never duplicate
+Failed asserting that actual size 2 matches expected size 1.
+3) PfbSyncStatusLedgerTest::testCloseExistingKeyRemovesEntry
+closing the open key must remove it
+Failed asserting that two arrays are identical.
+4) PfbSyncStatusLedgerTest::testCloseAbsentKeyAmongOthersLeavesOthersIntact
+Failed asserting that two strings are identical.
+FAILURES!
+Tests: 11, Assertions: 25, Failures: 4, PHPUnit Deprecations: 2.
+
+Reverted the mutation (`diff` against the pre-mutation backup copy confirmed
+byte-identical restoration):
+
+$ vendor/bin/phpunit --filter PfbSyncStatusLedgerTest   (REVERTED)
+...........                                                       11 / 11 (100%)
+OK, but there were issues!
+Tests: 11, Assertions: 31, PHPUnit Deprecations: 2.
+
+The target test named in the brief (testOpenExistingKeyRefreshesWithoutDuplicating,
+formerly named for the "refresh, not duplicate" contract) went RED under the
+mutation and GREEN after revert — the oracle is not vacuous.
+
+--------------------------------------------------------------------------------
+KILL-GATE — grep pfb_sync_status_ outside pfblockerng_extra.inc and the new tests
+--------------------------------------------------------------------------------
+
+$ grep -rln "pfb_sync_status_" --include="*.php" --include="*.inc" src/ tests/ \
+    | grep -v "pfblockerng_extra.inc" | grep -v "PfbSyncStatusLedgerTest.php"
+(empty — confirmed no production wiring snuck in; PfbWidgetOracleTest.php,
+which never references the ledger at all, correctly does not appear either)
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX — ledger library hostile-input rows (brief's required list)
+--------------------------------------------------------------------------------
+
+open-new                         -> testOpenNewKeyCreatesOneEntry
+open-existing-refreshes           -> testOpenExistingKeyRefreshesWithoutDuplicating
+  (asserts message/last_seen updated AND first_seen preserved AND no duplicate)
+open with no injected clock        -> testOpenDefaultsToRealClockWhenNoneInjected
+close-existing                    -> testCloseExistingKeyRemovesEntry
+  (asserts the BEFORE-state: 1 open entry, THEN closes it — before/after)
+close-absent                      -> testCloseAbsentKeyIsSafeNoOp
+  (no file created at all; no exception)
+close-absent among siblings        -> testCloseAbsentKeyAmongOthersLeavesOthersIntact
+list-open filters by facility      -> testListOpenFiltersByFacility
+absent-file-reads-as-empty         -> testAbsentFileReadsAsEmpty
+corrupt-file (non-JSON)             -> testCorruptNonJsonFileReadsAsEmpty
+corrupt-file (JSON, non-object)     -> testCorruptNonObjectJsonReadsAsEmpty
+unwritable-ledger-dir               -> testUnwritableLedgerDirFailsSafely
+  (skipped under root — posix_getuid()===0 guard, matching the repo's
+  established chmod-0555 permission-test convention; this sandbox is a
+  non-root user so the test genuinely ran and passed)
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX — widget oracle action-plan items (brief's item 2a/2b/2c)
+--------------------------------------------------------------------------------
+
+(a) IP icon:
+  enable_cb off -> red                          -> testIpDisabledIsRed
+  on + dedup off -> green (even w/ FAILED log)   -> testIpEnabledDedupOffIsGreenRegardlessOfLogContent
+  on + dedup on + Sanity PASSED -> green          -> testIpEnabledDedupOnSanityPassedIsGreen
+  on + dedup on + Sanity FAILED -> yellow         -> testIpEnabledDedupOnSanityFailedIsYellow
+  on + dedup on + Sanity absent -> yellow         -> testIpEnabledDedupOnSanityAbsentIsYellow
+
+(b) DNSBL icon:
+  enable off -> red                              -> testDnsblEnableOffIsRed
+  dnsbl toggle off -> red                        -> testDnsblToggleOffIsRed
+  unbound_state off -> red                       -> testDnsblUnboundStateOffIsRed
+  unbound.conf missing pfb_unbound.py ref -> red  -> testDnsblUnboundConfMissingPyReferenceIsRed
+  unbound.conf absent entirely -> red             -> testDnsblUnboundConfAbsentIsRed (bonus)
+  disabled + py_error.log content -> red,
+    error-specific message                        -> testDnsblDisabledWithPyErrorsUsesTheErrorMessage (bonus)
+  live + clean log -> green                       -> testDnsblLiveCleanIsGreen
+  live + OUT OF SYNC line -> yellow (dead code,
+    still today's behaviour, pinned as-is)         -> testDnsblLiveOutOfSyncLineIsYellow (bonus)
+  live + py_error.log content -> yellow            -> testDnsblLiveWithPyErrorContentIsYellow
+
+(c) pfBlockerNG_get_failed():
+  recognized alias builds deep link                -> testGetFailedRecognizedAliasBuildsDeepLink
+  unrecognized alias renders without crashing        -> testGetFailedUnrecognizedAliasRendersWithoutCrashing
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+
+1. Unwritable-ledger-dir contract: chose @-suppressed silent no-op for
+   pfb_sync_status_write_all(), which is a small, DOCUMENTED divergence from
+   pfb_due_ledger_write_entry()'s unsuppressed file_put_contents()/rename()
+   calls (see "LEDGER LIBRARY" section above for the full rationale — the
+   brief's explicit "never throw an uncaught exception" requirement forced
+   this choice; the due-ledger equivalent has never actually been tested
+   under that condition).
+
+2. No widget refactor was taken; the eval-extraction pattern already
+   established by WidgetAliasHiddenTest.php/WidgetSortTableTest.php was reused
+   instead, per the brief's own "(extracted or not)" allowance. This means
+   pfblockerng.widget.php has ZERO diff this phase.
+
+3. The ADR's SS1.2 table left "which download-fail call site is IP vs DNSBL"
+   unstated; re-derivation resolved it (Row 1 above) and that resolution
+   should be treated as authoritative going into Phase 2/3.
+
+4. Added a small number of BONUS oracle tests beyond the brief's literal
+   action-plan item 2b list (unbound.conf-absent, disabled-with-py-errors,
+   live-with-OUT-OF-SYNC) since they exercise the SAME already-extracted
+   function at near-zero marginal cost and directly protect branches Phase 6
+   will touch. None required a widget change; all pass.
+
+No other deviations.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 2/3/4
+--------------------------------------------------------------------------------
+
+- Use the COVERAGE MATRIX file:line table above (re-derived fresh this phase)
+  as the writer/clearer site list — NOT the ADR draft's original numbers.
+- Row 1 IP/DNSBL assignment correction: the DNSBL download-fail writer goes at
+  pfblockerng.inc:15983 (inside the pfblockerngdnsbl config foreach starting
+  :15814); the IP download-fail writer goes at pfblockerng.inc:17700 (inside
+  the {$ip_type} config foreach starting :17472).
+- Row 3 (DNSBL swap-not-confirmed / sentinel-flip-failed) has TWO fallback
+  log sites (:7897 and :7911), both "NOT itself terminal" per ADR Semantics —
+  Phase 3's convergence-helper work should account for both, not just one.
+- Phase 6 (widget rewrite) does NOT inherit a pre-extracted production
+  function from this phase (see "WIDGET EXTRACTION DECISION" above) — it must
+  decide its own extraction/refactor approach for the icon/list logic when it
+  actually changes behaviour; PfbWidgetOracleTest.php's eval-extracted
+  functions are regression oracles only, not a reusable library.
+- The exact message strings pinned by PfbWidgetOracleTest.php (e.g. "DNSBL is
+  Active on vip: {vip} ports: {port} & {ssl_port}", "pfBlockerNG
+  deDuplication is out of sync. Perform a Force Reload to correct.") are the
+  strings Phase 6 is expected to EITHER preserve for the green-branch UX OR
+  explicitly supersede — per the ADR's Phase 6 note, these oracles are
+  scaffolding pinning OLD behaviour, not a permanent contract.
+- pfb_unbound.py currently has 75 sys.stderr.write() sites total; Phase 4
+  must do its own full enumeration (this phase deliberately did not, per
+  scope) but can use 75 as a sanity-check count.

@@ -1,0 +1,75 @@
+================================================================================
+PHASE 3 PROMPT — Conditional GET (ETag / If-Modified-Since -> 304)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md   (read §2 pre-download + contract #5/#6)
+================================================================================
+
+ROLE
+You implement Phase 3 of ADR-42 on branch `adr/42-hash-based-change-detection`. BEHAVIOUR-CHANGING
+(adds HTTP conditional requests). Work inline on the branch, one commit, push directly (PR only if
+rejected).
+
+WHY THIS PHASE EXISTS
+Today pfBlockerNG sends NO conditional request: the detector does a HEAD to read Last-Modified and
+compares client-side, and the remote md5 fallback re-downloads the WHOLE feed. A real conditional
+GET (If-None-Match from a stored ETag; If-Modified-Since from a stored Last-Modified) lets the server
+answer 304 (empty body) -> skip the download entirely. pfb_download already has a dead 304 handler
+(inc:7694) waiting to be armed.
+
+REQUIRED READING
+- FIRST, read the prior handoff: .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/02_Results.txt —
+  confirm the local-detection flow and that the remote path was left untouched. If missing, STOP.
+- .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md (§2 pre-download decision; contract #5/#6 — a 304
+  means unchanged; a 200 is hashed and re-ingested iff changed; never a false skip)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — `pfb_download()` (:7338+): the curl GET setup, the
+  dead 304 handler (:7694), `curl_defaults` (:183, CURLOPT_FILETIME). Where to add CURLOPT_HTTPHEADER
+  for If-None-Match / CURLOPT_TIMECONDITION+CURLOPT_TIMEVALUE for If-Modified-Since, and where to
+  capture the response ETag (CURLOPT_HEADERFUNCTION / curl_getinfo).
+- src/usr/local/www/pfblockerng/pfblockerng.php — `pfb_update_check()` remote branch (the HEAD at
+  :480, CURLINFO_FILETIME at :502, whole-feed md5 fallback :526-:531) — replaced by the conditional
+  GET decision.
+- tests/smoke/test_smoke_feeds.py + tests/smoke/conftest.py `_MockFeedServer` (the mock HTTP feed
+  server — extend it to emit ETag + Last-Modified and answer 304 to a matching validator).
+- CLAUDE.md (PHP standards; the URL-encoding check if any query interpolation; PFBL-01).
+
+ACTION PLAN
+1. Persist per-feed validators on each successful 200: store the response `ETag` and `Last-Modified`
+   as sidecar files next to `.orig` (tagged, e.g. `{base}.etag` / reuse the Last-Modified the code
+   already reads). Use the Phase-1 sidecar-write style.
+2. On the next fetch, send `If-None-Match: <stored ETag>` (primary) and, when no ETag is stored,
+   `If-Modified-Since: <stored Last-Modified>` (CURLOPT_TIMECONDITION). Arm the 304 handler:
+   304 -> treat as UNCHANGED (no re-download, no re-ingest), keep the cached `.orig`.
+3. On 200: download as today, then DECIDE re-ingest by hashing the fetched bytes (xxh128) vs the
+   persisted source hash (Phase-1/2 helper) — a spurious 200 with identical bytes does NOT re-ingest
+   (contract #5). Update the stored validators + hash.
+4. Remove the detector's HEAD-then-client-compare for remote feeds (the conditional GET subsumes it);
+   keep download-then-hash ONLY as the last resort when the server offers neither validator.
+5. Smoke (mock-feed server): (a) unchanged feed + matching validator -> 304 -> not re-downloaded/
+   re-ingested; (b) changed feed -> 200 -> hashed -> re-ingested; (c) server with NO validator ->
+   download + hash decides; (d) spurious 200 identical bytes -> no re-ingest. Assert via the response
+   path + the detector log + a DNS/probe outcome where applicable.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; PFBL-01 green; quote/encode any header value safely. Keep the feed-host
+  SSRF guard + IP-pin (pfb_feed_host_allowed / CURLOPT_RESOLVE) intact — do NOT regress it. FAIL-SAFE
+  is mandatory: any uncertainty -> re-download/re-ingest, never a false "unchanged". Do NOT touch the
+  local-feed path (Phase 2) or Python/shell.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit ; php -l ; vendor/bin/phpstan ; vendor/bin/phpcs   → green/clean
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only -q ; ruff check/format  → clean
+- diff-read: conditional headers sent; 304 handler armed; HEAD-compare removed; SSRF guard intact.
+- (Live execution of the 304 cases is Phase 5 / maintainer — do NOT spin up a VM here.)
+
+EXPECTED RESULT
+Unchanged remote feeds return 304 and skip the body; changed feeds 200 + hash-gated re-ingest;
+no-validator servers fall back to download+hash; the wasted HEAD round-trip is gone; fail-safe holds.
+
+COMMIT (single)
+    pfblockerng: send conditional GET (ETag/If-Modified-Since), honour 304 (ADR-42 P3)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/03_Results.txt
+Record: where validators are stored + how sent; the 304/200/no-validator flows + file:line; the mock
+feed server extensions; the smoke case names; confirmation the SSRF guard is intact and fail-safe is
+pinned; PHPUnit/collect counts; the go-ahead.

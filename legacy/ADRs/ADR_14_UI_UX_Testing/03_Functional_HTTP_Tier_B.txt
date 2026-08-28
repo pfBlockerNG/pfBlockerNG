@@ -1,0 +1,70 @@
+================================================================================
+PHASE 3 PROMPT — Tier B (functional, HTTP-POST): drive forms, assert EFFECTIVE state
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §2 "Tier B functional" + fact 3 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 3 of ADR-14. This adds a curated set of
+functional flows over CSRF POST that assert the EFFECTIVE state of the box (config.xml /
+pfctl / unbound) — NOT the HTTP response. Establishes the functional oracle BEFORE any
+browser code. NO src/ change; default pytest unchanged. Work in this ADR's `adr/14`
+worktree; one commit for this phase.
+
+WHY THIS PHASE EXISTS
+Render-smoke proves a page draws; it does NOT prove a form persists. A page can POST,
+return 200, and silently fail to write config. The only trustworthy oracle is the
+effective state (ADR §1 fact 3) — read via helpers.config_get / pfctl / unbound, exactly
+the CLAUDE.md "source of truth, not a proxy" rule. Doing this over HTTP (not a browser)
+keeps the functional oracle independent of browser flake.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_14_UI_UX_Testing/RESULTS/02_Results.txt — it must confirm the render tier +
+  the oracle pattern. If missing, Phase 2 is not complete; STOP and report.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§2 Tier B functional row, fact 3, §4.4).
+- The target pages' forms: src/usr/local/www/pfblockerng/pfblockerng_general.php,
+  pfblockerng_ip.php (feed/alias add), pfblockerng_dnsbl.php — read the actual field
+  names + the POST/save action each uses.
+- tests/smoke/helpers.py — config_get (:403), config_set/write_config, and how the smoke
+  suite asserts effective unbound/pfctl state; the SmokeVM.ssh helper.
+- tests/smoke/ui/ (the Phase-1 session; CSRF must be re-extracted per POST target).
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. Pick a SMALL, high-value set of flows (start ~3): save a General setting; add/save an
+   IP feed or alias; toggle a DNSBL setting. For each, identify the exact POST endpoint,
+   the required fields, and the CSRF token handling (re-fetch the form -> extract
+   `__csrf_magic` -> POST).
+2. For each flow, the oracle asserts the EFFECTIVE result, not the response:
+   - read the relevant config.xml node via helpers.config_get and assert it changed to the
+     posted value; where the setting drives runtime, also assert pfctl/unbound effective
+     state (reuse the smoke suite's patterns).
+3. Mark these `ui_e2e`. Make them robust to ordering (each flow sets + asserts its own
+   state; restore/leave-clean so they don't poison Tier A or each other on a session VM).
+4. Keep them OFF the default collection + the PR gate (Tier B is daily/on-demand).
+
+CONSTRAINTS
+- NO src/ change. Reuse `smoke_vm` + the Phase-1 session; re-extract CSRF per POST.
+  Python 4-space/3.11+, type hints, no bare except. Assert EFFECTIVE state, never the
+  HTTP body alone.
+- Do NOT add the browser layer (Phase 4) or workflows (Phase 5) here.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest        -> green, default count UNCHANGED.
+- pytest -m ui_e2e (against the smoke VM) -> each flow changes the asserted effective
+  state (config.xml / pfctl / unbound), verified by re-reading the box.
+- ruff check . / ruff format .   -> clean.
+
+EXPECTED RESULT
+A small, robust set of functional CSRF-POST flows whose oracle is the box's effective
+state, independent of browser tooling.
+
+COMMIT (single)
+    tests: add Tier-B functional WebUI flows (effective-state oracle) (ADR-14 P3)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/03_Results.txt`
+State: the flows + their POST endpoints/fields + the exact effective-state assertion per
+flow; the CSRF-per-POST pattern; how state is left clean for other tiers; any pfBlockerNG
+quirk in the save path worth knowing; the go-ahead for Phase 4.

@@ -1,0 +1,19 @@
+[Adblock Plus 2.0]
+! DNSBL feed fixture - ABP / EasyList format (DnsblCase). The '[Adblock Plus 2.0]'
+! header line is an ordinary skipped bracket control line (ADR-62: no feed-level
+! header sniff); every '||'/'@@' line below is captured per-line and reaches
+! pfb_unbound.py parse_abp(): '!' comment lines are dropped;
+! '||domain^' is a BLOCK (wildcard: name + subdomains);
+! '@@||domain^' is an ALLOW exception (feed allow band 2 BEATS feed block band 1, so
+! a name that is also '||'-blocked resolves). uuid-style '.com' names ONLY
+! (smoke-domain rule: never RFC-6761 / HSTS-preload).
+!
+! Served by mock_feeds at http://192.168.89.2:<port>/dnsbl_abp.txt
+!
+! Phase 5 asserts (dns_probe block-shape on the box):
+!   MEMBER (||  -> must BLOCK):                      uuid-22f166f56cca.com
+!   ALLOW-EXCEPTION (|| then @@ -> must RESOLVE):    uuid-f26156c6df69.com
+!   NON-MEMBER (not in feed -> must RESOLVE):        uuid-8ed2df53e469.com
+||uuid-22f166f56cca.com^
+||uuid-f26156c6df69.com^
+@@||uuid-f26156c6df69.com^

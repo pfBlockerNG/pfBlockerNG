@@ -1,0 +1,63 @@
+# ADR-23 Phase 2 Results — PHPUnit tests (handoff to Phase 3)
+
+## Delivered
+Added tests/php/WizardVipAutoTest.php covering the Phase-1 pfb_dnsvip_auto gate by
+INVOKING the real shipped step3_submitphpaction() (no re-implemented predicate boolean).
+
+## Part A vs Part B
+- Part A (step3 gate): IMPLEMENTED against shipped code. Drives step3_submitphpaction()
+  and observes whether pfb_validate_vips() runs (the gate's observable consequence).
+  Orchestrator directive followed: NO standalone predicate test (would re-implement the
+  inlined `isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on'` boolean = coverage theater).
+- Part B (step4 persistence shape): FELL BACK (documented @todo + markTestSkipped).
+  Confirmed the Phase-1 NOT-WITHOUT-REFACTOR verdict by reading step4_submitphpaction()
+  end-to-end. Three hard blockers, all before any assertable persistence:
+    1. tail `header(".../pfblockerng_update.php?wizard=reload"); exit;` — exit kills the
+       PHPUnit process.
+    2. early input_error return unless json_decode(@file_get_contents($pfb['feeds']))
+       yields a feeds array — needs a live feeds-DB fixture first.
+    3. undoubled pfSense services reached before exit: services_unbound_configure(),
+       system_resolvconf_generate(), system_dhcpleases_configure() — live side effects.
+  Clean coverage needs the config-mutation block extracted into a pure helper — a
+  src/-touching change, hence its own ADR-23 phase/PR, out of this tests-only phase.
+  Step3 already pins the SAME inlined auto-gate predicate on shipped code; DnsblMarkedVipTest
+  pins the ADR-13 engine the step4 flag drives.
+
+## Coverage (CLAUDE.md mandatory rules)
+- Both sides: auto OFF and auto ON, same invalid (empty) VIP selection.
+- Before-state first: OFF asserts the DNSBL error is PRESENT, THEN flips ON and asserts
+  ABSENT -> green proves the auto flip CAUSED the skip (not an always-skip path).
+- Falsey strings '' and '0' pinned as OFF (validation still runs), mirroring
+  WizardDecisionTest::testSuppressCheckboxFalseyValuesStaySkip.
+- Anti-coverage-theater check: temporarily reverted the Phase-1 $pfb_auto guard ->
+  testAutoOnSkipsVipValidationThatAutoOffEnforces FAILS ("Failed asserting that true is
+  false"). Reverted the temp change; src/ is untouched.
+
+## bootstrap/doubles changes (tests/php/ only — NO src/ modified)
+- tests/php/bootstrap.php: added a guarded wizard-loader (step 5). The wizard .inc can't
+  be require()d as-is (3 relative require_once + 1 HOST-ABSOLUTE require of
+  /usr/local/pkg/pfblockerng/pfblockerng.inc not resolvable via include_path, plus
+  top-level wiring needing unprovisioned runtime). Loader: reads the source, strips the
+  require_once() lines, evals ONLY from the first `function ` keyword onward -> the
+  function bodies (shipped code under test) are defined verbatim, top-level wiring skipped.
+  function_exists()-guarded so an on-appliance include never double-defines.
+- tests/php/pfsense_doubles.php: added a faithful is_port() double (pure-digit 1..65535,
+  no ranges/aliases — pfSense util.inc semantics). step3 validates pfb_dnsport/
+  pfb_dnsport_ssl through it; tests supply valid ports so the port branch never masks the
+  VIP branch. Guarded by function_exists().
+
+## Gate results
+- php -l tests/php/WizardVipAutoTest.php : No syntax errors detected.
+- vendor/bin/phpunit : OK (299 tests, 584 assertions, 1 skipped). Grew from 295 -> 299
+  (1 transition case + 2 falsey testWith cases + 1 documented Part-B skip).
+  New cases (--testdox):
+    Wizard Vip Auto
+     [pass] Auto on skips vip validation that auto off enforces
+     [pass] Auto falsey values still enforce vip validation with data set #0   ('')
+     [pass] Auto falsey values still enforce vip validation with data set #1   ('0')
+     [skip] Step 4 persistence shape is not unit invokable
+- python -m pytest -q : 1480 passed (unchanged — no regression).
+- ruff check . : All checks passed.
+
+(The single suite-wide skip count == this file's Part-B fallback. The "drill not found"
+stderr lines are a pre-existing unrelated smoke-helper probe, not a failure.)

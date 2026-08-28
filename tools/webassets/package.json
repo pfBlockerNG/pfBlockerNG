@@ -1,0 +1,26 @@
+{
+  "name": "pfblockerng-webassets",
+  "private": true,
+  "description": "Dev/CI-only build for the vendored CodeMirror 6 regex-list editor bundle (issue #1669). Never shipped to the appliance -- scripts/build-webassets.sh emits the built .js under src/.",
+  "scripts": {
+    "build": "sh ../../scripts/build-webassets.sh",
+    "test:grammar": "npm --prefix lezer-regexp test",
+    "test:listgrammar": "npm --prefix lezer-pfb-regex-list test",
+    "test:bundle": "node --test test/cm-lint.test.js test/cm-regex-source.test.js test/cm-hooks-source.test.js test/cm-shell-source.test.js test/plain-list-language.test.js"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/legacy-modes": "6.5.3",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.7",
+    "@lezer/common": "1.5.2",
+    "@lezer/generator": "1.8.0",
+    "@lezer/highlight": "1.2.3",
+    "@lezer/lr": "1.4.10",
+    "@lezer/python": "1.1.19",
+    "esbuild": "0.28.1"
+  }
+}

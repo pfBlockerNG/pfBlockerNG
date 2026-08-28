@@ -1,0 +1,126 @@
+================================================================================
+ADR-63 PHASE 2 — ORCHESTRATOR GATE RECORD
+Shared client-side reorder component (drag + anchor-click, staged, DORMANT)
+Gate run: 2026-07-11 | Verdict: PASS | Step commit: 53cd27de
+================================================================================
+
+ROUTE
+phase-step workflow wf_0c5094b2-e91 (Brief: Opus 4.8 xhigh; Implement: Sonnet 5
+xhigh; Verify: Opus 4.8 xhigh). briefRecord OK / handoff DONE / gateRecord PASS.
+
+RECOVERY CONTEXT (recorded deviation — this is the SECOND Phase-2 attempt)
+The first attempt (wf_3dfff5b6-573, launched on Fable pre-model-switch, relaunched
+on Opus) had its Sonnet implementer CRASH: it committed code (de482412) then
+exhausted its turn budget blocking on repeated cold .pkg-build+VM-boot live runs
+and never emitted its StructuredOutput handoff (harness error "subagent completed
+without calling StructuredOutput"). Its 694-line test had NEVER executed even once
+(no Phase-2 fixture result ever landed; the reject-criterion-1 proof was
+unverified). Orchestrator reset origin+local to the Phase-1 tip 00dbe2e5
+(force-push discarded the unproven de482412; kept in reflog) and relaunched FRESH
+(not resume — resume caches the old brief) with a live-VM budget directive in
+notes (author+locally-collect before live runs; consolidate cold builds; use a
+background Monitor, don't turn-burn; budget for the mandatory handoff emit). The
+fresh run completed cleanly. No orphaned Monitor waits remained (TaskList clean).
+
+COMMANDS + RESULTS (verifier re-ran; orchestrator re-derived spot checks)
+- python3 -m pytest tests/smoke/ui/test_reorder_component.py --collect-only
+  -> 16 tests collected
+- python3 -m pytest -> 2672 passed, 4 skipped
+- ruff check . -> All checks passed!; ruff format --check . -> 223 formatted
+- mypy tests/ -> Success, 93 files (smoke tree excluded by pyproject config)
+- vendor/bin/phpunit -> OK; Tests: 3036, Assertions: 20257, Skipped: 4
+  (dnsbl+ip category_edit doubles added rows vs P1's 3019 — expected, tests-only)
+- Live VM (local-smoke.sh --marker ui_browser --filter test_reorder_component):
+  16 passed / 361 deselected, twice (RUN2 all-green post-fix; RUN4 green re-confirm).
+
+RED/GREEN — the mandated failability mutation (live-executed by the implementer)
+- RUN3: implementer swapped insertBefore/insertAfter in the shiftKey branches
+  (commit 97330390 TEMP, pushed to origin — the ONLY way to get a live red on the
+  origin-building smoke harness), ran live -> scenario c (straddle-both-sides)
+  FAILED. Reverted byte-identical (git diff empty vs pre-mutation), pushed ->
+  RUN4 all 16 green including scenario c. Freeze hash of the committed test
+  4936fd19 == handoff red_test_hashes (test unchanged across red->green).
+- verify-red-proof.sh live re-execution: SKIPPED — architecturally incompatible
+  with the origin-building smoke harness (local-smoke.sh does `git fetch origin
+  <ref>` + `git checkout --force FETCH_HEAD` on the box, so a local HEAD~1 revert
+  has ZERO effect on what the box builds; the box would load the full committed
+  component and pass, a false "no red"). A valid live red requires pushing a
+  mutation to the shared branch — outside a read-only verifier's remit. The
+  implementer DID perform exactly that live mutation red/green (RUN3/RUN4 above);
+  the verifier substituted freeze-hash match + full independent static
+  re-derivation of both GREEN expected orders and the pasted RED order. Accepted:
+  the failability IS live-proven (by the implementer), and this is a genuine
+  limitation of the check spec for smoke-tests-built-from-origin, honestly
+  recorded — not an implementer defect.
+
+PER-ITEM DIFF VERDICTS (orchestrator re-derived, not merely re-read)
+- Dormancy: `git diff 00dbe2e5..HEAD -- pfblockerng_category.php
+  pfblockerng_category_edit.php` EMPTY; commit is 3 files insertions-only
+  (RESULTS + pfBlockerNG.js + test). No page calls pfb_reorder_init/read_order.
+  ZERO production behaviour change. PASS.
+- Component surface (read pfBlockerNG.js:151-228 myself): pfb_reorder_init(
+  container,rowSelector,onAfterMove,dragEnabled) injects per-row
+  checkbox(pfb_reorder_chk-N)+type="button" anchor(pfb_reorder_anchor-N),
+  delegated container click (survives renumber), .sortable() iff dragEnabled;
+  anchor plain=insertBefore top->bottom, shift=insertAfter bottom->top,
+  `.not(anchorRow)` excludes the anchor row (no drop/dup). PASS.
+- Order-read: pfb_reorder_read_order regex /(.+)[-=_](.+)/ + encodeURIComponent;
+  re-derived 'pfb_r0'->'ids[]=r0', 'foo'->'', 'pfb_r_5'->'ids[]=r5' — byte-
+  identical to sortable('serialize',{key:'ids[]'}), works with no .sortable()
+  init (§1.8 serialize trap). PASS.
+- Reject-criterion-1 (renumber composition, scenario d): PASSED live -> the ADR's
+  ASSUMED pfSenseHelpers.js trailing-digit-rename contract is CONFIRMED on the
+  real box. Option A (renumber-on-move) stands; no BLOCK, no Option-B fallback.
+
+TEST HONESTY: all-new tests, no weakened assertions; negatives each have a
+failable fixture (serialize-throws never-init, drag-disabled has_instance False,
+zero-checked before==after). Live mutation produced a real red. PASS.
+CONVENTIONS: pfb_reorder_init/read_order match >=3 siblings (pfb_autocomplete_*,
+pfb_greyout, pfb_chg_state_bkgd); ADR-section comment pointers ("ADR-63 S2
+Decision 1", "S1.8") are section refs, NOT phase numbers — narration checker
+passed in pre-commit. PASS.
+
+DEVIATIONS (all accepted; documented in 02_Results.txt)
+1. onAfterMove FIRES on a zero-checked anchor click (early-return omitted). ADR
+   is silent on this (grep: "zero-checked" absent; §2 Decision 1 doesn't define
+   it) — a genuine judgment call, tested. Harmless while dormant (renumber is
+   idempotent; order-read is a no-op re-read). WATCH-ITEM for Phase 3/4: if the
+   page's onAfterMove marks the form dirty / touches Save-button state, a no-op
+   click would spuriously mark dirty — carried into Phase 3 notes.
+2. Multi-row straddle insert-order is the implementer's own design (relative
+   order preserved); firewall_rules.php was not required reading this phase.
+   Pinned by 3 straddle tests + a 3-line comment. Fidelity vs core's exact UX is
+   a Phase 3/4 / PR-review comparison point, not a Phase-2 blocker.
+3. A GENUINE bug found + fixed — in the TEST FIXTURE glue, not the component:
+   core delete_row() removes the row before a container-delegated gutter-refresh
+   handler bubbles, so the handler is silently skipped. Root-caused via hypothesis
+   ledger (H1 confirmed), fixed by binding directly per delete button + rebinding
+   after add_row() (core's own convention). This is exactly the load-bearing
+   pfSenseHelpers.js quirk Phase 2 exists to surface — carry-forward item 3 warns
+   Phase 3/4's page-level wiring.
+
+MATRIX: all component axes (drag true/false, anchor plain/shift, 3 straddle
+directions, onAfterMove-after-drag/-anchor, renumber composition +add_row
++delete_row, order-read hostile inputs) ticked to the 16 live tests. Production
+page/gtype/sort/roworderdragging axes correctly DEFERRED to Phases 3/4.
+
+ORCHESTRATOR ADDITIONS
+- Transaction: HEAD == origin/adr/63-category-reorder-ux == 53cd27de.
+- Confirmed ADR has no "never on zero-checked" contract (deviation 1 is not an
+  ADR contradiction).
+- CARRY TO PHASE 3/4 (from handoff carry_forward, load-bearing): (i) renumber/
+  add_row/delete_row/checkLastRow operate on GLOBAL $('.repeatable') — never add
+  a second repeatable cluster to category_edit.php; (ii) add_row() rewrites
+  input/select/[id^=deleterow] but NOT a generic <button>, so re-call renumber()
+  after the page's add handler; (iii) delete gutter-refresh must bind DIRECTLY on
+  each delete button (rebind after add_row), never delegated; (iv) add_row clone
+  clears <input> but leaves <select> at prior last-row choice — verify if a
+  specific new-row default is asserted.
+
+SKIPPED (recorded, auditable)
+- Orchestrator third run of gates/red-proof: verifier executed both; skill rule
+  (no third run).
+- Live-VM re-run by orchestrator: verified via committed diff + pushed tip +
+  handoff's pasted live evidence; shared boxes.
+- verify-red-proof.sh: see RED/GREEN above (harness-architecture incompatibility,
+  substitute evidence accepted).

@@ -1,0 +1,58 @@
+HISTORICAL — EXECUTED 2026-06-17/18; DO NOT RE-RUN. Every phase below already landed on devel
+(ADR-28 is Accepted; see ADR.md Status). Line anchors are stale and the "hard-freeze /
+byte-identical storage" doctrine in this prompt was superseded by the behaviour-not-bytes rule in CLAUDE.md.
+
+================================================================================
+PHASE 6 PROMPT — Short-circuit / cheap-test-first conditional reordering (PHP)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.1 item 2, §2.3.3, §6 Phase 6 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 6 of 11, BEHAVIOUR-PRESERVING but
+SEMANTIC-SENSITIVE. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Issue #265 item 2, generalised to short-circuiting: put the cheap enum/bool guard first in a
+boolean expression so an expensive test (preg, filesystem, lookup, function call) only runs when the
+cheap guard already passed. Now that flags are enums/bools (Phases 4-5), the cheap guard is obvious.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/05_Results.txt — confirm enum adoption complete. If
+  missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.1 item 2, §2.3.3 side-effect rule)
+- pfblockerng.inc + the other .inc + www/ PHP: && / || chains and nested ifs where an expensive test
+  precedes a cheap enum/bool/empty() guard.
+- CLAUDE.md (PHP; Test coverage).
+
+ACTION PLAN
+1. Reorder a boolean expression to put the cheap guard first ONLY when the reorder is provably
+   side-effect-free: no operand performs an assignment, increments, or calls a function with side
+   effects, and no later operand depends on an earlier one having run. If in doubt, LEAVE IT.
+2. For any non-trivial reordered condition, add/extend a golden test asserting identical truth value
+   AND identical side-effect behaviour across the relevant input classes (before- and after-state per
+   the Test-coverage mandate).
+3. Do not change enum adoption (done) or regex (Phase 7).
+
+CONSTRAINTS
+- Behaviour-preserving: truth values and side effects identical. §2.3.3 is absolute — never reorder a
+  side-effecting or order-dependent condition.
+- Tabs; PFBL-01 green; clean diff (only reordered conditions + their tests).
+
+VERIFICATION (must all pass)
+- vendor/bin/phpunit -> green (+ reorder golden tests)
+- vendor/bin/phpstan / vendor/bin/phpcs -> clean
+- python -m pytest -> green
+- diff-read: each hunk reorders operands only; no operand added/removed/mutated.
+
+EXPECTED RESULT
+Hot/expensive PHP conditionals guarded by a cheap enum/bool/empty() test first; behaviour identical.
+
+COMMIT (single)
+    pfblockerng: order cheap guards first in PHP conditionals (ADR-28 P6)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/06_Results.txt
+State: notable reorders done; conditions deliberately left (with the side-effect reason); golden tests
+added. Go-ahead for Phase 7.

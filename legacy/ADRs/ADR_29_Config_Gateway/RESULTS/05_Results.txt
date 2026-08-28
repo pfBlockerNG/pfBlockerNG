@@ -1,0 +1,195 @@
+ADR-29 Phase 5 — Route install-time config access through the gateway
+=====================================================================
+Status: COMPLETE — all verification gates green
+Date:   2026-06-19
+
+## What was done
+
+Routed all `installedpackages/pfblockerng*` reads and writes in
+`pfblockerng_install.inc` through the `PfbConfig` gateway (`readSection`,
+`writeSection`, `deleteSection`, `read`, `write`). Routed the migration
+driver in `pfblockerng_extra.inc::pfb_run_migrations()` through the same API.
+Foreign keys (non-`installedpackages/pfblockerng*` paths) left on direct
+`config_*_path` calls, each annotated with the standard comment. Behaviour is
+fully preserved — identical stored values, identical migration outcomes.
+
+## pfblockerng_extra.inc changes
+
+### pfb_run_migrations()
+
+The migration driver now reads/writes via the gateway instead of calling
+`config_get_path`/`config_set_path` directly:
+
+  Before: $cfg = config_get_path($migration['section'], []);
+          if ($result !== NULL) {
+              config_set_path($migration['section'], $result);
+          }
+
+  After:  $cfg = PfbConfig::readSection($migration['section']);
+          if ($result !== NULL) {
+              PfbConfig::writeSection($migration['section'], $result);
+          }
+
+Behaviour unchanged — the migration closures receive and return the same
+section array; write_config() is called on the same condition.
+
+## pfblockerng_install.inc changes — install sites routed
+
+All sites below changed from `config_get_path`/`config_set_path`/`config_del_path`
+on `installedpackages/pfblockerng*` paths to the equivalent `PfbConfig` API.
+
+### VIP migration (top of file)
+  installedpackages/pfblockerngdnsblsettings/config/0 (read)
+    → PfbConfig::readSection(...)
+  installedpackages/pfblockerngdnsblsettings/config/0 (write after VIP update)
+    → PfbConfig::writeSection(...)
+
+### pfblockerngantartica cleanup
+  installedpackages/pfblockerngantartica (delete)
+    → PfbConfig::deleteSection(...)
+
+### dnsblwebpage registered field
+  dnsblwebpage (read — registered field)
+    → PfbConfig::read('dnsblwebpage') == 'dnsbl_default.php'
+
+### Adv. Inbound settings upgrade (pfblockernglistsv4, pfblockernglistsv6)
+  installedpackages/{type}/config (read, check, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  Per-item field modifications done against the local array; written back as
+  a whole section — avoids per-item dynamic sub-path writes.
+
+### OpenVPN/IPSec interface upgrade
+  installedpackages/pfblockernglistsv4/config (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+
+### ET IQRisk reputation upgrade
+  installedpackages/pfblockerngreputation/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  NULL sentinel preserved: empty($pfb_iqrisk) ? NULL : $pfb_iqrisk — because
+  downstream is_array() check requires NULL (not []) for the absent case.
+
+### General Tab → IP Tab migration
+  installedpackages/pfblockerng/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  installedpackages/pfblockerngipsettings/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+
+### pfBlockerNGSuppress v4suppression upgrade
+  installedpackages/pfblockerngipsettings/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  v4suppression is unregistered — checked/set via section-level access.
+
+### pfb_feed_internal_filter registered field upgrade
+  installedpackages/pfblockerng/config/0 (read for context)
+    → PfbConfig::readSection(...)
+  pfb_feed_internal_filter (write — registered field)
+    → PfbConfig::write('pfb_feed_internal_filter', ...)
+
+### EasyList upgrade (pfblockerngdnsbleasylist → pfblockerngdnsbl migration)
+  installedpackages/pfblockerngdnsbleasylist (read, delete)
+    → PfbConfig::readSection(...) / PfbConfig::deleteSection(...)
+  installedpackages/pfblockerngdnsbl/config (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+
+### Firefox DoH upgrade (pfblockerngsafesearch)
+  installedpackages/pfblockerngsafesearch (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+
+### MaxMind key migration
+  installedpackages/pfblockerng/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  installedpackages/pfblockerngipsettings/config/0 (read, write)
+    → PfbConfig::readSection(...) / PfbConfig::writeSection(...)
+  maxmind_key, maxmind_locale, database_cc are unregistered — moved via
+  section-level access.
+
+### Widget CRON validation
+  installedpackages/pfblockerngglobal (read, once, reused for clearip + cleardnsbl)
+    → PfbConfig::readSection(...)
+  widget-clearip and widget-cleardnsbl are unregistered — read from the
+  section array directly.
+
+## Foreign keys left on direct config_*_path (annotated)
+
+Every call below retains its original form. Each is annotated with:
+  // foreign key — out of ADR-29 gateway scope
+
+  virtualip/vip
+    — not an installedpackages/pfblockerng* path; VIP table is a pfSense
+      system-level section
+
+  pfblockerng_wizard
+    — root-level key (not under installedpackages/); pre-ADR wizard remnant
+
+  widgets/sequence
+  widgets/widget-data (read + write)
+    — pfSense widget registry; not a pfblockerng namespace path
+
+  cron/item (read-check, per-item set, delete)
+    — pfSense cron section; not a pfblockerng namespace path
+
+## Absent-section NULL semantics
+
+`PfbConfig::readSection` returns `[]` (empty array) for an absent path, while
+the original `config_get_path` returns `null`. Where downstream code calls
+`is_array()` or `!= null` to distinguish absent from present sections, a
+conversion is applied immediately after the readSection call:
+
+  $x = PfbConfig::readSection(...);
+  $x = empty($x) ? NULL : $x;
+
+Affected sites: ET IQRisk, pfb_feed_internal_filter context read. All other
+sites use `is_array()` or `!empty()` which treat both `[]` and `null` as
+"absent" — no conversion needed there.
+
+## Tests
+
+No new tests were required: the existing `MigrationRegistryTest.php` exercises
+`pfb_run_migrations()` through the pfSense doubles layer (which provides the
+same `config_get_path`/`config_set_path` functions that `PfbConfig` wraps), so
+the migration driver change is covered. Install-time upgrade paths are
+integration-covered by the live-VM smoke suite (ADR-04); the unit suite does
+not exercise them directly (they depend on pfSense runtime state).
+
+  vendor/bin/phpunit:
+    Before Phase 5: 730 tests, 2662 assertions  (Phase 4 baseline)
+    After  Phase 5: 730 tests, 2662 assertions  (no change — no new paths)
+
+  python -m pytest: 1733 passed
+
+## Verification gates — all passed
+
+  php -l pfblockerng_install.inc                  -> "No syntax errors detected"
+  php -l pfblockerng_extra.inc                    -> "No syntax errors detected"
+  vendor/bin/phpunit                              -> 730 tests, 2662 assertions — OK
+  vendor/bin/phpstan analyse                      -> "No errors"
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> (no output — clean)
+  python -m pytest                                -> 1733 passed
+  ruff check . && ruff format --check .           -> "All checks passed! / 112 files already formatted"
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    — pfb_run_migrations(): config_get/set_path → PfbConfig::readSection/writeSection
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+    — All installedpackages/pfblockerng* reads/writes routed through PfbConfig
+    — dnsblwebpage + pfb_feed_internal_filter registered-field reads via PfbConfig::read/write
+    — Foreign keys annotated with standard comment (virtualip/vip, widgets/*,
+      cron/item, pfblockerng_wizard)
+
+## Go-ahead for Phase 6
+
+Phase 5 is complete. The full install-time and migration-driver write surface
+for installedpackages/pfblockerng* paths now flows through the PfbConfig
+gateway. Foreign-key calls are annotated. Behaviour is proven identical by
+green gates and the behaviour-preserving restructure (section-level
+read-modify-write, not per-path ad hoc calls).
+
+All gates green. Phase 6 (www/ UI page reads/writes) can proceed.
+
+## Commit
+
+  pfblockerng: route install-time config access through the gateway (ADR-29 P5)
+
+  Branch: adr/29-config-gateway

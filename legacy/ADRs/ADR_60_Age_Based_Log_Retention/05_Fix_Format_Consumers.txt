@@ -1,0 +1,96 @@
+================================================================================
+PHASE 5 PROMPT — Fix the in-repo consumers of the new log format
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §1.8, §2.1, §2.5, §6 Phase 5 first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 5 of 10. Behaviour-CHANGING (fixing a
+real breakage introduced by Phases 2-4, not an optional extra). One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 2-4 already changed every log-writer's timestamp format. Two real, in-repo consumers are
+byte-coupled to the OLD 3-space-token shape and are BROKEN right now, on the current branch tip, as a
+direct result: the DNSBL block page's log-correlation grep, and the Reports/Alerts day-bucket stats
+and hourly chart labels. This phase fixes both so the system is internally consistent again BEFORE
+the age-cutoff feature (Phase 6) adds new behaviour on top of a log format nothing else understands
+correctly yet. This is not a "nice to have broadening" — it's closing a gap this ADR's own §1.8 sweep
+found in its earlier phases' scope.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/04_Results.txt` — confirm Phase 4 landed
+  (both writers of `dnsbl.log` now ISO). If missing, STOP and report.
+- ADR.md §1.8 (the full finding, with old vs new format examples), §2.1 (the two new decision-table
+  rows), §2.5 (coverage matrix), §6 Phase 5.
+- src/usr/local/www/pfblockerng/www/index.php (~:40-:55): the DNSBL sinkhole block page. Find the
+  exact `date('M j H:i', ...)`/`date('M j', ...)` calls (~:45, ~:51, ~:52) and the grep/tail logic
+  around them that correlates a blocked request against `/var/log/pfblockerng/dnsbl.log` to pull
+  Type/Group/Evaluated/Feed for display.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php: the day-bucket stat builder (~:1837,
+  `cut -d ',' -f{col} | cut -d ' ' -f1-2 | uniq -c`) and the hourly chart-label builder (~:1782,
+  ~:1850, the `awk -F ' '` pipeline). Also read the `dnsbldatehr`/`dnsbldatehrmin` buckets (~:1841,
+  ~:1844, `cut -d ':' -f1`/`-f1,2`) — these are claimed UNAFFECTED by the format change; your job is
+  to verify that claim with a test, not just trust it.
+- Grep every OTHER site in the codebase that greps/cuts/awks one of the 10 log files by a
+  space-token-count assumption — the two sites above may not be exhaustive; re-derive the list
+  (`grep -rn "cut -d ' '" src/usr/local/www/pfblockerng/`, and similarly for any `awk -F ' '` over a
+  pfBlockerNG log path) rather than trusting this prompt's enumeration.
+
+ACTION PLAN
+1. `www/index.php`: rebuild the correlation grep key against the new ISO shape (`Y-m-d H:i`/`Y-m-d`
+   equivalents of the old `M j H:i`/`M j` windows — match the same "how much of the timestamp to key
+   on" precision the old code used, just in the new format). Verify end-to-end: a synthetic
+   `dnsbl.log` line in the NEW format is found by the rebuilt grep and its detail fields render.
+2. `pfblockerng_alerts.php`'s day-bucket builder (~:1837): the ISO format has exactly 2 space tokens
+   (date, time) where the old format had 3 (month, day, time). Adjust the `cut -d ' ' -f...` field
+   selection so the day-bucket key is just the ISO date token (`-f1` alone, most likely — verify by
+   constructing a real ISO sample line and running the pipeline by hand before changing the code).
+3. `pfblockerng_alerts.php`'s hourly chart-label builder (~:1782, ~:1850): adjust the `awk` field
+   references so the rendered label is sensible for the new 2-token shape (e.g. "2026-07-08 (14)" —
+   your call on the exact cosmetic shape, but it must show the correct hour, not an empty field).
+4. Add a regression test proving `dnsbldatehr`/`dnsbldatehrmin` (the `:`-split hour buckets) are
+   genuinely unaffected — construct both an old-format and new-format sample line and show both
+   produce the same hour-bucket key shape.
+5. Grep-gate: after your fixes, confirm no other site in `src/usr/local/www/pfblockerng/` still
+   assumes the old 3-space-token shape when parsing one of the 10 log files (paste the grep output).
+
+CONSTRAINTS
+- PHP: tabs, uppercase `TRUE`/`FALSE`.
+- Do not touch the log WRITER code (Phases 2-4 already did that) — this phase only touches
+  CONSUMERS: `www/index.php` and `pfblockerng_alerts.php`.
+- Do not change the day/hour bucket GRANULARITY an operator sees (still daily/hourly buckets) — only
+  the field-extraction mechanics that produce those buckets.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+VERIFICATION
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/` clean; `vendor/bin/phpstan` clean.
+- Red→green proof: construct a synthetic ISO-format `dnsbl.log` line and run it through the
+  PRE-Phase-5 `www/index.php` correlation logic — show it does NOT match (red, the live breakage this
+  phase fixes) — then through the POST-Phase-5 logic — show it DOES match and the detail fields
+  render (green). Same red-before/green-after for the Reports day-bucket grouping (pre-Phase-5: every
+  line its own bucket; post-Phase-5: correctly grouped by day) and the chart label (pre-Phase-5: empty
+  hour field; post-Phase-5: correct hour shown).
+- The `dnsbldatehr`/`dnsbldatehrmin` regression test (old-format and new-format samples both bucket
+  identically) — paste the result.
+- Tier-A `ui_render` for the DNSBL block page and the Reports/Alerts page:
+  `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="` (needs
+  `SMOKE_ADMIN_PASSWORD`) — 200, no PHP error/warning, page-specific marker present.
+- The grep-gate from Action Plan item 5, output pasted.
+
+EXPECTED RESULT
+The DNSBL block page correctly correlates and displays real block detail against the new ISO-format
+`dnsbl.log`; the Reports/Alerts daily stat table and hourly charts group correctly against all 10
+(now-ISO) log types; no other consumer in `www/` still assumes the old format.
+
+COMMIT (single)
+    www: fix DNSBL block page and Reports/Alerts stats for new ISO log format (ADR-60 P5)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/05_Results.txt` with: verdict; what
+changed + commit; gates + pasted output including both `ui_render` runs; red→green proof for the
+block page AND the Reports day-bucket/chart fixes; the `dnsbldatehr`/`dnsbldatehrmin` regression-test
+result; the grep-gate output for any other affected consumer found (or confirmed none); deviations
+(or "none"); carry-forward for Phase 6 (the system is now internally consistent — safe to add the
+age-cutoff feature on top).

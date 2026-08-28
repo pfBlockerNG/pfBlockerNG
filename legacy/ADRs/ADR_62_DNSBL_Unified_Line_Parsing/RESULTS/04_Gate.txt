@@ -1,0 +1,29 @@
+ADR-62 PHASE 4 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_e60d774f-ab5 (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record and wrote this file.
+Commit gated: 42ffe62b4993f9facc0dbf608c3e5fa059f3da11 ("pfblockerng: broaden DNSBL per-line ABP capture + universal control-line skip (ADR-62 P4)")
+
+0. HISTORY NOTE. Implementer rebased onto latest origin/devel again before committing (all prior phase commits picked clean; remote in sync; gates ran post-rebase). Prior-phase hashes shifted (P1 9a9fbf74, P2 4de5ff29, P3 836e3f58 + gates 2019430b/d7e06eb5/664468d1).
+
+1. TRANSACTION — PASS. HEAD == origin == 42ffe62b; tree clean; RESULTS/04_Results.txt committed; all fixed handoff fields present.
+
+2. CANONICAL GATES (verifier re-ran all) — PASS. php -l clean; phpunit Tests: 2650, Assertions: 19383, 0 failures (+1 new TLD-interaction test); phpstan OK; phpcs 0 violations; pytest 0 failures (verifier 2585/5 vs handoff 2591/4 — same documented env-only skip class: dnspython import, FreeBSD-ports checkout, release-conf; none touch ADR-62 files); ruff/mypy clean; narration/retired-token/version-literal checkers exit 0 (re-run in --diff HEAD~1 mode).
+
+3. RED PROOF — behaviour-changing; verifier RE-EXECUTED: checkout HEAD~1 -- pfblockerng.inc (tests stay) → phpunit --filter Adr62DnsblCorpusManifestTest → RED (mixed_plain raw drifted: D2 verbatim shapes missing under old guard; Tests: 4, Failures: 1); restore → GREEN (4 tests, 96 assertions); worktree porcelain-clean before/after.
+
+4. DIFF VS PLAN (full git show — exactly 5 inc hunks) — PASS.
+   - Item 1: manifest writer @~7180 and loop guard @16478 swapped to pfb_dnsbl_is_abp_rule_line(); `!$easylist &&` byte-identical; verbatim write + continue preserved.
+   - Item 2: universal skip @16564 AFTER the '#'-classifier (side effects intact), inside the non-easylist branch. Executed traces verified against function bodies: '##.ad' → captured at the guard (never reaches classifier/skip); '[2604:2dc0::]' → not captured, not skipped, reaches unbracket+IP-collect.
+   - Item 3: corpus — only mixed_plain.{txt,raw}, permit_feed.{txt,raw}, tld/pfb_dnsbl_plain.txt (+1 line) changed; 12 other feeds byte-identical; raws regenerated via the real broadened writer (throwaway script mirroring the PHPUnit setUp), never hand-edited; D2 rows: 4 pytest NEW-outcome tests + manifest golden; D4: 1 pytest test; red→green executed (item 3 above); D5 honestly DEFERRED to Phase 7 smoke (no driver); D3 diagnostics-only per Phase-1 scoping.
+   - Item 4: D1 test re-run PASSED; abp_feed fixtures byte-unchanged; Semantics #2/#3 via Phase-2 oracle suite re-run (50 tests/71 assertions); TLD-pass interaction CLEAN — PR #1066's unconditional comma-prefix guard (inc:7887, strncmp($line, ',', 1) !== 0 → continue) runs BEFORE the .abp-marker glob and skips every broadened verbatim shape; proven by new executed test testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled with a real 'sneaky…##.ad' fixture line; TLD pass itself untouched.
+   - Item 5: do-not-touch list diff-verified ($easylist/$validate_header/.abp/format_hint/CSV switch/generic IP loop untouched; only comment-text mentions).
+
+5. TEST HONESTY — PASS. D2/D4 flips are logical inverses of real assertions backed by regenerated corpus bytes (regression to old guard re-reds them — proven); TLD test's negative assertion has a purpose-built trippable fixture; UnboundPythonSourcesTest untouched AND verified legitimately unchanged (its fixtures carry only old-predicate shapes).
+
+6. CONVENTIONS — PASS. No new public symbols; two stale 'not-yet-wired/broadened' comments reconciled to ADR §-pointers (house style); policy checkers clean.
+
+7. SKIPPED — one (recorded): blank-line CSV-sniff timing (deviation 2) not independently probed beyond code-read — the download loop has no off-appliance driver (same class as D3/D5); accepted as traced-not-executed with explicit disclosure.
+
+DEVIATIONS ACCEPTED: (1) skip wired at Phase-2's pre-identified site ('#'-classifier first); (2) blank-line skip timing = diagnostics-class, traced, disclosed (see SKIPPED — Phase 7 smoke should include a leading-blank CSV feed row if cheap); (3) +1 TLD fixture line beyond the brief's literal list — upgraded a trace to an executed proof; (4) '[…]' shapes not addable as .txt fixtures (consumed before .txt) — covered by the Phase-2 pure-function oracle + executed ordering trace.
+
+Carry-forward for Phase 5: classifier deletion may now proceed (D1 the only remaining delta); note PR #1066's comma-guard already gives the TLD pass marker-independent protection — Phase 5's "#1060 gate fix / unconditional empty-column skip" step must be re-scoped against the CURRENT tld_analysis() code (the ADR §1.5/#1060 text predates PR #1066 — verify what remains of the $abp_feeds gate before editing); .abp marker retirement's TLD-consumer risk is likely already neutralised — re-derive live.

@@ -1,0 +1,327 @@
+@direct/1os
+#ios
+255.255.255.255	broadcasthost
+::1             localhost
+#common
+127.0.0.1 localhost
+#android
+::1             ip6-localhost
+#miwifi
+127.0.0.1 XiaoQiang
+@direct/official
+#Flash
+127.0.0.1 geo2.adobe.com
+127.0.0.1 get3.adobe.com
+127.0.0.1 flash.2144.com
+127.0.0.1 www.2144.cn
+#iTunes-radio
+127.0.0.1 iadctest.qwapi.com
+#MicroSoft
+127.0.0.1 ieonline.microsoft.com
+@direct/3rd
+13.107.21.200 cn.bing.com
+#acdsee
+127.0.0.1 acdid.acdsystems.com
+#adobe
+127.0.0.1 activate.adobe.com
+127.0.0.1 ereg.adobe.com
+127.0.0.1 hlrcv.stage.adobe.com
+127.0.0.1 lm.licenses.adobe.com
+127.0.0.1 lmlicenses.wip4.adobe.com
+127.0.0.1 na1r.services.adobe.com
+127.0.0.1 na2m-pr.licenses.adobe.com
+#alcohol
+127.0.0.1 serial.alcohol-soft.com
+127.0.0.1 trial.alcohol-soft.com
+#ashampoo
+127.0.0.1 licenses.ashampoo.com
+#BlueSoleil
+127.0.0.1 license.bluesoleil.com
+127.0.0.1 license2.bluesoleil.com
+127.0.0.1 license3.bluesoleil.com
+#capture1
+127.0.0.1 activation.phaseone.com
+#corel
+127.0.0.1 apps.corel.com
+127.0.0.1 mc.corel.com
+127.0.0.1 origin-mc.corel.com
+127.0.0.1 iws.corel.com
+127.0.0.1 ipm.corel.com
+127.0.0.1 sws.corel.com
+127.0.0.1 dam.corel.com
+#cuteftp
+127.0.0.1 dbregistration.cuteftp.com
+#cyberlink
+127.0.0.1 activation.cyberlink.com
+127.0.0.1 cap.cyberlink.com
+#easeus data recovery
+127.0.0.1 activation.easeus.com
+127.0.0.1 track.easeus.com
+#faronicslabs-deepfreeze
+127.0.0.1 upd.faronicslabs.com
+#lumion3d
+127.0.0.1 backup.lumion3d.com
+127.0.0.1 backup.lumion3d.net
+127.0.0.1 license.lumion3d.com
+127.0.0.1 license.lumion3d.net
+#macdrive
+127.0.0.1 act2.mediafour.com
+#nikon-imaging
+127.0.0.1 sams.nikonimaging.com
+#presonus
+127.0.0.1 registration.presonus.com
+#Piriform
+127.0.0.1 license.piriform.com
+#processlasso
+127.0.0.1 www.bitsumactivationserver.com
+#tableau-desktop
+127.0.0.1 licensing.tableausoftware.com
+#TechSmith
+127.0.0.1 activation.cloud.techsmith.com
+#totalfinder
+127.0.0.1 binaryage-leechgate.herokuapp.com
+127.0.0.1 updates-s3.binaryage.com
+#wise
+127.0.0.1 reg.wisecleaner.com
+#wondershare.com
+127.0.0.1 cbs.wondershare.com
+#126
+127.0.0.1 img1.126.net
+127.0.0.1 img2.126.net
+127.0.0.1 img3.126.net
+127.0.0.1 pimg1.126.net
+127.0.0.1 pg-ad-b1.ws.126.net
+127.0.0.1 webstat.ws.126.net
+#163-news
+127.0.0.1 analytics.163.com
+127.0.0.1 e-p4p.163.com
+127.0.0.1 nex.163.com
+127.0.0.1 popme.163.com
+127.0.0.1 temp.163.com
+#163-music
+127.0.0.1 iadmat.nosdn.127.net
+127.0.0.1 yt-adp.nosdn.127.net
+#youdao
+127.0.0.1 dsp-click.youdao.com
+127.0.0.1 gorgon.youdao.com
+127.0.0.1 impservice.dictapp.youdao.com
+127.0.0.1 log.yex.youdao.com
+127.0.0.1 ydpushserver.youdao.com
+#360-lianmeng
+127.0.0.1 api.so.lianmeng.360.cn
+127.0.0.1 cm.lianmeng.360.cn
+127.0.0.1 s.lianmeng.360.cn
+127.0.0.1 s1.stat.lianmeng.360.cn
+127.0.0.1 stat.lianmeng.360.cn
+#360-os
+127.0.0.1 adapter.shouji.360.cn
+127.0.0.1 agd.p.360.cn
+127.0.0.1 agd2.p.360.cn
+127.0.0.1 tr.p.360.cn
+127.0.0.1 iad.e.360.cn
+127.0.0.1 qstore.inner.api.sj.360.cn
+127.0.0.1 shake.360.cn
+127.0.0.1 shake.f.360.cn
+#360-tf
+127.0.0.1 e.tf.360.cn
+127.0.0.1 guess.tf.360.cn
+127.0.0.1 stat.tf.360.cn
+127.0.0.1 stats.guess.tf.360.cn
+127.0.0.1 tf.360.cn
+127.0.0.1 tracking.v.tf.360.cn
+127.0.0.1 v.tf.360.cn
+#jiagu
+127.0.0.1 service.jiagu.360.cn
+127.0.0.1 cpull.360.cn
+127.0.0.1 s.360.cn
+127.0.0.1 p.s.360.cn
+127.0.0.1 a.appjiagu.com
+127.0.0.1 api.appjiagu.com
+127.0.0.1 b.appjiagu.com
+127.0.0.1 c.appjiagu.com
+127.0.0.1 j.appjiagu.com
+127.0.0.1 p.appjiagu.com
+127.0.0.1 s.appjiagu.com
+#so
+127.0.0.1 haostat.qihoo.com
+127.0.0.1 s.sh.qihoo.com
+127.0.0.1 res.qhupdate.com
+127.0.0.1 tran.news.so.com
+127.0.0.1 spro.so.com
+127.0.0.1 u.api.look.360.cn
+#360.cn
+127.0.0.1 ad.dev.360.cn
+127.0.0.1 ad.gamebox.360.cn
+127.0.0.1 click.stat.hao.360.cn
+127.0.0.1 cm.dmp.360.cn
+127.0.0.1 dev.tg.wan.360.cn
+127.0.0.1 huid.ad.360.cn
+127.0.0.1 rd.wan.360.cn
+127.0.0.1 s.union.360.cn
+#360-mob
+127.0.0.1 act.commercial.shouji.360.cn
+127.0.0.1 commercial.shouji.360.cn
+127.0.0.1 huodong.mobilem.360.cn
+127.0.0.1 msg.shouji.360.cn
+#360-qihoo
+127.0.0.1 s.qhupdate.com
+127.0.0.1 hs.qhupdate.com
+127.0.0.1 top.h.qhimg.com
+127.0.0.1 top.h.qhmsg.com
+#360-total security
+127.0.0.1 display.360totalsecurity.com
+#360-news
+127.0.0.1 news.qhstatic.com
+127.0.0.1 show.look.360.cn
+127.0.0.1 s1.milkjpg.com
+127.0.0.1 new.taobc.com
+#alicdn
+127.0.0.1 afp.alicdn.com
+127.0.0.1 afpmm.alicdn.com
+127.0.0.1 asearch.alicdn.com
+127.0.0.1 atanx.alicdn.com
+127.0.0.1 atanx2.alicdn.com
+127.0.0.1 nbsdk-baichuan.alicdn.com
+#alimama
+127.0.0.1 a.alimama.cn
+127.0.0.1 afpeng.alimama.com
+127.0.0.1 afpssp.alimama.com
+#aliyun
+127.0.0.1 oa-panther.data.aliyun.com
+#aliyuncs
+127.0.0.1 adash.man.aliyuncs.com
+127.0.0.1 cdn-ads.oss-cn-shanghai.aliyuncs.com
+127.0.0.1 dressimage.img-cn-beijing.aliyuncs.com
+127.0.0.1 fs-uc-nearme-com-cn.oss-cn-hangzhou.aliyuncs.com
+127.0.0.1 img-dsp.oss-cn-beijing.aliyuncs.com
+127.0.0.1 jiayi1.oss-cn-shanghai.aliyuncs.com
+127.0.0.1 jsadsdisplay.cn-beijing.log.aliyuncs.com
+127.0.0.1 mobaders.oss-cn-beijing.aliyuncs.com
+127.0.0.1 ruikeja-mobileoffice.oss-cn-hangzhou.aliyuncs.com
+127.0.0.1 ttjx-online.cn-hangzhou.log.aliyuncs.com
+127.0.0.1 xz-development.oss-cn-beijing.aliyuncs.com
+#ipinyou
+127.0.0.1 cm.ipinyou.com
+127.0.0.1 fm.ipinyou.com
+127.0.0.1 fms.ipinyou.com
+127.0.0.1 optimus.ipinyou.com
+127.0.0.1 vt.ipinyou.com
+#mct01
+127.0.0.1 a.mct01.com
+127.0.0.1 cm.mct01.com
+127.0.0.1 static.mct01.com
+#mmstat
+127.0.0.1 ac.mmstat.com
+127.0.0.1 cnzz.mmstat.com
+127.0.0.1 go.mmstat.com
+127.0.0.1 gxb.mmstat.com
+127.0.0.1 hz.mmstat.com
+127.0.0.1 p3p.mmstat.com
+127.0.0.1 res.mmstat.com
+127.0.0.1 wgo.mmstat.com
+127.0.0.1 yt.mmstat.com
+#phpwind
+127.0.0.1 init.phpwind.net
+#tanx
+127.0.0.1 a.tanx.com
+127.0.0.1 cdn.tanx.com
+127.0.0.1 cms.tanx.com
+127.0.0.1 df.tanx.com
+127.0.0.1 ecpm.tanx.com
+127.0.0.1 ef-dongfeng.tanx.com
+127.0.0.1 opehs.tanx.com
+127.0.0.1 p.tanx.com
+127.0.0.1 pcookie.tanx.com
+127.0.0.1 phs.tanx.com
+#taobao
+127.0.0.1 ai.m.taobao.com
+127.0.0.1 ai.taobao.com
+127.0.0.1 re.m.taobao.com
+127.0.0.1 re.taobao.com
+127.0.0.1 redirect.simba.taobao.com
+127.0.0.1 show.re.taobao.com
+127.0.0.1 strip.taobaocdn.com
+127.0.0.1 temai.taobao.com
+127.0.0.1 tunion-api.m.taobao.com
+#uc
+127.0.0.1 adn.insight.ucweb.com
+127.0.0.1 adtrack.ucweb.com
+127.0.0.1 hk.napi.ucweb.com
+127.0.0.1 kwurl.ucweb.com
+127.0.0.1 puds.ucweb.com
+127.0.0.1 rescn.u3.ucweb.com
+127.0.0.1 sea.napi.ucweb.com
+127.0.0.1 uc9.ucweb.com
+127.0.0.1 ucus.ucweb.com
+127.0.0.1 up1.tj.u2.ucweb.com
+127.0.0.1 up4.ucweb.com
+127.0.0.1 utp-dmp.ucweb.com
+127.0.0.1 vs2.gzcu.u3.ucweb.com
+127.0.0.1 api.mp.uc.cn
+127.0.0.1 applog.uc.cn
+127.0.0.1 puds.test.uae.uc.cn
+127.0.0.1 track.uc.cn
+127.0.0.1 wmedia-track.uc.cn
+127.0.0.1 woodpecker.uc.cn
+127.0.0.1 log.cs.pp.cn
+127.0.0.1 patriot.cs.pp.cn
+127.0.0.1 huichuan.sm.cn
+127.0.0.1 u.ucfly.com
+#wrating
+127.0.0.1 c.wrating.com
+127.0.0.1 cntv.wrating.com
+127.0.0.1 cookiemapping.wrating.com
+127.0.0.1 sina.wrating.com
+127.0.0.1 tongji.wrating.com
+#ali-baba
+127.0.0.1 p4psearch.china.alibaba.com
+127.0.0.1 crm-eve.b2b.alibaba-inc.com
+127.0.0.1 fm.p0y.cn
+127.0.0.1 f1.p0y.cn
+127.0.0.1 f2.p0y.cn
+127.0.0.1 jxlog.istreamsche.com
+127.0.0.1 material.istreamsche.com
+127.0.0.1 tanxlog.istreamsche.com
+127.0.0.1 ac.atpanel.com
+127.0.0.1 t.atpanel.com
+127.0.0.1 afp.adchina.com
+127.0.0.1 match.p4p.1688.com
+#ali-cdn
+127.0.0.1 aecpm.alicdn.com
+127.0.0.1 alimama.alicdn.com
+127.0.0.1 gen.alicdn.com
+127.0.0.1 strip.alicdn.com
+#ali-ipinyou
+127.0.0.1 file.ipinyou.com.cn
+127.0.0.1 i.ipinyou.com
+127.0.0.1 ipinyou.com
+127.0.0.1 s.ipinyou.com
+127.0.0.1 sdsp.ipinyou.com
+127.0.0.1 stats.ipinyou.com
+127.0.0.1 www.ipinyou.com
+127.0.0.1 www.ipinyou.com.cn
+#ali-linezing.com
+127.0.0.1 acookie.linezing.com
+127.0.0.1 hidden-master.linezing.com
+127.0.0.1 js.tongji.linezing.com
+127.0.0.1 tongji.linezing.com
+127.0.0.1 www.linezing.com
+#ali-mama
+127.0.0.1 bm.alimama.cn
+127.0.0.1 bmvip.alimama.cn
+127.0.0.1 cb.alimama.cn
+127.0.0.1 img.alimama.cn
+127.0.0.1 tw.alimama.cn
+127.0.0.1 acookie.alimama.com
+127.0.0.1 afptrack.alimama.com
+127.0.0.1 banner.alimama.com
+127.0.0.1 c.alimama.com
+127.0.0.1 cpc.click.alimama.com
+127.0.0.1 p.alimama.com
+127.0.0.1 static.alimama.com
+127.0.0.1 t.alimama.com
+127.0.0.1 i.mmcdn.cn
+#ali-phpwind
+127.0.0.1 init.phpwind.com
+127.0.0.1 nt.phpwind.com
+127.0.0.1 s.phpwind.

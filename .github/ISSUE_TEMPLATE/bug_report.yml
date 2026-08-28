@@ -1,0 +1,120 @@
+name: Bug report
+description: Report a problem with pfBlockerNG so we can reproduce and fix it.
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. The more of the fields below you fill in,
+        the faster we can reproduce and fix the problem.
+
+        Before filing, please search [existing issues](https://github.com/pfBlockerNG/pfBlockerNG/issues?q=is%3Aissue)
+        — yours may already be reported.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and how it differs from what you expected.
+      placeholder: After updating feeds, DNSBL stops resolving any domain until I reboot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence that triggers the problem. Numbered steps are ideal.
+      placeholder: |
+        1. Add feed X to a DNSBL group
+        2. Force Update from the Update tab
+        3. Resolve any domain — NXDOMAIN for everything
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: Optional — what the correct behaviour would have been.
+    validations:
+      required: false
+
+  - type: input
+    id: pfb-version
+    attributes:
+      label: pfBlockerNG version
+      description: 'Found under System ▸ Package Manager ▸ Installed Packages, or the pfBlockerNG ▸ Update tab.'
+      placeholder: e.g. 3.2.1_9
+    validations:
+      required: true
+
+  - type: dropdown
+    id: pfsense-edition
+    attributes:
+      label: pfSense edition
+      options:
+        - CE
+        - "Plus"
+        - Other (state in version field)
+    validations:
+      required: true
+
+  - type: input
+    id: pfsense-version
+    attributes:
+      label: pfSense version
+      description: 'Found under System ▸ Update, or the dashboard System Information panel.'
+      placeholder: e.g. CE 2.8.0 / Plus 24.11
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Optional — which part of pfBlockerNG is involved.
+      options:
+        - Not sure
+        - DNSBL (domain blocking)
+        - IP blocking / aliases
+        - GeoIP / MaxMind
+        - Feeds / Update / scheduling
+        - Reports / widget / GUI
+        - Install / upgrade
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: 'Optional. pfBlockerNG logs live under Status ▸ System Logs ▸ Packages ▸ pfBlockerNG (or /var/log/pfblockerng/). Paste only the relevant lines.'
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: pfBlockerNG configuration (optional)
+      description: >-
+        Optional, but helps a lot. Paste the relevant pfBlockerNG settings or feed
+        definitions.
+        ⚠️ Remove secrets first — your MaxMind **license key** and **account ID**, and any
+        **API keys / tokens / credentials embedded in feed URLs** (e.g. `?token=…`,
+        `?key=…`, or `https://user:pass@…`).
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed secrets (MaxMind key/account, feed-URL API keys/tokens/credentials) from anything I pasted above.
+          required: true

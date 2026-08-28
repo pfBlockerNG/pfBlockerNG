@@ -1,0 +1,99 @@
+================================================================================
+PHASE 2 PROMPT -- The read-only decision query channel in pfb_unbound.py (new; PRODUCTION-DORMANT)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS2.1 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one commit,
+push directly. Test mode: brand-new capability pinned against the Phase-1 ORACLE (decision-equal) +
+a side-effect assertion; no PRE-EXISTING behaviour changes, so this is oracle-gated new code, not a
+red->green defect fix.
+Blast-radius note for the gate: PRODUCTION-DORMANT. The query watcher thread starts, but nothing
+writes the request file yet (the first consumer lands in Phase 4). If this phase lands alone, no
+served DNS query, counter, log line, or report changes.
+
+WHY THIS PHASE EXISTS
+This is the capability the whole ADR is built on: let a local consumer ask the LIVE matcher "would
+this domain be blocked, and with what log fields?" and get the authoritative answer -- so the .txt
+grep can die. It must run the real decision (never an approximation) and must have NONE of a real
+query's side effects except the LRU.
+
+REQUIRED READING
+- FIRST, read the prior handoff .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt --
+  it names the oracle entry symbols + corpus this phase must be decision-equal to. If it is missing,
+  Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS2.1 (the channel table: request/reply
+  shape, engine, side-effect rule, always-on, transport, privilege) and SS2 Semantics 2 + 3.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- the CONTROL channel to mirror: pfb_control_watcher
+  (~:799), _control_read_record (~:722), _control_write_applied (~:742, also the tmp+os.replace
+  atomic-write exemplar), the kqueue waiter (_ReloadKqueueWaiter, ~:653), init thread-start
+  (~:1827, gated on mod_threading AND python_control -- the QUERY watcher starts without the
+  python_control gate); the DECISION to call: evaluate_domain (~:6038) / _scan_block_band
+  (~:5834; renamed from highest_block_band) and the log-field builder get_details_dnsbl
+  (~:2762); the side-effect sinks to AVOID: pfb_db_enqueue("resolver"/"dnsbl") (~:2780/:2794),
+  the dnsbl.log write (~:2845), the dnsblcache enqueue (~:6750); the LRU write decisionDB[name]
+  (~:5730, in _decision_for ~:5718) which IS allowed.
+- CLAUDE.md -- stdlib-only-in-loader, Python standards, "No fixed-time waits to coordinate
+  concurrency (#456)", the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the prior
+RESULTS file and the live tree override this prompt on any conflict -- verify each symbol before
+acting, and flag contradictions loudly in the handoff. If the decision path cannot be invoked
+side-effect-free without an extraction the ADR did not name, ESCALATE (do not invent a mechanism
+silently).
+
+ACTION PLAN (ordered)
+1. Add a pure answer function (e.g. dnsbl_query_answer(domain, qtype)) that runs the SAME decision
+   evaluate_domain/_scan_block_band uses against the live DBs and returns
+   {blocked, b_type, group, b_eval, feed, p_type} -- the exact dnsbl.log fields (SS1.4). It MUST NOT
+   enqueue the resolver/dnsbl counters, write dnsbl.log, or enqueue a dnsblcache row. It MAY write
+   the LRU decisionDB memo.
+2. Add the always-on read-only watcher (mirror pfb_control_watcher): read pfb_py_query, answer,
+   atomic-write pfb_py_query.reply keyed by the request `id`. Correlate by `id`, NOT seq (queries
+   are stateless -- no baseline/replay gate). Start it in init unconditionally.
+3. Define the paths (pfb["pfb_py_query"] / pfb["pfb_py_query_reply"], chroot-relative like the
+   control channel) and the file perms per SS2.1 (request 0660, reply 0640).
+4. Wire a clean stop (mirror the pfb_control_stop threading.Event pattern -- declared ~:155,
+   .set() in deinit() ~:3502) so the thread is not an orphaned wait.
+
+CONSTRAINTS
+- Stdlib only (os/json/select/threading); mirror the existing watcher's idioms, do not import new
+  deps.
+- The request PARSER is a new hostile-input surface -- validate defensively; a malformed request is
+  a no-op reply (or an error reply), never an exception that kills the watcher thread.
+- No fixed-time sleeps to coordinate: use the kqueue/poll pattern the control/reload watchers use;
+  any timeout is a loud deadlock guard only.
+- DO NOT call operate()/the served-query path; call the pure decision directly.
+
+VERIFICATION (executed -- paste output, never "reasoned through")
+- test mode: oracle-gated new code -- a pytest that drives dnsbl_query_answer over the Phase-1
+  corpus and asserts the reply is decision-equal to the oracle (paste). (No red-run against the
+  void: the only "red" for brand-new code is a missing symbol -- coverage theater; the real
+  assertions are decision-equality + side-effect-freedom.)
+- SIDE-EFFECT test: run a query and assert the resolver counter, the dnsbl group counter, the
+  dnsbl.log file, and the dnsblcache table are ALL untouched, while decisionDB MAY change (paste).
+- HOSTILE-INPUT rows for the request parser (author these as REQUIRED test data; fill in results):
+  empty domain; missing `domain`/`id`; punycode/IDN + non-ASCII domain; oversized domain (>253);
+  malformed JSON; non-string field; unknown `qtype`; domain with embedded newline / comma / ';'.
+  Each must produce a safe reply or no-op -- never a watcher crash.
+- `python3 -m pytest`, `ruff check .`, `ruff format --check .`, `mypy tests/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: confirm the watcher never touches a counter/log/cache sink.
+
+EXPECTED RESULT
+An always-on read-only query channel that answers decision-equal to a real query with zero query
+side effects (bar the LRU), dormant until a consumer writes to it.
+
+COMMIT (single)
+    pfblockerng: add the read-only DNSBL decision query channel (ADR-65 P2)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/02_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted tails);
+the decision-equality proof (paste) AND the side-effect-free proof (paste); the hostile-input row
+table with results; Coverage-matrix (every decision arm answered equal, every hostile row handled);
+Deviations / judgment calls (or "none"); Carry-forward for Phase 3 (the request/reply file paths +
+JSON schema the PHP client must speak).

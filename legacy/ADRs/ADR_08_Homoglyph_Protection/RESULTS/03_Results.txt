@@ -1,0 +1,119 @@
+ADR-08 — Phase 3 Results (PREP: extract IDN unit + Off/All/Confusable mode plumbing)
+====================================================================================
+Status: DONE. STRICTLY BEHAVIOUR-PRESERVING — zero decision change for Off and
+All-IDN; Confusable INERT (behaves as Off). No analyzer, no Unicode data, no UI.
+Commit f757cfa on adr/08-homoglyph-protection (pushed). 2 files changed.
+Gates green: python -m pytest = 1177 passed (1166 baseline + 11 new); ruff check
+clean; ruff format --check clean; mypy tests/ clean; pre-commit hook (incl. php -l,
+markdownlint, shellcheck/shellspec) all green.
+
+
+1. WHAT CHANGED (matcher + minimal config-read ONLY; PHP/UI untouched)
+----------------------------------------------------------------------
+src/usr/local/pkg/pfblockerng/pfb_unbound.py — three small, decision-equivalent edits:
+
+  a) Mode constants + the extracted pure unit, just before/after is_idn_domain (~1328):
+       IDN_MODE_OFF        = "off"
+       IDN_MODE_ALL        = "all"
+       IDN_MODE_CONFUSABLE = "confusable"
+     is_idn_domain(q_name) is UNCHANGED (still the pure prefix match
+     `q_name.startswith("xn--") or ".xn--" in q_name`; NEVER decodes punycode).
+
+  b) Config derivation:
+       - default `pfb["idn_mode"] = IDN_MODE_OFF` added beside `pfb["python_idn"]=False` (~712).
+       - after the `python_idn` ini load (~867): `pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])`.
+     The PHP ini STILL writes only `python_idn = on|off` this phase (pfblockerng.inc
+     unchanged), so the mode is derived ENTIRELY Python-side. No new ini key read yet.
+
+  c) Matcher IDN branch in evaluate_domain (was ~4342, now ~4387): the inline
+       `if not is_found and cfg["python_idn"] and is_idn_domain(q_name):`
+     became
+       `if not is_found:
+            idn_mode = cfg.get("idn_mode") or idn_mode_from_legacy(cfg.get("python_idn", False))
+            if idn_mode_decision(q_name, idn_mode): ... feed="IDN"; group="DNSBL_IDN"`
+     Ordering UNCHANGED: data -> zone -> TLD-Allow -> *** IDN *** -> block-regex;
+     whiteDB override still applies AFTER is_found, untouched.
+
+  d) cfg passthrough in operate() (~4839): added
+       "idn_mode": pfb.get("idn_mode") or idn_mode_from_legacy(pfb.get("python_idn", False)),
+     beside the retained "python_idn" key (kept for legacy callers/back-compat).
+
+  NO new Unbound-injected symbol referenced -> stubs/python/unboundmodule.py UNCHANGED.
+  PHP (pfblockerng.inc) + UI (pfblockerng_dnsbl.php) UNTOUCHED — no Confusable value
+  added to the UI this phase (that is Phase 6).
+
+
+2. THE EXTRACTED UNIT — SIGNATURES (Phase 4/5 import surface)
+-------------------------------------------------------------
+  idn_mode_from_legacy(python_idn: bool) -> str
+      True  -> IDN_MODE_ALL   (today's block-all-IDN)
+      False -> IDN_MODE_OFF
+      The Confusable value CANNOT arise here — it only reaches Python once the PHP UI
+      emits it (Phase 6). Until then this is the SOLE derivation of idn_mode.
+
+  idn_mode_decision(q_name: str, idn_mode: str) -> bool
+      Pure (stdlib only, no Unbound symbol). Returns True IFF
+      `idn_mode == IDN_MODE_ALL and is_idn_domain(q_name)` — byte-equivalent to the old
+      inline `cfg["python_idn"] and is_idn_domain(q_name)`. OFF and CONFUSABLE both
+      return False this phase. No punycode decode, no script work.
+
+  is_idn_domain(q_name: str) -> bool   (UNCHANGED — pure xn-- prefix match)
+
+
+3. HOW idn_mode IS DERIVED (the 'on' -> All-IDN migration)
+----------------------------------------------------------
+  PHP ini  -> python_idn = on|off   (unchanged this phase)
+  pfb_unbound init_standard: pfb["idn_mode"] = idn_mode_from_legacy(pfb["python_idn"])
+    on  -> "all"   (All-IDN: every xn-- query blocked, today's exact behaviour)
+    off -> "off"   (no IDN action)
+  Both the matcher branch and the operate() cfg builder use a DEFENSIVE derivation
+  (`cfg/pfb.get("idn_mode") or idn_mode_from_legacy(...python_idn...)`) so a cfg/pfb
+  predating the key (hand-edited ini, or a unit test seeding only python_idn) still
+  resolves to today's mode instead of KeyError-ing. All mode constants are truthy, so
+  the `or`-fallback fires only when the key is absent/None — never masking a real "off".
+
+
+4. WHERE THE CONFUSABLE BRANCH WILL HOOK THE ANALYZER (Phase 5)
+---------------------------------------------------------------
+  Single seam: idn_mode_decision (and its call site in evaluate_domain). Today it is a
+  bool gate; Phase 5 changes the CONFUSABLE arm only. Two viable shapes:
+    - keep idn_mode_decision as the gate but, for CONFUSABLE, call the Phase-4 analyzer
+      (analyze_name) and route severity->action: malicious->block, suspicious->alert,
+      flagged->alert (escalatable) — per RESULTS/02 sections 2/3; OR
+    - widen the return to carry the verdict (feed/group/severity) so the matcher can
+      emit distinct labels (DNSBL_Homoglyph / DNSBL_Homoglyph_Suspect) instead of the
+      flat "IDN"/"DNSBL_IDN".
+  Either way: OFF and ALL-IDN arms MUST stay byte-identical (the golden in section 5 is
+  the gate); only the CONFUSABLE arm gains behaviour. The analyzer feeds is_found; the
+  existing whiteDB override still wins (applied after, unchanged).
+
+
+5. THE Off/All-IDN GOLDEN — GREEN (tests/test_adr08_mode_baseline.py, 11 tests)
+-------------------------------------------------------------------------------
+  Pins BOTH sides with failable, intent-named assertions:
+    - TestIdnModeDecisionUnit: every (mode x IDN-ness) cell — All blocks each xn-- form,
+      All ignores non-IDN, Off never blocks, Confusable INERT (asserts All WOULD block
+      the same input first, so green proves Confusable is the inert cause, not the input).
+    - TestIdnModeFromLegacy: 'on'->All, off->Off.
+    - TestEvaluateDomainIdnBaselineGolden (end-to-end through evaluate_domain):
+        * All-IDN: every xn-- query is_found + feed="IDN"/group="DNSBL_IDN" (== ~4342 today).
+        * Off: the SAME queries resolve — asserts the All-IDN before-state first, so green
+          proves the MODE (not the input) flips the verdict.
+        * Confusable: resolves like Off (before-state All-IDN asserted first).
+        * Non-IDN unaffected in ALL THREE modes.
+        * Legacy cfg carrying only python_idn=True still blocks all IDN; python_idn=False
+          resolves (the absent-idn_mode back-compat path).
+  Plus the pre-existing matcher golden test_idn_block (cfg python_idn=True) stays green —
+  proves the legacy cfg path is byte-identical.
+
+
+6. GO-AHEAD FOR PHASE 4
+-----------------------
+  PROCEED: ship the Scripts/ScriptExtensions data + scripts/update-unicode-data.py
+  generator + the pure analyzer (decode -> per-codepoint script via Script_Extensions,
+  Common/Inherited transparent -> resolved set -> restriction level -> severity, PER
+  LABEL), Unbound-symbol-free, NOT wired. Grade it against the Phase-2 oracle/driver API
+  (RESULTS/02 section 2) — reproduce analyze_label / analyze_name / severity / action and
+  the FLAGGED fourth severity (RESULTS/02 4c), NOT a re-derived rule. The Off/All-IDN
+  golden here is the no-regression gate for Phase 5 wiring; Phase 4 wires nothing, so it
+  must keep this golden green untouched.

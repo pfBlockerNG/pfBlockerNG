@@ -1,0 +1,159 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+    <title>Dictionary Attacker IPs | By Last Bad Event | Project Honey Pot</title>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+        <meta name="no-email-collection" content="/terms_of_use.php" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
+    <link rel="stylesheet" type="text/css" href="/css/hp.css" />
+    <link title="Dictionary Attacker IPs | By Last Bad Event | Project Honey Pot" type="application/rss+xml" rel="alternate" href="http://www.projecthoneypot.org//list_of_ips.php?t=d&rss=1">
+<meta name="description" content="A list of the Top 25  Dictionary Attacker IPs; Arranged by their Last Bad Event." />
+    <script type="text/javascript">
+    var _bftn_options = { animation: 'banner', theme: 'dark' }
+</script>
+<!--<script src="//widget.battleforthenet.com/widget.min.js" async></script> -->
+</head>
+<body>
+    	<div class="skip">[<a href="#start">Skip navigation</a>]</div>
+	<div id="header">
+		<div id="branding">
+     		<a href="/index.php"><img src="/images/php_logo.gif" alt="Project Honey Pot Logo" width="169px" height="97px"></a>
+			<span>
+				                Welcome to Project Honey Pot&nbsp;&nbsp;|&nbsp;&nbsp;<a href="/account_login.php">Login</a><BR>
+                                <a href="http://www.cafepress.com/projecthoneypot" target="_new">Buy Swag</a><br><a href="/refer_a_friend.php">Refer a Friend</a><br><a href="/terms_of_use.php">Terms of Use</a>
+			</span>
+    	</div>
+		<br class="spacer">
+		<div id="navbar">
+			<div id="navlinks">
+				<ul>
+                    					<li><a href="/index.php">Home</a></li>
+                    
+
+					
+                    					<li class="curpage"><a href="/list_of_ips.php" class="curpage">IP&nbsp;Data</a>
+                        <ul>
+                            <li><a href="/list_of_ips.php">Directory of IPs</a></li>
+                            <li><a href="/search_ip.php">Lookup IP</a></li>
+                            <li><a href="/list_of_ips.php?t=h">Harvesters</a></li>
+                            <li><a href="/list_of_ips.php?t=s">Spam Servers</a></li>
+                            <li><a href="/list_of_ips.php?t=d">Dictionary Attackers</a></li>
+                            <li><a href="/list_of_ips.php?t=p">Comment Spammers</a></li>
+                                                    </ul>
+                    </li>
+                    
+                    					<li><a href="/statistics.php">Statistics</a></li>
+                    
+                                        					<li><a href="/services_overview.php">Services</a></li>
+                                                            
+										<li><a href="/faq.php">Help</a></li>
+                    
+                                        <li><a href="/about_us.php">About</a></li>
+                    
+				</ul>
+			</div>
+			<div id="subnavbar">&nbsp;</div>
+		</div>
+	</div>
+    <div align="center">
+	<a name="start" id="start"></a>
+<script type="text/javascript">
+<!--
+    function menuChange(id) {
+        var qs = document.getElementById(id).value;
+        if (qs.substring(0,2) == "br") {
+            return false;
+        } else if (qs == "") {
+            window.location = "/list_of_ips.php";
+        } else {
+            window.location = "/list_of_ips.php?"+qs;
+        }
+    }
+//-->
+</script>
+<div id="main"><a name="start" id="start"></a>
+<form action="." method="post" name="main" id="main">
+        <h1>Directory of Dictionary Attacker IPs</h1>
+    			<div class="contain">
+        <p>The list below is comprised of Dictionary Attacker IPs</b> (limited to the top 25 &mdash; <a href="/account_login.php">login</a> to see more) that are:<br />            <ul><li>Arranged by their <b>Last Bad Event</b></li></ul>        </p>
+                <table cellspacing="0" width="535px" class="manmx">
+			<tr><td width="135px">
+				Dictionary Attacker IP			</td>
+            <td width="100px" align="right">
+                Event
+            </td>
+            <td width="100px" align="right">
+                Total <a href="/list_of_ips.php?t=d&by=3d"><img src="/images/sort.png" height="8" width="8" border="0"></a>			</td>
+            <td width="100px" align="right">
+				<a href="/list_of_ips.php?t=d&by=2a" class="headerlink">First</a>&nbsp;<a href="/list_of_ips.php?t=d&by=2d"><img src="/images/sort.png" height="8" width="8" border="0"></a>			</td>
+            <td width="100px" align="right">
+				<a href="/list_of_ips.php?t=d&by=1" class="headerlink">Last</a>&nbsp;<a href="/list_of_ips.php?t=d&by=1a"><img src="/images/sort-d.png" height="8" width="8" border="0"></a>			</td></tr>
+                        			<tr class="mxro">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=id"><img src="/images/flags/id.png" title="" /></a>&nbsp;<a href="/ip_103.59.95.240" class="bnone">103.59.95.240</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">5,453</td>
+                <td align="right">
+            		2023-05-06&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxre">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=us"><img src="/images/flags/us.png" title="" /></a>&nbsp;<a href="/ip_34.139.24.201" class="bnone">34.139.24.201</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">22</td>
+                <td align="right">
+            		2026-05-24&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxro">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=ar"><img src="/images/flags/ar.png" title="" /></a>&nbsp;<a href="/ip_181.229.154.222" class="bnone">181.229.154.222</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">127,968</td>
+                <td align="right">
+            		2023-07-26&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxre">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=us"><img src="/images/flags/us.png" title="" /></a>&nbsp;<a href="/ip_146.20.60.57" class="bnone">146.20.60.57</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">12</td>
+                <td align="right">
+            		2026-07-02&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxro">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=kr"><img src="/images/flags/kr.png" title="" /></a>&nbsp;<a href="/ip_175.215.224.56" class="bnone">175.215.224.56</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">879</td>
+                <td align="right">
+            		2026-06-09&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxre">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=ar"><img src="/images/flags/ar.png" title="" /></a>&nbsp;<a href="/ip_190.247.242.212" class="bnone">190.247.242.212</a>&nbsp;|&nbsp;SD</td>
+                <td align="right" nowrap>Bad Event</td>
+                <td align="right">1,787</td>
+                <td align="right">
+            		2026-06-28&nbsp;
+            	</td>
+                <td align="right">
+            		2026-07-03&nbsp;
+            	</td>
+            </tr>
+            			<tr class="mxro">
+            	<td nowrap><a href="/list_of_ips.php?t=d&ctry=us"><img src="/images/flags/us.png" title="" /></a>&nbsp;<a href="/ip_66.55.78.229" class="bnone">66.55.78.229</a>&nbsp;|&nbsp;SD</td>
+                <td a

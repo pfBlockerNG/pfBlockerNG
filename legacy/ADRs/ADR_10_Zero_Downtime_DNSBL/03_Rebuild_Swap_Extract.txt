@@ -1,0 +1,95 @@
+================================================================================
+PHASE 3 PROMPT — PREP (behaviour-preserving): extract rebuild_and_swap() + cache reset
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §2 "Background rebuild",
+     "Fail-closed", the Reports-log row, FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 3 of ADR-10. Behaviour-PRESERVING:
+factor the build->install step into a single reusable `rebuild_and_swap()` that is
+fail-closed, clears the decisionDB memo, and resets the Reports cache, but is still called SYNCHRONOUSLY at init
+this phase (no background thread yet) — so init behaviour is unchanged. Standalone-
+valuable. Work inline on `adr/10`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The background watcher (Phase 4) needs ONE function it can call off the query threads
+to apply an update: build -> (on success) atomic single-ref swap + decisionDB clear +
+Reports-cache reset + recount; (on failure) keep the old snapshot. Extracting and pinning that function
+NOW — while still wired synchronously — lets Phase 4 add only the thread + trigger,
+not the swap semantics. It also implements the cache decision from Phase 1.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/02_Results.txt — confirm the single
+  Snapshot ref + the captured-per-query read exist and the oracles pass. If missing,
+  STOP and report.
+- Also read RESULTS/01_Results.txt for the chosen Reports-log strategy (clear /
+  generation-key / drop) and whether the per-block write path stays.
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (§2 "Background rebuild"/"Fail-closed"/
+  Reports-log row; §6 Phase 3).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the build+assign site (:552-562, now
+  the single-ref swap from Phase 2), build()/dnsbl_build_from_manifest (:1966/:2118),
+  the existing `build_result is not None` guard (:558), the single decisionDB (:412,
+  the _LruCache query-memo) + its .clear(), the Reports sqlite (path :361,
+  removed-at-init :366-367, written :4162) + _db_lock + pfb_db_worker.
+- tests/test_adr06_*.py / test_adr07_*.py / test_adr10_snapshot_*.py.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. Extract `rebuild_and_swap()`:
+   - Run the pure build (build()/dnsbl_build_from_manifest) off the live snapshot.
+   - ON SUCCESS ONLY: (a) atomically rebind the single Snapshot ref (Phase 2);
+     (b) CLEAR the single query-time decision cache: decisionDB.clear() (the unified
+     _LruCache memo, ADR Context 6 — the former excludeDB/dnsblDB/excludeAAAADB/excludeSS
+     were folded into ONE decisionDB, #67/#70, LRU-capped #72; it is reset only by the
+     init() re-create, so a no-restart swap MUST clear it or it serves STALE block/allow
+     decisions on a cache miss — newly-added name stays unblocked, newly-removed stays
+     blocked);
+     (c) reset the Reports sqlite per Phase 1 — clear via _db_lock/the db-queue
+     (parity with :366-367) OR generation-bump, whichever the Reports UI reads; if
+     Phase 1 found the per-block write path (:4162) overkill, drop it; (d) re-emit counts
+     (pfb_py_count / DNSBL_Regex format the UI reads).
+   - ON FAILURE (build returns None / raises): keep the old snapshot, touch no cache
+     (leave decisionDB AND the Reports sqlite intact), log — fail-closed (mirrors :558).
+     Never swap to an empty/partial set.
+2. Wire init_standard to call rebuild_and_swap() SYNCHRONOUSLY (replacing the inline
+   assign) — net init behaviour unchanged.
+3. Reconcile ADR-07 regex-eviction: eviction mutates the live snapshot's regexDB;
+   a swap replaces it with a freshly-compiled set. Document the interaction (evicted-
+   pattern state is rebuilt from manifest + static cap) — no decision regression.
+4. Add tests/test_adr10_swap_*.py: success path swaps the ref + CLEARS decisionDB +
+   resets the Reports sqlite + recounts; a build returning None / raising leaves the old
+   snapshot intact and BOTH caches untouched (fail-closed); assert the BEFORE-state too
+   (a decisionDB entry present pre-swap, gone post-swap; a stale entry survives a failed
+   build); the Reports-cache reset goes through _db_lock (no race).
+
+CONSTRAINTS
+- Behaviour-PRESERVING at init (synchronous call; same net result as today). No
+  background thread, no PHP change, no sentinel this phase.
+- Stdlib only, typed, no bare except. The cache reset MUST serialize via _db_lock /
+  the db-queue — never touch the sqlite file directly off-thread.
+- Keep the ADR-06 + ADR-07 oracles green unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green incl. retained oracles + the new test_adr10_swap_*.
+- ruff check . / ruff format . → clean.
+- diff-read: rebuild_and_swap is the ONLY place the snapshot ref is rebound; the
+  fail-closed branch provably keeps the old snapshot.
+
+EXPECTED RESULT
+One fail-closed `rebuild_and_swap()` that builds, atomically swaps the single ref,
+resets the Reports cache, and recounts — called synchronously at init (behaviour
+unchanged), ready for a background caller.
+
+COMMIT (single)
+    pfblockerng: ADR-10 P3 — extract fail-closed rebuild_and_swap + cache reset (ADR-10 P3)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/03_Results.txt` (plain .txt)
+State: the rebuild_and_swap signature + semantics; the decisionDB clear (verified
+before/after by test); the chosen Reports-cache strategy as implemented; the
+fail-closed guarantee + its test; the regex-eviction-vs-swap
+reconciliation; the go-ahead for Phase 4 (the background watcher can now just call
+this function).

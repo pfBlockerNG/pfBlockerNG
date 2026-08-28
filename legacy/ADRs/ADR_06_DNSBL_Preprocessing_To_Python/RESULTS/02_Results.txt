@@ -1,0 +1,162 @@
+================================================================================
+ADR-06 — PHASE 2 RESULTS / HANDOFF FOR PHASE 3
+Golden oracle harness — pin CURRENT DNSBL block/resolve decisions before any move
+Branch: adr/06   Commit: test: ADR-06 P2 — golden oracle for current DNSBL preprocessing behaviour
+================================================================================
+
+VERDICT: GO. The decision-level golden oracle is committed and green (194 passed,
+10 new). Phase 3 may build the pure `pfb_dnsbl_build` module against it.
+
+This phase added TESTS + FIXTURES ONLY. No production file was touched
+(pfb_unbound.py load/match logic, tld_analysis, the shell, the UI — all unchanged).
+`python -m pytest` = 194 passed (was 184). `ruff check .` clean. `ruff format` clean.
+
+--------------------------------------------------------------------------------
+0. WHERE THE FIXTURES / ORACLE LIVE + HOW TO RUN
+--------------------------------------------------------------------------------
+Oracle module:
+    tests/test_adr06_golden_oracle.py
+Fixtures (human-readable, each documented in its header / JSON _doc keys):
+    tests/fixtures/adr06_golden/
+        manifest.json    — per-feed rows {raw, feed, group, format_hint, log_flag}
+                           (the shell->Python boundary; one row per raw feed file,
+                           Phase 1 §1i / §2 contract).
+        config.json      — TLD blacklist/exclusion, user whitelist, TOP1M list,
+                           HSTS list, noAAAA list, tld_seg. Every key has a _doc.
+        tld_master.txt   — public-suffix oracle for data/zone classify
+                           ({com, net, org, co.uk}).
+        feed_hosts.txt   — hosts format (0.0.0.0/127.0.0.1 + domain), bare IP.
+        feed_plain.txt   — plain-domain format, leading-dot line, bare IP.
+        feed_abp.txt     — basic-ABP (||domain^) + the IGNORED lines (@@/##/$/*//,regex).
+        feed_csv_pon.txt — structured CSV 'pon': domain in col2 + embedded IP in col0.
+        feed_extra.txt   — config-interaction domains (excluded.com, hstslisted.com).
+        feed_nolog.txt   — a log_flag '2' feed (block-but-skip-log).
+
+Run:
+    python -m pytest tests/test_adr06_golden_oracle.py -v     # just the oracle
+    python -m pytest                                          # full suite (194)
+
+--------------------------------------------------------------------------------
+1. WHAT THE ORACLE ASSERTS (DECISIONS, not list contents/counts)
+--------------------------------------------------------------------------------
+Per ADR §2 the contract is at the level of NET DNS DECISIONS — NOT identical
+dataDB/zoneDB contents, counts, or cross-feed attribution (those change by design).
+The oracle drives the PRODUCTION matcher decision functions and asserts outcomes:
+
+  * pfb_unbound.evaluate_domain(...)  -> reduced to a stable label by _decision_label:
+      "pass"        not on any list -> resolves (pass-through)
+      "whitelist"   on a list but un-blocked via whiteDB -> resolves
+      "hsts"        on a list but HSTS-bypassed -> resolves real
+      "block-null"  blocked + null-routed (log '1', not HSTS)
+      "block-nolog" blocked but log '2' (null_blocking stays True; skip-log)
+    Also asserts b_type ("DNSBL" = exact DATA, "TLD" = wildcard ZONE) and group
+    (e.g. DNSBL_TLD for the whole-TLD block).
+  * pfb_unbound.evaluate_noaaaa(...)  -> AAAA-block decision (exact + wildcard-parent).
+
+Representative QUERY SET (all required categories covered):
+  - exact-block (DATA):   deep.host.cleandata.com, deep.path.cleanmal.com,
+                          sub.abpzone.net, deep.node.cleanpon.com, excluded.com
+  - zone-subdomain:       anything.tracker.org, x.y.tracker.org, www.shop.co.uk
+  - registrable ZONE:     tracker.org, malware.com, evilads.net, ponmocup.com,
+                          abpblocked.com, ponip.net, popularcdn.com, shop.co.uk
+  - user-whitelisted:     phishing.net (exact), adblock.com + www.adblock.com
+                          (www-strip), host.wildwhite.org (wildcard, not blocked)
+  - TOP1M-when-enabled:   popularcdn.com — blocks when disabled, resolves
+                          (whitelist) when enabled (BOTH scenarios asserted)
+  - HSTS:                 hstslisted.com -> hsts
+  - noAAAA:               noaaaa.com (exact), host.noaaaawild.net (wildcard) — TestGoldenNoAAAA
+  - pass-through:         totally-unrelated.com, good.net, cleandata.com, cleanmal.com,
+                          abpzone.net, deeper.deep.host.cleandata.com, and the IGNORED
+                          basic-ABP lines (abpallowed/abpoptions/abpwildcard/abppath .com)
+  - log '2' (skip-log):   silentblock.com -> block-nolog
+  - TLD blacklist:        anything.zip, another.sub.zip -> block, group DNSBL_TLD
+  - TLD exclusion:        excluded.com forced exact DATA; sub.excluded.com -> pass
+
+EXTRACTED-IP SET (the firewall handoff, part of the oracle):
+  GOLDEN_EXTRACTED_IPS = {198.51.100.23 (hosts bare-IP), 203.0.113.45 (plain bare-IP),
+                          198.51.100.77, 192.0.2.140 (csv:pon col0 IPs)}.
+  TestGoldenExtractedIPSet asserts the set AND that no IP leaked into dataDB/zoneDB.
+  Phase 5's independent DNSBL-IP pass must reproduce this exact set.
+
+HOW "CURRENT BEHAVIOUR" IS MODELLED (no live PHP/Unbound in CI):
+  tests/test_adr06_golden_oracle.py contains a pure-Python ReferencePipeline that
+  faithfully re-implements the inventoried current preprocessing (Phase 1), with
+  pfblockerng.inc:line anchors in the method docstrings: per-format parse, embedded-IP
+  extraction, domain validation, data/zone classify via tld_search, user-whitelist
+  normalisation, TOP1M->whiteDB-when-enabled. It loads the matcher's runtime
+  structures (dataDB/zoneDB/feedGroupIndexDB/whiteDB) and the oracle evaluates the
+  production decision fns over them. Phase 3's NEW build must yield the SAME decisions
+  over these fixtures even though the loaded lists differ (un-pruned).
+
+--------------------------------------------------------------------------------
+2. EXACT EXPECTED-OUTPUT SHAPES (Phase 3 build targets these)
+--------------------------------------------------------------------------------
+The build(manifest, config) must return structures decision-equivalent to (loader
+contract, Phase 1 §1f):
+    dataDB[domain]          = {"log": <"0"|"1"|"2">, "index": <int>}    # exact match
+    zoneDB[registrable]     = {"log": <flag>,        "index": <int>}    # wildcard
+    feedGroupIndexDB[index] = {"feed": <str>, "group": <str>}
+    whiteDB[domain]         = <bool wildcard>   # True if leading-dot/'1', else False
+    extracted_ips           = set[str]          # firewall handoff (NOT in the dicts)
+Plus counts (Phase 4 emits pfb_py_count; value legitimately rises — un-pruned).
+
+Decision-relevant rules the build MUST honour (verified against the live matcher
+in this phase):
+  * data/zone classify mirrors tld_analysis/tld_search exactly:
+      - 2-label domain -> its own registrable parent -> ZONE.
+      - co.uk-style multi-label public suffix (in tld_master) -> ZONE on the
+        registrable parent (e.g. shop.co.uk).
+      - deeper sub-domain whose registrable parent is NOT a known public suffix
+        -> exact DATA (only that exact name blocks).
+      - TLD exclusion forces a would-be-ZONE domain to exact DATA.
+      - TLD blacklist -> synthetic ZONE entry per TLD, feed/group = DNSBL_TLD.
+  * last-wins on a duplicate key (dict assignment) — the documented cross-feed
+    attribution change (tracker.org is in hosts+plain -> attributed to the LAST,
+    PlainFeed/Malware). Asserted in TestReferencePipelineSanity.
+  * whiteDB normalisation: www-strip; leading-dot -> wildcard True else False;
+    TOP1M loaded into whiteDB ONLY when enabled.
+
+--------------------------------------------------------------------------------
+3. FORMAT EDGE CASES THE FIXTURES ENCODE (Phase 3 parser must match)
+--------------------------------------------------------------------------------
+  * basic-ABP token-strip (pfblockerng.inc:7706-7717): keep ONLY a plain
+    "||domain^"; strip ||,^. IGNORE @@ exceptions, ## element rules, $options,
+    '*', '/', and standalone regex lines. (abpallowed/abpoptions/abpwildcard/
+    abppath all -> pass; abpblocked.com, sub.abpzone.net -> block.) THIS IS THE
+    CURRENT, NON-CONFORMANT behaviour — Phase 3 reproduces it; the future ABP ADR
+    changes it.
+  * hosts format: "<sinkhole-IP> <domain>" -> take the domain token; "0.0.0.0"
+    and "127.0.0.1" prefixes both handled.
+  * www-strip in the WHITELIST normalisation (not the feed parse): whitelist entry
+    'www.adblock.com' un-blocks 'adblock.com' AND 'www.adblock.com'.
+  * wildcard whitelist: a leading-dot entry ('.wildwhite.org') -> whiteDB wildcard
+    True (un-blocks subdomains).
+  * leading-dot feed line ('.wildcardish.org' in feed_plain) -> PHP trims the dot;
+    becomes a plain domain.
+  * embedded IPs: generic bare-IP lines (hosts/plain) -> firewall, line stripped
+    from the domain build; csv:pon col0-IP -> firewall AND col2 domain STILL kept
+    (the loop does NOT continue after the col0-IP extraction). Both pinned.
+  * TLD removals: tld_master has the blacklisted/excluded TLDs removed before
+    classify (mirrors inc:2749-2751 / 2791-2793).
+
+--------------------------------------------------------------------------------
+4. GO-AHEAD FOR PHASE 3
+--------------------------------------------------------------------------------
+GO — build the pure, stdlib-only, Unbound-symbol-free `pfb_dnsbl_build` module
+(parse / normalise / classify / build, reentrant, kind-tagged block|allow|regex but
+emit only `block`). Unit-test each function AND assert it reproduces the Phase-2
+golden DECISIONS over tests/fixtures/adr06_golden/ (re-run evaluate_domain over the
+build's dicts; the labels in GOLDEN_TOP1M_DISABLED / _ENABLED_OVERRIDES /
+GOLDEN_EXTRACTED_IPS must stay identical). The ReferencePipeline in the oracle module
+is a ready reference for the exact current semantics to match.
+
+Carry-over reminders (from Phase 1, still binding):
+  * No dedup / subdomain collapse / build-time whitelist / TOP1M removal.
+  * pfb_py_count to be redefined to the LOADED total in Phase 4 (collapse gone);
+    fix the inc:3149-3156 sync-check then.
+  * DNSBL-IP firewall pass stays in PHP (Phase 5), refactored independent; Python
+    skips stray IPs (the oracle's extracted-IP set is what PHP must produce).
+
+GATES (this phase): python -m pytest = 194 passed; ruff check . clean; ruff format
+clean. Tests/fixtures only — zero production code touched.
+================================================================================

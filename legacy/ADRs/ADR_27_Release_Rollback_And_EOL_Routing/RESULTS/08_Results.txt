@@ -1,0 +1,136 @@
+================================================================================
+PHASE 8 RESULTS — Worker: route-only (EOL) routing pinned, no logic change
+Branch: adr/27-release-rollback-and-eol-rou
+================================================================================
+
+STATUS: Complete. All verification gates green. Ready for Phase 9.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=9
+
+────────────────────────────────────────────────────────────────────────────────
+1. RECONCILIATION CHECK (RESULTS/07 → Phase 8 precondition)
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 7 confirmed: route-only entries emit a NORMAL routing entry — the same
+{pattern, catalog, status} shape as any other entry. catalog = the varver string
+(e.g. "ce-2.7", "plus-25.03"), served at release/<varver>/. No special archive
+path was introduced. The routes.append() call is OUTSIDE the role if/else in
+build_repo_matrix(), so both build and route-only entries emit exactly one route
+per (variant, version) combination.
+
+Precondition satisfied — Phase 8 may proceed with zero reconciliation needed.
+
+────────────────────────────────────────────────────────────────────────────────
+2. INDEX.JS CHANGE DECISION
+────────────────────────────────────────────────────────────────────────────────
+
+index.js: UNCHANGED. No diff (0 lines).
+
+The Worker already routes correctly for route-only entries because:
+- Route matching: `routes.find(r => ua.includes(r.pattern))` — pure substring
+  match; the route-only entry's pattern ("pfSense/2.6", "Netgate pfSense Plus/25.03")
+  is matched the same way as any active entry.
+- Path mapping: `${PAGES}/${channel}/${route.catalog}/${arch}/${rest}` — uses
+  route.catalog directly; for a route-only entry catalog = varver = "ce-2.6",
+  so the redirect lands at release/ce-2.6/<arch>/<file>.
+- status field: NOT consulted by the Worker anywhere (informational only in
+  routing.json, per ADR §2.4). A route-only entry's status: "EOL" is transparent
+  to the routing logic.
+
+ADR §2.4 assertion "Worker unchanged" is now a GUARDED INVARIANT (see §3 below),
+not merely an assumed claim.
+
+────────────────────────────────────────────────────────────────────────────────
+3. TESTS ADDED (scripts/worker/test/router.test.js)
+────────────────────────────────────────────────────────────────────────────────
+
+Four new cases added after the existing 19 tests (total now 23):
+
+Fixture constants defined at module scope:
+  CE_EOL   = { pattern: "pfSense/2.6",               catalog: "ce-2.6",     status: "EOL" }
+  PLUS_EOL = { pattern: "Netgate pfSense Plus/25.03", catalog: "plus-25.03", status: "EOL" }
+  MANIFEST_WITH_EOL = { routes: [PLUS, CE, PLUS_EOL, CE_EOL] }
+    (live active entries + route-only EOL entries alongside — mirrors production routing.json)
+
+Case 20: "fetch: route-only CE version (pfSense/2.6) routes to release/ce-2.6/ — not 404"
+  GIVEN  MANIFEST_WITH_EOL served from edge cache
+  WHEN   pfSense 2.6 CE UA "pkg/1.21 (FreeBSD:14:amd64; pfSense/2.6)" requests
+         /FreeBSD:14:amd64/packagesite.pkg
+  THEN   status 302, location = ${PAGES}/release/ce-2.6/amd64/packagesite.pkg
+  GUARDS that a route-only CE entry is routed normally, not 404'd.
+
+Case 21: "fetch: route-only Plus version (pfSense Plus/25.03) routes to release/plus-25.03/ — not 404"
+  GIVEN  MANIFEST_WITH_EOL served from edge cache
+  WHEN   pfSense Plus 25.03 UA "pkg/1.21 (FreeBSD:15:aarch64; Netgate pfSense Plus/25.03)"
+         requests /FreeBSD:15:aarch64/meta.conf
+  THEN   status 302, location = ${PAGES}/release/plus-25.03/aarch64/meta.conf
+  GUARDS that a route-only Plus entry is routed normally, not 404'd.
+
+Case 22: "fetch: route-only CE UA does NOT match the Plus route-only pattern (opposite-edition guard)"
+  GIVEN  manifest with ONLY PLUS_EOL route
+  WHEN   pfSense 2.6 CE UA requests a file
+  THEN   status 404 — "pfSense/2.6" is NOT a substring of "Netgate pfSense Plus/25.03"
+  GUARDS that CE route-only UA cannot accidentally hit a Plus route.
+
+Case 23: "fetch: route-only Plus UA does NOT match the CE route-only pattern (opposite-edition guard)"
+  GIVEN  manifest with ONLY CE_EOL route
+  WHEN   pfSense Plus 25.03 UA requests a file
+  THEN   status 404 — "Netgate pfSense Plus/25.03" does NOT contain "pfSense/2.6"
+  GUARDS that Plus route-only UA cannot accidentally hit a CE route.
+
+Cases 22+23 together pin bidirectional pattern isolation for EOL entries.
+
+All four cases WOULD FAIL if:
+  - index.js started consulting status and returning 404 for status=="EOL"
+  - a route-only entry were emitted to a different catalog path (e.g. archive/<varver>/)
+  - a pattern collision were introduced between CE and Plus EOL entries
+
+────────────────────────────────────────────────────────────────────────────────
+4. ROUTE-ONLY ROUTING CONFIRMATION
+────────────────────────────────────────────────────────────────────────────────
+
+Confirmed: route-only versions route to release/<varver>/ — NOT to a special
+archive path, NOT 404'd. The EOL variant is transparent to the Worker. The
+manifest's status:"EOL" field flows through routing.json as-is; the Worker
+ignores it in the matching and redirect path.
+
+────────────────────────────────────────────────────────────────────────────────
+5. VERIFICATION RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+node --test (from scripts/worker/):  23 pass, 0 fail (was 19; +4 new cases)
+python -m pytest:                    1767 passed (no regressions; no Python touched)
+ruff check .:                        All checks passed
+ruff format --check .:               112 files already formatted
+mypy tests/:                         Success: no issues found in 46 source files
+markdownlint:                        Not run (no Markdown touched by this phase)
+
+────────────────────────────────────────────────────────────────────────────────
+6. DIFF SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+Files changed (one):
+  scripts/worker/test/router.test.js   (+80 lines — 4 new test cases + comments)
+
+Files NOT changed:
+  scripts/worker/src/index.js          (unchanged — "Worker unchanged" confirmed)
+
+────────────────────────────────────────────────────────────────────────────────
+7. COMMIT
+────────────────────────────────────────────────────────────────────────────────
+
+Message: dev: pin route-only (EOL) version routing in the worker tests (ADR-27 P8)
+Author:  Andre Brait <andrebrait@gmail.com>
+SHA:     (see git log after push)
+
+────────────────────────────────────────────────────────────────────────────────
+8. GO-AHEAD FOR PHASE 9
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 8 complete. The "Worker unchanged" claim is now a guarded invariant:
+four offline router.test.js cases prove that CE and Plus route-only (EOL)
+entries route to release/<varver>/ exactly like active build entries, with no
+cross-edition leakage, and that the Worker needs zero code change to support them.
+
+Phase 9 may proceed.
+================================================================================

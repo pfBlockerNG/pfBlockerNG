@@ -1,0 +1,82 @@
+================================================================================
+PHASE 1 PROMPT — PREP (behaviour-preserving): extract per-type Feeds rendering helpers
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §1 Context 1-3 + §2 A1/A2
+     + the contract "Render parity" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 1 of ADR-16. This is a PURE,
+BEHAVIOUR-PRESERVING PHP refactor of `pfblockerng_feeds.php`: lift the per-type
+rendering (the Feed Settings alias-name section + the predefined-feeds table) into
+functions keyed by a $type parameter, while the page STILL renders all three types
+exactly as today. NO UX change, NO save change, NO other file. Standalone-valuable
+(it makes Phase 3's type-filtering a one-argument change). Work in this ADR's `adr/16`
+worktree, one commit.
+
+WHY THIS PHASE EXISTS
+Phase 3 must render ONE type per tab. Today the IPv4/IPv6/DNSBL sections and the
+predefined-feeds table are inline, type-interleaved blocks. Extracting them into
+type-keyed helpers FIRST — proven identical by the unchanged Tier-A render oracle —
+keeps Phase 3 to "call the helper for the active type only" instead of surgery on a
+live procedural page. Behaviour-preserving prep before the risky change (ADR-10 discipline).
+
+REQUIRED READING (inspect before editing)
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§1 Context 1-3, §2 A1/A2, the contract).
+- src/usr/local/www/pfblockerng/pfblockerng_feeds.php — the Feed Settings Form_Section
+  (~:246-306, the ipv4/ipv6/dnsbl alias-name input loops over $feeds_list[type]); the
+  predefined-feeds table built from $feed_info = convert_feeds_json() grouped by $ftype
+  (~:420+); $feeds_list built at ~:39; the alt-URL radio/hidden emission inside the table.
+  (Line numbers drifted under 9465806 — grep the symbols.)
+- src/usr/local/www/pfblockerng/pfblockerng_category.php — how a per-type render is
+  structured there (reference only; do NOT change it).
+- tests/smoke/ui/test_render_smoke.py — the Feeds PAGE_TABLE entry + marker the refactor
+  must keep satisfying.
+- CLAUDE.md (PHP: tabs, 8.3, no die()/exit() in library code; keep Form_Section ids /
+  field names / config keys STABLE).
+
+ACTION PLAN (ordered — keep the page byte-rendering-equivalent)
+1. Extract the Feed Settings alias-name inputs into a helper that, given a $type
+   ('ipv4'|'ipv6'|'dnsbl') and the current $pconfig, renders that type's
+   `feed_<lower(alias)>` inputs (the same Form_Input set as today). The page calls it for
+   ipv4, ipv6, dnsbl in turn — output identical to the current inline loops.
+2. Extract the predefined-feeds table's per-type section into a helper that, given a
+   $ftype + $feed_info[$ftype] (+ the $ex_feeds/$alt_feeds it needs), renders that type's
+   rows (including the alt-URL radio group + the hidden alt_<header>/alt_selected emission
+   exactly as today). The page calls it per type; the rendered HTML is unchanged.
+3. Keep field names, Form_Section ids, the `alt_selected` hidden CSV, the save handler, and
+   all config keys EXACTLY as they are — this phase only relocates rendering code.
+4. Verify the rendered markup is equivalent (the Tier-A marker + structure unchanged); no
+   new PHP notice/warning.
+
+CONSTRAINTS
+- PURE REFACTOR. No `?type` handling, no sub-tab row, no save change, no test change beyond
+  confirming green. Do NOT touch any other src/ file or the parsers.
+- PHP tabs / 8.3 / no die()/exit() in library code / pfSense fns via stubs. PHPStan must
+  stay green (the page has baseline entries — don't add new violations).
+- Do NOT change the alt_selected mechanism or any config path.
+
+VERIFICATION (must all pass before the phase is done)
+- php -l on the page → clean; vendor/bin/phpstan → no NEW errors vs baseline.
+- python -m pytest → unchanged (smoke tree ignored by default).
+- diff-read: the page now calls the type-keyed helpers; the emitted HTML for the full
+  (all-types) page is equivalent to before (same Form_Section ids, same input names, same
+  table rows, same alt_selected CSV).
+
+EXPECTED RESULT
+`pfblockerng_feeds.php` renders identically to today, but its per-type Feed Settings inputs
+and predefined-feeds rows are produced by type-keyed helper functions — ready for Phase 3 to
+call with a single active type.
+
+COMMIT (single)
+    pfblockerng_feeds: extract per-type rendering helpers (ADR-16 P1)
+In this ADR's `adr/16` worktree (reuse it if already implementing this ADR, else create off
+the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push
+`adr/16`. This touches src/ → it lands on `devel` via a rebase-only PR (carry the `ui-tests`
+label so the live-VM render tier validates it). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/01_Results.txt` (plain .txt)
+State: the helper signatures (name, params: $type + what state they need) and where they live
+in the page; confirmation the full-page render is unchanged (Tier-A marker intact, php -l +
+PHPStan clean); any shared state the table helper needed hoisted ($ex_feeds/$alt_feeds/
+$alt_selected) and how that interacts with a future single-type render; the go-ahead for Phase 2.

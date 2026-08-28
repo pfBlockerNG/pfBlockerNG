@@ -1,0 +1,232 @@
+================================================================================
+ADR-09 Phase 4 Results — Scheduled version-tracker (curated detect + react)
+================================================================================
+
+Status: GO — version-tracker.yml implemented; reads the curated matrix; triggers
+the release artifact build AND the CI refresh/fan-out (LIVE, not gated — ADR-04
+Accepted); probe nudges-only; zero channel-branch writes; all gates green.
+
+
+--------------------------------------------------------------------------------
+1. WHAT WAS DONE
+--------------------------------------------------------------------------------
+
+Added .github/workflows/version-tracker.yml:
+
+  Schedule:   daily at 06:00 UTC ("0 6 * * *")
+  Dispatch:   workflow_dispatch with inputs:
+                dry_run        (default: "false") — log-only mode, no dispatches
+                target_version (default: "")      — filter to a specific version
+                skip_probe     (default: "false") — skip the optional probe
+
+  Jobs:
+    read-matrix   — reads supported-versions.json from ci-metadata via the
+                    composite action; emits build_matrix + ci_matrix outputs
+    react         — for each matrix entry, triggers downstream workflows
+    probe         — optional best-effort scan of RELENG_* branches; NUDGES only
+
+
+No changes to src/, tests/, any other workflow, or the ci-metadata matrix.
+
+
+--------------------------------------------------------------------------------
+2. TRACKER TRIGGERS + WHAT IT REACTS TO
+--------------------------------------------------------------------------------
+
+Job: react
+  Permission: actions: write (to dispatch workflows — NOT to push/commit)
+
+  Step A — Release artifact build (every BUILD matrix entry):
+    Dispatches: build-pkg-linux.yml (the portable Linux builder)
+    Inputs:     channel, abi (FreeBSD:<major>:amd64), php_version, py_flavor
+    Purpose:    validates the entry's (freebsd_version, php_version) pair builds
+                a clean .pkg independently of a release tag push
+    Note:       pkg_channel is hard-coded to "devel" for tracker-triggered builds;
+                real tagged releases always go through release.yml
+
+  Step B — CI image refresh (every ci:true CE entry in ci_matrix):
+    Dispatches: image-refresh.yml  (Phase 5 — NOT YET LANDED on adr/09)
+    Inputs:     pfsense_version, freebsd_version
+    Purpose:    upgrade-in-place + sanity gate + GHCR publish for each CE image
+
+  Step C — CI smoke fan-out (triggered once for all ci:true CE entries):
+    Dispatches: smoke-fanout.yml  (Phase 6 — NOT YET LANDED on adr/09)
+    Inputs:     none (the fan-out workflow reads ci_matrix itself)
+    Purpose:    live-VM smoke suite across all ci:true CE images in parallel
+
+  DRY-RUN MODE:
+    Set dry_run=true on workflow_dispatch.  Every trigger step is replaced with
+    a log of WHAT WOULD be dispatched — no downstream workflows are actually
+    run.  The log shows pfsense_version, channel, freebsd_major, ABI, PHP,
+    py_flavor, and the workflow that would be dispatched.  Self-test against the
+    seed matrix confirms:
+      - BUILD matrix: 2 entries (CE 2.8.x, Plus 25.03)
+      - CI matrix: 1 entry (CE 2.8.x, ci:true)
+      - Step A logs 2 dispatches (one per BUILD entry)
+      - Step B logs 1 dispatch (CE 2.8.x image-refresh)
+      - Step C logs 1 dispatch (smoke-fanout for all ci:true CE)
+
+
+--------------------------------------------------------------------------------
+3. FORWARD REFERENCES — EXACT NAMES PHASES 5 AND 6 MUST PROVIDE
+--------------------------------------------------------------------------------
+
+Phase 5 — image-refresh.yml
+  Workflow file name: .github/workflows/image-refresh.yml
+  Trigger:            workflow_dispatch
+  Required inputs:
+    pfsense_version   string  e.g. "2.8.x"
+    freebsd_version   string  e.g. "15.0-RELEASE"
+  Behaviour:
+    Runs on a KVM runner. Pulls the current GHCR tag for this CE version,
+    runs pfSense-upgrade (any bump incl. major), applies the SANITY GATE
+    (boot + SSH + /etc/version + pfctl + install-from-repo.sh + dig oracle),
+    and ONLY publishes (oras push) on gate PASS. Fail-closed: a bad upgrade
+    is NEVER published. The tracker calls this once per ci:true CE entry.
+
+Phase 6 — smoke-fanout.yml
+  Workflow file name: .github/workflows/smoke-fanout.yml
+  Trigger:            workflow_dispatch (AND schedule/workflow_call as needed)
+  Required inputs:    NONE — the fan-out workflow reads the ci_matrix from the
+                      read-version-matrix action itself
+  Behaviour:
+    Reads the ci_matrix (ci:true CE entries), expands it into parallel
+    strategy.matrix legs (fail-fast: false so all legs run), runs the ADR-04
+    smoke suite against each CE image, and gates on the AND of every leg
+    (never Plus). The tracker calls this once; it fans out internally.
+
+These two names are encoded in the tracker's `react` job.  They become live
+dispatch targets as soon as the respective phase lands its workflow file on
+the same branch.  Until then, dispatches degrade gracefully with a ::warning::
+annotation (|| echo "::warning::...") rather than a hard failure — the tracker
+itself stays green while the CI chain is being built out.
+
+
+--------------------------------------------------------------------------------
+4. PROBE BEHAVIOUR + HOW TO DISABLE
+--------------------------------------------------------------------------------
+
+Job: probe  (independent of react — failures do NOT block react)
+  Permission: issues: write (to open nudge issues)
+
+  Behaviour:
+    1. Checks if the repo label 'tracker-probe-disabled' exists — if so, skips.
+    2. Fetches all RELENG_* branch names from pfsense/FreeBSD-ports via GitHub API.
+    3. Extracts the X.Y prefix from each RELENG_X_Y[_Z] branch name.
+    4. Compares against known CE version prefixes in the matrix
+       (strips ".x" suffix: "2.8.x" -> "2.8" prefix).
+    5. For any version NOT covered: opens a GitHub issue nudge labelled
+       "enhancement".
+    6. Deduplication: checks for an existing open issue with the
+       "[version-tracker]" title prefix before opening; never opens a duplicate.
+    7. API failures / rate-limits: degrades with ::warning:: and exits 0.
+
+  PROBE NEVER:
+    - edits supported-versions.json
+    - commits to any branch
+    - pushes to any ref
+    - opens a PR (issues only)
+
+  HOW TO DISABLE (any of the following):
+    a) workflow_dispatch with skip_probe=true (per-run)
+    b) Create repo label 'tracker-probe-disabled' (persistent, no YAML edit)
+    c) Remove the `probe` job from version-tracker.yml entirely (permanent)
+
+  The probe is a job-level `if: github.event.inputs.skip_probe != 'true'`
+  so on schedule runs (which have no inputs) it always runs unless the label
+  is present.  On dispatch, the input gates it.
+
+
+--------------------------------------------------------------------------------
+5. PROOF OF NO CHANNEL-BRANCH WRITES
+--------------------------------------------------------------------------------
+
+Design analysis — the tracker NEVER writes to main, devel, or any channel branch:
+
+  a) The matrix lives on ci-metadata (orphan ref) — the react job only READS it
+     via `uses: ./.github/actions/read-version-matrix` (pure read, no push).
+
+  b) The react job's permission is `actions: write` ONLY — this permission allows
+     dispatching other workflow runs; it does NOT grant `contents: write` (which
+     is the permission needed to push commits or tags).
+
+  c) Every `gh workflow run` call dispatches a DIFFERENT workflow to run in its
+     own isolated context.  That downstream workflow may have whatever permissions
+     its own `permissions:` block declares — but that is its own constraint,
+     controlled by its own file, not by the tracker.
+
+  d) The probe job has `issues: write` and `contents: read` — explicitly no
+     `contents: write`.
+
+  e) There are zero `git push`, `git commit`, `gh pr merge`, `git tag`, or
+     `git checkout <channel-branch>` commands anywhere in this workflow.
+
+  f) The comment block at the top of the file documents the invariant explicitly
+     for future editors.
+
+  g) A workflow that runs from the default branch's YAML (as `schedule` does)
+     acts on behalf of that default branch's GITHUB_TOKEN — which is scoped to
+     the token's permissions (above), not to any ability to push other branches.
+
+Linearity invariant: CONFIRMED. The matrix is off-branch (ci-metadata); the
+tracker has no `contents: write` permission; the downstream workflow dispatches
+run under their own permissions. main/devel are never touched.
+
+
+--------------------------------------------------------------------------------
+6. GATE RESULTS
+--------------------------------------------------------------------------------
+
+python -m pytest:           1069 passed (unchanged)   [GREEN]
+ruff check .:               All checks passed          [CLEAN]
+ruff format --check .:      54 files already formatted [CLEAN]
+YAML (version-tracker.yml): valid (yaml.safe_load)    [CLEAN]
+YAML (all workflows):        all 9 valid               [CLEAN]
+markdownlint-cli2:           0 error(s), 33 files      [CLEAN]
+src/: no changes                                       [CONFIRMED]
+tests/: no changes                                     [CONFIRMED]
+
+Shell in version-tracker.yml: the pre-commit hook runs ShellCheck only on
+*.sh files (src/ scripts/); workflow run: blocks are not standalone scripts
+and are not checked by ShellCheck locally. The shell logic is POSIX sh
+(no bash-isms: no [[ ]], no arrays, no $RANDOM) and is consistent with the
+workflow's GitHub-hosted ubuntu-latest runner (which uses bash for `run:` by
+default but is compatible with POSIX sh constructs used here).
+
+
+--------------------------------------------------------------------------------
+7. FILES CHANGED (adr/09 branch commit)
+--------------------------------------------------------------------------------
+
+New files:
+  .github/workflows/version-tracker.yml              (the tracker workflow)
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt  (this file)
+
+
+--------------------------------------------------------------------------------
+8. HANDOFF FOR PHASES 5 AND 6
+--------------------------------------------------------------------------------
+
+Phase 5 (05_Image_Refresh.txt):
+  MUST create: .github/workflows/image-refresh.yml
+  MUST accept workflow_dispatch inputs: pfsense_version (string), freebsd_version (string)
+  The tracker already dispatches it with those exact field names.
+  Behaviour: upgrade-in-place (build-image.yml already has most of this) +
+  sanity gate + oras push on pass only + fail-closed on any gate failure.
+  See ADR §2 "CI image refresh" row for the full sanity-gate definition.
+
+Phase 6 (06_Smoke_Fanout.txt):
+  MUST create: .github/workflows/smoke-fanout.yml
+  MUST accept workflow_dispatch with NO version inputs (reads ci_matrix itself
+  via the read-version-matrix action).
+  The tracker dispatches it once with only --repo and --ref.
+  Behaviour: reads ci_matrix, expands to strategy.matrix (fail-fast: false),
+  runs ADR-04 smoke suite per leg, gating job `needs:` all legs (AND gate),
+  never Plus (ci:false entries excluded by the ci_matrix filter).
+
+Both workflows should use `workflow_call` as a second trigger if they need
+to be called by other workflows (e.g. release.yml in the future) — the
+tracker only uses `workflow_dispatch`, so `workflow_call` is purely additive
+for Phases 5/6.
+
+GO.

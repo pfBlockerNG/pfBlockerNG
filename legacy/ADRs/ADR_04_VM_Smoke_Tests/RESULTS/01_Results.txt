@@ -1,0 +1,238 @@
+ADR-04 — Phase 1 (De-risking spike): KVM boot + control round-trip
+===================================================================
+
+Branch: adr/04   Phase: 1 of 6   Date: 2026-06-02
+
+-------------------------------------------------------------------
+GO / NO-GO
+-------------------------------------------------------------------
+**GO.** Measured on GH-hosted ubuntu-latest CI (run 26835712774,
+2026-06-02), full chain green end-to-end: build the branch .pkg on a
+FreeBSD 15 VM -> boot pfSense CE 2.8.1 under KVM -> `pkg add` ->
+round-trip. Comfortably inside the §7 kill-threshold (<= ~20 min/job
+AND >= 4/5 clean).
+
+Measured numbers:
+  - boot-to-ready seconds (per run):     59, 55
+  - pass count:                          2/2 (0 fail)
+  - per-job wall time vs ~20 min budget: ~6m25s total (build + 2x
+    boot/install/round-trip), image caches warm
+  - /dev/kvm present + accel usable on ubuntu-latest: YES (after the
+    99-kvm4all.rules group-permission fix)
+
+Round-trip, both runs: pfctl -sr (84 rules) OK; `pfblockerng.php update`
+exit 0 OK; Unbound local-data inject+resolve OK (incl. external hostfwd
+:5353); WebUI login page OK.
+
+** Phase 2 may proceed: the premise is proven. **
+
+NOTE — the harness evolved from this prompt's original assumption (boot a
+hand-built pfSense+pfBlockerNG qcow2 and dig a baked local-data name).
+As validated it instead: boots a clean pfSense CE qcow2 (private GHCR,
+by digest, cached), BUILDS the branch-under-test into a real .pkg on an
+official FreeBSD VM-IMAGE matching the pfSense base ABI (build-pkg.yml /
+scripts/build-pkg.sh), installs it via `pkg add` (scripts/install-pkg.sh
+— properly registered, POST-INSTALL runs, deps from the repo), then
+injects control local-data over SSH per the round-trip. This is more
+reproducible than a hand-baked image and is the Phase-2/3 foundation.
+
+COMPATIBILITY FINDINGS (surfaced by the spike; pfBlockerNG-devel tracks a
+newer pfSense than CE 2.8.1):
+  - logger()/localize_text() are pfSense-core helpers absent from CE
+    2.8.1 (present in Plus/master). Shimmed in pfblockerng_extra.inc
+    (function_exists-guarded) so the package runs on both. Commit
+    af3cab9 on devel; cherry-picked onto adr/04 so the built .pkg
+    carries it.
+  - The fork's ports tree defaults to PHP 8.4 / net/rsync python flavor
+    (rsync-python), neither in CE 2.8.1's repo (php83 / rsync). The
+    build pins DEFAULT_VERSIONS php to the target (CE 2.8.1 -> 8.3) and
+    installs deps by default-flavor PKGBASE, so the .pkg's recorded deps
+    match the target pfSense. php_version is parameterised (Plus -> 8.5).
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase)
+-------------------------------------------------------------------
+  tests/smoke/boot_vm.sh        QEMU boot helper (POSIX sh)
+  tests/smoke/wait_ready.sh     SSH readiness poll, bounded backoff
+  tests/smoke/roundtrip.sh      pfctl + php-CLI + dig + WebUI checks
+  .github/workflows/smoke-spike.yml   workflow_dispatch-only spike
+
+Scope held: NO Packer, NO matrix, NO src/ edits, NO new pytest deps,
+default `python -m pytest` byte-for-byte unchanged (169 passed). No
+pytest smoke test was added in Phase 1 (that is Phase 3); the smoke
+artifacts here are shell + workflow only, so the default suite and its
+collection are untouched.
+
+-------------------------------------------------------------------
+EXACT QEMU INVOCATION (mirrors the source Proxmox VM hardware profile)
+-------------------------------------------------------------------
+Translated from `qm showcmd 103 --pretty` on the source Proxmox host;
+Proxmox host-glue dropped, net backend + disk swapped for CI. Encoded
+in tests/smoke/boot_vm.sh:
+
+  qemu-system-x86_64 \
+    -enable-kvm -machine pc -cpu host \
+    -smp 2,sockets=1,cores=2 -m 4096 \
+    -smbios type=1,uuid=58fd7964-c40c-4f47-bf02-3fdad18f8b00 \
+    -device virtio-scsi-pci,id=virtioscsi0 \
+    -drive file=<OVERLAY>,if=none,id=drive-scsi0,format=qcow2,\
+cache=unsafe,discard=unmap,detect-zeroes=unmap \
+    -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,\
+bootindex=100,rotation_rate=1 \
+    -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80,\
+hostfwd=tcp::5353-:53,hostfwd=udp::5353-:53 \
+    -device virtio-net-pci,mac=BC:24:11:37:9C:AC,netdev=net0,id=nic0 \
+    -display none -serial mon:stdio
+
+Hardware profile the helper mirrors (do NOT change without re-baking
+the image — pfSense keys interface assignment to NIC type/MAC/count and
+will drop to a console reassignment prompt otherwise):
+  - NIC      : single virtio-net-pci, MAC pinned BC:24:11:37:9C:AC
+               (the source VM's MAC; hardcoded — a MAC is not sensitive)
+  - disk bus : VirtIO-SCSI (virtio-scsi-pci + scsi-hd); guest sees da0
+  - machine  : pc (i440fx; Proxmox pc+pve0)
+  - cpu      : host (re-probed by FreeBSD at boot; keeps AES-NI; safe
+               across runners — CPU model is not a fingerprint axis)
+  - smp/mem  : 2 vCPU / 4096 MB
+
+NOTE / device-id fix: the reference invocation used id=net0 on BOTH the
+-netdev backend and the -device front-end, which QEMU rejects (duplicate
+id). The front-end device id is set to `nic0`; the netdev backend stays
+`net0` and the device's `netdev=net0` still binds them. NIC model, MAC,
+and count are unchanged, so the hardware fingerprint pfSense sees is
+identical.
+
+OVERLAY MECHANISM (image immutability — ADR §2):
+  The base qcow2 is read-only and is NEVER booted directly. boot_vm.sh
+  creates an ephemeral copy-on-write overlay:
+      qemu-img create -f qcow2 -b <BASE> -F qcow2 <OVERLAY>
+  and boots the OVERLAY. The overlay is mktemp'd and removed on clean
+  exit (pass an explicit overlay path as arg 2 to keep it for
+  post-mortem). The base is never written, so concurrent/repeat runs are
+  safe. (Equivalent to -snapshot but explicit and inspectable.)
+
+-------------------------------------------------------------------
+HOST <-> GUEST EXPOSURE (QEMU user-net / SLIRP)
+-------------------------------------------------------------------
+  host 127.0.0.1:2222/tcp -> guest 22  (SSH)
+  host 127.0.0.1:8080/tcp -> guest 80  (WebUI, HTTP)
+  host 127.0.0.1:5353/tcp -> guest 53  (DNS, TCP)
+  host 127.0.0.1:5353/udp -> guest 53  (DNS, UDP)
+  guest -> runner via SLIRP host alias 10.0.2.2 (mock feeds in later
+           phases; not exercised in Phase 1).
+  WAN stays DHCP (SLIRP leases 10.0.2.15, gw 10.0.2.2). Never bake a
+  static WAN IP — it breaks SLIRP. Through hostfwd the guest sees every
+  probe sourced from 10.0.2.2.
+
+-------------------------------------------------------------------
+SSH USER / KEY MODEL
+-------------------------------------------------------------------
+  - Runner connects as root@127.0.0.1:2222 with the PRIVATE key from
+    secret SMOKE_SSH_PRIV_KEY, written to a mode-600 temp file and used
+    via `ssh -i`.
+  - The matching PUBLIC key (SMOKE_SSH_PUB_KEY) is baked into the
+    image's root authorized_keys at image-build time.
+  - SSH options for the throwaway VM: StrictHostKeyChecking=no,
+    UserKnownHostsFile=/dev/null, BatchMode=yes — but the key stays
+    private (mode 600).
+  - The pfSense admin password (SMOKE_ADMIN_PASSWORD, baked into
+    config.xml) is NOT exercised by this spike: SSH = key, WebUI =
+    reachability only.
+
+-------------------------------------------------------------------
+THE CONTROL ROUND-TRIP (tests/smoke/roundtrip.sh)
+-------------------------------------------------------------------
+  1. ssh root@vm /sbin/pfctl -sr            -> non-empty ruleset
+  2. ssh root@vm /usr/local/bin/php \
+       /usr/local/www/pfblockerng/pfblockerng.php update   -> exit 0
+     (the exact production reload entry point — ADR fact 2)
+  3. dig +short @127.0.0.1 -p 5353 <local-data-name>       -> baked answer
+  4. curl http://127.0.0.1:8080/                           -> login page
+
+  The single baked local-data name is a SPIKE convenience for a
+  deterministic dig; it is a workflow input (default placeholder
+  `smoke-control.placeholder.invalid` — maintainer overrides with the
+  real baked name + optional expected IP). The real per-case local-data
+  injection over SSH is Phase 4 — do NOT build it here.
+
+-------------------------------------------------------------------
+IMAGE TRANSPORT (chosen: oras pull from private GHCR, by digest)
+-------------------------------------------------------------------
+  Consistent with ADR §2 ("pull the base by digest, not a mutable tag").
+  Workflow logs in to ghcr.io with SMOKE_GHCR_USER / SMOKE_GHCR_TOKEN
+  and `oras pull "$SMOKE_IMAGE_REF" --output image`. SMOKE_IMAGE_REF is
+  the qcow2 OCI ref BY DIGEST (ghcr.io/<org>/pfsense-smoke@sha256:...).
+  The qcow2 filename inside the artifact is the `image_file` input
+  (default pfsense-smoke.qcow2). This transport is a spike convenience;
+  Phase 2 replaces it with the build-image publish pipeline.
+
+-------------------------------------------------------------------
+WHAT MUST BE BAKED INTO THE HAND-BUILT IMAGE (maintainer)
+-------------------------------------------------------------------
+  - pfBlockerNG-devel present and functional (Phase 1 drives its PHP CLI
+    directly; later phases deploy src/ over it).
+  - root authorized_keys = SMOKE_SSH_PUB_KEY; sshd enabled.
+  - Single-NIC WAN is default-deny with NO anti-lockout, AND Unbound
+    refuses WAN-side recursion by default. So the image MUST boot with:
+      (a) WAN pass rules host -> 22 (SSH), 80 (WebUI HTTP), 53 (DNS);
+      (b) Unbound `access-control: 10.0.2.0/24 allow`;
+      (c) Block-private / Block-bogons DISABLED if present (10.0.2.2 is
+          RFC1918; on a single-interface install pfSense does not
+          auto-add these, so disable only if present).
+    All of this is baked — SSH/WebUI/DNS are unreachable until it exists,
+    so it cannot be added later over SSH.
+  - At least one Unbound `local-data` control name for the deterministic
+    dig probe (name passed to the workflow via `local_data_name`).
+  - admin password = SMOKE_ADMIN_PASSWORD (bcrypt) in config.xml
+    (not exercised by this spike).
+  - DNS Resolver in forwarding mode -> Cloudflare 1.1.1.1/1.0.0.1,
+    DNSSEC off (immaterial to Phase 1; relevant to hermeticity later).
+  - WAN = DHCP (no static IP). NIC MAC = BC:24:11:37:9C:AC.
+
+-------------------------------------------------------------------
+FLAKE / TIMING GOTCHAS THE DESIGN ANTICIPATES
+-------------------------------------------------------------------
+  - NO fixed sleeps for "boot done": wait_ready.sh polls SSH with
+    bounded exponential backoff (2s..15s) and a hard timeout (default
+    600s), reporting boot-to-ready seconds.
+  - If the image does not enable a serial console, `-serial mon:stdio`
+    shows nothing useful; readiness is gauged by SSH alone (by design).
+    Boot logs are captured to vm-<n>.log and tailed on failure.
+  - hostfwd ports (2222/8080/5353) are fixed; safe because each GH job
+    is its own runner. If several VMs ever share one runner, allocate
+    per-instance ports (not needed for the spike's serial loop).
+  - cache=unsafe on the overlay trades crash-safety for speed — fine for
+    a throwaway overlay that is discarded each run.
+  - KVM accel probe uses `-kernel /dev/null`, which always fails to boot;
+    the step only asserts KVM *initialised* (greps the log for kvm init
+    errors), not that a kernel loaded.
+
+-------------------------------------------------------------------
+GITHUB SECRETS / INPUTS THE MAINTAINER MUST SET BEFORE RUNNING
+-------------------------------------------------------------------
+  Secrets (repo or org):
+    SMOKE_IMAGE_REF     ghcr.io/<org>/pfsense-smoke@sha256:<digest>
+    SMOKE_GHCR_USER     username for `oras login ghcr.io`
+    SMOKE_GHCR_TOKEN    token with read:packages
+    SMOKE_SSH_PRIV_KEY  private key (public half baked into the image)
+    (SMOKE_SSH_PUB_KEY / SMOKE_ADMIN_PASSWORD are baked at image-build
+     time, not consumed by this workflow.)
+
+  workflow_dispatch inputs (have safe defaults):
+    runs              iterations (default 5)
+    image_file        qcow2 name in the artifact (default pfsense-smoke.qcow2)
+    local_data_name   baked dig name (default placeholder — OVERRIDE)
+    local_data_ip     expected answer (blank = any non-empty)
+    boot_timeout      hard readiness timeout secs (default 600)
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest        : 169 passed (unchanged baseline)
+  ruff check .            : clean
+  ruff format --check .   : clean
+  sh -n (3 scripts)       : clean
+  shellcheck --severity=warning (3 scripts) : clean
+  YAML parse              : valid; on == [workflow_dispatch]; 1 job
+  CI measured numbers + GO/NO-GO : DONE — GO (run 26835712774, 2/2,
+                                   ~6m25s, boot-to-ready 59/55s). See top.

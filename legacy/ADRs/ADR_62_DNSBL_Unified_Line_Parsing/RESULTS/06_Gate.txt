@@ -1,0 +1,27 @@
+ADR-62 PHASE 6 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_91d87c51-7b2 (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record and wrote this file.
+Commits gated: 95948d6d ("pfblockerng: perf-validate DNSBL per-line capture; drop dead classifier code (ADR-62 P6)"), d23f724d (docs handoff).
+
+1. TRANSACTION — PASS. HEAD == origin == d23f724d; tree clean; RESULTS/06_Results.txt committed (20 KB); all fixed handoff fields present.
+
+2. CANONICAL GATES (verifier re-ran all) — PASS. php -l clean; phpunit Tests: 2629, Assertions: 19363, 0 failures (P5 baseline counts); corpus filter 24 tests/151 assertions OK; phpstan OK; phpcs 0 violations; pytest 2620 passed/4 skipped (P5 baseline); corpus+parity 46 passed; ruff/mypy clean; policy checkers exit 0.
+
+3. RED PROOF — behaviour-preserving: verifier re-derived via the checkout dance (pre-P6 inc restored, dead 'abp' branch present → same 24/151 oracle result as post-deletion → deletion provably output-neutral; restored clean).
+
+4. BENCHMARK (ADR §7 reject criterion 2) — VERDICT: PASS.
+   - Methodology: scripts/bench_dnsbl_line_parsing.py run --lines 1000000 --iterations 5 --trials 2; merge-base f406a0ff (verifier-confirmed) vs branch tip; both surfaces (PHP pfb_unbound_python_sources over staged .txt — the download loop has no off-appliance driver, stated; Python build() over the .raw); wall-clock + peak RSS; temp worktree auto-cleaned.
+   - Numbers: PHP +6.12% wall / -0.25% RSS; Python +12.74% wall / -1.67% RSS. Second independent run: +5.32% / +12.66%. Verifier reproduced at reduced scale (200K/3/2): PHP +2.84%, Python +13.60% — same magnitude, same side of the threshold.
+   - Both axes, both surfaces well under the >25% kill-threshold (ADR.md wording verifier-matched verbatim). No REJECT.
+
+5. DIFF VS PLAN (full diff read: 3 files, +393/−12) — PASS. inc diff = exactly one 3-line comment reword + the 10-line dead `if ($format === 'abp')` block removal; grep-gone re-verified (one hit left = the kept derivation ternary @7117; consuming branch zero hits); Python-side stale-'abp' tolerance UNTOUCHED (git show --stat: pfb_unbound.py absent from commit; fmt=="abp" @5113 present; both Semantics-#7 tests green); helper survey: all Phase-2/ADR-21 helpers still live (call-site counts verifier-matched exactly); bench scripts under scripts/ only (bench_pfctl_tables.sh precedent confirmed real).
+
+6. TEST HONESTY — PASS. No test files touched; oracle assertions read and non-vacuous; deviation-1's rationale empirically validated (feeds.json reused_manifest_abp format='abp' row genuinely exercises the kept ternary).
+
+7. CONVENTIONS — PASS. New comment within budget; ADR citations verified against ADR.md text.
+
+8. SKIPPED (recorded, justified): (a) full-scale 1M benchmark not re-run verbatim by the verifier — reduced-scale reproduction corroborates deltas + verdict at ~1/50 cost on a noisy host; (b) branch-wide retired-token noise from P5 survivors not re-audited (pre-existing, documented; out of P6's --staged scope).
+
+DEVIATIONS ACCEPTED: (1) kept the $format derivation ternary (hardcoding 'plain' would break the reused_manifest_abp oracle — a real regression, empirically shown); (2) benchmark committed as permanent scripts/ dev tooling with --base-ref (precedent-following; brief said "your call"); (3) NO mid-ADR rebase onto devel's newest 10 commits (verified orthogonal by file-level spot-check) — rebase happens once at landing, consistent with the P2 gate note.
+
+Carry-forward for Phase 7 (orchestrator-endorsed): ADR §1.5/§6-P5 amendment (PR #1066 predates text) + record the perf verdict in §3's risk closure; architecture-notes "DNSBL/ABP pipeline" rewrite (still describes $easylist/header-sniff/marker as live); §7 smoke rows incl. "NO .abp marker" assertion, D5 line-count row, leading-blank CSV row if cheap; release-notes delta table (D1 two-case shape + D2–D5); bench scripts documented as reusable perf-regression tooling.

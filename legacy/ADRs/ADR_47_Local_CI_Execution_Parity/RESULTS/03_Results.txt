@@ -1,0 +1,154 @@
+ADR-47 Phase 3 — Results
+
+DELIVERABLES LANDED
+- scripts/build-leg.sh            — POSIX sh wrapper: prepare ports tree + build one .pkg; prints the
+                                    resolved .pkg path on stdout (nothing else). All sites use this.
+- scripts/parity-guard.sh         — grep-based lint; flags direct build-pkg-portable.py or
+                                    sparse-clone-ports.sh calls (Rules 1-2) AND inline-derived
+                                    build-leg.sh args (Rule 3 — amendment 4/5 teeth).
+- tests/shell/build_leg_spec.sh   — shellspec (8 examples: 6 fast layer-a + 2 layer-b skips)
+- tests/shell/parity_guard_spec.sh — shellspec (7 examples: passing + each violation class +
+                                    mixed + Rule 3 inline-derived FAIL + env-sourced PASS)
+- .github/workflows/build-pkg-linux.yml — rewired: 2 old steps → 1 "Build .pkg via build-leg.sh"
+- .github/workflows/smoke-single.yml    — rewired: inline sparse-clone + builder → build-leg.sh
+- .github/workflows/release.yml         — rewired: resolve-stamp job added (AMENDMENT 2);
+                                          portversion output added to read-matrix;
+                                          build-pkgs-portable loop now uses build-leg.sh
+
+GATE RESULTS
+  shellcheck scripts/build-leg.sh scripts/parity-guard.sh
+  shellcheck tests/shell/build_leg_spec.sh tests/shell/parity_guard_spec.sh
+    → clean (0 issues) on all four files
+
+  shellspec tests/shell/parity_guard_spec.sh
+    → 7 examples, 0 failures
+
+  shellspec tests/shell/build_leg_spec.sh
+    → 8 examples, 0 failures, 2 skips (layer-b real-build, explicitly scaffolded)
+
+  shellspec (full suite)
+    → 149 examples, 0 failures, 4 skips
+      (2 new layer-b skips + 2 pre-existing ADR-26 GNU-only locale skips)
+
+  actionlint .github/workflows/build-pkg-linux.yml smoke-single.yml release.yml
+    → 0 NEW issues in code I introduced
+      3 pre-existing issues unchanged (SC2129 × 2 + if: false — on base before P3)
+
+  parity-guard scan of all .github/workflows/
+    → 0 violations (all three rewired workflows pass clean)
+
+RED→GREEN EVIDENCE — AMENDMENT 1 (stdout contract)
+
+  Naive implementation (sparse-clone stdout NOT redirected):
+    Red stdout line count: 2
+    Red stdout content:
+      Your branch is up to date with origin/pfblockerng/use-github.
+      /tmp/fake.pkg
+    Callers using PKG="$(build-leg.sh ...)" would capture BOTH lines — the git
+    chatter contaminates the path variable; pkg installation breaks.
+
+  With 1>&2 redirect (build-leg.sh as shipped):
+    Green stdout line count: 1
+    Green stdout content:
+      /tmp/fake.pkg
+    Exactly one line; callers get a clean absolute path. ✓
+
+  The layer-a spec assertion "The lines of output should equal 1" was RED against
+  the naive implementation and GREEN after the 1>&2 redirect — the canonical
+  before/after evidence. Run to reproduce:
+    shellspec tests/shell/build_leg_spec.sh --example 'stdout is exactly'
+
+AMENDMENT 2 — resolve-stamp job (release.yml)
+  Added job resolve-stamp (needs: [prepare-release]), parallel with read-matrix.
+  Checks out the SAME ref as build-pkgs-portable:
+    ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.tag || github.ref }}
+  Emits created (tagged commit epoch) and commit (tagged SHA) as job outputs.
+  build-pkgs-portable adds needs.resolve-stamp and gates on resolve-stamp.result == 'success'.
+  portversion (ref-independent, derived from the tag string) stays in read-matrix and
+  is emitted as a new output; the build loop consumes it via needs.read-matrix.outputs.portversion.
+
+AMENDMENT 7 — LEG slugging (all three sites)
+  build-pkg-linux.yml:
+    LEG="$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+    → FreeBSD:15:amd64 → freebsd-15-amd64
+  smoke-single.yml:
+    LEG="nightly-$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+    → FreeBSD:15:amd64 → nightly-freebsd-15-amd64
+  release.yml (per-matrix-entry loop):
+    LEG="${VARSLUG}-${MAJOR}-${ARCH}"   e.g. ce-2.8-15-amd64 (already a slug from VARSLUG derivation)
+
+build-leg.sh CLI CONTRACT
+  build-leg.sh [OPTIONS]
+    --ports-repo  OWNER/NAME|URL     default: pfBlockerNG/FreeBSD-ports (→ GitHub HTTPS)
+    --ports-ref   REF                default: pfblockerng/use-github
+    --channel     devel|stable|nightly  default: devel
+    --abi         ABI                default: FreeBSD:15:amd64
+    --py-flavor   PYxx               default: py311
+    --php         X.Y                default: 8.3
+    --local-src   DIR                default: .
+    --pkgversion  V                  optional; omit → builder uses ports Makefile
+    --annotate    K=V                repeatable; each → --annotate to builder
+    --ports-dir   DEST               optional; default is run-keyed
+    --out-dir     OUT                optional; default is run-keyed
+
+  Stdout: exactly one line — the resolved absolute .pkg path (AMENDMENT 1).
+  Stderr: all progress, including sparse-clone step.
+
+  Run-keying:
+    RUN_ID already exported → used as-is (CI callers set via select-box.sh --print-id).
+    RUN_ID absent + GITHUB_RUN_ID set → pfb_mint_run_id_ci (LEG slugged from ABI if not set).
+    RUN_ID absent + GITHUB_RUN_ID absent → pfb_mint_run_id_local (local mode).
+    PFB_RUN_DIR = ${PFB_RUN_DIR:-${PFB_RUN_ROOT:-/var/tmp/pfb-runs}/${RUN_ID}}
+
+PARITY-GUARD RULES
+  Rule 1: direct build-pkg-portable.py call in workflow YAML → violation
+  Rule 2: direct sparse-clone-ports.sh call in workflow YAML → violation
+  Rule 3 (amendment 4/5 teeth): an inline-derived arg fed to build-leg.sh — a command
+    substitution $(...) OR a backtick positioned AFTER the build-leg.sh token on the
+    same line → violation. Implemented by taking the substring AFTER the first
+    build-leg.sh occurrence and testing THAT for $( or backtick. The legit capture
+    wrapper PKG="$(sh scripts/build-leg.sh ...)" has its $( BEFORE the token (not
+    flagged); an evasion build-leg.sh --pkgversion "$(release-version.sh ...)" has $(
+    AFTER (flagged). Verified false-positive-free: parity-guard over the 3 real
+    rewired workflows reports 0 violations (all use the BEFORE-token capture form).
+  YAML comment lines (first non-space char = #) are exempt.
+  Allowed: build-leg.sh calls whose args are GitHub ${{ ... }} or env-sourced $VAR/${VAR}.
+
+  RESIDUAL (Verify floor — amendment 5; documented in parity-guard.sh header too):
+    Rule 3 is LINE-scoped. A value derived on a PRIOR step/line or via an env: block
+    and passed in as a bare $VAR is NOT provenance-tracked — full deny-by-default would
+    need real shell/YAML parsing. The env-sourced case is pinned PASSING by the spec
+    (the documented residual). Generalizing provenance tracking is a P5 item.
+
+LAYER-B REAL-BUILD PARITY (deferred, scaffolded)
+  tests/shell/build_leg_spec.sh includes two scaffolded "pending" examples under
+  "real-build parity (layer b — heavier, skipped in fast suite)" with explicit Skip.
+  To run: set REAL_PORTS_DIR=<path-to-real-ports-clone> and un-skip locally.
+  Required: python3, zstd, a real ports clone at a fixed commit.
+  The smoke leg (no created= annotation) would be byte-identical OLD vs NEW.
+  The release leg would be manifest-identical modulo created= normalization.
+  Not gated in PR CI (too slow, network dep, not a correctness gate for this PR).
+
+OPEN RISKS / DEFERRED
+  - Layer-b real-build parity not run in CI (scaffolded, deferred per brief).
+  - Parity-guard Rule 3 is line-scoped (the documented residual above): a prior-line /
+    env-derived $VAR passed to build-leg.sh is not provenance-tracked → P5 generalization.
+  - The release.yml `if: false` (disabled ui-suite job) and two SC2129 warnings
+    are pre-existing; not introduced by P3.
+
+DEVIATIONS FROM §4 SPEC
+  None substantive. All 7 mandatory amendments implemented:
+    1 ✓ sparse-clone stdout redirected 1>&2 inside build-leg.sh
+    2 ✓ resolve-stamp job added; portversion stays in read-matrix
+    3 ✓ layer-b scaffolded (real ports test via file:// documented in the spec)
+    4+5 ✓ parity-guard discriminates by target (direct vs build-leg.sh) AND flags inline-
+        derived build-leg.sh args (Rule 3); the env-sourced residual is documented + P5-deferred
+    6 ✓ manifest extraction via zstd -dc "$PKG" | tar -xO +MANIFEST documented in layer-b
+    7 ✓ LEG slugged from ABI at all three call sites
+
+HANDOFF TO P4
+  RESUME: branch=adr/47-local-ci-execution-parity, next-phase=4
+  P3 commit: adr-47: add build-leg.sh + converge the three build sites (P3)
+  P4 takes the run-keyed out dirs (PFB_RUN_DIR/out/*.pkg) from build-leg.sh and
+  integrates with local-smoke.sh (boot_vm.sh, conftest.py). P3 does NOT modify those
+  files — the API is fully defined in scripts/build-leg.sh and scripts/lib/run-id.sh.

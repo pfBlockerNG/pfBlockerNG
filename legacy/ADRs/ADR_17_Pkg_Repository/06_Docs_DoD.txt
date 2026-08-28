@@ -1,0 +1,68 @@
+================================================================================
+PHASE 6 PROMPT — Docs + DoD + Status
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §7 Definition of done FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 6 (final) of ADR-17. Document the repo
+pipeline + install UX for users and maintainers, finalise §7, and set Status. Work in
+this ADR's `adr/17` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The mechanism is built + pinned (Phases 1-5). This phase makes it discoverable and
+records the acceptance state honestly (including the documented limitations + degrade
+paths) so the next maintainer/agent understands the channel without reverse-engineering CI.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_17_Pkg_Repository/RESULTS/05_Results.txt — the smoke results + the
+  OS-major-upgrade verdict (survives vs degraded-to-CLI) that the docs must reflect. If
+  missing, STOP and report.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§7; the whole ADR for the summary).
+- README.md — the existing release/build/deploy sections to slot the repo channel beside
+  (and the Phase-4 install section to cross-reference, not duplicate).
+- CLAUDE.md — "Branches and releases" / the workflow inventory, where the repo-publish
+  job + the new smoke belong; the Markdown rules.
+
+ACTION PLAN (ordered)
+1. README: a concise "pkg repository (GitHub Pages)" subsection — how it is published
+   (derived/regenerated over Release assets, `${ABI}`, NONE-signed), the user install/
+   upgrade flow (cross-reference Phase 4, do not duplicate the one-liner), and the honest
+   GUI caveat + deferred GUI panel.
+2. CLAUDE.md: add the repo-publish pipeline + `scripts/build-repo.sh`/`add-repo.sh` +
+   `tests/smoke/test_smoke_repo.py` to the relevant inventories (Repository structure /
+   Smoke tests / Branches and releases), in the established terse style.
+3. ADR.md §7: finalise the affected-flow smoke checklist (tick what Phase 5 proved),
+   confirm the reject/degrade outcomes that actually occurred, and set Status:
+   Proposed → Implemented (pending smoke) if not already, → Accepted iff the §7 smoke is
+   green on the live VM. State the OS-major-upgrade outcome explicitly.
+4. Keep wording brief; match neighbouring docs.
+
+CONSTRAINTS
+- Markdown only here (docs). Blank lines around headings/lists/fences; language on every
+  fence; single trailing newline; markdownlint-clean. STATIC URLs in any fence.
+- Do NOT touch `src/`, CI, or tests in this phase (docs only) beyond ticking ADR §7.
+- This phase is docs → it MAY push direct to `devel` per the CLAUDE.md carve-out (no PR
+  needed for Markdown-only). If it is folded with non-doc changes, use the PR flow.
+
+VERIFICATION (must all pass before the phase is done)
+- npx markdownlint-cli2 → clean; the URL-encoding gate → clean on any md fences.
+- A read-through: README + CLAUDE.md describe the channel accurately incl. the caveats;
+  ADR §7 Status + checklist reflect reality.
+- python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+README + CLAUDE.md document the self-hosted pkg repository channel and its honest limits;
+ADR-17 §7 is finalised and Status set per the live-VM smoke evidence.
+
+COMMIT (single)
+    docs: document the self-hosted pkg repository channel + ADR-17 DoD (ADR-17 P6)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push. Markdown-only → may push direct to `devel`; otherwise a rebase-only PR. PR
+body via --body-file if a PR is used.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/06_Results.txt` (plain .txt)
+State: the docs added (where); the final Status + the §7 checklist outcome; the
+OS-major-upgrade verdict as documented; any follow-ons (e.g. the deferred GUI panel ADR,
+offline-signed PUBKEY) for a future record.

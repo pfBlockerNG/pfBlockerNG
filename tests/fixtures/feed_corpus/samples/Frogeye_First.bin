@@ -1,0 +1,242 @@
+# First-party trackers host list
+# Variant: first-party trackers
+#
+# About first-party trackers: https://hostfiles.frogeye.fr/#whats-a-first-party-tracker
+#
+# In case of false positives/negatives, or any other question,
+# contact me the way you like: https://geoffrey.frogeye.fr
+#
+# Latest versions and variants: https://hostfiles.frogeye.fr/#list-variants
+# Source code: https://git.frogeye.fr/geoffrey/eulaurarien
+# License: https://git.frogeye.fr/geoffrey/eulaurarien/src/branch/master/LICENSE
+# Acknowledgements: https://hostfiles.frogeye.fr/#acknowledgements
+#
+# Generation software: eulaurarien 
+# List generation date: 2026-06-28T18:33:49+02:00
+# Oldest record: 2026-06-28T13:30:09+02:00
+# Number of source websites: 873
+# Number of source subdomains: 1766504
+# Number of source DNS records: 1617036
+#
+# Input rules: asns: 6, zones: 48
+# Subsequent rules: asns: 6, hostnames: 14999, ip4s: 77, zones: 48
+# … no dupplicates: asns: 6, hostnames: 12399, zones: 48
+# Output rules: hostnames: 14999
+#
+
+0.0.0.0 101230059950694.wt-eu02.net
+0.0.0.0 106075.genieessp.com
+0.0.0.0 107006243521810.wt-eu02.net
+0.0.0.0 108557.genieessp.com
+0.0.0.0 112686412066259.wt-eu02.net
+0.0.0.0 117490221505998.wt-eu02.net
+0.0.0.0 148749046266446.wt-eu02.net
+0.0.0.0 176652923057792.wt-eu02.net
+0.0.0.0 180629549208289.wt-eu02.net
+0.0.0.0 186015257614542.wt-eu02.net
+0.0.0.0 195357560818821.wt-eu02.net
+0.0.0.0 196380495960676.mateti.net
+0.0.0.0 1976.hallswindowcenter.com
+0.0.0.0 1stphorm.postaffiliatepro.com
+0.0.0.0 208005830805862.wt-eu02.net
+0.0.0.0 215973748390194.wt-eu02.net
+0.0.0.0 227633596530844.wt-eu02.net
+0.0.0.0 253822047730481.mateti.net
+0.0.0.0 261826549347986.wt-eu02.net
+0.0.0.0 266905402333512.wt-eu02.net
+0.0.0.0 285545256993116.wt-eu02.net
+0.0.0.0 286813086616891.wt-eu02.net
+0.0.0.0 2.brinkshome.com
+0.0.0.0 2.krayden.com
+0.0.0.0 2k.trackgecko.pl
+0.0.0.0 2.worktango.io
+0.0.0.0 302631813489498.wt-eu02.net
+0.0.0.0 307902509027183.wt-eu02.net
+0.0.0.0 310695274957699.wt-eu02.net
+0.0.0.0 319dn.dieti-natura.com
+0.0.0.0 3347.wolf-gordon.com
+0.0.0.0 346715981768881.wt-eu02.net
+0.0.0.0 349655011509897.mateti.net
+0.0.0.0 367171131378433.wt-eu02.net
+0.0.0.0 368352020330673.wt-eu02.net
+0.0.0.0 370212450674777.mateti.net
+0.0.0.0 371033713452477.wt-eu02.net
+0.0.0.0 390993738581837.wt-eu02.net
+0.0.0.0 3bmeteoitalia01.wt-eu02.net
+0.0.0.0 3d.laserdesign.com
+0.0.0.0 3esm.consubebe.es
+0.0.0.0 3pd.criteo.com
+0.0.0.0 427813503923049.wt-eu02.net
+0.0.0.0 444170171787319.wt-eu02.net
+0.0.0.0 458677892662477.wt-eu02.net
+0.0.0.0 467808562573270.wt-eu02.net
+0.0.0.0 469816027576686.mateti.net
+0.0.0.0 470719744966924.wt-eu02.net
+0.0.0.0 4711.lineadirecta.com
+0.0.0.0 4711.vivaz.com
+0.0.0.0 482221458407393.wt-eu02.net
+0.0.0.0 484879729086450.wt-eu02.net
+0.0.0.0 504684408060410.mateti.net
+0.0.0.0 517717528680725.wt-eu02.net
+0.0.0.0 524633908170120.wt-eu02.net
+0.0.0.0 5363316.marketing.numi.com
+0.0.0.0 547882457626880.wt-eu02.net
+0.0.0.0 554833903189763.wt-eu02.net
+0.0.0.0 579960529907681.wt-eu02.net
+0.0.0.0 590838755166551.wt-eu02.net
+0.0.0.0 598189357306993.wt-eu02.net
+0.0.0.0 5fm.985fm.ca
+0.0.0.0 600483262075260.wt-eu02.net
+0.0.0.0 602039762736393.mateti.net
+0.0.0.0 602849465568863.wt-eu02.net
+0.0.0.0 604499284307559.mateti.net
+0.0.0.0 611716061616237.wt-eu02.net
+0.0.0.0 625009642816718.wt-eu02.net
+0.0.0.0 626892113650542.wt-eu02.net
+0.0.0.0 630058339171838.mateti.net
+0.0.0.0 637394170883823.wt-eu02.net
+0.0.0.0 639871942536313.wt-eu02.net
+0.0.0.0 666882163750646.wt-eu02.net
+0.0.0.0 669154114435717.wt-eu02.net
+0.0.0.0 671130969507772.wt-eu02.net
+0.0.0.0 675646983570972.mateti.net
+0.0.0.0 688012155290337.mateti.net
+0.0.0.0 697968943875320.wt-eu02.net
+0.0.0.0 6ddc.lequipe.fr
+0.0.0.0 6hgz.labellevie.com
+0.0.0.0 6pal.consobaby.com
+0.0.0.0 6swu.cpa-france.org
+0.0.0.0 718847883744648.mateti.net
+0.0.0.0 729347163621496.wt-eu02.net
+0.0.0.0 730059294506327.wt-eu02.net
+0.0.0.0 734235127041830.wt-eu02.net
+0.0.0.0 734297997850272.wt-eu02.net
+0.0.0.0 737859735586197.wt-eu02.net
+0.0.0.0 752542050590835.wt-eu02.net
+0.0.0.0 752828619977374.wt-eu02.net
+0.0.0.0 753960264605716.wt-eu02.net
+0.0.0.0 757421535252818.wt-eu02.net
+0.0.0.0 769396664005295.wt-eu02.net
+0.0.0.0 7701534.emails.tntdrama.com
+0.0.0.0 778835614863159.mateti.net
+0.0.0.0 778835614863159.wt-eu02.net
+0.0.0.0 7lbd4.armandthiery.fr
+0.0.0.0 7mx.eider.com
+0.0.0.0 807354460250799.wt-eu02.net
+0.0.0.0 8147563.1954.bk.com
+0.0.0.0 8147563.thekingdom.bk.com
+0.0.0.0 8147563.your-way.bk.com
+0.0.0.0 823532764568303.mateti.net
+0.0.0.0 823532764568303.wt-eu02.net
+0.0.0.0 827040521851188.wt-eu02.net
+0.0.0.0 842359050480299.wt-eu02.net
+0.0.0.0 849036415619964.wt-eu02.net
+0.0.0.0 849715076759606.mateti.net
+0.0.0.0 854652424848633.wt-eu02.net
+0.0.0.0 864229213109397.wt-eu02.net
+0.0.0.0 865411762489824.wt-eu02.net
+0.0.0.0 877979016491790.wt-eu02.net
+0.0.0.0 893825625040746.wt-eu02.net
+0.0.0.0 913854712272815.wt-eu02.net
+0.0.0.0 913nd.dieti-natura.es
+0.0.0.0 915616854953982.mateti.net
+0.0.0.0 915651380225350.wt-eu02.net
+0.0.0.0 927615140575951.wt-eu02.net
+0.0.0.0 929408468507536.mateti.net
+0.0.0.0 943093585120520.mateti.net
+0.0.0.0 949365393396887.wt-eu02.net
+0.0.0.0 950197453774939.wt-eu02.net
+0.0.0.0 958731023298385.wt-eu02.net
+0.0.0.0 964869656656022.wt-eu02.net
+0.0.0.0 965607891904117.wt-eu02.net
+0.0.0.0 969665527401678.wt-eu02.net
+0.0.0.0 972067760041897.wt-eu02.net
+0.0.0.0 977787962413082.mateti.net
+0.0.0.0 981949533494636.mateti.net
+0.0.0.0 982429105360946.wt-eu02.net
+0.0.0.0 997311968670029.wt-eu02.net
+0.0.0.0 a10053.actonservice.com
+0.0.0.0 a10053.actonsoftware.com
+0.0.0.0 a10222.actonsoftware.com
+0.0.0.0 a10255.actonsoftware.com
+0.0.0.0 a1069.actonsoftware.com
+0.0.0.0 a11058.actonservice.com
+0.0.0.0 a11426.actonservice.com
+0.0.0.0 a11468.actonservice.com
+0.0.0.0 a1192.actonsoftware.com
+0.0.0.0 a13104.actonservice.com
+0.0.0.0 a13605.actonservice.com
+0.0.0.0 a13709.actonservice.com
+0.0.0.0 a13866.actonservice.com
+0.0.0.0 a14164.actonservice.com
+0.0.0.0 a14378.actonservice.com
+0.0.0.0 a15308.actonsoftware.com
+0.0.0.0 a15364.actonsoftware.com
+0.0.0.0 a16048.actonservice.com
+0.0.0.0 a16871.actonservice.com
+0.0.0.0 a17292.actonservice.com
+0.0.0.0 a17416.actonservice.com
+0.0.0.0 a17455.actonservice.com
+0.0.0.0 a17698.actonservice.com
+0.0.0.0 a17746.actonservice.com
+0.0.0.0 a17869.actonservice.com
+0.0.0.0 a17870.actonservice.com
+0.0.0.0 a18099.actonsoftware.com
+0.0.0.0 a18116.actonsoftware.com
+0.0.0.0 a18227.actonsoftware.com
+0.0.0.0 a18387.actonsoftware.com
+0.0.0.0 a18569.actonsoftware.com
+0.0.0.0 a18723.actonsoftware.com
+0.0.0.0 a18895.actonsoftware.com
+0.0.0.0 a18955.actonsoftware.com
+0.0.0.0 a19137.actonsoftware.com
+0.0.0.0 a19145.actonsoftware.com
+0.0.0.0 a19460.actonsoftware.com
+0.0.0.0 a1.api.bbc.com
+0.0.0.0 a1.api.bbc.co.uk
+0.0.0.0 a20069.actonsoftware.com
+0.0.0.0 a2006.actonsoftware.com
+0.0.0.0 a20130.actonsoftware.com
+0.0.0.0 a20210.actonsoftware.com
+0.0.0.0 a20297.actonsoftware.com
+0.0.0.0 a20625.actonsoftware.com
+0.0.0.0 a20814.actonsoftware.com
+0.0.0.0 a.20minutes.fr
+0.0.0.0 a21112.actonsoftware.com
+0.0.0.0 a21703.actonsoftware.com
+0.0.0.0 a21709.actonsoftware.com
+0.0.0.0 a21814.actonsoftware.com
+0.0.0.0 a22527.actonsoftware.com
+0.0.0.0 a2263.actonsoftware.com
+0.0.0.0 a22804.actonsoftware.com
+0.0.0.0 a23104.actonsoftware.com
+0.0.0.0 a24076.actonsoftware.com
+0.0.0.0 a24793.actonservice.com
+0.0.0.0 a24982.actonservice.com
+0.0.0.0 a26065.actonservice.com
+0.0.0.0 a26177.actonservice.com
+0.0.0.0 a26362.actonservice.com
+0.0.0.0 a26758.actonservice.com
+0.0.0.0 a26996.actonservice.com
+0.0.0.0 a27349.actonservice.com
+0.0.0.0 a28093.actonservice.com
+0.0.0.0 a28518.actonservice.com
+0.0.0.0 a28769.actonsoftware.com
+0.0.0.0 a29171.actonservice.com
+0.0.0.0 a29177.actonservice.com
+0.0.0.0 a29565.actonservice.com
+0.0.0.0 a29798.actonservice.com
+0.0.0.0 a29868.actonservice.com
+0.0.0.0 a30331.actonsoftware.com
+0.0.0.0 a30616.actonsoftware.com
+0.0.0.0 a30667.actonservice.com
+0.0.0.0 a30668.actonservice.com
+0.0.0.0 a31027.actonsoftware.com
+0.0.0.0 a31973.actonservice.com
+0.0.0.0 a32124.actonsoftware.com
+0.0.0.0 a32172.actonsoftware.com
+0.0.0.0 a32276.actonsoftware.com
+0.0.0.0 a32609.actonsoftware.com
+0.0.0.0 a32685.actonsoftware.com
+0.0.0.0 a32737.actonsoftware.com
+0.0.0.

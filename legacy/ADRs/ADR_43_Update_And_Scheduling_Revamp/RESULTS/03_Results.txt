@@ -1,0 +1,160 @@
+ADR-43 Phase 3 — Explicit Trigger API + Deprecated Verb Adapters
+================================================================
+Branch: adr/43-update-and-scheduling-revamp
+Commit: 9f65cbe
+Status: COMPLETE
+
+## What was done
+
+### New pure helpers (pfblockerng.inc)
+
+  pfb_req_to_hook_trigger($trigger)
+    Maps the struct's 'trigger' field to ADR-12 PFB_TRIGGER:
+      'force'  → 'force-reload'
+      'manual' → 'update'
+      'cron'   → 'cron' (default)
+
+  pfb_verb_deprecation_warning($verb)
+    Returns a DEPRECATED log message for 'update'/'updateip'/'updatednsbl'; '' otherwise.
+    Message format: "DEPRECATED: pfblockerng verb '{verb}' — use explicit request ({hint}); removal scheduled"
+
+### pfb_trigger_request() change
+
+  'update' now returns trigger='manual' (was 'cron' — Phase 1 oracle test went red as predicted).
+  All other verbs unchanged.
+
+### sync_package_pfblockerng() overload
+
+  Accepts string OR array { 'scope', 'force', 'trigger' } as $cron parameter.
+
+  Array path (new API):
+    - $pfb_req = $cron directly
+    - $pfb_hook_val = pfb_req_to_hook_trigger($pfb_req['trigger'])
+    - $pfb_is_noups = FALSE
+    - $pfb_cron_tick = (trigger==='cron' && !force)
+
+  String path (back-compat):
+    - pfb_verb_deprecation_warning() fires for deprecated verbs
+    - pfb_trigger_request() + pfb_hook_trigger() derive req + hook val
+    - Explicit $pfb_is_noups / $pfb_cron_tick flags replace the old === 'cron' checks
+
+  Both pfb_run_hooks('pre'/'post') calls now use $pfb_hook_val (not pfb_hook_trigger($cron)).
+
+### pfblockerng.php changes
+
+  'update' case: now passes 'update' (not 'cron') → deprecation fires inside sync_package.
+  'updateip'/'updatednsbl': unchanged call (deprecation fires inside sync_package).
+  New 'pfb_trigger' CLI verb: parses scope=/force=true|false/trigger= args, calls array form.
+  'pfb_trigger' added to the verb allowlist.
+
+### pfblockerng.xml HA-sync
+
+  Migrated: sync_package_pfblockerng() → sync_package_pfblockerng(array('scope'=>'both','force'=>FALSE,'trigger'=>'manual'))
+  PFB_TRIGGER='update' preserved (pfb_req_to_hook_trigger('manual')='update', same as old pfb_hook_trigger('')='update').
+
+### smoke helpers.py
+
+  reload() now calls 'pfb_trigger' verb for update/updateip/updatednsbl scopes.
+  Mapping (preserves pre-Phase-3 effective behavior):
+    "update"      → pfb_trigger scope=both force=false trigger=cron   (PFB_TRIGGER=cron, same as before)
+    "updateip"    → pfb_trigger scope=ip force=true trigger=force
+    "updatednsbl" → pfb_trigger scope=dnsbl force=true trigger=force
+    "cron"        → unchanged (still calls pfblockerng.php cron)
+  New: reload_deprecated_verb(vm, verb) — exercises the deprecated string path for adapter coverage.
+
+## Adapter table
+
+  verb        scope  force  trigger  PFB_TRIGGER  deprecation?
+  ----------  -----  -----  -------  -----------  ------------
+  'update'    both   false  manual   update        YES (was cron/cron)
+  'updateip'  ip     true   force    force-reload  YES (unchanged behavior)
+  'updatednsbl' dnsbl true  force    force-reload  YES (unchanged behavior)
+  'cron'      both   false  cron     cron          NO (internal, Phase 4 migrates)
+  'noupdates' both   false  cron     cron          NO (internal, Phase 4 migrates)
+  ''          both   false  cron     update        NO (via pfb_hook_trigger legacy path)
+  array(...)  —      —      as given derived        NO (new API)
+
+  Note: '' (settings save/de-install) has a known asymmetry: pfb_trigger_request('')['trigger']='cron'
+  but pfb_hook_trigger('')='update'. The string path uses pfb_hook_trigger directly, so PFB_TRIGGER='update'
+  is preserved for the '' path. Documented in TriggerAdaptersTest.
+
+## Red→green evidence (PHPUnit)
+
+  PRE-CHANGE (Phase 1 code):
+    TriggerRequestTest::testUpdateVerbMapsIdenticallyToCronToday  FAILED
+      → pfb_trigger_request('update')['trigger'] returned 'cron', expected 'manual'
+
+    TriggerAdaptersTest::testReqToHookTriggerMapping  FATAL
+      → "Call to undefined function pfb_req_to_hook_trigger()"
+
+    TriggerAdaptersTest::testDeprecatedVerbsHaveWarningMessages  FATAL
+      → "Call to undefined function pfb_verb_deprecation_warning()"
+
+    TriggerAdaptersTest::testNonDeprecatedVerbsHaveNoWarningMessage  FATAL
+      → "Call to undefined function pfb_verb_deprecation_warning()"
+
+  POST-CHANGE (this commit):
+    TriggerAdaptersTest  OK — 8 tests, 47 assertions
+    TriggerRequestTest   OK — 14 tests, 36 assertions (oracle updated: testUpdateVerbMapsToManualTrigger)
+    All PHPUnit          OK — 1457 tests, 5472 assertions, 3 skipped
+
+## Contracts satisfied
+
+  Contract #1: each verb's effective scope/force preserved (updateip/updatednsbl unchanged;
+               'update' scope=both force=false preserved; PFB_TRIGGER for 'update' intentionally
+               changed from 'cron' to 'update' — Phase 1 notes predicted this)
+  Contract #2: PFB_TRIGGER values by path:
+               'update' verb: was 'cron', now 'update' (intentional Phase 3 change)
+               'updateip'/'updatednsbl': 'force-reload' unchanged
+               'cron'/'noupdates': 'cron' unchanged
+               '' (settings save): 'update' unchanged (legacy pfb_hook_trigger path)
+  Contract #7: force=false → cron-tick path only, not forced; force=true → updateip/updatednsbl paths force $pfb['reuse']='on'
+  Contract #8: HA-sync migrated to array form (PFB_TRIGGER='update' preserved);
+               smoke helpers migrated to pfb_trigger verb
+
+## Out-of-CI limitations
+
+  HA-sync (secondary VM XMLRPC resync): no secondary VM in CI smoke environment.
+  pfblockerng.xml diff reviewed manually (trigger='manual' → PFB_TRIGGER='update' = old '' behavior).
+
+## Smoke test file authored
+
+  tests/smoke/test_trigger_api.py (5 tests, not run — Phase 7 fan-out):
+    test_pfb_trigger_verb_reloads_dnsbl           — new CLI verb via CaseContext/reload()
+    test_deprecated_verb_logs_deprecation_warning  — parametrized: update/updateip/updatednsbl
+    test_deprecated_update_verb_still_reloads_dnsbl — adapter preserved reload behavior
+
+  Dispatch: gh workflow run smoke.yml -f pytest_k="trigger_api"
+
+## Verification output
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc   → No syntax errors
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php    → No syntax errors
+  vendor/bin/phpunit --filter TriggerAdaptersTest          → 8 tests, 47 assertions, OK
+  vendor/bin/phpunit --filter TriggerRequestTest           → 14 tests, 36 assertions, OK
+  vendor/bin/phpunit                                        → 1457 tests, 5472 assertions, 3 skipped, OK
+  vendor/bin/phpstan analyse --memory-limit=1G             → No errors
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/          → (clean)
+  python -m pytest -q                                       → 1882 passed, 4 skipped
+  ruff check .                                              → All checks passed
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc  (3 new functions; sync_package_pfblockerng overload)
+  src/usr/local/pkg/pfblockerng.xml              (HA-sync migrated to array form)
+  src/usr/local/www/pfblockerng/pfblockerng.php  ('update' fix; 'pfb_trigger' verb added)
+  tests/php/TriggerAdaptersTest.php              (new — 8 tests, 47 assertions)
+  tests/php/TriggerRequestTest.php               (oracle updated for Phase 3 'update' change)
+  tests/smoke/helpers.py                         (reload() via pfb_trigger; reload_deprecated_verb())
+  tests/smoke/test_trigger_api.py               (new — 5 smoke tests, authored for Phase 7)
+
+## Go-ahead for Phase 4
+
+  Phase 4 (cron/scheduling rework) may proceed.
+  - pfblockerng_sync_cron() and the cron-tick path still use $cron='cron'/'noupdates' strings.
+    Phase 4 should migrate them to array form (trigger='cron') to complete the API migration.
+  - The due-ledger library from Phase 2 is ready for Phase 4 wiring.
+  - pfb_hook_trigger() remains for the back-compat string path; Phase 4 or later may retire it
+    once all internal callers are on the array form.
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=4

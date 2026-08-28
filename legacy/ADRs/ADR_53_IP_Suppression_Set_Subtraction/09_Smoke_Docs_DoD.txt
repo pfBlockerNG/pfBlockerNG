@@ -1,0 +1,108 @@
+================================================================================
+PHASE 9 PROMPT — Live-VM smoke, docs, Definition-of-Done
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §4, §6 Phase 9, §7 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 9 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. This
+phase adds the live-VM proof (new smoke module), the architecture-notes
+section, and runs the acceptance fan-out. You implement with
+Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+Everything so far is proven off-appliance. The acceptance requirement (§4.1)
+is a LIVE fact: on a real pfSense VM, a host suppressed inside a containing
+feed entry must vanish from the loaded pf table while siblings stay — both
+families, before-state asserted first. ADR acceptance rides on this fan-out
+(CLAUDE.md "ADR acceptance — automated tests").
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/08_Results.txt. If
+  missing, STOP and report.
+- CLAUDE.md "Smoke tests (ADR-04)" — ALL the non-obvious truths (on-box probes,
+  /bin/sh not tcsh, unique fixtures, the diagnostics artifact, selective
+  dispatch) — and "Bash CAN reach LAN VMs" + docs/misc/local-smoke-debian.md /
+  scripts/local-smoke.sh for local legs.
+- tests/smoke/test_smoke_feeds.py — the _MockFeedServer pattern + fixture
+  conventions; tests/smoke/fixtures/README.md (you will add fixture rows).
+- tests/smoke/helpers.py — SmokeVM.ssh, config-injection helpers, and the
+  expected-vs-actual reporting exemplars (_redir_match_report style — your
+  pfctl assertions must print expected vs actual memberships).
+- tests/smoke/test_smoke_adr40.py (membership end-state assertions to mirror).
+- CLAUDE.md ADR-40 notes — a due update applies on change; use the Force/run
+  paths the suite already uses to trigger a reparse deterministically.
+
+ACTION PLAN
+1. Fixtures: add a v4 feed fixture containing 198.18.0.0/16 (RFC 2544 — inert,
+   NOT RFC 1918: killstates/private-exclusion would eat it) plus a couple of
+   bare hosts, and a v6 feed fixture containing 2001:db8:53::/64 (RFC 3849)
+   plus bare v6 hosts. Update tests/smoke/fixtures/README.md.
+2. New tests/smoke/test_smoke_suppression.py (BDD-style — these are multi-step
+   journeys; Given/When/Then comments per the mandate), self-encapsulated per
+   test (autouse baseline reset: clear both suppression lists + force a
+   reparse, failing loudly if the wipe doesn't take):
+   Scenario A (v4 carve): Given the v4 fixture feed is loaded as a Deny list
+   and suppression is enabled -> assert BEFORE-state: a chosen host inside the
+   /16 (e.g. 198.18.3.4) pfctl -T tests as a member. When it is added to
+   v4suppression (config injection via PfbConfig through php_eval — never
+   appliance python) and an update/force runs. Then: the host tests 0 matches;
+   a sibling (198.18.3.5) still matches; the member/mirror file holds covering
+   CIDRs (16 entries for the /16 minus /32), not 65k hosts.
+   Scenario B (v6 carve): same journey on the /64 fixture with a /128
+   suppression -> suppressed host 0 matches, sibling matches, mirror holds 64
+   covering CIDRs.
+   Scenario C (whole-token + legacy shapes): a bare-host suppression removes
+   the bare token; a /24 suppression inside the /16 carves at /24 granularity
+   (upgrade-parity evidence for §2.2).
+   Every pfctl assertion prints expected vs actual (table name, test output,
+   relevant mirror lines) — no bare booleans.
+3. Docs: docs/misc/architecture-notes.md gains "IP suppression set-subtraction
+   (ADR-53)": the covering-CIDR math (b-a entries; /24-/32=8, /64-/128=64), the
+   iprange rc/DNS-hazard contract and the pre-filter, the v6 PHP engine + its
+   perf bound, consumer inheritance (why content-level), and the alerts/
+   killstates changes. Terse, reference-style, per the file's existing tone.
+4. Validate: run the new module + the touched suites locally
+   (scripts/local-smoke.sh --ref <branch> -k "suppression") if a local box is
+   available, else dispatch. Then rebase onto origin/devel and dispatch the
+   acceptance fan-out: smoke.yml scope=full for the suppression module across
+   CE+Plus (plus ui-tests.yml for the P4/P6/P8 tiers if not already green from
+   those phases). Record run URLs + verdicts.
+5. Update the ADR: append the fan-out evidence to §7 (or RESULTS) — do NOT
+   flip Status; the orchestrator/maintainer flips to Accepted on green
+   evidence per CLAUDE.md.
+
+CONSTRAINTS
+- Fixture data: documentation/benchmark ranges only (RFC 2544 / RFC 3849 /
+  RFC 5737); no RFC 6761 TLD anywhere; helpers.unique_domain() if any DNS name
+  is needed (it should not be — this is IP-side).
+- All guest commands through SmokeVM.ssh (/bin/sh); config via PHP
+  (php_eval/pfSsh.php) — the appliance has NO python3 symlink.
+- Self-encapsulated tests; module must leave no suppression entries behind
+  (the VM is shared across modules).
+- Docs-only edits do not skip this phase's CI: the smoke module is code — the
+  full suite runs.
+
+VERIFICATION (all must pass)
+- python -m pytest -> green (collection-safe: smoke module skips off-VM)
+- ruff check . ; ruff format --check . -> clean
+- npx markdownlint-cli2 -> clean (docs touched)
+- The live smoke module green on at least the min-CE leg locally/dispatched,
+  then the CE+Plus fan-out recorded.
+
+EXPECTED RESULT
+Live proof of the §4 acceptance list, a documented mechanism, and the fan-out
+evidence the maintainer needs to flip ADR-53 to Accepted.
+
+COMMIT (single)
+    tests: live-VM suppression carve smoke + ADR-53 docs (ADR-53 P9)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/09_Results.txt
+State: fixture names, scenario inventory, local/dispatch run URLs + verdicts
+per leg, any flake notes, docs section anchor, and the final evidence summary
+for the Accepted flip.

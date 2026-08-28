@@ -1,0 +1,174 @@
+ADR-35 Phase 5 — Live-VM smoke + DoD + docs
+============================================
+
+STATUS: COMPLETE — all off-box gates green; live-VM smoke authored and awaiting CI dispatch.
+BRANCH: adr/35-managed-firewall-objects
+
+ADR-RESUME: branch=adr/35-managed-firewall-objects next-phase=COMPLETE
+
+────────────────────────────────────────────────────────────────────────────────
+SMOKE TEST FUNCTIONS — tests/smoke/test_smoke_fwobj.py
+────────────────────────────────────────────────────────────────────────────────
+
+1. test_fwobj_enable_creates_vip_and_nat
+   Proves: enabling DNSBL with pfb_dnsvip_auto=on creates pfB-owned objects.
+   Before-state: pfB_AUTO_VIP_v4 absent from virtualip/vip[], no pfB DNSBL NAT in nat/rule[].
+   Action: set_dnsvip_auto(True), set_dnsbl_enabled(True), reload('update').
+   After-state: virtualip/vip[] has entry with descr='pfB_AUTO_VIP_v4'; nat/rule[] has entry
+                with descr starting 'pfB DNSBL'.
+
+2. test_fwobj_disable_removes_vip_and_nat
+   Proves: disabling DNSBL removes all pfB-owned VIP and NAT entries from config.xml.
+   Before-state: both owned objects confirmed present (before-state asserted).
+   Action: set_dnsbl_enabled(False), reload('update').
+   After-state: neither pfB_AUTO_VIP_v4 nor pfB_AUTO_VIP_v6 nor pfB DNSBL NAT present.
+
+3. test_fwobj_uninstall_sweeps_orphan_preserves_user_objects
+   Proves: the ADR-35 deinstall sweep removes an orphan VIP (pfB marker, pfb_dnsvip4 cleared)
+           while leaving user-created VIP and NAT untouched, and removes all
+           installedpackages/pfblockerng* from config.xml.
+   Before-state: three objects asserted present (orphan VIP, user VIP, user NAT).
+   Action: pkg delete -y pfSense-pkg-pfBlockerNG-devel.
+   After-state: orphan VIP gone; user VIP present; user NAT present; pfb sections gone.
+
+────────────────────────────────────────────────────────────────────────────────
+ORPHAN SEEDING IN SCENARIO C — SSH command sequence
+────────────────────────────────────────────────────────────────────────────────
+
+Seeding is done via php_eval (pfSsh.php) in two steps:
+
+Step 1: _seed_orphan_vip(vm, 'pfB_AUTO_VIP_v4')
+  - Via pfSsh.php: unset $d['pfb_dnsvip4'] from pfblockerngdnsblsettings/config/0 and write_config.
+  - Then append a virtualip/vip[] row with descr='pfB_AUTO_VIP_v4', subnet='10.10.10.99/32',
+    mode=ipalias, interface=lo0, uniqid=pfborphanvip and write_config.
+  - Result: VIP has the pfB marker but pfb_dnsvip4 is cleared, so pfb_manage_dnsbl_vip's
+    double-guard (subnet == stored IP) cannot match it — it is a genuine orphan.
+
+Step 2: _seed_user_vip(vm, 'my-test-user-vip-do-not-delete')
+  - Via pfSsh.php: append a virtualip/vip[] row with the user descr, subnet='127.0.0.200/32'.
+  - write_config.
+
+Step 3: _seed_user_nat(vm, 'my-test-user-nat-do-not-delete')
+  - Via pfSsh.php: append a nat/rule[] row with the user descr, interface=lo0, protocol=tcp.
+  - write_config.
+
+────────────────────────────────────────────────────────────────────────────────
+CONFIG.XML ASSERTION METHOD + KEY PATHS
+────────────────────────────────────────────────────────────────────────────────
+
+All assertions go through the pfSense config API over SSH via pfSsh.php (php_eval /
+_php_read_scalar), following the smoke-suite pattern. Never read config.xml directly.
+
+Key paths and helpers:
+- virtualip/vip[] presence: helpers.marked_vip_subnet(vm, descr) — returns subnet string
+  or '' if absent. Wraps _php_read_scalar iterating config_get_path('virtualip/vip', array()).
+- nat/rule[] presence: _nat_pfb_dnsbl_present(vm) — iterates config_get_path('nat/rule', array()),
+  checks strpos(descr, 'pfB DNSBL') !== FALSE.
+- installedpackages/pfblockerng* presence: _pfb_sections_present(vm) — iterates
+  config_get_path('installedpackages', array()), checks array_keys for 'pfblockerng' prefix.
+- User object survival: inline _php_read_scalar checks with exact descr match.
+
+────────────────────────────────────────────────────────────────────────────────
+ARCHITECTURE-NOTES.MD
+────────────────────────────────────────────────────────────────────────────────
+
+Section title: "Managed firewall object ownership and teardown (ADR-35)"
+Location: appended at the end of docs/misc/architecture-notes.md (after the ADR-39 section).
+Content: one paragraph covering pfblockerng_fwobj.inc's layer; marker recognition union
+(pfB_ prefix + legacy strings); when the sweep runs (disable + deinstall); the ordering
+constraint (before pfb_remove_config_settings); pfb_fwobj_register() seam for ADR-36/37;
+user-object inviolability. Link to tests/smoke/test_smoke_fwobj.py.
+
+────────────────────────────────────────────────────────────────────────────────
+ADR.MD STATUS
+────────────────────────────────────────────────────────────────────────────────
+
+Status line: "Implemented — pending live-VM smoke" (2026-06-22)
+(Per orchestrator override: NOT "Accepted" — that requires the live-VM smoke fan-out to be
+green, which the orchestrator dispatches separately.)
+
+§7 DoD checkboxes ticked (off-box automated suite satisfies these):
+  [x] pfblockerng_fwobj.inc layer unit-tested (P1 + P2: FwobjLayerTest 21 tests)
+  [x] VIP + DNSBL NAT retrofitted; Phase-1 golden suite green (P3: FwobjCurrentBehaviourTest 11 tests)
+  [x] Deinstall + disable sweep wired; orphan removed; user objects untouched (P4: FwobjSweepSeamTest 8 tests)
+  [x] Registration seam in place and demonstrated (P4: pfb_fwobj_init_registrations)
+
+§7 DoD checkboxes NOT ticked (awaiting live-VM dispatch):
+  [ ] All gates green ... live-VM smoke proves add→remove→uninstall + orphan sweep.
+      (Annotated: off-box gates all green. Live-VM smoke authored — pending dispatch.)
+
+§7 Manual smoke items: all remain unchecked (documented out-of-CI limitations, not blockers).
+
+────────────────────────────────────────────────────────────────────────────────
+LIVE-VM SMOKE OUTCOME
+────────────────────────────────────────────────────────────────────────────────
+
+NOT YET RUN. Tests authored and collected (3 functions, 0 import errors). The orchestrator
+dispatches smoke.yml on the branch; this results file is written before that dispatch.
+
+────────────────────────────────────────────────────────────────────────────────
+VERIFICATION OUTPUT
+────────────────────────────────────────────────────────────────────────────────
+
+vendor/bin/phpunit:
+  Tests: 1172, Assertions: 4493, Warnings: 31 (pre-existing), Skipped: 3. All PASS.
+
+php -l pfblockerng.inc: No syntax errors detected.
+php -l pfblockerng_fwobj.inc: No syntax errors detected.
+
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G:
+  [OK] No errors
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  Exit: 0 (clean — PFBL-01 + ADR-28 + ADR-29 all green)
+
+.venv/bin/python -m pytest -q:
+  1930 passed, 2 skipped.
+
+.venv/bin/ruff check .:
+  All checks passed!
+
+python -m pytest tests/smoke/test_smoke_fwobj.py --collect-only:
+  collected 3 items (test_fwobj_enable_creates_vip_and_nat,
+                      test_fwobj_disable_removes_vip_and_nat,
+                      test_fwobj_uninstall_sweeps_orphan_preserves_user_objects)
+  No import errors.
+
+npx markdownlint-cli2 docs/misc/architecture-notes.md:
+  Summary: 0 error(s)
+
+npx markdownlint-cli2 .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md:
+  Summary: 0 error(s)
+
+────────────────────────────────────────────────────────────────────────────────
+FINAL BRANCH DIFF SUMMARY (against origin/devel)
+────────────────────────────────────────────────────────────────────────────────
+
+P1–P4 (already committed, 4 commits):
+  .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01–04_Results.txt  (handoffs)
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc    (sweep wired in 2 call sites)
+  src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc  (new file: full layer)
+  tests/php/FwobjCurrentBehaviourTest.php          (11 golden tests, P1)
+  tests/php/FwobjLayerTest.php                     (21 layer tests, P2)
+  tests/php/FwobjSweepSeamTest.php                 (8 sweep/seam tests, P4)
+  tests/php/bootstrap.php                          (fwobj.inc bootstrap)
+  tests/php/pfsense_doubles.php                    (doubles for sweep path)
+
+P5 (this commit):
+  tests/smoke/test_smoke_fwobj.py                  (3 live-VM smoke tests)
+  docs/misc/architecture-notes.md                  (ADR-35 subsection added)
+  .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md     (status + §7 ticks)
+  .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/05_Results.txt  (this file)
+
+Total P1–P5: 13 files changed, ~3100 insertions, ~36 deletions (all in P1-P4 production changes).
+No debug logging or temporary comments in any src/ file.
+
+────────────────────────────────────────────────────────────────────────────────
+CROSS-REPO ACTION REQUIRED (carried from P4)
+────────────────────────────────────────────────────────────────────────────────
+
+pfBlockerNG/FreeBSD-ports repo, pfblockerng/use-github branch, pkg-plist:
+Add an entry for pfblockerng_fwobj.inc following the pfblockerng_extra.inc pattern.
+Without this, scripts/build-pkg-portable.py will fail with "recipe staged files not in
+the plist" when building the .pkg (pfblockerng_fwobj.inc is in src/ and will be staged,
+but the plist won't list it). The smoke CI also needs this for pkg add to succeed.

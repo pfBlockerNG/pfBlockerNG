@@ -1,0 +1,75 @@
+================================================================================
+PHASE 2 PROMPT — Register log_syslog / _facility / _priority config fields (dormant)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md   (read §2.1, §2.2.5, §1.2.5 first)
+================================================================================
+
+ROLE
+Phase 2 of ADR-38 on the implementation branch. BEHAVIOUR-PRESERVING: the fields are
+registered but unread/unwritten this phase. One commit, pushed on the branch.
+
+WHY THIS PHASE EXISTS
+All three settings must flow through the ADR-29 PfbConfig gateway so reads get the
+default-on-absent + adapter and the RequireConfigGateway sniff stays green. Doing the
+registration (and its round-trip/rollback tests) BEFORE any reader exists means the
+later wiring phases just call PfbConfig::read() against a proven, pinned field.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_38_System_Log_Integration/RESULTS/01_Results.txt — confirm Phase 1 is
+  complete (formatters + tests green, key vocabulary recorded). If it is missing,
+  STOP and report.
+- .ADRs/ADR_38_System_Log_Integration/ADR.md (§2.1 keys/defaults; §1.2.5 free
+  facilities — default local6).
+- CLAUDE.md → "Config gateway — PfbConfig (ADR-29)" (adding a registered field: the
+  5 steps), the field-vocabulary table, and the RequireConfigGateway sniff note.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — pfb_cfg_registry(); an
+  existing toggle entry (e.g. dnsbl_vip_auto) and a plain-string entry as templates;
+  the PfbToggle adapter.
+- tests/php/CfgGatewayTest.php, tests/php/RollbackContractTest.php (incl.
+  testInventoryCompletenessAllKnownKeysAccountedFor + the since-version test),
+  tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php ($registeredPaths).
+
+ACTION PLAN
+1. Add three registry entries to pfb_cfg_registry() under the General/Log-Settings
+   section path (match the log_max_* / log_rotate_* siblings' section):
+   - `log_syslog`          — PfbToggle adapter, default '' (off).
+   - `log_syslog_facility` — plain (NULL/NULL identity) adapter, default 'log_local6'.
+   - `log_syslog_priority` — plain identity adapter, default 'log_notice'.
+   Set each `since` to the current devel series (read it from the build/version
+   source — DO NOT guess; match what recent ADR-30/34 entries used if unchanged).
+2. Add the three full config paths to the sniff `$registeredPaths`.
+3. Extend CfgGatewayTest (round-trip write(read(v))==v for every vocabulary value +
+   default-absent) and RollbackContractTest (vocabulary membership) and the inventory
+   list for all three keys.
+4. Add a pure helper mapping the stored token → PHP syslog constant for facility and
+   severity (e.g. 'log_local6'→LOG_LOCAL6, 'log_notice'→LOG_NOTICE), validating the
+   full Snort-style vocabulary; unit-test it (tests/php/SyslogFacilityMapTest.php),
+   including an unknown token → safe default (local6 / notice).
+
+CONSTRAINTS
+- PHP 8.3, tabs, uppercase TRUE/FALSE. Toggle vocabulary is {'on',''}; plain fields
+  are identity (any stored string passes through) — confirm round-trip is lossless.
+- Do NOT wire any reader/writer into the daemon, python, or UI this phase.
+- Registry is read-only after boot — add entries, never mutate at runtime.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit  → green (CfgGateway, RollbackContract, inventory, new map test)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  → clean (RequireConfigGateway happy)
+- vendor/bin/phpstan  → clean
+- diff-read: the three keys appear in the registry, the sniff list, and all three
+  test files; nothing reads them yet.
+
+EXPECTED RESULT
+Three registered, gateway-mediated, round-trip-pinned settings (default
+off/local6/notice) plus a tested token→constant map; feature still dormant.
+
+COMMIT (single)
+    pfblockerng: register syslog export settings via PfbConfig (ADR-38 P2)
+Push on the branch.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/02_Results.txt`
+Record: the exact section path + `since` value used; the token→constant map function
+name + its default-on-unknown behaviour; the test files touched + counts; verification
+numbers. Carry the ADR-RESUME sentinel forward (next-phase=3) if pinned. Go-ahead for
+Phase 3.

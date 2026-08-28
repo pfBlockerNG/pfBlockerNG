@@ -1,0 +1,166 @@
+ADR-13 — Phase 2 Results (VIP lifecycle manager wired into pfb_create_dnsbl($mode))
+==================================================================================
+
+Status: DONE. Additive (auto OFF => byte-identical). All gates green. Go-ahead for Phase 3.
+
+What landed (one commit on adr/13)
+----------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng.inc  (+194 lines, no deletions)
+  - New config read in pfb_global(): $pfb['dnsbl_vip_auto'].
+  - New pure helper pfb_find_marked_vip() (the ownership/delete-guard predicate).
+  - New manager pfb_manage_dnsbl_vip(string $mode): void.
+  - One call site added inside pfb_create_dnsbl($mode), right after pfb_global(),
+    BEFORE the NAT pass (so NAT sees the resolved VIP address(es)).
+File: tests/php/DnsblMarkedVipTest.php  (additive PHPUnit test, +5 tests / +11 assertions)
+  - Unit test for pfb_find_marked_vip: marker+IP match, marker-without-IP (not
+    deleted), IP-without-marker (never matched -> manual VIP safety), null/'' reuse
+    by marker alone, and no-marked-VIP => null.
+
+NOTE: the worktree's .venv symlink is intentionally NOT committed (untracked).
+
+Config key + default
+--------------------
+  Key   : pfb_dnsvip_auto   (on/off)
+  Path  : installedpackages/pfblockerngdnsblsettings/config/0
+  Default: OFF (absent or != 'on' => off).
+  Read in pfb_global() as:
+    $pfb['dnsbl_vip_auto'] = ($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '') == 'on' ? 'on' : '';
+  No UI yet (UI is Phase 4) — only the config read + the manager consume it.
+
+Manager signature + lifecycle predicates
+-----------------------------------------
+  function pfb_manage_dnsbl_vip(string $mode): void
+
+  Pure ownership predicate it relies on:
+    function pfb_find_marked_vip(array $vips_config, string $marker, ?string $match_ip): ?int
+      Returns the integer key of the first virtualip/vip entry where:
+        (1) ($vip['descr'] ?? '') === $marker   (MARKER, always required), AND
+        (2) when $match_ip is a non-empty string: ($vip['subnet'] ?? '') === $match_ip
+            (IP MATCH). $match_ip === null OR '' matches on the marker alone.
+      null otherwise. (Guards $idx with is_int so a non-list array can't return a
+      string key.)
+
+  Top-level guards (in order):
+    * $mode not in {'enabled','disabled'} -> return (no-op).
+    * $mode === 'enabled' && auto OFF      -> return immediately (BYTE-IDENTICAL no-op).
+
+  EXACT CREATE predicate (mode 'enabled' AND pfb_dnsvip_auto on):
+    * v4 family ALWAYS managed; v6 family managed iff
+        $want_v6 = !empty($pfb['dnsblconfig']['pfb_dnsvip6']) || pfb_unbound_listens_v6()
+      (a v6 VIP already requested OR resolver listens on IPv6).
+    * For each managed family: IDEMPOTENT ensure —
+        $idx = pfb_find_marked_vip($vips, MARKER, null)   // reuse by marker alone
+        if found  -> reuse it (backfill a missing uniqid only);
+        else      -> $address = pfb_pick_free_dnsbl_vip($family, $interface);
+                     if null -> DO NOT create, log, leave config as-is (continue);
+                     else append entry {mode:'ipalias', interface:$pfb['dnsbl_iface'],
+                          type:'single', subnet:$address, subnet_bits:'32'|'128',
+                          descr:MARKER, uniqid:uniqid()}.
+      Then set $dnsblconfig[idkey] ('pfb_dnsvip4'|'pfb_dnsvip6') = "_vip{uniqid}"
+      (only if it changed).
+
+  EXACT DELETE predicate (family NOT managed — i.e. mode 'disabled', OR auto OFF on
+  the disabled path, OR a family no longer managed such as v6 no-longer-wanted):
+        $match_ip = (string)(get_configured_vip_ipv4|ipv6($dnsblconfig[idkey] ?? '') ?? '');
+        if ($match_ip === '') continue;                       // nothing resolvable to delete
+        $idx = pfb_find_marked_vip($vips, MARKER, $match_ip); // MARKER **AND** IP both required
+        if ($idx === null) continue;                          // not ours / no IP match -> skip
+        interface_vip_bring_down($vips[$idx]); unset; array_values;
+        unset $dnsblconfig[idkey].
+    => A VIP is deleted ONLY when descr === PFB_AUTO_VIP_DESCR_V4/_V6 AND its subnet
+       equals the address the stored pfb_dnsvip4/6 id currently resolves to. A manual
+       (unmarked) VIP is NEVER touched; a marked VIP whose address no longer matches
+       stored config is NEVER deleted on the marker alone.
+
+  write_config: fires exactly ONCE, and only when $changed is TRUE (a create, a
+  uniqid backfill, an idkey repoint, or a delete actually happened). With auto OFF
+  and no pre-existing marked VIP, $changed stays FALSE -> no write_config -> the
+  config.xml and the update pass are byte-identical to today.
+
+VIP entry fields + apply sequence
+---------------------------------
+  Entry (mirrors pfblockerng_install.inc:46-67 canonical shape):
+    mode='ipalias', interface=$pfb['dnsbl_iface'] (default 'lo0'), type='single',
+    subnet=<picked address>, subnet_bits='32' (v4) / '128' (v6),
+    descr=PFB_AUTO_VIP_DESCR_V4/_V6, uniqid=uniqid(); selectable id "_vip{uniqid}".
+
+  Apply sequence VERIFIED against upstream pfSense firewall_virtual_ip.inc
+  (saveVIP/applyVIP, read at master per CLAUDE.md upstream-source rule;
+  source of truth https://github.com/pfsense/pfSense): CONFIG FIRST, THEN APPLY —
+    config_set_path('virtualip/vip', $vips);
+    config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $dnsblconfig);
+    write_config('pfBlockerNG: saving DNSBL auto-VIP changes');
+    foreach managed family: interface_ipalias_configure($vip);   // bring alias up live
+  Removal mirrors applyVIP's teardown: interface_vip_bring_down($vip) BEFORE dropping
+  the entry from config. After write+apply the manager calls pfb_global() once to
+  refresh $pfb so the NAT create that follows sees the new dnsbl_vip4/6 addresses.
+
+Where it is called from pfb_create_dnsbl
+----------------------------------------
+  pfb_create_dnsbl($mode) {
+      global $pfb;
+      pfb_global();
+      pfb_manage_dnsbl_vip($mode);   // <-- ADDED HERE: before the NAT/lighttpd pass
+      ...
+  }
+  Both existing callers pass a literal $mode: the boot/install path
+  pfb_create_dnsbl('enabled') (inc, "Create DNSBL NAT, VIP, ... on reboot") and the
+  main update pass pfb_create_dnsbl($mode) at the "Modify DNSBL NAT and VIP and
+  lighttpd web server conf" hook. No caller signature changed.
+
+Auto-off byte-identical (confirmed by trace)
+--------------------------------------------
+  * mode 'enabled' & auto off -> 2nd top guard returns immediately; pfb_create_dnsbl
+    proceeds exactly as before (no VIP read/write).
+  * mode 'disabled' & auto off (feature never used) -> delete loop runs but every
+    candidate requires the MARKER; a manual/absent VIP yields no match -> $changed
+    stays FALSE -> early return BEFORE any config_set_path/write_config. No config
+    mutation, no interface call. Byte-identical.
+  * Only when a marked auto-VIP actually exists (i.e. auto was on earlier) does the
+    disabled path delete it — the intended teardown, not a regression.
+
+Stubs added
+-----------
+  NONE. Every pfSense function the manager calls is already declared:
+    interface_ipalias_configure, interface_vip_bring_down (interfaces.php),
+    get_configured_vip_ipv4/ipv6 (util.php), config_get_path/config_set_path,
+    write_config (config.php), uniqid (PHP core), pfb_logger/pfb_global (local).
+  PHPStan level 0: clean.
+
+Gate results
+------------
+  - php -l (pfblockerng.inc): No syntax errors detected. (The "Deprecated: Optional
+    parameter ... before required" notices are PRE-EXISTING in pfb_unlock and only
+    surface under PHP 8.5 CLI; target is 8.3 — not from this change.)
+  - PHPStan (level 0, --memory-limit=1G): [OK] No errors.
+  - PHPUnit (full suite): OK (93 tests, 143 assertions) — incl. the new 5-test file.
+  - pytest (worktree .venv): 989 passed (green/unchanged; no Python touched).
+  - ruff check .: All checks passed.
+  - ShellCheck: no shell files touched -> N/A.
+
+Scope confirmation
+------------------
+  Only pfblockerng.inc (config read + 2 functions + 1 call site) and an additive
+  tests/php PHPUnit test. No Python/Unbound plugin, no UI (Phase 4), no
+  pfb_validate_vips/pfb_global v6-mandatory rule (Phase 3), no other tests modified.
+
+Open questions for Phase 3 (v6 provisioning hook)
+-------------------------------------------------
+  - Phase 2 PROVISIONS a v6 VIP when ($want_v6): pfb_dnsvip6 already set OR
+    pfb_unbound_listens_v6(). Phase 3 must add the MANDATORY rule: when
+    pfb_unbound_listens_v6() is true, pfb_validate_vips() must REQUIRE a v6 VIP
+    (input error on save in manual mode) and pfb_global() must force-disable DNSBL if
+    a required v6 VIP is missing — while AUTO mode satisfies it via this manager.
+    Keep v4 + manual semantics intact when v6 is not listened-on.
+  - Decide whether to share the $want_v6 expression between Phase 2 (provision) and
+    Phase 3 (validate) so the "is a v6 VIP required?" question has a single source of
+    truth (currently inline in pfb_manage_dnsbl_vip).
+  - Carry the Phase-1 on-box v6 caveat into Phase 3's reject lever: confirm
+    get_interface_ipv6() returns a routable (not merely link-local) v6 for the
+    interface-automatic bind, and that 'interface-automatic: yes' accepts v6 queries.
+    If link-local-only must be excluded, tighten pfb_unbound_listens_v6() there.
+
+Go-ahead for Phase 3
+--------------------
+  GO. Phase 3 (IPv6-mandatory validation when the resolver listens on IPv6) can build
+  on pfb_unbound_listens_v6() (Phase 1) + the auto-provision path here.

@@ -1,0 +1,85 @@
+================================================================================
+PHASE 3 PROMPT — Implement immutable-user-rules reconciliation (core; red->green)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md   (read §2, §6 Phase 3, the contract)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active; otherwise
+/caveman. You are the Phase-3 implementer for ADR-41, on branch
+`adr/41-immutable-user-firewall-rules`. This is the CORE BEHAVIOUR CHANGE: user rules become
+immutable; only pfB rules move. You implement; you do NOT re-delegate. Full worktree + PR flow.
+
+WHY THIS PHASE EXISTS
+The strip-and-rebuild emission can drop (empty order), duplicate (order_1/2 shared interface), and
+reorder (order_4) user rules. This phase replaces it with: keep all non-pfB rules verbatim, splice
+the regenerated pfB rules at the Phase-2 anchor. Drop/dup/reorder become impossible by construction.
+
+REQUIRED READING
+- FIRST, read the prior handoffs:
+  .ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/02_Results.txt — the pass_order->anchor mapping
+  and the GO/RE-SCOPE verdict. If RE-SCOPE, follow it. If 02_Results.txt is missing or its verdict
+  is not GO, STOP and report.
+  Also re-read RESULTS/01_Results.txt — the helper signature + oracle fixtures.
+- .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md (§2 Decision table + "Semantics that MUST be
+  preserved", §6 Phase 3, §7 reject criteria).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the pfb_build_autorule_list() helper (Phase 1) +
+  the bucketing it now contains (~:14586–:14651) + the pfB-strip (:14601) + bypass keep (:14594).
+- tests/php/ (the Phase-1 oracle), tests/smoke/test_smoke_lan_rule_preserve.py + helpers.py.
+- CLAUDE.md — PHP standards, the test-coverage mandate (fail-before/pass-after), commit style,
+  "Smoke tests" (live-VM, /bin/sh), "Live-VM smoke passes PR CI while broken" (validate live).
+
+ACTION PLAN (ordered — flip the oracle, then implement, then live-validate)
+1. Reshape the Phase-1 oracle PHPUnit tests to assert the CONTRACT (ADR §2): for every fixture
+   (all pass_order x float x interface shapes x Deny_*/Permit_* x bypass-present), assert
+     (a) the non-pfB user-rule multiset is preserved EXACTLY (same set, count, ORDER) vs the input;
+     (b) the pfB rule set emitted is identical to today's (descr/type/interface/tracker);
+     (c) re-running on the helper's own output is a no-op (idempotence).
+   These FAIL on the current emission for order_1/order_2 (dup) and order_4 (reorder) — confirm red.
+2. Rewrite pfb_build_autorule_list() to the immutable-user model:
+     - keep = $existing_rules minus pfB-owned rules this region regenerates (descr starts pfB_ AND
+       NOT a DNS-redirect/DoT bypass rule), in ORIGINAL order;
+     - pfB = the generated permit/match/deny + DNSBL-float rules (split into pfB pass/match and
+       pfB block/reject blocks as the anchor needs);
+     - splice pfB block(s) into `keep` at the Phase-2 anchor for the active pass_order (unknown
+       order -> order_0 anchor; subsumes #539);
+     - return the result. NEVER bucket/filter/duplicate/reorder a non-pfB rule.
+   Delete the now-dead bucketing ($permit_rules/$other_rules/per-interface user emission).
+3. Confirm the reshaped oracle now passes (green) and the pfB-set-identical + idempotence asserts
+   hold. Keep the float path correct (its fixtures stay green).
+4. Add the LIVE oracle smoke (tests/smoke/) — factory-restore filter/rule between scenarios, sweep
+   pass_order x float, reload twice, assert exact user-rule preservation + stability (the harness
+   built during investigation; promote it to a committed test). VALIDATE red->green on the live VM:
+   build a pkg with this phase reverted, confirm the smoke FAILS for order_1/order_2; build with the
+   fix, confirm it PASSES. (Per CLAUDE.md, a Tier-B smoke passes PR CI without running — dispatch it
+   live yourself; module-scoped VM leaks state, so restore factory between scenarios.)
+
+CONSTRAINTS
+- USER RULES ARE IMMUTABLE — the helper must not bucket, filter, dedupe, or reorder a non-pfB rule.
+  The only operations on non-pfB rules are "keep in place".
+- Keep pfB-rule generation byte-identical (consume the same $pfb_generated arrays).
+- PHP: tabs; PHP 8.3; no die()/exit(); PHPCS green. Do NOT touch the alias-table reload path,
+  pfblockerng.sh, the DNSBL path, config.xml schema.
+- Keep #544's test_smoke_lan_rule_preserve.py green (the #532 drop must stay fixed).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit          → green (the reshaped contract oracle + idempotence + pfB-identical)
+- php -l / phpcs / phpstan     → clean / no new errors
+- python -m pytest             → green (off-appliance suite unaffected)
+- LIVE: the new tests/smoke oracle sweep PASSES on this pkg and FAILS on a this-phase-reverted pkg
+  (record the two runs); #544 smoke still green.
+- diff-read: `git diff origin/devel...HEAD` — the bucketing/per-interface user emission is GONE;
+  user rules are spliced-around, never rebuilt.
+
+EXPECTED RESULT
+The reconciliation keeps every user rule verbatim and only repositions pfB rules; drop/dup/reorder
+are impossible for every pass_order x interface config; live oracle green; #544 green.
+
+COMMIT (single)
+    pfblockerng: reconcile autorules without mutating user rules (ADR-41 P3, fixes #532 dup/reorder)
+Land via the full worktree + rebase-only PR flow (/pr-merge-flow). Reference the ADR + #532.
+
+HANDOFF — write `.ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/03_Results.txt` (plain .txt)
+Record: the final helper logic + anchor implementation; the live red->green evidence (both pkg
+runs); PHPUnit/smoke counts; what dead code was removed; the deliberate order_4 behaviour change as
+observed; and the go-ahead for Phase 4.

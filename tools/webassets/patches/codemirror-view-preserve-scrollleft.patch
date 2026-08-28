@@ -1,0 +1,20 @@
+--- a/node_modules/@codemirror/view/dist/index.js
++++ b/node_modules/@codemirror/view/dist/index.js
+@@ -3461,8 +3461,16 @@
+             (rect.top > window.pageYOffset + window.visualViewport.offsetTop + window.visualViewport.height ||
+                 rect.bottom < window.pageYOffset + window.visualViewport.offsetTop)) {
+             let line = this.view.docView.lineAt(range.head, 1);
+-            if (line)
++            // A line element spans the full width of the content, so scrolling it
++            // into view also moves the inline axis -- the browser aligns the line's
++            // start edge to the scrollport, shifting the view sideways by the width
++            // of the gutters. Only the vertical position is being kludged here, so
++            // put the horizontal scroll position back.
++            if (line) {
++                let { scrollLeft } = this.view.scrollDOM;
+                 line.dom.scrollIntoView({ block: "nearest" });
++                this.view.scrollDOM.scrollLeft = scrollLeft;
++            }
+         }
+     }
+     lineHasWidget(pos) {

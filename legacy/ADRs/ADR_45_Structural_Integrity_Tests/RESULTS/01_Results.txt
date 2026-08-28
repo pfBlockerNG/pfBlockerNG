@@ -1,0 +1,130 @@
+ADR-45 Phase 1 Results — pfb_archive_probe() + pfb_validate_archive() + oracle tests
+======================================================================================
+
+## Helpers added
+
+Both helpers land in src/usr/local/pkg/pfblockerng/pfblockerng.inc immediately after
+pfb_mime_normalise() (original line 666), before the pfb_filter() function.
+
+  pfb_archive_probe()     — inserted at ~L668 (after the closing brace of pfb_mime_normalise)
+  pfb_validate_archive()  — inserted at ~L684 (immediately after pfb_archive_probe)
+
+NEITHER helper is called from pfb_download() or pfb_filter(). No existing path changed.
+This phase is strictly behaviour-preserving.
+
+---
+
+## Exact argv per probe type
+
+  application/zip              → ['/usr/bin/tar',       '-tf']
+  application/gzip             → ['/usr/bin/gunzip',    '-t']
+  application/x-gzip  (alias) → ['/usr/bin/gunzip',    '-t']
+  application/x-bzip2         → ['/usr/bin/bzip2',     '-t']
+  application/x-7z-compressed → ['/usr/local/bin/7z',  't']
+  anything else (incl. text/plain, application/octet-stream, '')  → NULL
+
+Notes for Phase 2/3:
+  - /usr/bin/tar on FreeBSD IS bsdtar; matches existing pfb_download() usage at L8350/L8376.
+  - /usr/bin/gunzip already used at L8286/L8335 in pfb_download().
+  - /usr/bin/bzip2  already used at L8343 in pfb_download().
+  - /usr/local/bin/7z already used at L8402 in pfb_download().
+  - The file is NOT in probe's output array; pfb_validate_archive() appends it at call time.
+
+---
+
+## pfb_validate_archive() signature + runner contract
+
+  function pfb_validate_archive(string $file, string $canonical_type, ?callable $runner = NULL): bool
+
+  Runner contract: callable(array $argv): int
+    - $argv = pfb_archive_probe($canonical_type) with $file appended as the last element.
+    - Exit 0 → archive valid → returns TRUE.
+    - Any non-zero exit → archive invalid/corrupt → returns FALSE.
+    - NULL probe (non-archive type) → returns TRUE immediately without calling the runner.
+
+  Default runner (when $runner === NULL):
+    - escapeshellarg()s every argv element (binary, flags, file).
+    - Discards stdout+stderr (>/dev/null 2>&1).
+    - Returns the integer exit code.
+
+  Phase 2/3 calling convention:
+    - Pass the RAW file path ($file_download, NOT $file_dwn_esc). pfb_validate_archive()
+      is responsible for escaping via the default runner's array_map('escapeshellarg', ...).
+      Do NOT pre-escape the path before passing it — double-escaping breaks the arg.
+
+---
+
+## Oracle test names + results
+
+ArchiveProbeTest.php  (#[CoversFunction('pfb_archive_probe')])
+  [PASS] test_probe_zip_returns_tar_tf
+  [PASS] test_probe_gzip_returns_gunzip_t
+  [PASS] test_probe_x_gzip_alias_returns_gunzip_t
+  [PASS] test_probe_x_bzip2_returns_bzip2_t
+  [PASS] test_probe_x_7z_compressed_returns_7z_t
+  [PASS] test_probe_text_plain_returns_null
+  [PASS] test_probe_application_json_returns_null
+  [PASS] test_probe_empty_string_returns_null
+  [PASS] test_probe_octet_stream_returns_null
+
+ArchiveValidateTest.php  (#[CoversFunction('pfb_validate_archive')])
+  [PASS] test_non_archive_type_returns_true_without_calling_runner
+  [PASS] test_archive_type_runner_exit_0_returns_true
+  [PASS] test_archive_type_runner_exit_1_returns_false
+  [PASS] test_archive_type_runner_exit_2_returns_false
+  [PASS] test_file_is_appended_as_last_argv_element
+  [PASS] test_file_append_contract_for_gzip
+
+---
+
+## PHPUnit summary
+
+Tests: 1569, Assertions: 14932, Skipped: 3 (all pre-existing), Failures: 0, Errors: 0
+  → Full suite green including both new test files.
+
+## php -l
+
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  (Pre-existing PHP 8.3 Deprecated notices on optional-before-required params in
+  pfb_parsed_fail/pfb_download/pfb_dnsbl_parse/pfb_unlock — not introduced by this phase.)
+
+## phpcs
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  → Clean (no output / exit 0). UppercaseBooleanLiteral and RequireConfigGateway: no issues.
+  → TRUE/FALSE/NULL literals in new code are uppercase as required.
+
+---
+
+## Diff stat
+
+ src/usr/local/pkg/pfblockerng/pfblockerng.inc | 42 ++++++++++++++++++++++
+ tests/php/ArchiveProbeTest.php                 | (new file, 9 tests)
+ tests/php/ArchiveValidateTest.php              | (new file, 6 tests)
+
+No other files changed.
+
+---
+
+## Watch-outs for Phase 2
+
+1. Pass RAW $file_download (not pre-escaped) to pfb_validate_archive(). The default runner
+   calls escapeshellarg() on every argv element including the file; double-escaping silently
+   breaks the path. Example:
+     pfb_validate_archive($file_download, $file_type)
+
+2. Call pfb_validate_archive() BEFORE the extraction exec() at the top of each archive branch
+   (gzip / bzip2 / zip / 7z). On FALSE: log the failure and return FALSE (unlink via existing
+   unlink_if_exists() or equivalent). Do NOT attempt extraction on a failing probe.
+
+3. The 7z branch (L8397-8403) is reachable only via the Phase-3 octet-stream recovery path
+   today (7z is not in the allow-list). Phase 2 should still add the probe call there so the
+   branch is protected once Phase 3 unlocks it.
+
+4. pfb_archive_probe() never returns an argv for application/octet-stream — Phase 3 must
+   iterate over the supported canonical types and call pfb_validate_archive() on each.
+
+---
+
+Commit hash: (see below after commit)
+Push: adr/45-structural-integrity-tests

@@ -1,0 +1,74 @@
+ADR-66 PHASE 1 — ORCHESTRATOR GATE RECORD
+==========================================
+
+VERDICT: PASS (after one gate-driven fix pass)
+
+HISTORY
+-------
+- 8ef9d145 original phase-1 commit: independent gate FAILED (4 blocking findings:
+  frozen-module purity violated + falsely claimed; C2 ini bridge re-implemented the
+  production reader; oracle under-coverage the freeze would have made permanent;
+  vacuous half-rename test hardcoding the future 'tld_allow' key).
+- 2112d62d orchestrator ADR reconciliation: ADR.md §2.2/Semantic-4/Phase-3 prompt claimed a
+  manifest config.tld_master key; live tree (pfb_unbound.py:5306-5345, pfblockerng.inc
+  :8211-8227) shows the post-#1255 shape has none — the oracle rides the shipped pfb_py_tld
+  file, loaded reader-side. Text corrected before Phase 3 plans against it.
+- 5beb5de5 + a9de4fd9 fix pass (delegated, gate PASS): all four findings repaired pre-freeze;
+  RESULTS/01_Results.txt amended (false claim corrected, new frozen hash recorded, C2 rework
+  disclosed).
+
+FREEZE ANCHOR
+-------------
+tests/test_adr66_tld_naming_oracle.py frozen at git hash-object
+4ae3ad286a18d60ea496d40e649eb9b11e3c672c (orchestrator re-verified). The earlier anchor
+a7675a85 is VOID. Phases 2/3 must reproduce this hash byte-identically.
+
+COMMANDS + RESULTS (verifier-executed; orchestrator spot re-ran the purity grep, the
+frozen-file hash, and the two ADR-66 modules: 37 passed)
+--------------------------------------------------------
+- python3 -m pytest -q -> 2876 passed, 4 skipped
+- ruff check . -> All checks passed!; ruff format --check . -> 238 files already formatted
+- python3 -m mypy tests/ -> Success: no issues found in 102 source files
+- bash scripts/agent/run-gates.sh --diff origin/devel -> all gates PASS except
+  'GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)' (env PATH gap, diff-independent;
+  python3 -m mypy tests/ passes clean; --allow-missing rerun -> GATES: PASS)
+- vendor/bin/phpunit -> OK (3338 tests); composer phpstan -> No errors; phpcs clean
+  (from the fix-pass handoff, re-run by the verifier)
+
+RED/GREEN
+---------
+Behaviour-preserving phase, zero src/ edits (git diff origin/devel...HEAD -- src/ empty) —
+CLAUDE.md Test coverage #1 behaviour-preserving exception. Analog executed: oracle green on
+the untouched tree; baseline delta re-derived via checkout dance (2868 -> 2876 = -1 vacuous
+bridge test +9 new rows); freeze hash identical across both fix-pass commits.
+
+PER-ITEM DIFF VERDICTS
+----------------------
+F1 purity: PASS — 4 prose sites reworded; brief's purity grep on the final file: zero hits
+  (exit 1; orchestrator re-ran).
+F2 production reader: PASS — _read_main_tld_keys + vacuous test DELETED; round-trip now
+  drives pfb_unbound.init_standard(0, module_env()) with a real on-disk ini, asserts pfb[]
+  under seam keys, deinit(0) teardown.
+F3 oracle rows: PASS — A5c, A8a/A8b (VIP exemption + control), A9 (tld==''), A10
+  (prior-match precedence), B11-B13 (dcnt 5/4/1 arms), B14 (loader blank/# skip guards);
+  each cross-checked against production source by the verifier.
+F4 honesty: PASS — A5 docstring row now implemented (real never-matching regex, control
+  asserts); vacuous test gone from collection.
+RESULTS amendment: PASS — false claim corrected with pasted zero-hit grep; hashes updated;
+  carry-forward rewritten.
+Commit shape: PASS — 5beb5de5 exactly the 3 briefed files; a9de4fd9 RESULTS-only (disclosed
+  deviation: corrects a speculative gate-output claim with executed output; freeze
+  unaffected).
+
+MATRIX CONFIRMATION
+-------------------
+All original P1 rows (A1-A7, B1-B10, C1-C4, G1-G4) plus fix-pass rows (A5c, A8a/A8b, A9,
+A10, B11-B14) ticked with their tests in RESULTS/01_Results.txt; src/ untouched confirmed
+by empty diff.
+
+SKIPPED
+-------
+- scripts/agent/verify-red-proof.sh: no src/ baseline to revert (behaviour-preserving,
+  tests-only); analog check executed instead (see RED/GREEN).
+- run-gates.sh bare-mode literal PASS: sole failure is the TOOL-MISSING mypy PATH gap,
+  reproduced and diff-independent; canonical python3 -m mypy tests/ clean.

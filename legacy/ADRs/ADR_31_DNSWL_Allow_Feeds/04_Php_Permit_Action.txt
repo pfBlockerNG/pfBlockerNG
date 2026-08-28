@@ -1,0 +1,87 @@
+================================================================================
+PHASE 4 PROMPT — PHP: per-row Deny/Permit action -> mode='permit' wiring
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Push branch claude/gh-issue-324-vmn4aw (managed-remote pin; replaces adr/31-...).
+Phase 4 of 6. This phase CONNECTS Phase 2's dormant permit build branch: a DNSBL feed
+row whose per-row action is "Permit" now emits a mode='permit' manifest entry. One
+commit, push.
+
+WHY THIS PHASE EXISTS
+A subscribed DNSWL allow is just a DNSBL feed row marked Permit instead of Deny —
+mirroring the IP side's per-list Deny/Permit/Match action (ADR §2). With the Python
+permit build (P2) and the reusable manifest-row seam (P3) in place, this phase reads
+that per-row action and routes a Permit row through mode='permit'. NO separate config
+section, NO second download loop, NO new global scalar, NO new shipped page.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/03_Results.txt — the extracted seam
+  pfb_feed_manifest_row(..., $mode='deny') signature + the deny-omits-mode decision.
+  ALSO read RESULTS/02_Results.txt — the exact mode='permit' entry shape Python expects.
+  If either is missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.1 Config-field + PHP-download rows, §2.2)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the DNSBL feed loop reading
+  pfblockerngdnsbl/config rows (:11014-11036) and the per-row body (:11054-11191) where
+  the Phase-3 seam pfb_feed_manifest_row() is already called with mode='deny'; the
+  per-row fields already read (state/url/header/format/custom/logging).
+- How the sibling dynamic per-row keys (custom, logging) are read — your new `action`
+  key follows the SAME posture: direct config_*_path, NOT PfbConfig (foreign-key
+  exclusion, like pfblockerngdnsbl/config/{row}/custom).
+- CLAUDE.md (PHP rules; Naming — the field name must fit the established per-row
+  vocabulary; PFBL-01 input-validation sniff; ADR-28/29 config rules).
+
+ACTION PLAN
+1. Read the per-row `action` field on each pfblockerngdnsbl/config row (direct
+   config_*_path; default/absent ⇒ 'Deny'). Pick the field name + stored vocabulary to
+   match the established pattern — prefer `action` with values `Deny`/`Permit` mirroring
+   the IP side; confirm against how neighbouring per-row keys are named/stored, and pin
+   the chosen vocabulary in tests. config.xml storage hard-freeze (ADR-28): only ADD the
+   new key with a sane default-on-absent; change no existing stored value.
+2. In the existing per-row body, derive $mode from the action: Permit ⇒ 'permit', else
+   'deny'. Pass it to the existing pfb_feed_manifest_row(...) call (replacing the
+   hardcoded 'deny'). A Permit row thus emits a manifest entry with mode='permit'
+   (exact shape per RESULTS/02); a Deny/absent row stays byte-identical (omits mode).
+   Permit rows ride the SAME download path, staging dirs, and schedule as deny rows.
+3. Feed header/url validation reuses pfb_filter()/pfb_sanitise_feed_header() exactly as
+   the deny path does — keep PFBL-01 green; do not move a build past its validation.
+4. PHPUnit: a Permit-action row yields a mode='permit' manifest entry (producer side of
+   P2's contract); a Deny/absent row yields a byte-identical (no-mode) entry. Assert
+   BOTH sides (before-and-after / each branch).
+
+CONSTRAINTS
+- Mirror the established per-row field naming (Naming). The `action` key is dynamic/
+  per-row ⇒ direct config_*_path, NOT PfbConfig; no RequireConfigGateway violation.
+- Do NOT add a new config section, a second download loop, a global scalar, or any
+  www/priv/menu change (UI is Phase 5).
+- Do NOT touch the Python build (P2) or the seam's deny output (P3) — only the call site
+  that selects the mode.
+- Uppercase TRUE/FALSE; tabs; no die()/exit().
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit                 -> green incl. the permit/deny action tests
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean (PFBL-01 + ConfigGateway)
+- vendor/bin/phpstan analyse <edited files>         -> clean
+- php -l on edited files
+- python -m pytest                   -> green (P2 now has a real producer)
+
+EXPECTED RESULT
+A DNSBL feed row marked Permit is downloaded/staged on the existing update pass and
+emits a mode='permit' manifest entry that Python (P2) loads as a band-2 allow; Deny/
+absent rows are byte-identical. No UI yet (the row's action is set by test/config for
+now).
+
+COMMIT (single)
+    pfblockerng: emit permit manifest entries for Permit-action DNSBL rows (ADR-31 P4)
+Push to claude/gh-issue-324-vmn4aw.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/04_Results.txt
+State: the exact per-row field name + stored vocabulary chosen (Deny/Permit) and why it
+fits the pattern; the call-site change deriving $mode; the PHPUnit producer/deny tests;
+any validation seam reused. Confirm the full PHP+Python end-to-end (a Permit row ⇒
+band-2 allow) is green. Note for Phase 5: the exact field name + values the UI select
+must round-trip. Carry the line
+`ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=5`. Go-ahead for Phase 5.

@@ -1,0 +1,89 @@
+================================================================================
+PHASE 1 PROMPT — Oracle-pin the verb→behaviour map; extract the trigger request
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §1 + §2.A/§2.B first)
+================================================================================
+
+PREREQUISITE CHECK (do this BEFORE anything else)
+ADR-43 is gated on ADR-40 AND ADR-42 being IMPLEMENTED on devel (not merely Proposed).
+Verify both have landed (their `src/` changes are on origin/devel). If either is missing,
+STOP and report — do not implement ADR-43 yet. (This phase's prep is behaviour-preserving
+and technically independent, but the ADR's order of record is: 40+42 first.)
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full — match the orchestrator's laziness discipline.
+
+ROLE
+You implement Phase 1 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-PRESERVING — it extracts the current verb→request mapping into a
+testable pure helper and routes the existing code through it WITHOUT changing any observable
+behaviour (no deprecation log, no new public entry, no scheduling change). Work inline on the
+branch, one commit, push directly (open a PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The reload entrypoint overloads one `$cron` string with three concerns — trigger identity,
+scope (ip/dnsbl/both), and force-vs-reuse — and `pfb_trigger()` (inc:3170) exists only to
+RECOVER the trigger the string threw away. Before refactoring this live wire (HA-sync, the
+smoke PFB_CLI, the GUI all depend on it), pin every current verb→behaviour mapping as an
+oracle, so Phase 3's API swap changes a small, fully-pinned surface (the ADR-01 lesson: prep
+is independently valuable even if a later arm is narrowed).
+
+REQUIRED READING
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md  (§1 Today + load-bearing facts, §2.A/§2.B,
+  §2 "Semantics that MUST be preserved" #1/#2/#7, §5 constraints)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — `sync_package_pfblockerng($cron)` (:10916,
+  the reload entrypoint); `pfb_trigger()` (:3170-:3195, the $cron→PFB_TRIGGER map + the
+  GUI-Update-vs-scheduled-cron ambiguity note); the ADR-12 hook env builder that consumes
+  PFB_TRIGGER (grep `PFB_TRIGGER` / `pfb_trigger`).
+- src/usr/local/www/pfblockerng/pfblockerng.php — the CLI verb dispatch ($argv → which $cron
+  string is passed) for `cron`/`update`/`updateip`/`updatednsbl`; the Force-button POST paths
+  and `force_ip_refetch()` callers.
+- tests/php/bootstrap.php, tests/php/pfsense_doubles.php, tests/php/README.md (off-appliance
+  load model — the extracted helper MUST be loadable + PHPUnit-testable here).
+- CLAUDE.md (PHP standards: tabs, uppercase TRUE/FALSE, PFBL-01 sniff; the test-coverage mandate;
+  ADR-28/29 config discipline).
+
+ACTION PLAN (oracle tests FIRST — behaviour-preserving)
+1. Enumerate, from the code, the COMPLETE set of current trigger entry strings/paths and their
+   effective behaviour TODAY: for each of `cron`, `update`, `updateip`, `updatednsbl`, and the
+   Force-button / `force_ip_refetch` paths, determine (a) reload scope (ip / dnsbl / both),
+   (b) force vs reuse (reparse vs respect-fingerprint), (c) the PFB_TRIGGER value it yields.
+   Write this down in the handoff — it is the contract Phase 3 must not break.
+2. Add a pure helper `pfb_trigger_request($verb)` (name per the file's conventions) returning a
+   struct/array `{ 'scope' => 'ip'|'dnsbl'|'both', 'force' => bool, 'trigger' => 'cron'|'manual'|
+   'force' }` for each current verb/path. Keep it side-effect free and loadable off-appliance.
+3. Route the EXISTING code through it without changing behaviour: derive PFB_TRIGGER from
+   `pfb_trigger_request(...)['trigger']` (folding in / delegating from `pfb_trigger()`), and where
+   `sync_package_pfblockerng()` currently re-derives scope/force from `$cron`, have it read the
+   struct. The observable result (same reload, same PFB_TRIGGER, same logs) MUST be identical.
+   DO NOT add a deprecation log, a new public entrypoint, or any scheduling change this phase.
+4. Add PHPUnit tests (tests/php/) — table-driven, one row per verb/Force path — asserting
+   `pfb_trigger_request($verb)` returns the documented {scope,force,trigger} AND that the derived
+   PFB_TRIGGER matches today's value. This is the oracle Phase 3 flips to red→green.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit() in library code; keep PFBL-01 green. Do NOT add a
+  config field this phase. Do NOT change scheduling, the cron blocks, the GUI, HA-sync, or the
+  smoke harness. Do NOT touch Python or shell. Behaviour-preserving ONLY.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit                                  → green (+ the new mapping tests)
+- php -l on touched files                              → clean
+- vendor/bin/phpstan analyse (per composer script)    → clean
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/      → clean
+- diff-read: confirm sync_package_pfblockerng + pfb_trigger now route through the new struct with
+  NO behaviour change (same scope/force/PFB_TRIGGER for every verb).
+
+EXPECTED RESULT
+A pure, tested `pfb_trigger_request()` exists; the live path consumes it; behaviour is byte-for-byte
+unchanged; every current verb→{scope,force,trigger}+PFB_TRIGGER mapping is pinned by PHPUnit.
+
+COMMIT (single)
+    pfblockerng: extract + oracle-pin the trigger-verb request map (ADR-43 P1)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/01_Results.txt` (plain .txt)
+Record: the COMPLETE verb→{scope,force,trigger,PFB_TRIGGER} table you derived from the code (the
+contract); the helper name/signature + where it lives; which call sites now route through it; any
+verb/path whose scope/force turned out CONTEXT-DEPENDENT (a §7 reject-criterion signal — flag it
+loudly); verification output; and the go-ahead for Phase 2.

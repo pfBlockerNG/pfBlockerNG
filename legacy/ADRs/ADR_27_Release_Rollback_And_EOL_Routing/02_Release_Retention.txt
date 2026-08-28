@@ -1,0 +1,61 @@
+================================================================================
+PHASE 2 PROMPT — Release-subtree retention in build_repo_matrix
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.1, §2.2, §6 Phase 2 first)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 2 of 5. This CHANGES catalog shape
+(the release subtree may now carry multiple versions per name). Inline on the branch, one commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+The release subtree is latest-only today (ADR §1.1). Wire the Phase-1 retention helper so a publish
+can fold the last N devel + M stable releases into release/<varver>/<arch>/, pruned deterministically
+— the mechanism that makes rollback possible.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/RESULTS/01_Results.txt — confirm the helper signature
+  + channel rule. If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md  (§2.1 table, §2.2 contract, §2.3 scope)
+- scripts/build-repo-portable.py — build_repo_matrix() release subtree (release_dir build of devel +
+  --stable-tag/--stable-src), the nightly path for the retention pattern, and the arg parser.
+- tests/test_build_repo_portable.py — release-subtree + drift-pin tests.
+
+ACTION PLAN
+1. Add CLI: --release-keep-devel N (default 1) / --release-keep-stable M (default 1) — defaults
+   reproduce TODAY's latest-only behaviour (so the change is inert until the publish opts in).
+2. In build_repo_matrix(): accept extra release-candidate .pkg inputs (devel + stable) alongside the
+   fresh devel-HEAD build; fold them into release/<varver>/<arch>/; prune with retain_by_channel(
+   keep_devel=N, keep_stable=M); regenerate the multi-version catalog via the existing writer.
+3. Tests (assert BEFORE + AFTER per CLAUDE.md):
+   - test_release_default_is_latest_only — with defaults, exactly one devel + one stable (before-state).
+   - test_release_subtree_retains_devel_and_stable — with N=M=3 and 4 of each provided, the catalog
+     lists the newest 3 of each channel (and NOT the 4th).
+   - test_release_catalog_lists_all_kept_versions — packagesite NDJSON has one object per kept
+     (name, version); newest is still the highest version (newest-wins default, contract §2.2.2).
+   - confirm the generator drift pins (tests/test_add_repo_conf.py / test_build_repo_portable.py
+     conf bytes) still hold.
+
+CONSTRAINTS
+- Determinism + mtime-pinning preserved (contract §2.2.4). Stdlib only.
+- Do NOT alter nightly retention, the conf template, or signing.
+- Do NOT change release .pkg bytes — retention only selects which prebuilt .pkg the catalog indexes.
+
+VERIFICATION (must all pass)
+- python -m pytest               → green (+ the new release-retention cases)
+- ruff check . / ruff format . / mypy tests/   → clean
+- diff-read: a synthetic multi-release input produces release/<varver>/<arch>/ with the kept set;
+  packagesite lists all kept versions; newest unchanged.
+
+EXPECTED RESULT
+build_repo_matrix can retain N devel + M stable releases per ABI; defaults keep today's behaviour.
+
+COMMIT (single)
+    dev: retain the last N devel + M stable releases in the catalog (ADR-27 P2)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/02_Results.txt
+State: the new flags + defaults; how candidates are passed in; the catalog membership now produced;
+verification numbers (versions kept); confirmation newest-wins + drift pins intact. Go-ahead for Phase 3.

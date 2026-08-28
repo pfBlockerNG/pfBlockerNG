@@ -1,0 +1,308 @@
+================================================================================
+ADR-09 Phase 1 Results — Builder Inventory + Matrix-Driven Build Contract
+================================================================================
+
+Status: GO — both builders verified, contract defined, ready for Phase 3.
+
+
+--------------------------------------------------------------------------------
+1. BUILDER A — Portable Linux (DEFAULT)
+--------------------------------------------------------------------------------
+
+Workflow: .github/workflows/build-pkg-linux.yml
+Script:   scripts/build-pkg-portable.py
+
+TRIGGER
+  workflow_dispatch (iterate/test) + workflow_call (smoke.yml and future
+  release.yml consume it). No push/PR trigger.
+
+INPUTS (workflow_call and workflow_dispatch share identical defaults)
+
+  channel     devel|stable            default: devel
+  abi         FreeBSD:<major>:amd64   default: FreeBSD:15:amd64
+  py_flavor   pyNNN                   default: py311
+  php_version N.N                     default: 8.3
+  ports_repo  <owner>/FreeBSD-ports   default: andrebrait/FreeBSD-ports
+  ports_ref   <branch>                default: pfblockerng/use-github
+
+The (abi, py_flavor, php_version) triple is the TARGET description; none of it
+is read from the checked-out branch tree — it is always caller-supplied.
+
+The abi input encodes the FreeBSD major directly:
+  FreeBSD:15:amd64 => CE 2.8.x (FreeBSD 15.0-RELEASE)
+  FreeBSD:16:amd64 => Plus (FreeBSD 16.0-CURRENT)
+
+RUNNER
+  ubuntu-latest (plain Linux, no KVM, no FreeBSD VM)
+
+WALL-TIME CLASS
+  ~2-3 min (no boot, no VM setup). Timeout: 10 min.
+
+HOW IT BUILDS
+  1. Checks out the branch under test (local-src = the exact code to package).
+  2. Clones the FreeBSD-ports tree at ports_ref (the port Makefile + Mk framework).
+  3. Runs scripts/build-pkg-portable.py with:
+       --ports <ports-checkout>
+       --channel <channel>
+       --local-src .
+       --abi <abi>
+       --py-flavor <py_flavor>
+       --php <php_version>
+       --out out/
+  The portable builder executes the port's own do-extract / post-extract /
+  do-install recipe and reads pkg-plist — never a hardcoded file list. It emits
+  a real libpkg (zstd-tar) archive with +COMPACT_MANIFEST and +MANIFEST. When
+  the port gains files or changes deps, the builder keeps up automatically.
+
+ARTIFACT NAME
+  Artifact upload name: pfBlockerNG-pkg
+  File inside: <portname>-<portversion>.pkg (e.g. pfSense-pkg-pfBlockerNG-devel-3.2.16.pkg)
+  The .pkg filename is portname + portversion from the Makefile; it does NOT embed
+  the FreeBSD major. The ABI is encoded inside the manifest ("abi" field).
+
+  For Phase 3: to make the artifact name unambiguous across FreeBSD majors, the
+  release job should rename/copy the file before attaching it to the GitHub Release:
+    pfSense-pkg-pfBlockerNG-devel-<portversion>-FreeBSD-<major>.pkg
+  (one file per distinct FreeBSD major, deduped by ABI per ADR §1 fact 2).
+
+WORKFLOW_CALL OUTPUT
+  artifact: "pfBlockerNG-pkg"   (the upload-artifact name, consumed by download-artifact)
+
+DEP RESOLUTION (pkg add on pfSense)
+  The built .pkg records 12 dependencies (9 explicit RUN_DEPENDS + 3 injected by
+  USES=php/USES=python). On pfSense, pkg add checks that each dep is PRESENT (by
+  pkg origin/name), not its version. Because the smoke image bakes all RUN_DEPENDS
+  offline, pkg add resolves them from the local pkg db without network access.
+
+  9 explicit RUN_DEPENDS (from net/pfSense-pkg-pfBlockerNG-devel/Makefile):
+    net/libmaxminddb          => mmdblookup (GeoIP C library — COMPILED dep)
+    textproc/gnugrep          => ggrep
+    net-mgmt/grepcidr         => grepcidr
+    net-mgmt/iprange          => iprange
+    textproc/jq               => jq
+    net/rsync                 => rsync
+    www/lighttpd              => lighttpd
+    databases/py-sqlite3@pyNNN => py<ver>-sqlite3
+    net/py-maxminddb@pyNNN    => py<ver>-maxminddb
+
+  3 USES-injected (not in RUN_DEPENDS but in the built manifest):
+    lang/php<XY>   (e.g. php83)
+    devel/php<XY>-intl (e.g. php83-intl)  [USE_PHP=intl]
+    lang/python<NNN>   (e.g. python311)
+
+  net/libmaxminddb (mmdblookup) IS a hard dep; it is a compiled binary package
+  and must be present on the target pfSense for pkg add to succeed.
+
+FIDELITY NOTE
+  The portable builder output was diffed field-by-field against a real FreeBSD
+  make package artifact: identical except file mtime and a few dep versions
+  (make package reads those from the build host's installed packages; pkg add
+  checks presence not version, so installability is identical).
+
+
+--------------------------------------------------------------------------------
+2. BUILDER B — FreeBSD make package (ORACLE / FALLBACK)
+--------------------------------------------------------------------------------
+
+Workflow: .github/workflows/build-pkg.yml
+Script:   scripts/build-pkg.sh
+
+TRIGGER
+  workflow_dispatch + workflow_call. Annotated as "dispatch-only" for standalone
+  use; workflow_call enables build-image.yml (and future release.yml) to call it.
+
+INPUTS
+
+  freebsd_version  15.0-RELEASE | 16.0-CURRENT | ...  default: 15.0-RELEASE
+  channel          devel|stable                        default: devel
+  php_version      N.N                                 default: 8.3
+  ports_repo       <owner>/FreeBSD-ports               default: andrebrait/FreeBSD-ports
+  ports_ref        <branch>                            default: pfblockerng/use-github
+
+  NOTE: Builder B takes freebsd_version (full string, e.g. "15.0-RELEASE") while
+  Builder A takes abi (e.g. "FreeBSD:15:amd64"). Phase 3 must map between them:
+    freebsd_version "15.0-RELEASE" -> abi "FreeBSD:15:amd64"
+    freebsd_version "16.0-CURRENT" -> abi "FreeBSD:16:amd64"
+  The FreeBSD major is the shared key; the full version string is Builder B's
+  input and is also the matrix's freebsd_version field.
+
+RUNNER
+  ubuntu-latest with KVM enabled (the QEMU FreeBSD VM runs on GH-hosted Linux).
+
+WALL-TIME CLASS
+  ~20-30 min including image setup/boot. Timeout: 30 min.
+
+HOW IT BUILDS
+  1. Fetches a FreeBSD BASIC-CLOUDINIT qcow2 for freebsd_version from the FreeBSD
+     CDN (URL resolved by scripts/freebsd-image-url.sh, checksum verified against
+     FreeBSD's published CHECKSUM.SHA256).
+  2. Two-tier cache (keyed on image SHA256, not URL string):
+     Tier 1: raw base qcow2
+     Tier 2: prepared qcow2 (disk expanded +20 GB, ZFS expanded, git installed,
+             persistent SSH key baked into root authorized_keys, cloud-init
+             disabled). Cache hit skips all prep steps.
+  3. Build boot: prepared image with snapshot=on (throwaway overlay, base never
+     mutated). SSHes in with the baked key (no cloud-init needed).
+  4. Inside the VM: runs scripts/build-pkg.sh which:
+     - Pins DEFAULT_VERSIONS php=<php_version> in /etc/make.conf
+     - Clones ports tree (port + Mk framework)
+     - make makesum (fetches the pinned commit's tarball, records checksum)
+     - Resolves each RUN_DEPENDS origin to its default-flavor PKGBASE, installs
+       all deps as binary packages (pkg install -y)
+     - make package (the real ports framework build)
+  5. scp retrieves the .pkg from /tmp/out/ on the guest.
+
+ARTIFACT NAME
+  Artifact upload name: pfBlockerNG-pkg
+  File: <portname>-<portversion>.pkg  (same naming as Builder A)
+  The ABI is derived from the FreeBSD host the VM runs: a 15.0-RELEASE VM produces
+  FreeBSD:15:amd64 ABI. Same rename convention applies for Phase 3.
+
+WORKFLOW_CALL OUTPUT
+  artifact: "pfBlockerNG-pkg"   (same contract as Builder A — drop-in)
+
+DEP RESOLUTION
+  The VM has internet access; make package installs deps as binary packages from
+  FreeBSD's pkg repo before building. The resulting .pkg records the same 12 deps
+  as Builder A; pkg add on pfSense resolves them identically.
+
+
+--------------------------------------------------------------------------------
+3. (freebsd_version, php_version) PAIR — verified
+--------------------------------------------------------------------------------
+
+Both builders consume the pair. The pair is the build environment specification:
+  - freebsd_version pins the FreeBSD major (ABI tag) of the build env.
+  - php_version pins the PHP default so recorded dep names match the target pfSense
+    (USES=php injects php<XY>/php<XY>-intl; wrong pin -> dep absent from pfSense repo).
+
+Current supported matrix row (CE 2.8.x, the only GA CE entry):
+  pfsense_version: 2.8.x (covers 2.8.0 and 2.8.1 — same toolchain)
+  channel: CE
+  freebsd_version: 15.0-RELEASE
+  freebsd_major: 15
+  php_version: 8.3
+  py_flavor: py311        (derived from FreeBSD 15 + pfSense shipping Python 3.11)
+  status: GA
+  ci: true
+
+Source of truth for the pair: docs/misc/pfSense_versions.md (authoritative) and
+build-image.yml's resolve-version job (encodes the same mapping; hard-fails on
+unknown versions — issue #22 stopgap). ADR-09 Phase 2 supersedes both with the
+decoupled ci-metadata matrix; resolve-version becomes a matrix lookup.
+
+For Plus (FreeBSD 16.0-CURRENT, php_version TBD at the time a Plus entry is added):
+  freebsd_version: 16.0-CURRENT
+  freebsd_major: 16
+  ci: false (build-only; no CI run — licensing)
+
+py_flavor is derived from (freebsd_version, pfSense edition): pfSense ships
+Python 3.11 on CE 2.8.x. The matrix schema (Phase 2) will carry py_flavor
+explicitly; Builder A needs it as the py_flavor input, Builder B derives it
+from the VM's installed Python (same version on a correctly-matched image).
+
+
+--------------------------------------------------------------------------------
+4. DEFAULT vs FALLBACK/ORACLE SELECTION CONTRACT (for Phase 3)
+--------------------------------------------------------------------------------
+
+DEFAULT (use for every release build):
+  build-pkg-linux.yml (portable Linux builder)
+  Rationale: no FreeBSD VM, no KVM, ~3 min vs ~25 min. Byte-for-byte equivalent
+  to make package output (fidelity proven by field-by-field diff). pkg add checks
+  presence not version, so installability is identical.
+
+FALLBACK / ORACLE (selectable; "Linux by default, FreeBSD if we fuck up"):
+  build-pkg.yml (FreeBSD make package builder)
+  When to use: if the portable builder ever diverges from make package output in
+  a way that affects install or behaviour, the release job switches that matrix
+  entry to the FreeBSD builder. The fallback exists precisely for this case.
+
+SELECTION MECHANISM for Phase 3:
+  The release build job (release.yml extension) should accept a per-entry
+  builder input, defaulting to "linux". Phase 3 can implement this as:
+    - A matrix field: "builder": "linux" | "freebsd"  (default: "linux")
+    - The release job calls build-pkg-linux.yml if builder=="linux",
+      build-pkg.yml if builder=="freebsd"
+  Neither workflow has a top-level "builder" input today; Phase 3 adds the
+  dispatch logic. The two workflows already have identical output contracts
+  (both upload artifact name "pfBlockerNG-pkg"; both are workflow_call-able).
+
+ARTIFACT NAMING (one .pkg per distinct FreeBSD major, per ADR §1 fact 2):
+  The .pkg ABI tag gates `pkg add` on the OS major version: a FreeBSD:15 .pkg
+  is rejected on FreeBSD:16 without -f. Since the matrix may carry multiple
+  entries sharing the same FreeBSD major (e.g. CE 2.8.0 + 2.8.1 both = major 15),
+  Phase 3 dedupes: build once per distinct major, attach one file per major.
+
+  Attachment filename convention (to make the asset unambiguous):
+    pfSense-pkg-pfBlockerNG-devel-<portversion>-FreeBSD-<major>.pkg
+  Examples:
+    pfSense-pkg-pfBlockerNG-devel-3.2.16-FreeBSD-15.pkg  (CE 2.8.x)
+    pfSense-pkg-pfBlockerNG-devel-3.2.16-FreeBSD-16.pkg  (Plus)
+
+  Phase 3 renames/copies before attaching via softprops/action-gh-release.
+
+
+--------------------------------------------------------------------------------
+5. INPUTS BUILDER A NEEDS FROM THE MATRIX (per matrix entry)
+--------------------------------------------------------------------------------
+
+  channel:      from matrix[].channel ("devel" or "stable"; map CE->devel, Plus varies)
+  abi:          "FreeBSD:<freebsd_major>:amd64"  (constructed from matrix[].freebsd_major)
+  py_flavor:    matrix[].py_flavor  (e.g. "py311")
+  php_version:  matrix[].php_version  (e.g. "8.3")
+  ports_repo:   fixed: andrebrait/FreeBSD-ports  (or matrix-configurable)
+  ports_ref:    fixed: pfblockerng/use-github  (or matrix-configurable)
+
+INPUTS BUILDER B NEEDS FROM THE MATRIX (per matrix entry)
+
+  freebsd_version:  matrix[].freebsd_version  (e.g. "15.0-RELEASE")
+  channel:          from matrix[].channel
+  php_version:      matrix[].php_version
+  ports_repo:       same as A
+  ports_ref:        same as A
+
+Note: Builder B does NOT take py_flavor (it derives it from the VM's installed
+Python); Builder A requires it explicitly. The matrix carries it for Builder A.
+
+
+--------------------------------------------------------------------------------
+6. PRESERVED SEMANTICS CONTRACT (to verify before Phase 3 wires)
+--------------------------------------------------------------------------------
+
+- Both builders produce the same artifact output key: "pfBlockerNG-pkg". Phase 3
+  uses download-artifact with that name regardless of which builder ran.
+- A build failure must NOT break the ports-pr step in release.yml. Phase 3 should
+  run the build jobs in parallel with a `needs` dependency that is `if: always()`
+  on the release gate — or structure the build as a separate job that release.yml
+  needs with `continue-on-error: false` only for the artifacts step, not ports-pr.
+- The existing release.yml flow (tag -> verify-checks -> release -> ports-pr) is
+  unchanged by Phase 1. Phase 3 extends it; Phase 1 only documents.
+- Plus entries are built (build-only) but never run in CI (ci: false in matrix).
+- python -m pytest (default) is unchanged — no new deps, no new pytest targets.
+
+
+--------------------------------------------------------------------------------
+7. HANDOFF SUMMARY FOR PHASE 3
+--------------------------------------------------------------------------------
+
+Phase 3 (03_Release_Artifacts.txt) can wire both builders to the matrix with:
+
+  1. Read supported-versions.json from ci-metadata (Phase 2's output).
+  2. Compute the build matrix: dedupe entries by freebsd_major; for each distinct
+     major, pick the representative entry (highest pfsense_version in that major).
+  3. For each entry:
+     - Call build-pkg-linux.yml (DEFAULT) with:
+         channel, abi="FreeBSD:<major>:amd64", py_flavor, php_version,
+         ports_repo, ports_ref
+     - OR call build-pkg.yml (FALLBACK) with:
+         freebsd_version, channel, php_version, ports_repo, ports_ref
+     - Rename the output .pkg to pfSense-pkg-pfBlockerNG-<channel>-<ver>-FreeBSD-<major>.pkg
+  4. Attach all renamed .pkg files to the GitHub Release via softprops/action-gh-release.
+  5. Run ports-pr step regardless of build outcome (separate job, no build dependency).
+
+The (freebsd_version, php_version) pair is the matrix's authoritative build spec.
+The FreeBSD major (freebsd_major) is the ABI dedup key and the artifact suffix.
+py_flavor is derived from the same matrix entry, not from the builder.
+
+GO.

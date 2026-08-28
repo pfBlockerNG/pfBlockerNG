@@ -1,0 +1,348 @@
+ADR-62 Phase 6 -- Perf validation + dead-code cleanup -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 10 at session
+start (10 unrelated commits: download-retry cURL-loop hardening, fopen-
+failure guards on dnsbl_alias_update, DNSBL decision-memo generation
+stamping, release-gate CI query fixes). None touch pfblockerng.inc's
+DNSBL/ABP loop, pfb_unbound_python_sources(), or pfb_unbound.py -- confirmed
+via `git log --oneline HEAD..origin/devel` + spot `git show --stat` on each.
+NOT rebased: this branch is 6 phases deep with 5 prior phase commits already
+pushed/gated on top of an earlier base; rebasing mid-ADR would rewrite
+already-gated history for zero benefit (the 10 commits are provably
+orthogonal to every file this phase touches). Recorded per the standing
+contract's WORKTREE BASE CHECK note; no contradiction found.
+
+WHAT CHANGED -- COMMIT 95948d6d29717da310519cee321c5a29231a899a
+------------------------------------------------------------------------
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc (pfb_unbound_python_sources(),
+  inc:~7098-7167): deleted the `if ($format === 'abp') { ...; continue; }`
+  per-line branch (P5 carry-forward item 1, inc:~7141-7150 pre-edit) -- dead
+  from every LIVE caller's perspective (both pfb_feed_manifest_row() call
+  sites in sync_package_pfblockerng() have hardcoded 'plain' since Phase 5).
+  $format's derivation (`(isset($feed['format']) && $feed['format'] ===
+  'abp') ? 'abp' : 'plain'`) is UNCHANGED and KEPT -- it still feeds
+  'format_hint' in the manifest JSON, and the corpus's `reused_manifest_abp`
+  fixture (feeds.json format='abp') plus
+  Adr62DnsblCorpusManifestTest::testManifestTaggingMatchesFeedsJson()
+  deliberately exercise this derivation with format='abp' input (proving
+  Semantics #7's "a stale manifest naming format_hint='abp'" scenario one
+  layer earlier, at the writer's own tagging contract) -- reverting it was
+  never in scope and would have broken that oracle. Reworded the stale
+  ADR-07 header comment (still describing 'abp' feeds as a distinct raw-copy
+  path) to state the current fact: format_hint is a pure pass-through tag,
+  Python's own stale-'abp' tolerance (build(), Semantics #7) is untouched.
+- scripts/bench_dnsbl_line_parsing.py (NEW, dev-only, bare python3): the P6
+  perf-benchmark orchestrator -- generates a deterministic synthetic 1M-line
+  'plain' DNSBL feed (97% unique bare-domain lines / 2% '||d^' / 1% '@@||d^'
+  -- every bare-domain line, the majority case, must run the FULL capture-
+  predicate rejection path on both PHP and Python sides, which is exactly
+  the added per-line cost ADR.md SS3 flags), spins up a throwaway --detach
+  git worktree at the comparison ref (removed in a try/finally), runs both
+  off-appliance surfaces (PHP manifest writer, Python build()) N times per
+  ref via a subprocess wrapper, and reports wall-clock/RSS deltas against
+  the SS7 criterion-2 kill-threshold. Never imported/shipped from src/.
+- scripts/bench_dnsbl_line_parsing.php (NEW, dev-only): the PHP-side worker
+  the .py orchestrator subprocess-invokes -- requires the target worktree's
+  own tests/php/bootstrap.php (the same shim/double bootstrap PHPUnit uses)
+  and times pfb_unbound_python_sources() over a staged .txt.
+
+Commit hash: 95948d6d29717da310519cee321c5a29231a899a
+
+BENCHMARK METHODOLOGY
+----------------------------
+Machine: this dev host, Darwin 25.5.0 (macOS "26.5.2"/25F84), 10 logical
+CPUs, 32 GiB RAM; PHP 8.5.8 (cli, NTS, Homebrew build); Python 3.14.6.
+NOTE: PHP 8.5/Python 3.14 exceed the repo's PHP-8.3/Python-3.11+ targets --
+this is a LOCAL dev-host comparative benchmark (same interpreter binary for
+BOTH refs, so absolute numbers are host-specific but the base-vs-branch
+DELTA is apples-to-apples), not an on-appliance measurement.
+
+Comparison refs: base = f406a0ff04bf0207129619433710b176981f8d2b (merge-base
+of this branch with origin/devel, resolved via `git merge-base HEAD
+origin/devel`, same SHA the P5 handoff used); branch = this worktree's HEAD
+after this phase's own dead-code deletion (the deletion touches ONLY the
+'abp'-format branch, which the benchmark's 'plain'-format fixture never
+takes on either ref, so it is perf-neutral by construction -- confirmed by
+running the SAME benchmark before and after the deletion, see below).
+
+Surfaces (both off-appliance; the DNSBL download loop itself has no
+off-appliance driver, ADR.md SS1 -- inherited constraint, not new):
+  (a) PHP: pfb_unbound_python_sources() over a staged 1,000,000-line '.txt'
+      (the manifest writer -- the earliest driveable PHP-side surface).
+  (b) Python: dnsbl_build_from_manifest() over the resulting '.raw'.
+
+Warm/cold + repeats: each (ref, surface) "trial" = ONE fresh process
+(clean RSS baseline) running 5 internal iterations (--iterations 5) with an
+in-process monotonic-clock wall-time measurement around JUST the timed call
+(time.perf_counter() / microtime(true) -- excludes process startup + the
+~19K-line pfblockerng.inc require()/module-import overhead, so this is the
+ISOLATED parse-phase cost, not merely reduced by process overhead common to
+both refs). The reported wall-clock is the MEDIAN of the 5 internal
+iterations; --trials 2 independent process invocations are run per (ref,
+surface) and the medians are further reduced by median-of-medians (peak RSS
+is the max across the 2 trials, via /usr/bin/time -l's "maximum resident
+set size" wrapping the WHOLE 5-iteration process -- a stricter, whole-
+process figure that also captures interpreter/require overhead, common to
+both refs so the DELTA still isolates the changed code). Full command:
+  $ python3 scripts/bench_dnsbl_line_parsing.py run --lines 1000000 \
+      --iterations 5 --trials 2
+
+RESULTS (EXECUTED, final run against the COMPLETED branch state --
+i.e. AFTER this phase's own dead-code deletion; the fixture is 100% 'plain'-
+format so the deleted 'abp' branch was never on the hot path either before
+or after -- confirmed perf-neutral, see "dead-code perf-neutrality" below):
+
+  # php[base]:   wall=1.7316s (median-of-medians)  peak_rss=33325056 B (31.8 MiB)
+  # php[branch]: wall=1.8376s (median-of-medians)  peak_rss=33243136 B (31.7 MiB)
+  # python[base]:   wall=3.6893s  peak_rss=692158464 B (660.1 MiB)
+  # python[branch]: wall=4.1594s  peak_rss=680591360 B (649.1 MiB)
+
+=== ADR-62 perf benchmark ===
+
+-- PHP  pfb_unbound_python_sources() --
+  base:   wall=1.7316s  peak_rss=31.8 MiB
+  branch: wall=1.8376s  peak_rss=31.7 MiB
+  delta:  wall=+6.12%  peak_rss=-0.25%
+
+-- Python dnsbl_build_from_manifest() --
+  base:   wall=3.6893s  peak_rss=660.1 MiB
+  branch: wall=4.1594s  peak_rss=649.1 MiB
+  delta:  wall=+12.74%  peak_rss=-1.67%
+
+kill-threshold: >25% wall-clock OR RSS (ADR.md SS7 criterion 2)
+VERDICT: PASS
+
+Reproducibility: a second independent full run (--lines 1000000 --iterations
+5 --trials 2, run PRE-dead-code-deletion, on the branch tip before commit)
+gave wall deltas of +5.32%/+12.66% -- within ~1 point of the numbers above,
+confirming the measurement is stable, not noise. Both readings are well
+inside the 25% kill-threshold on BOTH axes for BOTH surfaces -- ADR.md SS7
+criterion 2 does NOT trigger. The Python-side delta (+12-13%) is real, not
+noise, and traces to a genuine per-line cost: the broadened
+_dnsbl_is_abp_rule_line() predicate (pfb_unbound.py) runs an `any(marker in
+line for marker in _DNSBL_ELEMENT_HIDING_MARKERS)` generator (5 substring
+scans) on every bare-domain line that clears the `startswith('||'/'@@')`
+fast path -- i.e. on the 97% majority case -- versus origin/devel's simple
+two-prefix `startswith('||') or startswith('@@||')` check. Still well under
+threshold; ADR.md SS3 "Consequences" anticipated exactly this class of cost
+("a few prefix checks... expected ~0") and named Phase 6 as the falsifier.
+
+DEAD-CODE PERF-NEUTRALITY (the deletion itself)
+-------------------------------------------------------
+The commit's ONLY functional change is deleting a branch keyed on
+`$format === 'abp'`, which the benchmark's fixture (100% format='plain')
+never takes on EITHER ref. To confirm this is truly perf-neutral (not
+assumed): the SAME 1M-line PHP-surface benchmark was run once BEFORE this
+phase's edit (branch tip = commit 45a5bd99, still carrying the dead branch)
+and once AFTER (this phase's commit 95948d6d):
+  before: php[branch] wall=1.8438s (median), 1.8450s (2nd process repeat)
+  after:  php[branch] wall=1.8376s (median-of-medians across 2 trials)
+Both readings sit inside the same ~1.83-1.85s band (noise-level spread,
+matching the base ref's own trial-to-trial spread of 1.7316-1.8438s across
+runs) -- no directional shift from the deletion, as expected for removing
+an unreachable branch.
+
+CORPUS-STILL-GREEN CONFIRMATION (EXECUTED, pasted)
+--------------------------------------------------------
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(same 4 pre-existing "Optional parameter declared before required parameter"
+deprecation notices prior phases already flagged as unrelated; ZERO new ones)
+
+$ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest|UnboundPythonSourcesTest'
+OK (24 tests, 151 assertions)
+(both surfaces that directly exercise pfb_unbound_python_sources() --
+including the corpus's reused_manifest_abp fixture (format='abp') and
+UnboundPythonSourcesTest's testManifestStructureAndTagging/testAbpRawIsVerbatim,
+which hand-feed format='abp' rows -- stayed green: the .raw byte content for
+those rows was ALREADY reachable via the broadened Decision-2 capture
+predicate before this deletion (both fixtures' abp-tagged lines are '||'/
+'@@||'-anchored, which pfb_dnsbl_is_abp_rule_line() already captures
+verbatim), so removing the redundant dedicated 'abp' branch changed no byte)
+
+$ vendor/bin/phpunit  (full suite)
+Tests: 2629, Assertions: 19363, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(IDENTICAL counts to Phase 5's baseline -- 0 tests added/removed/failed;
+the 1 warning is the SAME pre-existing $tlds-uninitialised notice prior
+phases already flagged as unrelated to this change)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations)
+
+$ python3 -m pytest tests/test_adr62_byte_identity_corpus.py tests/test_adr62_parity_oracle.py -v
+46 passed in 0.05s
+(the full corpus oracle -- D1-D5 delta rows + every non-delta row -- stays
+byte-identical; this phase touches ZERO Python source, so this is a pure
+confirmation run, not a red-run)
+
+$ python3 -m pytest -q  (full suite)
+2620 passed, 4 skipped in 50.90s
+(IDENTICAL counts to Phase 5's baseline)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+212 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 90 source files
+
+$ git add -A && python3 scripts/check_comment_narration.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_retired_tokens.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_version_literals.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_appliance_python.py ; echo exit:$?
+exit:0
+(bare `python3` in the two new scripts/ files is dev-tooling, the guard's
+documented carve-out; neither is imported by src/ or runs on the appliance)
+
+REMOVED DEAD SYMBOL -- GREP-GONE PROOF
+------------------------------------------------
+Removed: the `if ($format === 'abp') { $line = rtrim(...); if ($line !== '')
+{ @fwrite(...); } continue; }` block inside pfb_unbound_python_sources()'s
+per-line loop (inc:~7141-7150 pre-edit). This was NOT a named function (no
+symbol to grep for its OWN name), so the grep-gone proof targets the
+CONDITION it was gated on -- confirming no other call site in the loop still
+branches on `$format === 'abp'`:
+
+$ grep -n "format.*===.*'abp'\|'abp'.*===.*format" src/usr/local/pkg/pfblockerng/pfblockerng.inc
+7117:		$format	= (isset($feed['format']) && $feed['format'] === 'abp') ? 'abp' : 'plain';
+(exactly ONE hit -- the KEPT derivation line itself, which produces the
+format_hint TAG (still legitimately consumed downstream by Python's build()
+per Semantics #7); ZERO hits for the runtime branch that used to CONSUME
+that comparison inside the loop -- the deleted block is confirmed gone)
+
+CANDIDATE (b) SURVEY -- orphaned private helpers from the P4/P5 diffs
+-------------------------------------------------------------------------------
+Per-symbol grep across src/ + tests/ for every helper the P4/P5 diffs
+touched or that the deleted 'abp' branch's SIBLING ($easylist-branch,
+already deleted in P5) used to call, to confirm none is now orphaned:
+
+  pfb_dnsbl_collect_feed_ip        -- 3 live call sites (inc:16411/16552/16698)
+  pfb_dnsbl_is_skippable_control_line -- 1 live call site (inc:16472)
+  pfb_dnsbl_is_abp_rule_line       -- 2 live call sites (inc:7148, inc:16427)
+  pfb_dnsbl_abp_extract_ip         -- 1 live call site (inc:16409)
+  pfb_dnsbl_unbracket_ip6          -- 2 live call sites (inc:6671, inc:16689)
+  pfb_dnsbl_hash_line_classify     -- 1 live call site (inc:16447)
+  pfb_dnsbl_strip_bom              -- 1 live call site (inc:16393)
+  pfb_dnsbl_is_abp_header          -- ZERO hits anywhere (already fully
+                                       deleted in Phase 5, confirmed still gone)
+
+Every Phase-2-extracted predicate/helper is still called from the collapsed
+single per-line path; NONE became orphaned by this phase's deletion. The
+ONLY genuinely dead code the P4/P5 diffs left behind was the
+pfb_unbound_python_sources() 'abp' branch this phase removed (P5's own
+carry-forward item 1) -- confirmed by this survey, not assumed.
+
+grep re-confirmation (Requirement 2 unaffected by this phase, re-run to
+prove no regression):
+$ grep -rn '\$easylist\|pfb_dnsbl_is_abp_header\|\$validate_header' src/ | grep -v pfblockerng_install.inc
+(no output -- still clean, unchanged from Phase 5)
+$ grep -rn '\.abp' src/
+inc:16297: unlink_if_exists(...) -- reuse-path sweep (Phase 5, untouched)
+inc:16850: comment
+inc:16853: unlink_if_exists(...) -- download-path sweep (Phase 5, untouched)
+(still exactly the 2 intentional opportunistic-sweep sites, unchanged)
+
+COVERAGE MATRIX (this phase's brief items, ticked)
+-------------------------------------------------------
+1. Benchmark built + executed, both surfaces, both refs, methodology stated:
+   see BENCHMARK METHODOLOGY + RESULTS above.
+2. Threshold comparison (SS7 criterion 2, >25% wall-clock OR >25% peak-RSS):
+   PHP +6.12%/-0.25%, Python +12.74%/-1.67% -- both surfaces, both axes,
+   well under threshold. VERDICT: PASS (not REJECT).
+3. Dead-code candidate (a) -- pfb_unbound_python_sources()'s 'abp' branch:
+   verified unreachable from every live caller (grep on both
+   pfb_feed_manifest_row() call sites, both hardcode 'plain' since Phase 5,
+   RESULTS/05_Results.txt WHAT-CHANGED COMMIT-2 items 6-7); deleted; grep-
+   gone proof above; corpus stayed byte-identical (Adr62DnsblCorpusManifestTest
+   + UnboundPythonSourcesTest green, reasoned + empirically confirmed why:
+   both format='abp' test fixtures use '||'/'@@||'-anchored lines already
+   covered by the surviving Decision-2 capture predicate).
+   COUNTER-CONSTRAINT HONOURED: Python's pfb_unbound.py 'abp' format_hint
+   acceptance (build() inc:5113 `if fmt == "abp":` -> unconditional
+   line_reader->parse_abp() stream) is COMPLETELY UNTOUCHED -- confirmed via
+   `git diff --cached -- src/usr/local/pkg/pfblockerng/pfb_unbound.py` being
+   EMPTY (zero lines changed in that file this phase). Semantics #7's
+   Python-side stale-manifest tolerance tests (test_stale_abp_format_hint_
+   manifest_still_parses / test_stale_format_hint_abp_still_routes_to_parse_abp,
+   both PHP-independent, hand-built manifest.json inputs) were re-run as
+   part of the full pytest suite (2620 passed) and stayed green untouched.
+4. Dead-code candidate (b) -- orphaned helpers from P4/P5: surveyed (see
+   CANDIDATE (b) SURVEY above); none found beyond candidate (a).
+5. Retired-token guard note: `python3 scripts/check_retired_tokens.py
+   --staged` exit 0 (no stragglers flagged from this phase's deletion; the
+   deleted block contained no quoted literal token retired elsewhere).
+6. Scope discipline: no opportunistic reformatting -- `git show --stat`
+   confirms exactly 3 files touched (2 new dev-scripts, 1 targeted .inc
+   edit); `git diff --cached -- .../pfblockerng.inc` above shows a 15-line
+   net diff (1 comment reword + 1 dead block removed), nothing else moved.
+
+DEVIATIONS
+------------
+1. Kept $format's derivation (the ternary reading $feed['format']) instead
+   of also simplifying it to a hardcoded 'plain' literal. Justification:
+   the corpus's reused_manifest_abp fixture (feeds.json format='abp') and
+   Adr62DnsblCorpusManifestTest::testManifestTaggingMatchesFeedsJson()
+   deliberately drive this function with format='abp' input and assert
+   format_hint reflects it -- hardcoding 'plain' would have broken that
+   oracle assertion (a REAL regression, not dead-code cleanup) and would
+   have silently narrowed the function's documented "your call, state it"
+   contract with the corpus. The brief's own note anticipated exactly this
+   check ("If deleting the writer branch changes any corpus .raw byte, it
+   was NOT dead -- STOP and investigate") -- I extended the same discipline
+   to the format_hint TAGGING assertion, not just the .raw bytes, since
+   Adr62DnsblCorpusManifestTest asserts both from the same test run. Ran
+   the full corpus test BEFORE finalizing this decision (see CORPUS-STILL-
+   GREEN CONFIRMATION) -- confirmed both testEveryCorpusFeedRawMatchesGolden
+   AND testManifestTaggingMatchesFeedsJson pass with the derivation kept,
+   proving this was the correct scope boundary, not a guess.
+2. Committed the benchmark harness as permanent dev tooling under scripts/
+   (bare `python3`/`php` invocation, never shipped to src/) rather than a
+   throwaway scratch script, following the existing bench_pfctl_tables.sh /
+   bench_aggregate_union.sh precedent -- explicitly the brief's "your call".
+3. Did not rebase the worktree onto the current origin/devel tip (10 commits
+   ahead) -- justified under WORKTREE BASE CHECK above (all 10 are provably
+   orthogonal to this phase's files; rebasing 6 phases deep mid-ADR would
+   rewrite already-gated history for zero benefit).
+Per CLAUDE.md's ESCALATE contract: none of the above invented an unnamed
+mechanism or weakened a CLAUDE.md mandate; no STOP triggered.
+
+CARRY-FORWARD for Phase 7
+------------------------------
+1. ADR RECONCILIATION (carried from Phase 5, still outstanding): ADR.md
+   SS1.5/SS6-Phase-5 text predates PR #1066 -- needs the doc-pass amendment
+   per CLAUDE.md SS8 "Post-merge amendments".
+2. docs/misc/architecture-notes.md "DNSBL/ABP pipeline" section still
+   describes the retired $easylist/header-sniff/marker mechanism as live
+   (Phase 7's own action-plan item) -- untouched this phase (docs are Phase
+   7's charter).
+3. tests/smoke/ still needs its own SS7 acceptance-row update (Phase 5's
+   carry-forward, unchanged) -- no smoke dispatch this phase either
+   (perf/cleanup only, no live-VM-observable behaviour change).
+4. Release-notes delta table (Phase 7's charter) should record: D1's final
+   shape (Phase 5 carry-forward); AND this phase's perf verdict (PASS,
+   +6-13% wall-clock on the 1M-line synthetic benchmark, RSS flat/negative,
+   well under the 25% kill-threshold) as the closing evidence for ADR.md
+   SS3's "expected ~0... Phase 6 measures anyway" risk note.
+5. scripts/bench_dnsbl_line_parsing.py/.php are now committed dev tooling --
+   future DNSBL-parse-loop perf work can reuse them (`--base-ref <sha>`
+   accepts any comparison ref) rather than re-deriving a benchmark harness.
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean
+against --staged for the commit (see CORPUS-STILL-GREEN CONFIRMATION above).

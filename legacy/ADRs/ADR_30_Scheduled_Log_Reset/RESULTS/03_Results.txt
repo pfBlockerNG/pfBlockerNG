@@ -1,0 +1,197 @@
+ADR-30 Phase 3 Results — pfb_log_reset() + cron wiring
+========================================================
+
+Branch: adr/30-scheduled-log-reset
+Phase:  3 of 5 (feature flipped on — still default-off via 'off' default)
+Status: DONE — all gates green
+
+FUNCTIONS ADDED
+---------------
+
+All three new functions are in pfblockerng.inc, inserted between pfb_log_mgmt()
+(line 1823) and pfb_logger() (formerly line 1826).
+
+1. pfb_log_rotate_marker_parse(string $contents): array
+   PURE — no I/O. Splits the marker file contents (one "<type>=<key>" per line)
+   into a [type => key] map. Blank lines and garbled lines (no '=', leading '=',
+   or invalid type chars) are silently skipped — absent/garbled => '' for that
+   type => pfb_log_should_reset treats it as "never reset".
+
+2. pfb_log_rotate_marker_serialize(array $entries): string
+   PURE — no I/O. Emits "<type>=<key>\n" for each entry, sorted by type name for
+   stable output. Returns '' for an empty map.
+
+3. pfb_log_reset(): void
+   The main per-log reset function. Calls pfb_global(), loads and parses the
+   marker file once, then iterates the same 10-type array pfb_log_mgmt() uses.
+   For each log:
+     - Reads log_rotate_<type> via PfbConfig::read() (RequireConfigGateway).
+     - Looks up its last period key from $entries[$logtype] ?? ''.
+     - Calls pfb_log_should_reset($schedule, $last_key, time()); if FALSE, skips.
+     - On TRUE: truncates the log to empty IN PLACE via "/bin/cp /dev/null".
+       For python logs (dnslog, dnsreplylog, unilog): resolves through the chroot
+       (checks is_dir("{$chroot_folder}/var/log/pfblockerng")), uses
+       "{$chroot_folder}{$pfb[$logtype]}" as the final path, then @chown/chgrp
+       'unbound' — identical to pfb_log_mgmt()'s python-log handling.
+       For other logs: uses $pfb[$logtype] directly.
+     - On exec failure: calls pfb_logger(), continues (that log's marker unchanged).
+     - On success: writes the new period key to $entries[$logtype] and sets $changed.
+   After the loop, persists the marker file if $changed (LOCK_EX).
+
+MARKER FILE
+-----------
+
+Path:    /var/db/pfblockerng/log_rotate.last  ({$pfb['dbdir']}/log_rotate.last)
+Format:  one line per log: "<type>=<period-key>\n"
+         e.g.:  ip_blocklog=2025-07-15
+                dnslog=2025-W29
+                unilog=2025-07
+Scope:   one entry per log type that has had at least one reset; absent = ''
+         = "never reset" = eligible on next tick.
+
+LOG SET (same as pfb_log_mgmt())
+---------------------------------
+
+  log, errlog, extraslog, ip_blocklog, ip_permitlog, ip_matchlog,
+  dnslog, dnsbl_parse_err, dnsreplylog, unilog
+
+Each read independently via PfbConfig::read('log_rotate_' . $logtype).
+
+CRON CALL SITE
+--------------
+
+  src/usr/local/www/pfblockerng/pfblockerng.php:771 (pfb_log_mgmt() call)
+
+  pfb_log_reset() is called immediately AFTER pfb_log_mgmt():
+
+    pfb_log_mgmt();
+
+    // ADR-30: reset each log that has a configured schedule and whose calendar
+    // period has rolled over. Called after pfb_log_mgmt() so the line-cap trim
+    // runs first; the reset then empties the log for the new period. Per-log
+    // boundary-gated: a no-op for every log except those whose period just rolled.
+    pfb_log_reset();
+
+  It is NOT called on the settings-save path (pfblockerng.inc:9607 — that site
+  calls pfb_log_mgmt() only; pfb_log_reset() is not wired there).
+
+INODE + OWNERSHIP PRESERVATION
+--------------------------------
+
+  Non-python logs:
+    exec("/bin/cp /dev/null " . escapeshellarg($pfb[$logtype]))
+    cp /dev/null overwrites the existing file content in place without changing
+    the inode. No mv, no unlink, no recreate.
+
+  Python logs (dnslog, dnsreplylog, unilog):
+    Identical chroot/ownership handling as pfb_log_mgmt():
+      - $chroot_folder = '/var/unbound' (same constant)
+      - if (is_dir("{$chroot_folder}/var/log/pfblockerng"))
+            $final_log_file = "{$chroot_folder}{$pfb[$logtype]}"
+        else
+            $final_log_file = $pfb[$logtype]
+      - exec("/bin/cp /dev/null " . escapeshellarg($final_log_file))
+      - @chown($final_log_file, 'unbound')
+      - @chgrp($final_log_file, 'unbound')
+    Re-applying unbound ownership mirrors pfb_log_mgmt() exactly.
+
+SNIFF COMPLIANCE
+----------------
+
+  RequireConfigGateway:
+    Every schedule read is PfbConfig::read('log_rotate_' . $logtype) — no direct
+    config_get_path() calls for registered keys. PHPCS: 0 errors.
+
+  PFBL-01 RequirePfbFilter:
+    pfb_log_reset() is NOT in the sniff's scopeFunctions allow-list, so its exec()
+    calls are not in the sniff's scope. The sniff only guards in-scope input-handling
+    surfaces (pfb_manage_dnsbl_vip etc.) — pfb_log_reset() is a management function
+    that operates on controlled paths ($pfb[$logtype] from top-level config). The
+    exec calls use escapeshellarg() for shell quoting. PHPCS: 0 errors.
+
+TESTABLE SEAMS (tests/php/LogRotateResetTest.php)
+---------------------------------------------------
+
+20 new tests (975 total, 3714 assertions after Phase 3):
+
+  Parse tests:
+    testParseEmptyContentsReturnsEmptyMap
+    testParseSingleWellFormedEntry
+    testParseMultipleWellFormedEntries
+    testParseBlankLinesAreSkipped
+    testParseGarbledLineNoEqualsIsSkipped
+    testParseGarbledLineEqualsAtPositionZeroIsSkipped
+    testParseGarbledLineInvalidTypeCharactersIsSkipped
+    testParseValueWithEqualsSignIsPreserved
+    testParseDuplicateTypeLastValueWins
+
+  Serialize tests:
+    testSerializeEmptyMapReturnsEmptyString
+    testSerializeSingleEntry
+    testSerializeMultipleEntriesSortedByType
+
+  Round-trip tests:
+    testRoundTripEmptyMap
+    testRoundTripSingleEntry
+    testRoundTripAllTenLogTypes
+
+  Per-log selection + marker tests:
+    testPerLogIndependenceOneEligibleOneNot   [before-and-after: stale vs same-period]
+    testAbsentMarkerEntryTriggersReset        [before-and-after: present vs absent entry]
+    testIdempotencySecondTickSamePeriodIsNoop [before-and-after: first tick vs second tick]
+    testGarbledMarkerEntryTreatedAsNeverReset [garbled => absent => triggers reset]
+    testOffScheduleNeverEligibleEvenWithAbsentMarker [before (daily) vs after (off)]
+
+GATE RESULTS
+------------
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    -> No syntax errors detected
+
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php
+    -> No syntax errors detected
+
+  php -l tests/php/LogRotateResetTest.php
+    -> No syntax errors detected
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    -> (no output = 0 errors)
+
+  vendor/bin/phpunit
+    -> OK (975 tests, 3714 assertions)  [+20 from Phase 3; was 955/3671 after P2]
+
+  vendor/bin/phpunit --filter LogRotate
+    -> OK (124 tests, 489 assertions)  [21 P1 + 83 P2 + 20 P3]
+
+  vendor/bin/phpstan analyse src/usr/local/pkg/pfblockerng/pfblockerng.inc \
+                             src/usr/local/www/pfblockerng/pfblockerng.php
+    -> OK No errors
+
+SELF-REVIEW VERDICT: DONE
+--------------------------
+
+Checklist:
+  [x] In-place inode-preserving truncation: /bin/cp /dev/null (no mv/recreate)
+  [x] Chroot path translation for python logs: mirrored from pfb_log_mgmt() exactly
+  [x] unbound ownership re-applied (@chown/@chgrp) for python logs
+  [x] Schedules read exclusively via PfbConfig::read() — RequireConfigGateway clean
+  [x] Per-log independence: each log reads its own marker entry ($entries[$logtype] ?? '')
+  [x] Idempotent: pfb_log_should_reset() returns FALSE in same period (marker updated)
+  [x] One log's reset cannot affect another: separate $entries keys; $changed tracks
+  [x] Cron call placed immediately after pfb_log_mgmt() at pfblockerng.php:771
+  [x] NOT called on the settings-save path
+  [x] Marker file persisted once after the loop, only when $changed
+  [x] Pure helpers unit-tested: parse (9 cases), serialize (3), round-trip (3)
+  [x] Per-log selection tests: independence, absent marker, idempotency, garbled, off
+  [x] PFBL-01 sniff green (pfb_log_reset not in scopeFunctions — not scrutinized)
+  [x] RequireConfigGateway sniff green (0 errors)
+  [x] PHPUnit full suite: OK (975 tests)
+  [x] PHPStan: OK No errors
+  [x] Scope clean: 3 files changed (pfblockerng.inc, pfblockerng.php, new test file)
+
+GO-AHEAD FOR PHASE 4
+--------------------
+
+Phase 4 may proceed: add the log_rotate_<type> Form_Select next to each per-log
+max-lines select in pfblockerng_general.php:354, load/save via $pfb['gconfig'],
+reading through PfbConfig. Proof: UI render clean (no PHP error; controls present).

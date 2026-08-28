@@ -1,0 +1,104 @@
+ADR-41 Phase 4 Results — docs + DoD (off-box parts; live precedence sweep deferred)
+===================================================================================
+Branch: adr/41-immutable-user-firewall-rules
+Status set: Implemented (pending live-VM smoke)
+
+SCOPE NOTE: the live pfSense VM was flaky/occupied this session (a state-flushing reload
+transiently cut the harness control SSH — see RESULTS/02 §7), and the maintainer opted to run the
+live precedence fan-out later. So this phase delivered the OFF-BOX parts; the live data-plane
+precedence sweep is the one remaining acceptance item.
+
+DONE THIS PHASE
+---------------
+- docs/misc/architecture-notes.md: added "IP autorule reconciliation — immutable user rules
+  (ADR-41)" — the immutable-user splice, the binary anchor mapping, where the contract is pinned,
+  and the deliberate order_4 (no-reorder) behaviour change for release notes.
+- ADR.md Status -> "Implemented (pending live-VM smoke)" with the path to Accepted.
+- tests/smoke/test_smoke_autorule_immutable.py (the Phase-3 live oracle) hardened for landing:
+  * `_get_filter_rules` fixed to the proven h.php_eval(<<RULES>>..<<END>>) delimiter pattern
+    (was a non-existent `vm.php_eval`);
+  * relative import `from . import helpers as h` + `import json` (was an absolute import + a
+    function-local import);
+  * module mark changed from an UNREGISTERED `immutable_autorule` to
+    `[pytest.mark.smoke, pytest.mark.skip(...)]` — so it JOINS the ADR-04 fan-out but SKIPS cleanly
+    (4 skipped, no error) until Phase 4 removes the skip and wires the live fixtures. Verified it
+    collects + skips under `-m smoke`; ruff/format/mypy clean.
+
+OFF-APPLIANCE EVIDENCE (the landed proof)
+-----------------------------------------
+- pfb_build_autorule_list() = immutable splice: keep (non-pfB, original order) + contiguous pfB
+  block, spliced AFTER keep for order_1/order_2, BEFORE otherwise. All bucketing/per-interface user
+  emission removed.
+- AutoruleListOracleTest: 22 tests assert the CONTRACT (user-rule fidelity multiset+order,
+  pfB-set-identical, idempotence). Proven RED on the old Phase-1 bucketing helper (8 failures =
+  order_1/2 dup + order_4 reorder/drop), GREEN (100 assertions) on the new splice. Full PHP suite
+  green; phpcs/phpstan/php-l clean.
+
+REMAINING FOR ACCEPTANCE (maintainer / stable box — §7 DoD)
+----------------------------------------------------------
+- Wire the live fixtures in test_smoke_autorule_immutable.py (h.deploy + a Deny_* feed +
+  force-update), remove the module skip, and run the live-VM fan-out (CE + Plus):
+  * user-rule preservation sweep across pass_order x float (exact multiset + stability);
+  * per-pass_order DATA-PLANE precedence (a blocked-vs-allowed probe — pfB block effective AND the
+    LAN allow still passes), including an inbound!=outbound and a Permit_* case;
+  * keep #544's test_smoke_lan_rule_preserve.py green.
+- Then flip ADR.md Status -> Accepted.
+- MEASUREMENT TIP (RESULTS/02 §7): a state-flushing reload can transiently drop the control SSH;
+  prefer fewer reloads per session / fresh-boot-per-case, or a completion-polling reload.
+
+DoD VERDICT
+-----------
+Implemented (pending live-VM smoke). Off-appliance contract proven; pf-precedence kill-gate GO;
+docs updated. Acceptance gated only on the live fan-out above.
+
+
+================================================================================
+PHASE 4 COMPLETION (2026-07-04) — live wiring landed, ADR flipped to Accepted
+================================================================================
+The deferred live precedence sweep landed via issue #812 / PR #826 (branch
+issue/811-582-followups-batch, commit "tests/smoke: wire pass_order + data-plane probe,
+un-skip autorule module (ADR-41 P4, #812)").
+
+WHAT THE MODULE NOW DOES
+------------------------
+- Module skip removed; joins the ADR-04 smoke fan-out (10 tests).
+- pass_order is set explicitly per test via the IP-settings config path (the
+  test_smoke_lan_rule_preserve pattern); function-scoped fixtures re-materialize the list
+  config per test, so no case leaks its pass_order or reload state into a sibling.
+- Trap config wired: Permit_* + Deny_* v4 lists on LAN + a user Block PREPENDED ahead of the
+  baked "Default Allow LAN to any rule" (standard admin layout; makes the order_0/order_4
+  PERMIT probes decisive) + that baked allow reused as the user pass.
+- Data-plane probes (ADR-41 §7): civm-driven TCP SYNs through the LAN pf group, killstates-style
+  instrument — pf state formation = pass; no state + rule packet-counter delta = active block.
+  Both pfctl -k directions are killed pre-probe (single -k kills by SOURCE only; a stale
+  dst-state from an earlier parametrized order otherwise false-reads as reachable).
+- All config-order index assertions run within the LAN pf-group projection (non-floating,
+  interface == lan), mirroring the off-appliance oracle — the flat filter/rule array
+  interleaves the smoke image's baked MGT rules (incl. an empty-descr row), which broke the
+  first live run's flat-index predicates.
+
+LIVE EVIDENCE (CE + Plus fan-out)
+---------------------------------
+- Plus 26.03: run 28706678716 — 10/10 green (full module, all 5 trap orders incl. both
+  data-plane branches + the order_3->order_4 reorder contrast).
+- CE 2.8: run 28706678122 — module green inside the impacted sweep (71/72; the one failure was
+  an unrelated #811 marker, fixed and re-validated green in run 28707270396).
+- Iteration findings folded back into the module (each a first-live-run reality, none a design
+  change): LAN-projection scoping (baked MGT rules), dual-direction state kill, and a
+  counter-read guard (-1 sentinel surfaces as a read failure, not a false precedence failure —
+  PR #826 review).
+
+DoD / MANUAL-SMOKE CHECKLIST STATE
+----------------------------------
+- "Blocked destination actually blocked + LAN allow still passes, per pass_order, under live
+  traffic" — MACHINE-COVERED now (the civm data-plane probes above).
+- "User rule not duplicated over repeated updates (order_1/order_2)" — covered on the live VM
+  (T1 fidelity + T2 idempotence); confirming on physical hardware with real interfaces remains
+  a documented out-of-CI limitation, not a blocker (CLAUDE.md "ADR acceptance").
+- "Config restore / XMLRPC sync with absent pass_order does not drop the user LAN rule" —
+  covered by tests/smoke/test_smoke_lan_rule_preserve.py (issue #532 pin).
+- The §7 bullet "reconciliation reduced to delete-pfB + splice-at-anchor" is superseded by the
+  4-bucket stable reorder (RESULTS/05 — the binary anchor was the flaw, not the goal); the DoD
+  is read per the corrected design.
+
+VERDICT: Accepted (Status flipped in ADR.md, 2026-07-04).

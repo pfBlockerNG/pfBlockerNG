@@ -1,0 +1,94 @@
+================================================================================
+PHASE 5 PROMPT -- Remove the Python init fallback + fail loud (behaviour-CHANGING: D3; dissolves #1245)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1.1, SS1.7, SS2.3, delta D3)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one commit,
+push directly. Test mode: red->green -- author a test proving today's SILENT stale-fallback behaviour
+first (a build failure loads the on-disk .txt), then make it fail loud (empty DBs + notice).
+Blast-radius note for the gate: behaviour-CHANGING, delta budget D3 ONLY. If this phase lands alone:
+a manifest that is absent/unparseable/unbuildable now yields an EMPTY DNSBL + the ADR-61 ledger +
+a file_notice, instead of silently loading the legacy .txt. HSTS still loads; net decisions on a
+GOOD manifest are unchanged; nothing else moves. Dissolves #1245 (no fallback read of a stale zone).
+
+WHY THIS PHASE EXISTS
+The interchange-file fallback is a degraded second source of truth: LOSSY (no ABP/regex/allow
+rules -- Phase-1 Oracle B fact b), STALE-ABLE (the #1245 vector -- fact c), and failure-masking.
+Remove it so the manifest is the ONLY matcher source, and make a manifest failure a loud outage,
+never a silent stale-serve.
+
+REQUIRED READING
+- FIRST, read RESULTS/04_Results.txt AND RESULTS/01_Results.txt (Oracle B CHARACTERIZED the
+  fallback: failure-only trigger, lossy, stale-able, fresh plain-domain parity. The safety of
+  removing it is that this phase does not touch the manifest BUILD path, so production decisions
+  are unchanged, and the degraded failure-only fallback is replaced by fail-loud, D3. Its
+  staleness test is this phase's red baseline). If either is missing, STOP and report.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md -- SS1.1 (manifest decision-complete), SS1.5/SS1.7
+  (the status ledger + file_notice already exist), SS2.3 (fail loud), delta D3, Semantics 1 + 4.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- init_standard's build-vs-fallback branch
+  (~:1658-1704): dnsbl_build_from_manifest (~:5351) and its None returns (~:5365 absent --
+  status_close only; ~:5374 unparseable and ~:5392 build-threw -- both call pfb_py_status_open);
+  _load_zone_and_data_dbs (~:1045), _load_zone_db/_load_data_db (~:942/:968), _load_whitelist_db
+  (~:991), _load_ndjson_row_into_db (~:913 -- delete only if no other caller, grep first),
+  _load_whitelist_and_hsts_dbs (~:1058) -- KEEP the HSTS load (_load_hsts_db ~:1023, gated on
+  python_hsts, NOT on the manifest), keep the status-close bookkeeping (the loaders' own
+  pfb_py_status_close calls need a home or a successor); the manifest write to harden:
+  pfb_unbound_python_sources (pfblockerng.inc ~:8109) calls pfb_unbound_py_atomic_write (~:7725)
+  UNCHECKED at ~:8258 -- the sibling patcher ~:8293 is the checked exemplar.
+- CLAUDE.md -- Python standards, "the box has no python3 symlink" (drive the VM via PHP/sh in smoke),
+  the delegation contract.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims predate implementation; the prior RESULTS files and the live tree
+override this prompt on any conflict -- verify before acting and flag contradictions in the handoff.
+The safety of this phase is that it does NOT touch the manifest BUILD path -- so re-run the Phase-1
+manifest-built oracle and confirm those decisions are byte-identical before/after. If removing the
+fallback somehow changes a MANIFEST-BUILT decision, STOP and ESCALATE (it means you touched more than
+the fallback).
+
+ACTION PLAN (ordered -- red assertion FIRST)
+1. RED test: on a build failure (manifest absent / unparseable / build() raises), assert TODAY's
+   code SILENTLY populates dataDB/zoneDB from the on-disk .txt (the stale-serve). Execute -> RED
+   against the post-change expectation (paste, record git hash-object).
+2. Remove the fallback arm: _load_zone_and_data_dbs no longer reads the .txt; delete the now-dead
+   _load_zone_db/_load_data_db/_load_whitelist_db (grep for any other caller FIRST -- if one exists,
+   ESCALATE). Keep the parse-status close bookkeeping and the HSTS load (Semantic 4).
+3. On build_result is None: leave dataDB/zoneDB/whiteDB EMPTY, keep the ADR-61 status ledger open
+   (already written at the None sites), and raise a file_notice so the dashboard bell fires (SS2.3).
+   Harden the atomic manifest WRITE: check its result and notice on write failure too.
+4. GREEN: the same test now shows empty DBs + the ledger/notice + no stale data served. Re-run the
+   Phase-1 oracle on a GOOD manifest: decisions unchanged.
+
+CONSTRAINTS
+- Delta budget D3 ONLY. A GOOD manifest must decide EXACTLY as before (Semantic 1).
+- Keep HSTS loading unconditional (Semantic 4) -- do not let it fall out with the whitelist fallback.
+- Stdlib only; no python3 on the appliance; the file_notice fires from the PHP side that consumes the
+  ledger -- follow the existing MaxMind/#51 notice pattern rather than inventing a Python notice path.
+- Do NOT reintroduce any destructive pre-unlink (that was the #1097/#1241 bug class).
+
+VERIFICATION (executed -- paste output)
+- red->green: the stale-fallback test RED before (paste + git hash-object), GREEN after (empty DBs +
+  notice, no stale serve).
+- Phase-1 oracle on a GOOD manifest: GREEN, net decisions unchanged (paste).
+- HSTS still loads when the manifest built AND when it did not -- assert hstsDB populated (paste).
+- `python3 -m pytest`, `ruff check .`, `ruff format --check .`, `mypy tests/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: no .txt read remains on the init path; HSTS path intact; no destructive pre-unlink.
+
+EXPECTED RESULT
+The manifest is the ONLY DNSBL matcher source; a build failure is a loud, empty, self-healing
+outage; #1245's stale-zone read path no longer exists.
+
+COMMIT (single)
+    pfblockerng: make the manifest the sole DNSBL source; fail loud, no stale fallback (ADR-65 P5)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/05_Results.txt with the fixed
+fields: Verdict; What changed (files + one-line why + commit hash); Gates (commands + pasted tails);
+the RED->GREEN proof (stale-fallback before, loud-empty after, with red-time git hash-object) AND
+the Phase-1 oracle (good-manifest decisions unchanged) AND the HSTS-still-loads proof; Coverage-
+matrix (D3 ticked; no other caller of the deleted loaders; HSTS intact); Deviations / judgment calls
+(or "none"); Carry-forward for Phase 6.

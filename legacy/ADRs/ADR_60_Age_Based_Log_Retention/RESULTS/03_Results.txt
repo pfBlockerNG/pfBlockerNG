@@ -1,0 +1,315 @@
+ADR-60 Phase 3 — Uniform timestamp for the IP-side CSV logs — RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 5a8c27a2 (code+tests)
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_daemon_filterlog() (~:12811, verified live at that exact location,
+    matching the brief's verified note): 'syslog' branch keeps
+    `strtotime($f[1])` (RFC-5424's year, already correct) but now outputs
+    `date('Y-m-d H:i:s', $ts)` instead of the old year-dropping
+    `date('M j H:i:s', ...)`. 'BSD' branch: new year-inference --
+    `$ts = strtotime("{$f[0]} {$f[1]} {$f[2]}", $bsd_now)`; if $ts is
+    MORE than 6h in the future relative to $bsd_now, reparse with
+    `((int) date('Y', $bsd_now) - 1)` appended (rolls back one year); if the
+    first strtotime() returns FALSE, fall back to `pfb_log_iso_timestamp()`
+    ("now"). Both branches now feed a single `$ts_formatted`, and the
+    if/else collapsed to "how do we get $ts", with ONE `$log = "{$ts_formatted},..."`
+    line replacing the two near-duplicate lines the brief asked to merge.
+  - pfb_parsed_fail() (~:4478): `date('m/j/y H:i:s', time())` ->
+    `pfb_log_iso_timestamp()`.
+
+- tests/php/LogTimestampBaselineTest.php
+  - Class docblock + the ip_blocklog/dnsbl_parse_err section comment updated:
+    no longer says "Phase 3, untouched here" / "goes red the moment Phase 3
+    changes it" -- Phase 3 has landed.
+  - 3 tests flipped from "pins the bug" to "pins the fix" (all 3 named in
+    the brief):
+    testFilterlogBsdBranchRawPassthroughHasNoYear -> testFilterlogBsdBranchYearInfersFromNow
+    testFilterlogSyslogBranchLossyReformatDropsYear -> testFilterlogSyslogBranchKeepsRealYear
+    testParsedFailPinsAmbiguousTwoDigitYearFormat -> testParsedFailWritesIsoTimestampFormat
+    Each keeps a source-string tripwire (updated to the NEW formula text) +
+    a manual reproduction of the new formula against synthetic fixtures
+    (pfb_daemon_filterlog() itself stays uncallable -- stdin daemon loop,
+    confirmed unchanged from Phase 1).
+  - 5 NEW hostile-input-row tests added (item 5, all executed, see below):
+    testFilterlogSyslogBranchPreservesYearAcrossBoundary (row a)
+    testFilterlogBsdBranchYearInfersFromNow's own body IS row (b) -- the
+      flipped test already exercises "today, no rollback"; no separate
+      test duplicated for it
+    testFilterlogBsdBranchDecemberReadInJanuaryRollsBackYear (row c)
+    testFilterlogBsdBranchUnparseableFallsBackToIsoNow (row d, includes a
+      source tripwire on the FALSE-fallback line + a set_error_handler()
+      check that strtotime() on garbage never raises a warning)
+    testParsedFailIsoTimestampHasNoExtraCommaFields (row e)
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 5a8c27a2)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(the 5 "Deprecated: optional-before-required-parameter" notices are the SAME
+pre-existing ones Phase 1/2 already noted -- unrelated functions, unaffected
+by this phase's diff.)
+
+$ vendor/bin/phpunit
+............................................................. 2440 / 2453 ( 99%)
+.............                                                 2453 / 2453 (100%)
+Time: 00:10.090, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2453, Assertions: 19102, PHPUnit Deprecations: 2, Skipped: 4.
+(2453 = Phase 2's 2449 baseline + 4 net-new tests this phase (3 flipped
+methods kept 1:1, 5 new hostile-input rows added, 1 of the 5 folds into an
+already-counted flipped test) -- FULL suite green, no unenumerated
+downstream consumer broke this time, unlike Phase 2's 3 surprises.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+======================= 2437 passed, 4 skipped in 42.36s =======================
+(no .py files touched this phase; run for completeness -- unaffected, same
+pre-existing skips as Phase 1/2.)
+
+$ python3 scripts/check_comment_narration.py --diff HEAD   -> exit 0, clean
+$ python3 scripts/check_version_literals.py --diff HEAD    -> exit 0, clean
+$ python3 scripts/check_appliance_python.py --diff HEAD     -> exit 0, clean
+
+--------------------------------------------------------------------------------
+YEAR-INFERENCE ALGORITHM -- RE-VERIFIED THIS SESSION (executed php -r probes)
+--------------------------------------------------------------------------------
+Base $now = 2026-01-05 10:00:00 UTC (same base the brief used):
+
+$ php -r '
+date_default_timezone_set("UTC");
+$now = strtotime("2026-01-05 10:00:00 UTC");
+echo date("Y-m-d H:i:s", strtotime("Dec 31 23:00:00", $now)) . "\n";   // naive parse
+echo date("Y-m-d H:i:s", strtotime("Jul 4 13:30:45", $now)) . "\n";    // naive parse
+var_dump(strtotime("Foo 99 99:99:99", $now));                          // malformed
+'
+2026-12-31 23:00:00   (matches the brief's claimed naive parse exactly)
+2026-07-04 13:30:45   (matches the brief's claimed naive parse exactly)
+bool(false)            (matches the brief's claimed FALSE exactly)
+
+DISCREPANCY FOUND AND RESOLVED (not silently patched -- documented here):
+Applying the literal ">6h in the future" rollback check to the brief's OWN
+"Jul 4 relative to a Jan 5 $now" example ALSO triggers a rollback (Jul 4 is
+~6 months after Jan 5, which is obviously >6h in the future), producing
+2025-07-04, not the raw-parsed 2026-07-04. The brief's own probe notes
+anticipate exactly this and explain it away: pfb_daemon_filterlog() is a
+LIVE-tailing daemon, so a BSD line's month is always close to "now" in
+production; a many-months-away BSD line is outside this heuristic's design
+domain (same accepted limitation any yearless-BSD-syslog scheme has), not a
+bug to fix. I treat this as CONFIRMED, not a contradiction requiring
+BLOCKED, because:
+  (1) the brief itself calls out this exact input class as out-of-domain,
+  (2) the REAL hostile-input row the brief specifies (item 5b: "a line
+      timestamped for 'today' relative to $now") is a near-$now case, where
+      the naive parse is NOT months away and the future-check correctly
+      does NOT fire -- verified below.
+Same-day probe (the realistic daemon case):
+$ php -r '
+date_default_timezone_set("UTC");
+$now = strtotime("2026-07-08 10:00:00 UTC");
+$ts = strtotime("Jul 8 07:00:00", $now);
+echo (($ts > $now + 6*3600) ? "ROLLBACK" : "NO-ROLLBACK") . " " . date("Y-m-d H:i:s", $ts) . "\n";
+'
+NO-ROLLBACK 2026-07-08 07:00:00   (correct: "today" picks the current year)
+
+December-read-in-January probe (the classic rollback case):
+$ php -r '
+date_default_timezone_set("UTC");
+$now = strtotime("2026-01-05 10:00:00 UTC");
+$ts = strtotime("Dec 31 23:00:00", $now);
+echo (($ts > $now + 6*3600) ? "ROLLBACK" : "NO-ROLLBACK") . "\n";
+$ts2 = strtotime("Dec 31 23:00:00 " . ((int) date("Y", $now) - 1), $now);
+echo date("Y-m-d H:i:s", $ts2) . "\n";
+'
+ROLLBACK
+2025-12-31 23:00:00   (correct: rolls back exactly one year)
+
+Malformed-field probe:
+$ php -r '
+date_default_timezone_set("UTC");
+var_dump(strtotime("Foo 99 99:99:99", time()));
+'
+bool(false)   (fallback to pfb_log_iso_timestamp() engages, confirmed no warning
+              -- see hostile-input row (d) below, which asserts this via
+              set_error_handler())
+
+CONCLUSION: the algorithm as specified in the brief is CONFIRMED correct for
+its stated design domain (near-$now BSD lines, the only case a live-tailing
+daemon actually produces); the far-future edge is a documented,
+brief-acknowledged limitation, not a defect. No BLOCKED, no silent
+adjustment of the tolerance/algorithm -- wired exactly as specified.
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- the 3 flipped baseline oracles + the new fallback tripwire
+--------------------------------------------------------------------------------
+Procedure: `git checkout HEAD -- src/usr/local/pkg/pfblockerng/pfblockerng.inc`
+run while HEAD was still Phase 2's tip (0550dac7, i.e. pre-Phase-3 code),
+tests held at their new (uncommitted) Phase-3 state; then the file was
+restored to the Phase-3 content (now committed as 5a8c27a2) and re-run.
+
+RED (pre-Phase-3 pfblockerng.inc, new tests):
+$ vendor/bin/phpunit --filter LogTimestampBaselineTest --testdox
+ ✔ Log always stamped with iso timestamp
+ ✔ Extras log always stamped with iso timestamp
+ ✔ Log legacy now token scrubbed not substituted
+ ✔ Log repeated same second calls both stamped
+ ✔ Log and extras log calls are independent
+ ✔ Errlog and main log both stamped same format
+ ✔ Errlog bypass write always stamped
+ ✘ Filterlog bsd branch year infers from now       (tripwire: no $bsd_now in old source)
+ ✘ Filterlog syslog branch keeps real year          (tripwire: old format string differs)
+ ✔ Filterlog syslog branch preserves year across boundary   (formula-only, no code dependency)
+ ✔ Filterlog bsd branch december read in january rolls back year (formula-only)
+ ✘ Filterlog bsd branch unparseable falls back to iso now  (tripwire: no fallback line in old source)
+ ✘ Parsed fail writes iso timestamp format          (old code still writes m/j/y H:i:s)
+ ✔ Parsed fail iso timestamp has no extra comma fields (old format ALSO has 4 fields -- 4-field
+                                                          count alone doesn't distinguish old/new,
+                                                          by design: this row only proves the NEW
+                                                          format doesn't regress the column count,
+                                                          not that it differs from the old one)
+ ✔ Pfb log iso timestamp matches iso 8601 format
+Tests: 15, Assertions: 45, Failures: 4, PHPUnit Deprecations: 2.
+(4 failures = exactly the 3 named-in-brief flips + the 1 new fallback
+tripwire I added for rigor -- the December-rollback/syslog-boundary/comma
+tests correctly stay green on old code too, same "formula reproduction,
+not a real call" pattern Phase 1/2 already established for this
+uncallable function.)
+
+GREEN (restore Phase-3 code):
+$ vendor/bin/phpunit --filter LogTimestampBaselineTest --testdox
+ ✔ (all 15 tests, all checkmarks)
+Tests: 15, Assertions: 51, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+ALL 5 HOSTILE-INPUT ROWS (item 5) -- EXECUTED, PASTED
+--------------------------------------------------------------------------------
+(a) 'syslog' branch, RFC-5424 timestamp spanning a year boundary (Dec 31):
+    testFilterlogSyslogBranchPreservesYearAcrossBoundary
+    Input: $f[1] = '2025-12-31T23:59:59+00:00'
+    Result: '2025-12-31 23:59:59' -- exactly $f[1]'s own year, not inferred. PASS.
+
+(b) 'BSD' branch, a line timestamped for "today" relative to $now:
+    testFilterlogBsdBranchYearInfersFromNow (the flipped baseline test)
+    Input: $now = 2026-07-08 10:00:00 UTC, BSD triple = ['Jul','8','07:00:00']
+    Result: '2026-07-08 07:00:00' -- current year picked, no rollback. PASS.
+
+(c) 'BSD' branch, the Dec-31-read-in-January boundary case:
+    testFilterlogBsdBranchDecemberReadInJanuaryRollsBackYear
+    Input: $now = 2026-01-05 10:00:00 UTC, BSD triple = ['Dec','31','23:00:00']
+    Naive parse (2026-12-31 23:00:00) confirmed > $now + 6h (fixture sanity
+    assertion), then reparse with (year-1) gives '2025-12-31 23:00:00'. PASS.
+
+(d) 'BSD' branch with unparseable fields (garbage/missing):
+    testFilterlogBsdBranchUnparseableFallsBackToIsoNow
+    Input: ['Foo','99','99:99:99']; strtotime() -> FALSE, confirmed via
+    set_error_handler() that ZERO PHP warnings were raised; fallback
+    pfb_log_iso_timestamp() returns the ISO-8601 "now" shape. A source
+    tripwire additionally pins that pfb_daemon_filterlog() actually WIRES
+    this fallback (`$ts_formatted = pfb_log_iso_timestamp();` inside the
+    `$ts === FALSE` branch). PASS.
+
+(e) dnsbl_parse_err -- ',' field separator still parses cleanly:
+    testParsedFailIsoTimestampHasNoExtraCommaFields
+    pfb_parsed_fail() output split on ',' yields exactly 4 top-level
+    fields (timestamp, header, line, oline) -- the ISO format's own ':'
+    and '-' characters introduce no comma, so no CSV column shift. PASS.
+
+--------------------------------------------------------------------------------
+UnifiedFormatTest.php FINDING (per the CORRECTION note -- verified myself)
+--------------------------------------------------------------------------------
+Read tests/php/UnifiedFormatTest.php's testUnifiedIpFidelity and
+testUnifiedIpMissingKeysCoerceToEmpty myself (lines ~245-270). CONFIRMED:
+both use OPAQUE PLACEHOLDER strings ('A','B','C','+' and an empty array) for
+pfb_unified_format_ip()'s l_type/log/details/dup fields -- no timestamp-shaped
+fixture anywhere in either test. pfb_unified_format_ip() itself
+(pfblockerng_extra.inc:2074) is a pure comma-join passthrough with no
+knowledge of the 'log' field's internal shape (verified by reading its body).
+NO CHANGE NEEDED to UnifiedFormatTest.php this phase -- the brief's
+correction note is accurate.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Row                                                        | Test                                                           |
+| ----------------------------------------------------------- | --------------------------------------------------------------- |
+| pfb_daemon_filterlog() 'BSD' branch -- year-infer, today     | testFilterlogBsdBranchYearInfersFromNow                          |
+| pfb_daemon_filterlog() 'syslog' branch -- keeps real year    | testFilterlogSyslogBranchKeepsRealYear                            |
+| Hostile (a): syslog branch, year-boundary fidelity           | testFilterlogSyslogBranchPreservesYearAcrossBoundary              |
+| Hostile (b): BSD branch, "today" no-rollback                | testFilterlogBsdBranchYearInfersFromNow (same test as the row above) |
+| Hostile (c): BSD branch, Dec-31-read-in-January rollback     | testFilterlogBsdBranchDecemberReadInJanuaryRollsBackYear          |
+| Hostile (d): BSD branch, unparseable fields -> ISO fallback  | testFilterlogBsdBranchUnparseableFallsBackToIsoNow                |
+| Hostile (e): dnsbl_parse_err CSV column count unaffected     | testParsedFailIsoTimestampHasNoExtraCommaFields                   |
+| dnsbl_parse_err -- ISO format itself                         | testParsedFailWritesIsoTimestampFormat                            |
+| UnifiedFormatTest.php IP-row fixtures -- coupling check      | Read + verified: NOT coupled, no change needed (see above)       |
+| unilog's IP-row passthrough -- no separate change needed     | Read + verified: pfb_unified_format_ip() is a straight field copy (see carry-forward below) |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. My own first attempt at hostile-input row (b) used the brief's OWN "Jul 4
+   relative to Jan 5" example as the test fixture for
+   testFilterlogBsdBranchYearInfersFromNow. This FAILED against my own
+   correct implementation (rolled back to 2025, not 2026) because that
+   input is 6 MONTHS away from $now, not "today" -- the brief's action-plan
+   item 5b specifically calls for "a line timestamped for 'today'"; the
+   "Jul 4 vs Jan 5" comparison in the brief's probe-results section is
+   illustrating the RAW strtotime() parse only, not a worked hostile-input
+   test case. Fixed by rewriting the test fixture to a genuinely "close to
+   now" BSD line (same day, few hours earlier) per the brief's own item 5b
+   wording. No CLAUDE.md rule weakened; this is a test-fixture correction
+   caught by actually running the test, not a code change.
+2. Added a 4th tripwire (on the FALSE-fallback line) beyond the brief's 3
+   named test flips, so hostile-input row (d) actually pins REAL production
+   wiring, not just a general PHP fact about strtotime()/pfb_log_iso_timestamp().
+   Re-verified via the red->green proof that this new tripwire correctly
+   fails on pre-Phase-3 code (the fallback line doesn't exist there) and
+   passes after.
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 4 (pfb_unbound.py / pfb_log_event() / dnslog / dnsreplylog)
+--------------------------------------------------------------------------------
+- unilog's IP-row passthrough needs NO separate change in Phase 4 either:
+  verified by reading pfb_unified_format_ip() (pfblockerng_extra.inc:2074)
+  -- pure comma-join over its 'l_type'/'log'/'details'/'dup' args, no
+  reformatting of the 'log' field's content. Since $log (built in
+  pfb_daemon_filterlog()'s BSD/syslog branch, this phase's own change)
+  is passed verbatim as 'log' at pfblockerng.inc:12905, unilog's IP rows
+  already carry the new Y-m-d H:i:s format with zero Phase 4 involvement.
+  This claim was VERIFIED this session (read both the call site and the
+  formatter's body), not assumed.
+- Phase 4 touches pfb_unbound.py (make_timestamp()) + pfb_log_event()
+  (pfblockerng.inc, a DIFFERENT function than anything this phase touched)
+  -- no direct line-collision with this phase's pfb_daemon_filterlog()/
+  pfb_parsed_fail() edits. Purely informational: until Phase 4 lands,
+  unified.log now mixes THIS phase's new IP-row ISO format with Phase 2's
+  log/extraslog/errlog ISO format and Phase 4's still-year-less Python
+  dnslog/dnsreplylog format in the same file -- not a defect, an expected
+  transient state during the multi-phase rollout.
+- pfb_log_iso_timestamp() is now called from 4 sites (pfb_logger(),
+  pfb_open_sqlite(), pfb_parsed_fail(), and the BSD branch's FALSE-fallback)
+  -- if Phase 4 changes its format, ALL FOUR call sites' baseline oracles
+  (LogTimestampBaselineTest.php) need re-verification, not just the
+  dnslog/dnsreplylog-specific ones.
+- $pfb['pnow'] confirmed still absent (grep re-run this session, zero
+  hits) -- Phase 3 did not reintroduce it, matching Phase 2's carry-forward.
+- Full `vendor/bin/phpunit` (2453 tests) run and green this phase with ZERO
+  unenumerated downstream consumers breaking (unlike Phase 2's 3
+  surprises) -- Phase 4 should still re-run the full suite regardless,
+  per the standing gate discipline; a python-side format change could
+  still surface an unnamed PHP-side consumer of dnslog/dnsreplylog's
+  format that this phase's grep didn't have reason to check.

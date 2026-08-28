@@ -1,0 +1,215 @@
+================================================================================
+ADR-10 — PHASE 5 RESULTS — PHP/shell: atomic publish + sentinel flip + data-only
+  fast path (incl. #51 user custom-list edits) + allow->block C-cache flush
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Files: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+       src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+       tests/php/UnboundPyPublishTest.php (new, 9 tests)
+================================================================================
+
+OVERALL: ** DONE — GO for Phase 6 (validation/smoke/DoD). **
+  A DNSBL-DATA update in Python mode now publishes the manifest atomically and FLIPS
+  the reload sentinel (generation current+1) with NO unbound restart -- the Phase-4
+  watcher wakes, RAM-gates, and runs rebuild_and_swap() off the query threads. The
+  #51 user custom-list edits (alerts Lock/Unlock + "add to whitelist" + customlist
+  add/delete) all take the SAME no-restart fast path. A config change, the feature
+  being unavailable, the PHP RAM gate declining, or a failed sentinel flip all fall
+  back to the existing restart (fail-safe; PHP is the PRIMARY gate). allow->block
+  gets a targeted, coalesced, marker-coordinated C-cache flush of the newly-blocked
+  name(s); block->allow needs none (#43). No Python/shell shipped change this phase.
+
+--------------------------------------------------------------------------------
+1. ATOMIC PUBLISH (honours the Phase-4 contract verbatim — RESULTS/04 SS1)
+--------------------------------------------------------------------------------
+
+  NEW HELPER  pfb_unbound_py_atomic_write($path, $content)  (pfblockerng.inc)
+    Stage -> fsync -> atomic rename, all on ONE filesystem:
+      1. $tmp = tempnam(dirname($path), '.pfbpub_')   -- staging file in the SAME dir
+         (so rename(2) is atomic, not a cross-FS copy).
+      2. fopen 'wb' -> fwrite($content) -> fflush -> fsync($fh) -> fclose.
+         (PHP 8.1+ fsync(); CE 2.8 ships PHP 8.3.) The fsync durably persists the
+         bytes BEFORE the rename so a crash can never expose a zero-length manifest.
+      3. @chown/@chgrp the STAGING file to unbound:unbound (so the published inode is
+         correctly owned the instant it appears -- the chrooted module reads it).
+      4. rename($tmp, $path)  -- the all-or-nothing commit. On ANY failure: unlink the
+         temp, pfb_logger(level 2), return FALSE. NO die()/exit() (library code).
+    Replaces the three old `@file_put_contents(..., LOCK_EX)` writers (which exposed a
+    half-written manifest window): pfb_unbound_python_sources() (full build),
+    pfb_unbound_python_sources_whitelist() and ...sources_unlock() (#51 in-place
+    patches). The per-feed raw files are still (re)written into unbound_py_rawdir by
+    the full build BEFORE the manifest rename, so the manifest only ever names raws
+    that already exist.
+
+  NEW HELPER  pfb_unbound_py_flip_sentinel()  (pfblockerng.inc)
+    Sentinel host path: "{$pfb['dnsbldir']}/pfb_py_reload" == /var/unbound/pfb_py_reload
+      (dnsbldir is /var/unbound; the chrooted module opens it as "pfb_py_reload").
+    Format/order EXACTLY per RESULTS/04 SS1:
+      - read first line via strtok($raw,"\n"), trim, ctype_digit guard -> $cur (else 0
+        for absent/empty/non-integer);
+      - $next = $cur + 1  (a STRICT ADVANCE; the watcher swaps iff cur > last_gen);
+      - write "{$next}\n" through pfb_unbound_py_atomic_write (temp -> fsync -> rename
+        OVER the sentinel) so the directory watch sees a clean RENAME and never reads a
+        half-written integer.
+    Verified against pfb_unbound.py _reload_read_generation() (:299): it does
+    readline().strip() -> int(), so "42\n" reads as 42 -- byte-compatible. The flip is
+    the LAST step (after the manifest+raw rename), making manifest-rename + sentinel-
+    flip the two-step all-or-nothing commit.
+
+  ORDERING: the full feed/cron build publishes the manifest atomically inside
+  pfb_unbound_python_sources(); the SENTINEL FLIP is driven separately by the reload
+  fast path (below), so a full update advances the generation EXACTLY ONCE after every
+  manifest+raw file is in place. The #51 in-place patchers likewise publish the
+  manifest atomically and let the alerts handler's pfb_reload_unbound do the flip.
+
+--------------------------------------------------------------------------------
+2. pfb_reload_unbound FORK — data fast path vs restart (PHP is the PRIMARY gate)
+--------------------------------------------------------------------------------
+
+  NEW SIGNATURE  pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE,
+                                    $datapath=FALSE, $newly_blocked=array())
+    Two NEW params, both defaulted (every existing 3-arg call still compiles + keeps
+    its restart behaviour):
+      $datapath      -- caller asserts "this is a pure DNSBL-DATA update, manifest
+                        already published".
+      $newly_blocked -- the allow->block delta to C-cache-flush after the swap.
+
+  WHAT COUNTS AS DATA (zero-downtime fast path is taken) — ALL must hold:
+      $datapath === TRUE
+      && $mode == 'enabled'
+      && pfb_unbound_py_mode_active()    -- config.xml: unbound/python enabled AND
+                                            python_script == 'pfb_unbound' (source of
+                                            truth, not a generated file)
+      && is_process_running('unbound')   -- can't swap into a dead resolver
+      && empty($pfb['dnsbl_python_unmount'])              -- no unmount-in-progress
+      && !file_exists("{$pfb['dnsbldir']}/unbound.tmp")   -- NO staged config change
+    Then the PRIMARY RAM gate (pfb_unbound_py_swap_fits_ram) decides:
+      fits  -> touch "{dnsbl_file}.sync" (daemon stand-off) -> flip sentinel -> flush
+               C-cache delta -> RETURN (no pfb_stop_start_unbound; pid UNCHANGED).
+      declines / sentinel-flip fails -> log + FALL THROUGH to the restart path so the
+               new lists actually load ("never flip and hope").
+
+  WHAT COUNTS AS CONFIG / FALLBACK (restart kept): everything else --
+      a config change ($pfbpython TRUE from pfb_unbound_python(): unbound.conf/ini/
+      mounts/whitelist-file changed -> $datapath is set FALSE at the call site, and the
+      unbound.tmp guard above is a second backstop); unbound down; feature off
+      (pfb_unbound_py_mode_active() FALSE); RAM-constrained box; or a failed sentinel
+      write. The restart never doubles RAM (it frees the old set by dying before the
+      rebuild) -- the designed fail-safe.
+
+  PRIMARY RAM GATE  pfb_unbound_py_swap_fits_ram()  (mirrors RESULTS/04 SS3 / the
+  Python net):
+      projected = 2 * loaded_entries * 276       (RELOAD_BYTES_PER_ENTRY)
+      fits iff  hw.usermem >= projected + 64 MiB  (RELOAD_RAM_HEADROOM_BYTES)
+    loaded_entries = the Python-emitted live count (pfb_py_count, data+zone). Unknown
+    count (first build, no count file yet) or unreadable hw.usermem -> FALSE
+    (fail-closed: when in doubt, restart). hw.usermem (physical minus wired) is a
+    close-enough userspace upper bound; the Python watcher's free-page probe is the
+    finer net behind it. The 276 B/entry + 64 MiB constants are the two ends of one
+    contract with pfb_unbound.py -- keep them in step if either side changes.
+
+  CALL-SITE ROUTING:
+    pfb_update_unbound (feed/cron, inc): the running-unbound branch now calls
+      pfb_reload_unbound($mode, TRUE, $pfbpython, /*datapath=*/ !$pfbpython). So a
+      config-clean feed/cron update swaps; a config-changing one restarts. The
+      unbound-down branch is unchanged (always (re)starts; nothing to swap into). The
+      $pfbpython-gated pfb_dnsbl service restart that follows is untouched (it only
+      fires on a config change, i.e. NOT on the data fast path).
+    alerts (pfblockerng_alerts.php), all #51 paths now pass $datapath=TRUE:
+      - dnsbl_add (customlist grew / stripped-from-whitelist), :923 -> allow->block ->
+        pfb_reload_unbound('enabled', FALSE, TRUE, TRUE, array($domain)).
+      - whitelist add, :1092 -> block->allow -> (...,FALSE, TRUE) no newly_blocked.
+      - customlist delete, :1352 -> block->allow -> (...,FALSE, TRUE) no newly_blocked.
+      - Lock/Unlock dnsbl_remove, :1389 -> mode from pfb_dnsbl_unlock_action():
+          'lock'  (icon lock/reunlock) REMOVES from the unlock store -> domain returns
+                  to feed-blocked = allow->block -> newly_blocked = array($domain).
+          'unlock'(icon unlock/relock) ADDS to the store -> allowed = block->allow ->
+                  newly_blocked = [].
+      #51 SEMANTICS PRESERVED: only the APPLY MECHANISM changed (swap, not restart).
+      The pfb_unlock store toggle, the manifest-split (...sources_unlock /
+      ...sources_whitelist in-place patch), and the FULL-build store-clear (the
+      "re-lock on Cron/Force" path in pfb_update_unbound: it still unlinks the store
+      then recomputes user_unlock = []) are all UNTOUCHED.
+
+--------------------------------------------------------------------------------
+3. C-CACHE FLIP — targeted allow->block delta flush (block->allow needs none)
+--------------------------------------------------------------------------------
+
+  STRATEGY CHOSEN (per RESULTS/01 SS4b): TARGETED DELTA-FLUSH where the delta is known
+  and small (the #51 alerts paths -- exactly one domain), TTL-BOUNDED FALLBACK where it
+  is not (feed/cron -- the allow->block delta is not cheaply computable in PHP without
+  diffing multi-million-entry raw sets, and accepting TTL staleness is explicitly NOT a
+  regression: today's restart preserves the resolved cache too).
+
+  NEW HELPER  pfb_unbound_py_ccache_flush($names):
+    - block->allow: NO-OP by construction -- callers pass [] (blocks were never C-cached
+      since #43, so the prior real answer resolves immediately once decisionDB clears).
+    - allow->block: for each name, flush the name AND its "www." sibling via the chroot
+      unbound-control cmd ($pfb['chroot_cmd'] flush <name>), de-duplicated, COALESCED
+      into one pass.
+    - DAEMON COORDINATION: the fast path touch()es "{dnsbl_file}.sync" (the DNSBL
+      Queries daemon's stand-off marker) BEFORE the flip+flush, exactly as
+      pfb_update_unbound does, so the flush does not collide with the daemon on the
+      control socket; the marker is cleared by the normal pfb_unbound_clear_work_files()
+      at the end of pfb_update_unbound.
+  The two existing manual flushes the #51 alerts handler already runs on whitelist-add
+  (:1098) and on Unlock (:1394) are now REDUNDANT (block->allow; blocks not cached) --
+  left intact (annotated) for the resolved-CNAME edge and behaviour parity; they do not
+  break unlock.
+
+--------------------------------------------------------------------------------
+4. STUBS / LINT — no new stubs needed
+--------------------------------------------------------------------------------
+  Every pfSense/PHP symbol the new code uses was already resolvable:
+    get_single_sysctl, config_path_enabled, config_get_path, is_process_running,
+    sigkillbypid, touch, escapeshellarg (stubs/pfsense/*) + native PHP fsync/fflush/
+    tempnam/rename/dirname/ctype_digit/is_numeric. PHPStan level 0 (symbol existence)
+    is clean -> no stubs/pfsense addition and no phpstan-baseline suppression.
+
+--------------------------------------------------------------------------------
+5. GATES
+--------------------------------------------------------------------------------
+  php -l (both changed files + new test)            -> No syntax errors detected.
+     (Pre-existing E_DEPRECATED notices on PHP 8.5 about optional-before-required
+     params in unrelated functions -- inc:1686/4455/6470/7324 -- are not from this
+     phase; CE 2.8 runs PHP 8.3.)
+  vendor/bin/phpunit                                -> OK (124 tests, 211 assertions)
+     (115 retained + 9 NEW in tests/php/UnboundPyPublishTest.php pinning the atomic
+      writer + the sentinel generation contract: absent->1, advance-by-one twice,
+      first-line-only, empty/non-integer->1, exact "<int>\n" shape, no temp leftover,
+      missing-dir fail-safe.)
+  php -d memory_limit=1G vendor/bin/phpstan analyse --no-progress  -> [OK] No errors
+  .venv/bin/python -m pytest -q                     -> 1059 passed (UNCHANGED; the
+     Phase-4 watcher tests + ADR-06/07 oracles still green; no shipped Python change).
+  ShellCheck: N/A -- no shell file changed this phase.
+
+--------------------------------------------------------------------------------
+6. WHAT THE MAINTAINER MUST VERIFY LIVE (Phase 6, no live Unbound in CI)
+--------------------------------------------------------------------------------
+  - Atomic publish: a feed/cron update writes /var/unbound/pfb_py_sources.json via
+    a temp+rename (no '.pfbpub_*' left behind) then writes the next integer into
+    /var/unbound/pfb_py_reload; the watcher logs the no-restart swap; unbound PID is
+    UNCHANGED across the update.
+  - Fork: a pure DNSBL-data update takes the swap; a CONFIG change (unbound.conf/mode
+    toggle) still restarts (PID changes). With a RAM-constrained box (or pfb_py_count
+    absent / hw.usermem unreadable) the PHP gate declines and the update restarts so
+    the new lists still load.
+  - #51 instant apply, no restart: a Lock (allow->block) starts blocking promptly and
+    its prior resolved answer is flushed; an Unlock (block->allow) resolves promptly;
+    "add to whitelist" and customlist add/delete likewise. PID unchanged across each.
+  - allow->block C-cache flush actually clears the prior real answer for a Lock; a
+    feed/cron allow->block stays TTL-bounded (documented, not a regression).
+  - No control-socket collision with the DNSBL Queries daemon (the '.sync' marker is
+    set across the flip+flush).
+  RAM-gate threshold (276 B/entry, 64 MiB headroom, hw.usermem) and the C-cache
+  delta/TTL numbers are the maintainer slots in RESULTS/01 SS2/SS4b.
+
+--------------------------------------------------------------------------------
+7. GO-AHEAD FOR PHASE 6
+--------------------------------------------------------------------------------
+GO. The end-to-end zero-downtime path is now wired: PHP atomically publishes the
+manifest + per-feed raw, flips the generation sentinel exactly per the Phase-4
+contract, takes the no-restart fast path for feed/cron AND #51 user-list edits (RAM-
+gated, fail-safe to restart), and flushes the allow->block C-cache delta coalesced and
+daemon-marker-coordinated. Phase 6 is the live-box validation/benchmark/manual smoke +
+README/CLAUDE.md finalisation (data = swap, config = restart) and the DoD.
+================================================================================

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE packagegui SYSTEM "../schema/packages.dtd">
+<?xml-stylesheet type="text/xsl" href="../xsl/package.xsl"?>
+<packagegui>
+	<copyright>
+	<![CDATA[
+/*
+ * pfblockerng.xml
+ *
+ * part of pfSense (https://www.pfsense.org)
+ * Copyright (c) 2015-2026 Rubicon Communications, LLC (Netgate)
+ * Copyright (c) 2015-2024 BBcan177@gmail.com
+ * All rights reserved.
+ *
+ * Originally based upon pfBlocker by
+ * Copyright (c) 2011 Marcello Coutinho
+ * All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+	]]>
+	</copyright>
+	<name>pfblockerng</name>
+	<title>Firewall/pfBlockerNG</title>
+	<donotsave>true</donotsave>
+	<include_file>/usr/local/pkg/pfblockerng/pfblockerng.inc</include_file>
+	<ramdisk_dir_names>pfblockerng</ramdisk_dir_names>
+	<menu>
+		<name>pfBlockerNG</name>
+		<section>Firewall</section>
+		<url>/pfblockerng/pfblockerng_general.php</url>
+	</menu>
+	<service>
+		<name>pfb_dnsbl</name>
+		<rcfile>pfb_dnsbl.sh</rcfile>
+		<executable>lighttpd_pfb</executable>
+		<description>pfBlockerNG DNSBL service</description>
+	</service>
+	<service>
+		<name>pfb_filter</name>
+		<rcfile>pfb_filter.sh</rcfile>
+		<executable>php_pfb</executable>
+		<description>pfBlockerNG firewall filter service</description>
+	</service>
+	<tabs>
+	</tabs>
+	<fields>
+	</fields>
+	<!-- ADR-38: declarative syslog routing. pfSense core turns this into a
+	     syslog.d drop-in (!pfblockerng -> /var/log/pfblockerng_syslog.log), a
+	     newsyslog rotation entry, and a Status->System Logs->Packages subtab,
+	     and removes the drop-in on uninstall. NO <logsocket>: both syslog legs
+	     emit host-side from pfb_daemon_filterlog (not from the Unbound chroot),
+	     so no in-chroot socket is needed (ADR-38 Amendment 1). -->
+	<logging>
+		<!-- Pin the Status > System Logs > Packages subtab label to "pfBlockerNG" on
+		     both channels; core else falls back to the package short name, which reads
+		     "pfBlockerNG-devel" on the devel package. -->
+		<logtab>pfBlockerNG</logtab>
+		<facilityname>pfblockerng</facilityname>
+		<logfilename>pfblockerng_syslog.log</logfilename>
+	</logging>
+	<plugins>
+		<item>
+			<type>plugin_xmlrpc_send</type>
+		</item>
+		<item>
+			<type>plugin_xmlrpc_recv</type>
+		</item>
+	</plugins>
+	<custom_php_install_command>
+		<![CDATA[
+		include_once('/usr/local/pkg/pfblockerng/pfblockerng_install.inc');
+		]]>
+	</custom_php_install_command>
+	<custom_php_pre_deinstall_command>
+		<![CDATA[
+		pfblockerng_php_pre_deinstall_command();
+		]]>
+	</custom_php_pre_deinstall_command>
+	<custom_php_resync_config_command>
+		<![CDATA[
+		global $pfb;
+		$pfb['save'] = TRUE;
+		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+		]]>
+	</custom_php_resync_config_command>
+</packagegui>

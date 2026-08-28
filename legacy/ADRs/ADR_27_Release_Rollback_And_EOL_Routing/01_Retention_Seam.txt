@@ -1,0 +1,57 @@
+================================================================================
+PHASE 1 PROMPT — Extract + pin a channel-keyed release-retention seam (prep)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §1.1, §1.4, §2.1, §6 Phase 1 first)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). This is Phase 1 of 5 and is
+BEHAVIOUR-PRESERVING: extract a reusable retention helper and pin it with tests; do NOT change
+any catalog output yet. Work inline on the branch, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+ADR-27 Part 1 adds per-channel retention to the release subtree, reusing the proven nightly prune.
+Before changing catalog shape (Phase 2), extract the prune into a named, tested helper so the later
+change applies to a small, verified surface (ADR-01 prep discipline: prep has standalone value).
+
+REQUIRED READING
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md  (§1.1, §1.4, §2.1, §2.2)
+- scripts/build-repo-portable.py — _retain_newest(pkg_paths, keep) (the existing version-sorted
+  prune used for nightly); _ver_key / version-ordering helper; build_repo_matrix() nightly path.
+- tests/test_build_repo_portable.py — the off-box catalog tests + how they synthesize .pkg inputs.
+- CLAUDE.md (Python standards; deterministic mtime-pinned output).
+
+ACTION PLAN (golden/regression tests FIRST — behaviour-preserving)
+1. Add a pure helper `retain_by_channel(pkg_paths, *, keep_devel, keep_stable)` that:
+   - buckets paths by package-name channel — a name ending `-devel` => devel, `-nightly` => nightly
+     (left untouched here), else stable;
+   - within each retained channel keeps the newest `keep_*` by the existing version order
+     (reuse `_retain_newest`); returns the kept paths (stable order, deterministic).
+   - `keep >= len(bucket)` => no-op (keep all); `keep == 0` => keep all of that channel (the
+     "unbounded/disabled" sentinel — the prune is opt-in per channel).
+2. Do NOT wire it into build_repo_matrix yet (Phase 2). No call-site/behaviour change.
+3. Off-box tests in tests/test_build_repo_portable.py: devel vs stable bucketed independently;
+   newest-`keep` kept per channel; version order + ties deterministic; `keep` larger than input and
+   `keep==0` are no-ops; a mixed devel+stable+nightly input prunes only the channels asked for.
+
+CONSTRAINTS
+- Python 3.11+, stdlib only (+ the module's existing imports). Deterministic output.
+- Do NOT touch _write_catalog_dir, the catalog format, or the nightly path's behaviour.
+- Do NOT change any CLI flags yet.
+
+VERIFICATION (must all pass)
+- python -m pytest              → green (+ the new test_retain_by_channel_* cases)
+- ruff check . / ruff format .  → clean
+- mypy tests/                   → clean
+- diff-read: confirm no call site changed (helper is defined + tested only).
+
+EXPECTED RESULT
+A tested, unused-in-prod `retain_by_channel` helper; catalog output byte-identical to before.
+
+COMMIT (single)
+    dev: add channel-keyed release-retention helper (ADR-27 P1)
+Push directly to adr/27-release-rollback-and-eol-rou; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/RESULTS/01_Results.txt
+State: the helper's exact signature + channel-detection rule (name suffixes); the version-order
+function reused; test names added; confirmation that no catalog output changed. Go-ahead for Phase 2.

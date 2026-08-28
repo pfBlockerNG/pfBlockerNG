@@ -1,0 +1,126 @@
+ADR-37 Phase 4 Results — Smoke Tests + DoD + Architecture Notes
+================================================================
+Branch: adr/37-dot-doq-block
+Implemented by Phase 4 agent (Sonnet 4.6)
+
+
+1. SMOKE TEST FILE
+-------------------
+Path: tests/smoke/test_dot_doq_block.py
+Cases (7 total):
+
+  test_dot_doq_block_rule_appears_on_enable
+    Case 1 — Enable path: disabling first (before-state clean), then enabling on LAN
+    → asserts 1 pfB_DoT_Block_lan filter/rule entry with all §2.2 field values
+    (type=block, ipprotocol=inet46, protocol=tcp/udp, destination.network=(self),
+    destination.not present, destination.port=853, statetype=keep state) +
+    pfctl -sr shows port-853 block rule active.
+
+  test_dot_doq_block_rule_removed_on_disable
+    Case 2 — Disable path: enabling first (before-state with rule present), then
+    disabling → asserts 0 pfB_DoT_Block_* filter/rule entries + pfctl -sr clean.
+
+  test_user_filter_rule_survives_disable_and_uninstall
+    Case 3 — User-rule survival: seeds a user filter/rule (no pfB marker), enables,
+    asserts user rule survives enable; disables, asserts user rule survives disable;
+    re-enables and uninstalls, asserts user rule survives uninstall + pfB rules gone
+    + pfblockerng* sections gone.
+
+  test_stale_interface_rule_pruned_on_reconcile
+    Case 4 — Stale-interface prune: enables on 2 discovered non-WAN interfaces
+    (before-state: both rules present), reduces to 1 interface, asserts the
+    dropped interface rule is gone and the kept interface rule remains.
+    SKIP: "requires ≥2 non-WAN interfaces" when VM has fewer than 2.
+
+  test_exception_alias_source_in_config_xml_when_set
+    Case 5 — Exception alias branch: from disabled state (before-state clean),
+    enables with alias='DoT_Exceptions_Test' → asserts source.address==alias and
+    source.not present; clears alias → asserts source.any present and address gone.
+
+  test_uninstall_sweep_removes_all_dot_block_rules
+    Case 6 — Uninstall sweep: enables + seeds user filter rule (before-state:
+    rule + user rule + sections all present), pkg delete → asserts pfB rules gone,
+    user rule present, pfblockerng* sections gone.
+
+  test_self_exempt_guard_in_pfctl_output
+    Case 7 — Self-exempt guard: from disabled state (before-state: no port-853
+    block in pfctl -sr), enables on LAN → asserts pfctl -sr has block rule for
+    port 853 AND the block line carries '!' + 'self' tokens (self-exempt guard
+    confirmed in pfctl output). Full client-to-:853 block behaviour is a
+    documented maintainer manual-smoke item — not a CI assertion.
+
+Marker: @pytest.mark.smoke (all 7 cases)
+Collection: 7 tests collected, 0 import errors (confirmed via --collect-only).
+
+
+2. UI_RENDER STATUS
+--------------------
+Not retested in Phase 4 (no src/ changes). Phase 3 confirmed:
+  - "DoT/DoQ Block" marker added to tests/smoke/ui/test_render_smoke.py
+  - SKIP in local env (SMOKE_ADMIN_PASSWORD not set); runs cleanly on CI.
+
+
+3. DOCS BLURB
+--------------
+File: docs/misc/architecture-notes.md
+New section appended at the end (after ADR-36 section):
+  "## Optional DoT/DoQ BLOCK on port 853 (ADR-37)"
+  Lines ~400–420 (after line 398 of the pre-Phase-4 file).
+  Content covers: one inet46 BLOCK rule per interface; single-rule inet46 design;
+  self-exempt via negated (self); complementary relationship (ADR-36 port-53
+  + ADR-37 port-853 + DoH-IP feed for port 443); limitation: non-standard-port
+  and DoH-over-443 not covered.
+  Live-VM smoke pointer: tests/smoke/test_dot_doq_block.py
+
+ADR.md status line updated:
+  "- **Status:** **Implemented — pending live-VM smoke** (2026-06-22)"
+
+ADR.md §7 DoD items ticked:
+  [x] pfb_build_dot_block_rule() golden tests — all branches
+  [x] Three PfbConfig-registered fields — ADR-29 round-trip + invariants
+  [x] ADR-35 registration; reconcile/remove/sweep asserted
+  [x] UI control block; server-side PFBL-01 validation
+  [x] All off-VM gates green (phpunit/phpstan/phpcs/php-l/pytest/ui_render marker)
+  [ ] Live-VM smoke — pending CI fan-out (not runnable locally)
+
+
+4. DOD VERIFICATION MATRIX
+----------------------------
+  php -l (all src/ touched files)   CLEAN (no changes to src/ in Phase 4)
+  vendor/bin/phpunit --no-coverage   1244 tests, 5014 assertions, 31 warnings
+                                     (pre-existing), 3 skipped (pre-existing)
+                                     — ZERO failures / errors
+  PHPStan (--no-progress --mem 1G)  OK — No errors
+  PHPCS (phpcs.xml.dist, src/)      CLEAN (no output)
+  python -m pytest -q               1930 passed, 2 skipped (smoke excluded by
+                                     --ignore=tests/smoke in addopts)
+  ruff check .                      All checks passed
+  ruff format --check .             129 files already formatted
+  markdownlint-cli2 (two files)     0 error(s) across 69 files scanned
+  --collect-only (smoke test)       7 tests collected in 0.03s, 0 import errors
+
+
+5. MANUAL SMOKE ITEMS (owner: maintainer — not CI gates)
+----------------------------------------------------------
+  [ ] Enable DoT/DoQ block on LAN → attempt TCP from LAN client to external :853
+      → confirm connection is dropped by the firewall.
+  [ ] Confirm firewall's own outbound port-853 connections are NOT blocked
+      (self-exempt operational).
+  [ ] Populate exception alias with a client IP → confirm that client bypasses block.
+  [ ] Enable on LAN + OPT1 → remove OPT1 only → confirm OPT1 rule gone, LAN remains.
+  [ ] Uninstall with block enabled → confirm no pfB_DoT_Block_* in Firewall → Rules.
+
+
+6. OPEN ISSUES DISCOVERED IN PHASE 4
+--------------------------------------
+None. No bugs discovered in Phase 1-3 builder or sync code during Phase 4 review.
+
+
+7. RECOMMENDED NEXT STEP
+-------------------------
+Dispatch smoke-fanout.yml (or smoke.yml) on adr/37-dot-doq-block branch to run
+the live-VM smoke suite (Case 4 stale-interface prune will skip on single-NIC CE VM
+— expected). Once smoke is GREEN, flip ADR-37 status to Accepted and open the PR
+for /pr-merge-flow.
+
+ADR-RESUME: branch=adr/37-dot-doq-block next-phase=COMPLETE

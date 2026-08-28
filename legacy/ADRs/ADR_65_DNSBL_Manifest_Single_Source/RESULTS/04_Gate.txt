@@ -1,0 +1,87 @@
+ADR-65 Phase 4 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (after orchestrator remediation of the single verifier blocker:
+a false "clean" claim for check_retired_tokens.py in the handoff, corrected
+in place; all code, tests, and gates independently re-verified PASS)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently; orchestrator re-ran the
+disputed checker)
+--------------------------------------------------------------------------------
+- sh scripts/agent/run-gates.sh --diff origin/devel (mypy shim): GATES: PASS,
+  including the runner's own reminder that www/ was touched (Tier-A note).
+- php -l x4: clean. vendor/bin/phpunit (whole suite): 3436 tests, 21207
+  assertions, 0 failures (= P3 baseline 3427 + 9 new); the 9 new tests OK
+  (46 assertions); the 104 sibling grep-path/buffer-replay tests OK.
+- composer phpstan: [OK]; composer phpcs (src/): clean.
+- Frozen P1 decision oracle: 29 passed at zero edits.
+- check_comment_narration.py / check_version_literals.py --diff origin/devel:
+  clean. check_retired_tokens.py --diff origin/devel: exits 1 with TWO
+  warn-only false-positive findings ('</s><br />' x7, '<small>...</small>'
+  x12 survivors in pfblockerng_alerts.php) -- verifier and orchestrator runs
+  identical; rationale recorded in the corrected 04_Results.txt (unrelated
+  same-fragment sites; checker warn-only during rollout).
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE (re-executed by the verifier, not accepted from the handoff)
+--------------------------------------------------------------------------------
+scripts/agent/verify-red-proof.sh --worktree <path>
+  --test-cmd 'vendor/bin/phpunit tests/php/DnsblLogEventQueryAttributionTest.php
+  tests/php/AlertsDnsblLoggedFieldsRenderTest.php'
+  --src pfblockerng.inc --src pfblockerng_alerts.php
+  --hash <both files = handoff red-time SHAs> --base-ref 1c3c8be3
+-> FREEZE-OK (both), RED-OK against base src, PASS after restore.
+Red reasons match the deltas exactly (undefined-index warning from the dead
+$data[2] read, grep-group attribution, strike-render present, filter matching
+the re-derived feed). Deviations disclosed and accepted: (1) the warning-noise
+filter widening after the first red-time hash -- implementer re-verified by
+reverting src to base and re-running the WIDENED file (same 8/9 red reasons),
+so the committed content's red proof is genuine; (2) one test retargeted
+during authoring (before any production edit) because the brief's literal
+assertion was green-on-old -- the retargeted form correctly flips red->green.
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read git show in full)
+--------------------------------------------------------------------------------
+- D4 pfb_log_event: pfb_dnsbl_query() replaces the daemon grep; 'Unknown' on
+  NULL/blocked=false/empty-field; PFB_FILTER_HTML parity with the old compute
+  path verified against base source (mode never filtered before either);
+  counter mechanism untouched, only its group source -- PASS.
+- D2 convert_dnsbl_log: both re-check blocks removed (compare + !$isMatch
+  re-derive); first and third dnsbl_whitelist_type calls kept byte-untouched;
+  #809 two-pass buffer/replay wiring removed with its helpers' callers
+  enumerated; filter-mode path renders logged fields -- PASS.
+- IP path: zero diff hunks -- PASS (Semantic 8).
+- pfb_dnsbl_parse/_compute definitions kept, zero src/ callers remain -- PASS.
+- Test honesty: negatives paired with fixtures that produce the forbidden
+  strings on base code (verifier reverted and observed them) -- PASS.
+- Conventions + narration checkers -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+D2 + D4 rows all ticked to named tests (9 new); Semantics 5-8 confirmed by
+diff-read (counter mechanism, log schema, IP path, parse-kept). No deferrals
+beyond the recorded Tier-A item below.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Tier-A ui_render (python3 -m pytest tests/smoke/ui -m ui_render
+  --override-ini="addopts=") -- DEFERRED: needs a leased PFB_BOXES box +
+  SMOKE_ADMIN_PASSWORD, unavailable to the sub-agent sessions. HARD GATE at
+  Phase 7: the CE+Plus live-VM run executes it before the ADR can land;
+  coverage itself exists (the ui_render suite + the two new render tests).
+- Known carry-forward: six ui_e2e tests in
+  tests/smoke/ui/test_alerts_render_verify.py pin the REMOVED re-check and
+  will fail on-box until Phase 7 reconciles them (enumerated in
+  04_Results.txt carry-forward).
+
+--------------------------------------------------------------------------------
+REMEDIATION (orchestrator)
+--------------------------------------------------------------------------------
+1. Corrected 04_Results.txt's gates entry: check_retired_tokens.py is NOT
+   clean -- it warns on two false-positive fragments (evidence + rationale in
+   the corrected entry). The false "all exit 0" claim was the gate's sole
+   blocker; the underlying code needed no change.

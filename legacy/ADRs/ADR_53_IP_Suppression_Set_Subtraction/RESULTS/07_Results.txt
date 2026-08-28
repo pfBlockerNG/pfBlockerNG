@@ -1,0 +1,191 @@
+ADR-53 Phase 7 -- killstates prefix-aware suppression exclusion
+====================================================================
+
+STATUS: Done. pfb_remove_states()'s suppression exclusion is now prefix-aware for
+both families and any mask, via a new pure helper. Red->green proven both for the
+helper in isolation and for the actual production wiring (pfb_remove_states() itself).
+
+Helper -- signature and home
+-----------------------------
+`pfb_ip_suppressed(string $ip, array $entries): bool` in pfblockerng_extra.inc
+(src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:2926), right after Phase 5/6's
+pfb_suppress_file_v6(), under a new "ADR-53 P7" section banner. PURE: no config
+reads, no I/O -- the caller passes the already-decoded suppression list(s).
+
+Body: foreach $entries, trim + skip blank/'#'-led lines, strip a trailing inline
+'#' comment (same tolerance pfbng_text_area_decode()/pfb_validate_suppression_line()
+apply), then `ip_in_subnet($ip, $entry)` -- return TRUE on first hit, FALSE if the
+list is exhausted. No per-family branching needed: ip_in_subnet() itself returns
+FALSE on a family mismatch (confirmed via its double at tests/php/pfsense_doubles.php:588,
+which mirrors pfSense's real inet_pton-based implementation), so a v4 entry can never
+match a v6 IP or vice versa. This is the exact ip_in_subnet() loop shape
+pfb_local_ip() (pfblockerng.inc:10417) already applies to local subnets -- reused,
+not reinvented.
+
+Where the swap landed
+----------------------
+pfblockerng.inc, inside pfb_remove_states() (function starts at line 10153,
+confirmed via grep -- the ADR's stale "10151-10163" reference has drifted across
+Phases 1-6's edits elsewhere in the file, exactly as P6's handoff warned):
+
+1. Collection (was lines ~10186-10203: the "Collect IPv4 Suppression list IPs"
+   foreach + its /32 str_replace + /24 subnetv4_expand() branch + the following
+   `array_flip($pfb_local)`) -- REPLACED (now lines 10186-10192) with two decode
+   calls, no materialisation:
+       $v4suppression = pfbng_text_area_decode($pfb['ipconfig']['v4suppression'], TRUE, FALSE);
+       $v6suppression = pfbng_text_area_decode($pfb['ipconfig']['v6suppression'], TRUE, FALSE);
+   $pfb_local is no longer touched by suppression at all -- it now starts and stays
+   empty until pfb_collect_localip()'s merge (unchanged), which is a strictly
+   simpler/cleaner state than before (see "unexpected second bug" below).
+
+2. Exclusion checks (now lines 10304-10321): added `pfb_ip_suppressed($s_ip,
+   $v4suppression) ||` to the v4 branch's OR-chain and `pfb_ip_suppressed($s_ip,
+   $v6suppression) ||` to the v6 branch's, each placed right after the existing
+   `pfb_local_ip($s_ip, $pfb_localsub) ||` term (same family split the ip_version
+   if/else already provides -- no new branching structure). $pfb_local (local/DNS
+   exact-match) and the Permit-customlist `ip_in_subnet` loop a few lines down are
+   BYTE-IDENTICAL, confirmed by diff read.
+
+Net diff: 25 lines changed in pfblockerng.inc (mostly deletions -- the old
+materialisation logic was more code than the new call sites), +50 lines in
+pfblockerng_extra.inc (the new helper + its docblock).
+
+subnetv4_expand() confirmed still used elsewhere (pfb_collect_localip(), lines
+10461/10508, for LOCAL interface/VIP subnet expansion -- unrelated to suppression)
+-- the function itself is untouched, only its suppression call site is removed.
+
+An unrelated second bug this swap incidentally fixes (documented, not fixed further)
+-------------------------------------------------------------------------------------
+Investigating the swap surfaced a PRE-EXISTING, unrelated defect in the $pfb_local
+plumbing this phase deletes for suppression (still present for local-IP/DNS-server
+exact-match -- untouched, out of this phase's scope): the "Remove any duplicate IPs"
+step (`$pfb_local = array_flip(array_unique($pfb_local));`) blindly re-flips
+WHATEVER arrives already hashmap-shaped. The old suppression foreach's own
+`array_flip($pfb_local)` (now deleted) and pfb_collect_localip()'s internal flip
+BOTH hand back an IP=>int hashmap; merging those into $pfb_local and then re-flipping
+at the end double-flips them back into a plain list (keys become ints, values become
+IP strings) -- so `isset($pfb_local[$s_ip])` on an IP string never matches. Worse,
+array_unique()'s value-based comparison (the int values, essentially arbitrary
+per-source list positions) silently drops whichever entries collide on that
+position, independent of key. Confirmed empirically with isolated `php -r` traces
+(both an empty-local-data scenario and a populated one with local IPs + DNS
+servers): v4suppression's legacy exact '/32' match via $pfb_local NEVER reliably
+worked. This phase's swap sidesteps the whole problem for suppression (it no longer
+touches $pfb_local at all), incidentally fixing it there -- the local-IP/DNS-server
+half of the same bug is untouched and remains a latent defect outside this phase's
+"minimal diff to the exclusion swap only" constraint. Flagging for visibility, not
+fixing (would violate the phase's "do NOT restructure the states loop beyond the
+exclusion swap" constraint) -- a candidate for a future issue/ADR if the local-IP/
+DNS-server exclusion path is ever revisited.
+
+Doubles
+-------
+None new needed -- ip_in_subnet() (tests/php/pfsense_doubles.php:588, both-family
+faithful implementation) already existed from an earlier phase and is reused
+as-is. No new pfSense function reached.
+
+Tests FIRST (red->green)
+--------------------------
+1. tests/php/KillstatesSuppressionTest.php (NEW, 11 tests) -- the pure helper in
+   isolation: v4 '/16' containment (the headline red case: today's mechanism can
+   only express '/32'/'/24'), v4 outside-range miss, v4 legacy '/32' exact hit,
+   v4 legacy '/24' member hit, v6 '/64' containment, v6 outside-range miss, v6
+   '/128' exact hit, malformed entry skipped (not fatal, and doesn't block a
+   later real match), empty list -> FALSE, cross-family entry never matches.
+   Red proof: pfb_ip_suppressed() did not exist pre-Phase-7, so ALL 11 tests
+   fail with "Call to undefined function pfb_ip_suppressed()" against the
+   pre-change code (verified by git-stashing just the two src/ files and
+   re-running the filtered suite) and pass once the helper lands.
+
+2. tests/php/PfbRemoveStatesTest.php (extended, +3 tests; setUp now also seeds
+   `$GLOBALS['pfb']['ipconfig']['v6suppression'] = ''` alongside the existing
+   v4suppression seed) -- proves the ACTUAL WIRING in pfb_remove_states(), not
+   just the helper in isolation, using the file's existing fake-pfctl harness:
+     - test_v4_suppression_slash16_spares_contained_state_others_still_killed:
+       v4suppression='198.51.0.0/16', a matched state inside it survives, a
+       matched sibling outside it (198.52.100.9) is still killed. FAILS
+       pre-Phase-7 (old mechanism can't express '/16' -- verified via the same
+       stash-and-rerun).
+     - test_v4_suppression_legacy_slash32_now_reliably_spares_state: a legacy
+       exact '/32' entry. Expected to be a pure oracle (ADR §2.2 asks Phase 7
+       to keep "/32 + /24 entries working identically") -- it is NOT: this is
+       ALSO red->green, because of the unrelated $pfb_local double-flip bug
+       above (empirically confirmed the old mechanism silently failed to
+       suppress even the exact-host case once the final dedupe-flip ran).
+       Renamed from an initially-planned "..._still_spares_state" to
+       "..._now_reliably_spares_state" to state this honestly.
+     - test_v6_suppression_slash64_spares_contained_state_others_still_killed:
+       v6suppression was not read by pfb_remove_states() AT ALL pre-Phase-7, so
+       this is red for any v6 entry (not just a containing mask). Precondition-
+       asserts both fixture addresses (3fff:0:0:1::9 / 3fff:0:0:2::9, RFC 9637
+       documentation range -- NOT 2001:db8::/32, which may validate as reserved
+       under FILTER_FLAG_NO_RES_RANGE depending on PHP version, same rationale
+       as the file's existing V6_VICTIM/V6_PERMIT constants) validate as public
+       under NO_PRIV|NO_RES on the running PHP, mirroring the file's existing
+       #702 precondition-check pattern.
+   All 3 confirmed red pre-change (git-stash the two src/ files, rerun) and
+   green post-change, for the exact documented reasons -- kill-log contents
+   diffed inline in each assertion failure message.
+
+Gate results
+------------
+- vendor/bin/phpunit -> 1928 tests, 15807 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). Test count is P6's
+  1914 + 11 new (KillstatesSuppressionTest) + 3 new (PfbRemoveStatesTest) = 1928,
+  confirmed by direct arithmetic. The new/changed tests alone (--filter
+  'KillstatesSuppressionTest|PfbRemoveStatesTest') -> 20 tests, 29 assertions, 0
+  failures.
+- Red proof: `git stash push -- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` (keeping the new/changed
+  test files in place), rerun the same filter -> 11 errors ("Call to undefined
+  function pfb_ip_suppressed()") + 3 failures (kill-log contains the IP that
+  should have survived), each printing expected-vs-actual kill-log contents.
+  `git stash pop` restored the fix; rerun -> 20/20 green again.
+- php -l on every touched/new PHP file -> clean (pre-existing unrelated
+  E_DEPRECATED notices in pfblockerng.inc, untouched by this phase).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output.
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files).
+- .venv/bin/python -m pytest -q -> 2057 passed, 4 skipped -- byte-identical to
+  P6's count (no Python file touched this phase).
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "160 files already formatted" -- unchanged from P6 (no Python touched).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to the P3-P6 baseline (no shell touched this phase).
+
+Self-review (per the orchestrator's REVIEW step)
+-----------------------------------------------------
+- Every ACTION-PLAN item (1-5) done: tests-first with red evidence (both the
+  isolated helper AND the production wiring); helper implemented pure, reusing
+  ip_in_subnet()/pfb_local_ip()'s established shape; killstates pass swapped
+  with the OLD block fully removed (no dead code left behind); subnetv4_expand()
+  usage confirmed still needed elsewhere (grepped before deleting the call
+  site, not the function); full gates green.
+- $pfb_local still covers local/DNS IPs unchanged -- confirmed by diff read:
+  the only lines touched in the exclusion-check OR-chains are the two new
+  `pfb_ip_suppressed(...) ||` insertions; every other term (isset($pfb_local),
+  pfb_local_ip, is_private_ip, the substr/filter_var guards, the Permit
+  ip_in_subnet loop) is byte-identical.
+- Minimal diff in the states loop: no restructuring beyond the exclusion swap
+  (confirmed: the fopen/fgets walk, the ip_version detection, the pfctl -T
+  test verification loop, and the final kill exec() calls are all untouched).
+- Scope clean: `git diff --stat HEAD` touches exactly pfblockerng.inc,
+  pfblockerng_extra.inc, and 2 PHP test files (1 new) -- no Alerts "+"/widget
+  (Phase 8), no ADR.md edit, no other ADR's files, no config/UI files (this
+  phase needed none -- v4suppression/v6suppression already fully wired by
+  Phases 2-6).
+- One naming-convention fix caught in self-review: an early draft of the
+  pfblockerng.inc comment wrote "ADR-53 SS1.2/SS2.2" (an ASCII stand-in for
+  section signs) where every other ADR-53 comment in this codebase uses the
+  real "§" character (confirmed via grep across pfblockerng.inc/_extra.inc) --
+  corrected to "§1.2/§2.2" before commit.
+
+Go-ahead for Phase 8 (Alerts "+")
+-----------------------------------
+Phase 7 is complete and green (PHPUnit incl. red->green proof, PHPCS, PHPStan,
+pytest, ruff, shellspec). Killstates now spares suppressed prefixes at any
+mask, both families, via the standalone pfb_ip_suppressed() helper -- Phase 8
+can reuse the SAME helper (or its ip_in_subnet()-loop shape) for the Alerts
+"+" live-punch rework (ADR §2.1: "locate the containing table entr(y/ies)...
+drop the '/24'-only refusal and the 254-host loop", both families, any mask).
+No Alerts/widget code was touched this phase.

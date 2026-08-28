@@ -1,0 +1,77 @@
+================================================================================
+PHASE 1 PROMPT — PREP (behaviour-preserving): authenticated WebUI session helper + recon
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §1 facts 2-4, §2 table + contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 1 of ADR-14. Behaviour-PRESERVING:
+land a reusable authenticated-WebUI session helper + the live-box recon it depends on,
+as an ISOLATED, lint-clean building block. NO src/ change; the default `python -m pytest`
+stays byte-identical. Standalone-valuable. Work in this ADR's `adr/14` worktree; one
+commit for this phase.
+
+WHY THIS PHASE EXISTS
+Every later tier needs an authenticated session against the live webConfigurator, and
+the exact login mechanics (protocol, CSRF field, login fields, cookie, creds source) are
+pfSense-core facts we must CONFIRM, not assume (CLAUDE.md investigation rigor; ADR §1
+fact 4). Landing + pinning the helper in isolation keeps Phases 2-4 to pure assertions.
+
+REQUIRED READING (inspect before editing)
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§1 facts, §2 table, contract, §5).
+- tests/smoke/conftest.py — the `smoke_vm` SESSION-scoped fixture (:303), the `SmokeVM`
+  dataclass + `ssh()` helper (:144), how the VM exposes :8080 and how default collection
+  EXCLUDES the smoke suite (so UI tests inherit the exclusion).
+- tests/smoke/helpers.py — `config_get()` (:403) for reading config.xml on-box.
+- tests/smoke/boot_vm.sh:119 (hostfwd 8080->80), wait_ready.sh:102 (the http:// readiness
+  curl — evidence the WebUI answers plain HTTP, NOT forced HTTPS).
+- tests/smoke/requirements.txt — where dev-only test deps go.
+- CLAUDE.md (Python 4-space/3.11+/type hints; investigation rigor; smoke-harness truths).
+
+ACTION PLAN (ordered — recon FIRST, then the helper, then pin it)
+1. RECON on the live VM (source of truth — do NOT assume):
+   - webConfigurator protocol: read `config.xml <system><webgui><protocol>` (expect http;
+     confirm). If https, the helper must handle TLS (verify=False against the throwaway VM).
+   - The login form: fetch the live login page and read the ACTUAL field names
+     (`__csrf_magic`, `usernamefld`, `passwordfld`) + the session cookie name. Quote what
+     you find in the handoff — these are the contract for later phases.
+   - Creds: the baked admin user/password (`SMOKE_ADMIN_PASSWORD`); how the smoke
+     workflow supplies it. If it is not currently exposed to pytest, wire it through
+     (env/secret -> fixture), documented.
+2. HELPER `tests/smoke/ui/` subpackage (new): a `webui` client built on `requests`:
+   - GET the login page -> extract `__csrf_magic` -> POST creds -> persist the session
+     cookie. `get(path)` returns the authenticated response. Type-hinted, no bare except.
+   - Keep it a thin, reusable primitive (later phases inject this cookie into Playwright).
+3. PIN with a `ui_render`-marked test (reusing `smoke_vm`):
+   - login succeeds; an authenticated GET of a known pfBlockerNG page returns 200 + an
+     expected content marker; an UNAUTHENTICATED GET redirects to the login page.
+4. Add `requests` to tests/smoke/requirements.txt. Confirm the new tests are EXCLUDED
+   from default collection (same mechanism as smoke) -> `python -m pytest` byte-identical.
+
+CONSTRAINTS
+- NO src/ change. NO change to default pytest collection/behaviour. Reuse `smoke_vm`;
+  do NOT add a second VM boot path. Python 4-space, 3.11+, type hints, no bare except.
+- Do NOT build the render sweep / functional / browser tiers yet (Phases 2-4).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest        -> green, count UNCHANGED vs baseline (UI excluded by default).
+- ruff check . / ruff format .   -> clean.
+- Live: against the smoke VM, the pinned test logs in, fetches a page (200 + marker),
+  and an unauth GET redirects to login. Quote the measured login form/cookie names.
+
+EXPECTED RESULT
+A reusable, lint-clean authenticated `webui` session helper under tests/smoke/ui/,
+proven against the live VM, with the login mechanics CONFIRMED (not assumed) and recorded.
+
+COMMIT (single)
+    tests: add authenticated WebUI session helper + recon (ADR-14 P1)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create
+off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then
+push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/01_Results.txt` (plain .txt)
+State: the CONFIRMED protocol + exact login form/cookie/CSRF field names + creds source;
+the `webui` helper API (login + get signatures); where it lives; how creds reach pytest;
+confirmation the default suite is byte-identical; any gotcha (TLS, redirect quirks); the
+go-ahead for Phase 2.

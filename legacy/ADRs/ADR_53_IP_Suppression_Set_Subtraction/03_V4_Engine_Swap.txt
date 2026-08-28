@@ -1,0 +1,110 @@
+================================================================================
+PHASE 3 PROMPT — v4 engine swap: iprange --except (red->green)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 3 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. This is
+the core v4 BEHAVIOUR CHANGE: the containing-entry carve must go red->green
+against the Phase-1 oracle; every other pinned semantic stays green. You
+implement with Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+suppress() today explodes an exact /24 into 255 hosts and SILENTLY NO-OPS on
+any other containing entry (proven, ADR §1.2). iprange --except is true set
+subtraction with covering-CIDR output (8 entries for /24-/32, 24 for /8-/32),
+and iprange is already shipped as ${pathaggregate}. Empirical iprange facts you
+MUST design around (ADR §1.2): rc=0 on success INCLUDING a legitimately-empty
+result; rc=1 on a missing/unloadable file; rc=0 even on malformed tokens, which
+it treats as HOSTNAMES and DNS-RESOLVES (no flag disables resolution) — so both
+inputs must be pre-filtered to strict IP/CIDR shape before iprange runs.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/02_Results.txt — confirms
+  gateway prep landed. If it is missing, STOP and report.
+- .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/01_Results.txt — the
+  oracle inventory (which It pins what).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — suppress() (470-580); the
+  pathaggregate definition (line 48) and its existing missing-binary guard
+  pattern (591); pfb_is_cidr_token (~165); the #713 rc-gating comments.
+- tests/shell/pfblockerng_suppress_spec.sh (from Phase 1).
+- .github/workflows/test.yml — where the shellspec job installs its tools (you
+  will add iprange).
+- CLAUDE.md — shell standards (POSIX, LC_ALL=C, path* vars), test mandate
+  (red->green proof BOTH directions).
+
+ACTION PLAN
+1. Update the Phase-1 spec FIRST (red): flip case (d) containing-/16 to assert
+   the carve — suppressed host absent, 16 covering CIDRs present, sibling hosts
+   still covered (assert via a representative sample + line count, printing
+   expected vs actual sets on failure); change case (c) exact-/24 to assert the
+   8-covering-CIDR output (NOT 255 hosts); add:
+   (h) a hostname-shaped token in the suppression file is dropped by the
+       pre-filter and NEVER reaches iprange (assert via a wrapper stub that
+       records its argv/stdin, or by asserting the filtered temp file content);
+   (i) iprange rc=1 (missing/unloadable) -> previous list kept + error logged;
+   (j) full suppression -> EMPTY list published (rc=0 empty output is legit).
+   Cases needing real set-subtraction semantics (c, d, j) use the REAL iprange
+   binary: add a skip-if-absent guard (house pattern: missing tool = reported +
+   skipped; CI is the hard gate). Pure-gating cases (h, i) may stub pathaggregate.
+2. Run shellspec against UNCHANGED src -> the flipped/updated cases FAIL for the
+   right reason (record the failure output for the handoff).
+3. Rewrite suppress() in pfblockerng.sh:
+   - Keep: the pathaggregate missing-binary guard (mirror 472-476, now for
+     iprange), the suppressheader stats block, the per-alias
+     Pre/Suppress/Master stats line (wc -l before/after), the masterfile
+     resync under dedup=on, the enable/feed-change gating done by the CALLER
+     (unchanged).
+   - New core: build a filtered suppression temp file — iterate entries with
+     the existing pfb_is_cidr_token-style validation (digits/dots/slash only),
+     dropping and logging anything else; ALSO pre-filter the member-file copy
+     the same way (feed data is post-sanitisation, but the filter is the
+     defense-in-depth the DNS hazard demands). Then:
+       ${pathaggregate} "${tempfile}" --except "${suppfiltered}" > "${tempfile2}"
+     rc=0 -> atomic publish (mv) — INCLUDING empty output; rc!=0 -> rm temp,
+     keep previous list, log the rc (the #713 pattern).
+   - DELETE: the grep -F /24-token search, the seq-255 explode loop, the
+     dupfile/awk machinery, and the grepcidr -vf call (iprange subsumes it for
+     v4). Remove now-dead variables. grepcidr stays used elsewhere — do not
+     touch other functions.
+4. Wire iprange into CI: add the package to the shellspec job's tool install in
+   test.yml (apt `iprange`). Verify the spec's skip-guard triggers locally if
+   the binary is absent.
+5. Run shellspec against the NEW src -> all green (the red->green proof).
+6. Full gates: shellspec, sh -n, shellcheck on pfblockerng.sh, python -m pytest,
+   vendor/bin/phpunit (nothing PHP changed — sanity).
+
+CONSTRAINTS
+- POSIX sh; quote every expansion; no bash-isms; keep LC_ALL=C where the old
+  code had it (the sort -u of the suppression data).
+- Do NOT change the caller gating in pfblockerng.inc (16700-16711) — v4-only
+  invocation stays until Phase 6.
+- Do NOT touch the v6 path, the UI, or grepcidr's other uses.
+- The published-file swap must stay atomic (write temp, mv over).
+
+VERIFICATION (all must pass)
+- shellspec  -> green, with the P1-flipped cases proven red on pre-change src
+  (keep the recorded red output)
+- shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh -> clean
+- python -m pytest ; vendor/bin/phpunit -> green
+- diff-read: suppress() got SMALLER (explode machinery gone); stats +
+  masterfile blocks intact.
+
+EXPECTED RESULT
+suppress() is a strict-input, rc-gated, atomic iprange set-subtraction; the
+containing-entry defect is fixed and proven red->green; /24 holes cost 8
+entries.
+
+COMMIT (single)
+    pfblockerng: carve v4 suppressions via iprange set-subtraction (ADR-53 P3)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/03_Results.txt
+State: the new suppress() shape (filter -> iprange -> rc-gated publish); the
+recorded red-run output; CI tool wiring; any iprange behaviour discovered beyond
+ADR §1.2; spec counts; go-ahead for Phase 4 (UI mask lift — pure PHP).

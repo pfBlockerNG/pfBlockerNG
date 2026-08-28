@@ -1,0 +1,67 @@
+HISTORICAL — EXECUTED 2026-06-17/18; DO NOT RE-RUN. Every phase below already landed on devel
+(ADR-28 is Accepted; see ADR.md Status). Line anchors are stale and the "hard-freeze /
+byte-identical storage" doctrine in this prompt was superseded by the behaviour-not-bytes rule in CLAUDE.md.
+
+================================================================================
+PHASE 10 PROMPT — Enforcement sniff + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §4, §7, §6 Phase 10 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 10 of 11, enforcement + reconcile. Work
+inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Item 5 (uppercase PHP TRUE/FALSE) is the one rule cheap to machine-enforce, so it gets a targeted
+PHPCS sniff to keep future code compliant. This phase also reconciles CLAUDE.md. Phase 11 is the
+live-VM acceptance gate (smoke fan-out + UI + the automated upgrade-contract case).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/09_Results.txt (and skim 01-08 results for any
+  documented field exclusions). If 09 missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§4 requirements, §7 DoD + reject criteria)
+- tests/phpcs/PfBlockerNG/ — the existing PFBL-01 RequirePfbFilter sniff as the pattern to mirror;
+  tests/php/RequirePfbFilterSniffTest.php + tests/phpcs/fixtures/ (how a sniff is unit-tested).
+- phpcs.xml.dist — how sniffs are registered.
+- CLAUDE.md (Linting/PHP section).
+
+ACTION PLAN (tests FIRST)
+1. Add a PHPCS sniff (e.g. PfBlockerNG.CodeStyle.UppercaseBooleanLiteral) that flags lowercase/
+   PascalCase PHP boolean literals (true/false) and reports them, mirroring the PFBL-01 sniff
+   structure. It must NOT touch strings, identifiers, or JS.
+2. Pin it with fixtures + a test alongside RequirePfbFilterSniffTest.php (compliant + violating cases).
+3. Wire it into phpcs.xml.dist so pre-commit + CI enforce it. Confirm the whole src/ PHP passes
+   (Phases 2-3 already normalised it).
+4. Reconcile CLAUDE.md: ensure the ADR-28 conventions subsection is accurate and lists any config
+   field that was EXCLUDED from enum adoption (kept as string) per the §7 reject path.
+5. Diff hygiene: confirm the cumulative branch diff is minimal and intentional. (The full §7 DoD —
+   live-VM smoke + upgrade-contract — is proven in Phase 11, not here.)
+
+CONSTRAINTS
+- The sniff is mechanical + low-false-positive (literals only). Do not over-reach into judgment rules
+  (enum-vs-bool, alignment) — those stay reviewer-enforced per the §2.4 decision.
+- Tabs; keep PFBL-01 sniff + its tests green.
+
+VERIFICATION (must all pass)
+- vendor/bin/phpcs -> clean across src/ (new sniff active + PFBL-01 intact)
+- vendor/bin/phpunit -> green (+ the new sniff fixture test)
+- vendor/bin/phpstan -> clean
+- python -m pytest -> green
+- ruff check . / ruff format . -> clean
+- markdownlint-cli2 on CLAUDE.md -> clean
+- diff-read: sniff scope is literals-only; CLAUDE.md accurate.
+
+EXPECTED RESULT
+A targeted, tested PHPCS sniff enforcing uppercase PHP TRUE/FALSE, wired into CI; CLAUDE.md reconciled
+with any documented exclusions. The live-VM acceptance gate follows in Phase 11.
+
+COMMIT (single)
+    dev: enforce uppercase PHP TRUE/FALSE via PHPCS sniff (ADR-28 P10)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/10_Results.txt
+State: the sniff name + what it flags; fixtures/tests added; phpcs.xml.dist wiring; CLAUDE.md
+exclusions recorded; the list of adapted config fields (for Phase 11's upgrade-contract case).
+Go-ahead for Phase 11.
