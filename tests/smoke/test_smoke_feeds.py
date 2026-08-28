@@ -3753,6 +3753,120 @@ def test_adr46_legit_multifile_zip_still_imports(deployed_vm: SmokeVM, mock_feed
         deployed_vm.ssh(f"/bin/rm -rf {workdir}")
 
 
+# --------------------------------------------------------------------------- #
+# issue #2668 — the GeoIP extraction branches publish through staging, so an
+# extraction that fails part-way leaves the tree already in service untouched.
+#
+# Only the appliance can answer whether the staged publish holds against ITS
+# bsdtar and ITS filesystem: the refusal has to arrive from libarchive's own CRC
+# check, and the publication is a FreeBSD rename inside the target directory.
+# --------------------------------------------------------------------------- #
+
+_PFB2668_WORKDIR = f"{h.PFB_DBDIR}/pfb2668_stage"
+
+
+def _published_tree(vm: SmokeVM, target: str) -> str:
+    """Every file under $target as `<md5>  <name>` lines, sorted — the byte-identity oracle."""
+    return vm.ssh(
+        f"cd {target} && /usr/bin/find . \\( -type f -o -type l \\) | /usr/bin/sort | "
+        f'while read -r f; do /sbin/md5 -q "$f" 2>/dev/null | /usr/bin/tr -d \'\\n\'; echo "  $f"; done'
+    ).stdout.strip()
+
+
+@pytest.mark.timeout(180)
+def test_geoip_partway_extraction_keeps_the_published_tree_byte_identical(
+    deployed_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """issue #2668: a corrupt GeoIP archive leaves the published tree byte-identical.
+
+    The GeoIP ZIP branch used to extract straight onto its live target, so an
+    extraction that failed after writing some members left a mixture of the old
+    publication and a truncated new one. It now extracts into a staging directory
+    inside the target and moves the members over only once bsdtar exits clean.
+
+    The fixture is corrupt in the one way that reaches extraction at all: it lists
+    cleanly (header-only, so ADR-46's member guard passes) and fails on the second
+    member's CRC, with the first member already written.
+
+    Given a published tree in service and a corrupt two-member GeoIP archive
+    When  pfb_download() fetches it as a geoip extra
+    Then  the download fails, the published tree is byte-identical, neither member
+      was published, and no staging directory is left behind.
+    """
+    workdir = f"{_PFB2668_WORKDIR}_partway"
+    target = f"{workdir}/share"
+    try:
+        # Given -- a tree already in service.
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} && /bin/mkdir -p {target}")
+        deployed_vm.ssh(f"/bin/echo 203.0.113.99 > {target}/served.dat")
+        before = _published_tree(deployed_vm, target)
+        assert before.endswith("  ./served.dat"), f"fixture tree not in service: {before!r}"
+
+        # When -- the corrupt archive drives the multi-member GeoIP arm.
+        out = _adr46_download(
+            deployed_vm,
+            mock_feeds.feed_url("archive_partial_extract.zip"),
+            f"{workdir}/dl.zip",
+            target,
+            "geoip",
+        )
+
+        # Then -- refused, with the publication untouched.
+        assert "PFB_DL_FALSE" in out, (
+            f"expected pfb_download success flag FALSE for an archive that fails part-way; got: {out!r}"
+        )
+        after = _published_tree(deployed_vm, target)
+        assert after == before, (
+            "the published tree must be byte-identical after a part-way extraction "
+            f"(pre-#2668 the members were written straight onto it)\nbefore: {before!r}\nafter:  {after!r}"
+        )
+        leftovers = deployed_vm.ssh(f"/bin/ls -A {target}").stdout.split()
+        assert leftovers == ["served.dat"], (
+            f"expected only the tree in service — no members, no staging directory; found: {leftovers!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir}")
+
+
+@pytest.mark.timeout(180)
+def test_geoip_healthy_archive_still_publishes_every_member(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2668: staging is a pass-through for a healthy archive.
+
+    The refusal above is only worth having if a real GeoIP update still lands, and
+    the publication is a rename per member on the appliance's own filesystem.
+
+    Given a published tree in service and a healthy two-member GeoIP archive
+    When  pfb_download() fetches it as a geoip extra
+    Then  the download succeeds, both members are published with --strip=1 applied,
+      the unrelated file already in service survives, and nothing is left staged.
+    """
+    workdir = f"{_PFB2668_WORKDIR}_healthy"
+    target = f"{workdir}/share"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("d/pfb2668_a.csv", "192.0.2.31\n")  # inert RFC 5737 data
+        z.writestr("d/pfb2668_b.csv", "192.0.2.32\n")
+    feed_url = mock_feeds.register("pfb2668_healthy.zip", buf.getvalue())
+    try:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} && /bin/mkdir -p {target}")
+        deployed_vm.ssh(f"/bin/echo 203.0.113.99 > {target}/served.dat")
+        served_before = _published_tree(deployed_vm, target)
+
+        out = _adr46_download(deployed_vm, feed_url, f"{workdir}/dl.zip", target, "geoip")
+
+        assert "PFB_DL_TRUE" in out, (
+            f"expected pfb_download success flag TRUE for a healthy GeoIP archive; got: {out!r}"
+        )
+        published = sorted(deployed_vm.ssh(f"/bin/ls -A {target}").stdout.split())
+        assert published == ["pfb2668_a.csv", "pfb2668_b.csv", "served.dat"], (
+            f"expected both members published beside the tree in service; found: {published!r}"
+        )
+        assert "  ./served.dat" in _published_tree(deployed_vm, target), "the file in service was dropped"
+        assert served_before.endswith("  ./served.dat")
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir}")
+
+
 @pytest.mark.timeout(120)
 def test_top1m_file_target_rejects_multifile_and_retains_active(
     deployed_vm: SmokeVM, mock_feeds: _MockFeedServer

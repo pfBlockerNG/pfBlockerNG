@@ -11262,6 +11262,46 @@
             }
         ]
     },
+    "pfb_stage_publish_dir_merge": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "extract",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
+    "pfb_stage_publish_dir_merge_swap": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "staged",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_stage_publish_dir_recover": {
         "returnsRef": false,
         "returnType": "bool",

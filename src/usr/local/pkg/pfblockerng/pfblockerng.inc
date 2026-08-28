@@ -4341,8 +4341,10 @@ function pfb_blacklist_tar_mark_updated(string $file_dwn, string $filename): Pfb
 }
 
 /**
- * Disk-writing GeoIP tar extract into geoipshare. Gzip and uncompressed x-tar
- * share this path; -C must be the share directory, never a .mmdb file.
+ * Disk-writing GeoIP tar extract into geoipshare. The gzip container, the
+ * uncompressed x-tar and the zip container's multi-member arm all share this path;
+ * -C is a staging directory inside the share, never the live share itself and never
+ * a .mmdb file (issue #2638 B7).
  */
 function pfb_geoip_extract_tar_to_share(
 	string $header,
@@ -4360,12 +4362,20 @@ function pfb_geoip_extract_tar_to_share(
 	}
 	$output = array();
 	$retval = pfb_download_initial_retval();
-	exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1"), $output, $retval);
-	unlink_if_exists($file_download);
-	if (!pfb_download_extraction_succeeded($retval)) {
+	// issue #2668: the extraction runs in a staging directory and its members are
+	// published only once tar reports success, so a failure part-way -- a killed
+	// child at issue #2658's ceiling, ENOSPC, a member libarchive refuses -- leaves
+	// the share already in service byte-identical.
+	if (!pfb_stage_publish_dir_merge($pfb['geoipshare'],
+	    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+		exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
+		return $retval;
+	})) {
+		unlink_if_exists($file_download);
 		pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 		return PfbDownloadResult::failure();
 	}
+	unlink_if_exists($file_download);
 	return PfbDownloadResult::success();
 }
 
@@ -4505,6 +4515,85 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
 	}
 	if ($backup !== NULL && !pfb_stage_publish_dir_remove($backup)) {
 		return FALSE;
+	}
+	return TRUE;
+}
+
+/**
+ * Publish an extraction that MERGES into a directory holding other publications
+ * (issue #2668). $extract writes into an empty staging directory INSIDE $target and
+ * returns its exit code; the extracted members are moved over their live
+ * counterparts only once that code reports success, so an extraction that fails
+ * part-way leaves everything already in service byte-identical.
+ *
+ * Merging, not replacing: the whole-directory sibling helper REPLACES $target, and
+ * $pfb['geoipshare'] is shared ground -- $pfb['ccdir'] (the published country-code
+ * generation and the file its generation lock is taken on) sits inside it, and the
+ * ASN feeds publish their databases there too. Probed: replacing the directory
+ * deletes all of it while a publication lock is held, leaving the holder locking an
+ * unlinked inode.
+ *
+ * Staging INSIDE $target is what keeps every publication a same-filesystem rename:
+ * a directory just created there cannot be a mount point. tempnam() falls back to
+ * the system temp directory when $target is not writable, so a staged path that
+ * escaped is refused rather than published across a device boundary.
+ *
+ * @param callable(string):int $extract
+ */
+function pfb_stage_publish_dir_merge(string $target, callable $extract): bool {
+	if (!is_dir($target) || is_link($target)) {
+		return FALSE;
+	}
+	$staged = @tempnam($target, '.pfbstagedir_');
+	if ($staged === FALSE) {
+		return FALSE;
+	}
+	if (realpath(dirname($staged)) !== realpath($target)) {
+		unlink_if_exists($staged);
+		return FALSE;
+	}
+	// tempnam() hands back a FILE; the extractor needs a directory at that path.
+	// 0755, not tempnam's 0600: the members published from it have unprivileged
+	// readers, and tar carries each member's own mode across the rename.
+	if (!@unlink($staged) || !@mkdir($staged, 0755) || !@chmod($staged, 0755)) {
+		is_dir($staged) ? rmdir_recursive($staged) : unlink_if_exists($staged);
+		return FALSE;
+	}
+	$published = pfb_download_extraction_succeeded((int) $extract($staged)) &&
+		pfb_stage_publish_dir_merge_swap($staged, $target);
+	rmdir_recursive($staged);
+	return $published;
+}
+
+/**
+ * Move every top-level entry of $staged over its live counterpart in $target.
+ * rename() replaces a file atomically, so no reader can observe a half-written
+ * member; a directory on either side cannot be replaced that way, so the whole
+ * publication is refused BEFORE the first move rather than part-way through it.
+ * That refusal is also what stops a feed member named like $pfb['ccdir'] from
+ * taking the published country-code generation with it.
+ */
+function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool {
+	$entries = @scandir($staged);
+	if ($entries === FALSE) {
+		return FALSE;
+	}
+	$entries = array_values(array_diff($entries, array('.', '..')));
+	if (empty($entries)) {
+		return FALSE;
+	}
+	foreach ($entries as $entry) {
+		$live = "{$target}/{$entry}";
+		$live_exists = file_exists($live) || is_link($live);
+		if ((is_dir($live) && !is_link($live)) ||
+		    (is_dir("{$staged}/{$entry}") && !is_link("{$staged}/{$entry}") && $live_exists)) {
+			return FALSE;
+		}
+	}
+	foreach ($entries as $entry) {
+		if (!@rename("{$staged}/{$entry}", "{$target}/{$entry}")) {
+			return FALSE;
+		}
 	}
 	return TRUE;
 }
@@ -14712,8 +14801,8 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 
-			// Extras - MaxMind downloads. GeoIP publishes directly to its caller
-			// target; TOP1M's staged/atomic branch is kept separate below.
+			// Extras - MaxMind downloads. GeoIP publishes to its caller target;
+			// TOP1M's staged/atomic branch is kept separate below.
 			if ($type == 'geoip') {
 				// Determine if the Zip contains multiple files. A NULL list
 				// (unlistable) falls through to stdout extraction exactly as before.
@@ -14726,19 +14815,33 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
-					exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
-				} else {
-					// ADR-46: stdout extraction -- member names never reach the filesystem.
+					// issue #2668: the extraction runs in a staging directory inside
+					// the target and its members are published only once tar reports
+					// success, so a failure part-way leaves the publication already
+					// in service byte-identical.
 					$retval = pfb_download_initial_retval();
-					if (!pfb_stage_publish($head_download,
+					if (!pfb_stage_publish_dir_merge($head_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 						return $retval;
 					})) {
 						pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::success();
+				}
+				// ADR-46: stdout extraction -- member names never reach the filesystem.
+				$retval = pfb_download_initial_retval();
+				if (!pfb_stage_publish($head_download,
+				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+					exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+					return $retval;
+				})) {
+					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
 				}
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
