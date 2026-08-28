@@ -281,9 +281,11 @@ def test_omp_language_servers_route_php_include_files() -> None:
     assert server["languageId"] == "php", "an inferred language id follows the extension, not PHP"
 
     # Routing didOpen is not enough: intelephense's own workspace scan is driven by
-    # files.associations, and cross-file references come from that index.
+    # files.associations, and cross-file references come from that index. The array
+    # replaces intelephense's own default, so dropping *.php or *.phtml here would
+    # unindex ordinary PHP files.
     settings = server["settings"]["intelephense"]
-    assert "*.inc" in settings["files"]["associations"]
+    assert {"*.php", "*.phtml", "*.inc"} <= set(settings["files"]["associations"])
 
     # The editor already carries the same association and PHP version; the two agent
     # surfaces must not drift apart.
