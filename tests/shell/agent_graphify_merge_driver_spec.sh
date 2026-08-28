@@ -35,7 +35,7 @@ GRAPHIFY
     mkdir -p "$repo/scripts/agent"
     cat > "$repo/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
-printf 'patch-graphify\t%s\n' "$1" >> "$GRAPHIFY_LOG"
+printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
 PATCH_GRAPHIFY
     chmod +x "$stubdir/uv" "$stubdir/graphify"
     export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log"
@@ -52,7 +52,7 @@ PATCH_GRAPHIFY
     The status should equal 0
     The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
     The contents of file "$graphify_log" should equal \
-      "$(printf 'patch-graphify\t%s\n%s\thook install' "$repo" "$repo")"
+      "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
   End
 

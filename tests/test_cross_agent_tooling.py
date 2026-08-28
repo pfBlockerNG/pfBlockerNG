@@ -411,42 +411,41 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     # PHP includes extract as a handful of incidental nodes (issue #2810). The fix is
     # upstream in Graphify-Labs/graphify#3075 and unreleased, so it rides as a patch
     # applied to the installed package after every install. When upstream releases it,
-    # the patch, the script, its three call sites, and this test go away together.
+    # the patch, the script, its two call sites, and this test go away together.
     patch = (ROOT / ".agents/patches/graphify-3075-language-overrides.patch").read_text(encoding="utf-8")
     assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
     assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
 
-    # Order is part of the contract at every call site, and each site is pinned by the
-    # line that RUNS the patch: patching a Graphify that a later step already used
-    # would leave that step's output Pascal-parsed.
-    for install, invocation, anchor, patch_first in (
-        (
-            "scripts/agent/setup-agent-tools.sh",
-            'sh "$patch_graphify" "$root"',
-            "uv tool install --upgrade graphifyy",
-            False,
-        ),
+    # Two call sites, each pinned by the line that RUNS the patch, which must come
+    # before that site's first use of Graphify: patching a Graphify a step already used
+    # would leave that step's output Pascal-parsed. setup-agent-tools.sh has no call of
+    # its own -- it ends by running init-worktree-tools.sh, which patches.
+    for install, invocation, anchor in (
         (
             "scripts/agent/ensure-graphify-merge-driver.sh",
-            'sh "$patch_graphify" "$root"',
+            'sh "$patch_graphify" || {',
             "graphify hook install",
-            True,
         ),
         (
             "scripts/agent/init-worktree-tools.sh",
-            'sh "$(dirname "$0")/patch-graphify.sh" "$root"',
+            'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
             'graphify update "$root"',
-            True,
         ),
     ):
         lines = (ROOT / install).read_text(encoding="utf-8").splitlines()
+        # The invocation carries no repository argument: the script derives everything
+        # it needs from its own path and from the `graphify` on PATH.
         called = [index for index, line in enumerate(lines) if invocation in line]
         anchored = [index for index, line in enumerate(lines) if anchor in line]
-        assert called, f"{install} does not run patch-graphify.sh"
+        assert called, f"{install} does not run patch-graphify.sh with no argument"
         assert anchored, f"{install} no longer runs: {anchor}"
-        assert (called[0] < anchored[0]) is patch_first, (
-            f"{install} must run patch-graphify.sh {'before' if patch_first else 'after'}: {anchor}"
-        )
+        assert called[0] < anchored[0], f"{install} must run patch-graphify.sh before: {anchor}"
+
+    bootstrap = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
+    assert "patch-graphify.sh" not in bootstrap, (
+        "setup-agent-tools.sh regained a patch-graphify.sh call: it already reaches the "
+        "patch through init-worktree-tools.sh"
+    )
 
     rc = (ROOT / ".graphifyrc").read_text(encoding="utf-8").splitlines()
     assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"
@@ -456,11 +455,15 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
         "scripts/agent/patch-graphify.sh",
         "Graphify-Labs/graphify#3075",
         "language.inc=php",
-        # The three probed facts a contributor needs: what reverts the patch, what an
-        # unpatched host sees, and when the whole arrangement is deleted.
+        # The probed facts a contributor needs: what reverts the patch, what an
+        # unpatched host sees, when the whole arrangement is deleted, and which failure
+        # is loud versus which is a deliberate skip plus what catches a skipped install.
         "a bare `uv tool upgrade graphifyy` reverts it",
         "inert on an unpatched Graphify",
-        "Delete the patch, the script, its three call sites",
+        "Delete the patch, the script, its two call sites",
+        "fails loudly",
+        "a warning and a skip",
+        "include-node floor",
     ):
         assert contract in routing, f"repository-intelligence routing lost: {contract}"
 

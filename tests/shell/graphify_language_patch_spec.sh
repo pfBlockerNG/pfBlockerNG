@@ -1,31 +1,49 @@
 #shellcheck shell=sh
 # Vendored Graphify language-override patch (issue #2810, upstream
-# Graphify-Labs/graphify#3075). The script resolves both itself and its patch from
-# its own checkout, so every example runs a copy of it inside a fixture checkout
-# carrying a synthetic two-file patch, against a throwaway package tree named by
-# PFB_GRAPHIFY_PACKAGE_DIR. The real installed Graphify is never touched.
+# Graphify-Labs/graphify#3075). The script resolves its patch from its own checkout and
+# the package to patch from the interpreter named on the shebang of the `graphify` on
+# PATH, so every example runs a copy of the script inside a fixture checkout carrying a
+# synthetic two-file patch, behind a fixture `graphify` whose shebang names a fixture
+# interpreter that answers for a throwaway package tree. Nothing here reaches the real
+# installed Graphify.
 
 Describe 'patch-graphify.sh'
   project_root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
 
+  # The ambient python3 imports whatever graphify IT can see, which is why the script
+  # refuses to use it; the hostile-cwd example still needs a real one to import with.
+  ambient_python3_has_graphify() { python3 -I -c 'import graphify' >/dev/null 2>&1; }
+
+  # Stand-in for the interpreter inside a uv tool venv: it answers the script's two
+  # probes for the fixture package instead of importing anything. The override-API
+  # answer is read back off the package tree, so it flips exactly when a run patches
+  # it -- an already-provided override and a fresh apply cannot both be faked.
+  make_interpreter() {
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<INTERPRETER
+#!/bin/sh
+case "\$*" in
+  *os.path.dirname*) printf '%s\n' '$package' ;;
+  *activate_language_overrides*)
+    grep -q 'def activate_language_overrides' '$package/rcfile.py' 2>/dev/null || exit 1
+    ;;
+  *) exit 9 ;;
+esac
+INTERPRETER
+    chmod +x "$1"
+  }
+
   setup() {
-    . "$project_root/scripts/lib/git-env-scrub.sh"
-    pfb_scrub_git_env
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/graphify_language_patch.XXXXXX") || return 1
-    fixture=$(cd "$fixture" && pwd -P) || return 1
+    fixture=$(CDPATH='' cd "$fixture" && pwd -P) || return 1
 
-    repo="$fixture/checkout root"
-    git_fixture init -q "$repo" || return 1
-    mkdir -p "$repo/scripts/agent" "$repo/scripts/lib" "$repo/.agents/patches" \
-      "$repo/graphify-out/cache/ast" "$repo/graphify-out/cache/semantic" || return 1
-    cp "$project_root/scripts/agent/patch-graphify.sh" "$repo/scripts/agent/" || return 1
-    cp "$project_root/scripts/agent/agent_env.sh" "$repo/scripts/agent/" || return 1
-    cp "$project_root/scripts/lib/git-env-scrub.sh" "$repo/scripts/lib/" || return 1
-    script_abs="$repo/scripts/agent/patch-graphify.sh"
-    printf '%s\n' stale > "$repo/graphify-out/cache/ast/entry.json"
-    printf '%s\n' keep > "$repo/graphify-out/cache/semantic/entry.json"
+    checkout="$fixture/checkout root"
+    mkdir -p "$checkout/scripts/agent" "$checkout/.agents/patches" || return 1
+    cp "$project_root/scripts/agent/patch-graphify.sh" "$checkout/scripts/agent/" || return 1
+    cp "$project_root/scripts/agent/agent_env.sh" "$checkout/scripts/agent/" || return 1
+    script_abs="$checkout/scripts/agent/patch-graphify.sh"
 
-    cat > "$repo/.agents/patches/graphify-3075-language-overrides.patch" <<'PATCH'
+    cat > "$checkout/.agents/patches/graphify-3075-language-overrides.patch" <<'PATCH'
 diff --git a/graphify/extract.py b/graphify/extract.py
 --- a/graphify/extract.py
 +++ b/graphify/extract.py
@@ -52,130 +70,116 @@ SUFFIX_DISPATCH = {
 }
 EXTRACT
     cp "$package/extract.py" "$fixture/extract.py.before"
-    export PFB_GRAPHIFY_PACKAGE_DIR="$package"
+
+    # A uv tool venv's own interpreter, named on the CLI's shebang -- the only path the
+    # script trusts. Deliberately NOT on PATH: an example that neuters the shebang must
+    # not be able to reach a working interpreter by any other route.
+    interpreter="$fixture/toolvenv/bin/python3"
+    make_interpreter "$interpreter"
+
+    stubdir="$fixture/toolbin"
+    mkdir -p "$stubdir"
+    printf '#!%s\nexit 0\n' "$interpreter" > "$stubdir/graphify"
+    chmod +x "$stubdir/graphify"
+    PATH="$stubdir:$PATH"
+    export PATH
   }
 
   cleanup() { rm -rf "$fixture"; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'applies the vendored patch and purges the language-blind AST cache'
-    When run sh "$script_abs" "$repo"
+  It 'applies the vendored patch to the package its shebang interpreter reports'
+    When run sh "$script_abs"
     The status should equal 0
     The stderr should include 'Graphify-Labs/graphify#3075'
     The stderr should include "$package"
-    The stderr should include 'purged'
     The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
     The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
-    The path "$repo/graphify-out/cache/ast" should not be exist
-    The file "$repo/graphify-out/cache/semantic/entry.json" should be exist
   End
 
-  It 'no-ops without purging when the package already provides the override API'
+  It 'no-ops when the package already provides the override API'
     cat > "$package/rcfile.py" <<'RCFILE'
 def activate_language_overrides(root):
     return {}
 RCFILE
-    When run sh "$script_abs" "$repo"
+    When run sh "$script_abs"
     The status should equal 0
     The stderr should include 'already provides'
     Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.before"; printf '%s' "$?")" -eq 0 ]
-    The file "$repo/graphify-out/cache/ast/entry.json" should be exist
-  End
-
-  It 'is a clean no-op on a second run that neither repatches nor purges again'
-    When run sh -c 'sh "$1" "$2" >/dev/null || exit 1; mkdir -p "$2/graphify-out/cache/ast" && printf rebuilt > "$2/graphify-out/cache/ast/entry.json" && exec sh "$1" "$2"' _ "$script_abs" "$repo"
-    The status should equal 0
-    The stderr should include 'already provides'
-    The contents of file "$repo/graphify-out/cache/ast/entry.json" should equal 'rebuilt'
-    Assert [ "$(grep -c 'SUFFIX_OVERRIDES = True' "$package/extract.py")" -eq 1 ]
   End
 
   It 'fails loudly and changes nothing when the vendored patch does not apply'
     printf '%s\n' 'unrelated module' > "$package/extract.py"
     cp "$package/extract.py" "$fixture/extract.py.mismatch"
-    When run sh "$script_abs" "$repo"
+    When run sh "$script_abs"
     The status should not equal 0
     The stderr should include 'Graphify-Labs/graphify#3075'
     The stderr should include 'extract.py'
     The path "$package/rcfile.py" should not be exist
     Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.mismatch"; printf '%s' "$?")" -eq 0 ]
-    The file "$repo/graphify-out/cache/ast/entry.json" should be exist
   End
 
-  It 'patches only the package tree named by PFB_GRAPHIFY_PACKAGE_DIR'
-    other="$fixture/other site/graphify"
-    mkdir -p "$other"
-    true > "$other/__init__.py"
-    cp "$fixture/extract.py.before" "$other/extract.py"
-    When run sh "$script_abs" "$repo"
+  It 'leaves no patch backup behind a successful apply'
+    # No -V flag is portable: GNU patch 2.8 reads `-V none` as "numbered" and ENABLES
+    # backups, while Apple patch 2.0 needs an explicit -V to stay quiet. Whether THIS
+    # host's patch writes one is exactly what cannot be relied on, so the litter is
+    # planted here and the script has to remove it for the files its patch touches.
+    printf 'stale\n' > "$package/extract.py.orig"
+    printf 'stale\n' > "$package/rcfile.py.~1~"
+    When run sh "$script_abs"
     The status should equal 0
-    The stderr should include "$package"
-    The path "$other/rcfile.py" should not be exist
-    Assert [ "$(cmp -s "$other/extract.py" "$fixture/extract.py.before"; printf '%s' "$?")" -eq 0 ]
+    The stderr should include 'applied Graphify-Labs/graphify#3075'
+    The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
+    Assert [ -z "$(find "$fixture/site packages" \( -name '*.orig' -o -name '*.~[0-9]*~' \) -print)" ]
   End
 
-  It 'defaults to the current git worktree root when run from a subdirectory'
-    When run sh -c 'cd "$1/scripts" && exec sh "$2"' _ "$repo" "$script_abs"
-    The status should equal 0
-    The stderr should include 'purged'
-    The path "$repo/graphify-out/cache/ast" should not be exist
-  End
-
-  It 'reports an install hint when Graphify is absent and no package tree is named'
-    unset PFB_GRAPHIFY_PACKAGE_DIR
-    minimal_path="$(dirname "$(command -v git)"):$(dirname "$(command -v dirname)"):$(dirname "$(command -v sh)")"
-    When run env PATH="$minimal_path" sh "$script_abs" "$repo"
-    The status should not equal 0
-    The stderr should include 'uv tool install --upgrade graphifyy'
-    The file "$repo/graphify-out/cache/ast/entry.json" should be exist
-  End
-
-  It 'skips with a warning when the graphify on PATH is not a Python program'
-    unset PFB_GRAPHIFY_PACKAGE_DIR
-    stubdir="$fixture/stub bin"
-    mkdir -p "$stubdir"
+  It 'skips with a warning when the graphify shebang does not name a Python interpreter'
+    # The ambient python3 is NOT a fallback: another interpreter imports another
+    # graphify, so falling back patches an unrelated package and reports success. A
+    # working python3 sits on PATH here precisely to prove nothing reaches for it.
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/graphify"
-    printf '#!/bin/sh\nexit 1\n' > "$stubdir/python3"
-    chmod +x "$stubdir/graphify" "$stubdir/python3"
-    When run env PATH="$stubdir:$PATH" sh "$script_abs" "$repo"
+    make_interpreter "$stubdir/python3"
+    When run sh "$script_abs"
+    The status should equal 0
+    The stderr should include 'does not name a Python interpreter'
+    The path "$package/rcfile.py" should not be exist
+    Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.before"; printf '%s' "$?")" -eq 0 ]
+  End
+
+  It 'skips with a warning when the shebang interpreter cannot import graphify'
+    printf '#!/bin/sh\nexit 1\n' > "$interpreter"
+    When run sh "$script_abs"
     The status should equal 0
     The stderr should include 'cannot locate'
     The path "$package/rcfile.py" should not be exist
-    The file "$repo/graphify-out/cache/ast/entry.json" should be exist
   End
 
-  It 'falls back to the ambient python3 when the graphify wrapper hides its interpreter'
-    unset PFB_GRAPHIFY_PACKAGE_DIR
-    stubdir="$fixture/stub bin"
-    mkdir -p "$stubdir"
-    printf '#!/bin/sh\nexit 0\n' > "$stubdir/graphify"
-    cat > "$stubdir/python3" <<PYTHON3
-#!/bin/sh
-case "\$2" in
-  *graphify.__file__*) printf '%s\n' "$package" ;;
-  *) exit 1 ;;
-esac
-PYTHON3
-    chmod +x "$stubdir/graphify" "$stubdir/python3"
-    When run env PATH="$stubdir:$PATH" sh "$script_abs" "$repo"
+  It 'ignores a hostile module in the working directory it is called from'
+    # Both probes run isolated (-I) from a neutral directory, so a graphify.py beside
+    # the caller can neither answer for the installed package nor execute at all.
+    Skip if 'the ambient python3 imports a graphify of its own' ambient_python3_has_graphify
+    hostile="$fixture/hostile cwd"
+    mkdir -p "$hostile"
+    cat > "$hostile/graphify.py" <<HOSTILE
+import pathlib
+pathlib.Path('$hostile/executed').write_text('executed')
+__file__ = '$hostile/graphify.py'
+HOSTILE
+    printf '#!%s\nexit 0\n' "$(command -v python3)" > "$stubdir/graphify"
+    When run sh -c 'cd "$1" && exec sh "$2"' _ "$hostile" "$script_abs"
     The status should equal 0
-    The stderr should include 'Graphify-Labs/graphify#3075'
-    The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
-    The path "$repo/graphify-out/cache/ast" should not be exist
-  End
-
-  It 'rejects a target that is not a git worktree'
-    When run sh "$script_abs" "$fixture/not a checkout"
-    The status should equal 2
-    The stderr should include 'is not a git worktree'
+    The stderr should include 'cannot locate'
+    The path "$hostile/executed" should not be exist
+    The path "$hostile/rcfile.py" should not be exist
     The path "$package/rcfile.py" should not be exist
   End
 
-  It 'rejects more than one repository argument'
-    When run sh "$script_abs" "$repo" extra
-    The status should equal 2
-    The stderr should include 'usage: patch-graphify.sh [REPOSITORY]'
+  It 'fails with the install hint when graphify is absent from PATH'
+    minimal_path="$(dirname "$(command -v sed)"):$(dirname "$(command -v sh)"):$(dirname "$(command -v dirname)")"
+    When run env PATH="$minimal_path" sh "$script_abs"
+    The status should not equal 0
+    The stderr should include 'uv tool install --upgrade graphifyy'
     The path "$package/rcfile.py" should not be exist
   End
 End
