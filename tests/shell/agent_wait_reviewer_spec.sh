@@ -67,6 +67,18 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'QUOTA 999'
   End
 
+  It 'falls back when the window names an hour and a minute component'
+    issuec='Review limit reached. Next included review available in 1 hour 30 minutes.'
+    When call classify
+    The output should equal 'QUOTA 999'
+  End
+
+  It 'falls back when the window names its components in the other order'
+    issuec='Review limit reached. Next included review available in 40 minutes and 2 hours.'
+    When call classify
+    The output should equal 'QUOTA 999'
+  End
+
   It 'reports QUOTA 999 when the resume time is unparsable'
     issuec='You have run out of usage credits.'
     When call classify

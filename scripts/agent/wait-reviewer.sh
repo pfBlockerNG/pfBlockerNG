@@ -61,12 +61,17 @@ classify() {
 		return 0
 	fi
 	if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review (rate )?limit'; then
-		# issue #2837: the colon is optional ("available in 40 minutes"), and only
-		# non-digits may sit before the count, so a multi-unit window falls back
-		# instead of resuming on its first number.
-		mins=$(printf '%s' "$issuec" | grep -oEi 'available in:?[^0-9]{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
-		if printf '%s' "$issuec" | grep -oEi 'available in:?[^0-9]{0,10}[0-9]+ *hour' | grep -q .; then
-			mins=$(( ${mins:-1} * 60 ))
+		# issue #2837: the colon is optional ("available in 40 minutes"), and the
+		# window must name exactly ONE numeric component -- a compound window
+		# ("1 hour 30 minutes") falls back rather than resuming on one of its parts.
+		win=$(printf '%s' "$issuec" | grep -oEi 'available in:?[^.]{0,48}' | head -1)
+		mins=''
+		if [ "$(printf '%s' "$win" | grep -oE '[0-9]+' | wc -l | tr -d ' ')" = '1' ] &&
+		   printf '%s' "$win" | grep -qEi '[0-9]+ *(minute|hour)'; then
+			mins=$(printf '%s' "$win" | grep -oE '[0-9]+' | head -1)
+			if printf '%s' "$win" | grep -qEi '[0-9]+ *hour'; then
+				mins=$(( mins * 60 ))
+			fi
 		fi
 		printf 'QUOTA %s' "${mins:-999}"
 		return 0
