@@ -3795,12 +3795,17 @@ def test_geoip_partway_extraction_keeps_the_published_tree_byte_identical(
     """
     workdir = f"{_PFB2668_WORKDIR}_partway"
     target = f"{workdir}/share"
+    # Discriminates the stage: a pre-extraction refusal (a rejected member name, a
+    # failed structural probe) would satisfy every assertion below, so the run has
+    # to prove it reached the extraction the fixture is built to break.
+    marker = "geoip zip extraction failed"
     try:
         # Given -- a tree already in service.
         deployed_vm.ssh(f"/bin/rm -rf {workdir} && /bin/mkdir -p {target}")
         deployed_vm.ssh(f"/bin/echo 203.0.113.99 > {target}/served.dat")
         before = _published_tree(deployed_vm, target)
         assert before.endswith("  ./served.dat"), f"fixture tree not in service: {before!r}"
+        marker_before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
 
         # When -- the corrupt archive drives the multi-member GeoIP arm.
         out = _adr46_download(
@@ -3814,6 +3819,12 @@ def test_geoip_partway_extraction_keeps_the_published_tree_byte_identical(
         # Then -- refused, with the publication untouched.
         assert "PFB_DL_FALSE" in out, (
             f"expected pfb_download success flag FALSE for an archive that fails part-way; got: {out!r}"
+        )
+        marker_after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert marker_after > marker_before, (
+            f"expected a NEW {marker!r} line — without it the download could have failed "
+            f"before extraction, which would satisfy the tree assertion for the wrong reason; "
+            f"count before={marker_before} after={marker_after}"
         )
         after = _published_tree(deployed_vm, target)
         assert after == before, (
