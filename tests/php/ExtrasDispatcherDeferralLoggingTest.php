@@ -219,11 +219,12 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 * The verb wiring is asserted against the dispatcher's source because
 	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires plus
 	 * pfb_global()'s real /var writes), the same reason GeoipSwapConsumerGuardTest
-	 * reads it as text. Comments are removed through token_get_all() first, so a
-	 * commented-out copy of the arm cannot stand in for live wiring, and each verb is
-	 * then matched from ITS OWN label through to the guard: label order, interleaved
-	 * labels and any equivalent reformat are tolerated, while a verb that can reach the
-	 * switch body without the guard -- or a guard that stops exiting 1 -- fails.
+	 * reads it as text. The oracle is PHP's own token stream, not the raw bytes: only
+	 * executable tokens survive, so a copy of the arm parked in a comment, heredoc,
+	 * nowdoc or inline-HTML block cannot stand in for live wiring. One space per token
+	 * also makes formatting irrelevant, so every equivalent reformat matches while a
+	 * verb that can reach the switch body without the guard -- or a guard that stops
+	 * exiting 1 -- fails.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
@@ -234,32 +235,33 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		$source = file_get_contents(self::PHP);
 		$this->assertIsString($source, 'test setup: could not read the verb dispatcher');
 
-		// Comments are not wiring: strip them before matching, keeping line structure so
-		// a trailing comment still ends its label's line. Without this a commented-out
-		// copy of the guarded arm satisfies the match while the live labels break out.
-		$code = '';
+		// Only executable tokens are wiring. Dropping whitespace and comments and
+		// blanking the payload of the literal kinds that can carry newlines leaves a
+		// stream no decoy copy of the arm can join, whatever it is parked inside.
+		$tokens = [];
 		foreach (token_get_all($source) as $token) {
 			if (!is_array($token)) {
-				$code .= $token;
+				$tokens[] = $token;
 				continue;
 			}
-			$code .= in_array($token[0], [T_COMMENT, T_DOC_COMMENT], TRUE)
-				? str_repeat("\n", substr_count($token[1], "\n"))
+			if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
+				continue;
+			}
+			$tokens[] = in_array($token[0], [T_ENCAPSED_AND_WHITESPACE, T_INLINE_HTML], TRUE)
+				? '<literal>'
 				: $token[1];
 		}
+		$code = implode(' ', $tokens);
+		$this->assertStringContainsString('pfb_extras_process_begin', $code,
+			'test setup: the verb dispatcher did not tokenise into anything recognisable');
 
-		// A label's colon may be followed only by the end of its line: `case 'dcc': break;`
-		// leaves that verb unguarded while still looking like a shared label.
-		$label = '(?:case\s*[\'"][a-z0-9_]+[\'"]|default)\s*:[ \t]*\n';
-		// Further labels and blank lines may sit between a verb and the guard it shares.
-		$filler = '(?:[ \t]*' . $label . '|[ \t]*\n)*';
-		$guard = '[ \t]*\$scheduled[ \t]*=[ \t]*\(\$argv\[2\][ \t]*\?\?[ \t]*\'\'\)[ \t]*===[ \t]*\'scheduled\';'
-			. '\s*if\s*\(\s*!\s*\$scheduled\s*&&\s*!\s*pfb_extras_process_begin\(\)\s*\)'
-			. '\s*\{\s*exit\(1\);\s*\}';
+		$label = '(?:case [\'"][a-z0-9_]+[\'"]|default) : ';
+		$guard = preg_quote('$scheduled = ( $argv [ 2 ] ?? \'\' ) === \'scheduled\' ; '
+			. 'if ( ! $scheduled && ! pfb_extras_process_begin ( ) ) { exit ( 1 ) ; }', '/');
 
 		foreach (['dc', 'dcc'] as $verb) {
 			$this->assertSame(1, preg_match(
-				'/case\s*[\'"]' . $verb . '[\'"]\s*:[ \t]*\n' . $filler . $guard . '/',
+				'/case [\'"]' . $verb . '[\'"] : (?:' . $label . ')*' . $guard . '/',
 				$code
 			), "issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
 				. 'on a dispatcher deferral');
