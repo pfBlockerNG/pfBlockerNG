@@ -5464,6 +5464,14 @@ function pfb_extras_process_begin(): bool
 	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 	if (!pfb_schedule_dispatch_begin()) {
+		// issue #2592: the Extras verbs exit 1 on a FALSE from here with no other
+		// output, so every guard must name itself or the failure is undiagnosable
+		// (issue #2496). Observability only -- the rc is deliberately unchanged.
+		pfb_logger("\n Extras process deferred: dispatcher lock unavailable.\n", 1);
+		// issue #2592: feed-pass parity (pfb_feed_pass_begin() raises LOG_NOTICE) --
+		// a live wedged lock holder must be visible outside /var/log/pfblockerng.
+		logger(LOG_NOTICE, localize_text('Feed pass [ extras ] deferred - the scheduler dispatcher lock is unavailable.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
 		return FALSE;
 	}
 	if (!pfb_feed_pass_begin('extras')) {
