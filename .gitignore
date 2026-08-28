@@ -67,6 +67,11 @@ test-results/
 *.graphify-bak
 graphify-out/*
 !graphify-out/graph.json
+# Query-outcome records accumulate across tickets, so they outlive the worktree that
+# wrote them. The re-include names the DIRECTORY: `graphify-out/*` matches `memory`
+# itself, and git never descends into an excluded directory, so a `/**` contents glob
+# would leave every record ignored. The reflect aggregate stays local — it is derivable.
+!graphify-out/memory/
 
 # Per-machine Claude Code / Grok overrides — never committed
 .claude/settings.local.json

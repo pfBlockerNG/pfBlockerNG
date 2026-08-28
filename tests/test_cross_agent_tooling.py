@@ -208,7 +208,19 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "harness/test",
         "stubs/` is shim/support",
         "graph.json` is tracked",
-        "everything else under `graphify-out/` is ignored",
+        "records under `graphify-out/memory/` are tracked",
+        # The query-outcome feedback loop (issue #2823). A dead end with no correction
+        # is what makes the next session re-derive it.
+        "graphify save-result",
+        "graphify reflect",
+        "dead_end",
+        "--correction",
+        "reflections/LESSONS.md",
+        # Graphify-first holds for code structure ONLY. Every query in this
+        # repository's first reflect run was a question the code graph cannot answer.
+        "grep first",
+        "reference counts",
+        "tool wiring",
         # Every agent tool installs the same way: one command that installs on a
         # fresh host and upgrades an outdated one, a floor at most, never a pin --
         # including the install added when a setup script hits a missing dependency.
@@ -270,6 +282,31 @@ def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> N
     assert "!.gitignore" in local_ignore
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".codegraph/" not in root_ignore, "root ignore would hide CodeGraph's own tracked contract"
+
+
+def test_graphify_memory_records_are_tracked_by_a_directory_reinclude() -> None:
+    # issue #2823: `!graphify-out/memory/**` does NOT work. `graphify-out/*` matches the
+    # memory directory itself, git never descends into it, and every record stays
+    # ignored while the ignore file reads as though they are tracked.
+    lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert lines.count("graphify-out/*") == 1, "one ignore rule, or the ordering below is ambiguous"
+    assert lines.count("!graphify-out/memory/") == 1, "re-include the directory, exactly once"
+    assert "!graphify-out/memory/**" not in lines, "a contents glob leaves every record ignored"
+    # gitignore takes the LAST matching rule, so the re-include must follow the ignore.
+    assert lines.index("graphify-out/*") < lines.index("!graphify-out/memory/")
+
+    def ignored(path: str) -> bool:
+        return (
+            subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT, capture_output=True, check=False).returncode
+            == 0
+        )
+
+    assert not ignored("graphify-out/memory/query_20260101_000000_probe.md"), "records must be trackable"
+    assert ignored("graphify-out/GRAPH_REPORT.md"), "the re-include must not un-ignore the rest"
+    assert ignored("graphify-out/reflections/LESSONS.md"), "the aggregate is derivable, so it stays local"
+
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    assert "graphify-out/memory/** linguist-documentation" in attributes, "records are prose, not code"
 
 
 def test_omp_language_servers_route_php_include_files() -> None:
