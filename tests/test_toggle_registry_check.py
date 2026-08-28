@@ -311,3 +311,14 @@ def test_every_2123_key_is_classified_as_a_toggle() -> None:
     assert len(expected) == 17
     plain = [f"{a}/{b}" for a, b in expected if keys.get((a, b)) is not True]
     assert not plain, f"issue #2123 keys not carrying the toggle read adapter: {plain}"
+
+
+def test_whitespace_between_brackets_does_not_evade_either_rule() -> None:
+    """`$pfb ['iconfig'] ['x']` is valid PHP and must not slip past the matchers."""
+    mirror = f"$pfb ['iconfig'] = PfbConfig::readSection('{IP_SECTION}');\n"
+    save = (
+        mirror + "$pfb ['iconfig'] ['pfb_new_flag'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';\n"
+    )
+    assert _rules(save) == ["unregistered-toggle"]
+    read = mirror + "$pconfig['enable_dup'] = $pfb ['iconfig'] ['enable_dup'] ?: '';\n"
+    assert _rules(read) == ["page-level-default"]
