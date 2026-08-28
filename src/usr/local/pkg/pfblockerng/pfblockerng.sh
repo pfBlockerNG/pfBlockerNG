@@ -2061,9 +2061,7 @@ processxlsx() {
 
 	# Nothing here is piped: POSIX sh has no pipefail, so a pipeline reports only
 	# its last command's status -- `grep`'s no-match exit 1 (issue #2682) and a
-	# child killed at the ceiling would both be lost. `tar -xOf` therefore writes
-	# the shared-strings part to a file, and `grep` stages its matches for
-	# `sort -u -o` to rewrite in place (POSIX permits -o's file among its inputs).
+	# ceiling kill would both be lost. (POSIX permits sort -o's file among its inputs.)
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
 	# `chmod` before the rename because published feeds have unprivileged readers

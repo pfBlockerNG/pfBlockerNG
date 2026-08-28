@@ -79,8 +79,6 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
   # success. Same sink, same collation requirement, one filename earlier.
   # issue #2682 took it off the pipe as well -- `grep` stages its matches and this
   # `sort` rewrites that file in place -- so grep's no-match status is readable.
-  # The collation requirement is unchanged; only the sink's form moved to `-o`,
-  # the same in-place idiom the masterfile sink below already uses.
   It 'prefixes the extracted-IP .orig sink with LC_ALL=C'
     When call has 'LC_ALL=C sort -u -o "${xlsxstage}" "${xlsxstage}"'
     The status should be success
