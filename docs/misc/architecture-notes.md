@@ -1380,34 +1380,28 @@ Live-VM smoke: `tests/smoke/test_syslog_export.py` (marker `smoke`).
 
 ## Feed content-sanity scan (ADR-49)
 
-`pfb_text_sanity()` reads up to the first 64 KiB of a feed and returns one of three verdicts —
-`nul_bytes`, `html_error_page`, `below_min_content` — or `null` when the sample looks like a list.
-A verdict fails the download through the ADR-48 canonical line
-(`pfb_validate: REJECT feed=… stage=plaintext reason=<verdict> detected=<file>`) and leaves the
-data already in service untouched.
-
 **The scan is opt-in and its registered default is OFF.** `gen/pfb_feed_sanity` (a `PfbToggle`,
-default `''` ⇒ `Off`) gates it, there is no GUI checkbox, and the flag is read first in the gate —
-so on a default install the scan never runs and no feed on any path gets a content verdict.
-Turning it on is a deliberate operator choice. The default is an ADR-28 convention-2 decision (an
-off install pays no cost); changing it is a separate decision, not implied by anything here.
+default `''` ⇒ `Off`) gates both feed gates below, there is no GUI checkbox, and the flag is read
+first in each — so on a default install neither gate runs and no feed gets a content verdict from
+either. (`pfb_top1m_candidate_valid()` consults the same scanner unconditionally; that TOP1M
+semantic check is not gated by this flag.) Turning the flag on is a deliberate operator choice;
+the default is an ADR-28 convention-2 decision (an off install pays no cost), and changing it is a
+separate decision.
 
-Two gates, one scanner:
+The scanner and its verdicts are ADR-49's record. What moved since: the gate is no longer only
+the wire body's MIME type. `pfb_extracted_text_sanity()` applies the same scanner inside each
+staged publication of a decompressed `.orig` — gzip, bzip2, zip, plain tar — sampling the
+*staged* extraction so a verdict refuses the publication instead of replacing it (issue #2660).
+Where an earlier gate already refuses the same bytes (the compressed-inner and ZIP inner-content
+MIME checks) that gate keeps its own reason. Deliberately out of the scan: the archive paths that
+publish something other than a text `.orig` (GeoIP, ASN, TOP1M, Blacklist category trees), which
+are not text lists and keep their own validation, and the ZIP `.xlsx` arm, where `processxlsx()`
+emits only matched IPv4 tokens and already refuses an addressless workbook (issue #2682).
 
-- **Wire body** — in `pfb_download()`, after the MIME allow-list gate, for a body libmagic calls
-  `text/plain`, `text/html`, `text/csv` or `application/csv`.
-- **Extracted payload** — `pfb_extracted_text_sanity()` inside each staged publication of a
-  decompressed `.orig` (gzip, bzip2, zip, plain tar). It samples the *staged* extraction, so a
-  verdict refuses the publication instead of replacing it (issue #2660). Where an earlier gate
-  already refuses the same bytes — the compressed-inner and ZIP inner-content MIME checks — that
-  gate keeps its own reason. The archive paths that publish something other than a text `.orig`
-  (GeoIP, ASN, TOP1M, Blacklist category trees) are not text lists and keep their own validation;
-  the ZIP `.xlsx` arm cannot reach a verdict because `processxlsx()` emits only matched IPv4
-  tokens and already refuses an addressless workbook (issue #2682).
-
-Contracts pinned by `PfbTextSanityTest`, `PfbTextSanityUtf16Test`,
-`DownloadExtractedPayloadSanityTest`, and `FeedCorpusSurveyTest` (the offline false-positive
-survey over the committed feed corpus); live-VM coverage in `tests/smoke/test_smoke_feeds.py`.
+Off-appliance limit (issue #2821): the ZIP arm extracts through a `set -o pipefail` pipeline, and
+PHP's `exec()` runs `/bin/sh`. A `/bin/sh` without `pipefail` (Debian's dash, so the Linux CI
+runner) aborts before `tar` runs, so `DownloadExtractedPayloadSanityTest` skips its zip rows there;
+FreeBSD's `sh` has it, and the live-VM tier covers that arm.
 
 ## Change detection / content hashing (ADR-42)
 
