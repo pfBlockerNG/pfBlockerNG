@@ -2045,9 +2045,11 @@ processet() {
 # contract -- it refuses the refresh instead of publishing an empty feed.
 #
 # issue #2684: the shared-strings part is streamed, not written to a file. It is
-# XML, so it expands by two orders of magnitude past the workbook carrying it
-# (measured 49,160 bytes on disk -> 10,083,388 decompressed), and ${tmpdir} is a
-# RAM disk on a default use_mfs_tmpvar install.
+# XML, so it expands by two orders of magnitude past the workbook carrying it --
+# 4,181,827 bytes from a 20,897-byte workbook on the fixture in
+# tests/shell/pfblockerng_processxlsx_stream_spec.sh, and 10,083,388 from 49,160
+# on a real ZIP-in-ZIP workbook -- while ${tmpdir} is a RAM disk on a default
+# use_mfs_tmpvar install.
 processxlsx() {
 	if [ ! -x "${pathtar}" ]; then
 		log='Application [ TAR ] Not found, cannot proceed.'
