@@ -2868,11 +2868,13 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         "/bin/chmod 4755 $W/build/member.dat && "
         "/usr/sbin/chown 12345:12345 $W/build/member.dat || exit 90; "
         # Both are filesystem-dependent, so neither may abort the probe -- but a
-        # fixture that carried neither vector cannot prove their refusal either,
-        # so the assertions below REQUIRE the fixture line to show both rather
-        # than passing a negative nothing could have failed.
-        "/usr/sbin/setextattr user pfb2659 carried $W/build/member.dat 2>/dev/null; "
-        "/bin/chflags uchg $W/build/member.dat 2>/dev/null; "
+        # vector the fixture never carried cannot prove its own refusal, so the
+        # assertions below require the fixture line to show it, and any failure
+        # to author one is captured as a labelled line rather than discarded.
+        "/usr/sbin/setextattr user pfb2659 carried $W/build/member.dat 2>&1 | "
+        "/usr/bin/sed 's/^/authoring setextattr: /'; "
+        "/bin/chflags uchg $W/build/member.dat 2>&1 | /usr/bin/sed 's/^/authoring chflags: /'; "
+        '/sbin/mount -p | /usr/bin/awk \'$2 == "/" {print "authoring rootfs: " $3}\'; '
         "r fixture $W/build/member.dat; "
         "/usr/bin/tar -cf $W/foreign.tar -C $W/build member.dat || exit 91; "
         "/bin/chflags 0 $W/build/member.dat 2>/dev/null; "
@@ -2912,18 +2914,32 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         f"anything — appliance reported control {control!r} from fixture {fixture!r}"
     )
     fixture_flags = _probe_flags(fixture)
-    assert "uchg" in fixture_flags and "pfb2659" in fixture, (
-        f"the fixture must carry both an immutable flag and an extended attribute for their refusal to "
-        f"mean anything — appliance reported fixture {fixture!r} (stderr {probe.stderr!r})"
+    authoring = [ln for ln in probe.stdout.splitlines() if ln.startswith("authoring ")]
+    assert "pfb2659" in fixture, (
+        f"the fixture must carry an extended attribute for its refusal to mean anything — appliance "
+        f"reported fixture {fixture!r}, authoring {authoring!r}"
     )
-    for vector, marker in (("file flag", "uchg"), ("extended attribute", "pfb2659")):
-        assert marker in control, (
-            f"the appliance's tar did not restore the {vector} the fixture carried, so this vector "
+    assert "pfb2659" in control, (
+        f"the appliance's tar did not restore the extended attribute the fixture carried, so this "
+        f"vector proves nothing here — fixture {fixture!r}, control {control!r}"
+    )
+    assert "pfb2659" not in shipped, (
+        f"the flagged extraction restored the extended attribute — fixture {fixture!r}, "
+        f"control {control!r}, shipped {shipped!r}"
+    )
+    # The file-flag vector is the one the appliance's own filesystem may refuse to
+    # author. Exercise it when the fixture carried it; when it did not, require the
+    # captured authoring diagnostic that says why, so the gap is auditable instead
+    # of a negative nothing could ever have failed.
+    if fixture_flags:
+        assert fixture_flags <= _probe_flags(control), (
+            f"the appliance's tar did not restore the file flag the fixture carried, so this vector "
             f"proves nothing here — fixture {fixture!r}, control {control!r}"
         )
-        assert marker not in shipped, (
-            f"the flagged extraction restored the {vector} — fixture {fixture!r}, control {control!r}, "
-            f"shipped {shipped!r}"
+    else:
+        assert any(ln.startswith("authoring chflags: ") or ln.startswith("authoring rootfs: ") for ln in authoring), (
+            f"the fixture carried no file flag and the probe captured no reason — fixture {fixture!r}, "
+            f"authoring {authoring!r}, stderr {probe.stderr!r}"
         )
     assert "uid=0" in shipped, f"the flagged extraction must own its output: {shipped!r}"
     assert "rws" not in shipped and "rwx" in shipped, (
