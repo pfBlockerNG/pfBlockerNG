@@ -6705,13 +6705,15 @@ function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
 }
 
 /**
- * pfb_sync_status_close_removed_alias — close the stage=download ledger entry for an
- * IP/DNSBL alias removed by our own WebUI (renamed or deleted). $gtype selects the
- * download-key shape (pfb_ip/dnsbl_download_ledger_update's own prefix/suffix rules);
- * an empty $aliasname or an unrecognized $gtype (e.g. 'geoip') is a no-op.
+ * pfb_sync_status_close_removed_alias — close the ALIAS-PASS-managed ledger entries for
+ * an IP/DNSBL alias removed by our own WebUI (renamed or deleted). $gtype selects the
+ * key shape (pfb_ip/dnsbl_download_ledger_update's own prefix/suffix rules); an empty
+ * $aliasname or an unrecognized $gtype (e.g. 'geoip') is a no-op.
  *
- * Only the download stage closes -- apply/parse/dedup stay tick-managed (issue
- * #1014/#1019; ADR-61 §2.2 symmetric ownership).
+ * 'download' and 'script' both close: their paired clears run at the end of the alias's
+ * OWN pass, and a deleted alias never gets another one, so the entry would strand
+ * (issue #1014/#1019, #2060). 'apply' stays tick-managed and 'parse' Python-managed --
+ * those reconcile without the alias (ADR-61 §2.2 symmetric ownership).
  *
  * @param string $gtype     'ipv4' | 'ipv6' | 'dnsbl' (any other value is a no-op).
  * @param string $aliasname The REMOVED alias's raw aliasname (empty = no-op).
@@ -6726,17 +6728,24 @@ function pfb_sync_status_close_removed_alias(string $gtype, string $aliasname, s
 
 	switch ($gtype) {
 		case 'ipv4':
-			pfb_sync_status_close('ip', "pfB_{$aliasname}_v4", 'download', $ledger_dir);
+			$facility = 'ip';
+			$item     = "pfB_{$aliasname}_v4";
 			break;
 		case 'ipv6':
-			pfb_sync_status_close('ip', "pfB_{$aliasname}_v6", 'download', $ledger_dir);
+			$facility = 'ip';
+			$item     = "pfB_{$aliasname}_v6";
 			break;
 		case 'dnsbl':
-			pfb_sync_status_close('dnsbl', "DNSBL_{$aliasname}", 'download', $ledger_dir);
+			$facility = 'dnsbl';
+			$item     = "DNSBL_{$aliasname}";
 			break;
 		default:
-			// unknown gtype (e.g. 'geoip') -- no download ledger key shape defined, no-op
-			break;
+			// unknown gtype (e.g. 'geoip') -- no ledger key shape defined, no-op
+			return;
+	}
+
+	foreach (['download', 'script'] as $stage) {
+		pfb_sync_status_close($facility, $item, $stage, $ledger_dir);
 	}
 }
 
