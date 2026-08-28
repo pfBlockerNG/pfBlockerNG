@@ -173,13 +173,18 @@ setup_serena_client() {
 }
 
 configure_agents() {
+	# `graphify <client> install` wires the client's always-on hooks for the scope
+	# it runs in; `graphify install --platform <client>` copies the skill itself.
+	# The two are disjoint for Claude Code and Codex, so an upgrade needs both or
+	# the client keeps running the previous release's skill. Copilot and Pi have
+	# no hook wiring: their client subcommand IS the skill copy.
 	if command -v claude >/dev/null 2>&1; then
 		setup_serena_client claude claude-code
-		(cd "$HOME" && graphify claude install)
+		(cd "$HOME" && graphify claude install && graphify install --platform claude)
 	fi
 	if command -v codex >/dev/null 2>&1; then
 		setup_serena_client codex codex
-		(cd "$HOME" && graphify codex install)
+		(cd "$HOME" && graphify codex install && graphify install --platform codex)
 	fi
 	if command -v grok >/dev/null 2>&1; then
 		setup_serena_client grok grok
