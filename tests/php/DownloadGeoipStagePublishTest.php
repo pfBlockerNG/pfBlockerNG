@@ -58,7 +58,12 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->removeTree($this->dir);
 	}
 
-	/** Every file under $path as relative-path => md5, dot entries included. */
+	/**
+	 * Every entry under $path as relative-path => md5, dot entries included.
+	 * Directories carry their own key: an empty one adds no file, so without it a
+	 * refused publication could leave its staging directory in the share and every
+	 * byte-identity assertion would still pass.
+	 */
 	private function snapshot(string $path, string $prefix = ''): array
 	{
 		$seen = array();
@@ -68,6 +73,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 			if (is_link($child)) {
 				$seen[$label] = 'symlink:' . (string) readlink($child);
 			} elseif (is_dir($child)) {
+				$seen["{$label}/"] = 'dir';
 				$seen += $this->snapshot($child, "{$label}/");
 			} else {
 				$seen[$label] = (string) md5_file($child);
