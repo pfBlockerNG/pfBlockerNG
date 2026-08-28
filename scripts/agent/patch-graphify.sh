@@ -61,10 +61,13 @@ main() {
 		*) skip "'$graphify_bin' does not name a Python interpreter on its shebang" ;;
 	esac
 
-	# Both probes run isolated (-I: no cwd, no PYTHONPATH, no user site) from a neutral
-	# directory, so a module beside the caller cannot answer for the installed package
-	# -- or run at all. The CLI's own interpreter already resolves its own graphify.
-	package=$(cd / && "$interpreter" -I -c \
+	# Both probes run isolated (-I), which since Python 3.4 keeps the caller's directory
+	# off sys.path and, by implying -E and -s, keeps PYTHONPATH and the user site
+	# directory off it too. So a module beside the caller, on PYTHONPATH, or in the user
+	# site cannot answer for the installed package -- or run at all. Graphify needs
+	# >=3.10, so every interpreter that can run it honours the flag. The CLI's own
+	# interpreter already resolves its own graphify.
+	package=$("$interpreter" -I -c \
 		'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>/dev/null) || package=''
 	[ -n "$package" ] || skip "cannot locate an importable Graphify package for '$graphify_bin'"
 	[ -d "$package" ] || fail "Graphify package directory '$package' does not exist"
@@ -72,8 +75,8 @@ main() {
 
 	# Ask the package itself, not the file text: this no-ops both on an already
 	# patched install and on the release that finally carries the change upstream.
-	if (cd / && "$interpreter" -I -c \
-		'import graphify.rcfile as rc; raise SystemExit(0 if hasattr(rc, "activate_language_overrides") else 1)') \
+	if "$interpreter" -I -c \
+		'import graphify.rcfile as rc; raise SystemExit(0 if hasattr(rc, "activate_language_overrides") else 1)' \
 		>/dev/null 2>&1; then
 		echo "patch-graphify.sh: '$package' already provides the .inc language override; nothing to patch" >&2
 		return 0
