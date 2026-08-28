@@ -219,10 +219,11 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 * The verb wiring is asserted against the dispatcher's source because
 	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires plus
 	 * pfb_global()'s real /var writes), the same reason GeoipSwapConsumerGuardTest
-	 * reads it as text. Each verb is matched from ITS OWN label through to the guard,
-	 * so label order and an equivalent reformat are tolerated while a verb that can
-	 * reach the switch body without the guard -- or a guard that stops exiting 1 --
-	 * fails.
+	 * reads it as text. Comments are removed through token_get_all() first, so a
+	 * commented-out copy of the arm cannot stand in for live wiring, and each verb is
+	 * then matched from ITS OWN label through to the guard: label order, interleaved
+	 * labels and any equivalent reformat are tolerated, while a verb that can reach the
+	 * switch body without the guard -- or a guard that stops exiting 1 -- fails.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
@@ -233,19 +234,33 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		$source = file_get_contents(self::PHP);
 		$this->assertIsString($source, 'test setup: could not read the verb dispatcher');
 
-		// Nothing executable may ride behind a label's colon: `case 'dcc': break;`
+		// Comments are not wiring: strip them before matching, keeping line structure so
+		// a trailing comment still ends its label's line. Without this a commented-out
+		// copy of the guarded arm satisfies the match while the live labels break out.
+		$code = '';
+		foreach (token_get_all($source) as $token) {
+			if (!is_array($token)) {
+				$code .= $token;
+				continue;
+			}
+			$code .= in_array($token[0], [T_COMMENT, T_DOC_COMMENT], TRUE)
+				? str_repeat("\n", substr_count($token[1], "\n"))
+				: $token[1];
+		}
+
+		// A label's colon may be followed only by the end of its line: `case 'dcc': break;`
 		// leaves that verb unguarded while still looking like a shared label.
-		$label = '[ \t]*(?:case[ \t]*\'[a-z0-9_]+\'|default)[ \t]*:[ \t]*(?:\/\/[^\n]*)?\n';
-		// Further labels, comment-only lines and blank lines may sit between the two.
-		$filler = '(?:' . $label . '|[ \t]*(?:\/\/[^\n]*)?\n)*';
+		$label = '(?:case\s*[\'"][a-z0-9_]+[\'"]|default)\s*:[ \t]*\n';
+		// Further labels and blank lines may sit between a verb and the guard it shares.
+		$filler = '(?:[ \t]*' . $label . '|[ \t]*\n)*';
 		$guard = '[ \t]*\$scheduled[ \t]*=[ \t]*\(\$argv\[2\][ \t]*\?\?[ \t]*\'\'\)[ \t]*===[ \t]*\'scheduled\';'
 			. '\s*if\s*\(\s*!\s*\$scheduled\s*&&\s*!\s*pfb_extras_process_begin\(\)\s*\)'
 			. '\s*\{\s*exit\(1\);\s*\}';
 
 		foreach (['dc', 'dcc'] as $verb) {
 			$this->assertSame(1, preg_match(
-				'/[ \t]*case[ \t]*\'' . $verb . '\'[ \t]*:[ \t]*(?:\/\/[^\n]*)?\n' . $filler . $guard . '/',
-				$source
+				'/case\s*[\'"]' . $verb . '[\'"]\s*:[ \t]*\n' . $filler . $guard . '/',
+				$code
 			), "issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
 				. 'on a dispatcher deferral');
 		}
