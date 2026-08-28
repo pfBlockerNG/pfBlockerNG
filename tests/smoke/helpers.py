@@ -5318,7 +5318,9 @@ def redact_pkg_urls(text: str) -> str:
     """Strip userinfo and token-shaped query values from pkg dump text.
 
     ``pkg -vv`` and ``/usr/local/etc/pkg/repos/*`` can embed credentials.
-    Capture-time redaction (issue #2754) so the diag tarball never holds them.
+    Capture-time redaction (issue #2754) is a partial mitigation: userinfo
+    and the named query keywords are stripped. Residual risk includes
+    path-segment tokens, compound names, headers, and ``;``-separated params.
     ABI / ALTABI / ``uname -mr`` have no URLs and are unchanged.
     """
     out = _PKG_USERINFO_RE.sub(r"\1REDACTED@", text)

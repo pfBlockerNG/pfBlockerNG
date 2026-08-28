@@ -95,6 +95,18 @@ def test_redact_pkg_urls_leaves_clean_urls_intact() -> None:
     assert helpers.redact_pkg_urls(raw) == raw
 
 
+def test_redact_pkg_urls_docstring_names_partial_mitigation() -> None:
+    """Given redact_pkg_urls
+    When its docstring is read
+    Then it names a partial mitigation and residual path-segment risk,
+    not that the tarball never holds credentials.
+    """
+    src = inspect.getsource(helpers.redact_pkg_urls)
+    assert "never holds" not in src
+    assert "partial mitigation" in src
+    assert "path-segment" in src
+
+
 def test_collect_host_diagnostics_redacts_pkg_urls_at_capture() -> None:
     """Given the guest snapshot script
     When it captures pkg -vv and repo confs
