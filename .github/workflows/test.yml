@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     # issue #2614: kernel-lock reachable, and a flock(2) acquire has no timeout of its
     # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
-    # than failing here. Observed median 3.5 min, worst 4.1.
+    # than failing here. Observed median 3.5 min, worst 3.9.
     timeout-minutes: 20
 
     strategy:
