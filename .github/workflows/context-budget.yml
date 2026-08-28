@@ -86,8 +86,8 @@ jobs:
           cp -- "$ledger" "$ledger_before"
           trap 'git rm -q --cached -- "$canary" 2>/dev/null || true
                 rm -f -- "$canary" canary.log
-                cp -- "$ledger_before" "$ledger"
-                rm -f -- "$ledger_before"' EXIT
+                cp -- "$ledger_before" "$ledger" && rm -f -- "$ledger_before" \
+                  || echo "WARNING: $ledger not restored; its original bytes are at $ledger_before"' EXIT
 
           expect_violation() {  # expect_violation <expected violation substring>
             if python3 scripts/check_context_budget.py --all > canary.log 2>&1; then

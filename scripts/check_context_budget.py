@@ -99,11 +99,12 @@ LEDGER = ".agents/policy/coderabbit-misses.md"
 LEDGER_OWNER = ".agents/policy/coderabbit.md"
 LEDGER_ENTRY_MAX = 200
 LEDGER_ENTRY_RE = re.compile(r"^- `(?P<sha>[0-9a-f]{7,40})`  (?P<title>\S.*\S)  \(#(?P<pr>\d+)\)(?: — \S.*)?$")
-# Anything that could carry an entry past the reader's eye: a list item under any
-# Markdown marker, hidden behind indentation or a U+FEFF, or wrapped in an HTML
-# comment. Such a line is an entry for checking purposes, and a malformed one —
-# the header above the list is prose, and prose does not start like this.
-_LEDGER_ENTRYISH_RE = re.compile(r"^[\s\ufeff]*(?:[-*+]\s|\d+[.)]\s|<!--)")
+# Everything above the first entry is prose, and prose is where a narrative can
+# park unnoticed: enumerating the markers it could wear (`-`, `*`, `1.`, `#`,
+# `>`, `:`, `•`, an HTML comment, an invisible U+FEFF …) is a game the next
+# reviewer wins. The header answers to its own byte cap instead, which bounds
+# every shape at once and leaves ordinary prose alone.
+LEDGER_HEADER_MAX = 1_200
 
 SETTINGS = ".claude/settings.json"
 
@@ -208,7 +209,7 @@ def check_sizes(root: Path, tracked: list[str]) -> list[str]:
 
 
 def check_ledger_entries(root: Path) -> list[str]:
-    """One line per merged SHA, within LEDGER_ENTRY_MAX bytes, no SHA listed twice."""
+    """Capped header, then one line per merged SHA within LEDGER_ENTRY_MAX, no SHA twice."""
     try:
         text = (root / LEDGER).read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -222,14 +223,20 @@ def check_ledger_entries(root: Path) -> list[str]:
     violations: list[str] = []
     first_line_of: dict[str, int] = {}
     entries = 0
+    header_bytes = 0
     for lineno, line in enumerate(text.splitlines(), 1):
         match = LEDGER_ENTRY_RE.match(line)
         if match is None:
-            # Header prose is only tolerated ABOVE the list: once entries have
-            # started, a narrative continuation line is drift like any other.
-            if (entries or _LEDGER_ENTRYISH_RE.match(line)) and line.strip():
-                violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
-                entries += 1
+            if entries or line.startswith("- "):
+                # The list opens at the documented marker, and from there the
+                # file is entries: a malformed one, or a narrative continuation
+                # line, is the drift this gate exists to stop. Anything above
+                # that first `- ` is header prose, bounded by the header cap.
+                if line.strip():
+                    violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
+                    entries += 1
+            else:
+                header_bytes += len(line.encode("utf-8")) + 1  # the newline ships too
             continue
         entries += 1
         size = len(line.encode("utf-8"))
@@ -238,6 +245,8 @@ def check_ledger_entries(root: Path) -> list[str]:
         first = first_line_of.setdefault(match["sha"], lineno)
         if first != lineno:
             violations.append(f"{LEDGER}:{lineno}: SHA `{match['sha']}` is listed twice (first at line {first})")
+    if header_bytes > LEDGER_HEADER_MAX:
+        violations.append(f"{LEDGER}: header is {header_bytes} bytes > cap {LEDGER_HEADER_MAX}")
     if entries == 0:
         # Zero parsed entries is drift (or an emptied list), never a clean pass —
         # the same rule the routing-table extraction already follows.
