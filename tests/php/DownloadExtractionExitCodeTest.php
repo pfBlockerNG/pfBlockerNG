@@ -292,12 +292,16 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($geoip);
 		$this->assertNotFalse($top1m);
 		$scope = substr(self::$source, $geoip, $top1m - $geoip);
-		$this->assertStringContainsString('exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1"), $output, $retval);', $scope);
+		// issue #2668: the directory mode extracts into staging inside its target
+		// and publishes the members only on a clean exit, so its -C is the staged
+		// path rather than the live publication.
+		$this->assertStringContainsString('exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);', $scope);
 		$this->assertStringContainsString(
 			'exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);', $scope);
 		// issue #2169: the stdout mode publishes through the staged helper; the
-		// directory mode still reaches the shared zero-only gate below it.
+		// directory mode publishes through the staged merge helper.
 		$this->assertStringContainsString('if (!pfb_stage_publish($head_download,', $scope);
+		$this->assertStringContainsString('if (!pfb_stage_publish_dir_merge($head_download,', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
@@ -495,7 +499,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * Issue #2764 F3 — geoip tar -C is geoipshare with ADR-46, in one helper.
+	 * Issue #2764 F3 — geoip tar has ADR-46 in one helper, and since issue #2668 its
+	 * -C is a staging directory inside geoipshare rather than the live share itself.
 	 * Comments/docblocks cannot define this scope.
 	 */
 	public function testGeoipTarExtractHelperWritesShareNotHeader(): void
@@ -505,11 +510,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$brace = strpos(self::$source, '{', $start);
 		$this->assertNotFalse($brace);
 		$body = substr(self::$source, $start, self::closingBraceExclusive(self::$source, $brace) - $start);
-		$this->assertStringContainsString('-C {$pfb[\'geoipshare\']}', $body);
+		$this->assertStringContainsString('pfb_stage_publish_dir_merge($pfb[\'geoipshare\'],', $body);
+		$this->assertStringNotContainsString('-C {$pfb[\'geoipshare\']}', $body);
 		$this->assertStringNotContainsString('-C {$header_esc}', $body);
 		$this->assertStringContainsString('pfb_archive_unsafe_member', $body);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $body);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $body);
 	}
 
 	/**
