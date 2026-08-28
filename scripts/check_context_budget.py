@@ -17,6 +17,7 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
 - any single hook command (pre-tokenization cap)   11,000 B
+- each `coderabbit-misses.md` ledger entry            200 B
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
@@ -84,6 +85,16 @@ FILE_BUDGETS = {
     ".agents/policy/agent-roles.md": 19_000,
     ".agents/policy/delegation.md": 18_000,
 }
+
+# The append-only missed-review ledger (coderabbit.md "Missed-review backlog").
+# It gains one line per missed review forever, so the only thing keeping it
+# inside POLICY_BUDGET is the one-line format its own header documents. Entries
+# that drifted into 1,500-2,000-byte review narratives ate the whole budget and
+# left 17 bytes of headroom (#2829); the narrative belongs in that PR's audit
+# comments, and the ledger carries the pointer newest first.
+LEDGER = ".agents/policy/coderabbit-misses.md"
+LEDGER_ENTRY_MAX = 200
+LEDGER_ENTRY_RE = re.compile(r"^- `(?P<sha>[0-9a-f]{7,40})`  (?P<title>\S.*\S)  \(#(?P<pr>\d+)\)(?: — \S.*)?$")
 
 SETTINGS = ".claude/settings.json"
 
@@ -184,6 +195,38 @@ def check_sizes(root: Path, tracked: list[str]) -> list[str]:
             continue
         if size > budget:
             violations.append(f"{rel}: {size} bytes > budget {budget}")
+    return violations
+
+
+def check_ledger_entries(root: Path) -> list[str]:
+    """One line per merged SHA, within LEDGER_ENTRY_MAX bytes, no SHA listed twice."""
+    try:
+        text = (root / LEDGER).read_text(encoding="utf-8")
+    except OSError:
+        # Not every checked root carries the ledger (scratch roots do not); a
+        # tracked-but-unreadable file is check_sizes's verdict, not this one's.
+        return []
+    violations: list[str] = []
+    first_line_of: dict[str, int] = {}
+    entries = 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not line.startswith("- "):
+            continue
+        entries += 1
+        match = LEDGER_ENTRY_RE.match(line)
+        if match is None:
+            violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
+            continue
+        size = len(line.encode("utf-8"))
+        if size > LEDGER_ENTRY_MAX:
+            violations.append(f"{LEDGER}:{lineno}: entry is {size} bytes > cap {LEDGER_ENTRY_MAX}")
+        first = first_line_of.setdefault(match["sha"], lineno)
+        if first != lineno:
+            violations.append(f"{LEDGER}:{lineno}: SHA `{match['sha']}` is listed twice (first at line {first})")
+    if entries == 0:
+        # Zero parsed entries is drift (or an emptied list), never a clean pass —
+        # the same rule the routing-table extraction already follows.
+        violations.append(f"{LEDGER}: no entries parsed — has the one-line format drifted?")
     return violations
 
 
@@ -468,6 +511,7 @@ def run_checks(root: Path, tracked: list[str]) -> list[str]:
         + check_capsules(root)
         + check_parity(root)
         + check_indirect_producers(root)
+        + check_ledger_entries(root)
     )
 
 

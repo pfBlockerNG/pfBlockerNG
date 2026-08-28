@@ -164,6 +164,73 @@ def test_rules_budget_over_fires_and_at_budget_passes(tmp_path: Path) -> None:
     assert violations == [".claude/rules/x.md: 401 bytes > budget 400"]
 
 
+# --- the append-only CodeRabbit ledger keeps its one-line format (#2829) -------
+
+
+def _ledger_entry(nbytes: int, sha: str = "deadbeef", pr: int = 1) -> str:
+    """One ASCII ledger entry of exactly nbytes bytes, padded in the clause."""
+    stem = f"- `{sha}`  a title  (#{pr}) — "
+    return stem + "y" * (nbytes - len(stem.encode("utf-8")))
+
+
+def test_ledger_entry_at_cap_passes(tmp_path: Path) -> None:
+    _write(tmp_path, ccb.LEDGER, _ledger_entry(ccb.LEDGER_ENTRY_MAX) + "\n")
+    assert ccb.check_ledger_entries(tmp_path) == []
+
+
+def test_ledger_entry_one_byte_over_cap_fires(tmp_path: Path) -> None:
+    over = ccb.LEDGER_ENTRY_MAX + 1
+    _write(tmp_path, ccb.LEDGER, _ledger_entry(over) + "\n")
+    assert ccb.check_ledger_entries(tmp_path) == [f"{ccb.LEDGER}:1: entry is {over} bytes > cap {ccb.LEDGER_ENTRY_MAX}"]
+
+
+def test_ledger_narrative_entry_fires(tmp_path: Path) -> None:
+    # The #2829 regression shape: a ~1,900-byte review narrative appended in
+    # place of the documented one-liner. Twelve of those ate the file's budget,
+    # and the narrative they carry already lives in that PR's audit comments.
+    _write(tmp_path, ccb.LEDGER, _ledger_entry(1_900) + "\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "1900 bytes > cap" in violations[0], violations
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "- `deadbeef`  a title with no PR number",
+        "- a title  (#1)",  # no SHA
+        "- `deadbeef` a title  (#1)",  # single space, not the documented two
+        "- `deadbeef`  a title  (#1) - clause",  # hyphen, not the em-dash clause marker
+    ],
+)
+def test_ledger_malformed_entry_fires(tmp_path: Path, line: str) -> None:
+    _write(tmp_path, ccb.LEDGER, line + "\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "does not match" in violations[0], violations
+
+
+def test_ledger_duplicate_sha_fires(tmp_path: Path) -> None:
+    # One line per merged SHA: a re-appended entry is a double-count, and the
+    # ledger carried exactly that (`de69f67b` twice) until #2829.
+    entry = _ledger_entry(60)
+    _write(tmp_path, ccb.LEDGER, f"{entry}\n{entry}\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "listed twice" in violations[0], violations
+
+
+def test_ledger_without_entries_fires_rather_than_passing_vacuously(tmp_path: Path) -> None:
+    # Zero parsed entries means the format drifted (or the list was emptied) —
+    # never a clean pass, same rule the routing-table extraction already follows.
+    _write(tmp_path, ccb.LEDGER, "# CodeRabbit missed reviews\n\nNothing here.\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "no entries" in violations[0], violations
+
+
+def test_ledger_absent_from_the_root_is_not_a_violation(tmp_path: Path) -> None:
+    # Scratch roots (and any tree that never carried the ledger) stay clean;
+    # a tracked-but-unreadable file is check_sizes's verdict, not this one's.
+    assert ccb.check_ledger_entries(tmp_path) == []
+
+
 # --- routing-table extraction and resolution -----------------------------------
 
 
@@ -900,9 +967,78 @@ def test_ci_workflow_paths_match_checker_triggers() -> None:
         assert set(listed) == expected, f"{name} paths {sorted(listed)} != checker triggers {sorted(expected)}"
 
 
+def test_ci_workflow_arms_the_red_canary() -> None:
+    # This gate only ever runs green, so nothing else would notice a checker that
+    # stopped firing — and its failure mode surfaces at commit time, not in CI
+    # (#2829). The canary deliberately breaks the tree and requires the matching
+    # violation; deleting the step must fail here rather than go unnoticed.
+    text = (_REPO_ROOT / ".github/workflows/context-budget.yml").read_text(encoding="utf-8")
+    assert "Red canary" in text
+    assert f"bytes > budget {ccb.POLICY_BUDGET}" in text
+    assert f"> cap {ccb.LEDGER_ENTRY_MAX}" in text
+
+
 # --- the live tree stays within its own budgets --------------------------------
 
 
 def test_live_repository_tree_is_clean() -> None:
     tracked = _tracked(_REPO_ROOT)
     assert ccb.run_checks(_REPO_ROOT, tracked) == []
+
+
+# --- the live CodeRabbit ledger: recorded SHAs, recorded order, stated format ---
+
+# Every SHA the ledger carried when #2829 compressed the narrative entries back
+# to the documented one-liner, newest first (merge order, each position verified
+# against that PR's `merged_at`). Compressing or rewording an entry may never
+# drop one, and a new miss is PREPENDED, so this block stays the tail of the
+# list and recording a miss needs no edit here.
+_LEDGER_RECORDED = (
+    ("85bb57e3", 2819, "download: sanity-scan an archive's extracted payload"),
+    ("76b4ecc9", 2816, "download: stream the XLSX shared-strings part past the run tmpdir"),
+    ("309b1902", 2806, "download: refuse an XLSX extraction that finds no address"),
+    ("3aa51d4d", 2782, "pfblockerng: stage the two direct-write GeoIP extractions"),
+    ("4fa68d01", 2790, "tests: align the worktree-intelligence pin with the tracked root graph"),
+    ("3aab75a1", 2775, "install-pkg.sh: fail closed when pkg POST-INSTALL fails"),
+    ("624e9a75", 2756, "install.sh: document fetch-to-file not fetch|sh"),
+    ("f9a7e158", 2740, "pfblockerng: unlink leftover Blacklist orig/hash sidecars"),
+    ("8bb7d925", 2742, "pfblockerng: fail closed on bzip2/zip Blacklist bodies"),
+    ("dc1debe1", 2741, "ci: add scripted refresh for artifact-action majors"),
+    ("7896e379", 2737, "pfblockerng: return from gzip Blacklist success arm"),
+    ("b9cc813d", 2593, "smoke: bootstrap ports clone into an empty pre-created dir"),
+    ("86792fc5", 2594, "download: reject tar-bearing feeds"),
+    ("29c9111e", 2576, "install: fail closed when pkg reports a script failure"),
+    ("01c6ebd6", 2536, "install.sh: refuse an empty CA hash directory"),
+    ("1f348346b", 2523, "Consented pkg.conf PKG_ENV patch so GUI and CLI pkg operations work on Plus boxes"),
+    ("f0dddeb6", 2520, "pfblockerng: carry the box's CA locations on the Software catalog reads"),
+    ("b2df9957", 2515, "install: export SSL_CA_CERT_PATH for every pkg call"),
+    ("1e735e38", 2485, "smoke: keep polling when the post-boot metadata job has not started"),
+    ("de69f67b", 2482, "wait-checks.sh: resolve an abbreviated `--sha` at arm time"),
+    ("aaf8019d", 2444, "pkg Pages: one install-`<ch>`.sh per channel that converges the box from any starting state"),
+)
+
+
+def _live_ledger_entries() -> list[tuple[str, int, str]]:
+    text = (_REPO_ROOT / ccb.LEDGER).read_text(encoding="utf-8")
+    parsed = []
+    for line in text.splitlines():
+        if not line.startswith("- "):
+            continue
+        match = ccb.LEDGER_ENTRY_RE.match(line)
+        assert match is not None, f"unparseable ledger entry: {line}"
+        parsed.append((match["sha"], int(match["pr"]), match["title"]))
+    return parsed
+
+
+def test_live_ledger_keeps_every_recorded_sha_title_and_pr_in_order() -> None:
+    # The contract compression may not break: every SHA still listed, with its
+    # title and PR number, newest first.
+    assert _live_ledger_entries()[-len(_LEDGER_RECORDED) :] == list(_LEDGER_RECORDED)
+
+
+def test_live_ledger_header_states_the_format_and_the_entry_cap() -> None:
+    # The format drifted because the header stated it only in passing; the
+    # header now carries the template and the cap the checker enforces.
+    header = (_REPO_ROOT / ccb.LEDGER).read_text(encoding="utf-8").split("\n- ", 1)[0]
+    assert "`SHA`  title  (#PR)" in header
+    assert f"{ccb.LEDGER_ENTRY_MAX} bytes" in header
