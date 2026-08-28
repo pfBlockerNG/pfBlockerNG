@@ -13,6 +13,10 @@ use PHPUnit\Framework\TestCase;
  * and (re)writes the '.update' retry marker so the next ordinary pass still
  * attempts the transform instead of taking the verbatim-reuse fast path.
  *
+ * issue #2059: the same write site serves the POST-script call sites, which
+ * pass a NULL marker because they have no retry marker to write (see the
+ * NULL-marker rows below).
+ *
  * Decision (brief section 5): production code suppresses the marker touch()
  * with '@' (matches the existing @rename/@copy best-effort idiom already used
  * for filesystem side-writes in this file). PfbNoPhpWarningTrait does NOT fit
@@ -107,6 +111,56 @@ final class PfbListScriptFailureRecordTest extends TestCase
 		$this->assertFileExists($marker, 'after: the marker must still exist');
 		$this->assertSame('pre-existing-marker-content', file_get_contents($marker),
 			'touch() must not truncate an already-present marker\'s content');
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #2059 -- a NULL marker opens the ledger entry and touches nothing.
+	// The post-script call sites have no retry marker to write: #1278's reuse
+	// decision already re-runs a configured script every pass, and both
+	// download loops unlink '{header}.update' AFTER their post-script branch,
+	// so a marker written there would be a dead write.
+	// -----------------------------------------------------------------------
+
+	public function testNullRetryMarkerOpensTheLedgerEntryAndCreatesNoMarker(): void
+	{
+		$marker = "{$this->dir}/pfB_Example_v4.update";
+		$state  = ['failed' => FALSE];
+		// Before-state: mandatory -- neither the entry nor the marker exists yet.
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'), 'before: the ledger has no open entry');
+		$this->assertFileDoesNotExist($marker, 'before: no retry marker exists');
+
+		pfb_list_script_failure_record('ip', 'pfB_Example_v4',
+			'Post-script FAIL - feed updated, side effects incomplete', $this->dir, NULL, $state);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'a post-script failure must open exactly one entry');
+		$this->assertSame('script', $open[0]['stage']);
+		$this->assertSame('Post-script FAIL - feed updated, side effects incomplete', $open[0]['message']);
+		$this->assertTrue($state['failed'],
+			'the alias-pass state must be marked, else the paired close wipes the entry in the same pass');
+		$this->assertFileDoesNotExist($marker, 'a NULL marker must create no retry marker at all');
+	}
+
+	public function testNullRetryMarkerLeavesAPreExistingMarkerUntouched(): void
+	{
+		$marker = "{$this->dir}/pfB_Example_v4.update";
+		$stamp  = 1000000000;
+		file_put_contents($marker, 'pre-existing-marker-content');
+		// An unchanged mtime is the ONLY thing that discriminates "not touched"
+		// from "touched": touch() never truncates, so content alone proves nothing.
+		$this->assertTrue(touch($marker, $stamp), 'before: pin the marker mtime to a known past value');
+		clearstatcache(TRUE, $marker);
+		$this->assertSame($stamp, filemtime($marker), 'before: the pinned mtime must have taken');
+
+		pfb_list_script_failure_record('ip', 'pfB_Example_v4', 'Post-script FAIL', $this->dir, NULL);
+
+		clearstatcache(TRUE, $marker);
+		$this->assertSame('pre-existing-marker-content', file_get_contents($marker),
+			'a NULL marker must leave an unrelated pre-existing marker byte-identical');
+		$this->assertSame($stamp, filemtime($marker),
+			'a NULL marker must not touch() the marker -- an unchanged mtime is the proof');
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			'the ledger entry must still open when no marker is written');
 	}
 
 	// -----------------------------------------------------------------------
