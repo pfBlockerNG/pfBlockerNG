@@ -18,6 +18,7 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - each hook-capsule `additionalContext` payload     1,800 B
 - any single hook command (pre-tokenization cap)   11,000 B
 - each `coderabbit-misses.md` ledger entry            200 B
+- that ledger's header prose (above the list)      1,200 B
 
 A hook command may also invoke a repo helper script (under scripts/ or
 .claude/hooks/, both trigger surfaces). Detection recognizes `*.sh`/`*.py`
@@ -211,7 +212,9 @@ def check_sizes(root: Path, tracked: list[str]) -> list[str]:
 def check_ledger_entries(root: Path) -> list[str]:
     """Capped header, then one line per merged SHA within LEDGER_ENTRY_MAX, no SHA twice."""
     try:
-        text = (root / LEDGER).read_text(encoding="utf-8")
+        # Bytes, not universal-newline text: read_text() folds a CRLF away, and
+        # the header cap must weigh what the file actually ships.
+        text = (root / LEDGER).read_bytes().decode("utf-8")
     except FileNotFoundError:
         if (root / LEDGER_OWNER).exists():
             return [f"{LEDGER}: missing — {LEDGER_OWNER} routes every recorded miss to it"]
@@ -224,7 +227,10 @@ def check_ledger_entries(root: Path) -> list[str]:
     first_line_of: dict[str, int] = {}
     entries = 0
     header_bytes = 0
-    for lineno, line in enumerate(text.splitlines(), 1):
+    for lineno, raw in enumerate(text.splitlines(keepends=True), 1):
+        # keepends: a CRLF header line ships two bytes of terminator, and
+        # counting a normalized one lets 1,800 bytes of header measure 1,200.
+        line = raw.rstrip("\r\n")
         match = LEDGER_ENTRY_RE.match(line)
         if match is None:
             if entries or line.startswith("- "):
@@ -236,7 +242,7 @@ def check_ledger_entries(root: Path) -> list[str]:
                     violations.append(f"{LEDGER}:{lineno}: entry does not match `SHA`  title  (#PR) — clause")
                     entries += 1
             else:
-                header_bytes += len(line.encode("utf-8")) + 1  # the newline ships too
+                header_bytes += len(raw.encode("utf-8"))
             continue
         entries += 1
         size = len(line.encode("utf-8"))
