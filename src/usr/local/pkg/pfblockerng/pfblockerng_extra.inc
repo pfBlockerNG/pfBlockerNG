@@ -1785,13 +1785,14 @@ function pfb_cfg_registry(): array
 		// setting keeps the historical always-on behaviour through pfb_rdns_seed_value(),
 		// a CROSS-SECTION seed (it reads the General section to decide) that the registry
 		// pass cannot express as a per-section grandfather map. It stays hand-written in
-		// pfblockerng_install.inc and runs BEFORE the pass, which then sees the key
-		// present and leaves it alone -- so this entry's default governs new installs only.
+		// pfblockerng_install.inc, runs BEFORE the pass, and corrects the captured IP mode
+		// to OLDCFG -- without that correction the pass's NEWCFG branch would assign this
+		// default over the seed. So this default governs new installs only.
 		'ip/enable_rdns' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
-			'no_grandfather' => '#336 upgrade preservation is the cross-section pfb_rdns_seed_value() seed, ordered before the registry pass; a per-section map cannot see the General section it keys on',
+			'no_grandfather' => '#336 upgrade preservation is the cross-section pfb_rdns_seed_value() seed, ordered before the registry pass and protected by the installer correcting the captured IP mode to OLDCFG; a per-section map cannot see the General section it keys on',
 		],
 
 		'ip/database_cc' => [
