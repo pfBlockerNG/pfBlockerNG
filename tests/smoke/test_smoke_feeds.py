@@ -2758,10 +2758,10 @@ def _shipped_define(name: str) -> str:
 
     Asserting the box carries THIS line — rather than re-typing the number here —
     proves the deployed package is the one under test without duplicating the
-    constant into the test.
+    constant into the test. Numeric and single-quoted string values both match.
     """
     source = (FIXTURES_DIR.parent.parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng.inc").read_text()
-    match = re.search(rf"^define\('{re.escape(name)}', \d+\);$", source, re.MULTILINE)
+    match = re.search(rf"^define\('{re.escape(name)}', (?:\d+|'[^']*')\);$", source, re.MULTILINE)
     assert match is not None, f"{name} is not defined in the repo source"
     return match.group(0)
 
@@ -2810,6 +2810,93 @@ def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> No
     wiring = deployed_vm.ssh("grep", "-F", "-c", "exec(pfb_extract_cmd(", _PFB_INC)
     assert wiring.stdout.strip().isdigit() and int(wiring.stdout.strip()) > 0, (
         f"the deployed package runs no extraction under the ceiling — grep said {wiring.stdout!r}"
+    )
+
+
+@pytest.mark.timeout(120)
+def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> None:
+    """issue #2659: the appliance's own bsdtar drops what the archive claims.
+
+    Extraction runs as ROOT on the appliance, which is the only privilege level
+    where the whole class is visible: an unprivileged run cannot chown, keeps no
+    setuid bit and restores no file flags, so off-appliance suites can only pin
+    the argv and probe the vectors their tar and uid can express. Here the box
+    answers the question directly — its tar, its kernel, its root.
+
+    Given an archive whose member claims a foreign owner, a setuid mode, an
+      extended attribute and an immutable file flag
+    When the appliance extracts it twice as root, once with the shipped flag set
+      and once without
+    Then the unflagged extraction carries that metadata onto disk — the live
+      before-state this ticket exists for — the flagged one carries none of it,
+      and the deployed package carries the flag set on every disk-writing
+      extraction and on none of the stdout ones.
+    """
+    flags = _shipped_define("PFB_TAR_EXTRACT_FLAGS")
+    flag_argv = flags.split("'")[3]
+    work = "/tmp/pfb2659_metadata_probe"
+    # `stat -f %Sp` renders the mode as ls does, so the setuid bit reads as `rws`
+    # without depending on which sub-field specifier carries it; `%Sf` is the file
+    # flags; lsextattr lists attribute NAMES, so an empty list means none survived.
+    report = (
+        'for d in control shipped; do f="$W/$d/member.dat"; '
+        'printf "%s uid=%s mode=%s flags=[%s] xattr=[%s]\\n" "$d" '
+        '"$(/usr/bin/stat -f %u "$f")" "$(/usr/bin/stat -f %Sp "$f")" '
+        '"$(/usr/bin/stat -f %Sf "$f")" '
+        '"$(/usr/sbin/lsextattr -q user "$f" 2>/dev/null | tr -d " \\t\\n")"; done'
+    )
+    probe = deployed_vm.ssh(
+        f"W={work}; /bin/chflags -R 0 $W 2>/dev/null; /bin/rm -rf $W; /bin/mkdir -p $W/build && "
+        'printf "203.0.113.11\\n" > $W/build/member.dat && '
+        "/bin/chmod 4755 $W/build/member.dat && /usr/sbin/chown 12345:12345 $W/build/member.dat && "
+        "/usr/sbin/setextattr user pfb2659 carried $W/build/member.dat 2>/dev/null; "
+        "/bin/chflags uchg $W/build/member.dat && "
+        "/usr/bin/tar -cf $W/foreign.tar -C $W/build member.dat && "
+        "/bin/chflags 0 $W/build/member.dat && "
+        "/bin/mkdir $W/control $W/shipped && "
+        "/usr/bin/tar -xf $W/foreign.tar -C $W/control; echo control_rc=$?; "
+        f"/usr/bin/tar -xf $W/foreign.tar {flag_argv} -C $W/shipped; echo shipped_rc=$?; "
+        f"{report}; /usr/bin/tar --version"
+    )
+    deployed_vm.ssh(f"/bin/chflags -R 0 {work} 2>/dev/null; /bin/rm -rf {work}")
+
+    lines = dict(
+        (ln.split(" ", 1)[0], ln.split(" ", 1)[1])
+        for ln in probe.stdout.splitlines()
+        if ln.startswith(("control ", "shipped "))
+    )
+    codes = [ln for ln in probe.stdout.splitlines() if "_rc=" in ln]
+    assert "control" in lines and "shipped" in lines, (
+        f"the probe did not report both extractions — stdout {probe.stdout!r} stderr {probe.stderr!r}"
+    )
+    assert codes == ["control_rc=0", "shipped_rc=0"], (
+        f"both extractions must succeed on the appliance's tar, including with the shipped flag set; "
+        f"got {codes!r} — stdout {probe.stdout!r} stderr {probe.stderr!r}"
+    )
+
+    control, shipped = lines["control"], lines["shipped"]
+    assert "uid=12345" in control and "rws" in control and "uchg" in control, (
+        f"the unflagged extraction must carry the archive's owner, setuid mode and file flag for this "
+        f"case to mean anything — appliance reported {control!r}"
+    )
+    assert "uid=0" in shipped, f"the flagged extraction must own its output: {shipped!r}"
+    assert "rws" not in shipped and "rwx" in shipped, (
+        f"the flagged extraction must drop the setuid bit and keep an ordinary mode: {shipped!r}"
+    )
+    assert "flags=[]" in shipped, f"the flagged extraction restored a file flag: {shipped!r}"
+    assert "xattr=[]" in shipped, f"the flagged extraction restored an extended attribute: {shipped!r}"
+
+    deployed = deployed_vm.ssh("grep", "-F", "-c", flags, _PFB_INC)
+    assert deployed.stdout.strip() == "1", (
+        f"the deployed package does not carry {flags!r} — grep said {deployed.stdout!r}"
+    )
+    disk_writing = deployed_vm.ssh(f"/usr/bin/grep -c -e 'tar -x[a-z]*f.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
+    assert disk_writing.stdout.strip() == "5", (
+        f"the deployed package must flag all five disk-writing extractions — grep said {disk_writing.stdout!r}"
+    )
+    stdout_sites = deployed_vm.ssh(f"/usr/bin/grep -c -e 'tar -xOf.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
+    assert stdout_sites.stdout.strip() == "0", (
+        f"the deployed package must leave the stdout extractions unflagged — grep said {stdout_sites.stdout!r}"
     )
 
 
