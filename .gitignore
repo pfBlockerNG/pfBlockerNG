@@ -63,8 +63,10 @@ test-results/
 .claude/worktrees/
 .grok/worktrees/
 .codex/local-notes.md
-graphify-out/
 .ua/
+*.graphify-bak
+graphify-out/*
+!graphify-out/graph.json
 
 # Per-machine Claude Code / Grok overrides — never committed
 .claude/settings.local.json

@@ -22,8 +22,17 @@ Load when: every agent session, from `AGENTS.md`.
   an AI assistant. Install or refresh Graphify in one command with
   `uv tool install --upgrade 'graphifyy>=0.9.51'` — a floor, never an exact pin, so a
   fresh host and an outdated one both land on the current release.
-- Every worktree owns its ignored and untracked `graphify-out/` graph. Refresh it
-  directly with `graphify update <root>`; there is no shared repository graph.
+- Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
+  and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
+  verify that its active project root equals `git rev-parse --show-toplevel`; after a
+  mid-session worktree switch Serena is forbidden until a fresh top-level session starts
+  there. Claude Agent Teams teammates use built-ins.
+- `graphify-out/graph.json` is tracked; everything else under `graphify-out/` is ignored
+  and regenerated locally from it. Refresh the graph with `graphify update <root>` and
+  commit it alongside the change that moved it. Every clone needs the union merge driver
+  that `.gitattributes` assigns to the graph — `scripts/agent/ensure-graphify-merge-driver.sh`
+  installs Graphify, runs `graphify hook install`, and verifies the registration. Without
+  it a merge leaves conflict markers in the graph instead of union-merging it.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
   flows, structural exploration, and impact analysis, use CodeGraph through
   `codegraph_explore` or `codegraph explore`. Every client uses the same standard
@@ -34,6 +43,13 @@ Load when: every agent session, from `AGENTS.md`.
   inferred only from each node's `source_file`: `src/` is production, `tests/` is
   harness/test, and `stubs/` is shim/support; communities describe topology only.
   The root graph excludes `src/**/vendor/**`, documents/media, and `legacy/`.
+- Prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, and
+  `graphify explain "<concept>"` over raw grep and file reads for codebase questions:
+  they return a scoped subgraph. Read `graphify-out/GRAPH_REPORT.md` only for broad
+  architecture review, and `graphify-out/wiki/index.md`, when present, for navigation.
+  A dirty `graphify-out/` after a hook or incremental update is expected and is not a
+  reason to skip Graphify; skip it only when the task is about stale or incorrect graph
+  output. Run `graphify update .` after modifying code (AST only, no API cost).
 - Use `rg`, globbing, and file reads for literals, configuration, non-code files,
   and details CodeGraph did not cover. Use the client's LSP surface—Serena where
   available—for exact symbols, definitions, references, implementations,

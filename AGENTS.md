@@ -57,10 +57,6 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 - Every registered config field go through `PfbConfig` — never direct `config_*_path`.
 - No orphaned waits: harness-tracked work get no timer; every untracked wait has hard
   cap + deadline and die with its task.
-- Every worktree owns its `.codegraph/` index (`codegraph init` when absent; never borrow
-  a parent/other tree). Before Serena symbolic edits, verify its active project root equals
-  `git rev-parse --show-toplevel`; after any mid-session worktree switch, Serena is forbidden
-  until a fresh top-level session starts there. Claude Agent Teams teammates use built-ins.
 - `--no-verify` for humans, not agents. Never weaken canonical mandate without quoted
   user authorization.
 - Accepted/Implemented ADR bodies and artifacts immutable — corrections append dated
@@ -75,7 +71,8 @@ client mechanics.
 
 At session start read `.agents/context/repository-intelligence.md`: it owns
 `scripts/agent/ensure-codegraph.sh`, `codegraph_explore`, `codegraph serve --mcp`,
-Serena, and Graphify.
+Serena, and Graphify, and it carries the hard invariants for the per-worktree
+`.codegraph/` index, Serena's active project root, and the tracked root graph.
 
 ## Routing table — read on trigger, not up front
 
