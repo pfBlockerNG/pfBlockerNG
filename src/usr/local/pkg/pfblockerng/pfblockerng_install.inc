@@ -613,6 +613,12 @@ if ($has_migratable && empty($pfb_ip_section)) {
 	// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig']);
 	PfbConfig::writeSectionRawSystem('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+	// issue #2123: this branch fires only when the IP section was EMPTY, which is exactly
+	// when the mode captured above reads NEWCFG -- and the pass's NEWCFG branch assigns
+	// every registered key its default unconditionally, so it would erase the operator
+	// values just migrated here (six of the fourteen are registered IP toggles). A section
+	// that has received migrated operator data IS an existing install: correct the mode.
+	$pfb_registry_modes[PFB_SECTIONS['ip']] = 'OLDCFG';
 	update_status(" saving new changes ... done.\n");
 }
 else {
@@ -634,6 +640,10 @@ if ($pfb_rdns_seed !== null) {
 	// the gateway's system writer (no web session here). The pass below then sees the
 	// key present and leaves this cross-section decision alone.
 	PfbConfig::writeSystem('ip/enable_rdns', $pfb_rdns_seed);
+	// issue #2123: same reason as the reshape above -- this seed exists to preserve the
+	// historical always-on behaviour, and a captured NEWCFG (General configured, IP tab
+	// never saved) would let the pass overwrite it with the registered ''.
+	$pfb_registry_modes[PFB_SECTIONS['ip']] = 'OLDCFG';
 	update_status(" saving new changes ... done.\n");
 } else {
 	update_status(" no changes required ... done.\n");
