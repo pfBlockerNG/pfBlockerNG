@@ -225,10 +225,8 @@ main() {
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	setup_hooks=$root/scripts/setup-hooks.sh
 	init_tools=$root/scripts/agent/init-worktree-tools.sh
-	patch_graphify=$root/scripts/agent/patch-graphify.sh
 	[ -f "$setup_hooks" ] || fail "required repository helper '$setup_hooks' is missing"
 	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
-	[ -f "$patch_graphify" ] || fail "required repository helper '$patch_graphify' is missing"
 
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
 		xdg_bin_home=$XDG_BIN_HOME
@@ -271,9 +269,6 @@ main() {
 	require_tool graphify
 	require_tool ast-grep
 	require_tool semgrep
-	# Graphify parses this repository's PHP .inc files as Pascal until the vendored
-	# override lands on the freshly installed package (issue #2810).
-	sh "$patch_graphify" "$root"
 
 	if command -v codegraph >/dev/null 2>&1; then
 		codegraph upgrade

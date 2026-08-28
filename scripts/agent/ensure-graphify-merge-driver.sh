@@ -35,7 +35,7 @@ main() {
 		echo "ensure-graphify-merge-driver.sh: required repository helper '$patch_graphify' is missing" >&2
 		exit 1
 	}
-	sh "$patch_graphify" "$root" || {
+	sh "$patch_graphify" || {
 		echo "ensure-graphify-merge-driver.sh: Graphify language-override patch failed for '$root'" >&2
 		exit 1
 	}

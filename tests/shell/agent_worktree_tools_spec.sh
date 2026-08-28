@@ -7,8 +7,8 @@ Describe 'init-worktree-tools.sh'
   make_tool_path() {
     destination=$1
     mkdir -p "$destination"
-    # python3 resolves the throwaway Graphify package tree named in setup().
-    for tool in sh dirname git tr mkdir pwd python3; do
+    # sed reads the shebang of the `graphify` on PATH for the .inc override patch.
+    for tool in sh dirname git tr mkdir pwd sed; do
       ln -s "$(command -v "$tool")" "$destination/$tool"
     done
   }
@@ -74,18 +74,10 @@ SERENA
     ln -s "$stubdir/graphify" "$no_serena/graphify"
 
     export WORKTREE_TOOL_LOG="$tool_log"
-    # The initializer now applies the vendored .inc language-override patch (issue
-    # #2810) before refreshing the graph. Point it at a throwaway package tree that
-    # already carries the override API, so it no-ops instead of touching the real
-    # installed Graphify.
-    override_package="$fixture/site packages/graphify"
-    mkdir -p "$override_package"
-    true > "$override_package/__init__.py"
-    cat > "$override_package/rcfile.py" <<'RCFILE'
-def activate_language_overrides(root):
-    return {}
-RCFILE
-    export PFB_GRAPHIFY_PACKAGE_DIR="$override_package"
+    # The initializer applies the vendored .inc language-override patch (issue #2810)
+    # before refreshing the graph. The `graphify` stubbed above is a /bin/sh script, so
+    # the patch script finds no Python interpreter on its shebang and skips -- the real
+    # installed Graphify is never touched from here.
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -117,12 +109,12 @@ RCFILE
     The stderr should include 'Initializing CodeGraph in'
   End
 
-  It 'applies the vendored Graphify language override before refreshing the graph'
+  It 'runs the vendored Graphify language override before refreshing the graph, and a stubbed graphify is a skip'
     mkdir -p "$worktree/graphify-out"
     true > "$worktree/graphify-out/graph.json"
     When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
-    The stderr should include 'already provides'
+    The stderr should include 'does not name a Python interpreter'
     The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\ngraphify:update:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
   End
