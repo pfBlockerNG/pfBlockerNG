@@ -2060,14 +2060,10 @@ processxlsx() {
 	xlsxstage="${pfborig}${alias}.orig.tmp"
 
 	# Nothing here is piped: POSIX sh has no pipefail, so a pipeline reports only
-	# its last command's status. `tar -xOf` writes the shared-strings part to a
-	# file, and `grep` stages its matches for `sort -u -o` to rewrite in place
-	# (POSIX permits -o's output file among its inputs).
-	# issue #2682: that is what lets `grep`'s exit 1 -- a workbook that parses with
-	# no IPv4 literal in it -- refuse the feed. Through a pipe the status was lost,
-	# so zero bytes went out over the last-good '.orig' and read as a success: an
-	# empty file probes as the allow-listed `inode/x-empty`, so pfb_download()'s
-	# inner-content MIME gate passed the publication too.
+	# its last command's status -- `grep`'s no-match exit 1 (issue #2682) and a
+	# child killed at the ceiling would both be lost. `tar -xOf` therefore writes
+	# the shared-strings part to a file, and `grep` stages its matches for
+	# `sort -u -o` to rewrite in place (POSIX permits -o's file among its inputs).
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
 	# `chmod` before the rename because published feeds have unprivileged readers
