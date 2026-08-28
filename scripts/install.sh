@@ -106,7 +106,7 @@ die() {
 # named where it is proposed (issue #2803).
 #
 # The diagnosis prints FIRST: the remedy is conditional on it, and a reader who has not
-# yet been told what failed cannot judge whether these three commands are their answer.
+# yet been told what failed cannot judge whether this sequence is their answer.
 # die() exits, hence a wrapper rather than a call beside it.
 #
 # Deliberately NOT used for the conf-resolution failures that also exit 4, nor for a
@@ -372,9 +372,9 @@ conf: rebuild it, then re-run this script.
   pfSense-repoc
   pfSense-repo-setup
 
-Only if the re-run still fails, escalate to pfSense-upgrade. Run bare it applies any
-pfSense release upgrade the box's branch offers, and reboots when it does, so it is a
-deliberate last step rather than part of the sequence above.
+Only if the re-run still fails, escalate to pfSense-upgrade. With no arguments it applies
+any pfSense release upgrade the box's branch offers, and reboots when it does, so it is
+a deliberate last step rather than part of the sequence above.
 USAGE_TAIL
 }
 

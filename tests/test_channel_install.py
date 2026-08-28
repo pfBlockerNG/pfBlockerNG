@@ -1803,13 +1803,16 @@ def test_repair_hint_gates_pfsense_upgrade_behind_a_retry() -> None:
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
         hint = proc.stderr
-        assert hint.index("pfSense-repo-setup") < hint.index("pfSense-upgrade"), hint
-        # The retry sits BETWEEN the cheap repair and the escalation.
-        assert "re-run" in hint.split("pfSense-repo-setup", 1)[1].split("pfSense-upgrade", 1)[0], (
-            f"the hint must tell the user to retry before escalating:\n{hint}"
+        before, _, escalation = hint.partition("pfSense-upgrade")
+        assert escalation, f"the escalation command is missing entirely:\n{hint}"
+        between = before.split("pfSense-repo-setup", 1)[1]
+        # Shape, not just vocabulary: an indented bare command is a third list item, which
+        # is the regression this gate exists to catch — the words alone all survive it.
+        assert "install.sh:   pfSense-upgrade" not in hint, (
+            f"pfSense-upgrade must not be a list item beside the two repair commands:\n{hint}"
         )
-        escalation = hint.split("pfSense-repo-setup", 1)[1]
-        assert "only if" in escalation, f"pfSense-upgrade must be conditional:\n{hint}"
+        assert "re-run" in between, f"the retry must sit before the escalation:\n{hint}"
+        assert "only if" in between, f"pfSense-upgrade must be conditional:\n{hint}"
         assert "reboot" in escalation, f"the reboot must be stated where it is proposed:\n{hint}"
 
 
@@ -1818,11 +1821,14 @@ def test_usage_gates_pfsense_upgrade_behind_a_retry() -> None:
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     text = proc.stdout
-    assert text.index("pfSense-repo-setup") < text.index("pfSense-upgrade"), text
-    # Help text is prose, so the gate word may open a sentence.
-    escalation = text.split("pfSense-repo-setup", 1)[1].casefold()
-    assert "only if" in escalation, text
-    assert "reboot" in escalation, text
+    before, _, escalation = text.partition("pfSense-upgrade")
+    assert escalation, text
+    # Help text is prose, so the gate words may open a sentence.
+    between = before.split("pfSense-repo-setup", 1)[1].casefold()
+    assert "\n  pfSense-upgrade" not in text, f"pfSense-upgrade must not be a list item:\n{text}"
+    assert "re-run" in between, text
+    assert "only if" in between, text
+    assert "reboot" in escalation.casefold(), text
 
 
 def test_empty_catalogue_failure_prints_the_repository_repair_sequence() -> None:
