@@ -8,7 +8,8 @@ Format, one line of at most 200 bytes: ``- `SHA`  title  (#PR) — one clause``.
 Two spaces separate the fields; the em-dash clause is optional. The clause is a
 pointer, never a narrative: the review story — legs, findings, quota windows —
 already lives in that PR's own audit comments, so record only the outcome here.
-The list opens at the first `-` bullet, and from there the file is entries only.
+The list opens at the first line that begins with a dash and a space, and from
+there the file is entries only (blank lines aside).
 This header is prose and is capped at 1,200 bytes, which is the one place a
 narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs

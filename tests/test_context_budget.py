@@ -275,6 +275,14 @@ def test_ledger_header_at_cap_passes_and_one_byte_over_fires(tmp_path: Path) -> 
     )
 
 
+def test_ledger_header_cap_counts_the_bytes_the_file_ships_not_normalized_ones(tmp_path: Path) -> None:
+    # CRLF is two bytes. Counting a normalized "\n" per line lets a 1,800-byte
+    # header measure 1,200 and pass the cap it just broke.
+    _write(tmp_path, ccb.LEDGER, "x\r\n" * 600 + "- `deadbeef`  a title  (#1)\r\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert violations == [f"{ccb.LEDGER}: header is 1800 bytes > cap {ccb.LEDGER_HEADER_MAX}"], violations
+
+
 @pytest.mark.parametrize(
     "prose",
     [
@@ -282,11 +290,14 @@ def test_ledger_header_at_cap_passes_and_one_byte_over_fires(tmp_path: Path) -> 
         "+ expected output",
         "<!-- markdownlint-disable MD013 -->",
         "> the review story stays on the PR",
+        "---",  # a thematic break is not the list opening
+        "-- a dashed aside, still prose",
     ],
 )
 def test_ledger_ordinary_header_prose_passes(tmp_path: Path, prose: str) -> None:
     # Header prose is prose: a numbered instruction, a code sample line, a lint
-    # directive or a quote must not be mistaken for a smuggled entry.
+    # directive, a quote or a rule must not be mistaken for a smuggled entry.
+    # The list opens at `-` FOLLOWED BY A SPACE; a bare dash run does not open it.
     _write(tmp_path, ccb.LEDGER, f"# CodeRabbit missed reviews\n\n{prose}\n\n- `deadbeef`  a title  (#1)\n")
     assert ccb.check_ledger_entries(tmp_path) == []
 
