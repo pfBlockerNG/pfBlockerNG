@@ -1793,6 +1793,38 @@ def test_pkg_update_failure_prints_the_repository_repair_sequence() -> None:
         )
 
 
+def test_repair_hint_gates_pfsense_upgrade_behind_a_retry() -> None:
+    """issue #2803: a bare `pfSense-upgrade` applies the box's pending release upgrade
+    and reboots (upstream sets `: ${action:="upgrade"}` when no action flag is given),
+    so it is the escalation after rebuilding the repository files and retrying — never
+    the third item of a flat list the user works through in order."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "testing", update_fails=True)
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        hint = proc.stderr
+        assert hint.index("pfSense-repo-setup") < hint.index("pfSense-upgrade"), hint
+        # The retry sits BETWEEN the cheap repair and the escalation.
+        assert "re-run" in hint.split("pfSense-repo-setup", 1)[1].split("pfSense-upgrade", 1)[0], (
+            f"the hint must tell the user to retry before escalating:\n{hint}"
+        )
+        escalation = hint.split("pfSense-repo-setup", 1)[1]
+        assert "only if" in escalation, f"pfSense-upgrade must be conditional:\n{hint}"
+        assert "reboot" in escalation, f"the reboot must be stated where it is proposed:\n{hint}"
+
+
+def test_usage_gates_pfsense_upgrade_behind_a_retry() -> None:
+    proc = _run_argv("--help")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    text = proc.stdout
+    assert text.index("pfSense-repo-setup") < text.index("pfSense-upgrade"), text
+    # Help text is prose, so the gate word may open a sentence.
+    escalation = text.split("pfSense-repo-setup", 1)[1].casefold()
+    assert "only if" in escalation, text
+    assert "reboot" in escalation, text
+
+
 def test_empty_catalogue_failure_prints_the_repository_repair_sequence() -> None:
     with tempfile.TemporaryDirectory() as root:
         proc = _run_install(root, "edge", catalog=())
