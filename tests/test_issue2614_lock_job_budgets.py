@@ -1,36 +1,35 @@
 """Issue #2614: a CI job that can block on a kernel lock carries a wall-clock budget.
 
-A `flock(2)`-family acquire has no timeout of its own, so a regression that leaves the
-lock held makes the waiter block rather than fail. Probed for the issue (macOS, `lockf`):
-a second acquirer of a held lock never returns -- `timeout 5 sh -c 'exec 9>L; lockf -k 9'`
-exits 124 -- while the same acquire against a free lock exits 0 at once. Nothing inside
-the suites bounds that wait, so the only bound left is the job's own `timeout-minutes`;
-without one GitHub applies its 360-minute default and a deadlock reports as a platform
-timeout hours later instead of as the assertion that names the cause.
+A `flock(2)`-family acquire takes no timeout, so a regression that leaves the lock held
+makes the waiter block rather than fail, and the only bound above it is the job's own
+`timeout-minutes`. Without one GitHub applies its 360-minute default, and a deadlock
+reports as a platform timeout instead of as the assertion that names the cause.
 
-What this file gates is therefore the *relationship*, not the one job the issue named:
-every workflow job that runs a suite whose sources hold a kernel-lock acquire carries a
-job-level `timeout-minutes` that is a real bound. Which suites those are is read from
-source by `kernel_lock_acquires` and pinned by
-`test_which_suite_roots_hold_kernel_lock_acquires`, so a suite that starts or stops
-locking is a visible diff rather than a silent change in what this gate demands.
+This file gates the relationship rather than one job: every workflow job that reaches a
+tree holding a kernel-lock acquire carries a job-level `timeout-minutes` that is a real
+bound. `SUITE_RUNNERS` maps each runner to the trees it EXECUTES -- a spec suite reaches
+the scripts it drives, and PHPUnit and the live-VM harness reach `src/` -- so a lock
+returning to `scripts/agent/work-branch.sh`, which is where the one this issue names used
+to live, brings the shellspec jobs back into scope on its own.
 
-Why it was needed. On `origin/devel` at the time of writing, all four lock-reachable jobs
-carried a budget, but `smoke-single.yml`'s `smoke` job (45) was defended by no test at
-all: deleting that line left the whole suite green (5614 passed, 2 skipped) and
-`actionlint` 1.7.12 silent. `test.yml`'s `test` and `php-unit` are pinned by
-`test_issue2673_xdist_ci.py` and `ui-tests.yml`'s `ui` by
-`test_smoke_ui_config_digest.py`, but nothing tied any of them to lock reachability, so a
-new lock-reachable job would have landed unbudgeted with the suite green.
+Deliberate choices, so a reader does not mistake them for oversights:
 
-Jobs that call a reusable workflow are excluded: GitHub allows only
-name/uses/with/secrets/needs/if/permissions/strategy there -- smoke.yml states that same
-allow-list in its own comment -- so such a job cannot carry a budget, and the bound that
-applies is the called job's, which this gate reads at its definition site.
-
-Slices into the non-YAML config files go through `tests/_workflow_steps.py`, so a
-reworded anchor raises instead of silently widening (issue #2669). Workflow structure is
-read with `yaml`, whose missing key is `None` and cannot widen at all.
+* **Reachability is a MAY; the scan errs toward over-inclusion.** Whether an embedded
+  snippet is executed or merely written is not something a regex can decide, so a tree
+  naming an acquire counts as able to reach one. Over-inclusion costs a job a budget it
+  already has; under-inclusion costs a six-hour hang.
+* **There is a ceiling but no floor.** A budget at or above GitHub's default bounds
+  nothing and is silent, which is the hazard here. An absurdly tight budget is the
+  opposite: it fails on the next run and is self-revealing. A floor would put a wall-clock
+  number in an assertion and invite the flake class `testing.md` forbids.
+* **The budget is read from parsed YAML, not a text slice.** YAML is what GitHub reads,
+  and a slice is weaker: a quoted sibling job key walks past `extract_job`'s boundary and
+  lets the search match a LATER job's budget, passing vacuously
+  (`test_a_quoted_sibling_job_key_cannot_lend_its_budget`). `tests/_workflow_steps.py` is
+  still used where the landmark rule bites -- the non-YAML config files, where a reworded
+  anchor must raise rather than widen (issue #2669).
+* **A suite invoked from inside a composite action is NOT seen.** Stated so the gap is
+  known rather than silent.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests._workflow_steps import extract_after, extract_between, extract_job
+from tests._workflow_steps import extract_after, extract_between
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -52,164 +51,229 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # default wearing a number, which is the condition this issue exists to remove.
 GITHUB_DEFAULT_TIMEOUT_MINUTES = 360
 
-# Runner token (at command position in a `run:` body) -> the suite root it executes.
-# Every root is re-derived from the configuration the runner itself reads by
-# `test_suite_roots_match_the_configuration_that_declares_them`, so the table cannot
-# drift away from what the runners actually load.
-SUITE_ROOTS: dict[str, str] = {
-    "vendor/bin/phpunit": "tests/php",
-    "pytest": "tests",
-    "shellspec": "tests/shell",
-    "scripts/run-smoke.sh": "tests/smoke",
+# The pytest root is scoped to the top-level `tests/*.py` pytest can collect: `testpaths`
+# is `tests`, but that pathspec subsumes `tests/php` and `tests/smoke`, which pytest never
+# collects (not Python) and which other runners own. Unscoped, the premise assertion below
+# could never be false.
+PYTEST_ROOT = ":(glob)tests/*.py"
+
+# Runner token (at command position in a `run:` body) -> every tree it EXECUTES.
+# A suite reaches more than its own directory: shellspec drives `scripts/`, PHPUnit loads
+# the real `src/` .inc, and the live-VM harness runs the installed package.
+SUITE_RUNNERS: dict[str, tuple[str, ...]] = {
+    "vendor/bin/phpunit": ("tests/php", "src"),
+    "pytest": (PYTEST_ROOT,),
+    "shellspec": ("tests/shell", "scripts"),
+    "scripts/run-smoke.sh": ("tests/smoke", "src"),
 }
 
-# Command prefixes that carry a runner without being one: `uv run pytest`,
-# `sh scripts/run-smoke.sh`, `DASH=dash shellspec`. Stripped left to right until the
-# leading word is the command itself.
-_PREFIX_WORDS = frozenset({"sh", "bash", "sudo", "env", "time", "exec", "uv", "run", "xargs", "python3", "-m"})
-_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# A logical command boundary inside a `run:` body.
-_SEGMENT = re.compile(r"(?:\|\||&&|[|;&\n])")
+# Production entry points -> `src`, matched as a SUBSTRING of any non-comment `run:` line.
+# Substring, not command position, because these arrive through indirection no command
+# matcher can chase: build-image.yml runs `tests/smoke/roundtrip.sh` (which shells
+# `pfblockerng.php update`) and image-refresh.yml wraps the same entry point in
+# `run_ssh '...'`. Naming either in a live run body means driving production code.
+PRODUCTION_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
+    "pfblockerng.php": ("src",),
+    "tests/smoke/roundtrip.sh": ("src",),
+}
 
-# Kernel-lock acquires, by shape. `LOCK_UN` is a release and never matches. `flock()`
-# requires a `$`-prefixed first argument so a prose mention ("...and flock().") is
-# skipped -- the same discrimination `tests/test_bounded_flock.py` makes for the same
-# reason. `file_put_contents(..., LOCK_EX)` is included because it takes a BLOCKING
-# `flock(2)` exclusive lock, which the #1780 scanner (call-syntax only) does not see.
+REACHED_ROOTS: dict[str, tuple[str, ...]] = {**SUITE_RUNNERS, **PRODUCTION_ENTRY_POINTS}
+ALL_ROOTS: tuple[str, ...] = tuple(sorted({root for roots in REACHED_ROOTS.values() for root in roots}))
+
+# Words that can precede a runner without being one, stripped left to right until the
+# leading word is the command: `uv run pytest`, `sh scripts/run-smoke.sh`,
+# `python -m pytest`, `timeout 600 vendor/bin/phpunit`, `nice -n 5 shellspec`,
+# `if ! pytest`, `{ pytest; }`. `command`/`builtin` cover `command pytest`; that also
+# makes `command -v shellspec` read as an invocation, which is over-inclusion in the safe
+# direction.
+_PREFIX_WORDS = frozenset(
+    {
+        "sh",
+        "bash",
+        "sudo",
+        "env",
+        "time",
+        "exec",
+        "uv",
+        "run",
+        "xargs",
+        "poetry",
+        "nice",
+        "timeout",
+        "command",
+        "builtin",
+        "if",
+        "then",
+        "elif",
+        "else",
+        "do",
+        "while",
+        "until",
+        "!",
+        "-m",
+    }
+)
+_PREFIX_SHAPES = (
+    re.compile(r"^python[0-9.]*$"),  # python, python3, python3.11
+    re.compile(r"^-"),  # a flag of an already-stripped prefix
+    re.compile(r"^[0-9]+$"),  # `timeout 600`, `nice 10`
+    re.compile(r"^[A-Za-z_][A-Za-z0-9_]*="),  # VAR=value prefix assignment
+)
+_SEGMENT = re.compile(r"(?:\|\||&&|[|;&\n])")  # a logical command boundary
+_STRIP_CHARS = "(){}\"'`"  # grouping punctuation, not command words
+
+# Kernel-lock acquires, by shape. Every pattern is LINE-based and each names one of
+# `_PREFILTER_TOKENS`, which is what makes the prefilter a sound superset. `LOCK_UN` is a
+# release and never matches.
 _ACQUIRE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"flock\s*\(\s*\$[^()]*LOCK_(?:EX|SH)"),
-    re.compile(r"file_put_contents\s*\(.*LOCK_EX"),
+    # PHP flock(). A `$` must appear in the arguments so a prose mention ("...between its
+    # deadline check and flock().") stays out, while `self::$fp` and `$this->fp` match.
+    re.compile(r"flock\s*\(\s*[^();]*\$[^();]*LOCK_(?:EX|SH)"),
+    # file_put_contents(..., LOCK_EX) takes a real BLOCKING flock(2) LOCK_EX -- probed at
+    # 0.504 s against a holder releasing after 0.5 s. `[^;]` keeps a match in one
+    # statement. The #1780 scanner misses this shape; it reads flock( call syntax only.
+    re.compile(r"file_put_contents\s*\([^;]*LOCK_EX"),
+    # The ARGUMENT line of a wrapped acquire (`flock(\n\t$fp,\n\tLOCK_EX\n);`), invisible
+    # to the line-scoped patterns above. The constant must be the last thing on the line
+    # apart from delimiters, which is what keeps mid-line prose out; comment markers are
+    # excluded as well, so `// LOCK_EX, and the deadline` and `/* LOCK_EX */` do not match.
+    re.compile(r"^[^;/*#]*LOCK_(?:EX|SH)\b[^;/*#]*[,)\s]*;?\s*$"),
     re.compile(r"fcntl\.(?:flock|lockf)\s*\("),
-    re.compile(r"(?:^|[|;&(]\s*|\b(?:sh|bash|env|sudo|exec|timeout(?:\s+\S+)?)\s+)(?:lockf|flock)\s+-"),
+    # flock(1)/lockf(1) at command position, including the bare-fd form this issue names
+    # (`exec 9>L; flock 9`, `lockf -k 9`, `flock $fd`).
+    re.compile(r"(?:^|[|;&(]\s*|\b(?:sh|bash|env|sudo|exec|timeout(?:\s+\S+)?)\s+)(?:lockf|flock)\s+[-\d$]"),
 )
 
+_PREFILTER_TOKENS = ("LOCK_EX", "LOCK_SH", "flock", "lockf", "fcntl")
 
-def _tracked(root: str) -> list[Path]:
-    """Tracked files under ``root``. `git ls-files`, not `rglob`: untracked scratch a
-    developer left in the tree must not move this gate's verdict."""
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--", root],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return [ROOT / name for name in listing.split("\0") if name]
+
+def _candidate_files(root: str) -> list[Path]:
+    """Tracked files under ``root`` that could hold an acquire.
+
+    `git grep -l` over the loose token list rather than reading every tracked file: a
+    sound superset, and it stops re-reading ~1000 files once per root. Tracked-only, so
+    untracked scratch cannot move the verdict. `git grep` exits 1 for "no match", which is
+    not an error; any other status raises instead of reading as an empty scan.
+    """
+    argv = ["git", "grep", "-l", "-F"]
+    for token in _PREFILTER_TOKENS:
+        argv += ["-e", token]
+    result = subprocess.run([*argv, "--", root], cwd=ROOT, capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        raise OSError(f"git grep failed for {root!r}: {result.stderr.strip()}")
+    return [ROOT / name for name in result.stdout.split("\n") if name]
 
 
 def kernel_lock_acquires(root: str) -> list[str]:
-    """``path:line`` for every kernel-lock acquire under ``root``.
-
-    Reachability is a *may*, deliberately: a suite whose sources name an acquire counts
-    as able to reach one, because the discrimination that would narrow it -- does this
-    embedded snippet get executed or only written? -- is not something a regex can make.
-    `tests/` scores hits it can only write (`test_bounded_flock.py`'s own PHP fixtures)
-    alongside hits it really runs (`tests/smoke`'s appliance snippets). Over-inclusion
-    costs a job a budget it already has; under-inclusion costs a six-hour hang.
-    """
+    """``path:line`` for every kernel-lock acquire under ``root``."""
     found: list[str] = []
-    for path in _tracked(root):
+    for path in _candidate_files(root):
         try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue  # binary fixture or broken symlink: carries no acquire either way
-        for lineno, line in enumerate(text.splitlines(), start=1):
+            raw = path.read_bytes()
+        except OSError:
+            continue  # broken symlink: holds no acquire either way
+        # errors="replace", never a skip: an except-and-continue on UnicodeDecodeError
+        # silently dropped a tracked latin-1 .inc holding a real flock($fp, LOCK_EX).
+        for lineno, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), start=1):
             if any(pattern.search(line) for pattern in _ACQUIRE_PATTERNS):
                 found.append(f"{path.relative_to(ROOT)}:{lineno}")
     return found
 
 
 def lock_bearing_roots() -> set[str]:
-    return {root for root in set(SUITE_ROOTS.values()) if kernel_lock_acquires(root)}
+    return {root for root in ALL_ROOTS if kernel_lock_acquires(root)}
 
 
-def _strip_comment(line: str) -> str:
-    stripped = line.strip()
-    return "" if stripped.startswith("#") else stripped
+def _is_prefix(word: str) -> bool:
+    return word in _PREFIX_WORDS or any(shape.match(word) for shape in _PREFIX_SHAPES)
+
+
+def _runner_for(word: str) -> str | None:
+    """The runner ``word`` invokes, tolerating `./` and any leading path."""
+    candidate = word.removeprefix("./")
+    for token in SUITE_RUNNERS:
+        if candidate == token or candidate.endswith("/" + token):
+            return token
+    return None
 
 
 def runners_in_run_body(body: str) -> set[str]:
-    """Runner tokens ``body`` invokes *as commands*.
+    """Suite runners ``body`` invokes as commands, plus production entry points it names.
 
     A mention is not an invocation: `echo "shellspec shell tests failed"` and
-    `--suite pytest` name a runner in argument position, and a `#` line only documents
-    one. Keeping both out is what keeps this gate off jobs that merely talk about a suite
-    -- test.yml's `all-tests-passed` AND gate is exactly that shape.
+    `--suite pytest` put a runner in argument position, and a `#` line only documents one.
+    Keeping both out is what keeps this gate off jobs that merely talk about a suite --
+    test.yml's `all-tests-passed` AND gate is exactly that shape.
     """
     found: set[str] = set()
-    for segment in _SEGMENT.split("\n".join(_strip_comment(line) for line in body.splitlines())):
-        words = segment.strip().split()
-        while words and (words[0] in _PREFIX_WORDS or _ASSIGNMENT.match(words[0])):
+    live = [line.strip() for line in body.splitlines() if not line.strip().startswith("#")]
+    for line in live:
+        found |= {entry for entry in PRODUCTION_ENTRY_POINTS if entry in line}
+    for segment in _SEGMENT.split("\n".join(live)):
+        words = [stripped for word in segment.split() if (stripped := word.strip(_STRIP_CHARS))]
+        while words and _is_prefix(words[0]):
             words = words[1:]
-        if words and words[0] in SUITE_ROOTS:
-            found.add(words[0])
+        if words and (runner := _runner_for(words[0])) is not None:
+            found.add(runner)
     return found
 
 
-def _composite_run_bodies(uses: str) -> list[str]:
-    """`run:` bodies of a local composite action, so a suite invoked one level down is
-    still attributed to the job that reaches it."""
-    action = ROOT / uses.lstrip("./")
-    for candidate in (action / "action.yml", action / "action.yaml", action):
-        if candidate.is_file():
-            document = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            steps = (document.get("runs") or {}).get("steps") or []
-            return [step["run"] for step in steps if isinstance(step, dict) and step.get("run")]
-    return []
+def _documents() -> dict[str, dict]:
+    return {
+        path.name: (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) for path in sorted(WORKFLOWS.glob("*.y*ml"))
+    }
 
 
-def suite_running_jobs() -> dict[tuple[str, str], set[str]]:
-    """``(workflow file name, job id) -> runner tokens the job executes``.
+def suite_running_jobs(documents: dict[str, dict] | None = None) -> dict[tuple[str, str], set[str]]:
+    """``(workflow file name, job id) -> the runners / entry points the job reaches``.
 
-    Jobs that call a reusable workflow are skipped -- they cannot carry a budget, and the
-    called job's own budget is the bound that applies.
+    Jobs that call a reusable workflow are skipped: GitHub allows only
+    name/uses/with/secrets/needs/if/permissions/strategy there -- smoke.yml states that
+    allow-list in its own comment -- so they cannot carry a budget, and the bound that
+    applies is the called job's, which this gate reads at its definition site.
     """
     reached: dict[tuple[str, str], set[str]] = {}
-    for path in sorted(WORKFLOWS.glob("*.y*ml")):
-        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    for name, document in (documents if documents is not None else _documents()).items():
         for job_id, job in (document.get("jobs") or {}).items():
             if not isinstance(job, dict) or job.get("uses"):
                 continue
             runners: set[str] = set()
             for step in job.get("steps") or []:
-                if not isinstance(step, dict):
-                    continue
-                if step.get("run"):
+                if isinstance(step, dict) and step.get("run"):
                     runners |= runners_in_run_body(step["run"])
-                uses = step.get("uses")
-                if isinstance(uses, str) and uses.startswith("./"):
-                    for body in _composite_run_bodies(uses):
-                        runners |= runners_in_run_body(body)
             if runners:
-                reached[(path.name, job_id)] = runners
+                reached[(name, job_id)] = runners
     return reached
+
+
+def _reached_bearing_roots(runners: set[str], bearing: set[str]) -> list[str]:
+    return sorted({root for runner in runners for root in REACHED_ROOTS[runner]} & bearing)
 
 
 def lock_reachable_jobs() -> set[tuple[str, str]]:
     bearing = lock_bearing_roots()
-    return {
-        job for job, runners in suite_running_jobs().items() if {SUITE_ROOTS[runner] for runner in runners} & bearing
-    }
+    return {job for job, runners in suite_running_jobs().items() if _reached_bearing_roots(runners, bearing)}
 
 
-def budget_offences(sources: dict[str, str], reached: dict[tuple[str, str], set[str]]) -> list[str]:
-    """One line per job that runs a lock-bearing suite without a usable budget."""
+_MISSING = object()
+
+
+def budget_offences(documents: dict[str, dict], reached: dict[tuple[str, str], set[str]]) -> list[str]:
+    """One line per job that reaches a lock-bearing tree without a usable budget."""
     bearing = lock_bearing_roots()
     offences: list[str] = []
     for (workflow, job_id), runners in sorted(reached.items()):
-        roots = sorted({SUITE_ROOTS[runner] for runner in runners} & bearing)
+        roots = _reached_bearing_roots(runners, bearing)
         if not roots:
             continue
-        body = extract_job(sources[workflow], job_id)
-        hit = re.search(r"^    timeout-minutes:[ \t]*(.*\S)[ \t]*$", body, re.MULTILINE)
-        where = f"{workflow}: job {job_id} runs {', '.join(sorted(runners))} (lock sites under {', '.join(roots)})"
-        if hit is None:
+        job = (documents[workflow].get("jobs") or {})[job_id]
+        raw = job.get("timeout-minutes", _MISSING)
+        where = f"{workflow}: job {job_id} reaches {', '.join(sorted(runners))} (lock sites under {', '.join(roots)})"
+        if raw is _MISSING:
             offences.append(f"{where}: no job-level timeout-minutes, so a stuck lock burns GitHub's 360-minute default")
-            continue
-        raw = hit.group(1)
-        if not re.fullmatch(r"[1-9][0-9]*", raw):
+        elif not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
             offences.append(f"{where}: timeout-minutes is {raw!r}, not a plain positive integer")
-        elif int(raw) >= GITHUB_DEFAULT_TIMEOUT_MINUTES:
+        elif raw >= GITHUB_DEFAULT_TIMEOUT_MINUTES:
             offences.append(
                 f"{where}: timeout-minutes is {raw}, at or above GitHub's "
                 f"{GITHUB_DEFAULT_TIMEOUT_MINUTES}-minute default, so it bounds nothing"
@@ -217,68 +281,74 @@ def budget_offences(sources: dict[str, str], reached: dict[tuple[str, str], set[
     return offences
 
 
-def _workflow_sources() -> dict[str, str]:
-    return {path.name: path.read_text(encoding="utf-8") for path in sorted(WORKFLOWS.glob("*.y*ml"))}
-
-
 # --------------------------------------------------------------------------- #
 # The gate.
 # --------------------------------------------------------------------------- #
 
 
-def test_every_job_running_a_lock_bearing_suite_pins_timeout_minutes() -> None:
+def test_every_job_reaching_a_lock_bearing_tree_pins_timeout_minutes() -> None:
     """The issue's Expected, enforced for the whole class rather than the one job it
     named: a deadlock fails at the job's own budget, not at the platform default."""
-    offences = budget_offences(_workflow_sources(), suite_running_jobs())
+    documents = _documents()
+    offences = budget_offences(documents, suite_running_jobs(documents))
     assert not offences, "kernel-lock job budget missing:\n  " + "\n  ".join(offences)
 
 
-def test_which_suite_roots_hold_kernel_lock_acquires() -> None:
-    """The gate's premise, asserted rather than assumed.
+def test_which_roots_hold_kernel_lock_acquires() -> None:
+    """The gate's premise, asserted rather than assumed, and falsifiable in both
+    directions.
 
-    `tests/shell` holds none, which is why the shellspec jobs are deliberately NOT
-    gated here: the `lockf -k 9` / `flock 9` the issue named lived in
-    `scripts/agent/work-branch.sh` and was retired with the Graphify store, and no spec
-    has acquired a kernel lock since. A lock landing in (or leaving) any root changes
-    which jobs this file demands a budget from, so it must be a visible diff.
+    `scripts` and `tests/shell` hold none today: the `lockf -k 9` / `flock 9` this issue
+    names lived in `scripts/agent/work-branch.sh` and was retired with the Graphify store.
+    Reintroducing a lock there flips `scripts` to bearing and pulls the shellspec jobs
+    into the gate -- which is the regression class the issue is about, so it must be a
+    visible diff either way.
     """
-    bearing = {root: len(kernel_lock_acquires(root)) for root in sorted(set(SUITE_ROOTS.values()))}
-    assert {root for root, count in bearing.items() if count} == {
-        "tests",
+    counts = {root: len(kernel_lock_acquires(root)) for root in ALL_ROOTS}
+    assert {root for root, count in counts.items() if count} == {
+        "src",
+        PYTEST_ROOT,
         "tests/php",
         "tests/smoke",
-    }, bearing
+    }, counts
 
 
 def test_the_lock_reachable_jobs_are_the_ones_the_scan_finds() -> None:
-    """The enumeration the issue's scope note asks for, in one place, so a job entering
-    or leaving the class is a visible diff.
-
-    The issue named only `shell-tests`; its scope note says the exposure comes from the
-    primitives plus the missing budget, not from any one test.
-    """
-    assert lock_reachable_jobs() == {
+    """The enumeration the issue's scope note asks for, in one place, so a job entering or
+    leaving the class is a visible diff. The issue named only `shell-tests`; its scope note
+    says the exposure comes from the primitives plus the missing budget, not one test."""
+    found = lock_reachable_jobs()
+    assert found == {
+        ("build-image.yml", "verify-image"),
+        ("image-refresh.yml", "refresh"),
         ("smoke-single.yml", "smoke"),
         ("test.yml", "php-unit"),
         ("test.yml", "test"),
         ("ui-tests.yml", "ui"),
-    }, sorted(lock_reachable_jobs())
+    }, sorted(found)
 
 
 def test_suite_roots_match_the_configuration_that_declares_them() -> None:
-    """`SUITE_ROOTS` re-derived from the files the runners themselves read, each slice
-    bounded by its anchor so a reworded config line raises instead of passing."""
+    """Each root re-derived from the config the runner itself reads, every slice bounded by
+    its anchor so a reworded config line raises instead of passing."""
     phpunit = (ROOT / "phpunit.xml").read_text(encoding="utf-8")
-    assert extract_between(phpunit, "<directory>", "</directory>") == SUITE_ROOTS["vendor/bin/phpunit"]
+    assert extract_between(phpunit, "<directory>", "</directory>") in SUITE_RUNNERS["vendor/bin/phpunit"]
 
     ini = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"]["ini_options"]
-    assert ini["testpaths"] == [SUITE_ROOTS["pytest"]]
+    assert ini["testpaths"] == ["tests"]
+    assert "--ignore=tests/smoke" in ini["addopts"].split()
+    assert PYTEST_ROOT.endswith("tests/*.py")
 
     shellspec = (ROOT / ".shellspec").read_text(encoding="utf-8")
-    assert extract_after(shellspec, "--default-path ").split("\n", 1)[0].strip() == SUITE_ROOTS["shellspec"]
+    assert extract_after(shellspec, "--default-path ").split("\n", 1)[0].strip() in SUITE_RUNNERS["shellspec"]
 
     run_smoke = (ROOT / "scripts" / "run-smoke.sh").read_text(encoding="utf-8")
-    assert extract_between(run_smoke, '_PATHS="', '"') == SUITE_ROOTS["scripts/run-smoke.sh"]
+    assert extract_between(run_smoke, '_PATHS="', '"') in SUITE_RUNNERS["scripts/run-smoke.sh"]
+
+    # roundtrip.sh maps to `src` because it drives the production reload entry point.
+    roundtrip = (ROOT / "tests" / "smoke" / "roundtrip.sh").read_text(encoding="utf-8")
+    assert extract_between(roundtrip, 'PHP_CLI="', '"').endswith("pfblockerng.php")
+    assert PRODUCTION_ENTRY_POINTS["tests/smoke/roundtrip.sh"] == ("src",)
 
 
 # --------------------------------------------------------------------------- #
@@ -289,97 +359,156 @@ def test_suite_roots_match_the_configuration_that_declares_them() -> None:
 _PLANTED_JOB = {("planted.yml", "suite"): {"vendor/bin/phpunit"}}
 
 
+def _planted(budget: object) -> dict[str, dict]:
+    job: dict[str, object] = {"runs-on": "ubuntu-latest", "steps": []}
+    if budget is not _MISSING:
+        job["timeout-minutes"] = budget
+    return {"planted.yml": {"jobs": {"suite": job}}}
+
+
 @pytest.mark.parametrize(
     ("budget", "expected"),
     (
-        ("", "no job-level timeout-minutes"),
-        ("    timeout-minutes: ${{ inputs.budget }}\n", "not a plain positive integer"),
-        ("    timeout-minutes: 0\n", "not a plain positive integer"),
-        ("    timeout-minutes: -5\n", "not a plain positive integer"),
-        (f"    timeout-minutes: {GITHUB_DEFAULT_TIMEOUT_MINUTES}\n", "bounds nothing"),
+        (_MISSING, "no job-level timeout-minutes"),
+        ("${{ inputs.budget }}", "not a plain positive integer"),
+        ("20", "not a plain positive integer"),
+        (0, "not a plain positive integer"),
+        (-5, "not a plain positive integer"),
+        (20.0, "not a plain positive integer"),
+        (True, "not a plain positive integer"),
+        (GITHUB_DEFAULT_TIMEOUT_MINUTES, "bounds nothing"),
+        (100000, "bounds nothing"),
     ),
 )
-def test_the_gate_reports_a_planted_budget_offence(budget: str, expected: str) -> None:
-    source = "jobs:\n  suite:\n    runs-on: ubuntu-latest\n" + budget + "    steps: []\n"
-    offences = budget_offences({"planted.yml": source}, _PLANTED_JOB)
+def test_the_gate_reports_a_planted_budget_offence(budget: object, expected: str) -> None:
+    offences = budget_offences(_planted(budget), _PLANTED_JOB)
     assert len(offences) == 1 and expected in offences[0], offences
 
 
 def test_the_gate_accepts_a_planted_job_that_carries_a_budget() -> None:
-    source = "jobs:\n  suite:\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    steps: []\n"
-    assert budget_offences({"planted.yml": source}, _PLANTED_JOB) == []
-
-
-def test_a_budget_nested_under_a_step_is_not_a_job_budget() -> None:
-    """Six-space indentation puts the key on a step, where GitHub ignores it. The
-    job-level regex must not accept it."""
-    source = (
-        "jobs:\n  suite:\n    runs-on: ubuntu-latest\n    steps:\n"
-        "      - name: run\n        timeout-minutes: 15\n        run: true\n"
-    )
-    offences = budget_offences({"planted.yml": source}, _PLANTED_JOB)
-    assert len(offences) == 1 and "no job-level timeout-minutes" in offences[0], offences
-
-
-def test_a_renamed_planted_job_raises_instead_of_widening_the_slice() -> None:
-    """The #2669 shape: an absent landmark must raise, never return the whole file --
-    which would let the `timeout-minutes` search match a LATER job's budget and pass."""
-    source = "jobs:\n  renamed:\n    timeout-minutes: 15\n    steps: []\n"
-    with pytest.raises(ValueError, match="job 'suite' not found"):
-        budget_offences({"planted.yml": source}, _PLANTED_JOB)
+    assert budget_offences(_planted(15), _PLANTED_JOB) == []
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("label", "source"),
     (
-        "shellspec --shell dash",
-        "uv run pytest --junitxml=/tmp/x.xml",
-        "sh scripts/run-smoke.sh --paths tests/smoke",
-        "vendor/bin/phpunit --coverage-text",
-        'DASH=dash shellspec --shell "$DASH"',
-        "make build && shellspec",
+        (
+            "quoted sibling job key",
+            'jobs:\n  suite:\n    steps: []\n  "other":\n    timeout-minutes: 5\n    steps: []\n',
+        ),
+        (
+            "budget nested under a step",
+            "jobs:\n  suite:\n    steps:\n      - name: run\n        timeout-minutes: 15\n        run: 'true'\n",
+        ),
     ),
 )
-def test_the_runner_scan_sees_real_invocations(body: str) -> None:
-    assert runners_in_run_body(body), body
+def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str, source: str) -> None:
+    """Two false-pass shapes a text slice allows. `extract_job`'s sibling boundary does not
+    recognise a QUOTED job key, so a slice runs into the next job and its budget satisfies
+    the search; and GitHub ignores a step-level key as a job bound. Reading the parsed
+    document cannot be fooled by either."""
+    offences = budget_offences({"planted.yml": yaml.safe_load(source)}, _PLANTED_JOB)
+    assert len(offences) == 1 and "no job-level timeout-minutes" in offences[0], (label, offences)
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "expected"),
     (
-        '        echo "shellspec shell tests failed or were cancelled."',
-        "        # sh scripts/run-smoke.sh shells out to the synced interpreter",
-        "        python3 scripts/check_skip_allowlist.py --suite pytest report.xml",
-        '        installed="$(shellspec --version)"',
+        ("shellspec --shell dash", {"shellspec"}),
+        ("uv run pytest --junitxml=/tmp/x.xml", {"pytest"}),
+        ("python -m pytest -q", {"pytest"}),
+        ("python3.11 -m pytest", {"pytest"}),
+        ("uv run python -m pytest", {"pytest"}),
+        ("sh scripts/run-smoke.sh --paths tests/smoke", {"scripts/run-smoke.sh"}),
+        ("./scripts/run-smoke.sh --paths tests/smoke", {"scripts/run-smoke.sh"}),
+        ('"$GITHUB_WORKSPACE"/scripts/run-smoke.sh -m smoke', {"scripts/run-smoke.sh"}),
+        ("vendor/bin/phpunit --coverage-text", {"vendor/bin/phpunit"}),
+        ("./vendor/bin/phpunit", {"vendor/bin/phpunit"}),
+        ('DASH=dash shellspec --shell "$DASH"', {"shellspec"}),
+        ("make build && shellspec", {"shellspec"}),
+        ("timeout 600 vendor/bin/phpunit", {"vendor/bin/phpunit"}),
+        ("timeout 60 sh scripts/run-smoke.sh", {"scripts/run-smoke.sh"}),
+        ("timeout --foreground 60 sh scripts/run-smoke.sh", {"scripts/run-smoke.sh"}),
+        ("nice -n 5 shellspec", {"shellspec"}),
+        ("if ! pytest -q; then echo no; fi", {"pytest"}),
+        ("(pytest)", {"pytest"}),
+        ("{ pytest; }", {"pytest"}),
+        ("command pytest", {"pytest"}),
+        ("tests/smoke/roundtrip.sh smoke_key a b", {"tests/smoke/roundtrip.sh"}),
+        ("run_ssh '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update'", {"pfblockerng.php"}),
+        ('        echo "shellspec shell tests failed or were cancelled."', set()),
+        ("        # sh scripts/run-smoke.sh shells out to the synced interpreter", set()),
+        ("        # pfblockerng.php update is the production reload entry point", set()),
+        ("        python3 scripts/check_skip_allowlist.py --suite pytest report.xml", set()),
+        ('        installed="$(shellspec --version)"', set()),
+        ("        grep -n pytest pyproject.toml", set()),
     ),
 )
-def test_the_runner_scan_ignores_mentions_that_are_not_invocations(body: str) -> None:
-    assert runners_in_run_body(body) == set(), body
+def test_the_runner_scan_reads_invocations_and_not_mentions(body: str, expected: set[str]) -> None:
+    assert runners_in_run_body(body) == expected, body
 
 
-@pytest.mark.parametrize(
-    "line",
-    (
-        "\tif ($lock === FALSE || !@flock($lock, LOCK_SH | LOCK_NB)) {",
-        "\t\t$this->assertTrue(flock($holder, LOCK_EX));",
-        "\t@file_put_contents($path, $content, LOCK_EX);",
-        "        fcntl.flock(handle, fcntl.LOCK_EX)",
-        "\t\t( exec 9>lockfile; lockf -k 9; sleep 30 ) &",
-        "timeout 5 sh -c 'exec 9>L; flock -w 0 9'",
-    ),
+_ACQUIRE_CASES: tuple[tuple[bool, str], ...] = (
+    (True, "\tif ($lock === FALSE || !@flock($lock, LOCK_SH | LOCK_NB)) {"),
+    (True, "\t\t$this->assertTrue(flock($holder, LOCK_EX));"),
+    (True, "\t\tflock($this->fp, LOCK_EX);"),
+    (True, "\t\tflock(self::$fp, LOCK_EX);"),
+    (True, "\t@file_put_contents($path, $content, LOCK_EX);"),
+    # A call wrapped across lines puts the constant on its own line, with and without a
+    # trailing delimiter -- both are the shape the line-scoped patterns cannot see.
+    (True, "\t\t\tLOCK_EX"),
+    (True, "\t\t\t$fp, LOCK_EX);"),
+    (True, "\t\t\tLOCK_EX | LOCK_NB,"),
+    (True, "        fcntl.flock(handle, fcntl.LOCK_EX)"),
+    (True, "\t\t( exec 9>lockfile; lockf -k 9; sleep 30 ) &"),
+    (True, "\t\t( exec 9>lockfile; flock 9; sleep 30 ) &"),
+    (True, "sh -c 'exec 9>L; flock $fd'"),
+    (True, "timeout 5 sh -c 'exec 9>L; flock -w 0 9'"),
+    (False, "\t@flock($lock, LOCK_UN);"),
+    (False, "\t// A waiter can be descheduled between its deadline check and flock()."),
+    (False, "\t// LOCK_EX, and the deadline, are documented above."),
+    (False, "\t/* LOCK_EX */"),
+    (False, "# The flock inside _rebuild_code still prevents pile-ups"),
+    (False, "45 lockf /usr/bin/lockf -s -t 5 /tmp/pfSense-upgrade.lock"),
 )
-def test_the_acquire_scan_sees_every_acquire_shape(line: str) -> None:
-    assert any(pattern.search(line) for pattern in _ACQUIRE_PATTERNS), line
 
 
-@pytest.mark.parametrize(
-    "line",
-    (
-        "\t@flock($lock, LOCK_UN);",
-        "\t// A waiter can be descheduled between its deadline check and flock().",
-        "# The flock inside _rebuild_code still prevents pile-ups",
-        "45 lockf /usr/bin/lockf -s -t 5 /tmp/pfSense-upgrade.lock",
-    ),
-)
-def test_the_acquire_scan_ignores_releases_prose_and_fixture_text(line: str) -> None:
-    assert not any(pattern.search(line) for pattern in _ACQUIRE_PATTERNS), line
+@pytest.mark.parametrize(("acquires", "line"), _ACQUIRE_CASES)
+def test_the_acquire_scan_separates_acquires_from_releases_and_prose(acquires: bool, line: str) -> None:
+    assert any(pattern.search(line) for pattern in _ACQUIRE_PATTERNS) is acquires, line
+
+
+def test_the_acquire_scan_finds_the_real_production_and_fixture_lock_sites() -> None:
+    """A production oracle, not a restatement of the regexes: the scan must actually find
+    the acquires that make `php-unit` and the live-VM jobs lock-reachable."""
+    src_files = {hit.rsplit(":", 1)[0] for hit in kernel_lock_acquires("src")}
+    assert "src/usr/local/pkg/pfblockerng/pfblockerng.inc" in src_files
+    # Wrapped across lines, so this one only appears once the argument-line pattern works.
+    assert "src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc" in src_files, sorted(src_files)
+
+    php_files = {hit.rsplit(":", 1)[0] for hit in kernel_lock_acquires("tests/php")}
+    # The forked pair that both append under LOCK_EX to the SAME paths: a genuine blocking
+    # waiter, which is what makes the php-unit budget load-bearing rather than decorative.
+    assert "tests/php/TickSafeSearchReservationTest.php" in php_files
+    assert "tests/php/FeedPassLockTest.php" in php_files
+
+    assert kernel_lock_acquires("tests/smoke"), "tests/smoke must keep its appliance LOCK_EX writes"
+
+
+def test_a_latin1_encoded_source_is_scanned_rather_than_skipped() -> None:
+    """An except-and-continue on UnicodeDecodeError dropped a tracked latin-1 `.inc`
+    holding a real `flock($fp, LOCK_EX)` -- a silent false negative."""
+    decoded = b"<?php\nflock($fp, LOCK_EX); // latin-1: \xff\n".decode("utf-8", errors="replace")
+    assert any(pattern.search(line) for line in decoded.splitlines() for pattern in _ACQUIRE_PATTERNS)
+
+
+def test_the_prefilter_is_a_superset_of_every_acquire_pattern() -> None:
+    """`_candidate_files` only reads files naming a `_PREFILTER_TOKENS` entry, so a line a
+    pattern matches WITHOUT one of those tokens would be invisible to the scan even though
+    the regex would have caught it -- a silent hole. Checked against the real matching
+    lines above rather than against the pattern sources, which spell the constants as
+    alternations (`LOCK_(?:EX|SH)`) and would make a source-text check vacuous."""
+    matching = [line for acquires, line in _ACQUIRE_CASES if acquires]
+    assert matching, "no positive acquire cases to check the prefilter against"
+    for line in matching:
+        assert any(token in line for token in _PREFILTER_TOKENS), line
