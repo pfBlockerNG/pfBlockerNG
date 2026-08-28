@@ -498,12 +498,13 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	}
 
 	/**
-	 * Every call to the pipeline in shipped PHP, as repo-relative path => call count, with
-	 * the definition itself discounted. Keyed on the full path and counted per file so a
-	 * second caller cannot hide behind a duplicate basename, and matched on the callee name
-	 * alone so it cannot hide behind a different argument spelling -- either would be
-	 * exactly the bypass this pins against. Comments are stripped first, so prose naming
-	 * the callee is not miscounted as a call.
+	 * Every mention of the pipeline's name in shipped PHP, as repo-relative path => count,
+	 * with only its own declaration discounted. Keyed on the full path and counted per file,
+	 * so a second caller cannot hide behind a duplicate basename; read from PHP TOKENS, so
+	 * it cannot hide behind whitespace before the parenthesis, a leading namespace
+	 * separator, or a string literal handed to a dynamic call. Any of those would be exactly
+	 * the bypass this pins against. A bare mention counts too: for a guardrail, naming the
+	 * pipeline anywhere outside its own declaration is the thing worth looking at.
 	 *
 	 * @return array<string, int>
 	 */
@@ -518,11 +519,29 @@ final class DownloadRejectValidatorClearTest extends TestCase
 			if (!$entry->isFile() || !in_array($entry->getExtension(), ['inc', 'php'], TRUE)) {
 				continue;
 			}
-			$code = php_strip_whitespace($entry->getPathname());
-			$calls = substr_count($code, 'pfb_download_fetch(')
-				- substr_count($code, 'function pfb_download_fetch(');
-			if ($calls > 0) {
-				$callers[ltrim(str_replace($root, '', $entry->getPathname()), '/')] = $calls;
+			$uses = 0;
+			$previous = NULL;
+			foreach (token_get_all((string) file_get_contents($entry->getPathname())) as $token) {
+				if (is_array($token)
+				    && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
+					continue;
+				}
+				$named = NULL;
+				if (is_array($token)) {
+					if ($token[0] === T_STRING || $token[0] === T_NAME_FULLY_QUALIFIED) {
+						$named = ltrim($token[1], '\\');
+					} elseif ($token[0] === T_CONSTANT_ENCAPSED_STRING) {
+						$named = ltrim(trim($token[1], '\'"'), '\\');
+					}
+				}
+				if ($named === 'pfb_download_fetch'
+				    && !(is_array($previous) && $previous[0] === T_FUNCTION)) {
+					$uses++;
+				}
+				$previous = $token;
+			}
+			if ($uses > 0) {
+				$callers[ltrim(str_replace($root, '', $entry->getPathname()), '/')] = $uses;
 			}
 		}
 		ksort($callers, SORT_STRING);
