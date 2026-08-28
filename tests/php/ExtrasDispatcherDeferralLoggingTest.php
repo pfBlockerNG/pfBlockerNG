@@ -251,19 +251,46 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 				? '<literal>'
 				: $token[1];
 		}
-		$code = implode(' ', $tokens);
+
+		// Scope the oracle to the verb dispatcher's OWN switch: a guarded arm anywhere
+		// else in the file -- a second switch, an uncalled function -- is not this
+		// wiring. Depth is counted over tokens, so braces inside a literal cannot skew
+		// it, and a literal's text can never equal the one-character brace token.
+		$head = ['switch', '(', '$argv', '[', '1', ']', ')', '{'];
+		$open = NULL;
+		for ($i = 0, $last = count($tokens) - count($head); $i <= $last; $i++) {
+			if (array_slice($tokens, $i, count($head)) === $head) {
+				$open = $i + count($head);
+				break;
+			}
+		}
+		$this->assertNotNull($open, 'test setup: the verb dispatcher switch was not found');
+
+		$body = [];
+		$depth = 1;
+		for ($i = $open, $count = count($tokens); $i < $count && $depth > 0; $i++) {
+			$depth += (int) ($tokens[$i] === '{') - (int) ($tokens[$i] === '}');
+			if ($depth > 0) {
+				$body[] = $tokens[$i];
+			}
+		}
+		$this->assertSame(0, $depth, 'test setup: the verb dispatcher switch never closed');
+		$code = implode(' ', $body);
 		$this->assertStringContainsString('pfb_extras_process_begin', $code,
-			'test setup: the verb dispatcher did not tokenise into anything recognisable');
+			'test setup: the verb switch did not tokenise into anything recognisable');
 
 		$label = '(?:case [\'"][a-z0-9_]+[\'"]|default) : ';
 		$guard = preg_quote('$scheduled = ( $argv [ 2 ] ?? \'\' ) === \'scheduled\' ; '
-			. 'if ( ! $scheduled && ! pfb_extras_process_begin ( ) ) { exit ( 1 ) ; }', '/');
+			. 'if ( ! $scheduled && ! pfb_extras_process_begin ( ) ) { ', '/')
+			. '(?:exit|die)' . preg_quote(' ( 1 ) ; }', '/');
 
 		foreach (['dc', 'dcc'] as $verb) {
-			$this->assertSame(1, preg_match(
-				'/case [\'"]' . $verb . '[\'"] : (?:' . $label . ')*' . $guard . '/',
-				$code
-			), "issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
+			$at = 'case [\'"]' . $verb . '[\'"] : ';
+			$this->assertSame(1, preg_match_all('/' . $at . '/', $code),
+				"`{$verb}` must appear exactly once as a label in the verb switch, or the guarded "
+				. 'arm the next assertion finds need not be the one that runs');
+			$this->assertSame(1, preg_match('/' . $at . '(?:' . $label . ')*' . $guard . '/', $code),
+				"issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
 				. 'on a dispatcher deferral');
 		}
 	}
