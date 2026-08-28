@@ -224,4 +224,94 @@ PROBE
 			The contents of file "${errorlog}" should include " [ ${alias} ] XLSX processing failed, exit 1; keeping existing [ 2026-01-01 00:00:00 ]"
 		End
 	End
+
+	Context 'on a container that carries a status stash of its own'
+		# The stash is the one new file this shape writes, and the container is
+		# UNTRUSTED: a member landing on that path would hand a remote feed the
+		# status the publish gate reads. Paired with a workbook carrying no address
+		# it is issue #2682's defect back under the container's control -- `grep`
+		# reports no match, a planted `0` overrides it, and zero bytes publish over
+		# the live feed as a success. So the stash is derived as a SIBLING of the
+		# extraction target rather than a file inside it, and is cleared once the
+		# container has been unpacked, before anything can read it.
+		plant_planted_stash_raw() {
+			printf '0\n' > "${work}/build/sharedStrings.rc"
+			awk 'BEGIN {
+				for (n = 0; n < 128; n++) { line = line "<si><t>row-" (n % 16) "-category-not-an-address</t></si>" }
+				printf "<sst>"
+				for (r = 0; r < 720; r++) { printf "%s", line }
+				print "</sst>"
+			}' > "${work}/inner/xl/sharedStrings.xml"
+			( cd "${work}/inner" && tar -czf "${work}/build/${alias}.xlsx" xl )
+			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" sharedStrings.rc "${alias}.xlsx" )
+		}
+		Before 'plant_prior_publication'
+		Before 'plant_planted_stash_raw'
+
+		It 'refuses the addressless workbook anyway and keeps the live publication'
+			When run sh "${runner}"
+			The status should be failure
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'XLSX processing failed'
+		End
+	End
+
+	Context 'on a container whose member name climbs out of the extraction target'
+		# The sibling path the stash now uses is exactly one "../" away, so the
+		# escape is worth pinning rather than assuming. Both flavours refuse the
+		# member outright and extract nothing (probed: bsdtar 3.5.3 "Path contains
+		# '..'" exit 1, GNU tar 1.35 "Member name contains '..'" exit 2), so the
+		# feed is refused on the first tar and the stash is never reachable.
+		plant_traversal_raw() {
+			printf '0\n' > "${work}/build/climb"
+			python3 - "${orig}${alias}.raw" "${work}/build/climb" <<'PY'
+import io, sys, tarfile
+data = open(sys.argv[2], 'rb').read()
+with tarfile.open(sys.argv[1], 'w') as tf:
+    info = tarfile.TarInfo('../scratch.rc')
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+PY
+		}
+		Before 'plant_prior_publication'
+		Before 'plant_traversal_raw'
+
+		It 'refuses the feed and plants nothing beside the extraction target'
+			When run sh "${runner}"
+			The status should be failure
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The path "${work}/scratch.rc" should not be exist
+			The output should include 'XLSX processing failed'
+			The stderr should be present
+		End
+	End
+
+	Context 'when the extraction ceiling kills the stage that writes'
+		# Streamed, tar's only output is the pipe, and RLIMIT_FSIZE does not bound
+		# a pipe write (probed: 64 KiB through a pipe under `ulimit -f 1` exits 0
+		# where the same bytes to a file exit 1). So issue #2658's ceiling can only
+		# bite the stage that writes a FILE -- `grep`, here -- and when it does,
+		# tar dies of EPIPE behind it. Its status must NOT be read over the 153:
+		# pfb_extract_cap_note() keys on exactly that value to tell the operator
+		# "too large" instead of printing a bare exit code, and tar's EPIPE status
+		# (1 under bsdtar, 141 under GNU tar) carries no such meaning.
+		plant_killed_grep() {
+			printf '#!/bin/sh\nhead -c 32\nexit 153\n' > "${work}/shim/grep"
+			chmod +x "${work}/shim/grep"
+		}
+		Before 'plant_streaming_raw'
+		Before 'plant_prior_publication'
+		Before 'plant_killed_grep'
+
+		It 'returns the kill status verbatim and keeps the live publication'
+			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
+			The status should equal 153
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'XLSX processing failed'
+			The stderr should be present
+			The contents of file "${errorlog}" should include 'exit 153'
+		End
+	End
 End
