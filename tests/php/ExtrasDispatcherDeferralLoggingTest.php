@@ -111,15 +111,6 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		return implode("\n", array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
 	}
 
-	/** The captured syslog calls that blame the dispatcher lock. */
-	private function dispatcherDeferralNotices(): array
-	{
-		return array_values(array_filter(
-			$GLOBALS['pfb_test_logger_calls'] ?? [],
-			static fn (array $call): bool => str_contains($call['message'], 'dispatcher lock')
-		));
-	}
-
 	/** ANOTHER process wedges the scheduler dispatcher lock. */
 	private function holdDispatcherLock(): void
 	{
@@ -176,7 +167,10 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 
 		pfb_extras_process_begin();
 
-		$notices = $this->dispatcherDeferralNotices();
+		$notices = array_values(array_filter(
+			$GLOBALS['pfb_test_logger_calls'],
+			static fn (array $call): bool => str_contains($call['message'], 'dispatcher lock')
+		));
 		$this->assertCount(1, $notices,
 			'a wedged dispatcher-lock holder must raise exactly one syslog notice (issue #2592) -- captured: '
 			. var_export($GLOBALS['pfb_test_logger_calls'], TRUE));
@@ -225,10 +219,10 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 * The verb wiring is asserted against the dispatcher's source because
 	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires plus
 	 * pfb_global()'s real /var writes), the same reason GeoipSwapConsumerGuardTest
-	 * reads it as text. The match is anchored on the guard statement and captures the
-	 * contiguous `case` labels feeding it, so it is order-insensitive and tolerates an
-	 * equivalent reformat, while still failing if either verb is moved to a label with
-	 * no guard or if the guard stops exiting 1.
+	 * reads it as text. Each verb is matched from ITS OWN label through to the guard,
+	 * so label order and an equivalent reformat are tolerated while a verb that can
+	 * reach the switch body without the guard -- or a guard that stops exiting 1 --
+	 * fails.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
@@ -239,33 +233,21 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		$source = file_get_contents(self::PHP);
 		$this->assertIsString($source, 'test setup: could not read the verb dispatcher');
 
-		$arms = [];
-		$found = preg_match_all(
-			'/((?:[ \t]*case[ \t]*\'[a-z0-9_]+\'[ \t]*:[^\n]*\n)+)'
-			. '\s*\$scheduled\s*=\s*\(\$argv\[2\]\s*\?\?\s*\'\'\)\s*===\s*\'scheduled\';'
+		// Nothing executable may ride behind a label's colon: `case 'dcc': break;`
+		// leaves that verb unguarded while still looking like a shared label.
+		$label = '[ \t]*(?:case[ \t]*\'[a-z0-9_]+\'|default)[ \t]*:[ \t]*(?:\/\/[^\n]*)?\n';
+		// Further labels, comment-only lines and blank lines may sit between the two.
+		$filler = '(?:' . $label . '|[ \t]*(?:\/\/[^\n]*)?\n)*';
+		$guard = '[ \t]*\$scheduled[ \t]*=[ \t]*\(\$argv\[2\][ \t]*\?\?[ \t]*\'\'\)[ \t]*===[ \t]*\'scheduled\';'
 			. '\s*if\s*\(\s*!\s*\$scheduled\s*&&\s*!\s*pfb_extras_process_begin\(\)\s*\)'
-			. '\s*\{\s*exit\(1\);\s*\}/',
-			$source,
-			$arms
-		);
-		$this->assertNotFalse($found, 'the verb-arm matcher failed to compile');
-		$this->assertGreaterThan(0, $found,
-			'no Extras verb arm guards on pfb_extras_process_begin() with exit(1) any more');
+			. '\s*\{\s*exit\(1\);\s*\}';
 
-		// Sharing one arm (today) and owning separate guarded arms are both fine; a
-		// label reachable without the guard is not -- that is the regression this pins.
 		foreach (['dc', 'dcc'] as $verb) {
-			$guarded = FALSE;
-			foreach ($arms[1] as $labels) {
-				if (preg_match('/case[ \t]*\'' . $verb . '\'[ \t]*:/', $labels) === 1) {
-					$guarded = TRUE;
-					break;
-				}
-			}
-			$this->assertTrue($guarded,
-				"issue #2592 changes observability only: `{$verb}` must stay behind a guard that "
-				. 'exits 1 on a dispatcher deferral -- guarded label blocks found: '
-				. var_export($arms[1], TRUE));
+			$this->assertSame(1, preg_match(
+				'/[ \t]*case[ \t]*\'' . $verb . '\'[ \t]*:[ \t]*(?:\/\/[^\n]*)?\n' . $filler . $guard . '/',
+				$source
+			), "issue #2592 changes observability only: `{$verb}` must stay behind a guard that exits 1 "
+				. 'on a dispatcher deferral');
 		}
 	}
 
