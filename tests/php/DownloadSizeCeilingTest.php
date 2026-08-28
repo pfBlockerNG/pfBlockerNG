@@ -434,11 +434,12 @@ final class DownloadSizeCeilingTest extends TestCase
 	 * Issue #2684: that filesystem is /tmp -- a RAM disk on a default
 	 * use_mfs_tmpvar install, and the one consumer the precheck above cannot see,
 	 * because it belongs to a child process rather than to this function. The
-	 * probed path is derived the way the CHILD derives it, `getenv('TMPDIR') ?:
-	 * '/tmp'` against the environment exec() hands it, and deliberately NOT with
-	 * sys_get_temp_dir(): PHP's `sys_temp_dir` INI setting outranks TMPDIR, so on
-	 * an install that sets it the guard would measure one filesystem while the
-	 * helper's `mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"` wrote to another.
+	 * probed path is derived the way the CHILD derives it, off the environment
+	 * exec() hands it, and deliberately NOT with sys_get_temp_dir(): PHP's
+	 * `sys_temp_dir` INI setting outranks TMPDIR, so on an install that sets it the
+	 * guard would measure one filesystem while the helper's
+	 * `mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"` wrote to another. That resolution
+	 * lives in pfb_extract_temp_root(), which the test below exercises directly.
 	 *
 	 * Scoped to the xlsx branch, NOT folded into the precheck above: the gzip,
 	 * bzip2 and tar paths write nowhere near /tmp, and refusing a 50 MiB gzip feed
@@ -456,7 +457,7 @@ final class DownloadSizeCeilingTest extends TestCase
 		$scope = substr(self::$downloadBody, $xlsx, $zipBranch - $xlsx);
 
 		$check = strpos($scope,
-			"pfb_extract_space_shortfall(array(getenv('TMPDIR') ?: '/tmp'), (int) @filesize(\$file_download))");
+			'pfb_extract_space_shortfall(array(pfb_extract_temp_root()), (int) @filesize($file_download))');
 		$this->assertNotFalse($check,
 			'the xlsx branch must probe the temp filesystem the helper unpacks the workbook into');
 		$run = strpos($scope, 'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx');
@@ -469,5 +470,44 @@ final class DownloadSizeCeilingTest extends TestCase
 			'the refusal must name its reason, like every other size refusal');
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal,
 			'the refusal must return, not fall through into the extraction');
+	}
+
+	/**
+	 * Scenario: the probed temp root resolves exactly as the helper's shell does
+	 *
+	 * Given  TMPDIR unset, empty, set to "0", and set to a real path
+	 * When   pfb_extract_temp_root() and the shell's own ${TMPDIR:-/tmp} both
+	 *        resolve the temp root
+	 * Then   they name the same directory in every case.
+	 *
+	 * Issue #2684: the guard only means anything if it measures the filesystem the
+	 * child actually writes to, so the shell is the oracle here rather than a
+	 * restatement of the PHP. PHP's `?:` shorthand agrees for three of these four
+	 * and diverges on the fourth -- "0" is a non-empty string the shell keeps and
+	 * PHP's truthiness discards -- and the last assertion pins that the rejected
+	 * shorthand really is wrong here rather than a hypothetical.
+	 */
+	public function test_extract_temp_root_matches_the_shell_fallback(): void
+	{
+		$restore = getenv('TMPDIR');
+		try {
+			foreach (['unset' => NULL, 'empty' => '', 'zero' => '0', 'path' => '/var/tmp'] as $label => $value) {
+				$prelude = $value === NULL
+					? 'unset TMPDIR;'
+					: 'TMPDIR=' . escapeshellarg($value) . '; export TMPDIR;';
+				$shell = exec('/bin/sh -c ' . escapeshellarg($prelude . ' printf %s "${TMPDIR:-/tmp}"'));
+
+				$value === NULL ? putenv('TMPDIR') : putenv("TMPDIR={$value}");
+				$this->assertSame($shell, pfb_extract_temp_root(),
+					"TMPDIR {$label}: the precheck must resolve the temp root the helper writes to");
+
+				if ($label === 'zero') {
+					$this->assertNotSame($shell, (string) (getenv('TMPDIR') ?: '/tmp'),
+						'the rejected `?:` shorthand must be demonstrably wrong here');
+				}
+			}
+		} finally {
+			$restore === FALSE ? putenv('TMPDIR') : putenv("TMPDIR={$restore}");
+		}
 	}
 }

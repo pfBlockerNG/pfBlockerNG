@@ -4240,6 +4240,11 @@
             }
         ]
     },
+    "pfb_extract_temp_root": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
     "pfb_extras_credentials": {
         "returnsRef": false,
         "returnType": "array",

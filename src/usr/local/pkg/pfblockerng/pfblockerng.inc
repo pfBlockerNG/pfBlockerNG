@@ -4298,6 +4298,19 @@ function pfb_extract_space_shortfall(array $dirs, int $need, ?callable $free = N
 	return NULL;
 }
 
+/**
+ * issue #2684: the temp root the shell helpers unpack into, resolved the way the
+ * CHILD resolves it -- `${TMPDIR:-/tmp}`, against the environment exec() hands it.
+ * Deliberately NOT sys_get_temp_dir(): PHP's `sys_temp_dir` INI setting outranks
+ * TMPDIR, so on an install that sets it a free-space precheck would measure one
+ * filesystem while `pfb_make_tmpdir()`'s `mktemp -d` wrote to another. Deliberately
+ * not `?:` either -- that discards the legitimate value "0", which the shell keeps.
+ */
+function pfb_extract_temp_root(): string {
+	$tmp = (string) getenv('TMPDIR');
+	return $tmp !== '' ? $tmp : '/tmp';
+}
+
 function pfb_download_initial_retval(): int {
 	return 1;
 }
@@ -15026,15 +15039,13 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// precheck above cannot see -- it belongs to a child process, not to
 				// this function -- and which is a RAM disk on a default use_mfs_tmpvar
 				// install. Same requirement as every other extraction and no fixed
-				// floor: room for the archive itself. The path is derived the way the
-				// CHILD derives it, off the environment exec() hands it, and NOT with
-				// sys_get_temp_dir(): PHP's `sys_temp_dir` INI setting outranks TMPDIR,
-				// so on an install that sets it this would measure one filesystem while
-				// the helper wrote to another.
+				// floor: room for the archive itself. pfb_extract_temp_root() resolves
+				// that directory the way the child does; the reasons it is neither
+				// sys_get_temp_dir() nor a `?:` shorthand live at the helper.
 				// Scoped to this branch on purpose: the gzip, bzip2 and tar paths write
 				// nowhere near /tmp, and refusing them over a filesystem they never
 				// touch would repeat issue #2658's 64 MiB-floor mistake.
-				$xlsx_short = pfb_extract_space_shortfall(array(getenv('TMPDIR') ?: '/tmp'), (int) @filesize($file_download));
+				$xlsx_short = pfb_extract_space_shortfall(array(pfb_extract_temp_root()), (int) @filesize($file_download));
 				if ($xlsx_short !== NULL) {
 					pfb_validate_log($header, 'size', 'staging_space_low', $xlsx_short);
 					unlink_if_exists($file_download);
