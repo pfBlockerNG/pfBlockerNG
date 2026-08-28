@@ -45,6 +45,8 @@ pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_
 pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present on the runner
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the runner is Linux
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the runner is Linux
+pytest:tests.test_cross_agent_tooling::test_ast_grep_parses_a_php_inc_file_as_php  # ast-grep is an agent-host uv tool, not in CI's locked dev group
+pytest:tests.test_cross_agent_tooling::test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag  # semgrep is an agent-host uv tool, not in CI's locked dev group
 
 # ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
 # Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when
