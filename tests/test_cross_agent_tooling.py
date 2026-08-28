@@ -205,6 +205,11 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "stubs/` is shim/support",
         "graph.json` is tracked",
         "everything else under `graphify-out/` is ignored",
+        # Every agent tool installs the same way: one command that installs on a
+        # fresh host and upgrades an outdated one, a floor at most, never a pin --
+        # including the install added when a setup script hits a missing dependency.
+        "an exact `==` pin is never the answer",
+        "installed the same way, never pinned",
     ):
         assert contract in routing, f"direct worktree initialization routing lost {contract}"
 
