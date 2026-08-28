@@ -9588,6 +9588,94 @@
             }
         ]
     },
+    "pfb_reentry_budget": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_reentry_cmd": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "verb",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "args",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "outfile",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_reentry_exec": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "verb",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "args",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "append_to",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "lines",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_registry_pass": {
         "returnsRef": false,
         "returnType": "array",

@@ -671,8 +671,7 @@ final class Top1mDccDetectorTest extends TestCase
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertIsString($source);
-		$this->assertStringContainsString('pfblockerng.php dc scheduled', $source);
-		$this->assertStringContainsString('$maxmind_status);', $source);
+		$this->assertStringContainsString("\$maxmind_status = pfb_reentry_exec('dc', ['scheduled'], \$pfb['log']);", $source);
 		$this->assertStringContainsString('!in_array($maxmind_status, [0, 2], TRUE) || !pfb_geoip_generation_ready()', $source);
 	}
 

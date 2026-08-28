@@ -27,6 +27,19 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		rmdir_recursive($this->dir);
 	}
 
+	/**
+	 * #2016: the extras runner now spawns through pfb_reentry_exec(), so a row that
+	 * drives it needs a real timeout(1). A gate whose tool is missing is a failure.
+	 */
+	private function realTimeout(): string
+	{
+		$path = trim((string) shell_exec('command -v timeout 2>/dev/null'));
+		if ($path === '' || !is_executable($path)) {
+			$this->fail('no timeout(1) on PATH: the extras runner rows spawn through the bounded seam');
+		}
+		return $path;
+	}
+
 	private function general(string $master = ''): array
 	{
 		return [
@@ -233,6 +246,7 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		chmod($script, 0755);
 		$GLOBALS['pfb']['php'] = $script;
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
+		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
 
 		$this->assertTrue(pfb_schedule_extra_run('dcc'));
 		$this->assertTrue(pfb_schedule_extra_run('bl', 'one,two'));
@@ -249,6 +263,7 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		chmod($script, 0755);
 		$GLOBALS['pfb']['php'] = $script;
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
+		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
 		$changed = FALSE;
 
 		$this->assertTrue(pfb_schedule_extra_run('dcc', '', $changed));
@@ -262,6 +277,7 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 		chmod($script, 0755);
 		$GLOBALS['pfb']['php'] = $script;
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
+		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
 		$changed = FALSE;
 
 		$this->assertFalse(pfb_schedule_extra_run('dcc', '', $changed));

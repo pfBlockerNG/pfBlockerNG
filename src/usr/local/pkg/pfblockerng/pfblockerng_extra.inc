@@ -5736,18 +5736,14 @@ function pfb_schedule_extra_plan(array $model, array $state, int $now, DateTimeZ
 function pfb_schedule_extra_run(string $job, string $argument = '', bool &$changed = FALSE): bool
 {
 	global $pfb;
-	$command = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php {$job}";
-	if ($job === 'dcc') {
-		$command .= ' scheduled';
-	} elseif ($job === 'bl') {
-		$command .= ' scheduled';
+	$args = [];
+	if ($job === 'dcc' || $job === 'bl') {
+		$args[] = 'scheduled';
 	}
 	if ($argument !== '') {
-		$command .= ' ' . escapeshellarg($argument);
+		$args[] = $argument;
 	}
-	$command .= " >> {$pfb['extraslog']} 2>&1";
-	$status = 1;
-	exec($command, $output, $status);
+	$status = pfb_reentry_exec($job, $args, $pfb['extraslog']);
 	$changed = $status === 2 || $status === 3;
 	return $status === 0 || $status === 2;
 }

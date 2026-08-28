@@ -51,6 +51,12 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathtimeout=/usr/bin/timeout
 	pathtar=/usr/bin/tar
 	pathpfctl=/sbin/pfctl
+	pathphp=/usr/local/bin/php
+	# issue #2016: the nested re-entry target and its ceiling (seconds). pfb_reentry()
+	# floors an empty/non-numeric/zero value to its own default, so a degraded value can
+	# never restore an unbounded wait.
+	pathpfbphp=/usr/local/www/pfblockerng/pfblockerng.php
+	pfbreentrytimeout=1800
 
 	# Script Arguments
 	alias="${2}"
@@ -1526,6 +1532,28 @@ pfb_recompute_render_stats() {
 # Function to compare previous and current DNSBL Unbound conf file, and create Add/Remove files for unbound-control cmds
 
 
+# issue #2016: the ONE seam every blocking nested pfblockerng.php re-entry goes through.
+pfb_reentry() {
+	# issue #2488: start AT the default and take the configured value only once it is
+	# proven positive-integral, so no input can produce an empty or non-numeric duration
+	# (which is how an AND-list bound degrades into an unbounded wait).
+	_pfbre_tmo=1800
+	case "${pfbreentrytimeout:-}" in
+	''|*[!0-9]*) : ;;
+	*) [ "${pfbreentrytimeout}" -gt 0 ] 2>/dev/null && _pfbre_tmo="${pfbreentrytimeout}" ;;
+	esac
+	# Default (reaper) mode -- a hung download pass must die as a whole tree; --foreground
+	# would orphan a blocked fetch (docs/misc/external-process-waits.md).
+	"${pathtimeout}" -s TERM -k 5 "${_pfbre_tmo}" "${pathphp}" "${pathpfbphp}" "$@"
+	_pfbre_rc=$?
+	if [ "${_pfbre_rc}" -eq 124 ]; then
+		echo "Nested pfblockerng.php [ ${1} ] TIMED OUT after ${_pfbre_tmo}s and was killed" \
+			| tee -a "${errorlog}"
+	fi
+	return "${_pfbre_rc}"
+}
+
+
 # Function to convert Domains/ASs to its respective IP addresses
 whoisconvert() {
 
@@ -1592,7 +1620,7 @@ whoisconvert() {
 			# Download IPinfo asn databases on first use.
 			if [ ! -f "${pathasncsv}" ]; then
 				printf 'Downloading [ IPinfo databases ] [ %s ]' "${now}"
-				/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php asn_shell scheduled
+				pfb_reentry asn_shell scheduled
 				printf "... completed"
 			fi
 
@@ -1668,7 +1696,7 @@ iptoasn() {
         # Download IPinfo asn databases on first use.
         if [ ! -f "${pathasndat}" ]; then
                 echo "Downloading [ IPinfo databases ] [ ${now} ]" >> "${extraslog}" 
-                /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php asn
+                pfb_reentry asn
         fi
 
 	# Exit if asn.mmdb is not found
@@ -1713,7 +1741,7 @@ reputation_depends() {
 	# Download MaxMind GeoLite2-Country.mmdb on first install.
 	if [ ! -f "${pathgeoipdat}" ]; then
 		echo "Downloading [ MaxMind GeoLite2-Country.mmdb ] [ ${now} ]" >> "${geoiplog}"
-		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bu scheduled
+		pfb_reentry bu scheduled
 	fi
 
 	# Exit if GeoLite2-Country.mmdb is not found
@@ -2316,7 +2344,7 @@ case "${1}" in
 		# Usage: pfblockerng dnsbl-control disable [sec] | enable |
 		#        addbypass <ip> [sec] | removebypass <ip>
 		shift
-		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dnsbl-control "$@"
+		pfb_reentry dnsbl-control "$@"
 		exitnow "$?"
 		;;
 	closing)
