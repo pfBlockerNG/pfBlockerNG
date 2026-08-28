@@ -1806,7 +1806,7 @@ def test_repair_hint_gates_the_bare_upgrade_behind_a_retry() -> None:
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
         hint = proc.stderr
-        before, _, escalation = hint.partition(_REPAIR_COMMAND)
+        _, _, escalation = hint.partition(_REPAIR_COMMAND)
         assert escalation, f"the one-command repair is missing entirely:\n{hint}"
         # Shape, not just vocabulary: a bare `pfSense-upgrade` on its own indented line is
         # a second list item, the regression this gate exists to catch — every keyword
@@ -1825,7 +1825,7 @@ def test_usage_gates_the_bare_upgrade_behind_a_retry() -> None:
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     text = proc.stdout
-    before, _, escalation = text.partition(_REPAIR_COMMAND)
+    _, _, escalation = text.partition(_REPAIR_COMMAND)
     assert escalation, text
     assert "\n  pfSense-upgrade\n" not in text, f"the bare upgrade must not be a list item:\n{text}"
     # Help text is prose, so the gate words may open a sentence.
@@ -1833,6 +1833,7 @@ def test_usage_gates_the_bare_upgrade_behind_a_retry() -> None:
     assert "re-run" in folded, text
     assert "only if" in folded, text
     assert "reboot" in folded, text
+    assert folded.index("only if") < folded.index("reboot"), f"the condition must precede the consequence:\n{text}"
 
 
 def test_empty_catalogue_failure_prints_the_repository_repair_sequence() -> None:
