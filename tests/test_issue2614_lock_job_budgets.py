@@ -188,6 +188,18 @@ def _is_prefix(word: str) -> bool:
     return word in _PREFIX_WORDS or any(shape.match(word) for shape in _PREFIX_SHAPES)
 
 
+def _command_word(raw: str) -> str:
+    """``raw`` reduced to the command word it carries.
+
+    Strips grouping punctuation and a command-substitution opener, so
+    `"$(command -v shellspec)" --shell dash` reaches `command` (a prefix) and then
+    `shellspec`. A runner buried in a NESTED shell string with its own quoting
+    (`sh -c 'a && b'`) is only seen when the inner command leads; deeper nesting is
+    deliberately out of scope, and stated here rather than left implicit.
+    """
+    return raw.strip(_STRIP_CHARS).removeprefix("$(").strip(_STRIP_CHARS)
+
+
 def _runner_for(word: str) -> str | None:
     """The runner ``word`` invokes, tolerating `./` and any leading path."""
     candidate = word.removeprefix("./")
@@ -210,7 +222,7 @@ def runners_in_run_body(body: str) -> set[str]:
     for line in live:
         found |= {entry for entry in PRODUCTION_ENTRY_POINTS if entry in line}
     for segment in _SEGMENT.split("\n".join(live)):
-        words = [stripped for word in segment.split() if (stripped := word.strip(_STRIP_CHARS))]
+        words = [stripped for word in segment.split() if (stripped := _command_word(word))]
         while words and _is_prefix(words[0]):
             words = words[1:]
         if words and (runner := _runner_for(words[0])) is not None:
@@ -436,6 +448,12 @@ def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str
         ("command pytest", {"pytest"}),
         ("tests/smoke/roundtrip.sh smoke_key a b", {"tests/smoke/roundtrip.sh"}),
         ("run_ssh '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update'", {"pfblockerng.php"}),
+        ('"$(command -v shellspec)" --shell dash', {"shellspec"}),
+        ("poetry run pytest", {"pytest"}),
+        ('"$HOME/shellspec/shellspec" --shell dash', {"shellspec"}),
+        ("if command -v pytest; then pytest; fi", {"pytest"}),
+        ("for v in a b; do shellspec; done", {"shellspec"}),
+        ("bash -c 'shellspec'", {"shellspec"}),
         ('        echo "shellspec shell tests failed or were cancelled."', set()),
         ("        # sh scripts/run-smoke.sh shells out to the synced interpreter", set()),
         ("        # pfblockerng.php update is the production reload entry point", set()),
@@ -464,6 +482,10 @@ _ACQUIRE_CASES: tuple[tuple[bool, str], ...] = (
     (True, "\t\t( exec 9>lockfile; flock 9; sleep 30 ) &"),
     (True, "sh -c 'exec 9>L; flock $fd'"),
     (True, "timeout 5 sh -c 'exec 9>L; flock -w 0 9'"),
+    # SplFileObject::flock has no `$` argument at all; the wrapped-argument pattern is
+    # what catches it. `exec {fd}>` names the descriptor in a brace, not a digit.
+    (True, "\t\t$file->flock(LOCK_EX);"),
+    (True, "exec {fd}>file; flock $fd"),
     (False, "\t@flock($lock, LOCK_UN);"),
     (False, "\t// A waiter can be descheduled between its deadline check and flock()."),
     (False, "\t// LOCK_EX, and the deadline, are documented above."),
