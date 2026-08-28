@@ -249,9 +249,22 @@ if [ "$*" = 'install --platform agents' ] && [ "$(pwd -P)" = "$DEBIAN_REPOSITORY
   printf '%s\n' '# graphify rewrote repository agents' > "$DEBIAN_REPOSITORY/AGENTS.md"
   printf '%s\n' '# graphify rewrote repository policy' > "$DEBIAN_REPOSITORY/.agents/policy/invariants.txt"
 fi
-if [ "$*" = 'copilot install' ]; then
-  mkdir -p "$HOME/.copilot/skills/graphify"
-  printf '%s\n' '0.9.50' > "$HOME/.copilot/skills/graphify/.graphify_version"
+# Only the skill copy refreshes a client's installed skill; the per-client hook
+# wiring (`graphify claude install`) leaves it untouched, exactly as the real
+# Graphify does.
+case "$*" in
+  'copilot install'|'pi install') stub_client=${1} ;;
+  'install --platform claude') stub_client=claude ;;
+  'install --platform codex') stub_client=codex ;;
+  *) stub_client='' ;;
+esac
+if [ -n "$stub_client" ]; then
+  case "$stub_client" in
+    pi) stub_skill_dir="$HOME/.pi/agent/skills/graphify" ;;
+    *) stub_skill_dir="$HOME/.$stub_client/skills/graphify" ;;
+  esac
+  mkdir -p "$stub_skill_dir"
+  printf '%s\n' '0.9.51' > "$stub_skill_dir/.graphify_version"
 fi
 GRAPHIFY
     for tool in ast-grep semgrep; do
@@ -725,9 +738,31 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.copilot/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal '0.9.50'
+    The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal '0.9.51'
     Assert [ "$(grep -Fxc "graphify:$home:copilot install" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'
+  End
+
+  It 'refreshes the detected Claude Code Graphify skill as well as its hook wiring'
+    enable_client claude
+    mkdir -p "$home/.claude/skills/graphify"
+    printf '%s\n' '0.9.48' > "$home/.claude/skills/graphify/.graphify_version"
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$home/.claude/skills/graphify/.graphify_version" should equal '0.9.51'
+    Assert [ "$(grep -Fxc "graphify:$home:claude install" "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform claude" "$tool_log")" -eq 1 ]
+  End
+
+  It 'refreshes the detected Codex Graphify skill as well as its hook wiring'
+    enable_client codex
+    mkdir -p "$home/.codex/skills/graphify"
+    printf '%s\n' '0.9.48' > "$home/.codex/skills/graphify/.graphify_version"
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$home/.codex/skills/graphify/.graphify_version" should equal '0.9.51'
+    Assert [ "$(grep -Fxc "graphify:$home:codex install" "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform codex" "$tool_log")" -eq 1 ]
   End
 
   It 'uses one Pi-compatible home-scoped Graphify install for detected OMP'
