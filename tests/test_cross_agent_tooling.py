@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import shutil
@@ -471,8 +472,20 @@ def test_tracked_graph_carries_the_php_include_corpus() -> None:
     # else catches an unattended `uv tool upgrade graphifyy` followed by a Graphify
     # post-commit rebuild, which silently replaces site-packages and drops the patch.
     graph = json.loads((ROOT / "graphify-out/graph.json").read_text(encoding="utf-8"))
-    include_nodes = [node for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")]
-    assert len(include_nodes) > 400, (
-        f"only {len(include_nodes)} graph nodes come from .inc files: the tracked graph was "
-        "rebuilt by a Graphify without .agents/patches/graphify-3075-language-overrides.patch"
+    include_files = collections.Counter(
+        str(node["source_file"]) for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")
+    )
+    total = sum(include_files.values())
+    # Size alone is satisfied by ONE large include: pfblockerng.inc carries 482 of the
+    # 767 nodes, so a graph holding only that file clears any total-node floor. Breadth
+    # is the discriminating half -- a file parsed as Pascal still contributes its own
+    # file node, so the honest signal is how many includes contribute symbols BESIDES
+    # that node: 9 of 21 with the override, 3 without it.
+    with_symbols = sorted(path for path, nodes in include_files.items() if nodes > 1)
+    assert total > 400 and len(with_symbols) >= 6, (
+        f"{total} graph nodes from {len(include_files)} .inc files, and only "
+        f"{len(with_symbols)} of them contribute symbols beyond their own file node "
+        f"({', '.join(with_symbols) or 'none'}): the tracked graph is missing the PHP "
+        "include corpus that .agents/patches/graphify-3075-language-overrides.patch "
+        "restores"
     )
