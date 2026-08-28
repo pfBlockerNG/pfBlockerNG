@@ -10,3 +10,7 @@ docs/** linguist-documentation
 # diffs and drops it from the language stats, while merge=graphify keeps resolving
 # parallel updates through the union driver.
 graphify-out/graph.json merge=graphify linguist-generated=true
+# Query-outcome records are prose one file per query, and unlike the graph they are
+# written to be READ in review — linguist-documentation keeps them out of the language
+# stats while leaving their diffs visible, the same trade as legacy/ and docs/ above.
+graphify-out/memory/** linguist-documentation

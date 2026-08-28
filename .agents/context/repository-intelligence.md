@@ -34,12 +34,14 @@ Load when: every agent session, from `AGENTS.md`.
   verify that its active project root equals `git rev-parse --show-toplevel`; after a
   mid-session worktree switch Serena is forbidden until a fresh top-level session starts
   there. Claude Agent Teams teammates use built-ins.
-- `graphify-out/graph.json` is tracked; everything else under `graphify-out/` is ignored
-  and regenerated locally from it. Refresh the graph with `graphify update <root>` and
-  commit it alongside the change that moved it. Every clone needs the union merge driver
-  that `.gitattributes` assigns to the graph — `scripts/agent/ensure-graphify-merge-driver.sh`
-  installs Graphify, runs `graphify hook install`, and verifies the registration. Without
-  it a merge leaves conflict markers in the graph instead of union-merging it.
+- `graphify-out/graph.json` is tracked, and records under `graphify-out/memory/` are tracked
+  with the work that produced them; everything else under `graphify-out/` is ignored and
+  regenerated locally.
+  Refresh the graph with `graphify update <root>` and commit it alongside the change that
+  moved it. Every clone needs the union merge driver that `.gitattributes` assigns to the
+  graph — `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify, runs
+  `graphify hook install`, and verifies the registration. Without it a merge leaves
+  conflict markers in the graph instead of union-merging it.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
   flows, structural exploration, and impact analysis, use CodeGraph through
   `codegraph_explore` or `codegraph explore`. Every client uses the same standard
@@ -51,12 +53,25 @@ Load when: every agent session, from `AGENTS.md`.
   harness/test, and `stubs/` is shim/support; communities describe topology only.
   The root graph excludes `src/**/vendor/**`, documents/media, and `legacy/`.
 - Prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, and
-  `graphify explain "<concept>"` over raw grep and file reads for codebase questions:
-  they return a scoped subgraph. Read `graphify-out/GRAPH_REPORT.md` only for broad
-  architecture review, and `graphify-out/wiki/index.md`, when present, for navigation.
-  A dirty `graphify-out/` after a hook or incremental update is expected and is not a
-  reason to skip Graphify; skip it only when the task is about stale or incorrect graph
-  output. Run `graphify update .` after modifying code (AST only, no API cost).
+  `graphify explain "<concept>"` for questions about CODE STRUCTURE — call paths, flows,
+  cross-file relationships, blast radius. They return a scoped subgraph. Go to grep first
+  for the three classes the graph does not model, because it indexes code structure and
+  nothing else: configuration surfaces and tool wiring (which extensions a linter claims,
+  where a tool is installed, what a hook runs), reference counts and other text-frequency
+  questions, and a third-party tool's own feature set, which lives in its `--help`. Every
+  query in this repository's first `graphify reflect` run was one of those three and every
+  one was a dead end. Read `graphify-out/GRAPH_REPORT.md` only for broad architecture
+  review, and `graphify-out/wiki/index.md`, when present, for navigation. A dirty
+  `graphify-out/` after a hook or incremental update is expected and is not a reason to
+  skip Graphify; skip it only when the task is about stale or incorrect graph output. Run
+  `graphify update .` after modifying code (AST only, no API cost).
+- Close the loop on every query: record it with `graphify save-result --question … --answer …
+  --outcome useful|dead_end|corrected`. A dead end MUST carry `--correction` naming what
+  actually answered the question — an unexplained dead end is what makes the next session
+  re-derive it. Records land in `graphify-out/memory/` and are committed with the work.
+  `graphify reflect` aggregates them deterministically into
+  `graphify-out/reflections/LESSONS.md`; that file is derivable, so it stays untracked —
+  rebuild it, and read it for orientation before querying.
 - Use `rg`, globbing, and file reads for literals, configuration, non-code files,
   and details CodeGraph did not cover. Use the client's LSP surface—Serena where
   available—for exact symbols, definitions, references, implementations,
