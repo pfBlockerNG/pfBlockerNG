@@ -35,21 +35,16 @@ Load when: every agent session, from `AGENTS.md`.
   as `.agents/patches/graphify-3075-language-overrides.patch`, applied to the installed
   package by `scripts/agent/patch-graphify.sh` from its two call sites:
   `ensure-graphify-merge-driver.sh` (the entry point 8 CI workflows use) and
-  `init-worktree-tools.sh`, before it refreshes the graph. Both invoke it with no
-  argument: it finds the package through the interpreter named on the `graphify`
-  shebang, never the ambient python3, which would import a different graphify — and
-  it no-ops when that package already provides the override API. A patch that does not
-  apply fails loudly; a Graphify the script cannot reach is a warning and a skip, caught
-  by the tracked graph's include-node floor in `tests/test_cross_agent_tooling.py`. No
-  cache is purged: the patch salts the AST cache key with the remapped language, so a
-  pre-patch Pascal entry can never be served for a `.inc` file. Because it patches the
-  installed package, a bare `uv tool upgrade graphifyy` reverts it by replacing
-  site-packages; the next bootstrap, worktree cut, or CI run re-applies it. The tracked
-  `.graphifyrc` (`language.inc=php`) is inert on an unpatched Graphify — the key is
-  ignored and extraction runs unchanged — so a contributor who never runs these scripts
-  sees the old Pascal parse, not breakage.
-  Delete the patch, the script, its two call sites, and their tests once a released
-  graphifyy carries the change.
+  `init-worktree-tools.sh`, before it refreshes the graph. It patches only the package
+  owned by the interpreter named on the `graphify` shebang, so a `pip --user` or
+  PYTHONPATH-only Graphify is skipped rather than patched — caught by the tracked
+  graph's include-node floor in `tests/test_cross_agent_tooling.py`. Because it patches
+  the installed package, a bare `uv tool upgrade graphifyy` reverts it; the next
+  bootstrap, worktree cut, or CI run re-applies it. The tracked `.graphifyrc`
+  (`language.inc=php`) is inert on an unpatched Graphify, so a contributor who never
+  runs these scripts sees the old Pascal parse, not breakage. Delete the patch, the
+  script, its two call sites, and their tests once a released graphifyy carries the
+  change.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a

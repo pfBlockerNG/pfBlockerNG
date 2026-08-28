@@ -83,32 +83,21 @@ main() {
 	fi
 
 	require_tool patch
-	# Dry run first: a patch that fails halfway would leave a broken installation.
-	patch_output=$(cd "$site" && patch -p1 --forward --dry-run < "$patch_file" 2>&1) || {
+	# --no-backup-if-mismatch keeps an offset or fuzzy apply from dropping a `.orig`
+	# beside the installed package; a clean apply writes none either way. Both
+	# implementations this repository runs on accept and honour it -- GNU patch 2.8 and
+	# Apple patch 2.0 -- and both reject an unknown flag loudly, so acceptance is real.
+	# The dry run comes first because a patch that fails halfway would leave a broken
+	# installation; the two invocations are identical apart from --dry-run.
+	patch_output=$(cd "$site" && patch -p1 --forward --no-backup-if-mismatch --dry-run < "$patch_file" 2>&1) || {
 		printf '%s\n' "$patch_output" >&2
 		fail "vendored patch does not apply to '$package' (tracks $UPSTREAM); refresh Graphify with 'uv tool install --reinstall graphifyy', or delete the patch once upstream releases the change"
 	}
-	patch_output=$(cd "$site" && patch -p1 --forward < "$patch_file" 2>&1) || {
+	patch_output=$(cd "$site" && patch -p1 --forward --no-backup-if-mismatch < "$patch_file" 2>&1) || {
 		printf '%s\n' "$patch_output" >&2
 		fail "vendored patch failed midway through '$package' (tracks $UPSTREAM); reinstall Graphify with 'uv tool install --reinstall graphifyy'"
 	}
 
-	# No -V is portable -- GNU patch 2.8 reads `-V none` as "numbered" and ENABLES
-	# backups, Apple patch 2.0 needs a -V to stay quiet -- so the backups are removed
-	# afterwards, for exactly the files this patch touches, and verified gone.
-	litter=$(
-		sed -n 's|^+++ b/\([^[:space:]]*\).*|\1|p' "$patch_file" |
-			while IFS= read -r touched; do
-				for backup in "$site/$touched.orig" "$site/$touched".~*~; do
-					[ -e "$backup" ] || continue
-					rm -f "$backup" || :
-					if [ -e "$backup" ]; then
-						printf " '%s'" "$backup"
-					fi
-				done
-			done
-	)
-	[ -z "$litter" ] || fail "cannot remove patch backups left in '$site':$litter"
 	echo "patch-graphify.sh: applied $UPSTREAM to '$package'" >&2
 }
 
