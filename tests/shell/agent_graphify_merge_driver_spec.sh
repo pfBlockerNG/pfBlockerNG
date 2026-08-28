@@ -40,10 +40,10 @@ GRAPHIFY
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs the exact Graphify pin and configures the requested Git root'
+  It 'installs at least the required Graphify, upgrading to the latest, and configures the requested Git root'
     When run sh "$script_abs" "$repo"
     The status should equal 0
-    The contents of file "$uv_log" should equal 'tool install graphifyy==0.9.50'
+    The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
     The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
   End

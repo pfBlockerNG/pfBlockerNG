@@ -19,7 +19,9 @@ Load when: every agent session, from `AGENTS.md`.
   then runs `graphify update <root>` when the root graph already exists. When the
   root graph is absent the initializer prints a notice and builds nothing: the
   first build's scope is a judgement call, so create it with a `/graphify` run in
-  an AI assistant. Install Graphify with `uv tool install graphifyy==0.9.50`.
+  an AI assistant. Install or refresh Graphify in one command with
+  `uv tool install --upgrade 'graphifyy>=0.9.51'` — a floor, never an exact pin, so a
+  fresh host and an outdated one both land on the current release.
 - Every worktree owns its ignored and untracked `graphify-out/` graph. Refresh it
   directly with `graphify update <root>`; there is no shared repository graph.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
