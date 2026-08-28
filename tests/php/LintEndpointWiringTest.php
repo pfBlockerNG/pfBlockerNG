@@ -75,7 +75,7 @@ final class LintEndpointWiringTest extends TestCase
 		$before = glob(sys_get_temp_dir() . '/pfb_lint_shim_*') ?: [];
 		$result = $this->request(['lang' => 'regex', 'content' => 'x'], ['REQUEST_METHOD' => 'GET']);
 		$this->assertSame('POST only', $result['body']['error']);
-		$this->assertSame([], array_values(array_diff($this->shimResidue($result['pid']), $before)));
+		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $before));
 	}
 
 	/**
@@ -95,7 +95,7 @@ final class LintEndpointWiringTest extends TestCase
 			TRUE
 		);
 		$this->assertSame('POST only', $result['body']['error']);
-		$this->assertSame([], array_values(array_diff($this->shimResidue($result['pid']), $this->planted)));
+		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $this->planted));
 	}
 
 	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
