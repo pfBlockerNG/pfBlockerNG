@@ -145,8 +145,9 @@ _ACQUIRE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^[^;/*#]*LOCK_(?:EX|SH)\b[^;/*#]*[,)\s]*;?\s*$"),
     re.compile(r"fcntl\.(?:flock|lockf)\s*\("),
     # flock(1)/lockf(1) at command position, including the bare-fd form this issue names
-    # (`exec 9>L; flock 9`, `lockf -k 9`, `flock $fd`).
-    re.compile(r"(?:^|[|;&(]\s*|\b(?:sh|bash|env|sudo|exec|timeout(?:\s+\S+)?)\s+)(?:lockf|flock)\s+[-\d$]"),
+    # (`exec 9>L; flock 9`, `lockf -k 9`, `flock $fd`). The operand may be quoted, which
+    # is this repository's shell convention (`flock "$fd"`, `flock "${fd}"`).
+    re.compile(r"""(?:^|[|;&(]\s*|\b(?:sh|bash|env|sudo|exec|timeout(?:\s+\S+)?)\s+)(?:lockf|flock)\s+['"]?[-\d$]"""),
 )
 
 _PREFILTER_TOKENS = ("LOCK_EX", "LOCK_SH", "flock", "lockf", "fcntl")
@@ -580,6 +581,11 @@ _ACQUIRE_CASES: tuple[tuple[bool, str], ...] = (
     # what catches it. `exec {fd}>` names the descriptor in a brace, not a digit.
     (True, "\t\t$file->flock(LOCK_EX);"),
     (True, "exec {fd}>file; flock $fd"),
+    # A quoted expansion is this repository's shell convention, so the operand must be
+    # allowed to start with a quote.
+    (True, 'exec {fd}>file; flock "$fd"'),
+    (True, 'exec {fd}>file; flock "${fd}"'),
+    (True, 'exec 9>file; flock "9"'),
     (False, "\t@flock($lock, LOCK_UN);"),
     (False, "\t// A waiter can be descheduled between its deadline check and flock()."),
     (False, "\t// LOCK_EX, and the deadline, are documented above."),
