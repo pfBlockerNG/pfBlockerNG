@@ -214,8 +214,8 @@ jobs:
     if: ${{ needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-latest
     # issue #2614: this job SSH-runs the production `pfblockerng.php update` entry point
-    # on the image it is upgrading, so it reaches src/'s flock(2) acquires; they carry no
-    # timeout, so this pre-existing budget is the bound on a stuck lock.
+    # on the image it is upgrading, so it reaches src/'s unbounded
+    # file_put_contents(..., LOCK_EX) acquires. This budget is the only bound.
     timeout-minutes: 120
     permissions:
       contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
