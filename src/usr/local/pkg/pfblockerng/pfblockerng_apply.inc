@@ -246,7 +246,7 @@ function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool
 	if ($fetch !== NULL) {
 		$fetch();
 	} else {
-		exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al scheduled');
+		pfb_reentry_exec('al', ['scheduled']);
 	}
 	return TRUE;
 }
@@ -1956,7 +1956,7 @@ function sync_package_pfblockerng($cron=''): bool {
 
 							$log = "\nDownloading Blacklist Database(s) [{$bl_sources} ] ... Please wait ...\n";
 							pfb_logger("{$log}", 1);
-							exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bls scheduled {$bl_string} 2>&1", $pfb_return);
+							pfb_reentry_exec('bls', ['scheduled', $bl_string], NULL, $pfb_return);
 
 							if (is_array($pfb_return)) {
 								foreach ($pfb_return as $return_output) {
@@ -3320,7 +3320,7 @@ function sync_package_pfblockerng($cron=''): bool {
 			if (!preg_grep("/pfblockerng[.]php\s+dc/", $result_cron)) {
 				$log = "\nMaxMind Database downloading and processing ( approx 4MB ) ... Please wait ...\n";
 				pfb_logger("{$log}", 1);
-				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dc scheduled >> {$pfb['log']} 2>&1", $maxmind_output, $maxmind_status);
+				$maxmind_status = pfb_reentry_exec('dc', ['scheduled'], $pfb['log']);
 				if (!in_array($maxmind_status, [0, 2], TRUE) || !pfb_geoip_generation_ready()) {
 					pfb_mark_pending_changes();
 					pfb_due_ledger_set_pending('cron', $pfb['dbdir']);

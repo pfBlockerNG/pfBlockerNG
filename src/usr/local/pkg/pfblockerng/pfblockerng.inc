@@ -5002,6 +5002,19 @@ if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
 	define('PFB_LIST_SCRIPT_TIMEOUT', 300);
 }
 
+// Ceiling (seconds) for a nested `pfblockerng.php` re-entry launched from inside an
+// update pass (issue #2016). Generous on purpose: it must exceed a full MaxMind +
+// blacklist download pass on a slow link, and its only job is to stop a stalled child
+// from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
+if (!defined('PFB_REENTRY_TIMEOUT')) {
+	define('PFB_REENTRY_TIMEOUT', 1800);
+}
+
+// The re-entry target. Single-sourced so no caller composes the child command itself.
+if (!defined('PFB_REENTRY_SCRIPT')) {
+	define('PFB_REENTRY_SCRIPT', '/usr/local/www/pfblockerng/pfblockerng.php');
+}
+
 // Directory holding the admin-authored hook scripts the picker offers and the
 // runner executes (ADR-12 security model: a hook runs a vetted on-box script
 // file, never a GUI-entered command). A dedicated dir, separate from the per-feed
@@ -5046,6 +5059,87 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 		pfb_logger("\n[ {$header} ] {$stage}-script '{$script_name}' exited non-zero [ {$retval} ]; discarding its output\n", 2);
 	}
 	return $retval;
+}
+
+/*
+ * issue #2016/#2488: resolve a nested re-entry budget FAIL-SAFE BY CONSTRUCTION --
+ * start at the default and take the caller's value only once it is proven positive-
+ * integral, so no input can leave timeout(1) an empty or non-numeric duration (which
+ * is how a bound silently degrades back into an unbounded wait).
+ */
+function pfb_reentry_budget($budget): int {
+	if (is_int($budget) && $budget > 0) {
+		return $budget;
+	}
+	if (is_string($budget) && ctype_digit($budget) && (int) $budget > 0) {
+		return (int) $budget;
+	}
+	return PFB_REENTRY_TIMEOUT;
+}
+
+/*
+ * issue #2016: compose the ONE bounded nested-pfblockerng.php command; pure builder.
+ * timeout(1) stays in default (reaper) mode -- a hung download pass must die as a whole
+ * tree, and --foreground would SIGKILL php alone and orphan a blocked fetch
+ * (docs/misc/external-process-waits.md). Output lands on $outfile and stdin on
+ * /dev/null so no descendant can hold exec()'s capture pipe past the child's exit.
+ * $pfb['timeout'] / $pfb['php'] are the established off-appliance injection points.
+ */
+function pfb_reentry_cmd(string $verb, array $args, string $outfile, $budget = NULL): string {
+	global $pfb;
+
+	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+	$php_esc     = escapeshellarg($pfb['php'] ?? '/usr/local/bin/php');
+	$argv_esc    = escapeshellarg(PFB_REENTRY_SCRIPT) . ' ' . escapeshellarg($verb);
+	foreach ($args as $arg) {
+		$argv_esc .= ' ' . escapeshellarg((string) $arg);
+	}
+
+	return "{$timeout_esc} -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' . pfb_reentry_budget($budget) .
+	    " {$php_esc} {$argv_esc} > " . escapeshellarg($outfile) . ' 2>&1 < /dev/null';
+}
+
+/*
+ * issue #2016: run a nested pfblockerng.php re-entry under that bound and hand the
+ * caller back exactly what exec() used to give it -- the child's status, its output
+ * lines in $lines, and its raw bytes appended to $append_to (the old ">> $log"). An
+ * expiry is named here, once, so every caller surfaces it without composing anything.
+ */
+function pfb_reentry_exec(string $verb, array $args = [], ?string $append_to = NULL,
+    ?array &$lines = NULL, $budget = NULL): int {
+
+	$secs    = pfb_reentry_budget($budget);
+	$outfile = @tempnam(sys_get_temp_dir(), 'pfbre');
+	if ($outfile === FALSE) {
+		// A child that never ran must never read as success.
+		pfb_logger("\nNested pfblockerng.php [ {$verb} ] could not stage its output; not run\n", 2);
+		$lines = array();
+		return -1;
+	}
+
+	$discard = array();
+	$status  = 0;
+	if (exec(pfb_reentry_cmd($verb, $args, $outfile, $secs), $discard, $status) === FALSE &&
+	    $status === 0) {
+		// exec() itself failed to launch (fork/pipe).
+		$status = -1;
+	}
+
+	$raw   = (string) @file_get_contents($outfile);
+	$lines = ($raw === '') ? array() : explode("\n", $raw);
+	if (end($lines) === '') {
+		// exec()'s $output carries no trailing empty element for a newline-terminated child.
+		array_pop($lines);
+	}
+	if ($append_to !== NULL) {
+		@file_put_contents($append_to, $raw, FILE_APPEND);
+	}
+	@unlink($outfile);
+
+	if ($status === 124) {
+		pfb_logger("\nNested pfblockerng.php [ {$verb} ] TIMED OUT after {$secs}s and was killed\n", 2);
+	}
+	return $status;
 }
 
 /*
