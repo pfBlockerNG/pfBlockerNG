@@ -125,6 +125,17 @@ PROBE
 		}' > "${work}/inner/xl/sharedStrings.xml"
 	}
 
+	# The same pool with both addresses removed: a workbook that parses and carries
+	# the same expansion, but no IPv4 literal for `grep` to match (issue #2682).
+	build_addressless_part() {
+		awk 'BEGIN {
+			for (n = 0; n < 128; n++) { line = line "<si><t>row-" (n % 16) "-category-not-an-address</t></si>" }
+			printf "<sst>"
+			for (r = 0; r < 720; r++) { printf "%s", line }
+			print "</sst>"
+		}' > "${work}/inner/xl/sharedStrings.xml"
+	}
+
 	# The workbook is compressed, like the real thing; the outer container is not,
 	# because a real producer does not re-deflate an already-deflated ZIP -- so the
 	# ".raw" pfb_download() hands over is about the size of the workbook it carries.
@@ -203,12 +214,7 @@ PROBE
 		# stashed tar status in a way that overwrote a clean tar's 0 onto this would
 		# publish zero bytes over the last-good feed again.
 		plant_addressless_raw() {
-			awk 'BEGIN {
-				for (n = 0; n < 128; n++) { line = line "<si><t>row-" (n % 16) "-category-not-an-address</t></si>" }
-				printf "<sst>"
-				for (r = 0; r < 720; r++) { printf "%s", line }
-				print "</sst>"
-			}' > "${work}/inner/xl/sharedStrings.xml"
+			build_addressless_part
 			( cd "${work}/inner" && tar -czf "${work}/build/${alias}.xlsx" xl )
 			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
 		}
@@ -236,12 +242,7 @@ PROBE
 		# container has been unpacked, before anything can read it.
 		plant_planted_stash_raw() {
 			printf '0\n' > "${work}/build/sharedStrings.rc"
-			awk 'BEGIN {
-				for (n = 0; n < 128; n++) { line = line "<si><t>row-" (n % 16) "-category-not-an-address</t></si>" }
-				printf "<sst>"
-				for (r = 0; r < 720; r++) { printf "%s", line }
-				print "</sst>"
-			}' > "${work}/inner/xl/sharedStrings.xml"
+			build_addressless_part
 			( cd "${work}/inner" && tar -czf "${work}/build/${alias}.xlsx" xl )
 			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" sharedStrings.rc "${alias}.xlsx" )
 		}
