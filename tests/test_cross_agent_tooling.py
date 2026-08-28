@@ -251,12 +251,19 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     # updates, so both attributes must ride on the row.
     graphify_attribute = "graphify-out/graph.json merge=graphify linguist-generated=true"
     assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
-    # The root graph is tracked so a fresh checkout starts with the map; everything
-    # else under graphify-out/ is regenerated from it and stays ignored. Asserting the
-    # exact set fails both ways: a dropped graph and a tracked generated artifact.
-    assert subprocess.run(
+    # The root graph is tracked so a fresh checkout starts with the map, and the
+    # query-outcome records are tracked so lessons outlive the worktree that wrote them
+    # (issue #2823). Records are named per query and accumulate, so the durable contract
+    # is the SET of allowed prefixes: it still fails both ways, on a dropped graph and on
+    # a newly tracked generated artifact.
+    tracked = subprocess.run(
         ["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True
-    ).stdout.split() == ["graphify-out/graph.json"]
+    ).stdout.split()
+    assert "graphify-out/graph.json" in tracked, "the root graph must stay tracked"
+    strays = [
+        path for path in tracked if path != "graphify-out/graph.json" and not path.startswith("graphify-out/memory/")
+    ]
+    assert strays == [], f"generated Graphify output must stay ignored: {strays}"
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     # The pair, in order: ignore the directory's contents, then re-include only the
     # tracked graph. Either line alone gets the tracking wrong, and so does a later
