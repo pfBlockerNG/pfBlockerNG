@@ -92,23 +92,31 @@ die() {
     exit "${_die_code}"
 }
 
-# pfb_pkg_repair_hint — print the pfSense repository-repair sequence to stderr, for the
+# pfb_pkg_die CODE MSG... — die(), then the pfSense repository-repair sequence, for the
 # failures a broken pkg(8) setup on the box itself can cause: the catalogue refresh, and
 # the delete/install (issue #2789). Stale or half-written Netgate repo files, or an
 # interrupted upgrade, leave pkg unable to refresh ANY catalogue, and no conf this script
 # writes can repair that. Guidance only, never run for the user: pfSense-upgrade can move
 # the box to a different pfSense version, which is not a package installer's call.
 #
-# Deliberately NOT printed for the conf-resolution failures that also exit 4, nor for a
+# The diagnosis prints FIRST: the remedy is conditional on it, and a reader who has not
+# yet been told what failed cannot judge whether these three commands are their answer.
+# die() exits, hence a wrapper rather than a call beside it.
+#
+# Deliberately NOT used for the conf-resolution failures that also exit 4, nor for a
 # package-script failure, where pkg fetched and extracted fine and the box's repository
 # setup is not implicated — a hint pointing at the wrong cause costs more than none.
-pfb_pkg_repair_hint() {
+pfb_pkg_die() {
+    _pkg_die_code="$1"
+    shift
+    printf 'install.sh: %s\n' "$*" >&2
     cat >&2 <<'HINT'
 install.sh: if this box's own pkg setup is at fault, rebuild it, then re-run this script:
 install.sh:   pfSense-repoc
 install.sh:   pfSense-repo-setup
 install.sh:   pfSense-upgrade
 HINT
+    exit "${_pkg_die_code}"
 }
 
 # _pkg ARGS... — every pkg(8) invocation: /dev/null stdin (piped-script safety, see
@@ -305,8 +313,7 @@ _pkg_mutate() {
     printf 'done\n' >"${_mut_done}"
     wait "${_mut_reader}" 2>/dev/null || true
     if [ "${_mut_rc}" -ne 0 ]; then
-        pfb_pkg_repair_hint
-        die "${_mut_code}" "${_mut_msg}"
+        pfb_pkg_die "${_mut_code}" "${_mut_msg}"
     fi
     while IFS= read -r _mut_line || [ -n "${_mut_line}" ]; do
         # Hook stdout often ends without a newline, so pkg's message is glued
@@ -506,8 +513,7 @@ pfb_channel_install() {
     printf '==> pkg update -f -r %s (refreshing the pfBlockerNG catalog)\n' "${REPO_NAME}"
     _pkg update -f -r "${REPO_NAME}" || {
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
-        pfb_pkg_repair_hint
-        die 4 "$(printf '%s update -f -r %s failed — the catalog was not refreshed. Repo '\''%s'\'' is unreachable or serving an unreadable catalog. Inspect with: %s -d update -r %s' \
+        pfb_pkg_die 4 "$(printf '%s update -f -r %s failed — the catalog was not refreshed. Repo '\''%s'\'' is unreachable or serving an unreadable catalog. Inspect with: %s -d update -r %s' \
             "${PKG_BIN}" "${REPO_NAME}" "${REPO_NAME}" "${PKG_BIN}" "${REPO_NAME}")"
     }
 
@@ -531,8 +537,7 @@ pfb_channel_install() {
     done
     [ -n "${OFFERED}" ] || {
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
-        pfb_pkg_repair_hint
-        die 4 "repo '${REPO_NAME}' does not offer ${CANONICAL_PKG} — run \`pkg update -f\`, and check the ${PFB_CHANNEL} catalogue has a build for this pfSense edition/version"
+        pfb_pkg_die 4 "repo '${REPO_NAME}' does not offer ${CANONICAL_PKG} — run \`pkg update -f\`, and check the ${PFB_CHANNEL} catalogue has a build for this pfSense edition/version"
     }
     printf '==> Target: %s-%s (repo %s)\n' "${CANONICAL_PKG}" "${OFFERED}" "${REPO_NAME}"
 
