@@ -549,13 +549,22 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
  * transform. The marker write is best-effort (@-suppressed): ledger
  * visibility must never depend on it succeeding. ADR-61 symmetric ownership:
  * the paired close is pfb_list_script_failure_close() at the alias-pass end.
+ *
+ * issue #2059: the post-script call sites pass a NULL $update_marker. They
+ * have no retry to arm -- pfb_list_script_reuse_decision() already re-runs a
+ * configured script every pass (#1278), and both loops unlink
+ * '{header}.update' further down the same iteration -- so a write here would
+ * be dead. Everything else is identical: the same stage='script' key, the
+ * same alias-pass state, the same paired close.
  */
 function pfb_list_script_failure_record(string $facility, string $item, string $message,
-    string $ledger_dir, string $update_marker, ?array &$state = NULL): void {
+    string $ledger_dir, ?string $update_marker, ?array &$state = NULL): void {
 	if ($state !== NULL) {
 		$state['failed'] = TRUE;
 	}
-	@touch($update_marker);
+	if ($update_marker !== NULL) {
+		@touch($update_marker);
+	}
 	pfb_sync_status_open($facility, $item, 'script', $message, $ledger_dir);
 }
 
@@ -2582,8 +2591,15 @@ function sync_package_pfblockerng($cron=''): bool {
 								if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 									if (@copy("{$file_dwn}.orig", "{$file_dwn}.post")) {
-									pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
-										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
+										if (pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
+										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}") !== 0) {
+											// issue #2059: the feed itself refreshed, but the script's own
+											// side effects did not complete -- mark the pass ('script' stage,
+											// never 'download'), else it closes as full success.
+											pfb_list_script_failure_record('dnsbl', $alias,
+											    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+											    $pfb['dbdir'], NULL, $pfb_script_state);
+										}
 										unlink_if_exists("{$file_dwn}.post");
 									} else {
 										pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
@@ -3991,6 +4007,12 @@ function sync_package_pfblockerng($cron=''): bool {
 									if (file_exists("{$file_dwn}.orig.post")) {
 										@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
 									}
+									// issue #2059: the feed itself refreshed, but the script's own
+									// side effects did not complete -- mark the pass ('script' stage,
+									// never 'download'), else it closes as full success.
+									pfb_list_script_failure_record('ip', $alias,
+									    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+									    $pfb['dbdir'], NULL, $pfb_script_state);
 								}
 							}
 

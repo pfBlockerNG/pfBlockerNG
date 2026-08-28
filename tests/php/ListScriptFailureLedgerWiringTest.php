@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -217,6 +218,97 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 			$mutant = substr_replace($mutant, $needle, $endPos + strlen($end), 0);
 			$mutantScope = $this->applyScope($mutant, $start, $end);
 			$this->assertSame(0, substr_count($mutantScope, $needle), "a {$needle} relocation after its loop boundary must fail the scope pin");
+		}
+	}
+
+	/**
+	 * issue #2059 in-suite reproduction: a per-feed POST-process script that
+	 * exits non-zero must be visible in the ADR-61 ledger after the alias pass
+	 * closes, in BOTH loops. Drives the REAL pfb_list_script_exec() against a
+	 * genuinely failing script, then the real alias-pass close, so the fault is
+	 * produced the way the appliance produces it -- not injected.
+	 */
+	#[DataProvider('postScriptFacilities')]
+	public function testFailingPostScriptStaysVisibleAfterTheAliasPassCloses(string $facility, string $alias): void
+	{
+		$script = "{$this->dir}/fail_post.sh";
+		file_put_contents($script, "#!/bin/sh\nexit 3\n");
+		$this->assertTrue(chmod($script, 0755));
+		$state = ['failed' => FALSE];
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, $facility), 'before: the ledger has no open entry');
+
+		// The loop's own sequence: run the post-script, honour its exit status.
+		$rc = pfb_list_script_exec($script, 'fail_post.sh', 'post', 'foo_feed', '', '');
+		$this->assertNotSame(0, $rc, 'the fixture must genuinely fail -- a zero exit proves nothing');
+		pfb_list_script_failure_record($facility, $alias,
+			"[ {$alias} - foo_feed ] Post-script FAIL - feed updated, side effects incomplete",
+			$this->dir, NULL, $state);
+		pfb_list_script_failure_close($facility, $alias, $this->dir, $state);
+
+		$open = pfb_sync_status_list_open($this->dir, $facility);
+		$this->assertCount(1, $open, 'a failed post-script must survive the alias-pass close, not read as full success');
+		$this->assertSame($alias, $open[0]['item']);
+		$this->assertSame('script', $open[0]['stage']);
+		$this->assertStringContainsString('Post-script FAIL', $open[0]['message']);
+	}
+
+	/** @return array<string, array{0: string, 1: string}> */
+	public static function postScriptFacilities(): array
+	{
+		return [
+			'IP loop'    => ['ip', 'pfB_Example_v4'],
+			'DNSBL loop' => ['dnsbl', 'DNSBL_Example'],
+		];
+	}
+
+	/**
+	 * issue #2059: both post-script branches must bind the recorder. #993: the
+	 * apply monolith owns feed download and appliance side effects, so its loop
+	 * cannot be driven off-appliance -- pin each live binding in its own route
+	 * scope; php_strip_whitespace() removes comments/docblocks from the source.
+	 */
+	public function testEachFamilyBindsPostScriptFailureRecordOnce(): void
+	{
+		$source      = php_strip_whitespace(self::APPLY);
+		$dnsbl_start = 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {';
+		$dnsbl_end   = 'if (isset($csvline)) {';
+		$ip_start    = 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {';
+		$ip_end      = '$file_chk = pfb_ip_script_probe_staged(';
+		$dnsbl_post  = $this->applyScope($source, $dnsbl_start, $dnsbl_end);
+		$ip_post     = $this->applyScope($source, $ip_start, $ip_end);
+
+		$this->assertSame(1, substr_count($dnsbl_post, "pfb_list_script_failure_record('dnsbl', \$alias,"),
+			'the DNSBL post-script branch must record against its own alias');
+		$this->assertSame(1, substr_count($ip_post, "pfb_list_script_failure_record('ip', \$alias,"),
+			'the IP post-script branch must record against its own alias');
+
+		// The trailing arguments are load-bearing: NULL suppresses a retry-marker
+		// write both loops would unlink further down the same iteration, and
+		// $pfb_script_state is what stops the alias-pass close wiping the entry.
+		foreach (['dnsbl' => $dnsbl_post, 'ip' => $ip_post] as $family => $scope) {
+			$this->assertSame(1, substr_count($scope, "\$pfb['dbdir'], NULL, \$pfb_script_state);"),
+				"the {$family} post-script record must pass no retry marker and the alias-pass state");
+		}
+
+		// Exactly two literal-facility call sites -- one post-script branch per
+		// loop. A third would double-report; the pre-script sites route through
+		// pfb_list_script_failure_continue() instead, which takes $facility.
+		$this->assertSame(2, substr_count($source, "pfb_list_script_failure_record('"),
+			'only the two post-script branches may call the recorder with a literal facility');
+
+		foreach ([
+			[$dnsbl_start, $dnsbl_end, "pfb_list_script_failure_record('dnsbl', \$alias,"],
+			[$ip_start, $ip_end, "pfb_list_script_failure_record('ip', \$alias,"],
+		] as [$start, $end, $needle]) {
+			$removed = 0;
+			$mutant = str_replace($needle, '', $source, $removed);
+			$this->assertSame(1, $removed, "mutation fixture must remove {$needle} once");
+			$endPos = strpos($mutant, $end);
+			$this->assertNotFalse($endPos, "mutation fixture must retain {$end}");
+			$mutant = substr_replace($mutant, $needle, $endPos + strlen($end), 0);
+			$mutantScope = $this->applyScope($mutant, $start, $end);
+			$this->assertSame(0, substr_count($mutantScope, $needle),
+				"a {$needle} relocation after its post-script branch must fail the scope pin");
 		}
 	}
 }

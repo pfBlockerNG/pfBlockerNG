@@ -7654,7 +7654,7 @@
                 "name": "update_marker",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
+                "type": "?string",
                 "default": null
             },
             {
