@@ -4,8 +4,10 @@
 # the package to patch from the interpreter named on the shebang of the `graphify` on
 # PATH, so every example runs a copy of the script inside a fixture checkout carrying a
 # synthetic two-file patch, behind a fixture `graphify` whose shebang names a fixture
-# interpreter that answers for a throwaway package tree. Nothing here reaches the real
-# installed Graphify.
+# interpreter that answers for a throwaway package tree. The two isolation examples name
+# the ambient python3 instead -- a stub can neither honour nor ignore -I -- and the
+# PYTHONPATH one reaches it through a venv-shaped fixture that owns the throwaway
+# package. Nothing here reaches the real installed Graphify.
 
 Describe 'patch-graphify.sh'
   project_root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
@@ -31,6 +33,25 @@ case "\$*" in
 esac
 INTERPRETER
     chmod +x "$1"
+  }
+
+  # A real uv tool venv, built for the decoy example, which needs a REAL interpreter: a
+  # stub can neither honour nor ignore -I, so no example resting on one can observe the
+  # isolation. A symlinked python3 plus a pyvenv.cfg naming its home makes that
+  # interpreter treat $fixture/venv as its own prefix, so it finds the throwaway package
+  # on its DEFAULT sys.path with nothing injected, and system site packages are excluded
+  # so a machine-installed Graphify cannot answer either. The minor version is read off
+  # the interpreter, never hardcoded: it names the site-packages directory.
+  make_venv() {
+    real_python3=$(command -v python3) || return 1
+    pyver=$("$real_python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') || return 1
+    venv_package="$fixture/venv/lib/python$pyver/site-packages/graphify"
+    mkdir -p "$fixture/venv/bin" "$venv_package" || return 1
+    ln -s "$real_python3" "$fixture/venv/bin/python3" || return 1
+    printf 'home = %s\ninclude-system-site-packages = false\nversion = %s\n' \
+      "$(dirname "$real_python3")" "$pyver" > "$fixture/venv/pyvenv.cfg" || return 1
+    cp "$package/__init__.py" "$package/extract.py" "$venv_package/" || return 1
+    printf '#!%s\nexit 0\n' "$fixture/venv/bin/python3" > "$stubdir/graphify" || return 1
   }
 
   setup() {
@@ -156,8 +177,9 @@ RCFILE
   End
 
   It 'ignores a hostile module in the working directory it is called from'
-    # Both probes run isolated (-I) from a neutral directory, so a graphify.py beside
-    # the caller can neither answer for the installed package nor execute at all.
+    # Both probes run isolated (-I), which keeps the caller's directory off sys.path, so
+    # a graphify.py beside the caller can neither answer for the installed package nor
+    # execute at all.
     Skip if 'the ambient python3 imports a graphify of its own' ambient_python3_has_graphify
     hostile="$fixture/hostile cwd"
     mkdir -p "$hostile"
@@ -173,6 +195,28 @@ HOSTILE
     The path "$hostile/executed" should not be exist
     The path "$hostile/rcfile.py" should not be exist
     The path "$package/rcfile.py" should not be exist
+  End
+
+  It 'ignores a decoy graphify injected through PYTHONPATH'
+    # The other half of the isolation: -I drops PYTHONPATH, the user site directory and
+    # any .pth-injected path, so only the interpreter's own package can answer. A stub
+    # interpreter can neither honour nor ignore -I, so this example runs a real one out
+    # of a venv-shaped fixture. Drop -I and the decoy imports first, the script resolves
+    # the DECOY as the installed package, and the run patches the wrong tree.
+    make_venv
+    decoy="$fixture/decoy/graphify"
+    mkdir -p "$decoy"
+    true > "$decoy/__init__.py"
+    printf '%s\n' 'DECOY = True' > "$decoy/extract.py"
+    cp "$decoy/extract.py" "$fixture/decoy.extract.before"
+    When run env PYTHONPATH="$fixture/decoy" sh "$script_abs"
+    The status should equal 0
+    The stderr should include 'applied Graphify-Labs/graphify#3075'
+    The stderr should include "$venv_package"
+    The contents of file "$venv_package/rcfile.py" should include 'activate_language_overrides'
+    The contents of file "$venv_package/extract.py" should include 'SUFFIX_OVERRIDES = True'
+    The path "$decoy/rcfile.py" should not be exist
+    Assert [ "$(cmp -s "$decoy/extract.py" "$fixture/decoy.extract.before"; printf '%s' "$?")" -eq 0 ]
   End
 
   It 'fails with the install hint when graphify is absent from PATH'
