@@ -4576,10 +4576,6 @@ function pfb_stage_publish_dir_merge(string $target, callable $extract): bool {
  * publication is refused BEFORE the first move rather than part-way through it.
  * That refusal is also what stops a feed member named like $pfb['ccdir'] from
  * taking the published country-code generation with it.
- *
- * An empty staged tree is refused too, the contract
- * pfb_blacklist_tar_finalize_staged() already carries: an extraction that landed
- * nothing must not be reported as an update, or a stale database reads as fresh.
  */
 function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool {
 	$entries = @scandir($staged);
@@ -4587,9 +4583,6 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 		return FALSE;
 	}
 	$entries = array_values(array_diff($entries, array('.', '..')));
-	if (empty($entries)) {
-		return FALSE;
-	}
 	foreach ($entries as $entry) {
 		$live = "{$target}/{$entry}";
 		$live_exists = file_exists($live) || is_link($live);

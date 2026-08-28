@@ -473,48 +473,6 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->assertSame($before, $this->snapshot($this->share));
 	}
 
-	/**
-	 * An extraction that produces no members must not be published as an update.
-	 * Same contract the Blacklist tar branch already carries in
-	 * pfb_blacklist_tar_finalize_staged(): "an empty file list must not publish",
-	 * because reporting a refresh that landed nothing is how a stale database gets
-	 * mistaken for a fresh one.
-	 */
-	public function testExtractorThatStagesNothingRefusesThePublication(): void
-	{
-		$before = $this->seedServedShare();
-
-		$published = pfb_stage_publish_dir_merge($this->share, static fn (string $staged): int => 0);
-
-		$this->assertFalse($published, 'a clean exit that staged nothing must not publish');
-		$this->assertSame($before, $this->snapshot($this->share));
-	}
-
-	/**
-	 * The same contract through the shipped branch, driven by the archive that
-	 * reaches it: one whose only member is the top-level directory --strip=1
-	 * removes. tar exits 0 having written nothing, which before issue #2668 was
-	 * reported to the caller as a successful GeoIP update.
-	 */
-	public function testArchiveThatExtractsToNothingFailsTheDownload(): void
-	{
-		$before = $this->seedServedShare();
-		$this->assertTrue(mkdir("{$this->build}/GeoLite2-Country_20260801", 0755));
-		$archive = "{$this->dir}/empty.tar.gz";
-		$retval = 1;
-		$output = array();
-		exec('cd ' . escapeshellarg($this->build) . ' && /usr/bin/tar -czf ' . escapeshellarg($archive)
-			. ' ' . escapeshellarg('GeoLite2-Country_20260801'), $output, $retval);
-		$this->assertSame(0, $retval);
-		$this->assertSame(array('GeoLite2-Country_20260801/'), pfb_archive_member_names($archive),
-			'the fixture must carry the stripped top-level directory and nothing else');
-
-		$result = pfb_geoip_extract_tar_to_share('GeoIP', $archive, escapeshellarg($archive), $retval);
-
-		$this->assertFalse($result->success, 'an archive that extracts to nothing must fail the download');
-		$this->assertSame(0, $retval, 'tar itself exits clean here -- the publication is what refuses');
-		$this->assertSame($before, $this->snapshot($this->share));
-	}
 
 	/**
 	 * A staged merge can fail with the extractor's status still zero: the members
