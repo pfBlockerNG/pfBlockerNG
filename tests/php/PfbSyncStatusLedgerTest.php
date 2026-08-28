@@ -764,7 +764,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		$this->assertSame('pfB_Foo_v4', $open[0]['item']);
 	}
 
-	public function testCloseRemovedAliasOnlyClosesDownloadStageNeverApply(): void
+	public function testCloseRemovedAliasNeverClosesTheTickManagedApplyStage(): void
 	{
 		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
 		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'apply', '[pfctl] failed', $this->dir, self::clockAt(1000));
@@ -774,7 +774,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
 
 		$open = pfb_sync_status_list_open($this->dir, 'ip');
-		$this->assertCount(1, $open, 'only the download stage must close -- apply is tick-managed');
+		$this->assertCount(1, $open, 'the tick-managed apply stage must survive alias removal');
 		$this->assertSame('apply', $open[0]['stage'], 'the surviving entry must be the apply stage');
 	}
 
@@ -794,11 +794,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #2060: stage='script' (#1958) is ALIAS-PASS-managed, not
-	// tick-managed. Its paired close runs at the end of the alias's own
-	// download pass, and a deleted alias never gets another pass -- so removal
-	// has to close it alongside stage='download' or the entry strands and the
-	// widget keeps counting an open issue for an alias that no longer exists.
+	// issue #2060: stage='script' (#1958) is alias-pass-managed like 'download'
+	// -- removal must close it too, else no later pass runs its paired clear.
 	// -----------------------------------------------------------------------
 
 	public function testCloseRemovedAliasIpv4ClosesScriptEntry(): void
