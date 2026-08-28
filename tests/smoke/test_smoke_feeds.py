@@ -2834,51 +2834,71 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
     """
     flags = _shipped_define("PFB_TAR_EXTRACT_FLAGS")
     flag_argv = flags.split("'")[3]
-    work = "/tmp/pfb2659_metadata_probe"
+    # NOT /tmp: pfSense mounts it as tmpfs, which cannot hold file flags at all
+    # ("chflags: Operation not supported"), so a fixture built there could not
+    # claim the vector this case exists to refuse. /root sits on the same
+    # filesystem as the real staging parents under /var/db and /usr/local/share.
+    work = "/root/pfb2659_metadata_probe"
     # `stat -f %Sp` renders the mode as ls does, so the setuid bit reads as `rws`
-    # without depending on which sub-field specifier carries it; `%Sf` is the file
-    # flags; lsextattr lists attribute NAMES, so an empty list means none survived.
+    # whichever sub-field specifier carries it; `%Sf` is the file flags; lsextattr
+    # lists attribute NAMES, so an empty list means none survived.
     report = (
-        'for d in control shipped; do f="$W/$d/member.dat"; '
-        'printf "%s uid=%s mode=%s flags=[%s] xattr=[%s]\\n" "$d" '
-        '"$(/usr/bin/stat -f %u "$f")" "$(/usr/bin/stat -f %Sp "$f")" '
-        '"$(/usr/bin/stat -f %Sf "$f")" '
-        '"$(/usr/sbin/lsextattr -q user "$f" 2>/dev/null | tr -d " \\t\\n")"; done'
+        'r() { printf "%s uid=%s mode=%s flags=[%s] xattr=[%s]\\n" "$1" '
+        '"$(/usr/bin/stat -f %u "$2")" "$(/usr/bin/stat -f %Sp "$2")" '
+        '"$(/usr/bin/stat -f %Sf "$2")" '
+        '"$(/usr/sbin/lsextattr -q user "$2" 2>/dev/null | tr -d " \\t\\n")"; };'
     )
     probe = deployed_vm.ssh(
-        f"W={work}; /bin/chflags -R 0 $W 2>/dev/null; /bin/rm -rf $W; /bin/mkdir -p $W/build && "
+        f"W={work}; {report} "
+        "/bin/chflags -R 0 $W 2>/dev/null; /bin/rm -rf $W; /bin/mkdir -p $W/build && "
         'printf "203.0.113.11\\n" > $W/build/member.dat && '
-        "/bin/chmod 4755 $W/build/member.dat && /usr/sbin/chown 12345:12345 $W/build/member.dat && "
+        "/bin/chmod 4755 $W/build/member.dat && "
+        "/usr/sbin/chown 12345:12345 $W/build/member.dat || exit 90; "
+        # Both are filesystem-dependent, so neither may abort the probe: the
+        # fixture line below reports which of them the filesystem accepted, and
+        # the assertions only claim a vector the fixture actually carried.
         "/usr/sbin/setextattr user pfb2659 carried $W/build/member.dat 2>/dev/null; "
-        "/bin/chflags uchg $W/build/member.dat && "
-        "/usr/bin/tar -cf $W/foreign.tar -C $W/build member.dat && "
-        "/bin/chflags 0 $W/build/member.dat && "
-        "/bin/mkdir $W/control $W/shipped && "
+        "/bin/chflags uchg $W/build/member.dat 2>/dev/null; "
+        "r fixture $W/build/member.dat; "
+        "/usr/bin/tar -cf $W/foreign.tar -C $W/build member.dat || exit 91; "
+        "/bin/chflags 0 $W/build/member.dat 2>/dev/null; "
+        "/bin/mkdir $W/control $W/shipped || exit 92; "
         "/usr/bin/tar -xf $W/foreign.tar -C $W/control; echo control_rc=$?; "
         f"/usr/bin/tar -xf $W/foreign.tar {flag_argv} -C $W/shipped; echo shipped_rc=$?; "
-        f"{report}; /usr/bin/tar --version"
+        "r control $W/control/member.dat; r shipped $W/shipped/member.dat; "
+        "/usr/bin/tar --version"
     )
     deployed_vm.ssh(f"/bin/chflags -R 0 {work} 2>/dev/null; /bin/rm -rf {work}")
 
     lines = dict(
         (ln.split(" ", 1)[0], ln.split(" ", 1)[1])
         for ln in probe.stdout.splitlines()
-        if ln.startswith(("control ", "shipped "))
+        if ln.startswith(("fixture ", "control ", "shipped "))
     )
     codes = [ln for ln in probe.stdout.splitlines() if "_rc=" in ln]
-    assert "control" in lines and "shipped" in lines, (
-        f"the probe did not report both extractions — stdout {probe.stdout!r} stderr {probe.stderr!r}"
+    assert set(lines) == {"fixture", "control", "shipped"}, (
+        f"the probe did not report all three files — stdout {probe.stdout!r} stderr {probe.stderr!r}"
     )
+    # The flagged run's exit status is also the appliance's answer on whether its
+    # tar accepts the shipped flag set at all.
     assert codes == ["control_rc=0", "shipped_rc=0"], (
         f"both extractions must succeed on the appliance's tar, including with the shipped flag set; "
         f"got {codes!r} — stdout {probe.stdout!r} stderr {probe.stderr!r}"
     )
 
-    control, shipped = lines["control"], lines["shipped"]
-    assert "uid=12345" in control and "rws" in control and "uchg" in control, (
-        f"the unflagged extraction must carry the archive's owner, setuid mode and file flag for this "
-        f"case to mean anything — appliance reported {control!r}"
+    fixture, control, shipped = lines["fixture"], lines["control"], lines["shipped"]
+    assert "uid=12345" in control and "rws" in control, (
+        f"the unflagged extraction must carry the archive's owner and setuid mode for this case to mean "
+        f"anything — appliance reported control {control!r} from fixture {fixture!r}"
     )
+    for vector, marker in (("file flag", "uchg"), ("extended attribute", "pfb2659")):
+        if marker not in fixture:
+            continue
+        assert marker in control, (
+            f"the appliance's tar did not restore the {vector} the fixture carried, so this vector "
+            f"proves nothing here — fixture {fixture!r}, control {control!r}"
+        )
+        assert marker not in shipped, f"the flagged extraction restored the {vector}: {shipped!r}"
     assert "uid=0" in shipped, f"the flagged extraction must own its output: {shipped!r}"
     assert "rws" not in shipped and "rwx" in shipped, (
         f"the flagged extraction must drop the setuid bit and keep an ordinary mode: {shipped!r}"
