@@ -67,22 +67,22 @@ _SECTIONS_BLOCK_RE = re.compile(r"const PFB_SECTIONS\s*=\s*\[(.*?)^\];", re.DOTA
 _SECTIONS_ROW_RE = re.compile(r"'([a-z]+)'\s*=>\s*'([^']+)'")
 
 # A page's own mirror declaration: `$pfb['iconfig'] = PfbConfig::readSection('...');`.
-_MIRROR_RE = re.compile(r"\$pfb\['(\w+)'\]\s*=\s*PfbConfig::readSection\(\s*'([^']+)'")
+_MIRROR_RE = re.compile(r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*=\s*PfbConfig::readSection\(\s*'([^']+)'")
 
 # A save into a section mirror through the on/off form filter. Matched over the whole
 # file, not line by line: `[^;]*?` cannot cross a statement terminator, so a save
 # wrapped across lines is still one match and cannot slip past the gate by being
 # reformatted.
 _SAVE_RE = re.compile(
-    r"\$pfb\['(\w+)'\]\['(\w+)'\]\s*=[^;]*?\bPFB_FILTER_ON_OFF\b",
+    r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*=[^;]*?\bPFB_FILTER_ON_OFF\b",
     re.DOTALL,
 )
 
 # A read of a section mirror carrying its own default. Two spellings:
 #   $x = $pfb['iconfig']['enable_dup'] ?: '';
 #   $x = isset($pfb['aglobal']['alertrefresh']) ? $pfb['aglobal']['alertrefresh'] : 'on';
-_READ_COALESCE_RE = re.compile(r"=\s*\$pfb\['(\w+)'\]\['(\w+)'\]\s*\?[:?]")
-_READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\['(\w+)'\]\['(\w+)'\]\s*\)\s*\?[^?:]*:")
+_READ_COALESCE_RE = re.compile(r"=\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*\?[:?]")
+_READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*\)\s*\?[^?:]*:")
 
 # Sanity floor: the registry has had >100 entries since issue #1920's audit. A parse
 # that finds fewer has broken, and a broken parse must fail the gate rather than
