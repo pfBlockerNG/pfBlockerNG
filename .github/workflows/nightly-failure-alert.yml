@@ -1,0 +1,202 @@
+name: Nightly failure alert
+
+# File ONE deduped tracking issue when a schedule-triggered run of any watched
+# workflow fails, then close it when that workflow next passes. This shared
+# workflow_run alert owns the issue lifecycle for all watched schedules.
+#
+# Pattern follows top1m-healthcheck.yml's alert job (dedup by label + exact
+# title, update-in-place). WHY workflow_run and not a failure job in each
+# producer: one file, and it runs with its own token even when the failing
+# run's jobs are all red.
+
+on:
+  workflow_run:
+    workflows:
+      - "HSTS preload refresh (pfb_py_hsts)"
+      - "PSL Refresh (dnsbl_psl)"
+      - "Smoke fan-out (all CI legs, live pfSense VM)"
+      - "TLD List Refresh"
+      - "UI tests fan-out (all CI legs, live pfSense VM)"
+      - "Version Tracker"
+      - "Repo install (live pfSense VM)"
+      - "Nightly snapshot"
+    types: [completed]
+  # Red-path test handle (CLAUDE.md: a newly wired gate demonstrates its red
+  # path once): simulate a failed nightly of the named workflow. The issue it
+  # files is real — close it after the drill.
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow name to simulate a failed nightly for."
+        required: true
+        default: "Smoke fan-out (all CI legs, live pfSense VM)"
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: nightly-failure-alert
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  recovery:
+    name: Close the recovered nightly-red tracking issue
+    concurrency:
+      group: nightly-red-${{ github.event.workflow_run.name }}
+    if: >-
+      (github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      WF_NAME: ${{ github.event.workflow_run.name }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Close the recovered tracking issue
+        run: |
+          set -euo pipefail
+          TITLE="[nightly-red] ${WF_NAME} failing on ${BRANCH}"
+          MATCH=$(gh issue list --repo "$REPO" --state open \
+            --label "nightly-red" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
+
+          if [ -z "$MATCH" ]; then
+            echo "[noop] No open tracking issue for ${WF_NAME}"
+            exit 0
+          fi
+
+          FAILURE_RUN=$(gh issue view "$MATCH" --repo "$REPO" --json body \
+            --jq '(.body // "")
+              | if contains("<!-- failure-run:") | not then "legacy"
+                elif (split("<!-- failure-run:") | length) != 2 then "malformed"
+                else ([capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->")]
+                  | if length == 1 then "\(.[0].run) \(.[0].attempt)" else "malformed" end)
+                end')
+          if [ "$FAILURE_RUN" = "malformed" ]; then
+            echo "[noop] Tracking issue has malformed failure-run metadata"
+            exit 0
+          fi
+          if [ -n "$FAILURE_RUN" ] && [ "$FAILURE_RUN" != "legacy" ]; then
+            FAILURE_RUN_NUMBER=${FAILURE_RUN%% *}
+            FAILURE_RUN_ATTEMPT=${FAILURE_RUN#* }
+            case "${FAILURE_RUN_NUMBER}${FAILURE_RUN_ATTEMPT}" in
+              ""|*[!0-9]*)
+                echo "[noop] Tracking issue has malformed failure-run metadata"
+                exit 0
+                ;;
+            esac
+            if [ "${#FAILURE_RUN_NUMBER}" -gt 18 ] || [ "${#FAILURE_RUN_ATTEMPT}" -gt 18 ]; then
+              echo "[noop] Tracking issue has oversized failure-run metadata"
+              exit 0
+            fi
+            if [ "$RUN_NUMBER" -lt "$FAILURE_RUN_NUMBER" ] ||
+              { [ "$RUN_NUMBER" -eq "$FAILURE_RUN_NUMBER" ] &&
+                [ "$RUN_ATTEMPT" -le "$FAILURE_RUN_ATTEMPT" ]; }; then
+              echo "[noop] Successful run is not newer than tracking issue failure"
+              exit 0
+            fi
+          fi
+
+          echo "[close] Closing recovered tracking issue #${MATCH}"
+          gh issue close "$MATCH" --repo "$REPO" --reason completed \
+            --comment "Recovered automatically after successful run: ${RUN_URL}"
+
+  alert:
+    name: Open/update the nightly-red tracking issue
+    # Serialize per workflow name: the list-then-create dedup is check-then-act,
+    # so two concurrent alerts for the same title (drill overlapping a real
+    # failure) could both see "no match" and file duplicates (PR #958 review).
+    concurrency:
+      group: nightly-red-${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
+    # Real path: a schedule-triggered run that concluded failure. Dispatch
+    # path: always (that IS the drill).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      # Dispatch drill: the run link points at THIS run, clearly labeled below.
+      WF_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.workflow_name || github.event.workflow_run.name }}
+      RUN_URL: ${{ github.event_name == 'workflow_dispatch' && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) || github.event.workflow_run.html_url }}
+      RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      HEAD_SHA: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+      # Nightlies run on the default branch; read it from the payload rather than
+      # hardcoding it (PR #958 review) — the title doubles as the dedup key.
+      BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.workflow_run.head_branch }}
+      DRILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+    steps:
+      - name: Ensure the tracking label exists
+        run: |
+          gh label create "nightly-red" \
+            --color "b60205" \
+            --description "Automated nightly-suite failure tracking" \
+            --repo "$REPO" 2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        run: |
+          # pipefail: without it a failed `gh issue list` is masked by the jq/sort
+          # pipeline below and the dedup opens duplicates (PR #958 review, the
+          # PR #933 default-shell class).
+          set -euo pipefail
+          TITLE="[nightly-red] ${WF_NAME} failing on ${BRANCH}"
+
+          BODY_FILE=$(mktemp)
+          # shellcheck disable=SC2016  # markdown backticks in the issue body, not expansions
+          {
+            if [ -n "${RUN_NUMBER:-}" ]; then
+              printf '<!-- failure-run: %s:%s -->\n\n' "$RUN_NUMBER" "${RUN_ATTEMPT:-}"
+            fi
+            printf '## Nightly run failed: %s\n\n' "$WF_NAME"
+            if [ -n "$DRILL" ]; then
+              printf '**DRILL** — manual red-path test of the alert wiring, not a real failure. Close me.\n\n'
+            fi
+            printf -- '- Run: %s\n' "$RUN_URL"
+            printf -- '- Head: `%s`\n\n' "$HEAD_SHA"
+            printf 'Triage: read the run'"'"'s failing job logs + its diagnostics artifact first '
+            printf '(CLAUDE.md "Smoke tests"). If the failure is a devel regression, fix it on a '
+            printf 'branch and close this; if flaky, say so here with the evidence.\n\n'
+            printf '_Opened automatically by the nightly-failure-alert workflow. Updated in place on every red nightly; closes automatically after the next successful scheduled run._\n'
+          } > "$BODY_FILE"
+
+          # Dedup open issues by label + exact title (top1m-healthcheck pattern,
+          # including the >30-item page-cap lift). Closed issues stay closed.
+          MATCH=$(gh issue list --repo "$REPO" --state open \
+            --label "nightly-red" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
+
+          if [ -n "$MATCH" ]; then
+            if [ -n "$DRILL" ]; then
+              echo "[noop] Manual drill did not overwrite tracking issue #${MATCH}"
+            else
+              echo "[update] Updating tracking issue #${MATCH}"
+              gh issue edit "$MATCH" --repo "$REPO" --body-file "$BODY_FILE"
+            fi
+          else
+            echo "[create] Opening tracking issue"
+            gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label "nightly-red" \
+              --type Bug
+          fi

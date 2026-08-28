@@ -1,0 +1,77 @@
+================================================================================
+PHASE 4 PROMPT — Client bootstrap: add-repo.sh + README one-liner
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §2 "Client bootstrap" / "GUI",
+     §1 Context 3 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 4 of ADR-17. Ship the one-time
+client-side bootstrap that registers our repo on a pfSense box, and document the
+install/upgrade UX (including its honest GUI caveat). Work in this ADR's `adr/17`
+worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The repo is published (Phase 3); a user needs ONE supported step to opt in, after which
+`pkg install` / `pkg upgrade` and the stock GUI Install (cross-repo resolution) all pull
+our build. This phase is that step + its docs.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_17_Pkg_Repository/RESULTS/03_Results.txt — the published Pages URL / `${ABI}`
+  base the conf must point at. If missing, STOP and report.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§2 Client bootstrap + GUI, §1 Context 3 for the
+  discovery/update-badge caveat to document).
+- scripts/build-repo.sh (Phase 2) — the conf TEMPLATE (reuse it; do not re-invent the
+  field set: `${ABI}` url, `mirror_type: none`, `signature_type: none`, `priority`,
+  `enabled`).
+- scripts/install-pkg.sh / install-from-repo.sh — the house style for an SSH/CLI helper
+  (POSIX sh, quoting, absolute paths, readiness polling).
+- CLAUDE.md — Shell standards + the URL-encoding gate (the conf URL is STATIC; the
+  bootstrap may `fetch`/`curl` a static conf URL — no query interpolation) + the Markdown
+  rules for the README edit.
+
+ACTION PLAN (ordered)
+1. `scripts/add-repo.sh` (POSIX sh): write `/usr/local/etc/pkg/repos/pfblockerng-devel.conf`
+   from the Phase-2 template (channel arg `devel|stable`, default `devel`), `pkg update`,
+   then VERIFY the package is visible from OUR repo (`pkg search`/`pkg rquery` shows it;
+   `pkg query`/origin checks). Idempotent (safe to re-run; rewrites the conf). Clear
+   success/failure messages.
+2. README: a single-block "Install from our pkg repository" section — the one-liner to
+   add the repo + `pkg install pfSense-pkg-pfBlockerNG-devel`, and `pkg upgrade` for
+   updates. Document HONESTLY (Context 3): the stock GUI **Install** pulls our build via
+   cross-repo resolution, but Available-Packages **discovery** + the GUI **update badge**
+   stay Netgate-bound (our newer builds install via GUI Install / CLI `pkg upgrade`, not a
+   GUI badge); note the deferred GUI panel.
+3. Keep all example URLs STATIC in both the script and the README fences.
+
+CONSTRAINTS
+- POSIX sh, quoted expansions, absolute binary paths, ShellCheck-clean.
+- STATIC conf URL only (URL-encoding gate scans tracked shell + sh/bash/shell md fences).
+- Markdown: blank lines around headings/lists/fences, language on every fence, single
+  trailing newline (markdownlint-clean).
+- Do NOT touch `src/` (no GUI panel — that is the deferred, out-of-scope option).
+
+VERIFICATION (must all pass before the phase is done)
+- shellcheck scripts/add-repo.sh + `sh -n` → clean; URL-encoding gate → clean.
+- npx markdownlint-cli2 → clean on the README edit.
+- On the Phase-1/3 VM: running `add-repo.sh` then `pkg install
+  pfSense-pkg-pfBlockerNG-devel` installs from our repo (manual confirmation captured in
+  the handoff; the automated assertion is Phase 5).
+- python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+A user adds our repo with one command and installs/upgrades pfBlockerNG-devel via
+`pkg`/the GUI; the README states the UX and its honest GUI caveat.
+
+COMMIT (single)
+    scripts: add add-repo.sh + README install-from-repo section (ADR-17 P4)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push `adr/17`. Touches scripts/ + README → lands on `devel` via a rebase-only PR.
+PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/04_Results.txt` (plain .txt)
+State: the `add-repo.sh` interface (channel arg, the conf path written, the verify step);
+the exact conf it emits (url/priority/signature_type); the README section location; the
+manual install confirmation from the VM; what Phase 5 must assert automatically; the
+go-ahead for Phase 5.

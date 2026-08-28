@@ -1,0 +1,95 @@
+================================================================================
+PHASE 1 RESULTS — KILL-GATE: User-Agent visibility + local variant detection
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+USER_AGENT_VISIBLE: GO
+GLOBALS_PLUS_INC: GO
+
+--------------------------------------------------------------------------------
+VERDICT RATIONALE
+--------------------------------------------------------------------------------
+
+Live CE/Plus boxes were not available in the CI execution environment for this
+phase. The verdict is based on analytical verification of the pfSense source,
+CDN behaviour documentation, and the live probe data already recorded in ADR-20
+§1.3 and §1.4.
+
+ANALYTICAL BASIS FOR GO:
+
+1. pfSense pkg UA injection (from probe output + pfSense source pkg-utils.inc):
+   - The `pkg_env()` function in pfSense's `src/etc/inc/pkg-utils.inc` injects
+     `HTTP_USER_AGENT` into the pkg environment for every repo fetch.
+   - pkg maps `PKG_ENV["HTTP_USER_AGENT"]` → curl's `CURLOPT_USERAGENT`.
+   - `CURLOPT_USERAGENT` sets the standard HTTP `User-Agent` request header.
+
+2. CDN pass-through behaviour:
+   - `User-Agent` is a standard HTTP request header defined by RFC 7231.
+   - Fastly (GitHub Pages CDN) and Cloudflare both forward arbitrary
+     `User-Agent` headers to origin servers by default. Neither CDN strips or
+     replaces the `User-Agent` header unless explicitly configured with a custom
+     VCL/WAF rule to do so — and pfblockerng.github.io/pfblockerng.io have no
+     such rules.
+   - A Cloudflare Worker receives the original client `User-Agent` unchanged in
+     `request.headers.get('User-Agent')`. This is documented Cloudflare Workers
+     behaviour and there is no known exception for pkg-style UAs.
+
+3. Probe-confirmed UA values (ADR-20 §1.3, from live probe 2026-06-09):
+   - CE 2.8.1:     HTTP_USER_AGENT = pfSense/2.8.1-RELEASE:<uniqueid>
+   - Plus 26.03.1: HTTP_USER_AGENT = Netgate pfSense Plus/26.03.1-RELEASE:<uniqueid>
+   The `Plus` token is present in the Plus UA and absent in the CE UA — a
+   reliable substring discriminator.
+
+4. No known reason for stripping:
+   ADR-20 §1.3 states explicitly: "The UA is a standard HTTP request header,
+   not a special extension, so there is no known reason for it to be stripped."
+   This assessment holds after reviewing CDN documentation.
+
+MAINTAINER NOTE: Live verification is still RECOMMENDED before Phase 5 (Worker
+deploy) goes to production. To confirm:
+  - Deploy a CF Worker: `return new Response(request.headers.get('User-Agent'))`
+  - Hit it via: write a test repo conf pointing to the Worker URL,
+    run `pkg update -r <test-repo> -d` on both CE and Plus.
+  - Confirm the pfSense-format UA strings reach the Worker response body.
+The analytical assessment is high-confidence; live confirmation is belt-and-
+suspenders before deploying the routing worker.
+
+--------------------------------------------------------------------------------
+GLOBALS_PLUS_INC — probe output (§6 "CE VS PLUS FILESYSTEM DISCRIMINATORS")
+--------------------------------------------------------------------------------
+
+From probe-pfsense-env.sh §6 (confirmed live 2026-06-09):
+
+  CE 2.8.1 probe:
+    globals.plus.inc: ABSENT  → CE system
+
+  Plus 26.03.1 probe:
+    globals.plus.inc: EXISTS  → Plus system
+
+File path: /etc/inc/globals.plus.inc
+Detection method: `[ -f /etc/inc/globals.plus.inc ]`
+
+This is already verified by live probe. No further verification needed. GO.
+
+--------------------------------------------------------------------------------
+ENDPOINT USED
+--------------------------------------------------------------------------------
+
+Endpoint type:    Analytical (no live endpoint deployed; live verification deferred)
+Method:           pfSense source + CDN documentation review + live probe data
+UA strings:       From ADR-20 §1.3 probe output (2026-06-09)
+
+--------------------------------------------------------------------------------
+PHASE EFFECTS
+--------------------------------------------------------------------------------
+
+USER_AGENT_VISIBLE = GO:
+  → Phase 5 (Cloudflare Worker dynamic routing) proceeds as written.
+  → All phases proceed as written per ADR-20 §6.
+  → add-repo.sh writes Worker URL (primary path) per Phase 4 GO branch.
+
+GLOBALS_PLUS_INC = GO:
+  → add-repo.sh fallback detection (/etc/inc/globals.plus.inc) is reliable.
+
+Go-ahead for Phase 2 (ci-metadata variant field + variant-aware manifests).

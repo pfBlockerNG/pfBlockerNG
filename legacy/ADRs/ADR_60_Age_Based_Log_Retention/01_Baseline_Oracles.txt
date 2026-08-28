@@ -1,0 +1,92 @@
+================================================================================
+PHASE 1 PROMPT — Pin today's inconsistent timestamp behaviour as the "before" oracle
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §1.3, §1.4, §6 Phase 1 first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`, off `devel`. Phase 1 of 8. Behaviour-preserving:
+you add tests and two small unwired helper functions; you do not change any existing log's output.
+One commit, push directly to the branch.
+
+WHY THIS PHASE EXISTS
+ADR-60 rewrites how all 10 pfBlockerNG log types get their timestamps across Phases 2-4. Before
+touching any of that, this phase pins the CURRENT (inconsistent, sometimes-absent, sometimes
+year-less) behaviour as a set of oracle tests. Every later phase's red→green proof runs these same
+oracles against the pre-change code (expect the OLD assertion to still pass, or — where you assert
+the OLD behaviour explicitly as a "before" test — to demonstrate the gap the later phase closes).
+
+REQUIRED READING
+- ADR.md §1.3 (the per-type timestamp coverage table — this phase's test list), §1.4 (the
+  `$pfb['pnow']` dedup bug), §6 Phase 1.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `pfb_logger()` (~:3089), `pfb_open_sqlite()`
+  (~:13603, the 6 bypass writes at ~:13635/:13642/:13657/:13661/:13670/:13698), `pfb_daemon_filterlog()`
+  (~:12293, the timestamp branch at ~:12780-:12785), `pfb_parsed_fail()` (~:4448).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: `make_timestamp()` (~:2702), its call sites at
+  ~:2617, ~:2650, ~:2680, ~:2962.
+- tests/php/PfbLoggerIsoTimestampTest.php, PfbIsoTimestampTest.php, UnifiedFormatTest.php (existing
+  tests you are EXTENDING, not replacing yet — Phases 2-4 rewrite the parts that pin behaviour you
+  are about to change).
+
+ACTION PLAN
+1. Add PHPUnit oracle tests (new file `tests/php/LogTimestampBaselineTest.php` is fine, or extend an
+   existing one if more natural — your call, name for clarity) asserting TODAY's actual behaviour for
+   each row of ADR.md §1.3:
+   - `log`/`extraslog`: a `pfb_logger()` call WITHOUT a `NOW` token in the message writes a line with
+     NO timestamp at all. A call WITH `NOW` gets one substituted — UNLESS a prior call in the same
+     (mocked/injected) second already set `$pfb['pnow']`, in which case assert the bracket is
+     stripped to nothing (reproduce the dedup bug on purpose — this is the "before" proof for Phase 2).
+   - `errlog`: assert `pfb_logger()`'s `$elog` path IS always stamped; assert a direct
+     `pfb_open_sqlite()`-style bypass write (simulate via the same `file_put_contents` shape used at
+     `:13635`) has NO timestamp.
+   - `ip_blocklog`/`ip_permitlog`/`ip_matchlog`: pin the `'BSD'` branch's raw passthrough (no year,
+     literal copy of `$f[0] $f[1] $f[2]`) and the `'syslog'` branch's `date('M j H:i:s', strtotime($f[1]))`
+     lossy reformat (assert the YEAR IS ABSENT from the output even though `$f[1]` — a synthetic
+     RFC-5424 timestamp fixture — had one).
+   - `dnsbl_parse_err`: pin `pfb_parsed_fail()`'s `m/j/y H:i:s` format exactly (ambiguous 2-digit
+     year).
+2. Add a pytest oracle (`tests/test_pfb_unbound_log_timestamp_baseline.py` or extend an existing
+   pfb_unbound test module) pinning `make_timestamp()`'s current `"%b %-d %H:%M:%S"` output shape (no
+   year) and the `""` fallback when `datetime.now().strftime` raises `TypeError` twice (mock/monkeypatch
+   `datetime.now` to raise `TypeError` twice, per the existing `for _ in range(2)` loop shape).
+3. Add (but do NOT wire in anywhere) two small pure helpers:
+   - PHP `pfb_log_iso_timestamp(): string` in pfblockerng.inc, near `pfb_logger()`:
+     `return date('Y-m-d H:i:s', time());`
+   - Python `iso_timestamp() -> str` in pfb_unbound.py, near `make_timestamp()`, same shape as
+     `make_timestamp()` but with `"%Y-%m-%d %H:%M:%S"`.
+   Add a minimal unit test for each (they're one-liners, but CLAUDE.md still wants a runnable check —
+   a trivial format-match assertion is enough, no framework needed for these two).
+
+CONSTRAINTS
+- Do NOT change any existing production code path's OUTPUT — this phase only ADDS tests and two
+  unwired helper functions. `pfb_log_iso_timestamp()`/`iso_timestamp()` must not be called from
+  anywhere yet.
+- PHP: tabs, uppercase `TRUE`/`FALSE`, PHPCS/PHPStan clean.
+- Python: stdlib only (pfb_unbound.py runs in Unbound's embedded loader), type-hint the new function,
+  `from __future__ import annotations` if the file doesn't already have it (check first).
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+VERIFICATION
+- `vendor/bin/phpunit` — new tests pass; full suite green.
+- `python -m pytest` — new test passes; full suite green.
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/` and `vendor/bin/phpstan` — clean.
+- `ruff check .` / `ruff format --check .` on the touched Python file.
+- This is a behaviour-PRESERVING phase — no red→green proof required (nothing changes), but paste
+  the full test run output showing the new oracle assertions passing against the CURRENT (unmodified)
+  production code.
+
+EXPECTED RESULT
+A committed set of oracle tests that fully document today's inconsistent, sometimes-absent timestamp
+behaviour across all 10 log types, plus two small unwired helper functions ready for Phase 2-4 to
+call.
+
+COMMIT (single)
+    tests: pin current pfBlockerNG log-timestamp behaviour as ADR-60 baseline oracles (ADR-60 P1)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/01_Results.txt` (plain .txt) with:
+verdict; what changed + commit hash; gates run + pasted output tails; every §1.3 row's oracle test
+name; deviations/judgment calls (or "none"); carry-forward note for Phase 2 (which oracle tests it
+will flip from "pins the bug" to "pins the fix").

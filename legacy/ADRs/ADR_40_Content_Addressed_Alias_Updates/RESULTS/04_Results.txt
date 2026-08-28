@@ -1,0 +1,114 @@
+ADR-40 Phase 4 — Forward-delta alias-table apply
+=================================================
+
+Gate check:   02_Results.txt verdict = BUILD Phase 4. Confirmed.
+Branch:       adr/40-content-addressed-alias
+Commit:       pending (see end)
+
+─────────────────────────────────────────────────────────────────────────────
+WHAT WAS BUILT
+─────────────────────────────────────────────────────────────────────────────
+
+Config gateway fields (ADR-29 procedure followed):
+
+  pfb_alias_delta_mode   — PfbAliasDeltaMode enum (auto/delta/replace)
+                           registry entry + read/write adapters
+                           absent-default = 'auto' (all installs; no grandfather seed)
+                           adapter type label 'alias_delta_mode' + vocab added to
+                           pfb_cfg_field_vocab() + pfb_cfg_field_adapter_type()
+
+  pfb_alias_delta_batch  — plain string (NULL/NULL adapters)
+                           absent-default = '256'
+                           clamped to [64, 4096] at read/display time
+
+Both added to:
+  - pfb_cfg_registry() in pfblockerng_extra.inc
+  - $registeredPaths in RequireConfigGatewaySniff.php
+  - $inventory in CfgGatewayTest.php::testInventoryCompletenessAllKnownKeysAccountedFor()
+  - pfb_cfg_field_vocab() table (alias_delta_mode entry)
+  - docs/misc/config-gateway.md adapter inventory + vocab table
+
+New helpers in pfblockerng.inc (added after pfb_cross_list_scope()):
+
+  const PFB_DELTA_CHURN_THRESHOLD = 0.20
+  pfb_alias_delta_batch_clamp(int|string $raw): int
+  pfb_apply_alias_delta(
+      string $pfctl_bin, string $table, string $table_file,
+      array $desired_set, array $last_set,
+      string $mode, int $batch_size, bool $force_replace = FALSE
+  ): bool   — TRUE = delta taken; FALSE = replace taken
+
+Delta logic:
+  - force_replace=TRUE → always replace (boot / enable-disable path)
+  - mode='replace'     → always replace
+  - mode='auto' + (churn/table_size >= 0.20) → replace fallback
+  - mode='auto' + empty delta (desired==last)  → zero pfctl calls (idempotent)
+  - mode='delta'       → always delta (chunked -T add / -T delete)
+  - Each chunk written to tempnam() file, pfctl called, file unlinked
+
+Wiring in pfblockerng.inc:
+  - $pfb_alias_prev_sets = array()  declared after $pfb_feed_changed snapshot
+  - Write loop: per-alias prev_set captured from mirror file BEFORE overwrite
+  - Rule-change pfctl branch: kept -T replace (filter_configure rebuilds tables)
+  - No-rule-change pfctl branch: pfb_apply_alias_delta() for each alias
+    ip_unlock aliases (not in $pfb_alias_prev_sets) get force_replace=TRUE
+
+UI (pfblockerng_ip.php):
+  - $pconfig reads for pfb_alias_delta_mode + pfb_alias_delta_batch
+  - POST handler saves both fields via PfbConfig::write
+  - Form_Select (pfb_alias_delta_mode) + Form_Input number (pfb_alias_delta_batch)
+    placed after Aggregated Aliases, before Suppression
+
+─────────────────────────────────────────────────────────────────────────────
+TEST COVERAGE
+─────────────────────────────────────────────────────────────────────────────
+
+New test file: tests/php/AliasDeltaApplyTest.php (14 tests, 47 assertions)
+  Scenarios: end-state oracle, small/large churn auto, mode=replace, mode=delta,
+  batch chunking (ceil(150/64)=3 add calls), idempotence (zero pfctl calls),
+  config round-trips (H1-H5), force_replace override, off-by-one detection.
+
+CfgAdaptersTest.php: +10 tests for PfbAliasDeltaMode round-trips (Scenario D).
+CfgGatewayTest.php: inventory updated (2 new keys in testInventoryCompleteness…).
+RollbackContractTest.php: $valid_types += 'alias_delta_mode' (pfb_cfg_field_adapter_type).
+
+All 1410 PHPUnit tests pass (3 pre-existing skips, none new).
+
+Tier-A ui_render: test_render_smoke.py "ip" page markers include "Alias Table Apply Mode".
+
+─────────────────────────────────────────────────────────────────────────────
+VERIFICATION RESULTS
+─────────────────────────────────────────────────────────────────────────────
+
+php -l  src/**/*.inc src/**/*.php          PASS (no syntax errors)
+vendor/bin/phpunit                          PASS  1410 tests / 3 skipped
+vendor/bin/phpcs --standard=phpcs.xml.dist PASS  (no output)
+vendor/bin/phpstan --memory-limit=1G       PASS  "No errors"
+ruff check .                               PASS  "All checks passed!"
+ruff format --check .                      PASS  "141 files already formatted"
+npx markdownlint-cli2                      PASS  "0 error(s)"
+
+─────────────────────────────────────────────────────────────────────────────
+LIVE SMOKE
+─────────────────────────────────────────────────────────────────────────────
+
+A dispatch-only live-VM smoke test for ADR-40 delta apply is deferred to a
+follow-up (the lab VM is occupied).  The existing ADR-04 smoke covers the
+pfctl reload path end-to-end; the delta logic is unit-tested with a mock pfctl
+that records every call.  Dispatch `gh workflow run smoke.yml -f pytest_k=adr40`
+when the VM is free.
+
+─────────────────────────────────────────────────────────────────────────────
+COMMIT + PUSH
+─────────────────────────────────────────────────────────────────────────────
+
+  git commit -S -m "pfblockerng: apply alias-table changes as forward deltas, not full replace (ADR-40 P4)"
+  git push -u origin adr/40-content-addressed-alias
+
+─────────────────────────────────────────────────────────────────────────────
+NEXT STEPS
+─────────────────────────────────────────────────────────────────────────────
+
+Phase 4 complete.  Outstanding for a final PR:
+  - Live smoke dispatch (test_smoke_adr40.py) when VM is available
+  - PR via /pr-merge-flow

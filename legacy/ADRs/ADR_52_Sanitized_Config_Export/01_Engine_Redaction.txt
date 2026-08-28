@@ -1,0 +1,123 @@
+================================================================================
+PHASE 1 PROMPT — Diagnostics engine + redaction (pure PHP, TDD, off-appliance)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 1 implementer for ADR-52, working inline on branch
+`adr/52-sanitized-config-export`, one commit, pushed directly. This phase adds
+NEW code (a pure extraction + redaction engine) and its tests — there is no
+prior behaviour to preserve, but the tests are written FIRST and must fail
+against the absent engine, then pass once it exists (red->green). You implement
+with Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+The security-critical core of ADR-52 is pure string/XML transformation, so it
+can — and must — be proven off-appliance with adversarial tests BEFORE any GUI
+wiring. If a known secret class cannot be reliably removed here, the ADR is
+rejected (ADR §7) — so this phase is the gate.
+
+REQUIRED READING
+- .ADRs/ADR_52_Sanitized_Config_Export/ADR.md  (esp. §2.1 per-area table, §2.2
+  preserved semantics, §6 Phase 1)
+- tests/smoke/helpers.py — `_SENSITIVE_TAG_WORDS`, `sensitive_tag_sed_program()`,
+  `_config_xml_scrub_sed_program()` (the PROVEN scrubber this engine mirrors; its
+  word-set is the floor)
+- tests/test_smoke_diag_redaction.py — how that scrubber is pinned
+- tests/php/README.md, tests/php/bootstrap.php — how the PHPUnit suite loads real
+  `.inc` files off-appliance via shims + doubles
+- src/usr/local/www/pfblockerng/pfblockerng_log.php:331-333 — the download
+  pattern Phase 2 will reuse (context only; not edited here)
+- CLAUDE.md — PHP code standards, the test-coverage mandate (branch coverage,
+  red->before/green->after, intent-named, no coverage theater)
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (tests FIRST)
+1. Write tests/php/DiagnosticsExportTest.php against the NOT-YET-EXISTING engine:
+   - Build an in-test config.xml fixture string under `<installedpackages>` with,
+     at minimum: a `pfblockerngipsettings` section holding `<maxmind_key>`,
+     `<maxmind_account>`, `<maxmind_locale>en` ; a `pfblockernglistsv4` row with a
+     clean `<url>`, a row whose `<url>` has `?token=…&key=…`, and a row whose
+     `<url>` is `https://user:pass@host/…` ; a `pfblockerngsync` section with
+     `<varsyncpassword>` and a peer address ; a `pfblockerng` section with a
+     `hooks/row` whose command embeds `Authorization: Bearer …` ; an `<asn_token>`
+     (real IPinfo field, same ipsettings section) ; generic
+     `<password>`/`<secret>`/`<apikey>`/`<sometoken>` tags ; AND a NON-pfblockerng
+     `installedpackages` section (e.g. `<openvpn>`) plus a non-secret to prove
+     scope.
+     CRITICAL — seed each secret in BOTH serialized forms: plain entity-escaped
+     text AND the pfSense `$cdata_fields` CDATA form
+     (`<password><![CDATA[s3cret]]></password>`, a CDATA `<url>` with
+     `?token=a&key=b`). pfSense's xmlparse.inc writes password-prefixed fields as
+     CDATA; a text-only fixture goes green while the real on-disk form leaks.
+   - Assert (branch-covered): every seeded SECRET VALUE is ABSENT from the output;
+     every expected NON-SECRET (alias names, formats, `maxmind_locale`, the feed
+     URL host+path) is PRESENT; `pfblockerngsync` and the `hooks` subtree are
+     wholly absent; the non-pfblockerng section never appears; output is
+     well-formed XML under a single `<pfblockerng_sanitized_export>` root.
+   - Pair every redaction rule with a near-miss kept case (e.g. `<maxmind_locale>`
+     kept vs `<maxmind_account>` redacted; clean `<url>` intact vs `?token=`
+     stripped) so each is proven a real branch, not an always-redact path.
+2. Add a Python parity test (e.g. tests/test_diag_export_wordset_parity.py) that
+   parses the word-set from the new `.inc` (regex over the source) and asserts it
+   is a SUPERSET of tests.smoke.helpers._SENSITIVE_TAG_WORDS.
+3. Run both suites; confirm they FAIL for the right reason (engine absent).
+4. Create src/usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc with:
+   - `pfb_diag_extract_pfb_xml(string $config_xml): string` — DOMDocument +
+     DOMXPath select `//installedpackages/*` whose localName starts with
+     `pfblockerng`; remove `pfblockerngsync` node(s) and any `hooks` subtree under
+     the `pfblockerng` section; serialize the survivors wrapped in
+     `<pfblockerng_sanitized_export>…</pfblockerng_sanitized_export>`.
+   - `pfb_diag_redact(string $xml): string` — DOM-WALK, NOT preg_replace over the
+     serialized text (a regex `(<tag>)[^<]*` matches empty before `<![CDATA[` and
+     lets the CDATA form leak — the reason the harness-scrubber pattern is NOT
+     reused here): (a) traverse the DOMDocument; for any element whose tag-name
+     suffix matches the word-set (case-insensitive, optional trailing `s`,
+     word-set ⊇ the harness set), replace its text AND CDATA children with
+     REDACTED; (b) explicit `<maxmind_account>`; (c) `<url>` whole-query strip
+     (`?…`->`?REDACTED`) and `://user:pass@`->`://REDACTED@`, applied to text and
+     CDATA values alike. SETTLE the URL granularity here (default: strip the
+     entire query + userinfo) and pin it.
+   - `pfb_diag_export_sanitized_config(string $path = '/conf/config.xml'): string`
+     — read the file, extract, redact, return. Pure read; mutates nothing.
+   - Uppercase TRUE/FALSE; tabs; no die()/exit() in the engine (return/throw).
+5. Wire the new `.inc` into tests/php/bootstrap.php (and an empty include shim if
+   bootstrap needs one — see tests/php/shims/). Make both suites green.
+
+CONSTRAINTS
+- Pure PHP only in the `.inc`; DOMDocument/libxml + PCRE (both present in pfSense
+  PHP and dev PHP). No pfSense-runtime calls in the pure functions — take the XML
+  text/path as input so they are off-appliance testable.
+- Do NOT touch any `www/` page, the priv file, or the ports in this phase.
+- Over-redaction is acceptable; under-redaction is a phase failure.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit                 -> green (incl. DiagnosticsExportTest)
+- python -m pytest                   -> green (incl. the parity test)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc
+- diff-read: confirm the test fixture actually seeds each secret class and the
+  assertions would FAIL on un-redacted output (revert the redact call mentally /
+  temporarily to confirm red).
+
+EXPECTED RESULT
+A pure, fully unit-tested engine that turns /conf/config.xml into a
+pfBlockerNG-only, secret-free XML string; no GUI yet.
+
+COMMIT (single)
+    pfblockerng: add sanitized-config export engine + redaction (ADR-52 P1)
+Push directly to adr/52-sanitized-config-export; open a PR only if the direct
+push is rejected.
+
+HANDOFF — write .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/01_Results.txt
+State: the engine functions + signatures; the final word-set and the URL-strip
+granularity chosen; the exact public function to call from the page
+(`pfb_diag_export_sanitized_config`); the bootstrap wiring done; phpunit/pytest
+counts; any secret class that needed a wholesale drop beyond sync/hooks; and the
+go-ahead for Phase 2.

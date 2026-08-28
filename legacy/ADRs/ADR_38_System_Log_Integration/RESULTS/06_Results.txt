@@ -1,0 +1,124 @@
+ADR-38 Phase 6 — Live-VM Smoke + Docs for Syslog Export
+=========================================================
+
+Phase:    6 of 6 (final)
+Branch:   adr/38-system-log-integration
+Worktree: /home/user/pfBlockerNG/.claude/worktrees/adr-38
+Date:     2026-06-22
+
+─────────────────────────────────────────────
+SMOKE TEST FILE
+─────────────────────────────────────────────
+
+tests/smoke/test_syslog_export.py  (new file)
+  pytest.mark.smoke — deselected from default python -m pytest run
+  Module-scoped fixture deploys once; 4 test functions, BDD Given/When/Then.
+
+Case → §2.2 invariant mapping:
+
+  test_syslog_on_dnsbl_event_exported       §2.2.2
+    Given: deployed + DNSBL VIP blocking unique uuid-*.com domain, syslog OFF
+    When:  enable log_syslog + reload DNSBL (re-writes pfb_unbound.ini) + probe
+    Then:  new pfblockerng syslog line with act=dnsbl, btype=VIP, qname present
+    And:   CSV dnsbl.log also written (export is additive — §2.2.1)
+
+  test_syslog_on_ip_block_event_exported    §2.2.2 + §2.2.3
+    Given: syslog ON (left on by prior test); IP alias pfB_pfb_syslog_iptest_v4
+           covering RFC 5737 TEST-NET-3 203.0.113.0/24; filterlog daemon running
+    When:  curl --connect-timeout 1 http://203.0.113.1/ (pf blocks the SYN)
+           + 5s settle for filterlog daemon to process filter.log
+    Then:  new pfblockerng syslog line with act=block + pfblockerng tag
+    And:   CSV ip_block.log also written (additive)
+    Skip paths: alias not populated OR filterlog daemon absent (informative skip,
+    not a silent false-pass)
+
+  test_syslog_off_no_new_records            §2.2.1 (before/after proof)
+    Given: ON produced records — assert count_while_on > 0 (before-state)
+    When:  disable log_syslog + reload DNSBL + probe domain + trigger IP block
+    Then:  syslog line count unchanged (zero new records)
+    And:   CSV dnsbl.log + ip_block.log still written (toggle does NOT disable CSV)
+
+  test_syslog_records_excluded_from_system_log   §2.2.1 footprint
+    Given: syslog OFF (left off by prior test); baseline system.log pfblockerng count
+    When:  enable + reload + probe domain
+    Then:  system.log count unchanged (pfSense <logging> !pfblockerng exclusion working)
+
+§2.2.4 (silent degradation on socket failure) — exercised implicitly: the Python
+SysLogHandler's error path never surfaces to the caller; any socket failure on the live
+VM would leave the syslog file unmodified, which test 3 (OFF ⇒ count unchanged) would
+catch as a false-positive absence in test 1. The invariant is also pinned by unit tests.
+
+§2.2.5 (config round-trip) — pinned by off-box unit tests (CfgGatewayTest.php,
+RollbackContractTest.php); implicitly exercised via real PfbConfig::read() on the live box.
+
+─────────────────────────────────────────────
+DOCS UPDATED
+─────────────────────────────────────────────
+
+1. docs/misc/architecture-notes.md
+   Added "Syslog export of security events (ADR-38)" section (after ADR-37).
+   Covers: dedicated log, logsocket, two emit paths (PHP IP / Python DNSBL),
+   remote delivery note, config keys table.
+
+2. .ADRs/ADR_38_System_Log_Integration/ADR.md
+   Status line updated:
+     **Proposed** (2026-06-20)  →  **Implemented (pending smoke fan-out)** (2026-06-22)
+   The ADR flips to Accepted once the live-VM CE+Plus fan-out (smoke-fanout.yml) is green.
+
+─────────────────────────────────────────────
+VERIFICATION RESULTS
+─────────────────────────────────────────────
+
+python -m pytest (off-box):
+  1953 passed, 2 skipped — unaffected
+
+python -m pytest tests/smoke/test_syslog_export.py --collect-only -q:
+  4 tests collected — collection-clean (no import errors)
+
+ruff check .:
+  All checks passed
+
+npx markdownlint-cli2 "docs/misc/architecture-notes.md" ".ADRs/.../ADR.md":
+  0 error(s)
+
+Live-VM gate:
+  PENDING — dispatch smoke-fanout.yml against this branch (CE + Plus).
+  New test IDs to watch:
+    tests/smoke/test_syslog_export.py::test_syslog_on_dnsbl_event_exported
+    tests/smoke/test_syslog_export.py::test_syslog_on_ip_block_event_exported
+    tests/smoke/test_syslog_export.py::test_syslog_off_no_new_records
+    tests/smoke/test_syslog_export.py::test_syslog_records_excluded_from_system_log
+
+─────────────────────────────────────────────
+FILES CHANGED
+─────────────────────────────────────────────
+
+  A tests/smoke/test_syslog_export.py
+      4 smoke tests (module-scoped fixture + BDD Given/When/Then)
+      Covers §2.2.1–2.2.5; before/after branch coverage for ON/OFF toggle
+      pytest.mark.smoke; SMOKE_PKG skip when env absent
+
+  M docs/misc/architecture-notes.md
+      New "Syslog export of security events (ADR-38)" section
+
+  M .ADRs/ADR_38_System_Log_Integration/ADR.md
+      Status: Proposed → Implemented (pending smoke fan-out)
+
+─────────────────────────────────────────────
+COMMIT
+─────────────────────────────────────────────
+
+Message: pfblockerng: live-VM smoke + docs for syslog export (ADR-38 P6)
+
+─────────────────────────────────────────────
+MAINTAINER NEXT STEPS
+─────────────────────────────────────────────
+
+1. Dispatch smoke-fanout.yml against the branch adr/38-system-log-integration.
+2. Confirm all 4 new tests PASS on CE (and Plus if the Plus image is available).
+3. On green fan-out: flip ADR.md Status to **Accepted** (2026-06-22).
+4. Open PR and run /pr-merge-flow per the standard landing flow.
+
+─────────────────────────────────────────────
+ADR-RESUME: branch=adr/38-system-log-integration next-phase=COMPLETE
+─────────────────────────────────────────────

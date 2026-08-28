@@ -1,0 +1,103 @@
+================================================================================
+PHASE 2 PROMPT — Diagnostics page, Export download, tab + ACL (www)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §1.2, §2.1, §5 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 2 implementer for ADR-52, working inline on branch
+`adr/52-sanitized-config-export`, one commit, pushed directly. This phase adds a
+new GUI page that wires the Phase 1 engine to a download, plus the tab and ACL.
+You implement yourself; you do NOT spawn further agents.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+The engine from Phase 1 is headless. This phase gives users the one-click export
+on a new Diagnostics page (the home #364 and ADR-34 will later extend) and gates
+it behind the existing pfBlockerNG GUI privilege.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/01_Results.txt — it must confirm
+  the engine exists, the public function name, and that phpunit/pytest are green.
+  If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_52_Sanitized_Config_Export/ADR.md  (§2.1 page/tab/ACL/download rows,
+  §5 constraints)
+- src/usr/local/www/pfblockerng/pfblockerng_log.php — the FULL tab-bar +
+  Content-Disposition download pattern to mirror (esp. :331-333 and the
+  $tab_array / display_top_tabs block ~:359-368)
+- src/usr/local/www/pfblockerng/pfblockerng_general.php — a simple page using the
+  pfSense form/section helpers (panel/card layout to match)
+- src/etc/inc/priv/pfblockerng.priv.inc — the `page-firewall-pfblockerng` match[]
+  list
+- tests/smoke/ui/ — Tier A/B structure, the `smoke_vm` fixture, helpers.py,
+  credgate.py (UI fixtures SKIP without SMOKE_ADMIN_PASSWORD — never fail)
+- CLAUDE.md — Web-UI help-text rule (brief, match neighbours); Tier A always
+  required, Tier B required when the behaviour is observable only there
+  (the download+content assertion is).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN
+1. Create src/usr/local/www/pfblockerng/pfblockerng_diagnostics.php:
+   - Standard pfSense page bootstrap (require_once the package includes incl. the
+     new pfblockerng_diagnostics.inc); render the tab bar with a new
+     **Diagnostics** tab marked active.
+   - One section/card "Export sanitized configuration" with brief help text
+     (what it does, what is stripped) and a POST button.
+   - POST handler: call the Phase 1 public function, then stream the string with
+     Content-Type application/octet-stream + Content-Length + Content-Disposition
+     attachment; filename="pfblockerng-config-sanitized.xml"; exit after.
+   - Validate/guard the POST (CSRF token as other pages do); no user input feeds a
+     filesystem path or shell — the engine reads a fixed /conf/config.xml.
+2. Add the **Diagnostics** entry to the $tab_array of every page that renders the
+   bar (grep for `display_top_tabs` / the General|IP|DNSBL|… array). Keep the
+   ordering sensible (e.g. after Logs, before Sync) and identical across pages.
+3. Add `pfblockerng/pfblockerng_diagnostics.php` to the
+   `page-firewall-pfblockerng` match[] list in pfblockerng.priv.inc.
+4. Tests under tests/smoke/ui/:
+   - Tier A: register the new page in tests/smoke/ui/test_render_smoke.py
+     PAGE_TABLE (the mechanical Tier A registry — a page absent from it is never
+     rendered); GET the Diagnostics page -> 200, a page-specific marker present,
+     body free of Fatal/Parse/Warning/Notice/Uncaught, no new on-box
+     php_error.log line; assert the Diagnostics tab is present on a couple of
+     other pages too.
+   - Tier B: seed the secrets ON-BOX first via `h.php_eval` +
+     `config_set_path('installedpackages/pfblockerngipsettings/config/0/maxmind_key', …)`
+     (+ a token-bearing feed url row) + `write_config()` — the ensure_* fixture
+     pattern; then authenticated POST to the export -> assert Content-Disposition
+     header and that the downloaded body contains a known NON-secret marker and
+     NOT any seeded secret value.
+
+CONSTRAINTS
+- No new download/redaction logic in the page — call the Phase 1 engine.
+- The page is the only new www file; do NOT create more shipped files.
+- Uppercase TRUE/FALSE; tabs; match neighbouring page structure + help wording.
+- Do NOT touch the FreeBSD-ports repo here (that is Phase 3).
+
+VERIFICATION (all must pass)
+- php -l on the new page and every edited page
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean for touched files
+- Tier A locally (SMOKE_ADMIN_PASSWORD set) or via selective dispatch:
+  python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="
+- diff-read: the new tab appears identically on every page that renders the bar;
+  the priv match[] line is added.
+
+EXPECTED RESULT
+A Diagnostics tab on the pfBlockerNG menu; an Export button that downloads
+pfblockerng-config-sanitized.xml; access gated by the existing pfBlockerNG priv.
+
+COMMIT (single)
+    pfblockerng: add Diagnostics page with sanitized-config export (ADR-52 P2)
+Push directly to adr/52-sanitized-config-export; open a PR only if rejected.
+
+HANDOFF — write .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/02_Results.txt
+State: the two NEW shipped files' exact paths (the .inc from P1 + the .php here)
+for the ports plist; the list of pages whose $tab_array changed; the priv line
+added; Tier A/B status (run or skipped-for-no-password, with why); and the
+go-ahead for Phase 3. CALL OUT that Phase 3 must wire BOTH new src/ files into
+all three ports or the smoke/release build will fail.

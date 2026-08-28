@@ -1,0 +1,34 @@
+ADR-62 PHASE 3 — ORCHESTRATOR GATE RECORD
+Verdict: PASS
+Route: phase-step workflow wf_aeb86c8d-9a0 (Sonnet implementer + independent Sonnet verifier); orchestrator validated the schema-forced gate record and wrote this file.
+Commit gated: 776f737c6c584cb3d66ee978b709679285af10b2 ("pfb_unbound: extend per-line DNSBL parse routing to full ABP shape set (ADR-62 P3)")
+
+0. HISTORY NOTE. The implementer rebased the branch onto origin/devel @3dee8fe4 before committing (all 4 prior phase commits picked clean; remote force-updated in sync; every gate re-ran post-rebase). Branch now carries devel's PR #1066 tld_analysis guards + #1064. Phase 1/2 commit hashes changed to 3f4a2e70/dd4d7354 (gate records dd4d7354/dad7528a); content unchanged.
+
+1. TRANSACTION — PASS. HEAD == origin/adr/62-dnsbl-unified-line-parsing == 776f737c; tree clean; RESULTS/03_Results.txt committed (366 lines, all fixed fields). Nit: the in-file hash names the pre-amend reflog snapshot (same limitation as P1/P2); structured output + git agree on 776f737c.
+
+2. CANONICAL GATES (verifier re-ran all) — PASS. pytest 2588 passed/4 skipped; ruff check/format clean (210 files); mypy clean (89 files); php -l clean (no PHP touched); phpunit Tests: 2649, 0 failures; phpstan OK; phpcs 0 violations; narration/retired-token/version-literal checkers clean.
+
+3. RED PROOF — behaviour-changing; verifier RE-EXECUTED both directions:
+   - (a) checkout HEAD~1 -- pfb_unbound.py → pytest tests/test_adr62_parity_oracle.py → ImportError (new symbol absent) = FAIL; restore → 23 passed. (Import-shaped red; behavioural red covered by (b).)
+   - (b) deliberate mis-route (disable the ||/@@ anchor branch) → 7 named tests fail incl. the aggregate corpus-parity test; revert clean, re-verified.
+
+4. DIFF VS PLAN (full git show) — PASS.
+   - Item 1: plain-loop predicate swapped to _dnsbl_is_abp_rule_line(); function diffed branch-for-branch against PHP pfb_dnsbl_is_abp_rule_line() (inc:6705-6721) — identical structure/order; no parallel dispatcher; element-hiding → parse_abp → None.
+   - Item 2: permit loop shares the same predicate (one call site each) — D4 skip set covered, asserted.
+   - Item 3: stale format_hint='abp' tolerance asserted (new test + Phase-1 test untouched green).
+   - Item 4: parity oracle Section 1 = aggregate + per-format byte-identity over the Phase-1 corpus (ZERO delta flips — production-dormant confirmed); Section 2 = synthetic-raw NEW-outcome proofs for D2/D4 + full hostile table. Phase-1 oracle file: docstring-only pointers, zero assertion changes.
+   - Item 5: hostile table complete (23 tests: IDN boundary, #752/#753, empty/BOM, allow/regex/banded shapes, element-hiding family, control lines, IP non-emission, bare-domain D1-unchanged, mixed feed, '//comment', bare anchors crash-free).
+   - Item 6: both red-runs executed + reverted (see 3).
+
+5. TEST HONESTY — PASS. Corpus-file diff docstring-only; negative assertions proven trippable by the mis-route re-execution; the handoff's own non-discriminating probe disclosure (element-hiding-only misroute) independently replicated by the verifier with the same null result — honesty cross-validated.
+
+6. CONVENTIONS — PASS. _dnsbl_is_abp_rule_line beside _dnsbl_parse_abp_regex/_dnsbl_within_wire_caps/_dnsbl_strip_hosts_prefix; _DNSBL_ELEMENT_HIDING_MARKERS beside _DNSBL_LABEL_CHARS/_DNSBL_DNS_RELEVANT_OPTS/_DNSBL_NON_DNS_MODIFIERS; ADR-62/D-id docstring pointers are the sanctioned contract-pointer form.
+
+7. SKIPPED — none.
+
+DEVIATIONS ACCEPTED (both evidence-backed; the first corrects a PLANNER brief bug):
+   (1) Brief action-item 4 ordered flipping the Phase-1 oracle's D1/D2/D4 rows to NEW expectations — structurally impossible this phase: the corpus raw/*.raw are produced by PHP's manifest writer, which (source-read: no comma → cols[1] unset → dropped) cannot place regex/element-hiding/bare-@@ shapes into a plain feed's .raw until Phase 4 wires the broadened capture. Flipping would have shipped a FALSE assertion. Implementer proved the NEW outcomes via synthetic raws (Section 2) + doc pointers instead — consistent with the brief's own blast-radius constraint and the ADR (§6: Phase 4 flips D2–D5). Verdict "DONE" accepted despite the deviation being material, because the deviations field documents it in full.
+   (2) The Python regex-shape branch is a structural port of PHP's check, not a delegation to _dnsbl_parse_abp_regex — probed: bare '//' is capturable-TRUE under the PHP predicate but None under the regex helper; delegation would break row-for-row parity. parse_abp's inline element-hiding check refactored onto the shared constant (noted per brief clause; suite green).
+
+Carry-forward for Phase 4 (from handoff, orchestrator-endorsed): wire pfb_dnsbl_is_abp_rule_line() at the manifest writer (inc:7179-7189) AND the download-loop ADR-21 capture guard (re-grep, ~16404-16409); regenerate/extend the corpus txt/raw fixtures via the real broadened writer so the D2/D4 NEW-outcome proofs move from synthetic to corpus-real; D1 must NOT move in Phase 4 (Phase 5 only); use --staged (not --diff) for check_comment_narration.py on uncommitted work.

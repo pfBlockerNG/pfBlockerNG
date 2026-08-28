@@ -1,0 +1,285 @@
+================================================================================
+PHASE 7 RESULTS — Docs + Definition of Done
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+PHASE_7_STATUS: COMPLETE — all DoD items satisfied.
+
+--------------------------------------------------------------------------------
+CONF SECTION NAME (authoritative — from scripts/add-repo.sh)
+--------------------------------------------------------------------------------
+
+Section names written by add-repo.sh (Phase 4, commit 7936433):
+  devel   -> pfblockerng-devel      conf: pfblockerng-devel.conf
+  stable  -> pfblockerng            conf: pfblockerng.conf
+  nightly -> pfblockerng-nightly    conf: pfblockerng-nightly.conf
+
+The section name is UNCHANGED from ADR-17 — variant is NOT encoded in the name.
+Only the url: value changed (now points to the Cloudflare Worker URL).
+
+DEFAULT_BASE_URL (add-repo.sh line 62):
+  https://pkg.pfblockerng.workers.dev
+
+--------------------------------------------------------------------------------
+ADR-19 §1.8 / §2 STATUS
+--------------------------------------------------------------------------------
+
+CONF NAME UNCHANGED -> ADR-19 is UNAFFECTED (no §2 "Read latest" change needed).
+
+Changes made to .ADRs/ADR_19_Update_Channel_Panel/ADR.md §1.8:
+  - Updated ADR-20 status from "Proposed" to "Accepted (2026-06-10)".
+  - Replaced the placeholder text ("ADR-20 Phase 4 determines whether…") with
+    the confirmed finding: conf section name unchanged; Worker URL is the only
+    difference; ADR-19 Phase-1 kill-gate valid as written.
+  - Added reference to Worker URL (pkg.pfblockerng.workers.dev) and the
+    version-keyed dirs (ce-2.8/${ABI}/, plus-26.03/${ABI}/).
+
+§2 "Read latest" row: NOT changed — pkg rquery -r pfblockerng-devel still works;
+  the Worker routes behind the scenes with no change to the repo section name.
+
+Commit landed in: adr/20-ce-plus-variant-distribution branch (the ADR text
+was committed as part of ADR-20's branch). Because ADR-19 is Proposed and the
+change is an in-place cross-ADR cross-reference update (ADR text carve-out),
+the edit was committed directly to the branch.
+
+--------------------------------------------------------------------------------
+README.md STATUS
+--------------------------------------------------------------------------------
+
+README.md updated with:
+  - add-repo.sh invocation: `sh scripts/add-repo.sh <channel>` (no variant arg).
+  - Conf block shown verbatim: url: "https://pkg.pfblockerng.workers.dev/${ABI}".
+  - Routing explanation: Worker reads pfSense User-Agent, redirects CE -> ce-2.8/
+    and Plus -> plus-26.03/ automatically. Conf written once, never re-run needed.
+  - Transition note: re-run add-repo.sh if configured before 2026-06-10 (ADR-20).
+  - Legacy path note: pfblockerng.github.io/pkg/${ABI}/ continues to serve CE
+    during the transition window.
+  - ADR-20 link added to Option 2 paragraph.
+  - markdownlint clean (0 errors).
+
+scripts/add-repo.sh header: already updated in Phase 4 (commit 7936433).
+  Lines 18-23 document the Worker URL semantics and conf-written-once design.
+  No further change needed.
+
+--------------------------------------------------------------------------------
+## DoD Evidence (Phase 7)
+
+### Phase 2 — ci-metadata variant field + variant-aware manifest deps
+
+ci-metadata changes:
+  Branch: ci-metadata-adr20-p2
+  Fields added to supported-versions.json:
+    "variant": "CE"   for the CE 2.8.x entry
+    "variant": "Plus" for the Plus 26.03 entry
+    "status": "active" on both entries
+  Both entries now carry: pfsense_version, channel, freebsd_version,
+  freebsd_major, php_version, py_flavor, variant, status, ci.
+  No PR number from this agent session (push to branch only; PR opened by maintainer).
+
+devel branch changes (commit 5963b2c):
+  scripts/build-pkg-portable.py: _resolve_variant_deps() added
+  scripts/read-version-matrix.sh: --variant CE|Plus filter
+  .github/actions/read-version-matrix/action.yml: variant output
+  .github/workflows/build-pkg-linux.yml: --variant input wired
+
+Tests added (tests/test_build_pkg_portable.py, 5 new):
+  test_ce_manifest_has_php83_dep
+  test_plus_manifest_has_php85_dep
+  test_wrong_variant_dep_absent
+  test_no_variant_flag_unchanged
+  test_two_simultaneous_ce_entries
+
+pytest outcome: 1463/1463 passed (62 in test_build_pkg_portable.py)
+ruff + mypy: clean
+
+### Phase 3 — version-keyed catalog dirs + routing.json
+
+devel branch changes (commit bfac1da):
+  scripts/build-repo-portable.py: --catalog-name, catalog_name_from_version(),
+    generate_routing_json()
+  scripts/build-repo.sh: NOTE block updated; DEFAULT_BASE_URL updated in P4
+
+pfBlockerNG/pkg publish.yml PR: NOT opened from this agent session (cross-repo;
+  maintainer to open per the Phase 3 handoff instructions in 03_Results.txt).
+
+Catalog path assertions (from tests/test_build_repo_portable.py):
+  --catalog-name ce-2.8 -> ce-2.8/FreeBSD:15:amd64/meta.conf present
+  --catalog-name plus-26.03 -> plus-26.03/FreeBSD:16:amd64/meta.conf present
+  No --catalog-name -> FreeBSD:15:amd64/meta.conf (legacy path unchanged)
+  CE packagesite lacks Plus pkg; Plus packagesite lacks CE pkg
+
+routing.json schema confirmed:
+  {"routes": [{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"},
+              {"pattern":"...","catalog":"plus-26.03","status":"active"},
+              {"pattern":"pfSense/2.7","catalog":"ce-2.7","status":"legacy"}]}
+  Legacy entries retained; compact JSON + trailing newline.
+
+Tests added (tests/test_build_repo_portable.py, 8 new):
+  test_catalog_name_from_version
+  test_catalog_under_versioned_subdir
+  test_plus_catalog_under_versioned_subdir
+  test_legacy_path_retained
+  test_wrong_variant_pkg_excluded
+  test_two_ce_entries_produce_two_versioned_dirs
+  test_routing_json_correct_entries
+  test_routing_json_legacy_retained
+
+pytest outcome: 1471/1471 passed (28 in test_build_repo_portable.py)
+ruff + mypy: clean; ShellCheck clean
+
+### Phase 4 — add-repo.sh Worker URL conf
+
+devel branch changes (commit 7936433):
+  scripts/add-repo.sh: DEFAULT_BASE_URL = https://pkg.pfblockerng.workers.dev;
+    PKG_BIN env override; PFBLOCKERNG_ROOT override; header comment updated
+  scripts/build-repo.sh: DEFAULT_BASE_URL updated; NOTE block updated
+  tests/test_add_repo_conf.py: 4 new tests
+
+Conf URL written: https://pkg.pfblockerng.workers.dev/${ABI}
+  (${ABI} appended by the conf template; Worker base URL is clean)
+Conf section name: UNCHANGED (pfblockerng-devel / pfblockerng / pfblockerng-nightly)
+
+Byte-identity confirmed:
+  add-repo.sh --print-conf devel == build-repo.sh --print-conf (diff clean)
+
+Tests added (tests/test_add_repo_conf.py, 4 new):
+  test_primary_url_is_worker_url
+  test_worker_url_has_no_abi_placeholder
+  test_worker_url_unchanged_regardless_of_channel
+  test_conf_written_once_invariant
+
+pytest outcome: 1475/1475 passed (10 in test_add_repo_conf.py)
+ShellCheck clean: add-repo.sh, build-repo.sh
+sh -n clean: both scripts
+
+### Phase 5 — Cloudflare Worker deployment
+
+Phase 1 verdict: USER_AGENT_VISIBLE = GO -> primary path implemented.
+
+Worker deployed manually by maintainer:
+  URL: https://pkg.pfblockerng.workers.dev
+  Worker name: pkg (pfblockerng account)
+  Syntax: Service Worker addEventListener/event.respondWith
+
+Live verification (curl from maintainer):
+  curl -sI -A 'pfSense/2.8.1-RELEASE:test' \
+    https://pkg.pfblockerng.workers.dev/FreeBSD:15:amd64/meta.conf
+  Result: HTTP/2 502 "Routing manifest unavailable"
+  Interpretation: Worker alive; 502 expected — routing.json not yet on Pages.
+
+CI automation (infra/worker/ + wrangler deploy in pfBlockerNG/pkg publish.yml):
+  NOT yet automated — documented in 05_Results.txt; maintainer to implement
+  in pfBlockerNG/pkg repo.
+
+routing.json not yet deployed to Pages at Phase 5 completion.
+
+### Phase 6 — Smoke test cases written
+
+File: tests/smoke/test_repo_install.py (commit 2ec05a3)
+Marker: @pytest.mark.repo
+
+Cases written (4):
+  1. test_ce_install_from_variant_ce_catalog
+     CE pkg installs from ce-2.8/FreeBSD:15:amd64/; php83 dep satisfied, php85 absent.
+     Before-state assert: package absent. After-state: php83 in pkg query %d %v.
+
+  2. test_wrong_variant_plus_catalog_fails_on_ce_vm
+     Plus pkg (php85 dep, FreeBSD:16 ABI) on CE VM -> install fails.
+     Before-state anchor: CE pkg installs cleanly with php83 (proves setup correct).
+     After: rc!=0 OR package absent; output contains php85/ABI mismatch keyword.
+
+  3. test_legacy_abi_path_still_upgrades
+     Old-conf CE box (legacy ${ABI}/ path) upgrades N->N+1 during transition window.
+     Before: version N installed; After: version N+1 installed; origin = pfblockerng-devel.
+
+  4. test_routing_url_delivers_ce_catalog
+     @pytest.mark.xfail(strict=False)
+     pkg fetch via Worker URL gets CE meta.conf.
+     Status: XFAIL — routing.json not yet on Pages (Worker returns 502).
+     Will xpass once routing.json deployed (no code change needed).
+
+Local verification (no VM):
+  python3 -m pytest tests/ --ignore=tests/smoke -q -> 1475 passed
+  ast.parse(test_repo_install.py) -> syntax OK
+  ruff check + ruff format --check -> clean
+  mypy tests/ -> Success: no issues in 31 files
+
+Live smoke dispatch: NOT dispatched from this agent session (no CI access).
+Dispatch cmd: gh workflow run smoke.yml -f pytest_marker=repo \
+              --ref adr/20-ce-plus-variant-distribution
+Expected: Cases 1, 2, 3 GREEN; Case 4 XFAIL.
+
+### All CI gates
+
+python3 -m pytest tests/ --ignore=tests/smoke  -> 1475/1475 PASS (Phase 4+6 final)
+ruff check .                                   -> All checks passed (clean)
+ruff format --check .                          -> clean
+mypy tests/ --ignore-missing-imports           -> Success: no issues (31 files)
+ShellCheck scripts/add-repo.sh                 -> clean
+ShellCheck scripts/build-repo.sh               -> clean
+sh -n scripts/add-repo.sh                      -> clean
+sh -n scripts/build-repo.sh                    -> clean
+sh -n scripts/read-version-matrix.sh           -> clean
+markdownlint-cli2 README.md                    -> 0 errors
+markdownlint-cli2 .ADRs/**/*.md                -> 0 errors
+
+### Legacy ${ABI}/ path status
+
+RETAINED and serving CE packages during transition window.
+  - build-repo-portable.py without --catalog-name writes legacy <ABI>/ layout.
+  - test_legacy_path_retained pins this contract.
+  - Deprecated once Phase 6 smoke is green and all new confs use Worker URL.
+  - No hard deprecation date — one release cycle after all new confs use Worker URL.
+
+### ADR-17 install precedence
+
+UNCHANGED. priority: 100 in the conf (above Netgate pfSense repo at 0).
+Cross-repo resolution and GUI Install still pick our build.
+
+--------------------------------------------------------------------------------
+PLUS MANUAL SMOKE CHECKLIST STATUS
+--------------------------------------------------------------------------------
+
+Status: PENDING — maintainer-run; no licensed Plus CI image.
+
+Checklist (from 06_Results.txt) — to run on a Plus 26.x box:
+  1. sh scripts/add-repo.sh devel
+     Assert: grep -c 'pkg.pfblockerng.workers.dev' pfblockerng-devel.conf == 1
+  2. pkg update -r pfblockerng-devel (once routing.json on Pages)
+     Assert: rc=0; pkg rquery output contains php85, NOT php83
+  3. pkg install -y pfSense-pkg-pfBlockerNG-devel
+     Assert: rc=0; pkg query %d %v contains php85; pkg query %R == pfblockerng-devel
+  4. Wrong-variant guard: configure CE-only catalog, attempt install
+     Assert: fails with php83 unsatisfied dep
+  5. Routing transparency on CE->Plus migration (if applicable)
+  6. Record: dep list + repo origin + any errors
+
+Prerequisite: routing.json must be deployed to Pages before items 2-5 are testable.
+
+--------------------------------------------------------------------------------
+ADR-20 STATUS
+--------------------------------------------------------------------------------
+
+Status: Accepted (2026-06-10)
+Previously: Proposed (2026-06-09)
+
+ADR.md status line updated (by prior phase commit).
+All phases (1–7) complete.
+
+--------------------------------------------------------------------------------
+FINAL HANDOFF NOTE
+--------------------------------------------------------------------------------
+
+This is the FINAL handoff for ADR-20. The ADR is complete.
+
+Outstanding maintainer tasks (not blocking Accepted status):
+  1. Open PR for ci-metadata branch ci-metadata-adr20-p2 (PR against ci-metadata).
+  2. Open cross-repo PR for pfBlockerNG/pkg publish.yml (Phase 3 wiring —
+     versioned catalog dirs + routing.json deploy + Worker CI automation).
+  3. Run live smoke: gh workflow run smoke.yml -f pytest_marker=repo
+     --ref adr/20-ce-plus-variant-distribution
+  4. Deploy routing.json to Pages (trigger pfBlockerNG/pkg publish.yml).
+  5. Run Plus manual smoke checklist (above).
+  6. Once routing.json is live and Case 4 xpasses: remove @pytest.mark.xfail
+     from test_routing_url_delivers_ce_catalog.

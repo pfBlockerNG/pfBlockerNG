@@ -1,0 +1,95 @@
+ADR-65 Phase 6 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (after orchestrator remediation of the verifier's three
+blockers -- all doc/comment-level; every functional check was PASS)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently; orchestrator re-ran the
+full runner after the remediation edits)
+--------------------------------------------------------------------------------
+- sh scripts/agent/run-gates.sh --diff origin/devel (mypy shim): GATES: PASS
+  (verifier run and post-remediation orchestrator run both).
+- vendor/bin/phpunit whole suite: 3453 tests, 21207 assertions, 0 failures
+  (P5 baseline 3446 with the itemised +7 delta: new suites added, the four
+  classification-driving suites deleted with the code they drove).
+- python3 -m pytest whole suite (wrapper): 2933 passed, 2 skipped -- identical
+  to the P5 end state. Oracle A: 22 passed at ZERO edits (git diff empty).
+- composer phpstan [OK]; phpcs clean; php -l clean on every touched file;
+  markdownlint clean.
+- Narration/version-literal checkers: exit 0 (run post-commit -- the phase
+  recorded the process learning that these diff committed history, so a
+  pre-commit run is vacuous). check_retired_tokens.py: reported honestly;
+  zero genuine stragglers -- no surviving writer of the retired files, no
+  surviving pfb_dnsbl_py_swap()/tld_search() caller.
+- Tree grep for unbound_py_data/unbound_py_zone/pfb_py_data/pfb_py_zone:
+  zero writers (survivors are the kept path defs, Python close-only wrappers,
+  and historical comments -- P7 retirement inventory).
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE (re-executed by the verifier)
+--------------------------------------------------------------------------------
+verify-red-proof.sh --base-ref eb4bfac4 over the frozen
+tests/php/DnsblInterchangeRetirementTest.php (hash 32b5fe34...): FREEZE-OK,
+RED-OK against base src (TLD-mode writer retirement, #546 re-key, fingerprint
+retirement all red for the stated reasons), GREEN-OK at HEAD, VERDICT PASS.
+Green-only carve-outs correctly invoked: DnsblManifestMissingTest.php (brand
+-new helper, 12 tests incl. every hostile row) and the preservation oracle
+TldAnalysisBlacklistHostileInputTest.php (green on both untouched and changed
+tree). The health-check red the prompt literally asked for is not
+off-appliance-drivable (inline in sync_package_pfblockerng, restarts real
+services) -- rides the sibling re-key reds + branch coverage + diff-read;
+integrated behaviour DEFERRED to the Phase-7 live-VM run (recorded, not
+claimed).
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read the full diff)
+--------------------------------------------------------------------------------
+- tld_analysis(): classification, master-list load, tld_search(), exclusion
+  collection, read loop, finalize rename loop (#1244) and unconditional
+  "completed" log all removed; alias/stat bookkeeping retained line-for-line
+  (incl. the load-bearing TLD-mode alias-update loop, re-gated on
+  $pfb['domain_update'] with unchanged cadence); widget count semantics
+  identical -- PASS.
+- pfb_dnsbl_py_swap deleted + call site; #546 no-feeds empty-data write +
+  zone unlink removed; disable-path data/zone unlinks removed with the
+  .conf/manifest/rawdir cleanup kept; the domain-side {dnsbl_file}.raw concat
+  removed (pfb_dnsbl_concat_files itself stays -- two DNSBL-IP callers) --
+  PASS.
+- Health check re-keyed on manifest presence + ADR-10 generation via the new
+  pfb_dnsbl_manifest_missing() (named beside its pfb_dnsbl_* siblings);
+  rebuild-trigger semantics unchanged -- PASS.
+- Test honesty: inversions strengthen; vacuity twins present; before/after
+  sweep assertions genuine -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+All brief rows ticked (writer-retirement rows R1-R3 + vacuity twin, helper
+branch/hostile rows, sweep entries, retained-bookkeeping oracle, Oracle A
+zero-delta). Deferral: the integrated $dnsbl_missing live behaviour -> P7
+live-VM row (recorded above).
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Tier-A ui_render: the runner's reminder fires on the CUMULATIVE branch diff
+  (P4's www/ change); this phase's own diff touches no www/. Still the
+  standing P7 hard gate.
+- Live-VM smoke (DNSBL run blocks correctly with no interchange files on
+  disk): P7.
+
+--------------------------------------------------------------------------------
+REMEDIATION (orchestrator, closing the verifier's three blockers)
+--------------------------------------------------------------------------------
+1. Stale-doc reconciliation the phase missed, now fixed: architecture-notes
+   NDJSON paragraph (raw concat + TLD outputs retired), CONTRIBUTING.md ABP x
+   TLD paragraph (fold completed; follow-up note resolved),
+   public-suffix-list.md + scripts/misc/update_public_suffix_list.py
+   docstrings (single Python consumer via the staged pfb_py_tld.txt).
+2. tests/smoke/test_smoke_adr62.py stale pointer to the deleted
+   Adr62TldAnalysisCorpusTest.php repointed at the Python oracles
+   (test_adr62_parity_oracle.py + test_adr62_byte_identity_corpus.py).
+3. tld_analysis() header comment compressed 4 -> 3 lines (the brief's own
+   cap).
+   Gates re-ran green after all edits (GATES: PASS above).

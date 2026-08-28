@@ -1,0 +1,126 @@
+================================================================================
+PHASE 7 PROMPT — Docs + Definition of Done
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md
+     (read §7 DoD + manual smoke checklist FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/20-ce-plus-variant-distribution` branch performing Phase 7 of
+ADR-20 — the final phase. This phase updates documentation, records the DoD evidence,
+notifies ADR-19 of changed interface assumptions, and closes the ADR.
+It lands as a rebase-only PR against `devel`.
+Use the existing `adr/20-ce-plus-variant-distribution` worktree.
+
+WHY THIS PHASE EXISTS
+The ADR-17 README and `add-repo.sh` header still document the single-variant
+CE-only catalog. CE users with old confs need a transition note. ADR-19 consumes
+ADR-17's repo infrastructure and must be updated to reflect the new variant-correct
+repo name (the repo conf name written by `add-repo.sh` now includes the variant, or
+at least the URL points to the correct subtree). This phase also formally closes the
+ADR by recording all DoD evidence in one place.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/06_Results.txt — confirm smoke
+  run id + per-case pass; Plus manual smoke status (maintainer-done or pending).
+  If missing, Phase 6 is not complete; STOP and report.
+- ALL prior RESULTS files (01 through 06) — collect the DoD evidence.
+- .ADRs/ADR_20_CE_Plus_Variant_Distribution/ADR.md — §7 DoD, §7 manual smoke
+  checklist, §7 reject criteria.
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md — §1.8 (repo plumbing this ADR supersedes)
+  and §2 "Repo bootstrap" row — the ADR-19 team needs to know the new repo name /
+  URL structure produced by `add-repo.sh`.
+- README.md — current `add-repo.sh` invocation and repo URL docs.
+- scripts/add-repo.sh — header comment.
+- CLAUDE.md — "Updating documentation" (doc-only commits, markdownlint gate).
+
+ACTION PLAN
+1. UPDATE `README.md`:
+   - New `add-repo.sh` invocation (no variant argument; the script auto-detects CE
+     vs Plus): replace any example showing a `--variant` arg with the clean
+     `sh scripts/add-repo.sh <channel>` form.
+   - New URL structure: document that the repo URL is now
+     `pfblockerng.github.io/pkg/ce/${ABI}` (CE) or `.../plus/${ABI}` (Plus).
+   - Transition note for existing CE users: "If you configured the repo before
+     [ADR-20 landing date], re-run `sh scripts/add-repo.sh devel` (or `stable`) to
+     refresh the conf to the variant-specific URL. The legacy `${ABI}/` path continues
+     to serve CE packages during the transition window."
+   - If Phase 5 (routing layer) landed: add a brief note about the canonical routing
+     URL as an alternative (but `add-repo.sh` remains the bootstrap path).
+   - If Phase 5 was SKIPPED: no routing URL mentioned.
+   - Keep wording brief and matching the style of neighbouring README sections.
+
+2. UPDATE `scripts/add-repo.sh` header comment: one-line summary of CE/Plus
+   auto-detection (if not already added in Phase 4).
+
+3. NOTIFY ADR-19 of interface changes:
+   - The `pkg rquery -r <ourrepo>` invocation in ADR-19's §2 "Read latest" row must
+     use the variant-correct repo name. Read the current conf name written by
+     `add-repo.sh` after Phase 4 (e.g. `pfblockerng-devel` for devel channel — the
+     name may or may not include the variant). Record the authoritative conf section
+     name in the handoff.
+   - If the conf name is unchanged (e.g. still `pfblockerng-devel` regardless of
+     variant, with only the URL differing), then ADR-19 Phase-1 kill-gate is
+     UNAFFECTED — note it explicitly.
+   - If the conf name changed to include the variant (e.g. `pfblockerng-ce-devel`),
+     then ADR-19's §2 "Read latest" row must be updated to use the variant-correct
+     name, and its Phase-1 kill-gate must test against the variant-correct repo name.
+     In that case, update ADR-19's §2 "Read latest" row in place (ADR-19 is
+     Proposed/unmerged; direct in-place edit to `devel` is correct).
+   - Either way, add a note to ADR-19's §1.8 cross-referencing ADR-20 as the
+     infrastructure provider for the variant-aware repo.
+
+4. RECORD DoD evidence: add a `## DoD Evidence (Phase 7)` section to
+   `RESULTS/07_Results.txt` (do NOT modify the ADR.md itself — the ADR stays
+   as-written; the Results file is the evidence record). Include:
+   - Phase 2: ci-metadata PR number + variant field values; devel PR number +
+     test names + `python -m pytest` outcome.
+   - Phase 3: devel PR number; `pfBlockerNG/pkg` PR number; catalog path assertions.
+   - Phase 4: devel PR number; `add-repo.sh` detection diff summary; ShellCheck clean.
+   - Phase 5: LIVE (routing URL + smoke confirmation) or SKIPPED (reason from P1).
+   - Phase 6: smoke run id + per-case PASS; wrong-variant dep error string; legacy
+     path outcome; Plus manual smoke status.
+   - All CI gates: `python -m pytest`, `ruff`, `mypy tests/`, ShellCheck, `sh -n` — PASS.
+   - Legacy `${ABI}/` path: still live and serving CE build (confirmed in Phase 6).
+   - ADR-17 install precedence: unchanged (still `priority: 100`).
+
+5. SET the ADR status: update the `**Status:**` line in `ADR.md` from
+   `**Proposed** (2026-06-09)` to `**Accepted** (<today's date>)`.
+   This is a direct commit to `devel` (ADR text, no PR per CLAUDE.md worktrees
+   carve-out) — separate from the docs PR.
+
+CONSTRAINTS
+- `README.md` changes are documentation-only (`paths-ignore` in `test.yml`); they can
+  go in the same PR as `add-repo.sh` header or in a dedicated docs commit.
+- markdownlint-clean: blank line around headings/lists/fences; language on every fence.
+- The ADR-19 edit (if needed for conf name change) is a direct commit to `devel`,
+  not a separate PR (ADR text carve-out).
+- Do NOT set the legacy `${ABI}/` path deprecation date — just document that the
+  transition window is "one release cycle after all new confs use the variant paths."
+
+VERIFICATION (must all pass before the phase is done)
+- `npx markdownlint-cli2` → 0 errors on `README.md` and any ADR `.md` touched.
+- `python -m pytest` → unchanged.
+- `sh -n scripts/add-repo.sh` → clean (if touched).
+- `git diff origin/devel...HEAD` shows only: `README.md`, `scripts/add-repo.sh`
+  header (optional), `.ADRs/ADR_20_*/ADR.md` (Status update), `.ADRs/ADR_19_*/ADR.md`
+  (if conf name changed), `RESULTS/07_Results.txt` — nothing else.
+
+EXPECTED RESULT
+README updated with the new `add-repo.sh` invocation and variant URL structure.
+ADR-20 status set to Accepted. ADR-19 updated if needed. DoD evidence recorded.
+
+COMMIT (docs/ADR-status commit, direct to devel or PR depending on what is touched)
+    docs: ADR-20 README + variant URL docs; set ADR-20 Accepted (ADR-20 P7)
+Push to `adr/20-ce-plus-variant-distribution`; open a PR against `devel` for the
+docs changes. The ADR.md status update is a separate direct commit to `devel`
+(ADR-docs carve-out, per CLAUDE.md).
+
+HANDOFF — write `.ADRs/ADR_20_CE_Plus_Variant_Distribution/RESULTS/07_Results.txt`
+(plain .txt)
+Record: the authoritative conf section name produced by `add-repo.sh` (with variant
+or unchanged); whether ADR-19 §1.8/§2 was updated and what changed; the DoD evidence
+section (all phases, CI gates, legacy path status); the Plus manual smoke checklist
+status (done/pending); ADR-20 Status set to Accepted on date. This is the final
+handoff — the ADR is complete.

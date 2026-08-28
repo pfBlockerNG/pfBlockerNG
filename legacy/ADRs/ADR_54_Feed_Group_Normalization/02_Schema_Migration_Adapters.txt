@@ -1,0 +1,83 @@
+================================================================================
+PHASE 2 PROMPT — Schema + migration + read adapters (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_54_Feed_Group_Normalization/ADR.md   (read SS2.1-2.4, SS2.7 first)
+================================================================================
+
+ROLE
+Implementer in the adr/54-feed-group-normalization worktree. One commit. No sub-agents.
+Phase 1's oracles are your regression net — they must be GREEN UNCHANGED at the end.
+
+WHY THIS PHASE EXISTS
+Introduce the normalized storage (FEED + FEED GROUP sections), the one-time migration, and
+read adapters so every existing consumer reads the new sections — with the observable
+outputs byte-identical (Phase 1 goldens). Downstream phases and ADR-55/25 build on these
+sections; nothing else may change yet.
+
+REQUIRED READING
+- ADR SS2.1 (feed fields incl. fid/managed_by/cat_*), SS2.2 (group fields incl. members
+  listtag + policy_only token), SS2.4 (migration steps 1-6 EXACTLY, including whole-graph
+  staging, validation, and atomic commit), SS2.7 (contract).
+- pfblockerng.inc listtag documentation comment (search "listtag") — the '<0>' single-row
+  XML trap; nest members as a `member` listtag.
+- pfblockerng_category_edit.php save loop — the field set the group row carries today
+  (copy verbatim into the new section; action -> default_action).
+- docs/misc/config-gateway.md — foreign-key exclusion list (you will ADD the two new
+  structural sections there; they are NOT PfbConfig-registered).
+- ADR-33's ADR.md SS1 — the (category, header) matching + SWC duplicate; your migration
+  suffix rule must keep it workable (store cat_category/cat_header on migrated feeds when
+  the row matches the catalog; leave empty otherwise).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Schema constants + accessors in pfblockerng.inc (or pfblockerng_extra.inc where the
+   existing config helpers live): read/write helpers for pfblockerngfeeds and
+   pfblockerngfeedgroups (section-level, direct config_*_path — foreign keys). Follow the
+   naming pattern of neighbouring helpers (pfb_*).
+2. MIGRATION function (install/upgrade hook path, same place existing grandfather seeds
+   run): implement SS2.4 steps 1-6 exactly — preflight and stage the entire graph, copy
+   groups, extract feeds, collapse duplicates (family+header+url), suffix conflicts
+   ({header}_2, log one line each), apply feed_<alias> renames + feed_alt_<header> URL
+   selections, validate the staged graph and exact oracles, then commit the normalized
+   sections and delete the patch keys/legacy sections in one configuration transaction.
+   Any failure leaves legacy state untouched. Short-circuit only on a valid committed
+   normalized root; no-op when no legacy config.
+3. READ ADAPTERS: every consumer that iterated `installedpackages/pfblockernglists*` /
+   `pfblockerngdnsbl` group rows now iterates the new sections through ONE adapter that
+   yields the legacy row shape (group fields + synthesized `row` array from members) — so
+   the downstream loops stay UNTOUCHED this phase. Grep exhaustively for the section names;
+   list every call site in the handoff (the orchestrator will re-grep).
+4. Save paths of the two editors (category_edit + category quick-edit AJAX) write the new
+   sections through the same helpers (field-for-field; no UI change this phase).
+5. TESTS (red->green mandatory for the migration; oracle-green for the rest):
+   - Migration fixtures: duplicate-collapse, SWC-style suffix, patch-key absorption,
+     idempotent re-run, absent-legacy no-op, validation failure leaves the complete legacy
+     graph byte-identical, and success commits only the complete normalized graph.
+   - Phase 1 oracles green on a MIGRATED fixture config (the load-bearing proof).
+   - policy_only token: stored + read back, and enforcement-inert (treated as Disabled by
+     the enable checks) — pin with a test.
+6. Gates: phpunit, php -l, PHPStan, PHPCS, pytest (nothing python should change — prove it),
+   markdownlint for the config-gateway.md edit.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
+
+KILL-GATES
+- Phase 1 goldens byte-identical on migrated config.
+- Zero writes to the legacy sections after a successful migration (grep for writers).
+- Injected failure before commit leaves legacy sections and patch keys byte-identical; no partial
+  normalized root exists.
+- No PfbConfig registry entries added (these are foreign/structural sections).
+
+HANDOFF (RESULTS/02_Results.txt)
+Adapter call-site inventory (file:line per consumer), migration function name + hook site,
+helper names, test names, gate outputs.

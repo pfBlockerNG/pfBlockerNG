@@ -1,0 +1,501 @@
+ADR-60 Phase 6 -- log_max_days_<type>: the age-cutoff cap -- RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+REALITY CHECK AGAINST THE BRIEF (verified this session, before editing)
+--------------------------------------------------------------------------------
+Read RESULTS/05_Results.txt first: confirmed Phase 5 landed (55af70bc) -- both
+in-repo consumers (www/index.php, pfblockerng_alerts.php) rebuilt for the ISO
+format, system internally consistent. pfb_log_mgmt() itself was untouched by
+Phase 5, exactly as its own carry-forward said.
+
+Re-derived every planner-verified claim against the live tree at branch tip
+0f866cf3, before editing:
+
+- pfb_log_mgmt() shape (pfblockerng.inc:2784-2851 in the brief, actually
+  :2784-:2851 confirmed via Read): matches the brief's pasted shape exactly --
+  the `foreach` over the 10 types, `$logmax = pfb_log_max_lines(...)`, the
+  `if ($logmax === 'nolimit') continue;` early-out, the chroot/non-chroot
+  branches with their tempnam/tail/cat/chown sequence. No drift found.
+- pfb_log_max_lines() (:2773 in brief, confirmed at that exact line): matches
+  verbatim, used as the template for pfb_log_max_days().
+- pfb_cfg_registry() shape (pfblockerng_extra.inc): confirmed the 10
+  hand-written log_max_<type> entries, then `$log_types` array (:605-608),
+  then the log_rotate_<type>/log_reset_keep_<type> foreach loop (:609-626),
+  then `$registry = $registry + [...]` continuation (:628). Matches the brief
+  exactly -- used this loop as the structural template, reusing the SAME
+  $log_types array per the brief's explicit instruction.
+- RequireConfigGatewaySniff.php $registeredPaths: confirmed the log_max_<type>/
+  log_rotate_<type>/log_reset_keep_<type> path shape; added the 10 new
+  log_max_days_<type> paths in the same shape.
+- Per-type field-position mapping: independently re-verified EVERY claim via
+  fresh reads (not trusting the brief's citations blindly):
+  - pfb_logger() (:3101): confirmed `$log = substr($log,0,$lead) . "{$now} " .
+    substr($log,$lead)` -- leading 19-char prefix, confirmed via the function
+    body itself.
+  - pfb_daemon_filterlog() (:12324): confirmed `$log = "{$ts_formatted},
+    {$d[3]},..."` at :12829 -- CSV field 0 for ip_blocklog/ip_permitlog/
+    ip_matchlog.
+  - pfb_parsed_fail() (:4475): confirmed `$log = "{$now},{$header},
+    {$line},{$oline}"` -- CSV field 0 for dnsbl_parse_err.
+  - pfb_unbound.py make_timestamp() callers (dnsbl.log, dns_reply.log):
+    confirmed via grep + read -- `csv_line = ",".join((..., "DNSBL-python",
+    timestamp, ...))` / `(..., "DNS-reply", timestamp, ...)` -- field 0 is
+    the label, field 1 is the timestamp, for BOTH writers.
+  - pfb_unified_format_ip()/_dnsbl()/_dnsreply() (pfblockerng_extra.inc:2074-
+    2140): confirmed via read -- `pfb_unified_format_ip` implodes
+    [l_type, log, details, dup] where `log` (built at :12829, ABOVE) already
+    STARTS with the timestamp -- so the joined unilog line's field 0 = l_type,
+    field 1 = the timestamp. `pfb_unified_format_dnsbl`/`_dnsreply` both
+    implode [l_type, datetime, ...] directly -- field 1 = datetime. ALL THREE
+    unilog sub-shapes (IP rows, DNSBL rows, DNS-reply rows) agree: field 1.
+    Also confirmed the malformed-fallback verbatim-write paths in
+    pfb_daemon_filterlog() (:12470-12500ish, `strncmp($line,'DNSBL-python,',
+    13)`/`'DNS-reply,'` branches) preserve the SAME source field order on the
+    raw-passthrough path -- still field 1.
+  No contradiction found anywhere -- the brief's field-position mapping is
+  CONFIRMED, not merely trusted.
+- DateTime::createFromFormat() + round-trip + getLastErrors() probe: re-ran
+  independently this session (pasted below, "TIMESTAMP PARSING PROBE") --
+  confirmed createFromFormat() alone silently OVERFLOWS '2026-13-45 99:99:99'
+  into a different valid date (2027-02-18 04:40:39) rather than returning
+  FALSE; the round-trip string-equality check independently catches this
+  (output != input), and getLastErrors() flags it too (warning_count=2). Used
+  BOTH checks per the brief's recommendation.
+
+No blocker found. Proceeded exactly per the brief's action plan.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 9e3b8b8f68669afd30e0fcc39bdb1b821a558e9c
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - NEW `pfb_log_max_days($raw): int` -- mirrors pfb_log_max_lines()'s
+    fallback shape; non-numeric/garbage/absent/negative -> 0 (off).
+  - NEW `pfb_log_age_field_mode(string $logtype): string` -- the verified
+    per-type field-position map ('prefix' | 'field0' | 'field1').
+  - NEW `pfb_log_line_timestamp(string $line, string $field_mode): ?int` --
+    extracts + strictly validates the Y-m-d H:i:s timestamp at the given
+    position; NULL on anything not an exact, real timestamp.
+  - NEW `pfb_log_age_cutoff(array $lines, int $cutoff_ts, string
+    $field_mode): array` -- the pure leading-run scan (S2.2): drops the
+    leading expired/unparseable run, keeps everything from the first
+    non-expired line on WITHOUT re-validating the rest.
+  - NEW `pfb_log_age_trim_temp(string $temp, int $days, string $logtype):
+    bool` -- the file-I/O wrapper: reads $temp, filters via
+    pfb_log_age_cutoff(), rewrites $temp; returns FALSE on any read/write
+    failure so the caller can gate on it.
+  - `pfb_log_mgmt()` restructured:
+    - `$agedays = pfb_log_max_days(...)` read alongside `$logmax` for every
+      type, every tick.
+    - Early-continue guard widened: `if ($logmax === 'nolimit' && $agedays
+      === 0) continue;` (was: `if ($logmax === 'nolimit') continue;`) --
+      'nolimit' now only opts out of the LINE-COUNT step; the age cap still
+      applies when set.
+    - Both chroot and non-chroot branches: when `$logmax === 'nolimit'`, the
+      truncation candidate is produced via `copy($final_log_file, $temp)`
+      (no tail(1) step -- no line-count candidate exists) instead of the
+      `tail -n N` exec; otherwise the ORIGINAL tail exec runs UNCHANGED
+      (same command string, same escaping).
+    - After a successful candidate step, `if ($agedays > 0 &&
+      !pfb_log_age_trim_temp(...))` gates the age pass exactly like the
+      existing tail/cat steps -- a failure logs and forces `$ret = 1` so the
+      SAME downstream "never write a failed step back to the live log" logic
+      protects it. When `$agedays === 0` this whole block is skipped (short-
+      circuit on `$agedays > 0`), so $temp is never touched beyond what tail
+      already wrote -- BYTE-IDENTICAL to pre-Phase-6 for the default path.
+    - The final `cat $temp > $final_log_file` + chown/chgrp (chroot) step is
+      UNCHANGED -- same command strings, same exit-code gating, same
+      ownership handling. No chroot/chown logic was duplicated.
+
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  - `pfb_cfg_registry()`: new `foreach ($log_types as $log_type) { ... }`
+    block registering `log_max_days_<type>` (10 entries, default '0',
+    read_adapter/write_adapter NULL, since '4.0.0') -- placed as its OWN
+    loop right after the log_rotate_<type>/log_reset_keep_<type> loop,
+    reusing the SAME `$log_types` array (not duplicated).
+
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+  - 10 new `$registeredPaths` entries:
+    `installedpackages/pfblockerng/config/0/log_max_days_<type>`.
+
+- tests/php/CfgGatewayTest.php
+  - `testInventoryCompletenessAllKnownKeysAccountedFor()`'s `$inventory` list:
+    added the 10 `log_max_days_<type>` keys (documentation completeness --
+    the test's own assertion only checks inventory-not-in-registry, so this
+    wasn't strictly required to keep it green, but keeps the "ground truth"
+    list accurate per its own docblock).
+  - NEW section "ADR-60 -- log_max_days_<type> field round-trip,
+    default-absent, inventory" (mirrors the log_reset_keep_<type> section
+    immediately above it, same shape): `testLogMaxDaysFieldsAreRegistered`,
+    `logMaxDaysVocabularyProvider` (10 types x 3 tokens),
+    `testLogMaxDaysFieldRoundTripForAllVocabularyTokens`,
+    `testLogMaxDaysFieldAbsentKeyReturnsDefaultZero`.
+
+- tests/php/RollbackContractTest.php
+  - NEW lettered section "J -- ADR-60: log_max_days_<type> rollback
+    contract" (next letter after I, mirrors section G's log_reset_keep_<type>
+    shape exactly): `logMaxDaysVocabularyProvider`,
+    `testLogMaxDaysFieldForwardAndBackwardForEveryVocabToken`,
+    `testLogMaxDaysFieldAbsentKeyReturnsZeroDefault`.
+
+- tests/php/LogMaxDaysTest.php (NEW, 3 tests)
+  - Pure-helper tests for `pfb_log_max_days()`, mirroring
+    LogMaxLinesTest.php's naming/structure convention exactly.
+
+- tests/php/LogAgeCutoffTest.php (NEW, 18 tests)
+  - Pure-helper tests for `pfb_log_age_field_mode()`, `pfb_log_line_timestamp()`,
+    `pfb_log_age_cutoff()` -- every S2.6 hostile-input row at the parser
+    level (empty, all-legacy, mixed legacy+new, both cutoff-boundary
+    directions, corrupted/truncated prefix in the leading run AND after a
+    keeper is found, invalid-but-19-char-shaped timestamp), plus the
+    per-type field-mode mapping for all 10 log types.
+
+- tests/php/LogMgmtAgeCutoffTest.php (NEW, 13 tests)
+  - Integration tests driving the REAL `pfb_log_mgmt()` against real temp
+    files under the bootstrap sandbox, mirroring LogRotateResetTest.php's
+    established Part B pattern (no setUp/tearDown; each test seeds
+    $GLOBALS['config'] fresh and writes its own full file content). Covers
+    every S2.5 matrix row, the S2.6 hostile rows at the integration level,
+    per-field-mode wiring (field0/field1, 'prefix' covered by the matrix
+    tests), inode preservation (both the tail-based AND copy()-based code
+    paths), and the failed-exec-never-corrupts guarantee.
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(5 pre-existing E_DEPRECATED notices about optional-before-required params,
+same ones present on HEAD, unrelated to this change)
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+$ vendor/bin/phpunit
+............................................................. 2501 / 2563 ( 97%)
+............................................................. 2562 / 2563 ( 99%)
+.                                                             2563 / 2563 (100%)
+Time: 00:11.979, Memory: 40.00 MB
+OK, but there were issues!
+Tests: 2563, Assertions: 19660, PHPUnit Deprecations: 2, Skipped: 4.
+(2563 = Phase 5's 2466 baseline + 97 new tests: 32 in CfgGatewayTest + 31 in
+RollbackContractTest + 3 in LogMaxDaysTest + 18 in LogAgeCutoffTest + 13 in
+LogMgmtAgeCutoffTest. Same 2 pre-existing PHPUnit Deprecations and 4 skips as
+every prior phase -- no new skips introduced.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean, including the RequireConfigGateway /
+UppercaseBooleanLiteral / RequirePfbFilter sniffs)
+
+$ python3 -m pytest
+======================= 2436 passed, 4 skipped in 45.76s =======================
+(unchanged from Phase 5's baseline -- no .py file touched this phase.)
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(exit 0, clean -- no ADR phase numbers/RESULTS refs/review archaeology on
+added lines under src/)
+
+$ python3 scripts/check_version_literals.py
+(exit 0, clean)
+
+$ python3 scripts/check_appliance_python.py
+(exit 0, clean -- no python3 invocation added)
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF
+--------------------------------------------------------------------------------
+Procedure: rather than `git checkout HEAD~1` (which would require reverting
+the currently-uncommitted working tree, unsafe mid-session), materialized the
+PRE-PHASE-6 (HEAD, commit 0f866cf3) copies of pfblockerng.inc/
+pfblockerng_extra.inc via `git show HEAD:<path>` into a scratch directory
+(read-only git-history extraction -- the real working tree files were NEVER
+touched/reverted), then ran the SAME new PHPUnit test files against a scratch
+bootstrap that require_once()s those OLD copies instead of the real src/
+files (identical to tests/php/bootstrap.php otherwise -- same shims/doubles/
+sandbox setup). This proves the new tests fail against the genuinely
+pre-Phase-6 code for the right reason, without ever touching git state or the
+tracked working tree.
+
+RED (pre-Phase-6 pfblockerng.inc/pfblockerng_extra.inc, new test files):
+$ vendor/bin/phpunit --bootstrap <scratch>/bootstrap_old.php --testdox \
+    tests/php/LogMaxDaysTest.php tests/php/LogAgeCutoffTest.php tests/php/LogMgmtAgeCutoffTest.php
+EEEEEEEEEEEEEEEEEEEEE.F.F.F..F.FF.
+Tests: 34, Assertions: 17, Errors: 21, Failures: 6.
+
+  - All 3 LogMaxDaysTest tests + all 18 LogAgeCutoffTest tests: ERROR --
+    "Call to undefined function pfb_log_max_days()" /
+    "Call to undefined function pfb_log_age_field_mode()" /
+    "Call to undefined function pfb_log_line_timestamp()" /
+    "Call to undefined function pfb_log_age_cutoff()" (these functions
+    genuinely do not exist pre-Phase-6).
+  - LogMgmtAgeCutoffTest FAILURES (6, each for the exact reason this phase
+    fixes -- old pfb_log_mgmt() has no age concept at all):
+    - "Age only trim engages..." -- got all 4 lines (both 40-day-old AND
+      fresh), expected only the 2 fresh -- age never trims on old code.
+    - "Nolimit with age set still trims by age" (THE INDEPENDENCE FIX) --
+      got all 4 lines (old code's bare `if ($logmax==='nolimit') continue;`
+      exits before ANY trimming, expired lines included) -- this is exactly
+      the bug S2.2 documents and this phase fixes.
+    - "Set set age cutoff tighter..." -- got 4 lines (line-count-only tail
+      result), expected 2 (age should have trimmed further).
+    - "Realistic upgrade mixed legacy and new..." -- got all 4 lines
+      including both legacy ones, expected only the 2 fresh.
+    - "Field zero mode..." (ip_blocklog) / "Field one mode..." (dnslog) --
+      same shape: old code keeps the 40-day-old row, new code must drop it.
+  - LogMgmtAgeCutoffTest PASSES on old code too (7, EXPECTED and correct --
+    these pin behaviour that ALREADY existed pre-Phase-6 or a fixture where
+    the two caps coincidentally agree): "Defaults on both caps..." (today's
+    real no-op, unchanged by this phase), "Nolimit with age off..." (today's
+    real opt-out, unchanged), "Set line cap only..." (pure line-count, no
+    age involved), "Set set line count tighter..." (this row's fixture is
+    DESIGNED so line-count is already the tighter cap -- old code's
+    line-count-only behaviour happens to produce the identical output),
+    "Empty file stays empty", "Non numeric log max days..." (old code
+    ignores log_max_days_log entirely, coincidentally the same "ignored"
+    result), "Failed cat never corrupts..." (the exec exit-code gate is
+    PRE-EXISTING, not new to this phase).
+  - CfgGatewayTest/RollbackContractTest log_max_days_<type> tests (32
+    total): ALL ERROR -- "InvalidArgumentException: PfbConfig: key
+    'log_max_days_<type>' is not in the field registry" (the registry entry
+    genuinely does not exist pre-Phase-6). 1 plain FAILURE
+    (testLogMaxDaysFieldsAreRegistered: "must be in the registry" ->
+    assertArrayHasKey fails).
+
+GREEN (post-Phase-6 pfblockerng.inc/pfblockerng_extra.inc, same test files):
+$ vendor/bin/phpunit --testdox tests/php/LogMaxDaysTest.php tests/php/LogAgeCutoffTest.php tests/php/LogMgmtAgeCutoffTest.php
+.................................................................
+OK (34 tests, 56 assertions)
+(all 34/34 green -- testdox output pasted in full below, "TEST-BY-TEST
+COVERAGE MATRIX" section.)
+
+$ vendor/bin/phpunit --filter 'testLogMaxDaysFieldsAreRegistered|testLogMaxDaysFieldForwardAndBackwardForEveryVocabToken|testLogMaxDaysFieldAbsentKeyReturnsZeroDefault' tests/php/CfgGatewayTest.php tests/php/RollbackContractTest.php
+-> all 32 pass (part of the full 2563-test green run above).
+
+--------------------------------------------------------------------------------
+TIMESTAMP PARSING PROBE (re-verified independently this session)
+--------------------------------------------------------------------------------
+$ php -r '
+$dt = DateTime::createFromFormat("Y-m-d H:i:s", "2026-13-45 99:99:99");
+var_dump($dt !== false ? $dt->format("Y-m-d H:i:s") : "FALSE");
+var_dump(DateTime::getLastErrors());
+'
+string(19) "2027-02-18 04:40:39"
+array(4) { ["warning_count"]=> int(2) ["warnings"]=> array(1) { [19]=>
+  string(27) "The parsed date was invalid" } ["error_count"]=> int(0)
+  ["errors"]=> array(0) {} }
+
+Confirms createFromFormat() alone silently OVERFLOWS this invalid-but-19-char
+input into a DIFFERENT, valid-looking date instead of returning FALSE --
+pfb_log_line_timestamp()'s round-trip string-equality check
+($dt->format(...) !== $candidate) independently rejects it (output "2027-02-
+18 04:40:39" != input "2026-13-45 99:99:99"), and the getLastErrors()
+warning_count check also flags it -- BOTH layers used, per the brief's
+recommendation, pinned by testInvalidButShapedTimestampIsRejectedByRoundTripCheck.
+
+--------------------------------------------------------------------------------
+TEST-BY-TEST COVERAGE MATRIX (ADR.md S2.5 "log_max_<type> x log_max_days_<type>"
++ S2.6 hostile-input rows -- every row, its test name, and its result)
+--------------------------------------------------------------------------------
+
+S2.5 matrix (all against 'log' type / prefix field-mode unless the row names
+a different type):
+
+| Row (log_max x log_max_days) | Test | Result |
+| --- | --- | --- |
+| off x off (byte-identical to today) | LogMgmtAgeCutoffTest::testDefaultsOnBothCapsIsByteIdenticalNoOp | PASS |
+| off x set (age-only trim engages) | LogMgmtAgeCutoffTest::testAgeOnlyTrimEngagesWhenLineCapIsEffectivelyOff | PASS |
+| nolimit x off (today's opt-out, unchanged) | LogMgmtAgeCutoffTest::testNolimitWithAgeOffLeavesFileEntirelyUntouched | PASS |
+| nolimit x set (age STILL trims -- independence fix) | LogMgmtAgeCutoffTest::testNolimitWithAgeSetStillTrimsByAge | PASS |
+| set x off (line-count only, unchanged) | LogMgmtAgeCutoffTest::testSetLineCapOnlyTrimUnaffectedByNonTimestampedLines | PASS |
+| set x set, AGE tighter | LogMgmtAgeCutoffTest::testSetSetAgeCutoffTighterThanLineCount | PASS |
+| set x set, LINE-COUNT tighter | LogMgmtAgeCutoffTest::testSetSetLineCountTighterThanAgeCutoff | PASS |
+
+S2.6 hostile-input rows:
+
+| Row | Test(s) | Result |
+| --- | --- | --- |
+| Empty file | LogAgeCutoffTest::testEmptyLinesArrayReturnsEmptyArray (pure) + LogMgmtAgeCutoffTest::testEmptyFileStaysEmpty (integration) | PASS |
+| All-legacy-format lines | LogAgeCutoffTest::testAllLegacyFormatLinesAreAllDropped | PASS |
+| Mixed legacy + new (realistic upgrade) | LogAgeCutoffTest::testMixedLegacyAndNewFormatDropsOnlyTheLegacyLines (pure) + LogMgmtAgeCutoffTest::testRealisticUpgradeMixedLegacyAndNewFormatLines (integration) | PASS |
+| Boundary -- exactly at cutoff (kept side) | LogAgeCutoffTest::testLineExactlyAtCutoffBoundaryIsKept | PASS |
+| Boundary -- 1 second older (dropped side) | LogAgeCutoffTest::testLineOneSecondOlderThanCutoffBoundaryIsDropped | PASS |
+| Corrupted/truncated timestamp prefix | LogAgeCutoffTest::testCorruptedTruncatedPrefixIsUnparseable (parse-level) + testCorruptedPrefixInLeadingRunIsDroppedAsExpired (scan-level) | PASS |
+| Non-numeric log_max_days_<type> config value | LogMaxDaysTest::testInvalidOrEmptyRawFallsBackToZero (pure) + LogMgmtAgeCutoffTest::testNonNumericLogMaxDaysConfigValueIsTreatedAsOff (integration) | PASS |
+
+Extra hostile coverage beyond the minimum list (found while implementing,
+kept because each pins a real, distinct failure mode):
+  - testGarbageLineIsUnparseable / testEmptyLineIsUnparseable (parser edge cases).
+  - testInvalidButShapedTimestampIsRejectedByRoundTripCheck (the
+    createFromFormat() leniency the brief flagged).
+  - testLinesAfterFirstKeeperAreKeptWithoutReValidation (pins the documented
+    "single linear scan, no re-check after the first keeper" behaviour --
+    a corrupted line AFTER a keeper is kept as-is, not re-dropped).
+  - testField1ModeWithMissingSecondColumnReturnsNull (a unilog-shaped line
+    with no comma at all).
+
+--------------------------------------------------------------------------------
+PER-FIELD-MODE COVERAGE CONFIRMATION
+--------------------------------------------------------------------------------
+- 'prefix' (log/errlog/extraslog): every S2.5 matrix test above uses 'log'.
+- 'field0' (ip_blocklog/ip_permitlog/ip_matchlog/dnsbl_parse_err):
+  LogMgmtAgeCutoffTest::testFieldZeroModeAgeCutoffTrimsIpBlocklog (integration,
+  real CSV rows through pfb_log_mgmt()) + LogAgeCutoffTest::
+  testField0ModeParsesFirstCsvColumn (pure parser).
+- 'field1' (dnslog/dnsreplylog/unilog): LogMgmtAgeCutoffTest::
+  testFieldOneModeAgeCutoffTrimsDnslog (integration, ALSO exercises the
+  chroot-branch code path -- chroot dir absent on this runner so it falls
+  back to the host path, per LogRotateResetTest's established note) +
+  LogAgeCutoffTest::testField1ModeParsesSecondCsvColumnSkippingTheLabel
+  (pure parser).
+- pfb_log_age_field_mode() itself: LogAgeCutoffTest::
+  testFieldModeMapsEveryLogTypeToItsVerifiedPosition asserts ALL 10 log types
+  map to their correct mode in one test (enumerated from the verified S2.1
+  mapping, not a subset).
+
+--------------------------------------------------------------------------------
+INODE + OWNERSHIP PROOF
+--------------------------------------------------------------------------------
+fileinode() before/after pfb_log_mgmt(), asserting equality (in-place
+cat-over, never mv/recreate) in FOUR distinct tests covering BOTH candidate-
+production code paths:
+  - testNolimitWithAgeSetStillTrimsByAge -- the NEW copy()-based path
+    ('nolimit' + age set, no tail(1) step at all).
+  - testSetSetAgeCutoffTighterThanLineCount -- the tail(1)-based path with
+    the age pass ALSO engaging afterward.
+  - testFieldZeroModeAgeCutoffTrimsIpBlocklog -- tail(1)-based path, field0
+    type.
+  - testFieldOneModeAgeCutoffTrimsDnslog -- tail(1)-based path, chroot-branch
+    type (falls back to host path on this runner).
+Ownership (chown/chgrp 'unbound'): unchanged code, only reachable/meaningful
+on-appliance (no 'unbound' user off-box) -- same limitation LogRotateResetTest
+documents for pfb_log_reset()'s equivalent chroot path; not re-tested here,
+live-VM confirmation is this ADR's Phase 9 smoke item.
+
+--------------------------------------------------------------------------------
+FAILED-EXEC-NEVER-CORRUPTS PROOF
+--------------------------------------------------------------------------------
+LogMgmtAgeCutoffTest::testFailedCatNeverCorruptsLiveLogEvenWithAgeCutoffActive:
+seeds a file with an old + fresh line, sets BOTH log_max_extraslog='4' and
+log_max_days_extraslog='10' (age cutoff active, so both new code paths run),
+chmod 0444's the live log file (verified independently this session that this
+makes the shell's `>` redirection fail with "Permission denied" BEFORE cat
+ever runs, leaving the target byte-for-byte untouched -- probed via a real
+`/bin/cat ... > readonly-file` exec()), calls pfb_log_mgmt(), and asserts the
+file content is byte-identical to before. Guarded with a `posix_getuid() ===
+0` skip (root bypasses file permissions, per CLAUDE.md's documented pattern
+for this exact class of test). PASS (not root in this session).
+
+--------------------------------------------------------------------------------
+DIFF-READ: log_max_<type>=default + log_max_days_<type>=default is a true no-op
+--------------------------------------------------------------------------------
+Traced the default-everywhere execution path line by line against the diff:
+1. $logmax = pfb_log_max_lines('') = 20000 (int, NOT the string 'nolimit').
+2. $agedays = pfb_log_max_days('') = 0.
+3. Guard `$logmax === 'nolimit' && $agedays === 0`: FALSE (since $logmax is
+   an int, not the string 'nolimit') -- IDENTICAL outcome to the original
+   guard `$logmax === 'nolimit'` (also FALSE for the same reason). Execution
+   proceeds into the loop body exactly as before.
+4. `if (file_exists(...))`, tempnam(...): unchanged.
+5. `$logmax === 'nolimit'` test: FALSE -> the `else` branch runs the EXACT
+   SAME tail exec() command string as pre-Phase-6 (byte-identical
+   construction, confirmed via diff: no characters changed in that line).
+6. `if ($ret === 0 && $agedays > 0 && !pfb_log_age_trim_temp(...))`: since
+   $agedays === 0, `$agedays > 0` short-circuits to FALSE immediately (left-
+   to-right && evaluation) -- pfb_log_age_trim_temp() is NEVER CALLED, $temp
+   is NEVER touched beyond what tail already wrote into it.
+7. `if ($ret === 0) { exec("/bin/cat ...") ... }`: EXACT SAME cat exec()
+   command string as pre-Phase-6, run against the SAME untouched $temp.
+8. chown/chgrp / failure logging / unlink_if_exists: unchanged code, byte-
+   identical.
+CONCLUSION: for the default-everywhere path, the ONLY new code that executes
+at all is two pure, side-effect-free reads/computations ($agedays = ...; the
+widened boolean guard, which evaluates to the same FALSE) -- zero additional
+I/O, zero additional exec() calls, zero changed exec() command strings.
+Empirically confirmed by testDefaultsOnBothCapsIsByteIdenticalNoOp (byte-for-
+byte file-content equality assertion, real exec() execution, not reasoned
+through).
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. `$pfb['config'][...]` vs `PfbConfig::read()`: used `$pfb['config']
+   ['log_max_days_' . $logtype]` (matching the sibling `log_max_` read
+   already in this exact loop), NOT `PfbConfig::read()` directly. Both are
+   gateway-compliant (`PfbConfig::readSection()` populates `$pfb['config']`
+   in `pfb_global()`, called at the top of `pfb_log_mgmt()`) -- chose local
+   consistency with the loop's existing pattern over introducing a second
+   access style in the same function.
+2. 'nolimit'-with-no-line-cap-candidate: read the WHOLE file via PHP's
+   `copy($final_log_file, $temp)` (a plain filesystem copy, not a shelled-out
+   `cp`) rather than an exec(). This is the ADR's suggested approach (S2.2:
+   "reading the WHOLE file... is the ADR's suggested approach"). Chose
+   `copy()` over `exec("/bin/cp ...")` -- shortest correct diff, no new
+   shell-quoting surface for a plain file-to-file copy PHP's stdlib already
+   does natively; its boolean return still gates the SAME downstream
+   failure-protection logic (`$ret = 1` on failure) as the tail exec's exit
+   code. Not a duplicated chroot/chown code path -- the chown/chgrp step is
+   still the SAME single call site, reached only after the final cat exec.
+3. Did NOT factor a separate shared chroot/ownership helper -- the existing
+   chroot/non-chroot branching in pfb_log_mgmt() was left structurally
+   intact (two branches, as before); only the CANDIDATE-PRODUCTION step
+   (tail vs copy) and an inserted age-trim gate were added inside each,
+   without touching the final cat/chown/logging code at all in either
+   branch. This kept the diff to insertions only in the "produce the
+   candidate" section, avoiding any risk of introducing a behavioural
+   difference in the chroot-specific ownership logic.
+4. Timestamp parsing: `DateTime::createFromFormat('Y-m-d H:i:s', ...)` PLUS
+   a strict round-trip check (`$dt->format(...) === $candidate`) PLUS a
+   `DateTime::getLastErrors()` warning/error check -- validated via an
+   independent probe this session (pasted above) that createFromFormat()
+   alone is too lenient. A `strlen($candidate) !== 19` pre-check also guards
+   against createFromFormat()'s tolerance for a missing literal separator in
+   a shorter string (independently probed: a merged "2026-07-0814:30:00"
+   with no space parses "successfully" under this format at 18 chars --
+   the length check rejects it before createFromFormat() is even called).
+5. The generic "failed to tail {file} for truncation" log message is reused
+   verbatim for BOTH the tail-exec failure AND the new copy()-failure case
+   (the 'nolimit' branch) -- a minor, rare-path cosmetic wording inaccuracy
+   (an operator would see "failed to tail" even when no tail ran), left
+   as-is: correcting it would only touch a log string, not behaviour, and
+   copy() failing implies the same tmp-dir-unwritable condition that would
+   equally break the tail-exec path in the numeric-cap case.
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 7 (Retire pfb_log_reset() / ADR-30's mechanism)
+--------------------------------------------------------------------------------
+- Phase 6's new `log_max_days_<type>` registration loop in `pfb_cfg_registry()`
+  REUSES the SAME `$log_types` array the `log_rotate_<type>`/
+  `log_reset_keep_<type>` loop currently uses (pfblockerng_extra.inc, right
+  before `$registry = $registry + [...]`). Phase 7 deletes the log_rotate_/
+  log_reset_keep_ loop entirely -- it MUST KEEP the `$log_types` array alive
+  (my new loop, placed immediately after it, still needs it) and must NOT
+  delete the array itself, only the OTHER loop's body.
+- `pfb_log_mgmt()` now reads BOTH `log_max_<type>` and `log_max_days_<type>`
+  independently every tick; Phase 7 touches `pfb_log_reset()` and its own
+  registry keys/sniff paths/call site only -- `pfb_log_mgmt()` is NOT in
+  Phase 7's scope and should remain untouched by it.
+- The sniff's `$registeredPaths` now has 10 new `log_max_days_<type>` entries
+  alongside the (soon to be Phase-7-removed) `log_rotate_<type>`/
+  `log_reset_keep_<type>` ones -- Phase 7 removes ONLY the latter 20 entries,
+  not the former 10.
+- `tests/php/CfgGatewayTest.php`'s inventory list and
+  `tests/php/RollbackContractTest.php`'s lettered sections F/G (log_rotate_/
+  log_reset_keep_) are Phase 7's to delete; the new sections added THIS
+  phase (log_max_days_<type>, "J") must be left alone.
+- `LogMgmtAgeCutoffTest.php`'s hostile/matrix fixtures use 'log' (prefix) as
+  the primary representative type and 'ip_blocklog'/'dnslog' for field0/
+  field1 coverage -- Phase 9's live-VM smoke should use these same three
+  field-mode representatives when seeding its straddling-cutoff fixture, per
+  its own action-plan text ("seed a log with lines whose timestamps straddle
+  a log_max_days_<type> cutoff").

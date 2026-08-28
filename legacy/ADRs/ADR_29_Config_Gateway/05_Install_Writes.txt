@@ -1,0 +1,60 @@
+================================================================================
+PHASE 5 PROMPT — Route install-time writes + migrations through the gateway
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.2 first)
+================================================================================
+
+ROLE
+You implement Phase 5 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING. Route the
+remaining install-time config reads/writes (and the Phase-2 migration driver's config_set sites)
+through PfbConfig. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+pfblockerng_install.inc still uses raw config_get_path/config_set_path for install-time setup and the
+migration driver writes. Routing them through the gateway keeps defaults/adapters consistent and
+shrinks the raw-access surface ahead of the www/ phases.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/04_Results.txt — it
+  must confirm the read seam + wipe are routed and green. If missing, STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1, §2.2).
+- src/usr/local/pkg/pfblockerng/pfblockerng_install.inc — all config_get_path/config_set_path/
+  config_del_path sites (the migration driver from Phase 2, the widget-sequence/MaxMind/reputation
+  setup, etc.). Identify which are pfblockerng* (route) vs foreign keys like widgets/sequence,
+  system/* (leave raw, document).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig + registries.
+- tests/php/ — the migration + install-related tests.
+- CLAUDE.md — PHP standards + test mandate.
+
+ACTION PLAN
+1. Route pfblockerng* reads/writes in pfblockerng_install.inc through PfbConfig (incl. the migration
+   driver's config_set sites — use PfbConfig::write/section-write). Leave FOREIGN keys (widgets/
+   sequence, system/earlyshellcmd, installedpackages/shellcmdsettings) on direct config_*_path and
+   add a brief `// foreign key — out of ADR-29 gateway scope` note at each.
+2. Keep every write emitting the identical stored value (the adapters guarantee this). No migration
+   outcome changes.
+3. Extend/keep tests proving install-time writes still produce identical config.xml (reuse the
+   migration ordering/idempotency test; add assertions if a write path is newly covered).
+
+CONSTRAINTS
+- Behaviour-preserving; no stored-value change; foreign keys stay raw + documented.
+- PHP tabs/uppercase literals; sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green
+- vendor/bin/phpstan analyse / phpcs   -> clean
+- php -l on pfblockerng_install.inc
+- python -m pytest              -> green
+- diff-read: pfblockerng* install sites via PfbConfig; foreign keys annotated; no behaviour change
+
+EXPECTED RESULT
+Install-time config access for pfblockerng* keys flows through the gateway; only documented foreign
+keys remain on raw config_*_path in install.inc.
+
+COMMIT (single)
+    pfblockerng: route install-time config access through the gateway (ADR-29 P5)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/05_Results.txt
+Record: which install sites were routed, the list of foreign keys left raw (+ why), test counts, and
+the go-ahead for Phase 6.

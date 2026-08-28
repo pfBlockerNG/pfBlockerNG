@@ -1,0 +1,378 @@
+ADR-63 PHASE 2 -- Shared client-side reorder component (drag + anchor-click,
+staged, PRODUCTION-DORMANT)
+HANDOFF (implementer -> planner)
+
+== VERDICT ==
+DONE
+
+== WHAT CHANGED ==
+- src/usr/local/www/pfblockerng/pfBlockerNG.js (EXTENDED, +85 lines): adds
+  pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) and
+  pfb_reorder_read_order(container, rowSelector) -- the shared drag+
+  anchor-click reorder component, defined but called by NO page yet
+  (PRODUCTION-DORMANT). Landed after (:143), before the existing
+  `events.push(...)` block -- untouched.
+- tests/smoke/ui/test_reorder_component.py (NEW, 665 lines): 16 Playwright
+  (ui_browser) tests proving the component's contract against 3 static
+  fixture pages served from the live VM's own jQuery/jQuery-UI/
+  pfSenseHelpers.js plus the shipped /pfblockerng/pfBlockerNG.js.
+- .ADRs/ADR_63_Category_Reorder_UX/RESULTS/02_Results.txt (this file).
+
+Commit: this commit (single commit on adr/63-category-reorder-ux, pushed --
+component + test + this handoff; the exact hash is in `git log -1` / the
+structured handoff's `commit` field, since amending this file to record its
+own hash would change that hash again). It supersedes the intermediate
+commits d402e6b3/97330390/66fa2056 referenced by hash in the RUN 1-4
+sections below (identical component+test content at d402e6b3; this file was
+folded in afterward via `git commit --amend`). `git diff 00dbe2e5..HEAD
+--stat` confirms ONLY 3 files changed (pfBlockerNG.js, the new test file,
+this RESULTS file -- insertions only, zero deletions): the root-level
+RESULTS/0N_*.txt deletions and .ADRs/ADR_63.../ADR.md/01_*.txt changes
+visible in `git diff origin/devel...HEAD` predate this commit (already on
+the branch at base 00dbe2e5, Phase 1's own work) and are NOT part of this
+phase's diff.
+
+Zero production PHP touched: `git diff 00dbe2e5..HEAD -- src/usr/local/www/pfblockerng/pfblockerng_category.php src/usr/local/www/pfblockerng/pfblockerng_category_edit.php`
+is EMPTY (confirmed both before writing the handoff and by the stat above
+listing only pfBlockerNG.js).
+
+== WORKTREE BASE CHECK ==
+Fetched origin at session start: HEAD 00dbe2e58a8209baaf654d40ebe6e746e1055859
+== origin/adr/63-category-reorder-ux, `git rev-list --count HEAD..origin/devel`
+== 0. No rebase needed (matches the brief's pre-verified base).
+
+== GATES ==
+$ python3 -m pytest tests/smoke/ui/test_reorder_component.py --collect-only --override-ini="addopts="
+========================= 16 tests collected in 0.05s ==========================
+(zero import/collection errors -- run BEFORE any live-VM attempt, per the
+brief's anti-crash execution order)
+
+$ python3 -m pytest
+======================= 2672 passed, 4 skipped in 53.79s =======================
+(smoke tree --ignore'd by default addopts; proves no collection breakage, not
+smoke coverage -- matches Phase 1's baseline exactly, no drift)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+223 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 93 source files
+(tests/smoke/ is excluded from this gate by pyproject.toml's mypy config --
+ran `python3 -m mypy tests/smoke/ui/test_reorder_component.py` directly too:
+"Success: no issues found in 1 source file")
+
+$ vendor/bin/phpunit
+OK, but there were issues!
+Tests: 3036, Assertions: 20257, Deprecations: 1, Notices: 1, Skipped: 4.
+(3036 vs Phase 1's 3019 -- devel gained tests since Phase 1 landed, unrelated
+to this phase which touches zero PHP; the 4 skips are the pre-existing
+posix_getuid()===0 root-guard skips)
+
+Pre-commit hook (ran on the final commit): ruff check/format, mypy tests/,
+no-appliance-python, version-literals, comment-narration, retired-tokens --
+all passed/advisory-clean.
+
+== FIXTURE-SERVING RECIPE (what makes the proof real) ==
+Vendor script URLs discovered at runtime (never hardcoded) by fetching the
+authenticated page /pfblockerng/pfblockerng_category_edit.php?type=dnsbl
+(already proven 200 by test_post_array_scalar_guards.py) and regexing its
+<script src=...> tags for /vendor/jquery/jquery-*, /vendor/jquery-ui/*, and
+/js/pfSenseHelpers.js. On the live VM this resolved to jquery-3.7.1.min.js
+(cache-busted ?v=...) and jquery-ui-1.13.2.min.js -- confirmed via a direct
+SSH probe of an authenticated pfSense page during investigation, never
+hardcoded into the fixture generator. 3 static HTML pages built from these +
+the stable /pfblockerng/pfBlockerNG.js URL, written to the webroot via
+`vm.ssh(f"printf '%s' {shlex.quote(html)} > /usr/local/www{remote}")`
+(helpers.py's php_fpm_probe idiom), removed in a `finally` that WARNS loudly
+on failed removal.
+
+LOAD-BEARING DISCOVERY (verified by reading pfSenseHelpers.js on the live VM,
+not from memory -- required reading item, ADR's own claim was environmental
+and unverified until this session): renumber()/add_row()/delete_row()/
+checkLastRow() ALL operate via GLOBAL `$('.repeatable')` selectors -- page-wide,
+NOT scoped to any container. `add_row()` clones `$('.repeatable:last')` across
+the WHOLE page. Two independent repeatable clusters on ONE page would
+cross-talk. Consequence: the 3 fixture pages are SEPARATE static files, each
+hosting exactly ONE `.repeatable` cluster (or none, for the tr.sortable page)
+-- FIXTURE_REPEAT (drag=true, 5 rows), FIXTURE_REPEAT_NODRAG (drag=false, 3
+rows), FIXTURE_SORTABLE (tr.sortable id=pfb_rN, 3 rows, pfb_reorder_init()
+never called). This is consistent with production (category_edit.php only
+ever has ONE such cluster per page load) -- purely a fixture-design
+constraint, not a component defect.
+
+== LIVE-VM RUNS (4 total; command form per brief sec8) ==
+Command (same for all 4, --filter narrowed for runs 3):
+PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 \
+root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38" \
+scripts/local-smoke.sh --ref adr/63-category-reorder-ux --marker ui_browser \
+--filter "<filter>"
+
+--- RUN 1 (box root@10.0.0.36, commit 66fa2056 -- first cut, before the
+gutter-refresh fix below) --filter "test_reorder_component" ---
+15 passed, 1 failed, 361 deselected in 67.08s (0:01:07)
+FAILED: test_scenario_d_move_then_add_row_then_delete_row_keeps_fields_positional
+  AssertionError: post-delete gutter mismatch: ['01', '03', '04', '05', '06']
+  assert ['01', '03', '04', '05', '06'] == ['01', '02', '03', '04', '05']
+All other 15 (drag, both anchor-click, all 3 straddle cases, all order-read /
+hostile-input / self-anchor / zero-checked / drag-disabled tests) PASSED on
+this FIRST attempt -- the failure was isolated to the delete-row gutter
+refresh step of scenario (d), not the shared component itself.
+
+HYPOTHESIS LEDGER (debugging protocol): the fixture's original
+`$('#pfb_repeat').on('click', '[id^=deleterow]', refreshGutter)` (a
+container-DELEGATED handler) never ran its refresh after core's
+`delete_row()` removed the row. H1 (CONFIRMED by fix + green re-run):
+core's delete_row() is bound DIRECTLY on the button (fires in the button's
+own target-phase dispatch, separate from #pfb_repeat's delegated dispatch
+which runs later as the event continues to bubble); it removes the row+button
+from the DOM synchronously. By the time the SEPARATE delegated dispatch on
+#pfb_repeat runs, the row is already detached, and jQuery's target-match walk
+for that later dispatch never re-attaches the (now-orphaned) event.target to
+the container, so the delegated handler is skipped. H2 (refreshGutter() itself
+buggy) was ruled out: the observed values (stale pre-delete gutters minus the
+removed one, NOT renumbered) are exactly what "handler never ran" predicts,
+not what a buggy renumbering function would produce.
+
+FIX (test-fixture-only change, src/pfBlockerNG.js untouched): bind the
+gutter-refresh DIRECTLY on each delete button (not delegated on the
+container), rebinding after every add_row() the same way core itself
+rebinds its own delete handlers after every clone (`.clone()` copies no
+handlers) -- so ours runs in the SAME per-button dispatch pass, strictly
+after core's, immune to the detached-target issue. See CARRY-FORWARD.
+
+--- RUN 2 (box, commit d402e6b3 -- post-fix) --filter "test_reorder_component" ---
+================ 16 passed, 361 deselected in 63.15s (0:01:03) =================
+All 16 scenarios green, including scenario (d)'s full move->add->delete chain.
+
+--- RUN 3 (RED, commit 97330390 "TEMP: vacuity-check mutation for ADR-63 P2")
+--filter "test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor" ---
+Mutation: swapped the insertBefore/insertAfter bodies of the shiftKey
+true/false branches in pfb_reorder_init's anchor-click handler (before <->
+after reversed).
+RED test file hash (git hash-object of tests/smoke/ui/test_reorder_component.py,
+unchanged from green -- this is a component-side mutation, the test itself was
+never edited): 4936fd19a7b859c496c824e150e81c357d7309c8
+
+RED output (pasted, executed):
+tests/smoke/ui/test_reorder_component.py::test_scenario_c_multiple_checked_rows_straddle_both_sides_of_anchor FAILED [100%]
+...
+>       assert after == expected, f"straddle-both-sides produced {after}, expected {expected}"
+E       AssertionError: straddle-both-sides produced ['row1-url', 'row2-url', 'row4-url', 'row0-url', 'row3-url'], expected ['row1-url', 'row0-url', 'row4-url', 'row2-url', 'row3-url']
+E         At index 1 diff: 'row2-url' != 'row0-url'
+====================== 1 failed, 376 deselected in 57.81s ======================
+
+Revert: `git diff d402e6b3 -- src/usr/local/www/pfblockerng/pfBlockerNG.js`
+after `git reset --hard d402e6b3` is EMPTY (byte-identical revert confirmed),
+pushed --force-with-lease.
+
+--- RUN 4 (GREEN re-confirmation, commit d402e6b3, reverted)
+--filter "test_reorder_component" ---
+================ 16 passed, 361 deselected in 66.54s (0:01:06) =================
+All 16 scenarios green again, on the byte-identical-to-run-2 component.
+
+== FIXTURE PROOF (scenarios a-e; final state, run 2/4) ==
+a. Drag: row 0 dragged (mouse.down/move(steps=5+10)/up on the .pfb-gutter
+   handle -- NOT the anchor button, which jQuery UI sortable's default
+   `cancel` selector excludes from starting a drag) to below row 2; final
+   order has row0's content at index 2, no row lost, onAfterMove fired
+   (pfbFixtureMoveCount >= 1). PASSED both runs.
+b. Anchor-click: check row 3, click row 1's anchor (plain) ->
+   [row0,row3,row1,row2,row4]; check row 1, shift-click row 3's anchor ->
+   [row0,row2,row3,row1,row4]. Both PASSED both runs.
+c. Straddle: all-above (check 0,1; anchor 3) -> [row2,row0,row1,row3,row4];
+   all-below (check 3,4; anchor 1) -> [row0,row3,row4,row1,row2]; both-sides
+   (check 0,4; anchor 2) -> [row1,row0,row4,row2,row3]. All 3 PASSED both
+   runs; both-sides is the failability-mutation target (RUN 3 above).
+d. Renumber composition (ADR sec7 reject criterion 1's probe): move (check 0,
+   anchor-click 3 before) -> add_row() -> delete_row() on the row holding
+   "row2-url". After EACH step: pfbFixtureIdAudit() (rowCount + zero missing
+   positional format-/state-/url-/header- ids + zero duplicate ids anywhere
+   in the container) is clean, field VALUES are preserved and in the correct
+   new order, and the visible gutter matches DOM position. PASSED (run 2/4;
+   RED on the first cut for a fixture-only gutter-refresh-wiring bug, fixed
+   -- see RUN 1/HYPOTHESIS LEDGER above). REJECT CRITERION 1 DID NOT FIRE:
+   core renumber()/add_row()/delete_row() compose correctly with the staged
+   reorder on category_edit-shaped digit-suffixed fields.
+e. Order-read: byte-identical to a REAL `sortable('serialize',{key:'ids[]'})`
+   call on the same never-before-initialised container; a direct
+   `sortable('serialize')` call on that SAME never-initialised container
+   THROWS (proving the ADR sec1.8 trap is real); empty container -> '';
+   3 hostile-input rows (no-separator skipped, multi-separator splits on the
+   LAST separator, metachar token percent-encoded) all match brief sec4
+   exactly. All PASSED both runs.
+Plus 3 additional hostile/branch-coverage tests (brief sec4 + sec3's "drag
+boolean=false" row): dragEnabled=false never calls .sortable() on the
+container AND anchor-click still works; a zero-checked anchor-click is a
+DOM no-op but still fires onAfterMove (judgment call, see DEVIATIONS); a
+self-checked anchor (the anchor row also checked) does not move itself and
+does not drop/duplicate the other checked row. All PASSED both runs.
+
+== COMPONENT PUBLIC SURFACE (for Phase 3/4) ==
+pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled)
+  - container: jQuery selector STRING or element -- the delegation root AND
+    (if dragEnabled) the .sortable() target.
+  - rowSelector: 'tr.sortable' (category.php) or '.form-group.repeatable'
+    (category_edit.php).
+  - onAfterMove: function(), called after EVERY completed drag-stop or
+    anchor-click move (including a zero-checked anchor-click -- see
+    DEVIATIONS). Page-side glue (renumber(), a gutter refresh, etc.) belongs
+    HERE, not in the component (kept minimal per the brief).
+  - dragEnabled: boolean. true -> .sortable() initialised with category.php's
+    existing options (items:rowSelector, cursor:'move', distance:10,
+    opacity:0.8, the same width-fixing helper) plus a stop callback firing
+    onAfterMove. false -> .sortable() is NEVER called on the container.
+  - Injects, per row (idempotent -- skips a row that already has one): a
+    checkbox (`.pfb-reorder-chk`, id `pfb_reorder_chk-{i}`) and a
+    type="button" anchor (`.pfb-reorder-anchor`, id `pfb_reorder_anchor-{i}`).
+    Click = move all OTHER checked rows immediately BEFORE the clicked row;
+    shift-click = AFTER. Event handling is delegated on `container`
+    (namespaced `click.pfb_reorder`, safe to call init() more than once).
+
+pfb_reorder_read_order(container, rowSelector) -> string
+  Returns the current DOM order of row ids in `ids[]=rN&ids[]=rM&...`
+  format, computed directly from the DOM (byte-identical to
+  `$(container).sortable('serialize',{key:'ids[]'})` but works even when
+  .sortable() was NEVER initialised -- the ADR sec1.8 trap). Per-row token =
+  the substring after the id's LAST `-`/`=`/`_` (regex `/(.+)[-=_](.+)/`,
+  matching jQuery UI's own serialize regex), URL-encoded; a row id with no
+  such separator contributes no token; an empty container returns ''.
+
+== COVERAGE MATRIX (every brief sec3 row) ==
+- drag=true (drag+anchor both active) -- scenario a (drag) + b/c (anchor).
+  PASSED.
+- drag=false (anchor-only; sortable NEVER initialised) -- covered by BOTH
+  test_anchor_click_drag_disabled_never_initialises_sortable_but_still_works
+  (asserts no .sortable() instance + anchor still works) AND scenario e's
+  order-read tests (the tr.sortable fixture never calls pfb_reorder_init at
+  all). PASSED.
+- anchor-click plain = before -- test_scenario_b_anchor_click_before...
+  PASSED.
+- anchor-click shift = after -- test_scenario_b_shift_anchor_click...
+  PASSED.
+- straddle all-above / all-below / both-sides -- the 3
+  test_scenario_c_multiple_checked_rows_* tests. PASSED (both-sides is the
+  failability-mutation target).
+- onAfterMove fires after drag stop -- scenario a's move-count assertion.
+  PASSED.
+- onAfterMove fires after anchor-click -- scenarios b/c/d and the
+  zero-checked test's move-count assertion. PASSED.
+- renumber composition: move->renumber(), positional 0..N-1, no collision,
+  values intact, gutter matches -- scenario d. PASSED (RED on first cut, a
+  fixture-glue bug, not the component -- see RUN 1).
+- renumber composition + core add_row() after a staged move -- scenario d's
+  add-row step. PASSED.
+- renumber composition + core delete_row() after a staged move -- scenario
+  d's delete-row step. PASSED.
+- order-read byte-format-identical to real sortable('serialize') --
+  test_scenario_e_order_read_matches_real_sortable_serialize. PASSED.
+- order-read on empty container -> '' --
+  test_scenario_e_order_read_empty_container_returns_empty_string. PASSED.
+- delegated event binding survives renumber()'s rewrite -- scenario d's
+  anchor-click (row3's anchor) still resolves correctly after the earlier
+  renumber(); PASSED (implicit in scenario d passing at all).
+- injected control carries a trailing-digit-suffixed id -- verified by
+  scenario d's pfbFixtureIdAudit() (the checkbox AND the anchor button's ids
+  both follow `-{N}`, and after every move's renumber() call, no missing/
+  duplicate id exists among them plus the field ids). PASSED.
+- component never touches another named field / never gates Save -- no test
+  fixture has a Save button; scenario d's field-VALUE assertions (format/
+  state selections implicitly preserved through add's clone, url/header
+  explicit) prove no other field's content was touched. PASSED.
+- anchor buttons type="button" (never submit) -- asserted implicitly: no
+  fixture page has a <form>, so a type="submit" click would be a no-op
+  either way; the DOM markup itself (component-authored) hardcodes
+  type="button" -- verified by reading the diff (pfBlockerNG.js:169).
+- row selector '.form-group.repeatable' -- scenarios a-d's fixture rows.
+  PASSED.
+- row selector 'tr.sortable'+id=pfb_rN -- scenario e's fixture; full
+  drag+anchor wiring on this shape is DEFERRED to Phase 3 per the brief's
+  own NOTE (order-read only, this phase).
+- PRODUCTION-DORMANT: zero changes to pfblockerng_category.php AND
+  pfblockerng_category_edit.php -- `git diff 00dbe2e5..HEAD --stat` lists
+  only pfBlockerNG.js + the new test file + this RESULTS file.
+
+HOSTILE-INPUT ROWS (brief sec4), all covered:
+- empty container -> ''. PASSED.
+- no-separator id (e.g. "foo") -> skipped, no token. PASSED
+  (test_scenario_e_order_read_parser_hostile_inputs[no-separator-skipped]).
+- multi-separator id ("pfb_r_5") -> token "5" (last separator). PASSED
+  ([multi-separator-splits-on-last]).
+- zero checkboxes checked + anchor-click -> DOM no-op, onAfterMove STILL
+  fires (judgment call). PASSED
+  (test_anchor_click_zero_checked_is_a_noop_but_still_fires_callback).
+- self-anchor (anchor row itself checked) -> anchor stays put, other checked
+  rows move correctly, no row dropped/duplicated. PASSED
+  (test_anchor_click_self_anchor_does_not_drop_or_duplicate_the_anchor_row).
+- token needing URL-encoding ("row-a&b" -> "a&b") -> encodeURIComponent'd to
+  "a%26b", never emitted raw. PASSED ([metachar-token-url-encoded]).
+
+== DEVIATIONS / JUDGMENT CALLS ==
+1. Zero-checked anchor-click still fires onAfterMove (brief sec4 explicitly
+   left this as "define whether onAfterMove still fires and assert it").
+   Chosen: fires unconditionally -- "a completed anchor-click" is the
+   contract event, not "a completed move"; simpler mental model, no special
+   case in the component. Tested and asserted explicitly.
+2. The insert-order algorithm for multi-row straddle (brief left the exact
+   mechanism unspecified, only "a well-defined final order"; firewall_rules.php
+   was explicitly NOT required reading this phase): checked rows are walked
+   top-to-bottom and inserted immediately before the anchor (plain click), or
+   walked bottom-to-top and inserted immediately after it (shift-click) --
+   preserves the checked rows' original relative order, contiguous with the
+   anchor. Documented in a 3-line code comment; the 3 straddle test cases
+   pin the exact resulting order.
+3. A fixture-only bug (NOT the shared component): the test fixture's
+   original gutter-refresh-after-delete hook was container-DELEGATED and
+   missed core delete_row()'s already-removed target (see HYPOTHESIS LEDGER
+   above). Fixed by binding directly on each delete button, matching core's
+   own rebind-after-clone convention. This is test/fixture glue in
+   tests/smoke/ui/test_reorder_component.py, not a change to pfBlockerNG.js.
+4. No red-before-green TDD proof for the component itself: this is brand-new
+   code (CLAUDE.md's "brand-new code with no pre-existing behaviour to be
+   wrong" carve-out) -- the mandated substitute is the failability mutation
+   (RUN 3), executed and pasted above, which stands in for red->green.
+
+== CARRY-FORWARD FOR PHASE 3/4 ==
+- Component surface: see COMPONENT PUBLIC SURFACE above -- call
+  pfb_reorder_init(container, rowSelector, onAfterMove, dragEnabled) once per
+  page; dragEnabled should be `!roworderdragging` (ADR sec2 Decision 2, read
+  server-side via config_path_enabled('system/webgui/roworderdragging')).
+- pfSenseHelpers.js quirks observed on the REAL VM (load-bearing for Phase 4's
+  category_edit.php wiring):
+  1. renumber()/add_row()/delete_row()/checkLastRow() operate on GLOBAL
+     `$('.repeatable')` -- category_edit.php already only ever has ONE such
+     cluster per page load (matches this fixture's design), so this is a
+     non-issue there, but never add a SECOND `.repeatable` group to that page.
+  2. add_row()'s bump_input_id() only rewrites <input>/<select>/
+     [id^=deleterow] -- NOT a generic <button>. The component's own injected
+     anchor button can therefore carry a stale/duplicate id for one add_row()
+     cycle if no move (hence no renumber()) has run since the last
+     structural change. Inert for the component's OWN logic (row identity is
+     always resolved via DOM traversal, never by parsing the anchor's own
+     id -- see the component's file-header comment), but Phase 3/4's page
+     wiring should call renumber() again after its own add-row handler
+     (exactly what this phase's fixture now does) to keep the DOM's ids
+     fully clean, not just functionally inert.
+  3. A gutter/visual-refresh hook bound on core's delete_row() must NOT be a
+     container-delegated handler -- core's own delete handler (bound
+     directly on the button) removes the row before the event finishes
+     bubbling to a delegated ancestor listener, so the delegated handler can
+     be skipped entirely (see HYPOTHESIS LEDGER). Bind directly on each
+     delete button instead, REBINDING after every add_row() (mirroring how
+     core itself rebinds its own delete handlers after every `.clone()`,
+     since clone() copies no handlers). This phase's fixture
+     (pfbFixtureBindDeleteRefresh()) is the reference pattern.
+  4. add_row()'s clone via bump_input_id() clears <input> values (`url-`/
+     `header-`) but LEAVES <select> selections (`format-`/`state-`)
+     unchanged -- a newly-added row inherits the PREVIOUS last row's
+     format/state selection, not a blank default. category_edit.php's own
+     production defaults may differ; verify this if Phase 3/4 asserts a
+     specific new-row default.
+- GeoIP order-persist no-op (issue #1201, Phase 1) remains untouched and
+  out of scope -- this phase adds no GeoIP-specific behaviour.
+- The 3 fixture pages + their generator functions in
+  tests/smoke/ui/test_reorder_component.py are test-only artifacts (never
+  shipped) -- Phase 3/4 does not need to reuse them, only the component
+  they exercise.

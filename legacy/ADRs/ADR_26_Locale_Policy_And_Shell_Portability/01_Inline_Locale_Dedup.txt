@@ -1,0 +1,42 @@
+ADR-26 — Phase 1: Inline LC_ALL=C on the byte-exact machine-data sinks
+
+GOAL
+Make every collation/set-operation sink over machine data (IPs, punycode domains) in
+src/usr/local/pkg/pfblockerng/pfblockerng.sh byte-exact and locale-independent by prefixing
+the specific command with `LC_ALL=C`, matching the existing reference at line 479
+(`LC_ALL=C sort -u "${tempfile}"`). Do NOT export LC_ALL globally (that is Phase 2 policy +
+explicitly rejected — see ADR §2.2).
+
+SCOPE (the HIGH + MEDIUM sinks — line numbers as of ADR authoring; re-locate by command, the
+file drifts):
+- HIGH (sort -u / set-op uniqueness is load-bearing — a dropped entry = a hole in the block set):
+  * L282  data="$(sort -u "${pfbsuppression}")"
+  * L531  aliaslist="$(cut -d ' ' -f1 "${masterfile}" | sort -u)"
+  * L543  sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"   (in-place via mv)
+  * L759  sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"
+  * L853  sort -u "${pfbdeny}${alias}.txt" > "${tempfile}"   (in-place via mv)
+  * L1158 grep -aoEw '<ipv4-regex>' ... | sort -u > "${pfborig}${alias}.orig"
+- MEDIUM (plain sort whose ORDER feeds a later compare/diff):
+  * L1180 sort -o "${masterfile}" "${masterfile}"
+
+RULES
+- Prefix the EXACT command that collates. For a pipeline, the prefix rides the `sort`/`uniq`
+  stage (e.g. `... | LC_ALL=C sort -u`). The `cut` at L531 does not collate — only the
+  `sort -u` after it needs the prefix.
+- Leave L479 as-is (already correct; it is the reference idiom).
+- Do NOT touch the collation-insensitive sinks: numeric `sort -n…` / `sort -nu` (725, 1181)
+  and display-only `wc -l … | sort -n -r` (1197/1201/1205/1209/1222/1255). ADR §1.3 records
+  why; adding the prefix there is noise.
+- POSIX sh only; quote expansions; keep the diff minimal (only the prefixes).
+
+VALIDATION
+- `sh -n` + `shellcheck` clean on the modified file.
+- These shell paths are not unit-testable off-appliance (pfSense runtime). Validation is
+  shellcheck + the ADR-04 smoke run (Phase 4 ties it off). If any touched logic is cleanly
+  extractable into a pure helper, add a pytest under tests/ that demonstrates the
+  locale-collation hazard (a string pair that `LC_ALL=C sort -u` keeps distinct but a
+  UTF-8/locale sort would merge) — only if it can be done without contorting production code.
+
+HANDOFF
+Write RESULTS/ADR26_Phase1_Results.txt: the exact lines changed (before/after), shellcheck
+status, and any extractable-helper test added (or why none was warranted).

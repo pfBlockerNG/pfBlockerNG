@@ -1,0 +1,68 @@
+================================================================================
+PHASE 8 PROMPT -- Author the ADR-65 live-VM smoke rows (new tests; execution deferred)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS7 Definition of done first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving -- brand-new smoke coverage OBSERVING behaviour phases 2-6
+landed; authored + collection-checked off-appliance, EXECUTED only on the live-VM fan-out
+(the ADR acceptance step) -- never claim an on-box run you did not perform.
+Blast-radius note for the gate: NONE. New smoke tests only; no production file is edited.
+
+WHY THIS PHASE EXISTS
+SS7's acceptance evidence is live-VM-only: the module answers a real query only on a box.
+These four rows are that evidence, and they must exist before the fan-out can prove the ADR.
+
+REQUIRED READING
+- FIRST, read RESULTS/07_Results.txt (and skim 02/04/05/06 carry-forwards for the behaviours
+  to smoke). If missing, STOP and report.
+- ADR.md SS7 (the manual-smoke checklist these rows automate) + the D1-D4 delta rows.
+- CLAUDE.md "Smoke tests" section IN FULL (probe ON-BOX via drill @127.0.0.1; block shapes;
+  unique_domain() fixtures; /bin/sh on the guest; first response authoritative).
+- tests/smoke/test_smoke_feeds.py + tests/smoke/helpers.py -- the harness to mirror
+  (mock_feeds, ensure_dnsbl_vip, wait_unbound_ready, unique_domain).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:3785 pfb_dnsbl_query() -- drive the
+  channel from the box via php -r / pfSsh.php (NO python3 on the appliance).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims predate implementation; the prior RESULTS files and the
+live tree override this prompt on any conflict -- flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered -- one smoke row per SS7 behaviour)
+1. Row (a): a unique_domain() feed match blocks on-box AND a pfb_dnsbl_query() of the same
+   name returns the matching verdict while adding ZERO dnsbl.log lines and bumping NO
+   counter (D4 / Semantic 3). Assert the before-state (the block logged exactly once).
+2. Row (b): manifest removed on-box -> empty DNSBL + file_notice + widget out-of-sync + NO
+   stale block, then a Force reload self-heals (D3). Assert the domain RESOLVED while broken
+   and blocks again after the heal.
+3. Row (c): a block-page (VIP) hit increments the widget group counter with the
+   query-derived group (D4).
+4. Row (d): a reports/alerts DNSBL row renders the logged feed/group with the re-check gone
+   (D2) -- reuse the Tier-A/ui harness idioms where a page fetch is needed.
+
+CONSTRAINTS
+- Fixtures: unique_domain() / RFC-5737/3849 only; never RFC 6761 TLDs or HSTS-preload names.
+- Drive the guest via /bin/sh (SmokeVM.ssh); PHP for on-box logic -- no python3 on the box.
+- No fixed-time waits: use the suite's readiness helpers; timeouts raise loudly.
+- No ADR phase numbers in committed comments.
+
+VERIFICATION (executed -- paste output; only gates runnable off-appliance)
+- pytest collection of the new module succeeds (wrapper invocation).
+- sh scripts/agent/run-gates.sh --diff origin/devel.
+- DEFERRED (record the exact commands verbatim, never claim run): scripts/local-smoke.sh
+  execution of these rows on the CE+Plus fan-out -- the ADR acceptance step.
+
+EXPECTED RESULT
+Four collection-clean smoke rows automating SS7's checklist, ready for the fan-out.
+
+COMMIT (single)
+    tests: add the ADR-65 query/fail-loud/attribution smoke rows (ADR-65 P8)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the push is rejected.
+
+HANDOFF -- write RESULTS/08_Results.txt with the fixed fields: Verdict; What changed
+(+ commit); Gates (pasted tails); the collection proof; Coverage-matrix (rows a-d ticked to
+tests, each D-delta named); Deviations (or "none"); Carry-forward for the docs phase + the
+exact fan-out dispatch commands for the orchestrator.

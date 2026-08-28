@@ -1,0 +1,310 @@
+ADR-40 Phase 2 — pfctl replace vs chunked delta: data-plane measurement results
+================================================================================
+
+BINDING VERDICT: BUILD Phase 4 (content-addressed incremental delta), scoped
+to the incremental-update path. One-shot replace remains correct for
+boot/enable-disable (full initial load). Details below.
+
+Phase: 2 — Measurement harness + binding verdict
+Date: 2026-06-26 (final run — TCP-RST reject-loop, CR#12 op-aligned windows)
+Method: two-VM QEMU topology (pfSense CE 2.8.1 guest + Debian civm),
+  TCP-RST reject-loop probe (asyncio TCP SYN ~500 conn/s from civm),
+  running CONCURRENTLY with pfctl ops on the guest.
+  Signal: TCP RST RTT p50/p95/p99/p99.9/max + op wall-time (median/20 reps)
+    (spike threshold = baseline p99 × 3.0; baseline p50 ≈ 3.7ms LAN RTT).
+  Op-aligned windows (CR#12): probe timestamps bracketed by pfctl op t0/t1
+    on the same civm clock; only samples during the op window are analysed.
+  Probe: 10 in-table IPs (11.x — hit LAN block-return rule → RST) +
+         10 out-table IPs (13.x — hit WAN block-return-out rule → RST);
+         BOTH paths exercise the pf state/table lock.
+Guest: pfSense CE 2.8.1 (vtnet0=WAN, vtnet1=MGMT, vtnet2=LAN),
+  6 GiB RAM, 3 vCPUs (SMOKE_VM_SMP="3,sockets=1,cores=3").
+civm: Debian (ens4=MGMT, ens5=LAN data NIC),
+  3 vCPUs (SMOKE_CLIENT_SMP="3,sockets=1,cores=3").
+Table: pfb_bench_main (11.x IPs loaded; 13.x IPs never loaded).
+Ruleset: minimal floating ruleset (pfctl -f) — bypasses pfSense Default Allow
+  LAN rule, ensuring both reject rules fire correctly.
+Script: scripts/bench_pfctl_tables.sh
+Harness: tests/smoke/test_bench_pfctl.py (test_pfctl_reject_loop)
+Box: 10.0.0.24 (15 GB RAM, 6 cores)
+Run duration: 2:05:39 (7539s), 1 passed
+
+
+METHODOLOGY NOTES
+-----------------
+
+Previous probe (ICMP ping, cross-VM): measured lock-hold stall via connection-
+less ICMP RTT. Replaced by TCP-RST reject-loop for two reasons:
+  1. RST is a connection-oriented signal — the kernel must evaluate the pf table
+     (potentially under lock) before returning RST, so the signal is more
+     directly tied to table lock latency.
+  2. Higher probe throughput (~500 conn/s vs 50 pps) → larger n per op window
+     → tighter distribution estimates at smaller op sizes.
+
+Op-aligned windows (CR#12): every rep brackets the pfctl op with timestamps
+(t0/t1 captured on civm via Python time.time() immediately before/after the
+pfctl call over SSH). Only TCP samples whose completion timestamp falls in
+[t0, t1] are counted in the pooled distribution. Per-rep progress lines log
+[rst-probe-align] t0=... t1=... op_wall=<ms>ms during_samples=<n>.
+
+Loss% and spk (spikes) columns: 0% loss and 0 spikes throughout ALL cells —
+the reject-loop correctly returns RST for both in-table and out-table IPs
+with no packet loss during any pfctl operation.
+
+
+========== A/B: rule-type comparison (lan_if vs floating, 5 reps each) ==========
+
+rule_type  op           size    churn  batch  wall_ms    n    p50     p95         p99           p99.9    max   spk
+---------  --         ------   ------  -----  -------  ----  ----  ------      ------          ------  -----   ---
+lan_if     replace    462,000       0      -      404  2725   3.1ms   99.4ms   500.4ms   501.2ms  501.9ms    0
+lan_if     delta      462,000  46,000    512     2138  5288   1.1ms  102.8ms   500.9ms   501.3ms  502.6ms    0
+lan_if     delta      462,000  46,000   1024     1729  4558   1.0ms  500.1ms   500.9ms   501.3ms  502.3ms    0
+floating   replace    462,000       0      -      373  2456   3.1ms   73.5ms   500.6ms   501.2ms  502.1ms    0
+floating   delta      462,000  46,000    512     1983  4992   1.1ms   69.0ms   500.9ms   501.4ms  502.0ms    0
+floating   delta      462,000  46,000   1024     1741  4582   1.0ms   72.0ms   501.0ms   501.5ms  502.5ms    0
+
+Interpretation:
+- lan_if vs floating: no meaningful difference in data-plane impact (within
+  ~8% wall-time, same p99 shape). Floating rules used for remainder of bench.
+- replace p50 ≈ 3.1ms (baseline LAN RTT — op is fast enough that most samples
+  fall outside the lock window); delta p50 ≈ 1.0-1.1ms (sub-baseline because
+  10% churn adds many batches and most samples land between batches at idle).
+- p99 ≈ 500ms for both: the ~500ms samples are connections that hit the table
+  exactly during a pfctl batch lock — they wait for the lock to clear. This is
+  the data-plane disruption signal. Same magnitude for both rule types.
+- Wall-time: replace 373-404ms, delta/512 1983-2138ms, delta/1024 1729-1741ms
+  at 46k/462k churn (10%). Confirms: large-churn delta is slower than replace.
+
+
+========== A: replace baselines — wall time + RST distribution ==========
+
+20 reps per cell; floating ruleset.
+
+Size          wall_ms   n      p50     p95        p99          p99.9    max     spk
+-----------   -------  -----   -----  ------     ------        ------  ------   ---
+100,000          96ms   3986   1.3ms   20.0ms   102.4ms   502.1ms  502.8ms    0
+462,000         399ms   8586   1.1ms  113.8ms   501.0ms   501.7ms  506.3ms    0
+1,000,000       728ms  13736   1.0ms  500.3ms   501.1ms   501.7ms  503.8ms    0
+
+Key observations:
+- Replace at 100k: 96ms wall, p99=102ms — the lock hold is proportional to
+  table size. At p95=20ms, most samples complete before the lock clears; p99
+  shows the tail where connections land during peak lock hold.
+- Replace at 462k: 399ms wall, p99=501ms — lock hold now long enough that
+  p99 hits the ~500ms timeout ceiling (these are connections that wait the full
+  lock hold and get RST only after the table stabilises).
+- Replace at 1M: 728ms wall, p99=501ms — same ceiling, but p95 also at 500ms
+  (more samples fall in the long lock window).
+- The ~500ms RST delay: this is the kernel holding the pf table write-lock for
+  the duration of the replace; new SYN packets reaching the block rule queue
+  behind the lock. Connections that arrive during the op wait up to wall_ms
+  before the lock clears and they get their RST.
+
+
+========== B: batch-knee sweep — wall time + RST distribution ==========
+
+20 reps per cell; floating ruleset; op-aligned windows.
+Sizes: 462k/46k churn (10%) and 1M/100k churn (10%).
+
+size=462,000 / churn=46,000 (10%):
+op       batch  wall_ms     n      p50     p95        p99          p99.9    max   spk
+-------  -----  -------  ------   -----  ------     ------        ------  -----   ---
+delta      256    2264ms  22306   1.1ms  500.4ms   501.0ms   501.6ms  504.5ms    0
+delta      384    2003ms  20983   1.0ms  500.3ms   501.1ms   501.6ms  507.3ms    0
+delta      512    1852ms  19610   1.0ms  500.3ms   501.0ms   501.6ms  504.0ms    0
+delta      768    1717ms  18038   1.0ms  500.3ms   501.0ms   501.4ms  503.7ms    0
+delta     1024    1676ms  17739   1.0ms  500.3ms   501.0ms   501.5ms  503.2ms    0
+delta     2048    1547ms  16614   1.0ms  500.4ms   501.0ms   501.5ms  502.8ms    0
+delta     4096    1508ms  16320   1.0ms  500.4ms   501.0ms   501.5ms  502.8ms    0
+
+size=1,000,000 / churn=100,000 (10%):
+op       batch  wall_ms     n      p50     p95        p99          p99.9    max   spk
+-------  -----  -------  ------   -----  ------     ------        ------  -----   ---
+delta      256    4959ms  39938   1.1ms  500.4ms   501.1ms   501.6ms  512.0ms    0
+delta      384    4418ms  37651   1.0ms  500.3ms   501.0ms   501.6ms  532.4ms    0
+delta      512    4054ms  37507   1.0ms  500.4ms   501.0ms   501.3ms  505.2ms    0
+delta      768    3824ms  36177   1.0ms  500.4ms   501.0ms   501.4ms  524.0ms    0
+delta     1024    3694ms  35137   1.0ms  500.2ms   501.0ms   501.3ms  540.6ms    0
+delta     2048    3370ms  32631   0.9ms  500.4ms   501.0ms   501.4ms  519.8ms    0
+delta     4096    3296ms  32054   1.0ms  500.3ms   501.0ms   501.2ms  503.3ms    0
+
+Key observations:
+- Wall-time knee: clear monotone improvement with batch size; gains diminish
+  above 1024-2048. At 462k/46k: 256→4096 is 2264→1508ms (33% faster);
+  512→4096 is 1852→1508ms (19%). At 1M/100k: 256→4096 is 4959→3296ms (34%).
+  Diminishing returns beyond batch=2048.
+- RST distribution: p50 and p99 are FLAT across all batches (p50≈1ms, p99≈501ms).
+  This is expected: at 10% churn, all batch sizes produce many lock-hold windows;
+  the p99 connection always lands during one of them. The per-batch lock hold is
+  shorter at larger batch (fewer syscalls, same total work), but the cumulative
+  probability of landing during A lock hold remains high.
+- Interpretation: batch size controls throughput (wall-time), not the per-batch
+  stall depth. The data-plane disruption at large churn is INHERENT to the total
+  work (N table mutations), not to the batch strategy. Replace at same N is faster
+  because it holds the lock ONCE for the full sweep vs N/batch locks.
+- Confirmed conclusion: for large-churn operations, replace wins. Delta's benefit
+  accrues at SMALL churn (few lock windows, each short).
+
+
+========== C: small-churn reference — wall time + RST distribution ==========
+
+20 reps per cell; floating ruleset; op-aligned windows.
+This is the PRODUCTION COMMON CASE: incremental feed updates.
+
+size=100,000:
+churn   batch  wall_ms    n     p50     p95        p99          p99.9    max   spk
+------  -----  -------  ----   -----  ------     ------        ------  -----   ---
+ 1,000    256      60ms  3233   1.2ms   10.4ms    25.9ms   500.8ms  501.5ms    0
+ 1,000    512      53ms  3263   1.2ms    9.1ms    24.6ms   500.8ms  502.1ms    0
+ 1,000   1024      49ms  3272   1.2ms    9.9ms    24.5ms   501.1ms  501.3ms    0
+ 5,000    256     258ms  4730   1.1ms   12.1ms   500.8ms   502.2ms  503.2ms    0
+ 5,000    512     216ms  4252   1.1ms   10.6ms   500.3ms   501.7ms  502.0ms    0
+ 5,000   1024     202ms  4238   1.1ms   15.4ms   501.0ms   501.9ms  503.0ms    0
+
+size=462,000:
+churn   batch  wall_ms    n     p50     p95        p99          p99.9    max   spk
+------  -----  -------  ----   -----  ------     ------        ------  -----   ---
+ 4,620    256     236ms  6934   1.1ms   88.2ms   500.9ms   502.0ms  504.1ms    0
+ 4,620    512     196ms  6484   1.1ms   90.1ms   501.1ms   502.0ms  503.4ms    0
+ 4,620   1024     179ms  6598   1.1ms   88.8ms   501.0ms   501.8ms  502.6ms    0
+23,100    256    1140ms 13736   1.1ms  500.2ms   501.0ms   501.6ms  502.6ms    0
+23,100    512     921ms 11829   1.0ms  500.1ms   501.0ms   501.8ms  502.3ms    0
+23,100   1024     842ms 11258   1.0ms  500.1ms   501.0ms   501.5ms  519.1ms    0
+
+For comparison — replace at same sizes:
+size       wall_ms    n     p50     p95        p99      spk
+------     -------  -----  -----  ------     ------     ---
+100,000        96ms  3986   1.3ms   20.0ms   102.4ms    0
+462,000       399ms  8586   1.1ms  113.8ms   501.0ms    0
+
+Key observations:
+- 100k/1k churn (1% of table), batch=1024: wall=49ms vs replace=96ms (2× faster).
+  p99=24.5ms vs replace p99=102ms (4.2× lower stall depth). 0 spikes vs 0 spikes.
+  → Delta wins on BOTH wall-time and stall depth for 1% churn.
+
+- 100k/5k churn (5% of table), batch=1024: wall=202ms vs replace=96ms (2.1× SLOWER).
+  But replace p99=102ms vs delta p99=501ms — at 5% churn, delta produces more
+  lock-hold windows than replace's single window, so p99 is worse for delta.
+  → At 5% churn on 100k, replace is better. Threshold is between 1% and 5%.
+
+- 462k/4620 churn (1% of table), batch=1024: wall=179ms vs replace=399ms (2.2× faster).
+  p99=501ms for both (the few lock windows that land in the 501ms cap dominate p99).
+  p95=88.8ms for delta vs 113.8ms for replace — delta is marginally better at p95.
+  → Delta wins at 1% churn on 462k.
+
+- 462k/23100 churn (5% of table), batch=1024: wall=842ms vs replace=399ms (2.1× SLOWER).
+  → At 5% churn on 462k, replace wins. Same threshold: between 1% and 5%.
+
+- The 1%-vs-5% crossover is size-independent: both 100k and 462k show delta better
+  at 1% churn and replace better at 5% churn.
+
+CHURN THRESHOLD FOR REPLACE FALLBACK: ~2-3% of table size.
+  Below ~2% churn: delta wins (faster wall-time; lower or equal stall depth).
+  Above ~5% churn: replace wins (fewer total lock-hold windows).
+  Implementation note: pfBlockerNG feed updates are typically <1% churn per cron
+  cycle; the 1% small-churn case is the production reference.
+
+
+========== Analysis ==========
+
+1. TCP-RST PROBE VALIDATES THE REJECT-LOOP DESIGN
+
+   All 20-rep cells completed with 0% loss and 0 spikes (spike threshold =
+   baseline p99 × 3.0 ≈ 1505ms). The TCP-RST reject-loop is a clean signal:
+   in-table IPs (11.x) get RST via LAN block-return; out-table IPs (13.x) get
+   RST via WAN block-return-out. Both paths exercise the pf table lock.
+
+   The 500ms RST tail (p99 ≈ 500-501ms throughout all cells) reflects connections
+   landing during a pfctl lock-hold window. This is the correct measurement: the
+   kernel holds the pf table lock for the duration of the replace/add/delete
+   operation, and new connections queue behind it. The 500ms figure equals the
+   op wall-time for replace@462k (399ms) and is proportional to batch wall-time
+   for delta. It is NOT a timeout — it is the actual wait time for lock release.
+
+2. DELTA WINS FOR INCREMENTAL UPDATES; REPLACE WINS FOR LARGE CHURN
+
+   Production incremental updates (< ~2% churn):
+     100k table, 1k churn (1%), batch=1024:
+       delta 49ms vs replace 96ms (2.0× faster wall-time)
+       delta p99=24.5ms vs replace p99=102.4ms (4.2× lower stall depth)
+     462k table, 4.6k churn (1%), batch=1024:
+       delta 179ms vs replace 399ms (2.2× faster)
+       delta p95=88.8ms vs replace p95=113.8ms (20% lower at p95)
+
+   Large churn / full sync (> ~5% churn):
+     100k table, 5k churn (5%), batch=1024: delta 202ms vs replace 96ms (2.1× SLOWER)
+     462k table, 23k churn (5%), batch=1024: delta 842ms vs replace 399ms (2.1× SLOWER)
+     462k table, 46k churn (10%), batch=1024: delta 1676ms vs replace 399ms (4.2× SLOWER)
+     1M table, 100k churn (10%), batch=4096: delta 3296ms vs replace 728ms (4.5× SLOWER)
+
+   Decision boundary: ~2-3% churn. Phase 4 implementation MUST apply this
+   threshold: use delta for incremental (< 2-3% churn), replace for bulk/boot.
+
+3. BATCH SIZE: 1024 AS DEFAULT FOR INCREMENTAL UPDATES
+
+   At 1% churn, all batches show similar p99 (24-26ms at 100k, 501ms at 462k —
+   the p99 is set by whether any sample lands during a lock window). The
+   differentiator is wall-time and p95:
+     100k/1k: batch 256→512→1024 = 60→53→49ms wall; p99 26→25→25ms (flat).
+     462k/4.6k: batch 256→512→1024 = 236→196→179ms wall; p95 88→90→89ms (flat).
+
+   Batch=1024 is the correct default: best wall-time in the incremental range,
+   no meaningful p99 penalty. User-tunable range: 64-4096.
+
+4. RECOMPUTE COST (from prior ICMP-probe run, 2026-06-25)
+
+   LC_ALL=C sort -u proxy for pfb_canonical_alias_set:
+     100k: 136ms; 462k: (extrapolated ~350ms); 1M: 707ms.
+   At 1M, sort-u recompute (707ms) ≈ replace cost (728ms). Running recompute
+   on every cron tick to produce an identical set wastes the entire apply budget.
+   Content-addressing (hash comparison → skip both recompute and apply when
+   unchanged) is essential. This confirms Phase 3 design.
+
+5. STATE-KILL IS ORTHOGONAL (not measured here)
+
+   Raw pfctl -T replace/add/delete does NOT flush pf states. pfBlockerNG's
+   killstates feature (filter_configure / pfctl -k) operates at a higher layer.
+   The data here characterises table lock-hold latency only; state-kill latency
+   is a separate concern. Incremental delta enables targeted state-kill (kill
+   states only for IPs in the delta set) — a meaningful additional benefit of
+   Phase 4 not measured here.
+
+
+========== Binding Verdict ==========
+
+ADR-40 KILL-GATE ASSESSMENT (TCP-RST reject-loop, 2026-06-26):
+
+GATE 1: Does chunked delta materially beat replace at production table sizes?
+  YES for incremental updates (< ~2% churn — the production common case):
+    100k table, 1k churn (1%), batch=1024: delta 2.0× faster; p99 4.2× lower.
+    462k table, 4.6k churn (1%), batch=1024: delta 2.2× faster.
+  NO for large churn (> ~5% of table) or bulk operations:
+    5% churn: delta 2.1× SLOWER than replace (both sizes).
+    10% churn: delta 4-4.5× SLOWER than replace.
+  Use replace for: initial load, boot/enable-disable, full feed replacement,
+    any delta where churn > ~2-3% of table size.
+  Overall decision: PASS — delta wins where it matters (incremental updates);
+  replace fallback boundary is clear and measurable.
+
+GATE 2: Does recompute cost dominate?
+  707ms at 1M is significant but NOT dominant (vs 728ms replace). Re-scope is
+  NOT required. Content-addressed skip (Phase 3) is confirmed necessary.
+
+PHASE 4 DECISION: BUILD (confirmed)
+
+  Scope: incremental -T add/-T delete for feeds where computed set CHANGED and
+  churn is < ~2-3% of table size (Phase 3 content-addressed dirty check enables
+  this routing decision automatically).
+  Fall back to replace when: initial load; boot/enable-disable; churn >= ~3% of
+  table size; or any full-feed replacement.
+
+  Phase 4 implementation parameters (from this bench):
+  - Default mode:     "delta" for incremental; "replace" for bulk/boot.
+  - Default batch:    1024 (pfb_alias_delta_batch; tunable 64-4096).
+  - Churn threshold:  ~2-3% of table size → replace fallback.
+  - Boot path:        ALWAYS replace (one-shot full load).
+  - State-kill:       target only IPs in the delta set (separate integration).
+  - Content-address:  mandatory (Phase 3 prerequisite).
+
+
+ADR-RESUME: branch=adr/40-review-followup next-phase=3

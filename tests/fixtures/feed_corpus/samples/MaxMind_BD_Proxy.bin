@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+    <meta
+      name="description"
+      content="Find a sample list of high risk IP addresses here. Use MaxMind&apos;s proxy detection service to identify high risk IP addresses and detect online fraud."
+    />
+
+    <meta name="viewport" content="width=device-width" />
+
+    
+
+
+    <title>Sample list of high risk IP addresses | MaxMind</title>
+
+    <base href="/en/" />
+    
+      <link
+        media="all"
+        rel="stylesheet"
+        type="text/css"
+        href="https://static.maxmind.com/9a9ff040904ec63f44fb/css/redesign.css"
+        integrity="sha256-KHzA0mEYSGRLcn8jfCAWinDqQVl1z5X5PYTBVL88VSs="
+        crossorigin="anonymous"
+        nonce="ywd2FTgtxti9eDSmWmdjcw=="
+      />
+    
+
+
+    
+
+    <link
+        href="https://fonts.googleapis.com/css?family=Material+Symbols+Outlined&amp;display=block"
+        rel="stylesheet"
+        nonce="ywd2FTgtxti9eDSmWmdjcw=="
+        crossorigin="anonymous"
+      />
+
+
+    
+    
+
+      <script nonce="ywd2FTgtxti9eDSmWmdjcw==">
+        var dataLayer = window.dataLayer || [];
+        
+        
+      </script>
+
+    
+    <script nonce="ywd2FTgtxti9eDSmWmdjcw==">
+        (function (w, d, s, l, i) {
+          w[l] = w[l] || [];
+          w[l].push({ "gtm.start": new Date().getTime(), event: "gtm.js" });
+          var f = d.getElementsByTagName(s)[0],
+            j = d.createElement(s),
+            dl = l != "dataLayer" ? "&l=" + l : "";
+          j.async = true;
+          j.src = "https://www.googletagmanager.com/gtm.js?id=" + i + dl;
+          j.setAttribute("data-testid", "injected-script-for-gtm");
+          f.parentNode.insertBefore(j, f);
+        })(window, document, "script", "dataLayer", "GTM-M8K593P");
+      </script>
+    
+
+    
+
+  </head>
+
+  <body>
+    
+
+    <noscript
+        ><iframe
+          src="https://www.googletagmanager.com/ns.html?id=GTM-M8K593P"
+          height="0"
+          width="0"
+          style="display:none;visibility:hidden"
+        ></iframe
+      ></noscript>
+
+
+    
+
+    <div class="wrapper">
+      <div class="header__system-status js-header__system-status">
+        <div class="header__system-status-content">
+          <span class="header__status-icon js-header__status-icon">
+            <i
+              class="bi bi-exclamation-triangle-fill status-icon status-icon__warning"
+            ></i>
+          </span>
+          <span class="header__status-message js-header__status-message"></span>
+          <a class="header__status-more-info" href="https://status.maxmind.com"
+            >More info
+            <i
+              class="header__status-more-info-icon bi bi-chevron-double-right"
+            ></i
+          ></a>
+        </div>
+      </div>
+        
+      
+
+      <header
+  class="header 
+    has-subnav
+   
+        "
+>
+  <nav class="header__nav navbar navbar-expand-lg mx-auto">
+    <a class="header__logo" href="/en/home" aria-label="MaxMind">
+    </a>
+
+    <div
+      id="header__toggle"
+      class="offcanvas-lg offcanvas-end header__toggle"
+      tabindex="-1"
+    >
+      
+      <nav class="main-nav">
+        <ul class="main-nav__list navbar-nav">
+          <li class="main-nav__item js-main-nav__item dropdown">
+            <button
+              aria-haspopup="true"
+              class="main-nav__link js-main-nav__link dropdown-toggle"
+              data-bs-toggle="dropdown"
+              aria-expanded="false"
+              disabled
+            >
+              Products &amp; solutions
+            </button>
+            <div
+              class="main-nav__dropdown-menu main-nav__dropdown-menu--products dropdown-menu"
+            >
+              <div class="main-nav__dropdown-heading text-medium-blue">
+                Products
+              </div>
+              <div class="row main-nav__dropdown-group">
+                <div class="main-nav__subnav-group col-lg-4">
+                  <a
+                    class="main-nav__subnav-item main-nav__subnav-item--products"
+                    href="/en/solutions/fraud-prevention/overview"
+                  >
+                    <img
+                      alt="minFraud product icon"
+                      src="https://static.maxmind.com/9a9ff040904ec63f44fb/images/redesign/minfraud-product-icon.svg"
+                    />
+                    <div
+                      class="main-nav__subnav-title main-nav__subnav-title--products"
+                    >
+                      minFraud: fraud &amp; risk API
+                    </div>
+                    <div class="main-nav__subnav-description">
+                      Prevent online fraud and identify cyber threats with
+                      machine learning
+                    </div>
+                  </a>
+                </div>
+                <div class="main-nav__subnav-group col-lg-4">
+                  <a
+                    class="main-nav__subnav-item main-nav__subnav-item--products"
+                    href="/en/solutions/ip-geolocation-databases-api-services"
+                  >
+                    <img
+                      alt="GeoIP product icon"
+                      src="https://static.maxmind.com/9a9ff040904ec63f44fb/images/redesign/geoip-product-icon.svg"
+                    />
+                    <div
+                      class="main-nav__subnav-title main-nav__subnav-title--products"
+                    >
+                      GeoIP: IP geolocation &amp; intelligence
+                    </div>
+                    <div class="main-nav__subnav-description">
+                      Understand your online visitors and serve them customized,
+                      relevant content
+                    </div>
+                  </a>
+                </div>
+                <div class="main-nav__subnav-group col-lg-4">
+                  <a
+                    class="main-nav__subnav-item main-nav__subnav-item--products"
+                    href="/en/solutions/proxy-vpn-fraud-detection"
+                  >
+                    <img
+                      alt="Proxy detection product icon"
+                      src="https://static.maxmind.com/9a9ff040904ec63f44fb/images/redesign/proxy-detection-product-icon.svg"
+                    />
+                    <div
+                      class="main-nav__subnav-title main-nav__subnav-title--products"
+                    >
+                      Proxy &amp; VPN detection
+                    </div>
+                    <div class="main-nav__subnav-description">
+                      Manage unauthorized access and cyber threats with
+                      anonymous IP detection for safety and compliance
+                    </div>
+                  </a>
+                </div>
+              </div>
+              <div class="main-nav__separator"></div>
+              <div>
+                <div class="main-nav__dropdown-heading text-orange mt-3">
+                  Solutions
+                </div>
+                <div class="row main-nav__dropdown-group">
+                  <div class="main-nav__subnav-group col-lg-4">
+                    <a
+                      class="main-nav__subnav-item main-nav__subnav-item--products"
+                      href="/en/solutions/compliance"
+                    >
+                      <img
+                        alt="Compliance solution icon"
+                        src="https://static.maxmind.com/9a9ff040904ec63f44fb/images/redesign/compliance-solution-icon.svg"
+                      />
+                      <div
+                        class="main-nav__subnav-title main-nav__subnav-title--products"
+                      >
+                        Compliance
+                      </div>
+                      <div class="main-nav__subnav-description">
+                        Build an auditable solution capable of navigating
+                        evolving risks and regulatory requirements
+                      </div>
+                    </a>
+                  </div>
+                  <div class="main-nav__subnav-group col-lg-4">
+                    <a
+                      class="main-nav__subnav-item main-nav__subnav-item--products"
+                      href="/en/geoip-exchange"
+                    >
+  

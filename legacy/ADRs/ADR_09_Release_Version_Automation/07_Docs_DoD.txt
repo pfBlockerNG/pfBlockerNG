@@ -1,0 +1,65 @@
+================================================================================
+PHASE 7 PROMPT — Docs + DoD + reject criteria
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §5, §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch performing Phase 7 of ADR-09. Document the pipeline,
+finalise the Definition of Done + reject criteria + manual checklist, and reconcile the
+loose ends. Work inline on `adr/09`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The automation is only maintainable if the version lifecycle + build/CI split are
+documented for the next maintainer, and the DoD/reject criteria are pinned.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read RESULTS/04_Results.txt (release-side done) and RESULTS/05+06 (CI-side —
+  ADR-04 is Accepted, so these phases run). If any of Phases 1-6 aren't done, STOP.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§5, §7).
+- docs/misc/pfSense_versions.md  (the per-version base-facts table the matrix mirrors —
+  it already cross-references build-image.yml's resolve-version; keep them in sync).
+- scripts/README.md + README.md + CLAUDE.md  (where the version/CE-support checklist
+  lives — extend it; add the ci-metadata matrix pointer).
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md §2  (the "re-baseline on a MAJOR version jump"
+  wording this ADR refines — FLAG it for reconciliation; do NOT edit ADR-04 here).
+
+ACTION PLAN (ordered)
+1. DOCS: scripts/README.md + README + CLAUDE.md — the supported-version matrix (where it
+   lives, schema, how to add/drop a version), the lifecycle (add-on-beta, drop-oldest-
+   CE-on-newest-GA), the build-vs-CI split (CE both; Plus build-only), and where the
+   .pkg artifacts land. Add CE-support steps to the version-bump checklist.
+2. RECONCILE FLAG: note (in this ADR / the docs) that ADR-04 §2's "re-baseline on a MAJOR
+   version jump" is superseded by ADR-09's upgrade-in-place + sanity gate — to be
+   reconciled in a separate ADR-04 edit (not here).
+3. DoD + REJECT: finalise §7 — all phases 1-7 green (ADR-04 Accepted ⇒ 5-6 are not
+   gated); the reject criteria (portable-vs-make-package drift -> FreeBSD build as the
+   default for that entry; unattended major upgrade can't pass the gate -> manual seed
+   fallback) and the manual checklist (incl. the smoke AND-gate: one failed leg -> red).
+4. NO SPIKE TO FOLD: Phase 1 added NO build-spike workflow (it inventoried the two
+   existing builders), so there is nothing to retire — just confirm the release build
+   wires build-pkg-linux.yml (default) + build-pkg.yml (fallback) per RESULTS/01/03.
+
+CONSTRAINTS
+- Do NOT edit ADR-04 (flag the reconciliation only). Do NOT touch src/.
+- markdownlint/ShellCheck/YAML clean.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- Docs build/lint clean and describe the matrix lifecycle + build/CI split + Plus
+  build-only.
+- ruff/ShellCheck/markdownlint clean; pytest green/unchanged.
+
+EXPECTED RESULT
+Documented version pipeline + finalised DoD/reject/manual-checklist; the ADR-04
+reconciliation flagged.
+
+COMMIT (single)
+    docs: ADR-09 version pipeline + DoD + reject criteria (ADR-09 P7)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/07_Results.txt` (plain .txt)
+Final summary: what's live across BOTH release-side and CI-side (ADR-04 Accepted ⇒ all
+phases run); the matrix lifecycle; the ADR-04 reconciliation flag; the manual checklist
+status; and whether the ADR is ready to flip from Proposed toward Accepted pending the
+maintainer checklist.

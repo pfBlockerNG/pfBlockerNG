@@ -1,0 +1,110 @@
+================================================================================
+PHASE 1 PROMPT — Pin today's widget behavior + the ledger library (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS1, SS2.2, SS6 Phase 1 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/61-sync-status-ledger (off the latest devel; create if absent). One commit,
+pushed to the branch. You implement yourself with Read/Edit/Write/Bash — you NEVER spawn
+sub-agents. Follow CLAUDE.md in full (tabs in PHP, test principles, commit style).
+
+WHY THIS PHASE EXISTS
+Phases 2-6 rewrite the widget's icon/reporting logic and add new writers across the
+download/apply pipeline. Before touching any of that, freeze today's observable behavior
+as golden oracles (protects Phase 6's rewrite from silently regressing a case nobody
+thought to re-test) and land the new ledger's pure I/O library — unused by any production
+caller yet, so this phase carries zero behaviour change to the shipped product.
+
+REQUIRED READING
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS1 full context, SS2.2 ledger shape, SS2's
+  "Semantics that MUST be preserved" and "Coverage matrix").
+- src/usr/local/www/widgets/widgets/pfblockerng.widget.php:585-648 (both icon blocks),
+  :446-513 (pfBlockerNG_get_failed reporting list).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:2195-2470 (pfb_due_ledger_* — the
+  library shape to mirror: pure, clock/seed-injectable, atomic write, downgrade-safe).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — every file:line cited in the ADR's SS1.2
+  table and SS1.3 (download-fail, DNSBL conf-fail, IP pfctl-fail, the mirror write site).
+- tests/php/README.md + tests/php/bootstrap.php + tests/php/pfsense_doubles.php.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff. This
+phase's FIRST job is literally re-deriving the ADR's SS1.2/SS1.3 file:line table from a
+fresh grep — do not trust the ADR's numbers as anything but a starting search.
+
+ACTION PLAN (ordered)
+1. Re-derive the coverage matrix: grep the live tree for every writer/reader site the ADR's
+   SS1.2 table names (pfb_download_failure callers, pfb_pfctl_table_op, the DNSBL conf-fail
+   branch, pfb_write_canonical_alias, pfb_unbound_py_wait_applied and its restart-fallback,
+   the pfb_unbound.py sys.stderr.write sites). Record the CURRENT exact file:line for each
+   in the handoff — this is what Phases 2-4 read instead of the ADR's (possibly stale) draft
+   numbers.
+2. Freeze golden oracles for TODAY's widget behavior (no source change yet):
+   a. IP icon: enable_cb off -> red; on + dedup off -> green always; on + dedup on +
+      Sanity-check PASSED -> green; on + dedup on + Sanity-check FAILED/absent -> yellow.
+   b. DNSBL icon: every gate in the "is it live" check off -> red; live + no py_error.log
+      content -> green; live + py_error.log content (any) -> yellow (pin the CURRENT
+      monotonic behavior explicitly -- Phase 6 changes this, so the oracle here documents
+      what is being replaced, not what should remain).
+   c. pfBlockerNG_get_failed(): a synthetic error.log FAIL line for a known pfB_/DNSBL_
+      alias produces the expected deep link; an unrecognized alias name still renders
+      without crashing.
+   Write these as PHPUnit tests calling the ACTUAL widget functions (extract into a
+   testable form if the widget file isn't include-safe off-appliance -- check
+   tests/php/README.md for the established pattern other www/ files use, if any; if none
+   exists, this phase may need to lightly refactor pure decision logic out of the widget
+   into a function pfblockerng_extra.inc can host and the widget calls, WITHOUT changing
+   behavior -- state this refactor explicitly in the handoff if you take it, it is still
+   behaviour-preserving prep).
+3. Introduce the ledger library in pfblockerng_extra.inc, mirroring pfb_due_ledger_*'s
+   exact idiom:
+   - pfb_sync_status_open(string $facility, string $item, string $stage, string $message,
+     string $ledger_dir, ?callable $clock_fn = null): void
+   - pfb_sync_status_close(string $facility, string $item, string $stage, string
+     $ledger_dir): void
+   - pfb_sync_status_list_open(string $ledger_dir, ?string $facility = null): array
+   File: {$ledger_dir}/pfb_sync_status.json. Open on an existing (facility,item,stage) key
+   refreshes message/last_seen, never duplicates (ADR Semantics #3). Close on an absent key
+   is a safe no-op. Absent/corrupt/unreadable file reads as no open entries (ADR Semantics
+   #6) -- never throws.
+4. Do NOT wire any production caller to these functions yet -- that is Phases 2-4.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE. New PHP code stays PFBL-01/RequireConfigGateway/
+  UppercaseBoolean clean (the ledger touches no registered config key, so
+  RequireConfigGateway is a non-issue -- confirm this holds, don't assume).
+- Do NOT change any existing widget-visible behavior in this phase -- the oracles pin
+  CURRENT behavior; Phase 6 is where it changes.
+- Do NOT wire pfb_sync_status_* into any production call site yet.
+
+VERIFICATION (all must pass before the phase is done)
+- The canonical PHP gates (CLAUDE.md "Canonical gates"): php -l on touched files,
+  vendor/bin/phpunit (full suite green), vendor/bin/phpstan analyse --memory-limit=1G (0
+  errors), vendor/bin/phpcs --standard=phpcs.xml.dist src/ (clean).
+- The oracle tests pass against TODAY's (pre-Phase-6) widget code -- these are NOT
+  fail-before/pass-after (nothing changed yet); they are oracles that must stay green
+  through Phase 6's later change-of-behavior commit (at which point Phase 6 explicitly
+  supersedes them per the ADR's Phase 6 note).
+- The ledger library gets full branch coverage: open-new, open-existing-refreshes
+  (assert no duplicate, assert message/last_seen updated), close-existing, close-absent
+  (no-op, no error), list-open filters by facility, corrupt-file-reads-as-empty,
+  absent-file-reads-as-empty, unwritable-dir fails safely (does not throw an uncaught
+  exception up to the caller -- verify what IS the caller-visible contract: silent
+  no-op, or a caught/logged failure; state your choice and why in the handoff).
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- Re-run the new ledger tests against a DELIBERATELY mutated open() (e.g. skip the
+  idempotent-refresh check) and confirm they go red -- proves the oracle isn't vacuous.
+- grep pfb_sync_status_ in src/ outside pfblockerng_extra.inc and the new tests -- MUST be
+  empty (no production wiring snuck in this phase).
+- The re-derived coverage-matrix table in the handoff cites file:line for EVERY row the
+  ADR's SS1.2 table lists, not a subset.
+
+HANDOFF (RESULTS/01_Results.txt, committed)
+State: the re-derived coverage-matrix table (current file:line for every writer site);
+whether the widget needed a pure-logic extraction to become oracle-testable (and if so,
+exactly what moved where); the ledger library's function signatures and file path; full
+gate output; any deviation from this prompt's assumptions.

@@ -1,0 +1,99 @@
+================================================================================
+PHASE 4 PROMPT — Settings UI: the checkbox, prefill/disable, warning tooltip, save-time create
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md   (read §2 "UX model" + "Conflict detection" rows FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/13` branch performing Phase 4 of ADR-13. This phase adds the
+admin-facing control: a "Create VIPs automatically" checkbox that prefills + disables the
+manual dropdowns, disables itself with a warning when no free address exists, and persists
+the decision on save. Work inline on `adr/13`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The lifecycle (P2) + validation (P3) are server-side. This phase is the UX: opt in, see the
+address that will be created, and never be allowed to enable auto-create when no conflict-free
+address exists. The actual VIP create still happens server-side (P2 on the next pass / on save).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/03_Results.txt — manual-mode v6 decision + validator wiring.
+  Also re-confirm 02_Results.txt (config key pfb_dnsvip_auto, manager) and 01_Results.txt
+  (pfb_pick_free_dnsbl_vip, candidates). If 03_Results.txt is missing, STOP and report.
+- .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md (§2 UX model + Conflict detection + contract).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php:
+  * The "DNSBL Virtual IP" group :2504-2523 (dropdowns pfb_dnsvip4/6 + group help) and the
+    Web Server Interface select :2496-2502 — where the checkbox + prefill UI goes.
+  * The POST handler :466-475 (validate) and :494/:572-573 (save pfb_dnsvip4/6 + dnsbl_interface)
+    — wire pfb_dnsvip_auto save + the server-side create trigger here.
+  * The inline jQuery block — existing checkbox `.click()` toggle pattern at :3015-3045
+    (e.g. dnsbl_interface :3020, action :3045) and the lo0 logic :2957. MATCH this style.
+- Prior art for disable + warning: `disableInput(id, bool)` / `$('#id').prop('disabled', …)`
+  (used widely in pfSense + sibling pkgs, e.g. suricata_logs_mgmt.php), and the standard
+  warning idiom `<i class="fa fa-exclamation-triangle"></i>` + Bootstrap tooltip
+  (data-toggle="tooltip" title="…"). Use Form_Checkbox + setHelp from the gui_lib.
+- CLAUDE.md (PHP tabs/8.3; match existing JS style; no die()/exit()).
+
+ACTION PLAN (ordered)
+1. CHECKBOX: add Form_Checkbox `pfb_dnsvip_auto` ("Create VIPs automatically") to the DNSBL
+   Virtual IP group, value from $pconfig. setHelp documents: the address scheme (10.10.10.53 /
+   fd00::53), the pfB_AUTO_VIP_v* marker, and that the VIP is created on enable and removed on
+   disable (lifecycle).
+2. COMPUTE THE PREFILL ADDRESS server-side at render: call pfb_pick_free_dnsbl_vip(AF_INET, iface)
+   (and AF_INET6 when pfb_unbound_listens_v6()) to get the address(es) that WOULD be created.
+   Pass them to the JS (data attribute / inline var).
+3. JS BEHAVIOUR (match :3015-3045 style):
+   - On check: prefill the VIP field(s) with the computed address(es) (display) and
+     disableInput the manual dropdowns pfb_dnsvip4/pfb_dnsvip6; on uncheck: re-enable them and
+     restore the prior manual selection.
+   - Respect dnsbl_interface (the prefill/availability is per the selected interface).
+4. CONFLICT EXHAUSTION: when pfb_pick_free_dnsbl_vip returns null (no free candidate for a
+   required family), render the checkbox DISABLED with an fa-exclamation-triangle warning + a
+   tooltip explaining why (no free address in the 10.10.X.53 / fd00:X::53 range; free one in
+   Firewall > Virtual IPs). The admin must not be able to enable auto-create in this state.
+5. SAVE WIRING: persist pfb_dnsvip_auto in the POST handler. When it is on, set up config so the
+   next pfb_create_dnsbl('enabled') pass creates the VIP (and/or invoke the P2 manager) and the
+   dropdowns are not required (skip/relax the manual VIP validation appropriately, but KEEP the
+   P3 v6-mandatory rule). When off, the existing manual validation (:466-475) applies unchanged.
+6. UPDATE the group help text (:2518-2523): keep the "isolated range" note; add the auto-create
+   explanation. The "VIPs must be configured first" wording should reflect that auto-create
+   removes that requirement when enabled.
+
+CONSTRAINTS
+- Box OFF ⇒ the page, validation, and save are byte-identical to today (manual dropdowns).
+- UI CONSISTENCY (HARD REQUIREMENT — see ADR §5): reuse what already exists; integrate
+  seamlessly. Use the SAME Form_* components + gui_lib helpers the page already uses
+  (Form_Checkbox, Form_Group, setHelp, setWidth, disableInput) — NO bespoke widgets, NO custom
+  CSS, NO one-off markup. Warning = the stock fa-exclamation-triangle + Bootstrap tooltip
+  (data-toggle="tooltip"). JS = the existing inline-jQuery idiom (.click()/.change(), e.g.
+  :3015-3045), no new framework. Match the surrounding grouping, label/help phrasing, tab
+  indentation, and field positioning so the checkbox is indistinguishable from existing settings.
+  If an affordance has no precedent in pfBlockerNG/pfSense, use the closest existing pattern
+  rather than inventing one.
+- PHP tabs/8.3. No die()/exit().
+- Do NOT change pfb_manage_dnsbl_vip (P2) or the validator semantics (P3) — only call/wire them.
+- Do NOT touch Python/tests.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green/unchanged.
+- php -l (the .php page) + PHPStan + ShellCheck -> clean.
+- Manual/diff-read: box off = unchanged; box on prefills + disables dropdowns; exhausted-conflict
+  state disables the checkbox + shows the warning tooltip; save persists the flag.
+- Consistency diff-read: the new control uses only existing Form_*/gui_lib components + stock
+  icons/tooltips, no custom CSS/markup, and matches the surrounding fields' look, grouping, and
+  positioning (compare side-by-side with the existing DNSBL settings).
+
+EXPECTED RESULT
+The DNSBL settings page offers a working "Create VIPs automatically" checkbox: prefills the .53
+address + disables the manual dropdowns when on, disables itself with a warning when nothing is
+free, and persists the decision; box off leaves today's UX intact.
+
+COMMIT (single)
+    pfblockerng: add "Create VIPs automatically" DNSBL setting + prefill/disable UI (ADR-13 P4)
+Push directly to `adr/13`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/04_Results.txt` (plain .txt)
+State: the checkbox id + label + help; how the prefill address is computed + passed to JS; the
+disable/restore JS behaviour; the exhausted-conflict disabled+warning treatment; the save wiring
+(how auto-on relaxes manual validation while keeping the v6 rule); confirmation box-off is
+byte-identical; the go-ahead for Phase 5.

@@ -1,0 +1,247 @@
+[Adblock Plus 2.0]
+! Checksum: HayS6+S6TEASYwUQQVKVlw
+! Version: 202607041212
+! Title: RU, UA, UZ, KZ
+! Last modified: 04 Jul 2026 12:12 UTC
+! Expires: 1 days (фильтр обновляется автоматически каждые 2 дня)
+! Homepage: https://forums.lanik.us/viewforum.php?f=102
+!
+!
+! *** ruadlist:advblock.txt ***
+!
+! Дополнительный региональный фильтр RU AdList к фильтру EasyList
+! Лицензия CC-BY: http://creativecommons.org/licenses/by/3.0/
+! Проект создал Akuma (DemonSat) на основе списка фильтров denis-ovs.narod.ru.
+! Список содержит фрагменты списков MORPEH'а и Fanboy'я, результаты изучения
+! содержимого подписки UA-IX Banlist и некоторые правила из
+! Reek's Anti-Adblock Killer (https://github.com/reek/anti-adblock-killer)
+! В разное время над списком фильтров работали: denis-ovs, Akuma, Radik245.
+! На данный момент над списком работают Lain_13 и dimisa.
+!
+! Если на вашем любимом сайте осталась реклама или фильтр создаёт проблемы
+! в его работе, то свяжитесь с нами:
+! https://forums.lanik.us/viewforum.php?f=102
+!
+! = Сайты-попапы (самостоятельно открываются в новом окне) ====================
+! *** advblock/popup.txt ***
+! - Частные правила -----------------------------------------------------------
+$popup,domain=176.114.0.126|176.114.0.132|37.220.36.15|assiatv.com|cdnpotok.com|cdntvpotok.com|fastpic.org|freescreens.ru|imgbase.ru|imgcach.ru|imgclick.ru|kolikbolik.top|oneliketv.com|payforpic.ru|picclick.ru|picclock.ru|picforall.ru|protonvideo.to|telecdn.net|temptcdn.com|tv-assia.org
+$third-party,popup,domain=2ip.ru
+&utm_campaign=$popup,domain=itc.ua|sc2tv.ru|www.film.ru
+/*utm_$popup,domain=stratege.ru
+/go.php$popup,domain=piratca.net
+/redirect/cpa/*$popup,domain=rt02.ru
+?partner=$popup,domain=lifehacker.ru
+|http://li.ru/go?$popup,domain=fishki.net
+||aviasales.ru/?marker=$popup
+||catcut.net^$popup,domain=mobile-4at-obshenie.chatovod.ru|mobile-chat-obshenie.jimdo.com
+||clck.ru^$popup,domain=playground.ru
+||com/?id=*&t=direct^$popup
+||gemius.pl^$popup,domain=terrikon.com
+||getitbit.net/ads/$popup
+||goo.gl^$popup,domain=gamegpu.com|vsofte.biz
+||joker.win/*&offer_id=$popup
+||m.acestream.*/plan/select?popup=noads$popup
+||mama.land^$popup,domain=comments.ua
+||motorpage.ru/click/$popup,domain=motorpage.ru
+||namba.kg^$popup,domain=namba.kg
+||namba.tj^$popup,domain=namba.tj
+||onelink.me^$popup,domain=2ip.io|2ip.ru|2ip.ua
+||otus.ru/*utm_$third-party,popup
+||special.playground.info/haval$popup
+||topofgames.com^*?path=$popup
+||torrentum.ru^$popup
+||trashbox.ru/r.php?$popup
+||tv.acestream.org/p/?q=$popup
+||tvua.biz/clictv$popup
+||welcomegames.net^$popup
+||www.goha.ru/~$popup,domain=www.goha.ru
+||xn-----xlcfvffioc4g.xn--p1ai/*utm_$third-party,popup
+! - Общие правила -------------------------------------------------------------
+&ad.trans.id=*utm_campaign%$popup
+&cp.*&key=*&tz$popup
+&cp.*&tz*&key=$popup
+&cp.*=*&key=$popup
+&key=*&cp*&tz$popup
+&key=*&tz*&cp.$popup
+&key=*=true&tz=$popup
+&temz=clikundr&$popup
+&tz=*&key=$popup
+&utm_campaign=CU_ru$popup
+--autotargeting&$third-party,popup
+.clickunder.$popup
+.me/js/pop.js|$script
+.webunder.$popup
+.yandex.*banerid$popup
+/*.MTblocked=$popup
+/*?teaser_id=*&site_$popup
+//kpup.*/?sid=$popup
+//uno.*/?t=$popup,script
+/?utm_medium*&click_id=$popup
+/ad/popup/*$popup
+/adv_clk_redirect.php?$popup
+/bens/vinos.js$popup
+/click/body.php?id=*&hash=$popup
+/clicks/*==.php$popup
+/code/click.php?id=$popup
+/fcgi-bin/dispatch.fcgi?$popup
+/in.htm?wm=$popup
+/js/popup.php?id=$third-party
+/JumpClick?i=BannerKey_$popup
+/popads.$popup
+/popads/*$popup
+/popua/*$popup
+/popupclick/*$popup
+/propeller.php$third-party,popup
+/propeller_ou.php$popup
+/propeller_out.php$popup
+/ranging/*/click/|$third-party,popup
+/utarget.$popup
+/vkshpion/?page=$popup
+/webunder.$popup
+/wtsin.cgi?id=$popup
+=propellerads$popup
+=recreativ&utm_medium=$popup
+=tovarro&utm_campaign=$popup
+=yandex*context_$third-party,popup
+?utm_source=veoveo$popup
+^clickunder^$popup
+|http://*cp.MTblock=true&tz$popup
+||r0.mail.ru/redir/$popup
+||z.cdn.*.com/load?*&random=$popup
+||z.cdn.*.com/load?*=*=*=*=$popup
+||z.cdn.*.xyz/load?*&random=$popup
+! - Редиректоры (открываются в попапе и перекидывают на другой сайт) ----------
+.tnt-online.ru/?utm_$popup
+.variti.ch^$third-party,popup
+/gateway/aHR0c$popup
+/rlink/simptizer/$popup
+/rlink/textblock/$popup
+||12place.com^$popup
+||130.211.212.60^$popup
+||1740f665a91b68.com^$popup
+||176.114.0.131^$popup
+||24parik.*?adtag=$popup
+||24parik.*?creative_id=$popup
+||35.184.188.211^$popup
+||42eed1a0d9c129.com^$popup
+||46kdc235eh.com^$popup
+||4allclick.ru^$popup
+||602d76e204c032.com^$popup
+||777-888.ru^$popup
+||aabd.ru^$popup
+||accountant/*rd.php?id=$third-party,popup
+||actionpay.net^$third-party,popup
+||ad.adriver.ru^$third-party,popup
+||adfill.me^$popup
+||adservone.com^$popup
+||adsmedia-provider.com^$third-party,popup
+||adspynet.com/reference?pid=$popup
+||adtrak.org^$popup
+||advert-content.com^$third-party,popup
+||advertclick.ru^$popup
+||advjump.com^$third-party,popup
+||advtise.net^$third-party,popup
+||advtracker.ru^$popup
+||aff-ads.com^$third-party,popup
+||affiliate.wow-partners.com^$popup
+||affsnetwork.com^$third-party,popup
+||aftevap.ru^$popup
+||aj2738.top^$popup
+||amigo-biz.ru^$third-party,popup
+||an.yandex.ru/count/$popup
+||apb-re.ru/?pid=$popup
+||apycomm.com^$popup
+||apyecom.com^$popup
+||apygame.com/click$popup
+||apytrc.com/click$third-party,popup
+||arbxtrack.com^$third-party,popup
+||astdn.com^$third-party,popup
+||awesomeredirector*com^$popup
+||ayauaqatyx.xyz^$popup
+||baiduccdn.com^$popup
+||baiduccdn.org^$popup
+||baiduccdn1.com^$popup
+||baiducdn.org^$popup
+||bajvt.com^$popup
+||baztors.com^$third-party,popup
+||bid/*rd.php?id=$third-party,popup
+||bigleads.ru^$third-party,popup
+||bitpit.xyz^$popup
+||blamper-news.ru/getaway/$popup
+||blogfest.ru^$popup
+||bonus2u.ru^$popup
+||braun634.com^$popup
+||brndrm.com^$popup
+||bubblesmedia.ru/gocu/$popup
+||bussters.com^$popup
+||bvddfghxdsfd.top^$popup
+||byteengineering.net^$popup
+||callmebadguy.press^$popup
+||cbn.tbn.ru^$third-party,popup
+||cityadspix.com^$third-party,popup,domain=~cashalot.su|~cashlot24.ru|~creditkarm.ru
+||click-gate.ru^$popup
+||click1-clo.ru^$popup
+||clickganic.com^$popup
+||clickov.com^$popup
+||clickson.net^*/pp/$popup
+||cliclo-gateway.ru^$popup
+||cliclo-useraction.ru^$popup
+||clkdaly.com^$popup
+||club-vullkan.com^$third-party,popup
+||code.directadvert.ru^$popup
+||com/go.php?tid=*&hid=$popup
+||com/on.php?id=$popup
+||commerce.ua^$popup
+||comoestaschuvak.online^$popup
+||cooldeal.by^$popup
+||corntire.com^$popup
+||covivado.club^$popup
+||cpa1.xyz^$popup
+||cpagette.com^$third-party,popup
+||cpagettio.com^$third-party,popup
+||cpaggetti.com^$popup
+||cpamatica.com^$third-party,popup
+||cpl11.ru^$popup
+||credishe.com^$popup
+||creofive.com^$popup
+||cricket/*rd.php?id=$third-party,popup
+||crusewind.net/click/direct.php?$popup
+||d7921da5d4c24.com^$popup
+||daayenetra.ml^$popup
+||dafeb.ru^$popup
+||dagecisaxeze.cf^$popup
+||date/*rd.php?id=$third-party,popup
+||dididzroxa.ml^$popup
+||dionisum.com^$popup
+||directadvert.ru/click$third-party,popup
+||dobhot.com^$popup
+||doctortrust.me^$popup
+||domautraffika.com^$popup
+||dominantroute.com^$popup
+||download/*rd.php?id=$third-party,popup
+||drako.ru/refredirect$popup
+||dsbuiu.com^$popup
+||dxasracer.bid^$popup
+||dyshagi.ru^$popup
+||earnshill.com/images/sp/$popup
+||eknq.ru^$popup
+||erehhee.site^$popup
+||ertovy.ru^$popup
+||et-code.ru^$popup
+||et-land.xyz^$popup
+||eversmipro.ru^$third-party,popup
+||exilelink.com^$popup
+||exponderle.pro^$popup
+||ext-load.net^$third-party,popup
+||extlinka.ru^$popup
+||fastvk.com^$popup
+||fclmnews.ru^$third-party,popup
+||finetrack.ru^$popup
+||flashcdn.net^$popup
+||flylinks.pw^$popup
+||fortedrow.pro^$popup
+||fortsould.pro^$popup
+||freshtds.club^$popup
+||ftpglst.com^$popup
+||g17ie3l1k7

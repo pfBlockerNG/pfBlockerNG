@@ -1,0 +1,526 @@
+name: Smoke fan-out (all CI legs, live pfSense VM)
+
+# run-name surfaces a narrowed dispatch in the Actions run list (issue #853): a
+# scope=full run WITH a pytest_filter (or a non-'smoke' pytest_marker) selects
+# only a subset yet every leg still runs, so it otherwise looks identical to a
+# genuine unfiltered full fan-out. Mirror `name:` verbatim (run-name has no
+# context for the workflow's own name), then append the filter/marker ONLY when
+# set — an unfiltered, default-marker run renders byte-identically to before.
+# Only dispatch/call inputs are visible here; the per-leg job name below also
+# surfaces the impacted scope's auto-derived -k (that needs the prepare output).
+run-name: "Smoke fan-out (all CI legs, live pfSense VM)${{ inputs.pytest_filter && format(' [-k {0}]', inputs.pytest_filter) || '' }}${{ (inputs.pytest_marker && inputs.pytest_marker != 'smoke') && format(' [marker: {0}]', inputs.pytest_marker) || '' }}"
+
+# Fan the ADR-04 smoke suite across every ci:true image in parallel — CE and
+# Plus alike (ADR-24). Each leg carries its own image_name + mac from the matrix;
+# the Plus image is private (Netgate-licensed) — CI pulls it, never publishes it.
+# ci:false entries are excluded by the CI matrix filter; a CI GUARD below aborts
+# any leg that carries ci != true (a schema-change fail-safe).
+#
+# Workflow name + no-version-input dispatch contract (Phase 4 / RESULTS/04):
+#   Workflow file name:  .github/workflows/smoke.yml
+#   Trigger:            workflow_dispatch (no version inputs)
+#   Behaviour:          reads ci_matrix from read-version-matrix action,
+#                       expands to strategy.matrix (fail-fast: false),
+#                       runs ADR-04 smoke suite per leg (smoke-single.yml callee),
+#                       gating job needs: all legs (AND gate).
+#
+# SHARD dimension (issue #797): resolve-legs.sh's `legs` subcommand further
+# expands the matrix to legs x shards — a CE leg with a full-marker,
+# un-filtered run splits into `shards` parallel slices (default 3), each
+# booting its own VM; a slice is module-level or, for an oversized module,
+# test-level (issue #855's hybrid split via scripts/shard-modules.sh). A
+# -k-narrowed run or a non-'smoke' marker collapses back to 1 shard. Plus
+# legs shard exactly like CE — same `shards` count and defaults (issue #856
+# validated same-identity parallel Plus boots). The AND-gate below is unaffected:
+# needs.smoke.result already aggregates the WHOLE expanded matrix, shard
+# entries included.
+#
+# NOTE (issue #1855): `prepare` runs resolve-legs.sh from the CALLER's tree, so the
+# shard clamp counts tests/smoke/test_*.py there, while the legs execute the tests
+# from `checkout_ref` (the pinned release SHA). Inert in practice — the clamp only
+# bites below the shard count, and 51 modules sit far above the default 3 — but the
+# two counts are not by construction the same tree.
+#
+# ONE .pkg BUILD PER VERSION LEG, NOT PER SHARD (issue #857): resolve-legs.sh
+# also emits `leg_matrix` — the UNSHARDED per-leg set (one entry per version
+# leg). The `build-pkg` job below matrixes over THAT, so a leg sharded N ways
+# still builds its .pkg exactly once; every shard of that leg (the `smoke`
+# job's shard-expanded matrix) downloads the shared artifact instead of
+# rebuilding a byte-identical .pkg.
+#
+# AND-gate semantics (GitHub Actions needs.*.result):
+#   - All legs pass  → smoke job result = 'success' → gate = green
+#   - Any leg fails  → smoke job result = 'failure' → gate = red
+#   - Zero legs      → smoke job is skipped         → gate sees 'skipped' → red
+#   - Cancelled legs → smoke job result = 'cancelled' → gate = red
+# The gate job uses `if: always()` so it runs regardless of the matrix outcome,
+# and it hard-fails unless needs.smoke.result == 'success'.
+#
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ INVARIANT: this workflow NEVER commits to or writes any branch.     │
+# │ Runs every ci:true entry, CE and Plus; the Plus image is private — │
+# │ pulled, never published (no push/re-tag/attach of the qcow2).      │
+# │ ci:false entries are excluded at the matrix read step and the CI   │
+# │ GUARD below hard-fails any ci != true leak.                        │
+# └─────────────────────────────────────────────────────────────────────┘
+
+on:
+  # Manual trigger — dispatched by version-tracker.yml (Step C) with no inputs.
+  # Also usable for ad-hoc full-suite runs, OR a selective run: a dispatcher
+  # (human or AI) can narrow to one leg (version), one marker, and/or a -k
+  # subset. All three default to blank/whole-suite, so a no-input dispatch (and
+  # the scheduled/called paths below) run the full fan-out exactly as before.
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "impacted (DEFAULT for a bare dispatch): min CE leg + only the tests changed on this branch vs origin/devel. full: every ci:true leg (CE + Plus), whole marker — the nightly/release behaviour. Blank = impacted on dispatch."
+        required: false
+        type: choice
+        default: "impacted"
+        options:
+          - impacted
+          - full
+      version:
+        description: "Narrow the fan-out to the ci:true leg whose pfsense_version matches (e.g. \"2.8\"). Overrides scope's leg selection. Blank = scope decides (min CE for impacted, all legs for full)."
+        required: false
+        default: ""
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
+        required: false
+        default: "smoke"
+      pytest_filter:
+        description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the tests changed vs origin/devel (whole marker if none). e.g. 'test_dns_redirect' or 'redirect and not browser'."
+        required: false
+        default: ""
+      shards:
+        description: "Number of parallel module shards per leg — CE and Plus alike (issues #797/#856) — for full-marker, un-filtered runs. Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Clamped to the leg's test-module count."
+        required: false
+        default: "3"
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally (the build-pkg job runs as before)."
+        required: false
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        default: ""
+        type: string
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. Every other/absent status still runs and reports, loudly demoted, but cannot fail the run. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        default: false
+        type: boolean
+  # Called by other workflows. A callee sees the CALLER's event_name, so scope
+  # never auto-resolves to full here (issue #906): blank = impacted; a caller
+  # that wants the full suite passes scope=full explicitly.
+  workflow_call:
+    inputs:
+      scope:
+        description: "impacted | full. Blank on a call = impacted (issue #906); pass full explicitly for the whole fan-out."
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "Narrow the fan-out to the ci:true leg whose pfsense_version matches. Blank = scope decides."
+        required: false
+        type: string
+        default: ""
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke')."
+        required: false
+        type: string
+        default: "smoke"
+      pytest_filter:
+        description: "pytest -k selector (overrides impacted auto-derivation). Blank = scope decides."
+        required: false
+        type: string
+        default: ""
+      shards:
+        description: "Number of parallel module shards per leg — CE and Plus alike (issues #797/#856) — for full-marker, un-filtered runs. Collapses to 1 when pytest_filter is set or pytest_marker != smoke. Clamped to the leg's test-module count."
+        required: false
+        type: string
+        default: "3"
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally."
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        type: boolean
+        default: false
+  # Daily nightly run — scope=full: the whole marker on every ci:true leg (CE + Plus).
+  schedule:
+    - cron: "0 7 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Read CI matrix (every ci:true entry, CE and Plus) ─────────────────────
+  #
+  # Emits `ci_matrix` (JSON array) as the `include` list for the smoke job's
+  # strategy.matrix.  The reader filters to ci:true entries of ANY channel, each
+  # carrying its resolved image_name + mac; ci:false entries are NEVER present.
+  prepare:
+    name: Read CI matrix
+    runs-on: ubuntu-latest
+    outputs:
+      ci_matrix: ${{ steps.filter.outputs.ci_matrix }}
+      leg_matrix: ${{ steps.filter.outputs.leg_matrix }}
+      leg_count: ${{ steps.count.outputs.leg_count }}
+      pytest_marker: ${{ steps.filter.outputs.pytest_marker }}
+      pytest_filter: ${{ steps.filter.outputs.pytest_filter }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # reach the ci-metadata orphan ref + branch history (impacted diff)
+
+      - name: Read CI matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      # Resolve the run scope, the leg set, and the effective -k. Default for a
+      # bare DISPATCH is `impacted` (min CE leg + only the tests changed vs
+      # origin/devel); schedule resolves `full` (every ci:true leg, whole
+      # marker). A workflow_call caller gets NO special default (issue #906 —
+      # the callee sees the caller's event): the nightly schedule and the
+      # post-version-bump dispatch (version-tracker passes scope=full) stay
+      # full; any other caller passes scope explicitly.
+      - name: Resolve scope, legs, and -k
+        id: filter
+        env:
+          CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
+          VERSION_INPUT: ${{ inputs.version }}
+          SCOPE_INPUT: ${{ inputs.scope }}
+          MARKER_INPUT: ${{ inputs.pytest_marker }}
+          PYTEST_FILTER_INPUT: ${{ inputs.pytest_filter }}
+          # `schedule` events carry no inputs, so inputs.shards is empty there —
+          # default it explicitly or the nightly full run silently gets 1 shard
+          # (resolve-legs.sh's own conservative default), missing the policy.
+          # 3 since #855: the hybrid splitter breaks the test_smoke_feeds ceiling,
+          # so a third CE shard now buys real wall-clock (~11 min legs).
+          SHARDS_INPUT: ${{ inputs.shards || '3' }}
+          EVENT_NAME: ${{ github.event_name }}
+          # issue #1855: release-scoped veto rule. resolve-legs.sh stamps every leg
+          # with release_blocking and warns loudly for each demoted row; blank/false
+          # (every non-release caller) keeps every row blocking.
+          RELEASE_GATE_INPUT: ${{ inputs.release_gate }}
+        run: |
+          set -eu
+          # ADR-47 P5: scope + legs + -k resolved by the shared script.
+          # Writes scope=, ci_matrix=, leg_matrix=, pytest_filter= to $GITHUB_OUTPUT.
+          sh scripts/resolve-legs.sh legs --test-dir tests/smoke --label marker
+          printf 'pytest_marker=%s\n' "${MARKER_INPUT:-smoke}" >> "$GITHUB_OUTPUT"
+
+      - name: Log CI matrix
+        env:
+          CI_MATRIX: ${{ steps.filter.outputs.ci_matrix }}
+        run: |
+          echo "=== CI matrix (ci:true entries, CE + Plus — fed to smoke strategy.matrix) ==="
+          printf '%s\n' "$CI_MATRIX" | jq .
+
+      - name: Count legs + assert every leg is ci:true
+        id: count
+        env:
+          CI_MATRIX: ${{ steps.filter.outputs.ci_matrix }}
+        run: |
+          set -eu
+          COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Matrix entries (version legs x module shards): ${COUNT}"
+
+          # CI GUARD: assert that every entry in the CI matrix has ci=true (ADR-24).
+          # The channel is no longer asserted — Plus runs in CI from its private
+          # licensed image. The matrix reader already filters to ci:true; this step
+          # is a hard fail-safe so a schema change can never silently admit a
+          # ci:false (e.g. retired/unlicensed) entry.
+          BAD_COUNT=$(printf '%s\n' "$CI_MATRIX" \
+            | jq '[.[] | select(.ci != true)] | length')
+          if [ "$BAD_COUNT" -ne 0 ]; then
+            echo "::error::CI GUARD: CI matrix contains ${BAD_COUNT} ci:false entries — aborting."
+            printf '%s\n' "$CI_MATRIX" \
+              | jq '.[] | select(.ci != true)'
+            exit 1
+          fi
+          echo "CI guard: OK — all ${COUNT} leg(s) are ci:true."
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::CI matrix is empty — no images to smoke-test."
+          fi
+
+  # ── 2. Build the .pkg ONCE PER VERSION LEG (issue #857) ──────────────────────
+  #
+  # Matrixes over `leg_matrix` — the UNSHARDED per-leg set — so a leg sharded
+  # N ways (see the SHARD dimension note above) still builds its .pkg exactly
+  # once, not once per shard. build-pkg-linux.yml declares no `secrets:` input,
+  # so this call passes none (no `secrets: inherit`).
+  build-pkg:
+    name: build-pkg (${{ matrix.channel }} ${{ matrix.pfsense_version }})
+    needs: prepare
+    # Skipped when the caller supplies pkg_artifact_prefix -- prebuilt per-leg
+    # artifacts (e.g. release.yml) replace this job's own build.
+    if: needs.prepare.outputs.leg_count != '0' && inputs.pkg_artifact_prefix == ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.leg_matrix) }}
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: edge
+      # ABI/dep target matching this leg's image (CE=FreeBSD:15, Plus=FreeBSD:16
+      # in the current matrix) — pkg add refuses a cross-major-ABI .pkg.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # Variant/version row identity keeps same-major sibling legs distinct;
+      # every shard of this leg downloads this one build.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
+      ports_repo: pfBlockerNG/FreeBSD-ports
+      ports_ref: pfblockerng/use-github
+      # issue #1806 D1: this leg's dep .pkgs (e.g. textproc/py-charset-normalizer
+      # for CE), uploaded separately when non-empty — smoke-single.yml downloads
+      # + installs them (D2/D3).
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # W1: this job matrixes over leg_matrix (one row per version); the row
+      # identity prevents same-major collisions.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}
+
+  # ── 3. Per-leg smoke run (parallel, fail-fast: false) ────────────────────────
+  #
+  # One leg per shard-expanded ci:true entry.  Each leg calls the ADR-04 smoke
+  # workflow (smoke-single.yml) as a reusable callee, passing the per-version
+  # image ref AND the shared .pkg artifact build-pkg produced for its version
+  # leg (pkg_artifact) — smoke-single.yml downloads it instead of building its
+  # own. `fail-fast: false` ensures EVERY leg runs to completion regardless of
+  # whether another leg has already failed.
+  #
+  # IMAGE REF RESOLUTION + PER-LEG .pkg ABI:
+  # Each CI matrix entry carries pfsense_version (the GHCR floating tag, e.g. "2.8"
+  # / "26.03"), image_name (e.g. "pfsense-ce" / "pfsense-plus"), mac, and the build
+  # target (freebsd_major, php_version, py_flavor). We pass them all to smoke-single.yml: it
+  # composes the GHCR ref from the SMOKE_IMAGE_REPO repo variable + the image_name
+  # input + the pfsense_version tag (each input overriding its repo-variable default),
+  # exports mac as SMOKE_VM_MAC for the boot. abi/php_version/py_flavor are still
+  # passed for smoke-single.yml's build-if-absent fallback (a bare dispatch or
+  # repo-install.yml's direct call, neither of which sets pkg_artifact).
+  smoke:
+    # Append the effective -k (and a non-'smoke' marker) so a filtered leg is
+    # visually distinct from a full unfiltered one (issue #853). Uses the RESOLVED
+    # prepare output, so it also surfaces the impacted scope's auto-derived -k, not
+    # just an explicit input. Empty filter + 'smoke' marker → no suffix, byte-identical.
+    name: "Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }} shard ${{ matrix.shard_label }}/${{ matrix.shard_total }})${{ needs.prepare.outputs.pytest_filter && format(' [-k {0}]', needs.prepare.outputs.pytest_filter) || '' }}${{ (needs.prepare.outputs.pytest_marker && needs.prepare.outputs.pytest_marker != 'smoke') && format(' [marker: {0}]', needs.prepare.outputs.pytest_marker) || '' }}"
+    needs: [prepare, build-pkg]
+    # Run once prepare produced legs, REGARDLESS of build-pkg's result: the
+    # !cancelled() status function drops the implicit success() gate that
+    # `needs: build-pkg` would otherwise impose, so ONE leg's build failure no
+    # longer skips EVERY leg's smoke (issue #857 review) — yet the run is still
+    # skipped on a genuine cancellation. build-pkg stays a dependency purely for
+    # ordering (builds finish before smoke starts); a leg whose build failed
+    # then fails its own shards at the artifact-download step (before any VM
+    # boots), and the AND gate below still goes red. prepare must have succeeded
+    # — a prepare failure yields no matrix, so we skip rather than fromJson an
+    # empty string.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.leg_count != '0' }}
+    strategy:
+      fail-fast: false   # REQUIRED: all legs run to completion; no cancellation on failure
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      # Pass the per-leg version/name/mac directly — pfsense_version IS the GHCR
+      # floating tag (e.g. "2.8"), so no transformation needed. image_name selects
+      # the image (Plus = pfsense-plus); mac is the license-keyed boot MAC.
+      pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
+      # Per-leg .pkg target — still needed for smoke-single.yml's build-if-absent
+      # fallback path — keyed on the matrix freebsd_major (CE=15, Plus=16); pkg add
+      # refuses a cross-major-ABI .pkg.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # issue #1806 D1/D2/B1: this leg's dep .pkgs. extra_pkgs flows regardless
+      # of pkg_artifact_prefix (B1 fix): release.yml's build-pkgs-portable job
+      # now builds + uploads them too, so the release-verification path has a
+      # real deppkgs artifact to download -- it no longer needs forcing to '[]'.
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # dep_artifact composes the SAME way pkg_artifact does just below:
+      # pkg_artifact_prefix set -> '<prefix>-deppkgs-<Variant>-<version>';
+      # blank -> this job's own per-row dep_artifact_name above.
+      dep_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.pfsense_version) || format('pfBlockerNG-deppkgs-{0}-{1}', matrix.variant, matrix.pfsense_version) }}
+      # pkg_artifact_prefix set: the prebuilt row artifact a caller (e.g.
+      # release.yml) already published. Blank: this run's per-version build.
+      # Blank: the .pkg build-pkg already produced for this version leg (issue
+      # #857) -- identical to that job's artifact_name, so every shard of this
+      # leg finds the SAME shared artifact and downloads it instead of rebuilding.
+      pkg_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.pfsense_version) || format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.pfsense_version) }}
+      # Resolved by the prepare step: the marker, and the effective -k (an explicit
+      # input, else the impacted auto-derivation, else blank = whole marker).
+      pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
+      pytest_filter: ${{ needs.prepare.outputs.pytest_filter }}
+      # Module-shard identity (issue #797): resolve-legs.sh stamped these onto
+      # every expanded matrix entry (0..shards-1 of `shards`, CE and Plus
+      # alike — issue #856). N=1 is a byte-identical no-op in run-smoke.sh.
+      shard: ${{ matrix.shard }}
+      shard_total: ${{ matrix.shard_total }}
+      # issue #1855: this leg's release verdict, stamped by resolve-legs.sh. GitHub
+      # forbids `continue-on-error` on a job that calls a reusable workflow (only
+      # name/uses/with/secrets/needs/if/permissions/strategy are allowed there), so
+      # the demotion rides in as an input and smoke-single.yml applies it to ITS own
+      # job -- a demoted leg runs, reports red, and does not fail this call.
+      nonblocking: ${{ matrix.release_blocking == 'false' }}
+      # issue #1859: smoke.yml runs no tests itself — the leg does, so the pinned
+      # source ref rides down to smoke-single.yml.
+      checkout_ref: ${{ inputs.checkout_ref }}
+    secrets: inherit
+
+  # ── 4. AND-gate: green only if ALL legs passed ───────────────────────────────
+  #
+  # This is the REQUIRED STATUS check.  It runs regardless of the smoke matrix
+  # outcome (if: always()) and hard-fails unless every leg passed.
+  #
+  # GitHub Actions matrix semantics (verified):
+  #   needs.smoke.result == 'success'   → all legs passed
+  #   needs.smoke.result == 'failure'   → at least one leg failed
+  #   needs.smoke.result == 'skipped'   → zero legs (empty matrix)
+  #   needs.smoke.result == 'cancelled' → run was cancelled
+  #
+  # The gate fails on anything other than 'success' — including zero legs (skipped)
+  # and cancelled (which can hide failures).  This gives the AND of all legs with
+  # no partial-pass escape hatch.
+  all-smoke-passed:
+    name: All smoke legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [prepare, smoke]
+    if: always()   # run even if smoke failed/skipped/cancelled
+    steps:
+      # issue #1767: download every shard's selection-status marker (see
+      # smoke-single.yml's "Upload shard selection-status marker" step) so the
+      # assert step below can catch a whole-leg zero-selection that the
+      # per-shard #855 tolerance would otherwise hide. continue-on-error:
+      # actions/download-artifact tolerates a zero-match `pattern` on its own
+      # (0 artifacts, exit 0) -- this guards a genuine transient download
+      # failure instead, so an empty shard-status/ tree (marker never
+      # uploaded, or the download itself broke) still reaches the assert step
+      # below, which fails CLOSED on any multi-shard leg it expected a marker
+      # for but can't find.
+      - name: Download per-shard selection-status markers
+        if: needs.smoke.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: smoke-shard-status-*
+          path: shard-status
+
+      - name: Assert every smoke leg passed
+        env:
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+          CI_MATRIX: ${{ needs.prepare.outputs.ci_matrix }}
+          PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
+        run: |
+          set -eu
+          echo "Smoke matrix result : ${SMOKE_RESULT}"
+          echo "CI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          # Zero-leg guard: an empty matrix skips the smoke job (result='skipped').
+          # Treat this as a gate failure — the matrix should always have at least
+          # one CE entry.  A skipped gate silently hides a matrix-read problem.
+          if [ "${LEG_COUNT:-0}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — CI matrix was empty (zero legs); nothing was tested."
+            exit 1
+          fi
+
+          # Main gate: the smoke job result must be 'success'.
+          # 'failure' = at least one leg failed.
+          # 'skipped' = all legs were skipped (should not happen if leg_count > 0).
+          # 'cancelled' = run was cancelled (masks potential failures).
+          case "$SMOKE_RESULT" in
+            success)
+              # issue #1767: the per-shard exit-5 tolerance (#855) means a shard
+              # whose module slice legitimately carries no marker-matching test
+              # still reports 'success' even though it ran nothing — so the
+              # shard-level AND gate above can't see a whole-LEG zero-selection
+              # bug (marker typo, collection bug, path-filter regression) that
+              # empties EVERY shard of a full, unfiltered run. Assert, per
+              # multi-shard leg (shard_total != "1"), that at least ONE of its
+              # shards actually selected a test. PYTEST_FILTER non-empty means
+              # the caller deliberately narrowed the run (mirrors ui-tests.yml's
+              # PR #1766 selective exemption) — a selective run that legitimately
+              # selects nothing anywhere stays tolerated.
+              if [ -z "${PYTEST_FILTER:-}" ] && [ -n "${CI_MATRIX:-}" ]; then
+                # issue #1855: a leg demoted to non-blocking (its ci-metadata status
+                # is not a released pfSense version) must not veto here either -- it
+                # can fail before ever uploading a marker, which would otherwise read
+                # as a whole-leg zero-selection and re-introduce the veto by the back
+                # door. Absent field (every non-release run) = blocking, as before.
+                MULTI_SHARD_LEGS="$(printf '%s\n' "$CI_MATRIX" | jq -c '
+                    [.[] | select(.shard_total != "1" and (.release_blocking != "false"))]
+                    | group_by(.image_name + "|" + .pfsense_version)
+                    | map({
+                        image_name: .[0].image_name,
+                        pfsense_version: .[0].pfsense_version,
+                        shard_total: (.[0].shard_total | tonumber)
+                      })
+                ')"
+                LEG_N="$(printf '%s' "$MULTI_SHARD_LEGS" | jq 'length')"
+                BAD_LEGS=""
+                _i=0
+                while [ "$_i" -lt "$LEG_N" ]; do
+                    IMG="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].image_name")"
+                    VER="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].pfsense_version")"
+                    STOT="$(printf '%s' "$MULTI_SHARD_LEGS" | jq -r ".[$_i].shard_total")"
+                    FOUND_SELECTED=0
+                    _s=0
+                    while [ "$_s" -lt "$STOT" ]; do
+                        STATUS_FILE="shard-status/smoke-shard-status-${IMG}-${VER}-s${_s}/shard-selection-status"
+                        if [ -f "$STATUS_FILE" ] && [ "$(cat "$STATUS_FILE")" = "selected" ]; then
+                            FOUND_SELECTED=1
+                            break
+                        fi
+                        _s=$((_s + 1))
+                    done
+                    if [ "$FOUND_SELECTED" -eq 0 ]; then
+                        BAD_LEGS="${BAD_LEGS} ${IMG}-${VER}"
+                    fi
+                    _i=$((_i + 1))
+                done
+                if [ -n "$BAD_LEGS" ]; then
+                    echo "::error::AND gate FAIL — leg(s) selected ZERO tests across every shard (the #855 per-shard empty-partition tolerance masked a whole-leg zero-selection):${BAD_LEGS}"
+                    exit 1
+                fi
+              fi
+              echo "AND gate PASS — all ${LEG_COUNT} smoke leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more smoke legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — smoke job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — smoke job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected smoke result '${SMOKE_RESULT}'."
+              exit 1
+              ;;
+          esac

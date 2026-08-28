@@ -1,0 +1,79 @@
+================================================================================
+ADR-63 PHASE 1 — ORCHESTRATOR GATE RECORD
+Golden oracles for both pages' CURRENT reorder behaviour
+Gate run: 2026-07-11 | Verdict: PASS | Step commit: f3d81ad4
+================================================================================
+
+ROUTE
+phase-step workflow wf_c74ad3f5-c29 (Brief: Fable xhigh; Implement: Sonnet 5
+xhigh; Verify: Fable xhigh). briefRecord OK / handoff DONE / gateRecord PASS.
+
+COMMANDS + RESULTS (verifier re-ran all; orchestrator re-derived spot checks)
+- php -l tests/php/CategoryEditAutoSortTest.php -> No syntax errors
+- vendor/bin/phpunit -> OK; Tests: 3019, Assertions: 20232, Skipped: 4
+  (pre-existing root-guard skips); 5 new AutoSort + 9 tombstone RowMove green
+- composer phpstan -> [OK] No errors
+- composer phpcs -- --standard=phpcs.xml.dist src/ -> exit 0 (src/ untouched)
+- python3 -m pytest -> 2672 passed, 4 skipped
+- ruff check . -> All checks passed!; ruff format --check . -> 222 already
+  formatted; mypy tests/ -> no issues in 93 files
+- Live VM (local-smoke.sh --marker ui_e2e --filter category): Run 1 box .35
+  36 passed/322 deselected; Run 2 (post-vacuity-restore) box .38 36 passed.
+
+RED/GREEN (behaviour-preserving phase — vacuity/failability proofs)
+- Item A (live): golden mutated (commit cba67104; test blob 1a043853 ==
+  handoff red-time hash) -> [ipv4] FAILED "expected [a,b,c], got [c,a,b]";
+  reset --hard to 63be703f (tests byte-identical to final f3d81ad4 — empty
+  git diff 63be703f..f3d81ad4 -- tests/) -> full green re-run.
+- Item C (local): AutoSort golden mutated -> 1/5 FAILED with expected-vs-
+  actual array diff; restored blob ecf1fa1c == committed. Verifier ALSO ran
+  its own independent golden-mutation probe (different test) red->green.
+- verify-red-proof.sh: N/A — zero production paths to revert (see SKIPPED).
+
+PER-ITEM DIFF VERDICTS (full git show f3d81ad4 read by verifier; orchestrator
+spot-read bootstrap regex + new test assertions)
+1. Matrix re-derivation: PASS — both corrections recorded with citations.
+2. ids[] Tier-B coverage: PASS — permutation oracle {ipv4,ipv6,dnsbl} via
+   3-cycle, config.xml-over-SSH oracle, finally-restore; bundle test proves
+   postdata-before-ids ordering; geoip no-op pinned 3 ways (empty body,
+   render order, config-node blob).
+3. Tombstones: PASS — CategoryEditRowMoveTest.php (9) +
+   test_category_edit_row_move.py (3) green, byte-untouched.
+4. AutoSort oracle: PASS — eval-extraction anchored on unique comment,
+   RuntimeException on miss; branch coverage (empty/'sort'/'no-sort'),
+   hand-computed natural/case-insensitive golden, dup-header last-wins pin.
+
+MATRIX: M1-M15 all ticked (M11/M13/M15 justified deferrals — gtype-independent
+extracted block; input-method/roworderdragging/composition axes owned by
+Phases 2-4 per ADR §6).
+
+TEST HONESTY: no weakened assertions; before-state asserted; goldens failable
+(vacuity executed); fixtures inert (pfbord* names, local PFB_DBDIR urls).
+CONVENTIONS: class + eval'd oracle fn named beside 3+ siblings; module
+docstring reconciled; PHP tabs/strict_types; helpers generalized with old
+names kept as thin wrappers (zero behaviour change to pre-existing tests).
+
+ORCHESTRATOR ADDITIONS
+- Re-ran matrix sources M1/M4 myself: gtype switch (:92-114, geoip sets no
+  $conf_type) + grep rowdata_path (sole assignment :118 in non-GeoIP branch;
+  persist guard :302) — briefRecord non-vacuous.
+- Drift flags adjudicated: (1) geoip persist no-op -> tracking issue #1201
+  filed + ADR §1.4/Semantics-#7 amendment committed alongside this record;
+  (2) prompt's geoip "assert persisted order" refuted by code — brief's
+  REALITY-OVERRIDE correction accepted; (3) category_edit gtype axis
+  {ipv4,ipv6,dnsbl} — ADR matrix note amended.
+- Transaction: HEAD == origin/adr/63-category-reorder-ux == f3d81ad4;
+  implementer rebased onto advanced origin/devel (d0016064) as briefed.
+
+SKIPPED
+- Orchestrator third run of gates/red-proof: verifier just executed both
+  independently (skill rule — no third run).
+- Live-VM re-run by verifier: verified cryptographically instead (blob
+  hashes + empty tests/ diff between live-run commit and final commit);
+  shared boxes, ~4 min/run.
+
+NITS (non-blocking, recorded)
+- Handoff's PHPUnit-over-Tier-B rationale implicit rather than explicit.
+- Test docstring references brief fact id "(F3)" — meaningless to future
+  readers; tests/ is outside the narration checker's enforced surface.
+  Sweep opportunistically in a later phase touching the file.

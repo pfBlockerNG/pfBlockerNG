@@ -1,0 +1,113 @@
+================================================================================
+PHASE 1 PROMPT -- Oracle: pin today's DNSBL decision + characterize the legacy fallback (behaviour-preserving)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS1 + SS2 "Semantics that MUST be preserved" first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source (off the latest devel; create if absent). Implement yourself
+with Read/Edit/Write/Bash -- never spawn sub-agents. Inline on the branch, one commit, push
+directly. Test mode: behaviour-preserving -- you author an ORACLE that pins existing behaviour and
+stays GREEN across this phase (no production code changes at all this phase).
+Blast-radius note for the gate: NONE. This phase adds tests only; no production file is edited, so
+no production behaviour can change when it lands alone.
+
+WHY THIS PHASE EXISTS
+Every later phase claims "net PRODUCTION (manifest-built) decisions are unchanged" and "the query
+channel is decision-equal to a real query." Those claims need a falsification harness that exists
+BEFORE any code moves. This phase builds it: a golden oracle of what the production (manifest-built)
+matcher decides + would log today, plus a CHARACTERIZATION of the legacy interchange-file fallback
+(ADR SS1.1, re-derived 2026-07-14): the fallback runs ONLY on a manifest-build failure, it is LOSSY
+(the loaders skip every NDJSON 'abp' row -- _load_ndjson_row_into_db :925 -- and regexDB/allowRegexDB
+come only from the manifest build :1672, so ABP-feed rules are absent), and it is STALE-ABLE (it
+reads whatever pfb_py_data.txt/pfb_py_zone.txt exist, no freshness check). Fresh plain-domain rows
+DO agree with the manifest classification in both TLD-toggle states. Phase 5 removes the fallback
+because it is a degraded, failure-only path -- this oracle pins the manifest decisions and records
+those facts; it does NOT assert manifest==fallback equality.
+
+REQUIRED READING
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md IN FULL -- especially SS1.1 (manifest is
+  decision-complete), SS1.4/SS1.5 (the log fields + the side-effect sinks), and SS2 "Semantics that
+  MUST be preserved" (items 1-3).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- evaluate_domain (~:6038), _scan_block_band
+  (~:5834; renamed from highest_block_band), get_details_dnsbl (~:2762, where the log line +
+  counter/cache enqueues live), the csv_line field order (~:2829), dnsbl_build_from_manifest
+  (~:5351, called ~:1658), _load_zone_and_data_dbs (~:1045), _load_zone_db/_load_data_db
+  (~:942/:968), _load_ndjson_row_into_db (~:913, the 'abp'-row skip ~:925),
+  tld_wildcard_classify (~:4316, empty-oracle guard ~:4328, 2-label ZONE ~:4344) and its
+  python_tld_wildcard gating (~:1260/:1436/:5324).
+- tests/ -- find the existing DNSBL decision/build tests (e.g. tests touching build()/
+  dnsbl_build_from_manifest / evaluate_domain) and MIRROR their harness + fixture style; do not
+  invent a new pattern.
+- CLAUDE.md -- Test coverage mandate (esp. "brand-new code / oracle" and no coverage theater),
+  Python standards.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live tree
+and any prior RESULTS file override this prompt on any conflict -- verify each symbol/line before
+acting, and flag
+contradictions loudly in the handoff. If the live matcher disagrees with an ADR "fact", the CODE
+wins and you ESCALATE rather than encode the ADR's number as truth.
+
+ACTION PLAN (ordered -- oracle FIRST; this whole phase is the oracle)
+1. Build a representative corpus of (domain, qtype) inputs exercising EVERY decision arm: exact
+   dataDB hit, zoneDB suffix hit, feed regex, ABP block, ABP allow / whitelist override, TOP1M
+   whitelist, $important precedence, HSTS, homoglyph, and a clean NOT-BLOCKED name -- and cover
+   BOTH TLD-toggle states (python_tld_wildcard on: oracle loaded, 2-label plain domain -> ZONE;
+   off: oracle empty, everything plain -> DATA). Use inert fixtures (RFC-5737/3849, uuid-style
+   names) -- never RFC 6761 TLDs or HSTS-preload names except where a case is specifically
+   testing HSTS.
+2. Oracle A (decision): drive the production decision path over the corpus and snapshot, per input,
+   the verdict (blocked/allowed) + the exact fields a block would log
+   ({b_type, group, b_eval, feed, p_type}). This is the frozen expectation Phases 2/4/6 re-run.
+3. Oracle B (fallback CHARACTERIZATION -- NOT an equality assertion): pin the four ADR SS1.1
+   facts, each as its own test:
+   (a) TRIGGER -- the legacy loaders populate the DBs only when dnsbl_build_from_manifest
+       returned None (and never when it built).
+   (b) LOSSINESS -- with an ABP feed among the same inputs, the fallback-loaded DBs carry NO
+       ABP-derived entries and regexDB/allowRegexDB stay empty, while the manifest build carries
+       them (assert on actual payloads, not key presence).
+   (c) STALENESS -- seed pfb_py_data.txt/pfb_py_zone.txt with content that no longer matches the
+       manifest inputs; on a build failure that stale content IS served verbatim. This test is
+       Phase 5's red baseline -- name it for that intent.
+   (d) FRESH PLAIN-DOMAIN PARITY -- freshly-produced interchange files agree with the manifest
+       build's zone/data classes in BOTH toggle states (2-label, 3-label, sub-domain rows; ON:
+       both wildcard the registrable parent; OFF: both exact-only).
+   If (d) fails, or a fallback load runs while the manifest built, STOP and ESCALATE -- an ADR
+   SS1.1 fact is falsified and the removal argument must be re-examined.
+4. Name the tests for intent (what behaviour they pin), BDD-structured where non-trivial.
+
+CONSTRAINTS
+- Python: 4-space indent, from __future__ import annotations, type hints, no bare except; stdlib +
+  the suite's existing helpers only.
+- DO NOT edit any production file this phase. If pinning the oracle seems to require a production
+  change, STOP and ESCALATE -- it means an extraction belongs in a later phase.
+- No coverage theater: every assertion must be able to fail on a regression (Oracle B must actually
+  compare payloads, not just key presence).
+
+VERIFICATION (must all pass; only gates runnable here)
+- test mode: behaviour-preserving ORACLE -- the new tests are GREEN on today's untouched tree
+  (paste `python3 -m pytest <new test path>` output). There is no red run this phase (no behaviour
+  changes; the oracle pins current behaviour).
+- `python3 -m pytest` (whole suite green), `ruff check .`, `ruff format --check .`, `mypy tests/`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+- diff-read: confirm the diff is tests-only (no src/ change).
+
+EXPECTED RESULT
+Two committed oracle test modules (decision snapshot + fallback characterization), green on the
+untouched tree, ready to gate every later phase.
+
+COMMIT (single)
+    tests: pin DNSBL decision oracle + characterize the legacy fallback (ADR-65 P1)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the direct push is rejected.
+
+HANDOFF -- write .ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/01_Results.txt (plain .txt) with
+the fixed fields (CLAUDE.md "THE HANDOFF"): Verdict; What changed (files + one-line why each +
+commit hash); Gates (exact commands + pasted output tails); the ORACLE-green proof (paste); the
+Oracle-B CHARACTERIZATION result (facts a-d each confirmed with its test: trigger, lossiness,
+staleness, fresh plain-domain parity; ESCALATE on any SS1.1 contradiction); Coverage-matrix (every
+decision arm from ACTION PLAN step 1 ticked to a case -- both toggle states -- plus facts a-d, or a
+justified deferral); Deviations / judgment calls (or "none"); Carry-forward for Phase 2 (the oracle
+entry symbols + corpus location the query channel must match) and Phase 5 (the staleness test that
+becomes its red baseline).

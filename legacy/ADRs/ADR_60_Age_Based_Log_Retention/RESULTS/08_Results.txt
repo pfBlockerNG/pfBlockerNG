@@ -1,0 +1,376 @@
+ADR-60 Phase 8 -- Log Settings UI -- RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+REALITY CHECK AGAINST THE BRIEF (verified this session, before editing)
+--------------------------------------------------------------------------------
+Read RESULTS/07_Results.txt and RESULTS/07_Gate.txt first: confirmed Phase 7
+(commit eb1f3121) landed and is green, and re-read its URGENT-CONTEXT/gate
+finding that pfblockerng_general.php unconditionally calls
+PfbConfig::read('log_rotate_<type>')/read('log_reset_keep_<type>') at the
+top of every page request, before any $_POST branch.
+
+Independently re-verified this claim BEFORE editing (not trusted from the
+brief alone), via an executed PHPUnit-bootstrap probe against the live
+pre-edit tree:
+
+  $ php probe_throw.php
+  THROWS (log_rotate_log): PfbConfig: key 'log_rotate_log' is not in the
+    field registry. Use config_get_path() directly for foreign/unregistered
+    keys.
+  THROWS (log_reset_keep_unilog): PfbConfig: key 'log_reset_keep_unilog' is
+    not in the field registry. Use config_get_path() directly for
+    foreign/unregistered keys.
+  NO THROW (log_max_days_log): '0'
+
+CONFIRMED: both claimed throw sites do throw InvalidArgumentException on
+this exact commit (b7305628); log_max_days_log (Phase 6's own key) reads
+fine, confirming the registry state the brief described (log_max_days_*
+registered, log_rotate_*/log_reset_keep_* deregistered by Phase 7).
+
+Also independently re-derived (not trusted from the brief's line numbers):
+- Read the full pfblockerng_general.php Log Settings section end-to-end
+  (lines 75-465ish) -- confirmed every line-number claim in the brief's
+  "VERIFIED THIS SESSION" section matches the live tree exactly: the
+  $log_suffixes array (:78), the two ADR-30 read loops (:84-93, the throw
+  sites), $options_log_rotate (:120), the two POST-validation loops
+  (:166-184), the two persist loops (:219-229), the intro <ul> (:395-413),
+  the header row (:418-425), the per-row Form_Select/Form_Input controls
+  (:429-450).
+- grep for any OTHER consumer of log_rotate_<type>/log_reset_keep_<type>
+  under src/usr/local/www/: only pfblockerng_general.php (dynamic
+  'log_rotate_' . $type concatenation -- doesn't match Phase 7's own
+  literal-suffix grep pattern, which is WHY that phase's grep-gate showed
+  this file as already "gone"; the references were real and confirmed via
+  direct grep for the literal prefixes `log_rotate_`/`log_reset_keep_`
+  without requiring a following literal suffix).
+No contradiction found; no blocker. Proceeded per the action plan.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 9a410ec87cd0de412f898f27f664de7b30fb4b80
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed --
+  `git push origin adr/60-age-based-log-retention` succeeded, no rejection)
+
+- src/usr/local/www/pfblockerng/pfblockerng_general.php
+  - Removed the two ADR-30 PfbConfig::read() loops (log_rotate_<type>,
+    log_reset_keep_<type> -- the two throw sites) from the $pconfig-building
+    section; added one loop reading log_max_days_<type> via PfbConfig::read
+    (mirrors the log_syslog/pfb_feed_internal_filter NULL-adapter read
+    convention already in this file -- no ->value needed, confirmed by
+    reading the registry entry's read_adapter => NULL).
+  - Removed the now-dead $options_log_rotate array.
+  - Removed the two ADR-30 $_POST validation loops (log_rotate_<type>
+    against $options_log_rotate; log_reset_keep_<type> ctype_digit check);
+    added one validation loop for log_max_days_<type> using the EXACT same
+    ctype_digit / is_array / default-'0' shape as the deleted
+    log_reset_keep_<type> loop.
+  - Removed the two ADR-30 persist-into-$pfb['gconfig'] loops; added one
+    persist loop for log_max_days_<type>, same ?: '0' fallback shape.
+  - Intro help <ul> (Form_StaticText): replaced the "Schedule" + "Keep
+    lines" bullets (and the Schedule sub-bullet) with one "Max days"
+    bullet: "trims lines older than this many days (0 = disabled);
+    independent of Max lines -- whichever cap is more restrictive wins" --
+    mirrors ADR.md S2.2's wording, brief per CLAUDE.md's Web UI help text
+    rule.
+  - Per-category header row: replaced the 3 Form_StaticText columns
+    (Max lines width 4 / Schedule width 3 / Keep lines width 3) with 2
+    (Max lines width 4 / Max days width 4) -- see DEVIATIONS for the width
+    choice.
+  - Per-log-type row: replaced the log_rotate_<type> Form_Select and
+    log_reset_keep_<type> Form_Input with one log_max_days_<type>
+    Form_Input, mirroring the EXACT deleted log_reset_keep_<type> control
+    shape (`(new Form_Input(..., 'number', $pconfig[...]))
+    ->setAttribute('min', '0')`), width 4 to match its new header cell.
+  - Reworded 3 stale comments naming ADR-30/the old 3-column design (the
+    $log_suffixes comment, the issue #489 grouping comment, the intro
+    Form_StaticText comment) so none mention the removed mechanism.
+
+- tests/php/WwwGroupAGatewayTest.php
+  - Added the 10 log_max_days_<type> keys (default '0') to
+    testGeneralSectionWriteReadRoundTrip()'s $data array -- the section now
+    round-trips exactly what the real save handler writes post-Phase-8.
+  - Added testGeneralLogMaxDaysIpBlocklogRoundTrips(): writes the default
+    '0', asserts it, then writes '30' and asserts the value actually
+    changed -- following this file's exact toggle-round-trip convention
+    (testGeneralPfbFeedInternalFilterOffRoundTrips() etc.), proving the
+    write causes the change rather than just matching the final state.
+
+- tests/smoke/ui/test_render_smoke.py
+  (test_log_settings_section_redesign_render, ~line 1493)
+  - Docstring rewritten: 3-column -> 2-column design, ADR-30 retirement
+    context, updated source-line pointer (~359-418, current tree).
+  - PRESENT intro-wording assertions: "discards that period" /
+    "cushion for remote log shippers" (deleted wording) -> "trims lines
+    older than" / "whichever cap is more restrictive" (new Max days
+    wording); "rolling cap" (Max lines, unchanged) kept.
+  - PRESENT header-cell assertions: dropped the "Schedule"/"Keep lines"
+    full-markup needles, added "Max days".
+  - PRESENT field-name assertions: log_rotate_dnslog / log_reset_keep_unilog
+    / log_rotate_dnsreplylog -> log_max_days_dnslog / log_max_days_unilog /
+    log_max_days_dnsreplylog (same 3 categories: DNS Block, General
+    Unified, DNS Reply); log_max_log / log_max_ip_blocklog kept unchanged.
+  - ADDED a new ABSENT block asserting the 3 retired field names
+    (log_rotate_dnslog, log_reset_keep_unilog, log_rotate_dnsreplylog) are
+    now absent -- mirrors the file's existing "ABSENT: old ..." pattern
+    (the "</strong> Log" / "Unified Log" checks just below, untouched).
+
+Untouched, per constraints: everything else in the file (General Settings
+section, CRON Settings, ADR-38 syslog toggle, Support section); no other
+src/ file referenced log_rotate_<type>/log_reset_keep_<type> for display
+(confirmed by grep, see REALITY CHECK).
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 9a410ec8)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_general.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_general.php
+
+$ vendor/bin/phpunit
+............................................................. 2318 / 2372 ( 97%)
+......................................................         2372 / 2372 (100%)
+Time: 00:11.119, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2372, Assertions: 18574, PHPUnit Deprecations: 2, Skipped: 4.
+(2372 = Phase 7's 2371 baseline + 1 new test,
+ testGeneralLogMaxDaysIpBlocklogRoundTrips; same 2 pre-existing PHPUnit
+ Deprecations and 4 skips as every prior phase.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+2436 passed, 4 skipped in 41.10s
+(unchanged from Phase 7's baseline -- tests/smoke is excluded from default
+collection via pyproject.toml's testpaths/--ignore, so the
+tests/smoke/ui/test_render_smoke.py edit does not appear here.)
+
+$ python3 -m pytest tests/smoke/ui --collect-only -q
+290 tests collected in 0.08s
+(unchanged count from before this edit -- confirms the edited test file
+still collects cleanly with no syntax/import errors.)
+
+$ ruff check tests/smoke/ui/test_render_smoke.py
+All checks passed!
+
+$ ruff format --check tests/smoke/ui/test_render_smoke.py
+1 file already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(exit 0, clean)
+
+$ python3 scripts/check_version_literals.py
+(exit 0, clean)
+
+$ python3 scripts/check_appliance_python.py
+(exit 0, clean)
+
+$ python3 scripts/check_url_encoding.py
+(exit 0, clean)
+
+Pre-commit hook (ran automatically on `git commit`): ruff check, ruff
+format --check, no-appliance-python, version-literals, comment-narration,
+php -l, phpstan, phpcs all passed; mypy reported "skipped (tool not found)"
+in the hook's own sandboxed PATH -- re-run manually above via
+`python3 -m mypy tests/`, green.
+
+--------------------------------------------------------------------------------
+BEFORE/AFTER THROW-SITE PROOF (the "page is broken" bug -- executed)
+--------------------------------------------------------------------------------
+BEFORE (pre-edit tree, commit b7305628 -- the exact tip this phase started
+from):
+  THROWS (log_rotate_log): PfbConfig: key 'log_rotate_log' is not in the
+    field registry. Use config_get_path() directly for foreign/unregistered
+    keys.
+  THROWS (log_reset_keep_unilog): PfbConfig: key 'log_reset_keep_unilog' is
+    not in the field registry. Use config_get_path() directly for
+    foreign/unregistered keys.
+
+AFTER (post-edit tree, commit 9a410ec8) -- re-ran the probe against all 10
+log types plus a confirmation the deregistered keys still (correctly)
+throw when queried directly (proving the page no longer touches them, not
+that PfbConfig grew more lenient):
+  OK log_max_days_log = '0'
+  OK log_max_days_errlog = '0'
+  OK log_max_days_extraslog = '0'
+  OK log_max_days_ip_blocklog = '0'
+  OK log_max_days_ip_permitlog = '0'
+  OK log_max_days_ip_matchlog = '0'
+  OK log_max_days_dnslog = '0'
+  OK log_max_days_dnsbl_parse_err = '0'
+  OK log_max_days_dnsreplylog = '0'
+  OK log_max_days_unilog = '0'
+  EXPECTED THROW (deregistered, correct): log_rotate_log
+  EXPECTED THROW (deregistered, correct): log_reset_keep_unilog
+  PROBE PASS
+
+This is the red->green proof for the phase's headline fix: the page's
+config-read path throws on every one of the 10 log types before the edit
+(2 sampled, both throw) and reads cleanly for every one of the 10 types
+after the edit, with the retired keys still correctly rejected as
+unregistered (not silently tolerated).
+
+--------------------------------------------------------------------------------
+UI_RENDER TEST STATUS: written, statically checked, LIVE EXECUTION DEFERRED
+--------------------------------------------------------------------------------
+No PFB_BOXES remote box pool this session (same environmental constraint as
+Phase 5, reconfirmed) -- `python3 -m pytest tests/smoke/ui -m ui_render`
+against a real pfSense VM could NOT be executed. What WAS done:
+
+1. `python3 -m pytest tests/smoke/ui --collect-only -q` -- 290 tests
+   collected cleanly (no import/syntax errors in the edited file).
+2. `ruff check` / `ruff format --check` / the file's own docstring
+   cross-referenced line-by-line against render_oracle.py's
+   `evaluate_render(path, status_code, body, markers)` signature (unchanged
+   call shape, matches every other test in this file).
+3. A source-level red/green diff proof (the closest available substitute
+   for live execution, since the real page render needs pfSense's Form
+   class library + guiconfig.inc, unavailable off-box):
+     $ grep -c "log_max_days_" <pre-edit pfblockerng_general.php>   -> 0
+     $ grep -c "log_rotate_\|log_reset_keep_" <pre-edit file>       -> 11
+     (post-edit tree: inverse -- 0 log_rotate_/log_reset_keep_ instances
+     under src/usr/local/www/, all 10 log_max_days_<type> instances
+     present, confirmed via the "GREP-GATE" section below.)
+   This confirms: the OLD page source could never have emitted
+   'name="log_max_days_..."' (the string never appears anywhere in it) and
+   DOES emit 'name="log_rotate_..."'/'name="log_reset_keep_..."' -- so the
+   test's new PRESENT assertions would FAIL against the pre-edit page and
+   its new ABSENT assertions would FAIL as well (the old strings ARE
+   present) -- i.e. RED against old code. The post-edit page source
+   contains the exact literal strings the new PRESENT assertions require
+   and none of the strings the new ABSENT assertions forbid -- GREEN
+   against new code, confirmed by direct grep/Read above.
+4. The `name="..."` attribute convention itself is NOT a new assumption:
+   the test's unchanged, already-live-tested assertions
+   ('name="log_max_log"', 'name="log_max_ip_blocklog"') already rely on
+   this exact HTML-attribute shape for Form_Select controls; Form_Input
+   renders through the same pfSense Form library and the file's OWN
+   pre-existing (Phase-4/issue-489-era) log_reset_keep_<type> Form_Input
+   assertions used the identical convention before this phase deleted
+   them -- so this is an established, previously-verified pattern, not an
+   unverified new claim.
+
+Honest gap: none of the above is a substitute for an actual HTTP GET
+against a running pfSense VM asserting HTTP 200, no PHP error/warning in
+the body, and no new php_error.log line -- that is explicitly deferred to
+Phase 9 (which the ADR names as the live-VM validation phase), exactly as
+Phase 5 documented the same deferral for its own ui_render edits.
+
+--------------------------------------------------------------------------------
+ROUND-TRIP TEST RESULT
+--------------------------------------------------------------------------------
+$ vendor/bin/phpunit --filter WwwGroupAGatewayTest
+............                                                      12 / 12 (100%)
+Time: 00:00.062, Memory: 32.00 MB
+OK, but there were issues!
+Tests: 12, Assertions: 30, PHPUnit Deprecations: 2.
+
+12 tests (11 pre-existing + testGeneralLogMaxDaysIpBlocklogRoundTrips), all
+green. testGeneralSectionWriteReadRoundTrip (now carrying all 10
+log_max_days_<type> keys) and the new toggle test both pass; both are also
+included in the full-suite 2372-test run above.
+
+--------------------------------------------------------------------------------
+GREP-GATE (Phase 7's own grep-gate command, re-run post-Phase-8)
+--------------------------------------------------------------------------------
+Command (identical to Phase 7's):
+grep -rniE 'log_rotate_[a-z_]+|log_reset_keep_[a-z_]+|pfb_log_reset|log_rotate\.last|pfb_log_rotate_period|pfb_log_should_reset|pfb_log_rotate_marker' --include=*.php --include=*.inc --include=*.py --include=*.md . | grep -v '\.ADRs/'
+
+Output (post-Phase-8):
+  tests/smoke/ui/test_render_smoke.py:1588:  'name="log_rotate_dnslog"',
+  tests/smoke/ui/test_render_smoke.py:1589:  'name="log_reset_keep_unilog"',
+  tests/smoke/ui/test_render_smoke.py:1590:  'name="log_rotate_dnsreplylog"',
+  docs/misc/adr-7day-review-2026-06-26.md:42: `pfb_log_reset()` and the
+    `pfb_log_mgmt()` line-cap trim are scheduled only from
+  docs/misc/adr-7day-review-2026-06-26.md:138: calls `pfb_log_reset()`
+    directly), which is exactly why #2 shipped invisibly.
+
+Both residues are EXPECTED, not a leftover bug:
+- The 3 test_render_smoke.py lines are now the string literals inside this
+  phase's own new ABSENT-assertion block (proving the retired fields are
+  gone) -- not stale PRESENT markers. Confirmed via Read: they sit inside
+  `for field_name in (...)` followed by
+  `assert field_name not in body, ...`.
+- docs/misc/adr-7day-review-2026-06-26.md is the same dated, point-in-time
+  audit report Phase 7 already flagged and left untouched (rewriting a
+  past audit finding would fabricate history) -- unrelated to this phase's
+  scope (a UI page), untouched here too.
+
+Separately, confirmed src/ and tests/php/ are byte-for-byte clean of the
+dynamic-concatenation form Phase 7's regex couldn't see:
+  $ grep -rniE 'log_rotate_[a-z_]+|log_reset_keep_[a-z_]+' src/ tests/php/
+  (no output, exit 1 -- zero matches)
+
+Phase 7's carry-forward prediction ("once Phase 8 lands, the grep-gate will
+finally return truly empty modulo .ADRs/ and the dated docs/misc audit")
+is confirmed: the only non-.ADRs/ residue left is exactly that dated audit
+doc plus this phase's own intentional ABSENT-assertion literals.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (brief's action-plan items 1-4 + verification items)
+--------------------------------------------------------------------------------
+| Item | Status |
+| --- | --- |
+| 1. Remove log_rotate_<type>/log_reset_keep_<type> from $pconfig loop, default block, $_POST handling, rendering loop | DONE |
+| 2. Add log_max_days_<type> to all four (read/default/save/render) | DONE |
+| 3. Help text: brief, matching neighbouring style | DONE (intro <ul> bullet; mirrors ADR S2.2 wording) |
+| 4. Grep for any other consumer beyond this file | DONE -- none found (REALITY CHECK) |
+| phpcs clean | DONE |
+| ui_render: red-before/green-after (test assertions) | DONE, source-level proof (live execution deferred, see UI_RENDER TEST STATUS) |
+| Save round-trip test (PHPUnit) | DONE -- testGeneralLogMaxDaysIpBlocklogRoundTrips + updated testGeneralSectionWriteReadRoundTrip, both green |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Column widths for the new 2-column layout: chose width(4)/width(4) for
+   Max lines / Max days (both the header-row Form_StaticText pair and the
+   per-row Form_Select/Form_Input pair), rather than re-splitting the old
+   3-column 4/3/3 some other way. Justification: grep found an existing
+   in-repo 2-column Form_Group precedent --
+   pfblockerng_dnsbl.php:3085-3097's "DNSBL Virtual IP" group (IPv4 VIP /
+   IPv6 VIP), which uses width(4)/width(4) for exactly a 2-field row. Used
+   that house convention rather than inventing a new split.
+2. The brief's own VERIFICATION section says "python3 -m pytest tests/smoke/ui
+   -m ui_render --override-ini=\"addopts=\" (needs SMOKE_ADMIN_PASSWORD set)"
+   -- this session has no PFB_BOXES remote box pool (same constraint
+   verified in Phase 5), so this exact command could not be executed
+   against a live VM. Handled via collect-only + source-level red/green
+   proof instead (see UI_RENDER TEST STATUS), documented honestly rather
+   than claimed as done. Not a silent gap: flagged per the brief's own
+   Phase-5-precedent instruction.
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 9 (Smoke + validation + docs)
+--------------------------------------------------------------------------------
+- Execute `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
+  against a real pfSense VM (CE + Plus fan-out) -- this is where
+  test_log_settings_section_redesign_render's new assertions (2-column
+  header, new Max-days wording, log_max_days_<type> field names present,
+  retired log_rotate_/log_reset_keep_ field names absent) get their first
+  actual live execution. Phase 5 deferred the same way; both phases'
+  deferred ui_render coverage should be confirmed together.
+- Phase 9's own live-VM smoke case (seeding a log with straddling
+  timestamps, running the tick, asserting the age-cutoff trim) is the
+  right place to also confirm end-to-end that a value entered in the new
+  log_max_days_<type> Form_Input on this page actually reaches
+  pfb_log_mgmt()'s age-cutoff pass (Phase 6) via a real page POST -- this
+  phase only proved the config-gateway round-trip (PfbConfig level), not a
+  live browser POST through the page's own $_POST handler.
+- Grep-gate is now truly clean modulo the dated docs/misc audit report and
+  this phase's own intentional ABSENT-assertion literals -- no further
+  action needed on that front for Phase 9.
+- Maintainer note (carried from Phase 7, still open): ADR-30's own ADR.md
+  header could use a manual "Superseded by ADR-60" pointer -- left for the
+  maintainer.

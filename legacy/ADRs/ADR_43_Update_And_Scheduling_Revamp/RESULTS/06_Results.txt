@@ -1,0 +1,132 @@
+ADR-43 Phase 6 — Update Page Revamp
+=====================================
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=7
+
+STATUS: COMPLETE — all verification gates green.
+
+---
+
+WHAT WAS DONE
+
+1. pfblockerng_update.php — replaced opaque verb UI with explicit Phase-3 API controls
+
+   REMOVED:
+   - pfb_cron_update() function (used deprecated verb strings 'update'/'cron'/'reload')
+   - pfb_reload_option_value() call (old 'All'/'IP'/'DNSBL' option validator)
+   - Force Options group ("AVOID" warn text)
+   - "Select 'Force' option" group (Update/Cron/Reload radios: pfb_force_update,
+     pfb_force_cron, pfb_force_reload)
+   - "Select 'Reload' option" group (All/IP/DNSBL radios: pfb_reload_option_all,
+     pfb_reload_option_ip, pfb_reload_option_dnsbl)
+   - Old wizard handler (set pfb_force='reload', pfb_reload_option='All')
+   - Old POST dispatch (if pfb_force == 'update'/'cron'/'reload')
+   - Index-based JS textarea expansion (fragile :eq(N) selectors)
+   - $status from "Update Settings" section (moved to new "Schedule" section)
+   - $options block (the Force Options description text)
+
+   ADDED:
+   - pfb_runnow(string $scope, bool $force): void
+     * Validates scope against allowed list (ip/dnsbl/both)
+     * Checks for active pfBlockerNG process via ps
+     * Removes tick cron to prevent overlap (sync_package_pfblockerng restores it)
+     * Dispatches via Phase-3 explicit API: pfb_trigger scope=$scope force=... trigger=...
+     * force=true → trigger=force; force=false → trigger=manual
+     * Captures $now before dispatch (not after, so last_run = when the run was requested)
+     * Calls pfb_livetail() to block until "UPDATE PROCESS ENDED"
+     * Calls pfb_due_ledger_mark_ran('cron', $interval, $now, pfb_tick_seed(), 0, $dbdir)
+       to update the Schedule view (jitter_max=0 mirrors tick's cron dispatch)
+   - "Update Settings" section with Run Scope radio + Force Reparse checkbox
+     * pfb_scope radio: pfb_scope_both / pfb_scope_ip / pfb_scope_dnsbl (default: both)
+     * pfb_run_force checkbox: "Reparse" (reprocess cached downloads even if unchanged)
+   - "Schedule" section (read-only, sourced from due-ledger at page-load time)
+     * Cron Status: next scheduled tick time + time remaining (existing $status var)
+     * Feed cron: pfb_due_ledger_read_entry('cron', $pfb['dbdir']) → last + next
+     * MaxMind/Extras: pfb_due_ledger_read_entry('dcc', $pfb['dbdir'])
+     * DNSBL category: pfb_due_ledger_read_entry('bl', $pfb['dbdir'])
+     * pfb_ledger_entry_html(?array $entry): string helper → "Not yet run" or timestamps
+   - Updated wizard handler: pfb_scope='both', pfb_run_force='on' (reparse)
+   - Updated run POST handler: validates pfb_scope, derives force from pfb_run_force
+   - Updated process check regex: includes pfb_trigger + tick verbs
+   - Updated cron check cmd: uses 'pfblockerng.php tick' (not deprecated 'cron')
+   - Name-based JS textarea expansion ($('textarea[name="pfb_status"]').closest(...))
+     replaces the fragile :eq(N) selectors
+
+2. tests/smoke/ui/test_render_smoke.py
+
+   - PAGE_TABLE "update" entry: added "Schedule" as second required marker
+     (fails before Phase 6 because the Schedule section didn't exist)
+   - test_update_revamp_controls_render() [ui_render]
+     * PRESENT: pfb_scope_both, pfb_scope_ip, pfb_scope_dnsbl IDs
+     * PRESENT: pfb_run_force name, "Run Scope", "Force Reparse", "Schedule"
+     * ABSENT: pfb_force_update, pfb_force_cron, pfb_force_reload, pfb_reload_option_all
+     * Before/after evidence: ABSENT markers are PRESENT in old code → test FAILS on
+       origin/devel, PASSES after Phase 6
+
+3. tests/smoke/ui/test_functional.py [ui_e2e]
+
+   - import json added
+   - UPDATE_PAGE constant added
+   - test_update_runnow_updates_ledger():
+     * Enables pfBlockerNG if not already; restores state in finally
+     * Captures before_ts from VM clock (not runner clock — avoids cross-host skew)
+     * BEFORE assertion: cron.last_run (if present) < before_ts
+     * ACT: POST scope=ip, submit=("run", "Run Now"), timeout=300s
+     * AFTER assertion: pfb_due_ledger.json "cron.last_run" >= before_ts
+       (oracle = ledger file on VM, not HTTP response body)
+     * Re-GET: assert "Schedule" present (next-run view rendered cleanly)
+
+---
+
+WHAT WAS INTENTIONALLY NOT DONE
+
+- pfb_quiet_hours UI: Phase 5 notes speculated it would be added in Phase 6. The
+  authoritative Phase 6 prompt (06_Update_Page_Revamp.txt) does not include it.
+  Phase 5 registered 'pfb_quiet_hours' in PfbConfig but no UI exposes it yet.
+  FOLLOW-UP: add "Apply Window (HH:MM-HH:MM)" to the General settings page
+  (pfblockerng_general.php), which already has a save handler and is the right
+  location for a scheduling configuration field.
+
+- pfb_reload_option_value() in pfblockerng.inc: not removed (other callers might
+  reference it; phase is about the UI page only).
+
+---
+
+VERIFICATION GATES (all passed)
+
+  php -l src/usr/local/www/pfblockerng/pfblockerng_update.php          PASS
+  vendor/bin/phpstan analyse --memory-limit=1G                          PASS (0 errors)
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/                      PASS (0 errors)
+  vendor/bin/phpunit                                                    PASS (1508 tests, 5669 assertions, 3 skipped)
+  .venv/bin/python -m pytest -q                                         PASS (1882 passed, 4 skipped)
+  .venv/bin/ruff check .                                                PASS (0 errors)
+  .venv/bin/ruff format --check .                                       PASS (145 files formatted)
+  smoke --collect-only: test_update_revamp_controls_render collected    PASS
+  smoke --collect-only: test_update_runnow_updates_ledger collected     PASS
+
+---
+
+FILES CHANGED
+
+  src/usr/local/www/pfblockerng/pfblockerng_update.php
+    - pfb_cron_update() → pfb_runnow(string $scope, bool $force): void
+    - New "Update Settings" section (scope radio + force checkbox)
+    - New "Schedule" section (cron status + ledger last/next timestamps)
+    - Wizard handler updated to new params
+    - POST handler uses Phase-3 explicit API (no deprecated verb strings)
+
+  tests/smoke/ui/test_render_smoke.py
+    - PAGE_TABLE "update": added "Schedule" marker
+    - test_update_revamp_controls_render [NEW, ui_render]
+
+  tests/smoke/ui/test_functional.py
+    - import json added
+    - UPDATE_PAGE constant added
+    - test_update_runnow_updates_ledger [NEW, ui_e2e]
+
+---
+
+SMOKE DISPATCH (Phase 7)
+
+  gh workflow run ui-tests.yml -f tier=ui_render -f pytest_k="update_revamp"
+  gh workflow run ui-tests.yml -f tier=ui_e2e -f pytest_k="update_runnow"

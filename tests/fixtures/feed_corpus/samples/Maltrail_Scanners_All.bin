@@ -1,0 +1,162 @@
+# Copyright (c) 2014-2026 Maltrail developers (https://github.com/stamparm/maltrail/)
+# See the file 'LICENSE' for copying permission
+
+#################################################################
+# Note: to automatically block IPs from this list (with ipset): #
+#################################################################
+#  sudo su
+#  apt-get -qq install iptables ipset &&\
+#  ipset -q flush mass_scanners &&\
+#  ipset -q create mass_scanners hash:net &&\
+#  for ip in $(curl https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do ipset add mass_scanners $ip; done &&\
+#  iptables -I INPUT -m set --match-set mass_scanners src -j DROP
+#  iptables -nvL
+#################################################################
+
+129.82.138.12 # pinger1a.netsec.colostate.edu
+129.82.138.31 # pinger1.netsec.colostate.edu
+129.82.138.32 # pinger2.netsec.colostate.edu
+129.82.138.33 # pinger3.netsec.colostate.edu
+129.82.138.34 # pinger4.netsec.colostate.edu
+129.82.138.44 # pinger6.netsec.colostate.edu
+    
+128.9.63.138 # pinger-e1.ant.isi.edu
+203.178.148.18 # pinger-j1.ant.isi.edu
+128.9.29.128 # pinger-w1.ant.isi.edu
+128.9.29.129 # pinger-w2.ant.isi.edu
+128.9.29.130 # pinger-w3.ant.isi.edu
+128.9.29.131 # pinger-w4.ant.isi.edu
+    
+67.21.36.100 # researchscanner100.eecs.berkeley.edu
+67.21.36.101 # researchscanner101.eecs.berkeley.edu
+67.21.36.102 # researchscanner102.eecs.berkeley.edu
+67.21.36.103 # researchscanner103.eecs.berkeley.edu
+67.21.36.104 # researchscanner104.eecs.berkeley.edu
+67.21.36.105 # researchscanner105.eecs.berkeley.edu
+67.21.36.106 # researchscanner106.eecs.berkeley.edu
+67.21.36.107 # researchscanner107.eecs.berkeley.edu
+67.21.36.108 # researchscanner108.eecs.berkeley.edu
+67.21.36.109 # researchscanner109.eecs.berkeley.edu
+67.21.36.10 # researchscanner10.eecs.berkeley.edu
+67.21.36.110 # researchscanner110.eecs.berkeley.edu
+67.21.36.111 # researchscanner111.eecs.berkeley.edu
+67.21.36.112 # researchscanner112.eecs.berkeley.edu
+67.21.36.113 # researchscanner113.eecs.berkeley.edu
+67.21.36.114 # researchscanner114.eecs.berkeley.edu
+67.21.36.115 # researchscanner115.eecs.berkeley.edu
+67.21.36.116 # researchscanner116.eecs.berkeley.edu
+67.21.36.117 # researchscanner117.eecs.berkeley.edu
+67.21.36.118 # researchscanner118.eecs.berkeley.edu
+67.21.36.119 # researchscanner119.eecs.berkeley.edu
+67.21.36.11 # researchscanner11.eecs.berkeley.edu
+67.21.36.120 # researchscanner120.eecs.berkeley.edu
+67.21.36.121 # researchscanner121.eecs.berkeley.edu
+67.21.36.122 # researchscanner122.eecs.berkeley.edu
+67.21.36.123 # researchscanner123.eecs.berkeley.edu
+67.21.36.124 # researchscanner124.eecs.berkeley.edu
+67.21.36.125 # researchscanner125.eecs.berkeley.edu
+67.21.36.126 # researchscanner126.eecs.berkeley.edu
+67.21.36.127 # researchscanner127.eecs.berkeley.edu
+67.21.36.128 # researchscanner128.eecs.berkeley.edu
+67.21.36.129 # researchscanner129.eecs.berkeley.edu
+67.21.36.12 # researchscanner12.eecs.berkeley.edu
+67.21.36.130 # researchscanner130.eecs.berkeley.edu
+67.21.36.131 # researchscanner131.eecs.berkeley.edu
+67.21.36.133 # researchscanner133.eecs.berkeley.edu
+67.21.36.134 # researchscanner134.eecs.berkeley.edu
+67.21.36.135 # researchscanner135.eecs.berkeley.edu
+67.21.36.136 # researchscanner136.eecs.berkeley.edu
+67.21.36.137 # researchscanner137.eecs.berkeley.edu
+67.21.36.138 # researchscanner138.eecs.berkeley.edu
+67.21.36.139 # researchscanner139.eecs.berkeley.edu
+67.21.36.13 # researchscanner13.eecs.berkeley.edu
+67.21.36.140 # researchscanner140.eecs.berkeley.edu
+67.21.36.141 # researchscanner141.eecs.berkeley.edu
+67.21.36.142 # researchscanner142.eecs.berkeley.edu
+67.21.36.143 # researchscanner143.eecs.berkeley.edu
+67.21.36.144 # researchscanner144.eecs.berkeley.edu
+67.21.36.145 # researchscanner145.eecs.berkeley.edu
+67.21.36.146 # researchscanner146.eecs.berkeley.edu
+67.21.36.147 # researchscanner147.eecs.berkeley.edu
+67.21.36.148 # researchscanner148.eecs.berkeley.edu
+67.21.36.149 # researchscanner149.eecs.berkeley.edu
+67.21.36.14 # researchscanner14.eecs.berkeley.edu
+67.21.36.150 # researchscanner150.eecs.berkeley.edu
+67.21.36.151 # researchscanner151.eecs.berkeley.edu
+67.21.36.152 # researchscanner152.eecs.berkeley.edu
+67.21.36.153 # researchscanner153.eecs.berkeley.edu
+67.21.36.155 # researchscanner155.eecs.berkeley.edu
+67.21.36.156 # researchscanner156.eecs.berkeley.edu
+67.21.36.157 # researchscanner157.eecs.berkeley.edu
+67.21.36.158 # researchscanner158.eecs.berkeley.edu
+67.21.36.159 # researchscanner159.eecs.berkeley.edu
+67.21.36.15 # researchscanner15.eecs.berkeley.edu
+67.21.36.160 # researchscanner160.eecs.berkeley.edu
+67.21.36.161 # researchscanner161.eecs.berkeley.edu
+67.21.36.162 # researchscanner162.eecs.berkeley.edu
+67.21.36.163 # researchscanner163.eecs.berkeley.edu
+67.21.36.164 # researchscanner164.eecs.berkeley.edu
+67.21.36.165 # researchscanner165.eecs.berkeley.edu
+67.21.36.166 # researchscanner166.eecs.berkeley.edu
+67.21.36.167 # researchscanner167.eecs.berkeley.edu
+67.21.36.16 # researchscanner16.eecs.berkeley.edu
+67.21.36.170 # researchscanner170.eecs.berkeley.edu
+67.21.36.171 # researchscanner171.eecs.berkeley.edu
+67.21.36.172 # researchscanner172.eecs.berkeley.edu
+67.21.36.173 # researchscanner173.eecs.berkeley.edu
+67.21.36.174 # researchscanner174.eecs.berkeley.edu
+67.21.36.175 # researchscanner175.eecs.berkeley.edu
+67.21.36.176 # researchscanner176.eecs.berkeley.edu
+67.21.36.177 # researchscanner177.eecs.berkeley.edu
+67.21.36.178 # researchscanner178.eecs.berkeley.edu
+67.21.36.179 # researchscanner179.eecs.berkeley.edu
+67.21.36.17 # researchscanner17.eecs.berkeley.edu
+67.21.36.180 # researchscanner180.eecs.berkeley.edu
+67.21.36.181 # researchscanner181.eecs.berkeley.edu
+67.21.36.182 # researchscanner182.eecs.berkeley.edu
+67.21.36.183 # researchscanner183.eecs.berkeley.edu
+67.21.36.184 # researchscanner184.eecs.berkeley.edu
+67.21.36.185 # researchscanner185.eecs.berkeley.edu
+67.21.36.186 # researchscanner186.eecs.berkeley.edu
+67.21.36.187 # researchscanner187.eecs.berkeley.edu
+67.21.36.188 # researchscanner188.eecs.berkeley.edu
+67.21.36.189 # researchscanner189.eecs.berkeley.edu
+67.21.36.18 # researchscanner18.eecs.berkeley.edu
+67.21.36.190 # researchscanner190.eecs.berkeley.edu
+67.21.36.192 # researchscanner192.eecs.berkeley.edu
+67.21.36.194 # researchscanner194.eecs.berkeley.edu
+67.21.36.195 # researchscanner195.eecs.berkeley.edu
+67.21.36.196 # researchscanner196.eecs.berkeley.edu
+67.21.36.197 # researchscanner197.eecs.berkeley.edu
+67.21.36.198 # researchscanner198.eecs.berkeley.edu
+67.21.36.19 # researchscanner19.eecs.berkeley.edu
+67.21.36.1 # researchscanner01.eecs.berkeley.edu
+67.21.36.200 # researchscanner200.eecs.berkeley.edu
+67.21.36.201 # researchscanner201.eecs.berkeley.edu
+67.21.36.202 # researchscanner202.eecs.berkeley.edu
+67.21.36.203 # researchscanner203.eecs.berkeley.edu
+67.21.36.204 # researchscanner204.eecs.berkeley.edu
+67.21.36.205 # researchscanner205.eecs.berkeley.edu
+67.21.36.207 # researchscanner207.eecs.berkeley.edu
+67.21.36.209 # researchscanner209.eecs.berkeley.edu
+67.21.36.20 # researchscanner20.eecs.berkeley.edu
+67.21.36.210 # researchscanner210.eecs.berkeley.edu
+67.21.36.211 # researchscanner211.eecs.berkeley.edu
+67.21.36.212 # researchscanner212.eecs.berkeley.edu
+67.21.36.213 # researchscanner213.eecs.berkeley.edu
+67.21.36.214 # researchscanner214.eecs.berkeley.edu
+67.21.36.215 # researchscanner215.eecs.berkeley.edu
+67.21.36.216 # researchscanner216.eecs.berkeley.edu
+67.21.36.217 # researchscanner217.eecs.berkeley.edu
+67.21.36.218 # researchscanner218.eecs.berkeley.edu
+67.21.36.219 # researchscanner219.eecs.berkeley.edu
+67.21.36.21 # researchscanner21.eecs.berkeley.edu
+67.21.36.220 # researchscanner220.eecs.berkeley.edu
+67.21.36.221 # researchscanner221.eecs.berkeley.edu
+67.21.36.222 # researchscanner222.eecs.berkeley.edu
+67.21.36.223 # researchscanner223.eecs.berkeley.edu
+67.21.36.224 # researchscanner224.eecs.berkeley.edu
+67.21.36.225 # researchscanner225.eecs.berkeley.edu
+67.21.36.226 # researchscanner226.eecs.berkeley.edu
+67.21.36.227 # researchscanner227.eecs.berkeley.edu
+67.21.36.228 # researchscanner228.

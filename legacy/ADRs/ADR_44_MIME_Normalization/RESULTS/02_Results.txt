@@ -1,0 +1,159 @@
+ADR-44 Phase 2 — Add pfb_mime_normalise() + wire into MIME gate (const-17)
+==========================================================================
+Status: COMPLETE — 1553 tests, 0 failures, 3 pre-existing skips
+
+---
+
+1. Helper added
+---------------
+Function pfb_mime_normalise(string $raw): string added to pfblockerng.inc at
+line 644 (immediately before pfb_filter(), next to pfb_mime_in_allowlist()).
+
+Design:
+  a. switch/case exact-match first — maps x-zip-compressed and x-zip to
+     application/zip, and x-gzip to application/gzip.  The switch runs BEFORE
+     the substring guard so 'application/x-gzip' → 'application/gzip', NOT
+     'application/zip' (the switch short-circuits the catch-all).
+  b. Substring catch-all: stripos($raw, 'zip') !== FALSE for any remaining
+     unknown ZIP-variant string, BUT guarded by:
+       stripos($raw, 'gzip') === FALSE
+       stripos($raw, 'bzip') === FALSE
+     These guards are REQUIRED because "zip" is a substring of "gzip" and
+     "bzip2". Without them, application/gzip and application/x-bzip2 (both
+     already valid, allow-listed archive types) would be misrouted to
+     application/zip → pfb_download() would put them into the ZIP/tar handler
+     instead of their correct processing path → feed corruption.
+
+Pinned by tests:
+  test_normalise_x_gzip_to_gzip()     — x-gzip → gzip (NOT zip)
+  test_normalise_x_bzip2_unchanged()  — x-bzip2 passes through unchanged
+  test_normalise_gzip_unchanged()     — gzip passes through unchanged
+
+Constants 16 (PFB_FILTER_FILE_MIME_COMPARE) and 18 (PFB_FILTER_FILE_MIME_COMPRESSED)
+are NOT modified. $pfb['mime_types'] is NOT modified.
+git diff line counts: 31 insertions, 0 deletions — pfblockerng.inc only.
+
+---
+
+2. Wiring into const-17 (PFB_FILTER_FILE_MIME) only
+------------------------------------------------------
+Insertion point: between the exec() call and the pfb_mime_in_allowlist() check.
+After Phase 2, the sequence at ~line 1039 is:
+
+    exec("/usr/bin/file -b --mime-type " . escapeshellarg($input[1]) . " 2>&1", $output, $retval);
+    if (!empty($output[0])) {
+        $mime_raw = $output[0];
+        $output[0] = pfb_mime_normalise($mime_raw);
+        if ($output[0] !== $mime_raw) {
+            // ADR-44: debug-log every normalisation event (raw -> canonical).
+            pfb_logger("MIME normalised: raw=\"" . htmlspecialchars($mime_raw) . "\" -> canonical=\"" . htmlspecialchars($output[0]) . "\"", 5);
+        }
+    }
+    if ($retval != 0 || empty($output[0]) || !pfb_mime_in_allowlist($output[0], $pfb['mime_types'])) {
+
+$output[0] is overwritten with the canonical value BEFORE the allow-list check.
+This means the canonical type also flows downstream into $result (line 1057:
+`$result = htmlspecialchars($output[0])`) and into pfb_download()'s $file_type
+dispatch — so an x-zip-compressed feed is routed into the correct ZIP handler,
+not just passing the allow-list gate.
+
+The normalise block is guarded by `!empty($output[0])` so the existing
+empty/retval short-circuit behaviour is preserved exactly.
+
+Const-18 (PFB_FILTER_FILE_MIME_COMPRESSED, ~line 1066): NOT modified. ADR §2
+decision table says "No change" for that branch.
+
+---
+
+3. Debug-log sink
+------------------
+pfb_logger level 5 → /tmp/pfb_debug ("Print to debugger" case in pfb_logger,
+~line 2498 post-insertion).
+
+Log line format (emitted ONLY when normalisation changes the string):
+  MIME normalised: raw="<raw>" -> canonical="<canonical>"
+
+Both values are htmlspecialchars()-escaped before logging. Phase 4 smoke
+checklist: `tail -f /tmp/pfb_debug` on the pfSense VM during a feed reload
+to observe normalisation events for real x-zip-compressed feeds.
+
+---
+
+4. Red → green evidence
+------------------------
+RED (before adding pfb_mime_normalise() to pfblockerng.inc):
+
+  vendor/bin/phpunit tests/php/PfbMimeNormaliseTest.php
+  ERRORS!
+  Tests: 11, Assertions: 1, Errors: 11.
+  All 11: "Error: Call to undefined function pfb_mime_normalise()"
+
+GREEN (after adding function + wiring):
+
+  vendor/bin/phpunit
+  Tests: 1553, Assertions: 14909, Skipped: 3.
+  OK (no failures)
+
+Tests passing (all 11 new + all 1542 Phase 1 oracle tests):
+  PfbMimeNormaliseTest::test_normalise_x_zip_compressed_to_zip
+  PfbMimeNormaliseTest::test_normalise_x_zip_to_zip
+  PfbMimeNormaliseTest::test_normalise_zip_substring_case_insensitive
+  PfbMimeNormaliseTest::test_normalise_x_gzip_to_gzip
+  PfbMimeNormaliseTest::test_normalise_x_bzip2_unchanged
+  PfbMimeNormaliseTest::test_normalise_gzip_unchanged
+  PfbMimeNormaliseTest::test_normalise_octet_stream_unchanged
+  PfbMimeNormaliseTest::test_normalise_text_plain_unchanged
+  PfbMimeNormaliseTest::test_normalise_empty_string_unchanged
+  PfbMimeNormaliseTest::test_normalise_canonical_zip_unchanged
+  PfbMimeNormaliseTest::test_pfb_filter_mime_accepts_x_zip_compressed_after_normalise
+
+The integration test asserts before-state (raw x-zip-compressed → assertFalse)
+and after-state (normalised → assertTrue) in one test, proving normalisation
+caused the change.
+
+---
+
+5. Linting / static analysis
+------------------------------
+  php -l pfblockerng.inc       → No syntax errors
+  phpcs --standard=phpcs.xml.dist src/  → 0 errors (no violations)
+
+---
+
+6. For Phase 3
+---------------
+Phase 3 is a COMMENT-ONLY cleanup. Per the Phase 3 prompt and ADR-44 §1, it
+must NOT re-enable the commented-out PFB_FILTER_FILE_MIME_COMPRESSED call —
+inner-content/ZIP-container validation is explicitly OUT OF SCOPE (deferred to a
+future ADR). Phase 3 only removes the now-stale TODO *text* and replaces it with
+an ADR-44 reference; the commented-out _COMPRESSED call STAYS commented out.
+
+Relevant TODO comments in pfblockerng.inc (line numbers post-Phase-2 insertion):
+
+  Line 8354: /* TODO: FIX - Bypass ZIP Compression file mime type validation due
+             to incompatability with ZIP files
+             if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}",
+               "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download')) {
+                 return FALSE;
+             }
+             */
+
+  Line 8374: // TODO: Validate file contents after extraction (to be removed once
+             ZIP compression file mime type is fixed above)
+
+Phase 3 should (behaviour-preserving, comment lines only):
+  a. Replace the stale "TODO: FIX - Bypass ZIP Compression..." text with a brief
+     comment referencing ADR-44, KEEPING the commented-out _COMPRESSED call block
+     itself untouched (do NOT uncomment or delete the call).
+  b. Update/remove the line-8374 TODO text so it no longer implies the call will
+     be re-enabled.
+
+Note: Use `grep -n "TODO.*Bypass ZIP\|TODO.*Validate file"` after checkout to
+confirm exact line numbers, as they shift with each insertion.
+
+---
+
+7. Commit hash + push
+----------------------
+Commit: this phase's HEAD commit on adr/44-mime-normalisation (see `git log`)
+Push:   adr/44-mime-normalisation → origin/adr/44-mime-normalisation (SUCCESS)

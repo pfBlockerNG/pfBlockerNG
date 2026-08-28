@@ -1,0 +1,231 @@
+[Adblock Plus 2.0]
+! Checksum: PVITXcVvN4LdJ/kxfA0o9w
+! Version: 202607041212
+! Title: EasyList Dutch
+! Last modified: 04 Jul 2026 12:12 UTC
+! Expires: 1 days (update frequency)
+! Homepage: https://easylist.to/
+!
+! EasyList Dutch subscription
+!
+! *** easylistdutch:easylistdutch.txt ***
+! Description: Dutch supplement for the Easylist filters
+! Licence: https://easylist.to/pages/licence.html
+!
+! Alleen voor advertenties op Nederlandstalige sites!
+! Rapporteer gevonden advertenties of fouten hier:
+! https://forums.lanik.us/viewforum.php?f=100
+! of stuur een email naar easylistdutch@protonmail.com
+!
+!--------Algemene blokkeerregels--------!
+! *** easylistdutch/block_general.txt ***
+-reclameplaatjes/
+/adbron.
+/adtwee/*
+/adv_tekstlinks.
+/adverteerders/*
+/advertentie-banner-
+/advertentie.$domain=~anzeigen-aufgabe-alpha.de|~anzeigen-aufgabe-beta.de|~anzeigen-aufgabe-test.de|~rd.nl
+/advertentie/*$domain=~anzeigen-aufgabe-alpha.de|~anzeigen-aufgabe-beta.de|~anzeigen-aufgabe-test.de|~rd.nl
+/advertentie1.
+/advertentie2/*
+/advertentie_head.
+/advertentieblokje120x20.
+/advertentieblokje300x20.
+/advertenties.
+/advertenties/*
+/bannerlookup.
+/big_reclames/*
+/bolcom-partnerprogramma-wordpress-plugin/*
+/img/recl/*
+/mediahuis-ads/*
+/nmc/adv/*
+/pebble-adhese.
+/prikbordAdvertentie_
+/reclame-extra.
+/reclame-nieuws.
+/reclame2.
+/reclamebanners/*
+/small_reclames/*
+/tekst_advertentie_
+/topadvertentie.
+://promotie.$third-party
+_advertentie300x250_
+_advertentieleaderboardhome.
+!--------Advertentiedomeinen (derden)--------!
+! *** easylistdutch/block_third_party_server.txt ***
+||2k19.nl^$third-party
+||adrequest.net^$third-party
+||adshim.com^$third-party
+||adswag.nl^$third-party
+||affilaxy.com^$third-party
+||affiliatepartners.com^$third-party
+||affiliateprogramma.eu^$third-party
+||banner-online.nl^$third-party
+||believe-the-hype.be^$third-party
+||botndm.nl^$third-party
+||cashpartners.eu^$third-party
+||crnsgngrpj.nl^
+||dntblckmpls.nl^
+||ds1.nl^$third-party
+||dt51.net^$third-party
+||dt71.net^$third-party
+||gratis-neuken.com^$third-party
+||mt67.net^
+||nojazz.eu^
+||nonstoppartner.net^$third-party
+||online-banners.nl^$third-party
+||optoutadvertising.com^$third-party
+||publize.net^
+||sponsorkliks.com^$third-party
+||static-dscn.net^$third-party
+||tools-affil2.com^$third-party
+||tools.islive.nl^$third-party
+||travelads.be^$third-party
+||trickyrock.com^
+||viadata.store^
+||vpscash.nl^$third-party
+||xpartners.nl^$third-party
+!--------Advertentiedomeinen--------!
+! *** easylistdutch/block_first_party_server.txt ***
+!--------Specifieke blokkeerregels (derden)--------!
+! *** easylistdutch/block_third_party_resource.txt ***
+.nl/adurl/$xmlhttprequest,domain=start-player.npo.nl
+||adcdn.ster.nl^$third-party
+||ads.nextday.media^
+||advertising-cdn.dpgmedia.cloud^
+||advertising-module.api.dpgmedia.cloud^
+||bannersimages.s-bol.com^$third-party
+||bnpparibasmarkets.nl/widget/$third-party
+||bol.com/nl/upload/banners/
+||bol.com/nl/upload/partnerprogramma/
+||centraal.helpmij.nl/images/nieuwsbrief/nod32-colofon.jpg
+||cloudfront.net/-/media/6-parnerships/$domain=feyenoord.nl
+||cloudfront.net/Assets/images/partners/$domain=feyenoord.nl
+||cloudfront.net/banners/$domain=eredivisie.nl
+||feenstra-internetservices.nl/?_dnid=$third-party
+||flexwebhosting.nl/banners/
+||fx.nl/_ext/widget/$third-party
+||go2.go2cloud.org^
+||infotalia.com/worktalia_promo_
+||jobat.be/extra/trackuityhn/ticker_new.html$third-party
+||jobfish.nl/widget/$third-party
+||kjdsfjisdfjr23.azurewebsites.net^
+||mmcdn.nl/tags/
+||nextdaymedia-ads.s3.amazonaws.com^
+||ouders.nl/uploads/alt/$domain=viafora.nl
+||partner.bol.com^$third-party
+||partnerprogramma.bol.com^$third-party
+||pexi.nl/dpos/widget-$domain=intermediair.nl
+||pornokartel.nl^$image,third-party
+||pubble.nl/Content.svc/getAdCollection?
+||recreatief.nl/kerstarrangementen.gif
+||s-bol.com/nl/upload/partnerprogramma/
+||search-result.com^*/klokad2.js
+||sedproductions.nl/banners/
+||seks.com/img/bnr.gif
+||seksbuddy.nl/img/frontend/banners/
+||sociaaldigitaal.nl/img/Banner-$third-party
+||sp.dpgmedia.net^$third-party
+||stepstone.be/*?event=widgettool.$third-party
+||strafrechtadvocaten.nl/media/banner/$third-party
+||swpportal.com/upload/squarebanners/
+||t.bazarow.com^$third-party
+||traffic.12flirt.com^
+||viralize.tv/display/$domain=albrandswaardsdagblad.nl|barendrechtsdagblad.nl|dagblad010.nl|dagblad070.nl|goudsdagblad.nl|ridderkerksdagblad.nl|rijswijksdagblad.nl|sgxl.nl|startpagina.nl|voorburgsdagblad.nl|zoetermeersdagblad.nl
+||wertuipsertj34.azurewebsites.net^$xmlhttprequest
+||widget.vpnnederland.nl^$domain=nzbserver.com
+||widgets.skyscanner.net^$domain=puuropreis.nl
+||windows.net/banners/$domain=agf.nl|bpnieuws.nl|groentennieuws.nl|uiennieuws.nl
+||wp.com/www.bol.com/nl/upload/partnerprogramma/
+||xmissy.nl/admnfiles1809/sinclub/freechatbanner_
+!--------Specifieke blokkeerregels--------!
+! *** easylistdutch/block_first_party_resource.txt ***
+||123video.nl^*/300x100_
+||1twente.nl/Ads/
+||24cars.nl/api/advertise-deliver/
+||2link.be/banners/
+||aa.tweakers.nl^
+||aafm.nl/cms/wp-content/themes/omroepalmelo/img/banners/
+||abcsuriname.com/images/banners/
+||adodenhaag.nl/images/banners/
+||agconnect.nl/sites/ag/files/styles/partner_
+||am-forum.nl/upload/logo_elektrodump.png
+||antilliaansdagblad.com/images/banners/
+||apintie.sr/bannerz/
+||autosport.nl/images/Banner-
+||autosport.nl/images/banners/
+||baarsclassicrock.nl/wp-content/uploads/*/banner_
+||bdsm-vrienden.nl/sb_data/modules/mod_aav/
+||bdsmgirl.nl/banners/
+||bdsmgirl.nl^*/banner/
+||belgiancycling.be^*/Banners/
+||belgiancycling.be^*/Logo%27s%20partners/
+||bloovi.be/frontend/files/banners/
+||bodemvondstenwereld.nl/images/banners/
+||boek9.nl/sites/default/files/advertisements/
+||boek9.nl/sites/default/files/rotating-banners/
+||bol-an.nl/wp-content/uploads/*/Adv_
+||brandweerspotters.nl/modules/banners/
+||buzzbie.nl/uploads/banners/
+||cdn-ster-nl.akamaized.net/*.mp4$rewrite=abp-resource:blank-mp4,domain=nos.nl|npo.nl
+||cdn-tmo.nl^*/banners/
+||cdn-webcam-harlingen.nl/adv/
+||chatmetvreemden.be/static/html/
+||chatmetvreemden.nl/static/html/
+||christelijknieuws.nl^*/banner/
+||ciaotutti.nl/wp-content/uploads/Banner_
+||clubbrugge.be^*/partner/
+||coastline945fm.nl/cache/partners/
+||coastlinefm.nl/cache/partners/
+||content1.pcmweb.nl^
+||content1.pu.nl^
+||content1.wasmachines.nl^
+||content1.zoom.nl^
+||content2.besteproduct.nl^
+||content2.kieskeurig.nl^
+||content2.pu.nl^
+||content2.wasmachines.nl^
+||content2.zoom.nl^
+||cryptobenelux.com/wp-content/uploads/*-banner-
+||cryptobenelux.com/wp-content/uploads/*-Banner.
+||cryptobenelux.com/wp-content/uploads/*/banner_
+||cryptoprijzen.com/cryptoprijzen-widget/
+||debestevpn.nl/wp-content/*-banner.
+||decibel.nl/wp-content/uploads/*/banner-
+||dewereldmorgen.be/wp-content/banners/
+||digitaalburg.com/rn02/wp-content/uploads/*/CornetAnimationA-
+||digitaalburg.com/rn02/wp-content/uploads/*/MERKX11.png
+||digitaalburg.com/rn02/wp-content/uploads/*/Roel.jpg
+||digitaalburg.com/rn02/wp-content/uploads/*/uitwaard21.jpg
+||digitaalburg.com/rn02/wp-content/uploads/*/Vacature-
+||digitaalburg.com/rn02/wp-content/uploads/*/vertiadvies_
+||digitaalburg.com/rn02/wp-content/uploads/*/webbanner-
+||dolcevia.com^*/Banners/
+||duurzaam-actueel.nl^*banner
+||edelmetaal-info.nl/cdfund-336x280.html
+||edelmetaal-info.nl/wp-content/uploads/images/goudpensioen/
+||eredivisie.nl/images/logos/partners/
+||excellentfm.nl/images/aanbieding/
+||fanclubbarcelona.nl/viewfile/mainbanner/
+||farmaline.be/assets/banners/
+||fcupdate.nl/js/adslot.js
+||fcutrecht.net/img/banners/
+||flirtmee.nl/img/160x70_sponsor-
+||floranews.com/img/banner/
+||fonkmagazine.nl/adds/
+||fonkonline.nl/adds/
+||forum.spaarinformatie.nl/si-info.html
+||genemuidenactueel.nl^*banner
+||gic.nl/uploads/fckconnector/
+||gigantfm.nl/upload/20170420110645812.jpg
+||gigantfm.nl/upload/20210730122903794.gif
+||gigantfm.nl/upload/autoonderdelen24_1.png
+||gigantfm.nl/upload/onderdelenshop.gif
+||goedkoopstekeukensduitsland.nl/wp-content/uploads/*/I-kook-banner.jpg
+||goedkoopstekeukensduitsland.nl/wp-content/uploads/*/Keuken-ontwerp-aan-huis.jpg
+||goedkoopstekeukensduitsland.nl/wp-content/uploads/*/Keukenplaats.jpg
+||golf.be/files/BannerImage/
+||gratissextube.be/banners/
+||greenkeeper.nl/upload/banners/
+||greenk

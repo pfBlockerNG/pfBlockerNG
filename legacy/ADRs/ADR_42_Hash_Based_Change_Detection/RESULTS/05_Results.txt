@@ -1,0 +1,74 @@
+================================================================================
+ADR-42 PHASE 5 RESULTS — Live-VM smoke matrix + Definition of Done
+Branch: adr/42-hash-based-change-detection
+================================================================================
+
+OUTCOME: the live-VM smoke matrix is complete and collects clean; docs + DoD are
+finalised; ADR status set to "Implemented (pending live-VM smoke)". The CE+Plus
+live fan-out is MAINTAINER-DISPATCHED per ADR-04 / the Phase-5 prompt (no real
+HTTP server / Unbound / pf in PR CI; the dev box was not reachable from this
+worker). ADR-42 flips to Accepted on that green fan-out.
+
+LIVE-VM SMOKE MATRIX (tests/smoke/test_smoke_feeds.py — 8 ADR-42 cases, all collect)
+LOCAL (hash detection):
+- test_cron_detects_changed_local_feed            — changed content -> re-ingested
+- test_cron_skips_unchanged_local_feed            — identical content -> no re-ingest
+- test_cron_skips_local_feed_with_bumped_mtime_but_same_content
+                                                  — touch bumps mtime, bytes same -> no re-ingest
+- test_cron_detects_changed_local_feed_same_second
+                                                  — NEW: different bytes + forced-equal mtime
+                                                    (touch -r) -> detected+re-ingested. RED on the
+                                                    pre-Phase-2 mtime code (equal mtime => "unchanged"
+                                                    => dom_new never blocked), GREEN on the hash code.
+REMOTE (conditional GET via the extended _MockFeedServer ETag/Last-Modified/304):
+- test_cron_304_skips_unchanged_remote_feed       — matching validator -> 304 -> not re-downloaded/
+                                                    re-ingested
+- test_cron_200_reingest_changed_remote_feed      — changed -> 200 -> hashed -> re-ingested
+- test_cron_no_validator_download_hash_decides    — no validator offered -> download + hash decides
+- test_cron_spurious_200_same_bytes_no_reingest   — server ignores validator, identical bytes ->
+                                                    200 -> hash equal -> NO re-ingest (contract #5)
+
+§4 REQUIREMENT -> PROVING ASSERTION
+1. same-second local change detected (red->green vs mtime); unchanged not re-ingested
+   -> test_cron_detects_changed_local_feed_same_second (+ _skips_unchanged_local_feed);
+      off-VM: FeedChangeHashHelpersTest::test_local_feed_changed_different_content_with_sidecar_is_changed
+2. .xxhash128 round-trips; legacy .md5 reads as md5, next write replaces it (.md5 removed)
+   -> FeedChangeHashHelpersTest (round-trip / legacy-md5 / migrate / removes-legacy-md5);
+      live: the legacy-md5 read+replace is exercised by the cron cases after an ingest writes .xxhash128
+3. remote unchanged -> 304 not re-downloaded; changed -> 200 hashed + re-ingested
+   -> test_cron_304_skips_unchanged_remote_feed + test_cron_200_reingest_changed_remote_feed;
+      off-VM: ConditionalGetHelpersTest (pfb_conditional_get_decision all branches)
+4. no path concludes "unchanged" on changed content; ambiguity -> re-ingest
+   -> pfb_conditional_get_decision: 304->unchanged, 200-diff->changed, 200-same->unchanged,
+      unknown/error->changed (fail-safe); detector probe-fail -> fail-safe; pfb_local_feed_changed
+      any read failure -> TRUE. Asserted in ConditionalGetHelpersTest + FeedChangeHashHelpersTest.
+5. pytest/ruff/php -l/PHPUnit/PHPStan/PHPCS/ShellCheck green; #538/#540 cron cases now hash-based
+   -> PHPUnit 1349 / PHPStan OK / PHPCS clean / php -l clean / ruff clean / pytest 1882;
+      the three #538/#540 cases migrated from mtime to hash semantics in Phase 2.
+6. live-VM smoke (CE + Plus): 304 skip, hash detect (both branches), legacy-md5 read
+   -> the 8 cases above; MAINTAINER-DISPATCHED live fan-out (pending).
+
+MANUAL-SMOKE CHECKLIST (owner: maintainer — what CI cannot cover)
+- Dispatch the ADR-04 live-VM fan-out (CE + Plus) for the 8 feed cases above
+  (e.g. `gh workflow run smoke.yml` selective, or `scripts/local-smoke.sh -k "cron_"`),
+  and confirm green + no false skip; on failure read smoke-diagnostics first.
+- Against a REAL ETag-emitting feed host: confirm an unchanged feed returns 304 and is not
+  re-downloaded (observe traffic/logs), and a changed feed returns 200 and re-ingests.
+- Confirm an UPGRADE from a build carrying legacy .md5 sidecars reads them on the first pass
+  and replaces them with .xxhash128 on the next.
+- Settle xxh128sum provenance on the live box: `pkg which $(command -v xxh128sum)`. The
+  "no RUN_DEPENDS needed" decision holds as long as no shell site calls xxh128sum (ADR-42
+  introduces none); if a future shell site adds one, declare `xxhash` in RUN_DEPENDS.
+
+DoD STATUS
+- Code: content-addressed detector (mtime no longer the gate); tagged .xxhash128 sidecars +
+  legacy .md5 read/replace; conditional GET (ETag/IMS -> 304) live; HEAD-then-client-compare
+  removed. DONE.
+- Tests: round-trip / legacy-read / downgrade-safe / idempotence / known-answer green; the
+  full live matrix collects; no-false-skip pinned by fail-safe assertions. DONE (off-VM).
+- Provenance: no new config/schema; no new filter_configure()/pkg on the detector path;
+  xxh128sum provenance deferred to the maintainer live check (no shell dependency added). DONE.
+- Docs: architecture-notes "Change detection / content hashing" + CLAUDE.md entries. DONE.
+- REMAINING: the CE+Plus live-VM fan-out (maintainer). On green, flip ADR-42 to Accepted.
+
+GO-AHEAD: Phase 5 complete. ADR-42 implementation done; pending the maintainer live-VM fan-out.

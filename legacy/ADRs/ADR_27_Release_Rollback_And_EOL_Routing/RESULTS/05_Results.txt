@@ -1,0 +1,166 @@
+ADR-27 Phase 5 Results — Landing "Older releases" + rollback documentation
+==========================================================================
+
+Status: COMPLETE — ADR-27 Part 1 all phases done; §7 live -m repo smoke GREEN
+        (run 27802532591, CE leg). Ready to land.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=DONE
+
+------------------------------------------------------------------------
+What was built
+------------------------------------------------------------------------
+
+scripts/gen_landing.py — new functions (mirroring _older_nightlies_*):
+
+  older_releases(pkgs)
+    Returns retained devel/stable builds OTHER than the newest per channel,
+    sorted newest-first (devel channel-ordered before stable), then by ABI.
+    Empty when no older versions are retained (today's default N=M=1).
+
+  _older_releases_table_html(rows)
+    Renders one disclosure table per edition; includes a Channel column
+    (unlike the nightly equivalent, which omits it) because devel AND stable
+    can both appear in the same edition's older-releases list.
+    Columns: pfSense | Channel | Version | ABI | PHP | Python | Published | Commit | Size
+
+  _older_releases_by_edition(pkgs, matrix)
+    Groups the retained older releases by edition key via _join_matrix, so
+    each edition's disclosure folds directly under that edition's table.
+
+  _older_releases_details(rows)
+    Renders the <details><summary>Older releases (N)</summary>…</details>
+    disclosure; returns "" when there are no retained older releases.
+
+  _packages_html updated
+    Now emits _older_releases_details() BEFORE _older_nightlies_details()
+    under each edition's table, so both disclosures are present when applicable.
+
+tests/test_gen_landing.py — 3 new test functions:
+
+  test_older_releases_lists_retained_excludes_latest
+    Before/after (the genuine before-and-after mandate):
+    - BEFORE: asserts the newest devel (3.2.16), newest stable (3.1.0), and
+      any nightly are NOT in older_releases — proving they live in the edition
+      table and NOT in the disclosure.
+    - AFTER: asserts two older devel (3.2.15, 3.2.14) + one older stable
+      (3.0.0) ARE in the list.
+    Also asserts the packages block disclosure has the Channel column, and that
+    the newest versions are absent from the rendered 'Older releases' details.
+
+  test_older_releases_empty_when_only_latest_per_channel
+    With one version per channel (today's default N=M=1), older_releases
+    returns [] and "Older releases" is absent from the packages block HTML —
+    no empty affordance rendered.
+
+  test_older_releases_fold_under_each_edition
+    Given retained older devel releases for both a CE ABI and a Plus ABI,
+    each edition's disclosure folds under its own table carrying only that
+    edition's rows; Channel column present in each.
+
+Total tests: 26 in test_gen_landing.py (was 23 before Phase 5).
+
+------------------------------------------------------------------------
+Documentation delta (what Phase 5 added vs Phase 3)
+------------------------------------------------------------------------
+
+Phase 3 already provided:
+  - "Rolling back a stable or devel release" subsection in README.md
+    (pinned pkg install command, newest-wins, retention-window limit)
+  - Config-schema caveat in README.md
+  - Full flag reference + CLI rollback + config-schema caveat in scripts/README.md
+
+Phase 5 added (README.md only, minimal):
+  - One-sentence pointer from the rollback section to the repository landing
+    page (pfblockerng.github.io/pkg) stating it shows an "Older releases"
+    disclosure per pfSense edition listing retained versions with commit/date —
+    so a human knows WHERE to find the version string to pass to pkg install.
+
+scripts/README.md: unchanged (already comprehensive from Phase 3).
+
+------------------------------------------------------------------------
+ADR-27 §7 Definition-of-Done evidence (all phases)
+------------------------------------------------------------------------
+
+Phase 1 (Retention seam):
+  retain_by_channel() helper in scripts/build-repo-portable.py — extracts
+  nightly-like _retain_newest logic into a per-channel API. Tests:
+  test_retain_by_channel_* (membership, order, no-op) — all green.
+
+Phase 2 (Catalog shape change):
+  build_repo_matrix() gains release_keep_devel / release_keep_stable params
+  + --release-keep-devel/stable CLI flags. Tests:
+  test_release_default_is_latest_only (before-state),
+  test_release_subtree_retains_devel_and_stable,
+  test_release_catalog_lists_all_kept_versions — all green.
+  Drift pins (test_add_repo_conf, test_build_repo_portable) unchanged.
+
+Phase 3 (Publish wiring):
+  CLI --release-extra-pkgs flag + tests:
+  test_cli_release_extra_pkgs_default_is_latest_only,
+  test_cli_release_extra_pkgs_keeps_newest_n,
+  test_cli_release_extra_pkgs_newest_wins — all green.
+  publish.yml YAML spec delivered for pfBlockerNG/pkg (cross-repo).
+  README.md + scripts/README.md rollback docs + config-schema caveat written.
+
+Phase 4 (Rollback smoke — live VM, -m repo):
+  test_release_rollback_to_retained_older_version in
+  tests/smoke/test_repo_install.py. BDD lifecycle:
+    Given: multi-version catalog (lo + hi); hi installed (BEFORE-state proven).
+    When: pkg install <name>-<lo_version> (pinned rollback).
+    Then: lo_version active, origin pfblockerng, no missing dep (PREMISE HOLDS).
+    When: pkg upgrade.
+    Then: hi_version restored (lifecycle closed).
+  Off-box collection: 14 tests collected. On-box: dispatched + GREEN
+  (smoke.yml -f pytest_marker=repo, run 27802532591, CE leg).
+  REJECT gate: no REJECT triggered — pkg pinned-version install with `-f`
+  confirmed to roll back via the catalog (deps resolved) on the live VM.
+
+Phase 5 (Landing "Older releases" + docs):
+  older_releases() + _older_releases_* in scripts/gen_landing.py.
+  3 new tests (test_older_releases_*) — before/after, empty case,
+  per-edition folding. 26 gen_landing tests total (was 23).
+  README.md: landing-page pointer added.
+
+ADR §4 Requirements satisfied:
+  ✓ release/<varver>/<arch>/ carries N devel + M stable versions (Phase 2)
+  ✓ pkg install <name>-<oldversion> works from catalog (Phase 4 smoke design)
+  ✓ off-box catalog-membership tests pin retained versions (Phases 1–3)
+  ✓ landing page shows "Older releases" disclosure per edition (Phase 5)
+  ✓ CLI rollback procedure documented in README + scripts/README (Phase 3)
+  ✓ Part 2 (§2.4) present as design-of-record; NO part-2 code merged
+
+ADR §7 manual smoke checklist (owner: maintainer — CI cannot fully cover):
+  - On a real box: pkg install <name>-<oldver> and back; confirm DNSBL works.
+  - Confirm rollback across a config-schema change behaves per the documented caveat.
+  - Confirm Pages/catalog growth at N=M=10 is within publish runtime/artifact budget.
+
+------------------------------------------------------------------------
+Part 2 (§2.4) status
+------------------------------------------------------------------------
+
+DESIGN-ONLY, DEFERRED. No Part 2 code was merged in any phase. The matrix
+role flag (build vs route-only), Worker route-only support, and archival
+storage design remain in ADR.md §2.4 as the specification of record.
+Implementation begins when the min supported pfSense first advances and an
+EOL version would otherwise lose its route.
+
+------------------------------------------------------------------------
+Gate outputs
+------------------------------------------------------------------------
+
+python -m pytest -q:
+  1753 passed in 16.46s  (was 1750 after Phase 4; +3 new gen_landing tests)
+
+ruff check .:
+  All checks passed!
+
+ruff format --check .:
+  112 files already formatted
+
+mypy tests/:
+  Success: no issues found in 46 source files
+
+npx markdownlint-cli2 README.md:
+  0 error(s)
+
+No src/ files touched. No php -l / ui_render gate applies.

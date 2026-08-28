@@ -1,0 +1,125 @@
+ADR-47 Phase 2 — Run-id backbone + the select-box lease (local-only, additive)
+
+FIRST LINE FOR THE IMPLEMENTER: Run /ponytail:ponytail full
+
+OBJECTIVE
+Add the run-id minter + the box-lease/select-box orchestrator as NEW, additive scripts plus their
+shellspec. NO existing workflow or harness file changes in this phase (P3/P4 wire them in). The
+point: make concurrent local test/build runs isolate BY CONSTRUCTION over a PROVIDED pool of
+ssh-reachable containers, with ONE shared run-id definition so local and CI never drift.
+
+READ FIRST
+- .ADRs/ADR_47_Local_CI_Execution_Parity/ADR.md — sections 2, 5.1, 5.2, 6 (P2), 7. §5.2 is the
+  AUTHORITATIVE lease contract; §7 lists the adversarial gaps you MUST honor (atomic rename-capture
+  reclaim; atomic owner publish; the corruption-class scrub).
+- 01_P1_Shared_Ports_Prep.txt (this dir) — the handoff baseline.
+- tests/shell/sparse_clone_ports_spec.sh — the EXEMPLAR shellspec. Mirror its structure: a fake-bin
+  stub on PATH, the mandatory GIT_* unset in setup(), before/after assertions, expected-vs-actual
+  failure output.
+- tests/smoke/conftest.py (SmokeVM.ssh / ssh_argv) and tests/smoke/wait_ready.sh (SSH_OPTS) — match
+  their ssh option style so select-box behaves identically to the existing harness.
+
+TOPOLOGY (HARD CONSTRAINTS — do not deviate)
+- The pool is multiple LXC containers reached ONLY over ssh. NO host access, NO `lxc list`/`lxc exec`.
+- Pool = an explicit PFB_BOXES list of ssh targets (e.g. "root@10.0.0.23 root@10.0.0.24"). REQUIRED;
+  no default; no discovery. Empty/unset -> exit non-zero, loud.
+- Lease markers live in a host dir bind-mounted into EVERY box at the same path (PFB_LEASE_DIR,
+  default /var/lib/pfb/leases) -> the mkdir lock is ONE shared object visible across the whole pool.
+  Therefore the lock ops happen OVER SSH INTO the target box (they land on the shared mount).
+
+DELIVERABLES
+1. scripts/lib/run-id.sh          — the single run-id minter (sourced; no side effects on source).
+2. scripts/select-box.sh          — the keystone lease/orchestrator.
+3. tests/shell/select_box_spec.sh — shellspec pinning both, with ssh stubbed.
+
+--- scripts/lib/run-id.sh ---
+ONE definition of the run-id scheme, sourced by select-box.sh (local) and (later) the CI legs:
+- pfb_mint_run_id_local <box>: echo "local-<box-tok>-<epoch>-<rand>". epoch=`date +%s`;
+  rand=>=8 hex bytes from /dev/urandom (e.g. `od -An -tx1 -N8 /dev/urandom | tr -d ' \n'`);
+  box-tok = the box target reduced to [a-z0-9] (strip user@, dots, colons) so the id is a clean token.
+- pfb_mint_run_id_ci: echo "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-<leg>" where <leg> comes from a
+  LEG env/arg (varslug-major-arch[-marker]). For THIS phase a single emitter from GITHUB_* + LEG is
+  enough (the legs wire it in P3/P5).
+- No-alias is structural: the literal local-/ci- prefixes can never collide. POSIX sh; no $RANDOM;
+  quote everything; safe to `.`-source (no top-level side effects, no `set -e` traps).
+
+--- scripts/select-box.sh ---
+USAGE: select-box.sh [--release <RUN_ID>] [--print-id] [-- <cmd...>]
+ENV (defaults): PFB_BOXES (REQUIRED, no default); PFB_LEASE_DIR=/var/lib/pfb/leases;
+  PFB_LEASE_TTL=7200 (s; the CLAUDE.md 2h cap; PRIMARY staleness backstop); PFB_RUN_ROOT=/var/tmp/pfb-runs;
+  PFB_SSH (the ssh command+opts, overridable so the spec can stub it).
+MODES:
+- --print-id: source run-id.sh, emit the ci- id. No lease, no ssh. (CI.)
+- --release <RUN_ID>: locate the box this RUN_ID owns (read owner files over ssh) and, iff the owner
+  runid matches, remove its lock over ssh. Idempotent (missing lock = success).
+- default: scrub GIT_*; lease a box; mint RUN_ID; create PFB_RUN_DIR on the box; emit eval-able
+  KEY=value to stdout (RUN_ID, PFB_BOX, PFB_RUN_DIR, PFB_OUT_DIR=$PFB_RUN_DIR/out,
+  PFB_DIAG_DIR=$PFB_RUN_DIR/smoke-diag, SMOKE_LANE=0); print the chosen box+RUN_ID to stderr; if
+  `-- <cmd>` is given, run it in the box over ssh with those vars exported, then release in an
+  EXIT/INT/TERM trap.
+
+LEASE ALGORITHM (honor §5.2 + §7 EXACTLY):
+- ENTRY: `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_COMMON_DIR`.
+- ACQUIRE box B: over ssh into B, atomic `mkdir "$PFB_LEASE_DIR/<B-tok>.lock"` (create-or-fail on the
+  shared mount -> exactly one racer wins across the pool). On success, ATOMIC OWNER PUBLISH: write
+  "runid <agent-host> <epoch>" to a temp file inside the lockdir, then `mv` it onto `<lock>/owner`
+  (a reader never sees a half-written owner).
+- PICK: random index over PFB_BOXES (`od -An -N2 -tu2 /dev/urandom` mod count), advance through the
+  shuffled list on EEXIST. NOT first-free (avoids a thundering herd on box 0).
+- RETRY: one full pass; if all held, a short jittered backoff (1-3s drawn from /dev/urandom, NOT
+  $RANDOM) then re-scan. HARD-bounded total (a few minutes; never above PFB_LEASE_TTL). On exhaustion:
+  exit non-zero, printing each held box's owner (runid/host/age). Never hang, never silent. (This
+  backoff is a real between-scan backoff, NOT a fixed-sleep used as coordination — the mkdir lock is
+  the sync primitive, per CLAUDE.md / issue #456.)
+- STALE RECLAIM (ATOMIC-CAPTURE, NOT rmdir+mkdir — this is the §7 gap): on a held candidate, read its
+  owner over ssh. Reclaimable iff (a) now-epoch > PFB_LEASE_TTL (PRIMARY — the owner runs off-box over
+  ssh, so no cross-host kill -0), or (b) owner file absent/empty past a short grace (a crash between
+  mkdir and the publish). To reclaim: over ssh `mv "<lock>" "<lock>.reclaim.<RUN_ID>"` (rename is
+  atomic; exactly one concurrent reclaimer wins, the loser gets non-zero/ENOENT and rescans); then
+  re-read the captured owner and CONFIRM it still equals the stale tuple observed (TOCTOU guard —
+  never steal a freshly-acquired live lease); only then `mkdir` a fresh lock + publish owner; remove
+  the captured .reclaim dir. Rename-loss or confirm-fail => not acquired, move on.
+- RELEASE: over ssh, verify `<lock>/owner` runid == our RUN_ID, then `rm -rf` the lock. Idempotent.
+  Armed via `trap '... select-box.sh --release "$RUN_ID"' EXIT INT TERM`.
+
+CONSTRAINTS
+- POSIX /bin/sh; no bash-isms ([[ , arrays, $RANDOM, process substitution). Quote ALL expansions.
+  shellcheck clean (.shellcheckrc suppressions only).
+- Everything over ssh; NEVER the host; NEVER lxc.
+- No fixed-time sleep as a concurrency primitive — the mkdir lock is the sync.
+
+--- tests/shell/select_box_spec.sh ---
+Mirror sparse_clone_ports_spec.sh. Stub `ssh` via a fake bin on PATH that emulates the pool against a
+LOCAL temp dir standing in for the shared lease mount (so `ssh root@boxN "mkdir .../X.lock"` becomes a
+local mkdir in the fake's one shared dir — preserving mkdir/rename atomicity across "boxes"). The fake
+also emulates owner-file read/write + the run-the-cmd path. MANDATORY: unset the six GIT_* vars in
+setup(). Each case prints expected-vs-actual on failure.
+CASES (every one red on a naive/missing impl, green on the correct one):
+- acquire: one select-box leases one box; emits RUN_ID + PFB_BOX; owner file present + well-formed.
+- two contenders serialize: two concurrent acquires get DISTINCT boxes (mkdir atomicity); neither errors.
+- pool exhausted: all boxes pre-locked (live owners) -> exit non-zero + prints held owners (no hang).
+- TTL-stale reclaim: a lock with epoch older than TTL is reclaimed; the new owner runs.
+- missing-owner-grace reclaim: a lockdir with NO owner file, older than the grace, is reclaimed.
+- TWO-CONCURRENT-RECLAIMERS (the §7 double-grant gap): two reclaimers race ONE stale lock; assert
+  EXACTLY ONE ends up owning, the other rescans. MUST pass with rename-capture and FAIL against a
+  throwaway rmdir+mkdir reclaim (prove the red-before).
+- release: --release frees only the matching-owner lock; a mismatched RUN_ID does NOT free it.
+- no-alias: the local- vs ci- run-ids never collide.
+
+GATES
+- shellcheck scripts/lib/run-id.sh scripts/select-box.sh tests/shell/select_box_spec.sh — clean.
+- shellspec tests/shell/select_box_spec.sh — green; AND green under exported GIT_* (simulate the
+  pre-commit hook: GIT_DIR=... GIT_INDEX_FILE=... GIT_WORK_TREE=... shellspec ...).
+- Demonstrate the red-before for two-concurrent-reclaimers (rmdir+mkdir variant fails it).
+- python -m pytest is unaffected (no Python touched), but run the full shellspec suite to confirm no
+  regression.
+
+HANDOFF (return to the orchestrator)
+- run-id.sh API (function names + output formats) and select-box.sh contract (env in, KEY=value out,
+  --release/--print-id) for P3/P4 to consume.
+- The exact ssh-stub shape used in the spec (P4 reuses it for run-smoke/local-smoke specs).
+- Any deviation from §5.2 and why.
+
+SCOPE: additive ONLY. Do NOT modify local-smoke.sh, boot_vm.sh, conftest.py, or any workflow this
+phase. Live validation against the real pool (PFB_BOXES="root@10.0.0.23 root@10.0.0.24", shared mount)
+is the orchestrator's job after the unit gates pass — not the implementer's.

@@ -1,0 +1,48 @@
+ADR-60 Phase 4 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit 519e6b20 (code+tests) / 86a214cb (handoff):
+
+1. handoff-fields — PASS. Commit/branch/push verified via git log + fetch.
+2. gate-rerun — PASS. php -l, vendor/bin/phpunit (2457 tests, 19127
+   assertions, 2 pre-existing deprecations, 4 documented skips), phpstan,
+   phpcs, python3 -m pytest (2436 passed — 2437 Phase-3 baseline minus the
+   deleted iso_timestamp test), ruff check/format, mypy, all 3 policy
+   checkers — all clean, all matched the handoff's claimed output exactly.
+3. red-proof — PASS, re-executed independently for BOTH writers: reverted
+   src to Phase 3's tip (HEAD~2, correcting for the handoff-only commit on
+   top) -> pytest oracle fails on the old no-year shape, LogTimestampBaselineTest
+   fails 2 (old M-j-H:i:s shape) -> restored -> both green.
+4. diff-vs-plan — PASS, every action-plan item ticked against the full diff:
+   make_timestamp() format-only change (retry/fallback untouched);
+   iso_timestamp() + its test deleted (grep confirms zero remaining code
+   references); pfb_log_event() converted to pfb_log_iso_timestamp(); all 5
+   real make_timestamp() call sites inherit the fix automatically (in-body
+   change); dnsbl_alias_update() confirmed untouched (Phase 10 scope
+   preserved); single commit, pushed; handoff complete.
+5. Both planner-flagged verification findings independently re-derived (not
+   chain-trusted): unilog's DNSBL/DNS-reply passthrough formatters
+   (pfb_unified_format_dnsbl/dnsreply) are pure comma-joins — verifier read
+   them itself and confirmed the 2 new UnifiedFormatTest.php cases are
+   genuinely new coverage, not a re-badge of Phase 3's IP-row test. The
+   SQLite disjoint-rows claim (Upstream row vs dnsbl_alias_update()'s 8 call
+   sites) was independently re-grepped by the verifier — confirmed disjoint.
+6. test-honesty — PASS. No weakened assertions (the old 2-part oracle was
+   replaced by a single stricter anchored-ISO regex, a superset check, not a
+   loosening). The one deviation (pre-seeding a lastevent row so
+   pfb_log_event() takes its real "duplicate" branch, avoiding a pre-existing
+   unrelated `$data[2]` undefined-offset bug on the other branch) was
+   independently verified as legitimate — exercises the real unmodified
+   function down a genuine production path, zero mocking of the function
+   itself.
+7. conventions — PASS. No new public symbol; pfb_log_iso_timestamp() now has
+   5 call sites (verified by grep); stale docstrings/docblocks reconciled.
+
+Skipped: none. No orchestrator polish needed this phase — clean gate.
+
+Commits this phase (in order):
+- 519e6b20 — pfblockerng/pfb_unbound: add year to dnslog/dnsreplylog
+  timestamps, both writers (ADR-60 P4)
+- 86a214cb — docs: ADR-60 phase 4 handoff

@@ -1,0 +1,18 @@
+# ADR-53 smoke fixture: the containing-range carve target
+# (tests/smoke/test_smoke_suppression.py). Never RFC 1918 (the
+# killstates/private-exclusion path would otherwise eat it) and, since issue
+# #760 (every test in this module runs with the global Suppression checkbox
+# ON), never RFC 5737/2544 documentation/benchmarking space either --
+# sanitize_ipaddr() now drops those unconditionally under Suppression, which
+# would silently empty this fixture before it ever reached the pf table. Public,
+# non-reserved space instead (arbitrary RIPE-block octets, chosen only as inert
+# content -- never dialed, and never a harness-meaningful or well-known-resolver
+# literal: 1.1.1.1/1.0.0.1 is the smoke image's baked DNS-forwarder default
+# (tests/smoke/helpers.py's set_unbound_forwarding), so it was moved off again.
+81.169.0.0/16
+# Bare hosts (public, non-reserved, no resolver meaning), deliberately far
+# apart from each other and from the /16 above -- iprange's minimal-CIDR
+# aggregation would merge two ADJACENT hosts into one covering CIDR, which
+# would break the exact covering-CIDR-count assertions these tests pin.
+83.246.7.7
+82.165.5.5

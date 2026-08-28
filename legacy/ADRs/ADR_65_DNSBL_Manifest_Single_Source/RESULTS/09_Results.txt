@@ -1,0 +1,295 @@
+ADR-65 PHASE 9 -- RESULTS
+================================================================================
+VERDICT: DONE
+Commit:  1202a8f632088b84c6909f4f7177bad42f7e07d0 (docs-only, single commit per
+         the brief) -- this handoff lands as a follow-up doc-only commit
+         (same P1/P5/P6/P7/P8 precedent, pre-authorized by this phase's own
+         brief section 6).
+Branch:  adr/65-dnsbl-manifest-single-source
+base_sha (pre-fix baseline for the verifier): ece5c840639e2530cdc016af7534fc46b3f41860
+         (probed 0 behind origin/devel and 0/0 vs origin branch at brief time;
+         re-confirmed this session -- no rebase needed).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+docs/misc/alerts-reports-pipeline.md (rewritten)
+  - Collapsed the "two-phase attribution model" framing to: DNSBL is ONE-phase
+    (event-time only, log-driven, no render-time re-check); IP stays TWO-phase
+    (event-time + render-time freshness re-check, unchanged).
+  - Write-path table: added the webserver-hit attribution fact -- pfb_log_event()
+    (pfblockerng.inc:14992) asks the live matcher via pfb_dnsbl_query($domain)
+    (call site :15015), appends the dnsbl.log line (:15036), and bumps the
+    widget counter (`UPDATE dnsbl SET counter = counter + 1`, :15045). Noted
+    dnsblcache is still Python-populated but has no remaining render-path
+    reader -- vestigial, tracked by issue #1349.
+  - convert_dnsbl_log() bullet rewritten: renders the row's OWN logged fields,
+    no pfb_dnsbl_parse() call (verified zero callers). Dropped the "Ordering
+    constraint in convert_dnsbl_log" section (DNSBL side has no parse step
+    left to order against; its counter/limit gate now runs first,
+    unconditionally -- verified against pfblockerng_alerts.php:2270-2277 live).
+  - "The two report caches" -> "The IP report cache": dropped the DNSBL
+    dnsblcache row and both cache asymmetry bullets (both described the
+    retired DNSBL render-time cache); kept the ipcache row verbatim.
+  - Dropped "Render-time costs" DNSBL sub-block (SQLite/grep/TLD-zone-grep/
+    drill-CNAME machinery, all pfb_dnsbl_parse_compute()-only, zero render
+    callers) and the DNSBL "Batched prefetch (issue #809 Phase 3a)" section
+    (pfb_dnsbl_prefetch() has zero callers under src/usr/local/www/, verified;
+    its IP sibling pfb_ip_prefetch() IS live, called from alerts.php:4540).
+  - IP-side sections (Phase 3b batched prefetch, page-level costs) kept
+    verbatim in substance; self-contained the two cross-references that used
+    to point at the now-dropped DNSBL Phase 3a section ("exactly like Phase
+    3a" / "same reasoning as the DNSBL Phase 3a carve-out") by inlining the
+    reasoning instead of cross-referencing dropped text.
+  - "Why load time varies": dropped the dnsblcache-wipe and drill-stall
+    bullets (both DNSBL-render-time-only, now dead); rewrote the on-box check
+    to describe an IP-table timing comparison instead of the retired
+    cache-wipe comparison.
+  Why: R1 -- reconcile the doc to the shipped one-phase DNSBL model (ADR-65).
+
+docs/misc/architecture-notes.md (3 edits)
+  - :96-221 interchange section, transitional-window paragraph: rewrote the
+    stale "Alerts page ... reports the domain's feed/group as literal Unknown
+    until the window closes" impact sentence -- no render-path lookup exists
+    post-ADR-65, so the window has no attribution impact anymore (blocking
+    impact unchanged). Why: R3.
+  - Same section, downgrade paragraph: corrected the stale mechanism claim
+    "falls back to the legacy CSV loaders over pfb_py_data/pfb_py_zone --
+    which, under NEW code, are NDJSON" (those files are never written under
+    current code at all, ADR-65 D1) to the current mechanism: the fallback
+    loaders find nothing on disk (files never written, opportunistically
+    swept by pfb_unbound_clear_work_files(), pfblockerng.inc:9155-9156) and
+    load dataDB/zoneDB EMPTY -- same net conclusion (silently ineffective
+    until every feed redownloads), corrected cause. Why: R4.
+  - :663-675 "Alerts/Reports render pipeline" summary: rewritten to state
+    DNSBL is event-time-only (log-driven) and IP keeps the two-phase
+    render-recheck model; added a pointer to issue #1349 for the DNSBL-side
+    orphaned helpers. Why: R2.
+  - :96-127 interchange intro: verified, NOT edited -- already reconciled to
+    ADR-65 (the ":100-102" retirement sentence checked out against source;
+    the ":127" NDJSON-mirror parenthetical is textually true, left as-is per
+    the brief's "not required" note). Why: R5 (verify-only, no refutation
+    found).
+
+.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (appended)
+  - New "## 8. Post-merge amendments (2026-07-14 -- ADR-65)" section after the
+    file tail (former :259): manifest = single DNSBL source, interchange
+    files retired end-to-end (dissolves #1244/#1245), fail-loud replaces the
+    silent-fallback contract (supersedes the SS7 "Retained CSV consumers"
+    row), Alerts/Reports rows are log-driven, webserver-hit attribution uses
+    the query channel. Decision body/history untouched; §8-append only, per
+    constraint. Why: R6.
+
+.ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md (2 edits)
+  - Status block: added a "Release-note delta (D2, for the next release's
+    notes)" bullet, mirroring ADR-62 ADR.md:26's house pattern. Status value
+    itself untouched (stays Proposed). Why: R8.
+  - SS7 "Manual smoke checklist (owner: maintainer)" bullet rewritten: rows
+    (a)-(c) are now AUTOMATED by tests/smoke/test_smoke_adr65.py's three
+    tests + tests/smoke/ui/test_adr65_alerts_live.py's D2 render-contract
+    test; their green proof rides the CE+Plus acceptance fan-out -- no
+    separate maintainer action. Why: R7.
+
+.ADRs/ADR_65_DNSBL_Manifest_Single_Source/RESULTS/09_Results.txt (this file, NEW)
+  Why: R11, the handoff.
+
+GitHub issue #1349 (NEW, filed this session)
+  "DNSBL: retire the ADR-65-orphaned interchange helpers (pfb_dnsbl_parse/
+  prefetch, dnsblcache, Python close-only wrappers, path defs)" -- labels
+  enhancement, dnsbl, ADR-65. Body carries inventory rows a-j verbatim (see
+  COVERAGE MATRIX below). Why: R9.
+  URL: https://github.com/pfBlockerNG/pfBlockerNG/issues/1349
+
+--------------------------------------------------------------------------------
+GATES (exact commands + pasted tails)
+--------------------------------------------------------------------------------
+1) $ npx markdownlint-cli2
+     markdownlint-cli2 v0.23.0 (markdownlint v0.41.0)
+     Linting: 164 file(s)
+     Summary: 0 error(s)
+   (First run hit 1 error -- MD018 on architecture-notes.md:199, a paragraph
+   reflow that put "#1083-or-later" at a line start, read as an ATX heading.
+   Reworded to "a build from #1083 or later"; re-run above is the clean one.)
+
+2) $ PATH=<scratchpad>/gateshim:$PATH sh scripts/agent/run-gates.sh --diff origin/devel
+     GATE PASS: python3 -m pytest
+     GATE PASS: ruff check .
+     GATE PASS: ruff format --check .
+     GATE PASS: mypy tests/
+     GATE PASS: php -l (14 files, listed)
+     GATE PASS: vendor/bin/phpunit
+     GATE PASS: composer phpstan
+     GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+     GATE PASS: npx markdownlint-cli2
+     REMINDER: www/ touched -- Tier-A ui_render coverage is required and
+       cannot be script-checked (test mandate #4) -- WHOLE-BRANCH cumulative
+       diff vs origin/devel (prior phases touched www/); THIS phase's own
+       diff touches ZERO src/ or tests/ files:
+       $ git diff --stat ece5c840639e2530cdc016af7534fc46b3f41860..HEAD -- src/ tests/
+         (empty)
+     GATES: PASS
+
+3) POST-COMMIT:
+   $ python3 scripts/check_comment_narration.py --diff origin/devel
+     exit=0
+   $ python3 scripts/check_version_literals.py --diff origin/devel
+     exit=0
+
+4) POST-COMMIT, WARN-ONLY:
+   $ python3 scripts/check_retired_tokens.py --diff origin/devel
+     exit=1 (findings, not a tool error -- expected)
+     24 token-groups reported, IDENTICAL SET AND IDENTICAL COUNTS to
+     RESULTS/08's documented 24-group baseline (zero drift -- this phase's
+     diff touches none of the surrounding source, docs-only):
+       ' completed\n' (1), '</s><br />' (7), '<small>...</small>' (12),
+       'DNSBL' (1184), 'DNSBL_TLD' (21), 'Domain' (269), 'Failed to load:
+       {}: {}' (4), 'Feed' (228), 'Group' (1092), '[pfBlockerNG]: Failed to
+       load: {}: {}' (2), 'alerts' (205), 'domain_max_cnt' (1), 'important'
+       (155), 'index' (240), 'pfb_feed' (124), 'pfb_final' (12), 'pfb_group'
+       (19), 'pfb_mode' (12), 'python_blacklist' (15), 'redirect' (133),
+       'render' (177), 'transparent' (5), 'unified' (95), 'wildcard' (174).
+     ZERO NEW token-groups; ZERO count drift.
+
+5) Per-item acceptance greps (all pass):
+   $ grep -n "pfb_dnsbl_parse\|two-phase\|Previous Feed" docs/misc/alerts-reports-pipeline.md
+     3 hits, none describes the DNSBL re-check as live: the doc's own new
+     heading "DNSBL is one-phase, IP is two-phase", the IP-side "IP rows keep
+     the older two-phase model" sentence, and a historical note that
+     pfb_dnsbl_parse()/_compute() "stay defined" but are unreachable.
+   $ grep -n "reports the domain's feed/group as literal" docs/misc/architecture-notes.md
+     no hit (R3 done).
+   $ grep -n "falls back to the legacy CSV loaders" docs/misc/architecture-notes.md
+     no hit (R4 done).
+   $ grep -n "^## 8" .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     261:## 8. Post-merge amendments (2026-07-14 -- ADR-65)
+   $ grep -n "Release-note" .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md
+     line 7 (new bullet) + 2 pre-existing hits (D2 row, SS3 Consequences).
+   $ grep -n "test_smoke_adr65" .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md
+     line 456, in the rewritten SS7 bullet.
+
+6) $ git -C /Users/andre/git/pfBlockerNG-adr65 push -u origin HEAD
+     To github.com:pfBlockerNG/pfBlockerNG.git
+        ece5c840..1202a8f6  HEAD -> adr/65-dnsbl-manifest-single-source
+     ok adr/65-dnsbl-manifest-single-source
+   Accepted -- no denial to record (constraint 5.quirk-2 did not arise).
+
+--------------------------------------------------------------------------------
+RED->GREEN / TEST-MODE STATEMENT
+--------------------------------------------------------------------------------
+Declared TEST MODE: behaviour-preserving, documentation-only (phase prompt
+lines 10-12; brief section 6). red_proof is NULL BY DESIGN -- there is no
+production behaviour to change (blast-radius NONE: docs + ADR text + one
+GitHub issue body) and no test beyond markdownlint. The oracle is the
+existing full gate suite staying green (gate 2 above, zero src/tests diff)
+plus markdownlint on every changed .md (gate 1). This is the CLAUDE.md Test
+coverage #1 exception for behaviour-preserving work, applied narrowly to
+THIS phase only -- not generalized to any future phase.
+
+--------------------------------------------------------------------------------
+TRACKING ISSUE + DRAFTED CLOSURE COMMENTS (NOT POSTED -- issues stay OPEN)
+--------------------------------------------------------------------------------
+Tracking issue filed: https://github.com/pfBlockerNG/pfBlockerNG/issues/1349
+(labels enhancement, dnsbl, ADR-65; body carries inventory rows a-j).
+
+--- Draft closure comment for #1244 (post + close ONLY when this ADR's PR merges) ---
+Dissolved by ADR-65 delta D1. The `tld_analysis` TLD-classification pass and
+its finalize rename loop for `pfb_py_data.txt`/`pfb_py_zone.txt`, plus
+`pfb_dnsbl_py_swap`, are removed -- these files are never written by current
+code, so the unchecked-rename / "completed"-logged-regardless defect this
+issue describes has no code left to exhibit it.
+
+See `.ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md` on branch
+`adr/65-dnsbl-manifest-single-source` (<PR #>).
+
+--- Draft closure comment for #1245 (post + close ONLY when this ADR's PR merges) ---
+Dissolved by ADR-65 deltas D3 + D1. The Python init fallback that could serve
+a stale TLD-origin `pfb_py_zone` after a failed publish is removed -- a
+manifest build failure now fails loud (empty DNSBL + the ADR-61 ledger entry
++ a `file_notice`) instead of silently falling back to a possibly-stale
+interchange file. The interchange files themselves are never written by
+current code and are opportunistically swept by
+`pfb_unbound_clear_work_files()` (`pfblockerng.inc:9155-9156`).
+
+See `.ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md` on branch
+`adr/65-dnsbl-manifest-single-source` (<PR #>).
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Row | Item | Status |
+| --- | ---- | ------ |
+| R1 | alerts-reports-pipeline.md rewrite (every sub-section disposition) | DONE -- rewritten file, see WHAT CHANGED |
+| R2 | architecture-notes.md :663-675 render-pipeline summary | DONE |
+| R3 | architecture-notes.md :174-182 transitional-window impact sentence | DONE |
+| R4 | architecture-notes.md :184-197 downgrade mechanism correction | DONE |
+| R5 | architecture-notes.md :96-127 interchange intro | VERIFY-ONLY, no refutation found, not edited (as instructed) |
+| R6 | ADR-06 SS8 post-merge amendment | DONE -- appended, decision body untouched |
+| R7 | ADR-65 SS7 manual-checklist -> automated-tests rewrite | DONE |
+| R8 | ADR-65 Status-block D2 release-note bullet | DONE -- Status value unchanged |
+| R9 | Retirement-inventory tracking issue filed | DONE -- issue #1349, all labels applied, body verified to carry rows a-j |
+| R10 | #1244/#1245 closure comments drafted (not posted) | DONE -- see above; issues confirmed still OPEN (not touched) |
+| R11 | This handoff file | DONE |
+| inventory a | pfb_dnsbl_parse/_compute zero-caller claim | VERIFIED this session (git grep), in issue #1349 row a |
+| inventory b | prefetch family zero-www-caller claim | VERIFIED this session (git grep empty under www/, non-empty definitions-only under pfblockerng.inc), issue #1349 row b |
+| inventory c | dnsblcache Python-write / PHP-orphan claim | VERIFIED (pfb_unbound.py:2482/2581/2598 creates/inserts/wipes; sole PHP consumer is row a), issue #1349 row c |
+| inventory d | Python close-only wrappers | VERIFIED (source read, :1043/:1052, call sites :1684/:1690), issue #1349 row d |
+| inventory e | pfb_py_zone/pfb_py_data Python path defs | VERIFIED (:1279-1280), issue #1349 row e |
+| inventory f | PHP unbound_py_data/zone defs + sweep lockstep | VERIFIED (:130-131 defs, :9149-9150/:9155-9156 sweep sites -- exact lines re-derived this session, differ by 1 from the brief's approximate :9155-9156-for-comment citation; sweep entries themselves match), issue #1349 row f |
+| inventory g | domain_max_cnt write-only orphan | VERIFIED (:16352 setter, zero src/ readers), issue #1349 row g |
+| inventory h | _dnsbl_parse_ndjson_row + golden fixture orphan key | VERIFIED (pfb_unbound.py:3822; golden_pfb_py_loader_expected.json:4 "legacy_loader" key present), issue #1349 row h |
+| inventory i | Pinning tests to retire in lockstep | VERIFIED (`ls tests/php/` -- all 4 PHP files + test_issue1083_ndjson_primitives.py exist), issue #1349 row i |
+| inventory j | pfblockerng_alerts.php:2062-2075 stale header comment | VERIFIED stale this session (read live, still describes the re-check + dnsblcache as current); NOT touched (constraint: do not edit that file); routed into issue #1349 row j |
+| Hostile-input rows | N/A -- no parser/regex/guard touched | NONE REQUIRED, per brief section 4 |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. markdownlint MD018 false-trigger on a reflowed line starting "#1083-..." --
+   reworded to "a build from #1083 or later" (no semantic change). Not a
+   brief deviation, a lint-driven wording fix during authoring.
+2. ADR-65 ADR.md lines 14-16 ("ADR-06 gets a SS8 post-merge amendment in
+   Phase 7") is a pre-existing stale phase-number reference in the ADR's own
+   Status block -- the amendment actually landed in Phase 9 (this phase), not
+   Phase 7. NOT fixed: out of the brief's enumerated R1-R11 scope, the brief's
+   "Implementer scope" clause says not to go looking for extra work, and
+   fixing it risks touching text near (but not covered by) the do-NOT-rewrite
+   constraint on ADR-65's Status framing. Flagged here for the orchestrator's
+   judgment, not silently left unrecorded.
+3. Exact sweep-site line numbers in pfblockerng.inc: the brief's inventory
+   row (f) cited ":9155-9156" for both the ADR-65 comment AND the bare-path
+   defs; re-derived this session the comment is at :9154 and the bare-path
+   defs are at :9155-9156 -- a 1-line discrepancy on the comment only, not a
+   contradiction of substance. Used the re-derived (verified) line in the
+   issue body and this handoff; did not ESCALATE since it's a citation
+   off-by-one, not a falsified claim.
+4. No ESCALATE triggered otherwise: every quoted claim in the brief (function
+   signatures, line ranges, zero-caller assertions, label existence, issue
+   states) was re-verified against the live tree/GitHub this session and
+   matched.
+5. Session quirks: bare pytest/mypy already wrapped by run-gates.sh itself;
+   the scratchpad mypy PATH shim was recreated fresh per quirk (1) and used
+   for gate 2. No push was denied (quirk 2 did not arise). Retired-token
+   quirk (3) handled per GATES item 4 -- identical 24-group baseline, zero
+   drift, honestly quoted.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD
+--------------------------------------------------------------------------------
+- DEFERRED, VERBATIM dispatch commands for the orchestrator's CE+Plus
+  acceptance fan-out (carried from RESULTS/08, unchanged, never run this
+  session -- this phase is docs-only):
+    scripts/local-smoke.sh --marker smoke --filter adr65
+    scripts/local-smoke.sh --marker ui_e2e --filter adr65
+  The full ADR acceptance run additionally executes the Phase-7 reconciled
+  ui_e2e rows (tests/smoke/ui/test_alerts_render_verify.py) and Tier-A
+  ui_render, per ADR SS6 "Acceptance execution", before ADR-65 can flip to
+  Accepted per the "ADR acceptance -- automated tests" rule (CLAUDE.md).
+- After the acceptance fan-out is green: post the two drafted closure
+  comments on #1244/#1245 (filling the <PR #> placeholder), close both
+  issues, and this ADR's Status can flip from Proposed once the PR merges
+  per the ADR-acceptance rule.
+- Issue #1349 (retirement-inventory cleanup) is unblocked once this ADR's PR
+  merges -- its body already states that dependency.
+- DEVIATIONS item 2 above (ADR-65 ADR.md's stale "Phase 7" self-reference for
+  the ADR-06 amendment) is left for the orchestrator to fix or defer at its
+  discretion -- out of this phase's enumerated scope.

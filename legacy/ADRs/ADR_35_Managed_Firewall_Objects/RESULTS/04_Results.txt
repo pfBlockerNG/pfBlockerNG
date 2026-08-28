@@ -1,0 +1,290 @@
+ADR-35 Phase 4 — Sweep wiring + registration seam
+==================================================
+
+STATUS: COMPLETE — all gates green.
+BRANCH: adr/35-managed-firewall-objects
+
+ADR-RESUME: branch=adr/35-managed-firewall-objects next-phase=5
+
+────────────────────────────────────────────────────────────────────────────────
+WHAT WAS DONE
+────────────────────────────────────────────────────────────────────────────────
+
+Three changes across two production files + one new test file:
+
+  1. pfblockerng_fwobj.inc: added pfb_fwobj_init_registrations() — the registration seam.
+  2. pfblockerng.inc: wired sweep into deinstall path (pfblockerng_php_pre_deinstall_command).
+  3. pfblockerng.inc: wired defensive sweep into disable teardown (sync_package_pfblockerng).
+  4. tests/php/FwobjSweepSeamTest.php: 8 new test cases a–h.
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 1 — pfblockerng_fwobj.inc: pfb_fwobj_init_registrations()
+────────────────────────────────────────────────────────────────────────────────
+
+New function appended at end of pfblockerng_fwobj.inc (after pfb_fwobj_reconcile()).
+
+Registers three specs into the static registry via pfb_fwobj_register():
+
+  a. VIP V4:
+       pfb_fwobj_register([
+           'type'    => 'vip',
+           'section' => 'virtualip/vip',
+           'marker'  => PFB_AUTO_VIP_DESCR_V4,        // 'pfB_AUTO_VIP_v4'
+           'builder' => 'pfb_manage_dnsbl_vip',
+           'guard'   => NULL,
+       ]);
+
+  b. VIP V6:
+       pfb_fwobj_register([
+           'type'    => 'vip',
+           'section' => 'virtualip/vip',
+           'marker'  => PFB_AUTO_VIP_DESCR_V6,        // 'pfB_AUTO_VIP_v6'
+           'builder' => 'pfb_manage_dnsbl_vip',
+           'guard'   => NULL,
+       ]);
+
+  c. DNSBL NAT:
+       pfb_fwobj_register([
+           'type'    => 'nat',
+           'section' => 'nat/rule',
+           'marker'  => PFB_FWOBJ_NAT_LEGACY_PFX,     // 'pfB DNSBL'
+           'builder' => NULL,                          // NAT is managed by pfb_create_dnsbl; seam-only
+           'guard'   => NULL,
+       ]);
+
+These specs DEMONSTRATE the seam that ADR-36/37 will mirror.
+The builder field for VIP points to pfb_manage_dnsbl_vip (seam-only; actual lifecycle
+managed through the normal pfb_manage_dnsbl_vip/pfb_create_dnsbl paths).
+pfb_fwobj_reconcile() is NOT used by the wired sweep paths — sweep uses pfb_fwobj_sweep()
+which is marker-only and does not consult the registry.
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 2 — Deinstall sweep insertion point (pfblockerng.inc)
+────────────────────────────────────────────────────────────────────────────────
+
+Function: pfblockerng_php_pre_deinstall_command()
+Insertion: inside the if ($pfb['keep'] != 'on') block, immediately before
+           pfb_remove_config_settings().
+
+Context (surrounding code):
+
+  Line ~14474:
+      foreach (config_get_path(...)) { ... }    // shellcmdsettings cleanup
+
+  === INSERTED HERE ===
+      // [ ADR-35 P4 ] Sweep owned firewall objects BEFORE config ref data is wiped
+      pfb_fwobj_init_registrations();
+      if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+          write_config('pfBlockerNG: sweep orphan firewall objects on deinstall');
+      }
+  === END INSERT ===
+
+  Line ~14489 (after insert):
+      // Remove settings from config.xml
+      pfb_remove_config_settings();
+
+ORDER IS PRESERVED: sweep runs BEFORE pfb_remove_config_settings() wipes
+installedpackages/pfblockerng* (which holds pfb_dnsvip4/6 references).
+
+write_config() is called ONLY when pfb_fwobj_sweep() returns TRUE (something swept).
+If the normal disable teardown already cleaned up, sweep returns FALSE and no
+spurious write_config is issued (idempotent).
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 3 — Disable teardown sweep insertion point (pfblockerng.inc)
+────────────────────────────────────────────────────────────────────────────────
+
+Function: sync_package_pfblockerng()
+Insertion: immediately after pfb_create_dnsbl($mode), gated on $mode === 'disabled'.
+           pfb_create_dnsbl() itself calls pfb_manage_dnsbl_vip() internally, so by
+           the time the sweep runs, both the normal VIP and NAT removal paths have
+           already executed.
+
+Context (surrounding code):
+
+  Line ~12484:
+      pfb_create_dnsbl($mode);
+
+  === INSERTED HERE ===
+      // [ ADR-35 P4 ] Defensive sweep on disable: after pfb_manage_dnsbl_vip +
+      // pfb_create_dnsbl have removed VIP and NAT, ensure no owned objects remain
+      // (catches half-written state). Idempotent: returns FALSE when already clean.
+      if ($mode === 'disabled') {
+          pfb_fwobj_init_registrations();
+          if (pfb_fwobj_sweep(['virtualip/vip', 'nat/rule', 'filter/rule'])) {
+              write_config('pfBlockerNG: sweep orphan firewall objects on disable');
+          }
+      }
+  === END INSERT ===
+
+  Line ~12498 (after insert):
+      // Load new DNSBL updates to Unbound Resolver...
+      if ($pfb['domain_update'] || $pfbupdate || ...)
+
+────────────────────────────────────────────────────────────────────────────────
+FILE MANIFEST — pfblockerng_fwobj.inc in the shipped package
+────────────────────────────────────────────────────────────────────────────────
+
+pfblockerng_fwobj.inc is ALREADY wired into the load chain:
+  pfblockerng.inc (lines 34–35) uses a conditional require_once:
+      if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc')) {
+          require_once('/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc');
+      }
+  This is the SAME pattern as pfblockerng_extra.inc (lines 31–33).
+
+pfblockerng.xml only lists pfblockerng.inc as <include_file> — the sibling
+.inc files (pfblockerng_extra.inc, pfblockerng_fwobj.inc, pfblockerng_install.inc,
+pfb_unbound_include.inc) are NOT listed in pfblockerng.xml. They are loaded
+dynamically from within pfblockerng.inc via conditional require_once.
+
+CROSS-REPO PLIST NOTE (for orchestrator):
+pfblockerng_extra.inc does NOT appear in the pfblockerng.xml or pfblockerng_install.inc
+as a manifest entry. The FreeBSD-ports pkg-plist (in the separate pfBlockerNG/FreeBSD-ports
+repo under pfblockerng/use-github branch) is the authoritative file manifest for what
+the .pkg includes. pfblockerng_fwobj.inc was created in Phase 2 (src/ file exists) and
+needs a line in that FreeBSD-ports pkg-plist. The portable builder (scripts/build-pkg-portable.py)
+validates staged files against the plist and will error if pfblockerng_fwobj.inc is staged
+(it IS in src/) but not listed. A pkg-plist line following the pfblockerng_extra.inc pattern
+is needed in the cross-repo pfBlockerNG/FreeBSD-ports repo before CI building the .pkg.
+The orchestrator should track this as a cross-repo plist update.
+
+────────────────────────────────────────────────────────────────────────────────
+TEST FILE — tests/php/FwobjSweepSeamTest.php
+────────────────────────────────────────────────────────────────────────────────
+
+New file: tests/php/FwobjSweepSeamTest.php
+Class: FwobjSweepSeamTest (final, extends TestCase)
+Functions under test: pfb_fwobj_sweep, pfb_fwobj_register, pfb_fwobj_reconcile,
+                       pfb_fwobj_init_registrations
+
+8 test methods:
+
+  a. testSweepRemovesOrphanVip
+     Pins: orphan VIP (pfB_AUTO_VIP_v4 marker, double-guard IP ref = '') is swept
+     even when the double-guard predicate (subnet === cleared_ip) would skip it.
+     Before: orphan VIP present; double-guard mismatch confirmed. After: gone.
+
+  b. testSweepRemovesOrphanNat
+     Pins: orphan NAT rule (pfB DNSBL - DO NOT EDIT marker) removed by sweep even
+     without pfb_create_dnsbl teardown (simulates interrupted disable).
+     Before: orphan NAT present. After: gone.
+
+  c. testUserVipSurvivesSweep
+     Pins: user VIP ('My custom user VIP') survives when orphan pfB VIP is swept.
+     Before: two VIPs (orphan + user). After: only user VIP remains.
+
+  d. testUserNatSurvivesSweep
+     Pins: user NAT rule survives when orphan pfB DNSBL NAT is swept.
+     Before: two NAT rules (orphan + user). After: only user NAT remains.
+
+  e. testSweepIsNoopOnCleanConfig
+     Pins: sweep on empty config returns FALSE; write_config NOT called.
+     Verified via $GLOBALS['pfb_test_write_config_calls'] spy (stays empty).
+
+  f. testSweepIsIdempotent
+     Pins: first sweep returns TRUE (orphan removed); second sweep on same empty
+     section returns FALSE (idempotent). Intermediate state asserted.
+
+  g. testRegisterVipAndReconcileCreatesWhenAbsent
+     Pins: register VIP spec with test builder; reconcile when VIP absent → builder
+     called exactly once; VIP created in virtualip/vip.
+     Before: empty section. After: one VIP with PFB_AUTO_VIP_DESCR_V4 marker.
+
+  h. testRegisterVipAndReconcileIsIdempotent
+     Pins: reconcile twice — builder called only on first (object absent); second
+     call is a no-op (object already present). Builder call count asserted = 1 both
+     after first and after second reconcile.
+
+────────────────────────────────────────────────────────────────────────────────
+GATE RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+vendor/bin/phpunit:
+  Tests: 1172, Assertions: 4493, Warnings: 31 (pre-existing), Skipped: 3.
+  All PASS.
+  FwobjCurrentBehaviourTest: 11 tests — all PASS (unmodified).
+  FwobjLayerTest: 21 tests — all PASS (unmodified).
+  FwobjSweepSeamTest: 8 tests — all PASS (new).
+  Total Phase 1+2+4: 40 tests — all PASS.
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  No syntax errors detected. (pre-existing deprecation notices from legacy signatures)
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc:
+  No syntax errors detected.
+
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G:
+  [OK] No errors
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors — PFBL-01, ADR-28 (UppercaseBooleanLiteral), ADR-29 (RequireConfigGateway)
+  all clean.
+
+.venv/bin/python -m pytest -q:
+  1930 passed, 2 skipped.
+
+.venv/bin/ruff check .:
+  All checks passed!
+
+────────────────────────────────────────────────────────────────────────────────
+EDGE CASES ON write_config CALL SITES
+────────────────────────────────────────────────────────────────────────────────
+
+1. DEINSTALL PATH — write_config called iff sweep returns TRUE:
+   Normal case: sync_package_pfblockerng() (called just before the sweep) already
+   runs pfb_manage_dnsbl_vip('disabled') and pfb_create_dnsbl('disabled'), which
+   remove VIP + NAT and call write_config internally. The subsequent sweep returns
+   FALSE → no extra write_config. Only when orphans exist (half-written state) does
+   the sweep return TRUE and write_config is called once more.
+
+2. DISABLE TEARDOWN PATH — same logic: the sweep after pfb_create_dnsbl is a
+   safety net. In the normal (clean) case pfb_create_dnsbl already cleaned up and
+   write_config was already called there; the sweep returns FALSE and does not
+   add another write_config call.
+
+3. The $mode === 'disabled' guard on the disable-path sweep ensures the sweep
+   is NEVER called during an 'enabled' pass (would incorrectly wipe owned objects
+   that are live and intentionally present).
+
+4. $pfb['install'] during deinstall: pfb_global() (called inside
+   sync_package_pfblockerng) resets $pfb['install'] to FALSE and forces
+   $pfb['enable'] = $pfb['dnsbl'] = '' so the disable branch ($mode = 'disabled')
+   fires inside sync_package_pfblockerng even on the deinstall pass.
+   This means BOTH sweeps execute on deinstall:
+     - disable-path sweep (inside sync_package_pfblockerng): catches orphans in
+       the DNSBL section.
+     - deinstall sweep (in pfblockerng_php_pre_deinstall_command): catch-all
+       BEFORE pfb_remove_config_settings() wipes all reference data.
+   Both are idempotent: the second returns FALSE if the first already cleaned up.
+
+────────────────────────────────────────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────────────────────────────────────────
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc  (added pfb_fwobj_init_registrations)
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc        (sweep wired in 2 call sites)
+  tests/php/FwobjSweepSeamTest.php                     (new — 8 test cases)
+  .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/04_Results.txt  (this file)
+
+────────────────────────────────────────────────────────────────────────────────
+GO-AHEAD FOR PHASE 5
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 5 may proceed. The sweep is wired and tested. The registration seam is
+demonstrated by pfb_fwobj_init_registrations(). Phase 1 + Phase 2 oracles are
+green. Phase 4 (FwobjSweepSeamTest) adds 8 new tests, all green.
+
+Phase 5 should address the remaining work as defined in ADR-35:
+  - Extend the PHPCS RequireConfigGateway sniff or add a new enforcement mechanism
+    if needed for ADR-35 constraints.
+  - Wire pfb_fwobj_sweep/register/reconcile into filter/rule path if ADR-35 scopes it.
+  - Any remaining deinstall/disable coverage from the ADR-35 DoD checklist.
+  - Both Phase 1 (FwobjCurrentBehaviourTest) and Phase 2 (FwobjLayerTest) and
+    Phase 4 (FwobjSweepSeamTest) must stay green throughout.
+
+CROSS-REPO ACTION REQUIRED (tracked by orchestrator):
+  pfBlockerNG/FreeBSD-ports repo, pfblockerng/use-github branch, pkg-plist:
+  Add an entry for pfblockerng_fwobj.inc following the pfblockerng_extra.inc pattern.
+  Without this, scripts/build-pkg-portable.py will fail with "recipe staged files not
+  in the plist" when building the .pkg (pfblockerng_fwobj.inc is in src/ and will be
+  staged, but the plist won't list it).

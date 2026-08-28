@@ -1,0 +1,158 @@
+ADR-08 — Phase 7 Results (Validation + FP/TP on-branch + DoD + manual-smoke checklist)
+======================================================================================
+Status: DONE — ADR-08 IMPLEMENTED end-to-end. This is the final phase: validation +
+evidence + docs only. NO production decision code changed (matcher/UI behaviour is
+exactly as Phase 5/6 left it). The ADR Status is now "Implemented — pending live smoke";
+the maintainer flips it to Accepted after running the live-box manual smoke (§7). One
+commit on adr/08-homoglyph-protection (pushed).
+
+Gates green: python -m pytest = 1303 passed (floor met, unchanged from P5/P6 —
+validation phase adds no tests, the ADR-08 suite was authored P2-P5); ruff check . +
+ruff format --check . clean (79 files); php -l clean on the two IDN-touched PHP files
+(the pre-existing PHP 8.5-vs-8.3 "optional param before required" deprecations are
+unrelated to ADR-08 — those functions were not touched); PHPStan = No errors
+(--memory-limit=1G, 25 files); PHPUnit = 153 passed (279 assertions); markdownlint =
+0 errors on all 37 .md (incl. README.md, CLAUDE.md, ADR.md).
+
+
+1. THE FULL PASS COUNT
+----------------------
+  python -m pytest                 : 1303 passed, 0 failed.
+  ADR-08 suite (179 of the 1303):
+    tests/test_adr08_decision_spec.py       49  (Phase 2 — TR39 oracle vs golden table + corpus)
+    tests/test_adr08_mode_baseline.py       11  (Phase 3 — Off/All-IDN no-regression golden)
+    tests/test_adr08_analyzer.py            75  (Phase 4 — pure analyzer vs oracle over the corpus)
+    tests/test_adr08_confusable_matcher.py  44  (Phase 5 — production evaluate_domain wiring)
+    -------------------------------------------
+    TOTAL                                  179
+  PHPUnit (pfblockerng.inc helpers): 153 passed (unchanged — no PHP edited this phase).
+
+
+2. FP/TP ON-BRANCH vs THE KILL-THRESHOLD  ->  GO
+------------------------------------------------
+  Re-ran ON THIS BRANCH:
+      python tests/fixtures/adr08_corpus/measure_fp_tp.py
+  Verbatim RESULTS block:
+
+    FP (legit/suspicious wrongly -> malicious): 0 / 20 legit-tier labels
+    TP (homographs caught):                    6 / 6
+    Punycode decode safe (no uncaught raise):  True
+    Analyzer cost per xn-- label:              ~0.70 us
+    CJK FP (must be 0):                        0
+    IDN-ccTLD per-label FP (must be 0):        0
+
+    GATE: GO
+
+  Kill-threshold (RESULTS/01 section 6): GO requires malicious-tier FP == 0 on the
+  legit set (CJK + IDN-ccTLD MUST be 0) AND TP == all homographs AND decode-safe.
+  MET WITH MARGIN. No narrowing taken — the rule shipped exactly as finalised in
+  Phase 1 (>=2 of {Latin,Cyrillic,Greek} per label; per-label, never cross-dot union;
+  Cherokee/Armenian/Coptic -> suspicious tier; whole-script all-Cyrillic NOT caught,
+  documented limitation). The on-branch number matches the Phase-1 de-risk exactly
+  (no drift after the analyzer + matcher wiring landed).
+
+  Per-tier confirmation from the measure output (all as expected):
+    - LEGIT single-label (15): all -> legit (CJK, single Cyrillic/Greek, Latin-accented,
+      Arabic, Thai, Hebrew, Devanagari, ASCII).
+    - LEGIT IDN-ccTLD (2): example.xn--p1ai / site.xn--fiqs8s -> per-label legit
+      (wrong whole-name union of example.рф = {Cyrillic,Latin} WOULD be malicious; the
+      per-label rule eliminates that FP class).
+    - HOMOGRAPH (6): xn--pple-43d / xn--paypa-iof / xn--cope-f9d (Latin+Cyrillic),
+      xn--ggle-0nda (Latin+Greek), xn--mxa00ab (pure Cyrillic+Greek, no Latin),
+      xn--ypal-43d9g.example.com (subdomain) -> all malicious (TP 6/6).
+    - SUSPICIOUS (3): Latin+Armenian/Cherokee/Coptic -> suspicious (alert tier, not
+      a default block, not an FP).
+    - LIMITATION: xn--80ak6aa92e (all-Cyrillic 'apple') -> legit (documented out-of-scope).
+    - EDGE decode: xn--zz / xn--0 raise -> CAUGHT; xn-- / xn--a / xn--ls8h / xn--google
+      decode fine. No uncaught raise.
+
+
+3. PINNED UNICODE VERSION + REGEN STEP
+--------------------------------------
+  Pinned: Unicode 15.1.0.
+    UNICODE_VERSION = "15.1.0" embedded in BOTH:
+      - scripts/update-unicode-data.py                          (generator, dev-only)
+      - src/usr/local/pkg/pfblockerng/pfb_unicode_scripts.py    (SHIPPED data module)
+    Matches the dev-box stdlib unicodedata.unidata_version and the corpus/oracle
+    ucd_version 15.1.0 — tables, corpus and spec agree.
+  Regenerate (byte-for-byte reproducible, ruff-format-clean as emitted):
+      python scripts/update-unicode-data.py            # pinned 15.1.0
+      python scripts/update-unicode-data.py --version X.Y.Z
+  Downloads that version's Scripts.txt + ScriptExtensions.txt from unicode.org and
+  re-emits the compact range tables (pattern mirrors scripts/update-pfsense-stubs.py).
+  Documented now in README.md AND CLAUDE.md (this phase's DoD).
+
+
+4. WHAT DOCS / SETTING CHANGED (this phase — DOCS/ADR ONLY, no production decision code)
+----------------------------------------------------------------------------------------
+  README.md
+    - NEW "#### IDN homoglyph protection (ADR-08)" subsection under "### DNSBL list
+      build (Python)" (after the ADR-10 zero-downtime block, before "### DNSBL sinkhole
+      VIP"): documents the Off|All-IDN|Confusable mode selector + the two sub-toggles,
+      WHAT IT CATCHES (>=2 of {Latin,Cyrillic,Greek} per label; malicious->block default,
+      suspicious->alert opt-in-escalate), the DOCUMENTED LIMITATION (whole-script
+      confusables + pure-ASCII typosquats NOT caught), legit-IDN/per-label/IDN-ccTLD
+      resolve, the 0-FP / 6-of-6-TP corpus result, the shipped Unicode-data location
+      (pfb_unicode_scripts.py), the pinned version (15.1.0), and the
+      `python scripts/update-unicode-data.py [--version X.Y.Z]` regen step.
+
+  CLAUDE.md
+    - Repo-structure block: added pfb_idn_analyzer.py + pfb_unicode_scripts.py to the
+      package-dir listing, and scripts/update-unicode-data.py to the scripts/ listing.
+    - "Updating documentation": NEW "Update the shipped ADR-08 Unicode Scripts data"
+      block (after the stubs/pfsense/ block, before "When the min CE version changes"):
+      the pinned 15.1.0, the IDN-mode tie-in, ships-as-data/stdlib-only, the regen
+      commands, and "re-run tests/test_adr08_* + measure_fp_tp.py after a bump".
+
+  Help text (UI) — NO change needed; the Phase-6 wording is already consistent with the
+    docs (scope + limitation): pfblockerng_dnsbl.php IDN-Blocking select help reads
+    "...Confusable: block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes,
+    including Cyrillic+Greek). Does not catch whole-script confusables or pure-ASCII
+    typosquats." Verified consistent against the README + ADR wording.
+
+  .ADRs/ADR_08_Homoglyph_Protection/ADR.md
+    - Status line: Proposed -> "Implemented — pending live smoke" (with the Accepted-
+      after-live-smoke gate restated); stale "Branch: adr/08 (off next)" corrected to
+      "adr/08-homoglyph-protection (off devel; next retired)".
+    - NEW "### Build evidence (recorded Phase 7, on adr/08-homoglyph-protection)" block
+      in §7 (mirrors ADR-06/07): the pinned Unicode version, the 1303/179 test
+      equivalence broken down by phase, and the FP/TP measurement table
+      (FP 0/20, CJK 0, IDN-ccTLD 0, TP 6/6, decode-safe, ~0.70us) with the GO decision.
+    - §7 manual-smoke checklist made RUNNABLE: each box now carries the concrete corpus
+      xn-- labels (xn--pple-43d, xn--mxa00ab, xn--zckzah/3e0bk47br7k/fiq228c,
+      xn--h1alffa9f/hxakic4aa, example.xn--p1ai/site.xn--fiqs8s, xn--bnk-1ce, xn--zz/0),
+      the on-box drill @127.0.0.1 probe, the DNSBL block shape (NOERROR+VIP or NULL,
+      never NXDOMAIN), the feed/group labels, and explicit before/after toggle flips.
+
+  NO production decision code touched: pfb_unbound.py / pfb_idn_analyzer.py /
+  pfb_unicode_scripts.py / pfblockerng.inc / pfblockerng_dnsbl.php are UNCHANGED this
+  phase (git diff is README.md + CLAUDE.md + ADR.md + this handoff only).
+
+
+5. MANUAL-SMOKE CHECKLIST LOCATION (owner: maintainer)
+------------------------------------------------------
+  .ADRs/ADR_08_Homoglyph_Protection/ADR.md  ->  §7 "Manual smoke (owner: maintainer)
+  — required before Accept". Eight boxes, now runnable on a live pfSense CE box with
+  on-box drill probes + the exact corpus xn-- labels:
+    1. Malicious blocked (Latin+Cyrillic xn--pple-43d AND Cyrillic+Greek xn--mxa00ab;
+       alert shows decoded + offending scripts; Homoglyph/DNSBL_Homoglyph).
+    2. Legit IDN resolves (Japanese/Korean/Chinese + single-script Cyrillic/Greek).
+    3. IDN ccTLD safe per-label (example.рф / site.中国 resolve, never cross-dot union).
+    4. Suspicious alerts-not-blocks by default; escalate-suspicious ON flips resolve->block.
+    5. All-IDN blocks every xn-- (DNSBL_IDN); Off resolves all.
+    6. Backward-compat: pfb_idn='on' comes up as All-IDN.
+    7. Robustness: malformed xn-- (xn--zz / xn--0) does not crash the resolver.
+    8. Whitelist wins: a whitelisted homograph resolves.
+  CI cannot reach Unbound's Python loader -> these are the live-box gate the maintainer
+  runs before flipping Status to Accepted.
+
+
+6. STATUS + WRAP-UP
+-------------------
+  Status: "Implemented — pending live smoke" (NOT Accepted — the maintainer's call after
+  the §7 live-box smoke). All seven phases landed on adr/08-homoglyph-protection; the
+  full suite + the FP/TP kill-gate are green on-branch; docs + the IDN-mode setting +
+  the pinned Unicode-data version/regen step are finalised.
+
+  ADR-08 is feature-complete. No further code change expected; only the maintainer's
+  live-box manual smoke remains before Accept.

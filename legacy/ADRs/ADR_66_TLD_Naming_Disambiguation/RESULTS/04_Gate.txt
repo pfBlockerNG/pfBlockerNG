@@ -1,0 +1,40 @@
+ADR-66 PHASE 4 — ORCHESTRATOR GATE RECORD
+==========================================
+
+VERDICT: PASS
+
+TRANSACTION
+-----------
+Commits 44f63c31 (docs: reconcile TLD names in docs + ADR-65 to the tld_allow/tld_wildcard
+stems) + fb0ff85f (disclosed follow-up recording the post-commit run-gates.sh proof in the
+handoff), base_sha 2ddfd777, branch rebased onto origin/devel pre-edit and pushed
+--force-with-lease — remote tip == HEAD, worktree clean (orchestrator-verified). Handoff
+DONE; verifier (Sonnet) gate PASS on all 13 items, zero skips.
+
+COMMANDS + RESULTS (verifier-executed; orchestrator re-confirmed the frozen-oracle hash,
+remote tip, and spot-read two edit sites)
+------------------------------------------
+- npx markdownlint-cli2 -> clean; python3 pytest (rtk workaround) full suite green;
+  ruff / mypy clean; run-gates.sh proof recorded in the handoff (fb0ff85f)
+- Frozen oracle tests/test_adr66_tld_naming_oracle.py: hash 4ae3ad28 unchanged (zero edits)
+
+WHAT LANDED (docs-only, 6 enumerated files)
+-------------------------------------------
+- docs/misc/public-suffix-list.md + architecture-notes.md: old Feature-B names ->
+  tld_wildcard stems (the shipped dnsbl_tld FILE path and doomed tld_analysis() kept).
+- .ADRs/ADR_65_*/ADR.md §1.1-1.2 + phase prompts: renamed identifiers propagated AND the
+  two #1255 corrections carried over (no manifest public-suffix key — the oracle rides the
+  shipped pfb_py_tld file gated by python_tld_wildcard; python_tld_seg is whitelist
+  mechanics, not Feature A), via an update note rather than rewriting frozen decision text.
+- tests/smoke prose sites from the P3 carry-forward reconciled.
+
+PER-ITEM: all 13 verifier items pass (handoff-fields, gate-rerun, red-proof analog,
+diff-vs-plan for sections A-F + constraints-scope + commit-and-push + no-action rows,
+test-honesty, conventions).
+
+DEVIATION (disclosed, judged non-blocking): the whole-tree stale-name grep necessarily
+hits OTHER ADRs' frozen historical text (ADR_02/06/07/12/66) that the brief forbids
+touching — read as zero stale names within the enumerated edit scope; no file outside the
+6 was edited (verified by the diff-vs-plan:constraints-scope item).
+
+SKIPPED: none.

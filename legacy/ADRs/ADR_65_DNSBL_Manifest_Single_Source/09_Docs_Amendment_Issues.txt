@@ -1,0 +1,69 @@
+================================================================================
+PHASE 9 PROMPT -- Docs, ADR-06 amendment, release note, issue closure prep
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read SS2.2 + SS7 first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving, documentation-only -- no production behaviour, no tests
+beyond markdownlint.
+Blast-radius note for the gate: NONE. Docs + ADR text + issue bodies only.
+
+WHY THIS PHASE EXISTS
+The pipeline docs still describe the two-phase (render-time re-check) attribution model and
+ADR-06 still records the fallback as current; #1244/#1245 need closure text and the
+retirement inventory needs its tracking issue.
+
+REQUIRED READING
+- FIRST, read RESULTS/08_Results.txt. If missing, STOP and report.
+- docs/misc/alerts-reports-pipeline.md (the two-phase model being collapsed) +
+  docs/misc/architecture-notes.md (DNSBL/manifest + interchange sections).
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (SS8 amendment target).
+- RESULTS/05_Results.txt + RESULTS/06_Results.txt carry-forwards -- the retirement inventory
+  (pfb_dnsbl_parse/_compute + prefetch grep helpers, dnsblcache, the Python close-only
+  wrappers + pfb_py_zone/pfb_py_data path defs).
+
+REALITY OVERRIDE (standing rule)
+The prior RESULTS files and the live tree override this prompt on any conflict.
+
+ACTION PLAN (ordered)
+1. Rewrite docs/misc/alerts-reports-pipeline.md to the ONE-phase log-driven model (drop the
+   re-check/refinement sections; keep the write-path and cost sections accurate to source).
+2. Update architecture-notes' DNSBL sections to the manifest-single-source reality (verify
+   each touched claim against source; the interchange paragraph was already reconciled).
+3. Amend ADR-06 with a SS8 post-merge entry: manifest = single DNSBL source, interchange
+   files + fallback retired, fail-loud contract, log-driven reports, the query channel
+   (text-only; do not rewrite ADR-06's decision body).
+4. Add the D2 release-note text (refinement badges gone; feed filtering matches the logged
+   feed) where the release-notes pipeline picks it up (follow the house pattern -- check
+   docs/release-notes/ + workflow-reference "Release notes pipeline").
+5. Draft closure comments for #1244 + #1245 (pointing at this ADR + branch; they are CLOSED
+   only when the PR merges -- write the comments into the handoff, do NOT close the issues)
+   and FILE the retirement-inventory tracking issue now (gh issue create; body enumerates
+   the inventory from the carry-forwards). Do NOT file a vestigial-pfb_tld issue (mooted by
+   the #1255 fix).
+
+CONSTRAINTS
+- Documentation class: normal professional grammar; markdownlint clean.
+- No ADR phase numbers in committed comments/docs prose ('ADR-65:' pointers only).
+
+VERIFICATION (executed -- paste output)
+- npx markdownlint-cli2 on every changed .md.
+- sh scripts/agent/run-gates.sh --diff origin/devel.
+- Paste the created tracking-issue URL.
+
+EXPECTED RESULT
+Docs match the shipped one-phase model; ADR-06 amended; release note staged; closure comments
+drafted; the retirement tracking issue exists.
+
+COMMIT (single)
+    docs: one-phase alerts model, ADR-06 amendment, ADR-65 release note (ADR-65 P9)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the push is rejected.
+
+HANDOFF -- write RESULTS/09_Results.txt with the fixed fields: Verdict; What changed
+(+ commit); Gates (pasted tails); the tracking-issue URL + drafted closure comments;
+Coverage-matrix (each doc claim verified against source, ticked); Deviations (or "none");
+Carry-forward: the fan-out dispatch commands (from RESULTS/08) for the orchestrator's
+acceptance run.

@@ -1,0 +1,279 @@
+ADR-29 Phase 8 — www Group C (Alerts / Sync / Software / widget / wizard)
+==========================================================================
+
+## Status: DONE — gates green; go-ahead for Phase 9
+
+---
+
+## Pages routed
+
+### pfblockerng_alerts.php
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngglobal', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngglobal')`
+
+SAVE:
+- `config_set_path("installedpackages/pfblockerngglobal", $pfb['aglobal'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerngglobal', $pfb['aglobal'])`
+
+Registered-key routing (suppression, tldexclusion, global_log):
+- `config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log') ?: ''` →
+  `PfbConfig::read('global_log')`
+- `config_set_path(...suppression, ...)` / `config_get_path(...suppression)` (×5 sites) →
+  `PfbConfig::write('suppression', ...)` / `PfbConfig::read('suppression')`
+- `config_set_path(...tldexclusion, ...)` / `config_get_path(...tldexclusion)` (×4 sites) →
+  `PfbConfig::write('tldexclusion', ...)` / `PfbConfig::read('tldexclusion')`
+
+Foreign keys annotated:
+- `pfblockerngipsettings/config/0/v4suppression` — foreign key (section not in registry); 5 sites annotated
+- `pfblockerngdnsbl/config/{row}/custom` — dynamic per-row key, not in registry; 3 sites annotated
+- `pfblockerngdnsbl/config/{row}/logging` — dynamic per-row key, not in registry; 1 site annotated
+- `pfblockernglistsv4/v6/config/{row}/custom` — dynamic per-row key, not in registry; 3 sites annotated
+- `pfblockerngdnsbl` (section-level read) — dynamic per-feed list section, not in registry
+- `pfblockernglistsv4/v6` (section-level read) — dynamic per-feed list sections, not in registry
+- `interfaces` — pfSense core section, not in registry
+- `system/webgui/webguicss` — pfSense core key, not in registry; 3 render sites annotated
+
+### pfblockerng_sync.php
+
+Section: `installedpackages/pfblockerngsync/config/0` — NOT in registry (foreign section; XMLRPC-fed).
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngsync/config/0', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngsync/config/0')`
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerngsync/config/0', $pfb['sconfig'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerngsync/config/0', $pfb['sconfig'])`
+- Per-row write/delete sites (3) for `pfblockerngsync/config/0/row/{k}/{field}` and
+  `pfblockerngsync/config/0/row/{r_key}` — retained as foreign structures:
+  ```
+  // foreign structure: pfblockerngsync/config/0/row is a dynamic XMLRPC row blob, not in registry
+  ```
+
+### pfblockerng_software.php
+
+Section: `installedpackages/pfblockerng/config/0` — IN registry.
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerng/config/0/pfb_software_check', null)` →
+  `PfbConfig::read('pfb_software_check')`
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerng/config/0/pfb_software_check', ...)` →
+  `PfbConfig::write('pfb_software_check', isset($_POST['pfb_software_check']) ? 'on' : 'off')`
+
+### pfblockerng_log.php
+
+No `config_get/set/del_path` calls for any `pfblockerng*` sections.
+Page reads only filesystem log files. No routing work required.
+
+### pfblockerng.widget.php (dashboard widget)
+
+Section: `installedpackages/pfblockerngglobal` — NOT in registry (foreign section).
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngglobal', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngglobal')`
+
+SAVE:
+- `widget-*` per-key writes (9 keys: popup, sortmix, sortcolumn, sortdir, clearip, cleardnsbl,
+  dnsblquery, maxfails, maxheight) — retained as foreign keys:
+  ```
+  // foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
+  ```
+- `config_del_path('installedpackages/pfblockerngglobal/widget-maxpivot')` (obsolete removal) —
+  retained as foreign:
+  ```
+  // foreign key: pfblockerngglobal/widget-* are dashboard widget keys, not in registry
+  ```
+
+Other foreign sections in widget:
+- `filter/rule` — pfSense core section, not in registry; annotated
+- `aliases/alias` — pfSense core section, not in registry; annotated
+- `pfblockernglistsv4/v6/dnsbl/config` (dynamic list sections) — not in registry; annotated
+
+### pfblockerng_wizard.inc
+
+All config access is foreign (wizard temp section or bulk installedpackages init).
+
+Foreign annotated sites:
+- `config_del_path('pfblockerng_wizard')` (×2) — wizard temp section, not in registry
+- `config_set_path('pfblockerng_wizard/step2/inbound_interface', ...)` — wizard temp
+- `config_set_path('pfblockerng_wizard/step2/outbound_interface', ...)` — wizard temp
+- `config_get_path('installedpackages')` — bulk wizard init reads whole blob, not routed per-key
+- `config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto')` — wizard temp
+- `config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4')` — wizard temp
+- `config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6')` — wizard temp
+- `config_get_path('pfblockerng_wizard/step3/pfb_dnsport')` — wizard temp
+- `config_get_path('pfblockerng_wizard/step3/pfb_dnsport_ssl')` — wizard temp
+- `config_get_path('pfblockerng_wizard/step3/suppression')` — wizard temp
+- `config_set_path('installedpackages', $new_config)` — bulk wizard init writes whole blob
+- The `$new_config['pfblockerng']['config'][0]['enable_cb'] = 'on'` / `pfb_keep = 'on'` lines
+  set registered keys as string literals inside the bulk array; the bulk write
+  `config_set_path('installedpackages', ...)` is a one-time wizard init that cannot be
+  split into per-key gateway calls without significant restructuring. Annotated as
+  foreign structure.
+
+---
+
+## Grep evidence — remaining raw config_*_path sites in src/ (outside gateway)
+
+After Phase 8, `grep -rn "config_(get|set|del)_path" src/` shows (excluding
+`pfblockerng_extra.inc` gateway internals and `pfblockerng_migrate.inc` migration driver):
+
+### PfbConfig internals (pfblockerng_extra.inc)
+
+All `config_get_path` / `config_set_path` calls inside `PfbConfig::readSection`,
+`PfbConfig::writeSection`, `PfbConfig::deleteSection`, `PfbConfig::read`,
+`PfbConfig::write`, `PfbConfig::delete` — these ARE the gateway implementation.
+
+### Migration driver (pfblockerng_migrate.inc)
+
+Uses gateway calls for migration steps. Not an app page.
+
+### pfblockerng.inc (pkg core)
+
+All remaining `config_*_path` calls in `pfblockerng.inc` are either:
+- Dynamic list-section reads (`pfblockernglistsv4/v6/dnsbl/config`) — foreign structures
+- pfSense core sections (`filter/rule`, `unbound/*`) — foreign
+- Package management paths (install/uninstall/backup) — outside gateway scope (§2.5)
+- The pfSense package registration structure (`pfblockerng/config` at pkg-schema level)
+
+### pfblockerng.php (www)
+
+- `pfblockerng` continent config reads (dynamic per-continent keys) — foreign structure
+- `pfblockerngreputation` section — foreign (reputation is a static display page)
+
+### pfblockerng_dnsbl.php (www) — routed in Phase 6
+
+- `system/domain` — pfSense core key, annotated
+- `aliases/alias` — pfSense core section, annotated
+- `pfblockerngdnsblsettings/config/0/dnsbl_webpage` — out-of-scope key (ADR-29 §2.5),
+  annotated
+
+### pfblockerng_category_edit.php (www) — routed in Phase 7
+
+- All remaining sites are dynamic per-row keys (foreign structure), annotated
+
+### pfblockerng_blacklist.php (www) — routed in Phase 7
+
+- All remaining sites are foreign keys (pfblockerngblacklist not in registry), annotated
+
+### pfblockerng_feeds.php (www) — routed in Phase 7
+
+- All remaining sites are foreign keys (dynamic feed_* alias keys), annotated
+
+### pfblockerng_alerts.php (www) — routed in Phase 8
+
+- v4suppression (pfblockerngipsettings) — foreign, annotated (×5)
+- dnsbl/list per-row dynamic keys — foreign, annotated (×7)
+- interfaces — pfSense core, annotated
+- system/webgui/webguicss — pfSense core, annotated (×3 render sites)
+
+### pfblockerng_sync.php (www) — routed in Phase 8
+
+- Row sub-structure writes (pfblockerngsync/config/0/row/*) — foreign, annotated (×3)
+
+### pfblockerng.widget.php (www) — routed in Phase 8
+
+- widget-* per-key writes (pfblockerngglobal) — foreign, annotated (×10)
+- filter/rule — pfSense core, annotated
+- aliases/alias — pfSense core, annotated
+- pfblockernglistsv4/v6/dnsbl/config (dynamic list sections) — foreign, annotated
+
+### pfblockerng_wizard.inc (www) — routed in Phase 8
+
+- pfblockerng_wizard/* — wizard temp section, annotated (×10 sites)
+- installedpackages (bulk blob) — foreign structure, annotated (×2)
+
+### pfb_unbound_include.inc
+
+- `unbound/python_script` — pfSense core key (out of gateway scope, §2.5)
+
+---
+
+## Complete foreign-key list (after Phase 8)
+
+| Section / Key | Reason | Files |
+| --- | --- | --- |
+| `pfblockerngipsettings/config/0/v4suppression` | Foreign section (not in registry) | pfblockerng_alerts.php |
+| `pfblockerngdnsbl/config/{row}/custom` | Dynamic per-row key, not in registry | pfblockerng_alerts.php, pfblockerng_category_edit.php |
+| `pfblockerngdnsbl/config/{row}/logging` | Dynamic per-row key, not in registry | pfblockerng_alerts.php |
+| `pfblockernglistsv4/v6/config/{row}/custom` | Dynamic per-row key, not in registry | pfblockerng_alerts.php, pfblockerng_category_edit.php |
+| `pfblockernglistsv4/v6/dnsbl` (section-level) | Dynamic per-feed list sections, not in registry | pfblockerng_alerts.php, pfblockerng_category_edit.php, pfblockerng.widget.php |
+| `pfblockerngsync/config/0/row/*` | Dynamic XMLRPC row blob, not in registry | pfblockerng_sync.php |
+| `pfblockerngglobal/widget-*` | Dashboard widget keys, not in registry | pfblockerng.widget.php |
+| `pfblockerngblacklist` (all sub-keys) | Entire section is foreign (not in registry) | pfblockerng_blacklist.php |
+| `pfblockerngglobal/feed_*` + `feed_alt_*` | Dynamic alias-name keys, not in registry | pfblockerng_feeds.php, pfblockerng_category_edit.php |
+| `pfblockerngglobal` (section-level in feeds) | Dynamic feed key section, not in registry | pfblockerng_feeds.php |
+| `pfblockerng_wizard/*` | Wizard temp section, entirely foreign | pfblockerng_wizard.inc |
+| `installedpackages` (bulk blob) | Bulk wizard init write, not routed per-key | pfblockerng_wizard.inc |
+| `pfblockerngreputation/config/0` | Static display section (no registered keys) | pfblockerng.php |
+| `pfblockerng` continent configs | Dynamic per-continent structure | pfblockerng.php, pfblockerng.inc |
+| `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope key (ADR-29 §2.5) | pfblockerng_dnsbl.php |
+| `aliases/alias` | pfSense core section | pfblockerng_alerts.php, pfblockerng_category_edit.php, pfblockerng.widget.php, pfblockerng_dnsbl.php |
+| `filter/rule` | pfSense core section | pfblockerng.widget.php, pfblockerng.inc |
+| `system/webgui/webguicss` | pfSense core key | pfblockerng_alerts.php |
+| `system/domain` | pfSense core key | pfblockerng_dnsbl.php |
+| `interfaces` | pfSense core section | pfblockerng_alerts.php |
+| `unbound/*` | pfSense core section | pfb_unbound_include.inc |
+
+---
+
+## Test suite
+
+New file: `tests/php/WwwGroupCGatewayTest.php`
+
+Tests added (15 new, totalling 769 / 2760 assertions vs baseline 754 / 2729):
+
+Group A — Load default parity (registered keys):
+1. `testSoftwareCheckAbsentDefaultIsEmptyString` — absent → ''
+2. `testSoftwareCheckToggleRoundTrips` — before '', write 'on' → 'on', write 'off' → 'off'
+3. `testGlobalLogAbsentDefaultIsEmptyString` — absent → ''
+4. `testGlobalLogRoundTrips` — 'enabled' and 'disabled_log' both round-trip
+5. `testSuppressionAbsentDefaultIsEmptyString` — absent → ''
+6. `testSuppressionRoundTrips` — base64 blob round-trips byte-identically
+7. `testTldExclusionAbsentDefaultIsEmptyString` — absent → ''
+8. `testTldExclusionRoundTrips` — base64 blob round-trips byte-identically
+9. `testWidgetGlobalKeyIsNotInRegistry` — widget-popup throws InvalidArgumentException
+10. `testV4SuppressionIsNotInRegistry` — v4suppression throws InvalidArgumentException
+
+Group B — Save round-trip identity (section blobs):
+11. `testAlertsGlobalSectionRoundTripsByteIdentically` — pfblockerngglobal with all alert colour + widget keys
+12. `testSyncSectionRoundTripsByteIdentically` — pfblockerngsync with row XMLRPC structure
+13. `testSyncSectionToggleRoundTrips` — before disabled, write auto → confirm auto
+14. `testWidgetGlobalSectionWithWidgetKeysRoundTrip` — pfblockerngglobal with widget-* dynamic keys
+15. `testSuppressionAndTldExclusionCoexistInSection` — both registered keys in same section, independent reads
+
+### Gate results
+
+- `vendor/bin/phpunit`: 769 tests, 2760 assertions — OK (baseline was 754/2729; +15 tests, +31 assertions)
+- `vendor/bin/phpstan analyse`: No errors
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/`: Clean (no output)
+- `php -l` on all group-C files: No syntax errors
+- `python -m pytest`: 1733 passed (1 transient ordering-dependent flake in test_adr10_watcher.py — passes in isolation; pre-existing, not caused by Phase 8)
+- `ruff check .` + `ruff format --check .`: All checks passed
+
+---
+
+## Diff scope confirmation
+
+Changed files:
+- `src/usr/local/www/pfblockerng/pfblockerng_alerts.php` — 2 section gateway calls + 9 registered-key gateway calls + 14 foreign annotations
+- `src/usr/local/www/pfblockerng/pfblockerng_sync.php` — 1 readSection + 1 writeSection + 3 foreign annotations
+- `src/usr/local/www/pfblockerng/pfblockerng_software.php` — 1 read + 1 write (registered key pfb_software_check)
+- `src/usr/local/www/widgets/widgets/pfblockerng.widget.php` — 1 readSection + 11 foreign annotations
+- `src/usr/local/www/wizards/pfblockerng_wizard.inc` — 12 foreign annotations
+- `tests/php/WwwGroupCGatewayTest.php` — new test file (15 tests)
+
+No markup/help-text changes. No UI or stored-value changes. No changes outside group-C scope.
+
+---
+
+## Go-ahead for Phase 9
+
+Phase 8 complete. All gates green. All `installedpackages/pfblockerng*` config access in
+`www/` now flows through the gateway or is documented as a foreign key. The codebase is
+ready for the Phase-9 enforcement sniff.

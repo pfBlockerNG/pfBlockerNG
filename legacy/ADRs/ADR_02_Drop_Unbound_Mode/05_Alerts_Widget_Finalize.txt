@@ -1,0 +1,99 @@
+================================================================================
+PHASE 5 PROMPT — Alerts/widget collapse + finalize
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md  (§2 deletion rule, §7 done criteria)
+================================================================================
+
+ROLE
+You are on the `edge` branch performing the final phase of ADR-02. Collapse the
+remaining mode branches in the alerts page and the dashboard widget, drop the
+now-unread keystone mode variable, and verify the whole package is Python-only
+with no stray references. This phase closes the ADR.
+
+WHY THIS PHASE EXISTS
+pfblockerng_alerts.php (~30 sites) and pfblockerng.widget.php (3 sites) still
+branch on `$pfb['dnsbl_mode'] == 'dnsbl_python'` and `$pfb['dnsbl_py_blacklist']`.
+With Python the only mode these are constants. Once these readers are gone, the
+Phase-1 keystone `$pfb['dnsbl_mode'] = 'dnsbl_python';` and the `pfb_py_block`
+read in pfblockerng.inc can be removed too.
+
+THE DELETION RULE (same as Phase 3)
+- `$pfb['dnsbl_mode'] == 'dnsbl_python'` → TRUE: unwrap the guarded block; if it's
+  an `else`/ternary, take the python side. `!= 'dnsbl_python'` → FALSE: delete.
+- `$pfb['dnsbl_py_blacklist']` → TRUE; `!$pfb['dnsbl_py_blacklist']` → FALSE.
+  Collapse ternaries to the python side (e.g. column titles "Blocking Type" vs
+  "Top User-Agent" → keep the py label; "DNSBL Webserver/VIP" vs "Not available
+  for HTTPS alerts" → keep the py label).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/04_Results.txt — it states the actual
+  post-Phase-4 code state and any deviations from plan. If it is missing, Phase 4
+  is not complete; STOP and report.
+- .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php — grep first:
+    grep -n "dnsbl_mode\|dnsbl_py_blacklist\|dnsbl_python" src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+- src/usr/local/www/widgets/widgets/pfblockerng.widget.php — grep first:
+    grep -n "dnsbl_mode\|dnsbl_py_blacklist\|dnsbl_python" src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the Phase-1 keystone
+  `$pfb['dnsbl_mode'] = 'dnsbl_python';` and the `$pfb['dnsbl_py_block']` read.
+- CLAUDE.md — PHP standards.
+
+ACTION PLAN
+1. Collapse every mode/py_blacklist site in pfblockerng_alerts.php per the rule.
+   Watch the dnsbl_stat python-vs-not guard (~L4492) and the column/label
+   ternaries — keep the python-side text.
+2. Collapse the 3 widget guards (~L613, L640, L648) to unconditional.
+3. In pfblockerng.inc: now that no file reads $pfb['dnsbl_mode'] or
+   $pfb['dnsbl_py_block'] for behavior, remove the Phase-1 keystone assignment
+   `$pfb['dnsbl_mode'] = 'dnsbl_python';` and the `$pfb['dnsbl_py_block']` read.
+   (Re-grep the repo to confirm no remaining readers before deleting.)
+   KEEP emitting `python_blocking = on` in the resolver-config generation.
+4. Package-wide sweep — there must be ZERO matches:
+     grep -rn "dnsbl_unbound\|pfb_py_block\|dnsbl_py_blacklist" src/
+   And no behavioral `dnsbl_mode` guards remain (the config key may still appear
+   in migration code in pfblockerng_install.inc — that's expected and correct).
+5. README.md: update only if it documents the DNSBL modes / a min-version or
+   workflow fact that this ADR changed. If nothing applies, leave it.
+
+CONSTRAINTS
+- PHP: tabs; no die()/exit(); pfSense fns via stubs/pfsense/.
+- Do NOT remove the migration in pfblockerng_install.inc (it legitimately
+  references the old key names to rewrite them).
+- KEEP `python_blocking = on` emission, webserver/VIP/NAT, pfb_tld.
+
+VERIFICATION (Definition of Done — ADR §7)
+- `php -l` clean on pfblockerng_alerts.php, pfblockerng.widget.php, pfblockerng.inc.
+- `grep -rn "dnsbl_unbound\|pfb_py_block\|dnsbl_py_blacklist" src/` → no matches.
+- `grep -rn "dnsbl_mode" src/` → matches only inside the install.inc migration.
+- `python -m pytest` → green; `ruff check .` / `ruff format .` clean; ShellCheck
+  clean; intelephense/`php -l` clean.
+- Confirm `python_blocking` still emitted as `on`.
+
+EXPECTED RESULT
+- Alerts page and widget render with no mode branching and no PHP notices.
+- The entire package has a single DNSBL implementation (Python). The only
+  surviving reference to the legacy keys is the one-time config migration.
+
+MANUAL SMOKE (owner: maintainer — record in RESULTS; cannot be automated)
+Run the ADR §7 checklist on a clean install AND a box upgraded from
+dnsbl_unbound (deploy via scripts/deploy.sh). Only after it passes, set ADR
+Status to Accepted.
+
+COMMIT
+    pfblockerng: collapse DNSBL mode branches in alerts/widget and finalize (ADR-02 P5)
+Land on `edge`. Push directly; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/05_Results.txt`
+This is the FINAL phase, so the handoff recipient is the MAINTAINER who runs the
+manual smoke test and closes the ADR — there is no next-phase agent. Write it as
+plain text (.txt, not markdown), self-sufficient. Include:
+- State after this phase: the package has a single (Python) DNSBL implementation;
+  the only surviving legacy-key reference is the install.inc migration;
+  `python_blocking = on` still emitted.
+- What changed: sites collapsed in alerts/widget; the keystone assignment and the
+  pfb_py_block read removed.
+- Full verification output: grep sweep, php -l, ruff, ShellCheck, pytest.
+- The OUTSTANDING manual smoke items (ADR §7) the maintainer must run, and where
+  to record their results before moving Status to Accepted.
+Also update the ADR header Status to "IMPLEMENTED (pending smoke test)".

@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|run_terminal_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${GROK_WORKSPACE_ROOT:-.}/.grok/hooks/grok-bus-pretool\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${GROK_WORKSPACE_ROOT:-.}/.grok/hooks/grok-bus-stop\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

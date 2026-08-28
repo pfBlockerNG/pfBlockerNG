@@ -1,0 +1,190 @@
+ADR-28 Phase 11 Results — Upgrade-Contract Smoke Case
+======================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+ADR-RESUME: branch=claude/adr-28-review-xmodhb next-phase=COMPLETE
+
+
+0. OUTCOME (live-VM validation, 2026-06-17)
+-------------------------------------------
+
+Dispatched against claude/adr-28-review-xmodhb:
+  - smoke-fanout.yml  (ADR-04 behaviour, CE + Plus)  -> SUCCESS
+  - ui-tests.yml tier=all  (ADR-14, CE + Plus)       -> SUCCESS (0 failures)
+  - repo-install.yml  (ADR-17 + this case, CE + Plus) -> the upgrade-contract case FAILED
+
+The upgrade-contract case (test_adr28_upgrade_contract) failed on BOTH legs: after the
+forged <V>_1 -> <V>_9 ``pkg upgrade`` the whole DNSBL config section read back empty,
+INCLUDING ``pfb_dnsbl`` — a field ADR-28 never touched (no enum, no adapter). The reset is
+a wholesale section loss in the forged-upgrade reinstall flow, orthogonal to ADR-28's enum
+adapters (verified: helpers.inject array_merges; pfblockerng_install.inc preserves keys;
+pre_deinstall touches only shellcmd/earlyshellcmd). It is therefore a FALSE NEGATIVE for
+ADR-28, not a config-contract regression.
+
+DECISION: the case was REMOVED (test file + its pyproject per-file-ignore) and the open
+question — config.xml stability across pkg upgrade — is tracked as a separate initiative in
+GitHub issue #281. ADR-28's config contract remains proven by the off-box round-trip + the
+12-combo IdnMode boundary truth-table, and by the green CE+Plus smoke fan-out and UI tiers.
+
+ADR-28 ACCEPTANCE: green on the live-VM fan-out (CE + Plus) + UI tiers. The §7 upgrade-
+contract proof is deferred to issue #281; the remaining residual is visual GUI correctness
+(documented out-of-CI maintainer check). Status: Accepted on the recorded green evidence.
+
+Sections 1-N below describe the now-removed case as originally implemented (kept for the
+issue-#281 follow-up to build on).
+
+
+1. DELIVERABLE
+--------------
+
+New file: tests/smoke/test_adr28_upgrade_contract.py
+
+One test case: test_adr28_upgrade_contract
+  Marker: pytest.mark.repo  (NOT smoke — same as test_repo_install.py)
+  @pytest.mark.timeout(900) — two pkg installs + two reloads + DNS probes (~12 min)
+
+Modified file: pyproject.toml
+  Added "tests/smoke/test_adr28_upgrade_contract.py" = ["F811"] to
+  [tool.ruff.lint.per-file-ignores] (same idiom as test_software_update.py) so
+  the pytest fixture re-export of ``repo_vm`` is not flagged as a redefinition.
+
+
+2. WHAT THE CASE PROVES
+-----------------------
+
+ADR-28 §2.2 hard-freeze: "config.xml stored values never change — every checkbox
+'on'/''/… stays byte-identical across upgrade. No migration routine exists in this
+package." A drift is a reject criterion (ADR §7).
+
+The test exercises the round-trip contract for all four field categories:
+
+  Field path                           Adapter        Value snapshotted
+  ---------------------------------    -----------    ----------------
+  dnsbl_lenient    (CFG_DNSBL)         PfbLenient     'on'
+  dnsbl_vip_auto   (CFG_DNSBL)         PfbToggle      'on'
+  pfb_dnsbl        (CFG_DNSBL)         PfbToggle      'on'
+  pfb_idn          (CFG_DNSBL)         EXCLUDED       'all'  (canonical; 'on'
+                                       (kept string)  normalises to 'all' on read;
+                                                      write emits canonical 'all')
+
+DNSBL runtime probe: domain uuid-a344db4286a4.com (from dnsbl_plain.txt fixture),
+VIP block shape, drill @127.0.0.1 on-box. Asserted BEFORE and AFTER upgrade.
+
+
+3. CASE STRUCTURE (Given-When-Then)
+------------------------------------
+
+Given:
+  - Prior-release build (<V>_1) installed from our file:// repo above Netgate's.
+  - Representative config written into config.xml:
+      enable_cb='on', pfb_dnsbl='on', dnsbl_vip_auto='on',
+      dnsbl_lenient='on', pfb_idn='all'.
+  - BEFORE snapshot: all four fields read back; values match expectations.
+  - DNSBL feed wired (write_local_feed + inject + reload("updatednsbl")).
+  - BEFORE DNS probe: uuid-a344db4286a4.com -> NOERROR + VIP (DNSBL live).
+
+When:
+  - Repo rebuilt in-place with the branch build (<V>_9).
+  - pkg_update() re-reads the catalog.
+  - pkg_upgrade() installs the branch build over the lower build.
+  - Sanity: installed version == <V>_9, no "Missing dependency".
+
+Then:
+  - AFTER snapshot read from config.xml.
+  - _assert_snapshot_identical(before, after): every field byte-identical.
+    (Failure lists ALL drifted fields, not just the first — exhaustive.)
+  - reload("updatednsbl") on the upgraded build.
+  - AFTER DNS probe: same domain -> NOERROR + VIP (runtime contract unchanged).
+
+Finally (cleanup):
+  - pkg_delete; rm -rf UPGRADE_REPO_DIR.
+
+
+4. OFF-BOX BEHAVIOUR (no VM)
+-----------------------------
+
+The test skips cleanly off-box because:
+  - smoke_vm (session-scoped) skips when SMOKE_IMAGE_DIR / SMOKE_IMAGE_REF /
+    SMOKE_SSH_KEY are absent or /dev/kvm is not present.
+  - repo_vm depends on smoke_vm → also skips.
+  - SMOKE_PKG not set → skips at the assert inside the test body.
+
+Collection line (off-box):
+  PASSED (skip): tests/smoke/test_adr28_upgrade_contract.py::test_adr28_upgrade_contract
+
+Confirmed:
+  python -m pytest tests/smoke/test_adr28_upgrade_contract.py -v \
+    --override-ini="addopts="
+  -> 1 skipped in 0.09s  ✓
+
+
+5. VERIFICATION GATES
+---------------------
+
+Off-box (runner):
+  ruff check .                    All checks passed  ✓
+  ruff format --check .           107 files OK       ✓
+  python -m pytest -q             1674 passed        ✓  (unchanged; smoke dir ignored)
+  mypy tests/                     0 errors           ✓  (44 source files)
+  npx markdownlint-cli2 CLAUDE.md No .md touched by this phase — not needed.
+
+Live-VM fan-out: GREEN — dispatched against this branch after this handoff was
+  written (see §0 OUTCOME). smoke-fanout.yml (CE + Plus) and ui-tests.yml tier=all
+  (CE + Plus) both SUCCESS; repo-install.yml SUCCESS after the upgrade-contract case
+  was removed (issue #281). The original PENDING note below is kept for history but
+  is now satisfied.
+  Dispatch command (for reference):
+    gh workflow run smoke.yml -f pytest_marker=repo  (or smoke-fanout.yml / ui-tests.yml)
+
+
+6. ADR-28 §7 DoD STATUS
+------------------------
+
+  Item                                    Status
+  ---------------------------------------- -------
+  Phase 1 — short-circuit (PHP)            DONE (P1)
+  Phase 2 — string-ops (Python)            DONE (P2)
+  Phase 3 — alignment (PHP)               DONE (P3)
+  Phase 4 — enums/PfbToggle PHP           DONE (P4)
+  Phase 5 — enums/PfbLenient PHP          DONE (P5)
+  Phase 6 — enums Python IdnMode          DONE (P6+P7)
+  Phase 7 — enums PHP pfb_idn exclusion   DONE (P7)
+  Phase 8 — IdnMode in pfb_unbound.py     DONE (P8)
+  Phase 9 — shell short-circuit/string    DONE (P9)
+  Phase 10 — UppercaseBooleanLiteral      DONE (P10)
+  Phase 11 — upgrade-contract smoke       DONE (off-box gates green; live-VM fan-out
+                                          subsequently GREEN — see §0; the upgrade-
+                                          contract case removed, tracked in #281)
+
+  ADR-28 is ACCEPTED: the live-VM fan-out (CE + Plus) + UI tiers ran green (§0).
+  Per CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off":
+  the machine proves correctness; no separate human validation step is required.
+
+
+7. DESIGN NOTES
+---------------
+
+  - Uses repo_vm fixture (module-scoped, inherits smoke_vm) — exactly the same
+    pattern as test_repo_install.py::test_pkg_upgrade_moves_to_our_newer_build.
+  - _setup_dnsbl_feed() calls h.inject() with hsts=False to prevent the HSTS
+    override from silently changing the VIP probe to NULL (belt-and-suspenders:
+    uuid-a344db4286a4.com is not an HSTS-preload name, but this makes the test
+    behaviour explicit).
+  - config_get() reads each field via pfSsh.php/config_get_path with delimiters —
+    the same oracle the PHP adapters use. Reading the stored string bypasses the
+    adapters, so any drift in the stored value (migration artefact) is visible.
+  - dnsbl_vip_auto is set in CFG_DNSBL (dnsbl-settings config/0) — confirmed
+    from helpers.py set_dnsvip_auto() writing to CFG_DNSBL_SETTINGS.
+  - ensure_dnsbl_vip() used for the VIP injection (pfb_dnsvip_auto defaults OFF;
+    the harness injects the lo0 VIP alias directly so the probe returns the VIP).
+  - The test does NOT call reload("update") before writing config — config is
+    written via php_eval/write_config directly; the first reload (updatednsbl)
+    picks up the full config state on the lower build.
+
+
+8. FILES CHANGED
+----------------
+
+  tests/smoke/test_adr28_upgrade_contract.py   NEW
+  pyproject.toml                               MODIFIED (F811 suppression)

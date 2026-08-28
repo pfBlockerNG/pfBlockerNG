@@ -1,0 +1,151 @@
+================================================================================
+PHASE 1 RESULTS — Shared on-box variant-detection helper (+ tests)
+ADR: ADR_39_Meta_Package_Distribution
+Date: 2026-06-21
+================================================================================
+
+STATUS: COMPLETE — go-ahead for Phase 2.
+
+--------------------------------------------------------------------------------
+HELPER FILE + INTERFACE
+--------------------------------------------------------------------------------
+
+File: scripts/lib/detect_variant.sh
+Type: sourceable POSIX sh (no shebang; intended to be `. scripts/lib/detect_variant.sh`)
+
+Functions exposed (all print to stdout via printf, no trailing newline):
+
+  pfb_detect_edition
+      Prints "Plus" if globals.plus.inc is present, else "CE".
+      Detection: [ -f "${PFB_GLOBALS_PLUS_INC}" ]
+
+  pfb_detect_version
+      Prints the trimmed version string from /etc/version.
+      E.g. "2.8.1" (CE) or "26.03.1" (Plus).
+
+  pfb_detect_arch
+      Prints the bare arch leaf parsed from `pkg config abi`.
+      E.g. "FreeBSD:15:amd64" → "amd64";  "FreeBSD:16:aarch64" → "aarch64".
+      Parsing: IFS=: read -r os major arch from the abi string; prints arch.
+
+  pfb_detect_varver
+      Prints "<edition_lower>-<major>.<minor>" — the catalog variant token.
+      E.g. "ce-2.8", "plus-26.03".
+      Mapping: lowercase(edition) + "-" + cut -d. -f1,2(version).
+      Mirrors catalog_name_from_version() in scripts/build-repo-portable.py exactly.
+
+  pfb_detect_catalog
+      Prints "<varver>/<arch>" — the catalog subtree for this box.
+      E.g. "ce-2.8/amd64" or "plus-26.03/aarch64".
+      This is the path segment appended to the channel prefix in the repo conf URL.
+
+STDOUT CONTRACT:
+  Every function prints its result with printf (no trailing newline beyond the value
+  itself).  Callers that capture via $(...) receive the value with no extra whitespace.
+
+--------------------------------------------------------------------------------
+globals.plus.inc — RESOLVED PATH + EDITION LOGIC
+--------------------------------------------------------------------------------
+
+Real path on box: /etc/inc/globals.plus.inc
+Detection variable: PFB_GLOBALS_PLUS_INC (default: /etc/inc/globals.plus.inc)
+
+Source resolution: confirmed live by ADR-20 Phase 1 (2026-06-09):
+  - CE 2.8.1:     /etc/inc/globals.plus.inc ABSENT  → edition = CE
+  - Plus 26.03.1: /etc/inc/globals.plus.inc EXISTS  → edition = Plus
+  - Method: `[ -f /etc/inc/globals.plus.inc ]`
+
+Path sourced from pfSense open-source repo `src/etc/inc/globals.plus.inc`
+(as referenced in ADR-20 §1 and the Phase-1 live probe results).
+
+The helper uses the path via PFB_GLOBALS_PLUS_INC so tests can inject a fixture
+path without touching the real filesystem.
+
+--------------------------------------------------------------------------------
+ARCH PARSING FROM `pkg config abi`
+--------------------------------------------------------------------------------
+
+`pkg config abi` output format: "FreeBSD:<major>:<arch>"
+  Examples:
+    FreeBSD:15:amd64    → arch leaf = amd64
+    FreeBSD:16:aarch64  → arch leaf = aarch64
+
+Parsing technique: IFS=: read -r _pfb_os _pfb_major _pfb_arch (POSIX, no awk/cut).
+The OS and major fields are consumed by `read` and discarded (silenced via `: "${var}"`).
+The arch leaf is the third colon-delimited field.
+
+PFB_PKG_CMD overrides the pkg binary path for tests (default: pkg).
+
+--------------------------------------------------------------------------------
+TEST FILE + CASE TABLE
+--------------------------------------------------------------------------------
+
+File: tests/shell/detect_variant_spec.sh (shellspec, POSIX sh)
+
+14 examples, all passing (verified with shellspec 0.28.1).
+
+Case table — mirrors test_catalog_name_from_version() in
+tests/test_build_repo_portable.py:
+
+  Version     Edition  Expected varver
+  ----------  -------  ---------------
+  "2.8.1"     CE       "ce-2.8"        (patch stripped)
+  "2.8.x"     CE       "ce-2.8"        (non-numeric patch stripped)
+  "26.03"     Plus     "plus-26.03"    (no patch component)
+  "26.03.1"   Plus     "plus-26.03"    (patch stripped)
+
+Additional test coverage:
+  - pfb_detect_edition: CE branch (file absent) AND Plus branch (file present),
+    plus an edition-flip block (absent→CE asserted, then file created→Plus asserted)
+    proving both branches are real code paths (CLAUDE.md before-and-after mandate).
+  - pfb_detect_arch: amd64 (FreeBSD:15:amd64) and aarch64 (FreeBSD:16:aarch64)
+    via stubbed pkg commands.
+  - pfb_detect_catalog: CE 2.8.1/amd64 → "ce-2.8/amd64";
+                        Plus 26.03.1/aarch64 → "plus-26.03/aarch64".
+  - pfb_detect_version: "2.8.1" and "26.03.1" read correctly from fixture files.
+
+All syscalls are mockable via overridable env vars (PFB_GLOBALS_PLUS_INC,
+PFB_VERSION_FILE, PFB_PKG_CMD) — no real box required for any test.
+
+--------------------------------------------------------------------------------
+VERIFICATION GATES
+--------------------------------------------------------------------------------
+
+  sh -n scripts/lib/detect_variant.sh          → clean
+  sh -n tests/shell/detect_variant_spec.sh     → clean
+  shellspec tests/shell/detect_variant_spec.sh → 14 examples, 0 failures
+  python -m pytest                             → 1915 passed (unchanged)
+  ruff check .                                 → All checks passed
+  ruff format . --check                        → 123 files already formatted
+  shellcheck: not installed in the environment; CI is the hard gate
+  (sh -n is clean on both files; the helper is POSIX sh with no bash-isms)
+
+--------------------------------------------------------------------------------
+DIFF SCOPE (clean)
+--------------------------------------------------------------------------------
+
+Only two new files added:
+  + scripts/lib/detect_variant.sh          (new helper)
+  + tests/shell/detect_variant_spec.sh     (new shellspec suite)
+  + .ADRs/ADR_39_Meta_Package_Distribution/RESULTS/01_Results.txt (this handoff)
+
+No existing files modified. No callers wired (behaviour-preserving per Phase 1 spec).
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 2
+--------------------------------------------------------------------------------
+
+Phase 2 (pfblockerng-repo meta-package port) may proceed.
+
+The detection helper is:
+  - Complete and correct: maps version + edition → varver matching the Python helper,
+    plus arch leaf from pkg config abi → full "<varver>/<arch>" catalog subtree.
+  - Testable without a box: all external dependencies mockable via env vars.
+  - Pinned by tests: 14 shellspec examples covering both edition branches, the full
+    4-case version→varver table, arch parsing, and the integrated catalog output.
+  - POSIX sh compliant: sh -n clean, no bash-isms, all expansions quoted.
+
+Phase 2 ships this helper inside the pfblockerng-repo meta-package (the port's
+pkg-post-install.in sources it to detect → write the repo conf on install).
+The helper path (scripts/lib/detect_variant.sh) and the PFB_* overridable vars
+are the stable interface Phase 2 depends on.

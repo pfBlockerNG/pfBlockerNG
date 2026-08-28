@@ -1,0 +1,83 @@
+================================================================================
+PHASE 6 PROMPT — Stage-C emit + wire build() to abp feeds + live 6-band matcher (ABP ACTIVE)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 Emit/Counts + Query-time-matcher rows)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 6 of ADR-07. This is the INTEGRATION phase — it
+makes ABP support LIVE: emit the final structures, wire build()/init to consume abp-tagged
+feeds, and turn on the 6-band precedence in evaluate_domain. Work inline on `adr/07`, one
+commit, push directly. Regex is COMPILED + LOADED here; the runtime cap/evict SAFEGUARD is
+the next phase (Phase 7) — this phase loads regex without the timing guard yet (tests only).
+
+WHY THIS PHASE EXISTS
+Phases 3-5 built the strata matcher, the parser, and the reconcile in isolation. This phase
+connects them: the pre-emit rule sets become the matcher dicts + allowRegexDB, the
+important_rules flag flips on when needed, and the query path resolves the full precedence.
+This is the phase whose decision-equivalence (off) and ABP-correctness (on) gate the ADR.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/05_Results.txt — the reconcile() API + ReconcileResult
+  + irreducible-regex set. If missing, STOP and report.
+- RESULTS/03_Results.txt (the widened payloads + important_rules fast path) and
+  RESULTS/04_Results.txt (the parser) — the pieces being wired.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 Emit/Counts + Query-time-matcher; §2 contract).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: build() ~1966, dnsbl_build_from_manifest ~2118,
+  init load path ~535-660, evaluate_domain ~2251 (post Phase-3 strata form), regex scan ~2312.
+- tests/test_adr06_* (no-regression gate) + tests/test_adr07_* (the ABP gate).
+- CLAUDE.md.
+
+ACTION PLAN (both oracles are the gate)
+1. STAGE-C EMIT: extend build() to run Phase-4 parse (for format_hint='abp' feeds) -> Phase-5
+   reconcile -> emit:
+     dataDB[d]={log,index,important}, zoneDB[z]={...}, regexDB[k]=(compiled, important, feed),
+     allowRegexDB[k]=(compiled, important), whiteDB[d]={wildcard,important}, counts.
+   Set pfb["important_rules"] = (any $important or $badfilter rule was involved). Non-abp
+   feeds still go through the ADR-06 'plain'/'hosts'/'csv:pon' path unchanged.
+   Compile irreducible regex with re.compile (NO runtime guard yet — Phase 7).
+2. WIRE init: dnsbl_build_from_manifest already calls build(); ensure abp-tagged feeds flow
+   through and the emitted structures land in the module globals (dataDB/zoneDB/regexDB/
+   allowRegexDB/whiteDB) + counts -> pfb_py_count. Keep hsts/safesearch/noaaaa loads.
+3. LIVE MATCHER: in evaluate_domain, populate the Phase-3 numeric branch for real:
+   - apply allowRegexDB in the allow check (alongside whiteDB);
+   - feed block-regex stays in the block check;
+   - when important_rules is True, resolve by the 6-band priority (user 5-6 sovereign,
+     feed 1-4); when False, keep the byte-identical ADR-06 fast path.
+   Iterate regex DBs over a SNAPSHOT (list(...)) so Phase 7's eviction can mutate safely.
+4. GATE both directions:
+   - OFF (no abp feeds / no @@/regex/important): tests/test_adr06_* UNCHANGED-green (no regression).
+   - ON: tests/test_adr07_* (spec/parser/reconcile) now assert PRODUCTION evaluate_domain +
+     the wired build, decision-equal to the Phase-2 oracle (block/allow/regex/important/
+     badfilter/provenance), both important_rules branches exercised.
+5. COUNTS: pfb_py_count = loaded total (data+zone[+regex per RESULTS/01 decision]); reconcile
+   the inc:3149 sync-check if needed (flag for Phase 8 PHP if the UI expectation shifts).
+
+CONSTRAINTS
+- Do NOT add the runtime cap/evict guard here (Phase 7) — but DO snapshot-iterate the regex
+  scan so Phase 7 can drop in eviction without a structural change.
+- Do NOT touch PHP/shell yet (Phase 8 slims them) — the manifest may still say 'plain' for all
+  feeds until Phase 8; to test 'abp' end-to-end, drive build() with an abp-tagged fixture
+  manifest (like the ADR-06 init-from-raw test).
+- stdlib only, no new Unbound symbols (declare any in stubs/python/unboundmodule.py), 4-space,
+  type hints, no bare except.
+
+VERIFICATION
+- python -m pytest → green: ADR-06 oracle UNCHANGED-green; ADR-07 spec now green against
+  PRODUCTION. ruff clean. (No PHP/shell touched.)
+- Diff-read evaluate_domain: important_rules==False path is byte-identical to ADR-06.
+
+EXPECTED RESULT
+ABP support is LIVE in the Python build + matcher: abp-tagged feeds produce @@/regex/important/
+badfilter-correct decisions, non-abp input is unchanged, regex is loaded (guard pending Phase 7).
+
+COMMIT (single)
+    pfb_unbound: ADR-07 P6 — emit + wire ABP build + live 6-band precedence matcher
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/06_Results.txt`
+For Phase 7. Include: the emitted structure shapes + where regexDB/allowRegexDB are scanned
+(the snapshot-iterate point eviction hooks into); how important_rules gates the fast vs numeric
+path; the counts decision + any inc:3149 sync-check note for Phase 8; both-oracle green
+confirmation; and the go-ahead to add the regex runtime safeguard + setting.

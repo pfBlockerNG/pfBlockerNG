@@ -1,0 +1,188 @@
+ADR-36 Phase 1 — Config fields + rule-shape oracle tests
+=========================================================
+Date: 2026-06-22
+Implementer: Claude Sonnet 4.6
+
+--------------------------------------------------------------------------------
+COLLISION CHECK
+--------------------------------------------------------------------------------
+grep pfblockerngdnsblsettings for dnsbl_redir* across all src/ PHP files:
+  Result: NO COLLISION — keys dnsbl_redir / dnsbl_redir_int / dnsbl_redir_exclude
+  did not exist in the codebase before this phase.
+
+--------------------------------------------------------------------------------
+THREE REGISTRY ENTRIES (FINAL KEY NAMES — maintainer-confirmed)
+--------------------------------------------------------------------------------
+All three live under section path:
+  installedpackages/pfblockerngdnsblsettings/config/0
+
+1. dnsbl_redir
+   config.xml key : dnsbl_redir
+   adapter        : toggle (pfb_cfg_toggle_read / pfb_cfg_toggle_write)
+   vocabulary     : {'on', ''}
+   default        : '' (feature off by default)
+   since          : '4.0.0'
+   full path      : installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir
+
+2. dnsbl_redir_int
+   config.xml key : dnsbl_redir_int
+   adapter        : NULL/NULL (plain identity — comma-joined interface string)
+   vocabulary     : any string (comma-separated interface names)
+   default        : ''
+   since          : '4.0.0'
+   full path      : installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int
+
+3. dnsbl_redir_exclude
+   config.xml key : dnsbl_redir_exclude
+   adapter        : NULL/NULL (plain identity — alias/IP exception string)
+   vocabulary     : any string
+   default        : ''
+   since          : '4.0.0'
+   full path      : installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude
+
+Round-trip verified for all three (write(read(v)) == v):
+  - dnsbl_redir: 'on' round-trips as 'on'; '' round-trips as ''.
+  - dnsbl_redir_int: any string round-trips unchanged (identity).
+  - dnsbl_redir_exclude: any string round-trips unchanged (identity).
+
+--------------------------------------------------------------------------------
+$registeredPaths ADDITIONS (RequireConfigGatewaySniff.php)
+--------------------------------------------------------------------------------
+Added to tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+after the dnsblwebpage entry, before the SafeSearch section comment:
+
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir',
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_int',
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_redir_exclude',
+
+--------------------------------------------------------------------------------
+$inventory ADDITIONS (CfgGatewayTest.php)
+--------------------------------------------------------------------------------
+Added to testInventoryCompletenessAllKnownKeysAccountedFor() inventory array:
+  'dnsbl_redir', 'dnsbl_redir_int', 'dnsbl_redir_exclude'
+
+--------------------------------------------------------------------------------
+pfb_build_dns_redirect_rules() — SIGNATURE + RETURN STRUCTURE + FILE PLACEMENT
+--------------------------------------------------------------------------------
+File: src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc
+  (NEW SHIPPED FILE — see pkg-plist note below)
+
+Signature:
+  function pfb_build_dns_redirect_rules(
+      string $iface,
+      string $ipprotocol,
+      string $exception
+  ): array
+
+Parameters:
+  $iface       — pfSense interface name (e.g. 'lan', 'opt1')
+  $ipprotocol  — IP family: 'inet' (IPv4) or 'inet6' (IPv6)
+  $exception   — exception alias/IP string; empty string = no exception
+
+Return: array with exactly two entries:
+  [0] => array (NAT rdr rule fields matching §2.2 ground-truth shape)
+  [1] => array (associated filter PASS rule fields, same descr marker)
+
+Throws: \InvalidArgumentException if $ipprotocol is not 'inet' or 'inet6'.
+
+The function implements the FULL §2.2 shape immediately (not just a stub):
+  - source: <address>$exception</address><not/> when set; <any/> when empty
+  - destination: <network>(self)</network><not/><port>53</port> (always)
+  - ipprotocol: $ipprotocol
+  - protocol: 'tcp/udp'
+  - target: '127.0.0.1' (inet) or '::1' (inet6)
+  - local-port: '53'
+  - interface: $iface
+  - descr: 'pfB_DNS_Redirect_' . $iface . '_v4'|'_v6'
+  - natreflection: 'disable'
+
+Constants defined in pfblockerng_dns_redirect.inc:
+  PFB_DNS_REDIR_DESCR_V4_PFX = 'pfB_DNS_Redirect_'
+  PFB_DNS_REDIR_DESCR_V4_SFX = '_v4'
+  PFB_DNS_REDIR_DESCR_V6_SFX = '_v6'
+
+Wired into pfblockerng.inc via file_exists-guarded require_once (line ~36),
+matching the pfblockerng_fwobj.inc pattern:
+  if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc')) {
+      require_once('/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc');
+  }
+
+Wired into tests/php/bootstrap.php (step 8) with a repo-relative require_once.
+
+*** PKG-PLIST NOTE FOR ORCHESTRATOR ***
+pfblockerng_dns_redirect.inc is a NEW SHIPPED FILE. It must be added to the
+FreeBSD-ports pkg-plist entry in pfBlockerNG/FreeBSD-ports (branch
+pfblockerng/use-github). The line to add (alongside the other .inc files):
+
+  %%DATADIR%%/pfblockerng_dns_redirect.inc
+
+Where %%DATADIR%% = /usr/local/pkg/pfblockerng. Verify the exact plist format
+against existing .inc entries (e.g. pfblockerng_extra.inc, pfblockerng_fwobj.inc)
+in the ports tree.
+
+--------------------------------------------------------------------------------
+GOLDEN TESTS — PASS STATUS vs SKELETON
+--------------------------------------------------------------------------------
+Test file: tests/php/DnsRedirectBuilderTest.php
+
+All tests PASS against the Phase-1 implementation (the builder returns the
+correct §2.2 structure already — it was fully implemented in this phase, not
+a bare stub). No tests fail.
+
+Test cases implemented:
+  a. testInetNoExceptionTargetIs127AndSourceIsAny                   PASS
+     → inet target=127.0.0.1, source=any, destination negated(self)+53,
+       natreflection=disable, protocol=tcp/udp, local-port=53
+  b. testInet6NoExceptionTargetIsLoopback6AndSourceIsAny             PASS
+     → inet6 target=::1 (NOT 127.0.0.1), source=any, same fixed fields
+  c. testInetWithExceptionSourceIsNegatedAlias                       PASS
+     → inet + exception: source.address=alias, source.not present, no 'any'
+  d. testExceptionTransitionFromEmptyToSetChangesSourceBranch         PASS
+     → before (empty → any) vs after (set → negated), proving the branch flip
+  e. testInet6WithExceptionSourceIsNegatedAliasAndTargetIsLoopback6  PASS
+     → inet6 + exception: same negated source, target=::1
+  f. testMultipleInterfacesProduceIndependentRuleSets                PASS
+     → two interfaces: distinct interface fields and distinct markers
+  g. testInetDescrMarkerPresentInBothNatAndFilterEntries             PASS
+     → [0] and [1] both pfB_-prefixed; _v4 suffix; no 'pfB DNSBL' substring
+  h. testInet6DescrMarkerPresentInBothNatAndFilterEntries            PASS
+     → [0] and [1] both pfB_-prefixed; _v6 suffix; no 'pfB DNSBL' substring
+  i. testInetAndInet6MarkersAreDistinct                              PASS
+     → markers differ by suffix
+  j. testInvalidIpprotocolThrowsInvalidArgumentException             PASS
+     → throws on bad ipprotocol
+  k. testReturnStructureIsAlwaysTwoArrayEntries                      PASS
+     → 4 cases: 2 entries, both arrays
+
+Total new tests added:
+  DnsRedirectBuilderTest: 11 test methods (builder oracle)
+  CfgGatewayTest additions: 9 test methods (3 fields × 3 cases)
+  Total new: 20 tests (1174 baseline → 1194)
+
+--------------------------------------------------------------------------------
+VERIFICATION NUMBERS
+--------------------------------------------------------------------------------
+php -l:         All touched files — no syntax errors
+PHPUnit:        1194 tests, 4734 assertions — OK (31 pre-existing warnings)
+PHPStan:        No errors
+PHPCS:          Clean (PFBL-01 + ADR-28 UppercaseBooleanLiteral + ADR-29
+                RequireConfigGateway sniffs — no violations)
+pytest:         1930 passed, 2 skipped — no regressions
+ruff check:     All checks passed
+ruff format:    127 files already formatted
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 2
+--------------------------------------------------------------------------------
+Phase 1 complete. All gates green. Builder is implemented and golden tests pass.
+
+Phase 2 can proceed:
+- Wire pfb_build_dns_redirect_rules() into sync_package_pfblockerng() via
+  PfbConfig::read('dnsbl_redir') / PfbConfig::read('dnsbl_redir_int') /
+  PfbConfig::read('dnsbl_redir_exclude').
+- Register via pfb_fwobj_register() (ADR-35 seam).
+- Implement reconcile/stale-prune and disable/remove paths.
+- Add reconcile-is-idempotent, disable-removes-all, stale-prune, and
+  user-rule-survival PHPUnit tests.
+
+ADR-RESUME: branch=adr/36-dns-redirection next-phase=2

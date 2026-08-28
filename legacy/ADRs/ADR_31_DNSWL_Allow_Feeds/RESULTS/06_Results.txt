@@ -1,0 +1,161 @@
+ADR-31 Phase 6 — Smoke + validation + docs
+==========================================
+
+Status: COMPLETE — all off-box gates green; commit includes code + handoff.
+ADR Status set to: Implemented (pending live-VM smoke fan-out) (2026-06-20).
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=DONE
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+
+Files changed
+-------------
+``tests/smoke/helpers.py``
+  Added ``_dnsbl_list_php(spec, row_action)`` and ``inject_dnsbl_lists(vm, specs_and_actions)``.
+
+``tests/smoke/test_smoke_feeds.py``
+  Added ``test_dnswl_permit_feed_allow_overrides_block_feed`` (the ADR-31 §2.2 journey).
+
+``.ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md``
+  Status updated from "Proposed" to "Implemented (pending live-VM smoke fan-out)".
+
+Helpers added
+-------------
+**``_dnsbl_list_php(spec, row_action='Deny')``**
+
+  Builds ONE DNSBL list-group as a PHP array literal suitable for embedding inside a
+  multi-element ``array(...)`` passed to ``config_set_path(CFG_DNSBL_LISTS, ...)``.
+
+  The per-row ``action`` key (``'Permit'`` or absent/``'Deny'``) goes directly into the
+  primary row's PHP associative array — exactly the key Phase 4 reads from the config
+  (``$row['action'] ?? ''``).  The ``'Deny'`` default produces no ``action`` key (matches
+  the absent-key behaviour for back-compat); ``'Permit'`` adds ``'action' => 'Permit'``.
+
+  Custom_List is encoded inline as ``base64_encode(...)`` PHP (avoids double-escaping
+  issues that arise when the CRLF-joined blob is pre-base64'd in Python and then
+  re-escaped into a PHP string literal).
+
+**``inject_dnsbl_lists(vm, specs_and_actions, *, timeout=90.0)``**
+
+  Injects MULTIPLE DNSBL list-groups in ONE ``config_set_path`` call, keeping all
+  groups visible in ``installedpackages/pfblockerngdnsbl/config`` simultaneously.
+
+  The existing ``inject()`` always writes
+  ``config_set_path(CFG_DNSBL_LISTS, array($list))`` — a single-element array that
+  REPLACES any prior list.  Two successive ``inject()`` calls for a block feed and a
+  permit feed therefore discard the first group.  ``inject_dnsbl_lists`` groups all
+  specs into one ``array($list1, $list2, ...)`` write, exactly as ``inject_ip_lists``
+  does for IP cases.
+
+  DNSBL-settings (``pfb_dnsbl``, ``suppression``, etc.) are taken from the FIRST spec
+  (the primary block feed).  Per-list settings (``aliasname``, ``logging``,
+  ``custom_domains``) come from each spec individually.
+
+  Control records are applied per-spec before the config write, mirroring ``inject()``.
+
+Smoke journey — ``test_dnswl_permit_feed_allow_overrides_block_feed``
+----------------------------------------------------------------------
+Location: ``tests/smoke/test_smoke_feeds.py`` (new test, appended after ADR-22 suite).
+Marker: ``@pytest.mark.smoke`` (module-level ``pytestmark``).
+Timeout: ``@pytest.mark.timeout(600)``.
+Fixture: ``deployed_vm`` (module-scoped; deploys branch .pkg once for all HTTP-feed tests).
+
+Domain layout (all ``unique_domain()`` — uuid-*.com, never RFC 6761 / HSTS-preload):
+  s_domain  — Shared: on block feed + permit feed → permit wins (band 2 > band 1)
+  b_domain  — Block-only: on block feed only → always blocked
+  m_domain  — Manually-blocked: block feed + Custom_List → band-5 beats band-2 permit
+  p_domain  — Permit parent: permit feed only → resolves; child.p_domain also resolves
+  x_domain  — Non-listed: not on any feed → always resolves
+
+Feed delivery:
+  Both feeds written via ``write_local_feed()`` with runtime uuid names — the same
+  local-file mechanism the ADR-21/22 tests use for runtime-unique domains.
+
+§2.2 contract cases covered:
+
+  §2.2.1 (block-only baseline = standard block):
+    BEFORE (nothing live): all six names RESOLVE via stub sentinel.
+    WHEN block feed (Deny, no permit) loaded → updatednsbl reload.
+    THEN: s, b, m VIP-blocked; p, child.p, x RESOLVE.
+    Proves: absent/Deny action = standard block feed; non-listed domain unaffected.
+
+  §2.2.2 (Permit overrides block):
+    WHEN both feeds loaded (Deny block + Permit permit) via inject_dnsbl_lists → updatednsbl.
+    THEN: s RESOLVES (band-2 permit beats band-1 block);
+          b remains VIP-blocked (only on block feed, not on permit feed).
+    Proves: permit feed (band 2) overrides a cross-feed block (band 1) on shared domain;
+            block-only domain is unaffected by the permit feed.
+
+  §2.2.3 (operator wins — Custom_List band 5):
+    THEN: m remains VIP-blocked (Custom_List band 5 > permit band 2).
+    Proves: manual operator block (provenance='user' sovereign row) beats permit feed.
+
+  §2.2.4 (subdomain-covering; non-listed unaffected):
+    THEN: p RESOLVES (permit feed listed p explicitly);
+          child.p RESOLVES (subdomain of permit-listed parent);
+          x RESOLVES (not on any feed).
+    Proves: permit allow extends to subdomains; non-listed names unaffected.
+
+  Teardown (no whiteDB residue → §2.2.5 / absent-mode back-compat):
+    WHEN permit feed removed (inject block-only again) → updatednsbl reload.
+    THEN: s is VIP-blocked again (no permit feed → whiteDB entry gone → band-1 wins).
+    Proves: removing the permit feed cleanly re-blocks the shared domain.
+
+Before-and-after discipline:
+  Every transition is guarded by a before-state assertion (pre-feed: resolves; block-only:
+  blocked; permit-add: resolves; teardown: blocked again) so no assertion is vacuous —
+  a false-pass would require BOTH the before AND after state to be wrong simultaneously.
+
+  For each allow→block or block→allow transition:
+    flush_unbound_name(vm, name) clears the C-cache (ADR-10 allow→block is TTL-bounded,
+    so a cached real answer would serve past the swap window and mask the block);
+    dns_probe_until(vm, name, predicate) polls until the swapped decision appears.
+    The first response after a reload is authoritative; the poll is purely for the
+    async swap window (ADR-10), not to retry a failed probe.
+
+  RESOLVE probes use the controlled stub sentinel (STUB_DNS_A):
+    egress is left OPEN (unblock_egress()) so the query reaches the stub upstream —
+    a real, observable answer (NOT a host override, which would shadow the matcher
+    and falsely prove the name resolves regardless of pfBlockerNG's decision).
+
+ADR.md update
+-------------
+Status line changed from:
+  "Proposed" (2026-06-20)
+to:
+  "Implemented (pending live-VM smoke fan-out)" (2026-06-20)
+
+The orchestrator flips to Accepted after the live-VM CE + Plus smoke fan-out is green
+(dispatched in CI after this PR lands).
+
+Gate results (off-box)
+-----------------------
+- ``python -m pytest``                                    : 1904 passed (unchanged)
+- ``ruff check .``                                        : All checks passed
+- ``ruff format --check .``                               : 121 files formatted (clean)
+- ``vendor/bin/phpunit``                                  : 1039 passed (unchanged)
+- ``vendor/bin/phpcs --standard=phpcs.xml.dist src/``     : clean (0 errors)
+- ``vendor/bin/phpstan analyse``                          : No errors
+- ``python -m pytest tests/smoke/test_smoke_feeds.py --co -q``:
+    14 collected (13 existing + 1 new: test_dnswl_permit_feed_allow_overrides_block_feed)
+- ``python -m pytest tests/smoke --co -q``:
+    297 collected (the pre-existing test_stub_shapes.py missing-``dns``-module error
+    is unrelated to ADR-31 and pre-dates this phase)
+
+Live-VM smoke (CI only):
+  Not runnable locally (no VM / SMOKE_PKG / SMOKE_ADMIN_PASSWORD).
+  Dispatched by the orchestrator via ``smoke-fanout.yml`` after the PR lands
+  on the CE + Plus fan-out (ADR-04 / ADR-24).
+
+Commit structure
+----------------
+This phase adds:
+  tests/smoke/helpers.py              — _dnsbl_list_php + inject_dnsbl_lists helpers
+  tests/smoke/test_smoke_feeds.py     — test_dnswl_permit_feed_allow_overrides_block_feed
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md    — Status updated
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/06_Results.txt — this handoff
+
+All landed in ONE commit (code + handoff, per the phase directive).

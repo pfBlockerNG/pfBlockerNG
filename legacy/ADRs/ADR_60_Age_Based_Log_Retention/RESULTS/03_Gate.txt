@@ -1,0 +1,53 @@
+ADR-60 Phase 3 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks against
+commit 5a8c27a2 (code+tests) / 750545ef (handoff). NOTE: the harness reported the
+verify-step safety classifier was unavailable for this run; the orchestrator
+independently re-derived the key claims below rather than trusting the report
+alone (re-ran php -l + vendor/bin/phpunit --filter LogTimestampBaselineTest
+--testdox: 15/15 green, matching the verifier's numbers exactly; read the full
+`git show 5a8c27a2` diff directly — two functions changed (pfb_daemon_filterlog(),
+pfb_parsed_fail()) plus the test file, nothing unexpected or destructive).
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. php -l, vendor/bin/phpunit (2453 tests, 19102 assertions,
+   2 pre-existing deprecations, 4 documented skips), phpstan, phpcs, python3 -m
+   pytest (2437 passed, unaffected), the 3 policy checkers — all clean.
+3. red-proof — PASS. Verifier corrected the brief's literal "HEAD~1" (HEAD was
+   one commit past the code, at the handoff commit) to the actual pre-Phase-3
+   code ref; RED = 4 failures (the 3 flipped oracles + 1 new fallback tripwire);
+   GREEN = all pass, working tree restored clean.
+4. diff-vs-plan — PASS, checked item by item: syslog branch keeps
+   strtotime($f[1])'s real year, output collapsed to Y-m-d H:i:s; BSD branch
+   implements the exact specified year-inference algorithm (current-year parse,
+   >6h-future rollback, FALSE fallback to pfb_log_iso_timestamp()) — verifier
+   re-ran the year-inference probes independently rather than trusting the
+   brief's; pfb_parsed_fail() now calls pfb_log_iso_timestamp(); UnifiedFormatTest
+   coupling claim independently re-verified by reading pfb_unified_format_ip()
+   directly (pure comma-join, no timestamp parsing); all 5 hostile-input rows
+   present as named tests; no Phase-2/Phase-4 scope touched (confirmed via
+   grep of remaining old-format date() calls — all are Phase-4/Phase-10
+   territory); single commit, pushed; handoff written.
+5. test-honesty — PASS. No assertion weakened; the CSV-field-count hostile row
+   has a fixture that would actually fail on a comma-shaped date regression
+   (verified by the gate).
+6. conventions — PASS. No new public symbols; new test names match the file's
+   existing convention; new src comments (ADR-60 S2.1 pointer + ponytail
+   constant note) stay within the 3-line budget, clean per
+   check_comment_narration.py.
+
+Orchestrator fix after the gate (verifier-flagged non-blocking nit): the
+carry-forward note in RESULTS/03_Results.txt cited pfblockerng.inc:12892 for
+the unilog write call site; corrected to the actual :12905 (grepped). The
+substantive claim itself (pfb_unified_format_ip() receives $log verbatim) was
+already confirmed correct.
+
+Skipped: none.
+
+Commits this phase (in order):
+- 5a8c27a2 — pfblockerng: unify ip-log and dnsbl_parse_err timestamps to
+  Y-m-d H:i:s (ADR-60 P3)
+- 750545ef — docs: ADR-60 phase 3 handoff
+- (this gate-fix commit) — line-number nit fixup found by the phase 3 gate

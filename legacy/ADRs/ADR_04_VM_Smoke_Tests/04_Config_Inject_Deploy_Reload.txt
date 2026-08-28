@@ -1,0 +1,98 @@
+================================================================================
+PHASE 4 PROMPT — Config-injection + deploy + reload helpers
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §1 fact 2 (the PHP CLI verbs),
+     §2 "Deploy"/"Config injection"/"Reload" rows, §2 contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/04` branch (off `devel`) performing Phase 4 of ADR-04. Build the
+per-case loop primitives the matrix will call: deploy the working tree onto the VM,
+inject a pfBlockerNG config, reload, reset, and probe (DNS rcode+record; pfctl table
+members + rule presence). No matrix yet — just the helpers, each self-tested. Work
+inline on `adr/04`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 3 gives a booted VM and mock feeds; Phase 5 will iterate many DNSBL/IP cases.
+Each case is the same loop: set-config -> reload -> probe -> assert -> reset. This
+phase factors that loop into tested helpers so the matrix is data, not plumbing. The
+levers (verified in pfblockerng.php): `update` (full), `updatednsbl`/`updateip`
+(targeted/fast), `clearip`/`cleardnsbl` (reset) — all via
+`/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php <verb>`.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_04_VM_Smoke_Tests/RESULTS/03_Results.txt — the VM fixture API (ssh
+  target/key, dns host+port, feed base URL), the isolation strategy, and the mock-feed
+  API. If missing, the scaffolding isn't ready; STOP and report.
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md  (§1 fact 2/3/4; §2 Deploy/Config injection/
+  Reload/DNS probe/IP probe rows; §2 "contract" — the false-green guard).
+- scripts/deploy.sh  (reuse AS-IS to push the working tree; you provide the SSH target
+  + key from the fixture).
+- src/usr/local/www/pfblockerng/pfblockerng.php  (:66 clearip, :72 cleardnsbl, :173
+  gate, :188 update, :184 updateip, :185 updatednsbl) — the reload/reset verbs.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc + .../pfb_unbound.py  (enough to know
+  the config fields a case sets: feed URL/alias, DNSBL response mode NXDOMAIN/null/VIP,
+  whitelist, wildcard vs exact) and how blocked responses look (NXDOMAIN/0.0.0.0/
+  set_return_msg) so the DNS probe asserts the right shape.
+- CLAUDE.md (Python rules; PHP via stubs if you touch any; commit style).
+
+ACTION PLAN (ordered — pin each helper with a self-test)
+1. DEPLOY HELPER: wrap `scripts/deploy.sh <ssh-target>` to push the current working
+   tree's `src/` onto the VM, then confirm the reload entry runs (php
+   pfblockerng.php update exit 0). Self-test: after deploy, a file we changed is
+   present on the VM (sanity that the branch-under-test is what's running).
+2. CONFIG-INJECTION HELPER (`php -r` over SSH): given a case spec (feed url(s) +
+   alias name, DNSBL response mode, whitelist entries, wildcard/exact, AND the case's
+   control-domain local-data: {name -> A/AAAA} + any local-zone), apply it to the VM's
+   pfBlockerNG config AND Unbound config via the pfSense config API (parse_config /
+   config_get_path / config_set_path / write_config). The control records are Unbound
+   Host Overrides / Custom Options (local-zone:/local-data:) so passthrough/whitelist
+   cases resolve hermetically under blocked egress — set them HERE in config (NOT via
+   live `unbound-control`) and BEFORE the feed `update`, so they survive the reload that
+   regenerates unbound.conf. Keep it declarative: input a small dict/dataclass, emit the
+   php that sets exactly those fields. Self-test: inject a value, read it back via php,
+   assert it stuck; inject a control name, query it, assert it resolves.
+3. RELOAD/RESET HELPERS: `reload(scope)` -> php pfblockerng.php
+   update|updatednsbl|updateip (prefer the targeted verb for speed); `reset()` ->
+   clearip/cleardnsbl (+ reload) to return to a known baseline per the isolation
+   strategy from 03_Results.txt.
+4. DNS PROBE HELPER: query the VM (dnspython or `dig` via ssh/local) for (name, type);
+   return (rcode, records). Provide assert helpers: is_nxdomain, is_null_ip(addr),
+   is_vip(addr), resolves_to(addr). FALSE-GREEN GUARD (ADR §2 contract): a test that
+   asserts the WRONG shape MUST fail — include such a negative self-test.
+5. IP PROBE HELPER: `pfctl_table_members(alias)` (ssh `/sbin/pfctl -t <alias> -T show`)
+   and `rule_references(alias)` (ssh `pfctl -sr` | grep). Asserts: a fed IP is a
+   member; a non-fed IP is not; a rule references the alias.
+6. Wire 1-5 as a single per-case context/helper (set -> reload -> probe -> reset) the
+   matrix will call. Mark any test that touches the VM `@pytest.mark.smoke`.
+
+CONSTRAINTS
+- Reload via the PHP CLI verbs above (the cron path) — do NOT reinvent a reload.
+- Prefer targeted reload (updatednsbl/updateip) over full `update` per case (speed).
+- Probes must be hermetic: resolve from mock feeds + local-data only; no real upstream.
+- Python: 3.11+, 4-space, type hints, no bare except. Smoke-only deps stay in
+  tests/smoke/requirements.txt; default `python -m pytest` stays clean.
+- Do NOT touch `src/`. Do NOT weaken the false-green guard.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` (default) → green/unchanged.
+- `pytest -m smoke` (KVM + image): deploy self-test, inject-readback self-test, a DNS
+  probe + an IP probe against a baked/known state, and the false-green negative test
+  all pass.
+- `ruff`/ShellCheck → clean.
+
+EXPECTED RESULT
+Tested helpers — deploy, config-inject, reload/reset, DNS probe, IP probe — composing
+into a per-case loop, with a proven false-green guard. No matrix content yet.
+
+COMMIT (single)
+    test: add smoke deploy/config-inject/reload/probe helpers (ADR-04 P4)
+Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/04_Results.txt` (plain .txt)
+For Phase 5 (matrix). Include: the per-case loop API (signatures for deploy,
+inject(case_spec), reload(scope), reset, dns_probe, pfctl probe, and the assert
+helpers); the case_spec shape (every field a DNSBL/IP case can set + its config path);
+which reload verb is used when; how the false-green guard is expressed; any timing/
+retry needs around reload; pytest/ruff results; and the go-ahead.

@@ -1,0 +1,206 @@
+================================================================================
+ADR-19 — PHASE 3 RESULTS: cron-driven update check + de-duped, provenance-gated notice
+Branch: adr/19-update-channel-panel   Phase: 3   Status: GREEN (off-box gates)
+================================================================================
+
+SCOPE
+-----
+Phase 3 wires the Phase-2 pure decision core to real IO: a thin pkg-IO wrapper, a
+cron-driven orchestrator that caches installed-vs-our-repo-latest and raises a
+de-duped file_notice, and the cron wiring. NO GUI page / tab (Phase 4). The live
+pkg/file_notice legs are Phase-4/5 smoke (not run here).
+
+Predicate: Phase 2 GO (six pure helpers landed, 47 cases green). Phase-3 callers use
+the prompt-order pfb_should_notify($installed,$latest,$last_notified,$knob,$channel).
+
+
+FUNCTIONS ADDED (src/usr/local/pkg/pfblockerng/pfblockerng.inc, after the Phase-2 core)
+--------------------------------------------------------------------------------------
+Under one docblock "ADR-19 Phase 3 — pkg IO wrapper + cron-driven update check".
+
+Constant:
+  PFB_PKG_BIN = '/usr/sbin/pkg'   (base pkg binary on every supported target)
+
+Thin pkg-IO wrapper (the ONLY new code that shells to pkg; escapeshellarg'd; all the
+exec args are fixed flags + pkg-derived names — NOT attacker-controlled feed input, so
+the PFBL-01 sniff scope does not apply and they are not added to its allow-list):
+
+  pfb_pkg_installed_name(): string
+    -> `pkg query '%n' 'pfSense-pkg-pfBlockerNG*'`, returns the first line that
+       pfb_channel_from_pkgname() recognises; '' if not installed / query fails.
+
+  pfb_pkg_installed_version(string $pkgname): string
+    -> `pkg query '%v' <pkgname>`; '' when absent/failed.
+
+  pfb_pkg_installed_repo(string $pkgname): string
+    -> `pkg query '%R' <pkgname>` (the provenance signal); '' when absent/failed.
+
+  pfb_pkg_latest(string $pkgname, string $reponame): string
+    -> GUARDS FIRST: '' if pkgname/reponame empty, OR is_subsystem_dirty('pkg'),
+       OR (function_exists('get_dnsavailable') && !get_dnsavailable()).
+       Else best-effort `pkg update -r <repo>` then
+       `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY our repo — never -r pfSense /
+       get_pkg_info. '' when the repo/conf is absent.
+
+Cache helpers:
+  pfb_software_cache_file(): string   -> "{$pfb['dbdir']}/software_update.json"
+                                         (dbdir falls back to /var/db/pfblockerng).
+  pfb_software_read_cache(): array    -> json_decode the file; [] when absent/corrupt.
+  pfb_software_write_cache(array): void -> atomic-ish @file_put_contents(LOCK_EX),
+                                         best-effort (swallowed on failure; never throws).
+
+Orchestrator:
+  pfb_software_update_check(bool $force = false, ?array $io = null): array
+    Order (deliberate):
+      1. Resolve installed_name / installed / installed_repo. $io overrides each key
+         ('installed_name','installed','installed_repo','latest') for unit tests; absent
+         keys fall through to the live pfb_pkg_*() shellout. (This is the documented
+         unit-test seam — the IO is "doubled" by injection, not by redefining functions.)
+      2. PROVENANCE GATE FIRST: if !pfb_software_is_our_build($installed_repo) -> return
+         the existing cache and DO NOTHING ELSE (no catalog read, no cache write, no
+         file_notice). A Netgate-installed build (repo 'pfSense'/unknown/'') is a true
+         no-op.
+      3. Read our-repo latest (channel -> repo via pfb_pkg_repo_name_for_channel()).
+         An empty latest (pkg locked / no DNS / repo absent) PRESERVES the cached latest
+         (page keeps showing last-known, never regresses to '').
+      4. Refresh cache (channel/installed/latest/last_checked). If
+         pfb_should_notify($installed,$latest,$last_notified,$knob,$channel) ->
+         file_notice(...) AND persist last_notified = latest (per-version de-dupe).
+    Best-effort; returns the cache array; never throws.
+    $force is accepted for the Phase-4 "Check now" button — currently a no-op flag
+    (there is no freshness short-circuit yet).
+
+
+CACHE FILE
+----------
+  Path:   /var/db/pfblockerng/software_update.json   (pfb_software_cache_file())
+  Format: JSON object (JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES), keys:
+    {
+      "channel":       "stable" | "devel" | "nightly" | null,
+      "installed":     "<pkg %v>"   (e.g. "3.2.0_1"),
+      "latest":        "<our-repo %v>" (e.g. "3.2.0_9"; preserved when read unavailable),
+      "last_checked":  <unix epoch int>,
+      "last_notified": "<version last announced>"  (the de-dupe key; '' until first notice)
+    }
+  Cleared on deinstall like sibling /var/db/pfblockerng state.
+
+NOTICE
+------
+  file_notice('pfBlockerNG',
+              "pfBlockerNG <latest> available (<channel>)",
+              'pfBlockerNG',
+              '/pfblockerng/pfblockerng_software.php',   <- the Phase-4 page (not yet shipped)
+              1)
+  Fires ONCE per new latest (de-dupe via last_notified); local bell + the admin's
+  configured remote channels (SMTP/Telegram/Pushover/Slack), per pfSense notices.inc.
+
+
+CONFIG FIELD
+------------
+  Name:    pfb_software_notify   (pfb_* neighbour pattern, e.g. pfb_hsts/pfb_dnsvip_auto)
+  Path:    installedpackages/pfblockerng/config/0/pfb_software_notify
+  Values:  'default' | 'on' | 'off'
+  Default: read with config_get_path(..., 'default'); 'default' resolves PER CHANNEL via
+           the Phase-2 pfb_notify_default_for_channel() inside pfb_should_notify()
+           (nightly -> ON, stable/devel -> OFF). There is no central <default_value> xml
+           registration for pfBlockerNG general-settings knobs — the codebase resolves
+           defaults read-side with ?:/config_get_path defaults (same as pfb_hsts /
+           pfb_dnsvip_auto). The Phase-4 page writes the field; the orchestrator reads it.
+
+
+CRON WIRING
+-----------
+  src/usr/local/www/pfblockerng/pfblockerng.php :: pfblockerng_sync_cron()
+  Added `pfb_software_update_check();` at the TAIL (after the feed-update sync decision,
+  before pfb_log_mgmt()). Runs ONCE per cron tick (not per feed/sync). Best-effort +
+  fully guarded -> cannot throw into / slow the feed cron. `pfblockerng.php cron`
+  (-> pfblockerng_sync_cron) is the entry; `pfblockerng.php update`/'updateip'/'updatednsbl'
+  go through sync_package_pfblockerng directly and are NOT on this path (intentional —
+  the version check is a daily-tick concern, not a force-reload concern).
+
+
+STUBS / DOUBLES
+---------------
+  Stub ADDED (stubs/pfsense/system.php): get_dnsavailable($ipproto = "inet"): bool
+    (it IS in 2.7.2 system.inc so a stub regen would reproduce it; added to system.php,
+     the canonical home). No phpstan-baseline suppression — PHPStan clean.
+    Existing stubs reused: file_notice (logging.php), is_subsystem_dirty (util.php),
+    config_get_path (config.php), pkg_version_compare (services.php).
+
+  Doubles ADDED (tests/php/pfsense_doubles.php), function_exists-guarded, $GLOBALS-driven:
+    file_notice()        -> appends to $GLOBALS['pfb_test_file_notices'] (capture/count).
+    is_subsystem_dirty() -> 'pkg' returns $GLOBALS['pfb_test_pkg_locked'] (default false).
+    get_dnsavailable()   -> $GLOBALS['pfb_test_dns_available'] (default true).
+  The pkg IO itself is NOT doubled (it is real code under test) — the orchestrator's $io
+  injection seam supplies installed/latest/installed_repo so no real `pkg` shells off-box.
+
+
+TESTS (tests/php/SoftwareUpdateCheckTest.php) — 10 cases, 55 assertions, all green
+---------------------------------------------------------------------------------
+Every branch, both sides, before-state asserted; the de-dupe machine is BDD.
+
+  Provenance gate (the amendment, BOTH sides):
+    testOurBuildRunsCheckWritesCacheAndCanNotify
+        our repo -> cache written (channel/installed/latest/last_checked/last_notified)
+        + exactly one notice. Before: no cache, no notice.
+    testNetgateBuildIsCompleteNoOp  (DataProvider foreignRepoProvider:
+        'pfSense' / '' / 'unknown' / 'netgate-decoy')
+        update nominally available + knob ON, yet NO cache write + NO notice. Before/after
+        both asserted -> the gate is the first thing the check does.
+
+  pkg-lock / no-DNS short-circuit (LIVE pfb_pkg_latest path, no injected latest):
+    testPkgLockedServesCacheNoNetworkNoNotice  (is_subsystem_dirty('pkg') true)
+    testNoDnsServesCacheNoNetworkNoNotice       (get_dnsavailable() false)
+        Both: a seeded prior cache (latest=3.2.0_9, last_notified=3.2.0_9) is PRESERVED,
+        no NEW notice, no error. Before: cache holds prior latest.
+
+  Knob gating (cache always refreshed; notice gated):
+    testKnobOffRefreshesCacheButSuppressesNotice   (off vs the on case above = real branch)
+    testNoUpdateAvailableRefreshesCacheNoNotice     (installed==latest -> no notify)
+
+  De-dupe lifecycle across ticks (the persist-last-notified contract), BDD:
+    testNoticeDeDupesPerVersionAcrossTicks
+        tick1 3.2.0_9 -> notify once + persist; tick2 same -> NO renotify;
+        tick3 newer 3.2.0_10 -> notify again + persist (re-asserts tick2 suppression
+        first); tick4 same -> NO renotify. last_notified asserted BEFORE each tick.
+
+  KEY TEST IDS:
+    Provenance gate:  SoftwareUpdateCheckTest::testNetgateBuildIsCompleteNoOp
+                      SoftwareUpdateCheckTest::testOurBuildRunsCheckWritesCacheAndCanNotify
+    De-dupe:          SoftwareUpdateCheckTest::testNoticeDeDupesPerVersionAcrossTicks
+    pkg-lock:         SoftwareUpdateCheckTest::testPkgLockedServesCacheNoNetworkNoNotice
+    no-DNS:           SoftwareUpdateCheckTest::testNoDnsServesCacheNoNetworkNoNotice
+
+
+OFF-BOX GATE RESULTS (this agent, in the worktree)
+--------------------------------------------------
+  php -l (inc, pfblockerng.php, doubles, test, system.php) -> No syntax errors
+  vendor/bin/phpunit --filter SoftwareUpdateCheckTest      -> OK (10 tests, 55 assertions)
+  vendor/bin/phpunit (full)                                -> OK (487 tests, 933 assertions)
+  vendor/bin/phpstan analyse --no-progress                 -> [OK] No errors
+  vendor/bin/phpcs (PFBL-01 sniff)                         -> clean (no violations)
+  ruff check .                                             -> All checks passed!
+  python -m pytest -q                                      -> 1575 passed (UNCHANGED)
+
+
+GO-AHEAD FOR PHASE 4 — the "Software" page (display + actions) + UI render gate
+------------------------------------------------------------------------------
+Phase 4 builds src/usr/local/www/pfblockerng/pfblockerng_software.php. It must:
+  * GUARD top-of-file on pfb_software_is_our_build(pfb_pkg_installed_repo(
+    pfb_pkg_installed_name())) -> header(Location: /index.php) on a Netgate build.
+  * READ the cache via pfb_software_read_cache() (path pfb_software_cache_file(),
+    /var/db/pfblockerng/software_update.json) -> show channel, installed, latest,
+    last_checked. Compute "update available" with pfb_update_available(installed, latest).
+  * Render the pfb_software_notify knob (default|on|off) and persist it to
+    installedpackages/pfblockerng/config/0/pfb_software_notify.
+  * "Check now" -> call pfb_software_update_check(true) (force flag wired but presently a
+    no-op; add a freshness short-circuit here if desired) to refresh the cache.
+  * "Update now" -> same-channel `pkg upgrade -y <currentpkg>` (reuse pfblockerng_update.php
+    streaming). "Bootstrap repo" -> scripts/add-repo.sh <current-channel>.
+  * Add the "Software" tab to every page's $tab_array[] (gate the append on
+    pfb_software_is_our_build) + a match[] line in pfblockerng.priv.inc (also gated).
+  * Add the www/ page to the FreeBSD-ports pkg-plist (new shipped file).
+LIVE legs deferred to Phase 4 (ui_render) / Phase 5 (repo smoke): the real pkg shellout
+(pfb_pkg_*), the actual file_notice on the VM, and the publish-newer-build -> notice +
+cache + Update-now journey.
+================================================================================

@@ -1,0 +1,90 @@
+================================================================================
+PHASE 3 PROMPT — Content-addressed reload gating (core correctness)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md   (read §1.2, §2 table, "Semantics that MUST be preserved", §6 Phase 3 first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session; otherwise run /caveman. You are the Phase-3 implementer for ADR-40 on branch
+`adr/40-content-addressed-alias`. This phase CHANGES BEHAVIOUR (the reload gate) — it must be
+red→green. It is independently valuable and does NOT depend on Phase 2's perf verdict (it still
+uses `-T replace` to apply). You implement; you do NOT re-delegate. Inline on the branch, one
+commit, push directly (PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+Today the reload scope is gated on which FEEDS were refetched, which (a) defers cross-list dedup
+realignment of sibling tables to the next Force Reload and (b) makes reputation amplify one feed
+change into an all-tables reload (ADR §1.2). Gating on each table's FINAL MEMBERSHIP SET instead
+fixes both: a table reloads iff its set actually changed. Apply still via `-T replace` here — the
+delta is Phase 4 — so this phase is a pure gating change, low risk.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/02_Results.txt — confirm the cross-list
+  arm is KEPT (not rejected) and read the hybrid-scope verdict (whether to always-recompute all
+  aliases or only when a cross-list feature is on). If missing, Phase 2 is not complete; STOP and
+  report. (Also read RESULTS/01_Results.txt for the extracted helpers + canonical-set interface.)
+- .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md  (§2 "Reload gate" / "Last-applied record" /
+  "Cross-list correctness" / "Scope of always-recompute" rows; the contract items 1–8).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the Phase-1 helpers; the reload-scope build
+  (~:14888/:14936) and replace loops (:14903/:14954); the ADR-12 emit (~:15319,
+  PFB_IP_CHANGED = filter_configure || pfb_ip_unlock_forced — preserve it); empty-table
+  repopulation (the empty($pfctlck) path, ~:14379).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — the dedup/masterfile path (:513–:527) and
+  reputation, so you understand which sibling sets can move when a feed changes.
+- CLAUDE.md — test-coverage mandate (branch coverage; assert before-state; red→green), ADR-26.
+
+ACTION PLAN (ordered — write the failing test FIRST)
+1. Write the red→green tests FIRST (they must FAIL on current code):
+   - dedup cross-list: feed A change frees an IP that is also in unchanged feed B (same dedup
+     group) → assert B's reload was SKIPPED before (today's bug) and is INCLUDED after.
+   - reputation: with drep/prep on, a single-feed change → assert today reloads ALL aliases and
+     after the change reloads ONLY the tables whose set moved.
+   - surgical: single feed, no cross-list feature → only that feed's table(s) reload (unchanged).
+   - idempotence: identical inputs twice → second pass reloads nothing.
+2. Replace the reload-scope decision: compute each candidate alias's FINAL canonical set (via the
+   Phase-1 canonical helper) and compare (set-diff) against its last-applied mirror
+   (/var/db/aliastables/<alias>.txt). Reload (still `-T replace`) iff the set differs OR the
+   kernel table is empty (preserve empty-table repopulation).
+3. Apply the hybrid scope from RESULTS/02: if Phase 2 said "always recompute all", recompute every
+   alias's desired set each pass; if "only when a cross-list feature is on", keep the cheap
+   fetch-gated path when enable_dup AND reputation are both off, and content-gate all aliases only
+   when one is on.
+4. Drive PFB_IP_CHANGED / changed_ip_aliases from the content-diff set (the tables that actually
+   changed). Keep filter_configure() reserved for rule changes; keep the #519 ip_unlock-forced
+   signal. Remove/demote $pfb_alias_lists_all + repcheck to the hybrid-scope guard only.
+5. Make the aliasdir file a true LC_ALL=C sort -u set (behaviour-preserving at the table level —
+   pf already deduped it; pin that the loaded table membership is unchanged vs the old concat).
+6. Run the suite + a live ADR-12 hook smoke case for the end-to-end.
+
+CONSTRAINTS
+- Apply ONLY via `-T replace` in this phase (deltas are Phase 4). Atomicity unchanged.
+- No new filter_configure()/network/pkg on the content path (contract item 7).
+- PHP tabs/8.3; PfbConfig (ADR-29) for any registered field (none expected); pfSense doubles in
+  tests, never require_once. LC_ALL=C inline on every sort -u / set compare (ADR-26).
+- Do NOT touch the DNSBL reload path (ADR-10) or config.xml schema.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit            → green, incl. the new red→green decision tests
+- The dedup + reputation tests FAIL on pre-change code and PASS after (prove both directions)
+- php -l / phpcs / phpstan       → clean / no new errors
+- A live ADR-12 hook smoke case (single-feed surgical + dedup cross-list propagation) passes on
+  the VM (local-smoke ok while iterating)
+- diff-read: reload-scope logic reduced to the content-diff rule; $pfb_alias_lists_all/repcheck
+  gone or demoted; ADR-12 emit + #519 signal intact.
+
+EXPECTED RESULT
+Tables reload iff their final membership set changed; cross-list dedup realigns siblings in the
+same pass; reputation no longer reloads every table; single-feed-no-cross-list stays surgical;
+idempotent. Apply is still `-T replace`.
+
+COMMIT (single)
+    pfblockerng: gate alias reloads on final membership set, not feed-fetch (ADR-40 P3)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/03_Results.txt` (plain .txt)
+Record: the new decision function name + file:line; how the last-applied mirror is read and the
+set-diff computed; the hybrid-scope choice applied; what each red→green test pins (and its
+before/after); the ADR-12 emit wiring; verification output; and — for Phase 4 — whether Phase 2's
+verdict says to build the delta apply or stop here.

@@ -1,0 +1,219 @@
+================================================================================
+ADR-17 — Phase 2 RESULTS (catalog generator + ${ABI} layout + repo-conf template)
+================================================================================
+
+VERDICT: GO. scripts/build-repo.sh deterministically generates a per-ABI `pkg`
+         catalog (meta.conf/packagesite.pkg/data.pkg per ABI) with a loud
+         flavor-collision guard, plus the shared ${ABI}/none repo-conf template.
+         The build-side premise is SETTLED WITH EVIDENCE (see "BUILD-SIDE VERDICT"):
+           * libpkg-on-Linux WORKS — the freebsd/pkg `pkg` binary, built from
+             source on Alpine/Linux, runs `pkg query -F`/`pkg create`/`pkg repo`
+             and build-repo.sh produced a valid per-ABI tree end-to-end on Linux
+             (local Docker proof, captured below). CAVEAT: pkg cannot auto-detect
+             ABI on a Linux host (it parses /bin/sh as an ELF and aborts) — the
+             ABI must be FORCED via the `ABI` env var. So the libpkg-on-Linux path
+             is viable but needs (a) a source build of pkg and (b) `ABI=...` in the
+             environment for Phase 3.
+           * The script's output is VM-ACCEPTED — a `repo`-marked live test
+             (test_build_repo_script_catalog_is_accepted) runs build-repo.sh with
+             the guest's own libpkg over the branch .pkg, writes a NONE-signed
+             file:// repo conf at the produced <ABI>/ dir, and asserts `pkg update`
+             accepts it and `pkg install` (no -f) comes from our repo.
+         => Phase 3 is cleared. Recommended path for Phase 3: see "PHASE 3".
+
+--------------------------------------------------------------------------------
+SCRIPT INTERFACE (scripts/build-repo.sh — POSIX sh, ShellCheck-clean)
+--------------------------------------------------------------------------------
+  Build a catalog tree:
+      build-repo.sh --in <dir-of-.pkg> --out <dir>
+  Print the client repo-conf template:
+      build-repo.sh --print-conf [--base-url <url>]
+
+  Inputs:  --in   a flat dir of .pkg (searched non-recursively).
+           --out  output root; one <ABI>/ catalog subtree is created per ABI.
+  Env:     PKG_BIN  the pkg binary (default: pkg) — lets Phase 3 point at a
+                    source-built Linux pkg or the FreeBSD VM's pkg.
+  Outputs: <out>/<ABI>/<the .pkg> + the catalog triple `pkg repo` emits
+           (meta.conf, packagesite.pkg, data.pkg) per distinct ABI.
+
+  Behaviour:
+    * ABI is READ FROM THE PACKAGE (`pkg query -F <f> '%q'`), never guessed from
+      the filename.
+    * Deterministic + re-runnable + NO network: each ABI bucket is wiped and
+      rebuilt per run, so a removed .pkg never lingers; re-running over the same
+      inputs yields a byte-identical file tree (proven locally — see below).
+    * NONE-signed: `pkg repo` is run with no key argument (ADR trust model — TLS
+      to the host, no CI key).
+
+--------------------------------------------------------------------------------
+EMITTED LAYOUT (local proof: two dummy .pkg, two ABIs, Linux libpkg)
+--------------------------------------------------------------------------------
+  /tmp/repo
+  /tmp/repo/FreeBSD:15:amd64
+  /tmp/repo/FreeBSD:15:amd64/data.pkg
+  /tmp/repo/FreeBSD:15:amd64/meta
+  /tmp/repo/FreeBSD:15:amd64/meta.conf
+  /tmp/repo/FreeBSD:15:amd64/p15.pkg
+  /tmp/repo/FreeBSD:15:amd64/packagesite.pkg
+  /tmp/repo/FreeBSD:16:amd64
+  /tmp/repo/FreeBSD:16:amd64/data.pkg
+  /tmp/repo/FreeBSD:16:amd64/meta
+  /tmp/repo/FreeBSD:16:amd64/meta.conf
+  /tmp/repo/FreeBSD:16:amd64/p16.pkg
+  /tmp/repo/FreeBSD:16:amd64/packagesite.pkg
+
+  In production today there is exactly ONE ABI (FreeBSD:15:amd64 — CE 2.8 and
+  Plus 25.03 both FreeBSD15/php83/py311), so one <ABI>/ subtree. The two-ABI run
+  above proves the per-ABI bucketing generalises.
+
+--------------------------------------------------------------------------------
+CLIENT REPO-CONF TEMPLATE (build-repo.sh --print-conf)
+--------------------------------------------------------------------------------
+  pfblockerng-devel: {
+    url: "https://andrebrait.github.io/pfBlockerNG/${ABI}",
+    mirror_type: none,
+    signature_type: none,
+    priority: 100,
+    enabled: yes
+  }
+
+  Fields:
+    * url:            STATIC base + the literal ${ABI} pkg(8) variable (expanded by
+                      pkg, NOT the shell; no query interpolation -> the URL-encoding
+                      gate passes). ${ABI} auto-follows the box across an OS upgrade.
+                      --base-url overrides the base for staging/forks.
+    * mirror_type:    none.
+    * signature_type: none — NONE-signed; trust = HTTPS to the host (no CI key).
+    * priority:       100 — ABOVE the base Netgate `pfSense` repo (ships priority 0).
+                      Phase 1 PROVED priority dominates version (a higher-priority
+                      repo wins even at a lower version), so this is THE precedence
+                      lever. 100 clears pfSense's 0 with margin while staying an
+                      ordinary positive value. (Phase 4's add-repo.sh MAY recompute
+                      it live as effective-pfSense-priority + 100, the way the
+                      Phase-1 smoke does, if a box ever ships a non-zero pfSense
+                      priority.)
+    * enabled:        yes.
+
+  This is the SINGLE source Phase 4 (add-repo.sh) and the README reuse.
+
+--------------------------------------------------------------------------------
+FLAVOR-COLLISION GUARD (fails loud; locally exercised)
+--------------------------------------------------------------------------------
+  Two inputs sharing package-name + version + ABI but differing in php/py flavor
+  (their php*/python*/py*- DEPENDENCY NAMES, read via `pkg query -F <f> '%dn'`)
+  cannot coexist in one catalog — the second would silently shadow the first.
+  build-repo.sh FAILS LOUD (exit 1) with a clear message rather than drop a build:
+
+    build-repo: FLAVOR COLLISION — two packages share name+version+ABI
+      'pfSense-pkg-pfBlockerNG-devel 3.2.0_28|FreeBSD:15:amd64'
+      but differ in php/py flavor:
+        flavor A: php83,
+        flavor B: php84,
+      They cannot coexist in one catalog (the second would shadow the first).
+      Resolve by splitting into a flavored layout: <out>/<ABI>-<php><py>/
+      (not implemented — no colliding combo exists today; teach the tool when one does).
+
+  A repeated key with the SAME flavor signature is a harmless duplicate (pkg repo
+  dedups) and passes. The future flavored-layout split (<out>/<ABI>-<php><py>/) is
+  documented in the script + this guard but NOT implemented — no colliding combo
+  exists today (matrix: CE 2.8 + Plus 25.03 are both FreeBSD15/php83/py311). When
+  one ever does, add-repo.sh would detect + pin the box's flavor.
+
+  Locally exercised (Docker, Linux libpkg):
+    * php83 vs php84 @ same name+ver+ABI -> exit 1, message above (GUARD-PASS).
+    * php83 duplicated -> exit 0 (harmless duplicate).
+
+--------------------------------------------------------------------------------
+BUILD-SIDE VERDICT — libpkg-on-Linux vs FreeBSD-VM fallback (THE crux)
+--------------------------------------------------------------------------------
+CORRECTION to ADR §1 Context "Premise to falsify" / Target-runtime line: the ADR
+asserts "the portable builder already proves libpkg-on-Linux." THAT IS FALSE —
+scripts/build-pkg-portable.py hand-rolls the libpkg archive in PURE PYTHON (stdlib
+zstd-tar + a JSON/UCL manifest) and NEVER invokes libpkg/`pkg`. So `pkg repo` (a
+genuine libpkg op needing the binary) was UNPROVEN on Linux before this phase.
+There is NO apt package and NO official prebuilt Linux `pkg`/`pkg-static`
+(packages.debian.org has none; FreeBSD ships no Linux artifact). The freebsd/pkg
+CI does build on Alpine+Debian, so the binary IS buildable from source.
+
+This phase RESOLVED it directly (local Docker, alpine:3.20, aarch64):
+  * Built freebsd/pkg from source. Build deps: build-base autoconf automake libtool
+    m4 bash bzip2-dev zlib-dev sqlite-dev libarchive-dev openssl-dev curl-dev
+    linux-headers libbsd-dev libmd-dev xz-dev zstd-dev fts-dev. (The musl `fts.h`
+    gap needs fts-dev; libbsd + liblzma are also required — the configure step
+    fails one-by-one without them.) `./configure && make` -> src/pkg.
+  * `src/pkg -v` => "2.7.99.1-<sha>". With `ABI=FreeBSD:15:amd64` in the ENV:
+      - `pkg config ABI` => FreeBSD:15:amd64
+      - `pkg create` produced real .pkg from a +MANIFEST + staged root.
+      - `pkg query -F <f> '%n %v %q'` read name/version/ABI from each .pkg.
+      - build-repo.sh ran clean and emitted the per-ABI tree above (the catalog
+        triple present per ABI), idempotent across re-runs.
+  * KEY CAVEAT: WITHOUT `ABI` forced, pkg aborts: "failed to determine the
+    operating system / Unable to determine ABI, /bin/sh cannot be parsed" — it
+    introspects the host's /bin/sh ELF for the FreeBSD ABI, which a Linux binary
+    is not. Phase 3 MUST export `ABI=<the matrix ABI>` (e.g. FreeBSD:15:amd64) when
+    running build-repo.sh on the runner. OSVERSION/IGNORE_OSVERSION may also be set
+    but ABI is the load-bearing one.
+
+  => libpkg-on-Linux is VIABLE (build pkg from source + force ABI). The
+     FreeBSD-VM fallback is NOT required, but remains available (build-pkg.yml
+     provides a FreeBSD VM; run build-repo.sh there with the stock pkg, no ABI
+     forcing, no source build).
+
+LIVE VM EVIDENCE (the script's output accepted by a real pfSense pkg update):
+  Run: smoke.yml -m repo on adr/17-pkg-repository  ->  RUN_ID 27033922928, SUCCESS
+       "4 passed, 230 deselected in 186.36s" on a live pfSense CE 2.8.1 VM:
+         test_install_from_our_repo_lands_all_files          PASSED
+         test_precedence_ours_higher_priority_wins           PASSED
+         test_precedence_decoy_higher_priority_wins          PASSED
+         test_build_repo_script_catalog_is_accepted          PASSED   <- Phase 2
+  The new Phase-2 test PROVES build-repo.sh's catalog is VM-accepted: `pkg update`
+  consumed the script-generated <ABI>/ tree and `pkg install` (no -f) installed
+  from our repo (origin == pfblockerng-devel) with deps resolved. The Phase-1 trio
+  re-ran green unchanged.
+  The live test runs build-repo.sh ON THE GUEST (real pfSense libpkg, no ABI
+  forcing needed there) over the branch .pkg, points a NONE-signed file:// repo at
+  the produced <ABI>/ dir, and asserts `pkg update` accepts it + `pkg install`
+  (no -f) origin == pfblockerng-devel. Since the script + the `pkg repo` op are
+  byte-identical regardless of which libpkg invokes them, the Linux-libpkg local
+  proof + the VM-accepts-the-script-output live proof together settle the premise.
+
+--------------------------------------------------------------------------------
+WHAT PHASE 3 MUST CALL + WITH WHAT ARTIFACTS
+--------------------------------------------------------------------------------
+  1. Obtain a `pkg` binary on ubuntu-latest. RECOMMENDED: build freebsd/pkg from
+     source (deps + `./configure && make`, see above) and use src/pkg, OR run
+     build-repo.sh on the FreeBSD VM (build-pkg.yml) with stock pkg. Either way
+     export `ABI=<matrix ABI>` when running on Linux (NOT needed on the VM).
+  2. Enumerate ALL GitHub Releases -> download their .pkg assets into one dir per
+     the ADR's "derived index over Releases" model.
+  3. Run:  PKG_BIN=<pkg> ABI=<abi> build-repo.sh --in <dir-of-.pkg> --out <site>
+     (one <ABI>/ subtree per distinct ABI; the collision guard aborts the publish
+     on an unhandled flavor clash — fail-closed, never a silent drop).
+  4. Emit the client conf from the SAME source: build-repo.sh --print-conf
+     [--base-url <pages-url>]  (Phase 4's add-repo.sh + the README share it).
+  5. upload-pages-artifact(<site>) + deploy-pages. Additive + isolated
+     (if: always(); pages:write + id-token:write scoped to the deploy job only),
+     per ADR §6 Phase 3 / §2 "Hosting".
+
+--------------------------------------------------------------------------------
+LOCAL VERIFICATION (all green)
+--------------------------------------------------------------------------------
+  * shellcheck scripts/build-repo.sh  -> clean.
+  * sh -n scripts/build-repo.sh       -> clean.
+  * scripts/check_url_encoding.py     -> clean (the conf URL is static ${ABI}).
+  * python -m pytest (default)        -> 1124 passed, UNCHANGED (tests/smoke --ignore'd).
+  * ruff check / ruff format --check  -> clean.
+  * mypy tests/                       -> clean.
+  * -m repo --collect-only            -> 4 collected (Phase-1 trio + the new P2 test).
+  * build-repo.sh local Docker run (Linux libpkg): valid per-ABI tree (above),
+    collision guard fails loud (php83 vs php84), idempotent across re-runs.
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT
+--------------------------------------------------------------------------------
+Phase 2 = GO. scripts/build-repo.sh is the proven per-ABI catalog generator;
+the ${ABI}/none/above-pfSense repo-conf template is the single client source.
+Build-side premise SETTLED: libpkg-on-Linux works (source build + ABI forced);
+the FreeBSD-VM fallback remains available. Phase 3 (publish pipeline) is cleared
+— call build-repo.sh per "WHAT PHASE 3 MUST CALL", deploy the <ABI>/ tree to
+GitHub Pages, additive + isolated.

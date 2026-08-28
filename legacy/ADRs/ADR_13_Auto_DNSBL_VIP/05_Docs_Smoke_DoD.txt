@@ -1,0 +1,73 @@
+================================================================================
+PHASE 5 PROMPT — Docs + smoke note + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md   (read §7 Definition of done + manual smoke FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/13` branch performing Phase 5 (final) of ADR-13. Documentation +
+smoke interplay + finalising the DoD. No production behaviour change beyond docs/help.
+Work inline on `adr/13`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The feature is built (P1-P4). It must be documented for users + maintainers, the smoke-test
+interplay made explicit, and the manual-smoke / reject criteria locked so the maintainer can
+flip Status -> Accepted after verifying on a live box.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/04_Results.txt — the final UI shape + save wiring. Also
+  skim 01-03 Results for the marker strings, lifecycle predicates, and the manual-mode v6
+  decision. If 04_Results.txt is missing, STOP and report.
+- .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md (§2, §7).
+- README.md — the DNSBL setup section (where manual VIP creation is currently described).
+- CLAUDE.md — the "Smoke tests (ADR-04)" section (block shapes, VIP), the DNSBL VIP facts.
+- tests/smoke/helpers.py:454 ensure_dnsbl_vip + the comment block :85-90 ("pfBlockerNG never
+  auto-creates it") and tests/smoke/test_smoke_matrix.py:92-97 (the "no VIP" handling) —
+  these statements become conditionally false; update the comments to reflect default-off.
+
+ACTION PLAN (ordered)
+1. README.md: document the "Create VIPs automatically" checkbox — what it does, the address
+   scheme (10.10.10.53 / fd00::53), the pfB_AUTO_VIP_v* marker (how to identify package-owned
+   VIPs), the enable/disable lifecycle (VIP created on enable, removed on disable, settings
+   persist), the v6-mandatory-when-resolver-listens-v6 rule, and the HA behaviour (each node
+   manages its own lo0 VIP). Update any text that says a VIP must be created manually to note
+   the auto option.
+2. CLAUDE.md: update the DNSBL VIP facts in the "Smoke tests" section to note that the package
+   CAN now auto-create the sinkhole VIP (default off); keep the "default-off ⇒ harness injects
+   the VIP" reality accurate.
+3. tests/smoke comments: correct the now-conditional "pfBlockerNG never auto-creates it" comment
+   in helpers.py and test_smoke_matrix.py to "by default; pfb_dnsvip_auto auto-creates it".
+   OPTIONAL (only if cheap + green): add a smoke case that flips pfb_dnsvip_auto on and asserts
+   the marked VIP is created + a block sinks to it. Do NOT destabilise the existing matrix; if it
+   risks flakiness, leave it as a documented manual-smoke item instead.
+4. SETTINGS HELP: final pass on the DNSBL Virtual IP group help text for accuracy/consistency
+   with the README wording.
+5. ADR.md §7: confirm the manual-smoke checklist + reject criteria match what shipped; tick any
+   items already verified; leave Status = Proposed (maintainer flips to Accepted after on-box smoke).
+
+CONSTRAINTS
+- Docs/comments + (optional, safe) one smoke case only. No production logic change.
+- Markdown must be markdownlint-clean (blank lines around headings/lists/fences; language on
+  fences; single trailing newline). POSIX-sh-safe if any smoke shell is touched.
+- Do NOT change the shipped Python plugin. Keep python -m pytest green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green/unchanged (incl. any new smoke case, if added and runnable locally).
+- npx markdownlint-cli2 -> 0 errors on touched docs.
+- php -l (if the help text edit touches PHP) -> clean.
+- diff-read: README + CLAUDE.md + smoke comments accurately describe default-off + the lifecycle.
+
+EXPECTED RESULT
+Feature fully documented (README + CLAUDE.md + settings help), smoke comments corrected, optional
+auto-create smoke case (or a manual-smoke item), and §7 finalised. ADR-13 ready for the
+maintainer's on-box manual smoke before Accept.
+
+COMMIT (single)
+    pfblockerng: document DNSBL auto-VIP feature + finalise ADR-13 DoD (ADR-13 P5)
+Push directly to `adr/13`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/05_Results.txt` (plain .txt)
+State: what docs changed; whether a smoke case was added or deferred to manual; the final
+manual-smoke checklist status; confirmation Status stays Proposed pending on-box verification;
+any residual follow-ups (e.g. default-on-for-fresh-installs as a future ADR).

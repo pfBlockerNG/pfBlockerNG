@@ -1,0 +1,157 @@
+================================================================================
+ADR-09 Phase 7 Results — Docs + DoD + reject criteria
+================================================================================
+
+Status: GO — documentation complete; ADR-04 reconciliation flagged; ADR §7
+finalised; all gates green.
+
+
+--------------------------------------------------------------------------------
+1. WHAT WAS DONE
+--------------------------------------------------------------------------------
+
+Four files updated (docs only — no src/, tests/, or workflow changes):
+
+  scripts/README.md
+    - Expanded "Supported-version matrix" into sub-sections: Schema, Lifecycle
+      policy, Build vs CI split, Where .pkg artifacts land, What happens after
+      a matrix edit (the full three-step automation pipeline), ADR-04 §2
+      reconciliation flag.
+    - Build vs CI split table: CE → both .pkg build and live-VM smoke CI;
+      Plus → .pkg build only (ci:false, no licensed image).
+    - Automation pipeline: version-tracker reacts with (1) build-pkg-linux.yml
+      per BUILD entry, (2) image-refresh.yml per ci:true CE entry, (3)
+      smoke-fanout.yml once for all ci:true CE entries (never Plus).
+    - ADR-04 §2 reconciliation flagged: upgrade-in-place default for all jumps
+      (not just patch/minor); manual re-seed fallback only on gate failure.
+
+  CLAUDE.md
+    - Step 1 of the CE-version-change checklist extended with the build/CI
+      split note and the fact that version-tracker handles the automation.
+    - Step 2 updated from "build-image.yml" to "image-refresh.yml", with the
+      six-check sanity gate and fail-closed description, plus the ADR-04 §2
+      reconciliation note inline.
+    - Step 3 added: smoke-fanout.yml (AND-gate, never Plus, daily/dispatch).
+
+  README.md
+    - The stub-regeneration section: replaced the old one-liner CE-bump note
+      ("upgrade-in-place for a patch/minor bump, a fresh seed on a major") with
+      a pointer to the full three-step procedure in the smoke section.
+    - "Rebuilding the image on a CE bump" section: replaced the three-sentence
+      paragraph with a documented three-step procedure (matrix edit on
+      ci-metadata → image-refresh.yml → smoke-fanout.yml), including the
+      six-check sanity gate description and the manual-seed fallback.
+
+  .ADRs/ADR_09_Release_Version_Automation/ADR.md §7
+    - DoD rewritten: all 7 phases enumerated with brief summaries; phases 5-6
+      explicitly marked ungated (ADR-04 Accepted).
+    - Reject criteria: "portable-vs-make package drift → FreeBSD fallback" and
+      "upgrade gate failures → manual seed fallback" — both explicitly named.
+    - ADR-04 §2 reconciliation section: flags the "re-baseline on MAJOR" wording
+      as superseded by ADR-09's upgrade-in-place default; defers a reconciling
+      edit to a separate ADR-04 amendment (one-ADR-at-a-time rule).
+    - Manual checklist: six items including the new dry-run tracker dispatch
+      item; all checkboxes remain [ ] pending maintainer confirmation.
+
+
+--------------------------------------------------------------------------------
+2. FULL PIPELINE SUMMARY (what is live across ALL phases)
+--------------------------------------------------------------------------------
+
+Phase 1 (inventory):  both builders documented and inventoried; no new workflow.
+Phase 2 (matrix):     ci-metadata:supported-versions.json; read-version-matrix.sh
+                      + composite action; build-image.yml resolve-version repointed.
+Phase 3 (release):    release.yml extended; per-matrix .pkg builds attached to
+                      GitHub Release per FreeBSD major; ports-pr intact.
+Phase 4 (tracker):    version-tracker.yml (daily 06:00 UTC + dispatch); react job
+                      dispatches build, image-refresh, smoke-fanout; probe nudges.
+Phase 5 (refresh):    image-refresh.yml; upgrade-in-place + 6-check sanity gate;
+                      publish on pass only; manual-seed fallback on gate failure.
+Phase 6 (fanout):     smoke-fanout.yml; strategy.matrix over ci_matrix; fail-fast
+                      false; all-smoke-passed AND-gate; Plus excluded at 2 layers.
+Phase 7 (docs+DoD):   this phase — docs + finalised §7.
+
+
+--------------------------------------------------------------------------------
+3. MATRIX LIFECYCLE SUMMARY (documented in scripts/README.md + CLAUDE.md)
+--------------------------------------------------------------------------------
+
+Add:  curated — human edits supported-versions.json on ci-metadata via PR.
+      Add on beta (status:"beta"); update to "GA" when GA lands.
+      version-tracker reacts automatically: build + image-refresh + smoke-fanout.
+
+Drop: oldest CE entry only when newest CE goes GA.
+      Window = previous major + current major (transiently +1 during a beta).
+
+Plus: always ci:false (build-only). Never in smoke fan-out.
+
+No workflow YAML edit needed — all consumers read ci-metadata at runtime.
+
+
+--------------------------------------------------------------------------------
+4. ADR-04 §2 RECONCILIATION FLAG
+--------------------------------------------------------------------------------
+
+ADR-04 §2 (image build strategy) and §3 (risks) contain the wording
+"re-baseline on a MAJOR version jump" as a conservative option. ADR-09 supersedes
+this as the default: image-refresh.yml handles ALL version jumps uniformly
+(minor, major) via upgrade-in-place; a fresh manual re-seed is the fallback only
+when the sanity gate fails.
+
+The two ADRs are consistent in practice: both fall back to a manual seed on gate
+failure. The difference is documentation only — the old "re-baseline on major"
+read as a mandatory step; ADR-09's default makes it a gate-triggered fallback.
+
+Flagged in:
+  - scripts/README.md § "ADR-04 §2 reconciliation (flagged — not edited here)"
+  - CLAUDE.md step 2 inline note
+  - ADR.md §7 "ADR-04 §2 reconciliation" sub-section
+
+A reconciling edit to ADR-04 §2 is deferred to a separate ADR-04 amendment
+(one-ADR-at-a-time rule). ADR-04 is NOT touched in this phase.
+
+
+--------------------------------------------------------------------------------
+5. GATE RESULTS
+--------------------------------------------------------------------------------
+
+python -m pytest:         1069 passed (unchanged)   [GREEN]
+ruff check .:             All checks passed          [CLEAN]
+ruff format --check .:    54 files already formatted [CLEAN]
+markdownlint-cli2:        0 error(s), 33 .md files   [CLEAN]
+src/: no changes                                     [CONFIRMED]
+tests/: no changes                                   [CONFIRMED]
+.github/workflows/: no changes                       [CONFIRMED]
+
+
+--------------------------------------------------------------------------------
+6. FILES CHANGED (adr/09 branch commit)
+--------------------------------------------------------------------------------
+
+Modified:
+  scripts/README.md      (supported-version matrix section expanded)
+  CLAUDE.md              (CE-version-change checklist: steps 2+3 updated, step 3 added)
+  README.md              (CE bump: pointer updated; three-step procedure documented)
+  .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§7 finalised)
+
+New file:
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/07_Results.txt  (this file)
+
+
+--------------------------------------------------------------------------------
+7. ADR STATUS
+--------------------------------------------------------------------------------
+
+ADR-09 is READY TO FLIP from Proposed to Accepted pending the maintainer
+completing the §7 manual checklist (five existing items + the new dry-run
+tracker item). The implementation is complete across all seven phases:
+  - All CI workflows are deployed on adr/09.
+  - All gates are green.
+  - Docs describe the full pipeline accurately.
+  - ADR-04 reconciliation is flagged (not edited).
+  - No src/ changes.
+
+The ADR status line should be updated to "Accepted" by the maintainer after
+the manual checklist is confirmed on a live CI run.
+
+GO.

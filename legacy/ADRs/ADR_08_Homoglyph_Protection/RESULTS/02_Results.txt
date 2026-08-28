@@ -1,0 +1,189 @@
+ADR-08 — Phase 2 Results (TR39 decision spec + golden oracle)
+=============================================================
+Status: DONE. ADDITIVE ONLY — no production code changed, nothing deleted.
+Outputs (all dev-only, never shipped):
+  - this handoff;
+  - the committed golden DECISION TABLE  tests/fixtures/adr08_spec/decision_table.json;
+  - the pure oracle + BDD spec tests     tests/test_adr08_decision_spec.py (49 tests).
+Gates green: python -m pytest = 1166 passed (1117 baseline + 49 new);
+ruff check . clean; ruff format --check clean; mypy tests/ clean (suite is typed).
+
+This phase AUTHORS the TARGET. There is NO existing-code oracle: today's feature
+blocks ALL IDN — the bluntness ADR-08 replaces — so the (label -> resolved-script-
+set -> restriction-level -> severity -> action) mapping is written here as the
+contract every later phase diffs against, BEFORE any analyzer code exists.
+
+
+1. ORACLE + FIXTURE LOCATIONS
+-----------------------------
+  tests/fixtures/adr08_spec/decision_table.json
+    Committed, human-readable golden. Sections:
+      - single_label[16] : a_label, decoded, resolved_scripts, restriction_level,
+                           severity, action, intent. Covers ASCII no-op, single-
+                           script legit (Latin/Cyrillic/Greek/Arabic/Thai/Katakana),
+                           Latin+CJK legit (Han+Katakana, Han+Hangul), the 3 malicious
+                           confusable pairs (Latin+Cyrillic, Latin+Greek, Cyrillic+Greek),
+                           the 3 suspicious non-trio mixes (Latin+Armenian/Cherokee/
+                           Coptic), the whole-script-Cyrillic NOT-caught limitation.
+      - multi_label[3]   : per_label_scripts + per_label_severity + wrong_union_scripts
+                           + name severity/action. The IDN-ccTLD per-label cases
+                           (example.рф, site.中国 -> legit) + the malicious subdomain
+                           label (раypal.example.com -> block).
+      - edge_decode[6]   : decode_ok / raises / severity for the malformed+contentless
+                           labels (xn--, xn--a, xn--zz, xn--0, xn--ls8h, xn--google).
+    _meta carries the rule, the restriction-level definitions, the severity->action
+    map, the recorded borderline calls, and the documented limitations.
+
+  tests/test_adr08_decision_spec.py
+    The PURE oracle (stdlib only, NO Unbound symbol, importable as a plain module)
+    + the decision-label driver API (section 2) + 11 test classes / 49 tests that
+    grade the oracle against the golden table and cross-check it against the Phase-1
+    corpus.json. Reuses corpus.json directly (TestOracleAgreesWithThePhase1Corpus,
+    TestPunycodeDecodeFidelity) so the Phase-1 de-risk corpus and the Phase-2 spec
+    cannot silently diverge.
+
+  Codepoint -> resolved-script map: SCRIPT_MAP in the test module, scoped to exactly
+  the corpus + spec codepoints, generated from UCD 15.1.0 (Script_Extensions preferred,
+  Common/Inherited transparent) — the SAME basis as the Phase-1 throwaway
+  measure_fp_tp.py. The Phase-4 generator REPLACES this with the full shipped range
+  tables; here it only needs to reproduce the resolved set for these labels so the
+  graded severities are real.
+
+
+2. DECISION-LABEL DRIVER API  (Phases 3/4/5 import this)
+--------------------------------------------------------
+Pure module-level functions in tests/test_adr08_decision_spec.py, no Unbound symbols.
+The Phase-4 analyzer and the Phase-5 matcher MUST reproduce these results:
+
+  decode_label(a_label: str) -> str
+      Raw stdlib 'punycode' decode of one xn-- label. Non-xn-- returned unchanged.
+      MAY raise (UnicodeDecodeError / UnicodeError / ValueError) on malformed input
+      — callers catch it. NOT the 'idna' codec (idna's IDNA2003 validation REJECTS
+      analysable edge labels the raw codec decodes, e.g. xn--a -> U+0080, xn-- -> '';
+      pinned by TestPunycodeDecodeFidelity.test_decode_is_not_idna_codec).
+
+  resolved_scripts(text: str) -> set[str]
+      Per-label resolved script set for DECODED Unicode. Script_Extensions preferred,
+      Common/Inherited transparent (dropped). A codepoint with no letter-script
+      (control char / emoji) -> the UNKNOWN_SCRIPT sentinel (never silently a script).
+
+  restriction_level(scripts: set[str], *, ascii_only: bool = False) -> str
+      UTS#39 level; one of LEVEL_ASCII / LEVEL_SINGLE / LEVEL_HIGHLY_RESTRICTIVE /
+      LEVEL_NON_RESTRICTIVE. The documented intermediate the severity reads.
+
+  severity(text: str) -> str
+      ONE decoded label -> SEV_LEGIT / SEV_SUSPICIOUS / SEV_MALICIOUS / SEV_FLAGGED.
+      Never unions across the dot.
+
+  analyze_label(a_label: str) -> LabelVerdict
+      Decode-safe (NEVER raises). Frozen dataclass: a_label, decoded (None if decode
+      raised), scripts (frozenset), severity, decode_error (exc type name or None).
+
+  analyze_name(a_name: str) -> NameVerdict
+      Splits on '.', analyses EACH label, name severity = the most severe label
+      (PER-LABEL, never union across the dot). Frozen dataclass: a_name, labels
+      (tuple[LabelVerdict]), severity.
+
+  action(sev: str, *, block_malicious: bool = True, escalate_suspicious: bool = False) -> str
+      Severity -> ACT_NONE / ACT_ALERT / ACT_BLOCK under the two ADR-08 sub-toggles.
+      Raises ValueError on an unknown severity.
+
+  Constants exported: CONFUSABLE_SET={Latin,Cyrillic,Greek}, CJK_COMPANIONS=
+  {Hiragana,Katakana,Hangul,Bopomofo}, SEV_*, ACT_*, LEVEL_*, UNKNOWN_SCRIPT.
+
+
+3. SEVERITY -> ACTION MAPPING (as encoded)
+------------------------------------------
+  legit       -> none    (resolve normally; never touched in Confusable mode).
+  malicious   -> block   when block_malicious (DEFAULT-ON); -> alert when the
+                         operator disables that sub-toggle.
+  suspicious  -> alert   by default (escalate_suspicious DEFAULT-OFF); -> block
+                         when the opt-in escalation sub-toggle is enabled.
+  flagged     -> alert   by default; escalatable like suspicious. (See section 4.)
+
+  Default toggles = (block_malicious=True, escalate_suspicious=False). The default
+  severity->action map is the committed `action` column in decision_table.json and
+  is asserted total over all four severities under BOTH toggle states
+  (TestSeverityToActionMappingTotality).
+
+
+4. BORDERLINE CALLS RECORDED (consistent with RESULTS/01)
+---------------------------------------------------------
+  a) Cherokee / Armenian / Coptic + Latin -> SUSPICIOUS, not malicious. Outside the
+     high-confidence {Latin,Cyrillic,Greek} trio; legitimate single-script use;
+     default-block would risk FP without a measured TP need. (Revisit only on a
+     future corpus showing a real missed attack class.)
+  b) Cyrillic+Greek with NO Latin -> MALICIOUS. The rule is ">=2 of the trio", NOT
+     Latin-anchored (proven by xn--mxa00ab = сαр).
+  c) FLAGGED (new severity introduced this phase): an undecodable label (malformed
+     punycode, caught) OR a decoded label whose codepoints carry NO letter-script
+     (empty xn--, control char xn--a -> U+0080, emoji xn--ls8h -> 💩) resolves to
+     FLAGGED — NOT malicious (no confusable mix) but NOT silently legit either. It
+     is surfaced (action=alert, escalatable) so anomalies are never silently passed,
+     and the decode NEVER crashes the resolver. This is the action-mapping home for
+     the ADR's "decode error caught + flagged" robustness contract.
+     NOTE for Phase 4: the corpus.json edge_decode section labels these as decode
+     SUCCESS/FAILURE only (no severity); the JUNK-CJK case xn--google decodes to
+     single-script Han -> LEGIT (it has a real letter-script). The empty/control/
+     emoji cases are the ones that land in FLAGGED.
+
+  RESTRICTION-LEVEL collapse recorded: UTS#39 distinguishes Moderately/Minimally
+  Restrictive/Unrestricted; ADR-08 does not — anything failing Highly Restrictive
+  that isn't the malicious pair is "non_restrictive" -> suspicious. Pinned so a
+  later phase can't silently reintroduce the finer levels.
+
+
+5. THE WHOLE-SCRIPT LIMITATION (pinned as a no-op)
+--------------------------------------------------
+  xn--80ak6aa92e (аррӏе, all-Cyrillic 'apple' look-alike) is single-script ->
+  passes restriction-level analysis -> severity LEGIT -> action NONE. Asserted as a
+  deliberate NO-OP (TestWholeScriptConfusableNotCaught) so the documented out-of-
+  scope limitation (ADR-08 §7) is pinned: if a future change started catching it,
+  that test goes red and forces a deliberate decision. Mixed-script detection
+  catches MIXED homographs only; whole-script + pure-ASCII typosquats are out of
+  scope (need a confusables + protected-brand table, not built here).
+
+
+6. TEST DESIGN (branch coverage, before-state, BDD — per CLAUDE.md)
+-------------------------------------------------------------------
+  - Branch coverage: every severity (legit/suspicious/malicious/flagged), every
+    restriction level (ascii/single/highly-restrictive/non-restrictive), and BOTH
+    states of each sub-toggle get their own failable assertion. The CJK FP-guard
+    and the suspicious tier each assert the OFF side (it IS multi-script / it is NOT
+    malicious) before the ON side (it is legit / it is suspicious) so green proves
+    the rule branch, not an always-pass.
+  - Per-label guard proven real: test_wrong_union_would_have_false_positived_the_cctld
+    asserts the WRONG whole-name union of example.рф {Cyrillic,Latin} WOULD be
+    malicious, then that analyze_name keeps it legit — the FP the per-label rule
+    eliminates.
+  - Malformed-not-raised proven real: test_raw_decode_actually_raises_for_the_
+    raising_rows asserts the raw decoder DOES raise on xn--zz/xn--0, so
+    analyze_label's catch is load-bearing (not dead code).
+  - Cross-checked against Phase-1: the oracle reproduces corpus.json's
+    expected_severity for every single- and multi-label entry.
+
+
+7. GO-AHEAD FOR PHASE 3
+-----------------------
+  PROCEED with Phase 3 (PREP, behaviour-preserving): extract is_idn_domain + the
+  evaluate_domain IDN block (the live locations from RESULTS/01 section 1 —
+  is_idn_domain ~1321, the matcher IDN branch ~4342) into a named testable unit;
+  pin TODAY's Off + All-IDN behaviour with a golden (no regression); add the
+  Off | All-IDN | Confusable mode plumbing with 'on' -> All-IDN migration;
+  Confusable INERT this phase (behaves as Off until Phase 5 wires the analyzer).
+
+  Carry forward exactly as encoded here:
+    - the decision-label driver API (section 2) is the import surface Phase 4's
+      analyzer and Phase 5's matcher are graded against — reproduce its severities/
+      actions, not a re-derived rule;
+    - the severity->action map + the two sub-toggle defaults (section 3):
+      block_malicious DEFAULT-ON, escalate_suspicious DEFAULT-OFF — these become
+      the new MAIN config keys in Phase 3/6 (python_* naming, per RESULTS/01 §1);
+    - FLAGGED is a real fourth severity (section 4c) — Phase 4's analyzer must
+      return it for caught-decode-errors and scriptless labels, and Phase 5 must
+      route it to alert (escalatable), never block-by-default, never crash;
+    - Script_Extensions-first resolution with Common/Inherited transparent
+      (RESULTS/01 §4) — ship BOTH tables in Phase 4; the SCRIPT_MAP here is the
+      scoped reference the full tables must agree with on the corpus codepoints;
+    - raw 'punycode' codec, catch (UnicodeDecodeError, UnicodeError, ValueError)
+      — confirmed load-bearing vs 'idna' on the edge labels (section 2).

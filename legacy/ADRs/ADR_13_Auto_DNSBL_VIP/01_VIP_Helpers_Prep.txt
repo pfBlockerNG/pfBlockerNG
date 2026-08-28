@@ -1,0 +1,79 @@
+================================================================================
+PHASE 1 PROMPT — PREP (behaviour-preserving): marker + candidate/pick + v6-listen helpers (unwired)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md   (read §1, §2 table + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/13` branch performing Phase 1 of ADR-13. Behaviour-PRESERVING:
+land the pure helper functions + marker constants as ISOLATED, lint-clean building
+blocks, WITHOUT wiring them into anything. No observable change yet. Standalone-valuable.
+Work inline on `adr/13`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The address-selection + conflict-detection logic and the v6-listen predicate are the
+pieces with real correctness risk (never pick a conflicting IP; correctly detect IPv6).
+Landing them in isolation lets Phase 2 (lifecycle) and Phase 4 (UI) be thin callers, and
+keeps these testable/reviewable on their own. There is NO PHP unit harness in this repo
+(same as ADR-11/12) — validation is `php -l` + PHPStan + manual reasoning, not pytest.
+
+REQUIRED READING (inspect before editing)
+- .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md (§1 "Today" + §2 table + contract + §5).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  * pfb_get_vips() :669 and pfb_get_vip_options() :696 — how existing VIPs are enumerated
+    (get_configured_vip_list + SPECIALNET_VIPS).
+  * pfb_validate_vips() :727 — the overlap check via where_is_ipaddr_configured (:745/:752)
+    and get_configured_vip_interface (:734) — REUSE the same overlap semantics.
+  * pfb_global() :826-836 — how vip ids resolve to IPs and the force-disable behaviour.
+- stubs/pfsense/interfaces.php (interface_ipalias_configure :192, interface_vip_bring_down
+  :147) and util.php (get_configured_vip_list, get_configured_vip, get_configured_vip_ipv4/6,
+  where_is_ipaddr_configured). Add any MISSING stub used by this phase (PHPStan is the gate;
+  prefer a real stub over a baseline suppression — see CLAUDE.md).
+- For pfb_unbound_listens_v6(): the DNS Resolver config (config_get_path('unbound/...'),
+  active_interface) and how pfSense builds Unbound listen addresses. VERIFY the predicate
+  against upstream pfSense source (services_unbound.php / unbound.inc) at the dated refs per
+  CLAUDE.md, and note what must be confirmed on-box. Do NOT guess.
+- CLAUDE.md (PHP tabs/8.3, no die()/exit() in lib; stubbing rule; investigate-live-system).
+
+ACTION PLAN (ordered)
+1. MARKER CONSTANTS: define machine-detectable markers for auto-created VIPs —
+   'pfB_AUTO_VIP_v4' and 'pfB_AUTO_VIP_v6' (the `descr` value the package will stamp).
+   Put them where other pfb constants/globals live; one source of truth.
+2. CANDIDATE GENERATOR `pfb_dnsbl_vip_candidates(int $family): array`:
+   - AF_INET  -> ['10.10.10.53', '10.10.11.53', ... ] bounded sweep (e.g. X=0..15) keeping the
+     `.53` DNS homage.
+   - AF_INET6 -> ['fd00::53', 'fd00:1::53', ... ] bounded ULA sweep keeping `::53`.
+   - Ordered, preferred-first. Pure (no side effects).
+3. FREE-ADDRESS PICKER `pfb_pick_free_dnsbl_vip(int $family, string $interface): ?string`:
+   - Walk the candidates; return the FIRST that is (a) not an existing VIP (pfb_get_vips) and
+     (b) overlaps no configured subnet (where_is_ipaddr_configured — SAME call shape as
+     pfb_validate_vips). Return null if none free.
+4. V6-LISTEN DETECTION `pfb_unbound_listens_v6(): bool`:
+   - True iff the DNS Resolver is configured to listen on at least one IPv6 address. Base it on
+     the resolver's active interfaces resolved to addresses (document the exact predicate you
+     chose and why, citing the upstream source you read). Be conservative/correct over clever.
+5. KEEP IT UNWIRED: do NOT call these from pfb_create_dnsbl, pfb_global, the UI, or anywhere.
+   No behaviour change this phase.
+
+CONSTRAINTS
+- Behaviour-PRESERVING: nothing references the new helpers/constants yet → byte-identical
+  runtime. No die()/exit() in library code. PHP tabs/8.3. Any new pfSense fn → stubs/pfsense/.
+- Do NOT touch Python, tests/, or the Unbound plugin. Do NOT modify pfb_create_dnsbl or the UI.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest        -> green/unchanged.
+- php -l (every .inc touched) + PHPStan + ShellCheck (if any sh touched) -> clean.
+- diff-read: confirm the new functions are pure and uncalled (grep for call sites = none).
+
+EXPECTED RESULT
+Lint-clean marker constants + pfb_dnsbl_vip_candidates() + pfb_pick_free_dnsbl_vip() +
+pfb_unbound_listens_v6(), isolated and unwired, with the v6 predicate justified from upstream.
+
+COMMIT (single)
+    pfblockerng: add DNSBL auto-VIP candidate/pick + v6-listen helpers (ADR-13 P1)
+Push directly to `adr/13`; open a PR only if the direct push is rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/01_Results.txt` (plain .txt)
+State: the exact marker strings; each helper's signature + return contract; the candidate
+sweep bounds chosen; the v6-listen predicate you settled on (and what still needs on-box
+confirmation); any stubs added; confirmation nothing calls them yet; the go-ahead for Phase 2.

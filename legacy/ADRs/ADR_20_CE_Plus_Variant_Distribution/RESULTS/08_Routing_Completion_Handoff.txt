@@ -1,0 +1,171 @@
+ADR-20 — ROUTING COMPLETION HANDOFF  (2026-06-15)
+=================================================
+
+Purpose: pick up the self-hosted pkg ROUTING rework in a fresh session.
+The ADR-20 design/code was marked Accepted but the live routing path was never
+wired, so self-hosted installs via the Worker URL are currently BROKEN (502).
+This handoff captures the corrected design + the B1->B3 plan + every fact found.
+
+
+1. CURRENT STATE (the bug)
+--------------------------
+- ADR-20 ADR.md status corrected to "Accepted (code) — routing NOT yet live"
+  (devel commit 5efd308). §4/§7 acceptance ("routing.json live") was unmet.
+- Clients are configured to hit the Cloudflare Worker (add-repo.sh default URL).
+  The Worker fetches https://pfblockerng.github.io/pkg/routing.json -> 404, so it
+  returns HTTP 502 "Routing manifest unavailable". => self-hosted Worker install
+  path is NON-FUNCTIONAL. The Netgate ports channel is UNAFFECTED.
+- Verified live: curl with the real pfSense CE UA ("pfSense/2.8.0-RELEASE:<uid>")
+  AND the Plus UA ("Netgate pfSense Plus/26.03-RELEASE:<uid>") -> still 502.
+  pfblockerng.github.io/pkg/routing.json -> 404. So it is NOT a UA gate; the
+  manifest genuinely is not deployed.
+- Case 4 smoke test (tests/smoke/test_repo_install.py ::
+  test_routing_url_delivers_variant_catalog) is @pytest.mark.xfail(strict=False)
+  until routing is live — it masked this gap in CI (never red).
+
+devel tip at handoff: 6f8e775
+
+
+2. LANDED TONIGHT (all on devel)
+--------------------------------
+- #236  repo-install CE+Plus fan-out (.github/workflows/repo-install.yml).
+- #239  matrix-driven variant repo-install tests (tests/smoke/test_repo_install.py)
+        + smoke.yml exports SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR.
+- #242  manifest variant stamp  -> WRONG APPROACH, reverted by #244.
+- #244  revert of #242 (builder is dumb again).
+- ADR-20 ADR.md status correction (5efd308).
+
+
+3. CONFIRMED DESIGN  (build exactly this)
+-----------------------------------------
+TREE = a literal 1:1 projection of the version matrix. URLs relative to pkg root:
+
+   release/<variant>-<major.minor>/<arch>/<catalog files>
+   nightly/<variant>-<major.minor>/<arch>/<catalog files>
+
+   e.g.
+   release/ce-2.8/amd64/...        nightly/ce-2.8/amd64/...
+   release/plus-26.03/amd64/...    nightly/plus-26.03/amd64/...
+   release/plus-26.03/aarch64/...  nightly/plus-26.03/aarch64/...
+
+- channel-group: "release" = production + devel packages in ONE catalog
+  (Netgate-style; both pkgs coexist). "nightly" = nightly only.
+- variant-version segment = catalog_name_from_version(pfsense_version, variant)
+  -> "ce-2.8" / "plus-26.03" (strips the patch component).
+- leaf = ARCH (amd64 / aarch64), NOT the full ABI. This is fine: each .pkg's real
+  ABI (FreeBSD:15:amd64) lives in its own manifest, so pkg validates the ABI from
+  the package; the directory is purely the routing path.
+- FULL MATRIX, NO DEDUP. Place the same .pkg in every (version,arch) subtree it
+  belongs to even if two pfSense versions share ABI+PHP+PY. Builds are cheap/small;
+  do not optimize, do not segment by anything other than (version, arch).
+- Production is EMPTY right now (no stable release of this fork yet); release/ holds
+  only the -devel package today. Be prepared for production to appear.
+
+RESOLVED DECISIONS (from the maintainer):
+  D1. build-pkg-portable.py stays DUMB. Inputs that matter: channel (-> name
+      suffix ""/-devel/-nightly), ABI, PHP, Python (+ I/O: --ports/--local-src/--out).
+      NO stamping of any kind. DROP --variant; inject the php/py guard deps directly
+      from --php/--py-flavor whenever they are provided. (--pfsense-version already
+      removed by #244.)
+  D2. build-repo-portable.py is the BRAIN. It reads the matrix and CALLS
+      build-pkg-portable.py per (entry x channel), places each .pkg into its
+      subtree, generates each subtree's catalog, and writes routing.json.
+  D3. Stable/production is ALWAYS built from the release TAG's source. The SAME
+      tag build feeds BOTH the GitHub Release AND the repo (one flow, two
+      destinations). No stable tag now -> production stays empty.
+  D4. Retain 14 nightlies per (version, arch).
+  D5. Segment ONLY by (pfSense version, arch). Nothing else.
+
+
+4. PLAN  (B1 -> B2 -> B3)
+-------------------------
+B1  (pfBlockerNG repo) — rework scripts/build-repo-portable.py to matrix-driven:
+    - Read the matrix. read-version-matrix.sh --print-build emits, per entry:
+      pfsense_version, channel, freebsd_version, freebsd_major, php_version,
+      py_flavor, variant, status, ci, arch (arch defaults to amd64).
+    - For each entry: ABI = FreeBSD:<freebsd_major>:<arch>;
+      varver = catalog_name_from_version(pfsense_version, variant).
+        * build devel pkg  (channel=devel)      -> release/<varver>/<arch>/
+        * build nightly pkg (channel=nightly)    -> nightly/<varver>/<arch>/  (+retain 14)
+        * build stable pkg from latest stable TAG (channel=production)
+                                                  -> release/<varver>/<arch>/  (skip if no tag)
+    - Generate each subtree's pkg catalog (meta.conf / meta / packagesite.pkg /
+      data.pkg) — reuse existing build_repo() catalog logic, driven per subtree.
+    - Write routing.json at the pkg root:
+        {"routes":[{"pattern":<UA>,"catalog":<varver>,"status":<status>}, ...]}
+      UA pattern: CE -> "pfSense/<major.minor>";
+                  Plus -> "Netgate pfSense Plus/<major.minor>".
+      status comes from the matrix entry. Most-specific patterns first.
+      (generate_routing_json() already exists.)
+    - Keep the gen_landing.py landing page over the tree.
+    - TESTS (tests/test_build_repo_portable.py): assert the tree layout
+      (release/ce-2.8/amd64/meta.conf etc.), routing.json contents + statuses,
+      14-nightly retention, full-matrix/no-dedup placement, production-empty case.
+
+B2  (pfBlockerNG/pkg repo; cloned at /home/user/pkg; default branch = main):
+    Slim .github/workflows/publish.yml to: checkout pfBlockerNG source + the
+    FreeBSD-ports tree, resolve the latest stable release tag, run
+    build-repo-portable.py (matrix-driven) into site/, deploy site/ to Pages
+    (existing same-repo OIDC actions/deploy-pages). The current per-ABI build
+    loop, nightly Actions-cache, gh-release fold-in, and landing steps collapse
+    into the script.
+
+B3  (pfBlockerNG repo scripts/worker/ + Cloudflare deploy):
+    Rewrite scripts/worker/src/index.js. New redirect target:
+       https://pfblockerng.github.io/pkg/<channel><varver>/<arch>/<rest>
+      where:
+        channel = "nightly/" if the request path starts with /nightly/ else ""
+                  (release channel has no path prefix);
+        varver  = matched from the UA via routing.json (first match wins);
+        arch    = extracted from the request's FreeBSD:<major>:<arch> segment;
+        rest    = the path AFTER the ABI segment (meta.conf, packagesite.pkg, ...).
+    Then `wrangler deploy` (maintainer has CF creds + an existing deploy process).
+    FINALLY: un-xfail Case 4 (tests/smoke/test_repo_install.py ::
+    test_routing_url_delivers_variant_catalog) — remove @pytest.mark.xfail and
+    turn the else-branch pytest.xfail into a hard assert. Then dispatch the
+    repo-install fan-out (and/or the live-URL smoke) to prove it green.
+
+
+5. KEY FILE / FACT REFERENCES
+-----------------------------
+- scripts/worker/src/index.js — the live Worker. ROUTING_MANIFEST_URL =
+  https://pfblockerng.github.io/pkg/routing.json. Current logic just prepends
+  route.catalog to the FULL request pathname; must change to the
+  <channel>/<varver>/<arch>/<rest> scheme (B3).
+- scripts/build-repo-portable.py:
+    * catalog_name_from_version(pfsense_version, variant, *, channel="") :370
+      -> "ce-2.8" / "plus-26.03"; channel="" only (channel-group is a path concern
+      handled by the tree layout / Worker, NOT this helper for the new design).
+    * generate_routing_json(entries, output_path) :388 -> {"routes":[...]}.
+    * build_repo(in_dir, out_dir, *, catalog_name=None) :404 — per-ABI catalog gen.
+      NOTE: it currently writes <out>/<catalog_name>/<ABI>/ with the FULL ABI as the
+      leaf. The NEW design uses <arch> as the leaf under <channel>/<varver>/. Reconcile
+      (either generalize build_repo to take an explicit subtree path, or post-arrange).
+- scripts/build-pkg-portable.py — the dumb builder. Takes --channel/--abi/--php/
+  --py-flavor/--ports/--local-src/--out (+ nightly --pkgversion/--annotate). Drop
+  --variant per D1 and always inject the php/py guard deps from --php/--py-flavor
+  (currently gated behind --variant via _resolve_variant_deps()).
+- ci-metadata supported-versions.json already carries "variant" (CE/Plus) and
+  "status" (active/legacy) per entry. Current matrix: CE 2.8 / FreeBSD15 / php8.3 /
+  py311 (amd64, ci:true); Plus 26.03 / FreeBSD16 / php8.5 / py311 (amd64 ci:true;
+  aarch64 ci:false build-only).
+- scripts/add-repo.sh DEFAULT_BASE_URL = https://pkg.pfblockerng.workers.dev.
+  Release conf url: "<worker>/${ABI}"; nightly conf url: "<worker>/nightly/${ABI}".
+- pfBlockerNG/pkg repo cloned at /home/user/pkg (default branch main; contains only
+  .github/ + README.md). publish.yml currently builds per-ABI (flat <ABI>/), folds
+  in every GitHub Release .pkg, retains 14 nightlies via an Actions cache, renders
+  the landing page, deploys to Pages — and does NOT build variant subtrees and does
+  NOT generate routing.json (the two gaps).
+
+
+6. PROCESS NOTES
+----------------
+- All repo work in a dedicated git worktree. PRs are rebase-only; land via
+  /pr-merge-flow (CodeRabbit review -> CI green -> rebase merge -> delete branch).
+- ADR text (this file, ADR.md) is dev-only -> commit straight to devel (worktree,
+  fetch + rebase first), NO PR.
+- pre-commit gate: ruff check/format, pytest, mypy tests/, markdownlint, shellcheck
+  + sh -n, php -l. CI is the hard gate.
+- Suggested PR branches: B1 ci/repo-builder-matrix ; B2 (pkg repo) ci/publish-matrix ;
+  B3 ci/worker-routing.
+- GitHub access in this environment is via the GitHub MCP tools only (no gh CLI).

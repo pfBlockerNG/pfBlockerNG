@@ -1,0 +1,25 @@
+{
+  // markdownlint-cli2 runner config (globs + ignores). Rule set lives in
+  // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
+  // (add `--fix` to auto-fix). Lints maintained Markdown and skips historical,
+  // dependency/virtualenv trees and duplicate adapter paths.
+  "globs": ["**/*.md", "!graphify-out/**"],
+  "ignores": [
+    "node_modules",
+    "**/node_modules/**",
+    ".venv",
+    "**/.venv/**",
+    "vendor",
+    "**/vendor/**",
+    "legacy/**",
+    // Byte-faithful captures (CodeRabbit quota notice, etc.). Reformatting
+    // them would destroy the parser fixtures; MD022 on those files is noise.
+    "tests/fixtures/**",
+    // Verbatim conversation transcript (a historical record, not maintained
+    // documentation): its repeated "User"/"Assistant" headings and multiple
+    // H1s are inherent to the format, so it is not linted.
+    "**/TRANSCRIPT.md",
+    // Claude symlinks onto canonical repo-owned skills; lint each target once.
+    ".claude/skills/**"
+  ]
+}

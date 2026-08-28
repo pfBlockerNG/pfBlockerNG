@@ -1,0 +1,59 @@
+## ADR-23 Phase 3 — Docs + smoke note + Definition of Done
+
+Final housekeeping: update docs, note the wizard auto-VIP path in the smoke comment, and
+confirm the ADR-23 Definition of Done checklist.
+
+### Changes
+
+#### `CLAUDE.md` — smoke section
+
+In the "Enable chain" paragraph (or nearby), add a note that the wizard now also surfaces
+`pfb_dnsvip_auto`. The current note says the package defaults `pfb_dnsvip_auto` OFF and
+`ensure_dnsbl_vip` stays accurate — no behaviour change, just add a parenthetical that the
+wizard exposes the toggle.
+
+Example addition to the relevant smoke paragraph:
+> "The wizard (ADR-23) also exposes the `pfb_dnsvip_auto` toggle; `ensure_dnsbl_vip` remains
+> the harness fixture since the smoke harness does not run the wizard flow."
+
+Keep it to one sentence; don't disrupt the existing smoke guidance.
+
+#### `ADR_23_Wizard_DNSBL_VIP/ADR.md` — flip status
+
+Change `**Status:** Proposed` to `**Status:** Implemented` and add a note of which PR landed
+the change. Example:
+```
+**Status:** Implemented (PR #NNN, merged)
+```
+
+No other ADR.md changes needed unless Phase 1 or Phase 2 deviated from the plan in a
+decision-relevant way — if so, record the deviation under a new `## 8  Notes` section.
+
+### Verify
+
+```sh
+npx markdownlint-cli2          # CLAUDE.md + ADR.md changes must be clean
+vendor/bin/phpunit              # confirm no regression from doc-only commit
+python -m pytest                # confirm no regression
+```
+
+Commit message: `docs: note ADR-23 wizard VIP toggle in CLAUDE.md; mark ADR-23 implemented`
+
+### Definition of Done checklist
+
+Confirm each item and record the result in the handoff:
+
+**Automated (CI green):**
+- [ ] `php -l` both wizard files — no parse errors
+- [ ] PHPStan clean
+- [ ] `vendor/bin/phpunit` — all tests pass, `WizardVipAutoTest` present and green
+- [ ] ADR-14 Tier A (`ui_render`): GET wizard page → 200, no PHP errors, `pfb_dnsvip_auto`
+      checkbox present, no new `php_error.log` line
+
+**Manual smoke (maintainer, on-box — record results):**
+- [ ] Wizard auto=ON: Finish → `config.xml` has `pfb_dnsvip_auto='on'`; after reload
+      `pfB_AUTO_VIP_v4` VIP at `10.10.X.53` appears; `pfb_dnsvip4` repointed
+- [ ] Wizard auto=OFF + manual `lo0` VIP: validation rejects missing VIP; accepts valid one;
+      `pfb_dnsvip4` stored correctly
+- [ ] Back from step 4 preserves checkbox state
+- [ ] HA/CARP disclaimer visible in rendered wizard step 4

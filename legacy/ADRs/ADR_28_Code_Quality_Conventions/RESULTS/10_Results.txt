@@ -1,0 +1,199 @@
+ADR-28 Phase 10 Results — PHPCS UppercaseBooleanLiteral sniff + CLAUDE.md reconcile
+======================================================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+ADR-RESUME: branch=claude/adr-28-review-xmodhb next-phase=11
+
+
+1. NEW SNIFF — PfBlockerNG.CodeStyle.UppercaseBooleanLiteral
+-------------------------------------------------------------
+
+File: tests/phpcs/PfBlockerNG/Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php
+
+What it flags:
+  Any T_TRUE or T_FALSE token whose text is not exactly uppercase — i.e.
+  lowercase ("true", "false") or PascalCase ("True", "False") boolean VALUE
+  literals. Emits a fixable error (ADR-28 item 5).
+
+Type-declaration exclusion mechanism:
+  PHPCS's own PHP tokenizer (PHP.php) converts T_TRUE/T_FALSE back to T_STRING
+  when they appear in type-declaration context (after T_FUNCTION for return
+  types, inside parameter type hints, in union types following T_TYPE_UNION |).
+  This means "string|false", "?true", ": false" return types, and param types
+  never arrive at the sniff as T_TRUE/T_FALSE — they arrive as T_STRING and are
+  invisible to register() which only listens for T_TRUE and T_FALSE. The sniff
+  requires zero custom context inspection; the exclusion is structural.
+
+Implementation approach:
+  Extends Generic.PHP.UpperCaseConstantSniff (which extends
+  Generic.PHP.LowerCaseConstantSniff), inheriting the full type-declaration
+  skip logic (property modifiers, T_FUNCTION/T_CLOSURE/T_FN, T_CONST paths).
+  Overrides:
+    - register(): returns T_TRUE + T_FALSE (not T_NULL — out of scope).
+    - processConstant(): skips non-T_TRUE/T_FALSE tokens, reports uppercase
+      violations only with error code "Found" and auto-fixable replacement.
+
+Out of scope (not flagged):
+  - Type declarations (string|false, ?true, etc.) — structural exclusion.
+  - String literals ('true', "false").
+  - Identifiers and method names.
+  - null/NULL — ADR-28 §2.4 explicitly excludes NULL.
+  - JS — the sniff only registers PHP token types.
+
+
+2. FIXTURES + PHPUNIT TEST
+--------------------------
+
+Fixtures (tests/phpcs/fixtures/):
+  bool_compliant.php — contains:
+    - Uppercase TRUE/FALSE value literals (assignments, return, ternary).
+    - "string|false" union return type (MUST NOT be flagged).
+    - "?true" nullable param type (MUST NOT be flagged).
+    - 'true' string literal (MUST NOT be flagged).
+    - null value literal (out of scope, silent).
+    -> sniff produces ZERO findings.
+
+  bool_violation.php — contains:
+    - lowercase "true" (line 17), "false" (line 18), PascalCase "False" (line 19)
+      as VALUE literals — MUST be flagged (three errors).
+    - "string|false" return type (line 24) — MUST NOT appear in findings.
+    -> sniff produces exactly [17, 18, 19] findings.
+
+PHPUnit test (tests/php/UppercaseBooleanLiteralSniffTest.php):
+  3 test methods:
+    testCompliantFileIsClean()   — zero findings (incl. type-decl non-flag).
+    testViolatingFileFindings()  — exactly lines [17,18,19] flagged; line 24
+                                   (string|false) must NOT appear; each finding
+                                   carries the correct sniff source.
+    testDoesNotInterfereWithPfbl01Fixtures() — PFBL-01 fixtures (out_of_scope.php,
+                                   compliant_filtered.php) produce zero
+                                   UppercaseBooleanLiteral findings.
+
+Branch coverage:
+  - Uppercase value literal: passes (compliant fixture, also tested via
+    testDoesNotInterfereWithPfbl01Fixtures which has uppercase TRUE/FALSE).
+  - Lowercase/PascalCase value literal: flagged (violation fixture, lines 17-19).
+  - Type-declaration position: NOT flagged (compliant fixture string|false + ?true;
+    violation fixture line 24; the assertion [17,18,19] would fail if line 24 appeared).
+  - String literal: NOT flagged (compliant fixture 'true').
+  - PFBL-01 non-interference: asserted.
+
+
+3. phpcs.xml.dist WIRING
+------------------------
+
+Restructured to two independent rule blocks with separate scopes:
+
+  PFBL-01 RequirePfbFilter:
+    <include-pattern>src/usr/local/pkg/pfblockerng/pfblockerng\.inc$</include-pattern>
+    Scope: pfblockerng.inc ONLY — unchanged from before.
+
+  ADR-28 UppercaseBooleanLiteral:
+    <include-pattern>src/usr/local/pkg/pfblockerng/.*\.inc$</include-pattern>
+    <include-pattern>src/usr/local/www/.*\.php$</include-pattern>
+    Scope: all src/ PHP (all .inc + all www/ .php).
+
+Verification:
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> 0 errors, 0 warnings.
+  All 3 remaining lowercase `false` tokens in src/ are "string|false" return
+  types (pfblockerng.inc:4063, :4095, :4456) — correctly not flagged.
+  PFBL-01 remains scoped to pfblockerng.inc only (confirmed via -v output:
+  2 sniffs registered, only UppercaseBooleanLiteral processes .inc / www files
+  outside pfblockerng.inc; PFBL-01 fires only on pfblockerng.inc).
+
+
+4. CLAUDE.md RECONCILE
+-----------------------
+
+Changes made:
+  a) PHPCS section updated: from single-sniff description to two-sniff table
+     with per-sniff scope description. Type-decl exclusion mechanism documented.
+     Run command updated to "vendor/bin/phpcs --standard=phpcs.xml.dist src/".
+
+  b) Config storage adapter section: added explicit "Adopted" and "Excluded"
+     sub-bullets documenting:
+     - Adopted fields: dnsbl_lenient -> PfbLenient; ~76 toggle fields via
+       pfb_global() -> PfbToggle; all pass write(read(v)) == v.
+     - Excluded field: pfb_idn (config key dnsbl_idn) — legacy 'on' value
+       cannot round-trip ('on' normalises to 'all' on read); kept as string.
+     - Python: IdnMode enum adopted for pfb["idn_mode"]; PfbToggle/PfbLenient
+       are PHP-only (pfb_unbound.py uses config.getboolean() for toggles).
+
+  c) Repository structure line updated to mention both sniffs.
+
+CLAUDE.md lint: npx markdownlint-cli2 CLAUDE.md -> 0 errors.
+
+
+5. ADAPTED CONFIG FIELDS (for Phase 11 upgrade-contract case)
+--------------------------------------------------------------
+
+PHP side (pfblockerng_extra.inc + pfblockerng.inc):
+  Adopted via PfbToggle (pfb_cfg_toggle_read/write):
+    - dnsbl_vip_auto, pfb_dnsbl, enable_cb, pfb_keep_data, pfb_logger,
+      pfb_share, pfb_hsts, pfb_safeSearch, pfb_python_block_list, and
+      ~70 additional 'on'/''/'' checkbox fields in pfb_global() / www/
+      pfb_dnsblconfig[] / pfb_config[] reads.
+    Round-trip: 'on' <-> On, '' <-> Off (field-aware defaults confirmed).
+
+  Adopted via PfbLenient (pfb_cfg_lenient_read/write):
+    - dnsbl_lenient: 'on' -> On, 'lenient' -> Lenient, '' -> Off.
+    Round-trip: all three stored values pass losslessly.
+
+  Excluded (kept as string):
+    - dnsbl_idn / pfb_idn: legacy 'on' -> 'all' normalisation on read;
+      write never emits 'on' (canonical 'all'). Round-trip fails for 'on' only.
+      Field is NOT passed through pfb_cfg_idn_mode_read/write in pfb_global().
+
+Python side (pfb_unbound.py):
+  Adopted via IdnMode enum:
+    - pfb["idn_mode"]: ini string at read boundary -> IdnMode;
+      python_idn fallback preserved for absent/unrecognised keys.
+    - Stored ini string contract unchanged ('all'/'confusable'/'off'/absent).
+
+  NOT adopted (no Python consumer):
+    - Toggle (pfb_enable_dnsbl, pfb_dnsbl, etc.): read as bool via
+      config.getboolean(); PfbToggle PHP enum has no Python equivalent.
+    - Lenient: same — read as bool in Python.
+
+For the Phase 11 upgrade-contract smoke:
+  - Snapshot config.xml for: dnsbl_lenient='on', dnsbl_vip_auto='on',
+    dnsbl_idn='all' (canonical), dnsbl_idn='' (default), dnsbl_idn='confusable'.
+  - pkg upgrade -> assert all config.xml stored values byte-identical.
+  - Assert a DNSBL-blocked name still returns the block shape post-upgrade.
+
+
+6. VERIFICATION GATES
+----------------------
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/   0 errors          ✓
+  vendor/bin/phpunit                                 597 tests, OK     ✓
+    (incl. 3 new UppercaseBooleanLiteralSniffTest)
+    (incl. 594 pre-existing; RequirePfbFilterSniffTest still green)
+  vendor/bin/phpstan analyse                         0 errors          ✓
+  python -m pytest                                   1674 passed       ✓
+  ruff check .                                       All checks passed ✓
+  ruff format --check .                              106 files OK      ✓
+  npx markdownlint-cli2 CLAUDE.md                    0 errors          ✓
+
+
+7. SELF-REVIEW VERDICT
+-----------------------
+
+  - Sniff flags lowercase/PascalCase boolean VALUE literals only.
+  - Sniff does NOT flag "string|false" type declarations (structural: T_TRUE/
+    T_FALSE never reach the sniff in type-decl context; confirmed by the
+    testViolatingFileFindings assertion and testCompliantFileIsClean).
+  - PFBL-01 scope unchanged: pfblockerng.inc only (verified with verbose phpcs
+    -v output; include-pattern in phpcs.xml.dist explicitly scoped).
+  - New sniff runs over all src/ PHP; tree passes with 0 errors.
+  - Fixtures + test pin both directions (compliant clean; violating flags exactly
+    lines [17,18,19]; type-decl line excluded; string-literal excluded).
+  - CLAUDE.md accurate: sniff documented, excluded fields documented (pfb_idn),
+    Python adapters documented.
+  - Minimal diff: 3 modified files (CLAUDE.md, phpcs.xml.dist, ruleset.xml) +
+    4 new files (sniff, 2 fixtures, 1 test). No churn.
+  CLEAN.
+
+
+Go-ahead for Phase 11.

@@ -1,0 +1,158 @@
+================================================================================
+PHASE 4 PROMPT — live-VM smoke fixtures (corrupt + octet-stream recovery) + accept
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md   (read §4, §6 Phase 4, §7 first)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/45-structural-integrity-tests (off devel)
+Phase 4 of 4 — live-VM smoke coverage (ADR-04). Adds the end-to-end proof the
+unit phases could not give off-appliance. One commit, push directly.
+Work ENTIRELY inside the worktree you were given (`git -C <worktree> ...`).
+Do NOT touch the main checkout.
+
+WHY THIS PHASE EXISTS
+pfb_download()'s shell paths are not off-appliance unit-testable (ADR §5), so the
+real end-to-end behaviour — a corrupt archive rejected, a valid octet-stream
+archive recovered and imported, a junk octet-stream still rejected, a healthy
+feed still imported — is proven on the live pfSense VM. This phase adds those
+cases to tests/smoke/test_smoke_feeds.py. They are dispatch-only (NOT PR-gating);
+a green CE + Plus fan-out is what flips the ADR to Accepted (CLAUDE.md
+ADR-acceptance) — done by the maintainer after this lands (Status stays
+"Implemented (pending smoke)" until then; do NOT flip it in this phase).
+
+REQUIRED READING
+- FIRST read the prior handoff:
+  .ADRs/ADR_45_Structural_Integrity_Tests/RESULTS/03_Results.txt
+  Confirm the probe wiring (Phase 2) + octet-stream recovery (Phase 3) landed,
+  the supported-type probe order, and the octet-stream fixture shape. If missing
+  -> STOP.
+- .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md  (§3 both-branches smoke pair,
+  §4 acceptance, §6 Phase 4 incl. the enriched real-world-fixtures note, §7 DoD +
+  reject criteria — esp. "junk octet-stream never accepted", "no probe on a
+  plain-text path")
+- tests/smoke/test_smoke_feeds.py — the ADR-44 archive cases are the exact
+  template:
+    * test_zip_feed_imports / register("adr44_zip.zip", bytes) ...... ~L1951-1982
+    * test_gzip_feed_imports (REGRESSION GUARD: gzip not mis-normalised) ~L1984-2017
+    * the `before`/`after` membership idiom: assert alias ABSENT before, build +
+      register bytes over the mock, IpCase + CaseContext (Force Update), assert
+      member present / rule_references after.
+  Reuse mock_feeds.register(<name>, <bytes>) — it serves raw bytes verbatim
+  (Content-Type text/plain, no Content-Encoding), so the guest's
+  `file -b --mime-type` sees the actual bytes. Build archives in Python
+  (gzip / bz2 / zipfile already imported at the top of the module) — NO committed
+  binary fixtures needed (hermetic, matches ADR-44).
+- CLAUDE.md  Smoke-tests section + test-coverage non-negotiables (assert the
+  BEFORE state; print expected-vs-actual on failure; self-encapsulated; every
+  branch). Smoke domains: inert only (RFC 5737 IPs; uuid-*.com; never RFC-6761
+  TLDs / HSTS names).
+
+ACTION PLAN (ordered — new cases alongside the ADR-44 archive cases ~L1951+)
+
+Use inert IP bodies (RFC 5737), an IpCase (format auto), Force Update via
+CaseContext, and pfctl_table membership — same as test_zip_feed_imports.
+
+1. CORRUPT-ARCHIVE-REJECTED (Phase-2 proof), one case per format the box supports
+   (zip + gzip + bzip2; 7z only if /usr/local/bin/7z is on the image — else
+   document it as an out-of-CI item, do not fake it):
+   - Build a VALID archive of a tiny inert IP body, then TRUNCATE it (e.g. first
+     half of the bytes, or corrupt the trailing checksum/footer). register() the
+     corrupt bytes.
+   - Assert the alias is ABSENT before AND remains ABSENT after a Force Update
+     (the structural probe rejects it pre-extraction), and that no pf rule
+     references it. Optionally assert the pfBlockerNG log shows the
+     "structural probe failed" rejection (read it on-box). Print
+     expected-vs-actual on failure.
+   - Pair each corrupt case conceptually with the existing healthy-archive case
+     (test_zip_feed_imports / test_gzip_feed_imports already prove the valid side
+     imports) so green proves the probe is a real branch, not an always-reject.
+
+2. OCTET-STREAM-RECOVERED (Phase-3 primary #581 proof):
+   - Build a VALID ZIP of a tiny inert IP body, then PREPEND a few junk bytes
+     before the first local header so `file -b --mime-type` on the box reports
+     application/octet-stream while bsdtar can still list/extract it (the Top1M
+     `top-1m.csv.zip` is the real-world analogue — note this in the test
+     docstring).
+   - On-box guard: read `file -b --mime-type` of the staged download; if the
+     box's magic db does NOT report octet-stream, the recovery path is not
+     exercised — still assert the feed IMPORTS (it would via the normal zip
+     branch) and LOG the observed verdict, rather than failing. When it DOES
+     report octet-stream, assert the member loaded — proving recovery adopted
+     application/zip and the feed imported where today it is rejected.
+   - Assert the alias ABSENT before, member PRESENT after.
+
+3. JUNK-OCTET-STREAM-REJECTED (Phase-3 reject branch — ADR §7):
+   - register() a random/non-archive blob that `file` reports as octet-stream
+     (guard the verdict). Assert the alias is ABSENT before and AFTER Force
+     Update — no probe passes, so it is still rejected. This is the
+     "never blanket-accept octet-stream" pin; it MUST accompany the recovery
+     case (both branches).
+
+4. HEALTHY-FEED-STILL-IMPORTS: confirm the existing test_zip_feed_imports /
+   test_gzip_feed_imports still pass unchanged (the probe is a pass-through on
+   valid input). If a bzip2 healthy case is missing, add a small one for parity
+   so every decompression branch has a valid+corrupt pair.
+
+5. Mark every new case with the same pytest marker(s) the sibling archive cases
+   carry (smoke), so selective dispatch picks them up. Keep each case
+   self-encapsulated (its own alias name; assert the before-state).
+
+ACCEPTANCE (do NOT auto-flip)
+- Do NOT edit ADR.md Status in this phase. After this lands, the maintainer
+  dispatches the CE + Plus smoke fan-out; on green, they flip Status
+  "Proposed" -> "Accepted (YYYY-MM-DD)" on devel. Provide the dispatch command +
+  the pass/reject checklist in RESULTS (below) so they can run it.
+
+CONSTRAINTS
+- Live-VM/dispatch-only tests; they will NOT run in PR CI — so they cannot be the
+  PR gate. The off-appliance unit/wiring tests (Phases 1-3) are the PR evidence;
+  these are the end-to-end proof for acceptance.
+- No production-code change in this phase (tests + RESULTS only). If you find a
+  bug here, STOP and report — do not fix production code in the smoke phase.
+- Inert fixtures only (RFC 5737 IPs; never RFC-6761 TLDs / HSTS names).
+- Build archive bytes inline in Python; avoid committing binary blobs.
+
+VERIFICATION
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only  -> the new
+  cases collect without error (full live run needs the VM; not run here).
+- ruff check tests/smoke/test_smoke_feeds.py  +  ruff format --check  -> clean
+- vendor/bin/phpunit  -> still green (no production change; sanity)
+- git -C <worktree> diff --stat  -> test_smoke_feeds.py (+ fixtures/README.md only
+  if you committed any fixture file) + RESULTS
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: a corrupt + a valid case for each supported
+format (the real branch, not always-reject); octet-stream recovered AND junk
+octet-stream rejected (both branches); every case asserts the BEFORE state and
+prints expected-vs-actual; cases are self-encapsulated; no production code
+changed; no ADR.md Status flip. Fix and re-verify if anything is off.
+
+EXPECTED RESULT
+- test_smoke_feeds.py has corrupt-archive-rejected (per format), octet-stream-
+  recovered, junk-octet-stream-rejected cases; healthy cases still pass.
+- New cases collect cleanly; ruff clean; PHPUnit still green.
+- A maintainer dispatch checklist exists in RESULTS for the acceptance fan-out.
+
+COMMIT (single)
+    smoke: corrupt-archive + octet-stream recovery cases (ADR-45 P4)
+Push directly to adr/45-structural-integrity-tests.
+
+HANDOFF — write RESULTS/04_Results.txt  AND  RESULTS/SMOKE_CHECKLIST.md
+04_Results.txt:
+- The new case names + what each pins (corrupt-per-format, octet-recovered,
+  junk-rejected, healthy-still-imports).
+- Which formats got a corrupt case; 7z status on the image (covered vs
+  out-of-CI).
+- Collect-only + ruff results; PHPUnit still green; commit hash + push.
+SMOKE_CHECKLIST.md (for the maintainer):
+- The CE + Plus fan-out dispatch command (per CLAUDE.md selective dispatch — a
+  full or pytest_filter run that includes these cases on both legs).
+- Pass criteria: corrupt rejected (alias absent) per format; octet-stream ZIP
+  recovered + imported; junk octet-stream rejected; healthy feeds still import.
+- Reject criteria (ADR §7): any healthy feed now fails; a genuine octet-stream
+  junk/HTML is ever accepted; a probe is added to a plain-text path.
+- Instruction: on green both legs, flip ADR.md Status Proposed -> Accepted
+  (YYYY-MM-DD) on devel.

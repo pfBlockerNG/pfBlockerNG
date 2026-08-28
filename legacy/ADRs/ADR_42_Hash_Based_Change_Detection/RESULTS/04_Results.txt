@@ -1,0 +1,65 @@
+================================================================================
+ADR-42 PHASE 4 RESULTS — Shell convention + documentation (+ Python policy)
+Branch: adr/42-hash-based-change-detection
+================================================================================
+
+OUTCOME: documentation-only. No shell code change, no PHP behaviour change, no
+Python code. The convention is now policy of record; the shell side already
+satisfies it via the existing `cmp -s` gate.
+
+SHELL SITES (investigated, none changed)
+- pfblockerng.sh:621 — `cmp -s "${agg_memberlist}" "${agg_setsnap}"` — the aggregate
+  member-list mtime-gate. This is the ONLY file-vs-file change-detection site in the
+  script and it already uses the lightest-correct primitive (scenario 1: file-vs-file
+  -> cmp -s). Left untouched.
+- All other `.orig` references in pfblockerng.sh (lines ~184/715/765-841/1253-1340) are
+  file PRODUCTION / line-counting, not change detection — out of scope.
+- Decision: introduce NO new `xxh128sum` call. Nothing in the script needs a persisted
+  or portable digest, so adding one (plus its dependency) would be YAGNI and would pull
+  in a non-base binary for no consumer.
+
+xxh128sum PROVENANCE / RUN_DEPENDS
+- On FreeBSD `xxh128sum` is port-provided (misc/xxhash), NOT base. Confirmed present on
+  the box per ADR §1.3, but its base-vs-package ownership could not be re-verified here
+  (the `pkg which` check is on-box; not reachable from the dev machine).
+- Because ADR-42 adds NO shell xxh128sum call, NO RUN_DEPENDS is declared in this ADR.
+- Documented contract for any FUTURE shell site that wants a persisted digest: add a
+  `pathxxh128` absolute-path var (add-on-binary rule) AND declare `xxhash` in the
+  FreeBSD-ports RUN_DEPENDS. PHP needs no binary (`hash('xxh128')` is native).
+- The maintainer live check (`pkg which $(command -v xxh128sum)`) is folded into the
+  Phase 5 / DoD manual checklist.
+
+DOCS WRITTEN (policy of record)
+- docs/misc/architecture-notes.md — new "## Change detection / content hashing (ADR-42)"
+  section: per-side algorithm table (xxh128 PHP/shell, md5 Python policy-only), the four
+  comparison scenarios, the self-describing tagged-extension format (.xxhash128 / legacy
+  .md5; length-can't-disambiguate rationale), read-md5/write-xxh128 migration +
+  downgrade/fail-safe rule, the conditional-GET-first pre-download rule, the xxh128sum
+  provenance/RUN_DEPENDS note, ADR-40 sibling + deferred DNSBL-reuse cross-references,
+  and the where-it-lives map (helpers + tests).
+- CLAUDE.md — (1) a "Feed change detection (ADR-42)" entry after the DNSBL/ABP pipeline
+  pointer in "Running tests", pointing to the architecture-notes section; (2) a Python
+  standards bullet recording Python = md5 (stdlib-only/chrooted rationale, no Python code
+  in ADR-42, ships with the DNSBL-reuse consumer).
+
+CROSS-TOOL KNOWN-ANSWER (re-confirmed locally)
+- `printf 'pfBlockerNG' | xxh128sum`      -> 4a2690170244f2e853151c59fbcb2105
+- `php -r 'echo hash("xxh128","pfBlockerNG");'` -> 4a2690170244f2e853151c59fbcb2105
+- BYTE-IDENTICAL. Pinned in tests/php/FeedChangeHashHelpersTest.php
+  (test_content_hash_string_known_answer_vector) so a future divergence is caught.
+
+GATES
+- npx markdownlint-cli2 (architecture-notes.md + CLAUDE.md, 78 files) -> 0 errors.
+- No code touched -> PHPUnit/PHPStan/PHPCS/ShellCheck/pytest unaffected (still green
+  from Phase 3: phpunit 1349, pytest 1882).
+
+PHASE 5 (live-VM smoke + DoD) — what remains
+- Run the CE + Plus smoke fan-out for the ADR-42 cases added in Phases 2/3:
+  test_smoke_feeds.py — same-second local change, 304 skip, 200 hash re-ingest,
+  no-validator download+hash, spurious-200 no re-ingest, legacy-md5 read -> .xxhash128.
+- Confirm no false skip on any path on the live box.
+- Settle xxh128sum provenance on the live box (`pkg which`), confirming the "no
+  RUN_DEPENDS needed" decision (it holds as long as no shell site calls xxh128sum).
+- Finalise docs + flip the ADR DoD; record any out-of-CI limitations.
+
+GO-AHEAD: Phase 4 complete. Proceed to Phase 5.

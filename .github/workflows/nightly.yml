@@ -1,0 +1,546 @@
+name: Nightly snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Explicit source ref to pin for this snapshot"
+        required: true
+        type: string
+      ports_repo:
+        description: "FreeBSD-ports repository carrying the Nightly recipe"
+        required: true
+        default: "pfBlockerNG/FreeBSD-ports"
+        type: string
+      ports_ref:
+        description: "Explicit FreeBSD-ports ref to pin for this snapshot"
+        required: true
+        default: "pfblockerng/use-github"
+        type: string
+  schedule:
+    - cron: "0 9 * * *"
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: pkg-repository-mutation
+  queue: max
+  cancel-in-progress: false
+
+env:
+  NIGHTLY_SOURCE_REF: ${{ vars.NIGHTLY_SOURCE_REF }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || vars.NIGHTLY_SOURCE_REF }}
+  PORTS_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_repo || vars.NIGHTLY_PORTS_REPO || 'pfBlockerNG/FreeBSD-ports' }}
+  PORTS_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_ref || vars.NIGHTLY_PORTS_REF || 'pfblockerng/use-github' }}
+
+jobs:
+  prepare:
+    name: Pin inputs and identify snapshot
+    runs-on: ubuntu-latest
+    outputs:
+      pkg_version: ${{ steps.plan.outputs.pkg_version }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      ports_sha: ${{ steps.plan.outputs.ports_sha }}
+      tools_sha: ${{ steps.plan.outputs.tools_sha }}
+      matrix_sha: ${{ steps.plan.outputs.matrix_sha }}
+      matrix_digest: ${{ steps.plan.outputs.matrix_digest }}
+      source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
+    steps:
+      - name: Checkout trusted workflow tools
+        uses: actions/checkout@v6
+        with:
+          ref: devel
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Checkout explicit source ref as package input
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Resolve pinned source, Ports, and live matrices
+        id: inputs
+        run: |
+          set -eu
+          if [ -z "${SOURCE_REF:-}" ]; then
+            echo "::error::missing NIGHTLY_SOURCE_REF configuration"
+            exit 1
+          fi
+          TRUSTED_DIR="${GITHUB_WORKSPACE}/trusted"
+          SOURCE_DIR="${GITHUB_WORKSPACE}/source"
+          TOOLS_SHA="$(git -C "$TRUSTED_DIR" rev-parse HEAD)"
+          SOURCE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+          SOURCE_DATE_EPOCH="$(git -C "$SOURCE_DIR" show -s --format=%ct "$SOURCE_SHA")"
+
+          case "$PORTS_REPO" in
+            http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;
+            *) PORTS_URL="https://github.com/${PORTS_REPO}.git" ;;
+          esac
+          PORTS_REFS="$(git ls-remote "$PORTS_URL" \
+            "refs/heads/${PORTS_REF}" "refs/tags/${PORTS_REF}" "refs/tags/${PORTS_REF}^{}" \
+            | LC_ALL=C sort -u)"
+          PORTS_HEAD_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/heads/${PORTS_REF}" '$2 == ref { print $1 }')"
+          PORTS_TAG_OBJECT_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/tags/${PORTS_REF}" '$2 == ref { print $1 }')"
+          PORTS_TAG_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/tags/${PORTS_REF}^{}" '$2 == ref { print $1 }')"
+          [ -n "$PORTS_TAG_SHA" ] || PORTS_TAG_SHA="$PORTS_TAG_OBJECT_SHA"
+          PORTS_REF_COUNT=0
+          [ -n "$PORTS_HEAD_SHA" ] && PORTS_REF_COUNT=$((PORTS_REF_COUNT + 1))
+          [ -n "$PORTS_TAG_SHA" ] && PORTS_REF_COUNT=$((PORTS_REF_COUNT + 1))
+          if [ "$PORTS_REF_COUNT" -ne 1 ]; then
+            echo "::error::FreeBSD-ports ref is missing or ambiguous: ${PORTS_REF}"
+            exit 1
+          fi
+          PORTS_SHA="${PORTS_HEAD_SHA:-$PORTS_TAG_SHA}"
+          if ! printf '%s\n' "$PORTS_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::FreeBSD-ports ref did not resolve to a full SHA: ${PORTS_REF}"
+            exit 1
+          fi
+
+          matrix_nonempty() {
+            [ "$(printf '%s' "$1" | jq 'length')" -gt 0 ]
+          }
+          matrix_gate() {
+            if ! matrix_nonempty "$1" || ! matrix_nonempty "$2"; then
+              return 1
+            fi
+          }
+          if matrix_gate '[]' '[]'; then
+            echo "::error::matrix gate red canary passed"
+            exit 1
+          fi
+          echo "matrix gate red canary: expected rejection"
+
+          git -C "$TRUSTED_DIR" fetch origin ci-metadata
+          MATRIX_SHA="$(git -C "$TRUSTED_DIR" rev-parse FETCH_HEAD)"
+          BUILD_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
+            --ref "$MATRIX_SHA" --print-build)"
+          ROUTE_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
+            --ref "$MATRIX_SHA" --print-route)"
+          if ! matrix_gate "$BUILD_MATRIX" "$ROUTE_MATRIX"; then
+            echo "::error::missing live BUILD/ROUTE matrix rows"
+            exit 1
+          fi
+          MATRIX_PAYLOAD="$(jq -S -c -n \
+            --arg tools_sha "$TOOLS_SHA" \
+            --arg matrix_sha "$MATRIX_SHA" \
+            --argjson build "$BUILD_MATRIX" \
+            --argjson route "$ROUTE_MATRIX" \
+            '{tools_sha: $tools_sha, matrix_sha: $matrix_sha, build: $build, route: $route}')"
+          MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
+          mkdir -p plan
+          PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"
+          python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
+            > plan/dependency-builder.json
+          printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
+          printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
+          printf '%s\n' "$SOURCE_SHA" > plan/source-sha
+          printf '%s\n' "$PORTS_SHA" > plan/ports-sha
+          printf '%s\n' "$TOOLS_SHA" > plan/tools-sha
+          printf '%s\n' "$MATRIX_SHA" > plan/matrix-sha
+          printf '%s\n' "$MATRIX_DIGEST" > plan/matrix-digest
+          printf '%s\n' "$SOURCE_DATE_EPOCH" > plan/source-date-epoch
+          printf '%s\n' "$PKG_VERSION" > plan/pkg-version
+
+          {
+            echo "source_sha=$SOURCE_SHA"
+            echo "ports_sha=$PORTS_SHA"
+            echo "tools_sha=$TOOLS_SHA"
+            echo "matrix_sha=$MATRIX_SHA"
+            echo "matrix_digest=$MATRIX_DIGEST"
+            echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+            echo "pkg_version=$PKG_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Expose pinned plan
+        id: plan
+        run: |
+          set -eu
+          BUILD_MATRIX="$(cat plan/build-matrix.json)"
+          {
+            echo "pkg_version=${{ steps.inputs.outputs.pkg_version }}"
+            echo "source_sha=${{ steps.inputs.outputs.source_sha }}"
+            echo "ports_sha=${{ steps.inputs.outputs.ports_sha }}"
+            echo "tools_sha=${{ steps.inputs.outputs.tools_sha }}"
+            echo "matrix_sha=${{ steps.inputs.outputs.matrix_sha }}"
+            echo "matrix_digest=${{ steps.inputs.outputs.matrix_digest }}"
+            echo "source_date_epoch=${{ steps.inputs.outputs.source_date_epoch }}"
+            echo "build_matrix<<NIGHTLY_BUILD_MATRIX"
+            printf '%s\n' "$BUILD_MATRIX"
+            echo "NIGHTLY_BUILD_MATRIX"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload pinned plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-plan
+          path: plan
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
+    steps:
+      - name: Checkout trusted workflow tools
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Checkout pinned source as package input
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+
+      - name: Set up the pinned dependency-package toolchain
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.6"
+
+      - name: Sync the locked dependency-package toolchain
+        run: uv sync --project trusted --locked --only-group dep-pkg-build
+
+      - name: Build and verify package
+        env:
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          MATRIX_ROW: ${{ toJson(matrix) }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+          RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
+          PORTS_REPO: ${{ env.PORTS_REPO }}
+        run: |
+          set -eu
+          export RUN_ROOT="$GITHUB_WORKSPACE/out"
+          export TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
+          export SOURCE_DIR="$GITHUB_WORKSPACE/source"
+          mkdir -p result
+          DEP_PYTHON="$TRUSTED_DIR/.venv/bin/python"
+          "$DEP_PYTHON" "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
+            > dependency-builder.json
+          printf '%s\n' "$MATRIX_ROW" > row.json
+          FREEBSD_MAJOR="$(jq -r '.freebsd_major' row.json)"
+          VARIANT="$(jq -r '.variant' row.json)"
+          PY_FLAVOR="$(jq -r '.py_flavor' row.json)"
+          PHP_VERSION="$(jq -r '.php_version' row.json)"
+          PORTS_DIR="${RUN_ROOT}/${RUN_ID}/ports"
+          OUT_DIR="${RUN_ROOT}/${RUN_ID}/out"
+
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" record \
+            --pkg-version "$PKG_VERSION" \
+            --source-sha "$SOURCE_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --matrix-row row.json \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --dependency-builder dependency-builder.json \
+            --output build-record.json
+          PKG="$(
+            sh "$TRUSTED_DIR/scripts/build-leg.sh" \
+              --ports-repo "$PORTS_REPO" \
+              --ports-ref "$PORTS_SHA" \
+              --channel nightly \
+              --variant "$VARIANT" \
+              --build-record build-record.json \
+              --abi "FreeBSD:${FREEBSD_MAJOR}:amd64" \
+              --py-flavor "$PY_FLAVOR" \
+              --php "$PHP_VERSION" \
+              --local-src "$SOURCE_DIR" \
+              --pkgversion "$PKG_VERSION" \
+              --ports-dir "$PORTS_DIR" \
+              --out-dir "$OUT_DIR"
+          )"
+          ACTUAL_PORTS_SHA="$(git -C "$PORTS_DIR" rev-parse HEAD)"
+          if [ "$ACTUAL_PORTS_SHA" != "$PORTS_SHA" ]; then
+            echo "::error::FreeBSD-ports checkout changed during build"
+            exit 1
+          fi
+          PYTHONPATH="$TRUSTED_DIR/scripts" python3 - "$PKG" build-record.json <<'PY'
+          import json
+          import sys
+          from pfb_pkg import validate_project_pkg
+
+          validate_project_pkg(sys.argv[1], json.loads(open(sys.argv[2], encoding="utf-8").read()))
+          PY
+          PKG_NAME="$(basename "$PKG")"
+          PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
+          cp "$PKG" "result/$PKG_NAME"
+
+          DEP_PKG_DIR="${RUN_ROOT}/${RUN_ID}/deppkgs"
+          DEP_ARTIFACTS_JSON="[]"
+          EXTRA_PKGS="$(jq -c '.extra_pkgs // []' row.json)"
+          ORIGIN_COUNT="$(printf '%s' "$EXTRA_PKGS" | jq 'length // 0')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            mkdir -p "$DEP_PKG_DIR"
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+              "$DEP_PYTHON" "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
+                --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY_FLAVOR" \
+                --freebsd-major "$FREEBSD_MAJOR" \
+                --source-date-epoch "$SOURCE_DATE_EPOCH" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            for DEP_PKG in "$DEP_PKG_DIR"/*.pkg; do
+              [ -f "$DEP_PKG" ] || continue
+              DEP_NAME="$(basename "$DEP_PKG")"
+              DEP_SHA="$(sha256sum "$DEP_PKG" | cut -d' ' -f1)"
+              cp "$DEP_PKG" "result/$DEP_NAME"
+              DEP_ARTIFACTS_JSON="$(
+                printf '%s' "$DEP_ARTIFACTS_JSON" | jq \
+                  --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
+                  --arg name "$DEP_NAME" \
+                  --arg sha256 "$DEP_SHA" \
+                  '. + [{abi: $abi, name: $name, sha256: $sha256}]'
+              )"
+            done
+          fi
+          DEP_COPIED=0
+          for RESULT_PKG in result/*.pkg; do
+            [ -f "$RESULT_PKG" ] || continue
+            [ "$(basename "$RESULT_PKG")" = "$PKG_NAME" ] && continue
+            DEP_COPIED=$((DEP_COPIED + 1))
+          done
+          if [ "$DEP_COPIED" -ne "$ORIGIN_COUNT" ]; then
+            echo "::error::dep .pkg count ($DEP_COPIED) != extra_pkgs ($ORIGIN_COUNT)"
+            exit 1
+          fi
+
+          jq -n \
+            --argjson matrix_row "$MATRIX_ROW" \
+            --slurpfile record build-record.json \
+            --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
+            --arg name "$PKG_NAME" \
+            --arg sha256 "$PKG_SHA" \
+            --argjson dep_artifacts "$DEP_ARTIFACTS_JSON" \
+            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}, dep_artifacts: $dep_artifacts}' \
+            > result/result.json
+
+      - name: Upload verified build
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-result-${{ matrix.freebsd_major }}
+          path: result
+          if-no-files-found: error
+          retention-days: 14
+
+  handoff:
+    name: Verify and hand off Nightly snapshot
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted workflow tools for handoff validation
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Download pinned plan
+        uses: actions/download-artifact@v7
+        with:
+          name: nightly-plan
+          path: plan
+
+      - name: Download every BUILD result
+        uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-result-*
+          path: results
+          merge-multiple: false
+
+      - name: Create verified publisher handoff
+        env:
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
+          MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
+          MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+        run: |
+          set -eu
+          TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \
+            --pkg-version "$PKG_VERSION" \
+            --build-matrix plan/build-matrix.json \
+            --route-matrix plan/route-matrix.json \
+            --results-dir results \
+            --source-sha "$SOURCE_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --tools-sha "$TOOLS_SHA" \
+            --matrix-sha "$MATRIX_SHA" \
+            --matrix-digest "$MATRIX_DIGEST" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --dependency-builder plan/dependency-builder.json \
+            --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --source-ref "$SOURCE_REF" \
+            --ports-repo "$PORTS_REPO" \
+            --ports-ref "$PORTS_REF" \
+            --output nightly-handoff.json
+
+      - name: Upload verified publisher handoff
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-handoff-${{ github.run_id }}
+          path: nightly-handoff.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-nightly-oci:
+    name: Publish verified Nightly handoff to OCI
+    needs: [prepare, handoff]
+    if: vars.PKG_PUBLICATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      artifact_ref: ${{ steps.push.outputs.artifact_ref }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: nightly-handoff-${{ github.run_id }}
+          path: oci
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-result-*
+          path: oci/results
+          merge-multiple: false
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Push exact Nightly OCI manifest
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -eu
+          tar -czf oci/results.tar.gz -C oci/results .
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cd oci
+          TARGET="ghcr.io/pfblockerng/pfblockerng-nightly:${PKG_VERSION}"
+          DIGEST=$(oras push \
+            --artifact-type application/vnd.pfblockerng.nightly.v1 \
+            --annotation "org.opencontainers.image.version=${PKG_VERSION}" \
+            --annotation "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "org.pfblockerng.source-run-id=${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --format go-template='{{.digest}}' \
+            "$TARGET" \
+            "nightly-handoff.json:application/vnd.pfblockerng.nightly.handoff.v1+json" \
+            "results.tar.gz:application/vnd.pfblockerng.nightly.results.v1+tar+gzip")
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::ORAS returned an invalid manifest digest"; exit 1 ;; esac
+          DIGEST_HEX=${DIGEST#sha256:}
+          case "$DIGEST_HEX" in ''|*[!0-9a-f]*) echo "::error::ORAS digest is not sha256"; exit 1 ;; esac
+          [ "${#DIGEST_HEX}" -eq 64 ] || { echo "::error::ORAS digest is not sha256"; exit 1; }
+          ARTIFACT_REF="ghcr.io/pfblockerng/pfblockerng-nightly@sha256:${DIGEST_HEX}"
+          echo "artifact_ref=$ARTIFACT_REF" >> "$GITHUB_OUTPUT"
+          echo "artifact_ref=ghcr.io/pfblockerng/pfblockerng-nightly@sha256:${DIGEST_HEX}"
+
+  ingest-pkg:
+    name: Dispatch digest-pinned Nightly ingestion
+    needs: [prepare, publish-nightly-oci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Dispatch exact Nightly digest
+        env:
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          ARTIFACT_REF: ${{ needs.publish-nightly-oci.outputs.artifact_ref }}
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-nightly-result.json
+        run: |
+          set -eu
+          export PKG_OPERATION=nightly # operation=nightly
+          sh scripts/dispatch-pkg-publication.sh
+
+  validate-live-pages-install:
+    name: Live Pages pkg install
+    needs: [prepare, ingest-pkg]
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pytest_marker: repo
+      pytest_filter: test_install_from_live_nightly_url
+      smoke_nightly_live_url: https://pkg.pfblockerng.com/nightly
+      smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}
+      smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}
+    secrets: inherit
+
+  cleanup-nightly-oci:
+    name: Delete successfully validated Nightly OCI handoff
+    needs: [prepare, publish-nightly-oci, validate-live-pages-install]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Delete the exact consumed manifest through pkg
+        env:
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          ARTIFACT_REF: ${{ needs.publish-nightly-oci.outputs.artifact_ref }}
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-cleanup-result.json
+        run: |
+          set -eu
+          export PKG_OPERATION=nightly-cleanup # operation=nightly-cleanup
+          sh scripts/dispatch-pkg-publication.sh

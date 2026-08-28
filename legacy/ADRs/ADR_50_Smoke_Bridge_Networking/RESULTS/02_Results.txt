@@ -1,0 +1,100 @@
+ADR-50 Phase 2 — Per-box bridge+dnsmasq setup for SMOKE_NET_MODE=bridge
+
+BRANCH:  smoke/bridge-networking
+STATUS:  COMPLETE — all gates green; ready for P3
+
+═══════════════════════════════════════════════════════
+DELIVERABLES
+═══════════════════════════════════════════════════════
+
+1. scripts/bridge-net.sh  (NEW)
+   - POSIX sh; ShellCheck-clean; sh -n passes.
+   - Subcommands: up | down.
+   - 'up': creates br-wan (192.168.89.2/24) + br-mgmt (192.168.43.2/24),
+     3 per-lane tap devices (tap-wan<lane>, tap-mgmt<lane>, tap-cli<lane>),
+     starts dnsmasq DHCP-only (--port=0) with static MGMT leases.
+   - Static leases: pfSense net1/MGMT → SMOKE_PFSENSE_MGMT_IP (default 192.168.43.15),
+     civm MGMT → SMOKE_CLIENT_MGMT_IP (default 192.168.43.16).
+   - MAC resolution: SMOKE_VM_MAC line 2 (= sed -n '2p') drives pfSense lease MAC,
+     mirroring boot_vm.sh's nth_mac 1.  Default CE MAC = BC:24:11:80:42:35.
+   - 'up' is idempotent: calls _do_down first.
+   - Emits 5 eval-able KEY=value on stdout; diagnostics to stderr.
+   - Binary paths overridable: SMOKE_IP_BIN, SMOKE_DNSMASQ_BIN (shellspec stubs).
+   - ponytail ceiling: bridges/dnsmasq are singletons; only tap names are per-lane.
+     Multi-lane → per-lane subnets; deferred to P5.
+
+2. tests/shell/bridge_net_spec.sh  (NEW)
+   - Hermetic shellspec (no real ip/dnsmasq); stubs write argv to files.
+   - 16 examples, 0 failures, 0 warnings (verified).
+   - Red→green proven: breaking PFSENSE_MGMT_IP default (→.99) fails exactly 3
+     relevant assertions; restoring gives green.
+   - Covers: bridge creation, tap attachment, dnsmasq DHCP args, eval-able stdout,
+     idempotency (down-first), per-lane names, SMOKE_VM_MAC override,
+     down teardown, unknown/missing subcommand.
+
+3. scripts/smoke-on-box.sh  (EDITED)
+   - Added --net-mode slirp|bridge flag (default: slirp).
+   - Validation: unknown value → exit 1 + stderr.
+   - --net-mode propagates through reexec set.
+   - Step 4 bridge setup block: eval "$(sh bridge-net.sh up)" + exports
+     SMOKE_WAN_TAP, SMOKE_MGMT_TAP, SMOKE_CLIENT_MGMT_TAP,
+     SMOKE_PFSENSE_MGMT_IP, SMOKE_CLIENT_MGMT_IP, SMOKE_NET_MODE.
+
+4. scripts/local-smoke.sh  (EDITED)
+   - Added --net-mode slirp|bridge flag (default: slirp).
+   - Threads through _ob_flags to smoke-on-box.sh via _NET_MODE_Q.
+
+5. docs/misc/local-smoke-debian.md  (EDITED)
+   - New subsection: "## Bridge networking (ADR-50, opt-in)" before
+     "## Building the .pkg off-FreeBSD".
+   - Documents: apt-get install dnsmasq prerequisite, LXC /dev/net/tun passthrough,
+     usage (--net-mode bridge), note that live correctness is P5.
+
+═══════════════════════════════════════════════════════
+GATES PASSED
+═══════════════════════════════════════════════════════
+
+  sh -n scripts/bridge-net.sh                  OK
+  sh -n scripts/smoke-on-box.sh                OK
+  sh -n scripts/local-smoke.sh                 OK
+  shellcheck scripts/bridge-net.sh             0 issues
+  shellcheck scripts/smoke-on-box.sh           0 issues
+  shellcheck scripts/local-smoke.sh            0 issues
+  shellspec tests/shell/bridge_net_spec.sh     16/16, 0 failures, 0 warnings
+  Red→green proof (PFSENSE_MGMT_IP .15→.99)    3 failures → restore → 0 failures
+  python -m pytest tests/test_smoke_net_mode.py 15 passed
+  npx markdownlint-cli2 local-smoke-debian.md  0 errors
+
+═══════════════════════════════════════════════════════
+CONTRACTS FOR P3 (conftest.py)
+═══════════════════════════════════════════════════════
+
+P3 reads these env vars to configure the smoke harness:
+
+  SMOKE_NET_MODE              slirp (default) | bridge
+  SMOKE_WAN_TAP               tap-wan<lane>   (bridge mode)
+  SMOKE_MGMT_TAP              tap-mgmt<lane>  (bridge mode)
+  SMOKE_CLIENT_MGMT_TAP       tap-cli<lane>   (bridge mode)
+  SMOKE_PFSENSE_MGMT_IP       192.168.43.15   (static, matches P3 default)
+  SMOKE_CLIENT_MGMT_IP        192.168.43.16   (static, matches P3 default)
+
+Slirp mode: none of the bridge vars are set; boot_vm.sh uses SLIRP hostfwds
+as before (no change to P1 boot_vm.sh).
+
+Bridge mode: smoke-on-box.sh evaluates bridge-net.sh up and exports all six
+vars.  P3 conftest must consume SMOKE_NET_MODE to switch boot_vm.sh's QEMU
+net args from -netdev user,... to -netdev tap,ifname=SMOKE_WAN_TAP,... etc.
+
+boot_vm.sh already has bridge-mode tap consumption logic from P1; P3 only
+needs to pass the correct env.
+
+═══════════════════════════════════════════════════════
+DEFERRED (P3+)
+═══════════════════════════════════════════════════════
+
+- conftest.py bridge-mode QEMU args (P3)
+- Live correctness smoke (P5 A/B test)
+- Multi-lane subnets (ponytail ceiling; needs P5 justification)
+- bridge-net.sh down wired into smoke-on-box.sh EXIT trap (P3 can add)
+
+ADR-RESUME: branch=smoke/bridge-networking next-phase=3

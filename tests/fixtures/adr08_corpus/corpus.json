@@ -1,0 +1,427 @@
+{
+  "_meta": {
+    "ucd_version": "15.1.0",
+    "confusable_set": [
+      "Latin",
+      "Cyrillic",
+      "Greek"
+    ],
+    "malicious_rule": ">=2 of the confusable_set co-occur in ONE label (per-label, never unioned across the dot)",
+    "legit_allow": "UTS#39 Highly Restrictive: single script OR Latin+{Jpan/Kore/Hanb} (Han+Hiragana+Katakana / Han+Hangul / Han+Bopomofo); Common/Inherited transparent",
+    "suspicious_rule": "fails Highly-Restrictive but not the malicious pair (e.g. Latin+Armenian/Cherokee/Coptic) -> alert, block opt-in",
+    "scripts_property": "Script_Extensions when present else Script; Common+Inherited dropped (transparent)"
+  },
+  "legit_single_label": [
+    {
+      "a_label": "xn--mnchen-3ya",
+      "decoded": "münchen",
+      "label_class": "latin-accented",
+      "resolved_scripts": [
+        "Latin"
+      ],
+      "expected_severity": "legit",
+      "note": "German city, Latin + combining/ä"
+    },
+    {
+      "a_label": "xn--caf-dma",
+      "decoded": "café",
+      "label_class": "latin-accented",
+      "resolved_scripts": [
+        "Latin"
+      ],
+      "expected_severity": "legit",
+      "note": "French, Latin"
+    },
+    {
+      "a_label": "xn--h1alffa9f",
+      "decoded": "россия",
+      "label_class": "single-cyrillic",
+      "resolved_scripts": [
+        "Cyrillic"
+      ],
+      "expected_severity": "legit",
+      "note": "Russia, single-script Cyrillic"
+    },
+    {
+      "a_label": "xn--hxakic4aa",
+      "decoded": "ελλάδα",
+      "label_class": "single-greek",
+      "resolved_scripts": [
+        "Greek"
+      ],
+      "expected_severity": "legit",
+      "note": "Greece, single-script Greek"
+    },
+    {
+      "a_label": "xn--zckzah",
+      "decoded": "テスト",
+      "label_class": "japanese-katakana",
+      "resolved_scripts": [
+        "Katakana"
+      ],
+      "expected_severity": "legit",
+      "note": "Japanese 'test', Katakana"
+    },
+    {
+      "a_label": "xn--wgv71a119e",
+      "decoded": "日本語",
+      "label_class": "japanese-han",
+      "resolved_scripts": [
+        "Han"
+      ],
+      "expected_severity": "legit",
+      "note": "Japanese 'Japanese-language', Han"
+    },
+    {
+      "a_label": "xn--eckwd4c7c777u",
+      "decoded": "ドメイン名",
+      "label_class": "japanese-han+katakana",
+      "resolved_scripts": [
+        "Han",
+        "Katakana"
+      ],
+      "expected_severity": "legit",
+      "note": "Japanese 'domain name', Han+Katakana (Highly-Restrictive legit)"
+    },
+    {
+      "a_label": "xn--w8jxqd8946c",
+      "decoded": "メモ書き",
+      "label_class": "japanese-han+hiragana+katakana",
+      "resolved_scripts": [
+        "Han",
+        "Hiragana",
+        "Katakana"
+      ],
+      "expected_severity": "legit",
+      "note": "Japanese 'memo writing', ALL THREE scripts in one label (Katakana メモ + Han 書 + Hiragana き) -> Highly-Restrictive legit; the canonical real-Japanese 0-FP case"
+    },
+    {
+      "a_label": "xn--3e0bk47br7k",
+      "decoded": "한국어",
+      "label_class": "korean-hangul",
+      "resolved_scripts": [
+        "Hangul"
+      ],
+      "expected_severity": "legit",
+      "note": "Korean 'Korean-language', Hangul"
+    },
+    {
+      "a_label": "xn--eqr704t9deq8o",
+      "decoded": "도메인名",
+      "label_class": "korean-han+hangul",
+      "resolved_scripts": [
+        "Han",
+        "Hangul"
+      ],
+      "expected_severity": "legit",
+      "note": "Korean Hangul+Han (Highly-Restrictive legit)"
+    },
+    {
+      "a_label": "xn--fiq228c",
+      "decoded": "中文",
+      "label_class": "chinese-han",
+      "resolved_scripts": [
+        "Han"
+      ],
+      "expected_severity": "legit",
+      "note": "Chinese 'Chinese-text', Han"
+    },
+    {
+      "a_label": "xn--4gbrim",
+      "decoded": "موقع",
+      "label_class": "arabic",
+      "resolved_scripts": [
+        "Arabic"
+      ],
+      "expected_severity": "legit",
+      "note": "Arabic 'site'"
+    },
+    {
+      "a_label": "xn--o3cw4h",
+      "decoded": "ไทย",
+      "label_class": "thai",
+      "resolved_scripts": [
+        "Thai"
+      ],
+      "expected_severity": "legit",
+      "note": "Thai 'Thai'"
+    },
+    {
+      "a_label": "xn--5dbqzzl",
+      "decoded": "עברית",
+      "label_class": "hebrew",
+      "resolved_scripts": [
+        "Hebrew"
+      ],
+      "expected_severity": "legit",
+      "note": "Hebrew 'Hebrew'"
+    },
+    {
+      "a_label": "xn--h2brj9c",
+      "decoded": "भारत",
+      "label_class": "devanagari",
+      "resolved_scripts": [
+        "Devanagari"
+      ],
+      "expected_severity": "legit",
+      "note": "Hindi 'India', Devanagari"
+    },
+    {
+      "a_label": "a1-b2",
+      "decoded": "a1-b2",
+      "label_class": "ascii-digit-hyphen",
+      "resolved_scripts": [
+        "Latin"
+      ],
+      "expected_severity": "legit",
+      "note": "ASCII letters+digits+hyphen (Common-mix)"
+    }
+  ],
+  "legit_multi_label": [
+    {
+      "name": "example.рф",
+      "a_name": "example.xn--p1ai",
+      "labels": [
+        {
+          "label": "example",
+          "a_label": "example",
+          "resolved_scripts": [
+            "Latin"
+          ]
+        },
+        {
+          "label": "рф",
+          "a_label": "xn--p1ai",
+          "resolved_scripts": [
+            "Cyrillic"
+          ]
+        }
+      ],
+      "per_label_severity": [
+        "legit",
+        "legit"
+      ],
+      "expected_severity": "legit",
+      "fp_trap": "whole-name UNION = ['Cyrillic', 'Latin'] -> would falsely read as confusable; per-label keeps it legit",
+      "note": "Latin SLD under Cyrillic .рф (Russia) ccTLD"
+    },
+    {
+      "name": "site.中国",
+      "a_name": "site.xn--fiqs8s",
+      "labels": [
+        {
+          "label": "site",
+          "a_label": "site",
+          "resolved_scripts": [
+            "Latin"
+          ]
+        },
+        {
+          "label": "中国",
+          "a_label": "xn--fiqs8s",
+          "resolved_scripts": [
+            "Han"
+          ]
+        }
+      ],
+      "per_label_severity": [
+        "legit",
+        "legit"
+      ],
+      "expected_severity": "legit",
+      "fp_trap": "whole-name UNION = ['Han', 'Latin'] -> would falsely read as confusable; per-label keeps it legit",
+      "note": "Latin SLD under Han .中国 (China) ccTLD"
+    }
+  ],
+  "homograph_single_label": [
+    {
+      "a_label": "xn--pple-43d",
+      "decoded": "аpple",
+      "mix": "latin+cyrillic",
+      "resolved_scripts": [
+        "Cyrillic",
+        "Latin"
+      ],
+      "expected_severity": "malicious",
+      "note": "apple (Cyrillic а U+0430 for Latin a)"
+    },
+    {
+      "a_label": "xn--paypa-iof",
+      "decoded": "paypaӏ",
+      "mix": "latin+cyrillic",
+      "resolved_scripts": [
+        "Cyrillic",
+        "Latin"
+      ],
+      "expected_severity": "malicious",
+      "note": "paypal (Cyrillic palochka ӏ U+04CF for Latin l)"
+    },
+    {
+      "a_label": "xn--cope-f9d",
+      "decoded": "ѕcope",
+      "mix": "latin+cyrillic",
+      "resolved_scripts": [
+        "Cyrillic",
+        "Latin"
+      ],
+      "expected_severity": "malicious",
+      "note": "scope (Cyrillic ѕ U+0455 for Latin s)"
+    },
+    {
+      "a_label": "xn--ggle-0nda",
+      "decoded": "gοοgle",
+      "mix": "latin+greek",
+      "resolved_scripts": [
+        "Greek",
+        "Latin"
+      ],
+      "expected_severity": "malicious",
+      "note": "google (Greek omicron ο U+03BF for Latin o)"
+    },
+    {
+      "a_label": "xn--mxa00ab",
+      "decoded": "сαр",
+      "mix": "cyrillic+greek",
+      "resolved_scripts": [
+        "Cyrillic",
+        "Greek"
+      ],
+      "expected_severity": "malicious",
+      "note": "Cyrillic с + Greek α + Cyrillic р : pure non-Latin-anchored confusable mix"
+    }
+  ],
+  "homograph_multi_label": [
+    {
+      "name": "раypal.example.com",
+      "a_name": "xn--ypal-43d9g.example.com",
+      "labels": [
+        {
+          "label": "раypal",
+          "a_label": "xn--ypal-43d9g",
+          "resolved_scripts": [
+            "Cyrillic",
+            "Latin"
+          ]
+        },
+        {
+          "label": "example",
+          "a_label": "example",
+          "resolved_scripts": [
+            "Latin"
+          ]
+        },
+        {
+          "label": "com",
+          "a_label": "com",
+          "resolved_scripts": [
+            "Latin"
+          ]
+        }
+      ],
+      "per_label_severity": [
+        "malicious",
+        "legit",
+        "legit"
+      ],
+      "expected_severity": "malicious",
+      "note": "paypal homograph in the SUBDOMAIN label (раypal: Cyrillic р+а+у). Registry policy cannot catch subdomains; per-label analysis does."
+    }
+  ],
+  "suspicious_single_label": [
+    {
+      "a_label": "xn--bnk-1ce",
+      "decoded": "bաnk",
+      "mix": "latin+armenian",
+      "resolved_scripts": [
+        "Armenian",
+        "Latin"
+      ],
+      "expected_severity": "suspicious",
+      "note": "Latin b,n,k + Armenian ա (U+0561) -> Armenian not in confusable trio -> suspicious/alert"
+    },
+    {
+      "a_label": "xn--bnk-u8p",
+      "decoded": "bᎠnk",
+      "mix": "latin+cherokee",
+      "resolved_scripts": [
+        "Cherokee",
+        "Latin"
+      ],
+      "expected_severity": "suspicious",
+      "note": "Latin b,n,k + Cherokee Ꭰ (U+13A0) -> suspicious/alert"
+    },
+    {
+      "a_label": "xn--bnk-q10b",
+      "decoded": "bⲁnk",
+      "mix": "latin+coptic",
+      "resolved_scripts": [
+        "Coptic",
+        "Latin"
+      ],
+      "expected_severity": "suspicious",
+      "note": "Latin b,n,k + Coptic ⲁ (U+2C81) -> suspicious/alert"
+    }
+  ],
+  "limitation_whole_script": [
+    {
+      "a_label": "xn--80ak6aa92e",
+      "decoded": "аррӏе",
+      "resolved_scripts": [
+        "Cyrillic"
+      ],
+      "expected_severity": "legit",
+      "documented_limitation": "all-Cyrillic 'apple' look-alike; single-script -> passes restriction-level analysis. Whole-script confusables are OUT OF SCOPE (ADR SS7) - needs a confusables+protected-brand table."
+    }
+  ],
+  "edge_decode": [
+    {
+      "a_label": "xn--",
+      "note": "empty punycode payload",
+      "decode_ok": true,
+      "decoded_repr": "''",
+      "raised": null
+    },
+    {
+      "a_label": "xn--a",
+      "note": "single overlong byte",
+      "decode_ok": true,
+      "decoded_repr": "'\\x80'",
+      "raised": null
+    },
+    {
+      "a_label": "xn--zz",
+      "note": "junk payload",
+      "decode_ok": false,
+      "decoded_repr": null,
+      "raised": "UnicodeDecodeError: 'punycode' codec can't decode bytes in position 2-2: incomplete punycode string"
+    },
+    {
+      "a_label": "xn--pple-43d",
+      "note": "valid homograph control",
+      "decode_ok": true,
+      "decoded_repr": "'аpple'",
+      "raised": null
+    },
+    {
+      "a_label": "xn--ls8h",
+      "note": "valid emoji label (pile of poo)",
+      "decode_ok": true,
+      "decoded_repr": "'💩'",
+      "raised": null
+    },
+    {
+      "a_label": "xn--0",
+      "note": "lone digit payload",
+      "decode_ok": false,
+      "decoded_repr": null,
+      "raised": "UnicodeDecodeError: 'punycode' codec can't decode bytes in position 1-1: incomplete punycode string"
+    },
+    {
+      "a_label": "xn--google",
+      "note": "looks-ascii payload (no real punycode)",
+      "decode_ok": true,
+      "decoded_repr": "'䕮䕵䕶䕱'",
+      "raised": null
+    }
+  ]
+}
