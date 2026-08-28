@@ -82,6 +82,9 @@ gates_for() {
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
 		out="${out}uv run --locked python scripts/check_composer_vendor.py${nl}"
+		# issue #2123: the on/off toggle contract belongs to pfb_cfg_registry(), not to
+		# the page. --self-test is the gate's own red canary and runs first.
+		out="${out}uv run --locked python scripts/check_toggle_registry.py --self-test && uv run --locked python scripts/check_toggle_registry.py${nl}"
 		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done

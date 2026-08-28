@@ -18,12 +18,19 @@ or checking foreign-key exclusions.
   sniff's `$registeredPaths`).
 - **Path addressing (issue #1931):** registry keys = `'<alias>/<config-key>'` path
   strings — `'gen/pfb_keep'`, `'ip/suppression'` — alias resolved through
-  `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`), single home of five real
-  section paths. Same-named keys in different sections cannot collide. Bare-name
-  lookups throw (`InvalidArgumentException`) — no dual addressing. Entries carry no
-  `section` attribute; key prefix outside `PFB_SECTIONS` fails `CfgGatewayTest`'s
-  alias gate. Pre-change tuple parity pinned by
+  `PFB_SECTIONS` map (`gen`/`dnsbl`/`ss`/`ip`/`rep`, plus `global`/`sync` since
+  issue #2123), single home of seven real section paths. Same-named keys in different
+  sections cannot collide — which is what lets #2123 register the DNSBL page's
+  `dnsbl/auto*` scalars while the identically named per-feed-row and per-continent keys
+  stay foreign. Bare-name lookups throw (`InvalidArgumentException`) — no dual
+  addressing. Entries carry no `section` attribute; key prefix outside `PFB_SECTIONS`
+  fails `CfgGatewayTest`'s alias gate. Pre-change tuple parity pinned by
   `tests/php/fixtures/cfg_registry_pre1931_parity.json`.
+  `global` (`installedpackages/pfblockerngglobal`) and `sync`
+  (`installedpackages/pfblockerngsync/config/0`) each hold ONE registered key beside
+  otherwise-foreign siblings — the same arrangement `rep` has: an unregistered sibling
+  passes a section write through byte-identical, and adding an alias does not register
+  the section.
 - Section helpers (`readSection`/`writeSection`/`deleteSection`) for whole-section,
   non-per-field access. Unregistered key → `InvalidArgumentException`.
 - **No `write_config()` inside gateway** — caller decide when to flush. Registry
@@ -123,9 +130,21 @@ Authorization = property of **write**, not call site (generalises
     `pfb_noaaaa`, `pfb_gp`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
     keep raw `{'on', ''}` storage until they adopt pair — field joining
     adapter set moves all its consumers in same commit (see below).
-  - **Nine adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
+  - **The seventeen #2123 relocations.** `PFB_FILTER_ON_OFF` save sites whose default,
+    stored vocabulary and render comparison were still declared in the page (the 3.2
+    arrangement) now read through the registry: `ip/{enable_dup,enable_agg,enable_log,`
+    `enable_rdns,database_cc,enable_float,killstates}`,
+    `dnsbl/auto{addrnot,ports,addr,not}_{in,out}` (the DNSBL page's two Advanced
+    Firewall Rule panels), `sync/syncinterfaces`, and `global/alertrefresh`. Sixteen
+    default `''`; `alertrefresh` defaults `'on'`, so absence reads On while an
+    operator's stored `''` reads Off — the same shape as the nine below. Each save site
+    keeps its `pfb_filter(…, PFB_FILTER_ON_OFF, …) ?: ''` (transport normalisation of a
+    POST-absent checkbox, re-normalised by `writeSection()`); what moved is the READ
+    default. Regrowth blocked by `scripts/check_toggle_registry.py` (below).
+  - **Ten adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
     `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_cache`, `pfb_py_reply`,
-    `pfb_hsts`, `pfb_idn_block_malicious`, and ip-section `suppression`. For all nine,
+    `pfb_hsts`, `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
+    `global/alertrefresh`. For all ten,
     absence reads On while stored `''` reads Off. Six former `'' => 'off'`
     grandfather arms (`pfb_keep`, `pfb_cache`, `pfb_py_reply`, `pfb_hsts`,
     `pfb_idn_block_malicious`, `suppression`) retired by #2120 because runtime
@@ -209,6 +228,30 @@ Authorization = property of **write**, not call site (generalises
 
 When adding registered key, also add its full path to `$registeredPaths` property in
 `tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php` (enforcement sniff).
+
+### The toggle-contract gate (issue #2123)
+
+`scripts/check_toggle_registry.py` keeps the on/off contract from growing back into the
+pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
+`scripts/agent/run-gates.sh`; covered by `tests/test_toggle_registry_check.py`.
+
+- **RULE 1** — a `$pfb['<mirror>']['<key>'] = … PFB_FILTER_ON_OFF …` save into a section
+  that `PFB_SECTIONS` knows MUST name a registered key. So a new settings checkbox
+  cannot land without a registry entry.
+- **RULE 2** — a registered **toggle**'s default MUST NOT be restated by the page: no
+  `$pconfig[…] = $pfb['<mirror>']['<key>'] ?: '<literal>'` and no
+  `isset($pfb['<mirror>']['<key>']) ? … : '<literal>'`. Read it with `PfbConfig::read()`.
+  Scoped to toggles on purpose — several registered plain scalars carry a page default
+  their registry entry does not, so widening the rule would push a behaviour change
+  through a lint (issue #2812).
+- The mirror → alias mapping is DERIVED from each page's own
+  `$pfb['<mirror>'] = PfbConfig::readSection('<path>')`, so a new page needs no edit here.
+- Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100
+  parsed keys exits 2 rather than reporting clean.
+- `--self-test` is the red canary — a synthetic violating page must trip BOTH rules — and
+  runs before the real scan in every wiring.
+- Exemptions live in the checker's `EXEMPT` table, each with a reason;
+  `test_every_exempt_row_still_names_a_live_site` fails on a stale row.
 
 `tld_allow_sort` and `tld_allow_{gtld,cctld,itld,bgtld}` = plain registered scalars (`NULL`/
 `NULL` adapters) since issue #1921 — previously on foreign-key exclusion list
@@ -433,6 +476,11 @@ registered path set). Each annotation committed in relevant source file.
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
+| `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address) |
+| `pfblockernglistsv4/v6/config/{row}/whois_convert` + `filter_top1m` | Dynamic per-row `PFB_FILTER_ON_OFF` keys, same reason |
+| `pfblockerng{continent}/config/0/auto*` | Dynamic per-continent structure (issue #2123: `pfblockerng_geoip.inc` writes the same bare names per continent) |
+| `pfblockerngsync/config/0/{varsynconchanges,varsynctimeout}` | Foreign siblings of the registered `sync/syncinterfaces` |
+| `pfblockerngglobal/*` except `alertrefresh` | Foreign siblings of the registered `global/alertrefresh` (display prefs, `pfbextdns`, and the dynamic `feed_*`/`widget-*` keys) |
 
 ## Sniff file-scope exclusion — `pfblockerng_extra.inc` / `pfblockerng_migrate.inc`
 

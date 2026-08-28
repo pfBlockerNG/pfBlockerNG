@@ -18,10 +18,12 @@
 
 function pfb_gateway_compliant_foreign_key()
 {
-	// Foreign section — pfblockerngipsettings/enable_dup is NOT in the registry.
-	// (v4suppression, the ADR-53 sibling in this same section, IS registered now —
-	// see pfb_gateway_compliant_v4suppression_via_gateway() below.)
-	$dup = config_get_path('installedpackages/pfblockerngipsettings/config/0/enable_dup');
+	// Foreign key — pfblockerngipsettings/ip_placeholder is NOT in the registry.
+	// (v4suppression, the ADR-53 sibling in this same section, IS registered — see
+	// pfb_gateway_compliant_v4suppression_via_gateway() below — and issue #2123
+	// registered the section's seven checkbox keys, so this example uses a key that
+	// is still genuinely foreign.)
+	$dup = config_get_path('installedpackages/pfblockerngipsettings/config/0/ip_placeholder');
 
 	// Foreign dynamic per-row key — not in the registered path set.
 	$row = 0;

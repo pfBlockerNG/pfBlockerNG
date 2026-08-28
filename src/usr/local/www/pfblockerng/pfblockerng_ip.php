@@ -36,8 +36,14 @@ $pfb_syntaxhl_on = pfb_editor_enabled();
 $pfb_ip_editor = pfb_ip_editor_render($pfb_syntaxhl_on);
 
 $pconfig = array();
-$pconfig['enable_dup']		= $pfb['iconfig']['enable_dup']				?: '';
-$pconfig['enable_agg']		= $pfb['iconfig']['enable_agg']				?: '';
+// issue #2123: the seven checkbox defaults below are owned by the registry (ADR-29),
+// not restated here; PfbConfig::read() applies each one when the key is absent and
+// returns the PfbToggle the render compares. A validation-error redisplay replaces
+// $pconfig with raw $_POST (see below), so the renders still run the value through
+// the toggle read adapter -- that call is the POST-redisplay adapter, not a second
+// declaration of the default.
+$pconfig['enable_dup']		= PfbConfig::read('ip/enable_dup');
+$pconfig['enable_agg']		= PfbConfig::read('ip/enable_agg');
 
 // ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar, gateway-registered
 // (general section); presented here beside CIDR Aggregation. Default none -> [''] selects
@@ -56,13 +62,13 @@ $pconfig['pfb_alias_delta_batch']	= pfb_alias_delta_batch_clamp((string) PfbConf
 // when absent.
 $pconfig['suppression']		= PfbConfig::read('ip/suppression');
 
-$pconfig['enable_log']		= $pfb['iconfig']['enable_log']				?: '';
-$pconfig['enable_rdns']		= $pfb['iconfig']['enable_rdns']				?: '';
+$pconfig['enable_log']		= PfbConfig::read('ip/enable_log');
+$pconfig['enable_rdns']		= PfbConfig::read('ip/enable_rdns');
 $pconfig['ip_placeholder']	= $pfb['iconfig']['ip_placeholder']			?: '127.1.7.7';
 $pconfig['maxmind_locale']	= $pfb['iconfig']['maxmind_locale']			?: 'en';
 $pconfig['asn_reporting']	= $pfb['iconfig']['asn_reporting']			?: 'disabled';
 $pconfig['asn_token']		= $pfb['iconfig']['asn_token']				?: '';
-$pconfig['database_cc']		= $pfb['iconfig']['database_cc']			?: '';
+$pconfig['database_cc']		= PfbConfig::read('ip/database_cc');
 $pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
 // issue #924: maxmind_key is masked/write-only -- never populate it from the stored value.
 // A GET renders blank; a validation-error redisplay preserves the just-typed $_POST value
@@ -72,10 +78,10 @@ $pconfig['inbound_interface']	= pfb_csv_list($pfb['iconfig']['inbound_interface'
 $pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'block';
 $pconfig['outbound_interface']	= pfb_csv_list($pfb['iconfig']['outbound_interface'] ?? NULL);
 $pconfig['outbound_deny_action']= $pfb['iconfig']['outbound_deny_action']		?: 'reject';
-$pconfig['enable_float']	= $pfb['iconfig']['enable_float']			?: '';
+$pconfig['enable_float']	= PfbConfig::read('ip/enable_float');
 $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
-$pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
+$pconfig['killstates']		= PfbConfig::read('ip/killstates');
 $pconfig['v4suppression']	= pfb_b64_text($pfb['iconfig']['v4suppression'] ?? NULL);
 // ADR-53 review finding B: '?? ""' on the array read -- v6suppression (unlike
 // v4suppression) is NEVER install-migrated, so it is absent from config.xml
@@ -244,15 +250,18 @@ if ($_POST) {
 
 		if (!$input_errors) {
 
-			$pfb['iconfig']['enable_dup']		= pfb_filter($_POST['enable_dup'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
+			// issue #1907/#2123: an unchecked checkbox is absent from $_POST, and the
+			// owner-ruled empty token is what PFB_FILTER_ON_OFF already emits for it;
+			// writeSection() then normalises every registered key below through its
+			// registered adapter.
+			$pfb['iconfig']['enable_dup']		= pfb_filter($_POST['enable_dup'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+			$pfb['iconfig']['enable_agg']		= pfb_filter($_POST['enable_agg'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['suppression']		= pfb_filter($_POST['suppression'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
-			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'], PFB_FILTER_ON_OFF, 'ip')	?: '';
-			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['enable_log']		= pfb_filter($_POST['enable_log'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+			$pfb['iconfig']['enable_rdns']		= pfb_filter($_POST['enable_rdns'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['ip_placeholder']	= $_POST['ip_placeholder']					?: '127.1.7.7';
 			$pfb['iconfig']['maxmind_locale']	= $_POST['maxmind_locale']					?: 'en';
-			$pfb['iconfig']['database_cc']		= pfb_filter($_POST['database_cc'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['database_cc']		= pfb_filter($_POST['database_cc'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['maxmind_account']	= pfb_filter($_POST['maxmind_account'], PFB_FILTER_WORD, 'ip')	?: '';
 			// issue #924: blank keeps the existing stored key -- only overwrite on a non-empty
 			// submission, never clear it via a blank re-post ($pfb['iconfig']['maxmind_key']
@@ -266,10 +275,10 @@ if ($_POST) {
 			$pfb['iconfig']['inbound_deny_action']	= $_POST['inbound_deny_action']					?: '';
 			$pfb['iconfig']['outbound_interface']	= implode(',', (array)$_POST['outbound_interface'])		?: '';
 			$pfb['iconfig']['outbound_deny_action']	= $_POST['outbound_deny_action']				?: '';
-			$pfb['iconfig']['enable_float']		= pfb_filter($_POST['enable_float'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['enable_float']		= pfb_filter($_POST['enable_float'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			$pfb['iconfig']['pass_order']		= $_POST['pass_order']						?: 'order_0';
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
-			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
 			// issue #1723: already sanitized by the ingestion prologue -- plain encode.
 			$pfb['iconfig']['v4suppression']	= base64_encode($_POST['v4suppression'] ?? '');
 			$pfb['iconfig']['v6suppression']	= base64_encode($_POST['v6suppression'] ?? '');
@@ -362,7 +371,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_dup',
 	'De-Duplication',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_dup']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_dup'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Only used for IPv4 Deny Lists');
 
@@ -370,7 +379,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_agg',
 	'CIDR Aggregation',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_agg']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_agg'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
 
@@ -435,7 +444,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_log',
 	'Force Global IP Logging',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_log']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_log'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('The global logging option is only used to force logging for all IP Aliases, and not to disable the logging of all IP Aliases.<br />'
 		. 'This overrides any logging settings in the GeoIP/IPv4/v6 tabs.'
@@ -445,7 +454,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_rdns',
 	'Reverse DNS Lookups',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_rdns']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_rdns'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('Perform a reverse DNS (PTR) lookup to resolve the hostname of each blocked IP address shown in the Alerts and logs.<br />'
 		. 'Enabling this increases the number of DNS queries performed, though the impact is usually negligible.');
@@ -541,7 +550,7 @@ $section->addInput(new Form_Checkbox(
 	'database_cc',
 	'MaxMind CSV Updates',
 	'Check to disable MaxMind CSV updates',
-	pfb_cfg_toggle_read($pconfig['database_cc']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['database_cc'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
 
@@ -657,7 +666,7 @@ $section->addInput(new Form_Checkbox(
 	'enable_float',
 	'Floating Rules',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_float']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['enable_float'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
 		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
@@ -690,7 +699,7 @@ $section->addInput(new Form_Checkbox(
 	'killstates',
 	'Kill States',
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['killstates']) === PfbToggle::On,
+	pfb_cfg_toggle_read($pconfig['killstates'] ?? NULL) === PfbToggle::On,
 	'on'
 ))->setHelp('When \'Enabled\', after a cron event or any \'Force\' commands, any blocked IPs found in the Firewall states will be cleared.');
 
