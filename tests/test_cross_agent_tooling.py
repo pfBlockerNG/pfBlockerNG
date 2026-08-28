@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
+
+import yaml
 
 from tests._workflow_steps import extract_between
 
@@ -307,3 +310,68 @@ def test_copilot_roles_are_pinned_and_defined() -> None:
     agents = {path.name for path in (ROOT / ".github/agents").glob("*.agent.md")}
     codex_agents = {path.stem for path in (ROOT / ".codex/agents").glob("*.toml")}
     assert {f"{name}.agent.md" for name in codex_agents} == agents, "Copilot role coverage diverges from Codex"
+
+
+# A real production include, so the probes prove the tools read this package's own
+# PHP rather than a synthetic fixture. `return $$$X;` is chosen over a named symbol
+# because ~875 of them exist in this file: no refactor can quietly empty the probe.
+PHP_INCLUDE_PROBE = "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+
+
+def test_structural_and_static_analysis_tools_read_php_inc_files(tmp_path: Path) -> None:
+    # issue #2807: ast-grep and semgrep both key language detection off the file
+    # extension, so an unconfigured run over a `.inc` reports zero matches with exit
+    # status 0 -- indistinguishable from a genuine "no matches" and therefore worse
+    # than a parse error. PHPCS (`extensions="php,inc"`), PHPStan (`fileExtensions`),
+    # and `.editorconfig` already carry the association; these two did not.
+    config = yaml.safe_load((ROOT / "sgconfig.yml").read_text(encoding="utf-8"))
+    assert "*.inc" in config["languageGlobs"]["php"], "ast-grep must be told .inc is PHP"
+
+    # semgrep exposes no configuration-file or environment-variable equivalent, so the
+    # flag can only be a documented invocation rule.
+    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    assert "--scan-unknown-extensions" in routing, "the semgrep remedy must be routed"
+
+    # Neither binary is installed in CI (only `scripts/agent/setup-agent-tools.sh`
+    # installs them), so the behavioural halves are host-conditional while the
+    # configuration assertions above always run.
+    ast_grep = shutil.which("ast-grep")
+    if ast_grep is not None:
+        matches = subprocess.run(
+            [ast_grep, "run", "--pattern", "return $$$X;", PHP_INCLUDE_PROBE],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        hits = [line for line in matches.splitlines() if line.startswith(f"{PHP_INCLUDE_PROBE}:")]
+        assert len(hits) > 100, f"ast-grep parsed no PHP out of {PHP_INCLUDE_PROBE}"
+
+    semgrep = shutil.which("semgrep")
+    if semgrep is not None:
+        # Not under ROOT: in a worktree `.git` is a file, and semgrep would otherwise
+        # also have to be told to ignore its own rule file as a scan target.
+        rule = tmp_path / "pfb-inc-probe.yml"
+        rule.write_text(
+            "rules:\n"
+            "  - id: pfb-inc-probe\n"
+            "    languages: [php]\n"
+            "    message: probe\n"
+            "    severity: INFO\n"
+            "    pattern: return $X;\n",
+            encoding="utf-8",
+        )
+
+        def probe(*flags: str) -> int:
+            completed = subprocess.run(
+                [semgrep, "scan", "--quiet", "--json", "--config", str(rule), *flags, PHP_INCLUDE_PROBE],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert completed.stdout, f"semgrep produced no report: {completed.stderr}"
+            return len(json.loads(completed.stdout)["results"])
+
+        assert probe() == 0, "semgrep gained .inc support; the documented flag is now misleading"
+        assert probe("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
