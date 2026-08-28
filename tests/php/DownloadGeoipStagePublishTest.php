@@ -118,7 +118,17 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		return $archive;
 	}
 
-	/** The shipped extraction command, so a test never invents its own tar call. */
+	/**
+	 * The shipped extraction command's ceiling and staging wiring, so these cases
+	 * never invent their own tar call.
+	 *
+	 * Deliberately WITHOUT issue #2659's PFB_TAR_EXTRACT_FLAGS: GNU tar has no
+	 * --no-fflags and exits 64 on it, so carrying the appliance's flag set here
+	 * would make every case below fail on the Linux CI runner rather than on the
+	 * appliance's bsdtar. The flag set has its own executed proof in
+	 * DownloadExtractRestrictiveFlagsTest, which refuses to run on a tar that
+	 * cannot express it.
+	 */
 	private function extractCmd(string $archive, string $into, int $blocks): string
 	{
 		return pfb_extract_cmd('/usr/bin/tar -xf ' . escapeshellarg($archive) . ' --strip=1 -C '

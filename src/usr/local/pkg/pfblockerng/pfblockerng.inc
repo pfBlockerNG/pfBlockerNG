@@ -370,6 +370,15 @@ define('PFB_EXTRACT_MAX_BLOCKS', 4194304);
 // writer hitting the ceiling above produces.
 define('PFB_EXTRACT_SIGXFSZ_EXIT', 153);
 
+// issue #2659: extraction runs as root, and a disk-writing tar restores whatever
+// the archive asks for. These trees are staging directories -- scraped for tokens,
+// then deleted or swapped into place -- so every archive-supplied owner, mode bit,
+// extended attribute, ACL and file flag is refused. The appliance's bsdtar accepts
+// all six; GNU tar has no --no-fflags, so this set is for the appliance's tar and
+// belongs only on the calls that create directory entries, never on a -xO call
+// whose output the shell redirect owns.
+define('PFB_TAR_EXTRACT_FLAGS', '--no-same-owner --no-same-permissions --numeric-owner --no-xattrs --no-acls --no-fflags');
+
 // Default cURL options
 $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL download agent-' . system_get_uniqueid(),
 				CURLOPT_SSL_CIPHER_LIST	=> 'TLSv1.3, TLSv1.2',
@@ -4382,7 +4391,7 @@ function pfb_geoip_extract_tar_to_share(
 	// the share already in service byte-identical.
 	if (!pfb_stage_publish_dir_merge($pfb['geoipshare'],
 	    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-		exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
+		exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 		return $retval;
 	})) {
 		unlink_if_exists($file_download);
@@ -14759,7 +14768,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					$retval = pfb_download_initial_retval();
 					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
 					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " " . PFB_TAR_EXTRACT_FLAGS . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
 						return pfb_blacklist_tar_finalize_staged($staged, $filename, $retval);
 					})) {
 						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
@@ -14880,7 +14889,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					$retval = pfb_download_initial_retval();
 					if (!pfb_stage_publish_dir_merge($head_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 						return $retval;
 					})) {
 						pfb_logger("\n[pfb_download] {$type} zip " . pfb_stage_publish_failure_note($retval), 2);
@@ -14932,7 +14941,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				$header_esc = escapeshellarg($top1m_stage);
 				$strip = $top1m_target_dir ? ' --strip=1' : '';
-				exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
+				exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc}{$strip} " . PFB_TAR_EXTRACT_FLAGS . " -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					rmdir_recursive($top1m_stage);
@@ -15314,7 +15323,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					$retval = pfb_download_initial_retval();
 					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
 					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " " . PFB_TAR_EXTRACT_FLAGS . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
 						return pfb_blacklist_tar_finalize_staged($staged, $filename, $retval);
 					})) {
 						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
