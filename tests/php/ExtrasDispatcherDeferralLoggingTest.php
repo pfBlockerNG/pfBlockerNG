@@ -16,27 +16,28 @@ use PHPUnit\Framework\TestCase;
  * live wedged lock holder was undiagnosable. Same class as issue #2496 ("every guard
  * must name itself or the failure is undiagnosable") on a third dispatcher-lock site.
  *
- * The deferral must be visible in BOTH places the sibling guards use, and the
- * exit-code semantics must not move (a deferred Extras run got no work, so the verb
- * keeps reporting it):
+ * The deferral must be visible in BOTH sinks the sibling guards use, and the
+ * exit-code semantics must not move (a deferred Extras run got no work, so the verbs
+ * keep reporting it):
  *
- *   pfblockerng.inc  pfb_feed_pass_begin()  pfb_logger(logtype 1) + logger(LOG_NOTICE)
- *   pfblockerng_apply.inc:722-726 (#2505)   pfb_logger(logtype 1) + logger(LOG_NOTICE)
- *   pfblockerng_cron.inc:266-270  (#2505)   pfb_logger(logtype 1) + logger(LOG_NOTICE)
+ *   pfblockerng.inc:18608-18610   pfb_feed_pass_begin()  pfb_logger(1) + logger(LOG_NOTICE)
+ *   pfblockerng_apply.inc:722-726 (issue #2505)          pfb_logger(1) + logger(LOG_NOTICE)
+ *   pfblockerng_cron.inc:266-270  (issue #2505)          pfb_logger(1) + logger(LOG_NOTICE)
  *
- * Rows 1-2 are RED before the fix (the branch is silent). Rows 3-5 are the
- * before-state guards that keep the fix honest and pass on both sides: row 3 pins the
- * unchanged rc=1 wiring shared by `dc` and `dcc`, rows 4-5 pin that nothing new is
- * logged when the dispatcher lock was actually acquired.
+ * Rows 1-2 and 6 are RED before the fix. Rows 3-5 are before-state guards that pass
+ * on both sides: row 3 pins the unchanged rc=1 wiring of `dc` AND `dcc`, rows 4-5 pin
+ * that nothing new is logged when the dispatcher lock was actually acquired.
  *
- * flock(2) belongs to the open file description, not the process, so the raw fd held
- * here conflicts with the guard's own fopen() inside this one process -- the same
- * mechanism FeedPassLockTest relies on for its contention rows.
+ * Contention is provoked the way FeedPassLockTest's rows do it -- see its docblock for
+ * the flock(2) open-file-description semantics that make it work within one process.
  */
 final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 {
 	/** The verb dispatcher whose rc=1 wiring row 3 pins (not loadable off-appliance). */
 	private const PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php';
+
+	/** The syslog wording the sibling guards use, with this guard's label. */
+	private const NOTICE = 'Feed pass [ extras ] deferred - the scheduler dispatcher lock is unavailable.';
 
 	private string $dir = '';
 	private bool $hadPfb = FALSE;
@@ -110,6 +111,15 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		return implode("\n", array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
 	}
 
+	/** The captured syslog calls that blame the dispatcher lock. */
+	private function dispatcherDeferralNotices(): array
+	{
+		return array_values(array_filter(
+			$GLOBALS['pfb_test_logger_calls'] ?? [],
+			static fn (array $call): bool => str_contains($call['message'], 'dispatcher lock')
+		));
+	}
+
 	/** ANOTHER process wedges the scheduler dispatcher lock. */
 	private function holdDispatcherLock(): void
 	{
@@ -129,7 +139,7 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// RED rows: a lost dispatcher lock must name itself in both places.
+	// RED rows: a lost dispatcher lock must name itself in both sinks.
 	// -----------------------------------------------------------------------
 
 	/**
@@ -146,18 +156,19 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		$this->assertFalse(pfb_extras_process_begin(),
 			'before-state: a wedged dispatcher lock must keep reporting the deferral');
 		$this->assertStringContainsString('Extras process deferred: dispatcher lock unavailable', $this->mainLog(),
-			'the deferred Extras run must name WHICH guard stood it down (issue #2592) -- '
-			. 'pfblockerng.log held: ' . var_export($this->mainLog(), TRUE));
+			'the deferred Extras run must name WHICH guard stood it down (issue #2592)');
 	}
 
 	/**
 	 * Scenario: the same deferral must escape /var/log/pfblockerng.
 	 *   Given another process holds the scheduler dispatcher lock
 	 *   When  pfb_extras_process_begin() runs
-	 *   Then  a LOG_NOTICE syslog line names the Extras feed pass and the dispatcher lock
+	 *   Then  exactly one syslog notice carries the sibling guards' wording,
+	 *         at LOG_NOTICE, under the pfBlockerNG prefix
 	 *
-	 * Priority is asserted, not just the text: feed-pass parity is specifically
-	 * LOG_NOTICE (pfb_feed_pass_begin()), so a LOG_INFO downgrade must fail here.
+	 * All three attributes are asserted, not just the text: feed-pass parity is
+	 * specifically LOG_NOTICE (pfb_feed_pass_begin()), and without the prefix the
+	 * line is not attributable to this package in syslog.
 	 */
 	public function testDispatcherDeferralRaisesLogNoticeSyslogLine(): void
 	{
@@ -165,20 +176,40 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 
 		pfb_extras_process_begin();
 
-		$this->assertStringContainsString('Feed pass [ extras ] deferred', $this->syslogMessages(),
-			'a wedged dispatcher-lock holder must be visible on syslog, not only in pfblockerng.log '
-			. '(issue #2592) -- captured: ' . var_export($GLOBALS['pfb_test_logger_calls'], TRUE));
-		$this->assertStringContainsString('dispatcher lock', $this->syslogMessages(),
-			'the syslog notice must name the dispatcher lock as the cause');
-		$priorities = [];
-		foreach ($GLOBALS['pfb_test_logger_calls'] ?? [] as $call) {
-			if (str_contains($call['message'], 'dispatcher lock')) {
-				$priorities[] = $call['priority'];
-			}
-		}
-		$this->assertContains(LOG_NOTICE, $priorities,
-			'the dispatcher-lock deferral notice must be LOG_NOTICE (feed-pass parity) -- got priorities: '
-			. var_export($priorities, TRUE));
+		$notices = $this->dispatcherDeferralNotices();
+		$this->assertCount(1, $notices,
+			'a wedged dispatcher-lock holder must raise exactly one syslog notice (issue #2592) -- captured: '
+			. var_export($GLOBALS['pfb_test_logger_calls'], TRUE));
+		$this->assertSame(self::NOTICE, $notices[0]['message'],
+			"the notice must keep the sibling guards' wording (pfblockerng_apply.inc:725)");
+		$this->assertSame(LOG_NOTICE, $notices[0]['priority'],
+			'the deferral notice must be LOG_NOTICE (feed-pass parity)');
+		$this->assertSame(LOG_PREFIX_PKG_PFBLOCKERNG, $notices[0]['prefix'],
+			'the notice must be attributable to pfBlockerNG in syslog');
+	}
+
+	/**
+	 * Scenario: the deferral line must not graft onto a half-written log line.
+	 *   Given the main log ends mid-line (a previous writer's partial write)
+	 *   When  the dispatcher-lock deferral logs
+	 *   Then  the new line starts on a fresh line carrying its own ISO timestamp
+	 *
+	 * pfb_logger() inserts the stamp AFTER any leading newlines and only when the
+	 * target is at BOL (pfb_logger_format_for_target()), so dropping the message's
+	 * leading "\n" would append unstamped text to whatever was written last.
+	 */
+	public function testDeferralLineStartsOnItsOwnStampedLogLine(): void
+	{
+		file_put_contents($GLOBALS['pfb']['log'], 'unterminated line from the lock holder');
+		$this->holdDispatcherLock();
+
+		pfb_extras_process_begin();
+
+		$this->assertMatchesRegularExpression(
+			'/^unterminated line from the lock holder\n'
+			. '\d{4}-\d\d-\d\d \d\d:\d\d:\d\d  Extras process deferred: dispatcher lock unavailable\.\n$/',
+			$this->mainLog(),
+			'the deferral must begin its own stamped line, not extend the previous partial write');
 	}
 
 	// -----------------------------------------------------------------------
@@ -189,13 +220,15 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 * Scenario: logging the deferral must not change what the verbs report.
 	 *   Given another process holds the scheduler dispatcher lock
 	 *   Then  pfb_extras_process_begin() returns FALSE
-	 *   And   the shared `dc`/`dcc` label still turns that FALSE into exit(1)
+	 *   And   `dc` and `dcc` are each still behind a guard that turns that into exit(1)
 	 *
 	 * The verb wiring is asserted against the dispatcher's source because
-	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires
-	 * plus pfb_global()'s real /var writes), the same reason
-	 * GeoipSwapConsumerGuardTest reads it as text. Both verbs share ONE guard
-	 * statement, so this pins the rc for `dc` and `dcc` together.
+	 * pfblockerng.php is not loadable off-appliance (absolute /usr/local requires plus
+	 * pfb_global()'s real /var writes), the same reason GeoipSwapConsumerGuardTest
+	 * reads it as text. The match is anchored on the guard statement and captures the
+	 * contiguous `case` labels feeding it, so it is order-insensitive and tolerates an
+	 * equivalent reformat, while still failing if either verb is moved to a label with
+	 * no guard or if the guard stops exiting 1.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
@@ -205,19 +238,35 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 
 		$source = file_get_contents(self::PHP);
 		$this->assertIsString($source, 'test setup: could not read the verb dispatcher');
-		$start = strpos($source, "case 'dc':");
-		$this->assertIsInt($start, "the `dc` verb label is gone from pfblockerng.php");
-		$end = strpos($source, "case 'bu':", $start);
-		$this->assertIsInt($end, "the `bu` verb label that bounds the dc/dcc case is gone");
-		$region = substr($source, $start, $end - $start);
 
-		$this->assertStringContainsString("case 'dcc':", $region,
-			'`dcc` must keep sharing the `dc` label, so one guard covers both verbs');
-		$this->assertMatchesRegularExpression(
-			'/if \(!\$scheduled && !pfb_extras_process_begin\(\)\) \{\s*exit\(1\);\s*\}/',
-			$region,
-			'issue #2592 changes observability only: a deferred dc/dcc run got no work, '
-			. 'so the verbs must keep exiting 1');
+		$arms = [];
+		$found = preg_match_all(
+			'/((?:[ \t]*case[ \t]*\'[a-z0-9_]+\'[ \t]*:[^\n]*\n)+)'
+			. '\s*\$scheduled\s*=\s*\(\$argv\[2\]\s*\?\?\s*\'\'\)\s*===\s*\'scheduled\';'
+			. '\s*if\s*\(\s*!\s*\$scheduled\s*&&\s*!\s*pfb_extras_process_begin\(\)\s*\)'
+			. '\s*\{\s*exit\(1\);\s*\}/',
+			$source,
+			$arms
+		);
+		$this->assertNotFalse($found, 'the verb-arm matcher failed to compile');
+		$this->assertGreaterThan(0, $found,
+			'no Extras verb arm guards on pfb_extras_process_begin() with exit(1) any more');
+
+		// Sharing one arm (today) and owning separate guarded arms are both fine; a
+		// label reachable without the guard is not -- that is the regression this pins.
+		foreach (['dc', 'dcc'] as $verb) {
+			$guarded = FALSE;
+			foreach ($arms[1] as $labels) {
+				if (preg_match('/case[ \t]*\'' . $verb . '\'[ \t]*:/', $labels) === 1) {
+					$guarded = TRUE;
+					break;
+				}
+			}
+			$this->assertTrue($guarded,
+				"issue #2592 changes observability only: `{$verb}` must stay behind a guard that "
+				. 'exits 1 on a dispatcher deferral -- guarded label blocks found: '
+				. var_export($arms[1], TRUE));
+		}
 	}
 
 	/**
@@ -233,11 +282,9 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 			'before-state: an uncontended Extras run must get both locks');
 
 		$this->assertStringNotContainsString('deferred', $this->mainLog(),
-			'a granted Extras run must not log a deferral -- pfblockerng.log held: '
-			. var_export($this->mainLog(), TRUE));
+			'a granted Extras run must not log a deferral');
 		$this->assertSame([], $GLOBALS['pfb_test_logger_calls'],
-			'a granted Extras run must raise no syslog line -- captured: '
-			. var_export($GLOBALS['pfb_test_logger_calls'], TRUE));
+			'a granted Extras run must raise no syslog line');
 	}
 
 	/**
@@ -257,10 +304,8 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		$this->assertStringContainsString('Feed pass [ extras ] skipped', $this->mainLog(),
 			'before-state: the run must actually have taken the feed-pass deferral path');
 		$this->assertStringNotContainsString('dispatcher lock unavailable', $this->mainLog(),
-			'the dispatcher lock WAS acquired on this path -- pfblockerng.log held: '
-			. var_export($this->mainLog(), TRUE));
+			'the dispatcher lock WAS acquired on this path');
 		$this->assertStringNotContainsString('dispatcher lock', $this->syslogMessages(),
-			'the dispatcher lock WAS acquired on this path -- captured: '
-			. var_export($GLOBALS['pfb_test_logger_calls'], TRUE));
+			'the dispatcher lock WAS acquired on this path');
 	}
 }
