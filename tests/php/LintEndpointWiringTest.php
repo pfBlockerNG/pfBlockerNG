@@ -9,6 +9,18 @@ final class LintEndpointWiringTest extends TestCase
 	private const ROOT = __DIR__ . '/../..';
 	private const PAGE = self::ROOT . '/src/usr/local/www/pfblockerng/pfblockerng_lint.php';
 
+	/** @var list<string> Stale shim paths planted by request(), swept after each test. */
+	private array $planted = [];
+
+	protected function tearDown(): void
+	{
+		foreach ($this->planted as $path) {
+			@unlink($path . '/guiconfig.inc');
+			@rmdir($path);
+		}
+		$this->planted = [];
+	}
+
 	public function testRealPageRejectsWrongMethodBeforeDispatch(): void
 	{
 		$result = $this->request(['lang' => 'regex', 'content' => 'x'], ['REQUEST_METHOD' => 'GET']);
@@ -49,8 +61,51 @@ final class LintEndpointWiringTest extends TestCase
 		$this->assertSame('content too large', $large['body']['error']);
 	}
 
-	/** @param array<string,mixed> $post @param array<string,string> $server @param array<string,bool> $allowed @return array{body:array<string,mixed>} */
-	private function request(array $post, array $server, array $allowed = []): array
+	/**
+	 * Scenario: the include shim is per-invocation scratch.
+	 * Given a run of the real page,
+	 * When it finishes,
+	 * Then the temp directory holds nothing keyed to that run -- a shim left
+	 * behind is what lets a later run on a recycled PID collide (issue #2612).
+	 */
+	public function testRealPageRunLeavesNoShimResidue(): void
+	{
+		$result = $this->request(['lang' => 'regex', 'content' => 'x'], ['REQUEST_METHOD' => 'GET']);
+		$this->assertSame('POST only', $result['body']['error']);
+		$this->assertSame([], $this->shimResidue($result['pid']));
+	}
+
+	/**
+	 * Scenario: the OS recycles a PID an earlier suite run already used.
+	 * Given a shim directory already sitting at this run's PID-keyed path,
+	 * When the real page is requested,
+	 * Then it still answers clean JSON on a clean stderr, instead of the
+	 * mkdir()/"headers already sent" cascade of issue #2612.
+	 */
+	public function testRealPageSurvivesAShimLeftOverFromARecycledPid(): void
+	{
+		$result = $this->request(
+			['lang' => 'regex', 'content' => 'x'],
+			['REQUEST_METHOD' => 'GET'],
+			[],
+			TRUE
+		);
+		$this->assertSame('POST only', $result['body']['error']);
+	}
+
+	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
+	private function shimResidue(int $pid): array
+	{
+		$prefix = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
+		$found  = glob($prefix . '_*') ?: [];
+		if (is_dir($prefix)) {
+			array_unshift($found, $prefix);
+		}
+		return $found;
+	}
+
+	/** @param array<string,mixed> $post @param array<string,string> $server @param array<string,bool> $allowed @return array{body:array<string,mixed>,pid:int} */
+	private function request(array $post, array $server, array $allowed = [], bool $plantStaleShim = FALSE): array
 	{
 		$payload = json_encode(compact('post', 'server', 'allowed'), JSON_THROW_ON_ERROR);
 		$root = var_export(self::ROOT, TRUE);
@@ -60,8 +115,15 @@ final class LintEndpointWiringTest extends TestCase
 \$GLOBALS['pfb_test_allowed_pages'] = \$request['allowed'];
 \$_SERVER = \$request['server'];
 \$_POST = \$request['post'];
-\$shim = sys_get_temp_dir() . '/pfb_lint_shim_' . getmypid();
-mkdir(\$shim, 0777, TRUE);
+\$shim = sys_get_temp_dir() . '/pfb_lint_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
+if (!mkdir(\$shim, 0700, TRUE)) {
+	fwrite(STDERR, "lint include shim creation failed\\n");
+	exit(1);
+}
+register_shutdown_function(static function () use (\$shim): void {
+	@unlink(\$shim . '/guiconfig.inc');
+	@rmdir(\$shim);
+});
 file_put_contents(\$shim . '/guiconfig.inc', "<?php");
 set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
 require {$root} . '/tests/php/bootstrap.php';
@@ -70,6 +132,15 @@ PHP;
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
 		$this->assertIsResource($process);
+		$pid = (int) proc_get_status($process)['pid'];
+		if ($plantStaleShim) {
+			// The child blocks on STDIN until the fwrite() below, so the plant
+			// always lands before it creates its own shim.
+			$residue = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
+			$this->planted[] = $residue;
+			@mkdir($residue, 0777, TRUE);
+			$this->assertDirectoryExists($residue);
+		}
 		fwrite($pipes[0], $payload);
 		fclose($pipes[0]);
 		$stdout = stream_get_contents($pipes[1]);
@@ -81,6 +152,6 @@ PHP;
 		$body = json_decode((string) $stdout, TRUE);
 		$this->assertIsArray($body, (string) $stdout);
 		$this->assertSame(0, $status);
-		return ['body' => $body];
+		return ['body' => $body, 'pid' => $pid];
 	}
 }
