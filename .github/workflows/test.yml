@@ -98,9 +98,9 @@ jobs:
     name: pytest / Python ${{ matrix.python-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    # issue #2614: kernel-lock reachable (tests/ carries flock(2) acquires), and a
-    # flock(2) acquire has no timeout of its own -- without this budget a stuck lock
-    # burns GitHub's 360-minute default. Observed 3.5 min median (n=14).
+    # issue #2614: kernel-lock reachable, and a flock(2) acquire has no timeout of its
+    # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
+    # than failing here. Observed 3.5 min median (n=14).
     timeout-minutes: 20
 
     strategy:
@@ -762,9 +762,9 @@ jobs:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    # issue #2614: this job runs the PHPUnit suite, which loads the real .inc and
-    # holds 66 blocking flock(LOCK_EX) fixtures; a flock(2) acquire has no timeout of
-    # its own, so this budget is the only bound. Observed 2.2 min median (n=14).
+    # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
+    # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
+    # this budget is the only bound. Observed 2.2 min median (n=14).
     timeout-minutes: 15
 
     strategy:

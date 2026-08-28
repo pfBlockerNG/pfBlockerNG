@@ -307,6 +307,9 @@ jobs:
     name: Round-trip the freshly published image
     needs: [publish-image, build-pkg]
     runs-on: ubuntu-latest
+    # issue #2614: this job runs tests/smoke/roundtrip.sh, which drives the production
+    # `pfblockerng.php update` entry point on the live image and so reaches src/'s
+    # flock(2) acquires; they carry no timeout, so this pre-existing budget is the bound.
     timeout-minutes: 60
     steps:
       - name: Checkout
