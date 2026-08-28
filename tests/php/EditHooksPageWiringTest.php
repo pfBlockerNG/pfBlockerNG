@@ -9,6 +9,9 @@ final class EditHooksPageWiringTest extends TestCase
 {
 	private string $dir = '';
 
+	/** @var list<string> Stale shim paths planted by runDeniedPage(), swept after each test. */
+	private array $planted = [];
+
 	protected function setUp(): void
 	{
 		require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc';
@@ -22,6 +25,11 @@ final class EditHooksPageWiringTest extends TestCase
 			@unlink($path);
 		}
 		@rmdir($this->dir);
+		foreach ($this->planted as $path) {
+			@unlink($path . '/guiconfig.inc');
+			@rmdir($path);
+		}
+		$this->planted = [];
 	}
 
 	private function makeHook(string $name, string $body = "#!/bin/sh\nexit 0\n"): string
@@ -59,12 +67,69 @@ final class EditHooksPageWiringTest extends TestCase
 
 	public function testShippedPageDelegatesDeniedRequestToController(): void
 	{
+		$result = $this->runDeniedPage();
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame('shutdown', $result['stdout'], 'denied page must exit through the controller redirect');
+	}
+
+	/**
+	 * Scenario: the include shim is per-invocation scratch.
+	 * Given a request to the real Edit Hooks page,
+	 * When the subprocess exits,
+	 * Then the temp directory holds nothing keyed to that run -- a shim left
+	 * behind is what lets a later run on a recycled PID collide (issue #2834).
+	 */
+	public function testDeniedPageRunLeavesNoShimResidue(): void
+	{
+		// A checkout without this fix, sharing the host, can already hold a bare
+		// pfb_edit_hooks_shim_<pid>, so only what this run added counts.
+		$before = glob(sys_get_temp_dir() . '/pfb_edit_hooks_shim_*') ?: [];
+		$result = $this->runDeniedPage();
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $before));
+	}
+
+	/**
+	 * Scenario: the OS recycles a PID an earlier suite run already used.
+	 * Given a shim directory already sitting at this run's PID-keyed path,
+	 * When the real Edit Hooks page is requested,
+	 * Then it still exits through the controller redirect with nothing ahead of
+	 * its output, never writes into the directory it inherited, and adds no
+	 * residue of its own beside it.
+	 */
+	public function testDeniedPageSurvivesAShimLeftOverFromARecycledPid(): void
+	{
+		$result = $this->runDeniedPage(TRUE);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame('shutdown', $result['stdout'], 'denied page must exit through the controller redirect');
+		$this->assertSame([], glob($this->planted[0] . '/*') ?: [], 'a per-invocation shim path must never adopt an inherited directory');
+		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $this->planted));
+	}
+
+	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
+	private function shimResidue(int $pid): array
+	{
+		$prefix = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . $pid;
+		return array_merge(glob($prefix) ?: [], glob($prefix . '_*') ?: []);
+	}
+
+	/** @return array{status:int,stdout:string,stderr:string,pid:int} */
+	private function runDeniedPage(bool $plantStaleShim = FALSE): array
+	{
 		$root = var_export(dirname(__DIR__, 2), TRUE);
 		$page = var_export(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_edit_hooks.php', TRUE);
 		$script = <<<PHP
+stream_get_contents(STDIN);
 require {$root} . '/tests/php/bootstrap.php';
-\$shim = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . getmypid();
-mkdir(\$shim, 0777, TRUE);
+\$shim = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
+if (!mkdir(\$shim, 0700, TRUE)) {
+	fwrite(STDERR, "edit hooks include shim creation failed\\n");
+	exit(1);
+}
+register_shutdown_function(static function () use (\$shim): void {
+	@unlink(\$shim . '/guiconfig.inc');
+	@rmdir(\$shim);
+});
 file_put_contents(\$shim . '/guiconfig.inc', "<?php");
 set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
 error_reporting(E_ERROR | E_PARSE);
@@ -73,17 +138,25 @@ register_shutdown_function(static function (): void { echo 'shutdown'; });
 require {$page};
 echo 'after-page';
 PHP;
-		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
 		$this->assertIsResource($process);
+		$pid = (int) proc_get_status($process)['pid'];
+		if ($plantStaleShim) {
+			// The child blocks on STDIN until the pipe is closed below, so the
+			// plant always lands before it creates its own shim.
+			$residue = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . $pid;
+			$this->planted[] = $residue;
+			@mkdir($residue, 0777, TRUE);
+			$this->assertDirectoryExists($residue);
+		}
+		fclose($pipes[0]);
 		$stdout = stream_get_contents($pipes[1]);
 		$stderr = stream_get_contents($pipes[2]);
 		fclose($pipes[1]);
 		fclose($pipes[2]);
 		$status = proc_close($process);
-
-		$this->assertSame(0, $status, (string) $stderr);
-		$this->assertSame('shutdown', $stdout, 'denied page must exit through the controller redirect');
+		return ['status' => $status, 'stdout' => (string) $stdout, 'stderr' => (string) $stderr, 'pid' => $pid];
 	}
 
 	public function testControllerReturnsSuccessNoticesFromGet(): void
