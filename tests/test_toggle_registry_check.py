@@ -264,3 +264,50 @@ def test_missing_registry_file_fails_closed(tmp_path: Path, monkeypatch: pytest.
     """An unreadable registry file must exit 2 as well."""
     monkeypatch.setattr(ctr, "__file__", str(tmp_path / "scripts" / "check_toggle_registry.py"))
     assert ctr.main([]) == 2
+
+
+def test_exempt_row_does_not_suppress_rule_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exemption is a RULE 2 record, never a licence to skip registration.
+
+    EXEMPT documents a page that still declares a registered toggle's default. Letting
+    it also silence RULE 1 would mean one backlog row permanently hides every future
+    unregistered save of that key name.
+    """
+    text = MIRROR + "$pfb['iconfig']['enable_dup'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';\n"
+    monkeypatch.setattr(ctr, "EXEMPT", {("pfblockerng_ip.php", "enable_dup"): "test"})
+    assert ctr.find_violations(text, "pfblockerng_ip.php", FAKE_SECTIONS, {}) != [], (
+        "an exempt row must not suppress the unregistered-toggle rule"
+    )
+
+
+def test_unreadable_explicit_path_fails_closed() -> None:
+    """A named page the checker cannot read must exit 2, never 0."""
+    assert ctr.main(["src/usr/local/www/pfblockerng/does_not_exist.php"]) == 2
+
+
+def test_every_2123_key_is_classified_as_a_toggle() -> None:
+    """All seventeen, not a sample: a plain-scalar slip would let RULE 2 skip the key."""
+    text = (_REPO_ROOT / ctr.REGISTRY_FILE).read_text(encoding="utf-8")
+    keys = ctr.parse_registry_keys(text)
+    expected = [
+        ("ip", "enable_dup"),
+        ("ip", "enable_agg"),
+        ("ip", "enable_log"),
+        ("ip", "enable_rdns"),
+        ("ip", "database_cc"),
+        ("ip", "enable_float"),
+        ("ip", "killstates"),
+        ("dnsbl", "autoaddrnot_in"),
+        ("dnsbl", "autoports_in"),
+        ("dnsbl", "autoaddr_in"),
+        ("dnsbl", "autonot_in"),
+        ("dnsbl", "autoaddrnot_out"),
+        ("dnsbl", "autoports_out"),
+        ("dnsbl", "autoaddr_out"),
+        ("dnsbl", "autonot_out"),
+        ("sync", "syncinterfaces"),
+        ("global", "alertrefresh"),
+    ]
+    assert len(expected) == 17
+    plain = [f"{a}/{b}" for a, b in expected if keys.get((a, b)) is not True]
+    assert not plain, f"issue #2123 keys not carrying the toggle read adapter: {plain}"

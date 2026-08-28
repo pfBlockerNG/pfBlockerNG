@@ -113,11 +113,14 @@ final class RegistryPassTest extends TestCase
 	public function testFreshEmptySectionsSeedEveryRegisteredFieldAtDefault(): void
 	{
 		$sections = [
-			self::GEN_SECTION   => [],
-			self::DNSBL_SECTION => [],
-			self::SS_SECTION    => [],
-			self::IP_SECTION    => [],
-			self::REP_SECTION   => [],
+			self::GEN_SECTION    => [],
+			self::DNSBL_SECTION  => [],
+			self::SS_SECTION     => [],
+			self::IP_SECTION     => [],
+			self::REP_SECTION    => [],
+			// issue #2123: the two sections that joined PFB_SECTIONS.
+			self::GLOBAL_SECTION => [],
+			self::SYNC_SECTION   => [],
 		];
 
 		$result = pfb_registry_pass($sections);
@@ -136,6 +139,12 @@ final class RegistryPassTest extends TestCase
 		$this->assertSame('Disable', $result[self::SS_SECTION]['safesearch_enable'] ?? NULL);
 		$this->assertSame('', $result[self::IP_SECTION]['v6suppression'] ?? NULL);
 		$this->assertSame('', $result[self::REP_SECTION]['enable_rep'] ?? NULL);
+		// issue #2123: alertrefresh is the only default-ON key among the seventeen, so a
+		// fresh install must seed 'on' there and '' for syncinterfaces.
+		$this->assertSame('on', $result[self::GLOBAL_SECTION]['alertrefresh'] ?? NULL);
+		$this->assertSame('', $result[self::SYNC_SECTION]['syncinterfaces'] ?? NULL);
+		$this->assertSame('', $result[self::IP_SECTION]['enable_dup'] ?? NULL);
+		$this->assertSame('', $result[self::DNSBL_SECTION]['autoaddrnot_in'] ?? NULL);
 
 		// settings_family is never written by the pass -- absent from input, absent from output.
 		$this->assertArrayNotHasKey('settings_family', $result[self::GEN_SECTION]);
