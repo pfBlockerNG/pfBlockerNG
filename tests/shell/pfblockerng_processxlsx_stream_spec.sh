@@ -1,12 +1,13 @@
 #shellcheck shell=sh
 # issue #2684: processxlsx() wrote the workbook's decompressed "xl/sharedStrings.xml"
 # to a file under the per-run temp directory before scanning it. That part is XML and
-# expands by two orders of magnitude past the workbook that carries it -- measured on
-# the production-shape ZIP-in-ZIP fixture below at 10,486,635 bytes from 51,114 on
-# disk -- and ${tmpdir} lives under /tmp, a RAM disk on a default use_mfs_tmpvar
-# install. A workbook well inside every existing ceiling could therefore fill the
-# temp filesystem, or be killed at issue #2658's inherited RLIMIT_FSIZE, where it
-# previously streamed through a pipe and never touched the disk.
+# expands by two orders of magnitude past the workbook that carries it -- this file's
+# own fixture reaches roughly 4.2 MB from a ~21 KB workbook, and a real ZIP-in-ZIP
+# workbook was measured at 10,083,388 bytes from 49,160 on disk -- while ${tmpdir}
+# lives under /tmp, a RAM disk on a default use_mfs_tmpvar install. A workbook well
+# inside every existing ceiling could therefore fill the temp filesystem, or be
+# killed at issue #2658's inherited RLIMIT_FSIZE, where it previously streamed
+# through a pipe and never touched the disk.
 #
 # It was written to a file because POSIX sh has no `pipefail`: piped, a pipeline
 # reports only its last command's status, and issue #2666's exit contract needs
@@ -75,21 +76,33 @@ exec "$(command -v sort)" "\$@"
 SHIM
 		chmod +x "${work}/shim/sort"
 
-		# Reports the measurement on BOTH verdicts, so a failure prints the bytes
+		# Reports the measurement on EVERY verdict, so a failure prints the bytes
 		# that produced it instead of a bare boolean, and exits with the run's own
-		# status so the ingest is still under test.
+		# status so the ingest is still under test. A sample below the workbook's
+		# own size is reported as `unmeasured`, never as a win: the workbook IS in
+		# ${tmpdir} at the sink in the shape this pins, so a shim that silently
+		# stopped measuring -- an absent file, a broken `find`, an empty `wc` --
+		# would otherwise read as the smallest possible footprint and pass.
 		cat > "${probe}" <<PROBE
 #!/bin/sh
 PATH="${work}/shim:\${PATH}" sh "${runner}" >/dev/null 2>&1
 rc=\$?
-observed="\$(cat "${work}/sink_bytes" 2>/dev/null || echo NA)"
+observed="\$(cat "${work}/sink_bytes" 2>/dev/null)"
 part="\$(wc -c < "${work}/inner/xl/sharedStrings.xml" | tr -d ' ')"
 workbook="\$(wc -c < "${work}/build/${alias}.xlsx" | tr -d ' ')"
-verdict=materialised
-if [ "\${observed}" != NA ] && [ "\${observed}" -lt ${bound} ]; then
-	verdict=streamed
-fi
-echo "verdict=\${verdict} tmpdir_bytes_at_sink=\${observed} bound=${bound} part_bytes=\${part} workbook_bytes=\${workbook}"
+case "\${observed}" in
+	'' | *[!0-9]*) verdict=unmeasured ;;
+	*)
+		if [ "\${observed}" -lt "\${workbook}" ]; then
+			verdict=unmeasured
+		elif [ "\${observed}" -lt ${bound} ]; then
+			verdict=streamed
+		else
+			verdict=materialised
+		fi
+		;;
+esac
+echo "verdict=\${verdict} tmpdir_bytes_at_sink=\${observed:-none} bound=${bound} part_bytes=\${part} workbook_bytes=\${workbook}"
 exit "\${rc}"
 PROBE
 		chmod +x "${probe}"

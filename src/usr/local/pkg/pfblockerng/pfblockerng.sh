@@ -2046,7 +2046,7 @@ processet() {
 #
 # issue #2684: the shared-strings part is streamed, not written to a file. It is
 # XML, so it expands by two orders of magnitude past the workbook carrying it
-# (measured 51,114 bytes on disk -> 10,486,635 decompressed), and ${tmpdir} is a
+# (measured 49,160 bytes on disk -> 10,083,388 decompressed), and ${tmpdir} is a
 # RAM disk on a default use_mfs_tmpvar install.
 processxlsx() {
 	if [ ! -x "${pathtar}" ]; then
@@ -2070,10 +2070,9 @@ processxlsx() {
 	# does not support aborts the whole script rather than failing one command).
 	# So `grep` is the pipeline's LAST stage, which keeps its no-match exit 1
 	# (issue #2682) as the pipeline's own status, and tar's status is stashed to a
-	# file and re-read below. The stash is readable the moment the pipeline
-	# returns: the write happens inside the subshell holding the pipe's only write
-	# end, so `grep` cannot see EOF -- and the shell cannot reap it -- until that
-	# write has completed.
+	# file. That stash is readable the moment the pipeline returns because the
+	# subshell writing it holds the pipe's only write end: `grep` cannot see EOF,
+	# so the shell cannot reap it, until the write is done.
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
 	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}" &&
@@ -2082,12 +2081,10 @@ processxlsx() {
 			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" > "${xlsxstage}"
 	xlsxrc=$?
 	# tar's own status outranks the pipeline's, and is read BEFORE the publish: a
-	# workbook that read only partway still emits its leading megabytes, so `grep`
-	# matches and exits 0, and publishing that would be issue #2666's defect over
-	# again -- a truncated feed reported as a successful ingest. It outranks a
-	# failing pipeline too, so a child killed at the extraction ceiling reaches
-	# the caller as the 153 pfb_extract_cap_note() reads even when the bytes it
-	# managed to emit held no address for `grep` to match.
+	# partial read still emits an address for `grep` to match, so publishing would
+	# be issue #2666's defect again -- a truncated feed reported as a success. It
+	# outranks a FAILING pipeline too, so a ceiling kill still reaches the caller
+	# as the 153 pfb_extract_cap_note() reads even when nothing matched.
 	if [ -s "${xlsxtarrc}" ]; then
 		xlsxrc="$(cat "${xlsxtarrc}")"
 	fi

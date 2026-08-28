@@ -15026,12 +15026,15 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// precheck above cannot see -- it belongs to a child process, not to
 				// this function -- and which is a RAM disk on a default use_mfs_tmpvar
 				// install. Same requirement as every other extraction and no fixed
-				// floor: room for the archive itself. sys_get_temp_dir() reads the same
-				// ${TMPDIR:-/tmp} the helper's mktemp does, so the two cannot drift.
+				// floor: room for the archive itself. The path is derived the way the
+				// CHILD derives it, off the environment exec() hands it, and NOT with
+				// sys_get_temp_dir(): PHP's `sys_temp_dir` INI setting outranks TMPDIR,
+				// so on an install that sets it this would measure one filesystem while
+				// the helper wrote to another.
 				// Scoped to this branch on purpose: the gzip, bzip2 and tar paths write
 				// nowhere near /tmp, and refusing them over a filesystem they never
 				// touch would repeat issue #2658's 64 MiB-floor mistake.
-				$xlsx_short = pfb_extract_space_shortfall(array(sys_get_temp_dir()), (int) @filesize($file_download));
+				$xlsx_short = pfb_extract_space_shortfall(array(getenv('TMPDIR') ?: '/tmp'), (int) @filesize($file_download));
 				if ($xlsx_short !== NULL) {
 					pfb_validate_log($header, 'size', 'staging_space_low', $xlsx_short);
 					unlink_if_exists($file_download);
