@@ -156,6 +156,7 @@ PHP;
 		fclose($pipes[1]);
 		fclose($pipes[2]);
 		$status = proc_close($process);
+		$this->assertSame('', trim((string) $stderr), (string) $stderr);
 		return ['status' => $status, 'stdout' => (string) $stdout, 'stderr' => (string) $stderr, 'pid' => $pid];
 	}
 
