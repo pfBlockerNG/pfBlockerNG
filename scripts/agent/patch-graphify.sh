@@ -62,18 +62,24 @@ main() {
 		# A uv tool venv carries its Python minor version in the site-packages path,
 		# so the interpreter that owns the package is read off the CLI's own shebang
 		# and the package directory is derived from it -- neither is ever hardcoded.
+		# A wrapper or a shim hides the interpreter, and the repository's own shell
+		# fixtures stub `graphify` with /bin/sh, so an unreadable shebang falls back
+		# to the ambient python3 rather than failing: a Graphify this script cannot
+		# reach is a skip, never a dead worktree cut. The tracked graph's include-node
+		# floor catches the resulting Pascal parse if a real install is ever skipped.
 		interpreter=$(sed -n '1s/^#![[:space:]]*//p' "$graphify_bin")
-		case "$interpreter" in
-			/*) ;;
-			*) fail "'$graphify_bin' does not name an absolute interpreter (got: '${interpreter:-none}')" ;;
+		case "${interpreter%% *}" in
+			/*python*) ;;
+			*) interpreter=$(command -v python3 || :) ;;
 		esac
-		case "${interpreter##*/}" in
-			python*) ;;
-			*) fail "'$graphify_bin' is not run by a Python interpreter (got: '$interpreter')" ;;
-		esac
-		[ -x "$interpreter" ] || fail "Graphify's interpreter '$interpreter' is not executable"
-		package=$("$interpreter" -c 'import graphify, os; print(os.path.dirname(graphify.__file__))') ||
-			fail "'$interpreter' cannot import graphify; reinstall with 'uv tool install --reinstall graphifyy'"
+		package=''
+		if [ -n "$interpreter" ] && [ -x "$interpreter" ]; then
+			package=$("$interpreter" -c 'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>/dev/null || :)
+		fi
+		if [ -z "$package" ]; then
+			echo "patch-graphify.sh: cannot locate an importable Graphify package for '$graphify_bin'; skipping the $UPSTREAM override" >&2
+			return 0
+		fi
 	fi
 	[ -d "$package" ] || fail "Graphify package directory '$package' does not exist"
 	site=$(CDPATH='' cd "$package/.." && pwd -P) || exit 2
