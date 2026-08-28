@@ -225,24 +225,22 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	 * issue #2059 in-suite reproduction: a per-feed POST-process script that
 	 * exits non-zero must be visible in the ADR-61 ledger after the alias pass
 	 * closes, in BOTH loops. Drives the REAL pfb_list_script_exec() against a
-	 * genuinely failing script, then the real alias-pass close, so the fault is
-	 * produced the way the appliance produces it -- not injected.
+	 * genuinely failing script and feeds its real exit status to the recorder,
+	 * so the fault is produced the way the appliance produces it -- not injected.
 	 */
 	#[DataProvider('postScriptFacilities')]
 	public function testFailingPostScriptStaysVisibleAfterTheAliasPassCloses(string $facility, string $alias): void
 	{
-		$script = "{$this->dir}/fail_post.sh";
-		file_put_contents($script, "#!/bin/sh\nexit 3\n");
-		$this->assertTrue(chmod($script, 0755));
+		$script = $this->postScript('fail_post.sh', 'exit 3');
 		$state = ['failed' => FALSE];
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, $facility), 'before: the ledger has no open entry');
 
-		// The loop's own sequence: run the post-script, honour its exit status.
-		$rc = pfb_list_script_exec($script, 'fail_post.sh', 'post', 'foo_feed', '', '');
-		$this->assertNotSame(0, $rc, 'the fixture must genuinely fail -- a zero exit proves nothing');
-		pfb_list_script_failure_record($facility, $alias,
+		// The loop's own sequence: run the post-script, hand its status over.
+		$status = pfb_list_script_exec($script, 'fail_post.sh', 'post', 'foo_feed', '', '');
+		$this->assertNotSame(0, $status, 'the fixture must genuinely fail -- a zero exit proves nothing');
+		pfb_list_post_script_failure_record($status, $facility, $alias,
 			"[ {$alias} - foo_feed ] Post-script FAIL - feed updated, side effects incomplete",
-			$this->dir, NULL, $state);
+			$this->dir, $state);
 		pfb_list_script_failure_close($facility, $alias, $this->dir, $state);
 
 		$open = pfb_sync_status_list_open($this->dir, $facility);
@@ -250,6 +248,53 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		$this->assertSame($alias, $open[0]['item']);
 		$this->assertSame('script', $open[0]['stage']);
 		$this->assertStringContainsString('Post-script FAIL', $open[0]['message']);
+	}
+
+	/**
+	 * The other side of the same branch, and the reason the exit-status test
+	 * lives inside pfb_list_post_script_failure_record() rather than in an `if`
+	 * at each call site: a post-script that SUCCEEDS must leave the pass
+	 * reading as full success, which no off-appliance test could observe if the
+	 * decision stayed in the monolith (#993).
+	 */
+	#[DataProvider('postScriptFacilities')]
+	public function testCleanPostScriptRecordsNothingAndLeavesTheAliasPassClean(string $facility, string $alias): void
+	{
+		$script = $this->postScript('ok_post.sh', 'exit 0');
+		$state = ['failed' => FALSE];
+
+		$status = pfb_list_script_exec($script, 'ok_post.sh', 'post', 'foo_feed', '', '');
+		$this->assertSame(0, $status, 'the fixture must genuinely succeed');
+		pfb_list_post_script_failure_record($status, $facility, $alias,
+			'this message must never reach the ledger', $this->dir, $state);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, $facility),
+			'a post-script exiting 0 must open no entry');
+		$this->assertFalse($state['failed'],
+			'a clean post-script must leave the alias-pass state clean, so the paired close still fires');
+
+		pfb_list_script_failure_close($facility, $alias, $this->dir, $state);
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, $facility));
+	}
+
+	/**
+	 * Every non-zero status class the runner can return is a failure: a plain
+	 * non-zero exit, timeout(1)'s 124, and -1 for an exec() that never launched
+	 * (pfblockerng.inc's #1927 contract -- a script that never ran must never
+	 * read as success).
+	 */
+	#[DataProvider('postScriptStatuses')]
+	public function testEveryNonZeroPostScriptStatusOpensAnEntry(int $status, bool $expectOpen): void
+	{
+		$state = ['failed' => FALSE];
+
+		pfb_list_post_script_failure_record($status, 'ip', 'pfB_Example_v4',
+			"status {$status}", $this->dir, $state);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount($expectOpen ? 1 : 0, $open,
+			"exit status {$status} must " . ($expectOpen ? 'open' : 'not open') . ' a ledger entry');
+		$this->assertSame($expectOpen, $state['failed']);
 	}
 
 	/** @return array<string, array{0: string, 1: string}> */
@@ -261,11 +306,31 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		];
 	}
 
+	/** @return array<string, array{0: int, 1: bool}> */
+	public static function postScriptStatuses(): array
+	{
+		return [
+			'clean exit'         => [0, FALSE],
+			'plain non-zero'     => [3, TRUE],
+			'timeout(1) killed'  => [124, TRUE],
+			'exec never launched' => [-1, TRUE],
+		];
+	}
+
+	private function postScript(string $name, string $body): string
+	{
+		$path = "{$this->dir}/{$name}";
+		file_put_contents($path, "#!/bin/sh\n{$body}\n");
+		$this->assertTrue(chmod($path, 0755));
+		return $path;
+	}
+
 	/**
-	 * issue #2059: both post-script branches must bind the recorder. #993: the
-	 * apply monolith owns feed download and appliance side effects, so its loop
-	 * cannot be driven off-appliance -- pin each live binding in its own route
-	 * scope; php_strip_whitespace() removes comments/docblocks from the source.
+	 * issue #2059: both post-script branches must hand their exit status to the
+	 * recorder. #993: the apply monolith owns feed download and appliance side
+	 * effects, so its loop cannot be driven off-appliance -- pin each live
+	 * binding in its own route scope; php_strip_whitespace() removes
+	 * comments/docblocks from the source under test.
 	 */
 	public function testEachFamilyBindsPostScriptFailureRecordOnce(): void
 	{
@@ -277,28 +342,36 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		$dnsbl_post  = $this->applyScope($source, $dnsbl_start, $dnsbl_end);
 		$ip_post     = $this->applyScope($source, $ip_start, $ip_end);
 
-		$this->assertSame(1, substr_count($dnsbl_post, "pfb_list_script_failure_record('dnsbl', \$alias,"),
-			'the DNSBL post-script branch must record against its own alias');
-		$this->assertSame(1, substr_count($ip_post, "pfb_list_script_failure_record('ip', \$alias,"),
-			'the IP post-script branch must record against its own alias');
+		$dnsbl_needle = "pfb_list_post_script_failure_record(\$pfb_post_status, 'dnsbl', \$alias,";
+		$ip_needle    = "pfb_list_post_script_failure_record(\$pfb_post_status, 'ip', \$alias,";
 
-		// The trailing arguments are load-bearing: NULL suppresses a retry-marker
-		// write both loops would unlink further down the same iteration, and
-		// $pfb_script_state is what stops the alias-pass close wiping the entry.
+		$this->assertSame(1, substr_count($dnsbl_post, $dnsbl_needle),
+			'the DNSBL post-script branch must pass its own exit status and alias to the recorder');
+		$this->assertSame(1, substr_count($ip_post, $ip_needle),
+			'the IP post-script branch must pass its own exit status and alias to the recorder');
+
+		// $pfb_script_state is what stops the alias-pass close from wiping the
+		// entry the recorder just opened, and 'Post-script FAIL' is the marker an
+		// operator reads in the widget -- both are load-bearing arguments.
 		foreach (['dnsbl' => $dnsbl_post, 'ip' => $ip_post] as $family => $scope) {
-			$this->assertSame(1, substr_count($scope, "\$pfb['dbdir'], NULL, \$pfb_script_state);"),
-				"the {$family} post-script record must pass no retry marker and the alias-pass state");
+			$this->assertSame(1, substr_count($scope, "\$pfb['dbdir'], \$pfb_script_state);"),
+				"the {$family} post-script record must pass the alias-pass state");
+			$this->assertSame(1, substr_count($scope, 'Post-script FAIL'),
+				"the {$family} post-script record must carry the operator-facing marker");
+			// The status must come from THIS branch's own run, not a stale binding.
+			$this->assertSame(1, substr_count($scope, '$pfb_post_status = pfb_list_script_exec('),
+				"the {$family} post-script branch must bind its status from its own exec");
 		}
 
-		// Exactly two literal-facility call sites -- one post-script branch per
-		// loop. A third would double-report; the pre-script sites route through
-		// pfb_list_script_failure_continue() instead, which takes $facility.
-		$this->assertSame(2, substr_count($source, "pfb_list_script_failure_record('"),
-			'only the two post-script branches may call the recorder with a literal facility');
+		// Exactly two call sites -- one post-script branch per loop. A third
+		// would double-report; the pre-script sites route through
+		// pfb_list_script_failure_continue() instead.
+		$this->assertSame(2, substr_count($source, 'pfb_list_post_script_failure_record($pfb_post_status,'),
+			'only the two post-script branches may call the post-script recorder');
 
 		foreach ([
-			[$dnsbl_start, $dnsbl_end, "pfb_list_script_failure_record('dnsbl', \$alias,"],
-			[$ip_start, $ip_end, "pfb_list_script_failure_record('ip', \$alias,"],
+			[$dnsbl_start, $dnsbl_end, $dnsbl_needle],
+			[$ip_start, $ip_end, $ip_needle],
 		] as [$start, $end, $needle]) {
 			$removed = 0;
 			$mutant = str_replace($needle, '', $source, $removed);
