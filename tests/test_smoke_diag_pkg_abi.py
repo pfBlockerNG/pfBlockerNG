@@ -32,7 +32,7 @@ def test_collect_host_diagnostics_captures_pkg_vv_and_repo_confs() -> None:
     Then pkg -vv and /usr/local/etc/pkg/repos are in the bundle.
     """
     src = inspect.getsource(helpers.collect_host_diagnostics)
-    assert "pkg -vv" in src
+    assert 'pkg -vv > "$D/pkg/pkg_vv.txt"' in src
     assert "/usr/local/etc/pkg/repos" in src
 
 
