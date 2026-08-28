@@ -87,8 +87,8 @@ final class WidgetPostAllowedTest extends TestCase
 	 * Scenario: the OS recycles a PID an earlier suite run already used.
 	 * Given a shim directory already sitting at this run's PID-keyed path,
 	 * When the real widget renders,
-	 * Then it renders clean on a clean stderr, never writes into the directory
-	 * it inherited, and adds no residue of its own beside it.
+	 * Then it renders as usual, never writes into the directory it inherited,
+	 * and adds no residue of its own beside it.
 	 */
 	public function testWidgetSurvivesAShimLeftOverFromARecycledPid(): void
 	{
