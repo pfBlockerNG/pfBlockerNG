@@ -251,11 +251,10 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	}
 
 	/**
-	 * The other side of the same branch, and the reason the exit-status test
-	 * lives inside pfb_list_post_script_failure_record() rather than in an `if`
-	 * at each call site: a post-script that SUCCEEDS must leave the pass
-	 * reading as full success, which no off-appliance test could observe if the
-	 * decision stayed in the monolith (#993).
+	 * The other side of the same branch, and the reason
+	 * pfb_list_post_script_failure_record() owns the exit-status test (rationale
+	 * on that function): a post-script that SUCCEEDS must leave the pass
+	 * reading as full success.
 	 */
 	#[DataProvider('postScriptFacilities')]
 	public function testCleanPostScriptRecordsNothingAndLeavesTheAliasPassClean(string $facility, string $alias): void
@@ -284,17 +283,16 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	 * read as success).
 	 */
 	#[DataProvider('postScriptStatuses')]
-	public function testEveryNonZeroPostScriptStatusOpensAnEntry(int $status, bool $expectOpen): void
+	public function testEveryNonZeroPostScriptStatusOpensAnEntry(int $status): void
 	{
 		$state = ['failed' => FALSE];
 
 		pfb_list_post_script_failure_record($status, 'ip', 'pfB_Example_v4',
 			"status {$status}", $this->dir, $state);
 
-		$open = pfb_sync_status_list_open($this->dir, 'ip');
-		$this->assertCount($expectOpen ? 1 : 0, $open,
-			"exit status {$status} must " . ($expectOpen ? 'open' : 'not open') . ' a ledger entry');
-		$this->assertSame($expectOpen, $state['failed']);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			"exit status {$status} must open a ledger entry");
+		$this->assertTrue($state['failed']);
 	}
 
 	/** @return array<string, array{0: string, 1: string}> */
@@ -306,14 +304,13 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		];
 	}
 
-	/** @return array<string, array{0: int, 1: bool}> */
+	/** @return array<string, array{0: int}> */
 	public static function postScriptStatuses(): array
 	{
 		return [
-			'clean exit'         => [0, FALSE],
-			'plain non-zero'     => [3, TRUE],
-			'timeout(1) killed'  => [124, TRUE],
-			'exec never launched' => [-1, TRUE],
+			'plain non-zero'      => [3],
+			'timeout(1) killed'   => [124],
+			'exec never launched' => [-1],
 		];
 	}
 
