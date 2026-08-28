@@ -58,20 +58,23 @@ Load when: every agent session, from `AGENTS.md`.
   for the three classes the graph does not model, because it indexes code structure and
   nothing else: configuration surfaces and tool wiring (which extensions a linter claims,
   where a tool is installed, what a hook runs), reference counts and other text-frequency
-  questions, and a third-party tool's own feature set, which lives in its `--help`. Every
-  query in this repository's first `graphify reflect` run was one of those three and every
-  one was a dead end. Read `graphify-out/GRAPH_REPORT.md` only for broad architecture
+  questions, and a third-party tool's own feature set, which lives in its `--help`.
+  Read `graphify-out/GRAPH_REPORT.md` only for broad architecture
   review, and `graphify-out/wiki/index.md`, when present, for navigation. A dirty
   `graphify-out/` after a hook or incremental update is expected and is not a reason to
   skip Graphify; skip it only when the task is about stale or incorrect graph output. Run
   `graphify update .` after modifying code (AST only, no API cost).
 - Close the loop on every query: record it with `graphify save-result --question … --answer …
-  --outcome useful|dead_end|corrected`. A dead end MUST carry `--correction` naming what
-  actually answered the question — an unexplained dead end is what makes the next session
-  re-derive it. Records land in `graphify-out/memory/` and are committed with the work.
-  `graphify reflect` aggregates them deterministically into
-  `graphify-out/reflections/LESSONS.md`; that file is derivable, so it stays untracked —
-  rebuild it, and read it for orientation before querying.
+  --outcome useful|dead_end|corrected`. The boundary is where the answer came from, not
+  whether the output looked plausible: `useful` when the returned subgraph answered the
+  question or narrowed it enough to act on, `dead_end` when another surface answered it,
+  `corrected` when the graph answered and was wrong. A dead end MUST carry `--correction`
+  naming the surface that actually answered it, and a correction MUST name the right
+  answer — an unexplained dead end is what makes the next session re-derive it. Records
+  land in `graphify-out/memory/` and are committed with the work. `graphify reflect`
+  aggregates them deterministically into `graphify-out/reflections/LESSONS.md`; that file
+  is derivable, so it stays untracked — rebuild it, and read it for orientation before
+  querying.
 - Use `rg`, globbing, and file reads for literals, configuration, non-code files,
   and details CodeGraph did not cover. Use the client's LSP surface—Serena where
   available—for exact symbols, definitions, references, implementations,
