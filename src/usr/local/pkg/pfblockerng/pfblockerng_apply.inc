@@ -566,10 +566,9 @@ function pfb_list_script_failure_record(string $facility, string $item, string $
 
 /**
  * pfb_list_post_script_failure_record -- issue #2059: record a post-script's
- * exit status, no-op on 0. Owning the status test here (rather than wrapping
- * each call site in an `if`) is what makes "a clean post-script records
- * nothing" testable off-appliance: the download loops themselves cannot be
- * driven off the appliance (#993).
+ * exit status, no-op on 0. The status test lives here, not in an `if` at each
+ * call site, so "a clean post-script records nothing" is testable: the
+ * download loops cannot be driven off-appliance (#993).
  *
  * No retry marker: pfb_list_script_reuse_decision() re-runs a configured pre
  * OR post script every pass a local '.orig' baseline exists (#1278), so there
