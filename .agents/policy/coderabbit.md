@@ -100,9 +100,9 @@ When a merged SHA had only a quota notice (or no CodeRabbit engagement)
 and no later finished review of that SHA:
 
 - Prepend one line to [`coderabbit-misses.md`](coderabbit-misses.md), newest
-  first, in that file's documented shape — ``- `SHA`  title  (#PR) — one
-  clause``, at most 200 bytes, enforced by `scripts/check_context_budget.py`.
-  The review story stays on the PR; the ledger carries the pointer.
+  first, in the one-line shape its own header documents and
+  `scripts/check_context_budget.py` enforces. The review story stays on the PR;
+  the ledger carries the pointer.
 - Later sessions review that list CodeRabbit-style (correctness, hostile
   inputs, test honesty), newest first.
 - Do not start the older 481-commit tail unless a current cluster

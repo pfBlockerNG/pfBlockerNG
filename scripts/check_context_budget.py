@@ -99,9 +99,11 @@ LEDGER = ".agents/policy/coderabbit-misses.md"
 LEDGER_OWNER = ".agents/policy/coderabbit.md"
 LEDGER_ENTRY_MAX = 200
 LEDGER_ENTRY_RE = re.compile(r"^- `(?P<sha>[0-9a-f]{7,40})`  (?P<title>\S.*\S)  \(#(?P<pr>\d+)\)(?: — \S.*)?$")
-# An entry hidden behind indentation or a U+FEFF still renders as a list item;
-# it is an entry for checking purposes, and a malformed one.
-_LEDGER_ENTRYISH_RE = re.compile(r"^[\s\ufeff]*- ")
+# Anything that could carry an entry past the reader's eye: a list item under any
+# Markdown marker, hidden behind indentation or a U+FEFF, or wrapped in an HTML
+# comment. Such a line is an entry for checking purposes, and a malformed one —
+# the header above the list is prose, and prose does not start like this.
+_LEDGER_ENTRYISH_RE = re.compile(r"^[\s\ufeff]*(?:[-*+]\s|\d+[.)]\s|<!--)")
 
 SETTINGS = ".claude/settings.json"
 
