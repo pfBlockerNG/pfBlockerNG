@@ -4450,6 +4450,10 @@ function pfb_stage_publish_dir_remove(string $path): bool {
 	if (!is_dir($path) || is_link($path)) {
 		return FALSE;
 	}
+	// issue #2659: the tar arms now extract with --no-fflags, so a staged tree THIS
+	// path creates can no longer carry an immutable flag. Kept anyway: it still has
+	// to remove trees staged before that change, and a restored flag is only one of
+	// the ways a staged entry becomes undeletable.
 	if (is_executable('/bin/chflags')) {
 		exec('/bin/chflags -R 0 ' . escapeshellarg($path) . ' 2>/dev/null');
 	}

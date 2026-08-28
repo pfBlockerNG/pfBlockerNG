@@ -54,7 +54,8 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->dir = sys_get_temp_dir() . '/pfb_extract_flags_' . getmypid();
+		$this->dir = sys_get_temp_dir() . '/pfb_extract_flags_' . getmypid()
+			. '_' . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir("{$this->dir}/build", 0755, TRUE));
 	}
 

@@ -2948,6 +2948,10 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
     # --no-same-permissions hands the mode to the extracting process's umask, so a
     # umask with read bits set would make published feed members unreadable to
     # anything but root. That assumption is environmental, so the box states it.
+    # Both readings are login-context: the ssh /bin/sh child and a php child of it.
+    # pfb_download() runs from cron or php-fpm, which take their umask from rc
+    # rather than from a login class, so this is a proxy for that context -- a
+    # narrow one, since FreeBSD's default is 022 for both.
     umasks = dict(re.findall(r"^umask (sh|php)=(\S+)$", probe.stdout, re.MULTILINE))
     assert set(umasks) == {"sh", "php"}, (
         f"the probe did not report both umasks — captured {umasks!r}, stdout {probe.stdout!r}"
