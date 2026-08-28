@@ -57,9 +57,10 @@
 # Test-only (env):
 #   PFB_SELECT_BOX  override the select-box.sh path (default: scripts/select-box.sh).
 #                   Used by tests/shell/local_smoke_spec.sh to inject a fake.
-#   PFB_REF_PREFLIGHT  set to 0 to skip the branch/tag ls-remote check
-#                   (issue #2780). SHA expansion still runs. Spec rows that
-#                   use --ref dummy set this; production never does.
+#   PFB_REF_PREFLIGHT  1 = ls-remote check on; 0 = skip it (SHA expansion
+#                   still runs). Unset + PFB_SELECT_BOX set also skips, so
+#                   hermetic --ref dummy specs keep working. Production
+#                   never sets either, so the check stays on.
 #   PFB_LS_REMOTE   override the `git ls-remote` binary (same argv:
 #                   --exit-code <remote> <ref>). Spec injects a fake.
 #
@@ -213,7 +214,14 @@ if _ref_is_hex "$_REF" && [ "$_ref_len" -eq 40 ]; then
     # check. ls-remote here would reject reachable SHAs that are not tips.
     _skip_ls=1
 fi
-if [ "${PFB_REF_PREFLIGHT:-1}" != 0 ] && [ "$_skip_ls" -eq 0 ]; then
+# Production: preflight ON. Hermetic specs inject PFB_SELECT_BOX and pass
+# --ref dummy; skip ls-remote unless they opted in with PFB_REF_PREFLIGHT=1.
+if [ "${PFB_REF_PREFLIGHT:-}" = 0 ]; then
+    _skip_ls=1
+elif [ -z "${PFB_REF_PREFLIGHT+x}" ] && [ -n "${PFB_SELECT_BOX:-}" ]; then
+    _skip_ls=1
+fi
+if [ "$_skip_ls" -eq 0 ]; then
     _ls_rc=0
     if [ -n "${PFB_LS_REMOTE:-}" ]; then
         "$PFB_LS_REMOTE" --exit-code "$_GIT_REMOTE" "$_REF" || _ls_rc=$?

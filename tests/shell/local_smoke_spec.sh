@@ -370,8 +370,8 @@ FAKEEOF
     PFB_SELECT_BOX="$FAKE_SELECT_BOX"
     PFB_BOXES="dummy@dummy"
     PFB_LS_REMOTE="$FAKE_LS_REMOTE"
-    unset PFB_REF_PREFLIGHT
-    export PFB_SELECT_BOX PFB_BOXES WORK CALLS_DIR TMPDIR PFB_LS_REMOTE
+    PFB_REF_PREFLIGHT=1
+    export PFB_SELECT_BOX PFB_BOXES WORK CALLS_DIR TMPDIR PFB_LS_REMOTE PFB_REF_PREFLIGHT
   }
 
   teardown() {
@@ -411,7 +411,7 @@ FAKEEOF
 
   Describe 'abbreviated SHA that resolves locally'
     run_short_head() {
-      _full="$(git -C "${PFB_ROOT}" rev-parse HEAD)"
+      _full="$(git_fixture -C "${PFB_ROOT}" rev-parse HEAD)"
       _short="$(printf '%.7s' "$_full")"
       run_and_diag --ref "$_short"
       _boot="$(cat "$CALLS_DIR"/* 2>/dev/null)"
