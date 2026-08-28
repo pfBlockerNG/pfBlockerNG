@@ -65,12 +65,12 @@ Load when: every agent session, from `AGENTS.md`.
   skip Graphify; skip it only when the task is about stale or incorrect graph output. Run
   `graphify update .` after modifying code (AST only, no API cost).
 - Close the loop on every query: record it with `graphify save-result --question … --answer …
-  --outcome useful|dead_end|corrected`. The boundary is where the answer came from, not
-  whether the output looked plausible: `useful` when the returned subgraph answered the
-  question or narrowed it enough to act on, `dead_end` when another surface answered it,
-  `corrected` when the graph answered and was wrong. A dead end MUST carry `--correction`
-  naming the surface that actually answered it, and a correction MUST name the right
-  answer — an unexplained dead end is what makes the next session re-derive it. Records
+  --outcome useful|dead_end|corrected`. The boundary is where the answer came from:
+  `useful` when the returned subgraph answered or narrowed the question,
+  `dead_end` when another surface answered it,
+  `corrected` when the graph answered and was wrong.
+  A dead end MUST carry `--correction` naming the surface that actually answered it —
+  an unexplained dead end is what makes the next session re-derive it. Records
   land in `graphify-out/memory/` and are committed with the work. `graphify reflect`
   aggregates them deterministically into `graphify-out/reflections/LESSONS.md`; that file
   is derivable, so it stays untracked — rebuild it, and read it for orientation before
