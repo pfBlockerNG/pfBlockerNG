@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `d41cabc1`  extras: name the lost dispatcher lock in the Extras guard  (#2826) — two quota notices, no review; 6 leg rounds + verifier PASS.
 - `38a2332c`  download: drop a refused ingest's promoted validators  (#2831) — one quota notice, no review.
 - `85bb57e3`  download: sanity-scan an archive's extracted payload  (#2819) — two quota notices, no review; 4 legs + verifier PASS.
 - `76b4ecc9`  download: stream the XLSX shared-strings part past the run tmpdir  (#2816) — one quota notice (999 min), no review; 4 legs over two rounds, three blockers fixed.
