@@ -235,9 +235,11 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     ).stdout.split() == ["graphify-out/graph.json"]
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     # The pair, in order: ignore the directory's contents, then re-include only the
-    # tracked graph. Either line alone gets the tracking wrong.
-    assert "graphify-out/*" in root_ignore, "generated Graphify output must remain ignored"
-    assert "!graphify-out/graph.json" in root_ignore, "the tracked root graph must be re-included"
+    # tracked graph. Either line alone gets the tracking wrong, and so does a later
+    # duplicate of the ignore -- git takes the LAST matching rule, while index()
+    # reports the first, so the count is asserted before the order.
+    assert root_ignore.count("graphify-out/*") == 1, "generated Graphify output must remain ignored, once"
+    assert root_ignore.count("!graphify-out/graph.json") == 1, "the tracked root graph must be re-included, once"
     assert root_ignore.index("graphify-out/*") < root_ignore.index("!graphify-out/graph.json"), (
         "the re-include must follow the ignore, or the graph is not tracked"
     )
