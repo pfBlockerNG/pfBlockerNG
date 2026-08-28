@@ -98,10 +98,13 @@ die() {
 # interrupted upgrade, leave pkg unable to refresh ANY catalogue, and no conf this script
 # writes can repair that. Guidance only, never run for the user.
 #
-# `pfSense-upgrade -u` is the whole cheap repair in one command (issue #2808): upstream
-# runs pfSense-repo-setup before dispatching any action, that script runs
-# pfSense-repoc-static itself, and `-u` then forces `pkg update -f`, upgrading pkg and
-# bootstrapping it when the repository moved to metadata version 2. A BARE
+# `pfSense-upgrade -u` is the whole cheap repair in one command whenever it reaches its
+# work (issue #2808): upstream runs pfSense-repo-setup before dispatching any action,
+# that script runs pfSense-repoc-static itself, and `-u` then forces `pkg update -f`,
+# upgrading pkg and bootstrapping it when the repository moved to metadata version 2. Two
+# early exits precede all of that: the pid lock, which refuses while a boot-time metadata
+# refresh runs, and the block_external_services flag, which exits 0 without doing
+# anything. A BARE
 # `pfSense-upgrade` is NOT a second item beside it: upstream sets
 # `: ${action:="upgrade"}` when no action flag is given, so it applies whatever release
 # the box's branch offers and reboots afterwards. It is the escalation for a mismatch the
@@ -122,7 +125,7 @@ pfb_pkg_die() {
     cat >&2 <<'HINT'
 install.sh: if this box's own pkg setup is at fault, rebuild it and re-run this script:
 install.sh:   pfSense-upgrade -u
-install.sh: only if the re-run still fails, escalate to a bare pfSense-upgrade: it applies
+install.sh: only if the re-run still fails, escalate to a bare pfSense-upgrade — it applies
 install.sh: any pfSense release upgrade the box's branch offers, and reboots when it does.
 HINT
     exit "${_pkg_die_code}"
@@ -374,7 +377,9 @@ conf: rebuild it, then re-run this script.
   pfSense-upgrade -u
 
 That one command re-fetches the repository settings (it runs pfSense-repo-setup, which
-runs pfSense-repoc) and then forces a catalogue refresh.
+runs pfSense-repoc-static) and then forces a catalogue refresh, upgrading or
+re-bootstrapping pkg itself if the repository requires it. "Another instance is already
+running" means a boot-time metadata refresh holds the lock; wait for it and retry.
 
 Only if the re-run still fails, escalate to a bare pfSense-upgrade. With no arguments it
 applies any pfSense release upgrade the box's branch offers, and reboots when it does, so
