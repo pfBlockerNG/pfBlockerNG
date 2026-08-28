@@ -28,8 +28,10 @@ Deliberate choices, so a reader does not mistake them for oversights:
   (`test_a_quoted_sibling_job_key_cannot_lend_its_budget`). `tests/_workflow_steps.py` is
   still used where the landmark rule bites -- the non-YAML config files, where a reworded
   anchor must raise rather than widen (issue #2669).
-* **A suite invoked from inside a composite action is NOT seen.** Stated so the gap is
-  known rather than silent.
+* **Local composite actions ARE followed, recursively, with cycle detection.** A suite
+  invoked inside one belongs to the job that reaches it; a one-level walk would give
+  false assurance. Docker- and node-based local actions are not followed, because their
+  entry point is an image or a script rather than a `run:` body.
 """
 
 from __future__ import annotations
@@ -165,13 +167,19 @@ def _candidate_files(root: str) -> list[Path]:
 
 
 def kernel_lock_acquires(root: str) -> list[str]:
-    """``path:line`` for every kernel-lock acquire under ``root``."""
+    """``path:line`` for every kernel-lock acquire under ``root``.
+
+    An unreadable candidate RAISES. `_candidate_files` only returns files `git grep`
+    already matched on a lock token, so one that cannot then be read is a broken
+    assumption, not a benign skip -- and swallowing it would drop a file known to name a
+    lock, which is the vacuous-scan shape this gate exists to prevent.
+    """
     found: list[str] = []
     for path in _candidate_files(root):
         try:
             raw = path.read_bytes()
-        except OSError:
-            continue  # broken symlink: holds no acquire either way
+        except OSError as exc:
+            raise OSError(f"candidate {path.relative_to(ROOT)} names a lock token but cannot be read: {exc}") from exc
         # errors="replace", never a skip: an except-and-continue on UnicodeDecodeError
         # silently dropped a tracked latin-1 .inc holding a real flock($fp, LOCK_EX).
         for lineno, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), start=1):
@@ -223,11 +231,51 @@ def runners_in_run_body(body: str) -> set[str]:
         found |= {entry for entry in PRODUCTION_ENTRY_POINTS if entry in line}
     for segment in _SEGMENT.split("\n".join(live)):
         words = [stripped for word in segment.split() if (stripped := _command_word(word))]
-        while words and _is_prefix(words[0]):
+        while words:
+            if (runner := _runner_for(words[0])) is not None:
+                found.add(runner)
+                break
+            if not _is_prefix(words[0]):
+                break
+            was_flag = words[0].startswith("-")
             words = words[1:]
-        if words and (runner := _runner_for(words[0])) is not None:
-            found.add(runner)
+            # A wrapper option can take a VALUE (`uv run --group dev pytest`,
+            # `env -u NAME pytest`): drop it too, unless it is itself a runner or another
+            # prefix, so the runner behind it is still reached.
+            if was_flag and words and not _is_prefix(words[0]) and _runner_for(words[0]) is None:
+                words = words[1:]
     return found
+
+
+def _local_action_run_bodies(uses: str, seen: frozenset[str] = frozenset()) -> list[str]:
+    """Every `run:` body a LOCAL composite action reaches, following nested `uses: ./...`.
+
+    A composite action is ordinary GitHub Actions, so a suite invoked inside one belongs
+    to the job that reaches it. Recursive with cycle detection: a one-level walk would
+    give false assurance, and a self- or mutually-referential action must not hang the
+    gate. Docker- and node-based local actions are NOT followed -- their entry point is an
+    image or a script, not a `run:` body -- and no local action in this repository uses
+    either form.
+    """
+    reference = uses.split("@", 1)[0]
+    if reference in seen:
+        return []
+    action = ROOT / reference.removeprefix("./")
+    for candidate in (action / "action.yml", action / "action.yaml"):
+        if not candidate.is_file():
+            continue
+        document = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
+        bodies: list[str] = []
+        for step in (document.get("runs") or {}).get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if step.get("run"):
+                bodies.append(step["run"])
+            nested = step.get("uses")
+            if isinstance(nested, str) and nested.startswith("./"):
+                bodies.extend(_local_action_run_bodies(nested, seen | {reference}))
+        return bodies
+    return []
 
 
 def _documents() -> dict[str, dict]:
@@ -251,8 +299,14 @@ def suite_running_jobs(documents: dict[str, dict] | None = None) -> dict[tuple[s
                 continue
             runners: set[str] = set()
             for step in job.get("steps") or []:
-                if isinstance(step, dict) and step.get("run"):
+                if not isinstance(step, dict):
+                    continue
+                if step.get("run"):
                     runners |= runners_in_run_body(step["run"])
+                uses = step.get("uses")
+                if isinstance(uses, str) and uses.startswith("./"):
+                    for step_body in _local_action_run_bodies(uses):
+                        runners |= runners_in_run_body(step_body)
             if runners:
                 reached[(name, job_id)] = runners
     return reached
@@ -454,6 +508,10 @@ def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str
         ("if command -v pytest; then pytest; fi", {"pytest"}),
         ("for v in a b; do shellspec; done", {"shellspec"}),
         ("bash -c 'shellspec'", {"shellspec"}),
+        # A wrapper option that takes a VALUE must not hide the runner behind it.
+        ("uv run --group dev pytest", {"pytest"}),
+        ("env -u PYTHONPATH pytest", {"pytest"}),
+        ("uv run --python 3.11 pytest -q", {"pytest"}),
         ('        echo "shellspec shell tests failed or were cancelled."', set()),
         ("        # sh scripts/run-smoke.sh shells out to the synced interpreter", set()),
         ("        # pfblockerng.php update is the production reload entry point", set()),
@@ -464,6 +522,35 @@ def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str
 )
 def test_the_runner_scan_reads_invocations_and_not_mentions(body: str, expected: set[str]) -> None:
     assert runners_in_run_body(body) == expected, body
+
+
+def test_a_suite_invoked_through_nested_composite_actions_is_attributed_to_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A composite action is ordinary GitHub Actions, so a suite invoked one -- or two --
+    levels down still belongs to the job that reaches it. A self-referential action must
+    terminate rather than hang."""
+    actions = tmp_path / "actions"
+    for name, body in (
+        ("l1", "runs:\n  using: composite\n  steps:\n    - uses: ./actions/l2\n"),
+        ("l2", "runs:\n  using: composite\n  steps:\n    - shell: sh\n      run: uv run pytest -q\n"),
+        ("loop", "runs:\n  using: composite\n  steps:\n    - uses: ./actions/loop\n"),
+    ):
+        (actions / name).mkdir(parents=True)
+        (actions / name / "action.yaml").write_text(body, encoding="utf-8")
+    monkeypatch.setattr("tests.test_issue2614_lock_job_budgets.ROOT", tmp_path)
+
+    assert _local_action_run_bodies("./actions/l1") == ["uv run pytest -q"]
+    assert _local_action_run_bodies("./actions/loop") == []  # cycle, not a hang
+
+    workflows = tmp_path / "wf"
+    workflows.mkdir()
+    (workflows / "planted.yml").write_text(
+        "jobs:\n  suite:\n    steps:\n      - uses: ./actions/l1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("tests.test_issue2614_lock_job_budgets.WORKFLOWS", workflows)
+    assert suite_running_jobs() == {("planted.yml", "suite"): {"pytest"}}
 
 
 _ACQUIRE_CASES: tuple[tuple[bool, str], ...] = (
