@@ -377,7 +377,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringNotContainsString(
 			'-C {$header_esc}',
 			$scope,
-			'geoip tar -C must be geoipshare, not $header (.mmdb file)'
+			'geoip tar -C must stage inside geoipshare, never $header (.mmdb file)'
 		);
 		$geoip = strpos($scope, "if (\$type == 'geoip') {");
 		$this->assertNotFalse($geoip);

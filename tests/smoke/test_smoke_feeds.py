@@ -3985,9 +3985,10 @@ def test_top1m_file_target_hostile_and_truncated_archives_retain_active(
 def test_adr46_hostile_member_geoip_gz_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-46: the gzip GeoIP branch rejects a hostile-member tar.gz BEFORE extraction.
 
-    Site-specific wiring pin for `tar -xzf --strip=1 -C {geoipshare}` -- its ADR-45
-    probe is only `gunzip -t` (gzip-stream integrity), so the member guard is the
-    ONLY inner-tar inspection on this path. Fixture archive_traversal.tar.gz (see
+    Site-specific wiring pin for the gzip GeoIP branch, which since issue #2668
+    stages inside `{geoipshare}` before publishing -- its ADR-45 probe is only
+    `gunzip -t` (gzip-stream integrity), so the member guard is the ONLY inner-tar
+    inspection on this path. Fixture archive_traversal.tar.gz (see
     fixtures/README.md): benign `cat/domains` + hostile `../pfb_adr46_escape.txt`.
     Deliberately hostile-only: a benign geoip run would extract into the REAL
     /usr/local/share/GeoIP; the benign pass-through is pinned on the ZIP site's

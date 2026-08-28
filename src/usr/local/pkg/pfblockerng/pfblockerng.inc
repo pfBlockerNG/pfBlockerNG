@@ -4341,10 +4341,11 @@ function pfb_blacklist_tar_mark_updated(string $file_dwn, string $filename): Pfb
 }
 
 /**
- * Disk-writing GeoIP tar extract into geoipshare. The gzip container, the
- * uncompressed x-tar and the zip container's multi-member arm all share this path;
- * -C is a staging directory inside the share, never the live share itself and never
- * a .mmdb file (issue #2638 B7).
+ * Disk-writing GeoIP tar extract into geoipshare. The gzip container and the
+ * uncompressed x-tar share this path; -C is a staging directory inside the share,
+ * never the live share itself and never a .mmdb file (issue #2638 B7). The zip
+ * container's multi-member arm publishes to its own caller target, so it stages
+ * through the same merge helper rather than through this function.
  */
 function pfb_geoip_extract_tar_to_share(
 	string $header,
@@ -4372,7 +4373,7 @@ function pfb_geoip_extract_tar_to_share(
 		return $retval;
 	})) {
 		unlink_if_exists($file_download);
-		pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+		pfb_logger("\n[pfb_download] geoip " . pfb_stage_publish_failure_note($retval), 2);
 		return PfbDownloadResult::failure();
 	}
 	unlink_if_exists($file_download);
@@ -4536,7 +4537,10 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
  * Staging INSIDE $target is what keeps every publication a same-filesystem rename:
  * a directory just created there cannot be a mount point. tempnam() falls back to
  * the system temp directory when $target is not writable, so a staged path that
- * escaped is refused rather than published across a device boundary.
+ * escaped is refused rather than published across a device boundary. Known limit:
+ * the refusal compares resolved paths, so it assumes $target's parent is not being
+ * mutated concurrently -- true of every shipped caller, whose targets sit under
+ * root-owned package directories behind the feed-pass locks.
  *
  * @param callable(string):int $extract
  */
@@ -4572,6 +4576,10 @@ function pfb_stage_publish_dir_merge(string $target, callable $extract): bool {
  * publication is refused BEFORE the first move rather than part-way through it.
  * That refusal is also what stops a feed member named like $pfb['ccdir'] from
  * taking the published country-code generation with it.
+ *
+ * An empty staged tree is refused too, the contract
+ * pfb_blacklist_tar_finalize_staged() already carries: an extraction that landed
+ * nothing must not be reported as an update, or a stale database reads as fresh.
  */
 function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool {
 	$entries = @scandir($staged);
@@ -4596,6 +4604,18 @@ function pfb_stage_publish_dir_merge_swap(string $staged, string $target): bool 
 		}
 	}
 	return TRUE;
+}
+
+/**
+ * issue #2668: a staged publication can fail with the extractor's status still
+ * zero -- the members were refused, not the archive. Naming that "tar exit 0" tells
+ * an operator the opposite of what happened, so the two outcomes read differently.
+ * Every failing status keeps its existing wording, ceiling note included.
+ */
+function pfb_stage_publish_failure_note(int $retval): string {
+	return pfb_download_extraction_succeeded($retval)
+		? 'publication failed'
+		: "extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval);
 }
 
 function pfb_download_retval_success(?int $retval): bool {
@@ -14825,7 +14845,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 						return $retval;
 					})) {
-						pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+						pfb_logger("\n[pfb_download] {$type} zip " . pfb_stage_publish_failure_note($retval), 2);
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
