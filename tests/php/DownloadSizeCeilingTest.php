@@ -433,9 +433,12 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *
 	 * Issue #2684: that filesystem is /tmp -- a RAM disk on a default
 	 * use_mfs_tmpvar install, and the one consumer the precheck above cannot see,
-	 * because it belongs to a child process rather than to this function. Probed
-	 * with sys_get_temp_dir() rather than a literal, which is the same
-	 * ${TMPDIR:-/tmp} the helper's own `mktemp -d` reads.
+	 * because it belongs to a child process rather than to this function. The
+	 * probed path is derived the way the CHILD derives it, `getenv('TMPDIR') ?:
+	 * '/tmp'` against the environment exec() hands it, and deliberately NOT with
+	 * sys_get_temp_dir(): PHP's `sys_temp_dir` INI setting outranks TMPDIR, so on
+	 * an install that sets it the guard would measure one filesystem while the
+	 * helper's `mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"` wrote to another.
 	 *
 	 * Scoped to the xlsx branch, NOT folded into the precheck above: the gzip,
 	 * bzip2 and tar paths write nowhere near /tmp, and refusing a 50 MiB gzip feed
@@ -453,7 +456,7 @@ final class DownloadSizeCeilingTest extends TestCase
 		$scope = substr(self::$downloadBody, $xlsx, $zipBranch - $xlsx);
 
 		$check = strpos($scope,
-			'pfb_extract_space_shortfall(array(sys_get_temp_dir()), (int) @filesize($file_download))');
+			"pfb_extract_space_shortfall(array(getenv('TMPDIR') ?: '/tmp'), (int) @filesize(\$file_download))");
 		$this->assertNotFalse($check,
 			'the xlsx branch must probe the temp filesystem the helper unpacks the workbook into');
 		$run = strpos($scope, 'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx');
