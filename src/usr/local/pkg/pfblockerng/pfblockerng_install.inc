@@ -637,8 +637,9 @@ $pfb_rdns_seed = pfb_rdns_seed_value(
 );
 if ($pfb_rdns_seed !== null) {
 	// issue #2123: 'ip/enable_rdns' is a registered key now, so the seed goes through
-	// the gateway's system writer (no web session here). The pass below then sees the
-	// key present and leaves this cross-section decision alone.
+	// the gateway's system writer (no web session here). A present key alone is NOT
+	// enough to survive the pass -- its NEWCFG branch assigns the registered default
+	// regardless -- so the mode correction below is what preserves this decision.
 	PfbConfig::writeSystem('ip/enable_rdns', $pfb_rdns_seed);
 	// issue #2123: same reason as the reshape above -- this seed exists to preserve the
 	// historical always-on behaviour, and a captured NEWCFG (General configured, IP tab
