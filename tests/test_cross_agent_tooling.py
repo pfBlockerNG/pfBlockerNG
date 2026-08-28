@@ -230,7 +230,10 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     attrs_text = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert attrs_text.strip(), ".gitattributes must not be empty"
     attrs = attrs_text.splitlines()
-    graphify_attribute = "graphify-out/graph.json merge=graphify"
+    # linguist-generated collapses the whole-file rewrites in pull-request diffs and
+    # keeps them out of the language stats; merge=graphify still resolves parallel
+    # updates, so both attributes must ride on the row.
+    graphify_attribute = "graphify-out/graph.json merge=graphify linguist-generated=true"
     assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
     # The root graph is tracked so a fresh checkout starts with the map; everything
     # else under graphify-out/ is regenerated from it and stays ignored. Asserting the

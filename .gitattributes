@@ -5,4 +5,8 @@
 # scripts/git-no-docs.sh — it derives its excludes from these entries.
 legacy/** linguist-documentation
 docs/** linguist-documentation
-graphify-out/graph.json merge=graphify
+# The tracked root graph is generated output: `graphify update` rewrites it whole, so
+# suppressing its diff is the point — linguist-generated collapses it in pull-request
+# diffs and drops it from the language stats, while merge=graphify keeps resolving
+# parallel updates through the union driver.
+graphify-out/graph.json merge=graphify linguist-generated=true
