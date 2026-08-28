@@ -118,7 +118,10 @@ _PREFIX_WORDS = frozenset(
 _PREFIX_SHAPES = (
     re.compile(r"^python[0-9.]*$"),  # python, python3, python3.11
     re.compile(r"^-"),  # a flag of an already-stripped prefix
-    re.compile(r"^[0-9]+$"),  # `timeout 600`, `nice 10`
+    # A wrapper's duration/count operand: `timeout 600`, `timeout 10m`, `timeout 1.5h`,
+    # `nice 10`. GNU timeout's s/m/h/d suffixes are ordinary workflow syntax, so a
+    # digits-only shape would leave the runner behind `timeout 10m` unreached.
+    re.compile(r"^[0-9]+(?:\.[0-9]+)?[smhd]?$"),
     re.compile(r"^[A-Za-z_][A-Za-z0-9_]*="),  # VAR=value prefix assignment
 )
 _SEGMENT = re.compile(r"(?:\|\||&&|[|;&\n])")  # a logical command boundary
@@ -512,6 +515,10 @@ def test_a_budget_that_is_not_the_job_s_own_does_not_satisfy_the_gate(label: str
         ("uv run --group dev pytest", {"pytest"}),
         ("env -u PYTHONPATH pytest", {"pytest"}),
         ("uv run --python 3.11 pytest -q", {"pytest"}),
+        ("timeout 10m vendor/bin/phpunit", {"vendor/bin/phpunit"}),
+        ("timeout 600s sh scripts/run-smoke.sh", {"scripts/run-smoke.sh"}),
+        ("timeout 1.5h shellspec", {"shellspec"}),
+        ("nice -n +5 shellspec", {"shellspec"}),
         ('        echo "shellspec shell tests failed or were cancelled."', set()),
         ("        # sh scripts/run-smoke.sh shells out to the synced interpreter", set()),
         ("        # pfblockerng.php update is the production reload entry point", set()),
