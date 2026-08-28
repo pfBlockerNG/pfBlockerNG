@@ -372,11 +372,13 @@ define('PFB_EXTRACT_SIGXFSZ_EXIT', 153);
 
 // issue #2659: extraction runs as root, and a disk-writing tar restores whatever
 // the archive asks for. These trees are staging directories -- scraped for tokens,
-// then deleted or swapped into place -- so every archive-supplied owner, mode bit,
-// extended attribute, ACL and file flag is refused. The appliance's bsdtar accepts
-// all six; GNU tar has no --no-fflags, so this set is for the appliance's tar and
-// belongs only on the calls that create directory entries, never on a -xO call
-// whose output the shell redirect owns.
+// then deleted or swapped into place -- so the archive's owner, extended
+// attributes, ACLs and file flags are refused outright, and its permission bits
+// stop being restored exactly: the mode becomes the archive's masked by the
+// extracting process's umask, with setuid/setgid/sticky dropped. The appliance's
+// bsdtar accepts all six; GNU tar has no --no-fflags, so this set is for the
+// appliance's tar and belongs only on the calls that create directory entries,
+// never on a -xO call whose output the shell redirect owns.
 define('PFB_TAR_EXTRACT_FLAGS', '--no-same-owner --no-same-permissions --numeric-owner --no-xattrs --no-acls --no-fflags');
 
 // Default cURL options
