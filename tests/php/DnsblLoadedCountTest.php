@@ -92,14 +92,10 @@ final class DnsblLoadedCountTest extends TestCase
 		$GLOBALS['g']['varrun_path'] = $this->dir;
 		$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];
 
-		// Unbound answers "running" once, then reports gone. Without the second half, a
-		// pass that takes the restart fallback (which is exactly what an absent count
-		// forces, the RAM gate failing closed) sits in a real 30-second stop-wait loop.
-		$checks = 0;
-		$GLOBALS['pfb_test_process_running'] = ['unbound' => static function () use (&$checks): bool {
-			$checks++;
-			return $checks === 1;
-		}];
+		// Unbound is up throughout. The pass an absent count forces (the RAM gate failing
+		// closed) takes the restart fallback, whose stop-wait the harness caps (issue
+		// #2613) -- so this double does not have to model the daemon dying to stay fast.
+		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
 
 		// A live, healthy generation: manifest published, Python's emitted count on disk.
 		file_put_contents($GLOBALS['pfb']['unbound_py_count'], "11732\n");
