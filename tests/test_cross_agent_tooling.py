@@ -416,30 +416,24 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
     assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
 
-    # Two call sites, each pinned by the line that RUNS the patch, which must come
-    # before that site's first use of Graphify: patching a Graphify a step already used
-    # would leave that step's output Pascal-parsed. setup-agent-tools.sh has no call of
-    # its own -- it ends by running init-worktree-tools.sh, which patches.
-    for install, invocation, anchor in (
-        (
-            "scripts/agent/ensure-graphify-merge-driver.sh",
-            'sh "$patch_graphify" || {',
-            "graphify hook install",
-        ),
+    # Two call sites, each pinned by the line that RUNS the patch. Their ORDER -- the
+    # patch before that site's first use of Graphify, or that step's output is
+    # Pascal-parsed -- is asserted behaviourally by the specs that execute these
+    # scripts: agent_graphify_merge_driver_spec.sh pins the patch before
+    # `graphify hook install`, agent_worktree_tools_spec.sh before `graphify update`.
+    # setup-agent-tools.sh has no call of its own -- it ends by running
+    # init-worktree-tools.sh, which patches.
+    for install, invocation in (
+        ("scripts/agent/ensure-graphify-merge-driver.sh", 'sh "$patch_graphify" || {'),
         (
             "scripts/agent/init-worktree-tools.sh",
             'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
-            'graphify update "$root"',
         ),
     ):
-        lines = (ROOT / install).read_text(encoding="utf-8").splitlines()
         # The invocation carries no repository argument: the script derives everything
         # it needs from its own path and from the `graphify` on PATH.
-        called = [index for index, line in enumerate(lines) if invocation in line]
-        anchored = [index for index, line in enumerate(lines) if anchor in line]
-        assert called, f"{install} does not run patch-graphify.sh with no argument"
-        assert anchored, f"{install} no longer runs: {anchor}"
-        assert called[0] < anchored[0], f"{install} must run patch-graphify.sh before: {anchor}"
+        source = (ROOT / install).read_text(encoding="utf-8")
+        assert invocation in source, f"{install} does not run patch-graphify.sh with no argument"
 
     bootstrap = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
     assert "patch-graphify.sh" not in bootstrap, (
@@ -451,18 +445,12 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"
 
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    # Identifiers only. A prose pin fails on a pure line rewrap that changes nothing, so
+    # the document's sentences stay the reader's rather than this test's.
     for contract in (
         "scripts/agent/patch-graphify.sh",
         "Graphify-Labs/graphify#3075",
         "language.inc=php",
-        # The probed facts a contributor needs: what reverts the patch, what an
-        # unpatched host sees, when the whole arrangement is deleted, and which failure
-        # is loud versus which is a deliberate skip plus what catches a skipped install.
-        "a bare `uv tool upgrade graphifyy` reverts it",
-        "inert on an unpatched Graphify",
-        "Delete the patch, the script, its two call sites",
-        "fails loudly",
-        "a warning and a skip",
         "include-node floor",
     ):
         assert contract in routing, f"repository-intelligence routing lost: {contract}"

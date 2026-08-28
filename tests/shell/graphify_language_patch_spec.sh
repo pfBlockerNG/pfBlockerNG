@@ -141,18 +141,44 @@ RCFILE
     Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.mismatch"; printf '%s' "$?")" -eq 0 ]
   End
 
-  It 'leaves no patch backup behind a successful apply'
-    # No -V flag is portable: GNU patch 2.8 reads `-V none` as "numbered" and ENABLES
-    # backups, while Apple patch 2.0 needs an explicit -V to stay quiet. Whether THIS
-    # host's patch writes one is exactly what cannot be relied on, so the litter is
-    # planted here and the script has to remove it for the files its patch touches.
-    printf 'stale\n' > "$package/extract.py.orig"
-    printf 'stale\n' > "$package/rcfile.py.~1~"
+  It 'leaves no patch backup behind an apply that lands with an offset'
+    # A CLEAN apply writes no backup on either implementation this repository runs on,
+    # so a planted stale file would prove nothing. What DOES make patch write one is an
+    # offset apply: one extra line ahead of the hunk shifts it, and GNU patch 2.8 and
+    # Apple patch 2.0 both then write `extract.py.orig` unless the apply passes
+    # --no-backup-if-mismatch.
+    { printf '%s\n' '# shifts the hunk by one line'; cat "$package/extract.py"; } > "$fixture/shifted"
+    mv "$fixture/shifted" "$package/extract.py"
     When run sh "$script_abs"
     The status should equal 0
     The stderr should include 'applied Graphify-Labs/graphify#3075'
     The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
+    The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
     Assert [ -z "$(find "$fixture/site packages" \( -name '*.orig' -o -name '*.~[0-9]*~' \) -print)" ]
+  End
+
+  It 'leaves no backup and touches no neighbour for a patched path holding a space'
+    # The tab-terminated name is the only space-bearing form BOTH implementations
+    # resolve -- Apple patch rejects git's C-quoted form outright. So any parser that
+    # reads the `+++` line and truncates at whitespace sees `graphify/with`: it misses
+    # the real backup and hits the unrelated neighbour planted below.
+    # --no-backup-if-mismatch needs no such parser, and this example goes red the
+    # moment one comes back.
+    {
+      printf 'diff --git a/graphify/with space.py b/graphify/with space.py\n'
+      printf -- '--- a/graphify/with space.py\t1970-01-01\n'
+      printf '+++ b/graphify/with space.py\t1970-01-01\n'
+      printf '@@ -1,1 +1,2 @@\n SPACED = True\n+SPACED_OVERRIDE = True\n'
+    } >> "$checkout/.agents/patches/graphify-3075-language-overrides.patch"
+    # The pad line shifts the hunk, which is what makes patch want a backup at all.
+    { printf '%s\n' '# pad'; printf '%s\n' 'SPACED = True'; } > "$package/with space.py"
+    printf 'neighbour\n' > "$package/with.orig"
+    When run sh "$script_abs"
+    The status should equal 0
+    The stderr should include 'applied Graphify-Labs/graphify#3075'
+    The contents of file "$package/with space.py" should include 'SPACED_OVERRIDE = True'
+    The path "$package/with.orig" should be exist
+    Assert [ -z "$(find "$fixture/site packages" \( -name '*.~[0-9]*~' -o \( -name '*.orig' ! -name 'with.orig' \) \) -print)" ]
   End
 
   It 'skips with a warning when the graphify shebang does not name a Python interpreter'
