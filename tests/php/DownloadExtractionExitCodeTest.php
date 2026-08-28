@@ -560,6 +560,36 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
+	 * Issue #2682: an extraction that parses but yields no address is refused by the
+	 * helper, and the refusal has to stop the pass. The content-hash sidecar is
+	 * refreshed by pfb_download_finalize_text() further down the same function, so a
+	 * gate that logged and fell through would persist a digest for bytes that were
+	 * never ingested — and the next cron would then read the feed as unchanged.
+	 */
+	public function testXlsxRefusalReturnsBeforeTheSidecarRefresh(): void
+	{
+		$xlsx = strpos(self::$source, "if (strpos(\$xlsxtest, '.xlsx') !== FALSE) {");
+		$this->assertNotFalse($xlsx);
+		$zipBranch = strpos(self::$source, '} else {', $xlsx);
+		$this->assertNotFalse($zipBranch);
+		// Bounded by the branch, so a neutered xlsx gate cannot be satisfied by the
+		// ET branch's identical one further down the function.
+		$scope = substr(self::$source, $xlsx, $zipBranch - $xlsx);
+		$gate = strpos($scope, 'if (!pfb_download_extraction_succeeded($retval)) {');
+		$this->assertNotFalse($gate, 'the xlsx branch must gate on the helper exit status');
+		$refusal = substr($scope, $gate,
+			self::closingBraceExclusive($scope, strpos($scope, '{', $gate)) - $gate);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal,
+			'the xlsx refusal must return, not fall through into the text pipeline');
+		$this->assertStringNotContainsString('pfb_download_finalize_text', $refusal);
+		// Searched from the end of the branch, so the helper's own definition (far
+		// earlier in the file) cannot satisfy it: moving the refresh ahead of the
+		// archive branch leaves no later occurrence and this fails.
+		$this->assertNotFalse(strpos(self::$source, 'pfb_download_finalize_text(', $zipBranch),
+			'the sidecar refresh must sit downstream of the xlsx refusal, never ahead of it');
+	}
+
+	/**
 	 * pfb_download() hands the ET IQRisk feed to the shell helper, which splits it
 	 * into per-category files and republishes the feed from the selected ones;
 	 * issue #2683 gave that helper an exit contract, so this branch is pinned like

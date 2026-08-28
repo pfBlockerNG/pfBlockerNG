@@ -10,6 +10,10 @@
 # ".orig" already in service byte-unchanged instead of overwriting it with the
 # empty or partial remains of the attempt.
 #
+# issue #2682: an extraction that parses but yields no address is one of those
+# failing steps. `grep` reports it (exit 1, no lines selected) and that status is
+# now read, so the feed is refused rather than published as zero bytes.
+#
 # Fixture shape: the downloaded ".raw" container holds one "*.xlsx" member, and
 # that member is itself an archive holding "xl/sharedStrings.xml" -- the two
 # layers processxlsx() opens. Real feeds ship ZIP containers; these fixtures are
@@ -66,6 +70,17 @@ RUNNER
 		( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
 	}
 
+	# A container whose workbook PARSES but carries no IPv4 literal at all: the
+	# shape issue #2682 names -- an address column that came up empty, or a
+	# workbook whose addresses live in an inline-string part instead of the
+	# shared-strings table.
+	plant_addressless_raw() {
+		printf '<sst><si><t>Hostname</t></si><si><t>example.invalid</t></si><si><t>2001:db8::1</t></si></sst>\n' \
+			> "${work}/inner/xl/sharedStrings.xml"
+		( cd "${work}/inner" && tar -cf "${work}/build/${alias}.xlsx" xl )
+		( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
+	}
+
 	# A live publication left by a previous, successful run.
 	plant_prior_publication() {
 		printf '%s\n' "${prior}" > "${orig}${alias}.orig"
@@ -81,6 +96,65 @@ RUNNER
 			# The one context where this can fail: the staged file really was
 			# written here, so a publish that copied instead of renaming, or
 			# forgot to clean up, would leave it behind.
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'Final count'
+		End
+	End
+
+	Context 'on a workbook that parses but carries no IPv4 literal'
+		# issue #2682: `grep` exits 1 when nothing matched, but piped into `sort`
+		# that status was lost -- a pipeline reports only its last command -- so
+		# such a workbook staged zero bytes at status 0 and published them over
+		# the last-good ".orig". Nothing downstream caught it either: an empty
+		# file probes as "inode/x-empty", which pfb_download()'s inner-content
+		# MIME gate allow-lists, so the ingest reported success and refreshed the
+		# feed's content-hash sidecar for it.
+		Before 'plant_prior_publication'
+		Before 'plant_addressless_raw'
+
+		It 'refuses the refresh and keeps the live publication byte-unchanged'
+			When run sh "${runner}"
+			The status should be failure
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'XLSX processing failed'
+			# The sibling refusal line, verbatim: the operator reads the refusal
+			# and that the previous publication is what stayed in service.
+			The contents of file "${errorlog}" should include " [ ${alias} ] XLSX processing failed, exit 1; keeping existing [ 2026-01-01 00:00:00 ]"
+		End
+	End
+
+	Context 'on an addressless workbook with no publication yet'
+		# issue #2682, first fetch: with no ".orig" to keep, the refusal must
+		# leave the feed absent rather than publish zero bytes as its content.
+		Before 'plant_addressless_raw'
+
+		It 'refuses without manufacturing an empty publication'
+			When run sh "${runner}"
+			The status should be failure
+			The path "${orig}${alias}.orig" should not be exist
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'XLSX processing failed'
+		End
+	End
+
+	Context 'on a workbook whose addresses repeat and are out of order'
+		# issue #2682 moved the de-duplication off the pipe: `grep` stages its
+		# matches and `sort -u -o` rewrites that file in place. The bytes that
+		# reach the feed are pinned here, so a mis-wired rewrite cannot pass as
+		# "the extraction still exits 0".
+		plant_repeated_raw() {
+			printf '<sst><si><t>198.51.100.20</t></si><si><t>192.0.2.10</t></si><si><t>198.51.100.20</t></si></sst>\n' \
+				> "${work}/inner/xl/sharedStrings.xml"
+			( cd "${work}/inner" && tar -cf "${work}/build/${alias}.xlsx" xl )
+			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
+		}
+		Before 'plant_repeated_raw'
+
+		It 'publishes each address once, in LC_ALL=C order'
+			When run sh "${runner}"
+			The status should be success
+			The contents of file "${orig}${alias}.orig" should equal "${expected}"
 			The path "${orig}${alias}.orig.tmp" should not be exist
 			The output should include 'Final count'
 		End
