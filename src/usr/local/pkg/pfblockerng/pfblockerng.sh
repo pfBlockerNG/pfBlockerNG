@@ -2061,7 +2061,11 @@ processxlsx() {
 		return 1
 	fi
 
-	xlsxtarrc="${tmpxlsx}sharedStrings.rc"
+	# A SIBLING of the extraction target, never a file inside it: the container is
+	# untrusted, and a member landing on this path would hand a remote feed the
+	# status the publish gate below reads. ${tmpxlsx} is "${tmpdir}/xlsx/", so this
+	# is "${tmpdir}/xlsx.rc" -- still inside the run's own 0700 mktemp directory.
+	xlsxtarrc="${tmpxlsx%/}.rc"
 	xlsxstage="${pfborig}${alias}.orig.tmp"
 
 	# Only ONE status may be lost to the pipe, and neither of the two that decide
@@ -2070,9 +2074,8 @@ processxlsx() {
 	# does not support aborts the whole script rather than failing one command).
 	# So `grep` is the pipeline's LAST stage, which keeps its no-match exit 1
 	# (issue #2682) as the pipeline's own status, and tar's status is stashed to a
-	# file. That stash is readable the moment the pipeline returns because the
-	# subshell writing it holds the pipe's only write end: `grep` cannot see EOF,
-	# so the shell cannot reap it, until the write is done.
+	# file. Nothing can pre-seed that stash: it is not a path any container member
+	# can reach, and ${tmpdir} is a fresh 0700 mktemp directory every run.
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
 	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}" &&
@@ -2080,12 +2083,16 @@ processxlsx() {
 		{ "${pathtar}" -xOf "$1" "xl/sharedStrings.xml" || echo "$?" > "${xlsxtarrc}"; } |
 			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" > "${xlsxstage}"
 	xlsxrc=$?
-	# tar's own status outranks the pipeline's, and is read BEFORE the publish: a
-	# partial read still emits an address for `grep` to match, so publishing would
-	# be issue #2666's defect again -- a truncated feed reported as a success. It
-	# outranks a FAILING pipeline too, so a ceiling kill still reaches the caller
-	# as the 153 pfb_extract_cap_note() reads even when nothing matched.
-	if [ -s "${xlsxtarrc}" ]; then
+	# tar's stashed status is read only when `grep` ran to completion -- exit 0 or
+	# its no-match 1 -- and BEFORE the publish: a partial read still emits an
+	# address for `grep` to match, so publishing would be issue #2666's defect
+	# again, a truncated feed reported as a success. Above 1 the pipeline's own
+	# status stands, because tar cannot be the cause: its only output is the pipe,
+	# and RLIMIT_FSIZE does not bound a pipe write, so issue #2658's ceiling can
+	# only kill the stage that writes a FILE. tar merely dies of EPIPE behind it,
+	# and reading that over the 153 would cost pfb_extract_cap_note() the one
+	# value it keys on to tell the operator "too large".
+	if [ "${xlsxrc}" -le 1 ] && [ -s "${xlsxtarrc}" ]; then
 		xlsxrc="$(cat "${xlsxtarrc}")"
 	fi
 	# `chmod` before the rename because published feeds have unprivileged readers
@@ -2097,7 +2104,7 @@ processxlsx() {
 			mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
 		xlsxrc=$?
 	fi
-	rm -rf "${tmpxlsx}"*
+	rm -rf "${tmpxlsx}"* "${xlsxtarrc}"
 
 	if [ "${xlsxrc}" -ne 0 ]; then
 		# -rf, not -f: crash-leftover DIRECTORY debris here would otherwise survive
