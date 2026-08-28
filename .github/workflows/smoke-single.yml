@@ -359,7 +359,7 @@ jobs:
     runs-on: ubuntu-latest
     # issue #2614: the smoke suite stands a real on-box flock holder up against the
     # feed-pass lock, and a flock(2) acquire has no timeout of its own, so this budget
-    # is the only bound on a stuck lock. Observed 17.8 min worst leg (n=7 per leg).
+    # is the only bound on a stuck lock. Observed worst sampled leg 17.8 min.
     timeout-minutes: 45
     steps:
       - name: Checkout
