@@ -4240,10 +4240,25 @@
             }
         ]
     },
-    "pfb_extract_temp_root": {
+    "pfb_extracted_text_sanity": {
         "returnsRef": false,
-        "returnType": "string",
-        "params": []
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "staged",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
     },
     "pfb_extras_credentials": {
         "returnsRef": false,

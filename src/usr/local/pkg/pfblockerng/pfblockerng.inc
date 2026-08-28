@@ -4414,6 +4414,26 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	return TRUE;
 }
 
+/**
+ * issue #2660: the content-sanity verdict for an extraction's STAGED output -- the text
+ * gate in pfb_download() sees only the wire body's MIME, so an archive feed's payload
+ * would otherwise reach the parser unscanned. Scanning the staged copy is what lets a
+ * verdict refuse the publication instead of replacing it.
+ *
+ * NULL when there is nothing to refuse: a failed extraction (its exit code owns that
+ * rejection), the opt-in scan off, an unreadable sample (fail open, as the text gate
+ * does), or a payload that looks like a list.
+ */
+function pfb_extracted_text_sanity(string $staged, int $retval): ?string {
+	if (!pfb_download_extraction_succeeded($retval) ||
+	    PfbConfig::read('gen/pfb_feed_sanity') !== PfbToggle::On) {
+		return NULL;
+	}
+	// Same 64 KiB read cap as the text gate -- a cap, not a minimum.
+	$sample = @file_get_contents($staged, FALSE, NULL, 0, 65536);
+	return $sample === FALSE ? NULL : pfb_text_sanity($sample);
+}
+
 /** Remove one directory tree without treating its literal path as a glob. */
 function pfb_stage_publish_dir_remove(string $path): bool {
 	if (!is_dir($path) || is_link($path)) {
@@ -14764,16 +14784,22 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				pfb_logger('.', 1);
 				$retval = pfb_download_initial_retval();
 				$extract_tar = ($inner_type == 'application/x-tar');
+				$pfb_sanity = NULL;
 				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval): int {
+				    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval, &$pfb_sanity): int {
 					if ($extract_tar) {
 						exec(pfb_extract_cmd("set -o pipefail; /usr/bin/gunzip -c {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
 					} else {
 						exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 					}
-					return $retval;
+					$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
+					return $pfb_sanity === NULL ? $retval : pfb_download_initial_retval();
 				})) {
-					pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					if ($pfb_sanity !== NULL) {
+						pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($orig_download));
+					} else {
+						pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					}
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
@@ -14800,16 +14826,22 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			pfb_logger('.', 1);
 			$retval = pfb_download_initial_retval();
 			$extract_tar = ($inner_type == 'application/x-tar');
+			$pfb_sanity = NULL;
 			if (!pfb_stage_publish($orig_download,
-			    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval): int {
+			    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval, &$pfb_sanity): int {
 				if ($extract_tar) {
 					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/bzip2 -dkc {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
 				} else {
 					exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 				}
-				return $retval;
+				$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
+				return $pfb_sanity === NULL ? $retval : pfb_download_initial_retval();
 			})) {
-				pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})" . pfb_extract_cap_note($retval), 2);
+				if ($pfb_sanity !== NULL) {
+					pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($orig_download));
+				} else {
+					pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})" . pfb_extract_cap_note($retval), 2);
+				}
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
 			}
@@ -15071,9 +15103,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				$retval = pfb_download_initial_retval();
 				$reject_detail = array();
 				$inner_rejected = FALSE;
+				$pfb_sanity = NULL;
 				if (!pfb_stage_publish($orig_download,
 				    static function (string $staged) use ($file_dwn_esc, $list_download,
-				        &$output, &$retval, &$reject_detail, &$inner_rejected): int {
+				        &$output, &$retval, &$reject_detail, &$inner_rejected, &$pfb_sanity): int {
 					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
 					if ($retval !== 0) {
 						return $retval;
@@ -15085,9 +15118,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						$inner_rejected = TRUE;
 						return pfb_download_initial_retval();
 					}
-					return $retval;
+					$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
+					return $pfb_sanity === NULL ? $retval : pfb_download_initial_retval();
 				})) {
-					if ($inner_rejected) {
+					if ($pfb_sanity !== NULL) {
+						pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($orig_download));
+					} elseif ($inner_rejected) {
 						pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 					} else {
 						pfb_logger("\n[pfb_download] zip publish failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
@@ -15300,12 +15336,18 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						return PfbDownloadResult::failure();
 					}
 					$retval = pfb_download_initial_retval();
+					$pfb_sanity = NULL;
 					if (!pfb_stage_publish($orig_download,
-					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval, &$pfb_sanity): int {
 						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
-						return $retval;
+						$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
+						return $pfb_sanity === NULL ? $retval : pfb_download_initial_retval();
 					})) {
-						pfb_logger("\n[pfb_download] tar extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+						if ($pfb_sanity !== NULL) {
+							pfb_validate_log($header, 'plaintext', $pfb_sanity, basename($orig_download));
+						} else {
+							pfb_logger("\n[pfb_download] tar extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+						}
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
