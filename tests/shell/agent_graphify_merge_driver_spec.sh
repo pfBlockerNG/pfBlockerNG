@@ -30,6 +30,13 @@ case "${GRAPHIFY_DRIVER_MODE:-valid}" in
   *) exit 92 ;;
 esac
 GRAPHIFY
+    # The vendored .inc language-override patch (issue #2810): this script runs the
+    # requested checkout's copy, so the real installed Graphify is never touched here.
+    mkdir -p "$repo/scripts/agent"
+    cat > "$repo/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf 'patch-graphify\t%s\n' "$1" >> "$GRAPHIFY_LOG"
+PATCH_GRAPHIFY
     chmod +x "$stubdir/uv" "$stubdir/graphify"
     export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log"
     PATH="$stubdir:$PATH"
@@ -44,7 +51,8 @@ GRAPHIFY
     When run sh "$script_abs" "$repo"
     The status should equal 0
     The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
-    The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
+    The contents of file "$graphify_log" should equal \
+      "$(printf 'patch-graphify\t%s\n%s\thook install' "$repo" "$repo")"
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
   End
 
