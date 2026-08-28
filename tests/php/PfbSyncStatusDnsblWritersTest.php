@@ -371,9 +371,9 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// "should we log Reloading" check, (3)/(4) pfb_stop_start_unbound()'s own
 		// "wait for it to stop" loop -- once per invocation, TWO invocations happen
 		// here (the first restart, then this file's retval!=0 retry) -- FALSE so each
-		// loop breaks on its very first check instead of spinning up to 30 real
-		// seconds, (5) the post-restart "Confirm that Resolver is running" check, (6)
-		// pfb_dnsbl_converged()'s own read at the tail. Only calls 3 and 4 are FALSE.
+		// loop breaks on its very first check, (5) the post-restart "Confirm that
+		// Resolver is running" check, (6) pfb_dnsbl_converged()'s own read at the tail.
+		// Only calls 3 and 4 are FALSE.
 		$calls = 0;
 		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
 			$calls++;
@@ -439,8 +439,8 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		// TRUE only for the two expected success-path calls -- if a regression falls
 		// through to the restart path instead, is_process_running() resolves FALSE
-		// immediately so pfb_stop_start_unbound()'s 30-iteration wait loop never
-		// real-sleeps; the call-count assertion below still catches the regression.
+		// immediately so pfb_stop_start_unbound()'s wait loop never real-sleeps; the
+		// call-count assertion below still catches the regression.
 		$calls = 0;
 		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
 			$calls++;

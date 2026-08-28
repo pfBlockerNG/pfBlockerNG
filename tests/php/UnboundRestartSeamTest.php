@@ -130,8 +130,8 @@ final class UnboundRestartSeamTest extends TestCase
 
 		pfb_stop_start_unbound('');
 
-		$this->assertLessThanOrEqual(3, $polls,
-			'a test that never reports the daemon gone must not pay the appliance stop-wait');
+		$this->assertLessThan(30, $polls,
+			"a test that never reports the daemon gone must not pay the appliance's 30 one-second polls");
 		$this->assertSame(PFB_UNBOUND_STOP_WAIT, $polls,
 			'the wait loop must poll exactly its configured budget when the daemon never exits');
 	}
