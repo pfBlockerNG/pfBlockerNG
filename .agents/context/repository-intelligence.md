@@ -64,8 +64,7 @@ Load when: every agent session, from `AGENTS.md`.
   runs `serena project index <root>` when Serena is available. Under OMP (`OMP_CLI`
   or `PI_CLI`), it skips Serena because OMP provides native LSP tooling.
 - PHP includes are named `.inc`, and a tool that infers language from the extension
-  silently skips them until told otherwise — the result is indistinguishable from a clean
-  no-match (issue #2807). `phpcs.xml.dist`, `phpstan.neon`, `.editorconfig`,
-  `.vscode/settings.json`, and `sgconfig.yml` carry the association; semgrep has no
-  configuration equivalent, so always pass `semgrep --scan-unknown-extensions`.
+  silently skips them — indistinguishable from a clean no-match (issue #2807). The
+  tracked `sgconfig.yml` fixes ast-grep; semgrep has no configuration equivalent, so
+  always pass `semgrep --scan-unknown-extensions`.
 - Compiler, static analysis, tests, CI, and live smoke remain final.
