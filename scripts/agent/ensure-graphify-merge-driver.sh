@@ -24,7 +24,7 @@ main() {
 		exit 2
 	}
 
-	uv tool install graphifyy==0.9.50 || {
+	uv tool install --upgrade 'graphifyy>=0.9.51' || {
 		echo "ensure-graphify-merge-driver.sh: Graphify installation failed" >&2
 		exit 1
 	}
