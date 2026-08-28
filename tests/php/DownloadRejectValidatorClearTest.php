@@ -319,7 +319,7 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	public static function rejectStageMatrix(): array
 	{
 		return [
-			'wire body MIME is not allowed'      => ['binary', '',      'mime',       'mime_not_allowed'],
+			'wire body MIME is not allowed'      => ['binary', 'ok',    'mime',       'mime_not_allowed'],
 			'wire body is an HTML error page'    => ['plain',  'html',  'plaintext',  'html_error_page'],
 			'gzip payload is an HTML error page' => ['gz',     'html',  'plaintext',  'html_error_page'],
 			'gzip payload MIME is not allowed'   => ['gz',     'nul',   'inner',      'compressed_mime_not_allowed'],
@@ -389,6 +389,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 		$GLOBALS['pfb']['curl_defaults'][CURLOPT_MAXFILESIZE_LARGE] = 16;
 		try {
 			$base = $this->seedPublication();
+			$baseline = (string) file_get_contents("{$base}.orig.xxhash128");
+			$this->assertNotSame('', $baseline, 'fixture: the source-hash baseline must be on disk');
 			$this->promoteValidators($base);
 			$this->serve($this->fixturePlain(str_repeat("192.0.2.10/32\n", 64)), self::BAD_ETAG, self::BAD_LASTMOD);
 
@@ -401,6 +403,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 				'the refused body\'s Last-Modified must not survive the size refusal');
 			$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
 				'a refused refresh must leave the previously served payload byte-identical');
+			$this->assertSame($baseline, file_get_contents("{$base}.orig.xxhash128"),
+				'the source-hash baseline still describes the last GOOD body, so it must survive');
 		} finally {
 			if ($hadCeiling) {
 				$GLOBALS['pfb']['curl_defaults'][CURLOPT_MAXFILESIZE_LARGE] = $savedCeiling;
@@ -481,7 +485,7 @@ final class DownloadRejectValidatorClearTest extends TestCase
 			'the wrapper must call the pipeline exactly once');
 		$this->assertStringNotContainsString('PfbDownloadResult::', $wrapperBody,
 			'the wrapper must not build its own results — every outcome comes from the pipeline');
-		$this->assertSame(['pfblockerng.inc'], $this->pipelineCallers(),
+		$this->assertSame(['src/usr/local/pkg/pfblockerng/pfblockerng.inc' => 1], $this->pipelineCallers(),
 			'pfb_download_fetch() must have exactly one caller: nothing may bypass the wrapper');
 
 		$implEnd = strpos($source, 'function pfb_download_failure(', $impl);
@@ -494,27 +498,34 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	}
 
 	/**
-	 * Every shipped PHP file that calls the pipeline, by basename. Scanned over the whole
-	 * of src/ rather than one file, because a caller added anywhere else would be exactly
-	 * the bypass this pins against.
+	 * Every call to the pipeline in shipped PHP, as repo-relative path => call count, with
+	 * the definition itself discounted. Keyed on the full path and counted per file so a
+	 * second caller cannot hide behind a duplicate basename, and matched on the callee name
+	 * alone so it cannot hide behind a different argument spelling -- either would be
+	 * exactly the bypass this pins against. Comments are stripped first, so prose naming
+	 * the callee is not miscounted as a call.
 	 *
-	 * @return array<int, string>
+	 * @return array<string, int>
 	 */
 	private function pipelineCallers(): array
 	{
+		$root = dirname(__DIR__, 2);
 		$callers = [];
-		$root = dirname(__DIR__, 2) . '/src';
-		$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+		$it = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator("{$root}/src", FilesystemIterator::SKIP_DOTS)
+		);
 		foreach ($it as $entry) {
 			if (!$entry->isFile() || !in_array($entry->getExtension(), ['inc', 'php'], TRUE)) {
 				continue;
 			}
-			if (str_contains((string) file_get_contents($entry->getPathname()), 'pfb_download_fetch($request)')) {
-				$callers[] = $entry->getFilename();
+			$code = php_strip_whitespace($entry->getPathname());
+			$calls = substr_count($code, 'pfb_download_fetch(')
+				- substr_count($code, 'function pfb_download_fetch(');
+			if ($calls > 0) {
+				$callers[ltrim(str_replace($root, '', $entry->getPathname()), '/')] = $calls;
 			}
 		}
-		$callers = array_values(array_unique($callers));
-		sort($callers, SORT_STRING);
+		ksort($callers, SORT_STRING);
 		return $callers;
 	}
 
@@ -552,8 +563,6 @@ final class DownloadRejectValidatorClearTest extends TestCase
 				return self::NUL_BEARING;
 			case 'ok':
 				return self::HEALTHY;
-			case '':
-				return '';
 		}
 		throw new InvalidArgumentException("unknown payload fixture [{$name}]");
 	}
