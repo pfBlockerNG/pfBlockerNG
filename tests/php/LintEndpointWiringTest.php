@@ -70,9 +70,12 @@ final class LintEndpointWiringTest extends TestCase
 	 */
 	public function testRealPageRunLeavesNoShimResidue(): void
 	{
+		// A checkout without this fix, sharing the host, can already hold a bare
+		// pfb_lint_shim_<pid>, so only what this run added counts.
+		$before = glob(sys_get_temp_dir() . '/pfb_lint_shim_*') ?: [];
 		$result = $this->request(['lang' => 'regex', 'content' => 'x'], ['REQUEST_METHOD' => 'GET']);
 		$this->assertSame('POST only', $result['body']['error']);
-		$this->assertSame([], $this->shimResidue($result['pid']));
+		$this->assertSame([], array_values(array_diff($this->shimResidue($result['pid']), $before)));
 	}
 
 	/**
@@ -80,7 +83,8 @@ final class LintEndpointWiringTest extends TestCase
 	 * Given a shim directory already sitting at this run's PID-keyed path,
 	 * When the real page is requested,
 	 * Then it still answers clean JSON on a clean stderr, instead of the
-	 * mkdir()/"headers already sent" cascade of issue #2612.
+	 * mkdir()/"headers already sent" cascade of issue #2612, and adds no
+	 * residue of its own beside the directory it inherited.
 	 */
 	public function testRealPageSurvivesAShimLeftOverFromARecycledPid(): void
 	{
@@ -91,6 +95,7 @@ final class LintEndpointWiringTest extends TestCase
 			TRUE
 		);
 		$this->assertSame('POST only', $result['body']['error']);
+		$this->assertSame([], array_values(array_diff($this->shimResidue($result['pid']), $this->planted)));
 	}
 
 	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
