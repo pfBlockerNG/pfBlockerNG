@@ -794,6 +794,92 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
+	// issue #2060: stage='script' (#1958) is ALIAS-PASS-managed, not
+	// tick-managed. Its paired close runs at the end of the alias's own
+	// download pass, and a deleted alias never gets another pass -- so removal
+	// has to close it alongside stage='download' or the entry strands and the
+	// widget keeps counting an open issue for an alias that no longer exists.
+	// -----------------------------------------------------------------------
+
+	public function testCloseRemovedAliasIpv4ClosesScriptEntry(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'script', 'Pre-script FAIL - serving last known-good', $this->dir, self::clockAt(1000));
+		// Before-state: the script entry is genuinely open first.
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'ipv4 removal must close pfB_Foo_v4/script');
+	}
+
+	public function testCloseRemovedAliasIpv6ClosesScriptEntry(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v6', 'script', 'Pre-script FAIL - serving last known-good', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv6', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'ipv6 removal must close pfB_Foo_v6/script');
+	}
+
+	public function testCloseRemovedAliasDnsblClosesScriptEntry(): void
+	{
+		pfb_sync_status_open('dnsbl', 'DNSBL_Foo', 'script', 'Pre-script FAIL - serving last known-good', $this->dir, self::clockAt(1000));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'dnsbl'));
+
+		pfb_sync_status_close_removed_alias('dnsbl', 'Foo', $this->dir);
+
+		$this->assertSame([], pfb_sync_status_list_open($this->dir), 'dnsbl removal must close DNSBL_Foo/script');
+	}
+
+	public function testCloseRemovedAliasClosesEveryAliasPassManagedStageAndLeavesApplyOpen(): void
+	{
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'script', 'Post-script FAIL', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'apply', '[pfctl] failed', $this->dir, self::clockAt(1000));
+		// Before-state: all three stages genuinely open for the same item.
+		$this->assertCount(3, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open,
+			'download and script are alias-pass-managed and must close; apply is tick-managed and must survive');
+		$this->assertSame('apply', $open[0]['stage'], 'the surviving entry must be the apply stage');
+	}
+
+	public function testCloseRemovedAliasScriptStageMatchesTheExactKeyOnly(): void
+	{
+		// Prefix-adjacent sibling proves EXACT-key match for the script stage too:
+		// deleting 'Foo' must never sweep the live pfB_FooBar_v4's own entry.
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'script', 'Pre-script FAIL', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('ip', 'pfB_FooBar_v4', 'script', 'Pre-script FAIL', $this->dir, self::clockAt(2000));
+		$this->assertCount(2, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_sync_status_close_removed_alias('ipv4', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, 'closing Foo must close only its exact script key, leaving prefix-adjacent FooBar open');
+		$this->assertSame('pfB_FooBar_v4', $open[0]['item']);
+	}
+
+	public function testCloseRemovedAliasScriptStageDoesNotCrossFacilities(): void
+	{
+		// A DNSBL group and an IP alias may carry the same aliasname; removing
+		// one must never close the other facility's script entry.
+		pfb_sync_status_open('ip', 'pfB_Foo_v4', 'script', 'Pre-script FAIL', $this->dir, self::clockAt(1000));
+		pfb_sync_status_open('dnsbl', 'DNSBL_Foo', 'script', 'Pre-script FAIL', $this->dir, self::clockAt(1000));
+		$this->assertCount(2, pfb_sync_status_list_open($this->dir));
+
+		pfb_sync_status_close_removed_alias('dnsbl', 'Foo', $this->dir);
+
+		$open = pfb_sync_status_list_open($this->dir);
+		$this->assertCount(1, $open, 'removing the DNSBL group must leave the same-named IP alias untouched');
+		$this->assertSame('ip', $open[0]['facility']);
+		$this->assertSame('pfB_Foo_v4', $open[0]['item']);
+	}
+
+	// -----------------------------------------------------------------------
 	// issue #1780 F1/F2/F9 — read_all()'s $unavailable discrimination, and the
 	// two read-modify-write callers (open/close) failing closed on it.
 	// -----------------------------------------------------------------------
