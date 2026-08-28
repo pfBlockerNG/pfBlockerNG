@@ -2865,8 +2865,11 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         f"W={work}; {report} "
         "/bin/chflags -R 0 $W 2>/dev/null; /bin/rm -rf $W; /bin/mkdir -p $W/build && "
         'printf "203.0.113.11\\n" > $W/build/member.dat && '
-        "/bin/chmod 4755 $W/build/member.dat && "
-        "/usr/sbin/chown 12345:12345 $W/build/member.dat || exit 90; "
+        "/usr/sbin/chown 12345:12345 $W/build/member.dat && "
+        # chown AFTER chmod would need FreeBSD's "unless the caller is the
+        # super-user" carve-out to keep the setuid bit; ordering it first needs
+        # no carve-out at all.
+        "/bin/chmod 4755 $W/build/member.dat || exit 90; "
         # Both are filesystem-dependent, so neither may abort the probe -- but a
         # vector the fixture never carried cannot prove its own refusal, so the
         # assertions below require the fixture line to show it, and any failure
