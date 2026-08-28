@@ -213,15 +213,11 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 *   Then  pfb_extras_process_begin() returns FALSE, which is what the Extras verbs
 	 *         turn into exit(1)
 	 *
-	 * This pins the half that is executable. The other half -- that `dc` and `dcc` are
-	 * still WIRED as `if (!$scheduled && !pfb_extras_process_begin()) { exit(1); }` --
-	 * is guaranteed by pfblockerng.php being outside this change's diff, which
-	 * `git diff` proves directly; re-deriving an unmodified file's own text from a
-	 * static oracle proved unsound five times over (a label with executable text behind
-	 * its colon, an arm parked in a comment, in a heredoc, in a nowdoc, in inline HTML,
-	 * in another switch entirely). Nothing pinned this exit code before this change
-	 * either. An exit-code test that can really load pfblockerng.php needs the
-	 * appliance tier, tracked separately.
+	 * Only the executable half is pinned here. That `dc`/`dcc` stay WIRED as
+	 * `if (!$scheduled && !pfb_extras_process_begin()) { exit(1); }` is guaranteed by
+	 * pfblockerng.php being outside this change's diff, not by re-deriving an
+	 * unmodified file's text -- and nothing pinned that exit code before this change
+	 * either. Asserting it for real needs the appliance tier: issue #2832.
 	 */
 	public function testDcAndDccVerbsKeepExitingOneOnDispatcherDeferral(): void
 	{
