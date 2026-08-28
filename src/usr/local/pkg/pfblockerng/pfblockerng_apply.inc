@@ -538,24 +538,20 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 }
 
 /**
- * pfb_list_script_failure_record -- issue #1958: a per-feed pre-script that
- * exits non-zero must not let the alias pass close as full success. Opens a
- * distinct ADR-61 stage='script' ledger entry -- separate from stage='download',
- * since the download itself genuinely succeeded and only the transform failed
- * -- and (re)writes the '.update' retry marker. The marker matters because a
- * row that entered the update branch via a '.fail' marker alone had that
- * marker unlinked by the successful download; without this write the next
- * ordinary pass takes the verbatim-reuse fast path and never retries the
- * transform. The marker write is best-effort (@-suppressed): ledger
- * visibility must never depend on it succeeding. ADR-61 symmetric ownership:
- * the paired close is pfb_list_script_failure_close() at the alias-pass end.
+ * pfb_list_script_failure_record -- issue #1958/#2059: a per-feed pre- or
+ * post-script that exits non-zero must not let the alias pass close as full
+ * success. Opens a distinct ADR-61 stage='script' ledger entry -- separate
+ * from stage='download', since the download itself genuinely succeeded and
+ * only the script failed. ADR-61 symmetric ownership: the paired close is
+ * pfb_list_script_failure_close() at the alias-pass end.
  *
- * issue #2059: the post-script call sites pass a NULL $update_marker. They
- * have no retry to arm -- pfb_list_script_reuse_decision() already re-runs a
- * configured script every pass (#1278), and both loops unlink
- * '{header}.update' further down the same iteration -- so a write here would
- * be dead. Everything else is identical: the same stage='script' key, the
- * same alias-pass state, the same paired close.
+ * $update_marker NULL writes no retry marker; the pre-script sites pass one
+ * because a row that entered the update branch via a '.fail' marker alone had
+ * that marker unlinked by the successful download, and without this write the
+ * next pass takes the verbatim-reuse fast path and never retries the
+ * transform. The write is best-effort (@-suppressed): ledger visibility must
+ * never depend on it. Post-script callers pass NULL -- see
+ * pfb_list_post_script_failure_record().
  */
 function pfb_list_script_failure_record(string $facility, string $item, string $message,
     string $ledger_dir, ?string $update_marker, ?array &$state = NULL): void {
@@ -566,6 +562,26 @@ function pfb_list_script_failure_record(string $facility, string $item, string $
 		@touch($update_marker);
 	}
 	pfb_sync_status_open($facility, $item, 'script', $message, $ledger_dir);
+}
+
+/**
+ * pfb_list_post_script_failure_record -- issue #2059: record a post-script's
+ * exit status, no-op on 0. Owning the status test here (rather than wrapping
+ * each call site in an `if`) is what makes "a clean post-script records
+ * nothing" testable off-appliance: the download loops themselves cannot be
+ * driven off the appliance (#993).
+ *
+ * No retry marker: pfb_list_script_reuse_decision() re-runs a configured pre
+ * OR post script every pass a local '.orig' baseline exists (#1278), so there
+ * is nothing to arm -- and on the non-stale paths that reach here both loops
+ * unlink '{header}.update' further down the same iteration anyway.
+ */
+function pfb_list_post_script_failure_record(int $exit_status, string $facility, string $item,
+    string $message, string $ledger_dir, ?array &$state = NULL): void {
+	if ($exit_status === 0) {
+		return;
+	}
+	pfb_list_script_failure_record($facility, $item, $message, $ledger_dir, NULL, $state);
 }
 
 function pfb_list_script_failure_close(string $facility, string $item, string $ledger_dir, array $state): void {
@@ -2591,16 +2607,13 @@ function sync_package_pfblockerng($cron=''): bool {
 								if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 									if (@copy("{$file_dwn}.orig", "{$file_dwn}.post")) {
-										if (pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
-										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}") !== 0) {
-											// issue #2059: the feed itself refreshed, but the script's own
-											// side effects did not complete -- mark the pass ('script' stage,
-											// never 'download'), else it closes as full success.
-											pfb_list_script_failure_record('dnsbl', $alias,
-											    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
-											    $pfb['dbdir'], NULL, $pfb_script_state);
-										}
+										$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
+										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
 										unlink_if_exists("{$file_dwn}.post");
+										// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
+										pfb_list_post_script_failure_record($pfb_post_status, 'dnsbl', $alias,
+										    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+										    $pfb['dbdir'], $pfb_script_state);
 									} else {
 										pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its input; skipping\n", 2);
 									}
@@ -2721,8 +2734,9 @@ function sync_package_pfblockerng($cron=''): bool {
 					// feed's success mask an earlier feed's still-live failure.
 					pfb_download_ledger_close_if_clean('dnsbl', $alias, $pfb_dl_failed, $pfb['dbdir']);
 
-					// issue #1958: ADR-61 symmetric ownership -- close the 'script' stage
-					// entry once for the WHOLE alias-pass, iff no row's pre-script failed.
+					// issue #1958/#2059: ADR-61 symmetric ownership -- close the 'script'
+					// stage entry once for the WHOLE alias-pass, iff no row's pre- or
+					// post-script failed.
 					pfb_dnsbl_script_failure_close($alias, $pfb['dbdir'], $pfb_script_state);
 
 					// ADR-12: record GENUINELY-changed DNSBL groups for
@@ -4000,20 +4014,19 @@ function sync_package_pfblockerng($cron=''): bool {
 								pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 								$file_org_esc = escapeshellarg("{$file_dwn}.orig");
 								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.post"); // Save original file for restoration
-								if (pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
-								    "{$file_org_esc} {$list['vtype']} {$elog}") !== 0) {
+								$pfb_post_status = pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
+								    "{$file_org_esc} {$list['vtype']} {$elog}");
+								if ($pfb_post_status !== 0) {
 									// issue #1927: restore the download now so the empty-feed check
 									// below reads it, not the failed script's leftovers.
 									if (file_exists("{$file_dwn}.orig.post")) {
 										@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
 									}
-									// issue #2059: the feed itself refreshed, but the script's own
-									// side effects did not complete -- mark the pass ('script' stage,
-									// never 'download'), else it closes as full success.
-									pfb_list_script_failure_record('ip', $alias,
-									    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
-									    $pfb['dbdir'], NULL, $pfb_script_state);
 								}
+								// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
+								pfb_list_post_script_failure_record($pfb_post_status, 'ip', $alias,
+								    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+								    $pfb['dbdir'], $pfb_script_state);
 							}
 
 							// Check to see if list actually failed download or has no IPs listed.
@@ -4130,8 +4143,9 @@ function sync_package_pfblockerng($cron=''): bool {
 				// feed's success mask an earlier feed's still-live failure.
 				pfb_download_ledger_close_if_clean('ip', $alias, $pfb_dl_failed, $pfb['dbdir']);
 
-				// issue #1958: ADR-61 symmetric ownership -- close the 'script' stage
-				// entry once for the WHOLE alias-pass, iff no row's pre-script failed.
+				// issue #1958/#2059: ADR-61 symmetric ownership -- close the 'script'
+				// stage entry once for the WHOLE alias-pass, iff no row's pre- or
+				// post-script failed.
 				pfb_ip_script_failure_close($alias, $pfb['dbdir'], $pfb_script_state);
 			}
 		}

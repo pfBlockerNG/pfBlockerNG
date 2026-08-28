@@ -13,9 +13,8 @@ use PHPUnit\Framework\TestCase;
  * and (re)writes the '.update' retry marker so the next ordinary pass still
  * attempts the transform instead of taking the verbatim-reuse fast path.
  *
- * issue #2059: the same write site serves the POST-script call sites, which
- * pass a NULL marker because they have no retry marker to write (see the
- * NULL-marker rows below).
+ * issue #2059: the same write site serves the POST-script call sites via
+ * pfb_list_post_script_failure_record(), which passes a NULL marker.
  *
  * Decision (brief section 5): production code suppresses the marker touch()
  * with '@' (matches the existing @rename/@copy best-effort idiom already used
@@ -114,11 +113,7 @@ final class PfbListScriptFailureRecordTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #2059 -- a NULL marker opens the ledger entry and touches nothing.
-	// The post-script call sites have no retry marker to write: #1278's reuse
-	// decision already re-runs a configured script every pass, and both
-	// download loops unlink '{header}.update' AFTER their post-script branch,
-	// so a marker written there would be a dead write.
+	// issue #2059 -- a NULL marker opens the entry and touches nothing.
 	// -----------------------------------------------------------------------
 
 	public function testNullRetryMarkerOpensTheLedgerEntryAndCreatesNoMarker(): void
