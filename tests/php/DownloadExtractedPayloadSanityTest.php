@@ -307,8 +307,32 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 		throw new InvalidArgumentException("unknown archive kind [{$kind}]");
 	}
 
+	/**
+	 * The ZIP arm extracts through a `set -o pipefail` pipeline (issue #819) and PHP's
+	 * exec() runs /bin/sh. `set` is a special builtin, so a /bin/sh without pipefail --
+	 * Debian's dash, and so the Linux CI runner -- ABORTS on that error before tar runs
+	 * and the arm cannot be exercised at all. Skip loudly rather than report a host
+	 * property as a product defect; FreeBSD's sh has pipefail, so the appliance path is
+	 * covered live by tests/smoke/test_smoke_feeds.py.
+	 */
+	private function requirePipefailShell(): void
+	{
+		$out = [];
+		$rc = 1;
+		exec("set -o pipefail; /bin/echo pfbpipefail 2>/dev/null", $out, $rc);
+		if ($rc !== 0 || ($out[0] ?? '') !== 'pfbpipefail') {
+			$this->markTestSkipped(
+				"/bin/sh cannot 'set -o pipefail' (exit {$rc}); the ZIP arm's extraction pipeline "
+				. 'never runs on this host'
+			);
+		}
+	}
+
 	private function downloadArchive(string $kind, string $payload, string $base, PfbToggle $flag): PfbDownloadResult
 	{
+		if ($kind === 'zip') {
+			$this->requirePipefailShell();
+		}
 		$source = $this->archiveFixture($kind, $payload);
 		PfbConfig::write('gen/pfb_feed_sanity', $flag);
 		$this->assertSame($flag, PfbConfig::read('gen/pfb_feed_sanity'), 'the scan flag must be set for this row');
