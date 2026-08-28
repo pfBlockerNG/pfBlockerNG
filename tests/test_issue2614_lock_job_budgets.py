@@ -1,37 +1,13 @@
-"""Issue #2614: a CI job that can block on a kernel lock carries a wall-clock budget.
+"""Issue #2614: every workflow job that can reach a kernel-lock acquire is bounded.
 
-A `flock(2)`-family acquire takes no timeout, so a regression that leaves the lock held
-makes the waiter block rather than fail, and the only bound above it is the job's own
-`timeout-minutes`. Without one GitHub applies its 360-minute default, and a deadlock
-reports as a platform timeout instead of as the assertion that names the cause.
+A `flock(2)`-family acquire takes no timeout, so the only bound above a stuck lock is the
+job's own `timeout-minutes`; without one GitHub applies its 360-minute default and a
+deadlock reports as a platform timeout rather than as the assertion that names the cause.
 
-This file gates the relationship rather than one job: every workflow job that reaches a
-tree holding a kernel-lock acquire carries a job-level `timeout-minutes` that is a real
-bound. `SUITE_RUNNERS` maps each runner to the trees it EXECUTES -- a spec suite reaches
-the scripts it drives, and PHPUnit and the live-VM harness reach `src/` -- so a lock
-returning to `scripts/agent/work-branch.sh`, which is where the one this issue names used
-to live, brings the shellspec jobs back into scope on its own.
-
-Deliberate choices, so a reader does not mistake them for oversights:
-
-* **Reachability is a MAY; the scan errs toward over-inclusion.** Whether an embedded
-  snippet is executed or merely written is not something a regex can decide, so a tree
-  naming an acquire counts as able to reach one. Over-inclusion costs a job a budget it
-  already has; under-inclusion costs a six-hour hang.
-* **There is a ceiling but no floor.** A budget at or above GitHub's default bounds
-  nothing and is silent, which is the hazard here. An absurdly tight budget is the
-  opposite: it fails on the next run and is self-revealing. A floor would put a wall-clock
-  number in an assertion and invite the flake class `testing.md` forbids.
-* **The budget is read from parsed YAML, not a text slice.** YAML is what GitHub reads,
-  and a slice is weaker: a quoted sibling job key walks past `extract_job`'s boundary and
-  lets the search match a LATER job's budget, passing vacuously
-  (`test_a_quoted_sibling_job_key_cannot_lend_its_budget`). `tests/_workflow_steps.py` is
-  still used where the landmark rule bites -- the non-YAML config files, where a reworded
-  anchor must raise rather than widen (issue #2669).
-* **Local composite actions ARE followed, recursively, with cycle detection.** A suite
-  invoked inside one belongs to the job that reaches it; a one-level walk would give
-  false assurance. Docker- and node-based local actions are not followed, because their
-  entry point is an image or a script rather than a `run:` body.
+The gated contract is the relationship, not one job: a job that reaches a tree holding a
+kernel-lock acquire declares a job-level `timeout-minutes` that is a plain positive
+integer below that default. `SUITE_RUNNERS` maps each runner to the trees it EXECUTES, so
+a lock arriving anywhere a suite drives pulls that suite's jobs into the contract.
 """
 
 from __future__ import annotations
@@ -172,6 +148,11 @@ def _candidate_files(root: str) -> list[Path]:
 
 def kernel_lock_acquires(root: str) -> list[str]:
     """``path:line`` for every kernel-lock acquire under ``root``.
+
+    Reachability is a MAY, and the scan errs toward over-inclusion: whether an embedded
+    snippet is executed or merely written is not something a regex can decide, so a tree
+    naming an acquire counts as able to reach one. Over-inclusion costs a job a budget it
+    already has; under-inclusion costs a six-hour hang.
 
     An unreadable candidate RAISES. `_candidate_files` only returns files `git grep`
     already matched on a lock token, so one that cannot then be read is a broken
@@ -329,7 +310,16 @@ _MISSING = object()
 
 
 def budget_offences(documents: dict[str, dict], reached: dict[tuple[str, str], set[str]]) -> list[str]:
-    """One line per job that reaches a lock-bearing tree without a usable budget."""
+    """One line per job that reaches a lock-bearing tree without a usable budget.
+
+    Read from the parsed document, never a text slice: YAML is what GitHub reads, and a
+    quoted sibling job key walks past `extract_job`'s boundary and lets a LATER job's
+    budget satisfy the search.
+
+    There is a ceiling and deliberately no floor. A budget at or above GitHub's default
+    bounds nothing and is silent, which is the hazard; an absurdly tight one fails on the
+    next run and is self-revealing. A floor would put a wall-clock number in an assertion.
+    """
     bearing = lock_bearing_roots()
     offences: list[str] = []
     for (workflow, job_id), runners in sorted(reached.items()):
