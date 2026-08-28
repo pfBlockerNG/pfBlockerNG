@@ -6710,10 +6710,10 @@ function pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
  * key shape (pfb_ip/dnsbl_download_ledger_update's own prefix/suffix rules); an empty
  * $aliasname or an unrecognized $gtype (e.g. 'geoip') is a no-op.
  *
- * 'download' and 'script' both close: their paired clears run at the end of the alias's
- * OWN pass, and a deleted alias never gets another one, so the entry would strand
- * (issue #1014/#1019, #2060). 'apply' stays tick-managed and 'parse' Python-managed --
- * those reconcile without the alias (ADR-61 §2.2 symmetric ownership).
+ * 'download' and 'script' both close: both are alias-pass-managed, and a removed alias
+ * never gets another pass to run their paired clears (issue #1014/#1019, #2060). 'apply'
+ * is tick-managed and 'parse' Python-managed -- both reconcile without the alias; 'dedup'
+ * is not alias-keyed at all (item='dedup'), so no $aliasname reaches it (ADR-61 §2.2).
  *
  * @param string $gtype     'ipv4' | 'ipv6' | 'dnsbl' (any other value is a no-op).
  * @param string $aliasname The REMOVED alias's raw aliasname (empty = no-op).
@@ -6744,9 +6744,8 @@ function pfb_sync_status_close_removed_alias(string $gtype, string $aliasname, s
 			return;
 	}
 
-	foreach (['download', 'script'] as $stage) {
-		pfb_sync_status_close($facility, $item, $stage, $ledger_dir);
-	}
+	pfb_sync_status_close($facility, $item, 'download', $ledger_dir);
+	pfb_sync_status_close($facility, $item, 'script', $ledger_dir);
 }
 
 /**
