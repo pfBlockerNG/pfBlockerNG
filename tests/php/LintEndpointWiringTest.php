@@ -97,11 +97,7 @@ final class LintEndpointWiringTest extends TestCase
 	private function shimResidue(int $pid): array
 	{
 		$prefix = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
-		$found  = glob($prefix . '_*') ?: [];
-		if (is_dir($prefix)) {
-			array_unshift($found, $prefix);
-		}
-		return $found;
+		return array_merge(glob($prefix) ?: [], glob($prefix . '_*') ?: []);
 	}
 
 	/** @param array<string,mixed> $post @param array<string,string> $server @param array<string,bool> $allowed @return array{body:array<string,mixed>,pid:int} */
@@ -134,8 +130,8 @@ PHP;
 		$this->assertIsResource($process);
 		$pid = (int) proc_get_status($process)['pid'];
 		if ($plantStaleShim) {
-			// The child blocks on STDIN until the fwrite() below, so the plant
-			// always lands before it creates its own shim.
+			// The child blocks on STDIN until the pipe is closed below, so the
+			// plant always lands before it creates its own shim.
 			$residue = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
 			$this->planted[] = $residue;
 			@mkdir($residue, 0777, TRUE);
