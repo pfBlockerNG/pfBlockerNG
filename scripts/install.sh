@@ -98,12 +98,15 @@ die() {
 # interrupted upgrade, leave pkg unable to refresh ANY catalogue, and no conf this script
 # writes can repair that. Guidance only, never run for the user.
 #
-# The two repository-rebuild commands come first and are cheap and local. A bare
-# `pfSense-upgrade` is NOT a third item beside them: upstream sets
+# `pfSense-upgrade -u` is the whole cheap repair in one command (issue #2808): upstream
+# runs pfSense-repo-setup before dispatching any action, that script runs
+# pfSense-repoc-static itself, and `-u` then forces `pkg update -f`, upgrading pkg and
+# bootstrapping it when the repository moved to metadata version 2. A BARE
+# `pfSense-upgrade` is NOT a second item beside it: upstream sets
 # `: ${action:="upgrade"}` when no action flag is given, so it applies whatever release
-# the box's branch offers and reboots afterwards. It is the escalation for a mismatch
-# rebuilding the repository files did not fix, and it is stated as such, with the reboot
-# named where it is proposed (issue #2803).
+# the box's branch offers and reboots afterwards. It is the escalation for a mismatch the
+# repository rebuild did not fix, and it is stated as such, with the reboot named where
+# it is proposed (issue #2803).
 #
 # The diagnosis prints FIRST: the remedy is conditional on it, and a reader who has not
 # yet been told what failed cannot judge whether this sequence is their answer.
@@ -118,10 +121,9 @@ pfb_pkg_die() {
     printf 'install.sh: %s\n' "$*" >&2
     cat >&2 <<'HINT'
 install.sh: if this box's own pkg setup is at fault, rebuild it and re-run this script:
-install.sh:   pfSense-repoc
-install.sh:   pfSense-repo-setup
-install.sh: only if the re-run still fails, escalate to pfSense-upgrade — it applies any
-install.sh: pfSense release upgrade the box's branch offers, and reboots when it does.
+install.sh:   pfSense-upgrade -u
+install.sh: only if the re-run still fails, escalate to a bare pfSense-upgrade: it applies
+install.sh: any pfSense release upgrade the box's branch offers, and reboots when it does.
 HINT
     exit "${_pkg_die_code}"
 }
@@ -369,12 +371,14 @@ Exit codes:
 A failed pkg step is often this box's own repository setup rather than the pfBlockerNG
 conf: rebuild it, then re-run this script.
 
-  pfSense-repoc
-  pfSense-repo-setup
+  pfSense-upgrade -u
 
-Only if the re-run still fails, escalate to pfSense-upgrade. With no arguments it applies
-any pfSense release upgrade the box's branch offers, and reboots when it does, so it is
-a deliberate last step rather than part of the sequence above.
+That one command re-fetches the repository settings (it runs pfSense-repo-setup, which
+runs pfSense-repoc) and then forces a catalogue refresh.
+
+Only if the re-run still fails, escalate to a bare pfSense-upgrade. With no arguments it
+applies any pfSense release upgrade the box's branch offers, and reboots when it does, so
+it is a deliberate last step rather than part of the repair above.
 USAGE_TAIL
 }
 

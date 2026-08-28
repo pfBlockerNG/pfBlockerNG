@@ -1761,25 +1761,27 @@ def test_output_reader_does_not_outlive_the_run() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 22. pkg-setup repair hint (issue #2789): a failed pkg step is frequently the
-#     box's own repository setup, not our conf. The three recovery commands ride
-#     the failure output, but only where that setup can be the cause.
+# 22. pkg-setup repair hint (issues #2789, #2803, #2808): a failed pkg step is
+#     frequently the box's own repository setup, not our conf. `pfSense-upgrade -u`
+#     rebuilds that setup and refreshes the catalogue in one command; the bare form
+#     is the escalation behind a retry, because it upgrades the release and reboots.
+#     The hint rides the failure output, but only where that setup can be the cause.
 # --------------------------------------------------------------------------- #
 
-_REPAIR_COMMANDS = ("pfSense-repoc", "pfSense-repo-setup", "pfSense-upgrade")
+_REPAIR_COMMAND = "pfSense-upgrade -u"
+_BARE_UPGRADE_LIST_ITEM = "install.sh:   pfSense-upgrade\n"
 
 
 def _repair_hint_on_stderr(proc: subprocess.CompletedProcess[str]) -> bool:
     """The hint rides stderr beside die()'s diagnosis: a user who captures only stderr
     for a bug report still gets the remedy."""
-    return all(command in proc.stderr for command in _REPAIR_COMMANDS)
+    return _REPAIR_COMMAND in proc.stderr
 
 
 def _repair_hint_shown(proc: subprocess.CompletedProcess[str]) -> bool:
-    """Either stream — strictly stronger than the stderr check, so the negative cases
-    cannot pass merely because the hint went to stdout."""
-    combined = proc.stdout + proc.stderr
-    return any(command in combined for command in _REPAIR_COMMANDS)
+    """Either stream, and either form of the command — strictly stronger than the stderr
+    check, so a negative case cannot pass merely because the hint went to stdout."""
+    return "pfSense-upgrade" in proc.stdout + proc.stderr
 
 
 def test_pkg_update_failure_prints_the_repository_repair_sequence() -> None:
@@ -1788,47 +1790,49 @@ def test_pkg_update_failure_prints_the_repository_repair_sequence() -> None:
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
         assert _repair_hint_on_stderr(proc), proc.stdout + proc.stderr
-        assert proc.stderr.index("failed") < proc.stderr.index("pfSense-repoc"), (
+        assert proc.stderr.index("failed") < proc.stderr.index(_REPAIR_COMMAND), (
             f"the diagnosis must precede the remedy:\n{proc.stderr}"
         )
 
 
-def test_repair_hint_gates_pfsense_upgrade_behind_a_retry() -> None:
-    """issue #2803: a bare `pfSense-upgrade` applies the box's pending release upgrade
-    and reboots (upstream sets `: ${action:="upgrade"}` when no action flag is given),
-    so it is the escalation after rebuilding the repository files and retrying — never
-    the third item of a flat list the user works through in order."""
+def test_repair_hint_gates_the_bare_upgrade_behind_a_retry() -> None:
+    """issues #2803/#2808: `pfSense-upgrade -u` rebuilds the repository setup and
+    refreshes the catalogue, and is safe. The BARE form applies the box's pending
+    release upgrade and reboots (upstream sets `: ${action:="upgrade"}` when no action
+    flag is given), so it sits behind a retry — never beside `-u` as a second list
+    item the user works through in order."""
     with tempfile.TemporaryDirectory() as root:
         proc = _run_install(root, "testing", update_fails=True)
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
         hint = proc.stderr
-        before, _, escalation = hint.partition("pfSense-upgrade")
-        assert escalation, f"the escalation command is missing entirely:\n{hint}"
-        between = before.split("pfSense-repo-setup", 1)[1]
-        # Shape, not just vocabulary: an indented bare command is a third list item, which
-        # is the regression this gate exists to catch — the words alone all survive it.
-        assert "install.sh:   pfSense-upgrade" not in hint, (
-            f"pfSense-upgrade must not be a list item beside the two repair commands:\n{hint}"
-        )
-        assert "re-run" in between, f"the retry must sit before the escalation:\n{hint}"
-        assert "only if" in between, f"pfSense-upgrade must be conditional:\n{hint}"
+        before, _, escalation = hint.partition(_REPAIR_COMMAND)
+        assert escalation, f"the one-command repair is missing entirely:\n{hint}"
+        # Shape, not just vocabulary: a bare `pfSense-upgrade` on its own indented line is
+        # a second list item, the regression this gate exists to catch — every keyword
+        # below survives that flattening.
+        assert _BARE_UPGRADE_LIST_ITEM not in hint, f"the bare upgrade must not be a list item beside `-u`:\n{hint}"
+        assert "re-run" in escalation, f"the retry must sit before the escalation:\n{hint}"
+        assert "only if" in escalation, f"the bare upgrade must be conditional:\n{hint}"
         assert "reboot" in escalation, f"the reboot must be stated where it is proposed:\n{hint}"
+        assert escalation.index("only if") < escalation.index("reboot"), (
+            f"the condition must precede the consequence:\n{hint}"
+        )
 
 
-def test_usage_gates_pfsense_upgrade_behind_a_retry() -> None:
+def test_usage_gates_the_bare_upgrade_behind_a_retry() -> None:
     proc = _run_argv("--help")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     text = proc.stdout
-    before, _, escalation = text.partition("pfSense-upgrade")
+    before, _, escalation = text.partition(_REPAIR_COMMAND)
     assert escalation, text
+    assert "\n  pfSense-upgrade\n" not in text, f"the bare upgrade must not be a list item:\n{text}"
     # Help text is prose, so the gate words may open a sentence.
-    between = before.split("pfSense-repo-setup", 1)[1].casefold()
-    assert "\n  pfSense-upgrade" not in text, f"pfSense-upgrade must not be a list item:\n{text}"
-    assert "re-run" in between, text
-    assert "only if" in between, text
-    assert "reboot" in escalation.casefold(), text
+    folded = escalation.casefold()
+    assert "re-run" in folded, text
+    assert "only if" in folded, text
+    assert "reboot" in folded, text
 
 
 def test_empty_catalogue_failure_prints_the_repository_repair_sequence() -> None:
@@ -1903,5 +1907,4 @@ def test_usage_documents_the_repository_repair_sequence() -> None:
     proc = _run_argv("--help")
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    for command in _REPAIR_COMMANDS:
-        assert command in proc.stdout, proc.stdout
+    assert _REPAIR_COMMAND in proc.stdout, proc.stdout
