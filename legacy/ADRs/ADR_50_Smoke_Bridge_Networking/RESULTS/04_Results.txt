@@ -1,0 +1,70 @@
+ADR-50 P4 — CI bridge-setup wiring (smoke-single.yml + ui-tests.yml + smoke.yml)
+================================================================================
+
+OBJECTIVE (ADR §5.4)
+  Make the live-VM CI workflows able to run under SMOKE_NET_MODE=bridge: add a
+  `net_mode` toggle (default slirp) + a gated per-box bridge-setup step that calls the
+  P2 script (scripts/bridge-net.sh up), before the VM boots, and thread SMOKE_NET_MODE
+  into the pytest env so conftest (P3) + boot_vm.sh (P1) pick up bridge mode.
+
+WHAT CHANGED
+  .github/workflows/smoke-single.yml
+    - New `net_mode` input on BOTH workflow_dispatch (type: choice slirp|bridge) and
+      workflow_call (type: string, default "slirp").
+    - New step "Set up bridge networking (SMOKE_NET_MODE=bridge)", `if: inputs.net_mode
+      == 'bridge'`, placed AFTER "Resolve VM identity" (so RESOLVED_VM_MAC — the Plus
+      net1 MAC — is in $GITHUB_ENV; the pfSense MGMT static lease keys on it) and BEFORE
+      the pytest step. It: apt-installs dnsmasq; runs `sudo env SMOKE_VM_MAC=... sh
+      scripts/bridge-net.sh up` (root needed for ip/dnsmasq; SMOKE_VM_MAC passed through
+      sudo's env reset explicitly); appends the 5 emitted vars (SMOKE_WAN_TAP /
+      SMOKE_MGMT_TAP / SMOKE_CLIENT_MGMT_TAP / SMOKE_PFSENSE_MGMT_IP /
+      SMOKE_CLIENT_MGMT_IP) to $GITHUB_ENV.
+    - pytest step env: added `SMOKE_NET_MODE: ${{ inputs.net_mode }}` and made the
+      previously-hardcoded `SMOKE_STUB_DNS_ADDR` mode-aware:
+      `${{ inputs.net_mode == 'bridge' && '192.168.89.2' || '127.0.0.1' }}`.
+      (CRITICAL: without this the hardcoded loopback would override P3's conftest bridge
+      default — a step-level env wins over $GITHUB_ENV — so the stub DNS would bind
+      loopback in bridge mode and the guest's 192.168.89.2:53 would answer nothing.)
+
+  .github/workflows/ui-tests.yml
+    - Same `net_mode` input (call: string; dispatch: choice) + same bridge-setup step
+      after "Resolve VM identity". UI-tier env: added `SMOKE_NET_MODE: ${{ inputs.net_mode }}`.
+      No SMOKE_STUB_DNS_ADDR change needed — ui-tests never set it, so P3's conftest
+      default (bridge -> 192.168.89.2, slirp -> loopback) applies automatically.
+
+  .github/workflows/smoke.yml (fan-out)
+    - New `net_mode` input (dispatch: choice; call: string) forwarded to the smoke-single
+      call: `net_mode: ${{ inputs.net_mode || 'slirp' }}`. Lets P5 dispatch the WHOLE
+      CE+Plus fan-out under bridge in one shot.
+
+SLIRP IS BYTE-IDENTICAL (the regression guarantee)
+  net_mode defaults to "slirp" on every trigger AND every existing caller (test.yml /
+  release.yml / version-tracker / schedule pass nothing -> slirp). On slirp: the
+  bridge-setup step is skipped (if=false), SMOKE_NET_MODE='slirp' (conftest's own
+  default), and SMOKE_STUB_DNS_ADDR -> '127.0.0.1' (the prior literal). Nothing else
+  changes.
+
+VERIFICATION
+  - actionlint .github/workflows/{smoke-single,ui-tests,smoke}.yml -> exit 0 (clean;
+    actionlint does full YAML + workflow-schema + expression + run-block shellcheck).
+  - Slirp no-op reasoned above (gated step + ternary -> prior literal).
+  - NO runnable red->green unit test exists for CI-workflow wiring (it is not behaviour
+    executable off GitHub Actions). Per CLAUDE.md ADR-acceptance, this is a DOCUMENTED
+    out-of-CI item: the live validation of bridge mode end-to-end IS P5's A/B dispatch.
+
+P5 / LIVE ITEMS STILL OPEN (cannot be validated off a live runner; maintainer/P5)
+  - tap ownership vs non-root QEMU: bridge-net.sh creates root-owned taps; whether QEMU
+    (launched by boot_vm.sh as the runner user) can open them, or needs a `user <runner>`
+    on `ip tuntap add` (or QEMU-as-root), is a LIVE detail P5 must confirm/finalize. The
+    ADR §7 de-risk proved a bridge boot works on the GH runner, but the exact tap-user
+    wiring is not pinned here. If P5 finds it needs a tap user, add an optional
+    SMOKE_TAP_USER to bridge-net.sh + the CI step.
+  - dnsmasq actually serving DHCP + auto-announcing option 3/6 (§7.3) is runtime behaviour
+    the shellspec cannot assert (it stubs dnsmasq); P5's live boot is the proof.
+  - The A/B itself (slirp vs bridge timing on the CE+Plus fan-out) + the default flip
+    decision (§5.5) remain P5 / maintainer.
+
+NEXT
+  Landing: rebase the branch onto current origin/devel (it gained `54688477 adr: add
+  ADR-45 phase prompts` during the run), open the PR, run /pr-merge-flow. ADR.md §6 phase
+  statuses (P2/P3/P4 -> done) are an ADR-TEXT change -> direct to devel, NOT in this PR.

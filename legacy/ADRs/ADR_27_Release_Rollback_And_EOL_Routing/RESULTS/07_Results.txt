@@ -1,0 +1,207 @@
+================================================================================
+PHASE 7 RESULTS — Route-Only Generator: frozen .pkg catalog, no rebuild
+Branch: adr/27-release-rollback-and-eol-rou
+================================================================================
+
+STATUS: Complete. All verification gates green. Ready for Phase 8.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=8
+
+────────────────────────────────────────────────────────────────────────────────
+1. CHANGES
+────────────────────────────────────────────────────────────────────────────────
+
+Files modified (two, one commit):
+
+  scripts/build-repo-portable.py
+  tests/test_build_repo_portable.py
+
+────────────────────────────────────────────────────────────────────────────────
+2. FROZEN-.PKG INPUT CONTRACT
+────────────────────────────────────────────────────────────────────────────────
+
+New parameter on build_repo_matrix():
+
+  route_only_pkgs: dict[str, list[Path]] | None = None
+
+Key:   varver string — the output of catalog_name_from_version(version, variant)
+       e.g. "ce-2.7", "plus-25.03".
+Value: ordered list of pre-downloaded frozen .pkg Paths for that version.
+
+publish.yml downloads these from the corresponding GitHub Release tag and passes
+them here. The mapping is keyed by varver (not by matrix entry), so multiple
+arch entries for the same version can share the same frozen .pkg pool —
+_emit_catalog_from_paths deduplicates by (name, version), so arch-specific or
+duplicate entries are handled safely.
+
+If route_only_pkgs is None, empty, or missing the varver key for a route-only
+entry: BuildRepoError is raised immediately with a clear message containing
+"route-only". The error fires before any catalog output is written — fail loud,
+fail clean.
+
+────────────────────────────────────────────────────────────────────────────────
+3. ROUTE-ONLY BRANCH IN build_repo_matrix
+────────────────────────────────────────────────────────────────────────────────
+
+Inside the matrix loop, after extracting version / variant / arch / abi / php /
+py_flavor / status, the new code extracts:
+
+  role   = entry.get("role", "build")
+  varver = catalog_name_from_version(version, variant)
+
+Then branches:
+
+  if role == "route-only":
+      # --- route-only: frozen .pkg only; no rebuild; no nightly ---
+      frozen = list((route_only_pkgs or {}).get(varver) or [])
+      if not frozen:
+          raise BuildRepoError(...)          # fail loud
+      release_dir = out_dir / "release" / varver / arch
+      n_release = _emit_catalog_from_paths(release_dir, frozen)
+      built.append(str(release_dir))
+      # No nightly subtree — route-only entries never get a nightly build.
+
+  else:
+      # --- build entry (role absent or "build"): unchanged Part-1 path ---
+      ... (release subtree + optional nightly, identical to pre-Phase-7) ...
+
+  routes.append(...)  # OUTSIDE the if/else — both roles emit a route
+
+The build path is structurally identical to pre-Phase-7 code (only refactored
+from a flat block to the else branch). Back-compat confirmed: the full test suite
+(1767 tests) passes unchanged when no route-only entries are in the matrix.
+
+────────────────────────────────────────────────────────────────────────────────
+4. NO-NIGHTLY GUARANTEE
+────────────────────────────────────────────────────────────────────────────────
+
+The route-only branch returns after emitting the release catalog. The nightly
+subtree code lives entirely in the else branch and is never reached for role ==
+"route-only". This is structural — no flag, no conditional — so the guarantee
+holds regardless of the build_nightly parameter passed by the caller.
+
+Test: test_route_only_no_nightly_subtree asserts (before and after) that
+nightly/ce-2.7/ does NOT exist, while nightly/ce-2.8/ (a build entry in the
+same run) DOES exist.
+
+────────────────────────────────────────────────────────────────────────────────
+5. ROUTING-ENTRY GUARANTEE
+────────────────────────────────────────────────────────────────────────────────
+
+routes.append({"pattern": _ua_pattern(variant, version), "catalog": varver,
+               "status": status})
+
+This line is OUTSIDE both branches of the role if/else. It executes for every
+matrix entry, so both build and route-only entries emit exactly one routing
+entry per (variant, version) combination. _dedup_routes collapses entries with
+identical (pattern, catalog, status) — so multiple arches for the same version
+still produce ONE route.
+
+Test: test_route_only_routing_entries_for_all_entries verifies that routing.json
+for a [CE 2.8 (build), CE 2.7 (route-only), Plus 25.03 (route-only)] matrix
+contains routes for all three catalogs (ce-2.8, ce-2.7, plus-25.03), each with
+the correct status flowing through verbatim.
+
+────────────────────────────────────────────────────────────────────────────────
+6. TESTS ADDED
+────────────────────────────────────────────────────────────────────────────────
+
+New matrix fixture entries (module-level):
+
+  _CE_EOL = {pfsense_version: "2.7", variant: "CE", freebsd_major: "14",
+             php_version: "8.2", py_flavor: "py311", status: "EOL",
+             arch: "amd64", role: "route-only"}
+             → varver "ce-2.7"
+
+  _PLUS_EOL = {pfsense_version: "25.03", variant: "Plus", freebsd_major: "15",
+               php_version: "8.3", py_flavor: "py311", status: "EOL",
+               arch: "amd64", role: "route-only"}
+               → varver "plus-25.03"
+
+Tests added (all in tests/test_build_repo_portable.py):
+
+  test_route_only_release_catalog_contains_exactly_frozen_pkg
+    GIVEN frozen CE 2.7 .pkg (v3.1.0_5)
+    WHEN build_repo_matrix([_CE_EOL], route_only_pkgs={"ce-2.7": [frozen]})
+    THEN release/ce-2.7/amd64/ catalog lists exactly ONE entry: pfBlockerNG-devel 3.1.0_5
+    Before-state assert: release/ce-2.7 does not exist before the run.
+
+  test_route_only_no_nightly_subtree
+    GIVEN [_CE_EOL, _CE] matrix with build_nightly=True (default)
+    WHEN build_repo_matrix runs
+    THEN nightly/ce-2.7/ does NOT exist (route-only: no nightly)
+     AND nightly/ce-2.8/ DOES exist (build entry: normal)
+    Before-state assert: neither nightly subtree exists before the run.
+
+  test_route_only_routing_entries_for_all_entries
+    GIVEN [_CE, _CE_EOL, _PLUS_EOL] matrix
+    WHEN build_repo_matrix runs
+    THEN routing.json catalogs == {ce-2.8, ce-2.7, plus-25.03} (no 404)
+     AND status flows verbatim: ce-2.8=active, ce-2.7=EOL, plus-25.03=EOL
+    Before-state assert: routing.json does not exist before the run.
+
+  test_route_only_additive_parity_build_entry_unchanged
+    (CE/Plus parity — the before/after gate)
+    BEFORE: build_repo_matrix([_CE]) — capture release + nightly packagesite.pkg bytes
+    AFTER:  build_repo_matrix([_CE, _CE_EOL]) with frozen CE 2.7 added
+    THEN release/ce-2.8/amd64/packagesite.pkg bytes == before bytes
+     AND nightly/ce-2.8/amd64/packagesite.pkg bytes == before bytes
+    Proves route-only is additive — zero impact on build-entry subtrees.
+
+  test_route_only_ce_and_plus_both_served
+    GIVEN [_CE, _CE_EOL, _PLUS_EOL] with separate frozen .pkgs for each EOL entry
+    WHEN build_repo_matrix runs
+    THEN release/ce-2.7/ catalog version == "3.1.0_5"
+     AND release/plus-25.03/ catalog version == "3.0.9_1"
+     AND nightly/ce-2.7/ and nightly/plus-25.03/ do NOT exist
+
+  test_route_only_missing_frozen_pkg_raises_build_repo_error
+    Three sub-cases (all must raise BuildRepoError matching "route-only"):
+      1. route_only_pkgs is None
+      2. route_only_pkgs has a wrong key ("plus-26.03" but entry is "ce-2.7")
+      3. route_only_pkgs["ce-2.7"] is an empty list
+    Also asserts: release/ce-2.7 does NOT exist after the error (fail clean).
+
+  test_route_only_multiple_frozen_pkgs_all_indexed
+    GIVEN route_only_pkgs["ce-2.7"] = [v3.1.0_4.pkg, v3.1.0_5.pkg]
+    WHEN build_repo_matrix runs
+    THEN release/ce-2.7/ catalog lists BOTH versions {"3.1.0_4", "3.1.0_5"}
+    (rollback use-case: retain the last two builds before EOL)
+
+────────────────────────────────────────────────────────────────────────────────
+7. VERIFICATION RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+python -m pytest:        1767 passed (full suite, +7 new tests, no regressions)
+ruff check .:            All checks passed
+ruff format --check .:   112 files already formatted
+mypy tests/:             Success: no issues found in 46 source files
+sh -n / pre-commit hook: All gates green (pre-commit log shows all clean)
+markdownlint:            0 error(s)
+shellcheck:              Not installed (CI is the hard gate)
+
+────────────────────────────────────────────────────────────────────────────────
+8. COMMIT
+────────────────────────────────────────────────────────────────────────────────
+
+Message: dev: serve route-only (EOL) versions from frozen .pkg, no rebuild (ADR-27 P7)
+Author:  Andre Brait <andrebrait@gmail.com>
+SHA:     e1ad4ad (tip of adr/27-release-rollback-and-eol-rou)
+
+────────────────────────────────────────────────────────────────────────────────
+9. GO-AHEAD FOR PHASE 8
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 8 (Worker pin) may proceed. The generator now serves route-only (EOL)
+versions from frozen .pkg: the release catalog is regenerated each run from the
+frozen assets, the Worker routes clients to it via routing.json, and no nightly
+subtree is ever created for a route-only entry. The build path is byte-identical
+to pre-Phase-7 (parity confirmed by before/after test).
+
+Phase 8 task: pin the Cloudflare Worker routing logic so that a route-only
+catalog's routing entry is never accidentally overwritten or superseded by a
+fresher build entry (e.g. if a varver key is reused). Ensure the Worker correctly
+serves the frozen catalog path for EOL versions — the routing.json structure from
+Phase 7 already carries status:"EOL" for route-only entries, which Phase 8 can
+use as the discriminant.
+================================================================================

@@ -1,0 +1,209 @@
+name: TLD List Refresh
+
+# Weekly refresh of the DNSBL "TLD Allow" picker arrays from IANA.
+#
+# scripts/misc/update_tld_lists.py rewrites the gTLD/ccTLD/iTLD arrays in
+# src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php from the authoritative
+# IANA root-zone list (bgTLD is hand-curated and never touched). When the root
+# zone changes, this workflow opens/updates a PR against devel — it NEVER
+# pushes to devel directly.
+#
+# GitHub suppresses push/pull_request-triggered workflow runs for events
+# created by GITHUB_TOKEN, so test.yml's own pull_request gate never fires on
+# this PR — and a workflow_dispatch run's checks do NOT attach to a PR's
+# Checks tab either (only pull_request-triggered runs do; verified on #911).
+# So this workflow dispatches the real gates (test.yml's unit suite +
+# ui-tests.yml's Tier-A ui_render) onto the branch head after opening/updating
+# the PR, then posts a PR comment linking both runs: the PR's Checks tab stays
+# empty by GitHub's design — the linked runs (Actions tab) ARE the gate.
+# NOTE: the dry_run self-test validates the IANA diff only; the push / PR /
+# dispatch / comment path is exercised only by a real (non-dry) run. See issue
+# #872 (maintenance umbrella), issue #902 (the CI-dispatch fix), and
+# docs/misc/tld-lists.md.
+
+on:
+  # Weekly, Monday 06:00 UTC. The root zone changes slowly; weekly is ample.
+  schedule:
+    - cron: "0 6 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log the drift that WOULD be proposed but open no PR and
+          push nothing. Self-tests the IANA diff only — the push/PR/CI-dispatch
+          path runs only on a real (non-dry) run.
+        required: false
+        default: "false"
+
+# Least-privilege default; the refresh job elevates to write the automation
+# branch and open the PR. It never writes devel/main.
+permissions:
+  packages: read
+  contents: read
+
+# One refresh at a time — a slow scheduled run must not race a manual dispatch.
+concurrency:
+  group: tld-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh TLD lists and open PR on change
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      contents: write        # push the automation branch (NOT devel)
+      pull-requests: write    # open/label the PR
+      actions: write          # dispatch the CI gates onto the branch head (#902)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: tld-refresh/auto
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: true   # need to push the automation branch via git push --force
+          ref: devel
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
+      # Automated commits must hit the same local gates as a human commit.
+      - name: Activate git hooks
+        run: sh scripts/setup-hooks.sh
+
+      - name: Fetch the ci-metadata orphan ref
+        # The reader reads origin/ci-metadata; checkout doesn't bring orphan refs.
+        run: git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+
+      - name: Read the supported PHP versions
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
+      # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
+      # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
+      # supported PHP — the floor a diagnostic has to clear — never the runner default.
+      - name: Set up PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+        uses: shivammathur/setup-php@v2 # v2.37.2
+        with:
+          php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+          tools: composer:2.10.2
+
+      - name: Resolve the Composer cache directory
+        # Composer's cache lives wherever COMPOSER_HOME/XDG put it, not at a fixed
+        # path — ask composer for it, or actions/cache below would store nothing.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer packages
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      # Ungated so every run exercises the install: a lock or platform break then
+      # surfaces weekly instead of only on a drift week.
+      - name: Install Composer dependencies for the pre-commit PHP gates
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Refresh arrays from IANA
+        id: refresh
+        run: |
+          set -eu
+          python3 scripts/misc/update_tld_lists.py
+          if git diff --quiet -- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "TLD arrays already match IANA — nothing to propose."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "IANA drift detected:"
+            git diff --stat -- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+          fi
+
+      - name: Open or update the refresh PR
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Rebuild the bot-owned automation branch from the current change and
+          # force-push it (no human works on it, so a reset+force is safe).
+          git checkout -B "$BRANCH"
+          git add src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+          git commit -m "pfblockerng: refresh TLD Allow lists from IANA (automated)"
+          git push --force origin "$BRANCH"
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # PR first, CI dispatch after: the PR is the primary side effect — a
+          # transient dispatch failure must not leave a pushed branch with no
+          # PR until next Monday. One open PR at a time: the force-push above
+          # already updated any existing one.
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            echo "An open PR from $BRANCH already exists (#$PR_NUMBER) — the force-push updated it."
+          else
+            gh pr create \
+              --base devel \
+              --head "$BRANCH" \
+              --title "pfblockerng: refresh TLD Allow lists from IANA (automated)" \
+              --label "enhancement" \
+              --label "ui-tests" \
+              --body "Automated weekly refresh of the DNSBL **TLD Allow** picker arrays (\`gTLD\`/\`ccTLD\`/\`iTLD\`) from the [IANA root zone](https://data.iana.org/TLD/tlds-alpha-by-domain.txt), via \`scripts/misc/update_tld_lists.py\`. \`bgTLD\` is hand-curated and untouched. Part of the recurring maintenance in #872 — review the data diff. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab — the workflow dispatches the unit suite (\`test.yml\`) and the Tier-A \`ui_render\` gate (\`ui-tests.yml\`) onto this branch's head and links both runs in a comment below (they are also visible in the repo's Actions tab). Merge once both linked runs are green."
+            PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number')
+          fi
+
+          # GITHUB_TOKEN-created pushes/PRs trigger no workflow runs, so the
+          # branch head gets no automatic CI. workflow_dispatch is the
+          # documented exception — dispatch the real gates onto the branch.
+          # --ref only accepts a branch/tag (a bare SHA is rejected with HTTP
+          # 422 "No ref found"), so dispatch by branch and pin the runs to
+          # HEAD_SHA when resolving them below. scope=impacted derives its -k
+          # from changed TEST files only; this PR changes src only, so the
+          # derivation is empty and resolve-legs.sh falls back to the WHOLE
+          # ui_render tier on the min-CE leg — the intended gate. Loud on
+          # failure: no `|| true`, `set -eu` is active (issue #902).
+          gh workflow run test.yml --ref "$BRANCH"
+          gh workflow run ui-tests.yml --ref "$BRANCH" -f tier=render -f scope=impacted
+
+          # A workflow_dispatch run's checks never attach to the PR's Checks
+          # tab (only pull_request-triggered runs do), so without this comment
+          # the PR looks unchecked. Resolve each dispatched run's URL — runs
+          # take a few seconds to appear — and link them on the PR.
+          find_run_url() {
+            # $1 = workflow file; poll for the dispatched run at OUR head SHA.
+            _i=0
+            while [ "$_i" -lt 6 ]; do
+              _url=$(gh run list --workflow "$1" --branch "$BRANCH" \
+                       --event workflow_dispatch --limit 5 --json url,headSha \
+                       --jq ".[] | select(.headSha == \"$HEAD_SHA\") | .url" | head -n 1)
+              if [ -n "$_url" ]; then
+                printf '%s\n' "$_url"
+                return 0
+              fi
+              _i=$((_i + 1))
+              sleep 5
+            done
+            return 1
+          }
+          UNIT_URL=$(find_run_url test.yml) || {
+            echo "::warning::could not resolve the dispatched test.yml run for $HEAD_SHA — find it in the Actions tab."
+            UNIT_URL="not resolved — see the repo's Actions tab (workflow: Tests, branch: $BRANCH)"
+          }
+          UI_URL=$(find_run_url ui-tests.yml) || {
+            echo "::warning::could not resolve the dispatched ui-tests.yml run for $HEAD_SHA — find it in the Actions tab."
+            UI_URL="not resolved — see the repo's Actions tab (workflow: UI tests fan-out, branch: $BRANCH)"
+          }
+          gh pr comment "$PR_NUMBER" --body "CI for head \`$HEAD_SHA\` was dispatched by the refresh workflow (GitHub runs no automatic checks on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab): unit CI: $UNIT_URL — Tier-A UI render: $UI_URL. Merge once both runs are green."
+
+      - name: Dry-run summary
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN == 'true'
+        run: |
+          set -eu
+          echo "=== DRY-RUN: drift detected, but no branch pushed and no PR opened ==="
+          git diff -- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php | head -60

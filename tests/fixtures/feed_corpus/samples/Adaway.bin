@@ -1,0 +1,396 @@
+# AdAway default blocklist
+# Blocking mobile ad providers and some analytics providers
+#
+# Project home page:
+# https://github.com/AdAway/adaway.github.io/
+#
+# Fetch the latest version of this file:
+# https://raw.githubusercontent.com/AdAway/adaway.github.io/master/hosts.txt
+#
+# License:
+# CC Attribution 3.0 (http://creativecommons.org/licenses/by/3.0/)
+#
+# Contributions by:
+# Kicelo, Dominik Schuermann.
+# Further changes and contributors maintained in the commit history at
+# https://github.com/AdAway/adaway.github.io/commits/master
+#
+# Contribute:
+# Create an issue at https://github.com/AdAway/adaway.github.io/issues
+#
+
+127.0.0.1  localhost
+::1  localhost
+
+# [163.com]
+127.0.0.1 analytics.163.com
+127.0.0.1 crash.163.com
+127.0.0.1 iad.g.163.com
+
+# [1mobile.com]
+127.0.0.1 api4.1mobile.com
+
+# [1rx.io]
+127.0.0.1 sync.1rx.io
+127.0.0.1 tag.1rx.io
+
+# [206ads.com]
+127.0.0.1 s.206ads.com
+
+# [247-inc.net]
+127.0.0.1 api.247-inc.net
+127.0.0.1 tie.247-inc.net
+
+# [247realmedia.com]
+127.0.0.1 247realmedia.com
+
+# [2mdn.net]
+127.0.0.1 s0.2mdn.net
+
+# [33across.com]
+127.0.0.1 cms-xch-chicago.33across.com
+127.0.0.1 ssc.33across.com
+127.0.0.1 ssc-cms.33across.com
+
+# [360in.com]
+127.0.0.1 360in.com
+127.0.0.1 ad.360in.com
+127.0.0.1 challenge.360in.com
+127.0.0.1 dispatcher.360in.com
+127.0.0.1 exp.360in.com
+
+# [360yield.com]
+127.0.0.1 ad.360yield.com
+
+# [3gl.net]
+127.0.0.1 3gl.net
+127.0.0.1 g.3gl.net
+127.0.0.1 r.3gl.net
+
+# [3lift.com]
+127.0.0.1 as-eb2.3lift.com
+127.0.0.1 as-tlx.3lift.com
+127.0.0.1 cdn.3lift.com
+127.0.0.1 dmpsync.3lift.com
+127.0.0.1 eb2.3lift.com
+127.0.0.1 eu-tlx.3lift.com
+127.0.0.1 ib.3lift.com
+127.0.0.1 images.3lift.com
+127.0.0.1 img.3lift.com
+127.0.0.1 staging-tlx.3lift.com
+127.0.0.1 tlx.3lift.com
+127.0.0.1 update.3lift.com
+127.0.0.1 s.update.3lift.com
+127.0.0.1 us-east-tlx.3lift.com
+127.0.0.1 us-west-tlx.3lift.com
+
+# [404mobi.com]
+127.0.0.1 404mobi.com
+
+# [4dex.io]
+127.0.0.1 c.4dex.io
+127.0.0.1 script.4dex.io
+
+# [4dsply.com]
+127.0.0.1 4dsply.com
+
+# [4seeresults.com]
+127.0.0.1 4seeresults.com
+127.0.0.1 controller.4seeresults.com
+127.0.0.1 device.4seeresults.com
+127.0.0.1 replaycontroller.4seeresults.com
+
+# [51ginkgo.com]
+127.0.0.1 51ginkgo.com
+
+# [81plug.com]
+127.0.0.1 logs.81plug.com
+
+# [88-f.net]
+127.0.0.1 cdn.88-f.net
+127.0.0.1 config.88-f.net
+
+# [9gag.com]
+127.0.0.1 rlog.9gag.com
+
+# [a-ads.com]
+127.0.0.1 ad.a-ads.com
+127.0.0.1 click.a-ads.com
+127.0.0.1 static.a-ads.com
+
+# [a.ki]
+127.0.0.1 fl.a.ki
+
+# [a2z.com]
+127.0.0.1 prod.cm.publishers.advertising.a2z.com
+127.0.0.1 notify.bugsnag.appstore.a2z.com
+127.0.0.1 analytics.console.aws.a2z.com
+127.0.0.1 pr.analytics.console.aws.a2z.com
+127.0.0.1 prod.pr.analytics.console.aws.a2z.com
+127.0.0.1 ap-southeast-1.prod.pr.analytics.console.aws.a2z.com
+127.0.0.1 us-east-1.prod.pr.analytics.console.aws.a2z.com
+127.0.0.1 us-east-2.prod.pr.analytics.console.aws.a2z.com
+127.0.0.1 us-west-2.prod.pr.analytics.console.aws.a2z.com
+127.0.0.1 pw.analytics.console.aws.a2z.com
+127.0.0.1 prod.pw.analytics.console.aws.a2z.com
+127.0.0.1 metrics.client-eng.a2z.com
+127.0.0.1 global.telemetry.insights.video.a2z.com
+
+# [a3cloud.net]
+127.0.0.1 segment.a3cloud.net
+
+# [a8.net]
+127.0.0.1 a8.net
+
+# [aa.com]
+127.0.0.1 smetrics.aa.com
+
+# [aamapi.com]
+127.0.0.1 aamapi.com
+
+# [aamsitecertifier.com]
+127.0.0.1 aamcf.aamsitecertifier.com
+
+# [aarki.net]
+127.0.0.1 adx-asia.aarki.net
+127.0.0.1 adx-asia-imp.aarki.net
+127.0.0.1 adx-west-imp.aarki.net
+127.0.0.1 chartboost-imp.aarki.net
+127.0.0.1 rm.aarki.net
+127.0.0.1 rm-hk.aarki.net
+127.0.0.1 spire.aarki.net
+127.0.0.1 unity-imp.aarki.net
+
+# [aatkit.com]
+127.0.0.1 lb.aatkit.com
+127.0.0.1 reporting.aatkit.com
+127.0.0.1 rules.aatkit.com
+127.0.0.1 rules2.aatkit.com
+127.0.0.1 rules3.aatkit.com
+127.0.0.1 tracking.aatkit.com
+
+# [aaxads.com]
+127.0.0.1 c.aaxads.com
+
+# [abbi.io]
+127.0.0.1 assets.abbi.io
+127.0.0.1 rtapi.abbi.io
+127.0.0.1 stats.abbi.io
+
+# [abc.com]
+127.0.0.1 sw88.abc.com
+
+# [abtasty.com]
+127.0.0.1 ariane.abtasty.com
+127.0.0.1 dcinfos-cache.abtasty.com
+127.0.0.1 sr-tag.abtasty.com
+
+# [accengage.com]
+127.0.0.1 pingapi.accengage.com
+
+# [accengage.net]
+127.0.0.1 daraz-by.accengage.net
+
+# [accesstrade.vn]
+127.0.0.1 static.accesstrade.vn
+
+# [acmeaom.com]
+127.0.0.1 tags.acmeaom.com
+
+# [activemetering.com]
+127.0.0.1 activemetering.com
+127.0.0.1 track.activemetering.com
+
+# [acuityplatform.com]
+127.0.0.1 ums.acuityplatform.com
+
+# [ad-brix.com]
+127.0.0.1 config.ad-brix.com
+
+# [ad-delivery.net]
+127.0.0.1 ad-delivery.net
+
+# [ad-locus.com]
+127.0.0.1 api.ad-locus.com
+127.0.0.1 a.api.ad-locus.com
+
+# [ad-score.com]
+127.0.0.1 data.ad-score.com
+127.0.0.1 data2.ad-score.com
+127.0.0.1 js2.ad-score.com
+127.0.0.1 rdr.ad-score.com
+127.0.0.1 rt.ad-score.com
+
+# [ad-srv.co]
+127.0.0.1 c.ad-srv.co
+
+# [ad-stir.com]
+127.0.0.1 ad-stir.com
+127.0.0.1 bypass.ad-stir.com
+127.0.0.1 js.ad-stir.com
+127.0.0.1 sync.ad-stir.com
+127.0.0.1 tr.ad-stir.com
+
+# [ad-x.co.uk]
+127.0.0.1 ad-x.co.uk
+127.0.0.1 apps.ad-x.co.uk
+
+# [ad.gt]
+127.0.0.1 a.ad.gt
+127.0.0.1 ids.ad.gt
+127.0.0.1 p.ad.gt
+127.0.0.1 pixels.ad.gt
+127.0.0.1 seg.ad.gt
+
+# [ad.org.vn]
+127.0.0.1 ad.org.vn
+127.0.0.1 serving.ad.org.vn
+
+# [ad2iction.com]
+127.0.0.1 adlogs.ad2iction.com
+127.0.0.1 ads.ad2iction.com
+127.0.0.1 content.ad2iction.com
+
+# [ad4game.com]
+127.0.0.1 ads.ad4game.com
+
+# [ad6media.fr]
+127.0.0.1 ad6media.fr
+
+# [adacado.com]
+127.0.0.1 ad.adacado.com
+127.0.0.1 content.adacado.com
+127.0.0.1 info.adacado.com
+127.0.0.1 pixel.adacado.com
+127.0.0.1 strtrk.adacado.com
+
+# [adadapted.com]
+127.0.0.1 ads.adadapted.com
+127.0.0.1 ec.adadapted.com
+127.0.0.1 images.adadapted.com
+127.0.0.1 payload.adadapted.com
+
+# [adalliance.io]
+127.0.0.1 aqt.adalliance.io
+127.0.0.1 mafo.adalliance.io
+
+# [adalyser.com]
+127.0.0.1 tracking.adalyser.com
+
+# [adap.tv]
+127.0.0.1 adap.tv
+127.0.0.1 segments.adap.tv
+127.0.0.1 sync.adap.tv
+
+# [adapex.io]
+127.0.0.1 adapex.io
+127.0.0.1 cdn.adapex.io
+
+# [adasiaholdings.com]
+127.0.0.1 adasiaholdings.com
+127.0.0.1 adnetwork.adasiaholdings.com
+
+# [adblade.com]
+127.0.0.1 adblade.com
+127.0.0.1 dmp.adblade.com
+127.0.0.1 pixel.adblade.com
+127.0.0.1 static-cdn.adblade.com
+
+# [adbro.me]
+127.0.0.1 adbro.me
+127.0.0.1 apis.adbro.me
+127.0.0.1 cdn.adbro.me
+
+# [adcalls.nl]
+127.0.0.1 api.adcalls.nl
+
+# [adcdnx.com]
+127.0.0.1 cdn1.adcdnx.com
+
+# [adcel.co]
+127.0.0.1 rtb.adcel.co
+
+# [adcell.com]
+127.0.0.1 t.adcell.com
+
+# [adcolony.com]
+127.0.0.1 adcolony.com
+127.0.0.1 adc3-assets.adcolony.com
+127.0.0.1 adc3-launch.adcolony.com
+127.0.0.1 ads30.adcolony.com
+127.0.0.1 androidads20.adcolony.com
+127.0.0.1 androidads21.adcolony.com
+127.0.0.1 androidads23.adcolony.com
+127.0.0.1 androidads4-3.adcolony.com
+127.0.0.1 androidads4-5.adcolony.com
+127.0.0.1 androidads4-7.adcolony.com
+127.0.0.1 androidads4-8.adcolony.com
+127.0.0.1 c4d-cdn.adcolony.com
+127.0.0.1 c4dm.adcolony.com
+127.0.0.1 cpa.adcolony.com
+127.0.0.1 events3.adcolony.com
+127.0.0.1 events3alt.adcolony.com
+127.0.0.1 iosads24.adcolony.com
+127.0.0.1 rtb.adcolony.com
+127.0.0.1 wd.adcolony.com
+
+# [addealsnetwork.com]
+127.0.0.1 adsinter1.addealsnetwork.com
+127.0.0.1 adsvideo1.addealsnetwork.com
+127.0.0.1 trk-int.addealsnetwork.com
+
+# [addthis.com]
+127.0.0.1 api.addthis.com
+127.0.0.1 api-public.addthis.com
+127.0.0.1 cw.addthis.com
+127.0.0.1 dlx.addthis.com
+127.0.0.1 e.dlx.addthis.com
+127.0.0.1 m.dlx.addthis.com
+127.0.0.1 p.dlx.addthis.com
+127.0.0.1 x.dlx.addthis.com
+127.0.0.1 edge.addthis.com
+127.0.0.1 m.addthis.com
+127.0.0.1 q.addthis.com
+127.0.0.1 s7.addthis.com
+127.0.0.1 s8.addthis.com
+127.0.0.1 su.addthis.com
+127.0.0.1 v1.addthis.com
+
+# [addthiscdn.com]
+127.0.0.1 cache.addthiscdn.com
+
+# [addthisedge.com]
+127.0.0.1 m.addthisedge.com
+
+# [addtoany.com]
+127.0.0.1 static.addtoany.com
+127.0.0.1 stats.addtoany.com
+
+# [adelement.com]
+127.0.0.1 ads.adelement.com
+127.0.0.1 ctv.adelement.com
+127.0.0.1 sc.adelement.com
+
+# [adentifi.com]
+127.0.0.1 bm.adentifi.com
+127.0.0.1 rtb.adentifi.com
+
+# [adfalcon.com]
+127.0.0.1 adfalcon.com
+127.0.0.1 api.adfalcon.com
+
+# [adforgames.com]
+127.0.0.1 adforgames.com
+
+# [adform.com]
+127.0.0.1 adform.com
+
+# [adform.net]
+127.0.0.1 adform.net
+127.0.0.1 a1.adform.net
+127.0.0.1 adx.adform.net
+127.0.0.1 adx2.adform.net
+127.0.0.1 asia.adform.net
+127.0.0.1 c1.adform.net
+127.0.0.1 cm.adform.net
+127.0.0.1 cm2.adform.

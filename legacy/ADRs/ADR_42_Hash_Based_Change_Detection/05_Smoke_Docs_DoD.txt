@@ -1,0 +1,68 @@
+================================================================================
+PHASE 5 PROMPT — Live-VM smoke + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md   (read §4 requirements + §7 DoD)
+================================================================================
+
+ROLE
+You implement Phase 5 of ADR-42 on branch `adr/42-hash-based-change-detection`: the live-VM smoke
+matrix + final docs/DoD. Work inline on the branch, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The 304/ETag path and end-to-end content detection are only fully real on the ADR-04 live VM (no real
+HTTP server / Unbound in CI). This phase pins the matrix on the live VM (CE + Plus) and closes the
+ADR's Definition of Done.
+
+REQUIRED READING
+- FIRST, read the prior handoff: .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/04_Results.txt. If
+  missing, STOP and report.
+- .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md (§4 requirements; §7 DoD + manual smoke checklist +
+  reject criteria)
+- The RESULTS handoffs 02/03 (the detection + conditional-GET flows, smoke case names) and
+  tests/smoke/test_smoke_feeds.py + conftest.py `_MockFeedServer` (extended in Phase 3 to emit
+  ETag/Last-Modified + 304).
+- CLAUDE.md Smoke-tests section (probe ON-BOX; unique_domain(); cron verb + pfb_dailystart due; the
+  noupdates path; egress; mock-feed SLIRP host); docs/misc/local-smoke-debian.md + scripts/local-smoke.sh.
+
+ACTION PLAN
+1. Consolidate / finalise the live-VM smoke matrix in tests/smoke/ (extending test_smoke_feeds.py):
+   - LOCAL: same-second content change detected+re-ingested (the #540 blind spot, now closed);
+     content-identical -> no re-ingest; legacy `.md5` present -> read, then replaced by `.xxhash128`.
+   - REMOTE (mock-feed server): unchanged + matching validator -> 304 -> NOT re-downloaded/re-ingested;
+     changed -> 200 -> hashed -> re-ingested; no-validator server -> download + hash decides; spurious
+     200 identical bytes -> no re-ingest. Assert via the detector log + a client DNS/probe outcome.
+   - "No false skip" guard: across the matrix, a genuinely changed feed is ALWAYS re-ingested.
+2. Verify the migrated #538/#540 cron cases are green under the hash-based detector on the live VM.
+3. Finalise docs: ensure architecture-notes + CLAUDE.md match the shipped behaviour (detector is
+   content-addressed; conditional-GET-first; tagged `.xxhash128` + legacy `.md5`); tick the §7 DoD;
+   record the manual-smoke checklist items the maintainer must run on a real ETag-emitting host + a
+   real upgrade-with-legacy-`.md5`.
+4. Run the live-VM fan-out (CE + Plus) for the new/affected smoke cases (or hand the dispatch to the
+   maintainer per ADR-04) and record the result.
+
+CONSTRAINTS
+- Smoke domains via h.unique_domain(); probe ON-BOX or via client_vm; egress per CaseContext; mock
+  feeds are inert (RFC 5737/3849, uuid-*.com). Drive feed changes via the genuine `cron` verb. Do NOT
+  weaken the fail-safe assertions. Markdown clean.
+
+VERIFICATION (all must pass)
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only -q   → the full matrix collects
+- ruff check tests/ ; ruff format --check tests/                      → clean
+- npx markdownlint-cli2 (touched docs)                                → 0 errors
+- The live-VM fan-out (CE + Plus) for the affected cases               → green (or maintainer-dispatched
+  with the run recorded in the handoff). On any failure read smoke-diagnostics first.
+- diff-read: every §4 requirement has a corresponding green assertion; no false-skip path.
+
+EXPECTED RESULT
+The full live-VM matrix (local hash detection incl. same-second; remote 304/200/no-validator;
+legacy-md5 read+replace; no-false-skip) green on CE + Plus; docs + DoD complete; ADR-42 ready to flip
+to Accepted on the evidence (per CLAUDE.md "ADR acceptance — automated tests").
+
+COMMIT (single)
+    tests/smoke+docs: live-VM matrix for hash detection + conditional GET; close DoD (ADR-42 P5)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/05_Results.txt
+Record: the final smoke matrix + results (CE + Plus); each §4 requirement -> its proving assertion;
+the manual-smoke checklist handed to the maintainer; the DoD status; and whether ADR-42 should flip
+to Accepted (or what remains).

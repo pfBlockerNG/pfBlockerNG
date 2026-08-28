@@ -1,0 +1,144 @@
+================================================================================
+PHASE 2 PROMPT — Wire pfb_validate_archive() into pfb_download()'s archive branches
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md   (read §2, §3, §6 Phase 2 first)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/45-structural-integrity-tests (off devel)
+Phase 2 of 4 — behaviour-CHANGING (early reject of corrupt/truncated archives).
+Work ENTIRELY inside the worktree you were given (`git -C <worktree> ...`).
+Do NOT touch the main checkout. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 1 landed pfb_archive_probe() + pfb_validate_archive() (unwired). This phase
+calls pfb_validate_archive() at the TOP of each archive branch in pfb_download(),
+BEFORE extraction. A corrupt/truncated/wrong-format archive that nonetheless
+satisfied the file(1) MIME gate is now rejected early and clearly, instead of
+reaching the decompressor and failing late and opaquely (ADR §1, §3).
+
+REQUIRED READING
+- FIRST read the prior handoff:
+  .ADRs/ADR_45_Structural_Integrity_Tests/RESULTS/01_Results.txt
+  Confirm pfb_validate_archive(string $file, string $type, ?callable $runner=NULL): bool
+  exists, its runner contract (callable(array):int; exit 0 == valid), and that it
+  takes the RAW (unescaped) path. If missing -> STOP.
+- .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md  (§2 decision table, §3 risks, §6 Phase 2)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_download():
+    * $file_type = pfb_filter(...PFB_FILTER_FILE_MIME...) ............. L8252
+    * RAW download path is $file_download (input[1] at the gate call) . L8252
+    * gzip branch opener  `if ($file_type == 'application/x-gzip' || ... 'application/gzip')` L8278
+    * bzip2 branch opener `elseif ($file_type == 'application/x-bzip2')` L8338
+    * zip branch opener   `elseif ($file_type == 'application/zip')` ... L8345
+    * 7z branch opener    `elseif ($file_type == 'application/x-7z-compressed')` L8397
+    * unlink_if_exists() + `return FALSE` reject idiom already used at L8332 etc.
+- CLAUDE.md  (test-coverage non-negotiables; §5 ADR note: pfb_download()'s shell
+  paths are NOT off-appliance unit-testable — decision logic is unit-tested,
+  live exec/end-to-end is ADR-04 smoke; same split as ADR-44).
+- tests/php/PfbFileMimeNormaliseWiringTest.php  (the live-tool wiring-test
+  template: build a real fixture, guard with markTestSkipped if the host tool
+  is unavailable, assert real behaviour).
+
+ACTION PLAN (ordered)
+
+1. Insert the probe at the TOP of each archive branch, BEFORE any extraction or
+   sub-type dispatch (so the container is validated regardless of geoip/asn/
+   blacklist/top1m sub-cases). For each of the gzip (L8278), bzip2 (L8338), zip
+   (L8345), 7z (L8397) branches, the FIRST statement inside the branch:
+
+       if (!pfb_validate_archive($file_download, $file_type)) {
+           pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+           unlink_if_exists($file_download);
+           return FALSE;
+       }
+
+   - Pass the RAW path $file_download (NOT $file_dwn_esc) — pfb_validate_archive()
+     escapes internally.
+   - Use the canonical $file_type as the probe key. For gzip the branch matches
+     both 'application/x-gzip' and 'application/gzip'; pass $file_type through —
+     pfb_archive_probe() maps both to gunzip -t.
+   - The message format is the interim clear message (the unified rejection-log
+     format is ADR-48's job — do NOT build it here; a clear message now).
+
+2. Confirm the probe does NOT disturb the existing partial `tar -tf` work in the
+   zip branch (geoip/top1m member-count at L8350, xlsx test at L8376): the probe
+   is an ADDED pass-through check above them; leave that logic untouched.
+
+3. Confirm php -l and the existing suite stay green (the wiring adds a call; no
+   pure-helper or pfb_filter() change).
+
+TEST COVERAGE (this phase changes behaviour — honour the five non-negotiables)
+
+The TRUE end-to-end red->green (a corrupt archive now rejected by pfb_download)
+is the ADR-04 smoke in Phase 4 (pfb_download() is not off-appliance unit-testable
+— ADR §5). For PR-level off-appliance evidence, add a LIVE-TOOL wiring test that
+proves pfb_validate_archive() correctly accepts a real valid archive and rejects
+a real truncated one PER FORMAT, using the actual base tools:
+
+   ArchiveValidateWiringTest.php  (#[CoversFunction('pfb_validate_archive')])
+   For each format the host has the tool for (guard each with markTestSkipped if
+   the tool / capability is absent — e.g. no /usr/local/bin/7z on the CI host):
+     - Build a small VALID archive in a temp dir from inert bytes (e.g. gzip/bzip2
+       a short text blob; zip a short member; 7z if available). Assert
+       pfb_validate_archive($path, <canonical_type>) === TRUE.
+     - Make a TRUNCATED/corrupt copy (e.g. write only the first N bytes, or flip
+       the trailing bytes). Assert pfb_validate_archive($corrupt, <type>) === FALSE.
+   Assert the BEFORE (valid -> TRUE) and AFTER (corrupt -> FALSE) for the SAME
+   format, so green proves the probe distinguishes them (not an always-TRUE or
+   always-FALSE path). Print expected-vs-actual on failure.
+
+   This is genuine red->green at the function-behaviour level: the helper's
+   exit-code decision is exercised against the real tools, complementing Phase 1's
+   injected-runner decision tests. Record in the handoff that the end-to-end
+   pfb_download() rejection is pinned by the Phase 4 smoke (red on a fix-reverted
+   pkg).
+
+CONSTRAINTS
+- Probe call is added ONLY at the top of the four archive branches. Do NOT add it
+  to the non-archive `else` (uncompressed) path (L8404) — that is a reject
+  criterion in ADR §7 (no structural probe on a plain-text path).
+- Do NOT change $file_type derivation, the MIME gate, or the helpers.
+- Do NOT implement octet-stream recovery here — that is Phase 3.
+- Do NOT build the ADR-48 unified log format — clear interim message only.
+- PHP 8.3; tabs; uppercase TRUE/FALSE.
+
+VERIFICATION
+- vendor/bin/phpunit                 -> green (existing + ArchiveValidateWiringTest)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc   -> no syntax errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc -> clean
+  (RequirePfbFilter sniff scope is pfblockerng.inc — confirm the new exec-free
+   helper calls do not trip it; pfb_validate_archive() is the validation layer)
+- git -C <worktree> diff --stat   -> pfblockerng.inc + the new wiring test only
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: the probe is the first statement in all FOUR
+archive branches and NOWHERE else (not the uncompressed else); raw $file_download
+is passed; the zip branch's existing tar -tf logic is intact; the wiring test
+asserts valid->TRUE AND corrupt->FALSE per format with skip-guards. Fix and
+re-verify if anything is off.
+
+EXPECTED RESULT
+- pfb_validate_archive() is called at the top of the gzip/bzip2/zip/7z branches;
+  a failing probe logs + unlinks + returns FALSE before extraction.
+- ArchiveValidateWiringTest green (valid accepted, corrupt rejected, per format).
+- Healthy archives still extract exactly as before (probe is a pass-through on
+  valid input).
+
+COMMIT (single)
+    pfb_download: structural-probe archives before extraction (ADR-45 P2)
+Push directly to adr/45-structural-integrity-tests.
+
+HANDOFF — write RESULTS/02_Results.txt
+Include:
+- The four insertion points (line refs) + confirmation the uncompressed else is
+  untouched.
+- ArchiveValidateWiringTest names + results; which formats ran vs were skipped on
+  the CI host (esp. 7z) and why.
+- Explicit note that the end-to-end pfb_download() corrupt-archive rejection is
+  pinned by the Phase 4 smoke (the off-appliance limit per ADR §5).
+- PHPUnit summary + phpcs clean; commit hash + push confirmation.
+- Watch-out for Phase 3: recovery reuses pfb_validate_archive() against each
+  supported type; the 7z branch (L8397) becomes reachable ONLY once recovery can
+  set $file_type to application/x-7z-compressed.

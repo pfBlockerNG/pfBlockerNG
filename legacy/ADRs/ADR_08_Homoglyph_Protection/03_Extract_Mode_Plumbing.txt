@@ -1,0 +1,68 @@
+================================================================================
+PHASE 3 PROMPT — PREP (behaviour-preserving): extract IDN unit + pin Off/All + mode plumbing
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §2 mode-selector row + contract)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 3 of ADR-08. STRICTLY BEHAVIOUR-PRESERVING: extract
+the existing IDN block into a testable unit, pin Off/All-IDN with a golden, and add the
+Off | All-IDN | Confusable mode plumbing with Confusable INERT (no analyzer yet). No decision
+changes. Work inline on `adr/08`, one commit, push directly. Standalone-valuable.
+
+WHY THIS PHASE EXISTS
+Phase 5 will add the analyzer to the matcher's IDN branch. Doing that on top of today's inline
+block risks silently changing Off/All-IDN behaviour. So FIRST extract + pin the current
+behaviour and lay down the mode selector (defaulting 'on' -> All-IDN), then later phases only
+fill in the Confusable branch.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/02_Results.txt — the oracle + severity/action
+  mapping. If missing, STOP and report.
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§2 mode-selector + contract "Off/All-IDN identical").
+- RESULTS/01_Results.txt — the migration ('on' -> All-IDN) + the contract to preserve.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: is_idn_domain ~755; evaluate_domain IDN
+  branch ~2307-2310; python_idn load ~417/464; pfb[...] flags ~300-310.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: python_idn config write ~2540-2599.
+- tests/test_pfb_unbound.py + the ADR-06/07 golden patterns (the no-regression style).
+- tests/test_adr08_decision_spec.py (the future target — only the no-op/All cases matter now).
+- CLAUDE.md.
+
+ACTION PLAN (oracle-pinned; behaviour must not change)
+1. Extract the IDN detection + block decision into a named, pure unit (e.g.
+   idn_mode_decision(q_name, mode) or fold into a small helper) WITHOUT changing what
+   evaluate_domain decides today. Keep is_idn_domain.
+2. Introduce the mode value: Off | All-IDN | Confusable (a plugin cfg field, e.g.
+   pfb["idn_mode"]), derived from python_idn. MAP existing config: python_idn 'on' -> All-IDN,
+   else Off. Confusable is a recognised value but this phase makes it behave as **Off** (no
+   block) — the analyzer arrives in Phase 5.
+3. Pin today's behaviour with a golden (tests/test_adr08_mode_baseline.py):
+   - Off: no IDN block. All-IDN: every is_idn_domain query blocked with feed="IDN"/
+     group="DNSBL_IDN" exactly as ~2307 today. Non-IDN queries unaffected in all modes.
+4. Keep PHP/UI untouched here EXCEPT the minimal config read needed to derive idn_mode from the
+   existing python_idn (no new UI yet — Phase 6). If the python config only carries on/off
+   today, keep reading that and map it; do NOT add the Confusable value to the UI yet.
+
+CONSTRAINTS
+- ZERO decision change for Off and All-IDN — the golden is the gate; if anything flips, STOP.
+- Do NOT add the analyzer, do NOT ship Unicode data, do NOT add UI. Matcher + config-read only.
+- stdlib only, no new Unbound symbols (declare any in stubs/python/unboundmodule.py), 4-space,
+  type hints, no bare except.
+
+VERIFICATION
+- python -m pytest → green: existing matcher tests + the new Off/All golden green. ruff clean.
+- Diff-read evaluate_domain: All-IDN path == old behaviour; Confusable currently == Off.
+
+EXPECTED RESULT
+The IDN block extracted into a pinned unit + the Off|All-IDN|Confusable mode plumbing in place,
+Confusable inert, Off/All-IDN provably identical to today — ready for the analyzer.
+
+COMMIT (single)
+    pfb_unbound: ADR-08 P3 — extract IDN unit + Off/All/Confusable mode plumbing (behaviour-preserving)
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/03_Results.txt`
+For Phase 4. Include: the extracted unit's signature; how idn_mode is derived (the 'on'->All
+migration); where the Confusable branch will hook the analyzer; confirmation Off/All-IDN golden
+is green; and the go-ahead to ship the Unicode data + build the analyzer.

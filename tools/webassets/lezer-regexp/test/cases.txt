@@ -1,0 +1,471 @@
+# literal-text
+
+foo
+
+==>
+
+RegExp(Literal)
+
+# dot
+
+.
+
+==>
+
+RegExp(Dot)
+
+# anchors
+
+^abc$
+
+==>
+
+RegExp(Anchor,Literal,Anchor)
+
+# quantifier-greedy
+
+a*a+a?
+
+==>
+
+RegExp(Literal,Quantifier,Literal,Quantifier,Literal,Quantifier)
+
+# quantifier-lazy
+
+a*?a+?a??
+
+==>
+
+RegExp(Literal,Quantifier,Literal,Quantifier,Literal,Quantifier)
+
+# quantifier-possessive
+
+a*+a++a?+
+
+==>
+
+RegExp(Literal,Quantifier,Literal,Quantifier,Literal,Quantifier)
+
+# quantifier-counted-exact
+
+a{2}
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# quantifier-counted-min
+
+a{2,}
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# quantifier-counted-max
+
+a{,5}
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# quantifier-counted-range
+
+a{2,5}
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# quantifier-counted-range-lazy
+
+a{2,5}?
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# quantifier-counted-range-possessive
+
+a{2,5}+
+
+==>
+
+RegExp(Literal,Quantifier)
+
+# class-basic
+
+[abc]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
+
+# class-negated
+
+[^abc]
+
+==>
+
+RegExp(CharacterClass(ClassOpenNeg,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
+
+# class-ranges
+
+[a-z0-9]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),ClassRange(ClassLiteral,"-",ClassLiteral),"]"))
+
+# class-first-bracket-literal
+
+[]]
+
+==>
+
+RegExp(CharacterClass(ClassOpenLit,"]"))
+
+# class-first-bracket-literal-with-more
+
+[]a]
+
+==>
+
+RegExp(CharacterClass(ClassOpenLit,ClassLiteral,"]"))
+
+# class-negated-first-bracket-literal
+
+[^]]
+
+==>
+
+RegExp(CharacterClass(ClassOpenNegLit,"]"))
+
+# class-escape-content
+
+[\d\]]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,Escape,Escape,"]"))
+
+# class-escape-range
+
+[\x00-\x7f]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassRange(Escape,"-",Escape),"]"))
+
+# alternation
+
+a|b|c
+
+==>
+
+RegExp(Literal,"|",Literal,"|",Literal)
+
+# capturing-group
+
+(abc)
+
+==>
+
+RegExp(CapturingGroup("(",Literal,")"))
+
+# non-capturing-group
+
+(?:abc)
+
+==>
+
+RegExp(NonCapturingGroup("(",NonCapMarker,Literal,")"))
+
+# named-group
+
+(?P<name>x)
+
+==>
+
+RegExp(NamedGroup("(",NamedOpenMarker,GroupName,Literal,")"))
+
+# group-ref
+
+(?P=name)
+
+==>
+
+RegExp(GroupRef("(",GroupRefMarker,GroupName,")"))
+
+# comment-group
+
+(?#comment)
+
+==>
+
+RegExp(CommentGroup)
+
+# lookahead
+
+(?=x)
+
+==>
+
+RegExp(Lookahead("(",LookaheadMarker,Literal,")"))
+
+# neg-lookahead
+
+(?!x)
+
+==>
+
+RegExp(NegLookahead("(",NegLookaheadMarker,Literal,")"))
+
+# lookbehind
+
+(?<=x)
+
+==>
+
+RegExp(Lookbehind("(",LookbehindMarker,Literal,")"))
+
+# neg-lookbehind
+
+(?<!x)
+
+==>
+
+RegExp(NegLookbehind("(",NegLookbehindMarker,Literal,")"))
+
+# conditional-numeric
+
+(?(1)a|b)
+
+==>
+
+RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,"|",Literal,")"))
+
+# conditional-named
+
+(?(name)a)
+
+==>
+
+RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,")"))
+
+# atomic-group
+
+(?>x)
+
+==>
+
+RegExp(AtomicGroup("(",AtomicMarker,Literal,")"))
+
+# flags-global
+
+(?aiLmsux)
+
+==>
+
+RegExp(FlagsGroup("(",FlagsMarker,")"))
+
+# flags-scoped
+
+(?i:x)
+
+==>
+
+RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+
+# flags-scoped-negated
+
+(?-i:x)
+
+==>
+
+RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+
+# flags-scoped-mixed
+
+(?i-s:x)
+
+==>
+
+RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+
+# flags-scoped-mixed-other-order
+
+(?a-i:x)
+
+==>
+
+RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+
+# numeric-backreference
+
+\1
+
+==>
+
+RegExp(Backreference)
+
+# special-sequences
+
+\A\b\B\d\D\s\S\w\W\Z\z
+
+==>
+
+RegExp(Escape,Escape,Escape,Escape,Escape,Escape,Escape,Escape,Escape,Escape,Escape)
+
+# char-escapes-named
+
+\n\t\r\f\v\a
+
+==>
+
+RegExp(Escape,Escape,Escape,Escape,Escape,Escape)
+
+# char-escape-hex
+
+\x41
+
+==>
+
+RegExp(Escape)
+
+# char-escape-u16
+
+\uFFFF
+
+==>
+
+RegExp(Escape)
+
+# char-escape-u32
+
+\U0001F600
+
+==>
+
+RegExp(Escape)
+
+# char-escape-named-unicode
+
+\N{LATIN SMALL LETTER A}
+
+==>
+
+RegExp(Escape)
+
+# char-escape-octal-3digit
+
+\101
+
+==>
+
+RegExp(Escape)
+
+# char-escape-octal-zero
+
+\0
+
+==>
+
+RegExp(Escape)
+
+# identity-escapes
+
+\.\\\#\*
+
+==>
+
+RegExp(Escape,Escape,Escape,Escape)
+
+# hash-is-literal
+
+a#b
+
+==>
+
+RegExp(Literal)
+
+# raw-unicode-literal
+
+￿
+
+==>
+
+RegExp(Literal)
+
+# hostile-unclosed-group
+
+(ab
+
+==>
+
+RegExp(CapturingGroup("(",Literal,⚠))
+
+# hostile-unclosed-class
+
+[ab
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassLiteral,ClassLiteral,⚠))
+
+# hostile-trailing-backslash
+
+ab\
+
+==>
+
+RegExp(Literal,⚠)
+
+# hostile-bare-brace
+
+a{
+
+==>
+
+RegExp(Literal,"{")
+
+# hostile-brace-non-quantifier-content
+
+a{x}
+
+==>
+
+RegExp(Literal,"{",Literal,"}")
+
+# hostile-brace-unterminated
+
+a{2
+
+==>
+
+RegExp(Literal,"{",Literal)
+
+# hostile-quantifier-nothing-to-repeat
+
+{2}
+
+==>
+
+RegExp(Quantifier)
+
+# hostile-reversed-class-range
+
+[z-a]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),"]"))
+
+# hostile-bad-group-name
+
+(?P<1a>x)
+
+==>
+
+RegExp(NamedGroup("(",NamedOpenMarker,GroupName,Literal,")"))

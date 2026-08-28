@@ -1,0 +1,43 @@
+ADR-44 — Phase 4 Results (smoke checklist + acceptance prep)
+============================================================
+
+Phase 4 of 4 — documentation/acceptance phase. No code change.
+Branch: adr/44-mime-normalisation.
+
+1. What was done
+-----------------
+- Created .ADRs/ADR_44_MIME_Normalization/RESULTS/SMOKE_CHECKLIST.md — the manual
+  live-box smoke checklist for the maintainer, expanded from ADR-44 §7.
+  * TC-1/TC-2: ZIP feeds (x-zip-compressed) now pass the MIME gate.
+  * TC-3: gzip AND x-bzip2 feeds still pass (regression guard for the
+    gzip/bzip2 substring-guard in pfb_mime_normalise()).
+  * TC-4: references the real debug sink /tmp/pfb_debug (pfb_logger level 5) and
+    the exact log line format:
+        MIME normalised: raw="application/x-zip-compressed" -> canonical="application/zip"
+  * TC-5: HTML/non-archive bodies still rejected (octet-stream never promoted).
+  * Reject criteria include the x-bzip2/gzip misroute guard and the const-16
+    no-change invariant.
+- ADR.md Status was NOT changed (still "Proposed"). Per the Phase 4 prompt, the
+  flip to Accepted is a maintainer action after the live-box smoke run passes.
+
+2. Verification
+----------------
+- markdownlint-cli2 on SMOKE_CHECKLIST.md: clean (0 errors).
+- vendor/bin/phpunit: 1553 tests, 14909 assertions, 0 failures, 3 pre-existing
+  skips (unchanged from Phases 1-3 — this phase adds no code).
+
+3. Commit + push
+-----------------
+Commit: this phase's HEAD commit on adr/44-mime-normalisation (see `git log`).
+Push:   adr/44-mime-normalisation -> origin/adr/44-mime-normalisation.
+
+4. Instruction to the maintainer
+---------------------------------
+Run RESULTS/SMOKE_CHECKLIST.md on a live pfSense box (CE and Plus). If PASS, flip
+the ADR.md Status line from "Proposed" to "Accepted (YYYY-MM-DD)" and land the
+branch (PR rebase-merge, or commit the status flip on adr/44-mime-normalisation).
+
+Note: the §7 manual smoke is an out-of-CI item (no live Unbound / real feed
+download in CI). The automated PHPUnit coverage (oracle + red->green normalise
+tests, incl. the gzip/bzip2 guard) is the in-CI proof; the checklist covers the
+live download/extraction path that cannot run in CI.

@@ -1,0 +1,356 @@
+================================================================================
+PHASE 5 RESULTS — Masked token field + Cloudflare Radar (token via header)
+================================================================================
+
+WHAT CHANGED
+
+1. `top1m_token` — new registered PfbConfig field (pfblockerng_extra.inc
+   ~pfb_cfg_registry(), section `installedpackages/pfblockerngdnsblsettings/
+   config/0`, default '', read/write adapters NULL (plain string), since
+   '4.0.0'). Added its path to `RequireConfigGatewaySniff::$registeredPaths`
+   and the `docs/misc/config-gateway.md` inventory + vocab table.
+
+2. `PFB_FILTER_TOKEN` (pfblockerng.inc, new constant 22 + `pfb_filter()` case)
+   — accepts a base64url/JWT charset `[A-Za-z0-9._~+/=-]`, length 8-512.
+   `PFB_FILTER_WORD` ([A-Za-z0-9_] only) would reject a real token (dashes,
+   dots). Added `'top1m_token'` to `pfb_filter()`'s existing log-suppression
+   exceptions list (alongside the pre-existing `'DNSBL_Download'`) so a
+   REJECTED token is never logged, even at debug level — proven by a
+   dedicated test (see TESTS).
+
+3. `Top1mSource::Cloudflare = 'cloudflare'` — new enum case (pfblockerng_extra
+   .inc). `pfb_cfg_field_vocab()['top1m_source']` extended to include it.
+
+4. `pfb_top1m_providers()` — new Cloudflare descriptor row (see "CLOUDFLARE
+   REALITY vs THE ADR'S GUESS" below for the verified shape).
+
+5. `pfb_top1m_auth_headers(array $provider, string $token): array` — new pure
+   helper (pfblockerng_extra.inc, next to `pfb_top1m_providers()`). Builds the
+   caller header(s) a provider's `auth` descriptor needs: `array()` for a
+   keyless provider (`auth == 'none'`) OR an empty token; one
+   `'Authorization: Bearer <token>'`-shaped line otherwise. Zero I/O, zero
+   `pfb_logger` calls — the ONLY function that ever touches the raw token
+   before it reaches `pfb_download()`.
+
+6. `pfblockerng.php` (~line 160) — the TOP1M extras slot now also sets
+   `$pfb['extras'][2]['headers'] = pfb_top1m_auth_headers($pfb_top1m_provider,
+   (string) PfbConfig::read('top1m_token'))`, consumed by Phase 3's existing
+   `extra_headers: $feed['headers'] ?? array()` plumbing in
+   `pfblockerng_download_extras()`. A no-op for tranco/cisco/domcop/majestic
+   (`auth == 'none'`) even if a stale token happens to be stored.
+
+7. `pfblockerng_top1m()` (pfblockerng.inc ~8337) — FIXED a latent bug the
+   Cloudflare shape exposed: the generic content filter required a comma on
+   EVERY data line (`strpos($line, ',') === FALSE` unconditionally). A
+   single-column CSV (Cloudflare: just `domain`, no rank) has no comma at
+   all, so every real data line was silently skipped regardless of
+   domain_col. Fixed to only require a comma when `$top1m_domcol > 0` (every
+   OTHER provider today) — domain_col 0 still requires a '.'. Byte-identical
+   for every existing provider (all have domain_col > 0); this was a
+   necessary fix, not scope creep — without it Cloudflare's real shape
+   parses to an EMPTY whitelist regardless of the descriptor being correct.
+
+8. `pfblockerng_dnsbl.php` (www):
+   - `$options_alexa_type` += `'cloudflare' => 'Cloudflare Radar'`.
+   - `$pfb_top1m_token_providers` (+ its JSON) — derived from
+     `pfb_top1m_providers()`'s `auth` shape, not hardcoded, so a FUTURE token
+     provider needs no JS edit.
+   - `$top1m_text` — added a Cloudflare Radar link + CC BY-NC 4.0 attribution
+     sentence + a link to Cloudflare's token-creation docs.
+   - New masked `Form_Input('top1m_token', ..., 'password', $pconfig
+     ['top1m_token'] ?? '', ...)` — WRITE-ONLY: `$pconfig['top1m_token']` is
+     NEVER populated from `PfbConfig::read()`; it is only ever set from a
+     redisplayed `$_POST` on a validation error (same as every other field),
+     so a plain GET always renders it blank.
+   - POST validation: a NON-EMPTY `top1m_token` is validated via
+     `PFB_FILTER_TOKEN` (reference `'top1m_token'`, so a reject is never
+     logged); a BLANK submission validates trivially (no error).
+   - POST save: `$pfb['dconfig']['top1m_token']` is assigned ONLY when the
+     posted value is non-empty — a blank POST leaves whatever
+     `readSection()` already loaded there untouched, so an ordinary settings
+     save (which always renders this field blank) can never clear an
+     already-stored token.
+   - JS: `enable_top1m_token()` (driven by `pfb_top1m_token_providers`, a
+     server-derived array) shows/hides the token field based on the selected
+     `#alexa_type`; wired via a new `.change()` handler + initial call in
+     `events.push`.
+
+CLOUDFLARE REALITY vs THE ADR'S GUESS (verified, not guessed)
+
+Per the phase's mandate ("verify Cloudflare's ACTUAL current API before
+coding"), fetched THREE independent official Cloudflare doc pages plus a web
+search corroboration during this phase (network available; no Cloudflare API
+token available to make an authenticated request):
+
+  - developers.cloudflare.com/api/resources/radar/subresources/datasets/
+    (methods list): GET /radar/datasets (list, filter datasetType=
+    RANKING_BUCKET), POST /radar/datasets/download (returns a signed URL),
+    and — the load-bearing find — **GET /radar/datasets/{alias}**, which
+    "Retrieves the CSV content of a given dataset" DIRECTLY (a single
+    request), not the discover-id -> POST /download -> fetch-signed-URL
+    three-hop flow the ADR's §3 "Negative/risks" worried might be
+    "disproportionately complex" (§7 reject criterion).
+  - developers.cloudflare.com/radar/investigate/domain-ranking-datasets/
+    (walkthrough page): the worked example gives the STABLE alias for the
+    1,000,000-domain bucket verbatim — `id: 213`, `alias:
+    "ranking_top_1000000"`, `meta.top: 1000000` — and shows the downloaded
+    CSV has a `domain` column header with NO rank column, sample rows like
+    `1rx.io`, `2mdn.net`, `a2z.com` (bare registrable domains, no `www.`).
+  - A web search independently corroborated the same id/alias/tags
+    (blog.cloudflare.com/radar-domain-rankings/), so this is not a single-
+    source claim.
+  - developers.cloudflare.com/radar/ "About" (via search): the data is CC
+    BY-NC 4.0 (non-commercial, attribution required) — the ADR's "CC BY-NC"
+    note, now pinned to the specific 4.0 version.
+
+CONCLUSION: the real API turned out SIMPLER than the ADR anticipated — a
+single `GET https://api.cloudflare.com/client/v4/radar/datasets/
+ranking_top_1000000` with `Authorization: Bearer <token>` streams the CSV
+directly, fitting the EXISTING single-URL-descriptor architecture exactly
+like every other provider. §7's "ship dormant, drop Cloudflare" escape hatch
+was therefore NOT invoked — it is fully wired, not dormant. The descriptor
+diverges from the ADR's §2.2 table on TWO points, both corrected here:
+  - `domain_col`: ADR guessed 1 (assuming a 2-column rank,domain shape); the
+    REAL body is a SINGLE `domain` column -> domain_col 0.
+  - `auth`: the ADR's table cell said "(csv)" for container with an implicit
+    zip assumption elsewhere; confirmed `container: 'plain'` (uncompressed
+    CSV stream, same family as Majestic's shape) and `header: TRUE`.
+
+Residual gap (disclosed, not hidden): no live authenticated request was made
+end-to-end (no Cloudflare token in this environment) — confirmed via
+documentation only. This is exactly the ADR §7 "manual smoke (owner:
+maintainer)" acceptance item for Cloudflare specifically; a real token on a
+live box is the final proof, unchanged by this phase.
+
+TESTS
+
+New tests/php/Top1mAuthHeadersTest.php (5 tests, #[CoversFunction
+('pfb_top1m_auth_headers')]): Cloudflare-shaped auth produces the Bearer
+header; an empty token produces no header (safe-on-missing-token); a keyless
+provider NEVER emits a header even with a token present (proves the "only
+the active provider consumes it" contract); a missing 'auth' key defaults to
+no header; a schemeless header auth sends the token bare.
+
+tests/php/PfbFilterTest.php — `tokenProvider()`/`testTokenFilter()` (8 cases:
+realistic token, too short, space/colon/quote rejected, too long, exactly
+min/max length); `testTokenFilterRejectionNeverLogsForTop1mTokenReferenceBut
+OtherReferencesStillDo()` — the load-bearing security proof for the
+`pfb_filter()` exceptions-list edit: a rejected secret via reference
+'top1m_token' never reaches the errlog, but the SAME rejected input via any
+OTHER reference still logs (proves the suppression is reference-scoped, not
+a side effect of PFB_FILTER_TOKEN itself silently going quiet).
+
+tests/php/Top1mProvidersTest.php — renamed testFourKeylessProvidersAreDescribed
+-> testFiveProvidersAreDescribed (now asserts all 5 keys); new
+testCloudflareDescribesItsRealSingleColumnAuthedCsvShape (pins url, container
+'plain', parse 'csv', header TRUE, domain_col 0, auth {header:
+'Authorization', scheme: 'Bearer'}, licence containing 'CC BY-NC').
+
+tests/php/Top1mPreserveOnEmptyFeedTest.php — two new tests:
+  - testCloudflareRealShapeSampleParsesViaItsDescriptorAndTheSingleColumnCommaFix
+    FAIL-BEFORE/PASS-AFTER for the comma-relaxation fix (item 7 above).
+    MANUALLY VERIFIED by temporarily reverting just that hunk in
+    pfblockerng.inc and re-running this exact test:
+      RED  (pre-fix):  file_get_contents() on the whitelist path returned
+                       FALSE (file never created — $linecnt stayed 0, every
+                       comma-less line was skipped, "dead feed" path fired,
+                       no rename ever happened). Confirmed via a real
+                       `phpunit --filter` run (see command below), not
+                       assumed.
+      GREEN (post-fix): both real domains extracted correctly; full
+                       Top1mPreserveOnEmptyFeedTest suite (14 tests) green.
+    (The test body itself only exercises the permanent, fixed AFTER state —
+    the red/green cycle was validated by hand per CLAUDE.md's "revert/stash
+    the change" allowance, since there is no provider_override knob that
+    reproduces the pre-fix comma requirement the way the Phase 4 DomCop/
+    Majestic tests reproduce the pre-Phase-2 column default.)
+  - testMissingOrInvalidCloudflareTokenPreservesWhitelistAndLogsNoToken
+    Proves the #886 preserve+warn path (top-1m.csv absent, a prior whitelist
+    exists) is hit UNCHANGED for a failed Cloudflare download — no
+    Cloudflare-specific branch exists to bypass — AND directly asserts a
+    fake secret token never appears in either log (main or error), because
+    `pfblockerng_top1m()` never reads `$pfb['top1m_token']` or any header at
+    all.
+
+tests/php/CfgAdaptersTest.php / CfgGatewayTest.php / RollbackContractTest.php
+— Scenario E / the alexa_type rollback contract / the live-token pass-
+through test all extended with 'cloudflare'; CfgGatewayTest.php also gets a
+new testTop1mTokenDefaultsToEmptyAndRoundTrips (absent -> '', write/read
+round-trips a realistic token verbatim) + 'top1m_token' added to the
+$inventory completeness list.
+
+Tier-A (tests/smoke/ui/test_render_smoke.py) — extended (not duplicated)
+test_dnsbl_top1m_source_options_exclude_alexa: asserts all FIVE source
+labels including "Cloudflare Radar", the CC BY-NC 4.0 note, AND the masked
+token field (`name="top1m_token"` + `type="password"` both present).
+
+Tier-B (tests/smoke/ui/test_functional.py) — new
+test_dnsbl_top1m_token_masked_field_persists_and_is_never_echoed: POSTs a
+real-looking token -> asserts config.xml holds it verbatim (oracle = config,
+never the HTTP body, per this file's own doctrine) -> asserts the very next
+GET's raw HTML never contains it (write-only) -> POSTs a BLANK token (what
+every ordinary settings save actually sends, since the field always renders
+blank) -> asserts config.xml is STILL the original token (blank preserves,
+never clears). Restores the original value directly via the config API in
+`finally` (the web form cannot blank this field by design, so a normal POST
+can't be used for cleanup — mirrors the exact `php_eval` + `_php_str`
+restore idiom already used by test_alerts_render_verify.py:737-739).
+
+GATES (all run inside the worktree)
+
+1. `/opt/homebrew/bin/php -l` on every touched .inc/.php/test file ->
+   "No syntax errors detected" for all (same pre-existing unrelated
+   Deprecated notices as every prior phase).
+
+2. `/opt/homebrew/bin/php vendor/bin/phpunit`:
+   Tests: 2336, Assertions: 18590, Failures: 3, Skipped: 4.
+   The 3 failures are the SAME pre-existing, environment-only `open_basedir`
+   sandbox failures named in every prior phase's handoff (DnsblPrefetchTest /
+   IpPrefetchTest) — no other failures. 2336 = Phase 4's 2317 + 19 new tests
+   here (5 Top1mAuthHeadersTest + 1 CfgAdaptersTest + 1 CfgGatewayTest +
+   1 Top1mProvidersTest (net: 1 rename + 1 new) + 2 Top1mPreserveOnEmptyFeedTest
+   + 9 PfbFilterTest (8 dataprovider cases + 1 dedicated no-log test)).
+
+3. `php -d memory_limit=1G vendor/bin/phpcs --standard=phpcs.xml.dist src/`
+   -> clean (exit 0, no output). `RequireConfigGateway` stays green (the new
+   `top1m_token` path is in `$registeredPaths`, and every read/write in this
+   diff goes through `PfbConfig::read()`/the `writeSection()` bulk-write
+   pattern `alexa_type` et al. already use on this page, not a raw
+   `config_*_path` call). `UppercaseBooleanLiteral` stays green (TRUE/FALSE
+   used throughout the new descriptor row + PFB_FILTER_TOKEN case).
+
+4. `php -d memory_limit=1G vendor/bin/phpstan analyse --memory-limit=1G` ->
+   `[OK] No errors`.
+
+5. `python3 -m pytest tests/smoke/ui/test_render_smoke.py --collect-only -q
+   --override-ini="addopts="` -> 61 tests collected (same count as Phase 4 —
+   the assertion was extended, not duplicated).
+   `python3 -m pytest tests/smoke/ui/test_functional.py --collect-only -q
+   --override-ini="addopts=" -m ui_e2e -k top1m_token` -> 1/51 collected
+   (the new Tier-B test).
+
+6. `ruff check` / `ruff format --check` on both touched .py files -> clean.
+
+7. `npx markdownlint-cli2 docs/misc/config-gateway.md` -> 0 errors (one fix
+   needed: a continuation line starting with "+ the ADR-59 P3..." was
+   reworded to "and the ADR-59 P3..." — markdownlint parsed the leading "+"
+   as a new list-item marker, MD004 list-style violation against this file's
+   dash convention).
+
+SELF-REVIEW (git diff vs phase objectives)
+
+- Token field registered + masked + write-only + validated: confirmed by
+  reading the diff — `$pconfig['top1m_token']` is set ONLY from a
+  redisplayed `$_POST` (error path) or left unset (?? '' on GET), never from
+  `PfbConfig::read()`; grepped the whole diff for any `PfbConfig::read
+  ('top1m_token')` call in `www/` — the only call site is
+  `pfblockerng.php`'s extras-headers wiring, not the UI page.
+- `RequireConfigGatewaySniff::$registeredPaths` includes the new path —
+  confirmed by the clean phpcs run (a missed entry would have failed the
+  sniff the moment `PfbConfig::read/write('top1m_token')` compiled against
+  the registry, since the sniff flags DIRECT config_*_path calls on a
+  registered path found elsewhere — actually confirmed structurally: no
+  direct config_*_path('...top1m_token') call exists anywhere in the diff to
+  begin with, so this is belt-and-suspenders, matching the config-gateway.md
+  "Adding a new registered field" checklist item).
+- Cloudflare's descriptor matches REALITY (not the ADR's guess) — verified
+  against 3 independent official doc pages + 1 search corroboration; the
+  two concrete corrections (domain_col 0 not 1; container 'plain' streamed
+  via a single GET, not a multi-call dataset flow) are both documented
+  inline in the descriptor's own comment AND in this handoff. The §7 "ship
+  dormant" escape hatch was considered and explicitly NOT invoked, because
+  reality turned out to fit the existing architecture cleanly.
+- The token never reaches a log or the request URL: (a) header-carried only
+  (`Authorization: Bearer`, via `pfb_top1m_auth_headers()` + the P3
+  `$feed['headers']` plumbing) — never appended to any URL string; (b)
+  `pfb_top1m_auth_headers()` itself has zero `pfb_logger` calls (grepped);
+  (c) the PFB_FILTER_TOKEN reject path was AUDITED and found to leak the raw
+  rejected token via `pfb_filter()`'s existing "Failed validation [ ... ]"
+  debug log — FIXED by adding `'top1m_token'` to the pre-existing
+  `'DNSBL_Download'` no-log exceptions list (not by reusing 'DNSBL_Download'
+  itself, which would have created an unrelated, fragile coupling — see
+  DEVIATIONS); proven by a dedicated test showing suppression is genuinely
+  reference-scoped, not a blanket change; (d) the missing/invalid-token
+  download-failure path was proven to never touch the token at all, with a
+  fake-secret log-scan assertion, not merely asserted by inspection.
+- Missing-token safe path: reuses the EXACT existing #886 preserve+warn
+  generic path with NO new branch — `pfb_top1m_auth_headers()` returning
+  `array()` for an empty token means no Authorization header is sent, the
+  download fails exactly like any other provider's failed download, and
+  `pfblockerng_top1m()` hits its pre-existing "csv absent" handling
+  unmodified.
+- tranco/cisco/domcop/majestic unchanged: their descriptor rows are
+  byte-identical (only a new row was appended); the comma-relaxation fix is
+  gated on `$top1m_domcol > 0` (true for all four), so their behaviour is
+  unchanged — confirmed by the full green phpunit run including every
+  pre-existing Top1mProvidersTest/Top1mPreserveOnEmptyFeedTest assertion for
+  those four providers.
+- Tabs / uppercase TRUE/FALSE preserved throughout; phpcs's
+  UppercaseBooleanLiteral sniff stays clean.
+
+DEVIATIONS / JUDGMENT CALLS
+
+- Initially reused the PRE-EXISTING `'DNSBL_Download'` reference string to
+  suppress `pfb_filter()`'s failed-validation log for the token-validation
+  call site — this WORKED (the gate is a plain `in_array($reference, ...)`
+  check with no other semantics), but on self-review I judged it a fragile,
+  implicit coupling: `'DNSBL_Download'` is documented elsewhere as meaning
+  "parsed feed lines, suppressed for volume" — a future edit scoping that
+  exception more narrowly (e.g. gating on `$type` too) could silently start
+  logging tokens again with no signal. FIXED before finalizing: added a
+  SECOND, purpose-named entry `'top1m_token'` to the same exceptions array,
+  documented inline, and added a dedicated test proving the suppression is
+  reference-scoped (a different reference for the same rejected input still
+  logs). This is the more robust, self-documenting fix for a security-
+  relevant contract; recorded here since it required touching the shared
+  `pfb_filter()` exceptions list rather than staying purely additive.
+- Fixed the comma-requirement bug in `pfblockerng_top1m()`'s generic content
+  filter (item 7 above) — outside the phase prompt's literal ACTION PLAN
+  text, but REQUIRED for the Cloudflare descriptor to functionally work at
+  all (without it, every real single-column CSV line is silently skipped
+  and the whitelist comes out empty regardless of a correct descriptor).
+  Manually verified fail-before/pass-after by temporarily reverting the hunk
+  (see TESTS) since there is no provider_override knob that reproduces the
+  bug the way Phase 4's tests reproduce the Phase 2 default.
+- `container: 'plain'` for Cloudflare (not a new container type) — Phase
+  4's audit already confirmed the extractor branches on the ACTUAL
+  downloaded MIME type, not the descriptor label, so no extractor code
+  change was needed (same conclusion as Phase 4 reached for Majestic).
+- The Cloudflare descriptor's `url` is a HARDCODED literal
+  (`.../datasets/ranking_top_1000000`), not a `url_builder` callable as the
+  ADR's §2.1 table headline suggested — because the verified reality (a
+  STABLE, documented alias) makes a literal URL exactly as correct and far
+  simpler than a builder function would be; no per-request parameterization
+  (date, format) is needed for the default "latest" behaviour every other
+  provider already gets from a bare literal URL.
+- No live authenticated Cloudflare request was made (no token available in
+  this environment) — the descriptor is verified against documentation only
+  (3 independent official pages + 1 search corroboration), not an empirical
+  fetch. Flagged loudly per the phase's own instruction; this is exactly the
+  ADR §7 "manual smoke (owner: maintainer)" acceptance item for Cloudflare,
+  unchanged by this phase.
+
+GO-AHEAD FOR PHASE 6
+
+Ready. Phase 6 ("Health-check + docs") needs to:
+  - Update `scripts/misc/check_top1m_providers.py` for BOTH known issues:
+    (a) Phase 4's flagged staleness (`_URL_RE` still greps for a literal
+    `$pfb['extras'][2]['url'] = '...'` assignment that no longer exists —
+    the value is now a `pfb_top1m_providers()[...]['url']` expression); (b)
+    classify each descriptor by `auth` (§2.7) — keyless validated as today,
+    a token provider (Cloudflare) checked only if a secret (e.g.
+    `CLOUDFLARE_RADAR_TOKEN`) is present, else explicitly skipped with a
+    logged reason (never silently).
+  - Docs: `docs/misc/config-gateway.md`'s `top1m_token` inventory entry is
+    already in place (this phase); Phase 6's own scope is a TOP1M-providers
+    reference note (sources, formats, licences, token setup) per the ADR's
+    action plan — not yet written.
+  - The ADR's §7 Definition of Done's "manual smoke (owner: maintainer)" for
+    Cloudflare (a real token, live box, confirm `Found N>0` + a blocked-then-
+    whitelisted domain + a forced-failure `extras.log` scan showing no
+    token) remains an out-of-CI, maintainer-owned step — not something
+    Phase 6 can automate.
+
+COMMIT
+
+pfblockerng: add masked TOP1M token field + Cloudflare Radar provider (ADR-59 P5)

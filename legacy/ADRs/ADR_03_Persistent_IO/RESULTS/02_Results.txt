@@ -1,0 +1,61 @@
+ADR-03 Phase 2 Results — Logging: QueueListener + WatchedFileHandler
+====================================================================
+
+Files: pfb_unbound.py, tests/test_pfb_unbound.py, tests/conftest.py  (no PHP changes)
+
+STATE AFTER THIS PHASE
+-----------------------
+The three app logs (dnsbl.log, dns_reply.log, unified.log) are now written by a
+stdlib logging pipeline instead of open/append/close per line:
+- pfb_setup_logging(): one logger per file -> _PfbDropQueueHandler -> a shared
+  bounded queue (pfb_log_queue, 5000) -> ONE QueueListener thread -> one
+  WatchedFileHandler per file. Routing is by logger name via _PfbLogFilter (each
+  file handler accepts only its logger's records). Formatter is raw "%(message)s",
+  so the emitted line is exactly `line` + "\n" (byte-identical to the old writer).
+- _PfbDropQueueHandler drops on a full queue (log_dropped counter) -> never blocks
+  the DNS path (today's floor).
+- WatchedFileHandler holds the fd open but re-stats before each emit and reopens on
+  inode change -> tolerates the EXISTING line-cap trim (`pfb_log_mgmt` mv) and the
+  viewer clear (unlink+touch) WITHOUT modifying either.
+- pfb_log(path, line): public API. Uses the pipeline when running; otherwise falls
+  back to _log_entry_direct (the old synchronous open/append) -> used during init,
+  in tests, or if the listener failed to start.
+- The four call sites pfb_async(log_entry, csv_line, "<path>") are now
+  pfb_log("<path>", csv_line). log_entry() is gone (renamed to _log_entry_direct).
+- init_standard starts the pipeline (pfb_setup_logging, idempotent via
+  pfb["log_listener"]); deinit stops it (QueueListener.stop() flushes queued records)
+  alongside the DB worker and the async worker.
+
+IMPORTANT: pfb_async / pfb_async_worker were NOT retired (the P2 prompt guessed they
+might be). They are still used by log_stderr (pfb_unbound.py:250) to route captured
+sys.stderr to py_error.log via stdlib logging. Only the app-log writes moved off
+pfb_async. deinit now stops three things: db_worker, log_listener, async_worker.
+
+VERIFICATION
+------------
+- python -m pytest -> 167 passed (was 164; +3 logging tests, the old write_sqlite/
+  log_entry tests already adapted). New TestLogging covers: byte-identical lines
+  routed to the correct files incl. a literal '%' (no %-formatting), the synchronous
+  fallback, and WatchedFileHandler reopening after an external rename (the trim).
+  TestLogEntry repointed to the _log_entry_direct fallback.
+- ruff check / ruff format -> clean.
+- conftest resets the pipeline between tests (stops a leaked listener, clears
+  pfb_loggers) so the synchronous fallback is the default and pipeline tests are clean.
+
+WATCH-OUTS / NOTES FOR PHASE 3
+------------------------------
+- The reopen-after-rotation test uses pfb_log_queue.join() to synchronise with the
+  async listener (QueueListener calls task_done); reuse that pattern for any further
+  async-logging assertions.
+- Queue size = PFB_LOG_QUEUE_MAXSIZE (5000), drop-on-full. Flush on the DB side =
+  PFB_DB_FLUSH_INTERVAL (1.0s). Tune in P3 if the benchmark warrants.
+- Both subsystems are independent threads now (DB worker + log listener) plus the
+  retained stderr async worker.
+
+GO-AHEAD FOR PHASE 3
+---------------------
+Both persistent subsystems are in place and green. Proceed to integration validation:
+concurrency (PHP clearsqlite reset interleaved with the DB worker under WAL), fault
+injection (db delete/lock mid-run), perf/syscall benchmark (connect/open/stat counts
++ throughput, old vs new, reuse benchmarks/), shutdown drain (deinit flushes the DB
+batch + the log queue), and the manual smoke checklist.

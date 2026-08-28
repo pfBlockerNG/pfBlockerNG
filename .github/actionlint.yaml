@@ -1,0 +1,26 @@
+paths:
+  .github/workflows/nightly.yml:
+    ignore:
+      # GitHub added lossless concurrency queues before actionlint 1.7.12.
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/release-published.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/pkg-republish.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/image-refresh.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/nightly-failure-alert.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/smoke.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ui-tests.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

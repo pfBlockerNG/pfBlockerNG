@@ -1,0 +1,188 @@
+# This hosts file is brought to you by Dan Pollock and can be found at
+# http://someonewhocares.org/hosts/zero/
+# You are free to copy and distribute this file for non-commercial uses,
+# as long the original URL and attribution is included. 
+# 
+# This hosts file is proudly sponsored by adguard.com. 
+#
+# See below for acknowledgements.
+
+# Please forward any additions, corrections or comments by email to
+# hosts@someonewhocares.org
+
+# Last updated: Thu, 02 Jul 2026 at 20:47:18 GMT
+
+# Use this file to prevent your computer from connecting to selected
+# internet hosts. This is an easy and effective way to protect you from 
+# many types of spyware, reduces bandwidth use, blocks certain pop-up 
+# traps, prevents user tracking by way of "web bugs" embedded in spam,
+# provides partial protection to IE from certain web-based exploits and
+# blocks most advertising you would otherwise be subjected to on the 
+# internet. 
+
+# There is a version of this file that uses 127.0.0.1 instead of 0.0.0.0 
+# available at http://someonewhocares.org/hosts/.
+# On some machines the zero version may run minutely faster, however it
+# may not be compatible with all systems. 
+
+# This file must be saved as a text file with no extension. (This means
+# that the file name should be exactly as below, without a ".txt" appended.)
+
+# Let me repeat, the file should be named "hosts" NOT "hosts.txt".
+
+# For Windows 9x and ME place this file at "C:\Windows\hosts"
+# For NT, Win2K and XP use "C:\windows\system32\drivers\etc\hosts"
+#                       or "C:\winnt\system32\drivers\etc\hosts"
+# For Windows 7 and Vista use "C:\windows\system32\drivers\etc\hosts"
+#			or "%systemroot%\system32\drivers\etc\hosts"
+# For Windows 8 and Windows 10 use "C:\Windows\System32\drivers\etc\hosts"
+# 		You may need to tell Windows Defender to ignore this path
+# 		see: http://support.microsoft.com/kb/2764944
+# You may have to use Notepad and "Run as Administrator"
+#
+# For Linux, Unix, or OS X place this file at "/etc/hosts" or on some
+#    systems at "/private/etc/hosts". You will require root access to do
+#    this. Saving this file to "~/hosts" will allow you to run something
+#    like "sudo cp ~/hosts /etc/hosts".
+# For OS/2 copy the file to "%ETC%\HOSTS" and in the CONFIG.SYS file,
+#    ensure that the line "SET USE_HOSTS_FIRST=1" is included.
+# For BeOS place it at "/boot/beos/etc/hosts"
+# On a Netware system, the location is System\etc\hosts"
+# For Macintosh (pre OS X) place it in the Mac System Folder or Preferences
+#    folder and reboot. (something like HD:System Folder:Preferences:Hosts)
+#    Alternatively you can save it elsewhere on your machine, then go to the 
+#    TCP/IP control panel and click on "Select hosts file" to read it in.
+#    ------------------
+#    | As well, note that the format is different on old macs, so
+#    | please visit http://someonewhocares.org/hosts/zero/mac/ for mac format
+# For Android place the file at "/system/etc/hosts". You will need root
+#   access on your device to do this.
+#    ------------------
+# To convert the hosts file to a set of Cisco IOS commands for Cisco routers
+#   use this script by Jesse Baird:
+#   http://jebaird.com/2012/12/21/hosts-to-ip-host-generating-blocked-hosts-from-a-host-file-for-a-cisco-router.html
+
+# If there is a domain name you would rather never see, simply add a line
+# that reads "0.0.0.0 machine.domain.tld". This will have the effect of
+# redirecting any requests to that host to your own computer. For example
+# this will prevent your browser from downloading banner ads, or sending
+# your information back to a company.
+
+#<localhost>
+127.0.0.1	localhost
+127.0.0.1	localhost.localdomain
+255.255.255.255	broadcasthost
+::1		localhost
+127.0.0.1	local
+::1		ip6-localhost ip6-loopback
+fe00::0		ip6-localnet
+ff00::0		ip6-mcastprefix
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters
+ff02::3		ip6-allhosts
+#fe80::1%lo0	localhost
+#</localhost>
+
+#<shortcut-examples>
+# As well by specifying the ipaddress of a server, you can gain access
+#   to some of your favourite sites with a single letter, instead of
+#   using the whole domain name
+# It is perhaps a better solution to use Favourites/Bookmarks instead.
+#216.34.181.45   s        # slashdot.org
+#74.125.127.105	g        # google.com
+#</shortcut-examples>
+
+#<hijack-sites>
+# The sites ads234.com and ads345.com -- These sites hijack internet explorer 
+# and redirect all requests through their servers. You may need to use spyware 
+# removal programs such as SpyBotS&amp;D, AdAware or HijackThis to remove this 
+# nasty parasite. It's possible that blocking these sites using a hosts file 
+# may not work, in which case you should remove the following lines from this
+# file and try the tools listed above immediately. Don't forget to reboot 
+# after a scan.
+0.0.0.0 ads234.com
+0.0.0.0 ads345.com
+0.0.0.0 www.ads234.com
+0.0.0.0 www.ads345.com
+#</hijack-sites>
+
+
+#<spyware-sites>
+# Spyware and user tracking
+# By entering domains here, it will prevent certain companies from
+# gathering information on your surfing habits. These servers do not
+# necessarily serve ads, instead some are used by certain products to
+# "phone home". Others use web cookies to gather statistics on surfing 
+# habits. Among other uses, this is a common tactic by spammers, to 
+# let them know that you have read your mail. 
+# Uncomment (remove the #) the lines that you wish to block, as some
+# may provide you with services you like.
+
+#<maybe-spy>
+#0.0.0.0 auto.search.msn.com  # Microsoft uses this server to redirect
+                                # mistyped URLs to search engines. They
+                                # log all such errors.
+#0.0.0.0 sitefinder.verisign.com	# Verisign has joined the game 
+#0.0.0.0 sitefinder-idn.verisign.com	# of trying to hijack mistyped
+					# URLs to their site. 
+					# May break iOS Game Center.
+
+#0.0.0.0 s0.2mdn.net		# This may interfere with some streaming 
+				# video on sites such as cbc.ca
+#0.0.0.0 ad.doubleclick.net   # This may interefere with www.sears.com
+				# and potentially other sites. 
+0.0.0.0 media.fastclick.net	# Likewise, this may interfere with some
+0.0.0.0 cdn.fastclick.net	# sites. 
+#0.0.0.0 ebay.doubleclick.net		# may interfere with ebay
+#0.0.0.0 google-analytics.com			# breaks some sites
+#0.0.0.0 ssl.google-analytics.com
+#0.0.0.0 www.google-analytics.l.google.com
+#0.0.0.0 stat.livejournal.com		# There are reports that this may mess 
+ 					# up CSS on livejournal
+#0.0.0.0 stats.surfaid.ihost.com	# This has been known cause 
+					# problems with NPR.org
+#0.0.0.0 www.google-analytics.com		# breaks some sites
+#0.0.0.0 ads.imeem.com		# Seems to interfere with the functioning of imeem.com
+#</maybe-spy>
+
+#0.0.0.0 ci-mpsnare.iovation.com	# See http://www.codingthewheel.com/archives/online-gambling-privacy-iesnare
+#0.0.0.0 ll.a.hulu.com	# Uncomment to block Hulu.
+#0.0.0.0 metrics.ticketmaster.com	# interferes with logging in to ticketmaster.com
+#0.0.0.0 nl.sitestat.com	# may interfere with duo.nl
+#0.0.0.0 pro.hit.gemius.pl	# May interfere with some video sites
+#0.0.0.0 s.youtube.com				# Blocking this will interfere with video watching history and may interfere with Google Podcasts
+#0.0.0.0 services.krxd.net
+#0.0.0.0 stats.channel4.com
+#0.0.0.0 t2.hulu.com		# Uncomment to block Hulu.
+#0.0.0.0 track.hulu.com	# Uncomment to block Hulu.
+#0.0.0.0 webstat.channel4.com
+#0.0.0.0 www.googletagservices.com		#interferes with techrepublic
+0.0.0.0 006.free-counter.co.uk
+0.0.0.0 006.freecounters.co.uk
+0.0.0.0 0stats.com
+0.0.0.0 123counter.mycomputer.com
+0.0.0.0 123counter.superstats.com
+0.0.0.0 1ca.cqcounter.com
+0.0.0.0 1uk.cqcounter.com
+0.0.0.0 1us.cqcounter.com
+0.0.0.0 1xxx.cqcounter.com
+0.0.0.0 20585485p.rfihub.com
+0.0.0.0 3dns-1.adobe.com
+0.0.0.0 3dns-2.adobe.com
+0.0.0.0 3dns-3.adobe.com
+0.0.0.0 3dns-4.adobe.com
+0.0.0.0 3dns.adobe.com
+0.0.0.0 4-counter.com
+0.0.0.0 a-nj.1rx.io
+0.0.0.0 a-ssl.ligatus.com
+0.0.0.0 a.predictvideo.com
+0.0.0.0 a.visualrevenue.com
+0.0.0.0 abclnks.com
+0.0.0.0 aboardamusement.com
+0.0.0.0 abscbn.spinbox.net
+0.0.0.0 activity.serving-sys.com	#eyeblaster.com
+0.0.0.0 adadvisor.net
+0.0.0.0 adapi.ragapa.com
+0.0.0.0 adcounter.theglobeandmail.com
+0.0.0.0 addfreestats.com
+0.0.0.0 adel

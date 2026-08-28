@@ -1,0 +1,63 @@
+================================================================================
+PHASE 6 PROMPT — Health-check for token providers + docs
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §2.7, §6 Phase 6 first)
+================================================================================
+
+ROLE
+Branch adr/59-top1m-provider-framework. Phase 6 of 6 (final). CI tooling + docs.
+Inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The #884 CI health-check (check_top1m_providers.py) is keyless-only. Now that a
+token provider exists, it must classify providers by auth and handle token ones
+without failing the run for lack of a secret — and never silently skip.
+
+REQUIRED READING
+- FIRST read RESULTS/05_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§2.7, §7)
+- scripts/misc/check_top1m_providers.py (the extractor + validator) and
+  .github/workflows/top1m-healthcheck.yml (the fan-out matrix).
+- tests/test_check_top1m_providers.py.
+- docs/misc/config-gateway.md (inventory) + docs/misc/tld-lists.md (as a doc-style
+  sibling for a new TOP1M-providers note).
+
+ACTION PLAN
+1. Extend the extractor to also read each provider's `auth` from the descriptor
+   (the extractor already reads pfblockerng.php; now it must know which providers
+   need a token). Classify: keyless → GET-validate as today; token → validate ONLY
+   if the matching CI secret (e.g. env CLOUDFLARE_RADAR_TOKEN) is present (send it
+   via the Authorization header), else emit a VISIBLE "skipped: needs token, no
+   secret configured" line and do NOT fail the leg for that reason.
+2. Workflow: pass the optional secret into the check job's env; a token leg is
+   skipped-not-failed when the secret is absent. The overall run still goes red for
+   a genuinely dead keyless provider (unchanged).
+3. Docs: add the `top1m_token` field to the config-gateway.md inventory; add a
+   short docs/misc note (TOP1M providers: the descriptor, per-provider format +
+   container + auth, the licence obligations (Majestic CC BY 3.0, Cloudflare
+   CC BY-NC), and how a user supplies the Cloudflare token).
+
+CONSTRAINTS
+- scripts/ python3 is fine (dev-host). ruff clean. No secret printed to logs.
+- Markdown lint clean.
+
+VERIFICATION
+- ruff check / format clean; python3 -m pytest tests/test_check_top1m_providers.py
+  → green, incl. NEW cases: a token-auth provider is skipped-with-reason when no
+  secret, and validated when a mocked secret is present; keyless unchanged.
+- yaml/actionlint on the workflow; markdownlint on the docs.
+- python3 -m pytest -q (full) → green.
+
+EXPECTED RESULT
+The health-check covers keyless providers and handles token providers
+transparently (secret-checked or visibly skipped); docs record the framework +
+licences + token setup.
+
+COMMIT (single)
+    ci: health-check token TOP1M providers + document the provider framework (ADR-59 P6)
+Push directly; PR only if rejected.
+
+HANDOFF — RESULTS/06_Results.txt
+The auth-classification in the health-check; the secret wiring; the docs added;
+the full test/lint results; note the §7 manual-smoke (owner: maintainer) remains
+the acceptance gate for a live per-provider download + no-token-in-log check.

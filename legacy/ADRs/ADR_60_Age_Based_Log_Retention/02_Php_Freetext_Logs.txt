@@ -1,0 +1,81 @@
+================================================================================
+PHASE 2 PROMPT — Uniform, always-on timestamp for log/extraslog/errlog
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §1.4, §2.1, §2.3 items 4/5, §6 Phase 2)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 2 of 8. Behaviour-CHANGING. One commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+`log`/`extraslog` currently only get a timestamp if the caller embeds a literal `NOW` token, and even
+then a process-global same-second dedup (`$pfb['pnow']`) can strip it to nothing (ADR.md §1.4 — this
+predates the repo by over a decade and has no documented rationale). `errlog` has 6 bypass writes
+(`pfb_open_sqlite()`) with zero timestamp. This phase makes all three always, unconditionally
+stamped with the same ISO-8601 format, and deletes the dedup bug.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/01_Results.txt`
+  — confirm the baseline oracle test names and the `pfb_log_iso_timestamp()` helper it added. If
+  missing, Phase 1 is not complete; STOP and report.
+- ADR.md §1.4, §2.1 (the `log`/`extraslog`/`errlog` rows), §2.3 items 4 and 5.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `pfb_logger()` (~:3089-:3178), `pfb_open_sqlite()`
+  (~:13603, bypass writes at ~:13635/:13642/:13657/:13661/:13670/:13698), `pfb_failures()` (~:10619).
+- tests/php/PfbLoggerIsoTimestampTest.php (pins the OLD `[ NOW ]` substitution mechanic — you are
+  rewriting the parts that test the dedup specifically).
+- Grep every `pfb_logger(` call site that embeds a literal `NOW`/`" [ NOW ]"` token — you are NOT
+  rewriting these call sites' message strings (ADR.md §2.4 keeps that out of scope), but confirm your
+  defensive scrub in `pfb_logger()` handles the exact substrings they use (`grep -n "NOW" src/usr/local/pkg/pfblockerng/pfblockerng.inc src/usr/local/www/pfblockerng/*.php` to enumerate the real set — do not guess the token's exact spelling/spacing from memory).
+
+ACTION PLAN
+1. In `pfb_logger()`: delete the `strpos($log, 'NOW') !== FALSE` branch and `$pfb['pnow']` entirely.
+   Every call now: `$now = pfb_log_iso_timestamp();` (wire in Phase 1's helper), then for
+   `log`/`extraslog` (cases 1/3/4) prefix `$log` with `"{$now} "` before writing; for `errlog`
+   (`$elog`, cases 2/6) prefix similarly. Defensively `str_replace()` out any literal `NOW`/
+   `" [ NOW ]"` substring still present in the caller's raw message BEFORE prefixing (the exact
+   substrings you enumerated above) — so a caller that embedded the old token doesn't end up with a
+   dead "NOW" or empty "[ ]" artifact sitting mid-line.
+2. Route the 6 `pfb_open_sqlite()` bypass writes through the same prefix (call
+   `pfb_log_iso_timestamp()` and prepend it), so `errlog` has zero unstamped writes left.
+3. Do NOT touch `pfb_failures()`'s logic (`grep 'FAIL' | grep {$today_date}`) — verify (don't just
+   assume) it still matches: the new prefix format is `Y-m-d H:i:s ...`, so `$today_date =
+   date('Y-m-d', time())` still appears verbatim at the start of every line. Add a test proving this.
+4. Rewrite `PfbLoggerIsoTimestampTest.php`: remove the dedup-specific assertions (the mechanic is
+   gone); add assertions that EVERY write (with or without a former `NOW` token) is now stamped, and
+   that two calls in the same mocked second BOTH get a stamp (no stripping).
+
+CONSTRAINTS
+- Do not touch the ~30+ `pfb_logger()` CALLER message strings elsewhere in the codebase — only
+  `pfb_logger()` itself and the `pfb_open_sqlite()` bypass sites.
+- Do not touch `ip_blocklog`/`ip_permitlog`/`ip_matchlog`/`dnsbl_parse_err`/`dnslog`/`dnsreplylog`/
+  `unilog` — Phases 3-4.
+- PHP: tabs, uppercase `TRUE`/`FALSE`, no `die()`/`exit()`.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+VERIFICATION
+- `vendor/bin/phpunit` + `phpcs` + `phpstan` green.
+- Red→green proof: run Phase 1's baseline oracle tests for `log`/`extraslog`/`errlog`/the bypass
+  sites against the PRE-Phase-2 code (`git stash` or `git show HEAD~1:...` the touched file) — they
+  currently assert the OLD (sometimes-absent) behaviour, so after this phase's change those specific
+  assertions should now FAIL in the direction of "there IS a timestamp now" (paste the failing run),
+  then pass with the new code (paste the passing run). Where Phase 1 pinned "same-second dedup strips
+  the bracket," that exact test must now assert the OPPOSITE and pass.
+- `pfb_failures()` test: WHEN two errlog lines with `FAIL` land on the same day THEN both are counted
+  (today's date-grep still matches the new prefix format).
+- Diff-read: confirm no caller message string was touched, only `pfb_logger()` + the 6 bypass sites.
+
+EXPECTED RESULT
+`log`, `extraslog`, and `errlog` are unconditionally stamped `Y-m-d H:i:s <message>` on every write,
+including the former `pfb_open_sqlite()` bypass sites; `$pfb['pnow']` no longer exists anywhere.
+
+COMMIT (single)
+    pfblockerng: always stamp log/extraslog/errlog, retire pnow same-second dedup (ADR-60 P2)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/02_Results.txt` with: verdict; what
+changed + commit; gates + pasted output; red→green proof (both directions, pasted); the `NOW`-token
+grep enumeration and how each site's output looks now; coverage-matrix ticks for the `log`/
+`extraslog`/`errlog`(2 writers) rows; deviations (or "none"); carry-forward for Phase 3.

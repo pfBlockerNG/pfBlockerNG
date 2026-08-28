@@ -1,0 +1,59 @@
+================================================================================
+PHASE 3 PROMPT — Add request-header auth to pfb_download() (behaviour-preserving)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §2.5, §6 Phase 3 first)
+================================================================================
+
+ROLE
+Branch adr/59-top1m-provider-framework. Phase 3 of 6. BEHAVIOUR-PRESERVING (no
+caller sets a header yet). Inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+pfb_download() offers only Basic-auth + query-param URLs; the ADR-42
+conditional-GET owns CURLOPT_HTTPHEADER and REPLACES the whole list. Cloudflare
+Radar (Phase 5) needs `Authorization: Bearer <token>`. Wire caller-supplied
+headers now, merging with the conditional-GET header — so Phase 5 is a descriptor
+row, not surgery on the downloader.
+
+REQUIRED READING
+- FIRST read RESULTS/02_Results.txt (parser is descriptor-driven; tranco/cisco
+  identical). If missing, STOP and report.
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§2.5, §2.6)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_download() (:9626), esp. the
+  cURL branch: CURLOPT_USERPWD (~9867), the conditional-GET CURLOPT_HTTPHEADER
+  (~9842), and the retry logger (~9919). ALSO pfblockerng_download_extras()
+  (pfblockerng.php ~660-675) — where per-feed creds are injected.
+- Confirm #890 (pfb_redact_url) is merged to devel — the retry logger must already
+  redact; Phase 3 must NOT reintroduce a URL/secret log.
+
+ACTION PLAN
+1. Add an `$extra_headers = array()` parameter to pfb_download() and thread a new
+   per-feed field `$feed['headers']` through pfblockerng_download_extras().
+2. In the cURL branch, when `$extra_headers` is non-empty, MERGE it with the
+   conditional-GET header into a single CURLOPT_HTTPHEADER list — do NOT clobber
+   If-None-Match, and vice-versa. Keep the header values OUT of any log.
+3. No provider sets `headers` yet. Basic-auth (MaxMind) + query-param (asn)
+   paths unchanged.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE. PFBL sniffs green. Do NOT change the request URL of
+  any existing feed. Do NOT log header values.
+
+VERIFICATION
+- php -l / phpcs / phpstan clean.
+- vendor/bin/phpunit → green + a pinning test: given both a conditional-GET header
+  AND a supplied `Authorization: Bearer x`, the assembled CURLOPT_HTTPHEADER list
+  contains BOTH (extract the header-assembly into a testable helper if needed).
+- diff-read: header merge added; existing auth paths untouched; no new URL logging.
+
+EXPECTED RESULT
+pfb_download() can carry caller headers merged with the conditional-GET header;
+nothing uses it yet; all existing downloads behave identically.
+
+COMMIT (single)
+    pfblockerng: support caller request headers in pfb_download (ADR-59 P3)
+Push directly; PR only if rejected.
+
+HANDOFF — RESULTS/03_Results.txt
+The new param + per-feed field names; how the merge preserves If-None-Match; that
+no secret is logged (post-#890); go-ahead for Phase 4.

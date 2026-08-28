@@ -1,0 +1,91 @@
+ADR-42 Phase 3 — Conditional GET (ETag/If-Modified-Since → 304)
+================================================================
+Branch : adr/42-hash-based-change-detection
+Commit : 2d0f227
+Base   : 504a54a (Phase 2)
+Date   : 2026-06-25
+
+ADR-RESUME: branch=adr/42-hash-based-change-detection next-phase=4
+
+
+Summary
+-------
+Phase 3 adds HTTP conditional GET to the remote feed change detector in
+pfb_update_check(), replacing the old HEAD + Last-Modified client-compare +
+md5-fallback block with a single conditional GET through pfb_download() plus
+a pure decision helper.
+
+
+Changes
+-------
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_validator_read($base): reads .etag and .lastmod sidecars; returns
+    array('etag' => string|false, 'lastmod' => int|false).
+  - pfb_validator_write($base, $etag, $lastmod): writes .etag (string, non-empty)
+    and .lastmod (int > 0) sidecars via LOCK_EX.
+  - pfb_conditional_get_decision($http_status, $body_hash, $persisted_hash):
+    pure, no I/O; 304→FALSE; 200+same hash→FALSE; 200+diff hash→TRUE;
+    200+no baseline→TRUE (fail-safe); unknown status→TRUE (fail-safe).
+  - pfb_download(): 13th &$response_meta=NULL param; CURLOPT_HEADERFUNCTION
+    extended to capture ETag: header; when type=='md5' and a validator exists
+    send If-None-Match (ETag) or CURLOPT_TIMECONDITION/CURLOPT_TIMEVALUE
+    (Last-Modified); type=='md5' handler fills $response_meta and returns TRUE
+    for both 200 and 304.
+
+src/usr/local/www/pfblockerng/pfblockerng.php
+  - Remote detector else-block fully rewritten: one pfb_download() probe,
+    pfb_conditional_get_decision() decides, pfb_validator_write() persists.
+  - 304 path: logs "304 not modified", writes validators, returns (no re-ingest).
+  - 200 changed: logs "content changed", writes validators, flags update.
+  - 200 unchanged: logs "content unchanged", writes validators, returns.
+  - Unknown/error: logs warning, flags update (fail-safe).
+  - Local feed path (pfb_local_feed_changed) untouched.
+  - Both sync callers in pfblockerng.inc pass type='' — zero behaviour change.
+  - SSRF guard (pfb_feed_host_allowed / CURLOPT_RESOLVE) fully intact.
+
+tests/php/ConditionalGetHelpersTest.php (NEW)
+  - 13 PHPUnit tests for pfb_validator_read, pfb_validator_write,
+    pfb_conditional_get_decision; covers all branches + fail-safe.
+  - Red-on-broken: test_decision_304_is_unchanged, test_decision_200_same_bytes_is_unchanged,
+    test_decision_200_different_bytes_is_changed, test_decision_unknown_status_is_changed.
+
+tests/smoke/conftest.py
+  - _MockFeedServer extended: per-name _etag_map + threading.Lock; do_GET honours
+    If-None-Match → 304; emits ETag + Last-Modified: <fixed> on 200.
+  - New methods: enable_etag(name, etag), set_content(name, content, etag=None).
+  - register() unchanged (no ETag by default → simulates no-validator server).
+
+tests/smoke/test_smoke_feeds.py
+  - 4 new Phase 3 smoke cases (live-VM Phase 5):
+    (a) test_cron_304_skips_unchanged_remote_feed
+    (b) test_cron_200_reingest_changed_remote_feed
+    (c) test_cron_no_validator_download_hash_decides
+    (d) test_cron_spurious_200_same_bytes_no_reingest
+
+
+Verification gates
+------------------
+PHPUnit    : 1349 tests, 0 failures, 3 skips (drill not on dev box — expected)
+PHPStan    : No errors
+PHPCS      : Clean (no violations)
+ruff check : All checks passed
+ruff format: 116 files already formatted
+collect-only: 22 tests collected (18 pre-Phase-3 + 4 new)
+
+
+Constants used
+--------------
+CURLOPT_TIMECONDITION — sets the type of time comparison (PHP curl constant).
+CURL_TIMECOND_IFMODSINCE (value 1) — passed as CURLOPT_TIMECONDITION value to
+  send If-Modified-Since; NOT CURLOPT_TIMECOND_IFMODSINCE (that constant does
+  not exist in PHP and was a PHPStan error in an earlier draft).
+
+
+Handoff to Phase 4
+------------------
+Phase 4 is "Feed-level validator TTL + partial invalidation" (from the ADR §5
+implementation plan) OR whatever the next phase is per the ADR.  The Phase 3
+commit is self-contained; all existing behaviour is preserved.
+
+RESULTS/03_Results.txt written.

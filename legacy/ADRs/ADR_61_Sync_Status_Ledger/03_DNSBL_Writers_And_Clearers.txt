@@ -1,0 +1,96 @@
+================================================================================
+PHASE 3 PROMPT — Wire PHP-side DNSBL writers + clearers, + the convergence helper
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS1.2, SS1.3, SS2.2, SS2.4 first)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 2). One commit, pushed
+directly. Read/Edit/Write/Bash only -- never spawn sub-agents.
+
+WHY THIS PHASE EXISTS
+DNSBL's own PHP-side apply-stage failures (conf/build fail) need the same open/close
+wiring Phase 2 gave the IP side. This phase also introduces a pure convergence helper --
+"is DNSBL actually caught up with what it was told to become" -- that BOTH this phase's
+close-decision and Phase 5's tick reconciliation will reuse, so it must be exact and
+independently testable.
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt -- its file:line findings and any deviations are
+  authoritative. If missing, Phase 2 is not complete; STOP and report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS1.3 the sentinel/applied handshake and the
+  restart-fallback nuance -- re-read carefully: a swap-not-confirmed restart-fallback is
+  NOT itself a failure; only the restart's own failure is).
+- pfblockerng.inc: the sentinel-flip/wait-applied/restart-fallback region (per the ADR's
+  SS1.3 citations, re-verified against the live tree) and the $final['retval'] != 0
+  branch that is the genuine DNSBL apply-stage failure.
+- pfb_unbound_py_wait_applied(), pfb_unbound_py_flip_sentinel() and the file paths they
+  use (/var/unbound/pfb_py_reload, .applied) -- confirm exact current paths from source.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red->green. Every writer/clearer pair and pfb_dnsbl_converged()'s truth table
+in this phase are pinned by an executed fail-before/pass-after run.
+
+ACTION PLAN (ordered)
+1. Write pfb_dnsbl_converged(): bool -- pure-ish (may read $pfb globals + the sentinel/
+   applied files, but takes no side effects and performs no I/O beyond reading): TRUE iff
+   (a) the sentinel and applied-marker files agree (same generation, or applied is absent
+   AND sentinel has never been flipped -- confirm the correct "never flipped yet" baseline
+   from pfb_unbound.py's module-init behavior per the ADR's SS1.3 citation), AND
+   (b) is_process_running('unbound'), AND (c) unbound.conf references pfb_unbound.py
+   (mirrors the widget's existing $unbound_validate check -- reuse its exact logic, do
+   not reinvent).
+2. At the genuine DNSBL apply-stage failure site ($final['retval'] != 0 branch), add
+   open('dnsbl', <the DNSBL facility as a whole -- confirm from source whether there is a
+   more granular item identity available here, or whether 'dnsbl' itself is the item>,
+   'apply', <the existing "DNSBL {mode} FAIL"/"Unbound conf update FAIL" text>) ALONGSIDE
+   the existing pfb_logger(..., 2) call -- unchanged.
+3. On successful completion of that same code path (Unbound confirmed running afterward),
+   close() the same key. Also: anywhere pfb_dnsbl_converged() would independently detect
+   "actually fine now" outside that specific completion branch (e.g. a later, unrelated
+   pass that happens to find things converged), close() there too -- the clearer should
+   not be narrowly coupled to only the one success branch if convergence can also become
+   true via a different path. Verify this from source; state your finding either way in
+   the handoff.
+4. Do NOT open an entry for the swap-not-confirmed -> restart-fallback branch by itself
+   (ADR SS1.3: "NOT an error: fail-safe by design") -- only its own subsequent failure
+   (step 2) counts.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, PFBL-01/RequireConfigGateway/UppercaseBoolean clean.
+- Do NOT touch any existing pfb_logger() call's logtype/wording.
+- Do NOT wire the Python side (Phase 4), tick reconciliation (Phase 5), or the widget
+  (Phase 6) in this phase.
+- Do NOT open an entry for the restart-fallback branch itself (see step 4).
+
+VERIFICATION (all must pass before the phase is done)
+- Canonical PHP gates (php -l, phpunit, phpstan --memory-limit=1G, phpcs).
+- pfb_dnsbl_converged() gets FULL branch/truth-table coverage: every combination of
+  {sentinel==applied, sentinel!=applied} x {unbound running, not running} x {conf
+  references pfb_unbound.py, doesn't} -- at minimum the cases that matter for TRUE/FALSE
+  (not literally all 8 if some are provably equivalent -- justify any collapsed case).
+- Fail-before/pass-after, executed and pasted:
+  a. Simulate the DNSBL conf/build failure branch -> assert the entry opens. FAILS on
+     pre-Phase-3 code, PASSES after.
+  b. Simulate the paired success -> assert it closes.
+  c. Simulate a swap-not-confirmed-then-restart-succeeds sequence -> assert NO entry
+     ever opens for that alone (proves step 4's constraint holds, not just by omission).
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- grep every pfb_logger(...) call in the touched region before/after this phase's diff --
+  confirm zero wording/logtype changes.
+- The restart-fallback-does-not-open-an-entry test in VERIFICATION(c) actually exercises
+  the restart-fallback code path (not a mocked shortcut that never reaches it) -- read the
+  test and confirm it drives the real branch.
+- pfb_dnsbl_converged() is called from exactly the sites this phase and Phase 5 (next)
+  need -- grep confirms no stray/duplicate reimplementation of the same check elsewhere.
+
+HANDOFF (RESULTS/03_Results.txt, committed)
+State: pfb_dnsbl_converged()'s exact location/signature and its truth table; the
+apply-stage writer/clearer file:line pair(s) added; whether convergence can become true
+via more than one code path (and how each is handled); red-before/green-after output;
+gate output.

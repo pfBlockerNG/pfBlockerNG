@@ -1,0 +1,64 @@
+================================================================================
+PHASE 4 PROMPT — IPinfo provider for enrichment + ASN
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 4 implements the IPinfo
+GeoipProvider/AsnProvider behind the Phase-2 seam. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+With ingestion (Phase 3) producing the normalized record, the IPinfo provider can serve the
+five consumers (per ADR.md §1 — incl. the pfb_unbound.py + pfblockerng.sh readers) and
+ASN through the same seam MaxMind uses.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- the in-tree country/continent truth. It is a
+  BLOCKING PREREQUISITE for this ADR and OWNS everything about country/continent identity: which
+  countries exist, their names and locales, the ISO->continent mapping, the frozen structural
+  bindings, the unknown-country buckets. This ADR's provider seam supplies ONE thing: network -> ISO.
+  Do not re-derive or re-decide any of it here -- if this prompt and ADR-64 disagree, ADR-64 wins.
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/03_Results.txt AND 02_Results.txt. If missing,
+  STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS2.1 table, SS2.2 contract).
+- The Phase-2 interfaces + MaxMind impl; the Phase-3 ingestion + fixtures.
+- CLAUDE.md — PHP standards, Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. IMPLEMENT the IPinfo GeoipProvider: country/continent map, log-enrichment fields,
+   Reputation inputs, all from the normalized record. Keep log formats/block shapes stable.
+2. IMPLEMENT the IPinfo AsnProvider (ASN + as_org) from the normalized record.
+3. Where IPinfo lacks a MaxMind capability (locale name, a deprecated flag), return the
+   "unavailable" neutral value; never fatal.
+4. Tests: IPinfo impl returns normalized records matching the Phase-3 fixtures; enrichment
+   strings well-formed; ASN parity with today's IPinfo output where data permits; capability
+   degradation asserted (flag absent -> neutral, not crash).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in lib code.
+- Do NOT add the UI selector yet (Phase 5); the provider is selectable only via a test seam
+  for now. Do NOT change config.xml.
+- MaxMind output must remain byte-identical (Phase-1 oracle green).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (IPinfo provider tests + Phase-1 oracle unchanged); php -l;
+  PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: IPinfo impl additive; MaxMind path unchanged.
+
+EXPECTED RESULT
+A working IPinfo provider for GeoIP + ASN behind the seam; MaxMind unchanged.
+
+COMMIT (single)
+    pfblockerng: add IPinfo GeoIP/ASN provider behind the seam (ADR-32 P4)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/04_Results.txt (plain .txt)
+Record: the IPinfo provider entry points; which consumers it serves; capability-degradation
+behaviour; verification numbers; go-ahead for Phase 5.

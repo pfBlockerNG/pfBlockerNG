@@ -1,0 +1,218 @@
+================================================================================
+PHASE 6 RESULTS — Smoke: CE and Plus installs from variant repos
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+PHASE_6_STATUS: GO — test cases written, committed, pushed; live smoke NOT dispatched
+                (no CI dispatch available from this agent session).
+
+--------------------------------------------------------------------------------
+TEST CASES ADDED
+--------------------------------------------------------------------------------
+
+File: tests/smoke/test_repo_install.py
+Marker: @pytest.mark.repo (inherited from module-level pytestmark)
+Commit: 2ec05a3 "tests: ADR-20 P6 repo smoke — CE variant install + wrong-variant guard (ADR-20 P6)"
+
+Functions added:
+
+  HELPERS (new, not test cases themselves):
+    build_repo_via_portable_named(vm, pkg_files, tmp_path, *, catalog_name, guest_root)
+      -- Like build_repo_via_portable but passes --catalog-name to the generator,
+         producing <out>/<catalog-name>/<ABI>/ (e.g. ce-2.8/FreeBSD:15:amd64/).
+         Ships the tree to the guest; returns the on-guest ABI dir path.
+
+    forge_plus_pkg(src_pkg, out_dir)
+      -- Forge a fake Plus .pkg from the branch CE .pkg: replaces every php8N dep
+         key with php85, sets abi=FreeBSD:16:amd64.  Used by Case 2.
+
+    pkg_query_deps(vm)
+      -- Returns raw "pkg query '%d %v' <PKG_NAME>" output (dep names + versions).
+
+    vm_pkg_query_name(vm)
+      -- Returns "pkg query '%n' <PKG_NAME>" — package name if installed, else "".
+
+  CONSTANTS added:
+    CE_ABI = "FreeBSD:15:amd64"
+    PLUS_ABI = "FreeBSD:16:amd64"
+    CE_CATALOG_NAME = "ce-2.8"
+    PLUS_CATALOG_NAME = "plus-26.03"
+    VARIANT_REPO_ROOT = "/tmp/pfb_variant_repo"
+    CE_REPO_DIR, PLUS_REPO_DIR, LEGACY_REPO_DIR  (on-guest paths)
+    WORKER_BASE_URL = "https://pkg.pfblockerng.workers.dev"
+
+  TEST CASES:
+
+  1. test_ce_install_from_variant_ce_catalog   @pytest.mark.timeout(600)
+     File: tests/smoke/test_repo_install.py
+     Marker: repo
+     Scenario: CE package installs from variant-keyed ce-2.8/FreeBSD:15:amd64/ catalog.
+     Assert BEFORE: vm_pkg_query_name returns "" (package absent).
+     Assert AFTER:  pkg query '%d %v' contains "php83" (CE dep satisfied),
+                    "php85" absent, pkg query '%R' == pfblockerng-devel,
+                    pkg query '%v' is not None.
+
+  2. test_wrong_variant_plus_catalog_fails_on_ce_vm   @pytest.mark.timeout(900)
+     File: tests/smoke/test_repo_install.py
+     Marker: repo
+     Scenario: Plus package (php85 dep, FreeBSD:16 ABI) on CE VM fails.
+     Assert BEFORE (anchor): CE package from ce-2.8/ installs cleanly with php83 dep
+                             — proves the CE path is correct and the AFTER failure is
+                             caused by the variant mismatch, not setup.
+     Assert AFTER: install_result.returncode != 0 OR vm_pkg_query_name == "";
+                   install output contains "php85" or ABI/mismatch keyword;
+                   package NOT installed.
+
+  3. test_legacy_abi_path_still_upgrades   @pytest.mark.timeout(900)
+     File: tests/smoke/test_repo_install.py
+     Marker: repo
+     Scenario: Old-conf CE box (legacy FreeBSD:15:amd64/ path, no variant prefix)
+               upgrades from version N to N+1 during ADR-20 transition window.
+     Assert BEFORE: version N (e.g. <V>_1) installed; origin == pfblockerng-devel.
+     Assert AFTER:  version N+1 (e.g. <V>_9) installed; origin == pfblockerng-devel.
+
+  4. test_routing_url_delivers_ce_catalog   @pytest.mark.timeout(300)
+                                            @pytest.mark.xfail(strict=False)
+     File: tests/smoke/test_repo_install.py
+     Marker: repo
+     Scenario: pkg fetch via Worker URL gets CE variant meta.conf.
+     Status: XFAIL — routing.json not yet deployed to Pages (Worker returns 502
+             when routing.json absent, per Phase 5 RESULTS). strict=False: test
+             may xpass once routing.json is deployed without a code change.
+     When live: assert pkg rquery '%d %v' output contains "php83", not "php85".
+
+--------------------------------------------------------------------------------
+LIVE SMOKE DISPATCH
+--------------------------------------------------------------------------------
+
+NOT dispatched: no CI dispatch available in this agent session.
+
+To dispatch:
+  gh workflow run smoke.yml -f pytest_marker=repo \
+    --ref adr/20-ce-plus-variant-distribution
+
+Expected: Cases 1, 2, 3 GREEN; Case 4 XFAIL (routing.json not on Pages).
+
+--------------------------------------------------------------------------------
+VERIFICATION (local, no VM)
+--------------------------------------------------------------------------------
+
+All three checks passed before commit (pre-commit hook ran them):
+
+  python3 -m pytest tests/ --ignore=tests/smoke -q   -> 1475 passed
+  python3 -c "import ast; ast.parse(open('tests/smoke/test_repo_install.py').read()); print('syntax OK')"
+                                                      -> syntax OK
+  ruff check tests/smoke/test_repo_install.py        -> All checks passed!
+  ruff format --check tests/smoke/test_repo_install.py -> 1 file already formatted
+  mypy tests/                                         -> Success: no issues found in 31 source files
+
+--------------------------------------------------------------------------------
+WRONG-VARIANT GUARD DESIGN
+--------------------------------------------------------------------------------
+
+The guard is structural (not just a test assertion):
+  - Plus .pkg has abi=FreeBSD:16:amd64 + php85 dep (forged by forge_plus_pkg).
+  - CE VM has FreeBSD:15:amd64; php85 is NOT installed on CE.
+  - pkg install from the plus-26.03/FreeBSD:16:amd64/ catalog against a CE VM:
+    * ABI mismatch may prevent pkg update from loading the catalog, OR
+    * pkg install resolves the package but finds php85 unsatisfied -> error.
+  - Either path fires the guard; test checks both (rc!=0 OR package absent).
+  - The before-state anchor (CE install succeeds with php83) proves the failure
+    is caused by the variant mismatch, not an unrelated setup issue.
+
+--------------------------------------------------------------------------------
+PLUS MANUAL SMOKE CHECKLIST (maintainer — no licensed Plus CI image)
+--------------------------------------------------------------------------------
+
+Run on a real pfSense Plus 26.x box. Requires: add-repo.sh from the branch,
+or write the conf manually as shown. Each step includes the assertion command.
+
+1. Write the repo conf pointing at the Worker URL:
+
+     sh scripts/add-repo.sh devel
+
+   Assert conf written:
+     grep -c 'pkg.pfblockerng.workers.dev' /usr/local/etc/pkg/repos/pfblockerng-devel.conf
+     # expected: 1
+
+2. Update and verify the Plus catalog is served:
+
+     pkg update -r pfblockerng-devel
+     # expected: rc=0 (once routing.json is live on Pages)
+
+     pkg rquery -r pfblockerng-devel '%d %v' pfSense-pkg-pfBlockerNG-devel
+     # expected: output contains "php85" (Plus dep), NOT "php83"
+
+3. Install the Plus build and verify the dep:
+
+     pkg install -y pfSense-pkg-pfBlockerNG-devel
+     # expected: rc=0; "Missing dependency" absent from output
+
+     pkg query '%d %v' pfSense-pkg-pfBlockerNG-devel
+     # expected: output contains "php85"; "php83" absent
+
+     pkg query '%R' pfSense-pkg-pfBlockerNG-devel
+     # expected: "pfblockerng-devel"
+
+4. Verify wrong-variant guard (CE package on Plus box):
+   Write conf pointing at the CE catalog directly (hermetic test):
+
+     cat > /tmp/test-ce-only.conf <<'EOF'
+     pfblockerng-ce-test: {
+       url: "https://pfblockerng.github.io/pkg/ce-2.8/${ABI}",
+       signature_type: none,
+       enabled: yes,
+       priority: 200
+     }
+     EOF
+     cp /tmp/test-ce-only.conf /usr/local/etc/pkg/repos/pfblockerng-ce-test.conf
+     pkg update -r pfblockerng-ce-test
+     pkg install -y -r pfblockerng-ce-test pfSense-pkg-pfBlockerNG-devel
+     # expected: FAIL with "php83" unsatisfied dep (CE dep, not present on Plus)
+     rm /usr/local/etc/pkg/repos/pfblockerng-ce-test.conf
+
+5. Verify routing layer transparency (CE-conf surviving an OS upgrade, if applicable):
+   If a CE conf exists on this Plus box from before the migration:
+     - Restore the CE Worker-URL conf (same pfblockerng-devel.conf format).
+     - pkg update should succeed and the catalog served should be Plus (php85).
+     # The Worker reads the Plus UA (Netgate pfSense Plus/26.x...) and routes to plus-26.03/.
+
+6. Record results:
+   - pkg query '%d %v' output (dep list with php85)
+   - pkg query '%R' output (repo origin)
+   - Any unexpected errors
+
+--------------------------------------------------------------------------------
+CASE 4 XFAIL NOTE
+--------------------------------------------------------------------------------
+
+routing.json was NOT deployed to Pages at Phase 6 completion time.
+Phase 5 RESULTS confirmed the Worker is live at https://pkg.pfblockerng.workers.dev
+and correctly returns 502 when routing.json is absent (not a silent fail).
+
+Once routing.json is deployed (by running pfBlockerNG/pkg publish.yml), Case 4
+(test_routing_url_delivers_ce_catalog) will xpass and should be promoted to a
+passing test by removing the @pytest.mark.xfail decorator.
+
+Curl verification to do before removing xfail:
+  curl -sI -A 'pfSense/2.8.1-RELEASE:test' \
+    https://pkg.pfblockerng.workers.dev/FreeBSD:15:amd64/meta.conf
+  # expected: HTTP/2 302 -> Location: https://pfblockerng.github.io/pkg/ce-2.8/FreeBSD:15:amd64/meta.conf
+
+  curl -sI -A 'Netgate pfSense Plus/26.03.1-RELEASE:test' \
+    https://pkg.pfblockerng.workers.dev/FreeBSD:16:amd64/meta.conf
+  # expected: HTTP/2 302 -> Location: https://pfblockerng.github.io/pkg/plus-26.03/FreeBSD:16:amd64/meta.conf
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 7
+--------------------------------------------------------------------------------
+
+Phase 7 (Docs + DoD) can proceed:
+  - All four test cases are written and in the branch.
+  - Default python -m pytest: 1475 passed (unchanged).
+  - ruff + mypy: clean.
+  - Live smoke: dispatch manually with pytest_marker=repo when CI is available.
+  - Plus smoke checklist: documented above (maintainer-run).
+  - routing.json deployment (prerequisite for Case 4 to xpass) is a pfBlockerNG/pkg
+    publish.yml dispatch — separate from this repo's implementation work.

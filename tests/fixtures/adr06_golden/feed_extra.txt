@@ -1,0 +1,7 @@
+# Plain-domain feed carrying config-interaction cases.
+# Feed=ExtraFeed Group=Extra  log_flag=1
+# excluded.com  -> 2-label registrable; normally ZONE, but TLD-exclusion forces
+#                  it to exact DATA (transparent). A subdomain must NOT block.
+# hstslisted.com-> on the blocklist AND on the HSTS list -> resolves real (HSTS).
+excluded.com
+hstslisted.com

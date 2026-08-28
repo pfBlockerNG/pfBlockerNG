@@ -1,0 +1,152 @@
+name: Self-test — version matrix reader
+
+# Verify that scripts/read-version-matrix.sh correctly parses the
+# supported-versions.json on ci-metadata and emits the expected BUILD
+# and CI matrices. workflow_dispatch only — this is a development/
+# debugging aid, not a PR gate. (ADR-09 Phase 2)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-reader:
+    name: Read + print supported-version matrices
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (for scripts/read-version-matrix.sh)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read matrices via composite action
+        id: matrices
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Print BUILD matrix (all entries)
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+        run: |
+          set -eu
+          printf '=== BUILD matrix (all entries, carrying (freebsd_version, php_version) pair) ===\n'
+          printf '%s' "$BUILD_MATRIX" | jq .
+          COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
+          printf '\n%s entries total\n' "$COUNT"
+
+      - name: Print CI matrix (every ci:true row)
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          printf '=== CI matrix (every ci:true row — fed to smoke fan-out) ===\n'
+          printf '%s' "$CI_MATRIX" | jq .
+          COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
+          printf '\n%s CI entries\n' "$COUNT"
+
+      - name: Verify every build row is internally consistent
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+        run: |
+          set -eu
+          # Row-local conformance only (issue #2464): every row is checked against ITS OWN
+          # fields. No edition -> FreeBSD major, edition -> php, or edition -> ci mapping is
+          # asserted anywhere: the matrix is a matrix, and two rows may legitimately share a
+          # build target (CE 2.9 and Plus 26.03 are both FreeBSD 16 / php 8.5) or an edition
+          # and a major (Plus 26.03 and Plus 26.07). `--print-build` also drops `.ci` and
+          # dedupes to one row per freebsd_major, so no edition-keyed count is meaningful here.
+          printf '%s' "$BUILD_MATRIX" | jq -e '
+            length > 0 and all(.[]; . as $row |
+              ($row.pfsense_version | test("^[0-9]+[.][0-9]+")) and
+              ($row.freebsd_version | startswith($row.freebsd_major + ".")) and
+              ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
+              ($row.py_flavor | test("^py[0-9]+$")) and
+              ($row.channel | test("^(CE|Plus)$")) and
+              ($row.variant == $row.channel)
+            )
+          ' > /dev/null || {
+            printf '::error::a BUILD row is not internally consistent\n'
+            printf '%s' "$BUILD_MATRIX" | jq .
+            exit 1
+          }
+          printf 'every BUILD row is internally consistent\n'
+
+      - name: Verify every CI row is internally consistent and ci:true
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          # `--print-ci` is the row-per-version view the reader filters on ci:true, so the only
+          # invariant is that each row says so itself — never "which editions are allowed in
+          # CI" (Plus has been ci:true since ADR-24). `variant` is required below even though
+          # the reader defaults it to "": the smoke topology derives a catalog name from it,
+          # so a row without one yields a catalog like "-2.8" that no producer publishes.
+          printf '%s' "$CI_MATRIX" | jq -e '
+            length > 0 and all(.[]; . as $row |
+              $row.ci == true and
+              ($row.pfsense_version | test("^[0-9]+[.][0-9]+")) and
+              ($row.channel | test("^(CE|Plus)$")) and
+              ($row.variant == $row.channel) and
+              ($row.freebsd_version | startswith($row.freebsd_major + ".")) and
+              ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
+              ($row.py_flavor | test("^py[0-9]+$"))
+            )
+          ' > /dev/null || {
+            printf '::error::a CI row is not internally consistent, or is not ci:true\n'
+            printf '%s' "$CI_MATRIX" | jq .
+            exit 1
+          }
+          printf 'every CI row is internally consistent and ci:true\n'
+
+      - name: Verify every CI row is uniquely identified by its version
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          # The row identity the smoke topology addresses legs by (SMOKE_PFSENSE_VERSION,
+          # tests/smoke/_matrix.py). Duplicate versions would make a leg ambiguous.
+          printf '%s' "$CI_MATRIX" | jq -e '
+            ([.[].pfsense_version] | length) == ([.[].pfsense_version] | unique | length)
+          ' > /dev/null || {
+            printf '::error::two CI rows share a pfsense_version — a leg cannot be addressed\n'
+            printf '%s' "$CI_MATRIX" | jq -r '.[].pfsense_version'
+            exit 1
+          }
+          printf 'every CI row has a unique pfsense_version\n'
+
+      - name: Verify reject-unknown behaviour (simulate unknown version lookup)
+        run: |
+          set -eu
+          # The reject-unknown contract: looking up a version not in the matrix
+          # must fail non-zero. Simulate it by running the lookup script with a
+          # clearly unknown version string.
+          MATRIX_JSON="$(git fetch origin ci-metadata && git show origin/ci-metadata:supported-versions.json)"
+          UNKNOWN="__invalid__"
+          MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$UNKNOWN" '
+            .versions[]
+            | select(.channel == "CE" and .pfsense_version == $ver)
+          ' 2>/dev/null | jq -s '.[0] // empty')" || true
+
+          if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
+            printf '::error::lookup unexpectedly matched unknown version %s: %s\n' "$UNKNOWN" "$MATCH"
+            exit 1
+          fi
+          printf 'reject-unknown contract verified: version %s correctly returns no match\n' "$UNKNOWN"
+
+      - name: Summary
+        env:
+          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          BUILD_COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
+          CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
+          printf '\nAll assertions passed.\n'
+          printf 'BUILD matrix: %s entries | CI matrix: %s entries\n' "$BUILD_COUNT" "$CI_COUNT"

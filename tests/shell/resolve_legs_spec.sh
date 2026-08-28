@@ -1,0 +1,859 @@
+#!/bin/sh
+# shellcheck shell=sh
+# tests/shell/resolve_legs_spec.sh — behaviour oracle for scripts/resolve-legs.sh.
+#
+# Scenario: resolve-legs.sh legs subcommand (ADR-47 P5)
+#   The legs subcommand must produce byte-identical output to the inline jq
+#   previously in smoke.yml / ui-tests.yml. The oracle is the spec itself:
+#   each example asserts the EXACT output the inline code would have produced.
+#
+# Background:
+#   The CI matrix fixture has three legs: CE 2.8, CE 2.10, Plus 26.03.
+#   2.10 > 2.8 numerically; lexically "2.10" < "2.8" — the numeric sort test
+#   proves the correct component-wise comparison (split(".") | map(tonumber)).
+
+# shellcheck disable=SC2317  # shellspec wraps each example's body
+
+SCRIPT="${PFB_ROOT}/scripts/resolve-legs.sh"
+
+# CI matrix fixture: 3 legs (CE 2.8, CE 2.10, Plus 26.03).
+# All have ci:true (the reader pre-filters; we replicate that here).
+FIXTURE_MATRIX='[{"pfsense_version":"2.10","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"},{"pfsense_version":"2.8","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"},{"pfsense_version":"26.03","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py312","abi":"FreeBSD:16:amd64"}]'
+
+Describe 'resolve-legs.sh legs — scope + leg selection'
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    # ── full scope ──────────────────────────────────────────────────────────
+
+    It 'schedule event → full scope → all 3 legs'
+        # Given: schedule trigger (always full regardless of other inputs).
+        # When: legs subcommand runs.
+        # Then: stdout is the full 3-leg array (order preserved from matrix).
+        #       stderr carries the informational banner (scope=... legs=... -k=[...]).
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="schedule" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.10"'
+        The output should include '"pfsense_version":"2.8"'
+        The output should include '"pfsense_version":"26.03"'
+        The error should include 'scope='
+    End
+
+    It 'SCOPE_INPUT=full → all 3 legs'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.8"'
+        The output should include '"pfsense_version":"26.03"'
+        The error should include 'scope='
+    End
+
+    It 'EVENT_NAME=workflow_call without SCOPE_INPUT → impacted (no special rung)'
+        # A reusable-workflow callee sees the CALLER's event_name, never
+        # "workflow_call", so a dedicated rung could never fire in CI. Pin the
+        # fallthrough: without an explicit SCOPE_INPUT this resolves like any
+        # other event — impacted, min-CE leg only. A workflow_call gate that
+        # wants the full fan-out passes scope=full explicitly (issue #906).
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_call" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.8"'
+        The output should not include '"pfsense_version":"2.10"'
+        The output should not include '"pfsense_version":"26.03"'
+        The error should include 'scope='
+    End
+
+    # ── impacted scope ──────────────────────────────────────────────────────
+
+    It 'bare dispatch → impacted scope → only the minimum CE leg (2.8, not 2.10)'
+        # Given: workflow_dispatch with no SCOPE_INPUT (impacted default).
+        # When: legs runs the numeric-sort min-CE jq.
+        # Then: only 2.8 in stdout (numeric sort: 2.8 < 2.10; lexical would give 2.10).
+        #       stderr carries the informational banner and the impacted message.
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.8"'
+        The output should not include '"pfsense_version":"2.10"'
+        The output should not include '"pfsense_version":"26.03"'
+        The error should include 'scope='
+    End
+
+    It 'numeric sort: 2.8 < 2.10 (not lexical 2.10 < 2.8)'
+        # Given: CE legs 2.8 and 2.10 only.
+        # When: impacted scope runs.
+        # Then: 2.8 is the minimum (numeric), not 2.10 (which would be minimum lexically).
+        MATRIX_CE_ONLY='[{"pfsense_version":"2.10","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"},{"pfsense_version":"2.8","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"}]'
+        When run env \
+            CI_MATRIX="$MATRIX_CE_ONLY" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.8"'
+        The output should not include '"pfsense_version":"2.10"'
+        The error should include 'scope='
+    End
+
+    # ── version-exact ───────────────────────────────────────────────────────
+
+    It 'VERSION_INPUT=2.8 → only the 2.8 CE leg'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            VERSION_INPUT="2.8" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version":"2.8"'
+        The output should not include '"pfsense_version":"2.10"'
+        The output should not include '"pfsense_version":"26.03"'
+        The error should include 'scope='
+    End
+
+    It 'VERSION_INPUT for a non-existent version → exit 1 with ::error::'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            VERSION_INPUT="9.9" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be failure
+        The error should include '::error::'
+    End
+
+    It 'impacted scope with no CE leg in matrix → exit 1 with ::error::'
+        PLUS_ONLY='[{"pfsense_version":"26.03","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py312","abi":"FreeBSD:16:amd64"}]'
+        When run env \
+            CI_MATRIX="$PLUS_ONLY" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be failure
+        The error should include '::error::'
+    End
+
+    # ── unknown scope ───────────────────────────────────────────────────────
+
+    It 'unknown SCOPE_INPUT → exit 1 with ::error::'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="bogus" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be failure
+        The error should include '::error::'
+    End
+
+End
+
+Describe 'resolve-legs.sh legs — -k derivation'
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    It 'explicit PYTEST_FILTER_INPUT → used verbatim as -k'
+        # stdout = legs JSON; stderr = -k value + scope banner (informational).
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            PYTEST_FILTER_INPUT="test_foo or test_bar" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version"'
+        The error should include '-k=[test_foo or test_bar]'
+    End
+
+    It 'impacted scope with PFB_IMPACTED_CHANGED_FILES seam → auto-derives -k'
+        # Given: a changed test module visible via the PFB_IMPACTED_CHANGED_FILES seam.
+        # When: impacted scope with no explicit PYTEST_FILTER_INPUT.
+        # Then: stdout = legs JSON; stderr = auto-derived -k expression.
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version"'
+        The error should include 'test_dns_redirect'
+    End
+
+    It 'full scope → no -k auto-derivation (whole marker runs)'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
+    End
+
+    It 'impacted scope with no changed smoke tests → empty -k (whole marker)'
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="src/usr/local/pkg/pfblockerng/pfb_unbound.py" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
+    End
+
+    It '--test-dir filter: tests/smoke/ui does not pick up tests/smoke/test_*.py'
+        # Given: a changed tests/smoke/test_foo.py (NOT in tests/smoke/ui/).
+        # When: legs with --test-dir tests/smoke/ui.
+        # Then: stdout = legs JSON; stderr = empty -k (the smoke test is not a UI module).
+        When run env \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            PFB_IMPACTED_CHANGED_FILES="tests/smoke/test_dns_redirect.py" \
+            sh "$SCRIPT" legs --test-dir tests/smoke/ui --label tier
+        The status should be success
+        The output should include '"pfsense_version"'
+        The error should include '-k=[]'
+    End
+
+End
+
+Describe 'resolve-legs.sh legs — shard expansion (issue #797)'
+
+    # One CE + one Plus leg (mirrors the FIXTURE_MATRIX style above).
+    ONE_CE_ONE_PLUS='[{"pfsense_version":"2.8","channel":"CE","ci":true,"image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","abi":"FreeBSD:15:amd64"},{"pfsense_version":"26.03","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py312","abi":"FreeBSD:16:amd64"}]'
+
+    # 3 known test_*.py modules — --test-dir clamp target (PFB_FIXTURES/shard-modules).
+    SHARD_DIR="${PFB_FIXTURES}/shard-modules"
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    It 'SHARDS_INPUT=2, no -k, marker smoke -> EVERY leg expands to 2 shards (CE and Plus alike), total 4 legs'
+        # Given: full scope (no -k), default marker, a 3-module test-dir (>= 2 shards).
+        # When: legs runs with SHARDS_INPUT=2.
+        # Then: one `shards` value drives every channel — CE and Plus each
+        #       become 2 entries (0-based shard 0/1 of 2, display labels 1/2 and
+        #       2/2); no entry keeps a capped shard_total "1" (issue #856
+        #       validated same-identity parallel Plus boots, so Plus is no
+        #       longer special-cased); the array carries 4 legs total.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"channel":"CE"'
+        The output should include '"shard":"0","shard_label":"1","shard_total":"2"'
+        The output should include '"shard":"1","shard_label":"2","shard_total":"2"'
+        The output should include '"channel":"Plus"'
+        The output should not include '"shard_total":"1"'
+        The error should include 'legs=4'
+    End
+
+    It 'SHARDS_INPUT=2 + PYTEST_FILTER_INPUT set -> collapses to 1 (no expansion)'
+        # Given: an explicit -k narrows the run.
+        # When: SHARDS_INPUT=2 is also requested.
+        # Then: a -k'd run must never fan out to shards that may not contain the
+        #       selected tests -- every leg stays shard_total "1".
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            PYTEST_FILTER_INPUT="test_foo" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    It 'SHARDS_INPUT=2 + MARKER_INPUT=repo -> collapses to 1 (no expansion)'
+        # Given: a non-default marker (few tests -- a shard slice can collect zero).
+        # When: SHARDS_INPUT=2 is also requested.
+        # Then: every leg stays shard_total "1".
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            MARKER_INPUT="repo" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    It 'SHARDS_INPUT=5 over a 3-module test-dir -> BOTH legs clamped to 3 shards'
+        # Given: a fixture dir with exactly 3 test_*.py modules.
+        # When: SHARDS_INPUT requests more shards than modules exist.
+        # Then: every leg (CE and Plus) is clamped to 3 shards (0/1/2 of 3),
+        #       never 5 — 6 legs total.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="5" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_label":"1","shard_total":"3"'
+        The output should include '"shard":"1","shard_label":"2","shard_total":"3"'
+        The output should include '"shard":"2","shard_label":"3","shard_total":"3"'
+        The output should not include 'shard_total":"5"'
+        The output should not include '"shard_total":"1"'
+        The error should include 'legs=6'
+    End
+
+    It 'SHARDS_INPUT unset/empty -> 1 (uniform fields still present)'
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
+        The output should not include 'shard_total":"2"'
+        The error should include 'legs=2'
+    End
+
+    Context 'shard-count parsing errors'
+        # Parameters scopes to Examples within THIS Context only (it leaks to
+        # every sibling It in the enclosing scope otherwise).
+        Parameters
+            "abc"
+            "0"
+            "-1"
+        End
+        It "SHARDS_INPUT garbage ('$1') -> 1"
+            When run env \
+                CI_MATRIX="$ONE_CE_ONE_PLUS" \
+                EVENT_NAME="workflow_dispatch" \
+                SCOPE_INPUT="full" \
+                SHARDS_INPUT="$1" \
+                sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+            The status should be success
+            The output should include '"shard":"0","shard_label":"1","shard_total":"1"'
+            The output should not include 'shard_total":"2"'
+            The error should include 'legs=2'
+        End
+    End
+
+    It 'emitted shard/shard_total are JSON STRINGS, not bare numbers'
+        # Given: workflow_call inputs are typed string -- a bare JSON number would
+        #        need coercion at every consumer.
+        # When: legs runs with shards.
+        # Then: the JSON carries "0"/"2" (quoted strings), never bare 0/2.
+        When run env \
+            CI_MATRIX="$ONE_CE_ONE_PLUS" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir "$SHARD_DIR" --label marker
+        The status should be success
+        The output should include '"shard":"0"'
+        The output should include '"shard_label":"1"'
+        The output should include '"shard_total":"2"'
+        The output should not include '"shard":0,'
+        The output should not include '"shard_label":1,'
+        The output should not include '"shard_total":2,'
+        The output should not include '"shard_total":2}'
+        The error should include 'legs=4'
+    End
+
+End
+
+Describe 'resolve-legs.sh legs — leg_matrix output (issue #857)'
+    # Background: smoke.yml's build-pkg job (issue #857) builds the branch
+    # .pkg ONCE PER VERSION LEG by matrixing over the new leg_matrix output,
+    # while the smoke job keeps matrixing over the shard-expanded ci_matrix
+    # (every shard of a leg downloads that one shared artifact). This spec
+    # proves leg_matrix is the UNSHARDED per-leg set (no shard/shard_total
+    # fields) while ci_matrix keeps its existing shard expansion — the two
+    # outputs must diverge exactly this way, or a shard-count leg would
+    # rebuild its .pkg once per shard again.
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT MARKER_INPUT SHARDS_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+    }
+    BeforeEach 'setup'
+
+    # Run `legs` with $GITHUB_OUTPUT pointed at a temp file, extract the
+    # leg_matrix/ci_matrix heredoc blocks, and print jq summaries as plain
+    # `key=value` lines — shellspec has no built-in file-content matcher, so
+    # the It examples assert on this printed summary instead.
+    resolve_outputs() {
+        _gho="$(mktemp "${SHELLSPEC_TMPBASE:-/tmp}/resolve-legs-gho.XXXXXX")"
+        env GITHUB_OUTPUT="$_gho" \
+            CI_MATRIX="$FIXTURE_MATRIX" \
+            EVENT_NAME="workflow_dispatch" \
+            SCOPE_INPUT="full" \
+            SHARDS_INPUT="2" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker >/dev/null 2>&1
+        _leg_json="$(sed -n '/^leg_matrix<<__EOF__$/,/^__EOF__$/p' "$_gho" | sed '1d;$d')"
+        _ci_json="$(sed -n '/^ci_matrix<<__EOF__$/,/^__EOF__$/p' "$_gho" | sed '1d;$d')"
+        rm -f "$_gho"
+        printf 'leg_count=%s\n' "$(printf '%s' "$_leg_json" | jq 'length')"
+        printf 'leg_has_shard=%s\n' "$(printf '%s' "$_leg_json" | jq '[.[] | has("shard")] | any')"
+        printf 'ci_count=%s\n' "$(printf '%s' "$_ci_json" | jq 'length')"
+        printf 'ci_shard_total_2_count=%s\n' "$(printf '%s' "$_ci_json" | jq '[.[] | select(.shard_total == "2")] | length')"
+    }
+
+    It 'full scope + SHARDS_INPUT=2 -> leg_matrix has one unsharded entry per version leg (no shard fields)'
+        # Given: FIXTURE_MATRIX (3 version legs: CE 2.8, CE 2.10, Plus 26.03),
+        #        full scope, SHARDS_INPUT=2 over tests/smoke (43 modules, no clamp).
+        # When: legs runs and $GITHUB_OUTPUT's leg_matrix block is inspected.
+        # Then: leg_matrix carries exactly 3 entries (one per version leg) and
+        #       none of them carry a `shard` field.
+        When call resolve_outputs
+        The status should be success
+        The output should include 'leg_count=3'
+        The output should include 'leg_has_shard=false'
+    End
+
+    It 'full scope + SHARDS_INPUT=2 -> ci_matrix stays shard-expanded (3 legs x 2 shards = 6)'
+        # Given: the same run as above.
+        # When: $GITHUB_OUTPUT's ci_matrix block is inspected.
+        # Then: ci_matrix still carries 6 entries, all shard_total="2" — the
+        #       shard expansion this fix must NOT touch.
+        When call resolve_outputs
+        The status should be success
+        The output should include 'ci_count=6'
+        The output should include 'ci_shard_total_2_count=6'
+    End
+End
+
+Describe 'resolve-legs.sh image-ref'
+
+    setup() {
+        scrub_git_env
+        unset INPUT_REF INPUT_VERSION INPUT_IMAGE_NAME SMOKE_IMAGE_REPO SMOKE_IMAGE_NAME SMOKE_IMAGE_TAG GITHUB_OUTPUT PFB_LAN_REGISTRY
+    }
+    BeforeEach 'setup'
+
+    It 'INPUT_REF wins over all other vars'
+        When run env \
+            INPUT_REF="ghcr.io/pfblockerng/pfsense-ce@sha256:abc" \
+            INPUT_VERSION="99.99" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce@sha256:abc'
+        The error should include 'resolved image ref'
+    End
+
+    It 'composes ref from SMOKE_IMAGE_REPO + INPUT_IMAGE_NAME + INPUT_VERSION'
+        When run env \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    It 'applies defaults when no vars set (pfsense-ce:2.8)'
+        # GITHUB_REPOSITORY_OWNER must be set for the fallback REPO compose.
+        When run env \
+            GITHUB_REPOSITORY_OWNER="pfblockerng" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should include 'pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    # ── LAN registry rewrite (issue #2246) ────────────────────────────────── #
+
+    It 'rewrites the composed ref through the LAN registry when PFB_LAN_REGISTRY is set'
+        When run env \
+            PFB_LAN_REGISTRY="10.0.0.111" \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal '10.0.0.111/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    It 'rewrites an INPUT_REF-provided full ref through the LAN registry too'
+        When run env \
+            PFB_LAN_REGISTRY="10.0.0.111" \
+            INPUT_REF="ghcr.io/pfblockerng/pfsense-ce@sha256:abc" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal '10.0.0.111/pfblockerng/pfsense-ce@sha256:abc'
+        The error should include 'resolved image ref'
+    End
+
+    It 'leaves the ref unchanged when PFB_LAN_REGISTRY is unset'
+        When run env \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    It 'leaves the ref unchanged when PFB_LAN_REGISTRY is empty-but-set (hostile: inert)'
+        When run env \
+            PFB_LAN_REGISTRY="" \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+End
+
+Describe 'resolve-legs.sh digest — LAN registry routing (issue #2246)'
+    # oras is stubbed on PATH; it records every invocation's full argv so an
+    # example can assert which flags reached which subcommand (mirrors the
+    # stub in this file's digest-routing examples).
+
+    setup() {
+        scrub_git_env
+        WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rldigest.XXXXXX")"
+        BIN="${WORK}/bin"
+        mkdir -p "$BIN"
+        cat > "${BIN}/oras" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${STUB_ARGV_LOG}"
+case "$1" in
+  resolve)
+    if [ -n "${STUB_RESOLVE_EMPTY:-}" ]; then :; else printf '%s\n' "${STUB_DIGEST:-sha256:deadbeef}"; fi
+    ;;
+  manifest)
+    case "$*" in
+      *--descriptor*) printf '{"digest":"%s"}\n' "${STUB_DESCRIPTOR_DIGEST:-${STUB_DIGEST:-sha256:deadbeef}}" ;;
+      *) printf '{"annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' ;;
+    esac
+    ;;
+  login)    : ;;
+  *) exit 1 ;;
+esac
+EOF
+        chmod +x "${BIN}/oras"
+        STUB_ARGV_LOG="${WORK}/argv.log"
+        printf '' > "$STUB_ARGV_LOG"
+        PATH="${BIN}:${PATH}"
+        unset PFB_LAN_REGISTRY GITHUB_OUTPUT SMOKE_GHCR_USER SMOKE_GHCR_TOKEN
+        export PATH STUB_ARGV_LOG
+    }
+    BeforeEach 'setup'
+
+    cleanup() { rm -rf "$WORK"; }
+    AfterEach 'cleanup'
+
+    It 'LAN active: logs annotations from the descriptor pinned to the resolved digest'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:aaaa" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:aaaa'
+        The contents of file "$STUB_ARGV_LOG" should not include 'login'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The output should include '"pfsense_version":"2.8.1-RELEASE"'
+    End
+
+    It 'LAN active: derives the digest atomically from the tag descriptor when resolve is empty'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:bbbb" STUB_RESOLVE_EMPTY=1 \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:bbbb'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should not include 'login'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:bbbb'
+    End
+
+    It 'LAN inactive: logs into ghcr.io and fetches the descriptor without the LAN flag'
+        When run env STUB_DIGEST="sha256:cccc" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:cccc --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:cccc'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:cccc'
+    End
+
+    It 'PFB_LAN_REGISTRY empty-but-set behaves as inactive (hostile: login present, no flag)'
+        When run env PFB_LAN_REGISTRY="" STUB_DIGEST="sha256:dddd" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:dddd'
+    End
+
+    It 'rejects a descriptor whose digest disagrees with the resolved immutable identity'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:aaaa" \
+            STUB_DESCRIPTOR_DIGEST="sha256:bbbb" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be failure
+        The error should include 'descriptor digest sha256:bbbb disagrees with resolved digest sha256:aaaa'
+    End
+
+End
+
+Describe 'resolve-legs.sh pull (issue #2246)'
+    # Same argv-recording oras stub as the digest Describe above; the pull
+    # subcommand only ever calls `oras pull`.
+
+    setup() {
+        scrub_git_env
+        WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rlpull.XXXXXX")"
+        BIN="${WORK}/bin"
+        OUTDIR="${WORK}/out"
+        mkdir -p "$BIN"
+        cat > "${BIN}/oras" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${STUB_ARGV_LOG}"
+case "$1" in
+  pull) printf '%s\n' "$PWD" >> "${STUB_CWD_LOG}"; touch pulled.qcow2 ;;
+  *) exit 1 ;;
+esac
+EOF
+        chmod +x "${BIN}/oras"
+        STUB_ARGV_LOG="${WORK}/argv.log"
+        STUB_CWD_LOG="${WORK}/cwd.log"
+        printf '' > "$STUB_ARGV_LOG"
+        printf '' > "$STUB_CWD_LOG"
+        PATH="${BIN}:${PATH}"
+        unset PFB_LAN_REGISTRY
+        export PATH STUB_ARGV_LOG STUB_CWD_LOG
+    }
+    BeforeEach 'setup'
+
+    cleanup() { rm -rf "$WORK"; }
+    AfterEach 'cleanup'
+
+    It 'pulls digest-pinned and creates the outdir'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The contents of file "$STUB_CWD_LOG" should include "$OUTDIR"
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'strips an existing @digest suffix before pinning the new one (hostile)'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:oldold" "sha256:newnew" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:newnew'
+        The contents of file "$STUB_ARGV_LOG" should not include 'oldold'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'accepts a bare digest without the sha256: prefix (hostile: plain string-concat semantics)'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "deadbeef" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@deadbeef'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'threads --plain-http when the LAN registry is active'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" \
+            sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'passes no flag when the LAN registry is inactive'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'logs the outdir listing to stderr'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The error should include 'pulled.qcow2'
+    End
+
+End
+
+Describe 'resolve-legs.sh exact-image-name'
+
+    setup() {
+        scrub_git_env
+        unset IMAGE_REF INPUT_IMAGE_NAME
+    }
+    BeforeEach 'setup'
+
+    It 'strips ghcr path, digest, and tag from IMAGE_REF'
+        When run env \
+            IMAGE_REF="ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:abc" \
+            sh "$SCRIPT" exact-image-name
+        The status should be success
+        The output should equal 'pfsense-ce'
+    End
+
+    It 'falls back to INPUT_IMAGE_NAME when IMAGE_REF is unset'
+        When run env \
+            INPUT_IMAGE_NAME="pfsense-plus" \
+            sh "$SCRIPT" exact-image-name
+        The status should be success
+        The output should equal 'pfsense-plus'
+    End
+
+    It 'defaults to pfsense-ce when both IMAGE_REF and INPUT_IMAGE_NAME are unset'
+        When run sh "$SCRIPT" exact-image-name
+        The status should be success
+        The output should equal 'pfsense-ce'
+    End
+
+End
+
+Describe 'resolve-legs.sh legs — release-gate status demotion (issue #1855)'
+
+    # A matrix row may veto a RELEASE only when its ci-metadata `status` is a
+    # RELEASED pfSense version: `active`, or its legacy alias `GA`. Every other
+    # value — `beta` today, anything added later (rc/dev/eol/…), and an absent or
+    # unrecognized one — is NON-BLOCKING. Non-blocking legs still run and still
+    # report; they simply cannot veto, and each demotion is announced loudly so
+    # coverage cannot erode silently. Off by default: without RELEASE_GATE_INPUT
+    # every row stays blocking, so PR/nightly gating is untouched.
+    #
+    # Prompted by v4.0.0.alpha.24 (run 30424647767): Plus 26.07 (status=beta,
+    # auto-activated to ci=true by the reconcile automation) vetoed a release over
+    # a real 26.07-only defect (#1856) after the tag and draft already existed.
+
+    GATE_MATRIX='[{"pfsense_version":"2.8","channel":"CE","ci":true,"status":"active","image_name":"pfsense-ce","mac":"","freebsd_major":"15","php_version":"8.3","py_flavor":"py311"},{"pfsense_version":"26.03","channel":"Plus","ci":true,"status":"GA","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"26.07","channel":"Plus","ci":true,"status":"beta","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.01","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.02","channel":"Plus","ci":true,"status":"eol","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"}]'
+
+    setup() {
+        scrub_git_env
+        unset SCOPE_INPUT VERSION_INPUT PYTEST_FILTER_INPUT GITHUB_OUTPUT GITHUB_ENV PFB_BASE_REF
+        unset SHARDS_INPUT MARKER_INPUT RELEASE_GATE_INPUT
+    }
+    BeforeEach 'setup'
+
+    # version=release_blocking pairs, matrix order preserved.
+    gate_pairs() {
+        env CI_MATRIX="$GATE_MATRIX" EVENT_NAME="workflow_call" SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="$1" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker 2>/dev/null \
+            | jq -r 'map("\(.pfsense_version)=\(.release_blocking)") | join(" ")'
+    }
+
+    It 'RELEASE_GATE_INPUT=true → only active/GA rows keep their veto'
+        # Given: five ci:true rows — active, GA, beta, status-absent, unknown ("eol").
+        # When: the legs run with the release gate on.
+        # Then: active + GA stay blocking; beta, absent and unknown are demoted.
+        When call gate_pairs true
+        The status should be success
+        The output should equal '2.8=true 26.03=true 26.07=false 27.01=false 27.02=false'
+    End
+
+    It 'RELEASE_GATE_INPUT unset → every row stays blocking (PR/nightly unchanged)'
+        # The demotion is release-scoped: a pfSense beta still gates PR CI and the
+        # nightly fan-out exactly as before.
+        When call gate_pairs ''
+        The status should be success
+        The output should equal '2.8=true 26.03=true 26.07=true 27.01=true 27.02=true'
+    End
+
+    It 'each demoted row is announced loudly, naming the row and its status'
+        When run env \
+            CI_MATRIX="$GATE_MATRIX" \
+            EVENT_NAME="workflow_call" \
+            SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="true" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+        The status should be success
+        # The demoted legs are still IN the fan-out — they run and report, they
+        # just cannot veto.
+        The output should include '"pfsense_version":"26.07"'
+        The output should include '"release_blocking":"false"'
+        The error should include '::warning::release gate: Plus 26.07 (status beta)'
+        The error should include '::warning::release gate: Plus 27.01 (status <absent>)'
+        The error should include '::warning::release gate: Plus 27.02 (status eol)'
+        The error should not include '::warning::release gate: CE 2.8'
+        The error should not include '::warning::release gate: Plus 26.03'
+    End
+
+    It 'the release gate never silences a row it kept blocking'
+        # Coverage-erosion guard: an active/GA row must never be demoted, so a
+        # warning naming one is itself the bug.
+        When call gate_pairs true
+        The status should be success
+        The output should include '2.8=true'
+        The output should include '26.03=true'
+    End
+
+    # AGGREGATE guard. Demoting rows one at a time is safe; demoting ALL of them
+    # is not. With legs to run but NOT ONE of them able to veto, every leg runs,
+    # every failure is ignored, both suite AND-gates go green and the tag ships —
+    # the whole live-verification phase silently became advisory, announced only
+    # by ::warning:: lines inside a green run. Plausible mid-transition: reconcile
+    # demotes 2.8 and 26.03 while 26.07 is still beta. Distinct exit 3 so the
+    # cause is not confused with a scope/filter error (exit 1).
+    NO_BLOCKING_MATRIX='[{"pfsense_version":"26.07","channel":"Plus","ci":true,"status":"beta","image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"},{"pfsense_version":"27.01","channel":"Plus","ci":true,"image_name":"pfsense-plus","mac":"","freebsd_major":"16","php_version":"8.5","py_flavor":"py311"}]'
+
+    no_blocking_legs() {
+        env CI_MATRIX="$NO_BLOCKING_MATRIX" EVENT_NAME="workflow_call" SCOPE_INPUT="full" \
+            RELEASE_GATE_INPUT="$1" \
+            sh "$SCRIPT" legs --test-dir tests/smoke --label marker
+    }
+
+    It 'a release gate with legs but NO blocking row fails loudly'
+        # Given: two ci:true rows, neither of them a released pfSense version.
+        # When: an rc/stable release resolves its legs with the gate on.
+        # Then: it stops with a distinct exit and names what happened, instead of
+        #       running an entire fan-out whose verdict nothing could act on.
+        When run no_blocking_legs true
+        The status should equal 3
+        The error should include '::error::release gate:'
+        The error should include 'no leg can veto'
+        The stdout should be defined
+    End
+
+    It 'the same all-demoted matrix is fine when the gate is off'
+        # PR CI and the nightly fan-out never resolve a blocking set, so the guard
+        # must be release-scoped exactly like the demotion it protects.
+        When run no_blocking_legs ''
+        The status should be success
+        The output should include '"pfsense_version":"26.07"'
+        The error should be defined
+    End
+
+    It 'one blocking row is enough to satisfy the guard'
+        # Boundary: the guard fires on ZERO blocking legs, never on "fewer than
+        # before" — a single active/GA row still carries a real veto.
+        When call gate_pairs true
+        The status should be success
+        The output should include '2.8=true'
+    End
+End

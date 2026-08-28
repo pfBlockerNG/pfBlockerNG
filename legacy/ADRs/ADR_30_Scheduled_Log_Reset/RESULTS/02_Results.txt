@@ -1,0 +1,170 @@
+ADR-30 Phase 2 Results — Register per-log log_rotate_<type> config fields
+=========================================================================
+
+Branch: adr/30-scheduled-log-reset
+Phase:  2 of 5 (behaviour-preserving — 10 dormant config fields registered)
+Status: DONE — all gates green
+
+RESOLVED CONFIG.XML SECTION
+----------------------------
+
+  installedpackages/pfblockerng/config/0
+
+This is the General settings section ($gen in pfb_cfg_registry()). Confirmed
+by tracing log_max_<type> keys in pfblockerng_extra.inc (lines 342–411): all 10
+log_max_* keys use 'section' => $gen. The log_rotate_<type> keys are registered
+in the same section, mirroring that structure exactly.
+
+10 NEW REGISTERED KEYS
+-----------------------
+
+  log_rotate_log
+  log_rotate_errlog
+  log_rotate_extraslog
+  log_rotate_ip_blocklog
+  log_rotate_ip_permitlog
+  log_rotate_ip_matchlog
+  log_rotate_dnslog
+  log_rotate_dnsbl_parse_err
+  log_rotate_dnsreplylog
+  log_rotate_unilog
+
+All 10 registered with:
+  section:        'installedpackages/pfblockerng/config/0'
+  default:        'off'
+  read_adapter:   NULL (plain string / identity)
+  write_adapter:  NULL (plain string / identity)
+  since:          '3.2.0'  <-- SEE MAINTAINER NOTE BELOW
+
+SINCE-VERSION — MAINTAINER CONFIRMATION REQUIRED
+-------------------------------------------------
+
+  'since' = '3.2.0'
+
+Rationale: '3.2.0' is the newest 'since' value already present in the
+registry at ADR-30 authoring time. These fields are BRAND NEW (never shipped);
+their correct 'since' is the first release that will include them, which is
+not yet known at implementation time.
+
+MAINTAINER ACTION: update the 'since' value on these 10 entries to the
+actual first release version that ships them (e.g. '3.3.0' or '4.0.0'),
+before that release tag is cut. The comment in pfblockerng_extra.inc flags
+this explicitly:
+
+  // MAINTAINER NOTE: 'since' is set to '3.2.0' (newest registry version at ADR-30 authoring);
+  // confirm and update to the actual first release that ships these fields.
+
+HOW REGISTRATION WAS KEPT DRY
+------------------------------
+
+The 10 entries are built via a foreach loop over $log_types, appended to the
+first half of the $registry array:
+
+  $log_types = [
+      'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog',
+      'ip_matchlog', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog',
+  ];
+  foreach ($log_types as $log_type) {
+      $registry['log_rotate_' . $log_type] = [
+          'section'       => $gen,
+          'default'       => 'off',
+          'read_adapter'  => NULL,
+          'write_adapter' => NULL,
+          'since'         => '3.2.0',
+      ];
+  }
+
+The main $registry literal is then merged with the remaining entries via
+array union ($registry = $registry + [...]). The loop mirrors how the
+log_max_<type> set is logically grouped; the $log_types array is the single
+source of truth for both the loop and the test data providers.
+
+IMPLEMENTATION DETAILS
+----------------------
+
+Files changed:
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    - Closed the $registry = [...] literal after log_max_unilog.
+    - Added $log_types foreach loop building 10 log_rotate_<type> entries.
+    - Reopened registry continuation with $registry = $registry + [...].
+    - Added MAINTAINER NOTE comment on the since-version.
+
+  tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+    - Added 10 installedpackages/pfblockerng/config/0/log_rotate_<type> paths
+      to $registeredPaths, grouped after the log_max_* block.
+
+  tests/php/CfgGatewayTest.php
+    - Updated $inventory in testInventoryCompletenessAllKnownKeysAccountedFor:
+      added all 10 log_rotate_<type> keys.
+    - Added testLogRotateFieldsAreRegistered: asserts all 10 keys present in
+      the registry.
+    - Added logRotateVocabularyProvider: data provider 10 keys × 4 tokens.
+    - Added testLogRotateFieldRoundTripForAllVocabularyTokens (dataProvider):
+      before-assertion + read + write(read(v))==v for every key/token pair.
+    - Added testLogRotateFieldAbsentKeyReturnsDefaultOff: absent => 'off' for
+      all 10 keys.
+
+  tests/php/RollbackContractTest.php
+    - Added logRotateVocabularyProvider: same data provider as CfgGatewayTest.
+    - Added testLogRotateFieldForwardAndBackwardForEveryVocabToken (dataProvider):
+      FORWARD (read returns string, not crash) + BACKWARD (write(read) = same
+      stored string) for all 10 × 4 cases.
+    - Added testLogRotateFieldAbsentKeyReturnsOffDefault: FORWARD absent-key
+      default for all 10 keys.
+
+No call sites added. No UI wired. Fields are dormant this phase.
+
+GATE RESULTS
+------------
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    -> No syntax errors detected
+
+  php -l tests/php/CfgGatewayTest.php
+    -> No syntax errors detected
+
+  php -l tests/php/RollbackContractTest.php
+    -> No syntax errors detected
+
+  php -l tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+    -> No syntax errors detected
+
+  vendor/bin/phpunit
+    -> OK (955 tests, 3671 assertions) [was 872/3181 before Phase 2]
+    -> 83 new tests added
+    -> PHPUnit Deprecations: 2 (pre-existing; drill not found = pre-existing env)
+
+  vendor/bin/phpunit --filter LogRotate
+    -> OK (104 tests, 446 assertions)
+    -> 21 from Phase 1 LogRotateScheduleTest + 83 from Phase 2
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    -> (no output = 0 errors)
+
+  vendor/bin/phpstan analyse src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    -> OK No errors
+
+SELF-REVIEW VERDICT: DONE
+--------------------------
+
+Checklist:
+  [x] All 10 keys registered in the correct section (installedpackages/pfblockerng/config/0)
+  [x] Sniff $registeredPaths updated with all 10 paths
+  [x] Inventory test updated with all 10 keys
+  [x] Round-trip write(read(v))==v asserted for all 4 tokens per key (data provider)
+  [x] Before-assertion in round-trip tests (no false passes)
+  [x] Default-absent => 'off' asserted for all 10 keys
+  [x] RollbackContractTest FORWARD + BACKWARD for all 10 × 4 cases
+  [x] No UI, no reader/writer, no cron wiring (dormant this phase)
+  [x] Scope clean — only the 4 required files changed
+  [x] DRY: foreach loop with $log_types array as source of truth
+
+GO-AHEAD FOR PHASE 3
+--------------------
+
+Phase 3 may proceed: implement pfb_log_reset() reading each log's
+log_rotate_<type> via PfbConfig::read(), reading/writing the per-log marker
+file (/var/db/pfblockerng/log_rotate.last), calling pfb_log_should_reset()
+from Phase 1, truncating in-place (inode-preserving), and wiring after
+pfb_log_mgmt() at pfblockerng.php:771.

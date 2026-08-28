@@ -1,0 +1,198 @@
+================================================================================
+PHASE 4 RESULTS -- Docs + ADR-65 reconciliation (behaviour-preserving)
+================================================================================
+
+VERDICT: DONE
+
+WHAT CHANGED (base_sha 2ddfd777e7c8f5a0e1f620178bfa6867ff7ee41a)
+- docs/misc/public-suffix-list.md :4 -- `_dnsbl_load_tld_master()` ->
+  `_dnsbl_load_tld_wildcard_master()`. Why: Phase-3 rename.
+- docs/misc/architecture-notes.md :76 -- `classify()` -> `tld_wildcard_classify()`
+  (the D1 delta-row description of the plain-feed TLD-wildcard path). Why: Phase-3
+  rename; sole `classify(` hit in docs/.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md SS1.1/SS1.2 --
+  `classify()`->`tld_wildcard_classify()` (x4), `tld_master`->`tld_wildcard_master`
+  (x2), manifest-embedded-key names `tld_master/tld_blacklist/tld_exclusion` ->
+  `tld_wildcard_blacklist/tld_wildcard_exclusion`, `$pfb['dnsbl_tld']` ->
+  `$pfb['dnsbl_tld_wildcard']` (x2), softened "present unconditionally" / "always
+  wildcard-classifies" phrasing to past-tense + pointer to the new note, and INSERTED
+  a blockquote update note (2026-07-14) propagating the two #1255 corrections: (1)
+  the oracle is not a manifest key -- it rides the shipped pfb_py_tld file
+  reader-side into the internal tld_wildcard_master build key gated by
+  python_tld_wildcard; (2) states the "vestigial toggle" SS1.1 consequence is
+  superseded. Why: brief section 4 corrections (1); ADR-65's own decision body
+  (SS2+) untouched.
+- .ADRs/ADR_65_DNSBL_Manifest_Single_Source/06_Stop_Writing_Txt.txt :60 --
+  `(tld_master/blacklist/exclusion)` -> `(tld_wildcard_blacklist/
+  tld_wildcard_exclusion; post-#1255 the public-suffix oracle is not a manifest
+  input -- it rides the shipped pfb_py_tld file reader-side)`. :33 left verbatim
+  (designed keep -- names tld_analysis()'s own internal local, not a manifest key).
+  Why: Phase-3 rename + #1255 correction (1).
+- tests/smoke/helpers.py :323, :1786-1791, :2954 -- comment/docstring-only:
+  `$pfb['dnsbl_tld']` -> `$pfb['dnsbl_tld_wildcard']` (x3), `classify()` ->
+  `tld_wildcard_classify()` (x2). `tld_enabled` dataclass field/uses untouched (smoke
+  harness's own identifier). Why: Phase-3 rename.
+- tests/smoke/test_smoke_tld_wildcard.py module docstring :4/:8 -- `classify()` ->
+  `tld_wildcard_classify()` (x2); `dnsbl_tld` (the shipped file) left verbatim. Why:
+  Phase-3 rename.
+
+Commit: 44f63c315769dcde9f998ebf1f779bdda0bbe1af -- single commit, all 6 files + this
+handoff. Pushed with --force-with-lease to
+adr/66-tld-naming-disambiguation-1783983455 (rebase rewrote the 10 prior commits).
+
+GATES (all executed at post-rebase HEAD, pre-commit; re-verified no change after
+staging since no code paths were touched)
+$ git hash-object tests/test_adr66_tld_naming_oracle.py
+4ae3ad286a18d60ea496d40e649eb9b11e3c672c   (matches pre-edit; unchanged)
+
+$ python3 -c "import pytest,sys; sys.exit(pytest.main(sys.argv[1:]))" \
+  tests/test_adr66_tld_naming_oracle.py tests/test_adr66_tld_bridges.py -q
+tests/test_adr66_tld_naming_oracle.py .............................      [ 78%]
+tests/test_adr66_tld_bridges.py ........                                 [100%]
+======================= 37 passed in 0.56s =======================
+
+$ python3 -c "import pytest,sys; sys.exit(pytest.main(sys.argv[1:]))" -q
+======================= 2876 passed, 4 skipped in 56.14s =======================
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+238 files already formatted
+
+$ python3 -m mypy tests/   (rtk-rewritten compact form)
+mypy: No issues found
+
+$ npx markdownlint-cli2
+Summary: 0 error(s)
+
+$ python3 scripts/check_retired_tokens.py --diff 2ddfd777e7c8f5a0e1f620178bfa6867ff7ee41a
+(no output, exit 0)
+
+$ bash scripts/agent/run-gates.sh --diff origin/devel   (run post-commit)
+GATE PASS: python3 -m pytest
+GATE PASS: ruff check .
+GATE PASS: ruff format --check .
+GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+GATE PASS: php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+GATE PASS: php -l tests/php/DnsblLoadedFingerprintTest.php
+GATE PASS: php -l tests/php/PythonTldWildcardIniEmitTest.php
+GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+GATE PASS: php -l tests/php/UnboundPythonSourcesTest.php
+GATE PASS: vendor/bin/phpunit
+GATE PASS: composer phpstan
+GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+GATE PASS: npx markdownlint-cli2
+GATES: FAIL   (sole reason: bare `mypy` not on PATH -- a documented pre-existing
+  environment gap, hit identically in P1/P2's own gate records: RESULTS/01_Gate.txt:33,
+  02_Gate.txt:28-29. Covered by the manual `python3 -m mypy tests/` run above = "no
+  issues found". --allow-missing rerun below confirms the sole failure is this gap.)
+$ bash scripts/agent/run-gates.sh --diff origin/devel --allow-missing
+[... same 12 PASS + 1 SKIP lines ...]
+GATES: PASS
+
+ORACLE-UNCHANGED-GREEN PROOF: pasted above (V1 hash identical pre/post-edit; V2 =
+37 passed unchanged from the pre-edit baseline). This IS the behaviour-preserving
+proof required in place of red->green -- no production line was touched (V13 below).
+
+GREP-ZERO-STALE-NAMES PROOF (V8-V12, all executed post-edit)
+V8 `git grep -nE "_dnsbl_load_tld_master|_dnsbl_tld_search([^a-z_]|$)" -- docs/
+   .ADRs/ tests/smoke/` -- NOT empty: hits exist, but every hit is in ADR_02/06/07/66
+   -- other ADRs' frozen historical decision text, explicitly out of this phase's
+   scope ("Do not touch: ... other ADRs' text"; ADR-66's own files are also
+   protected). ZERO hits in ADR_65_* or any of the 6 touched files. The brief's V8
+   command scans the whole .ADRs/ tree rather than ADR_65 only -- a scope mismatch
+   between the verification command and the section-5 edit scope, not a missed
+   rename (judgment call, see Deviations).
+V9 `git grep -nE "(^|[^a-zA-Z0-9_.])classify\(" -- docs/ .ADRs/ADR_65_* tests/smoke/`
+   -- empty (rc 1). Matches expected exactly.
+V10 `git grep -nF "$pfb['dnsbl_tld']" -- docs/ .ADRs/ tests/` -- NOT empty: same
+   scope-mismatch pattern as V8 -- all hits in ADR_02/06/07/12/66 (frozen, out of
+   scope). ZERO hits in docs/, ADR_65_*, or tests/.
+V11 `git grep -nE "(^|[^a-z_])tld_master" -- docs/ .ADRs/ADR_65_*` -- empty (rc 1).
+   Matches expected exactly.
+V12 `git grep -nE "(^|[^a-z_])tld_(exclusion|blacklist)" -- docs/ .ADRs/ADR_65_*` --
+   EXACTLY one hit: `06_Stop_Writing_Txt.txt:33` (the designed keep -- tld_analysis()'s
+   own internal local bookkeeping, P3 deliberately kept). Matches expected exactly.
+V13 `git diff 2ddfd777e7c8f5a0e1f620178bfa6867ff7ee41a -- src/ scripts/ www/` --
+   empty. Zero production-behaviour change.
+
+COVERAGE MATRIX (every section-5 row)
+A. docs/misc/public-suffix-list.md :4 rename -- DONE (edit above).
+A. :3/:17/:30 dnsbl_tld file-path mentions -- KEPT verbatim (confirmed unchanged).
+B. docs/misc/architecture-notes.md :76 classify() rename -- DONE (edit above);
+   confirmed sole classify( hit in docs/ (V9 zero-remaining).
+C. ADR_65 ADR.md :43 classify()->tld_wildcard_classify() -- DONE.
+C. :44 tld_master public-suffix-list sentence -- DONE, reworded per brief wording
+   (post-#1255 oracle-not-a-manifest-key phrasing).
+C. :45 manifest-embeds tld_master/blacklist/exclusion -- DONE, renamed to
+   tld_wildcard_blacklist/tld_wildcard_exclusion; $pfb['dnsbl_tld_data'] mention kept
+   verbatim; "present unconditionally" softened to past tense per brief.
+C. :47 classify() x2 -- DONE.
+C. :48 tld_master -- DONE.
+C. update-note insertion after "Two consequences" bullets, before ### 1.2 -- DONE,
+   exact wording from brief (light grammar unchanged -- brief wording used verbatim).
+C. :68 $pfb['dnsbl_tld']->$pfb['dnsbl_tld_wildcard'], :15955 ref left stale -- DONE.
+C. :80 "always wildcard-classifies via tld_master" rewrite -- DONE.
+D. 06_Stop_Writing_Txt.txt :60 rename+correction -- DONE.
+D. :33 tld_blacklist/tld_update/DNSBL_TLD sentence -- CONFIRMED KEPT verbatim (no
+   edit; still accurate per brief's own reasoning).
+D. Prompts 01-05/07 zero old-name hits -- CONFIRMED by grep this session (see below);
+   no edits (none needed).
+E. tests/smoke/helpers.py :323/:2954 comments, :1786/:1789/:1790 docstring -- ALL
+   DONE. tld_enabled field/uses -- CONFIRMED KEPT (smoke harness's own identifier).
+F. tests/smoke/test_smoke_tld_wildcard.py :4/:8 classify() -- DONE; :5 dnsbl_tld --
+   CONFIRMED KEPT (shipped file name). No line pushed past 120 cols (checked: longest
+   touched line 86 cols in helpers.py, well under). ruff format --check clean (V5).
+G. This handoff -- DONE (this file).
+NO-ACTION rows -- all reconfirmed this session:
+  - src/+scripts/+www/ zero missed old names: `git diff <base_sha> -- src/ scripts/
+    www/` empty (V13) -- no grep needed, the diff itself proves zero touch, and the
+    brief's own pre-session probe already established zero missed renames there.
+  - ADR_65 prompts 01-05/07: re-verified this session, git grep for
+    python_tld*|pytld|parse_python_tlds|classify\(|tld_master|_dnsbl_tld_search|
+    $pfb['dnsbl_tld'] over each file individually = zero hits in all six.
+  - python_tld_seg: zero sites in docs/ or ADR_65 (re-verified,
+    `git grep -n "python_tld_seg" -- docs/ .ADRs/ADR_65_DNSBL_Manifest_Single_Source/`
+    = rc 1). Correction (2) has nothing to propagate into these files -- confirmed,
+    stated per brief's own instruction.
+  - ADR-66 has no SS8; phase prompt requires none -- confirmed (heading list ends at
+    "## 7. Definition of done").
+  - Root/other .md files outside docs//.ADRs/: zero old-name hits, re-verified this
+    session via `git grep -l` over `*.md` excluding docs/ and .ADRs/ = rc 1.
+
+DEVIATIONS / JUDGMENT CALLS
+- V8 and V10's literal command scope (whole `.ADRs/` tree) surfaces pre-existing
+  hits in ADR_02/06/07/66 -- historical decision text in OTHER ADRs, which the
+  brief's own constraints forbid touching ("other ADRs' text", "ADR-66's own
+  ADR.md/prompts"). Read the true observable as "zero stale names in the section-5
+  edit scope" (docs/, ADR_65_*, the two touched tests/smoke files) rather than
+  "zero output" against the whole-tree grep -- the whole-tree grep was never going to
+  be empty given those files are explicitly out of scope. No edit made outside the
+  enumerated 6 files. Judgment call, not an ESCALATE-worthy contradiction: the
+  disposition table (section 5) already enumerates the NO-ACTION rows correctly and
+  none of those out-of-scope hits fall inside ADR_65 or the touched files.
+- `scripts/agent/run-gates.sh --diff origin/devel` is run post-commit per its own
+  contract (needs a real commit to diff against origin/devel); see carry-forward.
+
+FINAL ADR-66 SS7 DEFINITION-OF-DONE STATE (reporting only -- ADR-66's own ADR.md is
+NOT touched by this phase per constraints)
+- "ADR-65 references + docs/misc reconciled" -- SATISFIED by this phase.
+- "Phase-1 oracle byte-identical green after Phases 2 and 3" -- already satisfied by
+  P2/P3; this phase adds a THIRD green run (V1/V2 above) proving Phase 4 moved no
+  behaviour either.
+- "Full canonical gates green for every touched language" -- SATISFIED this phase
+  (Markdown gate; Python gate for the two tests/smoke/*.py comment/docstring edits),
+  modulo the documented mypy-PATH tool-availability gap (strict run-gates.sh FAIL,
+  --allow-missing PASS + manual python3 -m mypy clean -- see GATES above).
+- Remaining SS7 items (grep-zero-surviving-old-names in production, config.xml
+  round-trip) were P2/P3's responsibility and are unaffected by this doc-only phase.
+- ADR-66 Status field left as "Proposed" -- flipping to Accepted is the orchestrator's
+  call per CLAUDE.md "ADR acceptance", not this phase's edit scope.
+
+CARRY-FORWARD (for the orchestrator)
+- Commit 44f63c315769dcde9f998ebf1f779bdda0bbe1af pushed (--force-with-lease) to
+  adr/66-tld-naming-disambiguation-1783983455; run-gates.sh --diff origin/devel run
+  against it, pasted above (PASS modulo the documented mypy-PATH gap).
+- All four ADR-66 phases (1-4) are now content-complete; ADR-66 is ready for the
+  orchestrator to evaluate SS7 as a whole and decide on Accepted / PR.

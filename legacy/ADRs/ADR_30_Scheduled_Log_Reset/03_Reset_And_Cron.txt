@@ -1,0 +1,81 @@
+================================================================================
+PHASE 3 PROMPT — pfb_log_reset() + cron wiring (per-log)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md   (read §1.1, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+Branch adr/30-scheduled-log-reset. Phase 3 of 5. This phase FLIPS THE FEATURE ON (still
+default-off via the 'off' default). One commit, push to branch.
+
+WHY THIS PHASE EXISTS
+With the deciders (P1) and per-log config fields (P2) in place, wire the actual reset: on
+each cron tick, for EACH log, if its own log_rotate_<type> is set AND its calendar period
+rolled over since its last reset, truncate THAT log to empty IN PLACE (inode + ownership
+preserved, exactly as pfb_log_mgmt()), then record its new period. Cron cadence is
+operator-defined, so the per-log boundary check makes each log reset once per period and be
+a no-op otherwise (ADR §1.2/§2.2). Each log is independent.
+
+REQUIRED READING
+- FIRST read RESULTS/02_Results.txt — confirm the 10 registry keys + section. If missing,
+  STOP and report.
+- .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (§2.1 reset/cron/log-set rows, §2.2 items 1-5)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_log_mgmt() (~:1750): COPY its
+  in-chroot path translation (/var/unbound for dnslog/dnsreplylog/unilog) and the
+  chown/chgrp 'unbound' handling; the $pfb[<logtype>] path map; the 10-type list it
+  iterates; pfb_logger() for errors.
+- src/usr/local/www/pfblockerng/pfblockerng.php (~:771) — the cron tick that calls
+  pfb_log_mgmt(); add the pfb_log_reset() call immediately after it.
+- The Phase-1 deciders in pfblockerng_extra.inc; PfbConfig::read in the same file.
+- CLAUDE.md (PHP rules; PFBL-01 RequirePfbFilter — keep exec/path-build sites validated;
+  RequireConfigGateway — read log_rotate_<type> via PfbConfig only).
+
+ACTION PLAN (tests alongside)
+1. Add pfb_log_reset() in pfblockerng.inc. For EACH log type in the same set pfb_log_mgmt()
+   iterates:
+   - $schedule = PfbConfig::read('log_rotate_'.$logtype); if 'off'/'' -> skip this log.
+   - Read this log's marker entry from /var/db/pfblockerng/log_rotate.last (absent/garbled
+     entry -> '').
+   - if (!pfb_log_should_reset($schedule, $entry, time())) skip this log.
+   - Truncate this log to EMPTY in place (e.g. `: > file` / cp /dev/null) — NEVER mv/recreate;
+     for the chrooted python logs (dnslog/dnsreplylog/unilog) use the chroot path + re-chown
+     unbound, mirroring pfb_log_mgmt(). Gate each exec on its exit code; pfb_logger() on failure.
+   - Update this log's marker entry to pfb_log_rotate_period($schedule, time()).
+   Persist the marker file once after the loop.
+2. Wire pfb_log_reset() right after pfb_log_mgmt() at pfblockerng.php:771.
+3. Extract testable seams: pure marker parse/serialize helpers (string<->[type=>key] map),
+   and the log-type list source if not already shared. Unit-test (tests/php/): marker
+   round-trip (parse(serialize(m))==m), missing/garbled entry -> '', and that a per-log
+   "should reset" decision drives selection correctly (one log eligible, another not). The
+   actual truncate/exec is the live-VM smoke's job (Phase 5) — off-box, assert the decision +
+   marker, not real I/O.
+
+CONSTRAINTS
+- Inode-preserving truncation only; no mv/recreate; preserve unbound ownership for python logs.
+- Read each schedule ONLY via PfbConfig::read (sniff). Keep PFBL-01 green (validate any dynamic
+  path/exec build as the surrounding code does).
+- Per-log idempotent: a second tick in the same period for a log must be a no-op (its marker
+  entry unchanged). Resetting one log must not touch another.
+- Do NOT change pfb_log_mgmt()'s line-cap behaviour or the UI this phase.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit  (new marker/selection tests + full suite)  -> green
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/                -> 0 errors
+- vendor/bin/phpstan analyse <edited files>                      -> OK
+- php -l on edited files
+- diff-read: each eligible log truncated in place; non-eligible/Off logs untouched; cron call
+  after pfb_log_mgmt().
+
+EXPECTED RESULT
+With a log's schedule set and its period rolled over, the next cron tick empties THAT log
+(inode preserved) once and records its period; Off / same-period logs are untouched; other
+logs unaffected.
+
+COMMIT (single)
+    pfblockerng: reset each log on its configured calendar schedule (ADR-30 P3)
+Push to adr/30-scheduled-log-reset.
+
+HANDOFF — write RESULTS/03_Results.txt
+State: pfb_log_reset() shape; the marker path + per-log format; the log set + how schedules
+are read; the cron call site; testable seams added; confirm inode-preserving truncation +
+sniffs + suite green. Go-ahead for Phase 4.

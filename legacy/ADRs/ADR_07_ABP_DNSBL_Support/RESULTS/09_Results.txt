@@ -1,0 +1,181 @@
+================================================================================
+ADR-07 -- PHASE 9 RESULTS (FINAL) / DoD + maintainer manual-smoke checklist
+Validation, perf/ReDoS benchmark on-branch, docs + setting finalised
+Branch: adr/07   Commit: pfblockerng: ADR-07 P9 -- full ABP validation, perf/ReDoS evidence, smoke checklist + DoD
+================================================================================
+
+VERDICT (headline): DONE -- ADR-07 implemented end-to-end with evidence recorded.
+Full ABP golden equivalence + no-regression hold (ADR-06 oracle 71 green; ADR-07
+spec/parser/reconcile/strata/emit_wire/regex_safety/php_boundary 662 green; default
+suite 917 green). The Phase-1 latency/ReDoS benchmark re-run ON adr/07 reproduces
+the spike numbers exactly and PASSES the kill-threshold: GATE = GO. Setting UI text
++ README.md + CLAUDE.md finalised. ADR.md Status set to "Implemented -- pending live
+smoke"; §7 "Build evidence" filled with real numbers. NOT flipped to Accepted --
+that is the maintainer's call after the live manual smoke below.
+
+NO production decision code touched this phase. P9 changes are docs + the setting
+help text only (the matcher/parser/boundary were finished in P3-P8 and are unchanged
+here); validation = re-running the suite + the on-branch benchmark.
+
+--------------------------------------------------------------------------------
+GATES (this phase)
+--------------------------------------------------------------------------------
+  python -m pytest   -> 917 passed (unchanged from P8; no test added in P9).
+                          ADR-06 oracle (no-regression):  71 passed.
+                          ADR-07 ABP suites (equivalence): 662 passed.
+                          retained test_pfb_unbound.py matcher/init: ~184, green.
+  ruff check .       -> All checks passed!
+  ruff format --check-> 28 files already formatted (clean).
+  php -l             -> pfblockerng_dnsbl.php: No syntax errors detected.
+                          (pfblockerng.inc still has ONLY the pre-existing
+                           "continue targeting switch" WARNING at inc:687 -- not
+                           mine, not introduced here, ignored per the phase prompt.)
+  ShellCheck         -> N/A (no .sh touched in P9).
+  npx markdownlint-cli2 README.md CLAUDE.md ADR.md -> Summary: 0 error(s).
+
+Files changed (P9):
+  M README.md                                          (ADR-07 section + spike note)
+  M src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php (setting help text finalised)
+  M CLAUDE.md                                          (pfb_unbound.py ABP note)
+  M .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md              (Status + §7 Build evidence)
+  A .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/09_Results.txt (this file)
+
+================================================================================
+1. FULL ABP GOLDEN EQUIVALENCE + NO-REGRESSION (pass counts)
+================================================================================
+* NO-REGRESSION (retained ADR-06 golden oracle, important_rules OFF): 71 passed.
+  test_adr06_golden_oracle.py + _build_module.py + _init_from_raw.py +
+  _php_boundary.py. The non-ABP fast path is byte-identical to today: every
+  block-shape / resolve / whitelist / HSTS / noAAAA / zone-subdomain decision is
+  identical old-vs-new for the plain/hosts/basic-||domain^ corpus (no @@, no feed
+  regex, no $important/$badfilter).
+* ABP DNS EQUIVALENCE (Phase-2 spec/oracle, ON): 662 passed.
+  test_adr07_decision_spec.py (the oracle) + _parser.py + _reconcile.py +
+  _matcher_strata.py + _emit_wire.py + _regex_safety.py + _php_boundary.py.
+  Production (wired build() + evaluate_domain + the slimmed PHP boundary, end to
+  end) is decision-equal to spec.decide() across hosts/plain/abp incl.:
+    - @@ exception un-blocks globally (block & allow), carve-out resolves while the
+      rest of the zone stays blocked;
+    - reducible regex == its dict/wildcard form; irreducible regex matches as
+      written; @@/re/ allow un-blocks;
+    - $important inverts allow-vs-block within the feed band;
+    - $badfilter prunes the matching FEED rule (user rules immune);
+    - provenance/sovereignty 6-band resolution;
+    - element/path/page-$option rules parsed-and-skipped, never DNS decisions;
+    - IP-anchored lines skipped by Python (firewall-only, 0 leak).
+* DEFAULT SUITE: 917 passed total.
+
+================================================================================
+2. PERF / ReDoS BENCHMARK ON adr/07 vs KILL-THRESHOLD  (GATE = GO)
+================================================================================
+Run: python benchmarks/spike_adr07_regex.py   (CPython 3.11, Linux, tracemalloc OFF)
+On-branch numbers reproduce the Phase-1 spike exactly (no drift):
+
+  metric                                  measured (adr/07)   threshold       result
+  --------------------------------------- -----------------   -------------   ------
+  regex reduction ratio (/re/ -> dict)    46% (18 of 39)      >= 30%          PASS
+  per-irreducible added latency (neg q)   0.1647 us/pattern   "few us"/50 us  PASS
+  budget-bounded irreducible count @50us  ~303 patterns       >> realistic    PASS
+  ReDoS pathological caught/MISSED (cap)  1 caught / 0 missed catch catastr.  PASS
+  worst CAP-PASSING first-hit (<=253 ch)  0.109 ms            <= 500 ms       PASS
+  GIL demo: thread timeout cancels match? NO (216x deadline)  (confirms design) --
+
+  Per-irreducible latency sweep (negative query, worst case, overhead-subtracted):
+       10 ->  1.92 us | 50 -> 8.44 us | 100 -> 16.92 us | 200 -> 34.04 us
+      500 -> 82.08 us | 1000 -> 164.71 us   => 0.1647 us/pattern (linear).
+  Statically-flagged dangerous (nested-quantifier): 4 of 21 irreducible. The only
+  pattern that ran >=2 s (([a-z]+)*\.example$) is nested-quantifier-flagged ->
+  dropped by the opt-in cap; (.*a){20}$ ~43.7 ms also flagged. Every cap-PASSING
+  pattern's worst first-hit <= 0.109 ms (three orders under the 100 ms evict ceiling).
+  GIL demo: a join(timeout=1ms) waiter on a runaway (a+)+$ was forced to wait
+  ~215.6 ms (216x) and the match ran to completion uncancelled -> a query-time
+  thread/asyncio timeout is futile under the GIL; hence accept-one-slow-first-hit
+  then EVICT (not vetting, not a query-time timeout).
+
+DECISION: GO -- no reject-criterion (ADR §7) tripped. No pivot taken. Reduction +
+the important_rules fast path keep typical deployments far under the ~303-pattern
+budget; the static cap catches the catastrophic nested-quantifier shapes at load
+with no execution and no corpus false-negatives.
+
+Shipped runtime ceilings (defaults): warn 10 ms / evict 100 ms thread-CPU per match
+(time.thread_time, jitter-robust); opt-in static cap drops length-/nested-quantifier-
+over-cap patterns at load. Both apply to feed AND user pfb_regex_list. Eviction is
+snapshot-iterate + evict-after-loop (thread-safe under the GIL).
+
+================================================================================
+3. DOCS + SETTING FINALISED
+================================================================================
+* SETTING ("Limit long/complex regex", pfblockerng_dnsbl.php ~2405): help text
+  finalised -- states (a) WHAT it does (drops over-long / nested-quantifier
+  catastrophic-backtracking patterns at LOAD, before they run, for feed (ABP) AND
+  the Python Regex List; each drop logged); (b) the ALWAYS-ON runtime guard that
+  times every match, warns over the warn ceiling and EVICTS over the evict ceiling
+  regardless of this setting (can't hang the resolver twice); (c) the ACCEPTED
+  RESIDUAL RISK (the first match of a pathological pattern can still slow that one
+  query until it returns -- Python re cannot be interrupted mid-match; enabling the
+  cap removes the worst offenders before that can happen).
+* README.md: new "Full ABP/EasyList support (ADR-07)" subsection (parse-in-Python
+  boundary, @@/regex/$important/$badfilter, the 6-band scale + important_rules fast
+  path, out-of-scope skip list, the regex safeguard + the admitted-regex count
+  file); the default-pytest example now lists the test_adr07_* files; a new
+  spike_adr07_regex.py benchmark note.
+* CLAUDE.md: the pfb_unbound.py preprocessing note extended with the ADR-07 ABP
+  parser (one Python parser, format_hint='abp', @@/regex/precedence, the fast path,
+  the regex safeguard, test_adr07_* + spike_adr07_regex.py).
+
+================================================================================
+4. ADR.md STATUS + §7 EVIDENCE
+================================================================================
+* Status: "Implemented -- pending live smoke" (flips to Accepted ONLY after the §7
+  manual smoke passes on a live pfSense box). NOT Accepted -- maintainer's call.
+* §7 "Build evidence (recorded Phase 9, on adr/07)" block added: the 917/71/662
+  pass counts, the perf/ReDoS table (reduction 46%, 0.1647 us/pattern, ~303 budget,
+  1 caught/0 missed, 0.109 ms worst cap-passing, GIL demo), the GO decision, the
+  shipped ceilings, and the docs/setting summary.
+
+================================================================================
+5. MAINTAINER MANUAL-SMOKE CHECKLIST (owner: MAINTAINER) -- REQUIRED BEFORE ACCEPT
+================================================================================
+GATE: Status flips to Accepted ONLY after EVERY box below passes on a live pfSense
+CE box. CI cannot reach Unbound's Python loader or pf. Run AFTER a full DNSBL
+update (so the manifest + regex set + counts are freshly written) and a resolver
+reload. The canonical copy lives in ADR.md §7 "Manual smoke"; reproduced here.
+
+  [ ] @@ EXCEPTION UN-BLOCKS. A feed that blocks ||example.com^ and exempts
+      @@||sub.example.com^ resolves the exempted name while the rest of the zone
+      stays blocked.
+  [ ] REGEX. A reducible feed regex blocks exactly its domain/wildcard equivalent;
+      an irreducible regex blocks as written; an @@/re/ allow un-blocks. The
+      DNSBL_Regex alias count reflects ADMITTED regex -- now sourced from
+      /var/unbound/pfb_py_regex_count; verify it renders post-reload (feed regex
+      with no user regex still shows).
+  [ ] $important / $badfilter. A feed ||x^$important beats a feed @@x^; a feed
+      ||y^$badfilter removes a feed ||y^ (y resolves). Neither touches a user rule.
+  [ ] USER SOVEREIGNTY. A whitelisted domain (settings textarea AND alerts "add to
+      whitelist" button) resolves regardless of any feed rule incl. $important; a
+      user-blocked domain stays blocked even against a feed @@...$important; no feed
+      $badfilter removes a user rule. TOP1M (enabled) behaves as a user allow.
+  [ ] REGEX SAFETY. With the opt-in "Limit long/complex regex" cap ON, an over-long
+      feed/user regex is dropped at load (logged). A deliberately slow regex trips
+      the runtime ceiling: a warning then an error is logged and the pattern is
+      EVICTED (subsequent queries fast); the resolver recovers. Same behaviour for
+      the user pfb_regex_list. (Spike note: confirm time.thread_time() resolves on
+      the live FreeBSD/pfSense box -- maps to CLOCK_THREAD_CPUTIME_ID; if absent the
+      perf_counter + 2-strike fallback engages.)
+  [ ] DNSBL-IP. A feed with embedded IPs (incl. ||1.2.3.4^ and hosts IPs) still
+      populates DNSBLIP_v4/_v6 with the configured action; no IP leaks into DNS
+      blocking. Also verify the '.abp' marker round-trips a REUSE build (an
+      unchanged feed stays tagged 'abp' without re-parse).
+  [ ] NO REGRESSION. A non-ABP feed set (plain/hosts) blocks/resolves exactly as
+      before; pfb_py_count renders.
+  [ ] RELOAD picks up feed, whitelist, regex-list, and setting changes correctly.
+
+ON ALL-GREEN: maintainer flips ADR.md Status -> Accepted.
+
+================================================================================
+6. PARKED FOLLOW-UP (reminder)
+================================================================================
+Accepting ADR-07 UNBLOCKS the parked homoglyph / IDN-homograph protection ADR
+(ADR-08 -- docs/add ADR-08 cross-script IDN homoglyph protection plan), which builds
+on this same Python preprocessing home. Bring it up once ADR-07 is Accepted.
+================================================================================

@@ -1,0 +1,64 @@
+ADR-60 Phase 1 — Gate record
+================================================================================
+Verdict: PASS (after one orchestrator-applied fix; see below)
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit a7d6f46d (handoff) / 678421dd (code+tests):
+
+1. handoff-fields — PASS. All required fields present/non-empty; commit
+   verified present on origin/adr/60-age-based-log-retention via git
+   ls-remote/fetch.
+2. gate-rerun — PASS. Re-ran every gate command independently, output matched
+   the handoff's claims exactly (php -l, vendor/bin/phpunit [2449 tests,
+   19093 assertions, 2 pre-existing deprecations, 4 documented skips],
+   the new LogTimestampBaselineTest filter [11/11], python3 -m pytest
+   [2437 passed, 4 skipped], the new pytest module [3 passed], ruff check,
+   ruff format --check, python3 -m mypy tests/, phpcs, phpstan). Also
+   independently re-ran scripts/check_comment_narration.py --diff origin/devel
+   and scripts/check_version_literals.py --diff origin/devel: both clean.
+3. red-proof — PASS. Phase is behaviour-preserving (ADR.md §6 Phase 1); no
+   red→green required. Verified via git show 678421dd that the pfblockerng.inc
+   / pfb_unbound.py diffs are purely additive (two new unwired helpers, zero
+   existing line touched) — genuinely behaviour-preserving, not merely
+   claimed.
+4. diff-vs-plan — PASS. Full diff (git show, not --stat) read; all 10
+   ACTION-PLAN items ticked against the actual diff, including the two
+   documented deviations (filterlog branch pinned via grep-tripwire + formula
+   repro since pfb_daemon_filterlog() is a monolithic stdin-loop with no
+   extracted seam; same-second dedup tests use a bounded 5-attempt retry
+   against a genuine wall-clock race). Both deviations judged honest and
+   non-weakening.
+5. test-honesty — INITIALLY FAILED, NOW FIXED. Verifier found a confirmed,
+   reproduced test-isolation bug: tests/php/LogTimestampBaselineTest.php's
+   setUp()/tearDown() saved/restored ['log','errlog','pnow','runlog',
+   'runlog_active'] but OMITTED 'extraslog', even though two tests
+   (testExtrasLogWithoutNowTokenWritesNoTimestamp,
+   testPnowDedupContaminatesAcrossLogAndExtrasLog) overwrite
+   $GLOBALS['pfb']['extraslog'] with a tempnam()'d path that tearDown then
+   unlink()s — leaking a deleted-file path into shared process-global state
+   for the rest of the PHPUnit run (CLAUDE.md "Self-encapsulated — never
+   order-dependent"). Verifier reproduced this with an executed standalone
+   PHP probe. ORCHESTRATOR FIX (this file's author, applied directly per
+   CLAUDE.md "the higher model may implement a fix directly when it is
+   relatively small and doable in one step"): added 'extraslog' to the
+   saved-keys array on line 37. Re-ran vendor/bin/phpunit --filter
+   LogTimestampBaselineTest --testdox (11/11 green) and the full suite
+   (2449 tests, 19093 assertions, same 2 pre-existing deprecations, 4
+   documented skips) — both green after the fix.
+6. conventions — PASS. pfb_log_iso_timestamp() verified against 5 sibling
+   pfb_log_* symbols; iso_timestamp() verified against sibling no-prefix
+   pfb_unbound.py functions. New comment within the ≤3-line budget, clean
+   per scripts/check_comment_narration.py. No stale docs to reconcile.
+
+Skipped: none.
+
+Coverage matrix: every §1.3 row ticked with its oracle test name (see
+RESULTS/01_Results.txt); the two filterlog rows and the unilog row carry an
+explicit, justified deferral rather than a silent gap.
+
+Commits this phase (in order):
+- 678421dd — tests: pin current pfBlockerNG log-timestamp behaviour as
+  ADR-60 baseline oracles (ADR-60 P1)
+- a7d6f46d — docs: ADR-60 phase 1 handoff
+- (this gate-fix commit) — test: fix LogTimestampBaselineTest extraslog
+  isolation leak found by the phase 1 gate

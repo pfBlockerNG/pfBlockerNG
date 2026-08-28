@@ -1,0 +1,13 @@
+#!/bin/sh
+# Test shim for the FreeBSD `iprange` CIDR aggregator, which the
+# ip_pre_AWS_*.sh pre-scripts pipe their v4 prefixes through (`jq ... | iprange`).
+#
+# The real tool is FreeBSD-only and not installable on the Linux CI runner or a
+# macOS dev box, so this stand-in provides just enough behaviour for the region
+# pre-scripts' tests: read CIDRs on stdin, emit them sorted + de-duplicated.
+#
+# This is faithful for the suite because tests/shell/fixtures/aws-ip-ranges.json
+# uses one non-adjacent /24 per region — there is nothing for the real iprange to
+# coalesce, so `sort -u` yields the identical set. Do NOT rely on this shim for
+# aggregation semantics; it only stands in for the pass-through case.
+exec sort -u

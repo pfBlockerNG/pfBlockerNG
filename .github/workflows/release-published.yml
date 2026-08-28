@@ -1,0 +1,315 @@
+name: Release published (downstream)
+
+# The two downstream effects that must wait for a GitHub Release to be PUBLISHED.
+#
+# The dispatch workflow deliberately stops at a complete DRAFT (issue #1855): the release notes
+# and final title are authored onto that draft by a human or by Claude, who then publishes it.
+# This workflow resolves that published release, bumps the matching port on the FreeBSD-ports
+# fork, and verifies and republishes its .pkg assets into pfBlockerNG/pkg's self-hosted
+# catalogue. Hanging both mutations off the real `release: published` event prevents an
+# unpublished or abandoned draft from changing either distribution path.
+#
+# Nightly is independent and untagged. This published-Release workflow must not allocate,
+# build, or mutate it; tagged release publication never changes the static Nightly port.
+#
+# Fires for prereleases too (`published` covers a pre-release being published).
+on:
+  release:
+    types: [published]
+
+permissions:
+  packages: read
+  contents: read
+
+# issue #2389 / #2391: serialize every workflow that can mutate pfBlockerNG/pkg
+# across stage, validation, promote/discard, and site rendering. Keep every run
+# queued and preserve the one already running.
+concurrency:
+  group: pkg-repository-mutation
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  # ── 0. Classify the published tag ────────────────────────────────────────
+  # Everything downstream needs is derived from the tag plus its explicit channel
+  # trailer, via the single source of truth (scripts/release-version.sh). A published
+  # release whose tag or metadata is invalid is a hard error, not a silent skip.
+  resolve:
+    name: Resolve the published tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.classify.outputs.release_id }}
+      release_tag: ${{ steps.classify.outputs.tag }}
+      source_repository: ${{ steps.classify.outputs.source_repository }}
+      destinations: ${{ steps.classify.outputs.destinations }}
+      # issue #2389: gate-before-announce identity. channel names the job in
+      # human-readable logs (validate-live-pages-install/promote-pkg-repo below);
+      # source/portversion/source_sha are the expected identity downstream jobs
+      # consume or assert before anything is promoted.
+      channel: ${{ steps.classify.outputs.channel }}
+      source: ${{ steps.classify.outputs.source }}
+      portversion: ${{ steps.classify.outputs.portversion }}
+      source_sha: ${{ steps.classify.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # SECURITY: release-version.sh below is EXECUTED AS SHELL, and a `release`
+          # event would otherwise default this checkout to the RELEASED tag's tree — a
+          # tree this workflow does not control. Pin the revision the workflow itself
+          # came from instead. The blast radius is small today (no App token, a
+          # read-scoped GITHUB_TOKEN, nothing pushed), but that is a property of this
+          # job's current body, not of the design: the next credential added here would
+          # silently inherit the hole. Same rule as the dispatch workflow's ports helper. Do not
+          # "simplify" this to the event ref or the release tag.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify the tag
+        id: classify
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          [ -n "$TAG" ] || { echo "::error::the published release carries no tag"; exit 1; }
+          git fetch --tags --force origin
+          TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+          [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
+          TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+          CHANNEL_COUNT=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
+          [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
+          CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)
+          case "$CHANNEL_LINE" in
+            'pfBlockerNG-Release-Channel: stable') CHANNEL=stable ;;
+            'pfBlockerNG-Release-Channel: testing') CHANNEL=testing ;;
+            'pfBlockerNG-Release-Channel: edge') CHANNEL=edge ;;
+            *) CHANNEL= ;;
+          esac
+          [ -n "$CHANNEL" ] || { echo "::error::published tag ${TAG} carries an unknown release-channel trailer"; exit 1; }
+          # release-version.sh writes its diagnostics to STDERR, so capturing stdout
+          # alone annotated an empty line and buried the real reason in the raw log.
+          # On success the script writes nothing to stderr, so `eval` still sees only
+          # the KEY=VALUE lines. Newlines are folded out: an annotation is one line.
+          if ! OUT=$(sh scripts/release-version.sh "$TAG" "$CHANNEL" 2>&1); then
+            echo "::error::cannot classify the published tag ${TAG} — $(printf '%s' "$OUT" | tr '\n' ' ')"
+            exit 1
+          fi
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          case "${RELEASE_PRERELEASE}:${prerelease}" in
+            false:false|true:true) ;;
+            *) echo "::error::published Release prerelease flag does not match ${TAG}"; exit 1 ;;
+          esac
+          if ! git fetch origin --tags --force "+refs/heads/release/*:refs/remotes/origin/release/*"; then
+            echo "::error::cannot fetch the derived source line origin/${release_line} for ${TAG}"; exit 1
+          fi
+          COMMIT=$(git rev-parse --verify "refs/tags/${TAG}^{commit}" 2>/dev/null) || {
+            echo "::error::published tag ${TAG} does not resolve to a commit"; exit 1; }
+          if ! git merge-base --is-ancestor "$COMMIT" "origin/${release_line}"; then
+            echo "::error::published tag ${TAG} commit is not reachable from origin/${release_line}"; exit 1
+          fi
+          DESTINATIONS=$(python3 - "$TAG" "$release_line" "$COMMIT" <<'PY'
+          import json
+          import sys
+
+          from scripts.release_version import derive_destinations_from_git
+
+          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
+          PY
+          )
+          {
+            echo "tag=${TAG}"
+            echo "release_id=${RELEASE_ID:-}"
+            echo "source_repository=${SOURCE_REPOSITORY:-}"
+            echo "channel=${release_channel}"
+            echo "source=${release_line}"
+            echo "portversion=${portversion}"
+            echo "source_sha=${COMMIT}"
+            echo "destinations=${DESTINATIONS}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Published ${TAG}: channel=${release_channel} source=${release_line} portversion=${portversion}"
+
+  # ── 1. Sync the port on our FreeBSD-ports fork (pfblockerng/use-github) ────
+  # Self-hosted distribution (ADR-17): we do NOT PR the upstream pfsense ports tree.
+  # Bump the matching port's PORTVERSION directly on our own fork's build-input branch
+  # (pfblockerng/use-github) — the SAME branch every build reads — so the fork changes
+  # only after the Release is actually published. Direct push: it is our branch, no PR.
+  # Re-publishing the same PORTVERSION is a rebuild and increments PORTREVISION.
+  sync-ports-fork:
+    name: Sync port on FreeBSD-ports fork
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    permissions:
+      packages: read
+      contents: read
+
+    steps:
+      - name: Generate GitHub App token (FreeBSD-ports)
+        id: ports-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App the pkg
+        # catalogue publish uses, no standalone PAT to rotate. REQUIRES the App to be installed
+        # on FreeBSD-ports with Contents:write; if it is not, this step fails loudly
+        # ('not installed on ... repositories' / permission error) — the clear signal
+        # to grant it, rather than a confusing empty-token checkout failure.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: FreeBSD-ports
+          permission-contents: write
+
+      - name: Checkout the FreeBSD-ports fork (use-github branch)
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/FreeBSD-ports
+          ref: pfblockerng/use-github
+          token: ${{ steps.ports-token.outputs.token }}
+          persist-credentials: true   # need to push the PORTVERSION bump via the App token
+          # Minimal clone: the bump only edits the port Makefile(s), then commits + pushes.
+          # Shallow (depth-1) + blobless + sparse to the bumped port dirs avoids cloning the
+          # full ~1.3 GB ports tree. The commit is a fast-forward the remote accepts; the
+          # push-reject rebase retry below reaches the racing tip via an on-demand fetch.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            net/pfSense-pkg-pfBlockerNG
+            net/pfSense-pkg-pfBlockerNG-testing
+            net/pfSense-pkg-pfBlockerNG-edge
+          sparse-checkout-cone-mode: true
+
+      - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: portrevision-rebuild.sh below is EXECUTED AS SHELL in a job that
+          # holds an App token able to push to pfblockerng/use-github. It must therefore
+          # come from the revision this workflow itself came from — never from the
+          # published tag's tree. github.workflow_sha is that trusted handle. Do not
+          # "simplify" this to the release tag or source SHA.
+          #
+          # ORDER: this MUST stay after the ports-fork checkout above. That one targets
+          # the workspace ROOT, and actions/checkout deletes the contents of its
+          # destination — checking this out first would wipe it again.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump PORTVERSION and push to use-github
+        # source/channel/version ride in via env (NOT inline ${{ }}) so a crafted tag can't
+        # template-inject into this shell.
+        env:
+          SOURCE:      ${{ needs.resolve.outputs.source }}
+          CHANNEL:     ${{ needs.resolve.outputs.channel }}
+          TAG:         ${{ needs.resolve.outputs.release_tag }}
+          PORTVERSION: ${{ needs.resolve.outputs.portversion }}
+        run: |
+          set -eu
+          # PORTVERSION is already classified + pkg-safe (no '-') by release-version.sh
+          # in `resolve`; re-assert the shape here as belt-and-braces so a malformed
+          # value can never reach the Makefile.
+          if [ "$CHANNEL" = "stable" ]; then
+            printf '%s' "$SOURCE" | grep -Eq '^release/[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid stable source line: ${SOURCE}"; exit 1; }
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+              echo "::error::invalid stable PORTVERSION/tag: ${TAG}"; exit 1; }
+          else
+            printf '%s' "$SOURCE" | grep -Eq '^release/[0-9]+\.[0-9]+$' || {
+              echo "::error::invalid prerelease source line: ${SOURCE}"; exit 1; }
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[abr][1-9][0-9]*$' || {
+              echo "::error::invalid prerelease PORTVERSION/tag: ${TAG}"; exit 1; }
+          fi
+
+          case "$CHANNEL" in
+            "stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG" ;;
+            "testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing" ;;
+            "edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge" ;;
+            *) echo "::error::unknown channel: ${CHANNEL}"; exit 1 ;;
+          esac
+          PORTS_LABEL="$PORT_PATH"
+          MAKEFILE="${PORT_PATH}/Makefile"
+
+            # Read the current PORTVERSION and PORTREVISION from the Makefile before
+            # editing, so the compare-and-bump helper can decide whether to increment
+            # or reset.  Absent PORTREVISION is treated as 0 by the helper.
+            OLD_PORTVERSION="$(grep -m1 '^PORTVERSION=' "$MAKEFILE" | sed 's/^PORTVERSION=[[:space:]]*//')"
+            if [ -z "${OLD_PORTVERSION}" ]; then
+              echo "::error::PORTVERSION not found in ${MAKEFILE}"
+              exit 1
+            fi
+            OLD_PORTREVISION="$(grep -m1 '^PORTREVISION=' "$MAKEFILE" | sed 's/^PORTREVISION=[[:space:]]*//')" || true
+
+            # Auto-detect rebuild: same PORTVERSION → bump PORTREVISION; different → 0.
+            # Logic is extracted into scripts/portrevision-rebuild.sh for testability.
+            NEW_PORTREVISION="$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/portrevision-rebuild.sh" \
+              "${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}")"
+
+            # Update PORTVERSION only. GH_TAGNAME is `v${PORTVERSION}` in the Makefile,
+            # so it self-resolves to the matching tag — the workflow never sets it.
+            sed -i \
+              -e "s/^PORTVERSION=.*/PORTVERSION=\t${PORTVERSION}/" \
+              "$MAKEFILE"
+
+            # Apply PORTREVISION per ports convention: remove when 0; set/insert after
+            # PORTVERSION when > 0.  The sed removes any existing line first, then the
+            # PORTVERSION line is used as an anchor to insert the new one.
+            sed -i -e "/^PORTREVISION=/d" "$MAKEFILE"
+            if [ "${NEW_PORTREVISION}" -gt 0 ]; then
+              sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
+            fi
+
+          git add "$MAKEFILE"
+
+          # ONE atomic commit for every bumped port.
+          if git diff --cached --quiet; then
+            echo "${PORTS_LABEL} already at ${PORTVERSION} (${TAG}) — nothing to push."
+            exit 0
+          fi
+          git commit -m "$(printf '%s: update to %s\n\npfBlockerNG/pfBlockerNG release %s.' \
+            "$PORTS_LABEL" "$PORTVERSION" "$TAG")"
+
+          # use-github only advances via releases; push directly, rebasing once on a
+          # racing update.
+          n=0
+          until git push origin HEAD:pfblockerng/use-github; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::could not push the port bump to use-github after ${n} attempts"
+              exit 1
+            fi
+            echo "push rejected — rebasing on the latest use-github (attempt ${n})"
+            git pull --rebase origin pfblockerng/use-github
+          done
+          echo "Pushed ${PORTS_LABEL} ${PORTVERSION} (${TAG}) to pfblockerng/use-github"
+
+  publish-pkg:
+    name: Ingest the immutable Release in pkg
+    needs: [resolve]
+    if: vars.PKG_PUBLICATION_ENABLED == 'true'
+    uses: ./.github/workflows/pkg-tagged-ingest.yml
+    with:
+      source_repository: ${{ needs.resolve.outputs.source_repository }}
+      release_id: ${{ needs.resolve.outputs.release_id }}
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      destinations: ${{ needs.resolve.outputs.destinations }}
+      channel: ${{ needs.resolve.outputs.channel }}
+      portversion: ${{ needs.resolve.outputs.portversion }}
+    secrets: inherit
+

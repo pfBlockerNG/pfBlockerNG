@@ -1,0 +1,615 @@
+{
+    "settings_family": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "3.2",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "enable_cb": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_keep": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_interval": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "1",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_min": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_hour": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dailystart": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "skipfeed": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_agg_types": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_log": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_errlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_extraslog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_ip_blocklog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_ip_permitlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_ip_matchlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_ip_parse_err": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_dnslog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_dnsbl_parse_err": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_dnsreplylog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_unilog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "20000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_log": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_errlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_extraslog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_ip_blocklog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_ip_permitlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_ip_matchlog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_ip_parse_err": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_dnslog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_dnsbl_parse_err": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_dnsreplylog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "log_max_days_unilog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_log_trim_margin_pct": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_software_check": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write",
+        "write_priv": "pkg_mgr_installed.php"
+    },
+    "pfb_feed_internal_filter": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_feed_internal_allowlist": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_feed_sanity": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_reuse": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_alias_delta_mode": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "auto",
+        "read_adapter": "pfb_cfg_alias_delta_mode_read",
+        "write_adapter": "pfb_cfg_alias_delta_mode_write"
+    },
+    "pfb_alias_delta_batch": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "512",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_quiet_hours": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_syntax_highlight": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_dnsbl": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_dnsvip_auto": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_dnsbl_nonat": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "dnsbl_interface": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "lo0",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsvip4": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsvip6": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsport": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsport_ssl": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "top1m_enable": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "top1m_source": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "tranco",
+        "read_adapter": "pfb_cfg_top1m_source_read",
+        "write_adapter": "pfb_cfg_top1m_source_write"
+    },
+    "top1m_count": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "1000",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "top1m_inclusion": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "top1m_token": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_cache": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_cache_flush": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "global_log": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsbl_lenient": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "off",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_py_reply": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_hsts": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_idn": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_idn_mode_read",
+        "write_adapter": "pfb_cfg_idn_mode_write"
+    },
+    "pfb_idn_block_malicious": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "on",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_idn_escalate_suspicious": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_regex": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_regex_list": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_regex_cap": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "pfb_cname": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "tld_allow": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_py_nolog": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_noaaaa": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_noaaaa_list": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_gp": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_gp_bypass_list": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "tld_wildcard_blacklist": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "tld_wildcard_exclusion": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "whitelist": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "action": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "Disabled",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_dnsbl_rule": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "Disabled",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_allow_int": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_control": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_control_legacy": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "pfb_py_cache_max": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "tld_wildcard": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "aliaslog": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_redir": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "dnsbl_redir_int": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_redir_exclude": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_dot_block": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "dnsbl_dot_block_int": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_dot_block_exclude": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_dot_block_action": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "reject",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "dnsbl_dot_block_floating": {
+        "section": "installedpackages/pfblockerngdnsblsettings/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "log_syslog": {
+        "section": "installedpackages/pfblockerng/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "safesearch_enable": {
+        "section": "installedpackages/pfblockerngsafesearch",
+        "default": "Disable",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "safesearch_youtube": {
+        "section": "installedpackages/pfblockerngsafesearch",
+        "default": "Disable",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "safesearch_doh": {
+        "section": "installedpackages/pfblockerngsafesearch",
+        "default": "Disable",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "safesearch_doh_list": {
+        "section": "installedpackages/pfblockerngsafesearch",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "v4suppression": {
+        "section": "installedpackages/pfblockerngipsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "v6suppression": {
+        "section": "installedpackages/pfblockerngipsettings/config/0",
+        "default": "",
+        "read_adapter": null,
+        "write_adapter": null
+    },
+    "enable_rep": {
+        "section": "installedpackages/pfblockerngreputation/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "enable_pdup": {
+        "section": "installedpackages/pfblockerngreputation/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    },
+    "enable_dedup": {
+        "section": "installedpackages/pfblockerngreputation/config/0",
+        "default": "",
+        "read_adapter": "pfb_cfg_toggle_read",
+        "write_adapter": "pfb_cfg_toggle_write"
+    }
+}

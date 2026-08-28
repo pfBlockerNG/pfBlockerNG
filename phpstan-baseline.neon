@@ -1,0 +1,403 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Variable \$folder_ex in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 4
+			path: src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc
+
+		-
+			message: '#^Binary operation "\+" between string and 1 results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Call to function unset\(\) contains undefined variable \$output\.$#'
+			identifier: unset.variable
+			count: 3
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Call to function unset\(\) contains undefined variable \$result\.$#'
+			identifier: unset.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Call to function unset\(\) contains undefined variable \$retval\.$#'
+			identifier: unset.variable
+			count: 3
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$milliseconds of method SQLite3\:\:busyTimeout\(\) expects int, string given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function htmlspecialchars expects string, int given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int\<0, max\> given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function strlen expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function substr expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#3 \$value of function curl_setopt expects 0\|2, false given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$asn_ex in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$labels in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$line in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$pfb_include in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$pfb_tables in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$rs in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Variable \$src_ip in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 55
+			path: src/usr/local/pkg/pfblockerng/pfblockerng.inc
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^Variable \$pfb_tables in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 22
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 27
+			path: src/usr/local/www/pfblockerng/pfblockerng.php
+
+		-
+			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$_POST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$alert_view in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$entry in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$filter_unified in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$pfbreplyrec in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$pfbreplytypes in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 5
+			path: src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+
+		-
+			message: '#^Variable \$blacklist_types in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_blacklist.php
+
+		-
+			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^Variable \$_POST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^Variable \$rowid in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, \(float\|int\) given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Variable \$_POST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 6
+			path: src/usr/local/www/pfblockerng/pfblockerng_category_edit.php
+
+		-
+			message: '#^Parameter \#2 \$callback of function array_filter expects \(callable\(string\)\: bool\)\|null, ''strlen'' given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^Variable \$customlist in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_feeds.php
+
+		-
+			message: '#^Variable \$v4suppression in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_ip.php
+
+		-
+			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Variable \$data in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_log.php
+
+		-
+			message: '#^Variable \$_REQUEST in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_threats.php
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int given\.$#'
+			identifier: argument.type
+			count: 3
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Parameter \#1 \$string of function str_pad expects string, int\<\-59, 59\> given\.$#'
+			identifier: argument.type
+			count: 2
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Variable \$_GET in isset\(\) always exists and is not nullable\.$#'
+			identifier: isset.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/pfblockerng_update.php
+
+		-
+			message: '#^Parameter \#2 \$timestamp of function date expects int\|null, string given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/pfblockerng/www/index.php
+
+		-
+			message: '#^Variable \$data in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: src/usr/local/www/pfblockerng/www/index.php
+
+		-
+			message: '#^empty\(\) on a string operand lies\: empty\(''0''\) is TRUE\. Use pfb_is_empty\(\) for ''''/NULL or pfb_is_blank\(\) for whitespace\-only \(issue \#1787\)\.$#'
+			identifier: pfBlockerNG.emptyOnString
+			count: 2
+			path: src/usr/local/www/pfblockerng/www/index.php
+
+		-
+			message: '#^Parameter \#1 \$num of function number_format expects float, string given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+
+		-
+			message: '#^Parameter \#2 \.\.\.\$arg1 of function min expects non\-empty\-array, 100 given\.$#'
+			identifier: argument.type
+			count: 1
+			path: src/usr/local/www/widgets/widgets/pfblockerng.widget.php

@@ -1,0 +1,74 @@
+================================================================================
+PHASE 5 PROMPT — Wire the analyzer into the matcher (Confusable mode goes live)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §2 tiers + contract + query-time)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 5 of ADR-08. INTEGRATION: make Confusable mode live in
+evaluate_domain using the Phase-4 analyzer, with the two-tier action policy. Off/All-IDN stay
+byte-identical. Work inline on `adr/08`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 3-4 left the Confusable branch inert and the analyzer unwired. This phase connects them:
+on xn-- queries in Confusable mode, classify -> malicious (block, default-on) / suspicious
+(alert, block opt-in) / OK (resolve), with dual-form logging. This is the phase whose
+no-regression (Off/All) + ABP-correctness (Phase-2 oracle) gate the feature.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/04_Results.txt — classify_idn API + severity enum.
+  If missing, STOP and report.
+- RESULTS/03_Results.txt (the extracted IDN unit + the Confusable hook point) and
+  RESULTS/02_Results.txt (the decision oracle + severity->action mapping).
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§2 tiers + "Semantics that MUST be preserved").
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: the extracted IDN unit (P3); evaluate_domain
+  ~2251-2349 (is_found / whiteDB override); resolve_feed_group ~2214; DnsblDecision ~2237;
+  the log-line builders the alerts/log consume.
+- tests/test_adr08_decision_spec.py + tests/test_adr08_mode_baseline.py (both gates).
+- CLAUDE.md.
+
+ACTION PLAN (both gates: Off/All golden + Phase-2 oracle)
+1. In the IDN unit, replace the inert Confusable branch with: if mode == Confusable and
+   is_idn_domain(q_name): sev = classify_idn(q_name) ->
+     - MALICIOUS  -> is_found, block, feed/group e.g. "Homoglyph"/"DNSBL_Homoglyph",
+       ONLY when the malicious sub-toggle (default-ON) is enabled; if disabled -> alert path.
+     - SUSPICIOUS -> alert/log (not blocking) by default; block ONLY when the suspicious
+       sub-toggle (opt-in) is enabled. Feed/group e.g. "Homoglyph_Suspect"/"DNSBL_Homoglyph_Suspect".
+     - OK         -> no IDN action (resolve).
+   Off and All-IDN paths are UNCHANGED (All-IDN still blocks every is_idn_domain query as today).
+2. LOGGING: emit BOTH the xn-- A-label AND the decoded Unicode + the offending char/script
+   (e.g. `xn--pple-43d [аpple] Cyrillic U+0430`), so alerts/log are actionable. Mirror the
+   existing log-line shape used by evaluate_domain so the alerts page renders it.
+3. WHITELIST WINS: the analyzer feeds is_found like any block source; the existing whiteDB
+   override (~2324) must still un-block a user-whitelisted homoglyph. Do NOT special-case it.
+4. GATE both directions:
+   - Off + All-IDN: tests/test_adr08_mode_baseline.py UNCHANGED-green (no regression).
+   - Confusable: a new test asserts PRODUCTION evaluate_domain matches the Phase-2 oracle over
+     the corpus (malicious block, suspicious alert, CJK resolve, sub-toggle combinations).
+5. Keep the analysis gated by is_idn_domain so non-IDN queries pay nothing (fact 4).
+
+CONSTRAINTS
+- ZERO change to Off/All-IDN decisions (golden gate). Non-IDN queries untouched.
+- Do NOT add UI yet (Phase 6) — drive the sub-toggles via plugin cfg fields for testing.
+- stdlib only, no new Unbound symbols (declare any in stubs/python/unboundmodule.py), 4-space,
+  type hints, no bare except. A decode failure must NOT raise into operate().
+
+VERIFICATION
+- python -m pytest → green: Off/All golden unchanged; Confusable oracle green. ruff clean.
+- Diff-read: All-IDN path == today; Confusable applies classify_idn with the tier policy;
+  whiteDB override still after is_found.
+
+EXPECTED RESULT
+Confusable mode is live: cross-script confusable homographs block by default, suspicious mixes
+alert, legit IDNs (incl. CJK) resolve, whitelist still wins, Off/All-IDN unchanged.
+
+COMMIT (single)
+    pfb_unbound: ADR-08 P5 — wire IDN homoglyph analyzer into matcher (Confusable mode live)
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/05_Results.txt`
+For Phase 6. Include: the cfg fields driving mode + the two sub-toggles (names/defaults:
+malicious default-ON, suspicious opt-in); the feed/group labels emitted; the log-line format
+(dual-form); confirmation Off/All golden + Confusable oracle are green + whitelist-wins; and the
+go-ahead to build the UI + PHP config.

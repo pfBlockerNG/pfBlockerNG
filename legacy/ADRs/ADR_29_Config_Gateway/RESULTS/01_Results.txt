@@ -1,0 +1,123 @@
+ADR-29 Phase 1 — Config Gateway and Field Registry
+===================================================
+Status: COMPLETE — all verification gates green
+Date:   2026-06-19
+
+## What was done
+
+Added `PfbConfig` final class + `pfb_cfg_registry()` function to
+`src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`, inserted before the
+logger/localize_text block.  This is behaviour-preserving and unused-in-prod
+(no existing call site was changed).
+
+### pfb_cfg_registry()
+
+Static-cached function returning an array of field descriptor maps:
+
+    key => [
+        'section'       => '<installedpackages/pfblockerng*/config/0>',
+        'default'       => '<stored default string>',
+        'read_adapter'  => callable|null,
+        'write_adapter' => callable|null,
+        'since'         => 'ADR-29-P1',
+    ]
+
+Three sections registered:
+- installedpackages/pfblockerng/config/0       — ~22 fields (general settings)
+- installedpackages/pfblockerngdnsblsettings/config/0 — ~36 fields (DNSBL settings)
+- installedpackages/pfblockerngsafesearch       — 4 fields (SafeSearch, flat section)
+
+All adapter pairs reuse existing ADR-28 adapters:
+- PfbToggle fields   → pfb_cfg_toggle_read / pfb_cfg_toggle_write
+- PfbLenient field   → pfb_cfg_lenient_read / pfb_cfg_lenient_write
+- Plain string fields → null / null (identity)
+
+pfb_idn is registered with null/null adapters (excluded from PfbIdnMode adoption:
+legacy 'on' value would cause a one-way migration; kept as plain string per ADR-28 §2.2).
+
+### PfbConfig class
+
+    final class PfbConfig {
+        public static function read(string $key): mixed
+        public static function write(string $key, mixed $value): void
+        public static function delete(string $key): void
+        public static function readSection(string $section): array
+        public static function writeSection(string $section, mixed $data): void
+        public static function deleteSection(string $section): void
+        private static function entry(string $key): array   // throws InvalidArgumentException
+    }
+
+- read()         → config_get_path($path, $default), then read_adapter($value) if set
+- write()        → write_adapter($value) if set, then config_set_path($path, $result)
+- delete()       → config_del_path($path)
+- readSection()  → config_get_path($section, [])
+- writeSection() → config_set_path($section, $data)
+- deleteSection()→ config_del_path($section)
+- entry()        → registry lookup; throws InvalidArgumentException for unknown keys
+
+### pfsense_doubles.php
+
+Added `config_del_path` double (was absent; needed by PfbConfig::delete and
+deleteSection).  The double walks the '/'-separated path via reference and unsets
+the final key; no-op when path is absent.
+
+### CLAUDE.md
+
+Added "Config gateway — PfbConfig (ADR-29)" subsection under the existing
+"Explicitly out of scope (ADR-28 §2.4)" block in the "Code-quality conventions
+(ADR-28)" section.  Documents the mandate: new code must use PfbConfig for
+registered fields; existing call sites are not migrated until Phase 2.
+
+## Verification gates — all passed
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc   → "No syntax errors detected"
+  vendor/bin/phpunit                                             → 667 tests, 2232 assertions — OK
+  vendor/bin/phpstan analyse                                     → "No errors"
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/               → (no output — clean)
+  python -m pytest                                               → 1733 passed
+  ruff check . && ruff format --check .                          → "All checks passed! / 112 files already formatted"
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    — Added: pfb_cfg_registry() function (~300 lines) + PfbConfig final class (~130 lines)
+
+  tests/php/pfsense_doubles.php
+    — Added: config_del_path() double
+
+  tests/php/CfgGatewayTest.php  [NEW FILE]
+    — 4 test groups (A round-trip / B default / C inventory / D mechanics)
+    — 667 total PHPUnit tests after addition (was 624 before)
+
+  CLAUDE.md
+    — Added "Config gateway — PfbConfig (ADR-29)" subsection
+
+## Out-of-scope keys (§2.5 ADR-29) — not in registry, Phase 2 or structural
+
+  pfb_wizard_skip, hooks, hooks/row (wizard-level / structural list)
+  pfblockerngblacklist sub-keys: blacklist_enable/freq/lang/logging/selected, item
+  pfblockerngglobal dynamic keys: pfbextdns
+  pfblockerngipsettings sub-keys: v4suppression, maxmind_key, maxmind_locale,
+    suppression (ipsettings-specific), database_cc, asn_reporting, asn_token,
+    maxmind_account, inbound_deny_action, outbound_deny_action, enable_float,
+    enable_dup, enable_agg, pass_order, enable_log, autorule_suffix, killstates,
+    ip_placeholder
+  pfblockerngreputation sub-keys: et_header
+  pfblockerngsync sub-keys: syncinterfaces, varsynconchanges, varsynctimeout,
+    varsyncdestinenable
+  dnsbl_webpage (ambiguous duplicate spelling; dnsblwebpage IS registered)
+
+## Notes
+
+- suppression in pfblockerngdnsblsettings/config/0 IS registered.
+  suppression in pfblockerngipsettings is a distinct concept and is out-of-scope.
+- pfb_idn registered with null adapters; its legacy 'on' => 'all' normalisation
+  happens only in pfb_global() (existing call site), not in the gateway.
+- Phase 2 will migrate existing pfb_global() + www/ + install.inc call sites
+  to route through PfbConfig.
+
+## Commit
+
+  pfblockerng: add config gateway and field registry (ADR-29 P1)
+
+  Branch: adr/29-config-gateway

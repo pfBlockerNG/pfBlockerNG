@@ -1,0 +1,113 @@
+ADR-44 Phase 3 — Comment-only cleanup: remove stale ZIP-MIME TODOs
+==================================================================
+Status: COMPLETE — 1553 tests, 0 failures, 3 pre-existing skips
+
+---
+
+1. Comment blocks reworded
+--------------------------
+Two stale TODO comment blocks were updated in
+src/usr/local/pkg/pfblockerng/pfblockerng.inc. Exact line numbers after Phase 2
+insertions (confirmed via grep before editing):
+
+a. Line 8363 (post-edit: 8362–8371): the /* TODO: FIX - Bypass ZIP Compression
+   file mime type validation due to incompatability with ZIP files */ opening prose
+   was replaced with a 5-line block comment that accurately describes the current
+   state:
+
+   - MIME variant strings are now canonicalised via pfb_mime_normalise() (ADR-44).
+   - The outer ZIP MIME gate therefore no longer false-rejects valid feeds.
+   - The post-extraction inner-content MIME check (the _COMPRESSED call) remains
+     disabled — inner-content validation is deferred to a future ADR.
+
+   The commented-out `if (!pfb_filter(..., PFB_FILTER_FILE_MIME_COMPRESSED, ...))
+   { return FALSE; }` block was NOT removed, NOT uncommented. It remains verbatim
+   inside the /* ... */ block.
+
+b. Line 8383 (post-edit: 8384–8386): the single-line
+   // TODO: Validate file contents after extraction (to be removed once ZIP
+   // compression file mime type is fixed above)
+   was replaced with a 3-line comment that accurately describes the active
+   pfb_filter(..., PFB_FILTER_FILE_MIME, ...) call that follows it: post-extraction
+   content validation, with a note that outer-container variant handling is now
+   covered by ADR-44's pfb_mime_normalise().
+
+---
+
+2. Commented-out PFB_FILTER_FILE_MIME_COMPRESSED call — confirmed NOT touched
+-------------------------------------------------------------------------------
+The `if (!pfb_filter(array(...), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download'))
+{ return FALSE; }` lines inside the /* ... */ block at ~line 8362 were NOT removed
+and NOT uncommented. They remain exactly as written in Phase 2, only the leading
+prose comment line changed.
+
+---
+
+3. No executable code changed
+------------------------------
+`git diff` for this phase contains only comment-line changes in pfblockerng.inc.
+No executable line was added, removed, or modified. The diff covers exactly:
+  - 5 comment lines added (new `/* ... */` opening prose, 5 lines)
+  - 1 comment line removed (old `/* TODO: FIX - ...` single line)
+  - 3 comment lines added (new `// Post-extraction ...` 3-line comment)
+  - 1 comment line removed (old `// TODO: Validate ...` single line)
+
+The `if (!pfb_filter(..., PFB_FILTER_FILE_MIME, ...))` active code at ~line 8387
+was not touched.
+
+---
+
+4. Const-16/17/18 inline comments — no stale text found
+---------------------------------------------------------
+Reviewed all inline comments for PFB_FILTER_FILE_MIME_COMPARE (const-16, ~line 1003),
+PFB_FILTER_FILE_MIME (const-17, ~line 1023), and PFB_FILTER_FILE_MIME_COMPRESSED
+(const-18, ~line 1067). None contained stale text describing the old un-normalised
+flow. The `// ADR-44: debug-log every normalisation event (raw -> canonical).`
+comment added in Phase 2 at ~line 1044 is accurate and was not modified.
+
+---
+
+5. PHPUnit summary
+-------------------
+vendor/bin/phpunit
+Tests: 1553, Assertions: 14909, Skipped: 3.
+OK (no failures) — identical to Phase 2 baseline, confirming no behaviour change.
+
+---
+
+6. Linting / static analysis
+------------------------------
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    → No syntax errors (pre-existing Deprecated notices unchanged)
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    → 0 errors
+
+---
+
+7. git diff --stat
+-------------------
+ src/usr/local/pkg/pfblockerng/pfblockerng.inc | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+---
+
+8. Commit + push
+-----------------
+Commit subject: pfb_filter: remove stale ZIP-MIME TODO; reference ADR-44 (ADR-44 P3)
+Commit hash: this phase's HEAD commit on adr/44-mime-normalisation (see git log)
+Push: adr/44-mime-normalisation → origin/adr/44-mime-normalisation (SUCCESS)
+
+---
+
+9. Go-ahead for Phase 4
+------------------------
+Phase 3 is complete and all gates are green. Phase 4 (smoke checklist) may proceed.
+
+Phase 4 smoke items to verify on a live pfSense CE VM with a real x-zip-compressed
+feed:
+  a. Feed reload completes without a MIME-rejection error for a feed whose server
+     returns Content-Type: application/x-zip-compressed (or similar variant).
+  b. /tmp/pfb_debug shows "MIME normalised: raw=..." log line when normalisation fires.
+  c. No regression on feeds already returning application/zip.
+  d. The disabled _COMPRESSED inner-content check has no runtime effect (it is inside
+     /* ... */ and is not reached).

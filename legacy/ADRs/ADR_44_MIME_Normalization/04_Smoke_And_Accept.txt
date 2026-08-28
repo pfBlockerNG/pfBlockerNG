@@ -1,0 +1,100 @@
+================================================================================
+PHASE 4 PROMPT — Smoke checklist + mark ADR Accepted
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_44_MIME_Normalization/ADR.md   (read §7 Definition of Done first)
+================================================================================
+
+ROLE
+Branch: adr/44-mime-normalisation (off devel)
+Phase 4 of 4 — documentation/acceptance phase. No code change.
+Inline on adr/44-mime-normalisation, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 1–3 implemented and cleaned up the MIME normalisation. This phase
+produces the manual smoke checklist document for the maintainer, and — after
+the maintainer confirms smoke results — updates ADR.md status from Proposed to
+Accepted.
+
+NOTE: This phase produces the checklist document and commits it. Status update
+to Accepted is a SEPARATE commit made by the maintainer (or on their explicit
+instruction) after the live-box smoke run passes.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_44_MIME_Normalization/RESULTS/03_Results.txt
+  Confirm all tests are green and the TODO cleanup is done. If missing; STOP.
+- .ADRs/ADR_44_MIME_Normalization/ADR.md  (§7 Definition of Done — smoke checklist)
+- CLAUDE.md
+
+ACTION PLAN (ordered)
+
+1. Create the file:
+   .ADRs/ADR_44_MIME_Normalization/RESULTS/SMOKE_CHECKLIST.md
+
+   Contents (copy and expand from ADR.md §7 manual smoke checklist):
+
+   # ADR-44 Manual Smoke Checklist
+   Owner: maintainer (requires live pfSense box with pfBlockerNG installed)
+   Branch: adr/44-mime-normalisation
+
+   ## Pre-conditions
+   - [ ] pfBlockerNG debug logging is enabled.
+   - [ ] Branch adr/44-mime-normalisation is installed on the test box.
+
+   ## Test cases
+   - [ ] TC-1: Download a blocklist feed served as a ZIP created by Python zipfile
+         (or 7-Zip / Windows Explorer). Confirm it passes the MIME gate and the
+         feed is processed normally (lines imported, no rejection log).
+   - [ ] TC-2: If a feed previously triggered `application/x-zip-compressed`
+         rejection, re-run it. Confirm it now succeeds.
+   - [ ] TC-3: Download a feed served as `application/gzip`. Confirm it still
+         passes (no regression).
+   - [ ] TC-4: Check pfBlockerNG debug log. Confirm normalisation events appear
+         when a variant string is encountered, e.g.:
+             MIME normalised: raw="application/x-zip-compressed" -> canonical="application/zip"
+   - [ ] TC-5: Download a feed that returns a genuine HTML error page (or simulate
+         with a test URL). Confirm it is still rejected by the MIME gate.
+
+   ## Reject criteria (if any of these occur, do NOT accept ADR-44)
+   - Any feed that previously succeeded now fails after this change.
+   - `application/octet-stream` is ever promoted through the normalisation path.
+   - PFB_FILTER_FILE_MIME_COMPARE (constant 16) behaviour changes.
+
+   ## Sign-off
+   - Tester: _______________
+   - Date: _______________
+   - Result: PASS / FAIL
+   - Notes: _______________
+
+2. Do NOT update ADR.md status in this commit. The status update to Accepted
+   is a maintainer action after smoke sign-off.
+
+3. Run the full test suite one final time to confirm green baseline.
+
+CONSTRAINTS
+- No code changes in this phase.
+- Only the SMOKE_CHECKLIST.md file is new.
+- PHP/shell lints still clean.
+
+VERIFICATION
+- vendor/bin/phpunit                → green (all phases)
+- git diff --stat                   → only RESULTS/SMOKE_CHECKLIST.md added
+
+EXPECTED RESULT
+- SMOKE_CHECKLIST.md exists in RESULTS/.
+- All automated tests green.
+- Maintainer has a clear, actionable checklist to run on a live box.
+
+COMMIT (single)
+    adr-44: add smoke checklist; ready for maintainer sign-off (ADR-44 P4)
+Push directly to adr/44-mime-normalisation.
+Open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_44_MIME_Normalization/RESULTS/04_Results.txt
+Include:
+- Confirmation SMOKE_CHECKLIST.md was created.
+- Final PHPUnit summary (all green).
+- Commit hash and push confirmation.
+- Instruction to maintainer: run smoke checklist on live box; if PASS, update
+  ADR.md Status line from "Proposed" to "Accepted (YYYY-MM-DD)" and commit
+  directly to adr/44-mime-normalisation or merge the PR.

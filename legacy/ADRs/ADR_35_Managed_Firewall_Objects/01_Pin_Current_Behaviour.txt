@@ -1,0 +1,124 @@
+================================================================================
+PHASE 1 PROMPT — Prep: pin current VIP/NAT ownership + teardown behaviour (oracle)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md   (read §1, §2, §2.2, §6 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/35-managed-firewall-objects (off devel; create off
+the latest devel if absent). Phase 1 is ORACLE-ONLY: add PHPUnit golden tests that pin today's
+behaviour; change NO production code. One commit, push directly (open a PR only if the direct
+push is rejected).
+
+WHY THIS PHASE EXISTS
+Phases 2 and 3 refactor the VIP + DNSBL-NAT call sites. If a behaviour changes during the
+refactor, the tests written here catch it. Writing the oracle FIRST — before any production
+change — is the only way to know the refactor is safe. These tests are the contract; the refactor
+must not break them.
+
+REQUIRED READING
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — full document; §1 (context + markers), §2.2
+  (the contract to pin), §6 Phase 1 scope.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    - Constants PFB_AUTO_VIP_DESCR_V4 = 'pfB_AUTO_VIP_v4' and
+      PFB_AUTO_VIP_DESCR_V6 = 'pfB_AUTO_VIP_v6'  (line ~315)
+    - pfb_find_marked_vip()  (line ~1121) — marker-only find; returns the vip array or FALSE
+    - pfb_manage_dnsbl_vip()  (line ~1178) — create idempotency + disable removal; the
+      double-guard: marker AND IP stored in pfb_dnsvip4/pfb_dnsvip6 must both match for removal
+    - pfb_create_dnsbl()  (line ~3775) — NAT add/strip; descr written as
+      'pfB DNSBL - DO NOT EDIT' (line ~3822); detection via
+      strpos($descr, 'pfB DNSBL') !== FALSE  (line ~3798)
+    - pfblockerng_php_pre_deinstall_command()  (line ~14423) — calls sync_package_pfblockerng()
+      then pfb_remove_config_settings() (line ~14512); no independent marker sweep today
+- src/usr/local/pkg/pfblockerng/pfblockerng_install.inc:48 — legacy 'pfB DNSBL' VIP descr
+  migration to the marker on upgrade
+- tests/php/ — existing PHPUnit tests for style + bootstrap pattern
+- tests/php/bootstrap.php and tests/php/pfsense_doubles.php — how pfSense functions are doubled
+- CLAUDE.md — PHP standards (tabs, PHP 8.3, uppercase TRUE/FALSE), test-coverage mandate (branch
+  coverage, before/after, BDD style for complex flows)
+
+ACTION PLAN (ordered — tests ONLY, no production change)
+1. Read pfb_find_marked_vip() and pfb_manage_dnsbl_vip() carefully. Understand what config.xml
+   shape they consume: virtualip/vip[] each has {descr, subnet, mode, ...}. The find checks
+   descr against PFB_AUTO_VIP_DESCR_V4/V6. The disable branch also checks subnet against the IP
+   in pfb_dnsvip4/pfb_dnsvip6 (the double-guard).
+2. Read pfb_create_dnsbl()'s NAT block. Understand: it reads nat/rule[], removes any with
+   strpos($descr, 'pfB DNSBL') !== FALSE on disable, and adds a new entry with
+   'pfB DNSBL - DO NOT EDIT' on enable.
+3. Add tests/php/FwobjCurrentBehaviourTest.php (new file; class FwobjCurrentBehaviourTest).
+   Cover all branches — each test asserts the before-state, then the after-state:
+
+   VIP tests (drive pfb_find_marked_vip + pfb_manage_dnsbl_vip via config fixtures):
+   a. testVipFindByMarkerV4 — fixture has one VIP with descr=PFB_AUTO_VIP_DESCR_V4 and one
+      unmarked user VIP; find returns the marked row and only that row.
+   b. testVipFindByMarkerV6 — same for PFB_AUTO_VIP_DESCR_V6.
+   c. testVipFindReturnsNullWhenAbsent — no marked VIP present → find returns FALSE.
+   d. testVipCreateIsIdempotent — call manage('enabled') twice with a marked VIP already present;
+      assert exactly one VIP entry after (no duplicate created). Assert before: one VIP. Assert
+      after: still one VIP.
+   e. testVipDisableRemovesMarkedVipWithMatchingIp — fixture has marked VIP + matching pfb_dnsvip4
+      IP; call manage('disabled'); assert the marked VIP is gone. Assert before: present.
+   f. testVipDisableDoesNotRemoveVipWithNonMatchingIp — the DOUBLE-GUARD: fixture has a marked
+      VIP but pfb_dnsvip4 holds a DIFFERENT IP; call manage('disabled'); assert the VIP remains
+      (double-guard prevents removal). Assert before: present.
+   g. testVipDisableNeverTouchesUserVip — fixture has a marked VIP (matching IP) plus a sibling
+      user VIP (no pfBlockerNG marker); call manage('disabled'); assert user VIP survives.
+      Assert before: both present.
+
+   NAT tests (drive pfb_create_dnsbl() NAT section via config fixtures):
+   h. testNatAddWritesPfbDnslDescr — call create_dnsbl(mode=enabled/create); assert new nat/rule
+      has descr='pfB DNSBL - DO NOT EDIT'.
+   i. testNatStripsOnDisable — fixture has nat/rule with descr='pfB DNSBL - DO NOT EDIT'; call
+      with mode=disabled; assert that rule is gone. Assert before: present.
+   j. testNatStripsLegacyPfbDnsblPrefix — fixture has nat/rule with descr='pfB DNSBL' (legacy,
+      no ' - DO NOT EDIT' suffix); strpos detects it; call with mode=disabled; assert removed.
+      Assert before: present.
+   k. testNatNeverTouchesUserRule — fixture has pfB DNSBL NAT rule plus a sibling user nat/rule
+      (descr='My custom rule'); call with mode=disabled; assert user rule survives.
+
+4. If pfb_manage_dnsbl_vip() or pfb_create_dnsbl() call pfSense functions not yet doubled
+   (e.g. config_get_path, config_set_path, write_config, return_gateways_array, get_interface_ip),
+   add faithful no-op doubles to tests/php/pfsense_doubles.php (+ empty shim if needed).
+   Do NOT stub complex pfSense runtime behaviour — keep doubles minimal and correct for the paths
+   under test.
+5. Run vendor/bin/phpunit — all new tests green.
+
+CONSTRAINTS
+- NO production code changes — tests only.
+- PHP tabs; PHP 8.3; uppercase TRUE/FALSE (ADR-28); no die()/exit().
+- These are pfSense-core sections (foreign key exclusion list, ADR-29) — direct config_*_path
+  use in production code is correct and must NOT be flagged; the test fixtures simulate the
+  config array directly, not via PfbConfig.
+- The RequireConfigGateway sniff is scoped to src/; tests/ is out of scope — no sniff concern
+  for the test file.
+- Each test must assert the BEFORE state before acting; no false passes.
+- Branch coverage: every conditional branch in the functions under test must be exercised by at
+  least one test case.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (all new FwobjCurrentBehaviourTest cases pass)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc (no syntax error — file untouched)
+- PHPStan (vendor/bin/phpstan analyse) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (no src/ change, so trivially green)
+- python -m pytest -> green (Python suite unaffected)
+- Diff-read: only tests/php/FwobjCurrentBehaviourTest.php (and any doubles additions) — zero
+  production code changed
+
+EXPECTED RESULT
+A comprehensive oracle test suite pinning VIP find/create/disable (including the double-guard
+and user-row survival) and DNSBL-NAT add/strip (including legacy prefix and user-row survival).
+All green against the unmodified pfblockerng.inc. No behaviour change.
+
+COMMIT (single)
+    pfblockerng: pin VIP/NAT ownership + teardown golden tests (ADR-35 P1)
+Push directly to adr/35-managed-firewall-objects; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01_Results.txt (plain .txt)
+Record:
+- The test file path and class name.
+- The exact test method names and what each pins (one line each).
+- Which pfSense doubles were added to pfsense_doubles.php and why.
+- The config.xml fixture shapes the tests use (virtualip/vip[] fields, nat/rule[] fields).
+- Verification output: phpunit pass count, phpstan clean, phpcs clean, pytest count.
+- Any surprises in the current production behaviour observed while writing the tests.
+- Go-ahead for Phase 2.

@@ -1,0 +1,230 @@
+================================================================================
+PHASE 3 RESULTS — version-keyed catalog dirs + routing.json generator
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+VERDICT: GO — all verification steps pass, tests green, lint clean.
+
+--------------------------------------------------------------------------------
+PART A — build-repo-portable.py --catalog-name interface
+--------------------------------------------------------------------------------
+
+Option: --catalog-name NAME  (e.g. "ce-2.8", "plus-26.03")
+
+Output dir structure:
+  With --catalog-name ce-2.8:
+    <out>/ce-2.8/FreeBSD:15:amd64/meta.conf
+    <out>/ce-2.8/FreeBSD:15:amd64/packagesite.pkg
+    <out>/ce-2.8/FreeBSD:15:amd64/data.pkg
+    <out>/ce-2.8/FreeBSD:15:amd64/<name>-<version>.pkg
+  Without --catalog-name (legacy):
+    <out>/FreeBSD:15:amd64/meta.conf   (UNCHANGED)
+
+Python API: build_repo(in_dir, out_dir, *, catalog_name: str | None = None)
+  - catalog_name=None  -> legacy <out>/<ABI>/ layout (backward-compatible)
+  - catalog_name="ce-2.8" -> <out>/ce-2.8/<ABI>/
+
+Multiple versioned dirs coexist under the same <out> root (the publish pipeline
+calls build_repo once per active ci-metadata entry with the appropriate catalog_name).
+
+--------------------------------------------------------------------------------
+PART B — generate_routing_json function signature
+--------------------------------------------------------------------------------
+
+Function:
+  def generate_routing_json(entries: list[dict], output_path: str) -> None
+
+Location: scripts/build-repo-portable.py
+
+Behaviour:
+  - Pure Python stdlib; no network I/O
+  - entries: list of routing entry dicts, each with {pattern, catalog, status}
+  - Writes {"routes": [...]} as compact JSON + trailing newline to output_path
+  - All entries passed through verbatim (no filtering by status)
+
+CLI:
+  build-repo-portable.py --generate-routing-json \
+    --routing-entries '[{"pattern":"pfSense/2.8","catalog":"ce-2.8","status":"active"}]' \
+    --routing-json-path routing.json
+  (--generate-routing-json exits after writing; does NOT build a catalog)
+
+Routing.json schema (exact JSON shape):
+  {
+    "routes": [
+      {"pattern": "pfSense/2.8",  "catalog": "ce-2.8",    "status": "active"},
+      {"pattern": "pfSense/26.03","catalog": "plus-26.03", "status": "active"},
+      {"pattern": "pfSense/2.7",  "catalog": "ce-2.7",     "status": "legacy"}
+    ]
+  }
+  Written as compact JSON (no spaces in separators) with a single trailing newline.
+  "legacy" entries are retained (not omitted) until the grace period ends.
+
+--------------------------------------------------------------------------------
+PART C — catalog_name_from_version helper
+--------------------------------------------------------------------------------
+
+Signature:
+  def catalog_name_from_version(pfsense_version: str, variant: str) -> str
+
+Location: scripts/build-repo-portable.py
+
+Derivation rule:
+  Both CE and Plus strip any trailing patch component, keeping only major.minor:
+    "2.8.1"  + "CE"   -> "ce-2.8"
+    "2.8.x"  + "CE"   -> "ce-2.8"    (x treated as third component, stripped)
+    "26.03"  + "Plus" -> "plus-26.03"
+    "26.03.1"+ "Plus" -> "plus-26.03"
+  Implementation: ".".join(pfsense_version.split(".")[:2]) + f"{variant.lower()}-" prefix
+
+--------------------------------------------------------------------------------
+PART D — legacy path retention
+--------------------------------------------------------------------------------
+
+When catalog_name is absent (None), build_repo writes to <out>/<ABI>/ exactly as
+before ADR-20 (zero behavioural change). The publish pipeline must call build_repo
+once MORE without catalog_name for the transition-window legacy <ABI>/ path (CE 2.8
+during the co-existence period). test_legacy_path_retained pins this contract.
+
+--------------------------------------------------------------------------------
+PART E — what pfBlockerNG/pkg publish.yml needs (cross-repo change, Phase 4 work)
+--------------------------------------------------------------------------------
+
+The publish.yml in the pfBlockerNG/pkg repo (separate repo, cannot be modified here)
+needs the following changes to use Phase 3:
+
+1. Read all active matrix entries from ci-metadata via read-version-matrix.sh
+   (no --variant, or two passes --variant CE + --variant Plus).
+
+2. For each active entry, call:
+     python3 scripts/build-pkg-portable.py ... --variant <variant>
+     python3 scripts/build-repo-portable.py --in <pkg-dir> --out <site-dir> \
+       --catalog-name $(python3 -c "
+         import importlib.util, sys
+         spec = importlib.util.spec_from_file_location('b','scripts/build-repo-portable.py')
+         b = importlib.util.module_from_spec(spec); spec.loader.exec_module(b)
+         print(b.catalog_name_from_version('$PFSENSE_VERSION','$VARIANT'))
+       ")
+
+   Or inline: catalog_name = "{variant.lower()}-{major}.{minor}"
+
+3. Generate routing.json from ALL entries (active + legacy):
+     python3 scripts/build-repo-portable.py --generate-routing-json \
+       --routing-entries "$ROUTING_ENTRIES_JSON" \
+       --routing-json-path site/routing.json
+
+4. Also run build-repo-portable.py WITHOUT --catalog-name for the legacy <ABI>/
+   path (CE 2.8 transition window).
+
+5. Deploy all subtrees in a SINGLE actions/deploy-pages invocation:
+   site/ contains:
+     ce-2.8/<ABI>/           (versioned CE 2.8)
+     plus-26.03/<ABI>/       (versioned Plus 26.03)
+     <ABI>/                  (legacy path)
+     routing.json
+
+NOTE: Phase 4 is the actual cross-repo PR. Phase 3 only delivers the devel-side
+tooling (build-repo-portable.py). The pfBlockerNG/pkg publish.yml change is Phase 4.
+
+--------------------------------------------------------------------------------
+PART F — scripts/build-repo.sh comment update
+--------------------------------------------------------------------------------
+
+Added a NOTE block to the --print-conf comment section documenting:
+  - Version-keyed subdirs: ce-2.8/${ABI}/, plus-26.03/${ABI}/
+  - Cloudflare Worker (Phase 5) rewrites requests to versioned dirs
+  - The template remains the legacy direct-to-Pages URL (transition window)
+The conf template itself was NOT changed (Phase 4 owns that).
+
+--------------------------------------------------------------------------------
+PART G — test names added
+--------------------------------------------------------------------------------
+
+File: tests/test_build_repo_portable.py  (8 new tests; total 28)
+
+  1. test_catalog_name_from_version
+     catalog_name_from_version() helper: 4 cases (CE+patch, CE+.x, Plus exact, Plus+patch)
+
+  2. test_catalog_under_versioned_subdir
+     --catalog-name=ce-2.8, CE pkg (ABI=FreeBSD:15:amd64)
+     -> meta.conf at ce-2.8/FreeBSD:15:amd64/meta.conf
+     -> NO meta.conf at plain FreeBSD:15:amd64/meta.conf
+     Before-state: assert ce-2.8/ does not exist
+
+  3. test_plus_catalog_under_versioned_subdir
+     --catalog-name=plus-26.03, Plus pkg (ABI=FreeBSD:16:amd64)
+     -> meta.conf at plus-26.03/FreeBSD:16:amd64/meta.conf
+     -> ce-2.8/ does NOT exist
+     Before-state: assert neither dir exists
+
+  4. test_legacy_path_retained
+     No --catalog-name -> meta.conf at FreeBSD:15:amd64/meta.conf (unchanged)
+     No versioned subdirs created as side-effect
+
+  5. test_wrong_variant_pkg_excluded
+     CE pkg built into ce-2.8/; Plus pkg built into plus-26.03/
+     -> CE packagesite lacks Plus pkg name; Plus packagesite lacks CE pkg name
+
+  6. test_two_ce_entries_produce_two_versioned_dirs
+     Two builds: ce-2.8/FreeBSD:15:amd64 and ce-2.9/FreeBSD:16:amd64
+     Both meta.confs exist; each packagesite has only its own pkg
+     Before-state: assert neither dir exists
+
+  7. test_routing_json_correct_entries
+     generate_routing_json with 2 active + 1 legacy entry
+     All three in output; correct catalog/pattern/status fields; legacy retained
+
+  8. test_routing_json_legacy_retained
+     Single legacy entry -> present in output with status="legacy"
+
+--------------------------------------------------------------------------------
+VERIFICATION RESULTS
+--------------------------------------------------------------------------------
+
+python3 -m pytest tests/test_build_repo_portable.py -v  -> 28 passed (was 20)
+python3 -m pytest tests/ --ignore=tests/smoke -q        -> 1471 passed
+ruff check + ruff format --check                        -> All checks passed
+mypy tests/ --ignore-missing-imports                    -> Success: no issues (31 files)
+sh -n scripts/build-repo.sh + shellcheck               -> clean
+pre-commit hook                                         -> all checks passed
+
+Manual verification:
+  build-repo-portable.py --catalog-name ce-2.8 against fixture .pkg
+    -> ce-2.8/FreeBSD:15:amd64/meta.conf confirmed present
+    -> FreeBSD:15:amd64/meta.conf absent at root (correct)
+  build-repo-portable.py --generate-routing-json with sample entries
+    -> {"routes":[...]} with correct fields confirmed
+
+--------------------------------------------------------------------------------
+COMMIT
+--------------------------------------------------------------------------------
+
+Branch: adr/20-ce-plus-variant-distribution
+Commit: bfac1da
+Message: ci: version-keyed catalog dirs + routing.json in build-repo-portable.py (ADR-20 P3)
+Files: scripts/build-repo-portable.py, scripts/build-repo.sh, tests/test_build_repo_portable.py
+Pushed: yes -> origin/adr/20-ce-plus-variant-distribution
+
+pfBlockerNG/pkg publish.yml PR: NOT opened in this phase.
+Phase 3 delivers only the devel-side tooling. The cross-repo publish.yml wiring
+is Phase 4's responsibility per the phase prompt.
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 4
+--------------------------------------------------------------------------------
+
+Phase 4 can proceed. The devel-side tooling is in place:
+  - build-repo-portable.py accepts --catalog-name for versioned dirs
+  - catalog_name_from_version() derives the correct name from (pfsense_version, variant)
+  - generate_routing_json() produces the routing.json schema Phase 5 consumes
+  - Legacy path (no --catalog-name) is backward-compatible and tested
+  - All 8 new tests are green; full suite 1471/1471 green
+
+Phase 4 should:
+  1. Open a cross-repo PR against pfBlockerNG/pkg updating publish.yml to:
+     - call build-repo-portable.py with --catalog-name per ci-metadata entry
+     - call --generate-routing-json with all entries (active + legacy)
+     - also run the legacy (no --catalog-name) build for the transition window
+     - deploy versioned dirs + legacy <ABI>/ + routing.json in one deploy-pages job
+  2. Phase 4 also owns the add-repo.sh conf update to point at the Cloudflare
+     Worker URL (Phase 5 provides the Worker; Phase 4 wires it in the conf).

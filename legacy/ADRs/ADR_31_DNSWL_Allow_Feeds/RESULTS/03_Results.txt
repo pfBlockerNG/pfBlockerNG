@@ -1,0 +1,165 @@
+ADR-31 Phase 3 — PHP: extract reusable feed download/stage seam
+================================================================
+
+Status: COMPLETE — 8 new PHPUnit tests green; full suite 887 passed (879 baseline + 8 new).
+All PHP gates clean. Python suite unchanged at 1904 passed.
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=4
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+A bare ``/adr-phase 31`` or ``/adr-all 31`` will recompute the canonical slug
+and miss this work.  Resume via this RESULTS file + the sentinel above.
+
+Extracted function
+------------------
+Function  : ``pfb_feed_manifest_row()``
+Location  : ``src/usr/local/pkg/pfblockerng/pfblockerng.inc`` — inserted between
+            ``pfb_sanitise_feed_header()`` and the ``pfb_unbound_python_sources()``
+            comment block (immediately before the ADR-06 manifest-writer comment).
+
+Signature:
+
+    function pfb_feed_manifest_row(
+        string $header,
+        string $group,
+        string $log_flag,
+        string $format,
+        string $provenance,
+        string $mode = 'deny'
+    ): array
+
+Returns an associative array with keys ``header``, ``group``, ``log``, ``format``,
+``provenance`` — and conditionally ``mode`` (see below).
+
+Deny manifest-entry decision
+-----------------------------
+Decision : **OMIT** ``mode`` for deny rows (default ``$mode = 'deny'`` and explicit
+           ``'deny'`` both omit the key).
+
+Rationale: Phase 2 confirmed that absent == deny in Python (``feed_row.get("mode") ==
+           "permit"`` is the only branch; absent/deny both fall through to the existing
+           block path). Omitting the key keeps every existing deny-row manifest entry
+           byte-identical — no diff in the written JSON, no churn in existing installs.
+
+Pinned by: ``tests/php/FeedManifestRowTest.php`` — tests
+           ``testDenyRowOmitsModeKey`` and ``testExplicitDenyRowOmitsModeKey``
+           assert ``assertArrayNotHasKey('mode', $row)`` for both the default and
+           explicit deny cases (both sides of the branch).
+
+Call sites updated
+------------------
+Two ``$pfb_py_feeds[]`` assignments replaced in the DNSBL download loop
+(``pfblockerng.inc``):
+
+1. Reuse/existing-file path (was ~line 11170):
+   Before: ``$pfb_py_feeds[] = array('header' => $header, 'group' => $alias, ...)``
+   After : ``$pfb_py_feeds[] = pfb_feed_manifest_row($header, $alias, $logging_type,
+               file_exists(...) ? 'abp' : 'plain', $custom ? 'user' : 'feed')``
+
+2. Download/parse path (was ~line 11765):
+   Before: ``$pfb_py_feeds[] = array('header' => $header, 'group' => $alias, ...)``
+   After : ``$pfb_py_feeds[] = pfb_feed_manifest_row($header, $alias, $logging_type,
+               $easylist ? 'abp' : 'plain', $custom ? 'user' : 'feed')``
+
+Byte-identical proof: the PHPUnit suite (including pre-existing UnboundPythonSourcesTest
+covering the full manifest write path) remains green with no changes to test fixtures or
+assertions — the function's output for deny is structurally equivalent to the old inline
+arrays, and ``pfb_unbound_python_sources()`` reads the same keys (``header``, ``group``,
+``log``, ``format``, ``provenance``) that the extracted function emits.
+
+Test file and counts
+--------------------
+File  : ``tests/php/FeedManifestRowTest.php`` — 8 tests.
+
+Test methods:
+  testDenyRowOmitsModeKey
+    BEFORE state (implicit): deny rows carry no 'mode' key — assertArrayNotHasKey.
+  testExplicitDenyRowOmitsModeKey
+    Explicit mode='deny' also omits — both sides of the deny branch pinned.
+  testDenyRowFieldsAreForwardedExactly
+    All five base fields (header, group, log, format, provenance) forwarded verbatim.
+  testDenyRowAbpFormatIsForwarded
+    ABP-tagged deny row: format='abp' preserved, mode absent.
+  testDenyRowUserProvenanceIsForwarded
+    Custom-list row: provenance='user' preserved, mode absent.
+  testDenyRowNullBlockingLogFlagIsForwarded
+    log_flag='2' (null-blocking) forwarded verbatim.
+  testPermitRowIncludesModePermit
+    BEFORE state: deny row has no 'mode' key.
+    AFTER (mode='permit'): 'mode' => 'permit' appears in row.
+  testPermitRowBaseFieldsAreUnchanged
+    All five base fields + 'mode' correct in a permit row.
+
+Sniff / validation status
+--------------------------
+PFBL-01 (RequirePfbFilter): ``pfb_feed_manifest_row()`` contains NO exec-family calls,
+  no ``json_encode``, no dynamic filesystem-path builds — it is a pure array constructor.
+  PFBL-01 does NOT require adding it to ``scopeFunctions``. Sniff green.
+
+RequireConfigGateway: the function touches no ``config_*_path`` calls and reads no
+  registered pfblockerng config keys. Sniff green.
+
+Gate results
+------------
+- ``php -l pfblockerng.inc``                        : No syntax errors
+- ``vendor/bin/phpunit``                            : 887 passed (879 baseline + 8 new)
+- ``vendor/bin/phpcs --standard=phpcs.xml.dist src/``: clean (0 errors)
+- ``vendor/bin/phpstan analyse pfblockerng.inc``    : No errors
+- ``python -m pytest``                              : 1904 passed (unchanged)
+
+Files changed
+-------------
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - Added ``pfb_feed_manifest_row()`` between pfb_sanitise_feed_header() and
+    pfb_unbound_python_sources().
+  - Two $pfb_py_feeds[] assignments replaced with calls to pfb_feed_manifest_row()
+    (deny default — byte-identical output).
+
+tests/php/FeedManifestRowTest.php
+  - New: 8 tests pinning the deny-omit contract and the permit row structure.
+
+What Phase 4 must pass to stage a permit row
+--------------------------------------------
+Phase 4 (DNSWL section wiring) must:
+
+1. Iterate ``config_get_path('installedpackages/pfblockerngdnswl/config', [])`` rows
+   (a new config section, parallel to pfblockerngdnsbl/config; dynamic per-row,
+   foreign/section-level — do NOT register in PfbConfig).
+
+2. For each enabled row, call the existing DNSBL download/stage machinery exactly
+   as the deny loop does (pfb_download → .orig staging, .bk parsing, .txt rename,
+   .abp marker) — THEN call::
+
+     $pfb_py_feeds[] = pfb_feed_manifest_row(
+         $header, $alias, $logging_type,
+         $easylist ? 'abp' : 'plain',
+         $custom   ? 'user' : 'feed',
+         'permit'          // ← the ONLY new argument vs the deny loop
+     );
+
+3. The resulting manifest entry will carry ``"mode": "permit"`` — exactly the JSON
+   token the Phase-2 Python branch checks (``feed_row.get("mode") == "permit"``).
+
+4. ``pfb_unbound_python_sources()`` consumes the ``$pfb_py_feeds[]`` array unchanged;
+   Phase 4 adds permit rows to the same array before the call at pfblockerng.inc:12053.
+
+The PFBL-01 validation contract applies identically: the permit section's download loop
+must call ``pfb_filter($header, PFB_FILTER_WORD, ...)`` and/or
+``pfb_sanitise_feed_header()`` before any exec/path/json_encode derived from $header —
+same posture as the deny loop. Add ``pfb_feed_manifest_row`` to ``scopeFunctions`` in
+RequirePfbFilterSniff.php only if the new function itself needs to become an in-scope
+surface (currently it does not — it contains no exec or path derivation).
+
+Go-ahead for Phase 4
+--------------------
+The reusable seam is extracted and pinned:
+  - ``pfb_feed_manifest_row($h, $g, $log, $fmt, $prov, $mode='deny')`` in pfblockerng.inc.
+  - deny: omits 'mode' key — byte-identical with pre-ADR-31 deny entries.
+  - permit: emits 'mode' => 'permit'.
+  - 8 PHPUnit tests green, all PHP/Python gates clean.
+  - Deny row output byte-identical (existing UnboundPythonSourcesTest still passes unchanged).
+
+Phase 4 may now proceed (DNSWL config section wiring + UI).

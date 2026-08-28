@@ -1,0 +1,134 @@
+ADR-42 Phase 2 Results
+======================
+Branch: adr/42-hash-based-change-detection
+Status: COMPLETE — all gates green; push succeeded.
+
+ADR-RESUME: branch=adr/42-hash-based-change-detection next-phase=3
+
+=== New Local-Feed Detection Flow ===
+
+pfb_local_feed_changed($source_path, $orig_path)
+  File: src/usr/local/pkg/pfblockerng/pfblockerng.inc ~line 9455
+
+  1. Either file absent → TRUE (no baseline = first run, fail-safe).
+  2. pfb_hash_read($orig_path):
+       sentinel (no/corrupt sidecar) → live-hash .orig as baseline (xxh128),
+         then hash source with pfb_content_hash(); changed = (src != baseline).
+       'md5'    → compare source with md5_file($source_path) vs sidecar digest.
+       'xxh128' → compare source with pfb_content_hash($source_path) vs sidecar digest.
+  3. Any read failure → TRUE (fail-safe).
+  mtime is GONE from the gate entirely.
+
+=== Sidecar Refresh at Ingest (pfb_download) ===
+
+  File: src/usr/local/pkg/pfblockerng/pfblockerng.inc — inside pfb_download()
+  Location: inside the `if ($retval == 0)` success block, after the `@touch` timestamp line.
+  Call added: pfb_hash_write("{$orig_download}", "{$orig_download}");
+
+  This is called on EVERY successful ingest (local and remote standard feeds) that
+  finalises a plain .orig file.  geoip/asn early-returns (~line 7872) do not reach this
+  block, so they correctly never get a sidecar.
+
+  WHY this prevents the staleness trap:
+    Without the ingest-time write, the sidecar holds the OLD .orig hash after a change is
+    ingested.  On the next cron: source == new .orig, but sidecar == old .orig hash →
+    source hash != sidecar → "changed" reported on every cron → perpetual re-ingest.
+    Writing the sidecar from the new .orig immediately after `.raw`→`.orig` rename means
+    the sidecar is always the hash of the last-ingested baseline.
+
+=== PHPUnit Tests (FeedChangeHashHelpersTest.php) ===
+
+  Phase 2 replaced the 6 mtime-based oracle tests with 6 hash-based tests:
+
+  New tests (replacing mtime-based oracles):
+    test_local_feed_changed_identical_content_with_sidecar_is_not_changed
+      — content-identical + .xxhash128 sidecar → FALSE.
+    test_local_feed_changed_different_content_with_sidecar_is_changed
+      — different content, mtime FORCED EQUAL (the same-second blind spot) → TRUE.
+      RED on pre-Phase-2: equal mtime → returns FALSE (change missed).
+      GREEN post-Phase-2: hash differs → returns TRUE.
+    test_local_feed_changed_legacy_md5_sidecar_detects_change_and_migrates
+      — legacy .md5 sidecar: reads as md5, detects change; pfb_hash_write migrates to .xxhash128.
+    test_local_feed_changed_absent_sidecar_falls_back_to_live_orig_hash
+      — no sidecar: falls back to live .orig hash (first-pass-after-upgrade).
+    test_local_feed_changed_idempotent_after_ingest_with_sidecar
+      — anti-staleness: two consecutive calls after ingest BOTH return FALSE (no perpetual re-ingest).
+      RED on a broken impl where the sidecar is NOT written at ingest:
+        second call sees stale sidecar → returns TRUE (perpetual re-ingest triggered).
+
+  Preserved (fail-safe, missing-file):
+    test_local_feed_changed_missing_source_is_changed
+    test_local_feed_changed_missing_orig_is_changed
+
+  Total: 17 tests, 41 assertions (was 16 tests, 35 assertions).
+  Full suite: 1336 tests, 5154 assertions, 3 skipped — all pass.
+
+=== Smoke Tests (test_smoke_feeds.py) — Migrated + New ===
+
+  1. test_cron_detects_changed_local_feed (migrated)
+     - Removed mtime bump (_bump_feed_mtime w/ advance="0200") — not needed for hash detection.
+     - Updated docstring: content bytes differ → hash differs → re-ingest.
+
+  2. test_cron_skips_unchanged_local_feed (migrated)
+     - Removed mtime equalisation (_bump_feed_mtime) — not needed for hash detection.
+     - Updated docstring: unchanged bytes → hash matches sidecar → "Update not required".
+
+  3. test_cron_skips_local_feed_with_bumped_mtime_but_same_content (migrated)
+     - Old marker "mtime changed, content identical" REMOVED (no longer logged post-Phase-2).
+     - Now asserts "Update not required" (the single no-change log path, shared by
+       both mtime-equal and mtime-bumped-same-content cases in the hash-based code).
+     - RED on pre-Phase-2 code: old code asserts the old marker which doesn't exist post-Phase-2.
+
+  4. test_cron_detects_changed_local_feed_same_second (NEW)
+     - The ADR-42 Phase 2 blind-spot guard.
+     - GIVEN: initial ingest (writes .xxhash128); WHEN: source rewritten with new content
+       AND `touch -r` forces source mtime == orig mtime (equal-second simulation);
+       THEN: dom_new becomes blocked (same-second change detected by hash, not mtime).
+     - RED on pre-Phase-2 code: equal mtime → pfb_local_feed_changed returns FALSE →
+       detector logs "Update not required" → dom_new never blocked → assertion fails.
+     - GREEN post-Phase-2: different bytes → different xxh128 hash → "Update found" →
+       re-ingest → dom_new blocked.
+     - Does NOT run a live VM (Phase 5); the red→green reasoning is documented here and
+       provable from the pfb_local_feed_changed logic change + the PHPUnit
+       test_local_feed_changed_different_content_with_sidecar_is_changed which actually
+       exercises the same code path off-VM.
+
+=== Gate Results ===
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc    → No syntax errors
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php    → No syntax errors
+  vendor/bin/phpunit                                       → 1336 tests, 0 failures
+  vendor/bin/phpstan analyse --memory-limit=1G            → No errors
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/         → No output (clean)
+  ruff check tests/smoke/test_smoke_feeds.py              → All checks passed
+  ruff format --check tests/smoke/test_smoke_feeds.py     → Already formatted
+  pytest --collect-only -q (smoke/test_smoke_feeds.py)    → 18 tests collected
+
+=== What Phase 3 Must NOT Disturb ===
+
+  Phase 3 covers the remote/conditional-GET path (HTTP HEAD + If-Modified-Since + md5
+  fallback in the `else { // Download URL headers ... }` branch of pfb_update_check()).
+  That branch is entirely untouched by Phase 2.  Phase 3 must:
+    - Leave pfb_local_feed_changed() untouched (Phase 2 owns local detection).
+    - Leave the pfb_hash_write call in pfb_download's success block untouched
+      (it correctly applies to remote standard feeds too).
+    - Target only the remote HEAD/304/md5 logic in pfblockerng.php (lines ~484-575).
+
+=== Files Changed ===
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc          — pfb_local_feed_changed() rewritten
+                                                            (mtime→hash); pfb_hash_write()
+                                                            call added in pfb_download success block
+  tests/php/FeedChangeHashHelpersTest.php                — 6 mtime-oracle tests replaced with
+                                                            6 hash-based tests; +1 test total
+  tests/smoke/test_smoke_feeds.py                        — 3 cron tests migrated; 1 new
+                                                            same-second test added
+
+=== Go-ahead for Phase 3 ===
+
+All Phase 2 gates green. Phase 3 may proceed:
+  - Target the remote HEAD/304/md5 conditional-GET branch in pfblockerng.php.
+  - Replace the HTTP HEAD + md5-fallback remote-staleness check with an ETag/xxh128
+    approach (or the ADR's specified conditional-GET + sidecar comparison).
+  - pfb_local_feed_changed() and the pfb_download sidecar write are locked (Phase 2);
+    do not modify them.

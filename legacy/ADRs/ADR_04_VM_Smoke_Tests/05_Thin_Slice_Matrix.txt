@@ -1,0 +1,89 @@
+================================================================================
+PHASE 5 PROMPT — Thin vertical-slice matrix
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §2 contract, §2 "Explicitly kept /
+     out of scope", §4 requirements, §7 manual smoke FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/04` branch (off `devel`) performing Phase 5 of ADR-04. Write the
+FIRST landed matrix — a thin vertical slice that proves the harness asserts real
+behaviour end-to-end on both paths. NOT a broad matrix: one IP case + a few DNSBL
+cases. The point is a green, hermetic, false-green-guarded slice that later PRs grow.
+Work inline on `adr/04`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+"Test all combinations of DNSBL settings" is the long-term goal, but landing it all at
+once is a huge, slow-to-green PR. A thin slice proves the loop (config -> reload ->
+probe -> assert) works on real pfSense for the representative shapes, then the matrix
+grows in follow-up changes. This is the deliverable that turns ADR-03/01's "manual
+smoke, owner: maintainer" into an automated regression guard for the covered cases.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_04_VM_Smoke_Tests/RESULTS/04_Results.txt — the per-case loop API, the
+  case_spec shape, the reload verbs, and the false-green guard. If missing, the
+  helpers aren't ready; STOP and report.
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md  (§2 contract bullets; §2 out-of-scope — do NOT
+  add SafeSearch/regex/HSTS/TLD/GeoIP here; §4 req 3-4; §7 manual checklist).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py  (the matchers: data=exact,
+  zone=wildcard incl self, whitelist, the NXDOMAIN/null/VIP response shapes) — so the
+  expected probe results are CORRECT, not guessed.
+- tests/smoke/ (the helpers from P4) and the fixtures dir.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. IP CASE: register a mock feed serving a known set of IPs into an alias; reload
+   (updateip); assert `pfctl -T show <alias>` contains every fed IP and EXCLUDES a
+   non-fed IP; assert a rule references the alias (`pfctl -sr`). One positive + one
+   negative member.
+2. DNSBL CASES (parametrised over the loop): for a domain served by the mock DNSBL
+   feed —
+   a. EXACT block, response mode NXDOMAIN -> `dig A` rcode NXDOMAIN; exact match does
+      NOT block a subdomain (data=exact: `x.<domain>` is NOT blocked).
+   b. EXACT block, response mode NULL-IP -> `dig A` returns the configured null addr
+      (and AAAA per the configured behaviour).
+   c. WILDCARD (zone) block -> blocks `<domain>` AND a deep subdomain
+      `a.b.<domain>` (incl self), per the zone=wildcard contract.
+   d. WHITELIST passthrough -> a domain on the whitelist (and also present in the
+      block feed) RESOLVES to its local-data answer, not the block shape.
+3. HERMETIC CHECK: ensure every expected answer comes from mock feeds + baked
+   local-data; add/keep a job mode (or note for Phase 6) that runs with runner egress
+   blocked and still passes (ADR §4 req 4).
+4. FALSE-GREEN GUARD: include one case whose expectation is deliberately wrong, marked
+   xfail(strict) (or an explicit assert-it-fails), so a harness that silently passes
+   everything is caught.
+5. Keep ALL of these under `@pytest.mark.smoke`; the default run must stay clean.
+
+CONSTRAINTS
+- THIN slice only — do NOT enumerate the full DNSBL knob space (out of scope §2);
+  leave SafeSearch, regex, HSTS, TLD, GeoIP, full AAAA/noAAAA for follow-up PRs.
+- Expected results must match `pfb_unbound.py`'s actual semantics (data exact vs zone
+  wildcard vs whitelist) — verify against the source, don't assume.
+- Hermetic: no real upstream/feed; mock + local-data only.
+- Python: 3.11+, 4-space, type hints, no bare except. Default `python -m pytest`
+  unchanged. Do NOT touch `src/`.
+- If a case reveals a genuine pfBlockerNG bug, DO NOT fix src/ here — note it in the
+  handoff for a separate change with its own unit test (ADR §2 out-of-scope).
+
+VERIFICATION (must all pass before the phase is done)
+- `pytest -m smoke` (KVM + image): the IP case, the 4 DNSBL cases, and the false-green
+  guard behave as specified (green; xfail strict where applicable).
+- Re-run with runner egress blocked → still green (hermetic).
+- `python -m pytest` (default) → green/unchanged.  `ruff`/ShellCheck → clean.
+
+EXPECTED RESULT
+A small, green, hermetic, false-green-guarded smoke matrix asserting both the IP
+(pfctl) and DNS (dig) paths against a real pfSense VM — the automated core of what was
+the maintainer's manual checklist.
+
+COMMIT (single)
+    test: add thin-slice IP + DNSBL smoke matrix against real pfSense VM (ADR-04 P5)
+Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/05_Results.txt` (plain .txt)
+For Phase 6 (workflow + docs). Include: the cases now covered and HOW to add a case
+(the case_spec recipe); total `pytest -m smoke` wall-time observed (feeds the
+every-PR-vs-gated decision); whether the hermetic/egress-blocked run passed; any
+pfBlockerNG behaviour that surprised you (candidate bugs, for separate PRs — NOT fixed
+here); pytest/ruff results; and the go-ahead.

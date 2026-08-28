@@ -1,0 +1,79 @@
+================================================================================
+PHASE 6 PROMPT — Smoke + validation + docs (Accept)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.2, §4, §7 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 6 of 6. Live-VM smoke proving the
+end-to-end behaviour + docs + Status flip. Work in the worktree, one commit, push.
+
+WHY THIS PHASE EXISTS
+The off-box suites pin the build/precedence logic; only the ADR-04 live VM proves a
+real Unbound serves the permit-allow correctly end-to-end. This phase adds that smoke
+(via the ADR-16 mock feed server), the §7 manual checklist, user docs, and flips
+Status -> Accepted on a green fan-out.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/05_Results.txt — the UI steps to configure a
+  permit feed. ALSO skim 02/03/04 Results for the manifest/section contracts. If 05 is
+  missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.2 contract, §4, §7 DoD + reject criteria)
+- CLAUDE.md "Smoke tests (ADR-04)" section IN FULL — probe ON-BOX (drill @127.0.0.1),
+  helpers.unique_domain() ONLY (never RFC 6761 TLDs / HSTS-preload names), block shapes
+  (VIP vs NULL), first response after reload is authoritative, Unbound chroot.
+- tests/smoke/test_smoke_feeds.py + the ADR-16 _MockFeedServer (mock_feeds.feed_url),
+  tests/smoke/fixtures/ + its README; tests/smoke/helpers.py (ensure_dnsbl_vip).
+
+ACTION PLAN
+1. Add a smoke journey (test_smoke_feeds.py or a sibling) using mock feeds — both are
+   DNSBL feed rows in pfblockerngdnsbl/config, distinguished only by the per-row action:
+   - a Deny-action BLOCK feed listing domains B (block-only) and S (shared);
+   - a Permit-action ALLOW feed listing S and a subdomain parent P.
+   Configure both rows (the Permit one via the per-row action=Permit field), update,
+   reload, wait_unbound_ready.
+2. Assert, every case BEFORE-AND-AFTER (mandate):
+   - BEFORE adding the permit feed: S is BLOCKED (its block shape) — proves the block
+     works, so a later "resolves" proves the permit CAUSED it.
+   - AFTER the permit feed: S RESOLVES (not blocked); B is STILL BLOCKED;
+     a subdomain child.P RESOLVES (subdomain-covering);
+     a manual-suppression / manual-block domain still behaves per band 6/5 (operator
+     wins over the permit feed — covers §2.2.3, incl. the band-5 case Phase 1 deferred);
+     a non-listed unique_domain() is unaffected (NOERROR, real answer).
+   - Teardown: remove the permit feed, update/reload, S is BLOCKED again (no whiteDB
+     residue).
+3. Use helpers.unique_domain() for every test domain; probe on-box; compare IPs by
+   value. Keep egress handling per the harness conventions.
+4. Docs: add a short user-facing description of DNSWL / Allow Feeds (what it does, the
+   band-2 precedence — manual whitelist/blocks still win) wherever feed docs live;
+   ensure the §7 manual checklist is current.
+5. Flip ADR-31 Status: Proposed -> Accepted (date) ONLY after the fan-out is green.
+
+CONSTRAINTS
+- Smoke domains: helpers.unique_domain() only; NEVER RFC 6761 TLDs or HSTS-preload.
+- The first DNS response after reload is authoritative — assert it, do not loop.
+- Do NOT weaken any earlier-phase assertion to make smoke pass; a real failure here is
+  a §7 reject signal, not a test to soften.
+
+VERIFICATION (all must pass)
+- python -m pytest                         -> green (off-box)
+- vendor/bin/phpunit / phpcs / phpstan     -> green
+- Smoke fan-out (CE + Plus) for the DNSWL journey -> green (dispatch smoke.yml /
+  smoke-fanout.yml per CLAUDE.md "Smoke tests"). Read smoke-diagnostics on any failure.
+- ui_render still green.
+
+EXPECTED RESULT
+A live VM serves a permit-feed domain as resolvable while still blocking block-only
+domains and honouring operator overrides; the journey is green on CE + Plus; docs +
+checklist updated; ADR-31 Accepted.
+
+COMMIT (single)
+    tests: smoke the DNSWL allow-feed journey end-to-end; accept ADR-31 (ADR-31 P6)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/06_Results.txt
+State: the smoke file + cases; the fan-out result (CE + Plus) with run links; the docs
+touched; confirmation §2.2 (1-5) all proven on a live box (which test pins each); the
+Status flip. Record the landed commit SHAs for the public<->issue linkage. Close-out:
+ADR-31 done; reference issue #324 in the PR body (Fixes #324) when landing.

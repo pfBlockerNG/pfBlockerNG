@@ -1,0 +1,110 @@
+================================================================================
+ADR-61 PHASE 5 GATE RECORD — orchestrator gate, CLAUDE.md "THE GATE"
+================================================================================
+
+VERDICT: PASS
+
+Commit gated: 8c1185ee28eadebc7125f4c4d248dd1b6af5403e
+"pfblockerng: retry stuck apply-stage entries every tick (ADR-61 P5)"
+
+The phase-step workflow's automated verifier completed fully this round
+(re-derived every check with real command output, not summarized from the
+handoff) and returned PASS with all items green and zero blocking reasons.
+I additionally independently spot-checked the highest-risk claims myself
+before accepting (below) rather than accepting the automated verifier at
+face value.
+
+--- Independent spot-checks (this orchestrator, in addition to the automated verifier) ---
+$ vendor/bin/phpunit
+2504/2504, 0 failures — matches both the handoff's and the automated
+verifier's claimed tail exactly.
+
+$ grep -n "dispatched" pfblockerng_extra.inc
+Only the 3 pre-existing cron/dcc/bl dispatch lines set $dispatched=TRUE; the
+new reconciliation step (read directly, lines ~2766-2776) does not appear in
+that list — confirmed by reading the actual source, not just grep absence.
+
+Read the new step directly: unconditional foreach over
+pfb_sync_status_list_open($dbdir), `continue` on any stage !== 'apply'
+(Semantics #5), placed after pfblockerng_ss_refresh() and before the
+log-maintenance tail — exactly as specified, no due/pending gate.
+
+Read pfb_ip_apply_retry() and pfb_dnsbl_apply_retry() directly (pfblockerng.inc):
+- IP: `pfb_pfctl_table_op($item, 'replace', '-f '.escapeshellarg($mirror))`
+  when the aliasdir mirror file exists, else `pfb_pfctl_table_op($item,
+  'kill')` — a sensible, safe fallback for the edge case where the mirror
+  has since been removed (not explicitly requested but a reasonable
+  engineering judgment call, not a concern). Zero direct ledger calls —
+  correctly relies on Phase 2's existing wiring inside pfb_pfctl_table_op().
+- DNSBL: re-checks the EXACT same 5-condition zero-downtime eligibility gate
+  pfb_reload_unbound() itself uses (datapath-equivalent check adapted for a
+  data-only re-flip) before flipping the sentinel, then unconditionally
+  calls pfb_dnsbl_apply_ledger_update() to re-settle the ledger regardless.
+  This is a genuinely narrower, safer operation than a full restart — the
+  deviation's own reasoning (avoiding a live-resolver restart loop every 15
+  minutes for a stuck condition) is sound and consistent with the actual
+  code.
+
+--- Automated verifier's independent re-derivation (accepted after my own spot-check corroborated it) ---
+1. handoff-fields: PASS — all fixed fields present, commit hash matches
+   exactly, pushed to origin.
+2. gate-rerun: PASS — all 7 canonical gates independently re-executed,
+   matching the handoff's claimed tails exactly (php -l 28/28 clean,
+   phpunit 2504/0-fail, phpstan 0 errors, phpcs/narration/version-literal/
+   appliance-python all clean).
+3. red-proof: PASS — genuinely re-executed (not accepted on claim). Revert
+   of pfblockerng_extra.inc alone → 5/6 new tests FAIL with the exact
+   expected reasons (spy counts unchanged, entries stay open, sentinel
+   unchanged) → restore → 6/6 green, full suite 2504 green, working tree
+   clean throughout. TickEntrypointTest A-D re-run unchanged/green.
+4. diff-vs-plan: PASS — every action-plan item independently traced through
+   the actual diff, including confirming Python's own independent RAM-gate
+   in pfb_unbound.py's swap path (so PHP's retry omitting
+   pfb_unbound_py_swap_fits_ram() is safe — Python fails closed on its own).
+5. test-honesty: PASS — all 6 new tests use real production seams (the
+   mock pfctl binary + spy counter file, the real sentinel/applied marker
+   files, the real pfb_dnsbl_apply_ledger_update()/pfb_dnsbl_converged()).
+   Manual mutation kill-gate (commenting out the whole new step) made 5/6
+   tests genuinely go red — non-vacuous, independently reproduced.
+6. conventions: PASS — pfb_ip_apply_retry()/pfb_dnsbl_apply_retry() match
+   their respective sibling naming patterns; the stale "Unwired here — no
+   production caller yet" comment (planItems item 5) is confirmed gone via
+   grep. Grepped the full diff for count/attempt/backoff tokens — zero hits,
+   confirming the ADR's explicit "no attempt counter, no backoff" mandate
+   (SS2.4) is honored to the letter.
+
+--- Deviations (2, both well-reasoned, neither weakens an ADR/CLAUDE.md MUST) ---
+1. DNSBL retry narrowed to a sentinel-re-flip-only operation, NOT the full
+   swap/restart path SS2.4's prose literally names. Reasoning independently
+   verified as sound: pfb_reload_unbound()'s restart fallback costs up to
+   ~30s (a stop-wait loop) plus a real daemon restart — invoking that every
+   15-minute tick for a condition that stays genuinely stuck would restart
+   a live DNS resolver indefinitely, a real production risk the ADR's own
+   text never explicitly weighed for the DNSBL side (it only discusses the
+   IP pfctl case). This was flagged loudly as an ESCALATE-style deviation
+   (per the brief's explicit invitation to do so), not silently narrowed.
+   Carry-forward for Phase 6: a genuinely stuck DNSBL condition (Unbound
+   fully down, real conf/build failure) will NOT self-heal via tick alone —
+   correctly documented for Phase 6's messaging.
+2. IP retry calls pfb_pfctl_table_op() directly instead of
+   pfb_apply_alias_delta() — behaviorally identical to the latter's
+   force_replace=TRUE branch, avoids needless $desired_set/$last_set
+   reconstruction the retry has no other use for. Sound.
+3. (Self-caught, not a defect) the implementer caught and fixed its own
+   draft comment citing "RESULTS/05_Results.txt" before committing — exactly
+   the kind of self-review the brief asked for.
+
+--- SKIPPED ---
+- None.
+
+--- CARRY-FORWARD FOR PHASE 6 (confirmed accurate) ---
+- Entries clear the SAME tick a fix becomes visible (within one
+  pfb_tick_interval, default 15 min) — Phase 6's widget just needs a plain
+  re-read of pfb_sync_status_list_open() + pfb_py_sync_status_list_open()
+  on page load, no polling/debounce needed.
+- No new ledger keys introduced — Phase 6's icon/reporting-list vocabulary
+  is unchanged from Phases 1-4.
+- A genuinely stuck DNSBL apply entry will NOT always self-heal via the
+  tick alone (deviation #1) — Phase 6 should not assume every DNSBL apply
+  failure clears automatically; the existing message already points at
+  error.log for the operator.

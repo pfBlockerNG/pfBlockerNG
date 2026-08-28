@@ -1,0 +1,282 @@
+name: Top1M Provider Health Check
+
+# Weekly health-check of every external Top1M provider we ship (issue #884,
+# generalized to a provider framework by ADR-59). We do NOT vendor these
+# lists (they're up to ~10M rows, runtime-downloaded per box) -- this is
+# validate-only, the guard that would have caught the Alexa Top1M source
+# rotting silently (its hardcoded URL died years ago; cleaned up in #877).
+#
+# scripts/misc/check_top1m_providers.py --extract reads every provider
+# straight out of pfb_top1m_providers()'s descriptor table
+# (pfblockerng_extra.inc), so adding/removing a provider row needs no edit
+# here. --check-url fetches + validates one URL (a real list, plausible row
+# count, not stale) and exits nonzero if unhealthy. A TOKEN provider (its
+# descriptor's 'auth' needs a header, e.g. Cloudflare Radar) is validated only
+# when its matching repo secret is configured (env CLOUDFLARE_RADAR_TOKEN
+# below) -- absent secret ⇒ the leg visibly SKIPs and exits 0, it never fails
+# the run merely for lacking a secret (ADR-59 S2.7).
+
+on:
+  # Weekly, Monday 07:00 UTC (an hour after tld-refresh, different concern).
+  schedule:
+    - cron: "0 7 * * 1"
+
+  workflow_dispatch:
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Discover every provider from pfb_top1m_providers() ────────────────
+  discover:
+    name: Discover Top1M providers
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.extract.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Extract providers
+        id: extract
+        run: |
+          set -eu
+          MATRIX=$(python3 scripts/misc/check_top1m_providers.py --extract)
+          echo "Discovered providers:"
+          printf '%s\n' "$MATRIX" | python3 -m json.tool
+
+          # The real floor guard lives in check_top1m_providers.py --extract
+          # itself (--min-providers, default: the committed provider count,
+          # #908) -- a too-small matrix already made `set -eu` abort this
+          # step at the `MATRIX=$(...)` line above with a non-zero exit, so a
+          # partial extractor breakage never reaches this point. This is a
+          # secondary belt-and-suspenders check for a literal zero/empty
+          # matrix (the exact silent death this watchdog exists to catch,
+          # #884 review).
+          COUNT=$(jq 'length' <<<"$MATRIX")
+          [ "$COUNT" -ge 1 ] || { echo "::error::no top1m providers discovered -- extractor may be broken"; exit 1; }
+
+          # printf (not echo) avoids echo-escaping quirks on structured JSON.
+          printf 'matrix=%s\n' "$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Health-check each provider independently ───────────────────────────
+  check:
+    name: Check (${{ matrix.name }})
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check provider
+        env:
+          URL: ${{ matrix.url }}
+          CONTAINER: ${{ matrix.container }}
+          SECRET_ENV: ${{ matrix.secret_env }}
+          AUTH_HEADER: ${{ matrix.auth_header }}
+          AUTH_SCHEME: ${{ matrix.auth_scheme }}
+          # The one token secret currently wired (Cloudflare Radar). A future
+          # token provider adds its own "NAME: ${{ secrets.NAME }}" line here,
+          # matching the env-var name check_top1m_providers.py derives from
+          # its descriptor's 'label' (see _secret_env_from_label) -- no other
+          # workflow change needed.
+          CLOUDFLARE_RADAR_TOKEN: ${{ secrets.CLOUDFLARE_RADAR_TOKEN }}
+        run: |
+          set -eu
+          args=(--check-url "$URL" --container "$CONTAINER")
+          if [ -n "$SECRET_ENV" ]; then
+            args+=(--secret-env "$SECRET_ENV" --auth-header "$AUTH_HEADER" --auth-scheme "$AUTH_SCHEME")
+          fi
+          python3 scripts/misc/check_top1m_providers.py "${args[@]}"
+
+  # ── 3. On a green run, close the matching open tracking issue ─────────────
+  recovery:
+    name: Close the recovered Top1M provider tracker
+    needs: check
+    if: success()
+    concurrency:
+      group: top1m-provider-alert
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Close the recovered tracking issue
+        run: |
+          set -euo pipefail
+          TITLE="[top1m-healthcheck] provider URL unhealthy"
+          MATCH=$(gh issue list --repo "$REPO" --state open \
+            --label "top1m-provider" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
+
+          if [ -z "$MATCH" ]; then
+            echo "[noop] No open Top1M provider tracking issue"
+            exit 0
+          fi
+
+          FAILURE_RUN=$(gh issue view "$MATCH" --repo "$REPO" --json body \
+            --jq '(.body // "")
+              | if contains("<!-- failure-run:") | not then "legacy"
+                elif (split("<!-- failure-run:") | length) != 2 then "malformed"
+                else ([capture("<!-- failure-run: (?<run>[0-9]+):(?<attempt>[0-9]+) -->")]
+                  | if length == 1 then "\(.[0].run) \(.[0].attempt)" else "malformed" end)
+                end')
+          if [ "$FAILURE_RUN" = "malformed" ]; then
+            echo "[noop] Tracking issue has malformed failure-run metadata"
+            exit 0
+          fi
+          if [ -n "$FAILURE_RUN" ] && [ "$FAILURE_RUN" != "legacy" ]; then
+            FAILURE_RUN_NUMBER=${FAILURE_RUN%% *}
+            FAILURE_RUN_ATTEMPT=${FAILURE_RUN#* }
+            case "${FAILURE_RUN_NUMBER}${FAILURE_RUN_ATTEMPT}" in
+              ""|*[!0-9]*)
+                echo "[noop] Tracking issue has malformed failure-run metadata"
+                exit 0
+                ;;
+            esac
+            if [ "${#FAILURE_RUN_NUMBER}" -gt 18 ] || [ "${#FAILURE_RUN_ATTEMPT}" -gt 18 ]; then
+              echo "[noop] Tracking issue has oversized failure-run metadata"
+              exit 0
+            fi
+            if [ "$RUN_NUMBER" -lt "$FAILURE_RUN_NUMBER" ] ||
+              { [ "$RUN_NUMBER" -eq "$FAILURE_RUN_NUMBER" ] &&
+                [ "$RUN_ATTEMPT" -le "$FAILURE_RUN_ATTEMPT" ]; }; then
+              echo "[noop] Successful run is not newer than tracking issue failure"
+              exit 0
+            fi
+          fi
+
+          echo "[close] Closing recovered tracking issue #${MATCH}"
+          gh issue close "$MATCH" --repo "$REPO" --reason completed \
+            --comment "Recovered automatically after successful run: ${RUN_URL}"
+
+  alert:
+    name: Alert on unhealthy provider(s)
+    needs: check
+    if: failure()
+    concurrency:
+      group: top1m-provider-alert
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      issues: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      # See the "check" job -- same secret, same derivation rule.
+      CLOUDFLARE_RADAR_TOKEN: ${{ secrets.CLOUDFLARE_RADAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Re-check every provider to build the failure report
+        id: report
+        # This re-checks every provider fresh at alert-time rather than
+        # reusing the failing `check` job's per-leg result, so a leg that
+        # failed transiently and has since recovered can list all-OK here on
+        # a run that is still red overall. Accepted simplicity trade-off --
+        # avoids plumbing each matrix leg's pass/fail back into this job.
+        run: |
+          set -eu
+          python3 scripts/misc/check_top1m_providers.py --extract > /tmp/providers.json
+
+          BODY_FILE=$(mktemp)
+          {
+            printf '<!-- failure-run: %s:%s -->\n\n' "$RUN_NUMBER" "$RUN_ATTEMPT"
+            printf '## Top1M provider health check failed\n\n'
+            printf 'Run: %s\n\n' "$RUN_URL"
+          } > "$BODY_FILE"
+
+          COUNT=$(jq 'length' /tmp/providers.json)
+          i=0
+          while [ "$i" -lt "$COUNT" ]; do
+            NAME=$(jq -r ".[$i].name" /tmp/providers.json)
+            URL=$(jq -r ".[$i].url" /tmp/providers.json)
+            CONTAINER=$(jq -r ".[$i].container" /tmp/providers.json)
+            SECRET_ENV=$(jq -r ".[$i].secret_env" /tmp/providers.json)
+            AUTH_HEADER=$(jq -r ".[$i].auth_header" /tmp/providers.json)
+            AUTH_SCHEME=$(jq -r ".[$i].auth_scheme" /tmp/providers.json)
+            i=$((i + 1))
+
+            args=(--check-url "$URL" --container "$CONTAINER")
+            if [ -n "$SECRET_ENV" ]; then
+              args+=(--secret-env "$SECRET_ENV" --auth-header "$AUTH_HEADER" --auth-scheme "$AUTH_SCHEME")
+            fi
+
+            if python3 scripts/misc/check_top1m_providers.py "${args[@]}" > /tmp/check_out.txt 2>&1; then
+              if grep -q '^SKIP ' /tmp/check_out.txt; then
+                printf -- "- SKIPPED **%s** (\`%s\`) -- %s\n" "$NAME" "$URL" "$(cat /tmp/check_out.txt)" >> "$BODY_FILE"
+              else
+                printf -- "- OK **%s** (\`%s\`)\n" "$NAME" "$URL" >> "$BODY_FILE"
+              fi
+            else
+              {
+                printf -- "- FAILING **%s** (\`%s\`)\n\n\`\`\`text\n" "$NAME" "$URL"
+                cat /tmp/check_out.txt
+                printf '```\n\n'
+              } >> "$BODY_FILE"
+            fi
+          done
+
+          printf '_Opened automatically by the top1m-healthcheck workflow. Closes automatically after the next successful run._\n' >> "$BODY_FILE"
+          echo "body_file=${BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure the tracking label exists
+        run: |
+          gh label create "top1m-provider" \
+            --color "b60205" \
+            --description "Automated Top1M provider health-check tracking" \
+            --repo "$REPO" 2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        run: |
+          # pipefail: without it a failed `gh issue list` is masked by the
+          # jq/sort pipeline below and the dedup opens duplicates (issue #960,
+          # the PR #933 default-shell class).
+          set -euo pipefail
+          TITLE="[top1m-healthcheck] provider URL unhealthy"
+
+          # Scope to open issues with the tracking label and lift the default
+          # 30-item cap so an older open issue is updated, not duplicated.
+          MATCH=$(gh issue list --repo "$REPO" --state open \
+            --label "top1m-provider" --limit 500 --json number,title,state \
+            | jq -r --arg t "$TITLE" \
+                '[.[] | select(.title == $t)] | sort_by(.number)
+                 | .[0].number // empty')
+
+          if [ -n "$MATCH" ]; then
+            echo "[update] Updating tracking issue #${MATCH}"
+            gh issue edit "$MATCH" --repo "$REPO" --body-file "${{ steps.report.outputs.body_file }}"
+          else
+            echo "[create] Opening tracking issue"
+            gh issue create \
+              --repo "$REPO" \
+              --title "$TITLE" \
+              --body-file "${{ steps.report.outputs.body_file }}" \
+              --label "top1m-provider" \
+              --type Bug
+          fi

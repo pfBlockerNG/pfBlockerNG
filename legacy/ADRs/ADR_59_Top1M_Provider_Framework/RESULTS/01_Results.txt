@@ -1,0 +1,128 @@
+================================================================================
+PHASE 1 RESULTS — Extract the provider descriptor table (behaviour-preserving)
+================================================================================
+
+WHAT CHANGED
+
+- New function `pfb_top1m_providers(): array`, added in
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc, directly after the
+  Top1mSource enum block (both www/ and .inc reach it: pfblockerng.inc
+  require_once's pfblockerng_extra.inc conditionally, pfblockerng.php requires
+  both directly).
+
+  Signature: `function pfb_top1m_providers(): array`
+  Returns an array keyed by Top1mSource::value ('tranco' | 'cisco'); each entry:
+
+    [
+      'url'       => string,          // literal download URL
+      'container' => 'zip',           // download container (only zip exists yet)
+      'parse'     => 'rank_domain',   // parser mode (only rank_domain exists yet)
+      'auth'      => 'none',          // auth mode (only none exists yet)
+      'label'     => string,          // human-readable name
+      'licence'   => '',              // licence/attribution note (empty for both)
+    ]
+
+  Phase 1 carries exactly 'tranco' and 'cisco', with the CURRENT literal URLs
+  copied verbatim:
+    - tranco: https://tranco-list.eu/top-1m.csv.zip
+    - cisco:  https://s3-us-west-1.amazonaws.com/umbrella-static/top-1m.csv.zip
+
+- Rewired src/usr/local/www/pfblockerng/pfblockerng.php's TOP1M URL selection
+  (was the `if ($pfb['dnsbl_top1m_type'] === Top1mSource::Tranco) {...} else
+  {...}` block at line 162) to a single lookup:
+
+    $pfb['extras'][2]['url'] = pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value]['url'];
+
+  `$pfb['dnsbl_top1m_type']` is already a Top1mSource enum instance by this
+  point (set in pfblockerng.inc via `PfbConfig::read('alexa_type')`, loaded
+  before pfblockerng.php reaches this code) — `->value` gives the backed
+  string ('tranco'/'cisco') that indexes the table. The extras filename/type/
+  folder lines are untouched.
+
+- pfblockerng_top1m() and pfb_download() NOT touched (reserved for Phases 2/3
+  per the ADR).
+
+TESTS
+
+New oracle: tests/php/Top1mProvidersTest.php (#[CoversFunction('pfb_top1m_providers')]):
+  - testTrancoUrlIsPinnedToThePreChangeLiteral — pins tranco's resolved URL to
+    the exact pre-ADR-59 literal.
+  - testCiscoUrlIsPinnedToThePreChangeLiteral — same for cisco.
+  - testOnlyTrancoAndCiscoAreDescribedInPhase1 — table has exactly these two
+    keys (no provider added yet).
+  - testBothProvidersDescribeTodaysZipRankDomainNoAuthShape — pins the
+    container/parse/auth fields Phase 2+ will read, so a later phase can't
+    silently change what Phase 1 shipped.
+
+This is a behaviour-preserving refactor (CLAUDE.md exception): the oracle pins
+EXISTING behaviour and stays green across the change — no red→green cycle, but
+mandatory and byte-identity-proving per the ADR's "Requirements #1: Tranco/Cisco
+behave byte-identically to today".
+
+VERIFICATION (all run inside the worktree)
+
+1. `/opt/homebrew/bin/php -l` on all three touched/added files → clean:
+   - src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc: No syntax errors detected
+   - src/usr/local/www/pfblockerng/pfblockerng.php: No syntax errors detected
+   - tests/php/Top1mProvidersTest.php: No syntax errors detected
+
+2. `composer install` (vendor/ was absent in this worktree) then
+   `vendor/bin/phpunit`:
+   Tests: 2305, Assertions: 18435, Failures: 3, Skipped: 4.
+   The 3 failures are exactly the pre-existing, environment-only
+   `open_basedir` sandbox failures called out in the task brief:
+     - DnsblPrefetchTest::test_prefetch_leaves_the_store_unseeded_when_a_grep_pass_pattern_file_cannot_be_created
+     - IpPrefetchTest::test_grep_lines_returns_null_when_the_pattern_file_cannot_be_created
+     - IpPrefetchTest::test_prefetch_leaves_the_miss_round_unseeded_when_round_a_pattern_file_cannot_be_created
+   No other failures. The new Top1mProvidersTest's 4 tests are green.
+
+3. `vendor/bin/phpcs --standard=phpcs.xml.dist src/` at the default 128M OOM'd
+   (`PHP_CodeSniffer_Fatal error: Allowed memory size of 134217728 bytes
+   exhausted`, confirmed environmental per the task brief, not a violation).
+   Re-run at 1G: `/opt/homebrew/bin/php -d memory_limit=1G vendor/bin/phpcs
+   --standard=phpcs.xml.dist src/` → clean (no output, exit clean; PFBL-01 /
+   RequireConfigGateway / UppercaseBooleanLiteral all green — the new function
+   is a pure data table, no config_*_path/exec/json_encode calls, no boolean
+   literals to case).
+
+4. `/opt/homebrew/bin/php -d memory_limit=1G vendor/bin/phpstan analyse
+   --memory-limit=1G` → `[OK] No errors`.
+
+5. Python untouched — `python -m pytest` not run (no src/**/*.py or tests/*.py
+   changed).
+
+SELF-REVIEW (git diff vs phase objectives)
+
+`git diff --stat` on src/: exactly the two files named in the ADR's Phase 1
+plan — pfblockerng_extra.inc (+32/-0) and pfblockerng.php (+2/-6). Confirmed
+by reading the full diff: only the new `pfb_top1m_providers()` table and the
+pfblockerng.php URL-selection lookup changed. No provider added beyond
+tranco/cisco, no change to pfblockerng_top1m() or pfb_download(), no parser or
+extractor edit. Plus the new test file (untracked, added).
+
+DEVIATIONS
+
+None from the phase prompt's ACTION PLAN/CONSTRAINTS. One judgment call not
+spelled out verbatim in the prompt: `pfb_top1m_providers()` lives in
+pfblockerng_extra.inc (not pfblockerng.inc) — chosen because it sits directly
+beside the Top1mSource enum it's keyed by, and pfblockerng_extra.inc is
+already require_once'd by BOTH pfblockerng.inc (conditionally, line 31) and
+pfblockerng.php (unconditionally, line 60), so both consumers reach it with no
+new include wiring. It is also outside RequireConfigGateway's sniff scope
+(which excludes pfblockerng_extra.inc/pfblockerng_migrate.inc), which is
+irrelevant here since the function does no config_*_path calls anyway.
+
+GO-AHEAD FOR PHASE 2
+
+Ready. Phase 2 ("Generalize the parser to the descriptor") can have
+pfblockerng_top1m() call `pfb_top1m_providers()[$pfb['dnsbl_top1m_type']->value]`
+and read its `parse`/`container` fields; for the `rank_domain`/`zip` combination
+(the only one that exists after this phase) the output must stay byte-identical
+to today, so the existing `Top1mPreserveOnEmptyFeedTest` oracle must stay green
+unmodified. The `label`/`licence` fields (present now, unused until later UI
+phases) and the table shape itself are stable and ready to extend with new
+provider rows without touching Phase 1's tranco/cisco entries.
+
+COMMIT
+
+pfblockerng: introduce the TOP1M provider descriptor table (ADR-59 P1)

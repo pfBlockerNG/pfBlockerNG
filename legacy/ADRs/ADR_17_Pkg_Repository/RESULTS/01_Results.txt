@@ -1,0 +1,166 @@
+================================================================================
+ADR-17 — Phase 1 RESULTS (the release -> repository -> install flow; KILL-GATE)
+================================================================================
+
+VERDICT: GO. Proven GREEN on a live pfSense CE 2.8.1 VM — smoke.yml run
+         27031334263 (-m repo), conclusion SUCCESS, "3 passed, 230 deselected":
+           test_install_from_our_repo_lands_all_files            PASSED
+           test_precedence_ours_higher_priority_wins             PASSED
+           test_precedence_decoy_higher_priority_wins            PASSED
+         A real box installs pfBlockerNG from a self-hosted, NONE-signed,
+         third-party file:// `pkg` repo with NO `-f` (origin pkg query %R ==
+         pfblockerng-devel), deps resolve, every registered file lands on-box, and
+         cross-repo precedence favours our build by `priority:` in BOTH directions.
+         => ADR-17 premise HOLDS; Phase 2 (scripts/build-repo.sh) is cleared. Five
+         live dispatches got here (issues + fixes logged below); no green fabricated.
+
+KEY FINDING (corrects ADR §1 Context 3): repository PRIORITY dominates version.
+         The VM showed a competing repo at priority 200 / version _1 BEAT ours at
+         priority 99 / version _9 — the higher-PRIORITY repo won despite the lower
+         version. So the ADR's "highest version wins, priority breaks ties" is
+         FALSIFIED; the real lever is `priority:`. This is GOOD for the ADR — our
+         repo just needs a priority above the base Netgate `pfSense` repo and it
+         wins regardless of version (more robust than version discipline).
+         => Phase 4 `add-repo.sh` MUST set our repo `priority:` above the pfSense
+            repo. Phase 6 MUST correct the §1/§2 precedence text.
+
+--------------------------------------------------------------------------------
+DESIGN, AFTER TWO MAINTAINER STEERS
+--------------------------------------------------------------------------------
+Steer 1: the release->repo->install path is a DISTRIBUTION concern; do NOT conflate
+it with the ADR-04 smoke suite (runtime behaviour). => own marker `repo` (not
+`smoke`), own file `tests/smoke/test_repo_install.py`, own dispatch
+`repo-install.yml` (reuses the smoke harness via `pytest_marker`), deselected from
+`-m smoke` (verified: "2 deselected"). Dropped the DNSBL functional probe; added a
+files-present sweep.
+
+Steer 2: "be able to disable the disablement of the egress." => stop fighting the
+egress block (the earlier cut DISABLED the Netgate repos to cope with it). Instead
+run this flow with egress OPEN so the REAL Netgate repo is reachable and genuinely
+competes. The flow now forces egress open (`_ensure_egress_open`, an unconditional
+mirror of helpers.unblock_egress) and no longer disables anything. Dropped the
+re-versioning / decoy / zstd machinery entirely — priority (not version) is the
+lever, and the real `pfSense` repo (not a re-versioned decoy) is the competitor.
+
+--------------------------------------------------------------------------------
+WHAT THIS FLOW ASSERTS (tests/smoke/test_repo_install.py, marker `repo`)
+--------------------------------------------------------------------------------
+3 tests, BDD Given/When/Then, intent-named, all reading EFFECTIVE state. The
+competitor for the precedence pair is a controlled file:// `netgate-decoy` repo
+serving the SAME package (the real Netgate `pfSense` repo does NOT offer `-devel`
+in this hermetic CE image — proven by run 4 below — so it cannot be the competing
+provider). The real Netgate repos are LEFT ENABLED (egress open) but set below
+ours/decoy on priority so they never interfere.
+
+  test_install_from_our_repo_lands_all_files            (the core: distribution works)
+      Given the package ABSENT, our NONE-signed file:// repo enabled at a priority
+        ABOVE the real `pfSense` repo (read live via `pkg -vv`, then +100),
+      When `pkg install -y pfSense-pkg-pfBlockerNG-devel` runs (NO -r, NO -f),
+      Then it installs from OUR repo (pkg query %R == pfblockerng-devel), no "Missing
+        dependency", AND every file pkg registers (pkg info -l) is present (> 50).
+
+  test_precedence_ours_higher_priority_wins             (ours wins by priority)
+      ours @ pfSense+200, decoy @ pfSense+100 (both file://, same package).
+      => ours wins (pkg query %R == pfblockerng-devel) — the production mechanism.
+
+  test_precedence_decoy_higher_priority_wins            (priority-driven counter)
+      ours @ pfSense+100, decoy @ pfSense+200.
+      => the decoy wins (pkg query %R == netgate-decoy) — proving "ours wins" is
+         priority-driven (not always-ours); a higher-priority competitor shadows us.
+
+All assert the BEFORE state (package absent) before installing. The VM is left
+clean (fixture `finally`: pkg delete + rm repo conf/dir).
+
+--------------------------------------------------------------------------------
+MECHANISM
+--------------------------------------------------------------------------------
+1. The branch .pkg (build-pkg-linux.yml -> build-pkg-portable.py; FreeBSD:15:amd64
+   / php83 / py311) is handed in via SMOKE_PKG. NOT re-invoked, NOT re-versioned —
+   the real release .pkg is published as-is (priority is the lever).
+2. The guest's OWN `pkg repo` (libpkg) builds the catalog from that one .pkg;
+   served via on-box file:// (hermetic transport; no second HTTP server — a CLAUDE.md
+   constraint). The Pages-style HTTP catalog is Phase 2/3; the premise is orthogonal
+   to transport.
+3. Repo conf /usr/local/etc/pkg/repos/pfblockerng-devel.conf: signature_type: none,
+   enabled: yes, priority set per-case relative to the live pfSense-repo priority.
+   The base Netgate repos are LEFT ENABLED (egress open => reachable).
+
+--------------------------------------------------------------------------------
+THE THREE LIVE DISPATCHES AND WHAT THEY TAUGHT — log-proven
+--------------------------------------------------------------------------------
+Run 27026904053: all repo tests FAILED at `pkg update` with pytest "Failed:
+  Timeout >30.0s". CAUSE: the smoke job caps each test BODY at --timeout=30; long
+  live-VM tests override with @pytest.mark.timeout(N) (the ADR-10 tests do). The new
+  tests lacked it. FIX: @pytest.mark.timeout(600) per case (timeout_func_only=true
+  caps the body, not the fixture).
+
+Run 27027796087: ran for minutes (timeout fix worked); FAILED at `pkg update -f`
+  rc=1. Log was decisive — our file:// repo updated CLEANLY ("pfblockerng-devel
+  repository update completed. 1 packages processed"); rc=1 came only from "Unable
+  to update repository pfSense / pfSense-core" because that run rode the FULL -m
+  smoke matrix whose CaseContext had the egress blocked. CONCLUSION: our third-party
+  repo IS honored; the failure was the egress block + repo conflation, not the
+  premise. => Steers 1 & 2: split into the distinct `repo` flow with egress OPEN.
+
+Run 27029830076: ISOLATED `-m repo` (2 deselected-from-smoke became 3-then-2 repo
+  tests). install reached the files-present sweep (so install SUCCEEDED) but the
+  sweep FAILED: `sh: Syntax error: "do" unexpected` — a `/bin/sh -c '<while...>'`
+  argument was re-tokenised by ssh's remote login shell. FIX: pipe the sweep SCRIPT
+  via STDIN to a remote `/bin/sh` (like write_repo_conf's tee) — no quoting. The
+  precedence test in this run also exposed the KEY FINDING (priority > version)
+  above; the test now pins the priority model directly.
+
+Run 27030736106 (egress-open redesign): the CORE test
+  (install-from-our-repo + all files present) PASSED — third-party NONE-signed
+  file:// repo install, no -f, every file landed. The counter-case
+  (test_netgate_repo_wins_when_ours_lower_priority) FAILED: with ours at priority
+  -100 vs pfSense 0, OURS STILL WON ("installed from 'pfblockerng-devel'"). So the
+  real Netgate `pfSense` repo does NOT serve an installable `-devel` in this
+  hermetic CE image (guest DNS sandboxed to the mock and/or the CE release repo
+  carries only the stable pkg) — it cannot be the competing provider, and a
+  real-Netgate counter-case is not testable here. FIX (current code): keep the real
+  Netgate repos ENABLED (egress open) but prove the priority mechanism with a
+  controlled file:// `netgate-decoy` repo serving the SAME package; set ours/decoy
+  priorities ABOVE pfSense so the outcome is deterministic regardless of Netgate.
+  This honors the egress steer (nothing disabled) AND gives a real ours-vs-competitor
+  priority proof.
+
+--------------------------------------------------------------------------------
+LOCAL VERIFICATION (all green; the live verdict is the only thing outstanding)
+--------------------------------------------------------------------------------
+  * `python -m pytest` (default) -> 1117 passed, UNCHANGED (tests/smoke --ignore'd).
+  * `ruff check` / `ruff format --check` -> clean.
+  * `-m repo --collect-only` -> 2 collected; `-m smoke --collect-only` -> 0 (2
+    deselected): out of the smoke matrix.
+  * smoke.yml + repo-install.yml parse; smoke.yml exposes `pytest_marker` (default
+    smoke, byte-identical smoke run); repo-install.yml calls it with marker=repo +
+    secrets: inherit. The zstd host-tool line was reverted (no more re-versioning).
+  * pre-commit hook (ruff/pytest/mypy/markdownlint/sh/php) -> green.
+
+--------------------------------------------------------------------------------
+WHAT PHASE 2 MUST REPRODUCE in scripts/build-repo.sh
+--------------------------------------------------------------------------------
+  * `pkg repo <dir>` with NO signing key => a NONE-signed catalog. The guest
+    accepted it; Linux libpkg must too (the Phase-2 Linux-vs-FreeBSD-VM decision).
+  * Repo conf fields that worked: url file://<dir> (HTTPS+${ABI} in prod),
+    signature_type: none, enabled: yes, and a `priority:` ABOVE the pfSense repo
+    (the real precedence lever — Phase 4 `add-repo.sh` must set this).
+  * No re-version — the real release .pkg is published unchanged.
+
+--------------------------------------------------------------------------------
+GO-AHEAD / NEXT
+--------------------------------------------------------------------------------
+repo-install.yml is dispatchable only once merged to devel (GitHub registers
+workflow_dispatch from the default branch). Until then, validate via the smoke
+harness with the marker (the branch's smoke.yml carries the input):
+    gh workflow run smoke.yml --ref adr/17-pkg-repository -f pytest_marker=repo
+    gh run list --workflow=smoke.yml --branch adr/17-pkg-repository
+    gh run watch <id>
+Confirm:
+  * test_install_from_our_repo_lands_all_files PASSED (origin == pfblockerng-devel;
+    > 50 files present) — ALREADY GREEN in run 27030736106.
+  * test_precedence_ours_higher_priority_wins PASSED (origin == pfblockerng-devel)
+  * test_precedence_decoy_higher_priority_wins PASSED (origin == netgate-decoy)
+If green => Phase 1 = GO, Phase 2 (scripts/build-repo.sh) cleared, and record the
+priority-model correction for Phases 4 + 6. If the box refuses the third-party repo
+for install, or priority cannot favour our build => the §7 REJECT outcome.

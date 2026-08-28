@@ -1,0 +1,93 @@
+================================================================================
+PHASE 7 PROMPT — Single-walk fusion (OPTIONAL performance optimization)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-6 committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing the OPTIONAL Phase 7. The
+correctness goal is already met after Phase 6; this phase is purely about
+reducing per-query work by collapsing the separate category lookups into a
+single trie descent. Skip this phase if profiling does not justify it, or if it
+would reduce clarity — note that decision in the ADR and move to Phase 8.
+
+WHY THIS PHASE EXISTS
+After Phase 6 each enabled category still triggers its own descent of the trie
+(data, zone, white, and on the noAAAA/AAAA path, noaaaa). For a domain with N
+labels that is up to ~N node-steps per category. Splitting the query into labels
+ONCE and descending ONCE, collecting every category hit along the path, removes
+the redundant traversals — the main motivation for a trie over the dicts.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 1 (problem: redundant walks) and Section 2.
+- .ADRs/ADR_01_Trie/RESULTS/06_Results.txt — Phase 6 handoff: swapped call sites,
+  noAAAA memo decision, and golden/equivalence test confirmation.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    * trie lookup wrappers from Phase 4 and the descent primitive they share.
+    * evaluate_domain() — the order in which data/zone/white are consulted and
+      how the result feeds isFound/b_type/b_eval/log_type.
+- tests/test_pfb_unbound.py — golden + equivalence tests (the safety net).
+
+ACTION PLAN (ordered)
+
+1. Add a fused descent that, given a query name, splits labels once (reverse
+   order) and walks the trie a single time, recording as it goes:
+     - the deepest exact node (for data),
+     - the deepest/shallowest zone-wildcard ancestor as required to reproduce
+       find_zone_match's matched-parent semantics,
+     - whitelist hits subject to the tld_seg gate,
+     - (if used on this path) noaaaa exact/parent and hsts state.
+   Return a small struct with the per-category results plus, for zone, the
+   matched-parent domain string.
+
+2. Refactor evaluate_domain to consult this single fused result INSTEAD of
+   calling trie_lookup_exact / trie_lookup_zone / trie_lookup_white separately,
+   preserving the EXACT precedence and field-setting order from Phase 2
+   (data before zone; whitelist applied after a positive find; b_eval from the
+   matched parent for zone; log_type rules unchanged).
+
+3. Keep the per-category lookup wrappers (trie_lookup_*) available — the
+   equivalence tests from Phase 4 still use them as the oracle. Do not delete
+   them here.
+
+4. Be careful with feature gates: only collect/act on a category when its
+   pfb[...] enable flag is set, matching current behavior. The single walk may
+   collect everything, but evaluate_domain must IGNORE categories whose feature
+   is disabled, exactly as before.
+
+5. (Recommended) Add a micro-benchmark or a comment documenting the before/after
+   traversal count for a representative multi-label domain, to justify the
+   change. This is not a CI gate, just evidence.
+
+6. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- ZERO behavior change versus Phase 6. The fused path must produce identical
+  DnsblDecision results for all inputs.
+- Keep the fused walker PURE (trie + name + config in; result out).
+- Do not sacrifice the contract for speed: tld_seg gate, hsts -2 stride, zone
+  matched-parent string, noaaaa parent-only all still hold.
+- stdlib only; 4-space indent; type hints.
+
+VERIFICATION
+- `python -m pytest` → all green. The Phase 3 golden tests and Phase 4
+  equivalence tests must pass unchanged — they prove the fused path matches both
+  the per-category trie lookups and the original dict behavior.
+- `ruff check .` / `ruff format .` → clean.
+
+EXPECTED RESULT / OBSERVATIONS
+- One trie descent per query resolves data/zone/white (and noaaaa/hsts where
+  applicable). Measured traversal steps drop for multi-label domains.
+- Behavior identical; tests untouched and green.
+
+COMMIT
+    pfb_unbound: fuse per-category trie lookups into a single descent
+Push policy as in earlier phases. If you SKIP this phase, instead record in
+.ADRs/ADR_01_Trie/ADR.md why fusion was deferred, and proceed to Phase 8.
+
+HANDOFF
+Report the fused descent signature, the before/after traversal evidence, and
+confirm golden + equivalence tests pass. Phase 8 removes the dead dicts/helpers.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/07_Results.txt`.

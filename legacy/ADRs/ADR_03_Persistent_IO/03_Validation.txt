@@ -1,0 +1,91 @@
+================================================================================
+PHASE 3 PROMPT — Integration validation + manual smoke (FINAL PHASE)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_03_Persistent_IO/ADR.md   (read §4 Requirements, §7 Definition of done)
+================================================================================
+
+ROLE
+You are on `adr/03` performing the final phase of ADR-03. Phases 1–2 each shipped
+their own golden equivalence tests; this phase adds the CROSS-CUTTING validation
+(concurrency, fault recovery, performance, shutdown durability) and prepares the
+manual smoke test. Inline on `adr/03`, one commit, push directly. This phase closes
+the ADR.
+
+WHY THIS PHASE EXISTS
+The per-phase golden tests prove "same output for a fixed sequence." They do NOT
+prove the harder properties this design rests on: that a live PHP writer and the
+persistent Python WAL connection coexist; that reconnect-on-fault loses nothing;
+that the change is actually a perf win; and that `deinit` drains+flushes. None can
+be proven by a live Unbound (absent in CI), so we test what we can in pytest and
+hand the rest to a maintainer smoke run.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_03_Persistent_IO/RESULTS/02_Results.txt — DB + logging subsystems are in
+  place. If missing, Phase 2 is not complete; STOP and report.
+- .ADRs/ADR_03_Persistent_IO/ADR.md
+- The DB worker / connection manager (Phase 1) and the logging pipeline (Phase 2) in
+  src/usr/local/pkg/pfblockerng/pfb_unbound.py.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: pfBlockerNG_clearsqlite() ~L6743,
+  pfb_open_sqlite() ~L5807 (WAL/busy_timeout from P1).
+- benchmarks/  (ADR-01 left a benchmark harness; reuse its structure).
+- tests/conftest.py, tests/test_pfb_unbound.py.
+- CLAUDE.md.
+
+ACTION PLAN
+1. CONCURRENCY (PHP coexistence): a test that, under WAL, runs Python counter
+   increments while a SECOND sqlite connection performs `UPDATE resolver SET
+   totalqueries=0` / `UPDATE dnsbl SET counter=0` (mimicking pfBlockerNG_clearsqlite)
+   interleaved with the flushes. Assert: (a) no `database is locked` raised (busy_timeout
+   honoured), (b) the reset takes effect, (c) post-reset increments are counted
+   (relative-increment correctness), (d) no lost/duplicated cache rows.
+2. FAULT INJECTION (reconnect-on-fault): delete the cache DB file mid-run (the
+   write-error path) and continue issuing writes; assert the manager reconnects,
+   re-creates the table, and subsequent ops are not lost. Repeat with a transient
+   lock held by another connection to exercise busy_timeout/retry.
+3. PERFORMANCE: a benchmark (in benchmarks/) comparing OLD (per-call connect /
+   open-per-line) vs NEW (persistent + batched) on: number of `connect()`/`open()`
+   (and WatchedFileHandler `stat()`) calls, and write throughput for a representative
+   query mix. Record results in the handoff (ratios are the signal). Confirm the
+   stat()-per-line cost of WatchedFileHandler is acceptable; note if not.
+4. SHUTDOWN DURABILITY: a test that enqueues writes/log lines then calls deinit and
+   asserts the DB batch was flushed and both queues drained (no loss on graceful
+   stop). Confirm an abrupt stop loses at most the un-flushed delta window.
+5. MANUAL SMOKE (maintainer-owned; record in RESULTS/03_Results.txt): deploy via
+   scripts/deploy.sh to a live pfSense box and verify on a running Unbound:
+     [ ] DNSBL blocking + dnsbl.log / unified.log lines are byte-identical to before.
+     [ ] DNS-reply logging (dns_reply.log) unchanged.
+     [ ] Dashboard widget query/Group counters increment; the UI "Clear" buttons
+         reset them AND counting resumes correctly (no clobber, no lock).
+     [ ] Reports/Alerts pages read the cache DB normally (no `database is locked`).
+     [ ] Force Reload (Unbound restart) + a normal reload: no errors, counters/logs
+         resume; no stuck WAL/-shm files.
+     [ ] Line-cap still trims dnsbl/dns_reply/unified to log_max_* and the viewer
+         "Clear" still works (handles reopen on the held fd).
+
+CONSTRAINTS
+- Python: stdlib only; 4-space; type hints; no bare except. Benchmarks may live under
+  benchmarks/ (dev-only, not shipped). Do NOT change P1/P2 behaviour to pass a test —
+  if a test fails, it found a real bug; fix the cause.
+
+VERIFICATION
+- `python -m pytest` → green incl. concurrency / fault / shutdown tests.
+- `ruff check .` / `ruff format .` clean; ShellCheck / `php -l` clean.
+- Benchmark run completes and shows the expected syscall/throughput improvement.
+
+EXPECTED RESULT
+- Automated coverage for coexistence, recovery, perf, and shutdown; a recorded
+  benchmark; and a written smoke checklist. ADR-03 is code-complete pending the
+  live smoke test.
+
+COMMIT (single)
+    pfb_unbound: add ADR-03 concurrency/fault/perf/shutdown validation (ADR-03 P3)
+Push directly to `adr/03`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_03_Persistent_IO/RESULTS/03_Results.txt` (plain .txt)
+FINAL phase: the recipient is the MAINTAINER who runs the smoke test and closes the
+ADR (no next-phase agent). Include: what each validation test covers and its result;
+the benchmark numbers (old vs new) and whether the WatchedFileHandler stat() cost is
+acceptable; full lint/pytest output; the OUTSTANDING manual smoke checklist (above)
+and where to record results before moving Status to Accepted. Also update the ADR
+header Status to "IMPLEMENTED (pending smoke test)".

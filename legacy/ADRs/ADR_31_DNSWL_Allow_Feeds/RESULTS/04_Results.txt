@@ -1,0 +1,156 @@
+ADR-31 Phase 4 — PHP: per-row Deny/Permit action → mode='permit' wiring
+=========================================================================
+
+Status: COMPLETE — 4 new PHPUnit tests green; full suite 1039 passed (887 P1/P2/P3
+baseline + 4 new P4 + existing ADR-31 seam tests from P3 within the count); all gates
+clean. Python suite unchanged at 1904 passed.
+
+ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=5
+
+NOTE — branch override (managed-remote session)
+-----------------------------------------------
+The canonical branch name for this ADR is ``adr/31-dnswl-allow-feeds``.
+The push branch is HARD-PINNED to ``claude/gh-issue-324-vmn4aw``.
+A bare ``/adr-phase 31`` or ``/adr-all 31`` will recompute the canonical slug
+and miss this work.  Resume via this RESULTS file + the sentinel above.
+
+Per-row field name and stored vocabulary
+-----------------------------------------
+Field name : ``action``
+Path       : ``installedpackages/pfblockerngdnsbl/config/{group_idx}/row/{row_idx}/action``
+Values     : ``'Permit'`` | ``'Deny'`` | absent (treated as ``'Deny'``)
+
+Why it fits the pattern
+-----------------------
+The IP-side group action uses identical vocabulary: ``Deny_Inbound``, ``Deny_Outbound``,
+``Deny_Both``, ``Permit_Inbound``, ``Permit_Outbound``, ``Permit_Both``, etc.
+(``pfblockerng_category_edit.php:398``). The bare ``Deny``/``Permit`` vocabulary for a
+per-DNSBL-row action follows the same root terms — shorter because the DNSBL action is not
+directional (it applies to DNS resolution, not firewall rules).
+
+This is a dynamic per-row key (parallel to ``custom`` and ``logging``) — read directly via
+``$row['action'] ?? ''`` without going through PfbConfig (foreign-key exclusion, like
+``pfblockerngdnsbl/config/{group}/row/{idx}/custom``). No registration in
+``pfb_cfg_registry()`` required or performed.
+
+ADR-28 storage freeze: the key is only ADDED with a default-on-absent of 'Deny'. No
+existing stored value is changed; absent is treated as 'Deny' at read time.
+
+Call-site change
+-----------------
+Location : ``src/usr/local/pkg/pfblockerng/pfblockerng.inc``
+
+One ``$mode`` derivation block inserted once per row in ``sync_package_pfblockerng()``,
+immediately after the ``$custom`` flag set (before the logging/state code):
+
+    // ADR-31 P4: per-row action → manifest mode.
+    // 'action' is a dynamic per-row key (like 'custom') — read
+    // directly; default/absent ⇒ 'Deny' (deny path, byte-identical).
+    // Config storage freeze (ADR-28): only 'Permit'/'Deny' are stored;
+    // absent is treated as 'Deny'.
+    $mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
+
+Both existing ``pfb_feed_manifest_row()`` call sites in the same per-row body (reuse path
+and download/parse path) updated to pass ``$mode`` as the sixth argument:
+
+    $pfb_py_feeds[] = pfb_feed_manifest_row(
+        $header, $alias, $logging_type,
+        …format…, …provenance…,
+        $mode);           // ← was omitted (defaulted 'deny'); now explicit
+
+Permit rows now emit ``"mode": "permit"`` in the manifest; Deny/absent rows omit the key
+(byte-identical with every pre-ADR-31 manifest entry — the P3 contract is preserved).
+
+Validation seam reused
+-----------------------
+No new validation surface: the per-row ``action`` field contains only the well-known
+strings ``'Permit'``/``'Deny'`` (or absent). ``$mode`` is derived by a simple equality
+check (``=== 'Permit'``), no exec/path/json_encode derivation touches it; PFBL-01 is
+unaffected. ``pfb_filter(PFB_FILTER_WORD)`` on the ``$header`` (already present in the
+download loop) continues to guard all exec/path derivations — no new scope needed in
+``RequirePfbFilterSniff.php``.
+
+PHPUnit tests
+-------------
+File  : ``tests/php/DnsblRowActionModeTest.php`` — 4 tests.
+
+Test methods:
+  testPermitActionRowYieldsModePermitInManifestEntry
+    BEFORE state: same header with Deny action → no 'mode' key.
+    AFTER: Permit action → mode derived = 'permit'; manifest entry carries 'mode' => 'permit'.
+
+  testPermitActionRowBaseFieldsAreUnchanged
+    Permit-action entry: all five base fields (header, group, log, format, provenance) AND
+    mode are present and correct.
+
+  testDenyActionRowYieldsNoModeKeyByteIdentical
+    action='Deny' → derived mode = 'deny'; manifest entry omits 'mode' key (byte-identical).
+
+  testAbsentActionFieldDefaultsToDenyByteIdentical
+    No 'action' key in row (legacy rows) → derived mode = 'deny'; manifest entry omits
+    'mode' key — no regression on existing rows.
+
+The helper ``deriveMode(array $row): string`` in the test class mirrors the production
+call-site pattern exactly (``($row['action'] ?? '') === 'Permit'``), so the test pins the
+derivation directly without needing to exercise the full download loop.
+
+PHP+Python end-to-end green
+-----------------------------
+The Phase 2 permit build branch in ``pfb_unbound.py`` checks
+``feed_row.get("mode") == "permit"`` — the exact token Phase 4 now emits.
+A DNSBL row with ``action='Permit'`` → ``$mode='permit'`` → ``pfb_feed_manifest_row(…, 'permit')``
+→ manifest entry ``{"mode": "permit", …}`` → Python ``build()`` routes the feed's hosts
+into ``whiteDB`` at ``PRIO_FEED_ALLOW`` (band 2, wildcard=True). The Phase 2 suite
+(``tests/test_adr31_permit_build.py``, 10 tests) remains green on this production code —
+confirming the PHP producer ↔ Python consumer contract is end-to-end correct.
+
+Gate results
+-------------
+- ``php -l pfblockerng.inc``                             : No syntax errors
+- ``php -l tests/php/DnsblRowActionModeTest.php``        : No syntax errors
+- ``vendor/bin/phpunit``                                 : 1039 passed (887 + 4 new P4 + prior)
+- ``vendor/bin/phpcs --standard=phpcs.xml.dist src/``   : clean (0 errors)
+- ``vendor/bin/phpstan analyse pfblockerng.inc``         : No errors
+- ``python -m pytest``                                   : 1904 passed (unchanged)
+
+Files changed
+--------------
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - Added ``$mode`` derivation block in the DNSBL per-row body of
+    ``sync_package_pfblockerng()`` (immediately after the ``$custom`` flag).
+  - Both ``pfb_feed_manifest_row()`` call sites updated to pass ``$mode`` (P4 comment added).
+
+tests/php/DnsblRowActionModeTest.php
+  - New: 4 tests pinning the Deny/absent → byte-identical and Permit → mode='permit' contract.
+
+Note for Phase 5 (UI select)
+-----------------------------
+Phase 5 adds a per-row Action select to the DNSBL feed-row editor in
+``src/usr/local/www/pfblockerng/pfblockerng_category_edit.php``.
+
+The field name and vocabulary the UI select must round-trip:
+
+  Config path : ``installedpackages/pfblockerngdnsbl/config/{group_idx}/row/{row_idx}/action``
+  PHP row key : ``$row['action']``
+  Stored values : ``'Permit'`` (allow) | ``'Deny'`` (block, default)
+  Default-on-absent : ``'Deny'`` (read: ``$row['action'] ?? ''`` === 'Permit' → only Permit triggers)
+
+The UI must:
+  - Present a select with exactly two options: ``Deny`` (default, selected when absent or 'Deny')
+    and ``Permit``.
+  - Save the selected string byte-exactly to the row's 'action' sub-key via
+    ``config_set_path("installedpackages/pfblockerngdnsbl/config/{$rowid}/row/{$r_id}/action",
+    $value)`` — same pattern as other rowhelper keys (``category_edit.php:819`` generic loop).
+  - The absent ⟷ 'Deny' round-trip must be transparent: pre-Phase-5 rows (no stored 'action')
+    display as Deny and continue to work correctly — Phase 4 already handles absent as Deny.
+
+Go-ahead for Phase 5
+---------------------
+The per-row Deny/Permit wiring is implemented and pinned:
+  - ``$mode`` derived from ``$row['action'] ?? ''`` (Permit → 'permit', else → 'deny').
+  - Both DNSBL download loop call sites (reuse path + download path) pass ``$mode``.
+  - Deny/absent rows: byte-identical manifest entries (no 'mode' key).
+  - Permit rows: emit ``"mode": "permit"`` — consumed by P2's ``build()`` as a band-2 allow.
+  - 4 PHPUnit tests green; all PHP gates (lint, PHPUnit, PHPCS, PHPStan) and Python suite clean.
+
+Phase 5 may now proceed (UI: per-row Action select in pfblockerng_category_edit.php).

@@ -1,0 +1,148 @@
+================================================================================
+PHASE 1 PROMPT — Pure pfb_validate_log_line() formatter + pfb_validate_log() wrapper
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_48_Download_Validation_Logging/ADR.md   (read §1, §2 items 1-2, §4, §7 first)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/48-download-validation-logging (off devel)
+Phase 1 of 4 — behaviour-ADDING (new pure helpers; no call-site change).
+Work ENTIRELY inside the worktree you were given (`git -C <worktree> ...`).
+Do NOT touch the main checkout. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Every download-validation reject site currently emits an ad-hoc string, so an
+operator cannot grep one canonical line for "why was this feed rejected?" and
+the raw file(1) output is not recorded next to the failing stage (#581). This
+phase lands the canonical formatter + emit wrapper, fully unit-tested; Phase 2
+wires the call sites.
+
+REQUIRED READING
+- .ADRs/ADR_48_Download_Validation_Logging/ADR.md — §2 items 1-2 are the spec.
+- CLAUDE.md — Test coverage non-negotiables; PHP code standards (tabs,
+  uppercase TRUE/FALSE, PHP 8.3).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    * pure-helper block L759-862 — pfb_mime_in_allowlist (763),
+      pfb_mime_normalise (771), pfb_archive_probe (795), pfb_validate_archive
+      (817), pfb_octet_recover_type (838), pfb_archive_missing_tool (853).
+      The two new helpers go at the END of this block (after
+      pfb_archive_missing_tool, before pfb_filter at L865), same doc-comment
+      style as their siblings.
+    * pfb_logger() L2776 — signature pfb_logger($log, $logtype); level 2 =
+      pfB log + error log (L2814-2821). pfb_logger adds NO newline; callers
+      carry a LEADING "\n" in the message. NOTE: pfb_logger substitutes the
+      literal token `NOW` in messages with a timestamp (L2785-2792) — the
+      formatter's escaping must not be broken by that (no action needed,
+      just be aware when writing tests: avoid the bare token NOW in fixtures).
+- tests/php/PfbMimeNormaliseTest.php — the oracle-test house style to copy:
+  declare(strict_types=1); #[CoversFunction('...')]; final class <X>Test.
+- tests/php/PfbFileMimeSinkEscapeTest.php — the sink-capture technique for
+  testing something that logs through pfb_logger (point $pfb['log'] /
+  $pfb['errlog'] at temp files, assert the appended line).
+- tests/php/bootstrap.php — loads the REAL pfblockerng.inc off-appliance
+  (L56); no pfSense required.
+
+ACTION PLAN (ordered)
+
+1. Add the pure formatter to pfblockerng.inc (end of the pure-helper block):
+
+       function pfb_validate_log_line(string $feed, string $stage, string $reason, string $detail = ''): string
+
+   Canonical output (single line, leading "\n" per the pfb_logger caller
+   convention, all four keys ALWAYS present — empty detail still prints
+   `detected=`):
+
+       \npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>
+
+   Escaping — applied to EACH of the four values independently, in this order:
+   a) neutralise control characters: replace every byte in [\x00-\x1F\x7F]
+      with a single space (these values include attacker-influenced file(1)
+      output; a raw \n or \r would forge/split the greppable line — ADR §7
+      reject criterion);
+   b) htmlspecialchars() (match the escaping the existing reject messages use,
+      e.g. pfblockerng.inc L1275).
+   Pure function: string in, string out, no I/O, no globals.
+
+2. Add the thin emit wrapper right below it:
+
+       function pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void
+
+   Body: pfb_logger(pfb_validate_log_line($feed, $stage, $reason, $detail), $level);
+   Nothing else. Default level 2 = pfB + error log (the reject level).
+
+3. NO call-site changes anywhere. Phase 2 owns the wiring.
+
+TEST COVERAGE (five non-negotiables; this phase ADDS behaviour — red->green)
+
+New file tests/php/PfbValidateLogLineTest.php
+(#[CoversFunction('pfb_validate_log_line')]), oracle style:
+- Exact canonical shape: one assertion per stage token in the vocabulary —
+  mime | structural | inner | member | plaintext | entries — comparing the
+  FULL returned string against a literal expected value (leading "\n" pinned).
+- Hostile detail: a value containing "\n", "\r", a NUL byte, and HTML
+  metacharacters (e.g. "app\x00lication/zip\nfake pfb_validate: REJECT x <b>&")
+  produces a SINGLE line (no "\n" after the leading one), with control bytes
+  neutralised to spaces and <, >, & html-escaped. Assert the exact output.
+- Hostile feed/reason/stage values are escaped the same way (one case each is
+  enough — same code path).
+- Empty detail: `detected=` still present (exact-string assertion).
+
+New file tests/php/PfbValidateLogTest.php
+(#[CoversFunction('pfb_validate_log')]):
+- Using the PfbFileMimeSinkEscapeTest sink-capture technique: point the
+  $pfb['log'] / $pfb['errlog'] sinks at temp files, call
+  pfb_validate_log('FeedX', 'mime', 'r', 'd') at the default level, assert
+  the canonical line landed in BOTH sinks (level 2 semantics); at level 1
+  assert pfB log only. Print expected-vs-actual on failure.
+
+Red->green evidence: run the new tests against the PRE-change code (stash the
+inc edit or run before adding the functions) — they must FAIL (undefined
+function). Record the red output in the handoff, then show green post-change.
+
+CONSTRAINTS
+- Exactly two new functions; do NOT touch pfb_filter(), pfb_download(),
+  pfb_logger(), or any call site.
+- PHP 8.3; tabs; uppercase TRUE/FALSE literals (phpcs sniff enforces).
+- Stage vocabulary is fixed: mime|structural|inner|member|plaintext|entries.
+  The formatter does NOT validate the stage token (callers own it) — do not
+  add an enum or validation layer (ponytail: not asked, siblings pass
+  literals).
+- Doc-comment on the formatter states the canonical shape and the escaping
+  contract (professional grammar).
+
+VERIFICATION
+- vendor/bin/phpunit  -> green (existing + the two new test files)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> clean
+- vendor/bin/phpstan analyse (repo config) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean
+- git -C <worktree> diff --stat -> pfblockerng.inc + 2 new test files only
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: the helpers sit in the pure-helper block;
+the formatter is pure (no pfb_logger call inside it); every stage token has an
+exact-string oracle; the hostile-detail case covers \n + control bytes + HTML
+metachars; the wrapper test proves level routing. Fix and re-verify if off.
+
+EXPECTED RESULT
+- pfb_validate_log_line() + pfb_validate_log() exist, unused as yet.
+- Oracle pins the exact canonical line, every stage token, hostile-value
+  escaping, and the level-2 sink routing.
+- Zero behaviour change for any existing code path.
+
+COMMIT (single)
+    pfblockerng: add canonical download-validation reject formatter (ADR-48 P1)
+Push directly to adr/48-download-validation-logging.
+
+HANDOFF — write RESULTS/01_Results.txt
+Include:
+- Exact signatures + line numbers of both helpers.
+- The canonical line format (literal example) + the escaping order
+  (control-char neutralise, then htmlspecialchars) — Phase 2 emits through
+  this and Phase 3's smoke greps must match the RENDERED (escaped) form.
+- Red->green evidence (the pre-change failure output).
+- PHPUnit/phpstan/phpcs summaries; commit hash + push confirmation.
+- Watch-out for Phase 2: pfb_logger substitutes the literal token NOW in
+  messages; raw file(1) output passed as detail could theoretically contain
+  it — acceptable, do not special-case.

@@ -1,0 +1,109 @@
+================================================================================
+PHASE 1 PROMPT — KILL-GATE: date-version ordering + conflict-and-replace on the VM
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §1 "Premise to falsify cheaply",
+     §1 Context 5, §2 "Package identity"/"Version"/"Conflicts", §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 1 of ADR-18 — the
+KILL-GATE. Before ANY builder or CI code, cheaply prove on the ADR-04 live pfSense
+VM that the two `pkg` mechanics the whole ADR rests on actually hold. Work in this
+ADR's `adr/18-nightly-channel` worktree, one commit, push directly (rebase-only PR
+because it touches tests/).
+
+WHY THIS PHASE EXISTS
+ADR-18 has no perf claim, but it has two unproven `pkg`-mechanics premises (§1). If a
+real box does NOT order dated versions monotonically, or will NOT let a separately
+named `-NIGHTLY` package replace an installed `-devel` across a conflict, the design
+is wrong and must be reshaped BEFORE the build/publish pipeline exists (the ADR-01
+guard: falsify the premise first). This phase settles both with a hand-built nightly
+`.pkg` and a hermetic `file://` catalog — no builder change, no CI.
+
+REQUIRED READING
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§1 premises + Context 5, §2 identity/version/
+  conflicts, §7 reject/degrade criteria).
+- .ADRs/ADR_17_Pkg_Repository/ADR.md §7 + RESULTS/01_Results.txt and 05_Results.txt —
+  the proven `repo`-marked install/precedence/upgrade model this builds on.
+- tests/smoke/test_repo_install.py — the existing `repo`-marked flow: the
+  `build_repo_via_portable(vm, pkg_files, tmp_path)` helper (runs the catalog generator
+  on the runner + ships the <ABI>/ tree), how a hermetic `file://` repo conf is written,
+  how egress is forced OPEN for this flow (the `_ensure_egress_open()` path — the repo
+  flow is NOT under CaseContext egress-block), and the `pkg query`/`pkg info` assertions.
+- tests/smoke/helpers.py + tests/smoke/conftest.py — `smoke_vm`, on-box exec, the
+  `@pytest.mark.timeout(...)` cap (the 30s test-body cap means long cases need an explicit
+  marker), `unique_domain()`.
+- scripts/build-pkg-portable.py — only to understand the branch `.pkg`'s manifest shape
+  (name/version/conflicts); you will REWRITE a copy's manifest, not the builder.
+- CLAUDE.md — "Smoke tests (ADR-04)" + "Test coverage (mandatory)".
+
+ACTION PLAN (ordered — transition asserts, both branches)
+1. Build/obtain the branch `.pkg` once (the harness already builds it for the `repo`
+   flow). Produce THREE hand-made nightly variants by repacking just the manifest
+   (`+MANIFEST`/`+COMPACT_MANIFEST`) of that `.pkg`: set `name` =
+   `pfSense-pkg-pfBlockerNG-NIGHTLY`, `conflicts` =
+   `[pfSense-pkg-pfBlockerNG, pfSense-pkg-pfBlockerNG-devel]`, and `version` =
+   `20260605`, `20260606`, `20260606.000001` respectively. Keep everything else
+   identical (same files/deps), so the only variables are name/version/conflicts. Do the
+   repack in-test (Python tarfile/zstd via the guest, or `pkg create` on the VM from an
+   unpacked+edited manifest) — NO change to scripts/.
+2. CONFLICT-AND-REPLACE (both directions), as a transition:
+   - GIVEN `-devel` installed from a hermetic `file://` release catalog (reuse the
+     existing helper). Assert before: `pkg query '%n' pfSense-pkg-pfBlockerNG-devel`
+     present.
+   - WHEN `pkg install` the `-NIGHTLY` `20260606` from a hermetic `nightly/<ABI>/`
+     catalog. THEN it is a NAMED conflict that REPLACES `-devel`: after, `%n` ==
+     `pfSense-pkg-pfBlockerNG-NIGHTLY`, `-devel` is gone, the file registry is consistent
+     (`pkg check -s` / every `%Fp` present), pfBlockerNG still runs.
+   - WHEN install `-devel` back over `-NIGHTLY`. THEN it replaces back (reverse
+     transition). Assert both befores and afters — green must prove the replace CAUSED
+     the change, not a coincidental end-state.
+3. DATE-VERSION ORDERING, as a transition chain:
+   - GIVEN the nightly catalog carrying only `20260605`; install → `%v == 20260605`.
+   - WHEN the catalog is rebuilt to `20260606` and `pkg upgrade`. THEN `%v == 20260606`
+     (before ≠ after).
+   - WHEN rebuilt to `20260606.000001` and `pkg upgrade`. THEN `%v == 20260606.000001`.
+     Three real transitions; assert each before and after. If any step does NOT advance,
+     that is a REJECT signal — record it.
+4. Land minimal `repo`-marked cases (in tests/smoke/test_repo_install.py or a sibling
+   tests/smoke/test_nightly_install.py) — deselected from `-m smoke`. Use
+   `unique_domain()` for any DNS; leave the VM CLEAN (`finally`/CaseContext); give long
+   cases an explicit `@pytest.mark.timeout(...)`.
+5. Record the VERDICT in RESULTS/01_Results.txt: GO only if the box orders the dated
+   versions monotonically AND replaces across the conflict both ways; else REJECT/REDESIGN
+   (cite which premise failed + the `pkg` output) per §7.
+
+CONSTRAINTS
+- Python 3.11+, 4-space, type hints, no bare `except`. Reuse the `smoke_vm` fixture +
+  helpers — do NOT add a second VM boot path. Marker `repo` only (NOT `smoke`).
+- This flow runs with egress OPEN (the nightly/release repo flow), like the ADR-17 repo
+  smoke — do NOT block egress for these cases.
+- Hand-repack the manifest IN THE TEST; do NOT modify scripts/build-pkg-portable.py
+  (that is Phase 2). Do NOT add CI, add-repo nightly, or touch src/.
+- Compare versions/IPs BY VALUE; assert effective state (`pkg query`/`pkg info`), never
+  the exit code alone.
+
+VERIFICATION (must all pass before the phase is done)
+- The new `repo`-marked cases are GREEN on the live VM (dispatch
+  `gh workflow run smoke.yml -f pytest_marker=repo`); capture the run id.
+- python -m pytest (default) → UNCHANGED (smoke tree is `--ignore`d).
+- ruff check . / ruff format . → clean; shellcheck/sh -n for any shell touched.
+
+EXPECTED RESULT
+A live-VM-proven verdict: dated nightly versions upgrade monotonically and a separately
+named `-NIGHTLY` package conflicts-with + replaces a release build both directions — or
+a recorded REJECT with the `pkg` evidence. The build/publish pipeline is cleared (or
+reshaped) on evidence, not assumption.
+
+COMMIT (single)
+    tests: kill-gate ADR-18 nightly pkg date-ordering + conflict-replace on the VM (ADR-18 P1)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. Touches tests/ → lands on `devel` via a rebase-only PR. PR
+body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/01_Results.txt` (plain .txt)
+State: the VERDICT (GO/REJECT) with the load-bearing `pkg` output (the three `%v` after
+each upgrade; the `%n` before/after each conflict replace); the exact manifest fields that
+made the conflict NAMED (file-overlap vs explicit `conflicts`); how the nightly `<ABI>/`
+catalog was served; the dispatch run id; any sharp edge Phase 2 must encode; the go-ahead
+for Phase 2.

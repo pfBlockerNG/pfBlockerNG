@@ -1,0 +1,93 @@
+ADR-24 — Actuator-style sensitive-TAG redaction in the smoke config.xml scrub
+================================================================================
+
+Final scope (tag-scrub only)
+-----------------------------
+The PR was reduced to ONLY the Spring-Boot-Actuator-style sensitive-TAG-NAME
+redaction of the smoke `config.scrubbed.xml`. The earlier value-based redaction
+(SMOKE_REDACT_VALUES / NDI / serial scrub + the runner-side smoke.yml step) was
+DROPPED.
+
+Why value-based redaction was dropped
+-------------------------------------
+The Netgate Device ID (NDI) is a non-reversible hash derived from the MAC address,
+and the MAC is already public (hardcoded in boot_vm.sh, carried in the ci-metadata
+matrix, required on the QEMU command line). Value-redacting the NDI/serial while the
+MAC ships in the repo is theater. The genuine win is the tag-name scrub: it caught
+the live box's `<ipsecpsk>` (and catches any token/secret/apikey-named tag by name,
+without enumerating them).
+
+Files touched (exactly three; smoke.yml reverts to devel)
+---------------------------------------------------------
+1. tests/smoke/helpers.py               — the tag-name scrub + its wiring (the ONLY
+                                           production change).
+2. tests/test_smoke_diag_redaction.py   — tag-scrub unit + Python-vs-`sed` parity.
+3. .ADRs/ADR_24_Plus_CI_Smoke/RESULTS/diag_redaction_Results.txt — this handoff.
+   .github/workflows/smoke.yml is UNCHANGED vs devel (the runner-side step removed).
+
+Word list (Spring Boot Actuator model)
+---------------------------------------
+Spring Boot Actuator's default keys-to-sanitize: any key matching
+`password` / `secret` / `key` / `token` / `.*credentials.*` (suffix/regex on the key
+name; value -> `******`). Ref: Spring Boot Actuator `Sanitizer` DEFAULT_KEYS_TO_SANITIZE.
+
+Adapted lowercase word list (`_SENSITIVE_TAG_WORDS`, helpers.py):
+  password, passwd, secret, token, apikey, authkey, privatekey, passphrase,
+  psk, credential, key
+`key` is the deliberately broad Actuator-style suffix (may over-redact e.g.
+`<monkey>`). Over-redaction in diagnostics is SAFE; under-redaction of a secret is
+not — the asymmetry that justifies the broad suffix.
+
+Helpers (tests/smoke/helpers.py) — one source of truth
+------------------------------------------------------
+- REDACTED = "REDACTED" — the single constant replacement token.
+- _SENSITIVE_TAG_WORDS / _SENSITIVE_TAG_ALTERNATION = "|".join(...) — the single
+  alternation both redactors consume, so they cannot drift.
+- _SENSITIVE_TAG_PATTERN — the compiled Python `re` pattern.
+- redact_sensitive_xml_tags(text) -> str — pure Python. Matches an OPENING tag
+  `<[a-z0-9_:-]*(<word>)s?>` (ends with a sensitive word, optional plural `s`),
+  preserves the opening tag verbatim, replaces inner text up to the next `<` with
+  REDACTED. The `/`-free name charset means CLOSING tags (`</name>`) never match, so
+  structure is never corrupted. Case-sensitive lowercase — config.xml tag names are
+  machine-generated lowercase, so no portable `I` flag is needed (BSD sed lacks it).
+- sensitive_tag_sed_program() -> str — the equivalent BSD-`sed -E` program,
+  delimiter `#`, replacement REDACTED, alternation from the SAME constant:
+  `s#(<[a-z0-9_:-]*(<alt>)s?>)[^<]*#\1REDACTED#g`.
+
+Wire-in (always on)
+-------------------
+`collect_host_diagnostics()` — the `config_scrub` builder APPENDS
+`sensitive_tag_sed_program()` to the SAME single `sed -E '…'` invocation, AFTER the
+explicit credential substitutions (bcrypt-hash / prv / authorizedkeys /
+tls_certificate, kept belt-and-suspenders — they are not name-matched). It runs for
+EVERY leg. `var_log_capture` is the plain direct `tar czf "$D/var_log.tgz" -C /var
+log`; no staging, no redact.sed, no kenv.
+
+Branch coverage (tests/test_smoke_diag_redaction.py)
+----------------------------------------------------
+- One positive case per word class (+ apikey, bare key) — each scrubbed.
+- Plural form `<tokens>` scrubbed.
+- LOAD-BEARING NEGATIVE: non-sensitive tags untouched, incl. `token` in TEXT not the
+  tag name, and `key` as a PREFIX (`<keyword>`) not a suffix.
+- Multiline fragment: closing tags / nesting / non-sensitive content preserved.
+- Empty element `<token></token>` safe.
+- Parity: `sensitive_tag_sed_program()` run via `sed -E` over a sample == the Python
+  redactor (skipped if `sed` absent) — the anti-coverage-theater drift gate.
+
+Anti-coverage-theater evidence (mutation-verified)
+--------------------------------------------------
+- Over-match mutation (Python pattern -> `(<[a-z0-9_:-]+>)[^<]*`, every tag matches):
+  the 5 `leaves_non_sensitive_tags_intact` cases all FAIL (plus structure + parity).
+  The negative is real.
+- Drift mutation (drop the plural `s?` from the `sed` program only, Python unchanged):
+  the parity test FAILS alone. The two redactors are genuinely pinned together.
+- Both reverted; helpers.py byte-identical to pre-mutation; the 21-test module green.
+
+Gate outputs
+------------
+- ruff check .                  : All checks passed!
+- ruff format --check .         : 91 files already formatted.
+- mypy tests/                   : Success: no issues found in 34 source files.
+- python -m pytest              : full suite green.
+- git diff origin/devel -- .github/workflows/smoke.yml : EMPTY (reverted to devel).
+- shellcheck / phpcs            : N/A (no shell-script file / no PHP touched).

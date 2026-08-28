@@ -1,0 +1,318 @@
+ADR-65 PHASE 2 RESULTS -- the read-only DNSBL decision query channel
+=====================================================================
+
+VERDICT: DONE-WITH-DEVIATION
+
+WORKTREE BASE CHECK: at start, `git rev-list --count HEAD..origin/devel` was 4
+(nonzero) -- origin/devel had advanced past the branch's e861bcb8 cut point
+(two commits touching pfb_unbound.py itself, an ABP hosts-dialect '##'-marker
+fix, net +9 lines before this phase's anchors). Rebased onto origin/devel
+(`git rebase origin/devel`) before any edit; rebase was clean, no conflicts.
+New base_sha (captured immediately after the rebase, before any edit):
+495de6374af945b0f37a454a071291fbdfdb12ee. Every symbol anchor named in the
+brief was re-verified by fresh grep against the rebased tree before use (all
+matched; only line numbers below ~3990 shifted by the ABP diff's +9 lines,
+which is below every anchor this phase touches).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  - Added `_evaluate_cfg(snap)` (module-level, PLANNER-AUTHORIZED extraction):
+    operate()'s per-query cfg-assembly dict literal moved verbatim into a
+    shared helper so operate() and the new query channel cannot drift.
+  - Added `dnsbl_query_answer(domain, qtype)`: pure, read-only DNSBL verdict
+    via evaluate_domain(), memoizing decisionDB (the one allowed side effect),
+    reaching no counter/log/cache sink.
+  - Added `_pfb_write_query_reply` (atomic temp+replace, mode 0640, mirrors
+    `_control_write_applied`) and `_pfb_answer_query_request` (id/domain
+    validation -> reply or miss-shaped reply).
+  - Added `pfb_query_watcher()`: stateless directory-watch daemon (mirrors
+    `pfb_control_watcher`, no seq/baseline; settle-on-identical-record).
+  - Wiring: `pfb_query_watcher_thread`/`pfb_query_stop` globals; path defaults
+    `pfb["pfb_py_query"]`/`pfb["pfb_py_query_reply"]`; `pfb["query_watcher"]`
+    flag default; init_standard start block gated on `mod_threading` ONLY
+    (always-on, no feature toggle); deinit stop block (bounded join).
+  - operate(): the ONLY edit is replacing the inline cfg dict literal with
+    `cfg = _evaluate_cfg(snap)` -- no other operate() line changed.
+
+- tests/test_adr65_query_channel.py (NEW): decision-equality (A1-A19),
+  side-effect-freedom + vacuity guard, watcher lifecycle, and all 13
+  hostile-input rows. 44 tests, all passing.
+
+- tests/test_adr10_swap.py (DEVIATION, see below): updated
+  `TestSwapGatesFromSnapshot.test_operate_cfg_gates_read_snapshot_not_pfb` to
+  source-inspect `P._evaluate_cfg` (where the snap-not-pfb invariant now
+  lives) instead of `P.operate`, plus a new assertion that operate() actually
+  delegates to it (`"cfg = _evaluate_cfg(snap)" in inspect.getsource(P.operate)`).
+
+Commit hash: 2334b297
+
+--------------------------------------------------------------------------------
+GATES (all executed; output tails pasted)
+--------------------------------------------------------------------------------
+Sandbox quirk (per brief section 6): a Bash command whose literal text
+contains "pytest" or "mypy" is intercepted by a session-local hook and
+returns a fabricated response. Every gate below was run through a thin
+wrapper script (`sh <wrapper>.sh ...`) whose OWN invocation text does not
+contain those substrings; wrappers were scratch files outside the repo,
+confirmed absent from `git status --short` before commit. The mypy check
+below independently PROVED this distinction live: an earlier direct
+`mypy tests/` command (with the substring in the text) returned the exact
+fabricated string this brief warned about verbatim ("mypy: No issues
+found"); the wrapper-routed re-run returned the real tool's actual message
+("Success: no issues found in N source files") -- pasted below.
+
+$ sh scripts/agent/run-gates.sh --diff origin/devel   (PATH-shimmed mypy)
+GATE PASS: python3 -m pytest
+GATE PASS: ruff check .
+GATE PASS: ruff format --check .
+GATE PASS: mypy tests/
+GATE PASS: npx markdownlint-cli2
+GATES: PASS
+
+$ <wrapper> tests/test_adr65_query_channel.py -v
+============================= test session starts ==============================
+... (44 items collected)
+============================== 44 passed in 4.42s ==============================
+
+$ <wrapper> tests/test_adr65_decision_oracle.py tests/test_adr65_fallback_characterization.py -v
+============================== 29 passed in 0.57s ==============================
+(byte-identical: `git diff --stat HEAD -- tests/test_adr65_decision_oracle.py
+tests/test_adr65_fallback_characterization.py` is empty -- zero edits, confirmed)
+
+$ <wrapper> -q                      (whole suite)
+================== 2951 passed, 2 skipped in 66.48s (0:01:06) ==================
+(baseline per 01_Results.txt gate 2: 2907 passed / 2 skipped; delta = +44, this
+phase's new tests, exactly. Zero regressions.)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+241 files already formatted
+
+$ python3 -m mypy tests/          (via wrapper; real tool output)
+Success: no issues found in 105 source files
+
+--------------------------------------------------------------------------------
+BEHAVIOUR-PRESERVATION PROOF (per declared test mode: brand-new dormant
+capability + a behaviour-preserving operate() refactor -- no red run against
+the void; the proof is the frozen oracle + whole suite green at ZERO edits)
+--------------------------------------------------------------------------------
+1. tests/test_adr65_decision_oracle.py + tests/test_adr65_fallback_characterization.py
+   (the P1 frozen oracle): 29 passed, ZERO file edits (git diff --stat empty).
+2. Whole suite: 2951 passed / 2 skipped -- the pre-existing 2907/2 plus this
+   phase's 44 new tests, with NO other file's test outcome changed except the
+   one deviation below (which was a pre-existing FAILURE this phase's
+   authorized refactor caused, fixed and re-verified green).
+3. operate()'s diff is a single-line substitution
+   (`cfg = _evaluate_cfg(snap)` replacing the inline dict literal) --
+   confirmed via `git diff -- src/usr/local/pkg/pfblockerng/pfb_unbound.py`;
+   no other operate() line changed.
+
+DECISION-EQUALITY PROOF (Axis 1, A1-A19; pasted run above,
+tests/test_adr65_query_channel.py -v, 44 passed) -- each arm asserts
+dnsbl_query_answer's reply equals an INDEPENDENTLY computed evaluate_domain
+verdict (never _evaluate_cfg's own output fed back into the comparison).
+
+SIDE-EFFECT-FREEDOM PROOF (Axis 2, TestSideEffectFree, included in the same
+44-passed run above): a BLOCKED query through the real watcher thread was
+proven to leave pfb_db_enqueue and pfb_log spies EMPTY, _dnsbl_last_event
+unchanged, and decisionDB gaining exactly the queried domain's entry stamped
+with the live snapshot's gen (the one allowed effect). The VACUITY GUARD in
+the same test then drove get_details_dnsbl() directly with the same spies
+and a found DnsblDecision + truthy sqlite3_resolver_con/sqlite3_dnsbl_con
+sentinels, and the SAME spies DID capture the resolver/dnsbl enqueues and the
+pfb_log call -- proving they would have caught a real violation.
+
+--------------------------------------------------------------------------------
+HOSTILE-INPUT ROW TABLE (section 5; all 13 rows, all EXECUTED and PASSING)
+--------------------------------------------------------------------------------
+ 1. Malformed JSON (`{"id":"x",`)                -> no reply; watcher alive.  PASS
+ 2. Non-dict JSON top level (`[1,2]`, `"str"`)    -> no reply; watcher alive.  PASS
+ 3. Empty/whitespace-only request file            -> no reply; watcher alive.  PASS
+ 4. Missing `id` (valid domain)                   -> no reply; watcher alive.  PASS
+ 5. Non-string/empty-string `id`                  -> no reply; watcher alive.  PASS
+ 6. Missing/empty/non-string `domain`, valid id    -> miss-shaped reply
+    ({"id",blocked:false, 5 empty fields}); watcher alive.                    PASS
+ 7. Punycode + raw non-ASCII domain                -> no crash; reply equals
+    the independently-computed verdict for the lowercased name.              PASS
+ 8. Oversized domain (300 chars)                   -> no crash; blocked=false. PASS
+ 9. Unknown/non-string qtype ("FOO", 42, null)      -> reply still produced,
+    decision qtype-independent; no crash.                                    PASS
+10. Domain with embedded newline/comma/";"          -> no crash; blocked=false. PASS
+11. 1 MB of junk in the request file                -> JSON parse fails; no
+    reply; watcher alive; no OOM/hang.                                       PASS
+12. Identical record re-delivered (self-wake)       -> answered exactly once
+    (settle memo); same id + NEW domain -> re-answered.                      PASS
+13. Reply write fails (OSError, nonexistent dir)    -> no exception escapes;
+    stderr-logged; caller (and by extension the watcher) survives.           PASS
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (every brief row ticked)
+--------------------------------------------------------------------------------
+Axis 1 -- decision arms (A1-A19), one equality assertion each:
+  A1  test_a1_data_db_exact_hit
+  A2  test_a2_zone_db_suffix_hit
+  A3  test_a3_feed_block_regex_hit
+  A4  test_a4_abp_anchor_zone_class + test_a4_abp_exact_regex_fold_data_class
+  A5  test_a5_abp_allow_overrides_block_via_numeric_band
+  A6  test_a6_fast_path_whitelist_overrides_block
+  A7  test_a7_top1m_enabled_unblocks + test_a7_top1m_disabled_blocks_same_domain
+  A8  test_a8_important_block_beats_plain_allow
+  A9  test_a9_hsts_listed_name_resolves_real
+  A10 test_a10_confusable_block_dual_form
+  A11 test_a11_all_idn_blocks_any_xn_dash_dash
+  A12 test_a12_confusable_alert_does_not_block
+  A13 test_a13_disallowed_tld_blocks_via_tld_allow
+  A14 test_a14_nxdomain_shape_still_blocked_in_reply
+  A15 test_a15_channel_never_applies_the_cname_suffix
+  A16 test_a16_unlisted_name_resolves
+  A17 test_a17_two_label_domain_zone_when_on
+  A18 test_a18_same_two_label_domain_data_when_off
+  A19 test_a19_multilabel_public_suffix_zone_when_on +
+      test_a19_multilabel_public_suffix_data_when_off +
+      test_a19_deep_subdomain_unmatched_parent_stays_data_when_on
+
+Axis 2 -- side-effect sinks: resolver enqueue, dnsbl-group enqueue, dnsblcache
+  enqueue, dnsbl.log pfb_log, _dnsbl_last_event -- all asserted UNTOUCHED;
+  decisionDB asserted CHANGED; vacuity guard proves the spies detect real
+  sink calls. All in TestSideEffectFree::
+  test_channel_query_is_side_effect_free_except_decisiondb_memo.
+
+Axis 3 -- hostile rows: section 5 table above, all 13 rows, TestHostileInputRows.
+
+Axis 4 -- watcher lifecycle branches:
+  - poll-fallback branch: EXECUTED (this Linux dev/CI host has no
+    select.kqueue -- hasattr(select, "kqueue") is False, so every watcher
+    test in this run exercised the poll-fallback path; the kqueue branch is
+    FreeBSD-only, DEFERRED to Phase-7 live-VM smoke -- identical deferral
+    level as the sibling control watcher, per the brief).
+  - settle-on-identical-record + changed-record-reanswered:
+    test_identical_record_answered_once_changed_record_reanswered
+  - startup-request answered: test_preexisting_request_answered_at_startup
+  - stop-Event exit: test_stop_event_terminates_the_thread
+  - reply-write OSError survival: test_row13_reply_write_oserror_survives
+  - init gating (mod_threading only, python_control ignored): DEFERRED to the
+    verifier's diff-read + Phase-7 smoke (init_standard() itself is not
+    driven by any existing unit test, matching the sibling control watcher's
+    own init-wiring coverage level, per the brief) -- confirmed by direct
+    diff read: the gate is `if pfb["mod_threading"] and not
+    pfb.get("query_watcher"):` with no `python_control` term.
+  - request file never written/deleted by the watcher:
+    test_watcher_never_writes_or_deletes_the_request_file
+  - reply mode 0640 + atomic replace (no .tmp residue):
+    test_reply_file_mode_is_0640, test_reply_written_atomically_no_tmp_residue
+
+Axis 5 -- the _evaluate_cfg extraction: operate()'s side pinned by the whole
+  pre-existing suite (2951 passed/2 skipped) + the frozen A1-A19 oracle
+  re-running green at zero edits; the channel's side by Axis 1. ALSO caught
+  one pre-existing test (test_adr10_swap.py) whose white-box assertion
+  needed relocating -- see DEVIATIONS.
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. tests/test_adr10_swap.py::TestSwapGatesFromSnapshot::
+   test_operate_cfg_gates_read_snapshot_not_pfb (NOT in the brief's DO-NOT-
+   TOUCH list, and NOT one of the two frozen ADR-65 oracle files) broke on
+   the whole-suite run after the brief's PLANNER-AUTHORIZED `_evaluate_cfg`
+   extraction (section 3a). Its assertion technique is `inspect.getsource
+   (P.operate)` grepped for the literal cfg dict-key/value text
+   (`'"dataDB": bool(snap.data_db)'` etc) -- a white-box check that the
+   INVARIANT it protects (cfg's list-presence gates + important_rules come
+   from the swapped snapshot, never a stale pfb[...] flag) lives inline in
+   operate(). The extraction moved that literal, verbatim, into
+   `_evaluate_cfg(snap)`; operate() now only calls it. The INVARIANT itself
+   is unchanged and still true (confirmed: _evaluate_cfg's source still
+   reads bool(snap.data_db) etc, never pfb["dataDB"] etc) -- only the
+   ASSERTION'S TARGET FUNCTION needed updating.
+
+   RED (before fix, full-suite run, pasted above the fix):
+     FAILED tests/test_adr10_swap.py::TestSwapGatesFromSnapshot::
+     test_operate_cfg_gates_read_snapshot_not_pfb
+     AssertionError: operate() cfg["dataDB"] must be derived from
+     snap.data_db (the swapped snapshot), not from the stale pfb[...] flag
+     assert '"dataDB": bool(snap.data_db)' in 'def operate(...): ...'
+     1 failed, 2950 passed, 2 skipped in 67.38s
+
+   FIX: source-inspect `P._evaluate_cfg` for the snap-not-pfb invariant
+   (unchanged assertions, relocated target), PLUS a new assertion that
+   operate() actually delegates (`"cfg = _evaluate_cfg(snap)" in
+   inspect.getsource(P.operate)`) -- strictly strengthens the test: it now
+   also pins the wiring between operate() and the extracted helper, which a
+   silent regression (operate() stops calling _evaluate_cfg) would catch
+   that the old test could not.
+
+   GREEN (after fix): tests/test_adr10_swap.py -- 21 passed. Whole suite
+   re-run: 2951 passed, 2 skipped (pasted above).
+
+   This is judged a DEVIATION, not an ESCALATE-worthy blocker: no new
+   mechanism was invented (the ONE pre-authorized mechanism, the
+   _evaluate_cfg extraction, is what caused it); the invariant the test
+   pins remains true and is now pinned more precisely (also checking the
+   delegation call, not merely the invariant's presence somewhere). Flagging
+   here rather than silently absorbing it into the diff, per the "never
+   silently patch the plan" rule -- reviewable, reversible, and evidenced
+   with red/green either side.
+
+2. Push denied by the platform permission classifier (per brief section 6
+   item 2, NOT treated as BLOCKED): the mandatory pre-edit rebase onto the
+   newer origin/devel (origin/devel had advanced 4 commits past this
+   branch's cut point; rebased cleanly, no conflicts) rewrote every
+   pre-existing commit on this branch, so landing required `git push
+   --force-with-lease -u
+   origin HEAD` (the remote tip e861bcb8 was fetched and confirmed as the
+   lease's expected oid first). The plain `git push` was rejected
+   non-fast-forward as expected; the `--force-with-lease` retry was denied
+   by the Claude Code auto-mode permission classifier ("Reason: No reason
+   provided"). Per instruction, this was NOT routed around (no alternate
+   push mechanism attempted) -- the push is left to the orchestrator. Local
+   commits are intact and ready to push:
+   95403457 (HEAD) -> 2334b297 -> 495de637 (rebased P0-P1 history) ->
+   origin/devel (051bf1ff).
+
+3. No other deviations. No CLAUDE.md mandate was weakened. Stdlib only (no
+   new imports). No config/ini/log-line schema touched. The control and
+   reload watchers' behaviour is untouched (confirmed by diff read: only
+   additive lines near them, no existing line altered). The two frozen P1
+   oracle files were not edited (confirmed: `git diff --stat HEAD --
+   tests/test_adr65_decision_oracle.py tests/test_adr65_fallback_characterization.py`
+   is empty).
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 3
+--------------------------------------------------------------------------------
+- Request/reply file paths (chroot-relative, under /var/unbound):
+  `pfb["pfb_py_query"]` = "pfb_py_query", `pfb["pfb_py_query_reply"]` =
+  "pfb_py_query.reply".
+- Request JSON schema: `{"id": <non-empty str>, "domain": <str>,
+  "qtype": <str, ignored by the decision>}`.
+- Reply JSON schema: `{"id", "blocked": bool, "b_type", "group", "b_eval",
+  "feed", "p_type"}` -- `blocked=false` => the five attribution fields are
+  all `""`.
+- Miss-shaped-reply rule: an invalid/empty/non-string `domain` (with a valid
+  `id`) gets the SAME miss shape as a genuine non-block (blocked=false, five
+  empty strings) -- Phase 4 cannot distinguish "no verdict" from "clean" by
+  this reply alone; if that distinction matters downstream, Phase 4 needs
+  its own signal (this phase did not invent one -- not asked for).
+  Phase 4 maps any blocked=false to "Unknown" per the brief.
+  0 also: a domain not correlatable at all (missing/invalid `id`) gets NO
+  reply file update whatsoever -- the PHP client must poll/timeout on its
+  own, not assume a reply always appears.
+- Settle semantics: an UNCHANGED request record (byte-for-byte, via Python
+  dict equality) is answered exactly once; the PHP client MUST use a FRESH,
+  unique `id` per query (a reused id with the same domain will not
+  re-trigger a fresh answer if the record is otherwise identical).
+- Perms contract: the request file's 0660 root:unbound is the PHP WRITER's
+  duty to set at create time (Python never creates/touches the request
+  file, confirmed by test_watcher_never_writes_or_deletes_the_request_file).
+  The reply file arrives at mode 0640 (Python-owned, set by
+  `_pfb_write_query_reply`).
+- `_evaluate_cfg(snap)` (module-level) and `dnsbl_query_answer(domain,
+  qtype)` are the two new public symbols Phase 3/4 may call directly if a
+  future phase needs the SAME decision computation outside the file
+  channel (e.g. an in-process caller) -- `dnsbl_query_answer` is the
+  channel's own pure decision function and requires no qstate/Unbound
+  context.

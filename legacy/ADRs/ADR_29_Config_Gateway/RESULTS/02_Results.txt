@@ -1,0 +1,156 @@
+ADR-29 Phase 2 — Migration registry + driver
+=============================================
+Status: COMPLETE — all verification gates green
+Date:   2026-06-19
+
+## What was done
+
+Consolidated the four independent upgrade migration blocks from
+pfblockerng_install.inc into a single ordered, idempotent, registry-driven
+driver (pfb_run_migrations()). Behaviour-preserving: same keys, same values,
+same effective order, same run-once discipline.
+
+## New functions
+
+### pfb_dnsbl_python_migrate() — pfblockerng.inc
+
+Extracts the ADR-02 inline migration block as a proper helper function,
+matching the pattern of pfb_control_legacy_seed / pfb_dnsbl_lenient_migrate /
+pfb_keep_migrate. Inserted just before pfb_control_legacy_seed (~line 6342).
+
+Contract (idempotent, returns array|NULL):
+  - empty/non-array config (fresh install) => NULL (nothing to migrate)
+  - section already has dnsbl_mode='dnsbl_python' AND pfb_py_block='on' => NULL
+  - otherwise => forces both keys to target values, returns updated array
+
+### pfb_migration_registry() — pfblockerng_extra.inc
+
+Ordered list of migration descriptors; each entry:
+  id      — unique stable identifier
+  section — full config.xml section path to read/write
+  apply   — callable($cfg: array): ?array (the existing *_migrate/*_seed helper)
+  message — write_config() string (byte-identical to the original install.inc string)
+  since   — version string
+
+Four entries in order:
+
+  1. adr02-dnsbl-python-mode
+     section : installedpackages/pfblockerngdnsblsettings/config/0
+     apply   : pfb_dnsbl_python_migrate
+     message : 'pfBlockerNG: migrated DNSBL to Python-only mode'
+     since   : 2.0.0
+
+  2. pfbl03-control-legacy-seed
+     section : installedpackages/pfblockerngdnsblsettings/config/0
+     apply   : pfb_control_legacy_seed
+     message : 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)'
+     since   : 3.2.0
+
+  3. adr22-dnsbl-lenient
+     section : installedpackages/pfblockerngdnsblsettings/config/0
+     apply   : pfb_dnsbl_lenient_migrate
+     message : 'pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)'
+     since   : 3.2.0
+
+  4. issue281-pfb-keep-seed
+     section : installedpackages/pfblockerng/config/0
+     apply   : pfb_keep_migrate
+     message : 'pfBlockerNG: preserve settings across upgrade (seed Keep flag, issue #281)'
+     since   : 3.2.0
+
+### pfb_run_migrations() — pfblockerng_extra.inc
+
+The driver: iterates pfb_migration_registry(), reads each section via
+config_get_path(), calls apply($cfg), and when the result is non-NULL calls
+config_set_path() + write_config() with the entry's message.
+
+## How the driver replaced the four install.inc blocks
+
+pfblockerng_install.inc lines 109-155 (the four hand-wired
+config_get/apply/config_set/write_config blocks) were removed and replaced
+with a single 5-line call to pfb_run_migrations(). The comment names all four
+original migrations for traceability (ADR-02, PFBL-03, ADR-22, issue #281).
+
+## Run-once / idempotency mechanism
+
+Each apply() callable is responsible for its own idempotency:
+  - pfb_dnsbl_python_migrate: returns NULL when both keys already have target values
+  - pfb_control_legacy_seed: returns NULL when 'pfb_control_legacy_seeded' == 'on'
+  - pfb_dnsbl_lenient_migrate: returns NULL when 'pfb_dnsbl_lenient' is set
+  - pfb_keep_migrate: returns NULL when 'pfb_keep' is set
+
+A second pfb_run_migrations() call on a fully-migrated config calls zero
+write_config()s — proven by MigrationRegistryTest::testDriverIsNoOpOnAlreadyMigratedConfig
+and testDriverSecondRunAfterFullMigrationIsIdentical.
+
+## Tests
+
+### New: tests/php/MigrationRegistryTest.php
+
+17 tests covering:
+
+  A — Registry shape (testRegistryHasFourEntriesInOrder,
+      testRegistryEntriesHaveRequiredFields, testRegistryEntriesSectionsAreCorrect)
+
+  B — pfb_dnsbl_python_migrate() unit (testPythonMigrateSkipsFreshInstall,
+      testPythonMigrateSetsTargetValues, testPythonMigrateIsIdempotentWhenAlreadyMigrated,
+      testPythonMigrateWhenOnlyOneKeyNeedsUpdate)
+
+  C — Driver: fresh install is no-op (testDriverFreshInstallIsNoOp)
+
+  D — Driver: existing install missing each key (testDriverMigratesDnsblModeOnExistingInstall,
+      testDriverSeedsControlLegacyOnExistingInstallWithControlOn,
+      testDriverMigratesLenientOnExistingInstall, testDriverSeedsPfbKeepOnExistingInstall)
+
+  E — Driver: idempotency / run-once (testDriverIsNoOpOnAlreadyMigratedConfig,
+      testDriverSecondRunAfterFullMigrationIsIdentical)
+
+  F — Ordering (testOrderingAdr02BeforePfbl03WithinOneRun,
+      testOrderingDnsblMigrationsBeforeGeneralMigration)
+
+  G — write_config messages byte-identical to original install.inc
+      (testWriteConfigMessagesMatchOriginalInstallIncMessages)
+
+### Kept green: existing per-migration tests
+
+  PfbDnsblLenientMigrateTest.php — 4 tests (helpers unchanged)
+  ControlLegacySeedTest.php      — 6 tests (helpers unchanged)
+  PfbKeepMigrateTest.php         — 3 tests (helpers unchanged)
+
+## Verification gates — all passed
+
+  php -l pfblockerng_install.inc                 → "No syntax errors detected"
+  php -l pfblockerng_extra.inc                   → "No syntax errors detected"
+  php -l pfblockerng.inc                         → "No syntax errors detected"
+  vendor/bin/phpunit                             → 684 tests, 2321 assertions — OK
+    (was 667/2232 in Phase 1; +17 tests from MigrationRegistryTest)
+  vendor/bin/phpstan analyse                     → "No errors"
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/ → (no output — clean)
+  python -m pytest                               → 1733 passed
+  ruff check . && ruff format --check .          → "All checks passed! / 112 files already formatted"
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    — Added: pfb_dnsbl_python_migrate() function (~18 lines, after pfb_feed_filter_install_default)
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    — Added: pfb_migration_registry() + pfb_run_migrations() (~100 lines, after PfbConfig class)
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_install.inc
+    — Replaced: 47 lines (four hand-wired migration blocks) with 5 lines (pfb_run_migrations() call)
+
+  tests/php/MigrationRegistryTest.php  [NEW FILE]
+    — 17 tests across 7 groups (A registry shape / B python-migrate / C fresh-install /
+      D per-migration / E idempotency / F ordering / G messages)
+
+## Go-ahead for Phase 3
+
+Phase 2 is complete. The migration registry is in place, driver in install.inc,
+all gates green. Phase 3 (Rollback/backward-compat contract) can proceed.
+
+## Commit
+
+  pfblockerng: consolidate upgrade migrations into an ordered registry (ADR-29 P2)
+
+  Branch: adr/29-config-gateway

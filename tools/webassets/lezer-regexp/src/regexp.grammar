@@ -1,0 +1,175 @@
+// Lezer grammar for Python 3.11 `re` regular expressions (issue #1669 slice A).
+// This is a HIGHLIGHTER grammar, not a validator: server-side validation
+// (PHP preg_match / Python re.compile) stays authoritative. Hostile input
+// (unclosed groups/classes, malformed quantifiers) must still produce a
+// tree -- Lezer's built-in error recovery (⚠ nodes) satisfies that; nothing
+// here throws.
+//
+// No whitespace skipping: every character in a regex is significant
+// (verbose/`re.X` mode, which ignores whitespace and supports `#` line
+// comments, is out of scope for this dialect).
+@skip {}
+
+@precedence { classRange @left }
+
+@top RegExp { alternation }
+
+alternation { branch ("|" branch)* }
+
+branch { piece* }
+
+piece { atom | Quantifier }
+
+atom {
+  Literal | Escape | Anchor | Dot | Backreference |
+  CharacterClass |
+  CapturingGroup | NonCapturingGroup | NamedGroup | GroupRef |
+  Lookahead | NegLookahead | Lookbehind | NegLookbehind |
+  AtomicGroup | ConditionalGroup | FlagsGroup | CommentGroup |
+  // Unmatched brace fallback (coverage matrix hostile rows: `a{`, `a{x}`,
+  // `a{2`) -- reached only when Quantifier's brace form didn't match.
+  "{" | "}"
+}
+
+CapturingGroup { "(" alternation ")" }
+NonCapturingGroup { "(" NonCapMarker alternation ")" }
+NamedGroup { "(" NamedOpenMarker GroupName ">" alternation ")" }
+GroupRef { "(" GroupRefMarker GroupName ")" }
+Lookahead { "(" LookaheadMarker alternation ")" }
+NegLookahead { "(" NegLookaheadMarker alternation ")" }
+Lookbehind { "(" LookbehindMarker alternation ")" }
+NegLookbehind { "(" NegLookbehindMarker alternation ")" }
+AtomicGroup { "(" AtomicMarker alternation ")" }
+
+// (?(id)yes|no) / (?(name)yes|no) -- id is a bare number or a group name;
+// reuse GroupName loosely (digits are a subset of its "not > ) |" charset).
+ConditionalGroup { "(" ConditionalMarker GroupName ")" branch ("|" branch)? ")" }
+
+// (?aiLmsux) global flags; (?i:...) / (?i-s:...) / (?-i:...) scoped flags.
+FlagsGroup { "(" FlagsMarker (":" alternation)? ")" }
+
+CharacterClass {
+  (ClassOpen | ClassOpenNeg | ClassOpenLit | ClassOpenNegLit) classPiece* "]"
+}
+
+// classAtom is deliberately single-character-wide (ClassLiteral matches one
+// char, not a run) so a-z/0-9-style ranges parse as distinct ClassRange
+// nodes instead of one greedy multi-char run swallowing a range endpoint.
+// A "-" that isn't sandwiched between two classAtoms (leading/trailing, or
+// after a range) falls through as its own classPiece -- Python treats an
+// unpaired "-" inside a class as a literal dash.
+classPiece { ClassRange | classAtom | "-" }
+classAtom { ClassLiteral | Escape | Backreference }
+ClassRange { classAtom !classRange "-" classAtom }
+
+@tokens {
+  // --- group-open markers: fused from directly after "(" so "(" itself
+  // stays a single, uniformly-stylable anonymous token everywhere.
+  NonCapMarker { "?:" }
+  NamedOpenMarker { "?P<" }
+  GroupRefMarker { "?P=" }
+  LookaheadMarker { "?=" }
+  NegLookaheadMarker { "?!" }
+  LookbehindMarker { "?<=" }
+  NegLookbehindMarker { "?<!" }
+  AtomicMarker { "?>" }
+  ConditionalMarker { "?(" }
+  // Positive flags, negative-only ("-i"), or both ("i-s") -- at least one
+  // flag letter somewhere is required (an empty "?" body is NonCapMarker).
+  FlagsMarker { "?" ($[aiLmsux]+ ("-" $[aiLmsux]+)? | "-" $[aiLmsux]+) }
+
+  // (?#...) -- content can't contain ")" (Python stops at the first one);
+  // modeled as a single leaf token (open marker + body + close all fused)
+  // since the body has no internal structure worth exposing.
+  CommentGroup { "(?#" ![)]* ")" }
+
+  // Group / backreference names: Python identifier rules loosely relaxed
+  // (accepts leading digits, e.g. "(?P<1a>x)") so a malformed name still
+  // parses into a GroupName leaf instead of falling into error recovery.
+  GroupName { ![>)|]+ }
+
+  // --- character class open markers. Longest-match naturally prefers the
+  // 2-/3-char forms that also swallow a literal-first "]" over the bare
+  // "[" / "[^": Python's rule that "]" immediately after "[" or "[^" is a
+  // literal (not the closer) falls out of this for free, no external
+  // tokenizer/context tracking needed (classes never nest in Python `re`,
+  // so there's no stack to track).
+  ClassOpenNegLit { "[^]" }
+  ClassOpenLit { "[]" }
+  ClassOpenNeg { "[^" }
+  ClassOpen { "[" }
+
+  // Single-char, not a run: a class is a set of individual members/ranges
+  // (unlike top-level Literal, which is free to coalesce a run of ordinary
+  // text) -- a multi-char token here would swallow a range endpoint, e.g.
+  // turning "[a-z0-9]" into a bogus single "a"-to-"z0" range.
+  ClassLiteral { classLiteralChar }
+  classLiteralChar { ![\]\\\-] }
+
+  // --- quantifiers: greedy/lazy/possessive single-char suffixes, and the
+  // counted {m}/{m,}/{,n}/{m,n} forms (each with an optional lazy `?` or
+  // possessive `+` suffix). Requiring >=1 digit somewhere in the brace body
+  // keeps a content-free "{}" from being swallowed as a quantifier (Python
+  // treats that as literal text; see hostile-input rows in the handoff).
+  Quantifier {
+    "*" | "+" | "?" | "*?" | "+?" | "??" | "*+" | "++" | "?+" |
+    "{" ($[0-9]+ ("," $[0-9]*)? | "," $[0-9]+) "}" ("?" | "+")?
+  }
+
+  Anchor { "^" | "$" }
+
+  Dot { "." }
+
+  // Numeric backreference: 1-2 digits, first nonzero. A 3-digit run
+  // starting 1-7 is claimed instead by the octal branch of Escape below
+  // (longer match wins), matching the coverage matrix's `\101` example.
+  Backreference { "\\" $[1-9] $[0-9]? }
+
+  Escape {
+    "\\" (
+      $[nrtfva] |                       // named char escapes
+      $[AbBdDsSwWZz] |                  // special sequences (incl \b \B)
+      "x" hexDigit hexDigit |           // \xhh
+      "u" hexDigit hexDigit hexDigit hexDigit | // \uhhhh
+      "U" hexDigit hexDigit hexDigit hexDigit hexDigit hexDigit hexDigit hexDigit | // \Uhhhhhhhh
+      "N" "{" ![}]* "}" |               // \N{...}
+      "0" octDigit? octDigit? |         // \0, \0dd (octal)
+      $[1-7] octDigit octDigit |        // \NNN (3-digit octal, e.g. \101)
+      ![0-9]                            // identity escape fallback: \. \\ \# \*
+    )
+  }
+
+  hexDigit { $[0-9a-fA-F] }
+  octDigit { $[0-7] }
+
+  // Escape's identity-escape fallback excludes digits (![0-9], not the
+  // usual "any char" `_`) so it never competes with Backreference/octal at
+  // all -- longest-match alone then picks correctly between "\1" (2 chars,
+  // Backreference) and "\101" (4 chars, Escape's 3-digit octal branch)
+  // without needing a manual tie-break (an earlier version tried
+  // `@precedence { Backreference, Escape }`, which turned out to force
+  // Backreference to win even when Escape's match was strictly longer --
+  // Lezer's precedence table isn't just an equal-length tie-breaker).
+  //
+  // Group-open markers are all longer than the bare "?" Quantifier when
+  // they match, but right after "(" both are reachable (CapturingGroup's
+  // content may hostile-tolerantly start with a bare Quantifier) -- state
+  // the preference explicitly so a real extension marker always wins.
+  @precedence {
+    NonCapMarker, NamedOpenMarker, GroupRefMarker, LookaheadMarker,
+    NegLookaheadMarker, LookbehindMarker, NegLookbehindMarker, AtomicMarker,
+    ConditionalMarker, FlagsMarker, Quantifier
+  }
+
+  // Top-level/branch literal run: anything not otherwise special. "]" has
+  // no meaning outside a class in Python, so it stays literal here.
+  Literal { literalChar+ }
+  literalChar { ![\^$.*+?(){}\[\\|] }
+
+  // "{"/"}" fallback: reached only when Quantifier's brace form failed to
+  // match (no digit, no closing "}", ...) -- Python treats an unmatched
+  // "{"/"}" as literal text (coverage matrix hostile rows: `a{`, `a{x}`,
+  // `a{2`). Always shorter than a successful Quantifier match, so longest
+  // match already prefers Quantifier whenever it actually applies.
+  "(" ")" "[" "]" "|" "-" "{" "}"
+}

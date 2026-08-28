@@ -1,0 +1,2 @@
+{"kind":"domain","domain":"twolabelzone.example","log":"1","feed":"tld_plain_feed","group":"tld_plain_feed"}
+{"kind":"domain","domain":"biz.co.zzsuffix","log":"1","feed":"tld_plain_feed","group":"tld_plain_feed"}

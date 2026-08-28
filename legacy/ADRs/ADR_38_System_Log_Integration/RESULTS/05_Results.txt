@@ -1,0 +1,133 @@
+ADR-38 Phase 5 — Web UI: Log Settings syslog export controls
+=============================================================
+
+Phase:    5 of 6
+Branch:   adr/38-system-log-integration
+Worktree: /home/user/pfBlockerNG/.claude/worktrees/adr-38
+Date:     2026-06-22
+
+─────────────────────────────────────────────
+CONTROL IDs AND HELP WORDING
+─────────────────────────────────────────────
+
+1. Form_Checkbox  id=log_syslog
+   Label:   "Send Security Events to System Log"
+   Help:    "When enabled, every IP Block/Permit/Match and DNSBL block event is also
+             emitted to syslog (tagged <code>pfblockerng</code>, in <code>key=value</code>
+             form) at the selected facility and severity. Remote delivery: pfSense
+             Status > System Logs > Settings > Remote Logging → Everything.
+             Default facility: local6."
+
+2. Form_Select  id=log_syslog_facility
+   Label:   "Syslog Facility"
+   Help:    "Default: local6 — Syslog facility for pfBlockerNG security events.
+             Choose a facility not already used by another pfSense service."
+   Options: log_local0..7, log_daemon, log_user, log_auth, log_kern, log_mail,
+            log_lpr, log_news, log_uucp, log_cron, log_syslog
+   Default selected: log_local6 ("local6 (default)")
+
+3. Form_Select  id=log_syslog_priority
+   Label:   "Syslog Severity"
+   Help:    "Default: notice — Severity level applied to all exported security events."
+   Options: log_emerg, log_alert, log_crit, log_err, log_warning, log_notice,
+            log_info, log_debug
+   Default selected: log_notice ("notice (default)")
+
+─────────────────────────────────────────────
+PROGRESSIVE-DISCLOSURE JS
+─────────────────────────────────────────────
+
+YES — added, matching the existing pfb_feed_internal_filter pattern exactly:
+
+  function pfb_sync_syslog() {
+      var enabled = $('#log_syslog').prop('checked');
+      disableInput('log_syslog_facility', !enabled);
+      disableInput('log_syslog_priority', !enabled);
+  }
+  $('#log_syslog').click(pfb_sync_syslog);
+  pfb_sync_syslog();
+
+When the checkbox is unchecked, both selects are greyed out (visually disabled) but
+still submitted on POST so the configured values are preserved across off-toggle saves.
+
+─────────────────────────────────────────────
+SAVE PATH — NO-CLOBBER PROOF
+─────────────────────────────────────────────
+
+The three keys live in installedpackages/pfblockerng/config/0 — the SAME section that
+PfbConfig::writeSection() rewrites at line 308. The critical pattern (documented in the
+existing ADR-30 comment at :275):
+
+  "Written into $pfb['gconfig'] so the writeSection() call below includes them in the
+   section; PfbConfig::write would be overwritten by writeSection."
+
+Implementation (lines 301-306):
+  $pfb['gconfig']['log_syslog']         = pfb_filter($_POST['log_syslog'], PFB_FILTER_ON_OFF, 'general', '');
+  $pfb['gconfig']['log_syslog_facility'] = $_POST['log_syslog_facility'] ?: 'log_local6';
+  $pfb['gconfig']['log_syslog_priority'] = $_POST['log_syslog_priority'] ?: 'log_notice';
+
+  PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
+
+The three keys are folded into $pfb['gconfig'] BEFORE writeSection() is called, so
+writeSection() writes all of them as part of the section blob — no clobber.
+
+Load path (lines 112-114):
+  $pconfig['log_syslog']          = PfbConfig::read('log_syslog')->value;   // PfbToggle → scalar
+  $pconfig['log_syslog_facility'] = PfbConfig::read('log_syslog_facility'); // plain string
+  $pconfig['log_syslog_priority'] = PfbConfig::read('log_syslog_priority'); // plain string
+
+PfbConfig::read() applies the registered default when the key is absent (new install):
+  log_syslog         → '' (PfbToggle::Off → .value = '')
+  log_syslog_facility → 'log_local6'
+  log_syslog_priority → 'log_notice'
+
+RequireConfigGateway: CLEAN — no direct config_*_path calls for these registered keys.
+The section-level writeSection() is allowed (not flagged by the sniff).
+
+─────────────────────────────────────────────
+VERIFICATION RESULTS
+─────────────────────────────────────────────
+
+php -l pfblockerng_general.php:
+  No syntax errors detected
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors (RequireConfigGateway + UppercaseBooleanLiteral both clean)
+
+vendor/bin/phpstan analyse:
+  OK — No errors
+
+python -m pytest:
+  1953 passed, 2 skipped
+
+ui_render (Tier A):
+  SKIP — SMOKE_ADMIN_PASSWORD not set in this environment.
+  No live pfSense VM available; the gate runs in smoke.yml CI on the PR.
+
+─────────────────────────────────────────────
+FILES CHANGED
+─────────────────────────────────────────────
+
+  M src/usr/local/www/pfblockerng/pfblockerng_general.php
+      - pconfig reads for log_syslog (.value), log_syslog_facility, log_syslog_priority
+      - $options_log_syslog_facility + $options_log_syslog_priority arrays
+      - POST validation for the two selects (safe-default on bad/absent value)
+      - Persist block: folded into $pfb['gconfig'] before writeSection() (no clobber)
+      - Form_Checkbox log_syslog + Form_Select log_syslog_facility + Form_Select log_syslog_priority
+        added at end of Log Settings section (inside same $section before $form->add())
+      - Progressive-disclosure JS (pfb_sync_syslog) matching pfb_sync_internal_filter pattern
+
+─────────────────────────────────────────────
+COMMIT
+─────────────────────────────────────────────
+
+Message: pfblockerng: add syslog export controls to Log Settings (ADR-38 P5)
+
+─────────────────────────────────────────────
+GO-AHEAD FOR PHASE 6
+─────────────────────────────────────────────
+
+Phase 5 complete. All PHP gates green; pytest unchanged (1953 passed, 2 skipped).
+ui_render SKIPs without a live VM — will run in CI on the PR.
+
+Phase 6 (Smoke + ADR acceptance) may proceed.

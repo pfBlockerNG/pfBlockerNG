@@ -1,0 +1,186 @@
+================================================================================
+ADR-07 -- PHASE 7 RESULTS / HANDOFF FOR PHASE 8
+Regex safety: opt-in static cap (load) + always-on runtime warn/evict (matcher)
+Branch: adr/07   Commit: pfblockerng: ADR-07 P7 -- regex safety (opt-in cap + runtime warn/evict, feed + user)
+================================================================================
+
+VERDICT (headline): DONE. Both feed AND user regex are now guarded best-effort,
+fully in-process, stdlib only -- NO subprocess, NO vetting, NO query-time timeout
+(fact 2: a thread/asyncio timeout cannot interrupt a match). Layer 1: an opt-in
+"Limit long/complex regex" STATIC CAP drops over-length / nested-quantifier
+patterns at LOAD (no execution) -- applied to the ABP feed regex AND the un-vetted
+user pfb_regex_list. Layer 2: ALWAYS-ON RUNTIME timing in the matcher times every
+regex match (per-thread CPU); over the WARN ceiling logs a rate-limited warning,
+over the higher EVICT ceiling logs an error + EVICTS the pattern from the live
+regexDB/allowRegexDB (snapshot-iterate, evict-AFTER-loop) so it cannot hang twice.
+Both oracles stay green: ADR-06 (no-regression, OFF) and the ADR-07 spec/parser/
+reconcile/strata/emit_wire (ON). GO-AHEAD to Phase 8 (slim the PHP boundary).
+
+GATES (this phase):
+  python -m pytest   -> 910 passed (was 891 after P6; +19 are the new safety tests
+                        tests/test_adr07_regex_safety.py). ADR-06 golden oracle +
+                        ADR-07 spec/strata/parser/reconcile/emit_wire ALL green.
+  ruff check .       -> All checks passed!
+  ruff format .      -> clean (1 build() line auto-wrapped; suite re-run green).
+  php -l             -> pfblockerng.inc + pfblockerng_dnsbl.php: no syntax errors.
+                        (Pre-existing unrelated "continue targeting switch" WARNING
+                         at inc:686 -- NOT introduced here.)
+  ShellCheck         -> N/A (no .sh touched).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py
+      - NEW regex-safety section (before _dnsbl_compile_regex_rules):
+          REGEX_STATIC_LEN_CAP=200, _REGEX_NESTED_QUANTIFIER (the Phase-1 heuristic),
+          REGEX_WARN_MS_DEFAULT=10.0, REGEX_EVICT_MS_DEFAULT=100.0,
+          REGEX_PERF_STRIKES=2, _REGEX_HAVE_THREAD_TIME (hasattr probe),
+          module dicts _regex_warned / _regex_perf_strikes (rate-limit + strike state),
+          _regex_exceeds_static_cap(pattern)->bool   (pure cap heuristic),
+          _regex_timed_search(pattern,q)->(match,elapsed_ms)  (thread_time | perf),
+          _regex_should_evict(name,ms,warn,evict,group,feed)->bool  (warn/evict policy),
+          _regex_evict_names(db,names)  (pop-after-loop helper).
+      - _dnsbl_compile_regex_rules(rules, *, static_cap=False): drops over-cap feed
+        patterns at LOAD when static_cap (logged, not compiled, not counted).
+      - build(): reads static_cap = config.get("regex_cap", False); forwards to the
+        two _dnsbl_compile_regex_rules calls.
+      - _dnsbl_config_from_manifest(): emits "regex_cap" into the build config blob
+        (manifest config.regex_cap takes precedence, else falls back to pfb["regex_cap"]
+        -- the ini-derived setting), so build() stays a pure fn of (manifest+config).
+      - init: reads MAIN regex_cap (bool) / regex_warn_ms / regex_evict_ms (float)
+        from pfb_unbound.ini; pfb defaults regex_cap=False, warn=10ms, evict=100ms;
+        clears _regex_warned/_regex_perf_strikes on (re)load.
+      - init REGEX-ini load (user regex): applies the same static cap (drops over-cap
+        user patterns when pfb["regex_cap"]).
+      - matcher scan points (a)/(b)/(c) ALL now time+evict (RESULTS/06 SS2):
+          (a) evaluate_domain discovery block-regex loop,
+          (b) _scan_block_band (numeric MAX-block scan),
+          (c) _scan_allow_regex_band (numeric allow scan; signature gained
+              warn_ms/evict_ms params; _resolve_numeric_allow passes cfg ceilings).
+      - operate() cfg: + "regex_warn_ms" / "regex_evict_ms" from pfb.
+  M src/usr/local/pkg/pfblockerng/pfblockerng.inc
+      - :850 map $pfb['dnsbl_regex_cap'] = dnsblconfig['pfb_regex_cap'] ?? ''.
+      - compute $regex_cap ('on'|'off') + emit "regex_cap = {$regex_cap}" into the
+        pfb_unbound.ini [MAIN] heredoc.
+  M src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+      - pconfig read + POST write (pfb_filter ON_OFF) for pfb_regex_cap.
+      - "Limit long/complex regex"(py) Form_Checkbox after the Regex Blocking toggle.
+  M tests/conftest.py
+      - reset fixture: + pfb regex_cap/regex_warn_ms/regex_evict_ms keys; clears
+        _regex_warned / _regex_perf_strikes each test.
+  A tests/test_adr07_regex_safety.py  (19 pure safety tests)
+
+================================================================================
+1. THE STATIC-CAP HEURISTIC + CEILINGS AS IMPLEMENTED
+================================================================================
+STATIC CAP (opt-in; _regex_exceeds_static_cap, pure, NO execution):
+  Drop a pattern iff:
+    len(pattern) > REGEX_STATIC_LEN_CAP (200)               -- over-length, OR
+    _REGEX_NESTED_QUANTIFIER.search(pattern) is not None    -- nested quantifier:
+      regex = r"\([^()]*[+*][^()]*\)\s*[+*{]"  (a quantified group inside a
+      quantifier: (a+)+, (a*)*, (\w+\.)+, ([a-z]+)*, (.*a){20}).
+  This is the Phase-1 RESULTS/01 SS3c heuristic verbatim (caught 1/1 catastrophic,
+  0 false-neg, 0 false-pos on the corpus). Applied at LOAD in BOTH:
+    * _dnsbl_compile_regex_rules(..., static_cap=...)  -- ABP FEED regex.
+    * the init REGEX-ini load loop                     -- USER pfb_regex_list.
+  Gated by pfb["regex_cap"] (the "Limit long/complex regex" setting). OFF -> nothing
+  dropped (default). Dropped patterns are logged to py_error.log via sys.stderr.
+
+RUNTIME CEILINGS (always on; from cfg, NOT hardcoded magic):
+  warn  = REGEX_WARN_MS_DEFAULT  = 10.0 ms  thread-CPU  -> rate-limited warning.
+  evict = REGEX_EVICT_MS_DEFAULT = 100.0 ms thread-CPU  -> error log + evict.
+  Overridable via ini MAIN regex_warn_ms / regex_evict_ms -> pfb -> cfg.
+  Timing source: time.thread_time when available (_REGEX_HAVE_THREAD_TIME, jitter-
+  robust so a descheduled thread can't false-evict); else time.perf_counter with a
+  REGEX_PERF_STRIKES(2)-consecutive guard (a lone wall-clock spike does NOT evict;
+  a fast match resets the streak). thread_time evicts on the FIRST over-evict cross.
+
+================================================================================
+2. THE EVICTION MECHANISM + ITS THREAD-SAFETY ARGUMENT
+================================================================================
+At each of the 3 scan points the loop iterates a SNAPSHOT (list(regex_db.items())
+/ list(allow_regex_db.items())), times each match with _regex_timed_search, asks
+_regex_should_evict, and COLLECTS over-evict keys into a local list `to_evict`.
+AFTER the loop, _regex_evict_names does regexDB.pop(k, None) / allowRegexDB.pop(k,
+None) for each. THREAD-SAFETY: the matcher runs across many Unbound query threads
+sharing the live dicts; under the GIL dict.pop is atomic, and because we snapshot-
+iterate and pop AFTER the loop we NEVER mutate a dict mid-iteration -> no "dict
+changed size during iteration" and no torn read (ADR.md fact 3). Per-name keying
+("{feed}#{seq}" for feed, the user label for user regex) means ONE bad pattern is
+evicted in isolation -- good patterns from the same feed survive (pinned by
+test_eviction_does_not_corrupt_scan: 5 survive, only SLOW evicted).
+ACCEPTED RESIDUAL (maintainer, fact 2): the FIRST over-evict match already ran to
+completion (it holds the GIL; cannot be interrupted) -- that one slow first-hit is
+the bounded cost. On that hit the pattern is treated as NOT-found (evicted, not
+blocked) and removed, so subsequent queries are fast and it can't hang twice.
+
+================================================================================
+3. THE NEW SETTING -- config key, where read
+================================================================================
+* UI: pfblockerng_dnsbl.php -- "Limit long/complex regex"(py) checkbox, immediately
+  after "Regex Blocking"(py). pconfig['pfb_regex_cap'] read (:60), POST written
+  (pfb_filter PFB_FILTER_ON_OFF) (:507). Stored in config.xml under dnsblconfig as
+  'pfb_regex_cap' ('on'|'').
+* inc: $pfb['dnsbl_regex_cap'] = dnsblconfig['pfb_regex_cap'] ?? '' (:850); the ini
+  writer emits  regex_cap = {on|off}  into pfb_unbound.ini [MAIN].
+* Python: init reads MAIN regex_cap/regex_warn_ms/regex_evict_ms; build() consumes
+  config["regex_cap"] (via _dnsbl_config_from_manifest, which falls back to
+  pfb["regex_cap"]); the matcher reads cfg["regex_warn_ms"/"regex_evict_ms"].
+  Ceilings are advanced-only (no UI control added -- they default in Python and are
+  tunable via the ini); only the cap toggle has a UI control, per the prompt.
+
+================================================================================
+4. TEST ENTRY POINTS  (tests/test_adr07_regex_safety.py, 19 tests, pure)
+================================================================================
+TestStaticCapHeuristic       -- _regex_exceeds_static_cap: normal passes; over-length
+                                + nested-quantifier flagged; boundary (==cap allowed).
+TestStaticCapAtLoad          -- cap OFF keeps nested-quantifier; cap ON drops nested
+                                + over-length; build() threads config["regex_cap"]
+                                (cap_on.regex_count < cap_off.regex_count).
+TestRuntimeBlockRegexEviction-- warn-then-evict on first hit (key gone from LIVE dict,
+                                second query empty/no-hang); warn-only keeps + records
+                                rate-limit; USER bare-compiled pattern evicted too;
+                                eviction does NOT corrupt the scan (5 survive).
+TestRuntimeAllowRegexEviction-- allow-regex evicted over ceiling (band 0, key gone) /
+                                kept under ceiling (band == PRIO_FEED_ALLOW).
+TestPerfCounterFallback      -- single spike -> strike 1, no evict; 2 consecutive ->
+                                evict; a fast match clears the streak.
+TestFastPathUnchanged        -- no-regex path untouched; a FAST regex blocks + stays
+                                loaded, nothing warned/evicted.
+TestRealCatastrophicCapped   -- the real ([a-z]+)*\.example$ ReDoS shape is dropped by
+                                the static cap WITHOUT executing it (no hang).
+Timing is simulated with a deterministic _FakeClock monkeypatched onto
+pfb_unbound.time.thread_time (+ _REGEX_HAVE_THREAD_TIME True) so a "slow" match
+costs nothing real -- the suite never pays catastrophic-backtracking time.
+
+================================================================================
+5. BOTH ORACLES STAY GREEN  (the preserved-semantics contract)
+================================================================================
+* ADR-06 GOLDEN ORACLE (no-regression, important_rules OFF): UNCHANGED-green. The
+  guard does NOT change correct decisions -- it only (a) drops pathological patterns
+  at load when the opt-in cap is ON (default OFF), and (b) evicts a pattern only when
+  its match crosses the evict ceiling. For non-slow patterns the matcher decides
+  exactly as P6 (the only change in the fast-path loop is wrapping pattern.search in
+  _regex_timed_search -- same match result; decisions identical, pinned by the oracle).
+* ADR-07 spec/parser/reconcile/strata/emit_wire (important_rules ON): green. The
+  numeric MAX-block + allow-regex scans now time+evict but, absent a slow pattern,
+  return the same bands -> same decisions vs decide().
+NOTE: the warn/evict bookkeeping (_regex_warned, _regex_perf_strikes) is module
+state; conftest clears it per test and init clears it per (re)load.
+
+================================================================================
+6. GO-AHEAD FOR PHASE 8 (slim the PHP boundary)
+================================================================================
+GO. The regex safeguard is in place for feed + user; no reject-criterion (ADR.md
+SS7) tripped. Phase 8 (08_Slim_PHP_Boundary.txt) can now:
+  * PHP header-sniff ABP feeds -> format_hint='abp', pass RAW lines; DELETE the
+    $easylist lite pass + $e_replace (the Python parse('abp') is the one parser).
+  * Teach the DNSBL-IP pass ABP-anchored IP syntax (||1.2.3.4^, hosts IP) ->
+    DNSBLIP_v4/_v6; Python parse('abp') already skips IP anchors (0 leak).
+  * Wire the DNSBL_Regex alias count to the ADMITTED (cap-filtered) regex total:
+    build_result.regex_count is the feed admitted count (RESULTS/06 SS4). Phase 8
+    must emit it + add the user admitted count and update inc:8329's expectation.
+    REMEMBER P7 changed admission: when regex_cap is ON, both feed AND user over-cap
+    patterns are dropped at load, so the admitted total (and thus the alias) is
+    LOWER than the configured count by design -- reconcile the count accordingly.
+KEEP GREEN: python -m pytest (ADR-06 + ADR-07 incl. regex_safety), ruff check/
+format, php -l + ShellCheck on the slimmed PHP/shell.
+================================================================================

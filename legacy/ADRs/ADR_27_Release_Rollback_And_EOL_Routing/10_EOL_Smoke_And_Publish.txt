@@ -1,0 +1,72 @@
+================================================================================
+PHASE 10 PROMPT — Simulated-EOL smoke (-m repo, CE + Plus) + publish wiring
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.4, §6 Phase 10, §7)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 10 of 10 (final, Part 2). Proves the
+EOL route-only mechanism END-TO-END on a real pfSense VM, and specifies + applies the publish wiring
+that feeds each route-only version's frozen .pkg. Inline, one commit, push. This phase closes Part 2.
+
+WHY THIS PHASE EXISTS
+The off-box tests (P6-P9) pin SHAPE; only a live box proves a route-only version's frozen catalog is
+actually installable from our repo (deps resolved, newest-of-frozen wins) while it is NOT rebuilt.
+This is the "prove it works before we need it" gate the user asked for — no real version is EOL yet,
+so the smoke SIMULATES one with a forged frozen .pkg + a route-only catalog.
+
+REQUIRED READING
+- FIRST read RESULTS/09_Results.txt (and 06-08) — the role seam, the route-only generator input
+  contract (how frozen .pkg are supplied per varver), the Worker pin. If the generator contract is
+  unclear, STOP.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md §2.4 + §6 Phase 10 + §7.
+- tests/smoke/test_repo_install.py — the `repo` marker; build_repo_via_portable / build_repo_via_portable_named;
+  reversion_pkg (forge versioned .pkg); pkg_install_from_repo / pkg_install_pinned / pkg_installed_version /
+  pkg_repo_origin / write_repo_conf / repo_priority; the Part-1 rollback case (your template for an in-pass
+  multi-version catalog on a live VM).
+- tests/smoke/_matrix.py + tests/test_smoke_matrix.py — matrix-derived ABI/variant (never hardcode CE/Plus).
+- pfBlockerNG/pkg .github/workflows/publish.yml — the release/devel/stable enumeration + the Part-1
+  --release-extra-pkgs feeding; the pattern to extend for route-only.
+- CLAUDE.md "Smoke tests" + "Repo smoke flow".
+
+ACTION PLAN
+1. tests/smoke/test_repo_install.py — add a `repo`-marked simulated-EOL case (BDD, before/after),
+   matrix-derived ABI/variant so it runs on BOTH the CE and Plus legs:
+   - GIVEN a route-only catalog built ON THE RUNNER from a forged FROZEN .pkg (reuse reversion_pkg to
+     mint the "last supported" version), via the Phase-7 route-only generator path (NO fresh build, NO
+     nightly subtree), shipped + add-repo'd at our priority.
+   - WHEN `pkg install <name>` runs on the guest: THEN it installs the frozen version from OUR repo
+     (pkg_installed_version == the frozen version, pkg_repo_origin == ours, no "Missing dependency").
+   - THEN assert NO nightly catalog is served for that varver (the route-only guarantee).
+   - (Optional, if cheap) a second frozen version proves newest-of-frozen wins.
+   - Guard the live body with the repo_vm fixture so off-box collection stays clean.
+2. Publish wiring (pfBlockerNG/pkg publish.yml) — SPECIFY in this handoff and APPLY cross-repo:
+   the step that takes `--print-route` MINUS `--print-build` (the route-only set), enumerates each such
+   version's last release .pkg from GitHub Releases, and feeds them to build-repo-portable.py as that
+   varver's frozen input (the Phase-7 contract). This repo's diff = smoke test (+ any generator/reader
+   CLI/help/doc parity); the publish.yml edit is applied in pfBlockerNG/pkg and referenced here.
+5. If the live route-only install cannot work via the catalog (only raw `pkg add` does), record it as a
+   REJECT/rescope trigger (ADR §7 discipline) — do NOT fake a pass.
+
+CONSTRAINTS
+- Matrix-derived ABI/variant only (tests/smoke/_matrix.py); never hardcode FreeBSD:15/php83 or CE/Plus.
+- The case carries the `repo` marker (dispatch-only; deselected from -m smoke). Off-box collection clean.
+- Releases only — assert the route-only varver has NO nightly served.
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff / mypy tests/  → green/clean (off-box collection unaffected).
+- Live proof (dispatch): gh workflow run smoke.yml -f pytest_marker=repo — the simulated-EOL case green
+  on the CE AND Plus legs. Read smoke-diagnostics on any failure.
+
+EXPECTED RESULT
+A live-VM case proving a route-only (EOL) version installs from its frozen catalog (deps resolved, no
+rebuild, no nightly) on CE and Plus; the publish wiring to feed frozen .pkg is specified + applied.
+
+COMMIT (single)
+    test: prove EOL route-only install from a frozen catalog (ADR-27 P10)
+Push directly to the branch; open the Part-2 PR per the normal landing flow (src/-free, tests/scripts).
+
+HANDOFF — write RESULTS/10_Results.txt
+State: the simulated-EOL smoke (CE + Plus) + the live run id + result; the verbatim publish.yml
+route-only step applied in pfBlockerNG/pkg; confirm no real version was flipped to route-only.
+Summarize the Part-2 (§2.4) Definition-of-Done evidence (§7) for the accept decision.

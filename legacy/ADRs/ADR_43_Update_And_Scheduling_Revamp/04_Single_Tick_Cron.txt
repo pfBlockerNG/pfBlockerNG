@@ -1,0 +1,90 @@
+================================================================================
+PHASE 4 PROMPT — One trigger-tick + the cron generator
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §2.D/§2.E + contract #3/#4/#5/#6/#10)
+================================================================================
+
+ROLE
+You implement Phase 4 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-CHANGING — it collapses the cron-job fleet into ONE frequent trigger-tick
+driven by the Phase-2 due-ledger. Work inline on the branch, one commit, push directly (open a PR
+only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+Today four near-duplicate install_cron_job families (cron/dcc/bl/ss_refresh) each carry their own
+cadence + (dcc/bl) inline rand(0,23) jitter. Replace them with ONE tick (≈*/15) that only reads the
+ledger and dispatches due jobs — moving all scheduling logic out of crontab into our PHP. Cadence +
+jitter MUST be preserved (feeds at their freq, dcc daily, bl daily/weekly, ss_refresh per-tick), the
+ledger must survive a clean reboot (#468 set) and degrade to due-now-jittered when wiped (no boot
+stampede), and offline catch-up must work (next_due in the past ⇒ due).
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt (new trigger API ready) AND RESULTS/02_Results.txt (ledger
+  API). If either is missing, STOP and report.
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§2.D/§2.E, §1.1 the job table, §1.3 RAM-disk +
+  jitter facts, contract #3/#4/#5/#6/#10, §5)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the cron-install region (:15125-:15290): the
+  `cron`/`dcc`/`bl`/`ss_refresh` blocks, `pfb_cron_base_hour()` (:3558), `pfblockerng_cron_exists()`
+  (the idempotency check), `install_cron_job()` call sites; the back-compat knobs
+  pfb_interval/pfb_min/pfb_dailystart + per-feed freq/updatefreq (how they seed cadence — §2.G).
+- The issue-#468 persist/restore set + earlyshellcmd restore (add the ledger to it).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig registry (ADR-29): register the
+  new tick-frequency knob there (read docs/misc/config-gateway.md for adding a field).
+- tests/smoke/ (the reboot test is `-m reboot`, see test_smoke_boot_reload.py) + helpers.py.
+- CLAUDE.md (PHP standards; ADR-29 config gateway; the test-coverage mandate).
+
+ACTION PLAN (red→green + live)
+1. Add the tick CLI verb (e.g. `pfblockerng.php tick`): read the ledger, compute which jobs are due
+   (feeds per their freq-seeded interval, dcc daily, bl daily/weekly, ss_refresh every tick), dispatch
+   each due job through the Phase-3 new API (scope/force per job), then mark_ran each. Preserve the
+   SEEDED jitter from the ledger (dcc/bl spread). ss_refresh runs every tick (cheap DNS re-resolution).
+2. Replace the cron generator: collapse the cron/dcc/bl/ss_refresh install_cron_job blocks into ONE
+   block that installs the single `*/<freq>` tick (default ≈15 min, registered via PfbConfig). LEAVE
+   clearip/cleardnsbl and any non-pfB jobs untouched. Keep idempotent install/teardown via
+   pfblockerng_cron_exists (no churn on re-run).
+3. Seed the ledger from the legacy knobs (§2.G): pfb_interval/per-feed freq → next_due interval;
+   dcc/bl cadence → their interval+jitter. Read at the ADR-28/29 boundary; NO config.xml migration.
+4. Add the ledger to issue #468's persist/restore set so a clean reboot keeps next_due; confirm the
+   absent-ledger path (Phase 2) gives due-now-jittered.
+5. Tests:
+   - PHPUnit: the cron generator emits exactly ONE pfB tick (+ untouched clearip/cleardnsbl);
+     idempotent (second run = no change); the due-computation picks the right jobs for a given clock
+     (feeds/dcc/bl/ss_refresh) with preserved cadence + non-zero jitter.
+   - Smoke (live): the tick fires and runs a due feed (set its next_due in the past → it updates on
+     the next tick); a wiped ledger ⇒ jobs run but JITTERED (no all-at-once); `-m reboot`: a clean
+     reboot keeps the schedule (ledger restored), DNSBL/feeds still current.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); PFBL-01 green for the cron command + ledger path
+  builds; the tick-frequency knob goes through PfbConfig (ADR-29) — do NOT call config_*_path
+  directly for it. Preserve dcc/bl jitter (do NOT collapse onto one minute). Do NOT touch the GUI
+  (Phase 6) or change apply semantics yet (Phase 5 — a due job still applies via the existing path
+  this phase). Do NOT touch clearip/cleardnsbl.
+
+VERIFICATION
+- vendor/bin/phpunit → green (generator + due-computation tests)
+- php -l / phpstan / phpcs (phpcs.xml.dist) → clean
+- Live-VM smoke (tick + catch-up) green; `-m reboot` reboot-persistence green
+- diff-read: crontab now carries ONE pfB tick; cadence/jitter preserved; clearip/cleardnsbl untouched.
+
+EXPECTED RESULT
+A single ≈*/15 trigger-tick drives all feed/dcc/bl/ss_refresh work off the due-ledger; cadence and
+jitter preserved; ledger persists across a clean reboot and degrades to due-now-jittered when wiped;
+offline catch-up works.
+
+COMMIT (single)
+    pfblockerng: collapse the cron fleet onto one due-ledger trigger-tick (ADR-43 P4)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/04_Results.txt`
+Record: the tick verb name + dispatch logic; the single-tick crontab line + default freq knob (PfbConfig
+key); how legacy knobs seed the ledger; the #468 persist integration; cadence/jitter test results;
+the reboot smoke result; the go-ahead for Phase 5.
+
+POST-MERGE AMENDMENT — 2026-08-11 (issue #2090)
+The tick-frequency-knob requirements above are historical. The cron-tick cadence is fixed at */15;
+pfb_tick_interval is no longer registered or supported through config/CLI. A stale raw config.xml
+value remains stored but inert, with no schema migration.

@@ -1,0 +1,180 @@
+================================================================================
+PHASE 3 PROMPT — octet-stream structural recovery (the #581 primary fix)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md   (read §1, §2.3, §3, §6 Phase 3 first)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/45-structural-integrity-tests (off devel)
+Phase 3 of 4 — behaviour-CHANGING (recovers a valid archive mislabelled
+application/octet-stream; junk octet-stream still rejected).
+Work ENTIRELY inside the worktree you were given (`git -C <worktree> ...`).
+Do NOT touch the main checkout. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+This is the reconciled PRIMARY #581 fix. file(1) sometimes returns
+application/octet-stream (or empty) for a PERFECTLY VALID, extractable archive —
+self-extracting ZIP stubs, archives with leading bytes before the first local
+header, an older magic database. The canonical LIVE case (ADR §1): the Top1M
+`top-1m.csv.zip` (alexa/tranco/umbrella), fetched via pfblockerng.php's
+$pfb['extras'], is reported as octet-stream. Today the MIME gate rejects it
+outright. This phase recovers it by POSITIVE structural identification — never a
+blanket accept: probe each supported archive type; on the first passing probe,
+adopt that canonical type and proceed. If no probe passes (random binary, an HTML
+error page), reject exactly as today.
+
+REQUIRED READING
+- FIRST read the prior handoff:
+  .ADRs/ADR_45_Structural_Integrity_Tests/RESULTS/02_Results.txt
+  Confirm pfb_validate_archive() is wired into the archive branches and its
+  signature/runner contract. If missing -> STOP.
+- .ADRs/ADR_45_Structural_Integrity_Tests/ADR.md  (§1 octet-stream reproduction,
+  §2.3 recovery decision, §3 risk/mitigation, §6 Phase 3, §7 reject criteria)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_filter() PFB_FILTER_FILE_MIME:
+    * the gate + allow-list test ............................ L1040-1049
+    * existing hostname exceptions (text/x-asm -> easylist; octet -> ipinfo.io)
+      promote to text/plain and SKIP the reject ............. L1051-1059
+    * the final `else { reject }` block (log + unlink + return FALSE) — the
+      recovery hook lives HERE ............................... L1060-1064
+    * $input[1] is the RAW file path (exists; checked at L1036) ; $input[2] is URL
+- pfb_archive_probe()/pfb_validate_archive() from Phase 1 (the supported types +
+  the exact canonical strings to probe).
+- CLAUDE.md  (test-coverage non-negotiables; branch coverage = BOTH sides:
+  recovered AND still-rejected).
+- tests/php/PfbFileMimeNormaliseWiringTest.php  (live file(1) wiring test +
+  markTestSkipped host guard — the template for the octet-stream wiring test).
+
+ACTION PLAN (ordered — seam first, then wire, then tests)
+
+1. Add a small, SEAMED recovery helper next to the Phase-1 helpers, so the
+   loop+decision is unit-testable with NO shell:
+
+       function pfb_octet_recover_type(string $file, array $supported_types, callable $validator): ?string {
+           foreach ($supported_types as $type) {
+               if ($validator($file, $type)) {
+                   return $type;           // first positive structural id wins
+               }
+           }
+           return NULL;                    // no supported archive matched -> caller rejects
+       }
+
+   $validator has the shape callable(string $file, string $type): bool — in
+   production it is 'pfb_validate_archive' (its 3rd runner arg defaults to the
+   real exec); in tests it is a fake closure.
+
+2. Wire recovery into the MIME gate's final `else` reject block (L1060-1064).
+   Restructure so octet-stream/empty gets ONE recovery attempt BEFORE rejecting,
+   and a positive id falls through to the normal `$result = htmlspecialchars($output[0])`:
+
+       else {
+           $recovered = NULL;
+           if ($output[0] === 'application/octet-stream' || empty($output[0])) {
+               $recovered = pfb_octet_recover_type(
+                   $input[1],
+                   array('application/zip', 'application/gzip', 'application/x-bzip2', 'application/x-7z-compressed'),
+                   'pfb_validate_archive'
+               );
+           }
+           if ($recovered !== NULL) {
+               pfb_logger("MIME recovered: octet-stream positively identified as \"" . htmlspecialchars($recovered) . "\" via structural probe", 5);
+               $output[0] = $recovered;
+           } else {
+               pfb_logger("\n[PFB_FILTER - {$type}] Failed or invalid Mime Type: [" . htmlspecialchars($output[0]) . "|" . htmlspecialchars($retval) . "]", 2);
+               unlink_if_exists($input[1]);
+               return FALSE;
+           }
+       }
+
+   - Recovery runs ONLY in the final else (so the existing text/x-asm and
+     ipinfo.io hostname exceptions at L1053-1059 still match first and are
+     untouched — an ipinfo.io octet-stream still becomes text/plain, never
+     reaching recovery).
+   - Probe order: zip first (the Top1M live case), then gzip, bzip2, 7z.
+   - On recovery the adopted $output[0] flows into $result at L1066 unchanged;
+     pfb_download() then dispatches on that $file_type — including the 7z branch
+     (L8397), reachable for the first time via a recovered application/x-7z-compressed.
+
+3. Confirm php -l + existing suite green.
+
+TEST COVERAGE (behaviour change — BOTH branches, red->green)
+
+A) Decision-logic unit tests (no shell) — OctetRecoverTypeTest.php
+   (#[CoversFunction('pfb_octet_recover_type')]):
+   - validator TRUE for 'application/zip' only -> recovers 'application/zip'
+     (and asserts probe ORDER: a validator true for both zip and gzip returns
+     zip, the first in the list).
+   - validator FALSE for ALL types -> returns NULL (the junk/HTML branch ->
+     caller rejects). This is the "genuinely-unknown octet-stream still rejected"
+     half — assert it explicitly.
+   - empty $supported_types -> NULL.
+   These FAIL before this phase (function absent) and PASS after — record the red
+   baseline (function-absent) in the handoff.
+
+B) Live wiring test — OctetStreamRecoveryWiringTest.php
+   (#[CoversFunction('pfb_filter')]), modelled on PfbFileMimeNormaliseWiringTest:
+   - VALID-octet-stream-archive branch: craft a small archive that the HOST file(1)
+     reports as application/octet-stream yet a real tool can still parse — e.g. a
+     valid ZIP with a few junk bytes PREPENDED before the first local header (bsdtar
+     scans for the central directory and lists it; file(1) typically returns
+     octet-stream). Embed the fixture as base64 for hermeticity. GUARD: probe the
+     host with `file -b --mime-type`; if it does NOT return application/octet-stream
+     for the fixture, markTestSkipped (the host magic db classified it differently —
+     not a failure of the wiring). With an allow-list that does NOT contain the
+     archive type pre-recovery, assert pfb_filter(...PFB_FILTER_FILE_MIME...)
+     returns 'application/zip' (recovered). BEFORE this phase the same input
+     returns FALSE — note that red baseline.
+   - JUNK-octet-stream branch: a random-bytes blob (NOT any valid archive). Guard
+     it reports octet-stream; assert pfb_filter(...) returns FALSE (no probe
+     passes -> still rejected). This pins ADR §7's "octet-stream never blanket
+     accepted". Print expected-vs-actual on failure.
+
+   Both branches in one suite = the recovered/rejected pair ADR §3 mitigation
+   requires.
+
+CONSTRAINTS
+- Recovery is POSITIVE-ID only: $output[0] is set to a canonical type ONLY when a
+  structural probe passes. NEVER blanket-promote octet-stream. (ADR §7 reject
+  criterion.)
+- Do NOT touch the text/x-asm / ipinfo.io hostname exceptions (L1053-1059), the
+  allow-list ($pfb['mime_types']), pfb_mime_normalise(), or the
+  PFB_FILTER_FILE_MIME_COMPRESSED (18) branch.
+- Recovery applies to PFB_FILTER_FILE_MIME (17) only.
+- Do NOT add recovery to any non-archive/plain-text path.
+- PHP 8.3; tabs; uppercase TRUE/FALSE.
+
+VERIFICATION
+- vendor/bin/phpunit  -> green (existing + OctetRecoverTypeTest + OctetStreamRecoveryWiringTest)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc   -> no syntax errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc -> clean
+- git -C <worktree> diff --stat   -> pfblockerng.inc + the two new test files
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: recovery sits ONLY in the final else (hostname
+exceptions still match first); positive-id only (no blanket promote); probe order
+zip->gzip->bzip2->7z; the recover decision test pins BOTH recovered and
+still-rejected; the wiring test pins valid-octet -> recovered AND junk-octet ->
+rejected, each guarded. Fix and re-verify if anything is off.
+
+EXPECTED RESULT
+- A valid archive file(1) mislabels octet-stream is recovered (Top1M-shaped case);
+  junk octet-stream is still rejected.
+- OctetRecoverTypeTest + OctetStreamRecoveryWiringTest green; full suite green.
+- The 7z branch is now reachable via a recovered application/x-7z-compressed.
+
+COMMIT (single)
+    pfb_filter: octet-stream structural recovery for valid archives (ADR-45 P3)
+Push directly to adr/45-structural-integrity-tests.
+
+HANDOFF — write RESULTS/03_Results.txt
+Include:
+- The recovery insertion point (line refs) + confirmation hostname exceptions are
+  untouched and recovery is positive-id only.
+- OctetRecoverTypeTest + OctetStreamRecoveryWiringTest names + results; the
+  recorded red baselines (function-absent for the decision test; octet-zip ->
+  FALSE pre-recovery for the wiring test); any host skip + why.
+- Confirmation the junk-octet-stream-rejected branch is asserted.
+- PHPUnit summary + phpcs clean; commit hash + push confirmation.
+- For Phase 4: the supported-type probe order, the octet-stream fixture shape
+  (leading-bytes ZIP), and that the Top1M `top-1m.csv.zip` is the live smoke case.

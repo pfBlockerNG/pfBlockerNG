@@ -1,0 +1,93 @@
+================================================================================
+PHASE 2 PROMPT — Builder overrides + manifest `conflicts` (behaviour-preserving for release)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §2 "Package identity"/"Version"/
+     "Commit provenance"/"Conflicts", §1 Context 3-4 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 2 of ADR-18. Teach the
+pure-Python builder to emit a nightly package WITHOUT changing what a release build
+produces. This is behaviour-preserving prep for the release channel, pinned by a unit
+oracle. Work in this ADR's worktree, one commit (touches scripts/ + tests/ → rebase-only
+PR).
+
+WHY THIS PHASE EXISTS
+Phase 1 proved a `-NIGHTLY` package with a date version + named conflict behaves on a box.
+The publish pipeline (Phase 4) must produce that package reproducibly from `devel` HEAD.
+Today `scripts/build-pkg-portable.py` names the package from `PORTNAME` verbatim (`:937`,
+`:1166`), versions it from `PORTVERSION` (`compute_pkgversion`, `:1090`) with NO override,
+and `make_manifest` (`:935-958`) emits NO `conflicts` key. This phase adds the minimal
+override surface + the `conflicts` key, and PROVES a release build is byte-identical to
+before (the contract, §2 "Semantics that MUST be preserved").
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_18_Nightly_Channel/RESULTS/01_Results.txt — it must say GO and record the
+  manifest fields that made the conflict NAMED + the date-ordering evidence. If it is
+  missing or says REJECT, STOP and report.
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§2 identity/version/provenance/conflicts; §1
+  Context 3-4 with the cited line numbers).
+- scripts/build-pkg-portable.py — `compute_pkgversion` (`:1090`), `run_build`/`portname`
+  (`:1166`), `make_manifest` (`:935-958`, note `annotations` already emitted at `:956`),
+  the `Build` dataclass (`portname`/`pkgversion`/`annotations` fields), and `main`'s
+  argparse groups (`--channel` `:1288`, `--port-dir`).
+- tests/test_build_pkg_portable.py — the existing unit oracle style for manifests.
+- CLAUDE.md — Python standards; "Naming — follow the established pattern".
+
+ACTION PLAN (ordered — oracle FIRST: pin the release manifest, then add the branch)
+1. UNIT ORACLE (write FIRST, behaviour-preserving guard): a test asserting the CURRENT
+   `--channel devel` (and `stable`) manifest — `name` from `PORTNAME`, `version` from
+   `PORTVERSION`, and NO `conflicts` key. This must stay green after the change.
+2. Add the override surface to `main`/`run_build`. Prefer a `--channel nightly` that
+   builds from the `-devel` port-dir but renames the emitted package to
+   `pfSense-pkg-pfBlockerNG-NIGHTLY`, PLUS explicit, composable overrides CI can pass:
+     --pkgversion <ver>        override compute_pkgversion (CI passes YYYYMMDD[.HHMMSS])
+     --annotate K=V            repeatable; merged into the manifest annotations dict
+     --conflicts <glob>        repeatable; the conflicts array (default empty)
+   `--channel nightly` should imply name=-NIGHTLY + the two release conflict globs, while
+   still requiring `--pkgversion`/`--annotate commit=` from CI (do not invent a date
+   inside the builder — Date is a CI fact). Keep `--pkgname`/suffix handling minimal and
+   match the established flag/naming style.
+3. Add a `conflicts` key to `make_manifest` (emitted ONLY when the conflicts list is
+   non-empty, in BOTH compact and full manifests, sorted for determinism). Confirm the
+   pure-Python `.pkg` archive + the catalog generator carry it through (a `-NIGHTLY` pkg's
+   `+MANIFEST`/`+COMPACT_MANIFEST` shows `conflicts`).
+4. UNIT ORACLE (the ON branch): assert the nightly manifest carries name
+   `pfSense-pkg-pfBlockerNG-NIGHTLY`, the passed date `version`,
+   `conflicts: [pfSense-pkg-pfBlockerNG, pfSense-pkg-pfBlockerNG-devel]`, and
+   `annotations.commit=<sha>` — and that the date `version` contains no `-`. Branch
+   coverage: OFF (release, no conflicts) vs ON (nightly, conflicts+annotation).
+5. `--dry-run`/`--print` output should show the nightly name+version+conflicts so CI logs
+   are legible.
+
+CONSTRAINTS
+- Python 3.11+, 4-space, type hints on new params/functions, no bare `except`. stdlib only.
+- The release path MUST be byte-identical (the oracle proves it). New flags default OFF.
+- Do NOT modify ADR-09's matrix/builders or the catalog generator; do NOT add CI (Phase 4),
+  add-repo nightly (Phase 3), or touch src/.
+- The comparable `version` must never contain `-` (§1 Context 5). The commit hash lives in
+  the annotation + COMMENT, NEVER the version or the canonical `.pkg` filename.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green INCLUDING the new oracle cases (OFF + ON branches).
+- ruff check . / ruff format . / mypy tests/ → clean.
+- A local `--channel nightly --pkgversion 20260606 --annotate commit=deadbee` dry-run
+  (and a real build if deps allow) shows the expected name/version/conflicts; diff a
+  `--channel devel` manifest against a pre-change capture → identical.
+
+EXPECTED RESULT
+`build-pkg-portable.py` can emit `pfSense-pkg-pfBlockerNG-NIGHTLY` at a CI-supplied date
+version with a `conflicts` array + a `commit` annotation, while a release build is provably
+unchanged — all pinned by unit oracles, no VM needed.
+
+COMMIT (single)
+    build: add nightly channel + conflicts/annotate overrides to build-pkg-portable (ADR-18 P2)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. Touches scripts/+tests/ → rebase-only PR. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/02_Results.txt` (plain .txt)
+State: the exact CLI surface added (flags + what `--channel nightly` implies), the
+`make_manifest` `conflicts` behaviour (when emitted, ordering, compact+full), the proof the
+release manifest is unchanged (oracle), the exact `--channel nightly` invocation Phase 4's
+CI must call (with `--pkgversion`/`--annotate commit=`), and the go-ahead for Phase 3.

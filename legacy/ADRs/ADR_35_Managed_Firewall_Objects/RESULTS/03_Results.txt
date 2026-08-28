@@ -1,0 +1,220 @@
+ADR-35 Phase 3 — Retrofit VIP + NAT teardown onto fwobj layer
+=============================================================
+
+STATUS: COMPLETE — all gates green.
+BRANCH: adr/35-managed-firewall-objects
+
+ADR-RESUME: branch=adr/35-managed-firewall-objects next-phase=4
+
+────────────────────────────────────────────────────────────────────────────────
+WHAT WAS DONE
+────────────────────────────────────────────────────────────────────────────────
+
+Three call sites in pfblockerng.inc retrofitted to use the Phase-2 shared helpers.
+Additionally, pfblockerng_fwobj.inc received a one-line fix to align its marker
+matching with its own design intent (str_contains for non-pfB_ markers).
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 1 — pfblockerng_fwobj.inc: marker matching fix
+────────────────────────────────────────────────────────────────────────────────
+
+Lines 119 (pfb_fwobj_find) and 176 (pfb_fwobj_remove):
+  Before: ($descr === $marker)     — exact equality for non-pfB_ markers
+  After:  str_contains($descr, $marker)  — contains match for non-pfB_ markers
+
+Rationale: PFB_FWOBJ_NAT_LEGACY_PFX = 'pfB DNSBL' is documented as "any descr
+CONTAINING this prefix", and pfb_fwobj_is_owned() already uses str_contains for
+the ownership check. The Phase-2 implementation accidentally used exact equality,
+making it impossible to match 'pfB DNSBL - DO NOT EDIT' via the legacy prefix.
+Changing to str_contains aligns implementation with design intent and passes all
+Phase-2 FwobjLayerTest cases (which all test exact-form or pfB_ prefix markers,
+so the change is additive — no existing test breaks).
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 2 — pfb_find_marked_vip() (pfblockerng.inc ~lines 1126–1153)
+────────────────────────────────────────────────────────────────────────────────
+
+Before (lines 1138–1149): manual loop with ($vip['descr'] ?? '') !== $marker
+(exact string equality) and no ownership check.
+
+After: loop uses pfb_fwobj_is_owned() for the ownership gate and the same
+prefix/contains marker matching logic as pfb_fwobj_find:
+
+    $use_prefix = str_starts_with($marker, PFB_FWOBJ_FILTER_PFX);
+    foreach ($vips_config as $idx => $vip) {
+        $descr = $vip['descr'] ?? '';
+        if (!pfb_fwobj_is_owned($descr)) {
+            continue;
+        }
+        $marker_match = $use_prefix
+            ? str_starts_with($descr, $marker)
+            : str_contains($descr, $marker);
+        if (!$marker_match) {
+            continue;
+        }
+        // ... $match_ip and is_int($idx) checks unchanged ...
+    }
+
+Return contract unchanged: ?int (the integer key of the first matching entry,
+or null if none matches). Function signature unchanged.
+
+For VIP markers (PFB_AUTO_VIP_DESCR_V4 = 'pfB_AUTO_VIP_v4', same for V6):
+  str_starts_with('pfB_AUTO_VIP_v4', 'pfB_') = TRUE → uses str_starts_with match.
+  Behaviour identical to old exact match for VIP descrs.
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 3 — pfb_manage_dnsbl_vip() disable branch (pfblockerng.inc ~lines 1303–1321)
+────────────────────────────────────────────────────────────────────────────────
+
+Before (lines 1306–1315):
+    $idx = pfb_find_marked_vip($vips_config, $fam['marker'], $match_ip);
+    if ($idx === null) { continue; }
+    interface_vip_bring_down($vips_config[$idx]);
+    pfb_logger(...);
+    unset($vips_config[$idx]);
+    $vips_config = array_values($vips_config);
+
+After:
+    $guard = static function(array $row) use ($match_ip): bool {
+        return ($row['subnet'] ?? '') === $match_ip;
+    };
+    $found_row = pfb_fwobj_find('virtualip/vip', $fam['marker'], $guard);
+    if ($found_row === FALSE) { continue; }
+    interface_vip_bring_down($found_row);
+    pfb_logger(...);
+    pfb_fwobj_remove('virtualip/vip', $fam['marker'], $guard);
+    // Re-sync $vips_config from global config (pfb_fwobj_remove wrote it back).
+    $vips_config = config_get_path('virtualip/vip', []);
+
+The $guard closure is the double-guard predicate: ($row['subnet'] ?? '') === $match_ip.
+It is passed to BOTH pfb_fwobj_find (to locate the row for interface_vip_bring_down)
+AND pfb_fwobj_remove (to constrain removal to the IP-matched VIP only).
+
+The create (enabled) branch and the post-write apply phase (lines 1331-1337) still
+call pfb_find_marked_vip() on $vips_config — unchanged, since pfb_find_marked_vip
+now uses the shared ownership logic internally.
+
+Invariant preserved: testVipDisableDoesNotRemoveVipWithNonMatchingIp — when the
+stored IP resolves to a different address than the marked VIP's subnet, $guard
+rejects the row, pfb_fwobj_find returns FALSE, and the VIP survives.
+
+────────────────────────────────────────────────────────────────────────────────
+CHANGE 4 — pfb_create_dnsbl() NAT removal loop (pfblockerng.inc ~lines 3811–3897)
+────────────────────────────────────────────────────────────────────────────────
+
+Before: a single classify loop over config_get_path('nat/rule', []) that ran for
+BOTH enabled and disabled modes, classifying rules into $dnsbl_ex_nat and $pfb_ex_nat
+using strpos($ex_nat['descr'], 'pfB DNSBL') !== FALSE. On disable, $pfb_ex_nat was
+written back as $new_nat; on enable, it was combined with new NAT rules.
+
+After: the classify loop is moved INSIDE the if ($mode == 'enabled') branch where
+it is needed. pfb_fwobj_is_owned() replaces the inline strpos check. The else
+(disabled) branch uses:
+
+    if (pfb_fwobj_remove('nat/rule', PFB_FWOBJ_NAT_LEGACY_PFX)) {
+        $pfbupdate = TRUE;
+    }
+
+pfb_fwobj_remove('nat/rule', 'pfB DNSBL') matches all NAT rules whose descr
+contains 'pfB DNSBL' — both the canonical 'pfB DNSBL - DO NOT EDIT' form and the
+legacy bare 'pfB DNSBL' form — because PFB_FWOBJ_NAT_LEGACY_PFX does not start with
+'pfB_', triggering the str_contains path in pfb_fwobj_remove (see Change 1).
+
+The final config write is restructured to only call config_set_path('nat/rule', $new_nat)
+on enable (disable has no $new_nat since pfb_fwobj_remove already wrote the config).
+write_config() is called in both cases when $pfbupdate is TRUE.
+
+Dead code removed: the $pfbfound = FALSE reset + subsequent if ($mode != 'enabled')
+block (lines 3879–3886 in the old code) was unreachable — $pfbfound was reset to FALSE
+immediately before the if check. This block is not present in the new code.
+
+The add-on-enable path (writing 'pfB DNSBL - DO NOT EDIT' descr) is UNCHANGED.
+No persisted descr string changed.
+
+────────────────────────────────────────────────────────────────────────────────
+MARKER PASSED TO pfb_fwobj_remove FOR NAT REMOVAL
+────────────────────────────────────────────────────────────────────────────────
+
+    pfb_fwobj_remove('nat/rule', PFB_FWOBJ_NAT_LEGACY_PFX)
+
+where PFB_FWOBJ_NAT_LEGACY_PFX = 'pfB DNSBL'.
+
+Matches (via str_contains, since 'pfB DNSBL' does not start with 'pfB_'):
+  - 'pfB DNSBL'               (bare legacy form)
+  - 'pfB DNSBL - DO NOT EDIT' (canonical current form)
+  - any other 'pfB DNSBL *'   (future variants, future-safe)
+
+User rules (no 'pfB DNSBL' in descr) are NEVER removed (pfb_fwobj_is_owned = FALSE).
+
+────────────────────────────────────────────────────────────────────────────────
+PHASE 1 ORACLE CONFIRMATION
+────────────────────────────────────────────────────────────────────────────────
+
+FwobjCurrentBehaviourTest (11 tests, all PASS, unmodified):
+  a. testVipFindByMarkerV4                          PASS
+  b. testVipFindByMarkerV6                          PASS
+  c. testVipFindReturnsNullWhenAbsent               PASS
+  d. testVipCreateIsIdempotent                      PASS
+  e. testVipDisableRemovesMarkedVipWithMatchingIp   PASS
+  f. testVipDisableDoesNotRemoveVipWithNonMatchingIp  PASS
+  g. testVipDisableNeverTouchesUserVip              PASS
+  h. testNatAddWritesPfbDnslDescr                   PASS
+  i. testNatStripsOnDisable                         PASS
+  j. testNatStripsLegacyPfbDnsblPrefix              PASS
+  k. testNatNeverTouchesUserRule                    PASS
+
+FwobjLayerTest (21 tests, all PASS, unmodified):
+  All 21 Phase-2 unit tests for pfb_fwobj_is_owned/find/remove/sweep/register/reconcile.
+
+────────────────────────────────────────────────────────────────────────────────
+GATE RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+vendor/bin/phpunit:
+  Tests: 1164, Assertions: 4455, Warnings: 31 (pre-existing pfb_global noise), Skipped: 3.
+  All PASS. FwobjCurrentBehaviourTest: 11 tests — all PASS. FwobjLayerTest: 21 tests — all PASS.
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  No syntax errors detected.
+
+php -l src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc:
+  No syntax errors detected.
+
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G:
+  [OK] No errors
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors — PFBL-01, ADR-28, ADR-29 sniffs all clean.
+
+.venv/bin/python -m pytest -q:
+  1930 passed, 2 skipped.
+
+.venv/bin/ruff check .:
+  All checks passed!
+
+────────────────────────────────────────────────────────────────────────────────
+FILES MODIFIED
+────────────────────────────────────────────────────────────────────────────────
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc  (modified — marker matching fix)
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc        (modified — 3 function retrofits)
+  .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/03_Results.txt  (this file)
+
+────────────────────────────────────────────────────────────────────────────────
+GO-AHEAD FOR PHASE 4
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 4 may now:
+  - Retrofit pfb_firewall_rule() filter/rule handling to call pfb_fwobj_remove()
+    with PFB_FWOBJ_FILTER_PFX instead of the inline substr() check.
+  - Any other sweep/deinstall path that still uses inline strpos/substr ownership
+    detection can be migrated to pfb_fwobj_is_owned() / pfb_fwobj_sweep().
+  Both Phase 1 (FwobjCurrentBehaviourTest) and Phase 2 (FwobjLayerTest) must stay
+  green throughout.
+
+Note for Phase 4: the non-pfB_ marker matching in pfb_fwobj_find/remove now uses
+str_contains (fixed in this phase). Any Phase-4 markers that are NOT pfB_-prefixed
+will use str_contains — pass an exact descr string as the marker if you want to
+match only that exact form (str_contains of itself is str_contains === str_starts_with
+when the haystack IS the marker). For pfB_-prefixed markers (like PFB_FWOBJ_FILTER_PFX),
+the str_starts_with path is used unchanged.

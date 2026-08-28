@@ -1,0 +1,98 @@
+================================================================================
+PHASE 3 PROMPT — Background check + cache + de-duped notice on the existing cron
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_19_Update_Channel_Panel/ADR.md
+     (read §2 "Read latest"/"Background check"/"Notice", §1.7 cron, §3 risks FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/19-update-channel-panel` branch performing Phase 3 of ADR-19. Add
+the thin `pkg`-IO wrapper + the orchestrator that reads installed/latest, caches it,
+and raises the de-duped notice via the Phase-2 decision core — wired into the EXISTING
+pfBlockerNG cron. Work in this ADR's worktree, one commit, push directly (rebase-only
+PR — touches src/ + tests/).
+
+WHY THIS PHASE EXISTS
+The notice must fire WITHOUT a page load, so a background check is required; pfBlockerNG
+already runs `pfblockerng.php cron` (§1.7) — piggyback it, no new scheduler. The IO is
+isolated behind a thin wrapper so the orchestration stays unit-testable (the wrapper is
+doubled in PHPUnit; the live legs are Phase-5 smoke). pkg access MUST respect base pkg
+locking + DNS availability or it stalls cron (§3 risks).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_19_Update_Channel_Panel/RESULTS/02_Results.txt — the four pure helpers +
+  their semantics. If missing, STOP and report.
+- Also re-read RESULTS/01_Results.txt — the PROVEN `pkg rquery -r <repo>` / `pkg query`
+  invocations and the de-dupe (last-notified) pattern + notice id/category.
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md (§2 "Read latest"/"Channel detection"/
+  "Background check"/"Notice"/"Notify default", the contract, §3 risks).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the cron entry path
+  (`sync_package_pfblockerng('cron')` ~:1932 and `pfblockerng.php cron`); the existing
+  `/var/db/pfblockerng/` state-file conventions (match the sibling cache style); how
+  `is_subsystem_dirty('pkg')` / `get_dnsavailable()` are used elsewhere.
+- src/usr/local/pkg/pfblockerng.xml — where to register the `pfb_software_notify`
+  config field default (config section `installedpackages/pfblockerng`).
+- tests/php/ — to double the IO wrapper (inject installed/latest, capture file_notice).
+- CLAUDE.md — "Investigating the live system" (pkg locking, chroot N/A here), "Code
+  standards", "Test coverage", "Naming" (`pfb_*`), [[project_pfsense_config_lists_need_row_listtag]]
+  (if any list config is added — prefer a scalar knob here, no list needed).
+
+ACTION PLAN (ordered)
+1. Thin IO wrapper in pfblockerng.inc (the ONLY new code that shells to pkg):
+   - `pfb_pkg_installed_name()` -> the installed pfBlockerNG package name (e.g. via
+     `pkg query '%n'` filtered to our prefix), feeding `pfb_channel_from_pkgname`.
+   - `pfb_pkg_repo_name_for_channel($channel)` -> 'pfblockerng' | 'pfblockerng-devel' |
+     'pfblockerng-nightly' (mirror add-repo.sh conf names).
+   - `pfb_pkg_latest($pkgname, $reponame)` -> `pkg update -r <repo>` (best-effort) +
+     `pkg rquery -r <repo> '%v' <pkgname>`; '' if the repo/conf is absent or pkg locked.
+   - `pfb_pkg_installed_version($pkgname)` -> `pkg query '%v' <pkgname>`.
+   - GUARDS: if `is_subsystem_dirty('pkg')` or `!get_dnsavailable()`, do the network
+     part NOT — return cached/empty and let the orchestrator serve cache.
+2. Orchestrator `pfb_software_update_check($force = false)`:
+   - Detect channel from installed name; compute repo name; read installed + latest.
+   - Read the cache file (e.g. `/var/db/pfblockerng/software_update.json`:
+     channel, installed, latest, last_checked, last_notified).
+   - Decide via Phase-2 `pfb_should_notify(installed, latest, last_notified, knob,
+     channel)`; if true -> `file_notice(...)` (id/category from P1) and set
+     last_notified = latest. Always refresh installed/latest/last_checked in the cache.
+   - `$force` (the page "Check now") bypasses any cache-freshness short-circuit.
+3. Wire into cron: call `pfb_software_update_check()` from the `pfblockerng.php cron`
+   path (NOT on every sync — once per cron tick is enough). Do NOT block or slow the
+   feed cron: guard + best-effort, swallow IO errors (log, never throw).
+4. Register the `pfb_software_notify` field default in pfblockerng.xml
+   (`default` resolving per channel via the helpers; values default|on|off).
+
+PHPUnit (tests/php/) — orchestration with the IO wrapper DOUBLED:
+- inject installed/latest pairs -> assert cache contents written + whether file_notice
+  was invoked (capture via the double), for: available+notify, available+suppressed
+  (OFF), not-available, and the de-dupe lifecycle (first tick notifies, repeat does
+  not, newer notifies) — before-state asserted each step.
+- pkg-LOCK / no-DNS short-circuit: GIVEN locked/no-DNS, WHEN check runs, THEN it serves
+  the existing cache and raises NO notice and throws NOT.
+
+CONSTRAINTS
+- PHP 8.3, TABS, no die()/exit(); pfSense funcs via stubs/doubles.
+- The wrapper is the ONLY pkg-shelling code; keep the orchestrator logic pure-ish
+  (delegates the decision to Phase-2 helpers). No www/ page yet (Phase 4).
+- Absolute path for the privileged `pkg` binary per CLAUDE.md shell/PHP convention.
+- Do NOT regress the feed cron timing; the check is best-effort + guarded.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit → green (new orchestration cases) ; php -l clean ; phpstan clean.
+- python -m pytest → UNCHANGED ; ruff/markdownlint as relevant.
+- diff-read: the config field default resolves per channel; the cron call is guarded
+  and best-effort (no throw path into the feed cron).
+
+EXPECTED RESULT
+A cron tick now refreshes the cache and raises a de-duped, channel-correct notice; the
+page (Phase 4) will read this cache. No GUI yet.
+
+COMMIT (single)
+    pfblockerng: cron-driven software-update check + de-duped notice (ADR-19 P3)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_19_Update_Channel_Panel/RESULTS/03_Results.txt` (plain .txt)
+Record: the cache file path + JSON shape; the wrapper fn names + exact pkg invocations;
+the config field name/default semantics; where the cron call was wired; the guard
+behaviour; PHPUnit case names; and the go-ahead for Phase 4 (the page that renders this).
