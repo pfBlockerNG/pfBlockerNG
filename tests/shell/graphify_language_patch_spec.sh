@@ -131,6 +131,40 @@ RCFILE
     The file "$repo/graphify-out/cache/ast/entry.json" should be exist
   End
 
+  It 'skips with a warning when the graphify on PATH is not a Python program'
+    unset PFB_GRAPHIFY_PACKAGE_DIR
+    stubdir="$fixture/stub bin"
+    mkdir -p "$stubdir"
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/graphify"
+    printf '#!/bin/sh\nexit 1\n' > "$stubdir/python3"
+    chmod +x "$stubdir/graphify" "$stubdir/python3"
+    When run env PATH="$stubdir:$PATH" sh "$script_abs" "$repo"
+    The status should equal 0
+    The stderr should include 'cannot locate'
+    The path "$package/rcfile.py" should not be exist
+    The file "$repo/graphify-out/cache/ast/entry.json" should be exist
+  End
+
+  It 'falls back to the ambient python3 when the graphify wrapper hides its interpreter'
+    unset PFB_GRAPHIFY_PACKAGE_DIR
+    stubdir="$fixture/stub bin"
+    mkdir -p "$stubdir"
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/graphify"
+    cat > "$stubdir/python3" <<PYTHON3
+#!/bin/sh
+case "\$2" in
+  *graphify.__file__*) printf '%s\n' "$package" ;;
+  *) exit 1 ;;
+esac
+PYTHON3
+    chmod +x "$stubdir/graphify" "$stubdir/python3"
+    When run env PATH="$stubdir:$PATH" sh "$script_abs" "$repo"
+    The status should equal 0
+    The stderr should include 'Graphify-Labs/graphify#3075'
+    The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
+    The path "$repo/graphify-out/cache/ast" should not be exist
+  End
+
   It 'rejects a target that is not a git worktree'
     When run sh "$script_abs" "$fixture/not a checkout"
     The status should equal 2
