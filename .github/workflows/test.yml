@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     # issue #2614: kernel-lock reachable, and a flock(2) acquire has no timeout of its
     # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
-    # than failing here. Observed 3.5 min median (n=14).
+    # than failing here. Observed median 3.5 min, worst 4.1.
     timeout-minutes: 20
 
     strategy:
@@ -764,7 +764,7 @@ jobs:
     runs-on: ubuntu-latest
     # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
     # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
-    # this budget is the only bound. Observed 2.2 min median (n=14).
+    # this budget is the only bound. Observed median 2.2 min, worst 2.6.
     timeout-minutes: 15
 
     strategy:
