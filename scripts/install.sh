@@ -92,6 +92,25 @@ die() {
     exit "${_die_code}"
 }
 
+# pfb_pkg_repair_hint — print the pfSense repository-repair sequence to stderr, for the
+# failures a broken pkg(8) setup on the box itself can cause: the catalogue refresh, and
+# the delete/install (issue #2789). Stale or half-written Netgate repo files, or an
+# interrupted upgrade, leave pkg unable to refresh ANY catalogue, and no conf this script
+# writes can repair that. Guidance only, never run for the user: pfSense-upgrade can move
+# the box to a different pfSense version, which is not a package installer's call.
+#
+# Deliberately NOT printed for the conf-resolution failures that also exit 4, nor for a
+# package-script failure, where pkg fetched and extracted fine and the box's repository
+# setup is not implicated — a hint pointing at the wrong cause costs more than none.
+pfb_pkg_repair_hint() {
+    cat >&2 <<'HINT'
+install.sh: if this box's own pkg setup is at fault, rebuild it, then re-run this script:
+install.sh:   pfSense-repoc
+install.sh:   pfSense-repo-setup
+install.sh:   pfSense-upgrade
+HINT
+}
+
 # _pkg ARGS... — every pkg(8) invocation: /dev/null stdin (piped-script safety, see
 # header) + ASSUME_ALWAYS_YES so a stray prompt cannot wedge a non-interactive run.
 # Callers add -y themselves on verbs that take it (delete/install); read-only verbs
@@ -286,6 +305,7 @@ _pkg_mutate() {
     printf 'done\n' >"${_mut_done}"
     wait "${_mut_reader}" 2>/dev/null || true
     if [ "${_mut_rc}" -ne 0 ]; then
+        pfb_pkg_repair_hint
         die "${_mut_code}" "${_mut_msg}"
     fi
     while IFS= read -r _mut_line || [ -n "${_mut_line}" ]; do
@@ -331,6 +351,13 @@ Exit codes:
      catalogue offers nothing, or pkg version -t gave no usable answer
   5  a pkg operation (delete/install) failed, including a package-script failure while pkg exited 0
   6  post-install verification failed
+
+A failed pkg step is often this box's own repository setup rather than the pfBlockerNG
+conf: rebuild it, then re-run this script.
+
+  pfSense-repoc
+  pfSense-repo-setup
+  pfSense-upgrade
 USAGE_TAIL
 }
 
@@ -479,6 +506,7 @@ pfb_channel_install() {
     printf '==> pkg update -f -r %s (refreshing the pfBlockerNG catalog)\n' "${REPO_NAME}"
     _pkg update -f -r "${REPO_NAME}" || {
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
+        pfb_pkg_repair_hint
         die 4 "$(printf '%s update -f -r %s failed — the catalog was not refreshed. Repo '\''%s'\'' is unreachable or serving an unreadable catalog. Inspect with: %s -d update -r %s' \
             "${PKG_BIN}" "${REPO_NAME}" "${REPO_NAME}" "${PKG_BIN}" "${REPO_NAME}")"
     }
@@ -503,6 +531,7 @@ pfb_channel_install() {
     done
     [ -n "${OFFERED}" ] || {
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
+        pfb_pkg_repair_hint
         die 4 "repo '${REPO_NAME}' does not offer ${CANONICAL_PKG} — run \`pkg update -f\`, and check the ${PFB_CHANNEL} catalogue has a build for this pfSense edition/version"
     }
     printf '==> Target: %s-%s (repo %s)\n' "${CANONICAL_PKG}" "${OFFERED}" "${REPO_NAME}"

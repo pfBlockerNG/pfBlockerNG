@@ -1758,3 +1758,96 @@ def test_output_reader_does_not_outlive_the_run() -> None:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(proc.pid, signal.SIGKILL)
             proc.wait(timeout=30)
+
+
+# --------------------------------------------------------------------------- #
+# 22. pkg-setup repair hint (issue #2789): a failed pkg step is frequently the
+#     box's own repository setup, not our conf. The three recovery commands ride
+#     the failure output, but only where that setup can be the cause.
+# --------------------------------------------------------------------------- #
+
+_REPAIR_COMMANDS = ("pfSense-repoc", "pfSense-repo-setup", "pfSense-upgrade")
+
+
+def _repair_hint_shown(proc: subprocess.CompletedProcess[str]) -> bool:
+    combined = proc.stdout + proc.stderr
+    return all(command in combined for command in _REPAIR_COMMANDS)
+
+
+def test_pkg_update_failure_prints_the_repository_repair_sequence() -> None:
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "testing", update_fails=True)
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert _repair_hint_shown(proc), proc.stdout + proc.stderr
+
+
+def test_empty_catalogue_failure_prints_the_repository_repair_sequence() -> None:
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "edge", catalog=())
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert _repair_hint_shown(proc), proc.stdout + proc.stderr
+
+
+def test_pkg_install_failure_prints_the_repository_repair_sequence() -> None:
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "stable", extra_env={"PFB_STUB_MUTATE_RC": "7"})
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        assert _repair_hint_shown(proc), proc.stdout + proc.stderr
+
+
+def test_conf_resolution_failure_does_not_print_the_repository_repair_sequence() -> None:
+    """A conf the generator hook could not resolve is our own bootstrap failing, with
+    pkg never reached. Printing pkg-repository repair steps there would send the user
+    after the wrong cause."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        pkg_bin = _write_pkg_stub(root)
+        _seed_box(root)
+        _seed_catalog(root, _repo_name(channel), ("4.0.0",))
+        manifest = _seed_info_manifest(root, (_DEFAULT_PAYLOAD_PATH,))
+        _seed_payload(root, _DEFAULT_PAYLOAD_PATH)
+        # Detection failure: blank /etc/version, so the hook leaves the seeded conf alone.
+        with open(os.path.join(root, "etc", "version"), "w") as fh:
+            fh.write("")
+        _seed_conf_file(
+            root,
+            _conf_name(channel),
+            "# Generated at boot by pfblockerng_repo_generate (ADR-39)\n"
+            'pfblockerng-stable: {\n  url: "https://other.example/pkg/stable/ce-2.8",\n'
+            "  mirror_type: none,\n  signature_type: none,\n  priority: 100,\n  enabled: yes\n}\n",
+        )
+        env = {
+            **os.environ,
+            "PFBLOCKERNG_ROOT": root,
+            "PKG_BIN": pkg_bin,
+            "PFB_BASE_URL": _BASE_URL,
+            "PFB_TEST_ROOT": root,
+            "PFB_STUB_INFO_MANIFEST": manifest,
+        }
+        proc = subprocess.run(
+            ["sh", str(_SCRIPT), "--channel", channel], env=env, capture_output=True, text=True, check=False
+        )
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert not _repair_hint_shown(proc), proc.stdout + proc.stderr
+
+
+def test_postinstall_script_failure_does_not_print_the_repository_repair_sequence() -> None:
+    """Our POST-INSTALL failing is our package's own script, not the box's repository
+    setup — pkg fetched and extracted the package just fine."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "stable", extra_env={"PFB_STUB_POSTINSTALL_FAIL": "1"})
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        assert not _repair_hint_shown(proc), proc.stdout + proc.stderr
+
+
+def test_usage_documents_the_repository_repair_sequence() -> None:
+    proc = _run_argv("--help")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    for command in _REPAIR_COMMANDS:
+        assert command in proc.stdout, proc.stdout
