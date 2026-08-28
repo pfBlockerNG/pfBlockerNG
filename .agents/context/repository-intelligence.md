@@ -8,6 +8,13 @@ Load when: every agent session, from `AGENTS.md`.
   Serena, CodeGraph, Graphify, and Worktrunk; configures only detected clients;
   disables Serena's web dashboard; and keeps Worktrunk worktrees outside the
   repository root.
+- Every agent tool installs through one command that both installs on a fresh host
+  and upgrades an outdated one — `uv tool install --upgrade <tool>`, `codegraph upgrade`,
+  or the tool's own installer. A `>=` floor rides along only when a minimum release is
+  required; an exact `==` pin is never the answer, because it makes every upstream
+  release wait on a repository commit and downgrades a host that is already ahead.
+  When a setup script fails because a dependency is absent, that missing dependency is
+  installed the same way, never pinned to whatever version the failure happened to name.
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`.
   `work-branch.sh --worktree` runs the same initializer after creating a worktree and
   removes the new worktree and branch if initialization fails; it uses Git directly
