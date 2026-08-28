@@ -225,10 +225,74 @@ def test_ledger_without_entries_fires_rather_than_passing_vacuously(tmp_path: Pa
     assert len(violations) == 1 and "no entries" in violations[0], violations
 
 
-def test_ledger_absent_from_the_root_is_not_a_violation(tmp_path: Path) -> None:
-    # Scratch roots (and any tree that never carried the ledger) stay clean;
-    # a tracked-but-unreadable file is check_sizes's verdict, not this one's.
+def test_ledger_entry_without_a_clause_passes(tmp_path: Path) -> None:
+    # The clause is optional by contract (#2829: "plus at most one clause"), so
+    # the bare documented shape is valid and stays valid.
+    _write(tmp_path, ccb.LEDGER, "- `deadbeef`  a title  (#1)\n")
     assert ccb.check_ledger_entries(tmp_path) == []
+
+
+@pytest.mark.parametrize("prefix", ["  ", "\t", "\ufeff"])
+def test_ledger_entry_hidden_behind_a_prefix_still_fires(tmp_path: Path, prefix: str) -> None:
+    # Markdown renders an indented bullet as a list item, and a U+FEFF is
+    # invisible: an entry-like line that dodges the `- ` prefix must not dodge
+    # the cap with it, or the whole control is one space away from bypassed.
+    _write(tmp_path, ccb.LEDGER, f"- `deadbeef`  a title  (#1)\n{prefix}{_ledger_entry(1_900, sha='c0ffee12')}\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "does not match" in violations[0], violations
+
+
+def test_ledger_prose_after_the_first_entry_fires(tmp_path: Path) -> None:
+    # A narrative continuation line carries no bullet at all; once the list has
+    # started, every non-blank line answers to the entry rule.
+    _write(tmp_path, ccb.LEDGER, "- `deadbeef`  a title  (#1)\n\nand then the review story continued\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "does not match" in violations[0], violations
+
+
+def test_ledger_absent_from_a_root_without_the_policy_is_not_a_violation(tmp_path: Path) -> None:
+    # Scratch roots (and any tree that never carried the ledger) stay clean.
+    assert ccb.check_ledger_entries(tmp_path) == []
+
+
+def test_ledger_missing_beside_the_policy_that_requires_it_fires(tmp_path: Path) -> None:
+    # A staged or committed deletion drops the file out of `git ls-files`, so
+    # check_sizes never sees it: this gate is the one that must fail closed.
+    _write(tmp_path, ccb.LEDGER_OWNER, "# CodeRabbit\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "missing" in violations[0], violations
+
+
+def test_ledger_replaced_by_a_directory_fires(tmp_path: Path) -> None:
+    (tmp_path / ccb.LEDGER).mkdir(parents=True)
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "unreadable" in violations[0], violations
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permissions — denial cannot be simulated")
+def test_ledger_unreadable_fires(tmp_path: Path) -> None:
+    path = _write(tmp_path, ccb.LEDGER, "- `deadbeef`  a title  (#1)\n")
+    path.chmod(0o000)
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "unreadable" in violations[0], violations
+
+
+def test_ledger_with_invalid_utf8_fires_instead_of_crashing(tmp_path: Path) -> None:
+    # A traceback out of the CLI discards every other violation already found.
+    path = tmp_path / ccb.LEDGER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"- `deadbeef`  a title  (#1)\n\xff\n")
+    violations = ccb.check_ledger_entries(tmp_path)
+    assert len(violations) == 1 and "unreadable" in violations[0], violations
+
+
+def test_run_checks_surfaces_ledger_violations(tmp_path: Path) -> None:
+    # Wiring pin: the rule is only a gate while run_checks calls it, and every
+    # unit test above stays green when the call is dropped.
+    root = _scratch_repo(tmp_path)
+    _write(root, ccb.LEDGER, _ledger_entry(ccb.LEDGER_ENTRY_MAX + 1) + "\n")
+    violations = ccb.run_checks(root, _tracked(root))
+    assert any("> cap" in v for v in violations), violations
 
 
 # --- routing-table extraction and resolution -----------------------------------

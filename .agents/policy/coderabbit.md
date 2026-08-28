@@ -99,8 +99,10 @@ so it cannot walk the PR Fair Usage band by itself. It needs the secret
 When a merged SHA had only a quota notice (or no CodeRabbit engagement)
 and no later finished review of that SHA:
 
-- Append one line to [`coderabbit-misses.md`](coderabbit-misses.md)
-  (`SHA  title  PR#`). Newest first.
+- Prepend one line to [`coderabbit-misses.md`](coderabbit-misses.md), newest
+  first, in that file's documented shape — ``- `SHA`  title  (#PR) — one
+  clause``, at most 200 bytes, enforced by `scripts/check_context_budget.py`.
+  The review story stays on the PR; the ledger carries the pointer.
 - Later sessions review that list CodeRabbit-style (correctness, hostile
   inputs, test honesty), newest first.
 - Do not start the older 481-commit tail unless a current cluster
