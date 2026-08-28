@@ -4612,3 +4612,180 @@ def test_unsupported_mime_feed_rejected(deployed_vm: SmokeVM, mock_feeds: _MockF
             f"{spec.alias} exists after an unsupported-MIME rejection — a refused feed must "
             f"never leave a table behind (a partial import is the failure this row guards)"
         )
+
+
+# --------------------------------------------------------------------------- #
+# issue #2660: the content-sanity verdicts cover an archive feed's EXTRACTED
+# payload. A .gz/.bz2/.zip/.tar wire body is never one of the scanned text types,
+# so the payload used to reach the parser with no verdict at all. The scan reads
+# the STAGED extraction, so a verdict refuses the publication instead of
+# replacing it -- pinned here by a '.orig' already in service.
+# --------------------------------------------------------------------------- #
+
+
+def _archive_of(kind: str, payload: bytes) -> bytes:
+    """Wrap ``payload`` in each archive kind whose extraction publishes a text '.orig'."""
+    if kind == "gz":
+        return gzip.compress(payload, mtime=0)
+    if kind == "bz2":
+        return bz2.compress(payload)
+    if kind == "zip":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("payload.txt", payload)
+        return buf.getvalue()
+    if kind == "tar":
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            info = tarfile.TarInfo("payload.txt")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        return buf.getvalue()
+    raise AssertionError(f"unknown archive kind {kind!r}")
+
+
+@pytest.mark.parametrize(
+    ("kind", "suffix", "mime"),
+    [
+        ("gz", ".gz", "application/gzip"),
+        ("bz2", ".bz2", "application/x-bzip2"),
+        ("zip", ".zip", "application/zip"),
+        ("tar", ".tar", "application/x-tar"),
+    ],
+)
+@pytest.mark.timeout(180)
+def test_extracted_error_page_rejected_and_publication_kept(
+    deployed_vm: SmokeVM,
+    mock_feeds: _MockFeedServer,
+    kind: str,
+    suffix: str,
+    mime: str,
+) -> None:
+    """issue #2660: an archive whose payload is an HTML error page must fail the update.
+
+    Both legs serve the SAME body and differ only in the flag, over two separate
+    download paths -- each freshly seeded with a healthy '.orig', so the conditional-GET
+    validators of one leg can never 304 the other.
+
+    Given the scan OFF (the registered default) and a healthy '.orig' in service,
+    When  pfb_download() fetches an archive whose extracted payload is the
+      html_error_page fixture,
+    Then  the download SUCCEEDS and the error page REPLACES the served payload -- the
+      before-state this issue reports.
+    Given the scan ON, the same body, and a second healthy '.orig' in service,
+    When  the same fetch runs,
+    Then  the download FAILS with 'stage=plaintext reason=html_error_page' naming the
+      extracted payload, and the served '.orig' is byte-identical.
+    """
+    payload = _fixture_bytes("html_error_page.html")
+    body = _archive_of(kind, payload)
+    served = "203.0.113.7/32\n"
+    workdir = f"/tmp/pfb2660_{kind}"
+    base_off = f"{workdir}/off{kind}"
+    base_on = f"{workdir}/on{kind}"
+    header_on = f"pfb2660{kind}on"
+    marker = f"pfb_validate: REJECT feed={header_on} stage=plaintext reason=html_error_page detected=on{kind}.orig"
+    try:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} && /bin/mkdir -p {workdir}")
+        # The outer gate must route to the branch under test; a libmagic surprise has to
+        # fail loudly rather than silently exercise a different arm.
+        box_mime = _box_mime_type(deployed_vm, body)
+        assert box_mime == mime, f"expected on-box MIME {mime!r} for the {kind} fixture, got {box_mime!r}"
+        feed_url = mock_feeds.register(f"pfb2660_{kind}{suffix}", body)
+
+        # Given -- scan OFF (also the registered default) + a healthy publication.
+        h.set_feed_sanity(deployed_vm, False)
+        _plant_guest_text(deployed_vm, f"{base_off}.orig", served)
+        out_off = _adr46_download(deployed_vm, feed_url, base_off, f"pfb2660{kind}off", "")
+        assert "PFB_DL_TRUE" in out_off, (
+            f"before-state: with the scan off a {kind} archive carrying an error page must still "
+            f"report success (that is the gap #2660 reports); got stdout: {out_off!r}"
+        )
+        published_off = deployed_vm.ssh("/bin/cat", f"{base_off}.orig").stdout
+        assert published_off == payload.decode(), (
+            f"before-state: the error page must have replaced the served payload with the scan off; "
+            f"{base_off}.orig now holds {published_off!r}"
+        )
+
+        # When -- the same bytes with the scan ON, over its own seeded publication.
+        h.set_feed_sanity(deployed_vm, True)
+        _plant_guest_text(deployed_vm, f"{base_on}.orig", served)
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        out_on = _adr46_download(deployed_vm, feed_url, base_on, header_on, "")
+
+        # Then -- refused, named, and the publication untouched.
+        assert "PFB_DL_FALSE" in out_on, (
+            f"expected pfb_download failure on a {kind} archive whose payload is an error page "
+            f"with the scan on; got stdout: {out_on!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert after > before, (
+            f"expected a NEW {marker!r} line in {h.PFB_LOG}; before={before} after={after}\n"
+            f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
+        )
+        kept = deployed_vm.ssh("/bin/cat", f"{base_on}.orig").stdout
+        assert kept == served, (
+            f"a refused refresh must leave the served payload byte-identical; {base_on}.orig now "
+            f"holds {kept!r}; ls={deployed_vm.ssh('/bin/ls', '-la', workdir).stdout!r}"
+        )
+    finally:
+        h.set_feed_sanity(deployed_vm, False)
+        deployed_vm.ssh(f"/bin/rm -rf {workdir}")
+
+
+@pytest.mark.timeout(240)
+def test_scan_on_keeps_ut1_and_geoip_archives_ingesting(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2660: the scan covers the text '.orig' publications and nothing else.
+
+    A UT1 archive extracts a category tree and a GeoIP archive publishes to the share;
+    neither is a text list, and each keeps its own validation. Turning the scan on must
+    leave both ingesting and must draw no sanity verdict.
+
+    Given the scan ON,
+    When  pfb_download() fetches a UT1-shaped tar.gz and a multi-member GeoIP zip,
+    Then  both succeed, the UT1 category file holds its domain, both GeoIP members are
+      published, and no NEW 'stage=plaintext' line appears across the window.
+    """
+    domain = h.unique_domain("pfb2660ut1")
+    workdir = "/tmp/pfb2660_regress"
+    category_dir = f"{h.PFB_DBDIR}/pfb2660ut1"
+    geoip_target = f"{workdir}/share"
+    geoip_zip = io.BytesIO()
+    with zipfile.ZipFile(geoip_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("d/pfb2660_a.csv", "192.0.2.31\n")  # inert RFC 5737 data
+        zf.writestr("d/pfb2660_b.csv", "192.0.2.32\n")
+    try:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} && /bin/mkdir -p {workdir} {geoip_target}")
+        h.set_feed_sanity(deployed_vm, True)
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, "stage=plaintext")
+
+        ut1_url = mock_feeds.register("pfb2660ut1.tar.gz", _blacklist_tar_gz("pfb2660ut1", "testcat", domain))
+        out_ut1 = _adr46_download(deployed_vm, ut1_url, f"{workdir}/pfb2660ut1.tar.gz", "pfb2660ut1", "blacklist")
+        assert "PFB_DL_TRUE" in out_ut1, (
+            f"a real UT1 archive must still ingest with the scan on; got stdout: {out_ut1!r}"
+        )
+        extracted = deployed_vm.ssh(f"/bin/cat {category_dir}/pfb2660ut1_testcat 2>&1").stdout
+        assert domain in extracted, (
+            f"expected {domain!r} in {category_dir}/pfb2660ut1_testcat with the scan on; "
+            f"got {extracted!r}; ls={deployed_vm.ssh(f'/bin/ls -A {category_dir} 2>&1').stdout!r}"
+        )
+
+        geoip_url = mock_feeds.register("pfb2660geoip.zip", geoip_zip.getvalue())
+        out_geoip = _adr46_download(deployed_vm, geoip_url, f"{workdir}/geoip.zip", geoip_target, "geoip")
+        assert "PFB_DL_TRUE" in out_geoip, (
+            f"a real GeoIP archive must still ingest with the scan on; got stdout: {out_geoip!r}"
+        )
+        published = sorted(deployed_vm.ssh(f"/bin/ls -A {geoip_target}").stdout.split())
+        assert published == ["pfb2660_a.csv", "pfb2660_b.csv"], (
+            f"expected both GeoIP members published with the scan on; found: {published!r}"
+        )
+
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, "stage=plaintext")
+        assert after == before, (
+            f"the scan must not reach the archive paths that publish no text '.orig'; "
+            f"stage=plaintext count before={before} after={after}\n"
+            f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
+        )
+    finally:
+        h.set_feed_sanity(deployed_vm, False)
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
