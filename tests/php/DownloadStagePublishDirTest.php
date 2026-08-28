@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/StagedDirFixtureTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -17,6 +19,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_stage_publish_dir')]
 final class DownloadStagePublishDirTest extends TestCase
 {
+	use StagedDirFixtureTrait;
+
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 	private string $dir;
 
@@ -29,29 +33,6 @@ final class DownloadStagePublishDirTest extends TestCase
 	protected function tearDown(): void
 	{
 		$this->removeTree($this->dir);
-	}
-
-	private function removeTree(string $path): void
-	{
-		foreach ($this->entries($path) as $name) {
-			$child = "{$path}/{$name}";
-			is_dir($child) && !is_link($child) ? $this->removeTree($child) : @unlink($child);
-		}
-		@rmdir($path);
-	}
-
-	/**
-	 * Staging and backup directories are dot-named, and glob() never returns dot
-	 * entries -- a litter assertion spelled with glob() cannot fail on leftovers.
-	 * An unreadable directory reports a sentinel rather than an empty listing, so it
-	 * fails its assertion loudly instead of reading as "nothing was left behind".
-	 */
-	private function entries(string $path): array
-	{
-		$entries = @scandir($path);
-		return $entries === FALSE
-			? array('<unreadable>')
-			: array_values(array_diff($entries, array('.', '..')));
 	}
 
 	private function backupPath(string $target): string

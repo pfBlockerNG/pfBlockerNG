@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/StagedDirFixtureTrait.php';
+
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
@@ -21,6 +23,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_geoip_extract_tar_to_share')]
 final class DownloadGeoipStagePublishTest extends TestCase
 {
+	use StagedDirFixtureTrait;
+
 	private const INC = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 
 	private array $originalPfb = [];
@@ -31,10 +35,9 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->originalPfb = $GLOBALS['pfb'];
-		// Shell-clean on purpose: the shipped command interpolates the share path
-		// unescaped, so a fixture path carrying metacharacters would break tar
-		// itself and every extraction would "fail" for the wrong reason. The
-		// escaping the staged target needs is pinned by its own case below.
+		// Shell-clean on purpose: a fixture path carrying metacharacters would make
+		// every failure ambiguous. The escaping the generated staged target needs is
+		// pinned by its own case below.
 		$this->dir = sys_get_temp_dir() . '/pfb_geoip_stage_' . getmypid();
 		$this->share = "{$this->dir}/GeoIP";
 		$this->build = "{$this->dir}/build";
@@ -42,6 +45,8 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->assertTrue(mkdir($this->build, 0755, TRUE));
 		$GLOBALS['pfb']['geoipshare'] = $this->share;
 		$GLOBALS['pfb']['ccdir'] = "{$this->share}/cc";
+		$GLOBALS['pfb']['log'] = "{$this->dir}/pfblockerng.log";
+		$GLOBALS['pfb']['errlog'] = "{$this->dir}/error.log";
 	}
 
 	protected function tearDown(): void
@@ -51,29 +56,6 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		// the tree can be removed whatever the test did to it.
 		exec('/bin/chmod -R u+rwx ' . escapeshellarg($this->dir) . ' 2>/dev/null');
 		$this->removeTree($this->dir);
-	}
-
-	private function removeTree(string $path): void
-	{
-		foreach ($this->entries($path) as $name) {
-			$child = "{$path}/{$name}";
-			is_dir($child) && !is_link($child) ? $this->removeTree($child) : @unlink($child);
-		}
-		@rmdir($path);
-	}
-
-	/**
-	 * Staging directories are dot-named and glob() never returns dot entries, so a
-	 * litter assertion spelled with glob() cannot fail on leftovers. An unreadable
-	 * directory reports a sentinel rather than an empty listing, so it fails loudly
-	 * instead of reading as "nothing was left behind".
-	 */
-	private function entries(string $path): array
-	{
-		$found = @scandir($path);
-		return $found === FALSE
-			? array('<unreadable>')
-			: array_values(array_diff($found, array('.', '..')));
 	}
 
 	/** Every file under $path as relative-path => md5, dot entries included. */
@@ -232,15 +214,18 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	/**
 	 * Scenario: the defect, through the shipped branch helper.
 	 *   Given  a GeoIP share already in service that contains a dangling symlink
-	 *   And    an archive that lists cleanly but whose second member must be
-	 *          written through that symlink -- libarchive refuses it, which is the
-	 *          refusal ADR-46 relies on, and tar exits nonzero having already
-	 *          written the first member
+	 *   And    an archive that lists cleanly but whose second member's path runs
+	 *          through that symlink
 	 *   When   the GeoIP tar branch extracts
 	 *   Then   the download fails AND the served share is byte-identical.
 	 *
-	 * Before the fix the served GeoLite2-Country.mmdb held the new archive's bytes:
-	 * the branch had already overwritten it when the second member failed.
+	 * The symlink is what made the PRE-fix run fail part-way: extraction went
+	 * straight into the share, so libarchive refused the second member -- the
+	 * refusal ADR-46 relies on -- with the first member already written over the
+	 * served .mmdb. Staged, tar writes into a fresh directory that has no such
+	 * symlink, and the publication is what refuses: the staged `sub` directory
+	 * cannot replace the live symlink. Either way the extraction fails part-way and
+	 * the served bytes are the assertion.
 	 */
 	public function testExtractionThatFailsPartWayLeavesTheServedShareByteIdentical(): void
 	{
@@ -368,16 +353,19 @@ final class DownloadGeoipStagePublishTest extends TestCase
 
 	/**
 	 *   Given  a staged member that is a directory whose live counterpart is a file
+	 *   And    a publishable member that sorts BEFORE it, so dropping the precheck
+	 *          would move that one first and leave a part-way publication
 	 *   When   the publication runs
-	 *   Then   it is refused whole rather than part-way, because rename() cannot
-	 *          replace a file with a directory.
+	 *   Then   it is refused whole, because rename() cannot replace a file with a
+	 *          directory and the refusal is decided before any member moves.
 	 */
-	public function testPublicationRefusesADirectoryMemberOverALiveFile(): void
+	public function testPublicationRefusesADirectoryMemberOverALiveFileBeforeMovingAnything(): void
 	{
 		$before = $this->seedServedShare();
 
 		$published = pfb_stage_publish_dir_merge($this->share, static function (string $staged): int {
-			file_put_contents("{$staged}/GeoLite2-Country.mmdb", "fresh-mmdb\n");
+			// Sorts before COPYRIGHT.txt, so scandir() hands it over first.
+			file_put_contents("{$staged}/AAA-GeoLite2-Country.mmdb", "fresh-mmdb\n");
 			mkdir("{$staged}/COPYRIGHT.txt", 0755);
 			file_put_contents("{$staged}/COPYRIGHT.txt/nested", "nested\n");
 			return 0;
@@ -483,6 +471,88 @@ final class DownloadGeoipStagePublishTest extends TestCase
 
 		$this->assertFalse($published);
 		$this->assertSame($before, $this->snapshot($this->share));
+	}
+
+	/**
+	 * An extraction that produces no members must not be published as an update.
+	 * Same contract the Blacklist tar branch already carries in
+	 * pfb_blacklist_tar_finalize_staged(): "an empty file list must not publish",
+	 * because reporting a refresh that landed nothing is how a stale database gets
+	 * mistaken for a fresh one.
+	 */
+	public function testExtractorThatStagesNothingRefusesThePublication(): void
+	{
+		$before = $this->seedServedShare();
+
+		$published = pfb_stage_publish_dir_merge($this->share, static fn (string $staged): int => 0);
+
+		$this->assertFalse($published, 'a clean exit that staged nothing must not publish');
+		$this->assertSame($before, $this->snapshot($this->share));
+	}
+
+	/**
+	 * The same contract through the shipped branch, driven by the archive that
+	 * reaches it: one whose only member is the top-level directory --strip=1
+	 * removes. tar exits 0 having written nothing, which before issue #2668 was
+	 * reported to the caller as a successful GeoIP update.
+	 */
+	public function testArchiveThatExtractsToNothingFailsTheDownload(): void
+	{
+		$before = $this->seedServedShare();
+		$this->assertTrue(mkdir("{$this->build}/GeoLite2-Country_20260801", 0755));
+		$archive = "{$this->dir}/empty.tar.gz";
+		$retval = 1;
+		$output = array();
+		exec('cd ' . escapeshellarg($this->build) . ' && /usr/bin/tar -czf ' . escapeshellarg($archive)
+			. ' ' . escapeshellarg('GeoLite2-Country_20260801'), $output, $retval);
+		$this->assertSame(0, $retval);
+		$this->assertSame(array('GeoLite2-Country_20260801/'), pfb_archive_member_names($archive),
+			'the fixture must carry the stripped top-level directory and nothing else');
+
+		$result = pfb_geoip_extract_tar_to_share('GeoIP', $archive, escapeshellarg($archive), $retval);
+
+		$this->assertFalse($result->success, 'an archive that extracts to nothing must fail the download');
+		$this->assertSame(0, $retval, 'tar itself exits clean here -- the publication is what refuses');
+		$this->assertSame($before, $this->snapshot($this->share));
+	}
+
+	/**
+	 * A staged merge can fail with the extractor's status still zero: the members
+	 * were refused, not the archive. Reporting that as "tar exit 0" tells an
+	 * operator the opposite of what happened, so the two outcomes read differently.
+	 */
+	public function testAPublicationRefusalIsNotLoggedAsATarFailure(): void
+	{
+		$this->seedServedShare();
+		$this->assertTrue(mkdir("{$this->build}/GeoLite2-Country_20260801", 0755));
+		// A member named like the live generation directory: tar extracts it
+		// cleanly into staging, and the publication refuses to replace cc/.
+		$archive = $this->buildArchive(array('cc' => "not the generation directory\n"));
+		$retval = pfb_download_initial_retval();
+
+		$result = pfb_geoip_extract_tar_to_share('GeoIP', $archive, escapeshellarg($archive), $retval);
+
+		$this->assertFalse($result->success);
+		$this->assertSame(0, $retval, 'the extractor must have exited clean for this case to mean anything');
+		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringContainsString('geoip publication failed', $log);
+		$this->assertStringNotContainsString('extraction failed (tar exit 0)', $log,
+			'a clean tar must never be reported as the reason a publication was refused');
+	}
+
+	/** The converse: a real extractor failure keeps naming its exit status. */
+	public function testAnExtractorFailureStillNamesItsExitStatus(): void
+	{
+		$this->seedServedShare();
+		$archive = $this->buildCorruptArchive();
+		$retval = pfb_download_initial_retval();
+
+		$result = pfb_geoip_extract_tar_to_share('GeoIP', $archive, escapeshellarg($archive), $retval);
+
+		$this->assertFalse($result->success);
+		$this->assertNotSame(0, $retval);
+		$this->assertStringContainsString("geoip extraction failed (tar exit {$retval})",
+			(string) file_get_contents($GLOBALS['pfb']['log']));
 	}
 
 	public function testFailedExtractionLeavesNoStagingDirectoryBehind(): void

@@ -11328,6 +11328,19 @@
             }
         ]
     },
+    "pfb_stage_publish_failure_note": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_stdout_is_terminal": {
         "returnsRef": false,
         "returnType": "bool",
