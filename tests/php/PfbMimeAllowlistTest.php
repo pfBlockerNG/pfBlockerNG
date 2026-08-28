@@ -138,12 +138,9 @@ final class PfbMimeAllowlistTest extends TestCase
 
 	public function test_shipped_allowlist_accepts_empty_bodies(): void
 	{
-		// issue #2682 asked whether 'inode/x-empty' is still justified once the XLSX
-		// path refuses an extraction that yields no address. It is, and this pins it:
-		// the entry is not the XLSX defect (which was a helper manufacturing an empty
-		// payload and reporting success), and this one list also gates the OUTER
-		// download of EVERY feed type, so dropping it would reject any legitimately
-		// empty body -- ADR-49's same ruling, that an empty body is its own signal.
+		// issue #2682 / ADR-49: an empty body is its own signal, and this one list
+		// gates the OUTER download of every feed type -- dropping the entry rejects
+		// legitimately empty bodies of every kind.
 		$shipped = $GLOBALS['pfb_shipped_mime_types'] ?? [];
 
 		$this->assertNotEmpty($shipped, 'shipped mime_types snapshot is empty — bootstrap capture broke');

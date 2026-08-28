@@ -62,9 +62,11 @@ RUNNER
 	After 'cleanup'
 
 	# A healthy container: outer archive holding an inner archive holding the
-	# shared-strings part the addresses are read out of.
+	# shared-strings part the addresses are read out of. The payload repeats one
+	# address and lists them out of order, so every example that asserts
+	# "${expected}" also pins the staging sort and its de-duplication.
 	plant_healthy_raw() {
-		printf '<si><t>192.0.2.10</t></si><si><t>198.51.100.20</t></si>\n' \
+		printf '<si><t>198.51.100.20</t></si><si><t>192.0.2.10</t></si><si><t>198.51.100.20</t></si>\n' \
 			> "${work}/inner/xl/sharedStrings.xml"
 		( cd "${work}/inner" && tar -cf "${work}/build/${alias}.xlsx" xl )
 		( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
@@ -135,28 +137,6 @@ RUNNER
 			The path "${orig}${alias}.orig" should not be exist
 			The path "${orig}${alias}.orig.tmp" should not be exist
 			The output should include 'XLSX processing failed'
-		End
-	End
-
-	Context 'on a workbook whose addresses repeat and are out of order'
-		# issue #2682 moved the de-duplication off the pipe: `grep` stages its
-		# matches and `sort -u -o` rewrites that file in place. The bytes that
-		# reach the feed are pinned here, so a mis-wired rewrite cannot pass as
-		# "the extraction still exits 0".
-		plant_repeated_raw() {
-			printf '<sst><si><t>198.51.100.20</t></si><si><t>192.0.2.10</t></si><si><t>198.51.100.20</t></si></sst>\n' \
-				> "${work}/inner/xl/sharedStrings.xml"
-			( cd "${work}/inner" && tar -cf "${work}/build/${alias}.xlsx" xl )
-			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" )
-		}
-		Before 'plant_repeated_raw'
-
-		It 'publishes each address once, in LC_ALL=C order'
-			When run sh "${runner}"
-			The status should be success
-			The contents of file "${orig}${alias}.orig" should equal "${expected}"
-			The path "${orig}${alias}.orig.tmp" should not be exist
-			The output should include 'Final count'
 		End
 	End
 
