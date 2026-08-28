@@ -203,7 +203,8 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "tests/` is",
         "harness/test",
         "stubs/` is shim/support",
-        "ignored and untracked",
+        "`graphify-out/graph.json` is tracked",
+        "ensure-graphify-merge-driver.sh",
     ):
         assert contract in routing, f"direct worktree initialization routing lost {contract}"
 
@@ -225,12 +226,15 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     attrs = attrs_text.splitlines()
     graphify_attribute = "graphify-out/graph.json merge=graphify"
     assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
-    assert (
-        subprocess.run(["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True).stdout
-        == ""
+    tracked = subprocess.run(
+        ["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True
+    ).stdout.split()
+    assert tracked == ["graphify-out/graph.json"], (
+        f"the root graph is the only tracked Graphify artifact; found {tracked}"
     )
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert "graphify-out/" in root_ignore, "generated Graphify output must remain ignored"
+    assert "graphify-out/*" in root_ignore, "every generated Graphify output must stay ignored"
+    assert "!graphify-out/graph.json" in root_ignore, "the tracked root graph must be negated back in"
     for obsolete_path in ("scripts/agent/graphify-store.py", "tests/test_graphify_store.py"):
         assert not (ROOT / obsolete_path).exists(), f"obsolete Graphify store path returned: {obsolete_path}"
 
