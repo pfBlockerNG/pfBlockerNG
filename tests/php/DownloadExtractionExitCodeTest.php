@@ -294,8 +294,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $geoip, $top1m - $geoip);
 		// issue #2668: the directory mode extracts into staging inside its target
 		// and publishes the members only on a clean exit, so its -C is the staged
-		// path rather than the live publication.
-		$this->assertStringContainsString('exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);', $scope);
+		// path rather than the live publication. issue #2659: the disk-writing mode
+		// carries the restriction flags; the stdout mode below must not.
+		$this->assertStringContainsString('exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);', $scope);
 		$this->assertStringContainsString(
 			'exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);', $scope);
 		// issue #2169: the stdout mode publishes through the staged helper; the
