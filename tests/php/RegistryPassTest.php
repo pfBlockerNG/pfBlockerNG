@@ -25,6 +25,9 @@ final class RegistryPassTest extends TestCase
 	private const SS_SECTION    = 'installedpackages/pfblockerngsafesearch';
 	private const IP_SECTION    = 'installedpackages/pfblockerngipsettings/config/0';
 	private const REP_SECTION   = 'installedpackages/pfblockerngreputation/config/0';
+	// issue #2123.
+	private const GLOBAL_SECTION = 'installedpackages/pfblockerngglobal';
+	private const SYNC_SECTION   = 'installedpackages/pfblockerngsync/config/0';
 
 	protected function setUp(): void
 	{
@@ -65,19 +68,24 @@ final class RegistryPassTest extends TestCase
 	public function testSectionModesUseOperatorViewAcrossEveryRegisteredSection(): void
 	{
 		$modes = pfb_registry_section_modes([
-			self::GEN_SECTION   => [],
-			self::DNSBL_SECTION => ['settings_family' => '4.0'],
-			self::SS_SECTION    => ['safesearch' => 'on'],
-			self::IP_SECTION    => 'not-an-array',
-			self::REP_SECTION   => ['enable_rep' => 'on'],
+			self::GEN_SECTION    => [],
+			self::DNSBL_SECTION  => ['settings_family' => '4.0'],
+			self::SS_SECTION     => ['safesearch' => 'on'],
+			self::IP_SECTION     => 'not-an-array',
+			self::REP_SECTION    => ['enable_rep' => 'on'],
+			// issue #2123: two sections joined PFB_SECTIONS. A supplied-but-empty blob
+			// and an absent one both read NEWCFG; real operator data reads OLDCFG.
+			self::GLOBAL_SECTION => ['pfbpageload' => 'unified'],
 		]);
 
 		$this->assertSame([
-			self::GEN_SECTION   => 'NEWCFG',
-			self::DNSBL_SECTION => 'NEWCFG',
-			self::SS_SECTION    => 'OLDCFG',
-			self::IP_SECTION    => 'NEWCFG',
-			self::REP_SECTION   => 'OLDCFG',
+			self::GEN_SECTION    => 'NEWCFG',
+			self::DNSBL_SECTION  => 'NEWCFG',
+			self::SS_SECTION     => 'OLDCFG',
+			self::IP_SECTION     => 'NEWCFG',
+			self::REP_SECTION    => 'OLDCFG',
+			self::GLOBAL_SECTION => 'OLDCFG',
+			self::SYNC_SECTION   => 'NEWCFG',
 		], $modes);
 	}
 

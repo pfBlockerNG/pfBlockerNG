@@ -17,6 +17,7 @@ scripts/check_agent_roles.py
 scripts/check_context_budget.py
 scripts/check_composer_vendor.py
 scripts/check_url_encoding.py
+scripts/check_toggle_registry.py
 scripts/agent/check-agent-config-parity.sh'
   make_repo() {
     scrub_git_env

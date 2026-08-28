@@ -19669,8 +19669,10 @@ function pfblockerng_do_xmlrpc_sync($sync_to_ip, $port, $protocol, $username, $p
 		$sync_to_ip = "[{$sync_to_ip}]";
 	}
 
-	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync
-	$sections = pfblockerng_sync_sections(config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on');
+	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync.
+	// issue #2123: read through the gateway, so the registered default and the
+	// case-insensitive toggle vocabulary apply here as on the Sync page.
+	$sections = pfblockerng_sync_sections(PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On);
 
 	/* xml will hold the sections to sync */
 	$xml = array();
@@ -19712,8 +19714,8 @@ function pfblockerng_plugin_xmlrpc_send() {
 	$section_paths_temp = [
 		'installedpackages/pfblockerngsync/config/0/varsynconchanges'
 	];
-	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync
-	$sections = pfblockerng_sync_sections(config_get_path('installedpackages/pfblockerngsync/config/0/syncinterfaces') != 'on');
+	// If User Disabled, remove 'General/IP/DNSBL Tab Customizations' from Sync (#2123).
+	$sections = pfblockerng_sync_sections(PfbConfig::read('sync/syncinterfaces') !== PfbToggle::On);
 	foreach ($sections as $section) {
 		$section_paths_temp[] = "installedpackages/{$section}";
 	}

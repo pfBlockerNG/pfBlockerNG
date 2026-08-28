@@ -18,19 +18,22 @@ Describe 'run-gates.sh gates_for()'
     The lines of output should equal 4
   End
 
-  It 'maps PHP files to per-file lint plus the three suite gates'
+  It 'maps PHP files to per-file lint plus the toggle-registry gate and the three suite gates'
     Data
       #|src/a.inc
       #|src/b.php
     End
     When call gates_for
     The line 1 of output should equal 'uv run --locked python scripts/check_composer_vendor.py'
-    The line 2 of output should equal 'php -l src/a.inc'
-    The line 3 of output should equal 'php -l src/b.php'
-    The line 4 of output should equal 'vendor/bin/phpunit'
-    The line 5 of output should equal 'composer phpstan'
-    The line 6 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 6
+    # issue #2123: the red canary runs first in the same command, so a rotted matcher
+    # fails the gate instead of greening the real scan.
+    The line 2 of output should equal 'uv run --locked python scripts/check_toggle_registry.py --self-test && uv run --locked python scripts/check_toggle_registry.py'
+    The line 3 of output should equal 'php -l src/a.inc'
+    The line 4 of output should equal 'php -l src/b.php'
+    The line 5 of output should equal 'vendor/bin/phpunit'
+    The line 6 of output should equal 'composer phpstan'
+    The line 7 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
+    The lines of output should equal 7
   End
 
   It 'maps shell files to per-file sh -n + shellcheck plus the dash-pinned shellspec'

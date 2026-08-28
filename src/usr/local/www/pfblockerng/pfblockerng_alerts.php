@@ -38,7 +38,10 @@ $aglobal_array = array(	'pfbunicnt' => 200, 'pfbdenycnt' => 25, 'pfbpermitcnt' =
 
 $pfb['aglobal'] = PfbConfig::readSection('installedpackages/pfblockerngglobal');
 
-$alertrefresh	= isset($pfb['aglobal']['alertrefresh'])	? $pfb['aglobal']['alertrefresh']	: 'on';
+// issue #2123: the ON default and the stored vocabulary now live in the registry
+// (ADR-29) instead of this page. PfbConfig::read() applies the default only for a
+// genuinely absent key, so an operator's unchecked '' still reads Off.
+$alertrefresh	= PfbConfig::read('global/alertrefresh');
 $pfbpageload	= $pfb['aglobal']['pfbpageload']	!= ''	? $pfb['aglobal']['pfbpageload']	: 'unified';
 $pfbmaxtable	= $pfb['aglobal']['pfbmaxtable']	!= ''	? $pfb['aglobal']['pfbmaxtable']	: '1000';
 $pfbreplytypes	= pfb_csv_list($pfb['aglobal']['pfbreplytypes'] ?? NULL);
@@ -600,7 +603,10 @@ if (isset($_POST) && !empty($_POST)) {
 			$pfb['aglobal']['pfbchart2'] = pfb_filter($_POST['pfbchart2'], PFB_FILTER_HEX_COLOR, 'alerts hex', '#7A7A7A');
 		}
 
-		$pfb['aglobal']['alertrefresh']		= pfb_filter($_POST['alertrefresh'], PFB_FILTER_ON_OFF, 'alerts alertrefresh');
+		// issue #2123: an unchecked checkbox is absent from $_POST; PFB_FILTER_ON_OFF
+		// emits the owner-ruled empty Off token for it, and writeSection() below
+		// normalises the value through the key's registered adapter.
+		$pfb['aglobal']['alertrefresh']		= pfb_filter($_POST['alertrefresh'] ?? '', PFB_FILTER_ON_OFF, 'alerts alertrefresh');
 
 		$pfb['aglobal']['pfbpageload']		= $_POST['pfbpageload']					?: 'unified';
 		$pfb['aglobal']['pfbmaxtable']		= $_POST['pfbmaxtable']					?: '1000';
@@ -3463,7 +3469,7 @@ $group->add(new Form_Checkbox(
 	'alertrefresh',
 	'Auto-Refresh',
 	NULL,
-	pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On,
+	$alertrefresh === PfbToggle::On,
 	'on'
 ))->setHelp('Auto&nbsp;Refresh')->setAttribute('title', 'Select to \'Auto-Refresh\' Alerts page every 60 seconds.');
 
@@ -4188,7 +4194,7 @@ if (!$alert_summary):
 <div class="panel panel-default" style="width: 100%;">
 	<div class="panel-heading">
 		<h2 class="panel-title">
-			<? if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On): ?>
+			<? if ($alertrefresh === PfbToggle::On): ?>
 			<i class="fa-solid fa-pause-circle" id="PauseRefresh" " title="Pause Alerts Refresh"></i>&nbsp;
 			<? endif; ?>
 			<?=gettext($logtype)?><small>-&nbsp;<?=gettext('Last')?>&nbsp;<?=$pfbentries?>&nbsp;<?=gettext('Alert Entries')?></small>
@@ -4762,7 +4768,7 @@ foreach ($stats as $stat_type => $stype):
 <div class="panel panel-default" id="Alert_Stats_<?=$stat_type?>" style="display: inline-block; width: 100%;">
 	<div class="panel-heading">
 		<h2 class="panel-title">
-			<? if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On): ?>
+			<? if ($alertrefresh === PfbToggle::On): ?>
 			<i class="fa-solid fa-pause-circle" id="PauseRefresh" " title="Pause Alerts Refresh"></i>&nbsp;
 			<? endif; ?>
 
@@ -5033,7 +5039,7 @@ foreach ($stats as $stat_type => $stype):
 endif;
 
 // Refresh page every 60 secs
-if (pfb_cfg_toggle_read($alertrefresh) === PfbToggle::On) {
+if ($alertrefresh === PfbToggle::On) {
 
 	$pageview = '?';
 	if ($pfb['filterlogentries']) {

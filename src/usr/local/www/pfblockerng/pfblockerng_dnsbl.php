@@ -108,20 +108,24 @@ $pconfig['pfb_gp_bypass_list']	= pfb_b64_text($pfb['dconfig']['pfb_gp_bypass_lis
 $pconfig['action']		= $pfb['dconfig']['action']				?: 'Disabled';
 $pconfig['aliaslog']		= $pfb['dconfig']['aliaslog']				?: 'enabled';
 
-$pconfig['autoaddrnot_in']	= $pfb['dconfig']['autoaddrnot_in']			?: '';
-$pconfig['autoports_in']	= $pfb['dconfig']['autoports_in']			?: '';
+// issue #2123: the eight Advanced In/Outbound rule checkbox defaults are owned by the
+// registry (ADR-29), not restated here. A validation-error redisplay replaces $pconfig
+// with raw $_POST (:1019), so the renders still run the value through the toggle read
+// adapter -- that call is the POST-redisplay adapter, not a second default.
+$pconfig['autoaddrnot_in']	= PfbConfig::read('dnsbl/autoaddrnot_in');
+$pconfig['autoports_in']	= PfbConfig::read('dnsbl/autoports_in');
 $pconfig['aliasports_in']	= $pfb['dconfig']['aliasports_in']			?: '';
-$pconfig['autoaddr_in']		= $pfb['dconfig']['autoaddr_in']			?: '';
-$pconfig['autonot_in']		= $pfb['dconfig']['autonot_in']				?: '';
+$pconfig['autoaddr_in']		= PfbConfig::read('dnsbl/autoaddr_in');
+$pconfig['autonot_in']		= PfbConfig::read('dnsbl/autonot_in');
 $pconfig['aliasaddr_in']	= $pfb['dconfig']['aliasaddr_in']			?: '';
 $pconfig['autoproto_in']	= $pfb['dconfig']['autoproto_in']			?: 'any';
 $pconfig['agateway_in']		= $pfb['dconfig']['agateway_in']			?: 'default';
 
-$pconfig['autoaddrnot_out']	= $pfb['dconfig']['autoaddrnot_out']			?: '';
-$pconfig['autoports_out']	= $pfb['dconfig']['autoports_out']			?: '';
+$pconfig['autoaddrnot_out']	= PfbConfig::read('dnsbl/autoaddrnot_out');
+$pconfig['autoports_out']	= PfbConfig::read('dnsbl/autoports_out');
 $pconfig['aliasports_out']	= $pfb['dconfig']['aliasports_out']			?: '';
-$pconfig['autoaddr_out']	= $pfb['dconfig']['autoaddr_out']			?: '';
-$pconfig['autonot_out']		= $pfb['dconfig']['autonot_out']			?: '';
+$pconfig['autoaddr_out']	= PfbConfig::read('dnsbl/autoaddr_out');
+$pconfig['autonot_out']		= PfbConfig::read('dnsbl/autonot_out');
 $pconfig['aliasaddr_out']	= $pfb['dconfig']['aliasaddr_out']			?: '';
 $pconfig['autoproto_out']	= $pfb['dconfig']['autoproto_out']			?: 'any';
 $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
@@ -900,22 +904,22 @@ if ($_POST) {
 			$pfb['dconfig']['action']		= $_POST['action']							?: 'Disabled';
 			$pfb['dconfig']['aliaslog']		= $_POST['aliaslog']							?: 'enabled';
 
-			$pfb['dconfig']['autoaddrnot_in']	= pfb_filter($_POST['autoaddrnot_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['autoports_in']		= pfb_filter($_POST['autoports_in'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['autoaddrnot_in']	= pfb_filter($_POST['autoaddrnot_in'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['autoports_in']		= pfb_filter($_POST['autoports_in'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			// issue #1723: aliasaddr_in/out, aliasports_in/out already sanitized by the
 			// ingestion prologue above -- plain read.
 			$pfb['dconfig']['aliasports_in']	= $_POST['aliasports_in']						?: '';
-			$pfb['dconfig']['autoaddr_in']		= pfb_filter($_POST['autoaddr_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
-			$pfb['dconfig']['autonot_in']		= pfb_filter($_POST['autonot_in'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['autoaddr_in']		= pfb_filter($_POST['autoaddr_in'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['autonot_in']		= pfb_filter($_POST['autonot_in'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['aliasaddr_in']		= $_POST['aliasaddr_in']						?: '';
 			$pfb['dconfig']['autoproto_in']		= $_POST['autoproto_in']						?: 'any';
 			$pfb['dconfig']['agateway_in']		= $_POST['agateway_in']							?: 'default';
 
-			$pfb['dconfig']['autoaddrnot_out']	= pfb_filter($_POST['autoaddrnot_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['autoports_out']	= pfb_filter($_POST['autoports_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['autoaddrnot_out']	= pfb_filter($_POST['autoaddrnot_out'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['autoports_out']	= pfb_filter($_POST['autoports_out'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['aliasports_out']	= $_POST['aliasports_out']						?: '';
-			$pfb['dconfig']['autoaddr_out']		= pfb_filter($_POST['autoaddr_out'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
-			$pfb['dconfig']['autonot_out']		= pfb_filter($_POST['autonot_out'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$pfb['dconfig']['autoaddr_out']		= pfb_filter($_POST['autoaddr_out'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
+			$pfb['dconfig']['autonot_out']		= pfb_filter($_POST['autonot_out'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['aliasaddr_out']	= $_POST['aliasaddr_out']						?: '';
 			$pfb['dconfig']['autoproto_out']	= $_POST['autoproto_out']						?: 'any';
 			$pfb['dconfig']['agateway_out']		= $_POST['agateway_out']						?: 'default';
@@ -3602,7 +3606,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddrnot_' . $advmode,
 		"Invert {$adv_type}",
 		NULL,
-		pfb_cfg_toggle_read($pconfig['autoaddrnot_' . $advmode]) === PfbToggle::On,
+		pfb_cfg_toggle_read($pconfig['autoaddrnot_' . $advmode] ?? NULL) === PfbToggle::On,
 		'on'
 	))->setHelp("Option to invert the sense of the match. ie - Not (!) {$adv_type} Address(es)")
 	  ->addClass('dnsbl_ip');
@@ -3612,7 +3616,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoports_' . $advmode,
 		'Custom DST Port',
 		NULL,
-		pfb_cfg_toggle_read($pconfig['autoports_' . $advmode]) === PfbToggle::On,
+		pfb_cfg_toggle_read($pconfig['autoports_' . $advmode] ?? NULL) === PfbToggle::On,
 		'on'
 	))->setHelp('Enable')
 	  ->setWidth(2)
@@ -3640,7 +3644,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autoaddr_' . $advmode,
 		"Custom {$custom_location}",
 		NULL,
-		pfb_cfg_toggle_read($pconfig["autoaddr_{$advmode}"]) === PfbToggle::On,
+		pfb_cfg_toggle_read($pconfig["autoaddr_{$advmode}"] ?? NULL) === PfbToggle::On,
 		'on'
 	))->setHelp('Enable')->setWidth(1)
 	  ->addClass('dnsbl_ip');
@@ -3649,7 +3653,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'autonot_' . $advmode,
 		NULL,
 		NULL,
-		pfb_cfg_toggle_read($pconfig["autonot_{$advmode}"]) === PfbToggle::On,
+		pfb_cfg_toggle_read($pconfig["autonot_{$advmode}"] ?? NULL) === PfbToggle::On,
 		'on'
 	))->setHelp('Invert')->setWidth(1)
 	  ->addClass('dnsbl_ip');

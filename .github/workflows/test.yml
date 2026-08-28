@@ -313,6 +313,16 @@ jobs:
         # .php/.inc/.xml (the checker's defaults). ubuntu-latest ships python3.
         run: python3 scripts/check_noopener.py
 
+      - name: Forbid an on/off toggle declaring its default in the page
+        # issue #2123: a PFB_FILTER_ON_OFF save into a registered config section must
+        # name a pfb_cfg_registry() entry, and a registered toggle's default must not be
+        # restated by the page. The --self-test run is this gate's red canary: it feeds a
+        # known-violating synthetic page through the same matchers and fails if either
+        # rule stops firing, so a matcher that rots cannot green the real scan.
+        run: |
+          python3 scripts/check_toggle_registry.py --self-test
+          python3 scripts/check_toggle_registry.py
+
       - name: Forbid direct Python paths on the pfSense appliance
         # pfb_python.sh alone constructs the dependency-derived versioned path; all
         # appliance consumers invoke that wrapper. Scans tracked src/ + tests.

@@ -630,7 +630,10 @@ $pfb_rdns_seed = pfb_rdns_seed_value(
 	PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0')
 );
 if ($pfb_rdns_seed !== null) {
-	config_set_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns', $pfb_rdns_seed);
+	// issue #2123: 'ip/enable_rdns' is a registered key now, so the seed goes through
+	// the gateway's system writer (no web session here). The pass below then sees the
+	// key present and leaves this cross-section decision alone.
+	PfbConfig::writeSystem('ip/enable_rdns', $pfb_rdns_seed);
 	update_status(" saving new changes ... done.\n");
 } else {
 	update_status(" no changes required ... done.\n");
