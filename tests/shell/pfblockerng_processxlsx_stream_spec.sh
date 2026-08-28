@@ -238,8 +238,8 @@ PROBE
 		# it is issue #2682's defect back under the container's control -- `grep`
 		# reports no match, a planted `0` overrides it, and zero bytes publish over
 		# the live feed as a success. So the stash is derived as a SIBLING of the
-		# extraction target rather than a file inside it, and is cleared once the
-		# container has been unpacked, before anything can read it.
+		# extraction target rather than a file inside it -- that derivation is the
+		# whole defence; there is no clearing step between the unpack and the read.
 		plant_planted_stash_raw() {
 			printf '0\n' > "${work}/build/sharedStrings.rc"
 			build_addressless_part
