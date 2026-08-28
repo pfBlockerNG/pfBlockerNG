@@ -61,8 +61,11 @@ classify() {
 		return 0
 	fi
 	if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review (rate )?limit'; then
-		mins=$(printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
-		if printf '%s' "$issuec" | grep -oEi 'available in:.{0,10}[0-9]+ *hour' | grep -q .; then
+		# issue #2837: the colon is optional ("available in 40 minutes"), and only
+		# non-digits may sit before the count, so a multi-unit window falls back
+		# instead of resuming on its first number.
+		mins=$(printf '%s' "$issuec" | grep -oEi 'available in:?[^0-9]{0,10}[0-9]+ *(minute|hour)' | grep -oE '[0-9]+' | head -1)
+		if printf '%s' "$issuec" | grep -oEi 'available in:?[^0-9]{0,10}[0-9]+ *hour' | grep -q .; then
 			mins=$(( ${mins:-1} * 60 ))
 		fi
 		printf 'QUOTA %s' "${mins:-999}"
