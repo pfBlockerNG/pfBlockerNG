@@ -363,6 +363,9 @@ jobs:
     # veto, unchanged. The predicate itself lives in scripts/resolve-legs.sh.
     continue-on-error: ${{ matrix.release_blocking == 'false' }}
     runs-on: ubuntu-latest
+    # issue #2614: the UI tiers drive the live appliance through the same tests/smoke
+    # harness, so they reach the on-box flock(2) locks, which carry no timeout of their
+    # own; this budget is the only bound. Observed 23.5 min worst tier (n=7 per leg).
     timeout-minutes: 45
     strategy:
       # One leg's failure must NOT cancel the others — each (tier x version) is
