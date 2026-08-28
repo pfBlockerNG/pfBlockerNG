@@ -315,8 +315,6 @@ def test_copilot_roles_are_pinned_and_defined() -> None:
 
 # A real production include, so the probes prove the tools read this package's own PHP.
 PHP_INCLUDE_PROBE = "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-AST_GREP = shutil.which("ast-grep") or ""
-SEMGREP = shutil.which("semgrep") or ""
 
 
 def test_php_inc_files_are_declared_php_to_extension_driven_tools() -> None:
@@ -329,12 +327,12 @@ def test_php_inc_files_are_declared_php_to_extension_driven_tools() -> None:
     assert "--scan-unknown-extensions" in routing, "semgrep's only surface is the documented flag"
 
 
-@pytest.mark.skipif(not AST_GREP, reason="ast-grep is an agent-host tool, absent from CI")
+@pytest.mark.skipif(shutil.which("ast-grep") is None, reason="agent-host tool, absent from CI")
 def test_ast_grep_parses_a_php_inc_file_as_php() -> None:
     # The reported language, not a match count: any language ast-grep assigns matches
     # `return $$$X;`, so a count alone passes under a decoy mapping.
     stream = subprocess.run(
-        [AST_GREP, "run", "--pattern", "return $$$X;", "--json=stream", PHP_INCLUDE_PROBE],
+        ["ast-grep", "run", "--pattern", "return $$$X;", "--json=stream", PHP_INCLUDE_PROBE],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -344,16 +342,17 @@ def test_ast_grep_parses_a_php_inc_file_as_php() -> None:
     assert languages == {"Php"}, f"ast-grep read {PHP_INCLUDE_PROBE} as {languages or 'no language'}"
 
 
-@pytest.mark.skipif(not SEMGREP, reason="semgrep is an agent-host tool, absent from CI")
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="agent-host tool, absent from CI")
 def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
     def findings(*flags: str) -> int:
         scan = subprocess.run(
-            [SEMGREP, "scan", "--quiet", "--json", "-e", "return $X;", "-l", "php", *flags, PHP_INCLUDE_PROBE],
+            ["semgrep", "scan", "--quiet", "--json", "-e", "return $X;", "-l", "php", *flags, PHP_INCLUDE_PROBE],
             cwd=ROOT,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
         )
+        assert scan.returncode == 0, f"semgrep exited {scan.returncode}: {scan.stdout}{scan.stderr}"
         report = json.loads(scan.stdout)
         assert report["errors"] == [], f"semgrep errored: {report['errors']}"
         return len(report["results"])
