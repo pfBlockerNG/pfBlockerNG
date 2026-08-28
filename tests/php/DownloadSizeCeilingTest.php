@@ -421,4 +421,50 @@ final class DownloadSizeCeilingTest extends TestCase
 		$this->assertStringContainsString(
 			'pfb_extract_space_shortfall($extract_dirs, (int) @filesize($file_download))', self::$downloadBody);
 	}
+
+	/**
+	 * Scenario: the XLSX helper's own temp filesystem is prechecked too
+	 *
+	 * Given  a ZIP container carrying a workbook
+	 * When   the source is read
+	 * Then   the xlsx branch probes the temp directory the shell helper unpacks
+	 *        that workbook into, names the shortfall in the refusal log, and
+	 *        returns before the helper is executed.
+	 *
+	 * Issue #2684: that filesystem is /tmp -- a RAM disk on a default
+	 * use_mfs_tmpvar install, and the one consumer the precheck above cannot see,
+	 * because it belongs to a child process rather than to this function. Probed
+	 * with sys_get_temp_dir() rather than a literal, which is the same
+	 * ${TMPDIR:-/tmp} the helper's own `mktemp -d` reads.
+	 *
+	 * Scoped to the xlsx branch, NOT folded into the precheck above: the gzip,
+	 * bzip2 and tar paths write nowhere near /tmp, and refusing a 50 MiB gzip feed
+	 * because a 40 MiB RAM disk it never touches is short would be the 64 MiB-floor
+	 * mistake of issue #2658 over again.
+	 */
+	public function test_xlsx_branch_prechecks_the_helper_temp_filesystem(): void
+	{
+		$xlsx = strpos(self::$downloadBody, "if (strpos(\$xlsxtest, '.xlsx') !== FALSE) {");
+		$this->assertNotFalse($xlsx, 'the xlsx branch must still be identifiable');
+		$zipBranch = strpos(self::$downloadBody, '} else {', $xlsx);
+		$this->assertNotFalse($zipBranch);
+		// Bounded by the branch, so the sibling precheck further up the function
+		// cannot satisfy a neutered xlsx one.
+		$scope = substr(self::$downloadBody, $xlsx, $zipBranch - $xlsx);
+
+		$check = strpos($scope,
+			'pfb_extract_space_shortfall(array(sys_get_temp_dir()), (int) @filesize($file_download))');
+		$this->assertNotFalse($check,
+			'the xlsx branch must probe the temp filesystem the helper unpacks the workbook into');
+		$run = strpos($scope, 'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx');
+		$this->assertNotFalse($run);
+		$this->assertLessThan($run, $check,
+			'the precheck must refuse before the helper runs, not after it has written');
+
+		$refusal = substr($scope, $check, $run - $check);
+		$this->assertStringContainsString("pfb_validate_log(\$header, 'size', 'staging_space_low'", $refusal,
+			'the refusal must name its reason, like every other size refusal');
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal,
+			'the refusal must return, not fall through into the extraction');
+	}
 }

@@ -15021,6 +15021,22 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// Check if ZIP archive contains xlsx files
 			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
+				// issue #2684: the helper unpacks the workbook into its OWN per-run temp
+				// directory (`mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"`), which the
+				// precheck above cannot see -- it belongs to a child process, not to
+				// this function -- and which is a RAM disk on a default use_mfs_tmpvar
+				// install. Same requirement as every other extraction and no fixed
+				// floor: room for the archive itself. sys_get_temp_dir() reads the same
+				// ${TMPDIR:-/tmp} the helper's mktemp does, so the two cannot drift.
+				// Scoped to this branch on purpose: the gzip, bzip2 and tar paths write
+				// nowhere near /tmp, and refusing them over a filesystem they never
+				// touch would repeat issue #2658's 64 MiB-floor mistake.
+				$xlsx_short = pfb_extract_space_shortfall(array(sys_get_temp_dir()), (int) @filesize($file_download));
+				if ($xlsx_short !== NULL) {
+					pfb_validate_log($header, 'size', 'staging_space_low', $xlsx_short);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
 				// issue #2666: the helper's exit status decides the ingest, which is what
 				// lets issue #2658's ceiling ride along. No unlink up front -- the
 				// '.orig' already in service must survive a refused refresh.
