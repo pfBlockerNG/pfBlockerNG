@@ -3308,6 +3308,19 @@
             }
         ]
     },
+    "pfb_download_fetch": {
+        "returnsRef": false,
+        "returnType": "PfbDownloadResult",
+        "params": [
+            {
+                "name": "request",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbDownloadRequest",
+                "default": null
+            }
+        ]
+    },
     "pfb_download_finalize_text": {
         "returnsRef": false,
         "returnType": "void",

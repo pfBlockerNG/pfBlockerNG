@@ -14032,8 +14032,32 @@ final class PfbDownloadResult
 	}
 }
 
-// Function to download feeds.
+// issue #2820: the scheduled detector promotes a response's ADR-42 validators BEFORE the
+// ingest it schedules has run (pfblockerng_cron.inc's '( content changed )' branch), because
+// that ingest re-uses the probe's '.md5.raw' body and so has no response headers of its own
+// to promote from (the re-use is below). A refused ingest must therefore discard them, or the
+// rejected body's own validator answers the next conditional GET with 304 and
+// pfb_conditional_get_decision() reports 'unchanged' -- the bad body is never re-fetched and
+// never re-judged. Clearing here rather than at each reject site is what keeps every reject
+// stage identical. The '.orig' in service and its '.orig.xxhash128' baseline stay untouched:
+// a refused refresh must leave the publication byte-identical (issues #2660/#2668), and that
+// baseline still describes the last GOOD body, so it still answers the spurious-200 compare.
+// Standard list feeds only ($type == ''): the extras lanes promote their validators only
+// after a successful publication, never before it (pfblockerng.php's TOP1M detector), so no
+// rejected body's validator can survive there.
 function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
+	$result = pfb_download_fetch($request);
+	if (!$result->success && $request->type === '') {
+		foreach (array('etag', 'lastmod') as $validator_sfx) {
+			unlink_if_exists("{$request->downloadPath}.orig.{$validator_sfx}");
+		}
+	}
+	return $result;
+}
+
+
+// Function to download feeds.
+function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$list_url = $request->listUrl;
 	$file_dwn = $request->downloadPath;
 	$pflex = $request->flex;
