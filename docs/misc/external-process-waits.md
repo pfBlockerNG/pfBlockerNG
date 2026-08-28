@@ -73,5 +73,6 @@ Test that launches work **over SSH** and waits inline hangs on backgrounded chil
 
 - `pfb_run_hooks()` (`--foreground` + temp-file capture) in `src/usr/local/pkg/pfblockerng/pfblockerng.inc` — landed in PR #634.
 - Detached `daemon -p` dispatch (`pfb_runnow()` / `pfb_runnow_forcecheck()` in `pfblockerng_update.php`, `pfb_software_dispatch()` in `pfblockerng_software.php`) feeding `?ajax=tail` poll endpoint (`pfb_log_tail_payload()` keyed on `isvalidpid`) — live-log tail.
+- Bounded nested-`pfblockerng.php` re-entry (issue #2016): `pfb_reentry_cmd()` / `pfb_reentry_exec()` in `src/usr/local/pkg/pfblockerng/pfblockerng.inc` and `pfb_reentry()` in `src/usr/local/pkg/pfblockerng/pfblockerng.sh` — default (reaper) mode, output to file with stdin `/dev/null`, named 124 failure; `scripts/check_reentry_bounds.py` keeps new callers on the seam.
 - CLAUDE.md "Bounded waits" and Python "no fixed-time waits to coordinate concurrency" rule — agent/test-side analogue: synchronise on signal, bound every wait, never sleep-poll blindly.
 - FreeBSD `bin/timeout/timeout.c` — `PROC_REAP_ACQUIRE`, `rs_children == 0` exit condition, `send_sig()` (`kill(child)` under `--foreground` vs reaper kill by default).

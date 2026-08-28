@@ -248,6 +248,24 @@ if [ "$staged_php" = 1 ]; then
 	fi
 fi
 
+# --- Forbid a new UNBOUNDED nested pfblockerng.php re-entry (issue #2016): every
+#     blocking re-entry must run through the bounded spawn seam -- pfb_reentry_exec()
+#     in PHP, pfb_reentry() in shell -- so a stalled child cannot hold an update pass
+#     open forever. Relevant to staged PHP/.inc and to staged shell (pfblockerng.sh
+#     owns four of the eight sites). ---
+if [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
+	if exempted scripts/check_reentry_bounds.py; then
+		exempt reentry-bounds
+	elif [ -n "$py_bin" ]; then
+		step 'reentry-bounds (nested pfblockerng.php re-entry must be bounded)'
+		"$py_bin" scripts/check_reentry_bounds.py --self-test > /dev/null \
+			|| failed 'reentry-bounds (red canary)'
+		"$py_bin" scripts/check_reentry_bounds.py || failed 'reentry-bounds'
+	else
+		skip reentry-bounds
+	fi
+fi
+
 # --- Forbid direct Python interpreter paths ON the pfSense appliance. Consumers
 #     invoke pfb_python.sh, the sole dependency-derived resolver. ---
 if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then

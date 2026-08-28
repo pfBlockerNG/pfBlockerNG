@@ -8,6 +8,10 @@ Describe 'run-gates.sh gates_for()'
   AGENT_SOURCE_ONLY=1
   Include scripts/agent/run-gates.sh
 
+  # issue #2016: the re-entry-bounds gate is emitted for a .php/.inc OR .sh diff, and
+  # exactly ONCE when both are touched -- a duplicated gate is the defect this counts.
+  count_reentry_gate() { gates_for | grep -c 'scripts/check_reentry_bounds.py --self-test'; }
+
   It 'maps a Python file to the four Python gates'
     Data "tests/test_x.py"
     When call gates_for
@@ -18,7 +22,7 @@ Describe 'run-gates.sh gates_for()'
     The lines of output should equal 4
   End
 
-  It 'maps PHP files to per-file lint plus the toggle-registry gate and the three suite gates'
+  It 'maps PHP files to per-file lint, the toggle-registry and re-entry-bounds gates, and the three suite gates'
     Data
       #|src/a.inc
       #|src/b.php
@@ -28,22 +32,74 @@ Describe 'run-gates.sh gates_for()'
     # issue #2123: the red canary runs first in the same command, so a rotted matcher
     # fails the gate instead of greening the real scan.
     The line 2 of output should equal 'uv run --locked python scripts/check_toggle_registry.py --self-test && uv run --locked python scripts/check_toggle_registry.py'
-    The line 3 of output should equal 'php -l src/a.inc'
-    The line 4 of output should equal 'php -l src/b.php'
+    # issue #2016: nested pfblockerng.php re-entries must stay bounded at the seam. Same
+    # red-canary-first shape, emitted directly after the toggle-registry gate.
+    The line 3 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    The line 4 of output should equal 'php -l src/a.inc'
+    The line 5 of output should equal 'php -l src/b.php'
+    The line 6 of output should equal 'vendor/bin/phpunit'
+    The line 7 of output should equal 'composer phpstan'
+    The line 8 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
+    The lines of output should equal 8
+  End
+
+  It 'emits the re-entry-bounds gate exactly once for a PHP-only diff'
+    Data
+      #|src/a.inc
+      #|src/b.php
+    End
+    When call count_reentry_gate
+    The output should equal '1'
+  End
+
+  It 'maps shell files to the re-entry-bounds gate, per-file sh -n + shellcheck, and the dash-pinned shellspec'
+    Data "scripts/agent/x.sh"
+    When call gates_for
+    # issue #2016: pfblockerng.sh owns four of the eight blocking re-entry sites, so a
+    # shell-only diff carries the gate too -- first line of the shell bucket.
+    The line 1 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    The line 2 of output should equal 'sh -n scripts/agent/x.sh'
+    The line 3 of output should equal 'shellcheck scripts/agent/x.sh'
+    # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+    The line 4 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 4
+  End
+
+  It 'emits the re-entry-bounds gate exactly once for a shell-only diff'
+    Data "scripts/agent/x.sh"
+    When call count_reentry_gate
+    The output should equal '1'
+  End
+
+  It 'emits the re-entry-bounds gate exactly once for a mixed PHP + shell diff'
+    # Both buckets want the gate; emitting it twice would run the same scan twice and
+    # report two verdicts for one question.
+    Data
+      #|src/a.php
+      #|scripts/b.sh
+    End
+    When call count_reentry_gate
+    The output should equal '1'
+  End
+
+  It 'keeps the re-entry-bounds gate in its PHP-bucket position for a mixed PHP + shell diff'
+    Data
+      #|src/a.php
+      #|scripts/b.sh
+    End
+    When call gates_for
+    The line 1 of output should equal 'uv run --locked python scripts/check_composer_vendor.py'
+    The line 2 of output should equal 'uv run --locked python scripts/check_toggle_registry.py --self-test && uv run --locked python scripts/check_toggle_registry.py'
+    The line 3 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    The line 4 of output should equal 'php -l src/a.php'
     The line 5 of output should equal 'vendor/bin/phpunit'
     The line 6 of output should equal 'composer phpstan'
     The line 7 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 7
-  End
-
-  It 'maps shell files to per-file sh -n + shellcheck plus the dash-pinned shellspec'
-    Data "scripts/agent/x.sh"
-    When call gates_for
-    The line 1 of output should equal 'sh -n scripts/agent/x.sh'
-    The line 2 of output should equal 'shellcheck scripts/agent/x.sh'
+    The line 8 of output should equal 'sh -n scripts/b.sh'
+    The line 9 of output should equal 'shellcheck scripts/b.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 3
+    The line 10 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 10
   End
 
   It 'wraps the selected pytest gate with JUnit, canary, and real check'
@@ -76,11 +132,12 @@ Describe 'run-gates.sh gates_for()'
       #|.agents/skills/release/helper.sh
     End
     When call gates_for
-    The line 1 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
-    The line 2 of output should equal 'sh -n .agents/skills/release/helper.sh'
+    The line 1 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    The line 2 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
+    The line 3 of output should equal 'sh -n .agents/skills/release/helper.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 3
+    The line 4 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 4
     The output should not include 'shellcheck'
   End
 
@@ -91,14 +148,15 @@ Describe 'run-gates.sh gates_for()'
       #|tests/shell/y_spec.sh
     End
     When call gates_for
-    The line 1 of output should equal 'sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh'
-    The line 2 of output should equal 'shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh'
-    The line 3 of output should equal 'sh -n .claude/hooks/x.sh'
-    The line 4 of output should equal 'shellcheck .claude/hooks/x.sh'
-    The line 5 of output should equal 'sh -n tests/shell/y_spec.sh'
+    The line 1 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    The line 2 of output should equal 'sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 3 of output should equal 'shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 4 of output should equal 'sh -n .claude/hooks/x.sh'
+    The line 5 of output should equal 'shellcheck .claude/hooks/x.sh'
+    The line 6 of output should equal 'sh -n tests/shell/y_spec.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 6 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 6
+    The line 7 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 7
   End
 
   It 'maps Markdown to markdownlint'
@@ -327,7 +385,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
       printf 'touch "%s"\n' "$marker"
     } > "$stubdir/shellspec"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/shellcheck"
-    chmod +x "$stubdir/python3" "$stubdir/shellspec" "$stubdir/shellcheck"
+    # issue #2016: a .sh diff now plans the re-entry-bounds gate, which runs through uv.
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/uv"
+    chmod +x "$stubdir/python3" "$stubdir/shellspec" "$stubdir/shellcheck" "$stubdir/uv"
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
@@ -339,9 +399,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
     The status should equal 0
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+    # issue #2016: the re-entry-bounds gate leads the shell bucket, so it is gate 2 here.
+    The line 2 of output should equal 'GATE PASS: uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
-    The line 5 of output should equal 'GATES: PASS'
+    The line 6 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
     Assert [ ! -e "$stubdir"/pfb-run-gates-skip-reports.* ]
   End
@@ -413,9 +475,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 3 of output should equal 'shellcheck stdout diagnostic'
-    The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 4 of output should equal 'shellcheck stdout diagnostic'
+    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The output should include 'GATES: FAIL'
     Assert [ -e "$marker" ]
@@ -427,9 +489,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 3 of output should equal 'shellcheck stderr diagnostic'
-    The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 4 of output should equal 'shellcheck stderr diagnostic'
+    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The stderr should equal ''
   End
 
@@ -439,11 +501,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 3 of output should equal 'line one'
-    The line 4 of output should equal 'line two'
-    The line 5 of output should equal 'line three'
-    The line 6 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 4 of output should equal 'line one'
+    The line 5 of output should equal 'line two'
+    The line 6 of output should equal 'line three'
+    The line 7 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
   End
 
   It 'keeps a PASSING generic gate diagnostics fully suppressed on stdout and stderr'
@@ -454,7 +516,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'should not appear'
     The stderr should equal ''
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 5 of output should equal 'GATES: PASS'
+    The line 6 of output should equal 'GATES: PASS'
   End
 
   It 'does not let a failing gate own OVERALL=0 output corrupt the final verdict'
@@ -476,11 +538,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 3 of output should equal 'before'
-    The line 4 of output should equal 'OVERALL=0'
-    The line 5 of output should equal 'after'
-    The line 6 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 4 of output should equal 'before'
+    The line 5 of output should equal 'OVERALL=0'
+    The line 6 of output should equal 'after'
+    The line 7 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The output should include 'GATES: FAIL'
     The output should not include 'GATES: PASS'
   End
@@ -492,8 +554,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 3 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
   End
 
   It 'ignores deleted files instead of failing on their ghosts'
@@ -528,8 +590,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 
   It 'plans gates for a STAGED (git add, not committed) edit identically'
@@ -540,8 +602,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 
   It 'lists a file touched by both a commit and a further uncommitted edit exactly once'
@@ -550,8 +612,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 
   # See run-gates.sh's staged/unstaged split comment for why: a lone `diff HEAD`
@@ -567,8 +629,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 
   # CodeRabbit review of #1293's fix: neither `diff --cached` nor bare `diff`
@@ -580,8 +642,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 
   # Delta re-review of the untracked-files fix: --exclude-standard must respect
@@ -597,8 +659,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
     The output should not include 'ignored.sh'
-    The line 5 of output should equal 'GATES: PASS'
-    The lines of output should equal 5
+    The line 6 of output should equal 'GATES: PASS'
+    The lines of output should equal 6
   End
 End
 
