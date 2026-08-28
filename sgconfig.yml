@@ -1,0 +1,15 @@
+# ast-grep project configuration (issue #2807).
+#
+# pfSense packages name PHP include files `.inc`, and ast-grep resolves a target's
+# language from its extension before applying `--lang`. Without this mapping every
+# `.inc` file -- including pfblockerng.inc, the largest production file in the package
+# -- yields zero matches with exit status 0, which is indistinguishable from a genuine
+# "no matches" result. PHPCS (`phpcs.xml.dist`: extensions="php,inc"), PHPStan
+# (`phpstan.neon`: fileExtensions), `.editorconfig`, and the VS Code workspace already
+# carry the same association.
+#
+# `ruleDirs` is deliberately absent: this repository ships no ast-grep rule packs, and
+# `ast-grep scan` exits 0 without it.
+languageGlobs:
+  php:
+    - "*.inc"

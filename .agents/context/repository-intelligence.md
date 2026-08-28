@@ -63,4 +63,11 @@ Load when: every agent session, from `AGENTS.md`.
   call/type hierarchy, diagnostics, and diagnostic-aware refactoring. The initializer
   runs `serena project index <root>` when Serena is available. Under OMP (`OMP_CLI`
   or `PI_CLI`), it skips Serena because OMP provides native LSP tooling.
+- PHP include files carry the `.inc` extension, and every tool that infers language
+  from the extension has to be told so, or it reports zero matches with exit status 0 —
+  indistinguishable from a genuine "no matches" (issue #2807). `phpcs.xml.dist`,
+  `phpstan.neon`, `.editorconfig`, `.vscode/settings.json`, and the tracked
+  `sgconfig.yml` (ast-grep) already carry the association. Semgrep exposes no
+  configuration-file or environment-variable equivalent, so always pass
+  `semgrep --scan-unknown-extensions` when a scan may reach a `.inc` file.
 - Compiler, static analysis, tests, CI, and live smoke remain final.
