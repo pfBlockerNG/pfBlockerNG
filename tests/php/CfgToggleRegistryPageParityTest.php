@@ -262,11 +262,17 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 				"{$path_key} must carry the toggle read adapter");
 			$this->assertSame('pfb_cfg_toggle_write', $entry['write_adapter'],
 				"{$path_key} must carry the toggle write adapter");
-			$this->assertSame(
-				1,
-				(int) isset($entry['grandfather']) + (int) isset($entry['no_grandfather']),
-				"{$path_key} must carry exactly one of grandfather / no_grandfather"
-			);
+			$this->assertArrayNotHasKey('grandfather', $entry,
+				"{$path_key} must NOT carry a grandfather map -- the registered default IS "
+				. 'the page default it replaced, so there is nothing to map');
+			$this->assertArrayHasKey('no_grandfather', $entry,
+				"{$path_key} must carry a no_grandfather reason");
+			// The reason must identify WHY, not merely be non-empty: a gate that accepts
+			// any string lets a wrong reason ship (issue #2123 review finding).
+			$expected_marker = $path_key === 'ip/enable_rdns' ? '#336' : '#2123';
+			$this->assertStringContainsString($expected_marker, $entry['no_grandfather'],
+				"{$path_key}: the no_grandfather reason must cite the decision it records "
+				. "({$expected_marker})");
 		}
 	}
 

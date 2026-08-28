@@ -170,7 +170,9 @@ def find_violations(
             # The mirror is not a registered section at all (no PFB_SECTIONS alias):
             # a foreign section, outside the registry's scope.
             continue
-        if (alias, key) in registry_keys or (basename, key) in EXEMPT:
+        # EXEMPT is a RULE 2 record only: one backlog row must never license an
+        # unregistered save of that key name forever.
+        if (alias, key) in registry_keys:
             continue
         lineno, snippet = site(match.start())
         if snippet.startswith(("//", "*", "/*", "#")):
@@ -311,8 +313,13 @@ def main(argv: list[str] | None = None) -> int:
             candidate = root / path
         try:
             text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
+        except OSError as exc:
+            # Fail CLOSED: a page the gate cannot read is not a clean page.
+            print(
+                f"check_toggle_registry: cannot read {path} ({exc}) -- failing closed rather than reporting clean.",
+                file=sys.stderr,
+            )
+            return 2
         violations.extend(find_violations(text, path, sections_by_path, registry_keys))
 
     for v in violations:
