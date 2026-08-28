@@ -96,8 +96,14 @@ die() {
 # failures a broken pkg(8) setup on the box itself can cause: the catalogue refresh, and
 # the delete/install (issue #2789). Stale or half-written Netgate repo files, or an
 # interrupted upgrade, leave pkg unable to refresh ANY catalogue, and no conf this script
-# writes can repair that. Guidance only, never run for the user: pfSense-upgrade can move
-# the box to a different pfSense version, which is not a package installer's call.
+# writes can repair that. Guidance only, never run for the user.
+#
+# The two repository-rebuild commands come first and are cheap and local. A bare
+# `pfSense-upgrade` is NOT a third item beside them: upstream sets
+# `: ${action:="upgrade"}` when no action flag is given, so it applies whatever release
+# the box's branch offers and reboots afterwards. It is the escalation for a mismatch
+# rebuilding the repository files did not fix, and it is stated as such, with the reboot
+# named where it is proposed (issue #2803).
 #
 # The diagnosis prints FIRST: the remedy is conditional on it, and a reader who has not
 # yet been told what failed cannot judge whether these three commands are their answer.
@@ -111,10 +117,11 @@ pfb_pkg_die() {
     shift
     printf 'install.sh: %s\n' "$*" >&2
     cat >&2 <<'HINT'
-install.sh: if this box's own pkg setup is at fault, rebuild it, then re-run this script:
+install.sh: if this box's own pkg setup is at fault, rebuild it and re-run this script:
 install.sh:   pfSense-repoc
 install.sh:   pfSense-repo-setup
-install.sh:   pfSense-upgrade
+install.sh: only if the re-run still fails, escalate to pfSense-upgrade — it applies any
+install.sh: pfSense release upgrade the box's branch offers, and reboots when it does.
 HINT
     exit "${_pkg_die_code}"
 }
@@ -364,7 +371,10 @@ conf: rebuild it, then re-run this script.
 
   pfSense-repoc
   pfSense-repo-setup
-  pfSense-upgrade
+
+Only if the re-run still fails, escalate to pfSense-upgrade. Run bare it applies any
+pfSense release upgrade the box's branch offers, and reboots when it does, so it is a
+deliberate last step rather than part of the sequence above.
 USAGE_TAIL
 }
 
