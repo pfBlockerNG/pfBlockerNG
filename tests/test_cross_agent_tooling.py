@@ -213,7 +213,7 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "graphify save-result",
         "graphify reflect",
         "--outcome useful|dead_end|corrected",
-        "`useful` when the returned subgraph answered the",
+        "`useful` when the returned subgraph answered",
         "`dead_end` when another surface answered it",
         "`corrected` when the graph answered and was wrong",
         "A dead end MUST carry `--correction`",
@@ -301,8 +301,7 @@ def test_graphify_memory_records_are_tracked_by_a_directory_reinclude() -> None:
     assert lines.index("graphify-out/*") < lines.index("!graphify-out/memory/")
 
     def ignored(path: str) -> bool:
-        # Only 0 and 1 are verdicts. Anything else is git failing to answer -- a symlinked
-        # memory/ exits 128, which read as "not ignored" and passed the probe below.
+        # Only 0 and 1 are verdicts; a symlinked memory/ exits 128.
         probe = subprocess.run(
             ["git", "check-ignore", "-q", path], cwd=ROOT, capture_output=True, text=True, check=False
         )
