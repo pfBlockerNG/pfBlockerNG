@@ -232,36 +232,70 @@ def test_ledger_entry_without_a_clause_passes(tmp_path: Path) -> None:
     assert ccb.check_ledger_entries(tmp_path) == []
 
 
-@pytest.mark.parametrize("prefix", ["  ", "\t", "\ufeff", "\u00a0", "\u3000"])
-def test_ledger_entry_hidden_behind_a_prefix_still_fires(tmp_path: Path, prefix: str) -> None:
-    # Markdown renders an indented bullet as a list item, and a U+FEFF is
-    # invisible: an entry-like line that dodges the `- ` prefix must not dodge
-    # the cap with it, or the whole control is one space away from bypassed.
-    # The hidden line comes FIRST, before any valid entry, so only the prefix
-    # rule can catch it — after one valid entry the every-line rule would.
-    _write(tmp_path, ccb.LEDGER, f"{prefix}{_ledger_entry(1_900, sha='c0ffee12')}\n- `deadbeef`  a title  (#1)\n")
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "  ",  # an indented bullet is still a list item
+        "\t",
+        "\ufeff",  # invisible
+        "\u00a0",  # a space that is not a space
+        "\u3000",
+        "* ",  # every other Markdown list marker
+        "+ ",
+        "1. ",
+        "1)\t",
+        "<!-- ",  # invisible again
+        "# ",  # and the shapes marker enumeration keeps missing
+        "> ",
+        ": ",
+        "\u2022 ",
+    ],
+)
+def test_ledger_narrative_hidden_above_the_list_still_fires(tmp_path: Path, wrapper: str) -> None:
+    # Enumerating markers is a losing game — `#`, `>`, `:` and `•` all render an
+    # entry-looking line, and the next reviewer finds a fifteenth shape. The
+    # header answers to its own byte cap instead, so a narrative parked above
+    # the list is caught whatever it wears.
+    hidden = f"{wrapper}{_ledger_entry(1_900, sha='c0ffee12')}"
+    _write(tmp_path, ccb.LEDGER, f"{hidden}\n\n- `deadbeef`  a title  (#1)\n")
     violations = ccb.check_ledger_entries(tmp_path)
-    assert len(violations) == 1 and "does not match" in violations[0], violations
+    assert len(violations) == 1 and "header is" in violations[0] and "> cap" in violations[0], violations
 
 
-@pytest.mark.parametrize("marker", ["* ", "+ ", "1. ", "1) ", "<!-- ", "  * "])
-def test_ledger_entry_hidden_behind_another_list_marker_still_fires(tmp_path: Path, marker: str) -> None:
-    # `- ` is not the only shape that renders as a list item (or hides one): a
-    # narrative smuggled in above the list under `*`, `+`, an ordered marker or
-    # an HTML comment must answer to the same rule.
-    hostile = f"{marker}{_ledger_entry(1_900, sha='c0ffee12')}"
-    _write(tmp_path, ccb.LEDGER, f"{hostile}\n- `deadbeef`  a title  (#1)\n")
+def test_ledger_header_at_cap_passes_and_one_byte_over_fires(tmp_path: Path) -> None:
+    entry = "- `deadbeef`  a title  (#1)\n"
+    header = "# CodeRabbit missed reviews\n\n"
+    at_cap = header + "x" * (ccb.LEDGER_HEADER_MAX - len(header.encode("utf-8")) - 1) + "\n"
+    _write(tmp_path, ccb.LEDGER, at_cap + entry)
+    assert ccb.check_ledger_entries(tmp_path) == []
+    _write(tmp_path, ccb.LEDGER, at_cap[:-1] + "x\n" + entry)
     violations = ccb.check_ledger_entries(tmp_path)
-    assert len(violations) == 1 and "does not match" in violations[0], violations
-
-
-def test_ledger_header_prose_above_the_list_still_passes(tmp_path: Path) -> None:
-    # The real header: a heading, prose, and the format template quoted inline.
-    header = (
-        "# CodeRabbit missed reviews\n\nAppend-only, newest first.\n\n"
-        "Format, one line of at most 200 bytes: ``- `SHA`  title  (#PR) — one clause``.\n\n"
+    assert violations == [f"{ccb.LEDGER}: header is {ccb.LEDGER_HEADER_MAX + 1} bytes > cap {ccb.LEDGER_HEADER_MAX}"], (
+        violations
     )
-    _write(tmp_path, ccb.LEDGER, f"{header}- `deadbeef`  a title  (#1)\n")
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "1. Read the PR, then record the miss.",
+        "+ expected output",
+        "<!-- markdownlint-disable MD013 -->",
+        "> the review story stays on the PR",
+    ],
+)
+def test_ledger_ordinary_header_prose_passes(tmp_path: Path, prose: str) -> None:
+    # Header prose is prose: a numbered instruction, a code sample line, a lint
+    # directive or a quote must not be mistaken for a smuggled entry.
+    _write(tmp_path, ccb.LEDGER, f"# CodeRabbit missed reviews\n\n{prose}\n\n- `deadbeef`  a title  (#1)\n")
+    assert ccb.check_ledger_entries(tmp_path) == []
+
+
+def test_ledger_live_header_passes_within_its_cap(tmp_path: Path) -> None:
+    # The LIVE header, not a paraphrase: it must stay inside the cap the gate
+    # enforces, so a header edit that would trip the gate fails here first.
+    live_header = (_REPO_ROOT / ccb.LEDGER).read_text(encoding="utf-8").split("\n- ", 1)[0]
+    _write(tmp_path, ccb.LEDGER, f"{live_header}\n- `deadbeef`  a title  (#1)\n")
     assert ccb.check_ledger_entries(tmp_path) == []
 
 
