@@ -2043,6 +2043,11 @@ processet() {
 #
 # issue #2682: an extraction that parses but yields no address is part of that
 # contract -- it refuses the refresh instead of publishing an empty feed.
+#
+# issue #2684: the shared-strings part is streamed, not written to a file. It is
+# XML, so it expands by two orders of magnitude past the workbook carrying it
+# (measured 51,114 bytes on disk -> 10,486,635 decompressed), and ${tmpdir} is a
+# RAM disk on a default use_mfs_tmpvar install.
 processxlsx() {
 	if [ ! -x "${pathtar}" ]; then
 		log='Application [ TAR ] Not found, cannot proceed.'
@@ -2056,24 +2061,45 @@ processxlsx() {
 		return 1
 	fi
 
-	xlsxshared="${tmpxlsx}sharedStrings.xml"
+	xlsxtarrc="${tmpxlsx}sharedStrings.rc"
 	xlsxstage="${pfborig}${alias}.orig.tmp"
 
-	# Nothing here is piped: POSIX sh has no pipefail, so a pipeline reports only
-	# its last command's status -- `grep`'s no-match exit 1 (issue #2682) and a
-	# ceiling kill would both be lost. (POSIX permits sort -o's file among its inputs.)
+	# Only ONE status may be lost to the pipe, and neither of the two that decide
+	# the feed is expendable: POSIX sh has no `pipefail` (and `set -o pipefail` is
+	# not an option here -- `set` is a special builtin, so an option a base system
+	# does not support aborts the whole script rather than failing one command).
+	# So `grep` is the pipeline's LAST stage, which keeps its no-match exit 1
+	# (issue #2682) as the pipeline's own status, and tar's status is stashed to a
+	# file and re-read below. The stash is readable the moment the pipeline
+	# returns: the write happens inside the subshell holding the pipe's only write
+	# end, so `grep` cannot see EOF -- and the shell cannot reap it -- until that
+	# write has completed.
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
-	# `chmod` before the rename because published feeds have unprivileged readers
-	# and a rename would hand the file the run's umask (as pfb_stage_publish()).
 	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}" &&
 		set -- "${tmpxlsx}"*.[xX][lL][sS][xX] &&
-		"${pathtar}" -xOf "$1" "xl/sharedStrings.xml" > "${xlsxshared}" &&
-		grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" > "${xlsxstage}" &&
-		LC_ALL=C sort -u -o "${xlsxstage}" "${xlsxstage}" &&
-		chmod 644 "${xlsxstage}" &&
-		mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
+		{ "${pathtar}" -xOf "$1" "xl/sharedStrings.xml" || echo "$?" > "${xlsxtarrc}"; } |
+			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" > "${xlsxstage}"
 	xlsxrc=$?
+	# tar's own status outranks the pipeline's, and is read BEFORE the publish: a
+	# workbook that read only partway still emits its leading megabytes, so `grep`
+	# matches and exits 0, and publishing that would be issue #2666's defect over
+	# again -- a truncated feed reported as a successful ingest. It outranks a
+	# failing pipeline too, so a child killed at the extraction ceiling reaches
+	# the caller as the 153 pfb_extract_cap_note() reads even when the bytes it
+	# managed to emit held no address for `grep` to match.
+	if [ -s "${xlsxtarrc}" ]; then
+		xlsxrc="$(cat "${xlsxtarrc}")"
+	fi
+	# `chmod` before the rename because published feeds have unprivileged readers
+	# and a rename would hand the file the run's umask (as pfb_stage_publish()).
+	# (POSIX permits sort -o's file among its inputs.)
+	if [ "${xlsxrc}" -eq 0 ]; then
+		LC_ALL=C sort -u -o "${xlsxstage}" "${xlsxstage}" &&
+			chmod 644 "${xlsxstage}" &&
+			mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
+		xlsxrc=$?
+	fi
 	rm -rf "${tmpxlsx}"*
 
 	if [ "${xlsxrc}" -ne 0 ]; then

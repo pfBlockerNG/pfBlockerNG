@@ -77,8 +77,10 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
   # issue #2666 staged this sink: the addresses are sorted onto "${xlsxstage}" and
   # only moved onto "${pfborig}${alias}.orig" once every extraction step reported
   # success. Same sink, same collation requirement, one filename earlier.
-  # issue #2682 took it off the pipe as well -- `grep` stages its matches and this
-  # `sort` rewrites that file in place -- so grep's no-match status is readable.
+  # issue #2682 made `grep` the writer of that staged file, so its no-match exit 1
+  # is readable, and this `sort` rewrites the file in place afterwards.
+  # issue #2684 put the extraction back on a pipe -- `grep` is its last stage, so
+  # that status still arrives -- and this `sort` still runs after it, unpiped.
   It 'prefixes the extracted-IP .orig sink with LC_ALL=C'
     When call has 'LC_ALL=C sort -u -o "${xlsxstage}" "${xlsxstage}"'
     The status should be success
