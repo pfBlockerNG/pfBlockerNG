@@ -268,6 +268,33 @@ def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> N
     assert ".codegraph/" not in root_ignore, "root ignore would hide CodeGraph's own tracked contract"
 
 
+def test_omp_language_servers_route_php_include_files() -> None:
+    # pfSense ships PHP include files as .inc, and OMP's built-in intelephense entry
+    # claims only .php/.phtml -- so without this override every .inc file, including
+    # the largest production file in the package, is invisible to lsp
+    # definition/references/rename/diagnostics (issue #2802). OMP merges server
+    # overrides shallowly, so an entry that omits command/args/rootMarkers drops the
+    # defaults it does not restate.
+    server = json.loads((ROOT / ".omp/lsp.json").read_text(encoding="utf-8"))["servers"]["intelephense"]
+    assert server["command"] == "intelephense"
+    assert server["args"] == ["--stdio"]
+    assert set(server["fileTypes"]) == {".php", ".phtml", ".inc"}
+    assert server["languageId"] == "php", "an inferred language id follows the extension, not PHP"
+    assert set(server["rootMarkers"]) == {"composer.json", "composer.lock", ".git"}
+
+    # Routing didOpen is not enough: intelephense's own workspace scan is driven by
+    # files.associations, and cross-file references come from that index.
+    settings = server["settings"]["intelephense"]
+    assert "*.inc" in settings["files"]["associations"]
+
+    # The editor already carries the same association and PHP version; the two agent
+    # surfaces must not drift apart.
+    vscode = (ROOT / ".vscode/settings.json").read_text(encoding="utf-8")
+    assert '"*.inc": "php"' in vscode
+    php_version = settings["environment"]["phpVersion"]
+    assert f'"intelephense.environment.phpVersion": "{php_version}"' in vscode
+
+
 def test_copilot_roles_are_pinned_and_defined() -> None:
     tiers = dict(
         line.split("=", 1)
