@@ -163,6 +163,33 @@ final class PfbListScriptFailureRecordTest extends TestCase
 			'the ledger entry must still open when no marker is written');
 	}
 
+	public function testNullRetryMarkerRaisesNoTouchDiagnostic(): void
+	{
+		// Without the NULL guard the call degrades to '@touch(NULL)', which
+		// coerces to '' and merely returns FALSE today -- but it raises
+		// "touch(): Passing null to parameter #1" as an E_DEPRECATED that '@'
+		// hides from output and PHP 9 promotes to a TypeError. A custom handler
+		// still sees a suppressed diagnostic, so its absence is the only
+		// observable that discriminates "skipped the touch" from "did it anyway".
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		}, E_DEPRECATED | E_WARNING);
+		try {
+			pfb_list_script_failure_record('ip', 'pfB_Example_v4', 'Post-script FAIL', $this->dir, NULL);
+		} finally {
+			restore_error_handler();
+		}
+
+		$touch = array_values(array_filter($diagnostics,
+			static fn (string $d): bool => str_contains($d, 'touch(')));
+		$this->assertSame([], $touch,
+			'a NULL marker must skip the touch() outright, raising no diagnostic: ' . implode('; ', $touch));
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'),
+			'the ledger entry must still open');
+	}
+
 	// -----------------------------------------------------------------------
 	// Row 5 -- the opened entry is closeable by the paired ADR-61 close.
 	// -----------------------------------------------------------------------
