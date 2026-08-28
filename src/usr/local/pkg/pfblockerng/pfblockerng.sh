@@ -2040,6 +2040,9 @@ processet() {
 # issue #2666: the exit contract pfb_download() gates on. A failing status is
 # returned verbatim rather than collapsed to 1, so a child killed at issue
 # #2658's extraction ceiling reaches the caller as the 153 that names it.
+#
+# issue #2682: an extraction that parses but yields no address is part of that
+# contract -- it refuses the refresh instead of publishing an empty feed.
 processxlsx() {
 	if [ ! -x "${pathtar}" ]; then
 		log='Application [ TAR ] Not found, cannot proceed.'
@@ -2056,8 +2059,15 @@ processxlsx() {
 	xlsxshared="${tmpxlsx}sharedStrings.xml"
 	xlsxstage="${pfborig}${alias}.orig.tmp"
 
-	# `tar -xOf` writes to a file, not into the pipe: POSIX sh has no pipefail, so
-	# piped it would report only the trailing `sort`'s status.
+	# Nothing here is piped: POSIX sh has no pipefail, so a pipeline reports only
+	# its last command's status. `tar -xOf` writes the shared-strings part to a
+	# file, and `grep` stages its matches for `sort -u -o` to rewrite in place
+	# (POSIX permits -o's output file among its inputs).
+	# issue #2682: that is what lets `grep`'s exit 1 -- a workbook that parses with
+	# no IPv4 literal in it -- refuse the feed. Through a pipe the status was lost,
+	# so zero bytes went out over the last-good '.orig' and read as a success: an
+	# empty file probes as the allow-listed `inode/x-empty`, so pfb_download()'s
+	# inner-content MIME gate passed the publication too.
 	# `set --` names ONE workbook: the glob splats into tar's argument list, where
 	# every match after the first is a member selector, not a second archive.
 	# `chmod` before the rename because published feeds have unprivileged readers
@@ -2065,7 +2075,8 @@ processxlsx() {
 	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}" &&
 		set -- "${tmpxlsx}"*.[xX][lL][sS][xX] &&
 		"${pathtar}" -xOf "$1" "xl/sharedStrings.xml" > "${xlsxshared}" &&
-		grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" | LC_ALL=C sort -u > "${xlsxstage}" &&
+		grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" > "${xlsxstage}" &&
+		LC_ALL=C sort -u -o "${xlsxstage}" "${xlsxstage}" &&
 		chmod 644 "${xlsxstage}" &&
 		mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
 	xlsxrc=$?
