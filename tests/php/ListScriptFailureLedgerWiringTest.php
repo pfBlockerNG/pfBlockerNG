@@ -295,6 +295,33 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		$this->assertTrue($state['failed']);
 	}
 
+	/**
+	 * $pfb_script_state accumulates across an alias's rows, so a LATER row's
+	 * clean post-script must not undo an earlier row's failure -- the alias
+	 * pass closes once, at the end, on the accumulated state.
+	 */
+	public function testACleanRowDoesNotUndoAnEarlierRowsPostScriptFailure(): void
+	{
+		$state = ['failed' => FALSE];
+		pfb_list_post_script_failure_record(3, 'ip', 'pfB_Example_v4',
+			'[ pfB_Example_v4 - row_a ] Post-script FAIL', $this->dir, $state);
+		// Before-state: row A genuinely marked the pass.
+		$this->assertTrue($state['failed']);
+		$this->assertCount(1, pfb_sync_status_list_open($this->dir, 'ip'));
+
+		pfb_list_post_script_failure_record(0, 'ip', 'pfB_Example_v4',
+			'row_b succeeded', $this->dir, $state);
+
+		$this->assertTrue($state['failed'],
+			"a clean row must leave an earlier row's failure state intact");
+		pfb_list_script_failure_close('ip', 'pfB_Example_v4', $this->dir, $state);
+
+		$open = pfb_sync_status_list_open($this->dir, 'ip');
+		$this->assertCount(1, $open, "row A's entry must survive the alias-pass close");
+		$this->assertStringContainsString('row_a', $open[0]['message'],
+			"the surviving entry must still be row A's, not row B's message");
+	}
+
 	/** @return array<string, array{0: string, 1: string}> */
 	public static function postScriptFacilities(): array
 	{
