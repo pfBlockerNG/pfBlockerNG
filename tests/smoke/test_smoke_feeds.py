@@ -2813,6 +2813,17 @@ def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> No
     )
 
 
+def _probe_flags(line: str) -> set[str]:
+    """The file flags in one probe line, minus the ones FreeBSD sets itself.
+
+    `uarch` (UF_ARCHIVE) is maintained by the kernel on every newly written file,
+    so its presence is not a restoration and must not read as one — the live run
+    that taught us this reported `flags=[uarch]` on a correctly flagged extract.
+    """
+    raw = line.split("flags=[", 1)[1].split("]", 1)[0] if "flags=[" in line else ""
+    return {flag for flag in raw.split(",") if flag} - {"uarch"}
+
+
 @pytest.mark.timeout(120)
 def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> None:
     """issue #2659: the appliance's own bsdtar drops what the archive claims.
@@ -2824,7 +2835,9 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
     answers the question directly — its tar, its kernel, its root.
 
     Given an archive whose member claims a foreign owner, a setuid mode, an
-      extended attribute and an immutable file flag
+      extended attribute and an immutable file flag (ACLs are out of the probe's
+      reach: FreeBSD needs the filesystem mounted with ACLs enabled to author
+      one, so --no-acls is pinned by the flag-set assertion rather than here)
     When the appliance extracts it twice as root, once with the shipped flag set
       and once without
     Then the unflagged extraction carries that metadata onto disk — the live
@@ -2854,9 +2867,10 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         'printf "203.0.113.11\\n" > $W/build/member.dat && '
         "/bin/chmod 4755 $W/build/member.dat && "
         "/usr/sbin/chown 12345:12345 $W/build/member.dat || exit 90; "
-        # Both are filesystem-dependent, so neither may abort the probe: the
-        # fixture line below reports which of them the filesystem accepted, and
-        # the assertions only claim a vector the fixture actually carried.
+        # Both are filesystem-dependent, so neither may abort the probe -- but a
+        # fixture that carried neither vector cannot prove their refusal either,
+        # so the assertions below REQUIRE the fixture line to show both rather
+        # than passing a negative nothing could have failed.
         "/usr/sbin/setextattr user pfb2659 carried $W/build/member.dat 2>/dev/null; "
         "/bin/chflags uchg $W/build/member.dat 2>/dev/null; "
         "r fixture $W/build/member.dat; "
@@ -2866,7 +2880,13 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         "/usr/bin/tar -xf $W/foreign.tar -C $W/control; echo control_rc=$?; "
         f"/usr/bin/tar -xf $W/foreign.tar {flag_argv} -C $W/shipped; echo shipped_rc=$?; "
         "r control $W/control/member.dat; r shipped $W/shipped/member.dat; "
-        "/usr/bin/tar --version"
+        "/usr/bin/tar --version; "
+        # The flagged extraction's mode is the archive's masked by the extracting
+        # process's umask, so record the umask that governs it on the appliance.
+        'printf "umask sh=%s\\n" "$(umask)"; '
+        "/usr/local/bin/php -r 'printf(\"umask php=%04o\\n\", umask());' 2>/dev/null; "
+        "/usr/bin/grep -E '^[[:space:]]*:umask=' /etc/login.conf | /usr/bin/head -2; "
+        "/usr/bin/grep -i umask /root/.cshrc 2>/dev/null; /usr/bin/true"
     )
     deployed_vm.ssh(f"/bin/chflags -R 0 {work} 2>/dev/null; /bin/rm -rf {work}")
 
@@ -2891,20 +2911,44 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
         f"the unflagged extraction must carry the archive's owner and setuid mode for this case to mean "
         f"anything — appliance reported control {control!r} from fixture {fixture!r}"
     )
+    fixture_flags = _probe_flags(fixture)
+    assert "uchg" in fixture_flags and "pfb2659" in fixture, (
+        f"the fixture must carry both an immutable flag and an extended attribute for their refusal to "
+        f"mean anything — appliance reported fixture {fixture!r} (stderr {probe.stderr!r})"
+    )
     for vector, marker in (("file flag", "uchg"), ("extended attribute", "pfb2659")):
-        if marker not in fixture:
-            continue
         assert marker in control, (
             f"the appliance's tar did not restore the {vector} the fixture carried, so this vector "
             f"proves nothing here — fixture {fixture!r}, control {control!r}"
         )
-        assert marker not in shipped, f"the flagged extraction restored the {vector}: {shipped!r}"
+        assert marker not in shipped, (
+            f"the flagged extraction restored the {vector} — fixture {fixture!r}, control {control!r}, "
+            f"shipped {shipped!r}"
+        )
     assert "uid=0" in shipped, f"the flagged extraction must own its output: {shipped!r}"
     assert "rws" not in shipped and "rwx" in shipped, (
         f"the flagged extraction must drop the setuid bit and keep an ordinary mode: {shipped!r}"
     )
-    assert "flags=[]" in shipped, f"the flagged extraction restored a file flag: {shipped!r}"
-    assert "xattr=[]" in shipped, f"the flagged extraction restored an extended attribute: {shipped!r}"
+    # --no-same-permissions hands the mode to the extracting process's umask, so a
+    # umask with read bits set would make published feed members unreadable to
+    # anything but root. That assumption is environmental, so the box states it.
+    umasks = dict(re.findall(r"^umask (sh|php)=(\S+)$", probe.stdout, re.MULTILINE))
+    assert set(umasks) == {"sh", "php"}, (
+        f"the probe did not report both umasks — captured {umasks!r}, stdout {probe.stdout!r}"
+    )
+    for source, value in sorted(umasks.items()):
+        assert int(value, 8) & 0o055 == 0, (
+            f"the extracting process's umask ({source}={value}) would strip read and execute bits from "
+            f"published feed members, which the flag set now leaves to the umask — shipped {shipped!r}"
+        )
+    assert not (_probe_flags(shipped) & (fixture_flags | _probe_flags(control))), (
+        f"the flagged extraction restored an archive-supplied file flag — fixture {fixture!r}, "
+        f"control {control!r}, shipped {shipped!r}"
+    )
+    assert "xattr=[]" in shipped, (
+        f"the flagged extraction restored an extended attribute — fixture {fixture!r}, "
+        f"control {control!r}, shipped {shipped!r}"
+    )
 
     deployed = deployed_vm.ssh("grep", "-F", "-c", flags, _PFB_INC)
     assert deployed.stdout.strip() == "1", (

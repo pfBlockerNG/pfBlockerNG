@@ -126,8 +126,10 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 	 * Given  every tar extraction in the shipped sources
 	 * When   the ones that write named files are enumerated from the
 	 *        comment-free source
-	 * Then   each one carries the flag set. A new disk-writing site added without
-	 *        it fails here, and so does a site that loses it.
+	 * Then   each one carries the flag set, AFTER the archive operand. A new
+	 *        disk-writing site added without the flags fails here, so does a site
+	 *        that loses them, and so does one that puts them where -f's own
+	 *        operand would swallow the first of them as the archive name.
 	 *
 	 * The five are the GeoIP share extract (gzip and x-tar containers share it),
 	 * the Blacklist category extracts on the gzip and x-tar arms, and the zip
@@ -144,6 +146,15 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 			$seen++;
 			$this->assertStringContainsString('PFB_TAR_EXTRACT_FLAGS', $statement,
 				"disk-writing extraction without the flag set in {$file}: {$statement}");
+			// -f takes the NEXT argument as the archive, so everything between the
+			// mode word and the flags must be the archive operand -- interpolated
+			// or escaped, never just the concatenation punctuation a misplaced
+			// flag set leaves behind.
+			$operand = substr($statement, 0, (int) strpos($statement, 'PFB_TAR_EXTRACT_FLAGS'));
+			$this->assertTrue(
+				str_contains($operand, 'escapeshellarg(') || str_contains($operand, '{$'),
+				"the flag set must follow the archive operand, not sit between -f and it, in {$file}: {$statement}"
+			);
 		}
 		$this->assertSame(5, $seen,
 			'the five disk-writing extractions are the whole class; a sixth must be added here deliberately');
