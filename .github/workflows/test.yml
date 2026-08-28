@@ -323,6 +323,16 @@ jobs:
           python3 scripts/check_toggle_registry.py --self-test
           python3 scripts/check_toggle_registry.py
 
+      - name: Forbid an unbounded nested pfblockerng.php re-entry
+        # issue #2016: every BLOCKING re-entry into pfblockerng.php must run through the
+        # bounded spawn seam -- pfb_reentry_exec() (PHP) / pfb_reentry() (shell) -- so a
+        # stalled child cannot hold an update pass open forever. Scans tracked src/
+        # .php/.inc/.sh (the checker's defaults). The --self-test run is this gate's red
+        # canary: a matcher that stops firing fails here instead of greening the scan.
+        run: |
+          python3 scripts/check_reentry_bounds.py --self-test
+          python3 scripts/check_reentry_bounds.py
+
       - name: Forbid direct Python paths on the pfSense appliance
         # pfb_python.sh alone constructs the dependency-derived versioned path; all
         # appliance consumers invoke that wrapper. Scans tracked src/ + tests.

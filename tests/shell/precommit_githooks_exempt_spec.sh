@@ -18,6 +18,7 @@ scripts/check_context_budget.py
 scripts/check_composer_vendor.py
 scripts/check_url_encoding.py
 scripts/check_toggle_registry.py
+scripts/check_reentry_bounds.py
 scripts/agent/check-agent-config-parity.sh'
   make_repo() {
     scrub_git_env
@@ -50,6 +51,9 @@ scripts/agent/check-agent-config-parity.sh'
     The output should include 'listed in .githooks-exempt): composer vendor'
     The output should include 'listed in .githooks-exempt): noopener'
     The output should include 'listed in .githooks-exempt): url-encoding'
+    # issue #2016: the re-entry-bounds step is gated on staged .php/.inc OR .sh, and this
+    # example stages both -- so an unlisted absent checker here would hard-fail the hook.
+    The output should include 'listed in .githooks-exempt): reentry-bounds'
     The output should include '[pre-commit] php -l'
     The output should include '[pre-commit] phpcs'
     The stderr should not include 'FAILED'

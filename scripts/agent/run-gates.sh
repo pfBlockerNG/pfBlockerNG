@@ -65,6 +65,10 @@ git_statuses() {
 gates_for() {
 	files=$(grep -v '^legacy/' || true)
 	out=''
+	# issue #2016: the re-entry-bounds gate belongs to the .php/.inc AND .sh buckets --
+	# pfblockerng.sh owns four of the eight sites -- but it is ONE whole-tree scan, so it
+	# must be emitted exactly once for a mixed diff.
+	reentry_emitted=0
 	nl='
 '
 	# Per-file commands (php -l / sh -n / shellcheck) are re-parsed by run_gate's
@@ -85,12 +89,19 @@ gates_for() {
 		# issue #2123: the on/off toggle contract belongs to pfb_cfg_registry(), not to
 		# the page. --self-test is the gate's own red canary and runs first.
 		out="${out}uv run --locked python scripts/check_toggle_registry.py --self-test && uv run --locked python scripts/check_toggle_registry.py${nl}"
+		# issue #2016: a nested pfblockerng.php re-entry must stay bounded at the
+		# pfb_reentry_exec()/pfb_reentry() seam. Same red-canary-first shape.
+		out="${out}uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py${nl}"
+		reentry_emitted=1
 		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done
 		out="${out}vendor/bin/phpunit${nl}composer phpstan${nl}composer phpcs -- --standard=phpcs.xml.dist src/${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -q '\.sh$'; then
+		if [ "$reentry_emitted" != 1 ]; then
+			out="${out}uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py${nl}"
+		fi
 		for f in $(printf '%s\n' "$files" | grep '\.sh$'); do
 			out="${out}sh -n $f${nl}"
 			# issue #1210: shellcheck scope mirrors .githooks/pre-commit + test.yml
