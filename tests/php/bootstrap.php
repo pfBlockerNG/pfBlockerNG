@@ -46,6 +46,21 @@ $GLOBALS['pfb'] = [];
 $GLOBALS['argv'] = ['pfblockerng.inc'];
 $GLOBALS['argc'] = 1;
 
+// 4b. Keep the resolver start dormant too. pfb_stop_start_unbound() execs the Unbound
+//     daemon and polls up to 30 one-second rounds for the outgoing one (issue #2613), so
+//     point its start command at a shell double that records the attempt and exits 127 --
+//     the command-not-found status an absent binary already produces here -- and cap the
+//     poll budget, so no individual test has to defuse either. Both guarded: a second
+//     load of this bootstrap must stay silent.
+$GLOBALS['pfb_test_unbound_start_log'] = "{$pfb_test_tmp}/unbound_start.log";
+if (!defined('PFB_UNBOUND_START_CMD')) {
+	define('PFB_UNBOUND_START_CMD', 'echo "unit-test double: Unbound start suppressed" | tee -a '
+		. escapeshellarg($GLOBALS['pfb_test_unbound_start_log']) . '; exit 127');
+}
+if (!defined('PFB_UNBOUND_STOP_WAIT')) {
+	define('PFB_UNBOUND_STOP_WAIT', 2);
+}
+
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
 // notices (e.g. an optional-before-required parameter, a switch `continue`) that

@@ -11261,6 +11261,16 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	dnsbl_save_stats();
 }
 
+// The daemon-start command and the stop-wait budget are named so a harness can
+// override them before this file loads (issue #2613: the unit suite would otherwise
+// start a real resolver on any box carrying Unbound at the shipped path).
+if (!defined('PFB_UNBOUND_START_CMD')) {
+	define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');
+}
+if (!defined('PFB_UNBOUND_STOP_WAIT')) {
+	define('PFB_UNBOUND_STOP_WAIT', 30);
+}
+
 // Function to Start Unbound
 function pfb_stop_start_unbound($type) {
 	global $g, $pfb;
@@ -11271,8 +11281,8 @@ function pfb_stop_start_unbound($type) {
 		sigkillbypid("{$g['varrun_path']}/unbound.pid", 'TERM');
 	}
 
-	// If unbound is still running, wait up to 30 seconds for it to terminate.
-	for ($i=1; $i <= 30; $i++) {
+	// If unbound is still running, wait up to PFB_UNBOUND_STOP_WAIT seconds for it to terminate.
+	for ($i=1; $i <= PFB_UNBOUND_STOP_WAIT; $i++) {
 		if (is_process_running('unbound')) {
 			pfb_logger('.', 1);
 			sleep(1);
@@ -11296,7 +11306,7 @@ function pfb_stop_start_unbound($type) {
 	}
 
 	pfb_logger("\nStarting Unbound Resolver", 1);
-	exec("/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1", $final['result'], $final['retval']);
+	exec(PFB_UNBOUND_START_CMD, $final['result'], $final['retval']);
 	return $final;
 }
 
