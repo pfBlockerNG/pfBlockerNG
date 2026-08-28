@@ -309,9 +309,9 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 
 	/**
 	 * The ZIP arm extracts through a `set -o pipefail` pipeline (issue #819) and PHP's
-	 * exec() runs /bin/sh. `set` is a special builtin, so a /bin/sh without pipefail --
-	 * Debian's dash, and so the Linux CI runner -- ABORTS on that error before tar runs
-	 * and the arm cannot be exercised at all. Skip loudly rather than report a host
+	 * exec() runs /bin/sh, so a /bin/sh without pipefail cannot exercise that arm at all:
+	 * `set` is a special builtin, and Debian's dash -- the Linux CI runner's /bin/sh --
+	 * exits on the option error before tar runs. Skip loudly rather than report a host
 	 * property as a product defect; FreeBSD's sh has pipefail, so the appliance path is
 	 * covered live by tests/smoke/test_smoke_feeds.py.
 	 */
@@ -319,7 +319,10 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 	{
 		$out = [];
 		$rc = 1;
-		exec("set -o pipefail; /bin/echo pfbpipefail 2>/dev/null", $out, $rc);
+		// `set -e` is what makes the probe loud. Without it $rc is the ECHO's status, so a
+		// shell that only WARNS on an unsupported option (bash 3.2) reports a capability it
+		// does not have and the ZIP rows run with no pipefail, hiding the issue #819 class.
+		exec('{ set -e; set -o pipefail; /bin/echo pfbpipefail; } 2>/dev/null', $out, $rc);
 		if ($rc !== 0 || ($out[0] ?? '') !== 'pfbpipefail') {
 			$this->markTestSkipped(
 				"/bin/sh cannot 'set -o pipefail' (exit {$rc}); the ZIP arm's extraction pipeline "
