@@ -209,15 +209,16 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "stubs/` is shim/support",
         "graph.json` is tracked",
         "records under `graphify-out/memory/` are tracked",
-        # The query-outcome feedback loop (issue #2823). A dead end with no correction
-        # is what makes the next session re-derive it.
+        # The query-outcome feedback loop (issue #2823).
         "graphify save-result",
         "graphify reflect",
-        "dead_end",
-        "--correction",
+        "--outcome useful|dead_end|corrected",
+        "`useful` when the returned subgraph answered the",
+        "`dead_end` when another surface answered it",
+        "`corrected` when the graph answered and was wrong",
+        "A dead end MUST carry `--correction`",
         "reflections/LESSONS.md",
-        # Graphify-first holds for code structure ONLY. Every query in this
-        # repository's first reflect run was a question the code graph cannot answer.
+        # Graphify-first holds for code structure ONLY.
         "grep first",
         "reference counts",
         "tool wiring",
@@ -251,11 +252,9 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     # updates, so both attributes must ride on the row.
     graphify_attribute = "graphify-out/graph.json merge=graphify linguist-generated=true"
     assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
-    # The root graph is tracked so a fresh checkout starts with the map, and the
-    # query-outcome records are tracked so lessons outlive the worktree that wrote them
-    # (issue #2823). Records are named per query and accumulate, so the durable contract
-    # is the SET of allowed prefixes: it still fails both ways, on a dropped graph and on
-    # a newly tracked generated artifact.
+    # The root graph plus the query-outcome records are tracked (issue #2823). Records are
+    # named per query and accumulate, so the durable contract is the SET of allowed
+    # prefixes: it fails on a dropped graph and on a newly tracked generated artifact.
     tracked = subprocess.run(
         ["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True
     ).stdout.split()
@@ -292,21 +291,23 @@ def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> N
 
 
 def test_graphify_memory_records_are_tracked_by_a_directory_reinclude() -> None:
-    # issue #2823: `!graphify-out/memory/**` does NOT work. `graphify-out/*` matches the
-    # memory directory itself, git never descends into it, and every record stays
+    # issue #2823: `!graphify-out/memory/**` silently fails. `graphify-out/*` matches the
+    # memory directory itself and git never descends into it, so every record stays
     # ignored while the ignore file reads as though they are tracked.
     lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert lines.count("graphify-out/*") == 1, "one ignore rule, or the ordering below is ambiguous"
     assert lines.count("!graphify-out/memory/") == 1, "re-include the directory, exactly once"
     assert "!graphify-out/memory/**" not in lines, "a contents glob leaves every record ignored"
     # gitignore takes the LAST matching rule, so the re-include must follow the ignore.
     assert lines.index("graphify-out/*") < lines.index("!graphify-out/memory/")
 
     def ignored(path: str) -> bool:
-        return (
-            subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT, capture_output=True, check=False).returncode
-            == 0
+        # Only 0 and 1 are verdicts. Anything else is git failing to answer -- a symlinked
+        # memory/ exits 128, which read as "not ignored" and passed the probe below.
+        probe = subprocess.run(
+            ["git", "check-ignore", "-q", path], cwd=ROOT, capture_output=True, text=True, check=False
         )
+        assert probe.returncode in (0, 1), f"git could not classify {path}: {probe.stderr.strip()}"
+        return probe.returncode == 0
 
     assert not ignored("graphify-out/memory/query_20260101_000000_probe.md"), "records must be trackable"
     assert ignored("graphify-out/GRAPH_REPORT.md"), "the re-include must not un-ignore the rest"
