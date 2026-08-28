@@ -203,12 +203,14 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "tests/` is",
         "harness/test",
         "stubs/` is shim/support",
-        "ignored and untracked",
+        "graph.json` is tracked",
+        "everything else under `graphify-out/` is ignored",
     ):
         assert contract in routing, f"direct worktree initialization routing lost {contract}"
 
     folded_routing = routing.casefold()
     for obsolete in (
+        "ignored and untracked",
         "graphify-refresh-required",
         "graphify-store.py",
         ".git/graphify-store.lock",
@@ -225,12 +227,20 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     attrs = attrs_text.splitlines()
     graphify_attribute = "graphify-out/graph.json merge=graphify"
     assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
-    assert (
-        subprocess.run(["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True).stdout
-        == ""
-    )
+    # The root graph is tracked so a fresh checkout starts with the map; everything
+    # else under graphify-out/ is regenerated from it and stays ignored. Asserting the
+    # exact set fails both ways: a dropped graph and a tracked generated artifact.
+    assert subprocess.run(
+        ["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True
+    ).stdout.split() == ["graphify-out/graph.json"]
     root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert "graphify-out/" in root_ignore, "generated Graphify output must remain ignored"
+    # The pair, in order: ignore the directory's contents, then re-include only the
+    # tracked graph. Either line alone gets the tracking wrong.
+    assert "graphify-out/*" in root_ignore, "generated Graphify output must remain ignored"
+    assert "!graphify-out/graph.json" in root_ignore, "the tracked root graph must be re-included"
+    assert root_ignore.index("graphify-out/*") < root_ignore.index("!graphify-out/graph.json"), (
+        "the re-include must follow the ignore, or the graph is not tracked"
+    )
     for obsolete_path in ("scripts/agent/graphify-store.py", "tests/test_graphify_store.py"):
         assert not (ROOT / obsolete_path).exists(), f"obsolete Graphify store path returned: {obsolete_path}"
 
