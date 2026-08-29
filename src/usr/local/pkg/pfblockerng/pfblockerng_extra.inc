@@ -397,6 +397,35 @@ function pfb_editor_mount_lists_for_sort(array $fields, string $sort, bool $enab
 	return pfb_editor_mount_lists($fields, $enabled);
 }
 
+/** Pointer from a toggle to the list section(s) it owns. $hiddenUntilEnabled is for DNSBL JS show/hide. */
+function pfb_list_section_help_note(array $sectionTitles, bool $hiddenUntilEnabled): string
+{
+	$names = [];
+	foreach ($sectionTitles as $title) {
+		$title = (string) $title;
+		if ($title === '') {
+			continue;
+		}
+		$names[] = '<strong>' . htmlspecialchars($title, ENT_QUOTES) . '</strong>';
+	}
+	if ($names === []) {
+		return '';
+	}
+	if (count($names) === 1) {
+		$list = $names[0] . ' section';
+		$verb = 'appears';
+	} else {
+		$last = array_pop($names);
+		$list = implode(', ', $names) . ' and ' . $last . ' sections';
+		$verb = 'appear';
+	}
+	$note = 'Entries are managed in the ' . $list . ' below';
+	if ($hiddenUntilEnabled) {
+		$note .= ', which ' . $verb . ' when this is enabled';
+	}
+	return $note . '.';
+}
+
 /**
  * Theme file head.inc will actually load. User value first (customsettings),
  * then pfSense.css. Missing files do not count: head.inc falls back to the
@@ -424,6 +453,30 @@ function pfb_effective_webguicss($user_settings, ?callable $exists = null): stri
 	return 'pfSense.css';
 }
 
+/** Shared CSS for pfb_form_subhdr(); callers wrap it in a page <style> block. */
+function pfb_form_subhdr_css_rules(): string
+{
+	return '.pfb-subhdr { background-color: rgba(127, 127, 127, .38); border-top: 1px solid rgba(127, 127, 127, .58); text-align: center; padding-top: 3px; }'
+		. '.pfb-subhdr > label.control-label { display: none; }'
+		. '.pfb-subhdr > div { width: 100%; float: none; }'
+		. '.pfb-subhdr p.form-control-static { font-weight: 700; padding: 0; min-height: 0; margin: 0; line-height: 1.2; }';
+}
+
+/** Full-width in-section divider. $extraClass is an optional alias (Log Settings keeps pfb-loghdr). */
+function pfb_form_subhdr(string $title, string $extraClass = ''): Form_Group
+{
+	$header = new Form_Group('');
+	$header->addClass('pfb-subhdr');
+	if ($extraClass !== '') {
+		$header->addClass($extraClass);
+	}
+	$header->add(new Form_StaticText(
+		'',
+		'<p class="form-control-static">' . htmlspecialchars($title, ENT_QUOTES) . '</p>'
+	));
+	return $header;
+}
+
 /** Label and help rendered for the General-page editor toggle. */
 function pfb_editor_toggle_label(): string
 {
@@ -432,12 +485,15 @@ function pfb_editor_toggle_label(): string
 
 function pfb_editor_toggle_help(): string
 {
-	return 'Client-side editor for the list and script fields (e.g. the DNSBL Regex '
-		. 'List, custom lists, IP suppression lists, hook scripts): syntax highlighting, '
-		. 'line numbers and undo/redo everywhere, plus inline linting on the DNSBL Regex '
-		. 'List and hook scripts. Unchecking this leaves those fields as plain text boxes '
-		. 'and skips loading the editor assets &mdash; useful for low-end client machines. '
-		. 'Validation always stays server-side either way.';
+	return 'Adds line numbers, syntax highlighting and undo/redo to list and script textareas. '
+		. 'Uncheck to keep those fields as plain text boxes (skips loading the editor on a slow machine).'
+		. '<div class="infoblock">'
+		. 'Covers every list and script textarea this package draws: DNSBL lists (Regex, DNSBL Whitelist, '
+		. 'no-AAAA, Group Policy Bypass IPs, TLD Exclusion, TLD Blacklist), IP suppression '
+		. 'lists, General Block Private-Address Exceptions, and hook scripts. '
+		. 'The DNSBL Regex List and hook scripts also get inline linting. '
+		. 'Validation always stays server-side either way.'
+		. '</div>';
 }
 
 /** Render one CodeMirror asset tag when the Advanced Text Editor is enabled. */
@@ -451,6 +507,35 @@ function pfb_editor_asset(string $asset, bool $enabled): string
 	return '<script src="vendor/codemirror/' . htmlspecialchars($asset, ENT_QUOTES, 'UTF-8')
 		. '?v=' . pfb_file_mtime('/usr/local/www/pfblockerng/vendor/codemirror/' . $asset)
 		. '"></script>';
+}
+
+/** Grow a short list textarea until $maxRows, then scroll. No-op if CodeMirror hid the field. */
+function pfb_autogrow_textarea_js(string $fieldId, int $maxRows): string
+{
+	if ($maxRows < 1 || preg_match('/^[A-Za-z_][A-Za-z0-9_-]*$/', $fieldId) !== 1) {
+		return '';
+	}
+
+	$idJson = json_encode($fieldId, JSON_THROW_ON_ERROR);
+	return "var pfbAg = document.getElementById({$idJson});\n"
+		. "if (!pfbAg || pfbAg.style.display === 'none') {\n"
+		. "} else {\n"
+		. "	(function (el, maxRows) {\n"
+		. "		function fit() {\n"
+		. "			el.rows = maxRows;\n"
+		. "			el.style.height = 'auto';\n"
+		. "			var cap = el.clientHeight;\n"
+		. "			el.rows = 1;\n"
+		. "			el.style.height = 'auto';\n"
+		. "			var need = el.scrollHeight;\n"
+		. "			el.style.height = (need > cap ? cap : need) + 'px';\n"
+		. "			el.style.overflowY = need > cap ? 'auto' : 'hidden';\n"
+		. "			if (need > cap) { el.scrollTop = el.scrollHeight; }\n"
+		. "		}\n"
+		. "		el.addEventListener('input', fit);\n"
+		. "		fit();\n"
+		. "	})(pfbAg, {$maxRows});\n"
+		. "}\n";
 }
 
 /** Render the shared plain-list CodeMirror mount call. */
