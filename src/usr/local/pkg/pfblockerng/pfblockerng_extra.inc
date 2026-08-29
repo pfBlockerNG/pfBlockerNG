@@ -397,6 +397,33 @@ function pfb_editor_mount_lists_for_sort(array $fields, string $sort, bool $enab
 	return pfb_editor_mount_lists($fields, $enabled);
 }
 
+/**
+ * Theme file head.inc will actually load. User value first (customsettings),
+ * then the system key, then pfSense.css. Missing files do not count: head.inc
+ * falls back to the light default, and the Alerts palette must follow.
+ *
+ * $exists is injectable so tests can simulate a missing theme file.
+ */
+function pfb_effective_webguicss($user_settings, $system_css, ?callable $exists = null): string
+{
+	$exists = $exists ?? 'file_exists';
+	$dir = '/usr/local/www/css/';
+	$user = '';
+	if (is_array($user_settings)) {
+		$user = (string) ($user_settings['webgui']['webguicss'] ?? '');
+	}
+	foreach ([$user, (string) $system_css, 'pfSense.css'] as $name) {
+		$base = basename($name);
+		if ($base === '' || $base === '.' || $base === '..') {
+			continue;
+		}
+		if ($exists($dir . $base)) {
+			return $base;
+		}
+	}
+	return 'pfSense.css';
+}
+
 /** Label and help rendered for the General-page editor toggle. */
 function pfb_editor_toggle_label(): string
 {

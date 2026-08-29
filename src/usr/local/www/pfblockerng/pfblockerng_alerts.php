@@ -74,6 +74,11 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 	}
 }
 
+// Same source and missing-file fallback as head.inc. strpos(..., 'dark') === 0
+// is falsy, so !== FALSE is required.
+$pfb_webgui_css = pfb_effective_webguicss($user_settings ?? null, config_get_path('system/webgui/webguicss'));
+$pfb_webgui_dark = strpos($pfb_webgui_css, 'dark') !== FALSE;
+
 $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
 $pfbchartstyle	= $pfb['aglobal']['pfbchartstyle']		?: 'twotone';
 $pfbchart1	= $pfb['aglobal']['pfbchart1']			?: '#0C6197';
@@ -2284,7 +2289,7 @@ function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $
 
 // Function to convert dnsbl.log -> Reports Tab
 function convert_dnsbl_log($mode, $fields) {
-	global $pfb, $local_hosts, $dnsbl_int, $filterfieldsarray, $clists, $dnsbl_unlock, $dup, $counter,
+	global $pfb, $pfb_webgui_dark, $local_hosts, $dnsbl_int, $filterfieldsarray, $clists, $dnsbl_unlock, $dup, $counter,
 		$pfbentries, $skipcount, $dnsblfilterlimit, $dnsblfilterlimitentries;
 
 	if ($dnsblfilterlimit) {
@@ -2574,9 +2579,9 @@ function convert_dnsbl_log($mode, $fields) {
 	else {
 		// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
 		if ($isUpstream) {
-			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['uniupstream2'] : $pfb['uniupstream'];
+			$bg = $pfb_webgui_dark ? $pfb['uniupstream2'] : $pfb['uniupstream'];
 		} else {
-			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unidnsbl2'] : $pfb['unidnsbl'];
+			$bg = $pfb_webgui_dark ? $pfb['unidnsbl2'] : $pfb['unidnsbl'];
 		}
 		if ($bg == 'none') {
 			$bg = '';
@@ -2602,7 +2607,7 @@ function convert_dnsbl_log($mode, $fields) {
 
 // Function to convert dns_reply.log -> Reports Tab
 function convert_dns_reply_log($mode, $fields) {
-	global $pfb, $local_hosts, $filterfieldsarray, $clists, $counter, $pfbentries, $skipcount, $dnsfilterlimit, $dnsfilterlimitentries;
+	global $pfb, $pfb_webgui_dark, $local_hosts, $filterfieldsarray, $clists, $counter, $pfbentries, $skipcount, $dnsfilterlimit, $dnsfilterlimitentries;
 
 	if ($dnsfilterlimit) {
 		return TRUE;
@@ -2767,7 +2772,7 @@ function convert_dns_reply_log($mode, $fields) {
 		$title = 'DNS Reply Event';
 		if ($fields[7] == '127.0.0.1') {
 			// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
-			$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unireply2'] : $pfb['unireply'];
+			$bg = $pfb_webgui_dark ? $pfb['unireply2'] : $pfb['unireply'];
 			if ($bg != 'none') {
 				$style_bg = "style=\"background-color:{$bg}\"";
 			}
@@ -2886,7 +2891,7 @@ function pfb_whitelist_trash_icon(array $wlists, string $host, int $vtype, strin
 
 // Function to convert IP Logs (ip_block, ip_permit and ip_match).log -> Reports Tab
 function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
-	global $pfb, $continents, $filterfieldsarray, $clists, $ip_unlock, $counter, $pfbentries, $skipcount, $dup, $ipfilterlimit, $ipfilterlimitentries;
+	global $pfb, $pfb_webgui_dark, $continents, $filterfieldsarray, $clists, $ip_unlock, $counter, $pfbentries, $skipcount, $dup, $ipfilterlimit, $ipfilterlimitentries;
 
 	if ($ipfilterlimit) {
 		return array(TRUE, '');
@@ -3261,13 +3266,13 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 		// foreign key: system/webgui/webguicss is a pfSense core key, not in registry
 		switch($rtype) {
 			case 'Block':
-				$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['uniblock2'] : $pfb['uniblock'];
+				$bg = $pfb_webgui_dark ? $pfb['uniblock2'] : $pfb['uniblock'];
 				break;
 			case 'Permit':
-				$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unipermit2'] : $pfb['unipermit'];
+				$bg = $pfb_webgui_dark ? $pfb['unipermit2'] : $pfb['unipermit'];
 				break;
 			case 'Match':
-				$bg = strpos(config_get_path('system/webgui/webguicss'), 'dark') ? $pfb['unimatch2'] : $pfb['unimatch'];
+				$bg = $pfb_webgui_dark ? $pfb['unimatch2'] : $pfb['unimatch'];
 				break;
 			default:
 				$bg = '';
