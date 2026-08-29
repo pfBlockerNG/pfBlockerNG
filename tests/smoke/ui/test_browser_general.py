@@ -327,10 +327,19 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
         assert "Schedule minute is invalid" in rejected.text
         assert helpers.config_get(smoke_vm, paths["pfb_schedule_minute"]) == "30"
 
-        _open(page, webui, GENERAL_PAGE + "?schcache=failed")
+        # issue #2855: the warning names the stage that failed, and an unrecognised stage
+        # token falls back to the generic label instead of reaching the page.
+        _open(page, webui, GENERAL_PAGE + "?schcache=failed&schstage=config")
         expect(
-            page.get_by_text("Settings were saved, but schedule-cache generation failed.", exact=False)
+            page.get_by_text(
+                "schedule-cache generation failed: the saved schedule configuration was rejected",
+                exact=False,
+            )
         ).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+        _open(page, webui, GENERAL_PAGE + "?schcache=failed&schstage=not-a-stage")
+        expect(page.get_by_text("the failing stage was not recorded", exact=False)).to_be_visible(timeout=JS_TIMEOUT_MS)
+        assert "not-a-stage" not in page.content()
 
         # Master Off suppresses scheduled work only; schedule and enabled window remain editable.
         window_toggle.check()
