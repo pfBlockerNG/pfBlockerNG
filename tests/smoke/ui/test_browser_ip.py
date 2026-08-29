@@ -61,11 +61,9 @@ def _expand_section(page: Page, section_id: str) -> None:
     that selector matches nothing, and a ``count() == 0`` guard turns it into a silent
     success. Assert the body is attached so a wrong selector fails here, loudly.
 
-    Keep this byte-identical to the copy in test_browser_ip.py -- the two drifting apart
-    is what left the IP page with the broken selector after the DNSBL page was fixed.
+    Keep the two copies of this helper byte-identical -- them drifting apart is what left
+    the IP page on the broken selector after the DNSBL page was fixed.
     """
-    panel = page.locator(f"#{section_id}")
-    expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
     body = page.locator(f"#{section_id}_panel-body")
     expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
     if "in" not in (body.get_attribute("class") or ""):
