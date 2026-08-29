@@ -1533,38 +1533,56 @@ def test_issue_2021_stripped_real_payload_is_rejected_and_oracle_unchanged(
 def test_issue_2061_cli_rejects_non_string_script_without_rewriting_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
     report_exists: bool,
 ) -> None:
     stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
     original = report_path.read_bytes()
     if not report_exists:
         report_path.unlink()
-    pkg_path, _ = _happy_fixture(
+    pkg_path, export_dir = _happy_fixture(
         tmp_path / "malformed",
         STABLE,
         ROW_15,
         scripts={**DEMO_SCRIPTS, "install": ["unexpected"]},
     )
-    monkeypatch.setattr(bfv, "_invoke_build_leg", lambda argv, *, cwd: str(pkg_path))
-    capsys.readouterr()
+    runner = f"""
+import importlib.util
+import shutil
+import sys
+from pathlib import Path
 
-    rc = bfv.main(
-        [
-            "--out",
-            str(stage),
-            "--matrix-cmd",
-            f"cat {matrix_file}",
-            "--repo",
-            str(tmp_path),
-            "--no-deterministic-check",
-        ]
-    )
+tool_path = Path({str(_TOOL)!r})
+sys.path.insert(0, str(tool_path.parent))
+spec = importlib.util.spec_from_file_location("build_frozen_v3_subprocess", tool_path)
+assert spec is not None and spec.loader is not None
+tool = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = tool
+spec.loader.exec_module(tool)
+tool.FROZEN_TARGETS = (tool.FrozenTarget(
+    channel={STABLE.channel!r},
+    tag={STABLE.tag!r},
+    commit={STABLE.commit!r},
+    portname={STABLE.portname!r},
+    portversion={STABLE.portversion!r},
+),)
+tool.resolve_tag_commit = lambda repo, tag, expected_commit: expected_commit
+tool.export_tag = lambda repo, commit, dest: shutil.copytree(
+    Path({str(export_dir)!r}), dest, dirs_exist_ok=True
+)
+tool._invoke_build_leg = lambda argv, cwd: {str(pkg_path)!r}
+sys.exit(tool.main([
+    "--out", {str(stage)!r},
+    "--matrix-cmd", "cat " + {str(matrix_file)!r},
+    "--repo", {str(tmp_path)!r},
+    "--no-deterministic-check",
+]))
+"""
 
-    assert rc != 0
-    stderr = capsys.readouterr().err
-    assert "scripts.install must be a string" in stderr
-    assert "Traceback" not in stderr
+    result = subprocess.run([sys.executable, "-c", runner], capture_output=True, text=True, check=False)
+
+    assert result.returncode != 0
+    assert "scripts.install must be a string" in result.stderr
+    assert "Traceback" not in result.stderr
     if report_exists:
         assert report_path.read_bytes() == original
     else:
