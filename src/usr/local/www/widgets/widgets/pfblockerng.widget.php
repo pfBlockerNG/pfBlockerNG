@@ -976,6 +976,15 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 			}
 
 			$alias_html = htmlspecialchars($pfb_alias);
+			if ($pfb_alias === 'Upstream') {
+				$alias_html = '<span class="pfb-widget-upstream" title="'
+					. htmlspecialchars(
+						'Domains blocked by your upstream DNS resolver rather than by a pfBlockerNG feed. Only counts when the Resolver is forwarding.',
+						ENT_QUOTES,
+						'UTF-8'
+					)
+					. '">' . $alias_html . '</span>';
+			}
 
 			if (strpos($pfb_alias, 'DNSBL_') !== FALSE) {
 				// Packet column pivot to Alerts Tab
@@ -1007,7 +1016,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				}
 
 				// Alias table popup
-				if ($values['count'] > 0 && $pfb['popup'] == 'on') {
+				if ($values['count'] > 0 && $pfb['popup'] == 'on' && $pfb_alias !== 'Upstream') {
 					$alias_html = "<a href=\"/firewall_aliases_edit.php?id={$values['id']}\" data-popover=\"true\" "
 						. " data-trigger=\"hover focus\" title=\"pfBlockerNG Alias details\" data-content=\""
 						. alias_info_popup($values['id']) . "\" data-html=\"true\">" . htmlspecialchars($pfb_alias) . "</a>";
@@ -1037,6 +1046,9 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 }
 ?>
 
+<style>
+#pfb-tbl .pfb-widget-upstream { font-style: italic; opacity: 0.65; }
+</style>
 <form id="formicons" action="/widgets/widgets/pfblockerng.widget.php" method="post" class="form-horizontal">
 <input type="hidden" name="pfblockerngack" id="pfblockerngack" value="">
 <input type="hidden" name="pfblockerngclear" id="pfblockerngclear" value="">
