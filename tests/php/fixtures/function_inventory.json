@@ -4149,6 +4149,33 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_effective_webguicss": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "user_settings",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "system_css",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "exists",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_emit_entry_reject_stats": {
         "returnsRef": false,
         "returnType": "void",
