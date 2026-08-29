@@ -22,8 +22,9 @@ Describe 'image-upgrade.sh package-metadata wait'
   setup() {
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/upgmeta.XXXXXX")"
     COUNT="${WORK}/count"
+    SLEEP_ARG="${WORK}/sleep-arg"
     printf '0\n' > "$COUNT"
-    export WORK COUNT
+    export WORK COUNT SLEEP_ARG
   }
   teardown() { rm -rf "$WORK"; }
   BeforeEach 'setup'
@@ -152,10 +153,36 @@ Describe 'image-upgrade.sh package-metadata wait'
     ' _ "$SCRIPT"
   }
 
+  # run_wait_interval_once INTERVAL — settle on probe two and record the one
+  # effective sleep argument, so an overflow fallback is observable under dash.
+  run_wait_interval_once() {
+    _interval="$1" sh -c '
+      set -e
+      log()  { :; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_wait_pkg_metadata BEGIN/,/^# pfb_wait_pkg_metadata END/p" "$1")"
+      METADATA_INTERVAL="$_interval"
+      sleep() { printf "%s\n" "$1" > "$SLEEP_ARG"; }
+      ssh_guest() {
+        _n=$(cat "$COUNT"); _n=$((_n + 1)); printf "%s\n" "$_n" > "$COUNT"
+        if [ "$_n" -eq 1 ]; then printf "gone\r\n"; else printf "present\r\n"; fi
+      }
+      pfb_wait_pkg_metadata 20
+    ' _ "$SCRIPT"
+  }
+
   It 'falls back to the documented 600s cap when the timeout is unusable'
     # Pins the fallback VALUE, not just that something bounded happens: with the
     # 5s interval fallback, a 600s cap is 121 probes. A fallback of 0 would be 1.
     When call run_wait_counted not-a-number
+    The status should be failure
+    The stderr should include 'did not settle'
+    The contents of file "$COUNT" should equal '121'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  It 'falls back when the metadata timeout exceeds shell integer range'
+    When call run_wait_counted 99999999999999999999999999
     The status should be failure
     The stderr should include 'did not settle'
     The contents of file "$COUNT" should equal '121'
@@ -180,6 +207,21 @@ Describe 'image-upgrade.sh package-metadata wait'
     The stderr should include 'did not settle'
     The contents of file "$COUNT" should equal '5'
     The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  It 'falls back when the metadata interval is zero-padded zero'
+    When call run_wait_counted 20 00
+    The status should be failure
+    The stderr should include 'did not settle'
+    The contents of file "$COUNT" should equal '5'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  It 'falls back when the metadata interval exceeds shell integer range'
+    When call run_wait_interval_once 99999999999999999999999999
+    The status should be success
+    The contents of file "$SLEEP_ARG" should equal '5'
+    The contents of file "$COUNT" should equal '2'
   End
 
   It 'stays bounded when the timeout is not a number'
@@ -246,6 +288,14 @@ Describe 'image-upgrade.sh package-metadata wait'
 
   It 'falls back to the documented 600s SSH cap when timeout has trailing whitespace'
     When call run_ssh_wait_counted '7 '
+    The status should be failure
+    The stderr should include 'VM did not answer SSH within 600s'
+    The contents of file "$COUNT" should equal '121'
+    The output should not include 'metadata-waited'
+  End
+
+  It 'falls back when the SSH timeout exceeds shell integer range'
+    When call run_ssh_wait_counted 99999999999999999999999999
     The status should be failure
     The stderr should include 'VM did not answer SSH within 600s'
     The contents of file "$COUNT" should equal '121'
