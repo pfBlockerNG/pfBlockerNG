@@ -7902,14 +7902,26 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 	}
 
 	if ($action === 'lock') {
-		$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
-		if ($apply['ok']) {
-			pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
-			$result['savemsg'] = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
-		} else {
-			$result['savemsg'] = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";
+		$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
+		if (!pfb_feed_pass_acquire()) {
+			$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry the re-lock once the current run finishes.";
+			return $result;
 		}
-		return $result;
+
+		try {
+			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+			if ($apply['ok']) {
+				pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
+				$result['savemsg'] = "The IP [ {$ip} ] has been re-locked into table [ {$table} ]!";
+			} else {
+				$result['savemsg'] = "The live re-lock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] does not block it; see the pfBlockerNG log.";
+			}
+			return $result;
+		} finally {
+			if (!$was_held) {
+				pfb_feed_pass_release();
+			}
+		}
 	}
 
 	if ($action === 'ip_white') {
@@ -7928,30 +7940,42 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			return $result;
 		}
 
-		$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
-		if (!$apply['ok']) {
-			$result['savemsg'] = "The add of [ {$ip} ] to aliastable [ {$table} ] failed [ {$apply['fail']} ] -- see the pfBlockerNG log.";
+		$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
+		if (!pfb_feed_pass_acquire()) {
+			$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry adding [ {$ip} ] to the Permit Alias once the current run finishes.";
 			return $result;
 		}
 
-		@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
-		$whitelist_string = !empty($descr) ? "{$ip} # {$descr}\r\n" : "{$ip}\r\n";
-		$custom = '';
-		foreach ($data as $line) {
-			$custom .= "{$line}";
+		try {
+			$apply = pfb_pfctl_checked_op($pfb['pfctl'], $table, 'add', $ip);
+			if (!$apply['ok']) {
+				$result['savemsg'] = "The add of [ {$ip} ] to aliastable [ {$table} ] failed [ {$apply['fail']} ] -- see the pfBlockerNG log.";
+				return $result;
+			}
+
+			@file_put_contents("{$pfb['aliasdir']}/{$table}.txt", "\n{$ip}", LOCK_EX);
+			$whitelist_string = !empty($descr) ? "{$ip} # {$descr}\r\n" : "{$ip}\r\n";
+			$custom = '';
+			foreach ($data as $line) {
+				$custom .= "{$line}";
+			}
+			$custom .= $whitelist_string;
+			$clists[$list_key][$table]['base64'] = pfb_text_area_encode($custom);
+			$base64_idx = $metadata['base64_idx'];
+			// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not a registered config field
+			config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$base64_idx}/custom", $clists[$list_key][$table]['base64']);
+			write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
+			$aname = substr(substr($table, 4), 0, -3);
+			touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");
+			$result['savemsg'] = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
+			// issue #2670: durable permit replaces the temporary unlock row
+			pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
+			return $result;
+		} finally {
+			if (!$was_held) {
+				pfb_feed_pass_release();
+			}
 		}
-		$custom .= $whitelist_string;
-		$clists[$list_key][$table]['base64'] = pfb_text_area_encode($custom);
-		$base64_idx = $metadata['base64_idx'];
-		// foreign structure: pfblockernglistsv4/v6/config/{row}/custom is a dynamic per-row key, not a registered config field
-		config_set_path("installedpackages/pfblockernglistsv{$vtype}/config/{$base64_idx}/custom", $clists[$list_key][$table]['base64']);
-		write_config("pfBlockerNG: Added [ {$ip} ] to [ {$table} ] Whitelist", FALSE);
-		$aname = substr(substr($table, 4), 0, -3);
-		touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");
-		$result['savemsg'] = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
-		// issue #2670: durable permit replaces the temporary unlock row
-		pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
-		return $result;
 	}
 
 	$result['savemsg'] = gettext('Cannot Lock/Unlock - Invalid action.');
