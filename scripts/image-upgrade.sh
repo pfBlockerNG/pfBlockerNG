@@ -104,8 +104,9 @@
 #   package metadata refresh to settle (defaults: 600 / 5). VERIFY_BOOT_TIMEOUT
 #   and METADATA_TIMEOUT accept 0..86400; METADATA_INTERVAL accepts canonical
 #   decimal 1..3600 with no leading zeros; invalid values use their defaults.
-#   Every boot wait adds the metadata wait to its own budget, so the worst case
-#   is its own timeout PLUS METADATA_TIMEOUT.
+#   Boot waits add the metadata budget to their own configured budget. Wall-clock
+#   time also includes connection/probe latency, fixed initial sleeps and up to
+#   one final poll interval; these knobs are elapsed-counter caps, not kill timers.
 #   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
 #                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
 #                    versions; reboots the guest and waits for SSH before proceeding.
@@ -829,6 +830,9 @@ PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo prese
 # means "not started yet" until a `running` probe has been seen and "exited without the
 # sentinel" after one. Only `present` is success; both failure shapes die loudly rather
 # than let the caller proceed against an unsettled box (#2458).
+#
+# TIMEOUT caps the elapsed counter. Each probe precedes the deadline check and each
+# sleep follows it, so wall clock may exceed TIMEOUT by probe latency plus one interval.
 pfb_wait_pkg_metadata() {
     _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
     _pwpm_interval="${METADATA_INTERVAL:-5}"
@@ -871,7 +875,8 @@ pfb_wait_pkg_metadata() {
 # pfb_wait_upgraded_box OLD_VERSION LOG — block until the box pfSense-upgrade
 # rebooted comes back reporting a version other than OLD_VERSION, then until its
 # package metadata refresh has settled. Sets the global NEW_VER; dies if the
-# version never changes within UPGRADE_TIMEOUT.
+# version never changes within the configured UPGRADE_TIMEOUT counter. Wall clock
+# also includes the initial 20s reboot sleep, probe latency and one final 15s poll.
 #
 # This path never reaches wait_guest_ssh, so it needs its own settle gate. The
 # version poll is not one: /etc/version is written by the installer BEFORE
@@ -907,9 +912,10 @@ pfb_wait_upgraded_box() {
 # wait_guest_ssh TIMEOUT [CONSOLE] — poll until root SSH answers or TIMEOUT
 # seconds elapse, then until the package metadata refresh has settled; CONSOLE
 # names the boot's console log for the failure message (the verification boot
-# writes verify-console.log, not console.log). TIMEOUT bounds the SSH poll only,
-# so the call's worst case is TIMEOUT + METADATA_TIMEOUT — both hard caps, and
-# both end by dying rather than returning.
+# writes verify-console.log, not console.log). TIMEOUT bounds the SSH poll's
+# elapsed counter; the configured call budget is TIMEOUT + METADATA_TIMEOUT.
+# Wall clock may additionally include one SSH attempt plus metadata probe latency
+# and one final metadata interval. Both exhausted counters die rather than return.
 #
 # Answering SSH is not a settled box. Every caller here goes straight on to read
 # pkg's ABI, apply a pkg upgrade, sample the exported artifact's ABI, or power the
