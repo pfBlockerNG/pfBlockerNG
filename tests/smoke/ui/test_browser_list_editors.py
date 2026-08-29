@@ -261,3 +261,77 @@ def test_general_allowlist_editor_follows_disabled_state(
         f"expected synced textarea '192.0.2.10', got {synced!r}"
     )
     _shot(page, screenshot_dir, "general_allowlist_disabled_after_enabled")
+
+
+def _allowlist_lines(n: int) -> str:
+    return "\n".join(f"192.0.2.{i}" for i in range(1, n + 1))
+
+
+def test_allowlist_grows_to_five_rows_then_scrolls(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Block Private-Address Exceptions starts at one row, grows while typing,
+    and caps at five with a scrollbar instead of growing further.
+
+    PHPUnit only pins the ``rows=1`` / ``data-pfb-autogrow-max=5`` attributes and
+    the helper source. This drives the live JS (textarea helper, or CM6 when the
+    editor is mounted).
+    """
+    page = browser_page
+    _open(page, webui, GENERAL_PAGE)
+
+    checkbox = page.locator("#pfb_feed_internal_filter")
+    textarea = page.locator("#pfb_feed_internal_allowlist")
+    editor = _editor_for(page, "pfb_feed_internal_allowlist")
+    expect(checkbox).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(textarea).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    if not checkbox.is_checked():
+        checkbox.evaluate("el => el.click()")
+    expect(checkbox).to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    def _height(loc: Locator) -> float:
+        box = loc.bounding_box()
+        assert box is not None, "allowlist widget has no bounding box"
+        return box["height"]
+
+    if editor.count() and not textarea.is_visible():
+        content = editor.locator(".cm-content")
+        expect(content).to_have_attribute("contenteditable", "true", timeout=JS_TIMEOUT_MS)
+        scroller = editor.locator(".cm-scroller")
+        _clear_and_type(content, _allowlist_lines(1))
+        h1 = _height(editor)
+        _shot(page, screenshot_dir, "allowlist_grow_1")
+        _clear_and_type(content, _allowlist_lines(3))
+        h3 = _height(editor)
+        _shot(page, screenshot_dir, "allowlist_grow_3")
+        _clear_and_type(content, _allowlist_lines(5))
+        h5 = _height(editor)
+        _shot(page, screenshot_dir, "allowlist_grow_5")
+        _clear_and_type(content, _allowlist_lines(8))
+        h8 = _height(editor)
+        overflow = scroller.evaluate("el => getComputedStyle(el).overflowY")
+        _shot(page, screenshot_dir, "allowlist_grow_8_capped")
+    else:
+        expect(textarea).to_be_visible(timeout=JS_TIMEOUT_MS)
+        textarea.fill(_allowlist_lines(1))
+        textarea.dispatch_event("input")
+        h1 = _height(textarea)
+        textarea.fill(_allowlist_lines(3))
+        textarea.dispatch_event("input")
+        h3 = _height(textarea)
+        textarea.fill(_allowlist_lines(5))
+        textarea.dispatch_event("input")
+        h5 = _height(textarea)
+        textarea.fill(_allowlist_lines(8))
+        textarea.dispatch_event("input")
+        h8 = _height(textarea)
+        overflow = textarea.evaluate("el => getComputedStyle(el).overflowY")
+        _shot(page, screenshot_dir, "allowlist_grow_textarea_capped")
+
+    assert h3 > h1 + 8, f"should grow 1->3 rows; h1={h1} h3={h3}"
+    assert h5 > h3 + 8, f"should grow 3->5 rows; h3={h3} h5={h5}"
+    assert abs(h8 - h5) < 16, f"should cap at 5 rows; h5={h5} h8={h8}"
+    assert overflow == "auto", f"expected overflowY auto past the cap, got {overflow!r}"
