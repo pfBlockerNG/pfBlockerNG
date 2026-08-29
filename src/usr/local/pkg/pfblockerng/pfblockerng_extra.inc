@@ -6604,7 +6604,7 @@ function pfb_sync_status_locked(string $ledger_dir, callable $fn, float $timeout
  *
  * @param string        $facility   'ip' | 'dnsbl'.
  * @param string        $item       The alias/group/feed name the entry is about.
- * @param string        $stage      'download' | 'parse' | 'apply' | 'dedup'.
+ * @param string        $stage      'download' | 'script' | 'parse' | 'apply' | 'dedup'.
  * @param string        $message    Human-readable failure description.
  * @param string        $ledger_dir Directory that contains pfb_sync_status.json.
  * @param callable|null $clock_fn   Returns the current epoch timestamp; defaults to time().
@@ -6651,7 +6651,7 @@ function pfb_sync_status_open(
  *
  * @param string $facility   'ip' | 'dnsbl'.
  * @param string $item       The alias/group/feed name the entry is about.
- * @param string $stage      'download' | 'parse' | 'apply' | 'dedup'.
+ * @param string $stage      'download' | 'script' | 'parse' | 'apply' | 'dedup'.
  * @param string $ledger_dir Directory that contains pfb_sync_status.json.
  * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @return void

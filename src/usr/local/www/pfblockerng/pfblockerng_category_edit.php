@@ -825,8 +825,8 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	if (!$input_errors) {
-		// issue #1014/#1019: close the OLD alias's stage=download ledger entry before
-		// the aliasname is overwritten below -- a renamed alias must not orphan it.
+		// issue #1014/#1019/#2060: close the OLD alias's alias-pass-managed ledger entries
+		// (download, script) before aliasname is overwritten -- a rename must not orphan them.
 		$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
 		if ($pfb_old_aliasname !== '' && $pfb_old_aliasname !== ($_POST['aliasname'] ?: '')) {
 			pfb_sync_status_close_removed_alias($gtype, $pfb_old_aliasname, $pfb['dbdir']);
