@@ -6,11 +6,13 @@ name: Issue 2671 memory probe
 # meaningful signal per that issue (binary pass/fail at a ceiling; never RSS,
 # never PHPStan's self-reported "Used memory").
 #
-# Round 2 isolates ONE variable: what the PHPStan job's own PHP has loaded.
-# php-static-analysis passes no `coverage:` to setup-php, so the analysis runs
-# with Xdebug loaded. Xdebug's mode decides how much of the engine it hooks, so
-# the three legs are: the job's real configuration, Xdebug forced to its own
-# upstream default mode (develop), and Xdebug unloaded (coverage: none).
+# Round 3 asks which lever actually moves that ceiling, so the #1122 question
+# is answered by measurement rather than assumed:
+#   whole-tree   -- the job as it stands (2 jobs, 1 spawned worker).
+#   biggest-file -- pfblockerng.inc alone, the per-file floor no scheduling
+#                   change can go below while the file stays one file.
+#   no-parallel  -- --debug, which analyses everything in the main process, so
+#                   the worker stops being the constraint at all.
 #
 # Deleted before the issue closes unless the measurement turns it into the fix.
 on:
@@ -23,28 +25,15 @@ permissions:
 
 jobs:
   ceiling:
-    name: Ceiling / PHP ${{ matrix.php-version }} ${{ matrix.variant.name }}
+    name: Ceiling / PHP ${{ matrix.php-version }} ${{ matrix.mode }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     strategy:
       fail-fast: false
       matrix:
-        # The two versions test.yml's php-static-analysis matrix carries today.
         php-version: ['8.3', '8.5']
-        variant:
-          # Byte-identical to the php-static-analysis leg that crashed.
-          - name: as-is
-            ini: ''
-            coverage: ''
-          # Xdebug's own default mode, in case the runner/PPA ini ever ships it.
-          - name: xdebug-develop
-            ini: 'xdebug.mode=develop'
-            coverage: ''
-          # setup-php's coverage:none unloads Xdebug (and pcov) entirely.
-          - name: no-xdebug
-            ini: ''
-            coverage: 'none'
+        mode: [biggest-file, no-parallel]
 
     steps:
       - name: Checkout
@@ -52,50 +41,37 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP ${{ matrix.php-version }} (${{ matrix.variant.name }})
+      - name: Set up PHP ${{ matrix.php-version }}
+        # Byte-identical to the php-static-analysis leg that crashed.
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
           tools: composer:2.10.2
-          ini-values: ${{ matrix.variant.ini }}
-          coverage: ${{ matrix.variant.coverage }}
 
       - name: Install PHPStan
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Environment facts
-        run: |
-          {
-            echo "## PHP ${{ matrix.php-version }} / ${{ matrix.variant.name }}"
-            echo '```'
-            php -v
-            echo "runner cores (nproc):        $(nproc)"
-            grep MemTotal /proc/meminfo
-            echo "loaded php.ini:              $(php -r 'echo php_ini_loaded_file() ?: "(none)";')"
-            echo "ini memory_limit:            $(php -r 'echo ini_get("memory_limit");')"
-            echo "xdebug loaded:               $(php -r 'echo var_export(extension_loaded("xdebug"), true);')"
-            echo "xdebug.mode:                 $(php -r 'echo var_export(ini_get("xdebug.mode"), true);')"
-            echo "xdebug.start_with_request:   $(php -r 'echo var_export(ini_get("xdebug.start_with_request"), true);')"
-            echo "xdebug version:              $(php -r 'echo phpversion("xdebug") ?: "(not loaded)";')"
-            echo "opcache enabled:             $(php -r 'echo function_exists("opcache_get_status") ? var_export((bool) ((@opcache_get_status(false) ?: [])["opcache_enabled"] ?? false), true) : "(no opcache ext)";')"
-            echo "loaded extensions:           $(php -m | tr '\n' ' ')"
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Ceiling bisect
+      - name: Ceiling bisect (${{ matrix.mode }})
         env:
           PROBE_GRANULARITY_MB: '64'
+          PROBE_MODE: ${{ matrix.mode }}
         run: |
           set -u
           results=/tmp/probe-results.tsv
           : > "$results"
 
-          # $1 label, $2 memory limit (e.g. 1024M), $3 extra phpstan args
+          case "$PROBE_MODE" in
+            biggest-file) extra='src/usr/local/pkg/pfblockerng/pfblockerng.inc' ;;
+            no-parallel) extra='--debug' ;;
+            *) extra='' ;;
+          esac
+
+          # $1 label, $2 memory limit (e.g. 1024M)
           probe() {
             vendor/bin/phpstan clear-result-cache -q >/dev/null 2>&1 || true
             _start=$(date +%s)
             set +e
-            _out="$(vendor/bin/phpstan analyse --no-progress --memory-limit="$2" $3 2>&1)"
+            _out="$(vendor/bin/phpstan analyse --no-progress --memory-limit="$2" $extra 2>&1)"
             _rc=$?
             set -e
             _elapsed=$(( $(date +%s) - _start ))
@@ -109,19 +85,15 @@ jobs:
             esac
             printf '%s\t%s\t%s\t%ss\n' "$1" "$2" "$_verdict" "$_elapsed" | tee -a "$results"
             if [ "$_verdict" != 'PASS' ]; then
-              printf '%s\n' "$_out" | tail -n 20
-            fi
-            if [ -n "$3" ]; then
-              printf '%s\n' "$_out" | sed -n '/Parallel worker creation:/,/spawned processes/p'
+              printf '%s\n' "$_out" | tail -n 8
             fi
             [ "$_verdict" = 'PASS' ]
           }
 
-          if probe 'upper-bound' '2048M' '-vvv'; then
-            lo=128
+          if probe 'upper-bound' '2048M'; then
+            lo=64
             hi=2048
-            if probe 'lower-bound' "${lo}M" ''; then
-              echo "MINIMUM: <= ${lo}M"
+            if probe 'lower-bound' "${lo}M" ; then
               min_line="minimum passing ceiling <= ${lo}M"
             else
               while [ $(( hi - lo )) -gt "$PROBE_GRANULARITY_MB" ]; do
@@ -129,7 +101,7 @@ jobs:
                 if [ "$mid" -le "$lo" ] || [ "$mid" -ge "$hi" ]; then
                   break
                 fi
-                if probe 'bisect' "${mid}M" ''; then
+                if probe 'bisect' "${mid}M"; then
                   hi=$mid
                 else
                   lo=$mid
@@ -141,20 +113,12 @@ jobs:
             min_line='no pass even at 2048M'
           fi
 
-          # The ceiling CI used when it crashed, repeated: a ceiling that
-          # sometimes passes and sometimes OOMs is a flake, not a ceiling.
-          i=1
-          while [ "$i" -le 3 ]; do
-            probe "repeat-1G-$i" '1024M' '' || true
-            i=$(( i + 1 ))
-          done
-
           {
-            echo "### PHP ${{ matrix.php-version }} / ${{ matrix.variant.name }} runs"
+            echo "### PHP ${{ matrix.php-version }} / ${{ matrix.mode }}"
             echo '| run | ceiling | verdict | elapsed |'
             echo '| --- | --- | --- | --- |'
             sed 's/^/| /; s/\t/ | /g; s/$/ |/' "$results"
             echo
-            echo "**Minimum passing ceiling: $min_line**"
+            echo "**Minimum passing ceiling ($PROBE_MODE): $min_line**"
             echo
           } | tee -a "$GITHUB_STEP_SUMMARY"
