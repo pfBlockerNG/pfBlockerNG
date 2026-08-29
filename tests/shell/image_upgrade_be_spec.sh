@@ -248,6 +248,13 @@ Describe 'image-upgrade.sh option parsing'
     The output should not include 'REACHED-AFTER-PARSE'
   End
 
+  It 'rejects a negative --upgrade-timeout before starting the upgrade'
+    When call run_optparse --upgrade-timeout -5
+    The status should be failure
+    The stderr should include '--upgrade-timeout must be a decimal integer from 0 to 86400'
+    The output should not include 'REACHED-AFTER-PARSE'
+  End
+
   It 'rejects an overflowing --upgrade-timeout before starting the upgrade'
     When call run_optparse --upgrade-timeout 99999999999999999999999999
     The status should be failure
@@ -403,6 +410,14 @@ Describe 'image-upgrade.sh boot-environment promotion'
     The contents of file "$SLEEP_ARG" should equal '10'
     The contents of file "$SLEEP_COUNT" should equal '30'
     The contents of file "$POLLS" should equal '32'
+  End
+
+  It 'falls back to 300s when the promotion timeout is negative'
+    When call run_promote slow -5 10
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 300s'
+    The contents of file "$SLEEP_ARG" should include '10'
   End
 
   It 'falls back to 10s when the promotion interval is nonnumeric'
