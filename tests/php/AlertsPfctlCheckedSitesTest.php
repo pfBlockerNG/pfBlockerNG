@@ -25,6 +25,44 @@ use PHPUnit\Framework\Attributes\DataProvider;
  * failures) since pfb_pfctl_checked_op() ultimately execs through the same
  * `pfctl -t <table> -T <op> <entry>` shape.
  */
+final class AlertsFeedPassLockProbeStream
+{
+	/** @var resource|null */
+	public $context;
+	/** @var list<bool> */
+	public static array $lockHeldDuringWrite = [];
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
+	{
+		return TRUE;
+	}
+
+	public function stream_write(string $data): int
+	{
+		$probe = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
+		if ($probe === FALSE) {
+			throw new RuntimeException('test probe: failed to open the feed-pass lock');
+		}
+		$acquired = flock($probe, LOCK_EX | LOCK_NB);
+		if ($acquired) {
+			flock($probe, LOCK_UN);
+		}
+		fclose($probe);
+		self::$lockHeldDuringWrite[] = !$acquired;
+		return strlen($data);
+	}
+
+	/** @return array<string, int> */
+	public function stream_stat(): array
+	{
+		return [];
+	}
+
+	public function stream_close(): void
+	{
+	}
+}
+
 final class AlertsPfctlCheckedSitesTest extends TestCase
 {
 	private string $tmp;
@@ -67,10 +105,11 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 			$region = substr($src, $start + strlen("case 'delete_ip':"), $end - $start - strlen("case 'delete_ip':"));
 			eval(
 				'function pfb_alerts_oracle_delete_ip(string $entry, string $table, array &$clists): array {'
-				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\';'
+				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\'; $config_flushed = FALSE;'
 				. ' switch (1) { case 1:'
 				. $region
 				. ' }'
+				. ' if ($pfb_found && !$config_flushed) { write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE); }'
 				. ' return [\'pfb_found\' => $pfb_found, \'savemsg\' => $savemsg]; }'
 			);
 		}
@@ -85,11 +124,11 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 			$region = substr($src, $start + strlen("case 'delete_ipwhitelist':"), $end - $start - strlen("case 'delete_ipwhitelist':"));
 			eval(
 				'function pfb_alerts_oracle_delete_ipwhitelist(string $entry, string $table, array &$clists): array {'
-				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\';'
+				. ' global $pfb; $pfb_found = TRUE; $savemsg = \'\'; $type = \'\'; $config_flushed = FALSE;'
 				. ' switch (1) { case 1:'
 				. $region
 				. ' }'
-				. ' if ($pfb_found) { write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE); }'
+				. ' if ($pfb_found && !$config_flushed) { write_config("pfBlockerNG: Deleted [ {$entry} ] from {$type} customlist", FALSE); }'
 				. ' return [\'pfb_found\' => $pfb_found, \'savemsg\' => $savemsg]; }'
 			);
 		}
@@ -153,6 +192,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		putenv('PFB_TEST_SHOW_ENTRY');
 		rmdir_recursive($this->tmp);
 		unset($GLOBALS['pfb_test_write_config_calls']);
+		unset($GLOBALS['pfb_test_write_config_hook']);
 
 		// issue #1666: restore every $pfb key overridden in setUp() -- otherwise
 		// every later test class inherits $pfb['log'] etc. pointing at the tree
@@ -227,6 +267,51 @@ SH
 		file_put_contents($this->rulesPath, "{$op}|{$entry}|{$rc}|{$err}\n", FILE_APPEND);
 	}
 
+	private function withFeedPassContention(callable $action): mixed
+	{
+		$holder = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
+		$this->assertNotFalse($holder, 'test setup: failed to open the feed-pass lock');
+		$this->assertTrue(flock($holder, LOCK_EX | LOCK_NB), 'test setup: failed to hold the feed-pass lock');
+		try {
+			return $action();
+		} finally {
+			flock($holder, LOCK_UN);
+			fclose($holder);
+		}
+	}
+
+	private function feedPassLockIsHeld(): bool
+	{
+		$probe = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
+		$this->assertNotFalse($probe, 'test probe: failed to open the feed-pass lock');
+		$acquired = flock($probe, LOCK_EX | LOCK_NB);
+		if ($acquired) {
+			flock($probe, LOCK_UN);
+		}
+		fclose($probe);
+		return !$acquired;
+	}
+
+	private function withWriteConfigLockProbe(callable $action): mixed
+	{
+		$writeSeen = FALSE;
+		$GLOBALS['pfb_test_write_config_hook'] = function () use (&$writeSeen): void {
+			$writeSeen = TRUE;
+			$this->assertTrue(
+				$this->feedPassLockIsHeld(),
+				'the feed-pass lock must still be held when write_config() commits the durable change'
+			);
+		};
+		try {
+			$result = $action();
+		} finally {
+			unset($GLOBALS['pfb_test_write_config_hook']);
+		}
+		$this->assertTrue($writeSeen, 'the successful mutation must reach write_config()');
+		$this->assertFalse($this->feedPassLockIsHeld(), 'the mutation must release its feed-pass lock after the commit');
+		return $result;
+	}
+
 	// =====================================================================
 	// delete_ip
 	// =====================================================================
@@ -247,11 +332,32 @@ SH
 		);
 	}
 
+	public function testDeleteIpBusyKeepsSuppressionEntryAndSkipsPfctlAndWrites(): void
+	{
+		$clists = ['ipsuppression' => ['data' => ['198.51.100.5' => "198.51.100.5\r\n"]]];
+
+		$result = $this->withFeedPassContention(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ip("'198.51.100.5'", "'pfB_Deny_v4'", $clists);
+			}
+		);
+
+		$this->assertFalse($result['pfb_found']);
+		$this->assertStringContainsString('mid-update', $result['savemsg']);
+		$this->assertArrayHasKey('198.51.100.5', $clists['ipsuppression']['data']);
+		$this->assertFileDoesNotExist($this->logPath, 'a busy mutation must not call pfctl');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? [], 'a busy mutation must not persist config');
+	}
+
 	public function testDeleteIpV4SuccessRemovesEntryAndWrites(): void
 	{
 		$clists = ['ipsuppression' => ['data' => ['198.51.100.5' => "198.51.100.5\r\n"]]];
 
-		$result = pfb_alerts_oracle_delete_ip("'198.51.100.5'", "'pfB_Deny_v4'", $clists);
+		$result = $this->withWriteConfigLockProbe(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ip("'198.51.100.5'", "'pfB_Deny_v4'", $clists);
+			}
+		);
 
 		$this->assertTrue($result['pfb_found']);
 		$this->assertStringContainsString('Removed', $result['savemsg']);
@@ -319,11 +425,32 @@ SH
 		);
 	}
 
+	public function testDeleteIpWhitelistBusyKeepsEntryAndSkipsPfctlAndWrites(): void
+	{
+		$clists = ['ipwhitelist4' => ['pfB_Permit_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.9' => "198.51.100.9\r\n"]]]];
+
+		$result = $this->withFeedPassContention(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ipwhitelist("'198.51.100.9'", "'pfB_Permit_v4'", $clists);
+			}
+		);
+
+		$this->assertFalse($result['pfb_found']);
+		$this->assertStringContainsString('mid-update', $result['savemsg']);
+		$this->assertArrayHasKey('198.51.100.9', $clists['ipwhitelist4']['pfB_Permit_v4']['data']);
+		$this->assertFileDoesNotExist($this->logPath, 'a busy mutation must not call pfctl');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? [], 'a busy mutation must not persist config');
+	}
+
 	public function testDeleteIpWhitelistV4SuccessRemovesEntryAndWrites(): void
 	{
 		$clists = ['ipwhitelist4' => ['pfB_Permit_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.9' => "198.51.100.9\r\n"]]]];
 
-		$result = pfb_alerts_oracle_delete_ipwhitelist("'198.51.100.9'", "'pfB_Permit_v4'", $clists);
+		$result = $this->withWriteConfigLockProbe(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ipwhitelist("'198.51.100.9'", "'pfB_Permit_v4'", $clists);
+			}
+		);
 
 		$this->assertTrue($result['pfb_found']);
 		$this->assertStringContainsString('deleted', $result['savemsg']);
@@ -385,6 +512,23 @@ SH
 		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']));
 	}
 
+	public function testIpRemoveLockBusyKeepsUnlockStoreAndSkipsPfctl(): void
+	{
+		$ip = '198.51.100.20';
+		$before = "{$ip},pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n";
+		$ip_unlock = [$ip => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], $before);
+
+		$result = $this->withFeedPassContention(
+			static fn (): array => pfb_alerts_ip_action('lock', $ip, 'pfB_Deny_v4', '', [], $ip_unlock)
+		);
+
+		$this->assertStringContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']));
+		$this->assertFileDoesNotExist($this->logPath, 'a busy re-lock must not call pfctl');
+	}
+
 	public function testIpRemoveLockSuccessAppliesUnlockStoreWrite(): void
 	{
 		$ip_unlock = ['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
@@ -399,6 +543,35 @@ SH
 		$content = file_get_contents($GLOBALS['pfb']['ip_unlock']);
 		$this->assertStringContainsString('keepme.example', $content, 'the untouched leftover entry must survive the rewrite');
 		$this->assertStringNotContainsString('198.51.100.20', $content, 'the re-locked IP must be removed from the unlock store');
+	}
+
+	public function testIpRemoveLockHoldsFeedPassLockThroughUnlockStoreWrite(): void
+	{
+		$scheme = 'pfbalertslockprobe';
+		$this->assertTrue(stream_wrapper_register($scheme, AlertsFeedPassLockProbeStream::class));
+		try {
+			AlertsFeedPassLockProbeStream::$lockHeldDuringWrite = [];
+			$GLOBALS['pfb']['ip_unlock'] = "{$scheme}://store";
+			$result = pfb_alerts_ip_action(
+				'lock',
+				'198.51.100.20',
+				'pfB_Deny_v4',
+				'',
+				[],
+				['198.51.100.20' => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4']
+			);
+
+			$this->assertStringContainsString('re-locked', $result['savemsg']);
+			$this->assertNotEmpty(AlertsFeedPassLockProbeStream::$lockHeldDuringWrite);
+			$this->assertNotContains(
+				FALSE,
+				AlertsFeedPassLockProbeStream::$lockHeldDuringWrite,
+				'the feed-pass lock must remain held through every unlock-store write'
+			);
+			$this->assertFalse($this->feedPassLockIsHeld(), 'the re-lock must release its feed-pass lock after the store write');
+		} finally {
+			stream_wrapper_unregister($scheme);
+		}
 	}
 
 	public function testIpRemoveLockV6SuccessRemovesExactHostOnly(): void
@@ -556,11 +729,33 @@ SH
 		);
 	}
 
+	public function testIpWhiteBusySkipsPfctlAndAllDurableWrites(): void
+	{
+		$table = 'pfB_Whitelist_v4';
+		$clists = ['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]];
+
+		$result = $this->withFeedPassContention(
+			static fn (): array => pfb_alerts_ip_action('ip_white', '198.51.100.30', $table, '', $clists, [])
+		);
+
+		$this->assertStringContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertFileDoesNotExist($this->logPath, 'a busy whitelist add must not call pfctl');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/{$table}.txt");
+		$this->assertArrayNotHasKey('installedpackages', $GLOBALS['config'] ?? []);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
+	}
+
 	public function testIpWhiteV4SuccessAppendsAndWrites(): void
 	{
 		$clists = ['ipwhitelist4' => ['pfB_Whitelist_v4' => ['base64_idx' => 0, 'data' => []]]];
 
-		$result = pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
+		$result = $this->withWriteConfigLockProbe(
+			function () use (&$clists): array {
+				return pfb_alerts_ip_action('ip_white', '198.51.100.31', 'pfB_Whitelist_v4', '', $clists, []);
+			}
+		);
 
 		$this->assertStringContainsString('added', $result['savemsg']);
 		$this->assertTrue($result['redirect']);

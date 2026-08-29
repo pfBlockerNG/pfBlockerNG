@@ -497,6 +497,9 @@ if (!function_exists('write_config')) {
 	// Persisting is out of scope off-appliance; record the call (so tests can
 	// assert whether a code path wrote config) and report success like pfSense.
 	function write_config($desc = 'Unknown', $backup = true, $write_config_only = false) {
+		if (isset($GLOBALS['pfb_test_write_config_hook']) && is_callable($GLOBALS['pfb_test_write_config_hook'])) {
+			$GLOBALS['pfb_test_write_config_hook']($desc);
+		}
 		$GLOBALS['pfb_test_write_config_calls'][] = $desc;
 		return true;
 	}
