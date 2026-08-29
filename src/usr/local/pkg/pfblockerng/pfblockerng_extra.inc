@@ -4890,8 +4890,7 @@ function pfb_schedule_runtime_model(
 	?string &$reason = NULL
 ): ?array {
 	$reason = NULL;
-	// issue #2855: every rejection names its check (and its alias) so the caller can
-	// log something actionable instead of asking the user to report an opaque bug.
+	// issue #2855: every rejection names its check and its alias.
 	$reject = static function (string $why) use (&$reason): ?array {
 		$reason = $why;
 		return NULL;
@@ -4945,19 +4944,19 @@ function pfb_schedule_runtime_model(
 		$suffix = $family === 'dnsbl' ? '' : ($family === 'ipv4' ? '_v4' : '_v6');
 		foreach ($sections[$family] as $index => $group) {
 			if (!is_array($group)) {
-				return $reject("{$family} group #" . (string) $index . ': not an array');
+				return $reject("{$family} group #{$index}: not an array");
 			}
 			$alias = $group['aliasname'] ?? '';
+			// 64 is a deliberate log-safety ceiling, not the alias field's own cap; an
+			// off-charset or over-long name degrades to the positional label.
 			$label = is_string($alias) && preg_match('/^[A-Za-z0-9_]{1,64}$/D', $alias)
-				? "{$family} alias \"{$alias}\"" : "{$family} group #" . (string) $index;
-			// issue #2855: an absent 'row' means "no feed rows", not corrupt config -- one
+				? "{$family} alias \"{$alias}\"" : "{$family} group #{$index}";
+			// issue #2855: an ABSENT 'row' means "no feed rows", not corrupt config -- one
 			// such group used to void schedule-cache generation for the entire install.
-			$rows = $group['row'] ?? [];
-			if (!array_key_exists('action', $group)) {
-				return $reject("{$label}: missing 'action'");
-			}
-			if (!is_string($group['action'])) {
-				return $reject("{$label}: 'action' is not a string");
+			// Present-but-not-a-list stays corrupt, NULL included.
+			$rows = array_key_exists('row', $group) ? $group['row'] : [];
+			if (!is_string($group['action'] ?? NULL)) {
+				return $reject("{$label}: 'action' is missing or not a string");
 			}
 			if (!array_key_exists('cron', $group) || !is_string($group['cron'])
 				|| !in_array($group['cron'], $cadences, TRUE)) {
@@ -4985,7 +4984,7 @@ function pfb_schedule_runtime_model(
 				&& $group['action'] !== 'Disabled'
 				&& $group['cron'] !== 'Never';
 			foreach ($rows as $row_index => $row) {
-				$at = "{$label} row #" . (string) $row_index;
+				$at = "{$label} row #{$row_index}";
 				if (!is_array($row)) {
 					return $reject("{$at}: not an array");
 				}
@@ -5073,8 +5072,7 @@ function pfb_schedule_runtime_model(
 /** Build the scheduled-feed runtime image from the config gateway. */
 function pfb_schedule_runtime_config(): ?array
 {
-	// issue #2855: name the failing check in the system log so a save that skips the
-	// schedule cache leaves a fact behind instead of an unactionable bug report.
+	// issue #2855: every caller inherits the detail through this one log line.
 	$reject = static function (string $why): ?array {
 		logger(LOG_NOTICE, localize_text('Schedule: runtime model rejected - %s', $why),
 			LOG_PREFIX_PKG_PFBLOCKERNG);
@@ -5142,7 +5140,7 @@ function pfb_schedule_runtime_config(): ?array
 			'cadence' => $blacklist_frequency === 'Weekly' ? 'Weekly' : 'EveryDay',
 		],
 	], $reason);
-	return $model ?? $reject($reason ?? 'reason unavailable');
+	return $model ?? $reject((string) $reason);
 }
 
 function pfb_schedule_state_update(
@@ -5465,6 +5463,38 @@ function pfb_schedule_cache_refresh(
 		$io,
 		$timeout_s
 	);
+}
+
+/**
+ * Name the schedule-cache stage that failed, or '' when the candidate published cleanly.
+ *
+ * $publish and $readback are deferred so a stage that never runs does no work, the way
+ * the && chain this replaced short-circuited.
+ */
+function pfb_schedule_cache_stage(
+	?array $model,
+	?array $state,
+	mixed $timezone,
+	string $candidate_dir,
+	callable $publish,
+	callable $readback
+): string {
+	if ($model === NULL) {
+		return 'config';
+	}
+	if ($state === NULL) {
+		return 'state';
+	}
+	if (!$timezone instanceof DateTimeZone) {
+		return 'timezone';
+	}
+	if ($candidate_dir === '') {
+		return 'workdir';
+	}
+	if (!$publish()) {
+		return 'refresh';
+	}
+	return $readback() === NULL ? 'readback' : '';
 }
 
 /** Label the schedule-cache stage that failed; unknown tokens degrade to the generic one. */
