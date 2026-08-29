@@ -1,76 +1,15 @@
 #!/usr/bin/env python3
-"""Forbid a new UNBOUNDED nested `pfblockerng.php` re-entry.
+"""Forbid synchronous, unbounded nested `pfblockerng.php` re-entry commands.
 
-PROBLEM
--------
-Production code under `src/` re-enters `pfblockerng.php` to run a whole download or
-transform pass (`al`, `bls`, `dc`, the extras jobs, `asn`, `asn_shell`, `bu`,
-`dnsbl-control`). When such a child is spawned SYNCHRONOUSLY and unbounded, a stalled
-fetch inside it holds the OUTER update pass -- and `pfblockerng_tick()`'s
-log-maintenance gate -- open forever (issue #2016). Issue #2016 moved every one of those
-eight sites onto ONE bounded spawn seam per language: `pfb_reentry_exec()` in PHP and
-`pfb_reentry()` in shell, both of which run the child under `timeout(1)` in default
-(reaper) mode and surface a named 124 failure. Without a mechanical gate that sweep is a
-one-off: the next caller writes its own `exec("{$pfb['php']} .../pfblockerng.php ...")`
-and the bound is gone again.
+A physical line is a composition when it names both a PHP interpreter and the
+re-entry target. Compositions are clean only when backgrounded or matched by one
+of seven repository-path-and-line exemptions for the bounded shell seam and
+crontab command strings. Commented compositions still flag.
 
-HEURISTIC (token pairing per physical line, deliberately not a PHP/sh parser)
-----------------------------------------------------------------------------
-A line is a RE-ENTRY COMPOSITION when it carries at least one INTERPRETER token AND at
-least one TARGET token -- i.e. it names both halves of a `php <script>` command:
-
-  interpreter: `/usr/local/bin/php`, `$pathphp` / `${pathphp}`,
-               `$pfb['php']` / `{$pfb['php']}` (either quote style)
-  target:      `pfblockerng.php`, `$pathpfbphp` / `${pathpfbphp}`
-
-Both variable tokens carry a token-END guard, so `$pathpfbphpx` is a DIFFERENT variable
-and matches nothing. A line carrying only one half (the `pathpfbphp=` assignment, the
-`PFB_REENTRY_SCRIPT` define, `pfb_reentry_cmd()`'s escapeshellarg builder, an
-`install_cron_job('pfblockerng.php ...')` needle) is not a composition and needs no
-exemption -- which is also why none of them is allowlisted: an entry there would be dead
-config that silently exempted a future line inlining the literal target path into it.
-
-A composition is CLEAN when it is BACKGROUNDED -- it cannot hold the pass open:
-
-  * `mwexec_bg(` or `/usr/sbin/daemon -p` on the line itself, or
-  * a trailing ` &` inside the command string (`... 2>&1 &");`), or
-  * `mwexec_bg(` / `daemon -p` on one of the TWO preceding physical lines -- the
-    multi-line `pfblockerng_update.php` dispatch shape. Exactly two: a marker further up
-    belongs to a different statement and must not exempt an unrelated composition.
-
-A COMMENTED-OUT composition still flags. A comment is not an exemption -- it is a
-copy-paste source for the next unbounded caller, and treating `//` as a silencer would
-let any violation be laundered through one. The allowlist is the only exemption.
-
-ALLOWLIST
----------
-`_ALLOWLIST` below holds exactly seven entries, each carrying a one-line justification:
-the bounded shell seam itself plus the six crontab COMMAND STRINGS (arguments to
-`install_cron_job()` / `pfblockerng_cron_exists()`, never executed by the composing
-process). Each entry is keyed on `(file basename, needle)` and exempts only the line
-carrying its needle, never the whole file. Needles are matched against the line with
-runs of spaces/tabs collapsed, so reformatting cannot silently widen or void one. If the
-tree flags something new, that is a real finding: route it through the seam rather than
-adding an eighth entry.
-
-CLI
----
-    check_reentry_bounds.py [PATH ...]
-    check_reentry_bounds.py --self-test
-
-With no PATH, scans every tracked file under `src/` ending `.php`/`.inc`/`.sh`. Prints
-`path:line: <message>` to stderr. Exit 0 clean, 1 on violations, 2 when the argless
-default scan set could not be enumerated (git absent / not a checkout) -- failing closed
-rather than reporting clean on a gate it could not run.
-
-`--self-test` is the red canary the testing policy requires for a blocking gate: it
-feeds one synthetic violating line and one synthetic backgrounded line through the same
-matcher and exits 0 only when the first flags and the second does not. It does not touch
-the repository.
-
-This is dev-only tooling (release archives contain only `src/`); it lives under
-`scripts/` and is wired into `.githooks/pre-commit`, `.github/workflows/test.yml` and
-`scripts/agent/run-gates.sh`.
+With no paths, scan tracked `.php`, `.inc`, and `.sh` files under `src/`.
+Explicit paths scan only those files. Exit 0 when clean, 1 for violations, and
+2 when the default scan cannot be enumerated. `--self-test` checks one violating
+and one backgrounded input without reading the repository.
 """
 
 from __future__ import annotations
@@ -113,10 +52,10 @@ _WS_RUN_RE = re.compile(r"[ \t]+")
 
 
 class _Exempt(NamedTuple):
-    """One allowlist entry: the file it applies to, the line it exempts, and why."""
+    """One allowlist entry: repository-relative path, line needle, and constraint."""
 
-    path: str  # file BASENAME
-    needle: str  # whitespace-normalised substring identifying the ONE exempt line
+    path: str
+    needle: str
     why: str
 
 
@@ -124,37 +63,37 @@ class _Exempt(NamedTuple):
 # alone would flag). Adding an eighth is a decision, never a convenience.
 _ALLOWLIST: tuple[_Exempt, ...] = (
     _Exempt(
-        "pfblockerng.sh",
+        "src/usr/local/pkg/pfblockerng/pfblockerng.sh",
         '"${_pfbre_tmo}"',
         "pfb_reentry(): the bounded shell seam itself -- this IS the timeout(1) spawn.",
     ),
     _Exempt(
-        "pfblockerng.inc",
+        "src/usr/local/pkg/pfblockerng/pfblockerng.inc",
         "$pfb_tick_cmd =",
         "crontab command string for install_cron_job(); never executed by this process.",
     ),
     _Exempt(
-        "pfblockerng_apply.inc",
+        "src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc",
         "$pfb_cmd =",
         "crontab command string for the widget clear jobs; never executed here.",
     ),
     _Exempt(
-        "pfblockerng_install.inc",
+        "src/usr/local/pkg/pfblockerng/pfblockerng_install.inc",
         "$pfb_cmd_esc =",
         "crontab needle for stale-entry removal; a string compared, never executed.",
     ),
     _Exempt(
-        "pfblockerng_install.inc",
+        "src/usr/local/pkg/pfblockerng/pfblockerng_install.inc",
         "$pfb_cmd =",
         "crontab command string for the widget clear jobs; never executed here.",
     ),
     _Exempt(
-        "pfblockerng_update.php",
+        "src/usr/local/www/pfblockerng/pfblockerng_update.php",
         "$pfb_cmd =",
         "crontab needle for the 'Missing cron task' check; a string compared, never run.",
     ),
     _Exempt(
-        "pfblockerng.widget.php",
+        "src/usr/local/www/widgets/widgets/pfblockerng.widget.php",
         "$pfb_cmd =",
         "crontab command string for the widget clear jobs; never executed here.",
     ),
@@ -184,14 +123,18 @@ def _is_backgrounded(line: str) -> bool:
     return any(marker in line for marker in _BG_MARKERS) or _TRAILING_AMP_RE.search(line) is not None
 
 
-def _is_allowlisted(basename: str, line: str) -> bool:
-    """True when an `_ALLOWLIST` entry names this file AND this line's needle.
-
-    `_ALLOWLIST` is read from the module global on every call, so emptying it (as the
-    tests do) brings every exempt line straight back.
-    """
+def _is_allowlisted(source: str, line: str) -> bool:
+    """True when an exemption names this repository path and line needle."""
+    path = Path(source)
+    if path.is_absolute():
+        try:
+            source = path.relative_to(Path.cwd()).as_posix()
+        except ValueError:
+            source = path.as_posix()
+    else:
+        source = path.as_posix()
     normalised = _WS_RUN_RE.sub(" ", line)
-    return any(entry.path == basename and entry.needle in normalised for entry in _ALLOWLIST)
+    return any(entry.path == source and entry.needle in normalised for entry in _ALLOWLIST)
 
 
 def find_violations(text: str, source: str) -> list[Violation]:
@@ -200,7 +143,6 @@ def find_violations(text: str, source: str) -> list[Violation]:
     Scanned per physical line, with a two-line lookback for a backgrounding marker
     belonging to the same statement (see the module docstring).
     """
-    basename = Path(source).name
     lines = text.splitlines()
     violations: list[Violation] = []
     for index, line in enumerate(lines):
@@ -209,7 +151,7 @@ def find_violations(text: str, source: str) -> list[Violation]:
         window = lines[max(0, index - _BG_LOOKBACK_LINES) : index]
         if any(marker in prev for prev in window for marker in _BG_MARKERS):
             continue
-        if _is_allowlisted(basename, line):
+        if _is_allowlisted(source, line):
             continue
         violations.append(Violation(source=source, line=index + 1, snippet=line.strip()))
     return violations
