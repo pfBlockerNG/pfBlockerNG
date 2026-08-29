@@ -592,12 +592,12 @@ if ($_POST && isset($_POST['save'])) {
 	// Validate CIDR Limit
 	if ($gtype == 'ipv4') {
 		if ($_POST['suppression_cidr'] != 'Disabled' && !ctype_digit($_POST['suppression_cidr'])) {
-			$input_errors[] = 'Advanced Tunable - Suppression CIDR Limit invalid';
+			$input_errors[] = 'Advanced Settings - Suppression CIDR Limit invalid';
 		}
 	}
 	if ($gtype == 'ipv6') {
 		if ($_POST['suppression_cidr_v6'] != 'Disabled' && !ctype_digit($_POST['suppression_cidr_v6'])) {
-			$input_errors[] = 'Advanced Tunable - Suppression CIDR Limit invalid';
+			$input_errors[] = 'Advanced Settings - Suppression CIDR Limit invalid';
 		}
 	}
 
@@ -1560,7 +1560,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		$pconfig['aliaslog'],
 		$options_aliaslog
 	))->setHelp('Default: <strong>Enable</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
-		. 'This can be overriden by the \'Global Logging\' Option in the General Tab.')
+		. 'This can be overriden by the \'Force Global IP Logging\' option on the IP Tab.')
 	  ->setAttribute('style', 'width: auto');
 
 	$section->addInput(new Form_Select(
@@ -1711,8 +1711,8 @@ if ($gtype == 'dnsbl') {
 	$form->add($section);
 }
 
-// Print Advanced Tunables section
-$section = new Form_Section('Advanced Tuneables', 'advancedtunable', COLLAPSIBLE|SEC_CLOSED);
+// Print Advanced Settings section
+$section = new Form_Section('Advanced Settings', 'advancedtunable', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
 	'These are \'Advanced\' settings and are typically best left at Default settings!')
