@@ -5100,10 +5100,10 @@ function pfb_reentry_cmd(string $verb, array $args, string $outfile, $budget = N
 }
 
 /*
- * issue #2016: run a nested pfblockerng.php re-entry under that bound and hand the
- * caller back exactly what exec() used to give it -- the child's status, its output
- * lines in $lines, and its raw bytes appended to $append_to (the old ">> $log"). An
- * expiry is named here, once, so every caller surfaces it without composing anything.
+ * issue #2016: run a nested pfblockerng.php re-entry under that bound and return
+ * the child's status, output as a fresh line array, and raw bytes appended to
+ * $append_to. An expiry is named here once, so every caller surfaces it without
+ * composing anything.
  */
 function pfb_reentry_exec(string $verb, array $args = [], ?string $append_to = NULL,
     ?array &$lines = NULL, $budget = NULL): int {
