@@ -1696,7 +1696,7 @@ def run_build(args: argparse.Namespace) -> Build:
     # `abi`/`arch` above stay CONCRETE (still needed verbatim for
     # --repo-catalogue's pkg.freebsd.org lookup below); only the MANIFEST
     # fields are wildcarded here. --arch's existing override precedence is
-    # preserved: an explicit --arch is never wildcarded, only the derived
+    # preserved: an explicit --arch is never wildcarded, only the derived default is.
     manifest_abi, manifest_arch = abi, arch
     if _truthy(mk.get("NO_ARCH")):
         major = abi.split(":")[1]
