@@ -1,0 +1,186 @@
+name: Issue 2671 memory probe
+
+# TEMPORARY, branch-scoped instrument for issue #2671 (the unexplained PHPStan
+# 8.3 1G worker crash). It measures, on the CI's OWN setup-php build, the
+# lowest --memory-limit at which `phpstan analyse` still passes -- the only
+# meaningful signal per that issue (binary pass/fail at a ceiling; never RSS,
+# never PHPStan's self-reported "Used memory"). It also records the scheduler
+# facts (cores / files / jobs / spawned processes) that decide how many workers
+# share the corpus, per candidate parallel.jobSize.
+#
+# Deleted before the issue closes unless the measurement turns it into the fix.
+on:
+  push:
+    branches:
+      - 'issue/2671-**'
+  workflow_dispatch:
+    inputs:
+      ini_values:
+        description: 'extra setup-php ini-values (e.g. opcache.enable_cli=1) -- isolates one variable per dispatch'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  ceiling:
+    name: Ceiling bisect / PHP ${{ matrix.php-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The two versions test.yml's php-static-analysis matrix carries today.
+        php-version: ['8.3', '8.5']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        # Identical to test.yml's php-static-analysis leg, so the build under
+        # measurement is the build that crashed -- not stock php:8.3-cli.
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer:2.10.2
+          ini-values: ${{ inputs.ini_values }}
+
+      - name: Install PHPStan
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Environment facts
+        run: |
+          {
+            echo "## PHP ${{ matrix.php-version }} environment"
+            echo '```'
+            php -v
+            echo "runner cores (nproc):    $(nproc)"
+            echo "runner cores (_NPROCESSORS_ONLN): $(getconf _NPROCESSORS_ONLN)"
+            grep MemTotal /proc/meminfo
+            echo "loaded php.ini:          $(php -r 'echo php_ini_loaded_file() ?: "(none)";')"
+            echo "ini memory_limit:        $(php -r 'echo ini_get("memory_limit");')"
+            echo "opcache enabled:         $(php -r 'echo function_exists("opcache_get_status") ? var_export((bool) ((@opcache_get_status(false) ?: [])["opcache_enabled"] ?? false), true) : "(no opcache ext)";')"
+            echo "opcache.enable_cli ini:  $(php -r 'echo var_export(ini_get("opcache.enable_cli"), true);')"
+            echo "opcache.jit ini:         $(php -r 'echo var_export(ini_get("opcache.jit"), true);')"
+            echo "PHPSTAN_PARALLEL_FORK:   ${PHPSTAN_PARALLEL_FORK:-(unset)}"
+            echo "scanned ini files:       $(php -r 'echo php_ini_scanned_files() ?: "(none)";' | tr -d " \n")"
+            echo "loaded extensions:       $(php -m | tr '\n' ' ')"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Ceiling bisect per parallel.jobSize
+        env:
+          # Every probe re-analyses the whole tree: the result cache would make
+          # run N+1 skip the work whose memory we are measuring.
+          PROBE_GRANULARITY_MB: '64'
+        run: |
+          set -u
+          results=/tmp/probe-results.tsv
+          : > "$results"
+
+          # $1 label, $2 config file, $3 memory limit (e.g. 1024M), $4 extra phpstan args
+          probe() {
+            vendor/bin/phpstan clear-result-cache -c "$2" -q >/dev/null 2>&1 || true
+            _start=$(date +%s)
+            set +e
+            _out="$(vendor/bin/phpstan analyse --no-progress -c "$2" --memory-limit="$3" $4 2>&1)"
+            _rc=$?
+            set -e
+            _elapsed=$(( $(date +%s) - _start ))
+            case "$_out" in
+              *'reached configured PHP memory limit'*) _verdict='OOM' ;;
+              *) if [ "$_rc" -eq 0 ]; then _verdict='PASS'; else _verdict="OTHER-FAIL(rc=$_rc)"; fi ;;
+            esac
+            printf '%s\t%s\t%s\t%ss\n' "$1" "$3" "$_verdict" "$_elapsed" | tee -a "$results"
+            if [ "$_verdict" != 'PASS' ]; then
+              printf '%s\n' "$_out" | tail -n 25
+            fi
+            if [ -n "$4" ]; then
+              printf '%s\n' "$_out" | sed -n '/Parallel worker creation:/,/spawned processes/p'
+            fi
+            [ "$_verdict" = 'PASS' ]
+          }
+
+          # $1 jobSize ("default" keeps phpstan.neon untouched) -> prints config path
+          config_for() {
+            if [ "$1" = 'default' ]; then
+              echo phpstan.neon
+              return
+            fi
+            _cfg="phpstan-probe-js$1.neon"
+            {
+              echo 'includes:'
+              echo '    - phpstan.neon'
+              echo 'parameters:'
+              echo '    parallel:'
+              echo "        jobSize: $1"
+            } > "$_cfg"
+            echo "$_cfg"
+          }
+
+          # $1 label, $2 config, $3 known-failing lower bound MB, $4 known-passing upper bound MB
+          bisect() {
+            _lo=$3
+            _hi=$4
+            if probe "$1/lower-bound" "$2" "${_lo}M" ''; then
+              echo "lower bound ${_lo}M unexpectedly passed -- minimum is at or below it"
+              printf '%s\tmin<=%sM\n' "$1" "$_lo" >> /tmp/probe-min.tsv
+              return 0
+            fi
+            while [ $(( _hi - _lo )) -gt "$PROBE_GRANULARITY_MB" ]; do
+              _mid=$(( (_lo + _hi) / 2 / PROBE_GRANULARITY_MB * PROBE_GRANULARITY_MB ))
+              if [ "$_mid" -le "$_lo" ] || [ "$_mid" -ge "$_hi" ]; then
+                break
+              fi
+              if probe "$1/bisect" "$2" "${_mid}M" ''; then
+                _hi=$_mid
+              else
+                _lo=$_mid
+              fi
+            done
+            printf '%s\tfails at %sM, passes at %sM\n' "$1" "$_lo" "$_hi" >> /tmp/probe-min.tsv
+          }
+
+          : > /tmp/probe-min.tsv
+
+          for js in default 10 5 3; do
+            cfg="$(config_for "$js")"
+            echo "===================== jobSize=$js (config $cfg) ====================="
+            # -vvv prints the scheduler block (cores/files/jobs/processes) and the
+            # worker-creation mechanism; it does NOT disable parallelism the way
+            # --debug does. Doubles as the known-passing upper bound at 2G.
+            if probe "jobSize=$js/upper-bound" "$cfg" '2048M' '-vvv'; then
+              bisect "jobSize=$js" "$cfg" 128 2048
+            else
+              echo "2048M did not pass for jobSize=$js -- no usable upper bound"
+              printf '%s\tno pass at 2048M\n' "jobSize=$js" >> /tmp/probe-min.tsv
+            fi
+          done
+
+          # Determinism: the ceiling CI actually uses, repeated. A ceiling that
+          # sometimes passes and sometimes OOMs is a flake, not a ceiling.
+          echo '===================== repeats at 1024M, default jobSize ====================='
+          i=1
+          while [ "$i" -le 4 ]; do
+            probe "default/repeat-1G-$i" phpstan.neon '1024M' '' || true
+            i=$(( i + 1 ))
+          done
+
+          {
+            echo "## PHP ${{ matrix.php-version }} probe runs"
+            echo '| run | ceiling | verdict | elapsed |'
+            echo '| --- | --- | --- | --- |'
+            sed 's/^/| /; s/\t/ | /g; s/$/ |/' "$results"
+            echo
+            echo "## PHP ${{ matrix.php-version }} minimum passing ceiling"
+            echo '```'
+            cat /tmp/probe-min.tsv
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          rm -f phpstan-probe-js*.neon
