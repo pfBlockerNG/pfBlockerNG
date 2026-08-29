@@ -263,11 +263,7 @@ if ($_POST) {
 			// issue #2855: name the stage that failed instead of collapsing six checks into
 			// one boolean. pfb_schedule_runtime_config() logs the 'config' detail itself.
 			$cache_stage = pfb_schedule_cache_stage(
-				$runtime_model, $runtime_state, $runtime_timezone, $candidate_dir,
-				static fn (): bool => pfb_schedule_cache_refresh(
-					$runtime_model, $runtime_state, time(), $runtime_timezone, $candidate_dir
-				),
-				static fn (): ?array => pfb_due_ledger_read_cache($candidate_dir, $runtime_model['config_hash'])
+				$runtime_model, $runtime_state, $runtime_timezone, $candidate_dir
 			);
 			$cache_ok = $cache_stage === '';
 			if ($candidate_dir !== '') {

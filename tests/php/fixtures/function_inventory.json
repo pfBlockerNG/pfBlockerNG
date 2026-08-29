@@ -10460,18 +10460,18 @@
                 "default": null
             },
             {
-                "name": "publish",
+                "name": "now",
                 "byRef": false,
                 "variadic": false,
-                "type": "callable",
-                "default": null
+                "type": "?int",
+                "default": "NULL"
             },
             {
-                "name": "readback",
+                "name": "io",
                 "byRef": false,
                 "variadic": false,
-                "type": "callable",
-                "default": null
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },

@@ -5468,21 +5468,26 @@ function pfb_schedule_cache_refresh(
 /**
  * Name the schedule-cache stage that failed, or '' when the candidate published cleanly.
  *
- * $publish and $readback are deferred so a stage that never runs does no work, the way
- * the && chain this replaced short-circuited.
+ * Publication and read-back run here rather than through injected callables: the caller
+ * then has no argument pair it can transpose, and a test drives the real path.
+ *
+ * @param array{config_hash: string, scheduled: bool, default: array<string, int>, entries: array<string, mixed>}|null $model
+ * @param array{schema: int, items: array<string, mixed>}|null $state
  */
 function pfb_schedule_cache_stage(
 	?array $model,
 	?array $state,
 	mixed $timezone,
 	string $candidate_dir,
-	callable $publish,
-	callable $readback
+	?int $now = NULL,
+	array $io = []
 ): string {
-	if ($model === NULL) {
+	// Shape-check rather than null-check: both are nullable arrays, so nothing in the
+	// type system stops a caller transposing them. A transpose then names a stage.
+	if (!pfb_schedule_runtime_model_valid($model)) {
 		return 'config';
 	}
-	if ($state === NULL) {
+	if (!pfb_schedule_state_valid($state)) {
 		return 'state';
 	}
 	if (!$timezone instanceof DateTimeZone) {
@@ -5491,10 +5496,10 @@ function pfb_schedule_cache_stage(
 	if ($candidate_dir === '') {
 		return 'workdir';
 	}
-	if (!$publish()) {
+	if (!pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir, $io)) {
 		return 'refresh';
 	}
-	return $readback() === NULL ? 'readback' : '';
+	return pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) === NULL ? 'readback' : '';
 }
 
 /** Label the schedule-cache stage that failed; unknown tokens degrade to the generic one. */
