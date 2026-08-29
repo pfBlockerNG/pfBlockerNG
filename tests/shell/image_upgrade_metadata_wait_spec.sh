@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# image_upgrade_metadata_wait_spec.sh — issue #2458.
+# image_upgrade_metadata_wait_spec.sh — issues #2458, #2488.
 #
 # image-upgrade.sh reads `pkg config ABI`, runs `pkg upgrade`, samples the
 # exported artifact's ABI and powers the verify VM off, each one immediately
@@ -133,15 +133,16 @@ Describe 'image-upgrade.sh package-metadata wait'
     ' _ "$SCRIPT"
   }
 
-  # run_wait_counted TIMEOUT_ARG — same stub, but counting probes and letting the
-  # interval fall back too, so the number of probes before the wait dies is a
-  # direct readout of the effective cap: probes = cap / interval + 1.
+  # run_wait_counted TIMEOUT_ARG [INTERVAL] — same stub, but counting probes,
+  # so the number before the wait dies directly reports both effective values:
+  # probes = cap / interval + 1.
   run_wait_counted() {
-    _arg="$1" timeout 20 sh -c '
+    _arg="$1" _interval="${2:-5}" timeout 20 sh -c '
       set -e
       log()  { printf "==> %s\n" "$*"; }
       die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
       eval "$(sed -n "/^# pfb_wait_pkg_metadata BEGIN/,/^# pfb_wait_pkg_metadata END/p" "$1")"
+      METADATA_INTERVAL="$_interval"
       sleep() { :; }
       ssh_guest() {
         _n=$(cat "$COUNT"); _n=$((_n + 1)); printf "%s\n" "$_n" > "$COUNT"
@@ -168,6 +169,16 @@ Describe 'image-upgrade.sh package-metadata wait'
     The status should be failure
     The stderr should include 'did not settle'
     The contents of file "$COUNT" should equal '1'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  It 'falls back to the documented 5s interval when it has trailing whitespace'
+    # With a 20s cap, interval 5 dies on probe 5; whitespace-bearing 7 dies on
+    # probe 4. The count distinguishes strict decimal validation from test(1).
+    When call run_wait_counted 20 '7 '
+    The status should be failure
+    The stderr should include 'did not settle'
+    The contents of file "$COUNT" should equal '5'
     The stdout should include 'waiting for the pfSense package metadata refresh'
   End
 
@@ -199,6 +210,63 @@ Describe 'image-upgrade.sh package-metadata wait'
       wait_guest_ssh 30
     ' _ "$SCRIPT"
   }
+
+  # run_ssh_wait_counted TIMEOUT — keep SSH unreachable and count every probe.
+  # The real outer timeout is only a salvage guard for an unbounded regression;
+  # the crafted failure plus exact count are the behavioural oracle.
+  run_ssh_wait_counted() {
+    _timeout="$1" timeout 10 sh -c '
+      set -e
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# wait_guest_ssh BEGIN/,/^# wait_guest_ssh END/p" "$1")"
+      REMOTE_DIR=/tmp
+      sleep() { :; }
+      ssh_guest() {
+        _n=$(cat "$COUNT"); _n=$((_n + 1)); printf "%s\n" "$_n" > "$COUNT"
+        return 1
+      }
+      pfb_wait_pkg_metadata() { printf "metadata-waited\n"; }
+      wait_guest_ssh "$_timeout"
+    ' _ "$SCRIPT"
+    _status=$?
+    if [ "$_status" -eq 124 ]; then
+      printf 'stuck/environment: wait_guest_ssh exceeded salvage cap\n' >&2
+      return 125
+    fi
+    return "$_status"
+  }
+
+  It 'falls back to the documented 600s SSH cap when timeout is nonnumeric'
+    When call run_ssh_wait_counted not-a-number
+    The status should be failure
+    The stderr should include 'VM did not answer SSH within 600s'
+    The contents of file "$COUNT" should equal '121'
+    The output should not include 'metadata-waited'
+  End
+
+  It 'falls back to the documented 600s SSH cap when timeout has trailing whitespace'
+    When call run_ssh_wait_counted '7 '
+    The status should be failure
+    The stderr should include 'VM did not answer SSH within 600s'
+    The contents of file "$COUNT" should equal '121'
+    The output should not include 'metadata-waited'
+  End
+
+  It 'treats a zero SSH timeout as fail-on-first-probe'
+    When call run_ssh_wait_counted 0
+    The status should be failure
+    The stderr should include 'VM did not answer SSH within 0s'
+    The contents of file "$COUNT" should equal '1'
+    The output should not include 'metadata-waited'
+  End
+
+  It 'honours a positive decimal SSH timeout'
+    When call run_ssh_wait_counted 10
+    The status should be failure
+    The stderr should include 'VM did not answer SSH within 10s'
+    The contents of file "$COUNT" should equal '3'
+    The output should not include 'metadata-waited'
+  End
 
   It 'waits for package metadata before any caller reads pkg state'
     When call run_ssh_wait
