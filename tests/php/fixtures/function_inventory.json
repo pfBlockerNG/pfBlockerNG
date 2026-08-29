@@ -694,6 +694,26 @@
             }
         ]
     },
+    "pfb_autogrow_textarea_js": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "fieldId",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "maxRows",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_b64_text": {
         "returnsRef": false,
         "returnType": "string",
@@ -5006,6 +5026,31 @@
             }
         ]
     },
+    "pfb_form_subhdr": {
+        "returnsRef": false,
+        "returnType": "Form_Group",
+        "params": [
+            {
+                "name": "title",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "extraClass",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
+            }
+        ]
+    },
+    "pfb_form_subhdr_css_rules": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
     "pfb_gconfig_operator_view": {
         "returnsRef": false,
         "returnType": "array",
@@ -7804,6 +7849,26 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_list_section_help_note": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "sectionTitles",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "hiddenUntilEnabled",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]
