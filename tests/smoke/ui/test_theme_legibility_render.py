@@ -21,7 +21,7 @@ _LIST_PAGES: dict[str, str] = {
     "/pfblockerng/pfblockerng_ip.php": "IP Configuration",
     "/pfblockerng/pfblockerng_log.php": "Log/File Browser selections",
     "/pfblockerng/pfblockerng_edit_hooks.php": "Load an Existing Hook Script",
-    "/pfblockerng/pfblockerng_category_edit.php?type=ipv4": "Advanced Tuneables",
+    "/pfblockerng/pfblockerng_category_edit.php?type=ipv4": "Update Frequency",
 }
 
 
