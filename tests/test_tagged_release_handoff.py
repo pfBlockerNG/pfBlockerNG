@@ -46,7 +46,7 @@ ROW = {
 }
 DEP_ORIGIN = "textproc/py-charset-normalizer"
 DEP_NAME = "py311-charset-normalizer"
-DEP_VERSION = "3.4.4"
+DEP_VERSION = "3.4.7"
 DEP_SUFFIX = "-CE-2.8.pkg"
 DEP_ASSET = f"{DEP_NAME}-{DEP_VERSION}{DEP_SUFFIX}"
 CANONICAL_ASSET = "pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg"
@@ -61,8 +61,8 @@ def _dependency_identity(row: Mapping[str, object] = ROW) -> dict[str, object]:
         "portname": "charset-normalizer",
         "port_version": DEP_VERSION,
         "distfile": f"charset_normalizer-{DEP_VERSION}.tar.gz",
-        "distfile_sha256": "e" * 64,
-        "distfile_size": 129_418,
+        "distfile_sha256": "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5",
+        "distfile_size": 144_271,
         "package_name": package_name,
         "package_version": DEP_VERSION,
         "filename": f"{package_name}-{DEP_VERSION}{suffix}",
@@ -321,8 +321,8 @@ def _dependency_record(**changes: object) -> dict[str, object]:
         "port_origin": DEP_ORIGIN,
         "port_version": DEP_VERSION,
         "distfile": f"charset_normalizer-{DEP_VERSION}.tar.gz",
-        "distfile_sha256": "e" * 64,
-        "distfile_size": 129_418,
+        "distfile_sha256": "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5",
+        "distfile_size": 144_271,
         "py_flavor": "py311",
         "freebsd_major": "15",
         "abi": "FreeBSD:15:*",
@@ -353,7 +353,7 @@ def _write_dependency_package(
             if annotation == "record"
             else annotation
         )
-    payload = b"__version__ = '3.4.4'\n"
+    payload = f"__version__ = '{DEP_VERSION}'\n".encode()
     compact: dict[str, object] = {
         "name": DEP_NAME,
         "version": DEP_VERSION,
@@ -508,7 +508,7 @@ def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> N
     ("record_changes", "version", "field"),
     [
         ({"port_version": "3.4"}, "3.4", "port_version"),
-        ({"distfile": "other-3.4.4.tar.gz"}, DEP_VERSION, "distfile"),
+        ({"distfile": "other-3.4.7.tar.gz"}, DEP_VERSION, "distfile"),
         ({"distfile_sha256": "a" * 64}, DEP_VERSION, "distfile_sha256"),
         ({"distfile_size": 1}, DEP_VERSION, "distfile_size"),
     ],
@@ -673,8 +673,8 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
         elif case == "manifest-origin":
             manifest_changes["origin"] = "textproc/py-wrong"
         elif case == "version":
-            record_changes["port_version"] = "3.4.5"
-            record_changes["distfile"] = "charset_normalizer-3.4.5.tar.gz"
+            record_changes["port_version"] = "3.4.8"
+            record_changes["distfile"] = "charset_normalizer-3.4.8.tar.gz"
         elif case == "synchronized-scripts":
             manifest_changes["scripts"] = {"post-install": "#!/bin/sh\nid > /root/pwned\n"}
         elif case == "synchronized-directories":
