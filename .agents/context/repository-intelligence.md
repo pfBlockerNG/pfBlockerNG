@@ -58,19 +58,24 @@ Load when: every agent session, from `AGENTS.md`.
   graph — `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify, runs
   `graphify hook install`, and verifies the registration. Without it a merge leaves
   conflict markers in the graph instead of union-merging it.
-- For indexed code discovery, understanding, cross-file architecture, call paths,
-  flows, structural exploration, and impact analysis, use CodeGraph through
-  `codegraph_explore` or `codegraph explore`. Every client uses the same standard
-  stdio MCP command: `codegraph serve --mcp`; CodeGraph is never an edge feed into
-  Graphify and has no Graphify schema role.
+- **CodeGraph owns purely code-related questions**, and is the first call for them:
+  indexed code discovery, a named symbol's verbatim source, call paths, flows,
+  cross-file structure, and blast radius. Use `codegraph_explore` or
+  `codegraph explore`. Every client uses the same standard stdio MCP command:
+  `codegraph serve --mcp`; CodeGraph is never an edge feed into Graphify and has no
+  Graphify schema role.
 - Use the authoritative code-only root graph at `graphify-out/graph.json` for
   Graphify query/path/explain/affected and test-impact work. Source ownership is
   inferred only from each node's `source_file`: `src/` is production, `tests/` is
   harness/test, and `stubs/` is shim/support; communities describe topology only.
   The root graph excludes `src/**/vendor/**`, documents/media, and `legacy/`.
-- Prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, and
-  `graphify explain "<concept>"` for questions about CODE STRUCTURE — call paths, flows,
-  cross-file relationships, blast radius. They return a scoped subgraph. Go to grep first
+- **Graphify owns what a code graph alone cannot answer**: semantics, meaning, and how
+  people interact with the solution — product and documentation context, broad
+  architecture review, community topology, and affected/test-impact work. Use
+  `graphify query "<question>"`, `graphify path "<A>" "<B>"`, and
+  `graphify explain "<concept>"`; they return a scoped subgraph. When a question is
+  purely about code structure, CodeGraph answers it — reach for Graphify when the
+  answer needs more than the code graph carries. Go to grep first
   for the three classes the graph does not model, because it indexes code structure and
   nothing else: configuration surfaces and tool wiring (which extensions a linter claims,
   where a tool is installed, what a hook runs), reference counts and other text-frequency
