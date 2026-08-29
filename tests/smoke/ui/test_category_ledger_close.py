@@ -1,13 +1,13 @@
-"""issue #1014/#1019 -- Tier-B coverage: WebUI alias rename/delete closes the
-orphaned sync-status ledger ``stage=download`` entry (ADR-61 mechanism: a WebUI
-event hook, NOT tick reconciliation).
+"""issue #1014/#1019/#2060 -- Tier-B coverage: WebUI alias rename/delete
+routes the selected facility/alias key shape through
+``pfb_sync_status_close_removed_alias()``. The helper closes both
+alias-pass-managed keys (``download`` and ``script``); this is a WebUI event
+hook, not tick reconciliation.
 
-Before this fix, deleting or renaming an IP/DNSBL alias via pfBlockerNG's OWN
-category pages left its ``facility=ip|dnsbl stage=download`` ledger entry open
-forever -- nothing else ever closes a download key for a REMOVED alias (the
-tick only ever re-opens/closes keys for aliases that still EXIST). The new
-``pfb_sync_status_close_removed_alias()`` call at both WebUI mutation sites
-closes exactly that key.
+Without this hook, deleting or renaming an IP/DNSBL alias via pfBlockerNG's
+own category pages could leave its alias-pass-managed ledger entries open
+forever because a removed alias never receives another pass. Both mutation
+sites call the helper before the row's alias key disappears.
 
 Ledger seeding/probing reuses ``test_render_widget_ledger.py``'s own
 conventions (``_ledger_open()`` over the REAL ``pfb_sync_status_open()``,
@@ -18,12 +18,14 @@ writer, not a hand-rolled JSON blob. Row seeding/mutation reuses
 NOT the form-scrape helper -- the row's own JS-fired AJAX envelope) and
 ``test_category_edit.py``'s full-form-POST save drive for the rename case.
 
-Every flow is a TRUE transition test (CLAUDE.md): it seeds a row + opens its
-download ledger entry, asserts OPEN, drives the WebUI mutation, then asserts
-CLOSED -- proving the mutation CAUSED the close, not that the ledger merely
-started empty. ``clean_ledger`` wipes+restores the ledger files around every
-test regardless of outcome, so a failed assertion never leaks an open entry
-into a sibling test.
+Each smoke flow deliberately seeds only a ``download`` entry, so these rows
+prove that the WebUI call sites reach the helper for the original regression;
+they do not claim a seeded ``script`` transition. The helper's two-key
+contract is covered by ``PfbSyncStatusLedgerTest``. Each flow is a true
+transition test: it asserts OPEN, drives the mutation, then asserts CLOSED,
+proving the mutation caused the close. ``clean_ledger`` wipes and restores the
+ledger files around every test regardless of outcome, so a failed assertion
+never leaks an open entry into a sibling test.
 """
 
 from __future__ import annotations
