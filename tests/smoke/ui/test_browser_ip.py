@@ -55,14 +55,14 @@ JS_TIMEOUT_MS = 10_000
 
 
 def _expand_section(page: Page, section_id: str) -> None:
-    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section body so fields inside are visible.
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so rows inside are observable.
 
-    Form_Section body id is ``{id}_panel-body`` (Section.class.php:107-113) --
-    underscore, and ``_panel-body`` rather than ``-panel``. A locator of
-    ``#{id}-panel`` matches NOTHING, and the old ``body.count() == 0`` guard
-    turned that into a silent early return: the helper reported success, the
-    section stayed closed, and the caller failed later on a hidden control.
-    Assert the body is attached instead, so a wrong selector fails loudly here.
+    The body id is ``{id}_panel-body`` (pfSense Section.class.php), not ``#{id}-panel``:
+    that selector matches nothing, and a ``count() == 0`` guard turns it into a silent
+    success. Assert the body is attached so a wrong selector fails here, loudly.
+
+    Keep this byte-identical to the copy in test_browser_ip.py -- the two drifting apart
+    is what left the IP page with the broken selector after the DNSBL page was fixed.
     """
     panel = page.locator(f"#{section_id}")
     expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)

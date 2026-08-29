@@ -81,19 +81,13 @@ class Page:
 PAGE_TABLE: tuple[Page, ...] = (
     # "Advanced Text Editor" is the issue #1888 label of the pfb_syntax_highlight checkbox
     # (renamed from "Syntax Highlighting") — a third marker for the rendered field label.
-    # "Block Private-Address Exceptions" is the pfb_feed_internal_allowlist textarea label
-    # added by the General reorg — the general row's only marker that did not already exist
-    # before it, so the row pins the reorg rather than passing on pre-reorg text alone.
+    # The reorg-introduced label is pinned by test_general_private_address_label_renders,
+    # not added here: the oracle matches markers with any(), so a fifth marker beside four
+    # already-present ones would gate nothing.
     Page(
         "general",
         "/pfblockerng/pfblockerng_general.php",
-        (
-            "pfBlockerNG",
-            "General Settings",
-            "Scheduling",
-            "Advanced Text Editor",
-            "Block Private-Address Exceptions",
-        ),
+        ("pfBlockerNG", "General Settings", "Scheduling", "Advanced Text Editor"),
     ),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
@@ -484,8 +478,6 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
 # Each url is a stable href in the named page's source.
 _NOOPENER_RENDER_CASES: tuple[tuple[str, str], ...] = (
     ("/pfblockerng/pfblockerng_general.php", "https://pfblockerng.com"),
-    # The Support byline moved from the Netgate forum to GitHub in the General
-    # reorganisation, and gained a co-author; both carry the same rel requirement.
     ("/pfblockerng/pfblockerng_general.php", "https://github.com/BBcan177"),
     ("/pfblockerng/pfblockerng_general.php", "https://github.com/andrebrait"),
     # ?type=geoip: the MaxMind attribution callout only prints in the category page's
@@ -1746,6 +1738,28 @@ def test_alerts_unified_log_colour_fields_render(
             "write_config('pfBlockerNG smoke: restore DNSBL toggle');\n"
             "echo 'OK';",
         )
+
+
+def test_general_private_address_label_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The General reorg renamed the pfb_feed_internal_allowlist textarea label from
+    "Internal Feed Host Exemptions" to "Block Private-Address Exceptions".
+
+    A dedicated assertion rather than a PAGE_TABLE marker because the render oracle matches
+    markers with ``any()``: a fifth marker beside four that already render would pass whether
+    or not the label survives (coverage theater). Asserting the new string present AND the old
+    absent gives an unambiguous fail-before / pass-after for the rename.
+    """
+    path = "/pfblockerng/pfblockerng_general.php"
+    resp = webui.get(path)
+    result = evaluate_render(path, resp.status_code, resp.text, ("General Settings",))
+    assert result.ok, f"General render oracle failed: {result.detail}"
+    body = resp.text
+    assert "Block Private-Address Exceptions" in body, (
+        "General page is missing the 'Block Private-Address Exceptions' textarea label"
+    )
+    assert "Internal Feed Host Exemptions" not in body, (
+        "General page still renders the pre-reorg 'Internal Feed Host Exemptions' label"
+    )
 
 
 def test_feeds_custom_panel_heading_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
