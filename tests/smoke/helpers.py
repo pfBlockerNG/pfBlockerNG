@@ -3283,11 +3283,6 @@ _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
     "updatednsbl": ("dnsbl", "true", "force"),
 }
 
-# issue #2591: the reload() scopes whose verb MUST run a feed pass to completion before the
-# CLI exits, so a clean exit without a new PASS_START_MARKERS banner means the pass never
-# started. "tick" is deliberately absent: an IDLE scheduled tick dispatches no pass at all.
-_PASS_START_SCOPES = frozenset({"update", "updateip", "updatednsbl", "cron"})
-
 
 @timed_step(lambda vm, scope="update", **_k: f"reload:{scope}")
 def reload(
@@ -3338,7 +3333,9 @@ def reload(
     """
     if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
-    assert_started = scope in _PASS_START_SCOPES
+    # Every verb but the tick runs a feed pass to completion before the CLI exits; an IDLE
+    # scheduled tick dispatches no pass at all, so it is the one scope with no banner to wait for.
+    assert_started = scope != "tick"
     start_before = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS) if assert_started else 0
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
