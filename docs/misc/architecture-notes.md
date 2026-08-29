@@ -1670,12 +1670,14 @@ next success. Open is idempotent-by-key: opening an already-open key refreshes
 
 | Facility | Stage | Writer/clearer site | Notes |
 | --- | --- | --- | --- |
-| `ip` | `download` | `pfb_ip_download_ledger_update()` at the IP feed-download call site (`pfblockerng.inc`) | paired with the download success path |
-| `ip` | `dedup` | `pfb_sync_status_dedup_check()` (`pfblockerng_extra.inc`), reads the shell's `Sanity check [ PASSED / FAILED ]` line the same way the old widget grep did | replaces that grep entirely |
-| `ip` | `apply` | wired **inside** `pfb_pfctl_table_op()` itself (`pfblockerng.inc`) — a deliberate choice covering every one of that function's callers (delta apply, force-replace, aggregate build/teardown) at one choke point | issue #980's logging-level fix (level 2) is untouched; this ADR only adds the ledger write alongside it |
-| `dnsbl` | `download` | `pfb_dnsbl_download_ledger_update()` at the DNSBL feed-download call site (`pfblockerng.inc`) | paired with the download success path; issue #998 follow-up, mirrors the IP download writer |
-| `dnsbl` | `apply` | `pfb_dnsbl_apply_ledger_update()` + the pure `pfb_dnsbl_converged(): bool` helper (sentinel/applied generation match, Unbound running, `unbound.conf` still wires `pfb_unbound.py`), wired at `pfb_reload_unbound()`'s zero-downtime-success return and its shared-restart tail (mode-gated) | the swap-not-confirmed → restart-fallback branch never opens an entry by itself (fail-safe by design, not an error) |
-| `dnsbl` | `parse` | Python-owned, 8 sites in `pfb_unbound.py`: the zone/data/whitelist/hsts/SafeSearch loaders and the `pfb_unbound.ini` config read (each extracted into its own testable `_load_*` function) plus the DNSBL manifest load (`dnsbl_build_from_manifest()`, both its callers) | 7 further `sys.stderr.write` sites (module-capability imports, per-pattern REGEX-ini rows, background-thread bring-up) are deliberately left freetext-only — no stable per-run item identity / no natural clear site; still visible in `py_error.log` as before |
+| `ip` | `download` | `pfb_ip_download_ledger_update()` (`pfblockerng_extra.inc`) | alias-pass-managed; paired with the whole-alias download success path |
+| `ip` | `script` | `pfb_list_script_failure_record()` / `pfb_list_script_failure_close()` (`pfblockerng_apply.inc`) | alias-pass-managed; same alias key shape as download |
+| `ip` | `dedup` | `pfb_sync_status_dedup_check()` (`pfblockerng_extra.inc`); the dedup-off branch of `sync_package_pfblockerng()` final reporting clears the same key | global constant key `ip` / `dedup` / `dedup`; never alias-keyed |
+| `ip` | `apply` | `pfb_pfctl_table_op()` (`pfblockerng.inc`) | one choke point covers delta apply, force-replace and aggregate build/teardown; issue #980 logging level remains unchanged |
+| `dnsbl` | `download` | `pfb_dnsbl_download_ledger_update()` (`pfblockerng_extra.inc`) | alias-pass-managed; paired with the whole-alias download success path |
+| `dnsbl` | `script` | `pfb_list_script_failure_record()` / `pfb_list_script_failure_close()` (`pfblockerng_apply.inc`) | alias-pass-managed; same alias key shape as download |
+| `dnsbl` | `apply` | `pfb_dnsbl_apply_ledger_update()` and `pfb_reload_unbound()` (`pfblockerng.inc`) | convergence paths update the key; disabled-mode teardown clears it |
+| `dnsbl` | `parse` | Python-owned `pfb_py_status_open()` / `pfb_py_status_close()` sites in `pfb_unbound.py` | loader/build failures with stable item identities use the Python ledger; capability and background-thread errors remain free text |
 
 ### Tick-driven reconciliation — apply stage only
 
