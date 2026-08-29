@@ -23,9 +23,23 @@ export function accessibleNameFor(textarea) {
 
 // Replaces `textarea` with a CM6 EditorView wired for `language` (a LanguageSupport or
 // Language extension), plus any `extraExtensions` (lint wiring) appended after it.
+function fitAutoGrow(view, minLines, maxLines) {
+  const n = view.state.doc.lines;
+  const lines = Math.min(maxLines, Math.max(minLines, n));
+  const line = view.defaultLineHeight;
+  const pad = view.documentPadding.top + view.documentPadding.bottom;
+  view.scrollDOM.style.overflowY = n > maxLines ? "auto" : "hidden";
+  view.scrollDOM.style.overflowX = "hidden";
+  const chrome = Math.max(0, view.dom.offsetHeight - view.scrollDOM.clientHeight);
+  view.dom.style.height = `${lines * line + pad + chrome}px`;
+}
+
 export function mountTextarea(textarea, language, extraExtensions = []) {
   const rows = parseInt(textarea.getAttribute("rows"), 10);
-  const height = Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em";
+  const minLines = Number.isFinite(rows) && rows > 0 ? rows : 1;
+  const growMax = parseInt(textarea.getAttribute("data-pfb-autogrow-max"), 10);
+  const autoGrow = Number.isFinite(growMax) && growMax > 0;
+  const height = autoGrow ? null : (Number.isFinite(rows) && rows > 0 ? `${rows * 1.4}em` : "20em");
   const ariaLabel = accessibleNameFor(textarea);
 
   // issue #1875: pfSense's disableInput() greys a field and keeps it out of the POST (the
@@ -40,7 +54,8 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
     // issue #1869: the lint gutter alone rendered an empty strip down the left edge, so a
     // "line N: ..." diagnostic from the save-time validator had no number to point at and
     // the admin counted rows by hand. Listed BEFORE the lint extensions so the numbers sit
-    // leftmost and the lint marker keeps its own column beside them.
+    // leftmost and the lint marker keeps its own column beside them. Auto-grow fields keep
+    // the gutter too — a one-line box still has a line 1.
     lineNumbers(),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     syntaxHighlighting(defaultHighlightStyle),
@@ -64,6 +79,9 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         textarea.value = update.state.doc.toString();
+        if (autoGrow) {
+          fitAutoGrow(update.view, minLines, growMax);
+        }
       }
     }),
     ...extraExtensions,
@@ -76,12 +94,18 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
     }),
   });
 
-  view.dom.style.height = height;
+  if (!autoGrow) {
+    view.dom.style.height = height;
+  }
   textarea.insertAdjacentElement("beforebegin", view.dom);
   // The textarea stays in the form (its name/value are the POST source) but is hidden --
   // updateListener above keeps its value synced on every doc change, so the native form
   // submit still posts the CURRENT editor content, not just the value as of page load.
   textarea.style.display = "none";
+  if (autoGrow) {
+    fitAutoGrow(view, minLines, growMax);
+    requestAnimationFrame(() => fitAutoGrow(view, minLines, growMax));
+  }
 
   // Clicking the <label> that used to focus the (now-hidden) textarea should focus the
   // replacement view instead, same as a native label->control association would.

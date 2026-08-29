@@ -79,7 +79,16 @@ test("EditorView.contentAttributes carries an aria-label derived from the textar
 // per entry.
 test("lineNumbers() is imported and installed in the extension list", () => {
   assert.match(src, /import \{[^}]*\blineNumbers\b[^}]*\} from "@codemirror\/view"/);
-  assert.match(src, /^\s*lineNumbers\(\),$/m);
+  assert.match(src, /lineNumbers\(\)/);
+  assert.doesNotMatch(src, /autoGrow \? \[\] : \[lineNumbers\(\)\]/);
+});
+
+test("auto-grow fields hide the scroller until content exceeds the cap", () => {
+  assert.ok(
+    src.includes('overflowY = n > maxLines ? "auto" : "hidden"'),
+    "expected overflow:auto only once the auto-grow field is past maxLines",
+  );
+  assert.match(src, /requestAnimationFrame\(\(\) => fitAutoGrow/);
 });
 
 // issue #1875: pfSense's disableInput() greys a field and keeps it out of the POST (the
@@ -134,5 +143,29 @@ test("the light editor pane pins foreground wherever it pins a background", () =
   assert.match(
     src,
     /&\.cm-focused \.cm-selectionBackground, \.cm-selectionBackground": \{ backgroundColor: "#d7d7d7" \}/,
+  );
+});
+
+test("fixed-height mounts still use the textarea rows attribute times 1.4em", () => {
+  assert.match(src, /rows \* 1\.4/);
+  assert.match(src, /view\.dom\.style\.height = height/);
+});
+
+test("data-pfb-autogrow-max grows the editor with doc.lines and caps at the attribute", () => {
+  assert.ok(
+    src.includes('data-pfb-autogrow-max'),
+    "expected mountTextarea to read data-pfb-autogrow-max from the textarea",
+  );
+  assert.ok(
+    src.includes("view.state.doc.lines"),
+    "expected auto-grow height to follow the document line count",
+  );
+  assert.ok(
+    src.includes("view.defaultLineHeight"),
+    "expected auto-grow to use the rendered line height, not a 1.4em guess",
+  );
+  assert.ok(
+    src.includes("view.documentPadding"),
+    "expected auto-grow to include content padding so a one-line editor is not cropped",
   );
 });
