@@ -330,7 +330,7 @@ $pfb_eh_textarea->removeClass('form-control')
 	->setAttribute('rows', '20')
 	->setAttribute('wrap', 'off')
 	->setAttribute('spellcheck', 'false')
-	->setAttribute('style', 'background:#fafafa; width: 100%; font-family: monospace;')
+	->setAttribute('style', 'width: 100%; font-family: monospace;')
 	->setHelp(gettext('Saved as typed, except line endings are normalized to LF, trailing whitespace is ' .
 		'stripped from each line, and control characters other than tab are removed -- write a literal ' .
 		'control byte as an escape (e.g. \\033) instead.'));

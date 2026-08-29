@@ -1836,7 +1836,7 @@ $section->addInput(new Form_Textarea(
   ->addClass('row-fluid col-sm-12')
   ->setAttribute('rows', '30')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%');
+  ->setAttribute('style', 'width: 100%');
 
 $form->add($section);
 print ($form);
