@@ -15,11 +15,11 @@ nothing). The allowlist rows go further: EVERY entry is proved load-bearing (emp
 flags), which is what stops an entry from degrading into a blanket per-file exemption.
 
 The allowlist is exactly SEVEN entries: the bounded shell seam plus the six crontab
-command strings. The single-sourced path/constant lines (`PFB_REENTRY_SCRIPT`,
-`pathpfbphp=`) and the PHP seam builder are deliberately NOT listed -- each carries only
+command strings. The single-sourced path/constant definition lines
+(`PFB_REENTRY_SCRIPT`, `pathpfbphp=`) are deliberately NOT listed -- each carries only
 ONE token, so it is clean by the token rule and an entry for it would be dead config
-that would silently exempt a future line inlining the literal target path into the same
-composition. `test_single_token_line_needs_no_allowlist_entry` pins that hazard shut.
+that would silently exempt a future line composing the constant with an interpreter.
+`test_single_token_line_needs_no_allowlist_entry` pins that hazard shut.
 
 `test_src_tree_is_bounded` is issue #2016's red->green proof, written as the DEFINITIVE
 post-fix expectation (exit 0, no violations). It is RED against the unfixed tree -- the
@@ -151,6 +151,12 @@ _BLOCKING_SHAPES: tuple[_Shape, ...] = (
         _SH,
         '"${pathphp}" "${pathpfbphp}" bls scheduled',
         "pfb_reentry bls scheduled",
+    ),
+    _Shape(
+        "php-constant-target-form",
+        _INC,
+        "exec(escapeshellarg($pfb['php']) . ' ' . escapeshellarg(PFB_REENTRY_SCRIPT) . ' dc scheduled');",
+        "pfb_reentry_exec('dc', ['scheduled']);",
     ),
 )
 
@@ -363,12 +369,6 @@ _NO_ENTRY_ROWS: tuple[_InertRow, ...] = (
         '\t$cmd = "' + _SPAWN + ' {$verb}";',
     ),
     _InertRow(
-        "pfblockerng.inc/pfb_reentry_cmd",
-        _INC,
-        "\t$cmd = escapeshellarg($pfb['php']) . ' ' . escapeshellarg(PFB_REENTRY_SCRIPT);",
-        "\t$cmd = escapeshellarg($pfb['php']) . ' " + _TARGET + " ' . $verb;",
-    ),
-    _InertRow(
         "pfblockerng.sh/pathpfbphp",
         _SH,
         "\tpathpfbphp=" + _TARGET,
@@ -381,13 +381,13 @@ _NO_ENTRY_IDS = [row.name for row in _NO_ENTRY_ROWS]
 
 @pytest.mark.parametrize("row", _NO_ENTRY_ROWS, ids=_NO_ENTRY_IDS)
 def test_single_token_line_needs_no_allowlist_entry(row: _InertRow, monkeypatch: pytest.MonkeyPatch) -> None:
-    """These three carry ONE token, so listing them would be dead config -- and a hazard.
+    """Definition lines carry ONE token, so listing them would be dead config -- and a hazard.
 
     Each is clean with NO allowlist at all (first assertion), so an entry for it would
     never be load-bearing. It would, however, keep matching if someone later inlined the
-    literal target path into that same line -- silently exempting exactly the composition
-    this checker exists to catch. The second assertion pins that inlined form as a
-    violation under the REAL allowlist, which only holds while no entry covers it.
+    other half into that same line -- silently exempting exactly the composition this
+    checker exists to catch. The second assertion pins that inlined form as a violation
+    under the REAL allowlist, which only holds while no entry covers it.
     """
     monkeypatch.setattr(crb, "_ALLOWLIST", type(crb._ALLOWLIST)())
     assert _find(row.single_token, row.source) == [], f"{row.name}: a one-token line was flagged"

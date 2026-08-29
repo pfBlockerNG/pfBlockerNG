@@ -301,11 +301,10 @@ final class ReentryBoundsTest extends TestCase
 			'a swallowed expiry is the defect: the seam must name it in the error log');
 	}
 
-	public function testHungChildWithAGrandchildHoldingItsOutputStillReturnsAtTheBudget(): void
+	public function testHungChildAndGrandchildHoldingOutputStillReturnAtTheBudget(): void
 	{
-		// Probe row B: the direct child can exit while a descendant still holds the
-		// capture pipe, and exec() then blocks on EOF regardless of the child's status.
-		// Routing output to a FILE is what makes the bound observable at all.
+		// Both processes stall. Default reaper mode must cap the whole tree, while file
+		// output keeps the parent off the child's capture pipe.
 		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
 		$GLOBALS['pfb']['php']     = $this->fakePhp();
 

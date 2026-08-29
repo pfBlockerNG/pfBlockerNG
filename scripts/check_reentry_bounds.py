@@ -96,6 +96,7 @@ _INTERPRETER_RES = (
 _TARGET_RES = (
     re.compile(r"pfblockerng\.php"),
     re.compile(r"\$\{?pathpfbphp(?![\w])"),
+    re.compile(r"PFB_REENTRY_SCRIPT(?![\w])"),
 )
 
 # Backgrounding markers on the line, or within the two-line lookback window.
