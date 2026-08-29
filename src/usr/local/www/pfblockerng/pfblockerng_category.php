@@ -395,7 +395,8 @@ if (isset($savemsg)) {
 				$mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
 				if ($mmsg !== '') {
 					$maxmind_verify = FALSE;
-					print_callout('<br /><p><strong>' . $mmsg . '</strong></p><br />', 'warning', '');
+					print_callout('<p><strong>' . $mmsg . '</strong><br />'
+						. '<a href="/pfblockerng/pfblockerng_ip.php">IP tab &mdash; MaxMind GeoIP configuration</a></p>', 'warning', '');
 				}
 			}
 		?>
@@ -624,6 +625,9 @@ if ($gtype == 'geoip') {
 			selected Countries only.<br />
 			Also consider protecting just the specific open WAN ports and its just as important to protect the outbound LAN traffic.<br /><br />
 			Country ISOs can also be defined in the IPv4/6 Tabs (Refer to blue infoblocks for more details)<br /><br />
+			MaxMind Account ID and License Key are configured on the
+			<a href="/pfblockerng/pfblockerng_ip.php">IP tab</a>
+			(MaxMind GeoIP configuration).<br /><br />
 			<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
 }
 elseif ($gtype == 'dnsbl') {

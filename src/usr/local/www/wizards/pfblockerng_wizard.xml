@@ -31,8 +31,10 @@
 		<div style="width: 75%; height: 170px; float: left;">
 			<p><h4>Welcome to pfBlockerNG!</h4></p>
 			<p>This wizard will configure an entry level configuration of pfBlockerNG for IP and DNSBL.</p>
-			<p><strong>pfBlockerNG</strong> is developed and maintained by
-				<a target="_blank" rel="noopener noreferrer" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
+			<p><strong>pfBlockerNG</strong> is created by
+				<a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">BBcan177</a>,
+				who designs, supports and maintains it with
+				<a target="_blank" rel="noopener noreferrer" href="https://github.com/andrebrait">André Brait</a>.<br />
 
 			<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
 				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
@@ -43,7 +45,7 @@
 					<span style="color: #8B181B;" class="fa-brands fa-reddit"></span> Reddit</a></li>
 				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://infosec.exchange/@BBcan177#">
 					<span style="color: #8B181B;" class="fa-solid fa-globe"></span> Mastodon</a></li>
-				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">
+				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://github.com/pfBlockerNG/pfBlockerNG">
 					<span style="color: #8B181B;" class="fa-brands fa-github"></span> GitHub</a></li>
 				<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="mailto:bbcan177@gmail.com?Subject=pfBlockerNG%20Support">
 					<span style="color: #8B181B;" class="fa-regular fa-envelope"></span> Contact us</a></li>
