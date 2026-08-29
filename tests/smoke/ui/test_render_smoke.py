@@ -93,7 +93,15 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "ip",
         "/pfblockerng/pfblockerng_ip.php",
-        ("IP Configuration", "ASN configuration", "Aggregated Aliases", "Alias Table Apply Mode", "IPv6 Suppression"),
+        (
+            "IP Configuration",
+            "IP Interface/Rules Configuration",
+            "ASN configuration",
+            "Advanced Settings",
+            "Aggregated Aliases",
+            "Alias Table Apply Mode",
+            "IPv6 Suppression",
+        ),
     ),
     # "DNS Redirect" is the ADR-36 section title added to this page (Phase 3).
     # "DoT/DoQ Block" is the ADR-37 section title added to this page (Phase 3).
@@ -107,7 +115,9 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/pfblockerng/pfblockerng_dnsbl.php",
         (
             "DNSBL Webserver Configuration",
-            "DNSBL Configuration",
+            "DNS Caching",
+            "AdBlock suffix handling",
+            "TLD Allow list",
             "DNS Redirect",
             "DoT/DoQ Block",
             "Permit Firewall Rules",
@@ -137,6 +147,9 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Feed entries at shared-hosting suffixes (PSL PRIVATE)",
             "Feed entries at public suffixes (ICANN)",
             "Block the suffix apex only",
+            # Enable DNSBL infoblock: v4 evaluate_domain() order (not the v3 pfb_py_block text).
+            "DNSBL evaluation order",
+            "first match wins",
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
@@ -186,12 +199,19 @@ PAGE_TABLE: tuple[Page, ...] = (
     # category.php: default IP view (?type=ipv4) AND the DNSBL view (?type=dnsbl).
     Page("category_ip", "/pfblockerng/pfblockerng_category.php?type=ipv4", ("Summary", "pfBlockerNG")),
     Page("category_dnsbl", "/pfblockerng/pfblockerng_category.php?type=dnsbl", ("Summary", "DNSBL")),
-    # category_edit.php: default IP view AND the DNSBL view; Form_Section('Advanced Tuneables') is unique to it.
+    # GeoIP summary: the IP-tab credentials pointer is always rendered (not gated on
+    # a missing key), so it is a stable marker even on a box that already has MaxMind.
+    Page(
+        "category_geoip",
+        "/pfblockerng/pfblockerng_category.php?type=geoip",
+        ("Summary", "MaxMind Account ID and License Key"),
+    ),
+    # category_edit.php: default IP view AND the DNSBL view. "Override Default Schedule"
+    # is unique to this page now that the IP tab also has an Advanced Settings section.
     Page(
         "category_edit_ip",
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv4",
         (
-            "Advanced Tuneables",
             "Override Default Schedule",
             "schedule_override",
             "schedule_weekday",
@@ -207,7 +227,6 @@ PAGE_TABLE: tuple[Page, ...] = (
         "category_edit_dnsbl",
         "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl",
         (
-            "Advanced Tuneables",
             "A DNSBL pre-process script must not remove",
             "Override Default Schedule",
             "schedule_override",
@@ -223,7 +242,6 @@ PAGE_TABLE: tuple[Page, ...] = (
         "category_edit_ipv6",
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv6",
         (
-            "Advanced Tuneables",
             "Suppression CIDR Limit",
             "Override Default Schedule",
             "schedule_override",
@@ -244,7 +262,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "category_edit_fresh_addgroup_whitelist",
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv4&act=addgroup&atype=Whitelist%7C192.0.2.55%7Csmoke-1211",
-        ("Advanced Tuneables",),
+        ("Override Default Schedule",),
     ),
     # threats.php REQUIRES a host/domain/port param -- with none it print_info_box()es and exit()s
     # before rendering $pgtitle. A syntactically-valid param renders the lookup page chrome; the
@@ -1342,7 +1360,7 @@ def test_dnsbl_idn_blocking_fields_render(webui: WebUI, php_error_log_guard: Php
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1366,7 +1384,7 @@ def test_dnsbl_control_fields_render(webui: WebUI, php_error_log_guard: PhpError
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1394,7 +1412,7 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1434,7 +1452,7 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     assert "select the type and Save, then run an Update" in body, (
@@ -1449,22 +1467,22 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
 
 
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The ADR-22 'Lenient Feed Parsing' toggle renders cleanly on the DNSBL page — so a
+    """The ADR-22 'Download Schemes' toggle renders cleanly on the DNSBL page — so a
     regression that drops or breaks the field is caught at the render tier (not only by the
     feed-parsing smoke).
 
     Asserts the page passes the clean-render oracle AND that the POST field name
-    (``pfb_dnsbl_lenient``) and its 'Lenient Feed Parsing' label are present in the body.
+    (``pfb_dnsbl_lenient``) and its 'Download Schemes' label are present in the body.
     ``php_error_log_guard`` enrolls this GET in the module-level no-growth sweep.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
         'name="pfb_dnsbl_lenient"',
-        "Lenient Feed Parsing",
+        "Download Schemes",
     ):
         assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
 
@@ -1483,7 +1501,7 @@ def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_lo
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     for needle in (
@@ -1526,7 +1544,7 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     # The field still renders (a pfSense multi-select renders its name as "<field>[]").
@@ -1554,7 +1572,7 @@ def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: P
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     doh_pos = body.find("DNS over HTTPS/TLS/QUIC Blocking")
@@ -1592,7 +1610,7 @@ def test_dnsbl_group_policy_section_renders_above_dns_redirect(
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     gp_pos = body.find("Python_Group_Policy")
@@ -1629,7 +1647,7 @@ def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpEr
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
     # Each picker is a pfSense multi-select (Form_Select(..., TRUE)), so its name renders
@@ -1782,7 +1800,7 @@ def test_dnsbl_cache_flush_option_renders(webui: WebUI, php_error_log_guard: Php
     """DNSBL page exposes the default-off full-cache trade-off without PHP diagnostics."""
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL cache-flush render oracle failed: {result.detail}"
     assert 'name="pfb_cache_flush"' in resp.text, "DNSBL page is missing the cache-flush checkbox"
     assert "When disabled, cached allowed answers remain until their DNS TTL expires" in resp.text, (
@@ -1840,7 +1858,7 @@ def test_dnsbl_python_gated_toggles_render_checked_when_absent(
     try:
         page = "/pfblockerng/pfblockerng_dnsbl.php"
         resp = webui.get(page)
-        result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Configuration",))
+        result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
         assert result.ok, f"DNSBL render oracle failed: {result.detail}"
         fields = scrape_form_fields(resp.text)
         for name, _path in _ISSUE1907_DNSBL_TOGGLES:
@@ -1867,7 +1885,7 @@ def test_dnsbl_python_gated_toggles_render_unchecked_when_stored_off(
                 _set_scalar_or_absent(vm, path, stored)
             page = "/pfblockerng/pfblockerng_dnsbl.php"
             resp = webui.get(page)
-            result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Configuration",))
+            result = evaluate_render(page, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
             assert result.ok, f"DNSBL render oracle failed for {stored!r}: {result.detail}"
             fields = scrape_form_fields(resp.text)
             for name, _path in _ISSUE1907_DNSBL_TOGGLES:
@@ -2056,7 +2074,7 @@ def test_category_edit_flex_help_states_certificate_verification_disabled(
     """
     resp = webui.get(path)
     body = resp.text
-    result = evaluate_render(path, resp.status_code, body, ("Advanced Tuneables",))
+    result = evaluate_render(path, resp.status_code, body, ("Override Default Schedule",))
     assert result.ok, f"{path}: category-edit render oracle failed: {result.detail}"
     assert "certificate verification disabled" in body, (
         f"{path} is missing Flex help that certificate verification is disabled (issue #2661)"
@@ -2387,13 +2405,13 @@ def test_corrupt_group_actions_render_repairably(
 
         path = f"/pfblockerng/pfblockerng_category_edit.php?type=dnsbl&rowid={effective_rowids['dnsbl']}"
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("Override Default Schedule",))
         assert result.ok, f"Category Edit DNSBL corrupt-action render failed: {result.detail}"
         assert_disabled_selected(resp.text, path)
 
         path = f"/pfblockerng/pfblockerng_category_edit.php?type=ipv4&rowid={effective_rowids['ipv4']}"
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("Advanced Tuneables",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("Override Default Schedule",))
         assert result.ok, f"Category Edit IPv4 corrupt-action render failed: {result.detail}"
         assert "PermitBogus" not in resp.text, f"invalid persisted action leaked into repair form on {path}"
         assert_disabled_selected(resp.text, path)
@@ -3189,7 +3207,7 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
     When the body is inspected for the grouped-column structure,
 
     Then the two column-header texts (Max lines / Max days) are present in the body, emitted
-      by the per-category header ``Form_Group`` rows (PRESENT: new design);
+      once by the ``.pfb-logcolhdr`` row (PRESENT: option A);
     And the 2-item intro wording markers are present (the column-purpose ``<ul>`` sentences
       written in issue #489's intro ``Form_StaticText``, updated for ADR-60's Max days column);
     And a representative set of ``log_max_days_<type>`` field names spanning the categories the
@@ -3243,16 +3261,19 @@ def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard:
     ):
         assert needle in body, f"Log Settings intro wording {needle!r} missing — redesign intro not rendered"
 
-    # PRESENT: the per-category header Form_Group rows. A bare ">Max lines<" substring is
-    # ALSO satisfied by the intro <ul> ("<li><strong>Max lines</strong> ...") — dropping every
+    # PRESENT: the single column-title row. A bare ">Max lines<" substring is ALSO
+    # satisfied by the intro <ul> ("<li><strong>Max lines</strong> ...") — dropping the
     # header row entirely would still pass that needle. Assert the full header-cell HTML
-    # instead — the intro carries neither "hidden-xs" nor "form-control-static". (Don't
-    # assert the "pfb-loghdr" class: its name also appears in the intro's <style> block.)
+    # instead — the intro carries neither "hidden-xs" nor "form-control-static". Count 1
+    # pins option A's hoist: the pre-A page emitted this markup three times (once per
+    # category).
     for needle in (
         'form-control-static hidden-xs"><strong>Max lines</strong>',
         'form-control-static hidden-xs"><strong>Max days</strong>',
     ):
-        assert needle in body, f"Log Settings header cell {needle!r} missing — header rows not rendered"
+        assert body.count(needle) == 1, (
+            f"Log Settings header cell {needle!r} count={body.count(needle)} — want exactly one (option A)"
+        )
 
     # PRESENT: field names spanning all four categories — no control dropped. The
     # log_max_days_<type> markers cover the same 3 categories the retired
@@ -3521,14 +3542,14 @@ def test_pending_changes_banner_tracks_the_marker(
         # Given a clean state — banner ABSENT, page still renders cleanly.
         smoke_vm.ssh("rm", "-f", _PENDING_MARKER)
         resp = webui.get(path)
-        result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Configuration",))
+        result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
         assert result.ok, f"DNSBL render oracle failed (clean state): {result.detail}"
         assert _PENDING_NEEDLE not in resp.text, "pending-changes banner must be ABSENT when there is no marker file"
 
         # When settings have changed but no Update has run — banner SHOWS, with its link.
         smoke_vm.ssh("touch", _PENDING_MARKER)
         resp2 = webui.get(path)
-        result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Configuration",))
+        result2 = evaluate_render(path, resp2.status_code, resp2.text, ("DNSBL Webserver Configuration",))
         assert result2.ok, f"DNSBL render oracle failed (pending state): {result2.detail}"
         assert _PENDING_NEEDLE in resp2.text, "pending-changes banner must SHOW when the marker file exists"
         assert "To run an update now, go to the" in resp2.text, (
