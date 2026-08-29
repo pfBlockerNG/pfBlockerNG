@@ -358,7 +358,7 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Checkbox(
 	'pfb_feed_internal_filter',
-	'Internal Feed Host Filter',
+	'Block Private-Address',
 	gettext('Enable'),
 	pfb_cfg_toggle_read($pconfig['pfb_feed_internal_filter']) === PfbToggle::On,
 	'on'
@@ -368,9 +368,12 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Textarea(
 	'pfb_feed_internal_allowlist',
-	'Internal Feed Host Exemptions',
+	'Block Private-Address Exceptions',
 	$pconfig['pfb_feed_internal_allowlist']
-))->setHelp('IP addresses or CIDR ranges (one per line) that are exempt from the '
+))->setAttribute('rows', '1')
+  ->setAttribute('data-pfb-autogrow-max', '5')
+  ->setWidth(8)
+  ->setHelp('IP addresses or CIDR ranges (one per line) that are exempt from the '
 		. 'internal-address check &mdash; e.g. an internal mirror. '
 		. 'Leave empty to block all feeds that resolve to an internal/private address.'
 );
@@ -452,10 +455,10 @@ $group->add((new Form_Input(
 $section->add($group);
 $form->add($section);
 
-// issue #489: Log Settings — grouped by category, one row per log. A shaded header row
-// opens each category; the two columns (Max lines / Max days) are labelled once per
-// category on desktop (the header row) and per-control on mobile, where the columns
-// stack (the desktop header row is hidden on xs, the per-control labels shown).
+// issue #489: Log Settings — grouped by category, one row per log. Column titles
+// (Max lines / Max days) are labelled once at the top on desktop; each category is a
+// full-width centred divider. On xs the column-title row is hidden and per-control
+// label-start labels name the stacked fields.
 $section = new Form_Section('Log Settings');
 $log_types = array(
 	'General'	=> array('pfBlockerNG' => 'log', 'Unified' => 'unilog', 'Error' => 'errlog', 'Extras' => 'extraslog'),
@@ -463,57 +466,38 @@ $log_types = array(
 	'DNS'		=> array('Block' => 'dnslog', 'Reply' => 'dnsreplylog', 'Parse Error' => 'dnsbl_parse_err'),
 );
 
-// Single intro explaining both columns — replaces the former per-field repeated help.
-// ponytail: the media query is the whole responsive trick — per-control labels (Form_Input
-// label-start, class form-label) carry the columns on mobile; on >=sm the desktop header
-// row carries them, so the per-control copies are hidden to avoid double-labelling.
+// Intro explains the two columns. Trim Margin help stays on that field (not repeated here).
+// Desktop hide of label-start is scoped to .pfb-logrow so other form-label uses on this
+// page are not suppressed.
 $section->addInput(new Form_StaticText(
 	'',
 	'<style>'
-	. '@media (min-width: 768px) { label.form-label { display: none; } }'
-	. '.pfb-loghdr { background-color: #f0f0f0; border-top: 1px solid #ddd; }'
-	. '.pfb-loghdr .control-label > span { font-weight: 700; }'
+	. '@media (min-width: 768px) { .pfb-logrow label.form-label { display: none; } }'
+	. '@media (max-width: 767px) { .pfb-logcolhdr { display: none; } }'
+	. pfb_form_subhdr_css_rules()
+	. '.pfb-logtrim { margin-top: 14px; padding-top: 10px; }'
 	. '</style>'
 	. '<ul style="margin-bottom:0">'
 	. '<li><strong>Max lines</strong> &mdash; rolling cap; the log keeps only its most recent N lines.</li>'
 	. '<li><strong>Max days</strong> &mdash; trims lines older than this many days (0 = disabled); '
 	. 'independent of Max lines &mdash; whichever cap is more restrictive wins.</li>'
-	. '<li><strong>Trim Margin</strong> &mdash; percent tolerance above whichever cap is active; '
-	. 'the log is rewritten only once it drifts past cap + margin% (0 = trim as soon as exceeded), '
-	. 'then trimmed back to the exact cap &mdash; a larger margin means fewer, larger rewrites and '
-	. 'less flash/SSD wear.</li>'
 	. '</ul>'
 ));
 
-// issue #1109: log-trim hysteresis margin -- a single global percentage applying to both
-// the line and age caps (see the intro list above for the trigger/cut semantics).
-$section->addInput((new Form_Input(
-	'pfb_log_trim_margin_pct',
-	'Trim Margin',
-	'number',
-	$pconfig['pfb_log_trim_margin_pct']
-))->setAttribute('min', '0')->setAttribute('max', '1000'))->setHelp(
-	'Percent tolerance above whichever cap (Max lines or Max days) is active. The log is '
-	. 'rewritten only once it drifts past cap + margin%, then trimmed back to the exact cap. '
-	. '<strong>0</strong> (default) trims as soon as the cap is exceeded. A larger margin means '
-	. 'fewer, larger rewrites &mdash; less flash/SSD wear.'
-);
+$colhdr = new Form_Group('');
+$colhdr->addClass('pfb-logcolhdr');
+$colhdr->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max lines</strong></p>'))->setWidth(4);
+$colhdr->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max days</strong></p>'))->setWidth(4);
+$section->add($colhdr);
 
 foreach ($log_types as $logdescr => $logtype) {
-	// Header row: shaded category divider; the StaticText children label the columns on
-	// desktop and are hidden on xs (where the columns stack and the labels would mislead).
-	$header = new Form_Group($logdescr);
-	$header->addClass('pfb-loghdr');
-	// form-control-static gives the column titles the same top padding as the category
-	// control-label, so the label and the titles sit on one line (hidden-xs: desktop only).
-	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max lines</strong></p>'))->setWidth(4);
-	$header->add(new Form_StaticText('', '<p class="form-control-static hidden-xs"><strong>Max days</strong></p>'))->setWidth(4);
-	$section->add($header);
+	$section->add(pfb_form_subhdr($logdescr, 'pfb-loghdr'));
 
 	// One row per log in this category. Each control carries a label-start so the column is
-	// named on mobile (hidden on desktop via the media query above).
+	// named on mobile (hidden on desktop via the scoped media query above).
 	foreach ($logtype as $descr => $type) {
 		$group = new Form_Group($descr);
+		$group->addClass('pfb-logrow');
 		$group->add(new Form_Select(
 			'log_max_' . $type,
 			'',
@@ -529,6 +513,24 @@ foreach ($log_types as $logdescr => $logtype) {
 		$section->add($group);
 	}
 }
+
+// issue #1109: log-trim hysteresis margin -- a single global percentage applying to both
+// the line and age caps. Sits with syslog, after the table it describes.
+$trim = new Form_Group('Trim Margin');
+$trim->addClass('pfb-logtrim');
+$trim->add((new Form_Input(
+	'pfb_log_trim_margin_pct',
+	null,
+	'number',
+	$pconfig['pfb_log_trim_margin_pct']
+))->setAttribute('min', '0')->setAttribute('max', '1000'));
+$trim->setHelp(
+	'Percent tolerance above whichever cap (Max lines or Max days) is active. The log is '
+	. 'rewritten only once it drifts past cap + margin%, then trimmed back to the exact cap. '
+	. '<strong>0</strong> (default) trims as soon as the cap is exceeded. A larger margin means '
+	. 'fewer, larger rewrites &mdash; less flash/SSD wear.'
+);
+$section->add($trim);
 
 // ADR-38: syslog export controls — appended at the end of the Log Settings section.
 $section->addInput(new Form_Checkbox(
@@ -552,8 +554,10 @@ $section->addInput(new Form_StaticText(
 	'
 <div class="row">
 <div class="col-sm-9">
-	<strong>pfBlockerNG</strong> is created, designed, developed, supported and maintained by:
-	<a target="_blank" rel="noopener noreferrer" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
+	<strong>pfBlockerNG</strong> is created by
+	<a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">BBcan177</a>,
+	who designs, supports and maintains it with
+	<a target="_blank" rel="noopener noreferrer" href="https://github.com/andrebrait">André Brait</a>.<br />
 
 	<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
 		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
@@ -564,7 +568,7 @@ $section->addInput(new Form_StaticText(
 			<span style="color: #8B181B;" class="fa-brands fa-reddit"></span> Reddit</a></li>
 		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://infosec.exchange/@BBcan177#">
 			<span style="color: #8B181B;" class="fa-solid fa-globe"></span> Mastodon</a></li>
-		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://github.com/BBcan177">
+		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="https://github.com/pfBlockerNG/pfBlockerNG">
 			<span style="color: #8B181B;" class="fa-brands fa-github"></span> GitHub</a></li>
 		<li class="list-inline-item"><a target="_blank" rel="noopener noreferrer" href="mailto:bbcan177@gmail.com?Subject=pfBlockerNG%20Support">
 			<span style="color: #8B181B;" class="fa-regular fa-envelope"></span> Contact Us</a></li>
@@ -572,11 +576,11 @@ $section->addInput(new Form_StaticText(
 	<span class="pull-right"><small>Based upon pfBlocker by Marcello Coutinho and Tom Schaefer.</small></span>
 </div>
 
-<div class="col-sm-3">
+<div class="col-sm-3" style="color-scheme: only light; text-align: center">
 	<a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
 
 <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
-	 viewBox="128 172 384 384" style="width:100%;height:auto;max-width:180pt;" xml:space="preserve">
+	 viewBox="128 172 384 384" style="display:block;margin-left:auto;margin-right:auto;width:100%;height:auto;max-width:140pt;" xml:space="preserve">
 <style type="text/css">
 	.st0{fill:#8B181B;}
 	.st1{fill:#660818;}
@@ -666,6 +670,7 @@ events.push(function() {
 	pfb_sync_quiet_hours();
 
 <?=$pfb_general_editor['lists']?>
+<?=pfb_autogrow_textarea_js('pfb_feed_internal_allowlist', 5)?>
 
 });
 //]]>

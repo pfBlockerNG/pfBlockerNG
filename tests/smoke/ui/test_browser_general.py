@@ -188,7 +188,7 @@ def test_log_settings_grouped_layout(
     When the DOM is inspected for the grouped-column structure,
 
     Then the two column-header texts are visible on the page ("Max lines", "Max days") --
-      emitted by the per-category header ``Form_StaticText`` children;
+      emitted once by the ``.pfb-logcolhdr`` row, not once per category;
     And the ``log_max_log`` control is present and its enclosing ``.form-group`` left label
       (``col-sm-2.control-label``) shows the log name "pfBlockerNG" -- proving per-log rows
       carry the individual log name as the left label;
@@ -208,18 +208,15 @@ def test_log_settings_grouped_layout(
     _open(page, webui, GENERAL_PAGE)
     _shot(page, screenshot_dir, "log_settings_grouped_layout")
 
-    # Column headers must come from the shaded category header rows (.pfb-loghdr), NOT the intro
-    # bullets: the intro also wraps "Max lines"/"Max days" in <strong> (exact text nodes) and is
-    # emitted before the header rows, so an unscoped exact match resolves to the intro via .first
-    # and would pass even if a header StaticText child were missing or renamed. Scope the lookup
-    # into the header rows, and assert one header cell PER category (all three, matching the three
-    # .pfb-loghdr rows), so a column header dropped from any single category fails -- not just the
-    # first row.
-    loghdr = page.locator(".pfb-loghdr")
+    # Column headers live on the single .pfb-logcolhdr row, NOT the intro bullets (which also
+    # wrap "Max lines"/"Max days" in <strong>) and NOT the category dividers. One cell each.
+    colhdr = page.locator(".pfb-logcolhdr")
+    expect(colhdr).to_have_count(1, timeout=JS_TIMEOUT_MS)
     for col_header in ("Max lines", "Max days"):
-        cells = loghdr.get_by_text(col_header, exact=True)
-        expect(cells).to_have_count(3, timeout=JS_TIMEOUT_MS)
+        cells = colhdr.get_by_text(col_header, exact=True)
+        expect(cells).to_have_count(1, timeout=JS_TIMEOUT_MS)
         expect(cells.first).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(page.locator(".pfb-loghdr").get_by_text("Max lines", exact=True)).to_have_count(0)
 
     # The log_max_log control's enclosing form-group carries the per-log label "pfBlockerNG".
     log_max_log = page.locator('select[name="log_max_log"]')
@@ -250,6 +247,7 @@ def test_log_settings_grouped_layout(
     assert n_rows >= 1, f"expected at least one Log Settings row (select[name^=log_max_]), found {n_rows}"
     expect(max_days).to_have_count(n_rows, timeout=JS_TIMEOUT_MS)
     expect(page.locator("label.form-label")).to_have_count(n_rows * 2, timeout=JS_TIMEOUT_MS)
+    expect(page.locator(".form-group.pfb-logrow")).to_have_count(n_rows, timeout=JS_TIMEOUT_MS)
 
 
 def test_quarter_hour_scheduling_controls_and_apply_window(

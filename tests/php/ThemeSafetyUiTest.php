@@ -47,17 +47,12 @@ final class ThemeSafetyUiTest extends TestCase
 		'src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc' => [
 			'background-color: #d6d6d6',
 		],
-		// Pre-existing Log Settings header band. Same defect class; kept
-		// out of this change so the readability failures stay scoped.
-		'src/usr/local/www/pfblockerng/pfblockerng_general.php' => [
-			'background-color: #f0f0f0',
-		],
 	];
 
 	public function testOpaqueSnippetWithoutForegroundIsAViolation(): void
 	{
 		$bad = [
-			'.example-band { background-color: #f0f0f0; border-top: 1px solid #ddd; }',
+			'.pfb-subhdr { background-color: #f0f0f0; border-top: 1px solid #ddd; }',
 			"->setAttribute('style', 'background:#fafafa; width: 100%')",
 			'EditorView.theme({ "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" } })',
 			'$tr_style = \'background-color: #F5FBF6;\';',
@@ -72,7 +67,7 @@ final class ThemeSafetyUiTest extends TestCase
 	public function testTranslucentOrPairedForegroundIsNotAViolation(): void
 	{
 		$good = [
-			'.example-band { background-color: rgba(127, 127, 127, .38); border-top: 1px solid rgba(127, 127, 127, .58); }',
+			'.pfb-subhdr { background-color: rgba(127, 127, 127, .38); border-top: 1px solid rgba(127, 127, 127, .58); }',
 			'<span style="color: black; background-color: #FFFF00; border-style: groove;">Failed</span>',
 			'EditorView.theme({ "&": { backgroundColor: "#fff", color: "#212121" } })',
 			'td style=\'font-size:10px; color: red; background-color: rgba(128, 128, 128, 0.2);\'',
