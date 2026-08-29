@@ -504,3 +504,26 @@ downgrade is unsupported; no inverse ledger conversion or downgrade-only test is
 The `pfb_tick_interval` wording in §7 step 3 is historical. "Within one tick interval" now means
 within one fixed 15-minute tick; there is no registered `pfb_tick_interval` config/CLI knob. A stale
 raw value may remain in `config.xml`, but scheduling ignores it.
+
+## Amendment — 2026-08-29: five-stage ownership (issue #2102)
+
+The live, source-backed stage vocabulary now has five members:
+
+- `download` is alias-pass-managed. `pfb_ip_download_ledger_update()` and
+  `pfb_dnsbl_download_ledger_update()` write its per-alias keys; the pass closes
+  a key only when no feed row for that alias failed.
+- `script` is alias-pass-managed. `pfb_list_script_failure_record()` opens it, and
+  `pfb_list_script_failure_close()` performs the paired alias-pass close.
+- `parse` is Python-managed. `pfb_unbound.py` writes it through
+  `pfb_py_status_open()` and `pfb_py_status_close()`.
+- `apply` is tick-managed. `pfb_pfctl_table_op()` and
+  `pfb_dnsbl_apply_ledger_update()` write it, and `pfblockerng_tick()` reconciles
+  only this stage.
+- `dedup` is written by `pfb_sync_status_dedup_check()` under the global constant
+  key `ip` / `dedup` / `dedup`; it is never keyed by alias.
+
+Alias removal therefore closes `download` and `script`: both use the removed
+alias's key shape, and neither can receive its ordinary paired close after that
+alias loses its next pass. Removal never closes `parse` or `apply`, whose Python
+and tick owners reconcile without the alias, and it never closes `dedup`, whose
+constant key cannot be reached through an alias-removal path.
