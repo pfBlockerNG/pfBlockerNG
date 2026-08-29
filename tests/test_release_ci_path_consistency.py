@@ -223,9 +223,10 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
         "import json, sys\n"
         "if '--print-port-identity' in sys.argv:\n"
         " print(json.dumps({'port_origin':'textproc/py-charset-normalizer',"
-        "'portname':'charset-normalizer','port_version':'3.4.4',"
-        "'distfile':'charset_normalizer-3.4.4.tar.gz','distfile_sha256':'e'*64,"
-        "'distfile_size':129418}, separators=(',', ':')))\n"
+        "'portname':'charset-normalizer','port_version':'3.4.7',"
+        "'distfile':'charset_normalizer-3.4.7.tar.gz',"
+        "'distfile_sha256':'ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5',"
+        "'distfile_size':144271}, separators=(',', ':')))\n"
         "else:\n"
         " print(json.dumps({'python':'3.11.15','pip':'26.2.1','setuptools':'75.6.0',"
         "'wheel':'0.45.1','zstandard':'0.25.0','uv':'0.12.6',"
@@ -278,15 +279,15 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
             suffix = f"-CE-{version}.pkg"
             identity = {
                 "abi": f"FreeBSD:{major}:*",
-                "distfile": "charset_normalizer-3.4.4.tar.gz",
-                "distfile_sha256": "e" * 64,
-                "distfile_size": 129_418,
-                "filename": f"py311-charset-normalizer-3.4.4{suffix}",
+                "distfile": "charset_normalizer-3.4.7.tar.gz",
+                "distfile_sha256": "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5",
+                "distfile_size": 144_271,
+                "filename": f"py311-charset-normalizer-3.4.7{suffix}",
                 "freebsd_major": major,
                 "freebsd_ports_sha": ports_sha,
                 "package_name": "py311-charset-normalizer",
-                "package_version": "3.4.4",
-                "port_version": "3.4.4",
+                "package_version": "3.4.7",
+                "port_version": "3.4.7",
                 "portname": "charset-normalizer",
                 "py_flavor": "py311",
                 "source_date_epoch": source_epoch,
