@@ -55,13 +55,21 @@ JS_TIMEOUT_MS = 10_000
 
 
 def _expand_section(page: Page, section_id: str) -> None:
-    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section body so fields inside are visible."""
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section body so fields inside are visible.
+
+    Form_Section body id is ``{id}_panel-body`` (Section.class.php:107-113) --
+    underscore, and ``_panel-body`` rather than ``-panel``. A locator of
+    ``#{id}-panel`` matches NOTHING, and the old ``body.count() == 0`` guard
+    turned that into a silent early return: the helper reported success, the
+    section stayed closed, and the caller failed later on a hidden control.
+    Assert the body is attached instead, so a wrong selector fails loudly here.
+    """
     panel = page.locator(f"#{section_id}")
     expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
-    body = page.locator(f"#{section_id}-panel")
-    if body.count() == 0 or body.is_visible():
-        return
-    panel.locator("a[data-toggle='collapse']").first.click()
+    body = page.locator(f"#{section_id}_panel-body")
+    expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
+    if "in" not in (body.get_attribute("class") or ""):
+        page.locator(f'a[data-toggle="collapse"][href="#{section_id}_panel-body"]').click()
     expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
 
 
