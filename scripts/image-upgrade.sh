@@ -93,17 +93,23 @@
 # equal those secrets — a wrong NDI can burn the license. CE uses public defaults.
 #   --compression T  qcow2 compression for the published image: zstd|zlib|off (default: zstd)
 #   --upgrade-timeout S  MAX seconds to wait for the pfSense-upgrade+reboot
-#                    (default: 1200). The poll exits the instant /etc/version
-#                    changes, so this only bounds how long a STUCK upgrade waits
-#                    before the run fails — it is not added to a successful run.
+#                    (default: 1200; accepted range: 0..86400). Invalid values
+#                    are rejected before the upgrade starts. The poll exits the
+#                    instant /etc/version changes, so this only bounds how long
+#                    a STUCK upgrade waits before the run fails — it is not
+#                    added to a successful run.
 #   Env knobs (mainly for the spec): VERIFY_BOOT_TIMEOUT — seconds to wait for
 #   the artifact-verification boot's SSH (default: 600); PROMOTE_TIMEOUT /
 #   PROMOTE_INTERVAL — seconds to wait / poll step for pfSense's own boot
 #   verification to promote the new BE (defaults: 300 / 10); METADATA_TIMEOUT /
 #   METADATA_INTERVAL — seconds to wait / poll step for pfSense's post-boot
-#   package metadata refresh to settle (defaults: 600 / 5). VERIFY_BOOT_TIMEOUT
-#   and METADATA_TIMEOUT accept 0..86400; METADATA_INTERVAL accepts canonical
-#   decimal 1..3600 with no leading zeros; invalid values use their defaults.
+#   package metadata refresh to settle (defaults: 600 / 5); LOCK_RETRIES /
+#   LOCK_INTERVAL — attempts / delay for a held pfSense-upgrade lock (defaults:
+#   20 / 15). VERIFY_BOOT_TIMEOUT, PROMOTE_TIMEOUT and METADATA_TIMEOUT accept
+#   0..86400; PROMOTE_INTERVAL and METADATA_INTERVAL accept canonical decimal
+#   1..3600 with no leading zeros; LOCK_RETRIES and LOCK_INTERVAL accept
+#   canonical decimal 1..20 and 0..15, respectively. Invalid env values use
+#   their defaults.
 #   Boot waits add the metadata budget to their own configured budget. Wall-clock
 #   time also includes connection/probe latency, fixed initial sleeps and up to
 #   one final poll interval; these knobs are elapsed-counter caps, not kill timers.
@@ -233,7 +239,14 @@ while [ $# -gt 0 ]; do
         --mac)             MAC="$2"; shift 2 ;;
         --smbios-uuid)     SMBIOS_UUID="$2"; shift 2 ;;
         --compression)     COMPRESSION="$2"; shift 2 ;;
-        --upgrade-timeout) UPGRADE_TIMEOUT="$2"; shift 2 ;;
+        --upgrade-timeout)
+            UPGRADE_TIMEOUT="$2"
+            case "$UPGRADE_TIMEOUT" in
+                '' | *[!0-9]*) die "--upgrade-timeout must be a decimal integer from 0 to 86400" ;;
+            esac
+            [ "$UPGRADE_TIMEOUT" -le 86400 ] 2>/dev/null \
+                || die "--upgrade-timeout must be a decimal integer from 0 to 86400"
+            shift 2 ;;
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
         --branch)          BRANCH="$2"; shift 2 ;;
         --facts-out)       FACTS_OUT="$2"; shift 2 ;;
@@ -412,11 +425,22 @@ pfb_switch_branch() {
 # refused upgrade look like a started one and turned a short lock into the
 # version-poll timeout (issue #1844). An unclearable lock dies loudly here,
 # before any downstream step can misread it. Echoes the successful output.
-# LOCK_RETRIES / LOCK_INTERVAL are overridable for the spec.
+# LOCK_RETRIES / LOCK_INTERVAL are overridable for the spec; invalid or
+# out-of-range values use the documented 20 / 15 defaults.
 pfb_upgrade_run() {
     _pur_cmd="$1"; _pur_label="$2"; _pur_log="${3:-}"
+    _pur_retries="${LOCK_RETRIES:-20}"
+    _pur_interval="${LOCK_INTERVAL:-15}"
+    case "$_pur_retries" in '' | *[!0-9]* | 0 | 0[0-9]*) _pur_retries=20 ;; esac
+    if ! [ "$_pur_retries" -ge 1 ] 2>/dev/null || ! [ "$_pur_retries" -le 20 ] 2>/dev/null; then
+        _pur_retries=20
+    fi
+    case "$_pur_interval" in '' | *[!0-9]* | 0[0-9]*) _pur_interval=15 ;; esac
+    if ! [ "$_pur_interval" -ge 0 ] 2>/dev/null || ! [ "$_pur_interval" -le 15 ] 2>/dev/null; then
+        _pur_interval=15
+    fi
     _pur_i=0
-    while [ "$_pur_i" -lt "${LOCK_RETRIES:-20}" ]; do
+    while [ "$_pur_i" -lt "$_pur_retries" ]; do
         _pur_out=$(ssh_guest "$_pur_cmd" 2>&1 || true)
         # Persist EVERY attempt (append) so an unclearable lock still leaves the
         # refusal text in the log — the old `| tee` path recorded it, and the
@@ -425,8 +449,8 @@ pfb_upgrade_run() {
         case "$_pur_out" in
             *"Another instance is already running"*)
                 _pur_i=$((_pur_i + 1))
-                warn "${_pur_label}: pfSense-upgrade lock held (attempt ${_pur_i}/${LOCK_RETRIES:-20}); retrying"
-                sleep "${LOCK_INTERVAL:-15}"
+                warn "${_pur_label}: pfSense-upgrade lock held (attempt ${_pur_i}/${_pur_retries}); retrying"
+                sleep "$_pur_interval"
                 ;;
             *)
                 printf '%s\n' "$_pur_out"
@@ -434,7 +458,7 @@ pfb_upgrade_run() {
                 ;;
         esac
     done
-    die "${_pur_label}: pfSense-upgrade lock never cleared after ${LOCK_RETRIES:-20} attempts — refusing to continue"
+    die "${_pur_label}: pfSense-upgrade lock never cleared after ${_pur_retries} attempts — refusing to continue"
 }
 # pfb_upgrade_run END
 
@@ -779,8 +803,19 @@ pfb_boot_artifact_version() {
 # booted the archived pre-upgrade BE (issue #1858: :26.07 shipped a 26.03.1
 # disk). Wait for that promotion, fall back to doing it ourselves if the box
 # never gets there, and fail closed if the disk would still boot the old system.
-# PROMOTE_TIMEOUT / PROMOTE_INTERVAL are overridable for the spec.
+# PROMOTE_TIMEOUT / PROMOTE_INTERVAL are overridable for the spec; invalid or
+# out-of-range values use the documented 300 / 10 defaults.
 pfb_promote_be() {
+    _pbe_timeout="${PROMOTE_TIMEOUT:-300}"
+    _pbe_interval="${PROMOTE_INTERVAL:-10}"
+    case "$_pbe_interval" in '' | *[!0-9]* | 0 | 0[0-9]*) _pbe_interval=10 ;; esac
+    if ! [ "$_pbe_interval" -ge 1 ] 2>/dev/null || ! [ "$_pbe_interval" -le 3600 ] 2>/dev/null; then
+        _pbe_interval=10
+    fi
+    case "$_pbe_timeout" in '' | *[!0-9]*) _pbe_timeout=300 ;; esac
+    if ! [ "$_pbe_timeout" -le 86400 ] 2>/dev/null; then
+        _pbe_timeout=300
+    fi
     # Parse locally (-H: headerless, script-stable fields), so this works the
     # same on any pfSense and is drivable in the spec.
     _pbe_running=$(ssh_guest 'bectl list -H' 2>/dev/null | tr -d '\r' \
@@ -789,17 +824,17 @@ pfb_promote_be() {
         || die "could not identify the running boot environment from 'bectl list' — refusing to promote a guess"
     log "waiting for pfSense to make boot environment '${_pbe_running}' permanent"
     _pbe_elapsed=0
-    while [ "$_pbe_elapsed" -lt "${PROMOTE_TIMEOUT:-300}" ]; do
+    while [ "$_pbe_elapsed" -lt "$_pbe_timeout" ]; do
         pfb_be_is_permanent "$_pbe_running" && {
             log "boot environment '${_pbe_running}' is active on reboot"
             return 0
         }
-        sleep "${PROMOTE_INTERVAL:-10}"
-        _pbe_elapsed=$((_pbe_elapsed + ${PROMOTE_INTERVAL:-10}))
+        sleep "$_pbe_interval"
+        _pbe_elapsed=$((_pbe_elapsed + _pbe_interval))
     done
     # No automatic promotion (manual verification configured, or a boot that
     # never finished): do what pfSense-rc would have done, then re-check.
-    warn "no automatic boot verification after ${PROMOTE_TIMEOUT:-300}s — activating '${_pbe_running}' explicitly"
+    warn "no automatic boot verification after ${_pbe_timeout}s — activating '${_pbe_running}' explicitly"
     ssh_guest "bectl activate '${_pbe_running}'" >/dev/null 2>&1 || true
     pfb_be_is_permanent "$_pbe_running" \
         || die "boot environment '${_pbe_running}' is not active on reboot — refusing to publish a disk that boots the pre-upgrade system"
