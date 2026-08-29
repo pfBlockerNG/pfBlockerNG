@@ -118,9 +118,12 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
 def _expand_section(page: Page, section_id: str) -> None:
     """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so rows inside are observable.
 
-    Form_Section body id is ``{id}_panel-body``. The outer panel stays in the
-    tree when collapsed; the body does not display. A locator of ``#{id}-panel``
-    matches nothing, so this must use the ``_panel-body`` suffix.
+    The body id is ``{id}_panel-body`` (pfSense Section.class.php), not ``#{id}-panel``:
+    that selector matches nothing, and a ``count() == 0`` guard turns it into a silent
+    success. Assert the body is attached so a wrong selector fails here, loudly.
+
+    Keep this byte-identical to the copy in test_browser_ip.py -- the two drifting apart
+    is what left the IP page with the broken selector after the DNSBL page was fixed.
     """
     panel = page.locator(f"#{section_id}")
     expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
@@ -405,8 +408,6 @@ def test_action_select_toggles_advanced_firewall_sections(
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
-    # The controls below moved into the collapsed "dnsbl_ips" section in the DNSBL
-    # tab reorganisation; a closed panel is attached but not interactable.
     _expand_section(page, "dnsbl_ips")
 
     action = page.locator("#action")
@@ -942,8 +943,6 @@ def test_fill_buttons_populate_interface_selects(
         )
 
         _open(page, webui, DNSBL_PAGE)
-        # The controls below moved into the collapsed "dnsbl_bypass" section in the DNSBL
-        # tab reorganisation; a closed panel is attached but not interactable.
         _expand_section(page, "dnsbl_bypass")
 
         # DNS Redirect fill.
@@ -1008,8 +1007,6 @@ def test_exception_fields_have_alias_autocomplete(
         )
 
         _open(page, webui, DNSBL_PAGE)
-        # The controls below moved into the collapsed "dnsbl_bypass" section in the DNSBL
-        # tab reorganisation; a closed panel is attached but not interactable.
         _expand_section(page, "dnsbl_bypass")
 
         # The alias name must have reached the page's JS source array.
