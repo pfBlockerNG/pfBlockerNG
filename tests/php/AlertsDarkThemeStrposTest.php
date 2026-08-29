@@ -24,7 +24,7 @@ final class AlertsDarkThemeStrposTest extends TestCase
 			$source,
 			'palette must not bind the system theme key alone; a user with customsettings can differ'
 		);
-		$this->assertStringContainsString('pfb_effective_webguicss($user_settings ?? null, config_get_path(\'system/webgui/webguicss\'))', $source);
+		$this->assertStringContainsString('pfb_effective_webguicss($user_settings ?? null)', $source);
 		$this->assertStringContainsString("strpos(\$pfb_webgui_css, 'dark') !== FALSE", $source);
 		$this->assertSame(1, substr_count($source, "strpos(\$pfb_webgui_css, 'dark')"));
 	}

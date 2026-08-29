@@ -404,7 +404,7 @@ function pfb_editor_mount_lists_for_sort(array $fields, string $sort, bool $enab
  *
  * $exists is injectable so tests can simulate a missing theme file.
  */
-function pfb_effective_webguicss($user_settings, $system_css, ?callable $exists = null): string
+function pfb_effective_webguicss($user_settings, ?callable $exists = null): string
 {
 	$exists = $exists ?? 'file_exists';
 	$dir = '/usr/local/www/css/';
@@ -412,7 +412,7 @@ function pfb_effective_webguicss($user_settings, $system_css, ?callable $exists 
 	if (is_array($user_settings)) {
 		$user = (string) ($user_settings['webgui']['webguicss'] ?? '');
 	}
-	foreach ([$user, (string) $system_css, 'pfSense.css'] as $name) {
+	foreach ([$user, 'pfSense.css'] as $name) {
 		$base = basename($name);
 		if ($base === '' || $base === '.' || $base === '..') {
 			continue;

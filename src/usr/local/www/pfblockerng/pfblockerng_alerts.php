@@ -76,7 +76,7 @@ foreach ($uni_defaults as $u_type => $u_cfg) {
 
 // Same source and missing-file fallback as head.inc. strpos(..., 'dark') === 0
 // is falsy, so !== FALSE is required.
-$pfb_webgui_css = pfb_effective_webguicss($user_settings ?? null, config_get_path('system/webgui/webguicss'));
+$pfb_webgui_css = pfb_effective_webguicss($user_settings ?? null);
 $pfb_webgui_dark = strpos($pfb_webgui_css, 'dark') !== FALSE;
 
 $pfbchartcnt	= $pfb['aglobal']['pfbchartcnt']		?: '24';
