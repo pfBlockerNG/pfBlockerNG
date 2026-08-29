@@ -5,8 +5,9 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * DNSBL tab phase 8: Webserver second, Matching refinements dissolved into §1,
- * Caches renamed, Exception Alias qualified, Bypass Prevention and DNSBL IPs collapsed.
+ * DNSBL tab: Webserver is the second section, Matching refinements live in
+ * the DNSBL section, Caches renamed, Exception Alias qualified, Bypass
+ * Prevention and DNSBL IPs collapsed.
  */
 final class DnsblTabLayoutUiTest extends TestCase
 {
@@ -80,7 +81,7 @@ final class DnsblTabLayoutUiTest extends TestCase
 		foreach ($names as $needle) {
 			$pos = strpos($source, $needle);
 			$this->assertNotFalse($pos, "missing {$needle}");
-			$this->assertGreaterThan($last, $pos, "{$needle} is out of the owner-specified §1 order");
+			$this->assertGreaterThan($last, $pos, "{$needle} is out of DNSBL-section field order");
 			$last = $pos;
 		}
 		$this->assertStringContainsString("gettext('Download Schemes')", $source);

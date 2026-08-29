@@ -5,8 +5,9 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * DNSBL §1 help: five fields get one infoblock each; Wildcard drops the v2 warning
- * and the Advanced-process framing; $dnsbl_text is only Enable DNSBL's help.
+ * DNSBL-section help: five fields get one infoblock each; Wildcard drops the
+ * v2 warning and the Advanced-process framing; $dnsbl_text is only Enable
+ * DNSBL's help.
  */
 final class DnsblBlock1HelpUiTest extends TestCase
 {

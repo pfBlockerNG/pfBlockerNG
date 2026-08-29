@@ -5,7 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * DNSBL tab phase 3: AdBlock suffix handling + TLD Allow list rewrite.
+ * DNSBL tab: AdBlock suffix handling and TLD Allow list rewrite.
  *
  * Pins the section split, the tld_allow gating rewrite (hideMultiClass ->
  * section show/hide), the extracted picker help, and the issue #2371 rule that
