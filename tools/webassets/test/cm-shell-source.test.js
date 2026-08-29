@@ -114,4 +114,25 @@ test("a non-editable editor is greyed like a disabled pfSense input", () => {
     src.includes('".cm-content[contenteditable=false]"'),
     "expected a theme rule greying the content pane when the editable facet turns it off",
   );
+  assert.match(
+    src,
+    /\.cm-content\[contenteditable=false\]": \{ backgroundColor: "#eee", color: "#555" \}/,
+    "disabled pane must pin foreground so it cannot inherit body color",
+  );
+});
+
+test("the light editor pane pins foreground wherever it pins a background", () => {
+  assert.match(
+    src,
+    /"&": \{ border: "1px solid #b7b7b7", backgroundColor: "#fff", color: "#212121" \}/,
+  );
+  assert.match(src, /\.cm-cursor, \.cm-dropCursor": \{ borderLeftColor: "#212121" \}/);
+  assert.match(
+    src,
+    /\.cm-gutters": \{ backgroundColor: "#f5f5f5", color: "#6c6c6c", borderRight: "1px solid #ddd" \}/,
+  );
+  assert.match(
+    src,
+    /&\.cm-focused \.cm-selectionBackground, \.cm-selectionBackground": \{ backgroundColor: "#d7d7d7" \}/,
+  );
 });

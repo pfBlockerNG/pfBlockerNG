@@ -49,11 +49,17 @@ export function mountTextarea(textarea, language, extraExtensions = []) {
     editable.of(EditorView.editable.of(!textarea.disabled)),
     EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
     EditorView.theme({
-      "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff" },
+      // Light pane on every theme; color must travel with backgroundColor.
+      "&": { border: "1px solid #b7b7b7", backgroundColor: "#fff", color: "#212121" },
       ".cm-scroller": { fontFamily: "monospace", overflow: "auto" },
       ".cm-content": { whiteSpace: "pre" },
       // Non-editable (disabled-field) parity: grey like a disabled pfSense input.
-      ".cm-content[contenteditable=false]": { backgroundColor: "#eee" },
+      ".cm-content[contenteditable=false]": { backgroundColor: "#eee", color: "#555" },
+      ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#212121" },
+      ".cm-gutters": { backgroundColor: "#f5f5f5", color: "#6c6c6c", borderRight: "1px solid #ddd" },
+      ".cm-activeLine": { backgroundColor: "#f5f5f5" },
+      ".cm-activeLineGutter": { backgroundColor: "#e8e8e8" },
+      "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": { backgroundColor: "#d7d7d7" },
     }),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
