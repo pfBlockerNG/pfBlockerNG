@@ -78,6 +78,16 @@ final class BootstrapSandboxTest extends TestCase
 			'shutdown cleanup must remove the sandbox without replacing the child status');
 	}
 
+	public function testForkedChildCannotRemoveParentSandbox(): void
+	{
+		$result = $this->runBootstrap($this->tmp, FALSE, 0, TRUE);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$record = json_decode($result['stdout'], TRUE, flags: JSON_THROW_ON_ERROR);
+		$this->assertIsArray($record);
+		$this->assertDirectoryDoesNotExist($record['root'],
+			'the owner process must remove its sandbox only when the owner exits');
+	}
+
 	/** @param array{root:string,db:string,log:string,tmp:string} $record */
 	private function assertSandboxPaths(array $record): void
 	{
@@ -90,12 +100,32 @@ final class BootstrapSandboxTest extends TestCase
 	/**
 	 * @return array{status:int,stdout:string,stderr:string,pid:int,legacy_root:string}
 	 */
-	private function runBootstrap(string $tmpdir, bool $plantLegacy = FALSE, int $exitCode = 0): array
-	{
+	private function runBootstrap(
+	    string $tmpdir, bool $plantLegacy = FALSE, int $exitCode = 0, bool $forkChild = FALSE
+	): array {
 		$bootstrap = var_export(self::ROOT . '/tests/php/bootstrap.php', TRUE);
+		$forkScript = '';
+		if ($forkChild) {
+			$forkScript = <<<'PHP'
+$forkPid = pcntl_fork();
+if ($forkPid === -1) {
+	fwrite(STDERR, "pcntl_fork failed\n");
+	exit(91);
+}
+if ($forkPid === 0) {
+	exit(0);
+}
+pcntl_waitpid($forkPid, $forkStatus);
+if (!is_dir($pfb_test_tmp)) {
+	fwrite(STDERR, "forked child removed owner sandbox\n");
+	exit(92);
+}
+PHP;
+		}
 		$script = <<<PHP
 stream_get_contents(STDIN);
 require {$bootstrap};
+{$forkScript}
 echo json_encode([
 	'root' => \$pfb_test_tmp,
 	'db' => \$GLOBALS['g']['vardb_path'],

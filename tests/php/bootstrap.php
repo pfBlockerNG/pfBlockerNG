@@ -27,13 +27,18 @@ require_once __DIR__ . '/pfsense_doubles.php';
 set_include_path(__DIR__ . '/shims' . PATH_SEPARATOR . get_include_path());
 
 // 3. Writable per-invocation sandbox for any load-time/log file writes.
-$pfb_test_tmp = sys_get_temp_dir() . '/pfb_php_unit_' . getmypid() . '_' . bin2hex(random_bytes(8));
+$pfb_test_owner_pid = getmypid();
+$pfb_test_tmp = sys_get_temp_dir() . '/pfb_php_unit_' . $pfb_test_owner_pid . '_' . bin2hex(random_bytes(8));
 if (!mkdir($pfb_test_tmp, 0777, TRUE)) {
 	throw new RuntimeException("PHPUnit sandbox creation failed: {$pfb_test_tmp}");
 }
-register_shutdown_function(static function () use ($pfb_test_tmp): void {
-	rmdir_recursive($pfb_test_tmp);
+register_shutdown_function(static function () use ($pfb_test_tmp, $pfb_test_owner_pid): void {
+	// pcntl_fork() inherits shutdown callbacks; only the process that created this tree owns it.
+	if (getmypid() === $pfb_test_owner_pid) {
+		rmdir_recursive($pfb_test_tmp);
+	}
 });
+unset($pfb_test_owner_pid);
 foreach (['db', 'log', 'tmp'] as $pfb_test_subdir) {
 	$pfb_test_path = "{$pfb_test_tmp}/{$pfb_test_subdir}";
 	if (!mkdir($pfb_test_path, 0777, TRUE)) {

@@ -889,15 +889,15 @@ final class IpPrefetchTest extends TestCase
 		$this->assertNotFalse($probe, 'precondition: failed to create the sandbox probe script');
 
 		try {
-			$code = "<?php\nrequire " . var_export("{$repo}/tests/php/bootstrap.php", true) . ";\n" . $phpBody;
+			$code = "<?php\nrequire " . var_export("{$repo}/tests/php/bootstrap.php", TRUE) . ";\n"
+				. 'ini_set(\'open_basedir\', ' . var_export($repo, TRUE) . ' . PATH_SEPARATOR . $pfb_test_tmp);' . "\n"
+				. $phpBody;
 			file_put_contents($probe, $code);
 
-			// issue #896: route PHP engine diagnostics to stderr (dropped by the 2>/dev/null
-			// below) so the child's stdout stays pure JSON. Under open_basedir the child's
-			// tempnam() emits a Warning; on PHP 8.5 it lands on STDOUT (not stderr), prepending
-			// non-JSON text that breaks json_decode() — green on 8.3, red on 8.5 without this.
-			$cmd = 'php -d open_basedir=' . escapeshellarg($repo)
-				. ' -d display_errors=stderr ' . escapeshellarg($probe) . ' 2>/dev/null';
+			// Apply the restriction after bootstrap creates its own sandbox. Keep that exact
+			// tree allowed so its shutdown cleanup works, while sys_get_temp_dir() itself
+			// remains outside open_basedir and the body still exercises tempnam() failure.
+			$cmd = 'php -d display_errors=stderr ' . escapeshellarg($probe) . ' 2>/dev/null';
 			$output = shell_exec($cmd);
 		} finally {
 			@unlink($probe);
