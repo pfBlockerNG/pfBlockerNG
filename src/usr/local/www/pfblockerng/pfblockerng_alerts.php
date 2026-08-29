@@ -3307,6 +3307,7 @@ $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Alerts'))
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
+$pfb_unified_tint = $pfb_webgui_dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05)';
 ?>
 
 <style>
@@ -3337,6 +3338,9 @@ include_once('head.inc');
 	}
 	.panel-body { overflow: visible !important; }
 	* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+.pfb-unified tbody tr:nth-of-type(odd) {
+	background-image: linear-gradient(<?=$pfb_unified_tint?>, <?=$pfb_unified_tint?>);
 }
 </style>
 
@@ -4207,7 +4211,7 @@ if (!$alert_summary):
 	</div>
 	<div class="panel-body">
 		<div class="table-responsive">
-		<table style="width: 100%;" class="table table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>
+		<table style="width: 100%;" class="table table-striped table-hover table-compact sortable-theme-bootstrap<?= $logtype == 'Unified' ? ' pfb-unified' : '' ?>" data-sortable>
 
 	<?php
 		// Create Unified Report
