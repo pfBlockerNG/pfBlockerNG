@@ -127,9 +127,11 @@ def test_category_edit_add_dnsbl_stale_atype_renders_clean(smoke_vm: SmokeVM, we
     guard.snapshot()
 
     resp = webui.get(CATEGORY_EDIT_ADD_DNSBL_STALE_PAGE)
-    # "Advanced Tuneables" is the same generic page-wide marker the sibling
-    # category_edit_fresh_addgroup_whitelist PAGE_TABLE entry uses.
-    result = evaluate_render(CATEGORY_EDIT_ADD_DNSBL_STALE_PAGE, resp.status_code, resp.text, ("Advanced Tuneables",))
+    # "Override Default Schedule" is unique to category_edit now that the IP tab
+    # also has an Advanced Settings section.
+    result = evaluate_render(
+        CATEGORY_EDIT_ADD_DNSBL_STALE_PAGE, resp.status_code, resp.text, ("Override Default Schedule",)
+    )
     assert result.ok, f"Tier-A render oracle failed for the stale-atype add path: {result.detail}"
 
     guard.assert_no_growth()
