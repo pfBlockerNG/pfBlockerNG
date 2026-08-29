@@ -399,8 +399,8 @@ function pfb_editor_mount_lists_for_sort(array $fields, string $sort, bool $enab
 
 /**
  * Theme file head.inc will actually load. User value first (customsettings),
- * then the system key, then pfSense.css. Missing files do not count: head.inc
- * falls back to the light default, and the Alerts palette must follow.
+ * then pfSense.css. Missing files do not count: head.inc falls back to the
+ * light default, and the Alerts palette must follow.
  *
  * $exists is injectable so tests can simulate a missing theme file.
  */
