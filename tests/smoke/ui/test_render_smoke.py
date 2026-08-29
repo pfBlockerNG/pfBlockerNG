@@ -1558,34 +1558,34 @@ def test_dnsbl_doh_list_select_is_bounded_scrollable(webui: WebUI, php_error_log
 
 
 def test_dnsbl_encrypted_dns_sections_order(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """The DNS Redirect and DoT/DoQ Block sections render ABOVE the DoH/DoT/DoQ Blocking
-    (DNS over HTTPS/TLS/QUIC Blocking) section on the DNSBL page.
+    """The DNS Redirect and DoT/DoQ Block sections render ABOVE the
+    ``DNS over HTTPS/TLS/QUIC`` sub-heading on the DNSBL page.
 
     The encrypted-DNS controls were reordered so the active interception controls (redirect
-    plain DNS, block DoT/DoQ) come first and the provider-name blocklist (DoH/DoT/DoQ
-    Blocking) sits last. This is a structural/positional change, so the order of the section
-    headings in the rendered HTML is the oracle.
+    plain DNS, block DoT/DoQ) come first and the provider-name blocklist sits last. This is
+    a structural/positional change, so the order of the headings in the rendered HTML is
+    the oracle.
 
-    Pins the change: pre-change the DoH section heading appeared FIRST (so it preceded the
-    other two and these assertions fail); post-change it appears last and both ``DNS
-    Redirect`` and ``DoT/DoQ Block`` precede it.
+    The DoH marker is the subhdr markup (``>DNS over HTTPS/TLS/QUIC<``), not the help
+    sentence that also contains that phrase, and not the old Form_Section title that
+    ended in ``Blocking``.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
     result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"DNSBL render oracle failed: {result.detail}"
     body = resp.text
-    doh_pos = body.find("DNS over HTTPS/TLS/QUIC Blocking")
+    doh_pos = body.find(">DNS over HTTPS/TLS/QUIC<")
     redir_pos = body.find("DNS Redirect")
     dot_pos = body.find("DoT/DoQ Block")
-    assert doh_pos != -1, "DNSBL page is missing the 'DNS over HTTPS/TLS/QUIC Blocking' section heading"
+    assert doh_pos != -1, "DNSBL page is missing the 'DNS over HTTPS/TLS/QUIC' sub-heading"
     assert redir_pos != -1, "DNSBL page is missing the 'DNS Redirect' section heading"
     assert dot_pos != -1, "DNSBL page is missing the 'DoT/DoQ Block' section heading"
     assert redir_pos < doh_pos, (
-        f"'DNS Redirect' (pos {redir_pos}) must render above 'DNS over HTTPS/TLS/QUIC Blocking' (pos {doh_pos})"
+        f"'DNS Redirect' (pos {redir_pos}) must render above 'DNS over HTTPS/TLS/QUIC' (pos {doh_pos})"
     )
     assert dot_pos < doh_pos, (
-        f"'DoT/DoQ Block' (pos {dot_pos}) must render above 'DNS over HTTPS/TLS/QUIC Blocking' (pos {doh_pos})"
+        f"'DoT/DoQ Block' (pos {dot_pos}) must render above 'DNS over HTTPS/TLS/QUIC' (pos {doh_pos})"
     )
 
 

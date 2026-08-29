@@ -138,8 +138,9 @@ final class DnsblEvalOrderHelpTest extends TestCase
 	{
 		$source = self::source();
 		$this->assertStringNotContainsString("A 10.10.10.1", $source);
-		$this->assertStringContainsString("A 10.10.0.53", $source);
-		$this->assertStringContainsString('10.10.x.53', $source);
+		$this->assertStringNotContainsString("A 10.10.0.53", $source);
+		$this->assertStringNotContainsString('10.10.x.53', $source);
 		$this->assertStringContainsString('DNSBL Webserver Configuration', $source);
+		$this->assertStringContainsString("A &lt;VIP&gt;", $source);
 	}
 }
