@@ -20,6 +20,7 @@ import json
 import subprocess
 import sys
 import tarfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +61,7 @@ def _write_pkg(
     abi: str = "FreeBSD:15:*",
     arch: str = "freebsd:15:*",
     deps: dict[str, dict[str, str]] | None = None,
-    scripts: dict[str, object] | None = None,
+    scripts: Mapping[str, object] | None = None,
     files: dict[str, bytes] | None = None,
     omit_compact: bool = False,
     omit_manifest: bool = False,
