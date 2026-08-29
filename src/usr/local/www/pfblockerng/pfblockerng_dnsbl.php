@@ -1102,8 +1102,8 @@ $dnsbl_text = '<div class="infoblock">'
 		. 'To debug issues with \'False Positives\', the following tools below can be used:<br />'
 		. '<ol>'
 		. '<li>Browser Developer tools, Console tab, for error messages.</li>'
-		. '<li>Execute the following from the pfSense Shell, substituting your LAN interface for \'re1\' and your own DNSBL Virtual IP for the address shown. Your VIP is listed under <strong>DNSBL Webserver Configuration</strong> above; pfBlockerNG auto-selects one in the <strong>10.10.x.53</strong> range:<br />'
-		. '&emsp;<strong>tcpdump -nnvli re1 port 53 | grep -B1 \'A 10.10.0.53\'</strong></li>'
+		. '<li>Execute the following from the pfSense Shell, substituting your LAN interface for \'re1\' and the DNSBL Virtual IP listed under <strong>DNSBL Webserver Configuration</strong> above:<br />'
+		. '&emsp;<strong>tcpdump -nnvli re1 port 53 | grep -B1 \'A &lt;VIP&gt;\'</strong></li>'
 		. '<li>Packet capture software such as Wireshark.</li>'
 		. '</ol>'
 		. '</div>';
@@ -1321,8 +1321,8 @@ $section->addInput(new Form_Checkbox(
 
 // [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
 // selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
-// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free 10.10.X.53 / fd00:X::53
-// candidate (null when every candidate conflicts). A v6 VIP is only relevant when the
+// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free candidate from
+// pfb_dnsbl_vip_candidates() (null when every candidate conflicts). A v6 VIP is only relevant when the
 // DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
 $pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
 $pfb_auto_v6_needed	= pfb_unbound_listens_v6();
@@ -1377,8 +1377,8 @@ $pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forw
 	. '<a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
 if ($pfb_auto_exhausted) {
 	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
-		. '<span class="text-warning">No free auto-create address is available — free one in the '
-		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
+		. '<span class="text-warning">No free auto-create address is available — free one of the '
+		. 'auto-create candidates, or select a VIP manually.</span>';
 }
 $group->setHelp($pfb_vip_help);
 $section->add($group);
@@ -1399,7 +1399,7 @@ $section->addInput(new Form_Input(
 	gettext('SSL Port'),
 	'number',
 	$pconfig['pfb_dnsport_ssl'],
-	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL VIP address' ]
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL SSL Listening Port' ]
 ))->setHelp('Example ( 8443 ) &mdash; a single PORT in the range 1 - 65535. '
 		. 'Applies when Web Server Interface is not Localhost.'
 		. '<div class="infoblock">This Port must not be in use by any other process.</div>'

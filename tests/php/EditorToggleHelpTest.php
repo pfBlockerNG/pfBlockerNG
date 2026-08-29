@@ -11,12 +11,13 @@ final class EditorToggleHelpTest extends TestCase
 	{
 		$help = pfb_editor_toggle_help();
 		foreach ([
-			'every list and script textarea',
+			'including:',
 			'DNSBL Whitelist',
 			'no-AAAA',
 			'Group Policy Bypass IPs',
 			'TLD Exclusion',
 			'TLD Blacklist',
+			'per-feed Custom List',
 			'Block Private-Address Exceptions',
 		] as $needle) {
 			$this->assertStringContainsString($needle, $help);
