@@ -2966,7 +2966,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
 		. 'Changes to this option will require a Force Update to take effect.');
 
@@ -3148,7 +3148,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($regex_text);
 
 $form->add($section);
@@ -3170,7 +3170,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($noaaaa_text);
 
 $form->add($section);
@@ -3391,7 +3391,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($whitelist_text);
 
 $form->add($section);
@@ -3497,7 +3497,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($tld_exclusion_text);
 
 $form->add($section);
@@ -3528,7 +3528,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($tld_blacklist_text);
 
 $form->add($section);

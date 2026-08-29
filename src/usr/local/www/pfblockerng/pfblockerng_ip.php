@@ -586,7 +586,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($suppression_text);
 
 $form->add($section);
@@ -617,7 +617,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('columns', '90')
   ->setAttribute('rows', '15')
   ->setAttribute('wrap', 'off')
-  ->setAttribute('style', 'background:#fafafa; width: 100%')
+  ->setAttribute('style', 'width: 100%')
   ->setHelp($suppression_text_v6);
 
 $form->add($section);
