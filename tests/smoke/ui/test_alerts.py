@@ -1229,7 +1229,47 @@ def test_ip_unlock_v4_carves_containing_range_relock_restores_and_spares_sibling
             f"expected {IP_UNLOCK_STORE} to record the exact host {target!r} -> {table!r}, got {unlocked!r}"
         )
 
-        # WHEN: re-lock the same host.
+        # WHEN: a scheduled feed pass owns the serialization lock, a re-lock POST
+        # must refuse the mutation and leave both live state and durable truth alone.
+        holder = "/tmp/pfb_alerts_relock_holder.php"
+        ready = "/tmp/pfb_alerts_relock_ready"
+        stop = "/tmp/pfb_alerts_relock_stop"
+        holder_php = f"""<?php
+require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
+pfb_global();
+if (!pfb_feed_pass_acquire()) {{
+    exit(2);
+}}
+touch('{ready}');
+for ($i = 0; $i < 1200 && !file_exists('{stop}'); $i++) {{
+    usleep(100000);
+}}
+@unlink('{ready}');
+"""
+        launch = vm.ssh(f"rm -f {ready} {stop}; cat > {holder} << 'PFBEOF'\n{holder_php}\nPFBEOF")
+        assert launch.returncode == 0, f"failed to write feed-pass holder: {launch.stderr!r}"
+        launch = vm.ssh(f"nohup /usr/local/bin/php {holder} >/dev/null 2>&1 &")
+        assert launch.returncode == 0, f"failed to launch feed-pass holder: {launch.stderr!r}"
+        assert helpers.wait_until(lambda: vm.ssh("test", "-f", ready).returncode == 0, timeout=30.0), (
+            "feed-pass holder never acquired the lock"
+        )
+        try:
+            resp = _post_action(webui, {"ip_remove": "lock", "ip": target, "table": table})
+            assert not looks_like_login_page(resp.text), "busy ip_remove=lock POST returned the login form"
+            assert "mid-update" in resp.text, f"busy re-lock feedback missing from Alerts response: {resp.text[:500]!r}"
+            matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+            assert not matched, f"{target} was re-locked while the feed-pass lock was busy; pfctl said: {raw!r}"
+            assert _ip_unlock_hosts(vm).get(target) == table, (
+                f"busy re-lock removed {target!r} from {IP_UNLOCK_STORE}: {_ip_unlock_hosts(vm)!r}"
+            )
+        finally:
+            vm.ssh("touch", stop)
+            assert helpers.wait_until(lambda: vm.ssh("test", "!", "-f", ready).returncode == 0, timeout=30.0), (
+                "feed-pass holder did not release after the stop signal"
+            )
+
+        # WHEN: the lock is free, re-lock the same host.
         resp = _post_action(webui, {"ip_remove": "lock", "ip": target, "table": table})
         assert not looks_like_login_page(resp.text), "ip_remove=lock POST returned the login form (session lost)"
 
