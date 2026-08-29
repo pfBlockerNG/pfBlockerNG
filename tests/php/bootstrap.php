@@ -26,12 +26,21 @@ require_once __DIR__ . '/pfsense_doubles.php';
 // 1. Shims for the eight pfSense includes required at the top of pfblockerng.inc.
 set_include_path(__DIR__ . '/shims' . PATH_SEPARATOR . get_include_path());
 
-// 3. Writable sandbox for any load-time/log file writes.
-$pfb_test_tmp = sys_get_temp_dir() . '/pfb_php_unit_' . getmypid();
-@mkdir($pfb_test_tmp, 0777, true);
-@mkdir("{$pfb_test_tmp}/db", 0777, true);
-@mkdir("{$pfb_test_tmp}/log", 0777, true);
-@mkdir("{$pfb_test_tmp}/tmp", 0777, true);
+// 3. Writable per-invocation sandbox for any load-time/log file writes.
+$pfb_test_tmp = sys_get_temp_dir() . '/pfb_php_unit_' . getmypid() . '_' . bin2hex(random_bytes(8));
+if (!mkdir($pfb_test_tmp, 0777, TRUE)) {
+	throw new RuntimeException("PHPUnit sandbox creation failed: {$pfb_test_tmp}");
+}
+register_shutdown_function(static function () use ($pfb_test_tmp): void {
+	rmdir_recursive($pfb_test_tmp);
+});
+foreach (['db', 'log', 'tmp'] as $pfb_test_subdir) {
+	$pfb_test_path = "{$pfb_test_tmp}/{$pfb_test_subdir}";
+	if (!mkdir($pfb_test_path, 0777, TRUE)) {
+		throw new RuntimeException("PHPUnit sandbox directory creation failed: {$pfb_test_path}");
+	}
+}
+unset($pfb_test_path, $pfb_test_subdir);
 
 $GLOBALS['g'] = [
 	'vardb_path'  => "{$pfb_test_tmp}/db",
