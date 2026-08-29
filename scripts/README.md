@@ -337,43 +337,6 @@ plan (files, modes, deps) without writing the archive.
 Full reference (every option, the fidelity comparison, troubleshooting):
 [`../docs/build-pkg-portable.md`](../docs/build-pkg-portable.md).
 
-### Frozen v3.2 build (issue #1676)
-
-[`build-frozen-v3.py`](build-frozen-v3.py) builds and identity-validates the frozen pfBlockerNG
-`v3.2.15` (Stable) and `v3.2.16` (Testing) `.pkg` artifacts for every BUILD-matrix row, on top of
-`build-leg.sh`/`build-pkg-portable.py`. It exists because those two source tags predate the
-2026-06-05 `list_scripts/` move: a current `devel`-branch ports ref cannot build a v3.2 source
-tree, and a current source tree cannot be built by the frozen ports ref either. The tool
-therefore pins BOTH sides as module-level constants — an exact FreeBSD-ports commit
-(`FROZEN_PORTS_REF`) and, per channel, an exact source tag/commit (`FROZEN_TARGETS`) — and
-treats any drift from either as a hard error rather than silently rebuilding the wrong bits.
-
-Per artifact it exports the pinned tag with `git archive` into a fresh temp dir (clean by
-construction, never the working tree), builds one leg via `build-leg.sh`, and validates the
-result before staging anything: package name/origin/version, the wildcarded ABI (`--no-arch`
-is what keeps a single `.pkg` per FreeBSD major serving `aarch64` and every other arch — same
-as every other `NO_ARCH` pfBlockerNG port, see "ABI: what actually matters" above),
-matrix-derived dependency names, and byte-for-byte payload parity against the tag export. The
-**one** reviewed packaging divergence is `usr/local/share/<port>/info.xml`'s
-`%%PKGVERSION%%` substitution (the port's own `do-install` `REINPLACE_CMD`) — allowlisted
-exactly there and nowhere else; anything else that differs is a hard rejection, and a failed
-validation stages nothing. Unless `--no-deterministic-check`, every row is built twice and
-required to produce a byte-identical artifact.
-
-```sh
-python3 scripts/build-frozen-v3.py --out /tmp/frozen-v3-stage
-```
-
-Writes `<out>/fbsd<major>/<pkgname>-<version>.pkg` per row plus a JSON identity report
-(`<out>/frozen-v3-report.json`: source commit, artifact SHA-256, payload inventory with
-per-file SHA-256, dependency/ABI facts). `--verify-only DIR` requires that report (or the
-path passed with `--report`), re-validates an already-staged directory against its exact
-recorded identities, and never rewrites the report; no build seam is invoked. See `--help`
-for the full flag set.
-
-**This tool never publishes anything** — no GitHub Release upload, no catalog write, no
-network write of any kind. Publication is a separate, maintainer-gated step.
-
 ## Image pipeline (ADR-04 smoke base)
 
 The CI smoke harness — see [`../legacy/ADRs/ADR_04_VM_Smoke_Tests/`](../legacy/ADRs/ADR_04_VM_Smoke_Tests/) —

@@ -129,24 +129,6 @@ def test_context_budget_scratch_commit_survives_a_hostile_config(
     assert len(head) == 40, f"context-budget scratch commit produced no HEAD ({head!r})"
 
 
-def test_frozen_build_scratch_repo_tags_under_a_hostile_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``test_build_frozen_v3`` tags its scratch repo — a commit-only pin never signs a tag."""
-    _hostile_config(tmp_path, monkeypatch)
-    git = importlib.import_module("tests.test_build_frozen_v3")._git
-
-    repo = tmp_path / "frozen"
-    repo.mkdir()
-    git("init", "-q", "-b", "devel", cwd=repo)
-    git("config", "user.email", "t@example.invalid", cwd=repo)
-    git("config", "user.name", "t", cwd=repo)
-    (repo / "a.txt").write_text("one\n")
-    git("add", "a.txt", cwd=repo)
-    git("commit", "-qm", "base", cwd=repo)
-    git("tag", "v9.9.9", cwd=repo)
-
-    assert git("tag", "--list", cwd=repo).stdout.split() == ["v9.9.9"]
-
-
 def test_read_version_matrix_env_neutralises_config_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """The matrix suite's env helper strips GIT_* AND neutralises the config scopes.
 
