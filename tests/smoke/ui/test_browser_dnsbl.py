@@ -492,6 +492,48 @@ def test_idn_mode_select_gates_confusable_subtoggles(
     _shot(page, screenshot_dir, "dnsbl_idn_always_subtoggles_hidden")
 
 
+_IN_CLASS = re.compile(r"(^|\s)in(\s|$)")
+
+
+def test_expand_all_opens_then_collapses_every_form_panel(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """``#pfb_expand_all`` expands every ``form .panel-body.collapse``, swaps the
+    label to Collapse all, and reverses on the second click.
+
+    Source-string tests cannot prove the Bootstrap collapse() call or the label
+    swap. Login form must be absent; the button must exist as ``type=button``.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    btn = page.locator("#pfb_expand_all")
+    expect(btn).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(btn).to_be_visible(timeout=JS_TIMEOUT_MS)
+    assert btn.get_attribute("type") == "button", "Expand all must be a button, not a heading link"
+
+    bodies = page.locator("form .panel-body.collapse")
+    n = bodies.count()
+    assert n >= 2, f"expected several collapsible DNSBL panels, got {n}"
+
+    expect(btn).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_expand_all_before")
+
+    btn.click()
+    expect(btn).to_have_text("Collapse all", timeout=JS_TIMEOUT_MS)
+    for i in range(n):
+        expect(bodies.nth(i)).to_have_class(_IN_CLASS, timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_expand_all_open")
+
+    btn.click()
+    expect(btn).to_have_text("Expand all", timeout=JS_TIMEOUT_MS)
+    for i in range(n):
+        expect(bodies.nth(i)).not_to_have_class(_IN_CLASS, timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_expand_all_closed")
+
+
 # --------------------------------------------------------------------------- #
 # ADR-29 gateway save→reload→assert round-trip (pfb_dnsbl_lenient on DNSBL page)
 # --------------------------------------------------------------------------- #
