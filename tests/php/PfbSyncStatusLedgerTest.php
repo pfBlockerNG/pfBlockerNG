@@ -701,8 +701,8 @@ final class PfbSyncStatusLedgerTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfb_sync_status_close_removed_alias() — issue #1014/#1019: close an
-	// orphaned stage=download entry when our own WebUI renames/deletes an alias.
+	// pfb_sync_status_close_removed_alias() — issue #1014/#1019/#2060: close an
+	// alias's orphaned alias-pass-managed entries (download, script) on rename/delete.
 	// -----------------------------------------------------------------------
 
 	public function testCloseRemovedAliasIpv4ClosesDownloadEntry(): void
