@@ -362,7 +362,8 @@ final class ReentryBoundsTest extends TestCase
 		$scope = $this->scope(php_strip_whitespace(self::APPLY),
 			'function pfb_top1m_fetch_if_needed(', 'function pfb_top1m_reprocess_needed(');
 
-		$this->assertSame(1, substr_count($scope, "pfb_reentry_exec('al'"), $scope);
+		$this->assertStringContainsString("pfb_reentry_exec('al', ['scheduled']);", $scope,
+			'the TOP1M refresh must preserve the scheduled child argument');
 		$this->assertStringNotContainsString('pfblockerng.php', $scope,
 			'the TOP1M refresh must compose no re-entry command of its own');
 		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
@@ -374,9 +375,11 @@ final class ReentryBoundsTest extends TestCase
 		$scope = $this->scope(php_strip_whitespace(self::APPLY),
 			'Downloading Blacklist Database(s) [', 'pfb_prune_failed_bl_lists($lists, $pfb_return);');
 
-		$this->assertSame(1, substr_count($scope, "pfb_reentry_exec('bls'"), $scope);
-		$this->assertStringContainsString('$pfb_return', $scope,
-			'$pfb_return must stay the destination of the child output lines');
+		$this->assertStringContainsString(
+			"pfb_reentry_exec('bls', ['scheduled', \$bl_string], NULL, \$pfb_return);",
+			$scope,
+			'$pfb_return must stay the destination of the child output lines'
+		);
 		$this->assertStringNotContainsString('pfblockerng.php', $scope,
 			'the blacklist download must compose no re-entry command of its own');
 		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
