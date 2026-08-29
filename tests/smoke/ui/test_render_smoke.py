@@ -1666,10 +1666,8 @@ def test_dnsbl_page_renders_tld_pickers(webui: WebUI, php_error_log_guard: PhpEr
     tld_count = int(count_match.group(1).replace(",", ""))
     assert tld_count >= 1000, f"TLD-Allow count {tld_count} is implausibly low (arrays blanked?)"
     assert count_match.group(1) != "1,546", "TLD-Allow count is still the stale hardcoded 1,546"
-    # The aggregate and the four per-list figures derive from the same $tld_list, so they
-    # must agree on the rendered page. A count that is plausible but no longer the sum means
-    # the aggregate was computed from different data than the pickers -- the failure mode a
-    # ">= 1000" floor cannot see.
+    # Aggregate and per-list figures derive from the same $tld_list, so they must agree on
+    # the rendered page -- a divergence the ">= 1000" floor cannot see.
     per_list = [int(n) for n in re.findall(r"Total TLD Count: \[(\d+)\]", body)]
     assert len(per_list) == len(_TLD_STABLE_OPTIONS), (
         f"expected {len(_TLD_STABLE_OPTIONS)} per-list TLD counts, found {len(per_list)}: {per_list}"
