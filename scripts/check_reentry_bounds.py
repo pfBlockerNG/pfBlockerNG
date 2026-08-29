@@ -138,11 +138,7 @@ def _is_allowlisted(source: str, line: str) -> bool:
 
 
 def find_violations(text: str, source: str) -> list[Violation]:
-    """Find every unbounded nested `pfblockerng.php` composition in one file's source.
-
-    Scanned per physical line, with a two-line lookback for a backgrounding marker
-    belonging to the same statement (see the module docstring).
-    """
+    """Find unbounded compositions using a two-line background-marker lookback."""
     lines = text.splitlines()
     violations: list[Violation] = []
     for index, line in enumerate(lines):
