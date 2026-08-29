@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -56,14 +57,30 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 			'the row-less alias contributes no entries, and the healthy alias still schedules');
 	}
 
-	/** NULL stays reserved for input that is genuinely malformed, not merely incomplete. */
-	public function testMalformedRowValueStillRejectsTheModel(): void
+	/**
+	 * NULL stays reserved for input that is genuinely malformed, not merely incomplete.
+	 * Absent means "no rows"; PRESENT-but-not-a-list is corrupt, NULL included -- a
+	 * config that names the key and then carries nothing is not the same as omitting it.
+	 */
+	#[DataProvider('malformedRowProvider')]
+	public function testMalformedRowValueStillRejectsTheModel(string $label, mixed $row): void
 	{
-		$broken = ['aliasname' => 'Broken', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'row' => 'not-a-list'];
+		$broken = ['aliasname' => 'Broken', 'action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'row' => $row];
 
 		$this->assertNull(pfb_schedule_runtime_model(self::GENERAL,
 			['ipv4' => [$broken], 'ipv6' => [], 'dnsbl' => []]),
-			"'row' present but not a list is corrupt config, and must still reject the model");
+			"'row' present as {$label} is corrupt config, and must still reject the model");
+	}
+
+	/** @return array<string, array{0: string, 1: mixed}> */
+	public static function malformedRowProvider(): array
+	{
+		return [
+			'a string'      => ['a string', 'not-a-list'],
+			'NULL'          => ['NULL', NULL],
+			'an empty text' => ['an empty text node', ''],
+			'an integer'    => ['an integer', 7],
+		];
 	}
 
 	/** A rejection reports which check failed and which alias tripped it. */
@@ -140,6 +157,64 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		$this->assertStringNotContainsString('<', $fallback, 'the query token must never reach the page verbatim');
 	}
 
+	/**
+	 * Scenario: each of the six checks fails in turn, alone. Expected: the token names
+	 * THAT check -- a mapping a source-substring pin cannot tell from a swapped pair.
+	 */
+	public function testEachFailingConditionYieldsItsOwnStageToken(): void
+	{
+		$model = ['config_hash' => str_repeat('a', 64)];
+		$state = ['schema' => 1, 'items' => []];
+		$zone = new DateTimeZone('UTC');
+		$pass = static fn (): bool => TRUE;
+		$read = static fn (): ?array => ['_meta' => []];
+
+		$cases = [
+			'config'   => [NULL, $state, $zone, '/tmp', $pass, $read],
+			'state'    => [$model, NULL, $zone, '/tmp', $pass, $read],
+			'timezone' => [$model, $state, 'UTC', '/tmp', $pass, $read],
+			'workdir'  => [$model, $state, $zone, '', $pass, $read],
+			'refresh'  => [$model, $state, $zone, '/tmp', static fn (): bool => FALSE, $read],
+			'readback' => [$model, $state, $zone, '/tmp', $pass, static fn (): ?array => NULL],
+		];
+		foreach ($cases as $expected => $args) {
+			$this->assertSame($expected, pfb_schedule_cache_stage(...$args),
+				"the {$expected} check must report its own stage, not another's");
+		}
+		$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, '/tmp', $pass, $read),
+			'a candidate that publishes and reads back cleanly reports no failing stage');
+	}
+
+	/**
+	 * The ladder short-circuits: an earlier failure wins, and the publish/read-back work
+	 * is never attempted -- the property the original && chain provided for free.
+	 */
+	public function testEarlierStageWinsAndSkipsTheWorkBehindIt(): void
+	{
+		$calls = ['publish' => 0, 'read' => 0];
+		$publish = static function () use (&$calls): bool {
+			$calls['publish']++;
+			return FALSE;
+		};
+		$read = static function () use (&$calls): ?array {
+			$calls['read']++;
+			return NULL;
+		};
+
+		$this->assertSame('config',
+			pfb_schedule_cache_stage(NULL, NULL, 'not-a-zone', '', $publish, $read),
+			'with every check failing, the first one reports');
+		$this->assertSame(['publish' => 0, 'read' => 0], $calls,
+			'a stage that never runs must not do its work: ' . var_export($calls, TRUE));
+
+		$model = ['config_hash' => str_repeat('a', 64)];
+		$this->assertSame('refresh',
+			pfb_schedule_cache_stage($model, ['schema' => 1, 'items' => []], new DateTimeZone('UTC'),
+				'/tmp', $publish, $read));
+		$this->assertSame(['publish' => 1, 'read' => 0], $calls,
+			'a failed publication must not be followed by a read-back: ' . var_export($calls, TRUE));
+	}
+
 	/** The save path records which stage failed, and the warning names it. */
 	public function testGeneralSaveRecordsTheFailingStageAndTheWarningNamesIt(): void
 	{
@@ -148,10 +223,8 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		$this->assertNotFalse($save);
 		$this->assertNotFalse(strpos($source, 'schstage=', $save),
 			'the save redirect must carry the stage that failed');
-		foreach (self::STAGES as $stage) {
-			$this->assertStringContainsString("\$cache_stage = '{$stage}'", $source,
-				"the stage ladder must be able to report '{$stage}'");
-		}
+		$this->assertStringContainsString('pfb_schedule_cache_stage(', $source,
+			'the save must resolve the stage through the tested helper, not an inline ladder');
 		$this->assertStringContainsString('pfb_schedule_cache_stage_label(', $source,
 			'the warning must render the stage through the fixed label map');
 		$this->assertStringNotContainsString('This is likely a bug; please report it.', $source,
