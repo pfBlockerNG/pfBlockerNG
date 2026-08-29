@@ -257,6 +257,12 @@ tar -xzf shellspec-dist.tar.gz -C "$HOME"   # then put "$HOME/shellspec" on PATH
 or use `brew install shellspec` (macOS) and check `shellspec --version`. The
 pre-commit hook and CI run it automatically when `shellspec` is present (coverage
 is informational, no floor).
+
+Several shell specs use `timeout(1)` only as a salvage guard so a wait-loop
+regression fails instead of hanging the suite. Linux and FreeBSD provide it;
+on macOS install GNU coreutils (`brew install coreutils`) and put
+`$(brew --prefix coreutils)/libexec/gnubin` on `PATH` so `timeout` is available
+under that name. A missing `timeout` is a test-environment failure, not a skip.
 See [`tests/shell/README.md`](tests/shell/README.md) for the harness contracts
 (the `iprange` PATH shim, the AWS fixture, and the `PFB_SOURCED` source-for-test
 pattern).
