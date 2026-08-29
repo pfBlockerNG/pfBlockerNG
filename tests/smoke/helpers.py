@@ -3283,6 +3283,11 @@ _SCOPE_TO_PFBTRIGGER: dict[str, tuple[str, str, str]] = {
     "updatednsbl": ("dnsbl", "true", "force"),
 }
 
+# issue #2591: the reload() scopes whose verb MUST run a feed pass to completion before the
+# CLI exits, so a clean exit without a new PASS_START_MARKERS banner means the pass never
+# started. "tick" is deliberately absent: an IDLE scheduled tick dispatches no pass at all.
+_PASS_START_SCOPES = frozenset({"update", "updateip", "updatednsbl", "cron"})
+
 
 @timed_step(lambda vm, scope="update", **_k: f"reload:{scope}")
 def reload(
@@ -3323,9 +3328,18 @@ def reload(
     is pure wasted wall-clock there. Pair it with :func:`apply_filter_sync` so the live pf
     ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
     it must wait on the zero-downtime swap signal regardless.
+
+    Every scope but ``tick`` also asserts the pass ACTUALLY STARTED (issue #2591): a lock
+    deferral exits 0 for the unattended ``trigger=cron force=false`` shape this helper
+    dispatches (PR #2589) and for the ``cron`` verb (PR #2504), so ``rc == 0`` alone cannot
+    tell a completed pass from one that stood down. A NEW banner from
+    :data:`PASS_START_MARKERS` is required, and its absence raises HERE — at the reload call
+    site — instead of surfacing later as an unrelated assertion far from the cause.
     """
     if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
+    assert_started = scope in _PASS_START_SCOPES
+    start_before = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS) if assert_started else 0
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
     if scope in ("cron", "tick"):
@@ -3341,6 +3355,16 @@ def reload(
         raise RuntimeError(
             f"reload({scope}) failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
         )
+    if assert_started:
+        start_after = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS)
+        if start_after <= start_before:
+            raise RuntimeError(
+                f"reload({scope}) exited 0 but the feed pass did not start: expected a NEW pass-start "
+                f"banner in {PFB_LOG} (before={start_before}, after={start_after}), searched for "
+                f"{list(PASS_START_MARKERS)}. A pass that loses the dispatcher or feed-pass lock race "
+                f"stands down and STILL exits 0 for this request shape (issue #2591), so nothing was "
+                f"reloaded — see the pfBlockerNG log tail in the smoke diagnostics for the deferral line."
+            )
     if data_path:
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
         # of wait_zero_downtime_swap's shorter default.
@@ -4234,6 +4258,15 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # bare phrase "the zero-downtime swap", so matching the unbracketed substring would
 # false-positive on a fallback (restart) as if the swap had been taken.
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
+# issue #2591: the banners a feed pass writes to PFB_LOG ONCE it holds both the dispatcher
+# and the feed-pass lock — a NEW one is positive proof the pass actually started. Three,
+# because the pass logs a different banner per state and reload() reaches all three:
+#   " UPDATE PROCESS START [ <ver> ]"  sync_package_pfblockerng, master ON, not save-only
+#   "**Saving configuration**"         sync_package_pfblockerng, master OFF or save-only
+#   " CRON  PROCESS  START [ <ver> ]"  pfblockerng_sync_cron (the `cron` verb's own funnel)
+# A lock deferral returns from those guards BEFORE any banner and — for the unattended
+# `trigger=cron force=false` shape (PR #2589) — exits 0, which is why rc alone cannot see it.
+PASS_START_MARKERS = ("UPDATE PROCESS START", "**Saving configuration**", "CRON  PROCESS  START")
 # The DNSBL per-line parse-error log: pfb_parse_fail_log() appends one CSV record
 # ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
 # an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:91,
@@ -4264,23 +4297,26 @@ def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
         raise RuntimeError(f"unbound_pid: {UNBOUND_PID_FILE} not an integer: {text!r}") from exc
 
 
-def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30.0) -> int:
-    """Count lines in the file ``path`` on the guest that CONTAIN ``marker``.
+def count_log_marker(vm: SmokeVM, path: str, marker: str | Sequence[str], *, timeout: float = 30.0) -> int:
+    """Count occurrences in the file ``path`` on the guest of ``marker`` — one fixed string,
+    or a sequence of them counted together in ONE grep (their total, e.g. a set of
+    mutually-exclusive banners of which a pass writes exactly one).
 
     Capture this BEFORE a no-restart data update and pass the value as ``since`` to
     :func:`wait_zero_downtime_swap`: a NEW matching line (count strictly greater than
     the captured baseline) proves the swap log line was appended AFTER the trigger,
-    not left over from an earlier reload. ``grep -Fc`` does a fixed-string (non-regex)
-    count; a missing file / no match yields 0 (grep exits non-zero) — never raises.
+    not left over from an earlier reload. Matching is fixed-string (non-regex); a missing
+    file / no match yields 0 (grep exits non-zero) — never raises.
     """
     # Count OCCURRENCES, not matching lines: the Python module writes its failure strings
     # to py_error.log via sys.stderr.write WITHOUT a trailing newline (pfb_unbound.py:3679),
     # so two failures can share a physical line — `grep -c` (line count) would under-count
     # them. `grep -Fo` prints one line per match; `wc -l` counts those. Run as ONE shell
     # string (the guest login shell handles the pipe); a missing file / no match -> 0.
-    quoted_marker = shlex.quote(marker)
+    markers = [marker] if isinstance(marker, str) else list(marker)
+    patterns = " ".join(f"-e {shlex.quote(m)}" for m in markers)
     quoted_path = shlex.quote(path)
-    cmd = f"/usr/bin/grep -Fo {quoted_marker} {quoted_path} 2>/dev/null | /usr/bin/wc -l"
+    cmd = f"/usr/bin/grep -Fo {patterns} {quoted_path} 2>/dev/null | /usr/bin/wc -l"
     result = vm.ssh(cmd, timeout=timeout)
     text = result.stdout.strip()
     try:
