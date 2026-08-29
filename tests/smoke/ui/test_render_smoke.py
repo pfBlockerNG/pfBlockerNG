@@ -484,7 +484,10 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
 # Each url is a stable href in the named page's source.
 _NOOPENER_RENDER_CASES: tuple[tuple[str, str], ...] = (
     ("/pfblockerng/pfblockerng_general.php", "https://pfblockerng.com"),
-    ("/pfblockerng/pfblockerng_general.php", "https://forum.netgate.com/user/bbcan177"),
+    # The Support byline moved from the Netgate forum to GitHub in the General
+    # reorganisation, and gained a co-author; both carry the same rel requirement.
+    ("/pfblockerng/pfblockerng_general.php", "https://github.com/BBcan177"),
+    ("/pfblockerng/pfblockerng_general.php", "https://github.com/andrebrait"),
     # ?type=geoip: the MaxMind attribution callout only prints in the category page's
     # GeoIP view (source guards it with `$gtype == 'geoip'`).
     ("/pfblockerng/pfblockerng_category.php?type=geoip", "https://www.maxmind.com"),
