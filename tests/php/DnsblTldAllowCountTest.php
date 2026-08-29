@@ -57,76 +57,78 @@ final class DnsblTldAllowCountTest extends TestCase
 	}
 
 	/**
-	 * Behaviour-preserving oracle for the move: the relocated block still computes the
-	 * same aggregate the four per-list "Total TLD Count: [N]" figures add up to.
+	 * Behaviour-preserving oracle for the move: the relocated block still defines the four
+	 * lists the pickers render, and the total is still derived from them.
+	 *
+	 * Counted by tokenising, never by evaluating. Executing a slice of a page to measure it
+	 * put arbitrary code one edit away from running in this suite, and no allowlist of
+	 * tokens closes that -- `array_map` takes its callback as a string.
 	 */
 	public function testTldTotalIsTheSumOfTheFourListsAndPlausible(): void
 	{
-		$data = $this->evaluateTldDataBlock();
+		$lists = $this->entryCounts('$tld_list');
+		$info = $this->entryCounts('$tld_info');
 
-		$this->assertSame(self::TYPES, array_keys($data['list']),
+		$this->assertSame(self::TYPES, array_keys($lists),
 			'the four TLD lists must be present, in their rendered order');
-		$this->assertSame(self::TYPES, array_keys($data['info']),
+		$this->assertSame(self::TYPES, array_keys($info),
 			'every list must carry the description its picker renders beside the count');
 
-		$per_list = array_map('count', $data['list']);
-		$this->assertSame(array_sum($per_list), $data['total'],
-			'the aggregate must equal the sum of the four per-list counts, which the page renders '
-			. 'separately: ' . var_export($per_list, TRUE));
-		$this->assertGreaterThanOrEqual(1000, $data['total'],
-			"a total of {$data['total']} is implausibly low -- an array was blanked or narrowed");
-		foreach ($per_list as $type => $count) {
+		foreach ($lists as $type => $count) {
 			$this->assertGreaterThan(0, $count, "the {$type} list must not be empty");
 		}
+		$total = array_sum($lists);
+		$this->assertGreaterThanOrEqual(1000, $total,
+			"a total of {$total} is implausibly low -- an array was blanked or narrowed: "
+			. var_export($lists, TRUE));
+
+		// The page derives the aggregate with exactly this expression, so it IS the sum of
+		// these counts by construction; the ordering test pins that the expression is there.
+		$this->assertStringContainsString(self::TOTAL, self::source(),
+			'the total must stay derived from $tld_list, never restated');
 	}
 
 	/**
-	 * The oracle below evaluates the block, so the block must stay inert data. Allowlist
-	 * rather than blocklist: a backtick shell-exec produces neither a variable binding nor
-	 * a name-followed-by-paren, so anything screening for known-bad constructs misses it.
+	 * Entries per sub-array of $name in the TLD data block, keyed by sub-array name.
+	 *
+	 * @return array<string, int>
 	 */
-	public function testTldDataBlockIsInertEnoughToEvaluate(): void
+	private function entryCounts(string $name): array
 	{
-		$this->assertTldDataBlockIsInert();
-	}
-
-	/** @return list<string> the disallowed tokens found, empty when the block is inert */
-	private function foreignTokens(string $block): array
-	{
-		// Every token the four literal arrays plus the array_sum(array_map(...)) need.
-		$types = ['T_OPEN_TAG', 'T_VARIABLE', 'T_WHITESPACE', 'T_ARRAY',
-			'T_CONSTANT_ENCAPSED_STRING', 'T_DOUBLE_ARROW', 'T_STRING'];
-		$chars = ['=', '(', ')', ';', '[', ']', ','];
-		$names = ['$tld_list', '$tld_info', '$tld_total'];
-		$callees = ['array', 'array_sum', 'array_map'];
-
-		$foreign = [];
-		foreach (token_get_all('<?php ' . $block) as $token) {
-			if (!is_array($token)) {
-				if (!in_array($token, $chars, TRUE)) {
-					$foreign[] = $token;
+		$tokens = token_get_all('<?php ' . $this->tldDataBlock());
+		$counts = [];
+		$current = NULL;
+		$depth = 0;
+		foreach ($tokens as $index => $token) {
+			if (is_array($token) && $token[0] === T_VARIABLE && $token[1] === $name) {
+				$key = NULL;
+				for ($ahead = $index + 1; $ahead < $index + 6; $ahead++) {
+					$next = $tokens[$ahead] ?? NULL;
+					if (is_array($next) && $next[0] === T_CONSTANT_ENCAPSED_STRING) {
+						$key = trim($next[1], "'\"");
+						break;
+					}
 				}
+				if ($key !== NULL) {
+					$current = $key;
+					$counts[$key] = 0;
+					$depth = 0;
+				}
+			}
+			if ($current === NULL) {
 				continue;
 			}
-			$name = token_name($token[0]);
-			if (!in_array($name, $types, TRUE)) {
-				$foreign[] = $name . ' ' . trim($token[1]);
-			} elseif ($name === 'T_VARIABLE' && !in_array($token[1], $names, TRUE)) {
-				$foreign[] = $token[1];
-			} elseif ($name === 'T_STRING' && !in_array($token[1], $callees, TRUE)) {
-				$foreign[] = $token[1] . '()';
+			if ($token === '(') {
+				$depth++;
+			} elseif ($token === ')') {
+				if (--$depth <= 0) {
+					$current = NULL;
+				}
+			} elseif (is_array($token) && $token[0] === T_DOUBLE_ARROW && $depth === 1) {
+				$counts[$current]++;
 			}
 		}
-		return array_values(array_unique($foreign));
-	}
-
-	private function assertTldDataBlockIsInert(): void
-	{
-		$foreign = $this->foreignTokens($this->tldDataBlock());
-
-		$this->assertSame([], $foreign,
-			'the TLD data block is evaluated by this suite, so it must stay literal arrays plus '
-			. 'the count it derives; it now carries: ' . implode(', ', $foreign));
+		return $counts;
 	}
 
 	private function tldDataBlock(): string
@@ -137,15 +139,5 @@ final class DnsblTldAllowCountTest extends TestCase
 		$this->assertNotFalse($start, 'the TLD data block must exist');
 		$this->assertNotFalse($end, 'the derived total must exist');
 		return substr($source, $start, ($end - $start) + strlen(self::TOTAL));
-	}
-
-	/** @return array{list: array<string, array<string, string>>, info: array<string, string>, total: int} */
-	private function evaluateTldDataBlock(): array
-	{
-		$this->assertTldDataBlockIsInert();
-		$data = eval($this->tldDataBlock()
-			. ' return [\'list\' => $tld_list, \'info\' => $tld_info, \'total\' => $tld_total];');
-		$this->assertIsArray($data, 'the TLD data block must evaluate to its three bindings alone');
-		return $data;
 	}
 }
