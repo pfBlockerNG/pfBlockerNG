@@ -1,36 +1,9 @@
-"""Tests for scripts/check_reentry_bounds.py (issue #2016).
+"""Contract tests for the nested pfblockerng.php re-entry bounds checker.
 
-PINNED INTENT
--------------
-Every BLOCKING nested `pfblockerng.php` re-entry under `src/` must run through the
-bounded spawn seam -- `pfb_reentry_exec()` in PHP, `pfb_reentry()` in shell -- so a
-stalled child can never hold an update pass open forever. This module pins the checker
-that stops a new UNBOUNDED re-entry from being added after the seams land.
-
-Every dimension is covered in BOTH directions per CLAUDE.md's test-coverage rules: each
-row that must FLAG is paired with the corresponding clean row that must not, so a green
-run proves the heuristic DISCRIMINATES rather than merely matching everything (or
-nothing). The allowlist rows go further: EVERY entry is proved load-bearing (emptying
-`_ALLOWLIST` brings its line back) and needle-scoped (a near-miss in the SAME file still
-flags), which is what stops an entry from degrading into a blanket per-file exemption.
-
-The allowlist is exactly SEVEN entries: the bounded shell seam plus the six crontab
-command strings. The single-sourced path/constant definition lines
-(`PFB_REENTRY_SCRIPT`, `pathpfbphp=`) are deliberately NOT listed -- each names
-only the target half, never an interpreter, so the pairing rule leaves it clean
-without an exemption that could later hide a composition.
-`test_single_token_line_needs_no_allowlist_entry` pins that hazard shut.
-
-`test_src_tree_is_bounded` is issue #2016's red->green proof, written as the DEFINITIVE
-post-fix expectation (exit 0, no violations). It is RED against the unfixed tree -- the
-8 blocking sites the brief enumerates, across `pfblockerng_apply.inc` (3),
-`pfblockerng_extra.inc` (1) and `pfblockerng.sh` (4) -- and GREEN once every one of them
-routes through its seam. It asserts on the set of source PATHS, never line numbers, so
-it survives unrelated edits to those files.
-
-The checker is a hyphen-free, underscore-named script under scripts/, so it is importable
-directly by path via importlib. Its absence is an import failure here, which is exactly
-the red state this module was authored in.
+Each blocking shape is paired with its routed/backgrounded form so the matcher
+must discriminate in both directions. Every path-and-needle exemption is pinned
+as load-bearing and unable to exempt another line or same-named file. Hostile
+rows cover malformed text and token-boundary cases.
 """
 
 from __future__ import annotations
@@ -342,6 +315,14 @@ def test_allowlist_entry_does_not_exempt_the_whole_file(row: _AllowRow) -> None:
     """A near-miss in the same file still flags: entries are needle-scoped, not file-scoped."""
     violations = _find(row.variant, row.source)
     assert len(violations) == 1, f"{row.entry}: the near-miss variant was not flagged ({violations!r})"
+
+
+@pytest.mark.parametrize("row", _ALLOWLIST_ROWS, ids=_ALLOW_IDS)
+def test_allowlist_entry_does_not_exempt_same_basename_elsewhere(row: _AllowRow) -> None:
+    """An exemption owns one repository-relative path, not every matching basename."""
+    collision = f"src/same-basename/{Path(row.source).name}"
+    violations = _find(row.clean, collision)
+    assert len(violations) == 1, f"{row.entry}: exemption leaked into {collision} ({violations!r})"
 
 
 @pytest.mark.parametrize("row", _ALLOWLIST_ROWS, ids=_ALLOW_IDS)

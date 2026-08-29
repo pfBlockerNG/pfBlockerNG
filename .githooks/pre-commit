@@ -248,11 +248,7 @@ if [ "$staged_php" = 1 ]; then
 	fi
 fi
 
-# --- Forbid a new UNBOUNDED nested pfblockerng.php re-entry (issue #2016): every
-#     blocking re-entry must run through the bounded spawn seam -- pfb_reentry_exec()
-#     in PHP, pfb_reentry() in shell -- so a stalled child cannot hold an update pass
-#     open forever. Relevant to staged PHP/.inc and to staged shell (pfblockerng.sh
-#     owns four of the eight sites). ---
+# --- Nested pfblockerng.php re-entry commands must use the bounded seam. ---
 if [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
 	if exempted scripts/check_reentry_bounds.py; then
 		exempt reentry-bounds
