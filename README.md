@@ -4,8 +4,8 @@
 
 <h1>pfBlockerNG</h1>
 
-<p><strong>IP and DNS blocking for <a href="https://www.pfsense.org/">pfSense</a> (CE and Plus).</strong></p>
-
+<p><strong>This is the OFFICIAL repository for pfBlockerNG</strong></p>
+<p>pfBlockerNG is created by <a href="https://github.com/BBcan177">BBcan177</a>, who designs, supports and maintains it with <a href="https://github.com/andrebrait">André Brait</a>.</p>
 <p>
   <a href="https://github.com/pfBlockerNG/pfBlockerNG/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/pfBlockerNG/pfBlockerNG/test.yml?branch=devel&label=tests" alt="Tests"></a>
   <a href="https://github.com/pfBlockerNG/pfBlockerNG/releases"><img src="https://img.shields.io/github/v/release/pfBlockerNG/pfBlockerNG?label=release&color=blue" alt="Latest release"></a>
@@ -20,11 +20,6 @@ firewall and DNS policy: IP feeds become firewall rules, GeoIP lets you block
 or permit by country, and DNSBL enforces domain blocklists directly in the
 Unbound resolver. It adds reports, alerts, a dashboard widget, and HA/CARP
 sync on top.
-
-pfBlockerNG is developed in this repository —
-[pfBlockerNG/pfBlockerNG](https://github.com/pfBlockerNG/pfBlockerNG) —
-continuing the original package by [BBcan177](https://github.com/BBcan177),
-under the **Apache License 2.0**.
 
 > [!NOTE]
 > For day-to-day usage and configuration, start with the
@@ -253,6 +248,6 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
 
 Licensed under the **Apache License, Version 2.0**.
 
-- Original author: [BBcan177](https://github.com/BBcan177).
+- Created by: [BBcan177](https://github.com/BBcan177).
 - Copyright © 2015–2026 Rubicon Communications, LLC (Netgate) and contributors.
 - GeoIP data by MaxMind Inc. (GeoLite2).
