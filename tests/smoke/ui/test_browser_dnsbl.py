@@ -24,12 +24,14 @@ so the references cannot rot as pfblockerng_dnsbl.php grows (issue #788):
 * ``enable_python_gp()``: ``#pfb_gp`` gates the ``Python_Group_Policy`` section.
 * ``enable_tld()``: ``#tld_wildcard`` gates BOTH the ``TLD_Exclusion`` and
   ``TLD_BW_list`` sections at once.
+* ``enable_tld_allow()``: ``#tld_allow`` ``.show()``/``.hide()``s the
+  ``tld_allow_pickers`` section and ``hideCheckbox()``s ``pfb_psl_allow_private``.
 * ``enable_dnsblip()`` (bound to ``#action`` click): the ``#action`` List-Action
   select being non-``Disabled`` ``.show()``s BOTH the ``advinboundsettings`` and
   ``advoutboundsettings`` sections; ``Disabled`` ``.hide()``s them.
 
-All five gating controls default OFF on a fresh box (``pfb_regex``/``pfb_noaaaa``/
-``pfb_gp``/``tld_wildcard`` default ``''`` -> unchecked; ``action`` defaults
+All six gating controls default OFF on a fresh box (``pfb_regex``/``pfb_noaaaa``/
+``pfb_gp``/``tld_wildcard``/``tld_allow`` default ``''`` -> unchecked; ``action`` defaults
 ``Disabled``), so the on-load handler pass leaves every dependent section HIDDEN
 -- the BEFORE state each test asserts before flipping the control, then asserts
 the AFTER (shown), then flips back to re-hide (both branches, per CLAUDE.md
@@ -42,8 +44,13 @@ NO fixed sleeps: every assertion uses Playwright's auto-waiting
 Per-state full-page screenshots are written to ``screenshot_dir`` for human
 review (ADR §2 "Screenshots (A1)" -- artifacts, NOT asserted pixel baselines).
 
-DEFERRED (noted in the report): ``enable_tld_allow`` (multi-target
-``hideMultiClass``/``hideCheckbox``), ``enable_ports`` (gated by the
+``enable_tld_allow()`` gates the ``tld_allow_pickers`` section (same
+``.show()``/``.hide()`` pattern as Regex / no-AAAA / Group Policy) plus the
+``pfb_psl_allow_private`` row via ``hideCheckbox()``. The two PSL *feed-policy*
+selects live in ``dnsbl_suffix`` and must stay visible regardless of
+``#tld_allow`` / ``#tld_wildcard`` (issue #2371).
+
+DEFERRED (noted in the report): ``enable_ports`` (gated by the
 ``#dnsbl_interface`` select, whose non-``lo0`` options depend on the VM's live
 interfaces), and the auto-VIP OPTION-INJECTION half of ``enable_dnsvip_auto``.
 
@@ -106,6 +113,24 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     """
     mask_page_identity(page)
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
+
+
+def _expand_section(page: Page, section_id: str) -> None:
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so hideCheckbox rows inside are observable.
+
+    The outer panel id (second Form_Section arg) stays visible when the section is
+    collapsed; the body (``#{id}-panel``) does not. hideCheckbox tests that assert
+    ``to_be_visible()`` on a field in ``dnsbl_suffix`` must expand first.
+    """
+    panel = page.locator(f"#{section_id}")
+    expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
+    body = page.locator(f"#{section_id}-panel")
+    if body.count() == 0:
+        return
+    if body.is_visible():
+        return
+    panel.locator("a[data-toggle='collapse']").first.click()
+    expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
 
 
 def _assert_checkbox_gates_section(
@@ -215,12 +240,14 @@ def test_tld_checkbox_toggles_both_tld_sections(
     excl = page.locator("#TLD_Exclusion")
     bwl = page.locator("#TLD_BW_list")
     # issue #1541: the PSL PRIVATE recognition row rides the same gate via
-    # hideCheckbox() (whole form-group, label and help included).
+    # hideCheckbox() (whole form-group, label and help included). The row now
+    # lives in collapsed AdBlock suffix handling, so expand that panel first.
     psl_row = page.locator("#pfb_psl_include_private")
     expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(psl_row).to_be_attached(timeout=JS_TIMEOUT_MS)
+    _expand_section(page, "dnsbl_suffix")
 
     # Normalise to a deterministic start (unchecked) regardless of saved config.
     if box.is_checked():
@@ -257,12 +284,13 @@ def test_tld_allow_checkbox_gates_psl_allow_private_row(
 ) -> None:
     """`#tld_allow` gates the PSL PRIVATE allow row via ``hideCheckbox()``.
 
-    Narrow drill for issue #1541's new toggle only: the wider
-    ``enable_tld_allow`` multi-target set stays deferred as before. Before-state
-    asserted, then both directions.
+    Narrow drill for issue #1541's allow-private toggle. The row lives in
+    collapsed AdBlock suffix handling, so that panel is expanded first.
+    Before-state asserted, then both directions.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
+    _expand_section(page, "dnsbl_suffix")
 
     box = page.locator("#tld_allow")
     allow_row = page.locator("#pfb_psl_allow_private")
@@ -284,6 +312,74 @@ def test_tld_allow_checkbox_gates_psl_allow_private_row(
     box.evaluate("el => el.click()")
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(allow_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+
+def test_tld_allow_checkbox_toggles_tld_allow_pickers_section(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#tld_allow` gates the `tld_allow_pickers` section's visibility.
+
+    ``enable_tld_allow()`` (pfblockerng_dnsbl.php) CHECKED -> ``.show()`` the
+    picker section, UNCHECKED -> ``.hide()`` it. Same sibling pattern as Regex /
+    no-AAAA / Group Policy. Before-state asserted, both directions.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _assert_checkbox_gates_section(page, "tld_allow", "tld_allow_pickers", screenshot_dir, "dnsbl_tld_allow_pickers")
+
+
+def test_feed_policy_selects_stay_visible_when_tld_gates_flip(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """issue #2371: PSL feed-policy selects are not hide-gated by Wildcard or TLD Allow.
+
+    They live in collapsed AdBlock suffix handling (a move is allowed) but must
+    remain visible inside that expanded panel when ``#tld_wildcard`` and
+    ``#tld_allow`` flip. A hideCheckbox on either select is the regression.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _expand_section(page, "dnsbl_suffix")
+
+    private_sel = page.locator("#pfb_psl_feed_private_policy")
+    icann_sel = page.locator("#pfb_psl_feed_icann_policy")
+    wildcard = page.locator("#tld_wildcard")
+    tld_allow = page.locator("#tld_allow")
+    expect(private_sel).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(icann_sel).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    if wildcard.is_checked():
+        wildcard.evaluate("el => el.click()")
+        expect(wildcard).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    if tld_allow.is_checked():
+        tld_allow.evaluate("el => el.click()")
+        expect(tld_allow).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    expect(private_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(icann_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_feed_policy_before_gates")
+
+    wildcard.evaluate("el => el.click()")
+    expect(wildcard).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(private_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(icann_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+    tld_allow.evaluate("el => el.click()")
+    expect(tld_allow).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(private_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(icann_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_feed_policy_after_gates")
+
+    wildcard.evaluate("el => el.click()")
+    tld_allow.evaluate("el => el.click()")
+    expect(wildcard).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(tld_allow).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(private_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(icann_sel).to_be_visible(timeout=JS_TIMEOUT_MS)
 
 
 def test_action_select_toggles_advanced_firewall_sections(

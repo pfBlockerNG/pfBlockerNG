@@ -181,7 +181,9 @@ $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
 $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
-$options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
+$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting. Default is no global override.'
+			. '<div class="infoblock">'
+			. 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
@@ -189,7 +191,8 @@ $options_global_log_txt = 'Default: <strong>No Global mode</strong><br />'
 			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
 			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
-			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
+			. 'A \'Force Reload - DNSBL\' is required for changes to take effect'
+			. '</div>';
 
 $options_global_log	= [	''		=> 'No Global mode',
 				'enabled'	=> 'DNSBL WebServer/VIP',
@@ -1072,25 +1075,38 @@ $section->addInput(new Form_StaticText(
 	. '<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small>'
 ));
 
-$dnsbl_text = '<div class="infoblock">
-			<span class="text-danger">Note: </span>
-			DNSBL requires the DNS Resolver (Unbound) to be used as the DNS service.<br />
-			When a DNS request is made for a Domain that is listed in DNSBL, the request is redirected to the Virtual IP address<br />
-			where an instance of Lighttpd Web Server will collect the packet statistics and push a \'1x1\' GIF image to the Browser.<br />
-			If the blocked domain is a root domain, a customizable Blocked Webpage will be displayed to the user.<br /><br />
-
-			If browsing is slow, check for Firewall LAN Rules/Limiters that might be blocking access to the DNSBL VIP.<br /><br />
-
-			<span class="text-danger">Note: </span>
-			DNSBL will block and <u>partially</u> log Alerts for HTTPS requests.
-			To debug issues with \'False Positives\', the following tools below can be used:<br />
-			<ol>
-				<li>Browser Dev mode (F12) and goto \'Console\' to review any error messages.</li>
-				<li>Execute the following command from pfSense Shell (Changing the interface \'re1\' to the pfSense Lan Interface):<br />
-					&emsp;<strong>tcpdump -nnvli re1 port 53 | grep -B1 \'A 10.10.10.1\'</strong></li>
-				<li>Packet capture software such as Wireshark.</li>
-			</ol>
-		</div>';
+$dnsbl_text = '<div class="infoblock">'
+		. '<div id="dnsbl_eval_order">'
+		. '<strong>DNSBL evaluation order</strong> (first match wins):'
+		. '<ol>'
+		. '<li><strong>Feed lists, exact name</strong> — a listed domain is blocked (logged as DNSBL).</li>'
+		. '<li><strong>Feed lists, wildcard/zone</strong> — Wildcard Blocking classifies registrable domains (logged as TLD).</li>'
+		. '<li><strong>TLD Allow</strong> — when enabled, a name whose suffix is not selected is blocked here (logged as TLD_Allow).</li>'
+		. '<li><strong>IDN Blocking</strong> — Off / Confusable / Always. Confusable can raise a non-blocking alert instead of a block.</li>'
+		. '<li><strong>Regex Blocking</strong> — user regex and ABP feed block-regex.</li>'
+		. '</ol>'
+		. 'Feed exact and wildcard matching (1–2) run only while DNSBL blocking is enabled; TLD Allow, IDN, and Regex (3–5) still run.<br /><br />'
+		. 'If a block is found, a whitelist entry, an ABP allow rule (@@) or an allow-regex can override it. Once an ABP feed loads $important rules, block and allow are resolved by priority rather than allow-always-wins.<br /><br />'
+		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN replies (logged or silent) replace a VIP or null answer; a hit via a CNAME chain is tagged _CNAME. Null-blocking is not a property of which stage matched.<br /><br />'
+		. 'CNAME Validation and no-AAAA are separate features, not steps in this order. Feed-at-suffix (PSL) policies, the regex cap, and Download Schemes shape what is loaded, not the per-query order.'
+		. '</div><br /><br />'
+		. '<span class="text-danger">Note: </span>'
+		. 'DNSBL requires the DNS Resolver (Unbound) to be used as the DNS service.<br />'
+		. 'How a blocked name is answered depends on the <strong>Global Logging/Blocking Mode</strong> and on each DNSBL Group\'s own Logging/Blocking setting:<br />'
+		. '&#8226 <strong>DNSBL WebServer/VIP</strong> - the request is redirected to the DNSBL Virtual IP, where a Lighttpd instance records the hit and returns a \'1x1\' GIF. For a root domain the customizable Blocked Webpage is shown instead.<br />'
+		. '&#8226 <strong>Null Blocking</strong> - the name is answered with \'0.0.0.0\'. No Virtual IP, no web server and no block page are involved.<br />'
+		. '&#8226 <strong>NXDOMAIN</strong> - the name is answered NXDOMAIN and the block page is bypassed.<br /><br />'
+		. 'If browsing is slow <strong>in VIP mode</strong>, check for Firewall LAN Rules/Limiters that might be blocking access to the DNSBL VIP.<br /><br />'
+		. '<span class="text-danger">Note: </span>'
+		. 'DNSBL will block and <u>partially</u> log Alerts for HTTPS requests. '
+		. 'To debug issues with \'False Positives\', the following tools below can be used:<br />'
+		. '<ol>'
+		. '<li>Browser Developer tools, Console tab, for error messages.</li>'
+		. '<li>Execute the following from the pfSense Shell, substituting your LAN interface for \'re1\' and your own DNSBL Virtual IP for the address shown. Your VIP is listed under <strong>DNSBL Webserver Configuration</strong> above; pfBlockerNG auto-selects one in the <strong>10.10.x.53</strong> range:<br />'
+		. '&emsp;<strong>tcpdump -nnvli re1 port 53 | grep -B1 \'A 10.10.0.53\'</strong></li>'
+		. '<li>Packet capture software such as Wireshark.</li>'
+		. '</ol>'
+		. '</div>';
 
 $section->addInput(new Form_Checkbox(
 	'pfb_dnsbl',
@@ -1103,9 +1119,9 @@ $section->addInput(new Form_Checkbox(
 		. "{$dnsbl_text}"
 );
 
-$dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all Sub-Domains should be wildcard blocked for each listed Domain.<br />
-		<span class="text-danger">Click infoblock</span> before enabling this feature!&emsp;
-		<div id="dnsbl_tld_info" class="infoblock">
+$tld_wildcard_text = 'Block listed domains and their subdomains. '
+		. pfb_list_section_help_note(['TLD Exclusion List', 'TLD Blacklist'], TRUE)
+		. '<div id="dnsbl_tld_info" class="infoblock">
 
 		<strong>Definition: Public suffix</strong> -
 		&emsp;a domain suffix under which the public may register names, per the
@@ -1142,94 +1158,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['tld_wildcard']) === PfbToggle::On,
 	'on'
-))->setHelp($dnsbl_text);
-
-// issue #2371: feed-at-suffix policy selects. Feed-wide and independent of Wildcard
-// Blocking (and of each other) -- deliberately NOT behind a hideCheckbox() show/hide,
-// so placement here (near Wildcard Blocking, for topical proximity) never implies a
-// dependency on it. Applies only to Feed-provenance rows; a Custom List or a sovereign
-// ABP list entry is never affected by either select.
-$psl_feed_policy_options = array(
-	'ignore'	=> 'Ignore entirely',
-	'apex'		=> 'Block the suffix apex only',
-	'honor'		=> 'Honor list rules',
-);
-$psl_feed_policy_help = '<ul>'
-	. '<li><strong>Ignore entirely</strong> - the feed entry is dropped (counted in the reject stats).</li>'
-	. '<li><strong>Block the suffix apex only</strong> - only the exact suffix name is blocked; this entry no longer affects names under the suffix (other list entries still apply).</li>'
-	. '<li><strong>Honor list rules</strong> - the list is honored as written, including an explicit ABP wildcard rule that may still blanket the suffix.</li>'
-	. '</ul>'
-	. 'A Custom List or a sovereign ABP list entry is never affected by this policy. Intentional whole-suffix blocking belongs in '
-	. '<strong>TLD Blacklist</strong> below (dotted entries supported).';
-
-$section->addInput(new Form_Select(
-	'pfb_psl_feed_private_policy',
-	gettext('Feed entries at shared-hosting suffixes (PSL PRIVATE)'),
-	$pconfig['pfb_psl_feed_private_policy'],
-	$psl_feed_policy_options
-))->setHelp('Applies only to a Feed entry named exactly at a PSL PRIVATE suffix (shared domains such as github.io -- not private DNS).'
-	. $psl_feed_policy_help);
-
-$section->addInput(new Form_Select(
-	'pfb_psl_feed_icann_policy',
-	gettext('Feed entries at public suffixes (ICANN)'),
-	$pconfig['pfb_psl_feed_icann_policy'],
-	$psl_feed_policy_options
-))->setHelp('Applies only to a Feed entry named exactly at an ICANN (public) suffix.'
-	. $psl_feed_policy_help);
-
-$section->addInput(new Form_Checkbox(
-	'pfb_psl_include_private',
-	gettext('Recognize Shared-Hosting Suffixes (PSL PRIVATE)'),
-	'Enable',
-	$pconfig['pfb_psl_include_private'] === PfbToggle::On,
-	'on'
-))->setHelp('Recognize the PSL PRIVATE section when determining the registrable boundary. A suffix apex is never wildcarded. PSL PRIVATE describes shared domains such as github.io; it does not mean private DNS.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_control',
-	gettext('DNSBL Control'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_control']) === PfbToggle::On,
-	'on'
-))->setHelp('Enabling this option will allow sending DNSBL control commands via the local CLI.'
-	. '<div class="infoblock" style="width: 90%;">'
-	. 'Commands are run on pfSense as root via the <strong>pfblockerng dnsbl-control</strong> CLI<br />'
-	. 'A disable is a temporary intervention, and will be reset on a restart of the Resolver<br />'
-	. 'These commands can be incorporated in CRON/Scheduler tasks or run manually as required<br />'
-	. 'All events are logged to the Reports Tab (Gear icon)<br /><br />'
-	. '<strong>Command Syntax:</strong><br />'
-	. '<table class="table table-bordered table-striped table-hover table-compact">'
-	. '	<thead>'
-	. '		<tr>'
-	. '			<th style="max-width: 10%">Description</th>'
-	. '			<th style="max-width: 85%">Command</th>'
-	. '			<th style="max-width: 5%">Notes</th>'
-	. '		</tr>'
-	. '	</thead>'
-	. '	<tbody>'
-	. '		<tr><td>Enable DNSBL</td><td>pfblockerng dnsbl-control enable</td><td></td></tr>'
-	. '		<tr><td>Disable DNSBL</td><td>pfblockerng dnsbl-control disable</td><td></td></tr>'
-	. '		<tr><td>Disable DNSBL for duration</td><td>pfblockerng dnsbl-control disable seconds</td><td>Seconds: 1-3600</td></tr>'
-	. '		<tr><td>Add a Global bypass IP</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4</td><td></td></tr>'
-	. '		<tr><td>Add a Global bypass IP for duration</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4 seconds</td><td>Seconds: 1-3600</td></tr>'
-	. '		<tr><td>Remove a Global bypass IP</td><td>pfblockerng dnsbl-control removebypass 1.2.3.4</td><td></td></tr>'
-	. '	</tbody>'
-	. '</table>'
-	. '</div>');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_control_legacy',
-	gettext('DNSBL Control (legacy DNS TXT)'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_control_legacy']) === PfbToggle::On,
-	'on'
-))->setHelp('<span class="text-danger">Deprecated</span> - re-enable the legacy DNS TXT control transport (drill TXT python_control.*).'
-	. '<div class="infoblock" style="width: 90%;">'
-	. 'This option is <strong>deprecated</strong>, <strong>less secure</strong>, and will be <strong>removed in a future release</strong>.<br />'
-	. 'It only takes effect when <strong>DNSBL Control</strong> above is enabled. Leave it off and use the CLI instead.<br />'
-	. 'Migrate any CRON/Scheduler tasks from drill TXT python_control.* to the pfblockerng dnsbl-control CLI shown above.'
-	. '</div>');
+))->setHelp($tld_wildcard_text);
 
 $section->addInput(new Form_Checkbox(
 	'pfb_py_reply',
@@ -1245,13 +1174,278 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_dnsbl_toggle_enabled($pconfig['pfb_hsts'] ?? NULL),
 	'on'
-))->setHelp('Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
+))->setHelp('Answer HSTS-preload domains with 0.0.0.0 instead of the DNSBL VIP, which may avoid browser certificate errors.'
+	. '<div class="infoblock">'
+	. 'Enable the DNSBL <strong title="Utilizes 0.0.0.0 instead of the DNSBL VIP">Null Blocking mode</strong> for HSTS domains.<br />'
 	. 'Blocked domains that are in the <a target=_"blank" href="https://hstspreload.org/">HSTS preload</a> browser'
 	. ' <a target=_"blank" href="https://raw.githubusercontent.com/chromium/chromium/master/net/http/transport_security_state_static.json">list</a>'
 	. ' will use the Null Blocking Mode which *may* prevent Browser Certificate Errors.<br />'
 	. '<span class="text-danger">Note:</span> This option will not block HSTS domains, unless those Domains are added via the Feeds/Customlists.'
+	. '</div>'
 );
 
+$section->addInput(new Form_Select(
+	'pfb_idn',
+	gettext('IDN Blocking'),
+	$pconfig['pfb_idn'],
+	array(
+		'off'		=> 'Off',
+		'confusable'	=> 'Confusable',
+		'on'		=> 'Always',
+	)
+))->setHelp('How IDN / xn-- names are handled (Off, Confusable, or Always). Not regex-based.'
+		. '<div class="infoblock">'
+		. 'IDN handling (not Regex based).<ul>'
+		. '<li><strong>Off</strong> - no IDN action.</li>'
+		. '<li><strong>Confusable</strong> - block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, '
+		. 'including Cyrillic+Greek).<br />Does not catch whole-script confusables or pure-ASCII typosquats.</li>'
+		. '<li><strong>Always</strong> - block every IDN/\'xn--\' domain (blunt).</li></ul>'
+		. '</div>');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_idn_block_malicious',
+	gettext('Block clearly-malicious homoglyphs'),
+	'Enable',
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_block_malicious'] ?? NULL),
+	'on'
+))->setHelp('Confusable mode: block names that mix confusable scripts in one label (clearly malicious). Disable to alert only. '
+		. 'Applies in Confusable mode.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_idn_escalate_suspicious',
+	gettext('Block suspicious mixed-script'),
+	'Enable',
+	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_escalate_suspicious'] ?? NULL),
+	'on'
+))->setHelp('Confusable mode: escalate suspicious mixed-script names to a block. Default alerts only (no block). '
+		. 'Applies in Confusable mode.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_regex',
+	gettext('Regex Blocking'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_regex']) === PfbToggle::On,
+	'on'
+))->setHelp('Enable the Regex blocking feature. '
+		. pfb_list_section_help_note(['Regex List'], TRUE));
+
+$section->addInput(new Form_Checkbox(
+	'pfb_regex_cap',
+	gettext('Limit long/complex regex'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_regex_cap']) === PfbToggle::On,
+	'on'
+))->setHelp('Best-effort ReDoS safeguard (opt-in): over-long or catastrophic-backtracking regex patterns are dropped at load, before they run. '
+		. 'Applies when Regex Blocking is enabled.'
+		. '<div class="infoblock">From both feeds (ABP) and the Regex List below (each drop is logged). '
+		. 'An always-on runtime guard additionally warns on, then evicts, any pattern whose match runs too slow.</div>');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_cname',
+	gettext('CNAME Validation'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_cname']) === PfbToggle::On,
+	'on'
+))->setHelp('Also check CNAME targets against DNSBL.'
+		. '<div class="infoblock">'
+		. 'Enable the CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
+		. 'Events are logged with a "_CNAME" suffix in the DNSBL Log.'
+		. '</div>');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_noaaaa',
+	gettext('no-AAAA'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_noaaaa']) === PfbToggle::On,
+	'on'
+))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. '
+		. pfb_list_section_help_note(['no-AAAA List'], TRUE));
+
+$section->addInput(new Form_Checkbox(
+	'pfb_gp',
+	gettext('DNSBL Group Policy'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_gp']) === PfbToggle::On,
+	'on'
+))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL. '
+		. pfb_list_section_help_note(['DNSBL Group Policy'], TRUE));
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dnsbl_lenient',
+	gettext('Download Schemes'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_lenient']) === PfbToggle::On,
+	'on'
+))->setHelp('How feed lines are parsed: strip scheme:// and URL paths, or skip those lines.'
+		. '<div class="infoblock">'
+		. 'Parse DNSBL feed lines permissively: any <strong>scheme://</strong> is stripped and URL paths are removed.<br />'
+		. 'When disabled (strict), lines with an invalid scheme (e.g. <strong>123://</strong>) or a URL path are skipped and logged.<br />'
+		. 'New installs default to disabled (strict); upgraded installs keep the permissive behaviour.'
+		. '</div>');
+
+$section->addInput(new Form_Select(
+	'global_log',
+	'Global Logging/Blocking Mode',
+	$pconfig['global_log'],
+	$options_global_log
+))->setHelp($options_global_log_txt)
+  ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Checkbox(
+	'tld_allow',
+	gettext('Allow Only Selected Domain Suffixes'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['tld_allow']) === PfbToggle::On,
+	'on'
+))->setHelp('Enable the TLD Allow feature. This will block all TLDs that are not specifically selected. '
+		. pfb_list_section_help_note(['TLD Allow list'], TRUE));
+
+$form->add($section);
+
+$section = new Form_Section('DNSBL Webserver Configuration');
+$section->addInput(new Form_Select(
+	'dnsbl_interface',
+	gettext('Web Server Interface'),
+	$pconfig['dnsbl_interface'],
+	$options_dnsbl_interface_all
+))->setHelp('Select the interface which DNSBL Web Server will Listen on.<br />'
+	. 'Default: <strong>Localhost (ports 80/443)</strong> - Selected Interface should be a Local Interface only.');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dnsbl_nonat',
+	gettext('Auto NAT'),
+	gettext('Disable automatic NAT rule creation'),
+	(pfb_cfg_toggle_read($pconfig['pfb_dnsbl_nonat']) === PfbToggle::On),
+	'on'
+))->setHelp('When set, pfBlockerNG will not auto-create the DNSBL NAT port-forward rules (non-Localhost interface only); manage them manually.');
+
+// [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
+// selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
+// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free 10.10.X.53 / fd00:X::53
+// candidate (null when every candidate conflicts). A v6 VIP is only relevant when the
+// DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
+$pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
+$pfb_auto_v6_needed	= pfb_unbound_listens_v6();
+$pfb_auto_vip4		= pfb_pick_free_dnsbl_vip(AF_INET, $pfb_auto_iface);
+$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_auto_iface) : null;
+
+// Conflict exhaustion: v4 is always required; v6 only when the resolver listens on it.
+// When no free candidate exists for a required family the checkbox is rendered disabled
+// with a warning, so auto-create can never be enabled into a known-conflicting state.
+$pfb_auto_exhausted	= ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
+
+$vips = pfb_get_vips();
+
+// [ ADR-13 ] The "Create VIPs automatically" toggle on its OWN row, above the
+// manual VIP selects. Its explanation lives in the group help UNDER the fields,
+// not on the checkbox: a long inline checkbox help renders as a very tall, narrow
+// column that towers over the rest of the section.
+$pfb_auto_chk = new Form_Checkbox(
+	'pfb_dnsvip_auto',
+	gettext('Auto VIP'),
+	gettext('Create VIPs automatically'),
+	(!$pfb_auto_exhausted && pfb_cfg_toggle_read($pconfig['pfb_dnsvip_auto']) === PfbToggle::On),
+	'on'
+);
+if ($pfb_auto_exhausted) {
+	$pfb_auto_chk->setAttribute('disabled', 'disabled');
+}
+$section->addInput($pfb_auto_chk);
+
+$group = new Form_Group('DNSBL Virtual IP');
+$group->add(new Form_Select(
+	'pfb_dnsvip4',
+	gettext('IPv4 VIP'),
+	$pconfig['pfb_dnsvip4'],
+	pfb_get_vip_options(AF_INET)
+))->setWidth(4)->setHelp('IPv4 Virtual IP');
+$group->add(new Form_Select(
+	'pfb_dnsvip6',
+	gettext('IPv6 VIP'),
+	(!empty($pconfig['pfb_dnsvip6']) ? $pconfig['pfb_dnsvip6'] : 'none'),
+	pfb_get_vip_options(AF_INET6)
+))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
+
+// Help under the side-by-side VIP fields: the original intro, a line break at the
+// SENTENCE boundary (never mid-sentence), then one concise line covering both
+// modes. "VIP"/"Virtual IP" used consistently (no "IP-Alias VIP" jargon); the
+// address/lifecycle detail belongs in the docs.
+$pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
+	. 'It should be in an isolated range not already used on the network.<br />'
+	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
+	. 'manually — create it first at '
+	. '<a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
+if ($pfb_auto_exhausted) {
+	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
+		. '<span class="text-warning">No free auto-create address is available — free one in the '
+		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
+}
+$group->setHelp($pfb_vip_help);
+$section->add($group);
+
+$section->addInput(new Form_Input(
+	'pfb_dnsport',
+	gettext('Port'),
+	'number',
+	$pconfig['pfb_dnsport'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL Listening Port' ]
+))->setHelp('Example ( 8081 ) &mdash; a single PORT in the range 1 - 65535. '
+		. 'Applies when Web Server Interface is not Localhost.'
+		. '<div class="infoblock">This Port must not be in use by any other process.</div>'
+);
+
+$section->addInput(new Form_Input(
+	'pfb_dnsport_ssl',
+	gettext('SSL Port'),
+	'number',
+	$pconfig['pfb_dnsport_ssl'],
+	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL VIP address' ]
+))->setHelp('Example ( 8443 ) &mdash; a single PORT in the range 1 - 65535. '
+		. 'Applies when Web Server Interface is not Localhost.'
+		. '<div class="infoblock">This Port must not be in use by any other process.</div>'
+);
+
+// Add option to disable DNSBL logging and utilize the DNSBL Webserver (excluding nullblocking events)
+$section->addInput(new Form_Checkbox(
+	'pfb_py_nolog',
+	gettext('DNSBL Event Logging'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_py_nolog']) === PfbToggle::On,
+	'on'
+))->setHelp('Disable event logging in the DNS Resolver and utilize the DNSBL Webserver. Typically used when an upstream LAN DNS server is utilized.<br />'
+	. 'Null blocked events will still be logged.');
+
+
+$section->addInput(new Form_Checkbox(
+	'pfb_dnsbl_rule',
+	gettext('Permit Firewall Rules'),
+	gettext('Enable'),
+	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_rule']) === PfbToggle::On,
+	'on'
+))->setHelp('Creates \'Floating\' Firewall permit rules allowing the selected interface(s) to reach the DNSBL Webserver (ICMP and Webserver ports only).'
+		. '<div class="infoblock">This option is not designed to bypass DNSBL for the non-selected LAN segments. '
+		. 'Only required for networks with multiple LAN Segments.</div>');
+
+$section->addInput(new Form_Select(
+	'dnsbl_allow_int',
+	gettext('Interface(s)'),
+	$pconfig['dnsbl_allow_int'],
+	$options_dnsbl_interface,
+	TRUE
+))->setAttribute('style', 'width: auto')
+  ->setAttribute('size', $options_dnsbl_interface_cnt)
+  ->setHelp('Interface(s) permitted to reach the DNSBL Webserver by the Permit Firewall Rules above.');
+
+$section->addInput(new Form_Select(
+	'dnsbl_webpage',
+	'Blocked Webpage',
+	$pconfig['dnsbl_webpage'],
+	$options_dnsbl_webpage
+))->sethelp('Default: <strong>dnsbl_default.php</strong><br />Select the DNSBL Blocked Webpage.<br /><br />'
+	. 'Custom block web pages can be added to: <strong>/usr/local/www/pfblockerng/www/</strong> folder.')
+  ->setAttribute('style', 'width: auto')
+  ->setAttribute('size', $options_dnsbl_webpage_cnt);
+$form->add($section);
 
 $tld_list = array();
 
@@ -2804,22 +2998,51 @@ $tld_info['bgTLD']	= 'List of Branded Generic Top-Level-Domains (bgTLD)';
 
 $tld_total = array_sum(array_map('count', $tld_list));
 
+$section = new Form_Section('AdBlock suffix handling', 'dnsbl_suffix', COLLAPSIBLE|SEC_CLOSED);
+
+// issue #2371: feed-at-suffix policy selects. Feed-wide and independent of Wildcard
+// Blocking (and of each other) -- deliberately NOT behind a hideCheckbox() show/hide,
+// so placement here (near Wildcard Blocking, for topical proximity) never implies a
+// dependency on it. Applies only to Feed-provenance rows; a Custom List or a sovereign
+// ABP list entry is never affected by either select.
+$psl_feed_policy_options = array(
+	'ignore'	=> 'Ignore entirely',
+	'apex'		=> 'Block the suffix apex only',
+	'honor'		=> 'Honor list rules',
+);
+$psl_feed_policy_help = '<div class="infoblock"><ul>'
+	. '<li><strong>Ignore entirely</strong> - the feed entry is dropped (counted in the reject stats).</li>'
+	. '<li><strong>Block the suffix apex only</strong> - only the exact suffix name is blocked; this entry no longer affects names under the suffix (other list entries still apply).</li>'
+	. '<li><strong>Honor list rules</strong> - the list is honored as written, including an explicit ABP wildcard rule that may still blanket the suffix.</li>'
+	. '</ul>'
+	. 'A Custom List or a sovereign ABP list entry is never affected by this policy. Intentional whole-suffix blocking belongs in '
+	. '<strong>TLD Blacklist</strong> below (dotted entries supported).</div>';
+
+$section->addInput(new Form_Select(
+	'pfb_psl_feed_private_policy',
+	gettext('Feed entries at shared-hosting suffixes (PSL PRIVATE)'),
+	$pconfig['pfb_psl_feed_private_policy'],
+	$psl_feed_policy_options
+))->setHelp('Applies only to a Feed entry named exactly at a PSL PRIVATE suffix (shared domains such as github.io -- not private DNS).'
+	. $psl_feed_policy_help);
+
+$section->addInput(new Form_Select(
+	'pfb_psl_feed_icann_policy',
+	gettext('Feed entries at public suffixes (ICANN)'),
+	$pconfig['pfb_psl_feed_icann_policy'],
+	$psl_feed_policy_options
+))->setHelp('Applies only to a Feed entry named exactly at an ICANN (public) suffix.'
+	. $psl_feed_policy_help);
+
 $section->addInput(new Form_Checkbox(
-	'tld_allow',
-	gettext('Allow Only Selected Domain Suffixes'),
+	'pfb_psl_include_private',
+	gettext('Recognize Shared-Hosting Suffixes (PSL PRIVATE)'),
 	'Enable',
-	pfb_cfg_toggle_read($pconfig['tld_allow']) === PfbToggle::On,
+	$pconfig['pfb_psl_include_private'] === PfbToggle::On,
 	'on'
-))->setHelp('Enable the TLD Allow feature (' . number_format($tld_total) . ' TLDs available). This will block all TLDs that are not specifically selected.'
-		. '<div id="dnsbl_python_tld_allow_text">'
-		. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
-		. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
-		. 'Picker: <strong>IANA root TLDs</strong>. Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
-		. 'Changes to this option will require a Force Update to take effect.<br /><br />'
-		. '<strong>Legend</strong>:<br />'
-		. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
-		. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
-		);
+))->setHelp('Recognize the PSL PRIVATE section when determining the registrable boundary. '
+		. 'Applies when Wildcard Blocking is enabled.'
+		. '<div class="infoblock">A suffix apex is never wildcarded. PSL PRIVATE describes shared domains such as github.io; it does not mean private DNS.</div>');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_psl_allow_private',
@@ -2827,7 +3050,24 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_psl_allow_private'] === PfbToggle::On,
 	'on'
-))->setHelp('Permit only the winning PSL PRIVATE boundary when no selected IANA root TLD matches. This precision applies to shared domains such as github.io; the suffix apex itself is never wildcarded.');
+))->setHelp('Permit only the winning PSL PRIVATE boundary when no selected IANA root TLD matches. '
+		. 'Applies when Allow Only Selected Domain Suffixes is enabled.'
+		. '<div class="infoblock">This precision applies to shared domains such as github.io; the suffix apex itself is never wildcarded.</div>');
+
+$form->add($section);
+
+$section = new Form_Section('TLD Allow list', 'tld_allow_pickers', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_StaticText(
+	NULL,
+	'<div id="dnsbl_python_tld_allow_text">'
+	. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
+	. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
+	. 'Picker: <strong>IANA root TLDs</strong>. Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
+	. 'Changes to this option will require a Force Update to take effect.<br /><br />'
+	. '<strong>Legend</strong>:<br />'
+	. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
+	. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
+));
 
 $section->addInput(new Form_Checkbox(
 	'tld_allow_sort',
@@ -2856,7 +3096,6 @@ foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 		TRUE
 	))->setHelp("{$tld_info[$tld_type]}<br />Total TLD Count: [{$count}]")
 	  ->setAttribute('size', '20')
-	  ->addClass('pfb_python')
 	  ->setWidth(4);
 
 	if ($key == 1 || $key == 3) { 
@@ -2864,90 +3103,55 @@ foreach (array('gTLD', 'ccTLD', 'iTLD', 'bgTLD') as $key => $tld_type) {
 	}
 }
 
-$section->addInput(new Form_Select(
-	'pfb_idn',
-	gettext('IDN Blocking'),
-	$pconfig['pfb_idn'],
-	array(
-		'off'		=> 'Off',
-		'confusable'	=> 'Confusable',
-		'on'		=> 'Always',
-	)
-))->setHelp('IDN handling (not Regex based).<ul>'
-		. '<li><strong>Off</strong> - no IDN action.</li>'
-		. '<li><strong>Confusable</strong> - block only cross-script homoglyphs (Latin/Cyrillic/Greek mixes, '
-		. 'including Cyrillic+Greek).<br />Does not catch whole-script confusables or pure-ASCII typosquats.</li>'
-		. '<li><strong>Always</strong> - block every IDN/\'xn--\' domain (blunt).</li></ul>');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_idn_block_malicious',
-	gettext('Block clearly-malicious homoglyphs'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_block_malicious'] ?? NULL),
-	'on'
-))->setHelp('Confusable mode: block names that mix confusable scripts in one label (clearly malicious). Disable to alert only.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_idn_escalate_suspicious',
-	gettext('Block suspicious mixed-script'),
-	'Enable',
-	pfb_dnsbl_toggle_enabled($pconfig['pfb_idn_escalate_suspicious'] ?? NULL),
-	'on'
-))->setHelp('Confusable mode: escalate suspicious mixed-script names to a block. Default alerts only (no block).');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_regex',
-	gettext('Regex Blocking'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_regex']) === PfbToggle::On,
-	'on'
-))->setHelp('Enable the Regex blocking feature. Regex list below: [Regex List]');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_regex_cap',
-	gettext('Limit long/complex regex'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_regex_cap']) === PfbToggle::On,
-	'on'
-))->setHelp('Best-effort ReDoS safeguard (opt-in): over-long or catastrophic-backtracking regex patterns are dropped at load, before they run, from both feeds (ABP) and the Regex List above (each drop is logged). '
-		. 'An always-on runtime guard additionally warns on, then evicts, any pattern whose match runs too slow.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_cname',
-	gettext('CNAME Validation'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_cname']) === PfbToggle::On,
-	'on'
-))->setHelp('Enable the CNAME Validation feature. All CNAMES will be evaluated against DNSBL database and blocked.<br />'
-		. 'Events are logged with a "_CNAME" suffix in the DNSBL Log.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_lenient',
-	gettext('Lenient Feed Parsing'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_lenient']) === PfbToggle::On,
-	'on'
-))->setHelp('Parse DNSBL feed lines permissively: any <strong>scheme://</strong> is stripped and URL paths are removed.<br />'
-		. 'When disabled (strict), lines with an invalid scheme (e.g. <strong>123://</strong>) or a URL path are skipped and logged.<br />'
-		. 'New installs default to disabled (strict); upgraded installs keep the permissive behaviour.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_noaaaa',
-	gettext('no-AAAA'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_noaaaa']) === PfbToggle::On,
-	'on'
-))->setHelp('Enable the no-AAAA feature. This will block all (IPv6) AAAA DNS requests for the defined domains. no-AAAA List below.');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_gp',
-	gettext('DNSBL Group Policy'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_gp']) === PfbToggle::On,
-	'on'
-))->setHelp('Enable the Group Policy functionality to allow certain Local LAN IPs to bypass DNSBL');
-
 $form->add($section);
+
+$section = new Form_Section('DNSBL Control', 'dnsbl_control', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_Checkbox(
+	'pfb_control',
+	gettext('DNSBL Control'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_control']) === PfbToggle::On,
+	'on'
+))->setHelp('Enabling this option will allow sending DNSBL control commands via the local CLI.'
+	. '<div class="infoblock" style="width: 90%;">'
+	. 'Commands are run on pfSense as root via the <strong>pfblockerng dnsbl-control</strong> CLI<br />'
+	. 'A disable is a temporary intervention, and will be reset on a restart of the Resolver<br />'
+	. 'These commands can be incorporated in CRON/Scheduler tasks or run manually as required<br />'
+	. 'All events are logged to the Reports Tab (Gear icon)<br /><br />'
+	. '<strong>Command Syntax:</strong><br />'
+	. '<table class="table table-bordered table-striped table-hover table-compact">'
+	. '	<thead>'
+	. '		<tr>'
+	. '			<th style="max-width: 10%">Description</th>'
+	. '			<th style="max-width: 85%">Command</th>'
+	. '			<th style="max-width: 5%">Notes</th>'
+	. '		</tr>'
+	. '	</thead>'
+	. '	<tbody>'
+	. '		<tr><td>Enable DNSBL</td><td>pfblockerng dnsbl-control enable</td><td></td></tr>'
+	. '		<tr><td>Disable DNSBL</td><td>pfblockerng dnsbl-control disable</td><td></td></tr>'
+	. '		<tr><td>Disable DNSBL for duration</td><td>pfblockerng dnsbl-control disable seconds</td><td>Seconds: 1-3600</td></tr>'
+	. '		<tr><td>Add a Global bypass IP</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4</td><td></td></tr>'
+	. '		<tr><td>Add a Global bypass IP for duration</td><td>pfblockerng dnsbl-control addbypass 1.2.3.4 seconds</td><td>Seconds: 1-3600</td></tr>'
+	. '		<tr><td>Remove a Global bypass IP</td><td>pfblockerng dnsbl-control removebypass 1.2.3.4</td><td></td></tr>'
+	. '	</tbody>'
+	. '</table>'
+	. '</div>');
+
+$section->addInput(new Form_Checkbox(
+	'pfb_control_legacy',
+	gettext('DNSBL Control (legacy DNS TXT)'),
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['pfb_control_legacy']) === PfbToggle::On,
+	'on'
+))->setHelp('<span class="text-danger">Deprecated</span> - re-enable the legacy DNS TXT control transport (drill TXT python_control.*).'
+	. '<div class="infoblock" style="width: 90%;">'
+	. 'This option is <strong>deprecated</strong>, <strong>less secure</strong>, and will be <strong>removed in a future release</strong>.<br />'
+	. 'It only takes effect when <strong>DNSBL Control</strong> above is enabled. Leave it off and use the CLI instead.<br />'
+	. 'Migrate any CRON/Scheduler tasks from drill TXT python_control.* to the pfblockerng dnsbl-control CLI shown above.'
+	. '</div>');
+$form->add($section);
+
 
 // DNSBL Group Policy section — placed directly below the main 'DNSBL' section (which
 // holds its pfb_gp enable checkbox) and above the encrypted-DNS sections. The pfb_gp
@@ -2972,10 +3176,16 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
+// DNS Bypass Prevention: DNS Redirect + DoT/DoQ Block + DoH/DoT/DoQ Blocking.
 // [ ADR-36 ] DNS Redirect section — placed above the DoH/DoT/DoQ Blocking section.
 // Redirects outbound port-53 DNS traffic on the selected interfaces to the
 // firewall's own resolver. DoH/DoT bypass is NOT covered.
-$section = new Form_Section('DNS Redirect');
+$section = new Form_Section('DNS Bypass Prevention', 'dnsbl_bypass', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_StaticText(
+	'',
+	'<style>' . pfb_form_subhdr_css_rules() . '</style>'
+));
+$section->add(pfb_form_subhdr('DNS Redirect'));
 
 $group = new Form_Group('DNS Redirect');
 $group->add(new Form_Checkbox(
@@ -2985,9 +3195,9 @@ $group->add(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['dnsbl_redir']) === PfbToggle::On,
 	'on'
 ))->setWidth(7)
-  ->setHelp('Redirects outbound port-53 DNS traffic on the selected interface(s) to the firewall\'s own resolver.<br />'
-		. 'Keeps clients on the local DNS resolver so DNSBL stays effective.<br />'
-		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the DoH/DoT/DoQ Blocking section below for that).');
+  ->setHelp('Redirects outbound port-53 DNS traffic on the selected interface(s) to the firewall\'s own resolver.'
+		. '<div class="infoblock">Keeps clients on the local DNS resolver so DNSBL stays effective.<br />'
+		. 'The firewall itself is always exempt. Does not cover DoH/DoT/DoQ traffic (use the DoH/DoT/DoQ Blocking section below for that).</div>');
 
 // [ ADR-36/37 ] Build the quick-fill interface union (inbound + outbound from IP settings).
 // These are the pfBlockerNG firewall-rule interfaces; the quick-fill populates the DNS
@@ -3036,19 +3246,18 @@ $section->add($group);
 
 $section->addInput(new Form_Input(
 	'dnsbl_redir_exclude',
-	gettext('Exception Alias'),
+	gettext('DNS Redirect Exception Alias'),
 	'text',
 	$pconfig['dnsbl_redir_exclude'],
 	['placeholder' => 'Firewall alias name (optional)']
 ))->setHelp('Optional. Name of an existing Firewall Alias. Hosts/subnets in this alias bypass the DNS redirect.<br />'
 		. 'The alias must be created separately at <a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a>.');
 
-$form->add($section);
 
 // [ ADR-37 ] DoT/DoQ Block section — placed adjacent to DNS Redirect.
 // Blocks port-853 DoT (TCP) and DoQ (UDP) traffic on the selected interfaces.
 // DoH (port 443) is not covered here; it is addressed by the DoH-IP feed and DNSBL domain blocking.
-$section = new Form_Section('DoT/DoQ Block');
+$section->add(pfb_form_subhdr('DoT/DoQ Block'));
 
 $group = new Form_Group('DoT/DoQ Block');
 $group->add(new Form_Checkbox(
@@ -3058,12 +3267,12 @@ $group->add(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['dnsbl_dot_block']) === PfbToggle::On,
 	'on'
 ))->setWidth(7)
-  ->setHelp('Blocks DNS-over-TLS (TCP 853) and DNS-over-QUIC (UDP 853) on the selected interface(s).<br />'
-		. 'DoH (port 443) is <strong>not</strong> blocked here — blocking 443 would break all HTTPS. '
+  ->setHelp('Blocks DNS-over-TLS (TCP 853) and DNS-over-QUIC (UDP 853) on the selected interface(s).'
+		. '<div class="infoblock">DoH (port 443) is <strong>not</strong> blocked here — blocking 443 would break all HTTPS. '
 		. 'DoH is addressed by the DoH-IP feed and DNSBL domain blocking.<br />'
-		. 'The firewall itself is always exempt. Hosts in the exception alias are also exempt.<br />'
+		. 'The firewall itself is always exempt. Hosts in the exception alias are also exempt. '
 		. 'The exception alias must exist at '
-		. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a> before use.');
+		. '<a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall &gt; Aliases</a> before use.</div>');
 
 // [ ADR-37 ] Quick-fill interface union -- identical to the ADR-36 DNS Redirect fill above
 // ($options_dnsbl_dot_block_int is the same interface list as $options_dnsbl_redir_int), so
@@ -3105,23 +3314,22 @@ $section->addInput(new Form_Checkbox(
 	gettext('Use a single floating rule instead of one rule per interface'),
 	pfb_cfg_toggle_read($pconfig['dnsbl_dot_block_floating']) === PfbToggle::On,
 	'on'
-))->setHelp('Default: <strong>off</strong> (one rule per selected interface).<br />'
-		. 'When enabled, a single floating rule (direction <strong>in</strong>, quick) is created over '
-		. 'all selected interfaces instead of a separate rule per interface. The action, interface '
-		. 'selection, and exception alias all apply unchanged.');
+))->setHelp('Default: <strong>off</strong> (one rule per selected interface). When enabled, one floating rule covers all selected interfaces instead of one rule each.'
+		. '<div class="infoblock">A single floating rule (direction <strong>in</strong>, quick) is created over all selected interfaces. '
+		. 'The action, interface selection, and exception alias all apply unchanged.</div>');
 
-$form->add($section);
 
-// DoH/DoT/DoQ Blocking section — placed below DNS Redirect + DoT/DoQ Block.
-$section = new Form_Section('DNS over HTTPS/TLS/QUIC Blocking');
+$section->add(pfb_form_subhdr('DNS over HTTPS/TLS/QUIC'));
+
 $section->addInput(new Form_Select(
 	'safesearch_doh',
 	gettext('DoH/DoT/DoQ Blocking'),
 	$pconfig['safesearch_doh'],
 	$options_safesearch_doh
-))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers. Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective.<br />'
-		. 'DNS requests to these domains will return NXDOMAIN.<br />'
-		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank" rel="noopener noreferrer">Feed</a> may cover more providers and update more often than this built-in list.')
+))->setHelp('Block well-known DNS over HTTPS/TLS/QUIC (DoH/DoT/DoQ) providers.'
+		. '<div class="infoblock">Modern browsers and devices often use encrypted DNS that bypasses DNSBL; blocking these providers keeps clients on the local resolver so DNSBL stays effective. '
+		. 'DNS requests to these domains will return NXDOMAIN. '
+		. 'A DoH/DoT/DoQ <a href="/pfblockerng/pfblockerng_feeds.php" target="_blank" rel="noopener noreferrer">Feed</a> may cover more providers and update more often than this built-in list.</div>')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Select(
@@ -3175,161 +3383,8 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-$section = new Form_Section('DNSBL Webserver Configuration');
-$section->addInput(new Form_Select(
-	'dnsbl_interface',
-	gettext('Web Server Interface'),
-	$pconfig['dnsbl_interface'],
-	$options_dnsbl_interface_all
-))->setHelp('Select the interface which DNSBL Web Server will Listen on.<br />'
-	. 'Default: <strong>Localhost (ports 80/443)</strong> - Selected Interface should be a Local Interface only.');
 
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_nonat',
-	gettext('Auto NAT'),
-	gettext('Disable automatic NAT rule creation'),
-	(pfb_cfg_toggle_read($pconfig['pfb_dnsbl_nonat']) === PfbToggle::On),
-	'on'
-))->setHelp('When set, pfBlockerNG will not auto-create the DNSBL NAT port-forward rules (non-Localhost interface only); manage them manually.');
-
-// [ ADR-13 ] Compute the address(es) the package WOULD auto-create, for the currently
-// selected DNSBL Web Server interface, so the UI can pre-fill them and detect conflict
-// exhaustion. pfb_pick_free_dnsbl_vip() returns the first free 10.10.X.53 / fd00:X::53
-// candidate (null when every candidate conflicts). A v6 VIP is only relevant when the
-// DNS Resolver listens on IPv6 (pfb_unbound_listens_v6()); otherwise v6 is not required.
-$pfb_auto_iface		= $pconfig['dnsbl_interface'] ?: 'lo0';
-$pfb_auto_v6_needed	= pfb_unbound_listens_v6();
-$pfb_auto_vip4		= pfb_pick_free_dnsbl_vip(AF_INET, $pfb_auto_iface);
-$pfb_auto_vip6		= $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_auto_iface) : null;
-
-// Conflict exhaustion: v4 is always required; v6 only when the resolver listens on it.
-// When no free candidate exists for a required family the checkbox is rendered disabled
-// with a warning, so auto-create can never be enabled into a known-conflicting state.
-$pfb_auto_exhausted	= ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
-
-$vips = pfb_get_vips();
-
-// [ ADR-13 ] The "Create VIPs automatically" toggle on its OWN row, above the
-// manual VIP selects. Its explanation lives in the group help UNDER the fields,
-// not on the checkbox: a long inline checkbox help renders as a very tall, narrow
-// column that towers over the rest of the section.
-$pfb_auto_chk = new Form_Checkbox(
-	'pfb_dnsvip_auto',
-	gettext('Auto VIP'),
-	gettext('Create VIPs automatically'),
-	(!$pfb_auto_exhausted && pfb_cfg_toggle_read($pconfig['pfb_dnsvip_auto']) === PfbToggle::On),
-	'on'
-);
-if ($pfb_auto_exhausted) {
-	$pfb_auto_chk->setAttribute('disabled', 'disabled');
-}
-$section->addInput($pfb_auto_chk);
-
-$group = new Form_Group('DNSBL Virtual IP');
-$group->add(new Form_Select(
-	'pfb_dnsvip4',
-	gettext('IPv4 VIP'),
-	$pconfig['pfb_dnsvip4'],
-	pfb_get_vip_options(AF_INET)
-))->setWidth(4)->setHelp('IPv4 Virtual IP');
-$group->add(new Form_Select(
-	'pfb_dnsvip6',
-	gettext('IPv6 VIP'),
-	(!empty($pconfig['pfb_dnsvip6']) ? $pconfig['pfb_dnsvip6'] : 'none'),
-	pfb_get_vip_options(AF_INET6)
-))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
-
-// Help under the side-by-side VIP fields: the original intro, a line break at the
-// SENTENCE boundary (never mid-sentence), then one concise line covering both
-// modes. "VIP"/"Virtual IP" used consistently (no "IP-Alias VIP" jargon); the
-// address/lifecycle detail belongs in the docs.
-$pfb_vip_help = 'Select the DNSBL VIP address — rejected DNS requests are forwarded here. '
-	. 'It should be in an isolated range not already used on the network.<br />'
-	. 'Enable <strong>Create VIPs automatically</strong> to have pfBlockerNG manage it, or select one '
-	. 'manually — create it first at '
-	. '<a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.';
-if ($pfb_auto_exhausted) {
-	$pfb_vip_help .= '<br /><i class="fa fa-exclamation-triangle text-warning"></i> '
-		. '<span class="text-warning">No free auto-create address is available — free one in the '
-		. '<strong>10.10.X.53</strong> / <strong>fd00:X::53</strong> range, or select a VIP manually.</span>';
-}
-$group->setHelp($pfb_vip_help);
-$section->add($group);
-
-$section->addInput(new Form_Input(
-	'pfb_dnsport',
-	gettext('Port'),
-	'number',
-	$pconfig['pfb_dnsport'],
-	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL Listening Port' ]
-))->setHelp('Example ( 8081 )<br />Enter a &emsp;<strong>single PORT</strong> &emsp;that is in the range of 1 - 65535<br />'
-		. 'This Port must not be in use by any other process.'
-);
-
-$section->addInput(new Form_Input(
-	'pfb_dnsport_ssl',
-	gettext('SSL Port'),
-	'number',
-	$pconfig['pfb_dnsport_ssl'],
-	[ 'min' => 1, 'max' => 65535, 'placeholder' => 'Enter DNSBL VIP address' ]
-))->setHelp('Example ( 8443 )<br />Enter a &emsp;<strong>single PORT</strong> &emsp;that is in the range of 1 - 65535<br />'
-		. 'This Port must not be in use by any other process.'
-);
-
-// Add option to disable DNSBL logging and utilize the DNSBL Webserver (excluding nullblocking events)
-$section->addInput(new Form_Checkbox(
-	'pfb_py_nolog',
-	gettext('DNSBL Event Logging'),
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['pfb_py_nolog']) === PfbToggle::On,
-	'on'
-))->setHelp('Disable event logging in the DNS Resolver and utilize the DNSBL Webserver. Typically used when an upstream LAN DNS server is utilized.<br />'
-	. 'Null blocked events will still be logged.');
-
-$form->add($section);
-
-$section = new Form_Section('DNSBL Configuration');
-
-$section->addInput(new Form_Checkbox(
-	'pfb_dnsbl_rule',
-	gettext('Permit Firewall Rules'),
-	gettext('Enable'),
-	pfb_cfg_toggle_read($pconfig['pfb_dnsbl_rule']) === PfbToggle::On,
-	'on'
-))->setHelp('This will create \'Floating\' Firewall permit rules to allow traffic from the Selected Interface(s) to access '
-		. 'the <strong>DNSBL Webserver</strong>. (ICMP and Webserver ports only).'
-		. '<br /><br />'
-		. 'This option is not designed to bypass DNSBL for the non-selected LAN segments<br />'
-		. 'This option is only required for networks with multiple LAN Segments.');
-
-$section->addInput(new Form_Select(
-	'dnsbl_allow_int',
-	gettext('Interface(s)'),
-	$pconfig['dnsbl_allow_int'],
-	$options_dnsbl_interface,
-	TRUE
-))->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_dnsbl_interface_cnt)
-  ->setHelp('Interface(s) permitted to reach the DNSBL Webserver by the Permit Firewall Rules above.');
-
-$section->addInput(new Form_Select(
-	'global_log',
-	'Global Logging/Blocking Mode',
-	$pconfig['global_log'],
-	$options_global_log
-))->setHelp($options_global_log_txt)
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Select(
-	'dnsbl_webpage',
-	'Blocked Webpage',
-	$pconfig['dnsbl_webpage'],
-	$options_dnsbl_webpage
-))->sethelp('Default: <strong>dnsbl_default.php</strong><br />Select the DNSBL Blocked Webpage.<br /><br />'
-	. 'Custom block web pages can be added to: <strong>/usr/local/www/pfblockerng/www/</strong> folder.')
-  ->setAttribute('style', 'width: auto')
-  ->setAttribute('size', $options_dnsbl_webpage_cnt);
-
+$section = new Form_Section('DNS Caching', 'dnsbl_caches', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Checkbox(
 	'pfb_cache',
 	gettext('Resolver cache'),
@@ -3344,9 +3399,9 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['pfb_cache_flush']) === PfbToggle::On,
 	'on'
-))->setHelp('Default: <strong>Disabled</strong><br />When enabled, clear Unbound\'s full resolver cache after a DNSBL data update is applied without restarting Unbound. '
-	. 'This makes newly blocked domains take effect immediately when an allowed answer was already cached, but also discards unrelated answers and can temporarily increase DNS latency and upstream queries. '
-	. 'When disabled, cached allowed answers remain until their DNS TTL expires. Resolver restarts already clear the cache; exact Alerts actions use targeted flushing.');
+))->setHelp('Default: <strong>Disabled</strong><br />Clear Unbound\'s resolver cache after a DNSBL update without restarting Unbound.'
+	. '<div class="infoblock">When enabled, newly blocked domains take effect immediately when an allowed answer was already cached, but also discards unrelated answers and can temporarily increase DNS latency and upstream queries. '
+	. 'When disabled, cached allowed answers remain until their DNS TTL expires. Resolver restarts already clear the cache; exact Alerts actions use targeted flushing.</div>');
 
 $section->addInput(new Form_Input(
 	'pfb_py_cache_max',
@@ -3354,10 +3409,10 @@ $section->addInput(new Form_Input(
 	'number',
 	$pconfig['pfb_py_cache_max'],
 	['min' => 0, 'max' => 5000000, 'placeholder' => '10000']
-))->setHelp('Default: <strong>10000</strong><br />Maximum number of domains kept in the DNSBL per-domain decision cache. '
-	. 'It is an <strong>LRU</strong> cache: frequently-queried domains stay resident and the least-recently-used entries are evicted at the cap. '
+))->setHelp('Default: <strong>10000</strong><br />Maximum number of domains kept in the DNSBL per-domain decision cache.'
+	. '<div class="infoblock">It is an <strong>LRU</strong> cache: frequently-queried domains stay resident and the least-recently-used entries are evicted at the cap. '
 	. 'Roughly under 1 KB of RAM per entry. Set to <strong>0</strong> for unlimited (no eviction). '
-	. 'Takes effect on the next DNSBL Reload.');
+	. 'Takes effect on the next DNSBL Reload.</div>');
 
 // issue #1881: the "#Whitelist" page anchor that used to live here was its own empty
 // Form_StaticText row -- every .form-group carries a theme border-bottom, so it drew a
@@ -3452,8 +3507,9 @@ $section->addInput(new Form_Input(
 	'password',
 	$pconfig['top1m_token'] ?? '',
 	['placeholder' => 'Enter your Cloudflare Radar API Token -- leave blank to keep the current token']
-))->setHelp('Required for Cloudflare Radar. The stored token is never displayed here; leaving this field blank on Save keeps '
-		. 'the existing token unchanged.')
+))->setHelp('Required for Cloudflare Radar. Leave blank on Save to keep the existing token. '
+		. 'Applies when the selected Type requires an API token.'
+		. '<div class="infoblock">The stored token is never displayed here.</div>')
   ->setAttribute('autocomplete', 'off');
 
 $section->addInput(new Form_Select(
@@ -3533,7 +3589,7 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-$section = new Form_Section('DNSBL IPs');
+$section = new Form_Section('DNSBL IPs', 'dnsbl_ips', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_StaticText(
 	NULL,
 	'When literal IP addresses are found in any Domain based Feed, those IPs are added to the <strong>pfB_DNSBLIP_v4</strong> / <strong>pfB_DNSBLIP_v6</strong> IP Aliastables and<br />'
@@ -3584,7 +3640,8 @@ $section->addInput(new Form_Select(
 	$pconfig['aliaslog'],
 	$options_aliaslog
 ))->sethelp('Default: <strong>Enable</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
-		. 'This can be overriden by the \'Global Logging\' Option in the General Tab.'
+		. 'This can be overriden by the \'Force Global IP Logging\' option on the IP Tab. '
+		. 'Applies when List Action is not Disabled.'
 );
 $form->add($section);
 
@@ -3782,35 +3839,31 @@ function enable_tld() {
 	if ($('#tld_wildcard').prop('checked')) {
 		$('#TLD_Exclusion').show();
 		$('#TLD_BW_list').show();
-		hideCheckbox('pfb_psl_include_private', false);
+		disableInput('pfb_psl_include_private', false);
 	} else {
 		$('#TLD_Exclusion').hide();
 		$('#TLD_BW_list').hide();
-		hideCheckbox('pfb_psl_include_private', true);
+		disableInput('pfb_psl_include_private', true);
 	}
 }
 
 function enable_ports() {
 	if ($('#dnsbl_interface').val() == 'lo0') {
-		hideInput('pfb_dnsport', true);
-		hideInput('pfb_dnsport_ssl', true);
+		disableInput('pfb_dnsport', true);
+		disableInput('pfb_dnsport_ssl', true);
 	} else {
-		hideInput('pfb_dnsport', false);
-		hideInput('pfb_dnsport_ssl', false);
+		disableInput('pfb_dnsport', false);
+		disableInput('pfb_dnsport_ssl', false);
 	}
 }
 
 function enable_tld_allow() {
 	if ($('#tld_allow').prop('checked')) {
-		hideCheckbox('tld_allow_sort', false);
-		hideMultiClass('pfb_python', false);
-		$('#dnsbl_python_tld_allow_text').show();
-		hideCheckbox('pfb_psl_allow_private', false);
+		$('#tld_allow_pickers').show();
+		disableInput('pfb_psl_allow_private', false);
 	} else {
-		hideCheckbox('tld_allow_sort', true);
-		hideMultiClass('pfb_python', true);
-		$('#dnsbl_python_tld_allow_text').hide();
-		hideCheckbox('pfb_psl_allow_private', true);
+		$('#tld_allow_pickers').hide();
+		disableInput('pfb_psl_allow_private', true);
 	}
 }
 
@@ -3830,14 +3883,16 @@ function enable_idn_mode() {
 var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
 
 function enable_top1m_token() {
-	hideInput('top1m_token', pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1);
+	disableInput('top1m_token', pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1);
 }
 
 function enable_python_regex() {
 	if ($('#pfb_regex').prop('checked')) {
 		$('#Python_regex_list').show();
+		hideCheckbox('pfb_regex_cap', false);
 	} else {
 		$('#Python_regex_list').hide();
+		hideCheckbox('pfb_regex_cap', true);
 	}
 }
 
@@ -3859,11 +3914,11 @@ function enable_python_gp() {
 
 function enable_dnsblip() {
 	if ($('#action').val() != 'Disabled') {
-		hideInput('aliaslog', false);
+		disableInput('aliaslog', false);
 		$('#advinboundsettings').show();
 		$('#advoutboundsettings').show();
 	} else {
-		hideInput('aliaslog', true);
+		disableInput('aliaslog', true);
 		$('#advinboundsettings').hide();
 		$('#advoutboundsettings').hide();
 	}
@@ -3898,7 +3953,7 @@ events.push(function(){
 	});
 	enable_top1m_token();
 
-	$('#pfb_regex').click(function() {
+	$('#pfb_regex').on('click change', function() {
 		enable_python_regex();
 	});
 	enable_python_regex();
@@ -3918,10 +3973,45 @@ events.push(function(){
 	});
 	enable_dnsblip();
 
+	var pfb_gated_ids = [
+		'pfb_psl_include_private', 'pfb_dnsport', 'pfb_dnsport_ssl',
+		'pfb_psl_allow_private', 'top1m_token', 'aliaslog'
+	];
+	$('form').submit(function() {
+		$.each(pfb_gated_ids, function(_, id) {
+			disableInput(id, false);
+		});
+	});
+
 	$('#pfb_dnsvip_auto').click(function() {
 		enable_dnsvip_auto();
 	});
 	enable_dnsvip_auto();
+
+	(function() {
+		var $title = $('#pfb_dnsbl').closest('.panel').children('.panel-heading').find('.panel-title').first();
+		if (!$title.length) {
+			return;
+		}
+		var $btn = $('<button type="button" id="pfb_expand_all" class="btn btn-xs btn-default pull-right">Expand all</button>');
+		$title.append($btn);
+		function collapses() {
+			return $('form .panel-body.collapse');
+		}
+		function anyClosed() {
+			return collapses().filter(':not(.in)').length > 0;
+		}
+		function syncLabel() {
+			$btn.text(anyClosed() ? 'Expand all' : 'Collapse all');
+		}
+		$btn.on('click', function(e) {
+			e.preventDefault();
+			collapses().collapse(anyClosed() ? 'show' : 'hide');
+			syncLabel();
+		});
+		$('form').on('shown.bs.collapse hidden.bs.collapse', syncLabel);
+		syncLabel();
+	})();
 
 	pfb_redir_exclude_autocomplete();
 });
