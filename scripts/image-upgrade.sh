@@ -102,9 +102,10 @@
 #   verification to promote the new BE (defaults: 300 / 10); METADATA_TIMEOUT /
 #   METADATA_INTERVAL — seconds to wait / poll step for pfSense's post-boot
 #   package metadata refresh to settle (defaults: 600 / 5). VERIFY_BOOT_TIMEOUT
-#   and METADATA_TIMEOUT accept 0..86400; METADATA_INTERVAL accepts 1..3600;
-#   invalid values use their defaults. Every boot wait adds the metadata wait to
-#   its own budget, so the worst case is its own timeout PLUS METADATA_TIMEOUT.
+#   and METADATA_TIMEOUT accept 0..86400; METADATA_INTERVAL accepts canonical
+#   decimal 1..3600 with no leading zeros; invalid values use their defaults.
+#   Every boot wait adds the metadata wait to its own budget, so the worst case
+#   is its own timeout PLUS METADATA_TIMEOUT.
 #   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
 #                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
 #                    versions; reboots the guest and waits for SSH before proceeding.
@@ -831,9 +832,9 @@ PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo prese
 pfb_wait_pkg_metadata() {
     _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
     _pwpm_interval="${METADATA_INTERVAL:-5}"
-    # Validate before comparison/arithmetic; only bounded decimal values are
-    # configured integers, so whitespace, zero intervals and shell overflows fall
-    # back before they can hide the deadline or pin the elapsed counter.
+    # Validate before comparison/arithmetic; only bounded canonical decimal values
+    # are configured integers, so whitespace, leading zeros, zero intervals and
+    # shell overflows fall back before they can hide the deadline or pin the counter.
     case "$_pwpm_interval" in '' | *[!0-9]* | 0 | 0[0-9]*) _pwpm_interval=5 ;; esac
     if ! [ "$_pwpm_interval" -ge 1 ] 2>/dev/null || ! [ "$_pwpm_interval" -le 3600 ] 2>/dev/null; then
         _pwpm_interval=5
