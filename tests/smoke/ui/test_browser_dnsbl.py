@@ -25,7 +25,7 @@ so the references cannot rot as pfblockerng_dnsbl.php grows (issue #788):
 * ``enable_tld()``: ``#tld_wildcard`` gates BOTH the ``TLD_Exclusion`` and
   ``TLD_BW_list`` sections at once.
 * ``enable_tld_allow()``: ``#tld_allow`` ``.show()``/``.hide()``s the
-  ``tld_allow_pickers`` section and ``hideCheckbox()``s ``pfb_psl_allow_private``.
+  ``tld_allow_pickers`` section and ``disableInput()``s ``pfb_psl_allow_private``.
 * ``enable_dnsblip()`` (bound to ``#action`` click): the ``#action`` List-Action
   select being non-``Disabled`` ``.show()``s BOTH the ``advinboundsettings`` and
   ``advoutboundsettings`` sections; ``Disabled`` ``.hide()``s them.
@@ -46,9 +46,9 @@ review (ADR §2 "Screenshots (A1)" -- artifacts, NOT asserted pixel baselines).
 
 ``enable_tld_allow()`` gates the ``tld_allow_pickers`` section (same
 ``.show()``/``.hide()`` pattern as Regex / no-AAAA / Group Policy) plus the
-``pfb_psl_allow_private`` row via ``hideCheckbox()``. The two PSL *feed-policy*
-selects live in ``dnsbl_suffix`` and must stay visible regardless of
-``#tld_allow`` / ``#tld_wildcard`` (issue #2371).
+``pfb_psl_allow_private`` row via ``disableInput()`` (stays visible, greys out,
+still POSTs). The two PSL *feed-policy* selects live in ``dnsbl_suffix`` and
+must stay visible regardless of ``#tld_allow`` / ``#tld_wildcard`` (issue #2371).
 
 DEFERRED (noted in the report): ``enable_ports`` (gated by the
 ``#dnsbl_interface`` select, whose non-``lo0`` options depend on the VM's live
@@ -240,8 +240,8 @@ def test_tld_checkbox_toggles_both_tld_sections(
     excl = page.locator("#TLD_Exclusion")
     bwl = page.locator("#TLD_BW_list")
     # issue #1541: the PSL PRIVATE recognition row rides the same gate via
-    # hideCheckbox() (whole form-group, label and help included). The row now
-    # lives in collapsed AdBlock suffix handling, so expand that panel first.
+    # disableInput() (visible, greys out, still POSTs). The row lives in
+    # collapsed AdBlock suffix handling, so expand that panel first.
     psl_row = page.locator("#pfb_psl_include_private")
     expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_attached(timeout=JS_TIMEOUT_MS)
@@ -258,23 +258,26 @@ def test_tld_checkbox_toggles_both_tld_sections(
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
-    expect(psl_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_disabled(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_tld_before_hidden")
 
-    # CHECK -> the handler .show()s both sections.
+    # CHECK -> the handler .show()s both sections; PSL row enables.
     box.evaluate("el => el.click()")
     expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_visible(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_visible(timeout=JS_TIMEOUT_MS)
     expect(psl_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_enabled(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_tld_after_shown")
 
-    # UNCHECK -> both re-hidden (proves a real two-way branch).
+    # UNCHECK -> both re-hidden; PSL row disables (still visible).
     box.evaluate("el => el.click()")
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
-    expect(psl_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_disabled(timeout=JS_TIMEOUT_MS)
 
 
 def test_tld_allow_checkbox_gates_psl_allow_private_row(
@@ -282,11 +285,12 @@ def test_tld_allow_checkbox_gates_psl_allow_private_row(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """`#tld_allow` gates the PSL PRIVATE allow row via ``hideCheckbox()``.
+    """`#tld_allow` gates the PSL PRIVATE allow row via ``disableInput()``.
 
     Narrow drill for issue #1541's allow-private toggle. The row lives in
     collapsed AdBlock suffix handling, so that panel is expanded first.
-    Before-state asserted, then both directions.
+    The input stays visible and greys out (it must POST). Before-state
+    asserted, then both directions.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -301,17 +305,20 @@ def test_tld_allow_checkbox_gates_psl_allow_private_row(
         box.evaluate("el => el.click()")
         expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
 
-    expect(allow_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "dnsbl_psl_allow_before_hidden")
+    expect(allow_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_psl_allow_before_disabled")
 
     box.evaluate("el => el.click()")
     expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(allow_row).to_be_visible(timeout=JS_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "dnsbl_psl_allow_after_shown")
+    expect(allow_row).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_psl_allow_after_enabled")
 
     box.evaluate("el => el.click()")
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
-    expect(allow_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_disabled(timeout=JS_TIMEOUT_MS)
 
 
 def test_tld_allow_checkbox_toggles_tld_allow_pickers_section(

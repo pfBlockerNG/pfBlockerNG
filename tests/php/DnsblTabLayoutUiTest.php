@@ -49,11 +49,11 @@ final class DnsblTabLayoutUiTest extends TestCase
 		return $positions;
 	}
 
-	public function testMatchingRefinementsSectionIsGone(): void
+	public function testDnsblConfigurationSectionWasRenamedAway(): void
 	{
 		$source = self::source();
-		$this->assertStringNotContainsString("new Form_Section('Matching refinements'", $source);
-		$this->assertStringNotContainsString("'dnsbl_matching'", $source);
+		$this->assertStringNotContainsString("new Form_Section('DNSBL Configuration'", $source);
+		$this->assertStringContainsString("new Form_Section('DNSBL Webserver Configuration'", $source);
 	}
 
 	public function testDnsblSectionControlOrderAndPairs(): void
