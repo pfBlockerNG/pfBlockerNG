@@ -81,37 +81,52 @@ final class DnsblTldAllowCountTest extends TestCase
 	}
 
 	/**
-	 * The oracle above evaluates the block, so the block must stay inert data: it may bind
-	 * only its own three names and call only the array builders. Anything else would run
-	 * inside PHPUnit, in a scope where the page's own state does not exist.
+	 * The oracle below evaluates the block, so the block must stay inert data. Allowlist
+	 * rather than blocklist: a backtick shell-exec produces neither a variable binding nor
+	 * a name-followed-by-paren, so anything screening for known-bad constructs misses it.
 	 */
 	public function testTldDataBlockIsInertEnoughToEvaluate(): void
 	{
-		// Tokenised, not grepped: the TLD descriptions themselves contain parentheses
-		// ('List of Generic Top-Level-Domains (gTLD)'), which a regex reads as calls.
-		$tokens = token_get_all('<?php ' . $this->tldDataBlock());
-		$calls = [];
-		$names = [];
-		foreach ($tokens as $index => $token) {
+		$this->assertTldDataBlockIsInert();
+	}
+
+	/** @return list<string> the disallowed tokens found, empty when the block is inert */
+	private function foreignTokens(string $block): array
+	{
+		// Every token the four literal arrays plus the array_sum(array_map(...)) need.
+		$types = ['T_OPEN_TAG', 'T_VARIABLE', 'T_WHITESPACE', 'T_ARRAY',
+			'T_CONSTANT_ENCAPSED_STRING', 'T_DOUBLE_ARROW', 'T_STRING'];
+		$chars = ['=', '(', ')', ';', '[', ']', ','];
+		$names = ['$tld_list', '$tld_info', '$tld_total'];
+		$callees = ['array', 'array_sum', 'array_map'];
+
+		$foreign = [];
+		foreach (token_get_all('<?php ' . $block) as $token) {
 			if (!is_array($token)) {
+				if (!in_array($token, $chars, TRUE)) {
+					$foreign[] = $token;
+				}
 				continue;
 			}
-			if ($token[0] === T_VARIABLE
-				&& !in_array($token[1], ['$tld_list', '$tld_info', '$tld_total'], TRUE)) {
-				$names[$token[1]] = TRUE;
-			}
-			if (($tokens[$index + 1] ?? NULL) === '('
-				&& !in_array($token[1], ['array', 'array_sum', 'array_map'], TRUE)) {
-				$calls[$token[1]] = TRUE;
+			$name = token_name($token[0]);
+			if (!in_array($name, $types, TRUE)) {
+				$foreign[] = $name . ' ' . trim($token[1]);
+			} elseif ($name === 'T_VARIABLE' && !in_array($token[1], $names, TRUE)) {
+				$foreign[] = $token[1];
+			} elseif ($name === 'T_STRING' && !in_array($token[1], $callees, TRUE)) {
+				$foreign[] = $token[1] . '()';
 			}
 		}
+		return array_values(array_unique($foreign));
+	}
 
-		$this->assertSame([], array_keys($names),
-			'the TLD data block must bind only its own three names; it now reaches for: '
-			. implode(', ', array_keys($names)));
-		$this->assertSame([], array_keys($calls),
-			'the TLD data block must stay literal arrays plus the count it derives; evaluating it '
-			. 'would otherwise execute: ' . implode(', ', array_keys($calls)));
+	private function assertTldDataBlockIsInert(): void
+	{
+		$foreign = $this->foreignTokens($this->tldDataBlock());
+
+		$this->assertSame([], $foreign,
+			'the TLD data block is evaluated by this suite, so it must stay literal arrays plus '
+			. 'the count it derives; it now carries: ' . implode(', ', $foreign));
 	}
 
 	private function tldDataBlock(): string
@@ -127,6 +142,7 @@ final class DnsblTldAllowCountTest extends TestCase
 	/** @return array{list: array<string, array<string, string>>, info: array<string, string>, total: int} */
 	private function evaluateTldDataBlock(): array
 	{
+		$this->assertTldDataBlockIsInert();
 		$data = eval($this->tldDataBlock()
 			. ' return [\'list\' => $tld_list, \'info\' => $tld_info, \'total\' => $tld_total];');
 		$this->assertIsArray($data, 'the TLD data block must evaluate to its three bindings alone');
