@@ -113,11 +113,11 @@ final class IpTabLayoutUiTest extends TestCase
 		}
 	}
 
-	public function testDeltaBatchIsDisabledWhenApplyModeIsReplace(): void
+	public function testDeltaBatchIsHiddenWhenApplyModeIsReplace(): void
 	{
 		$source = self::source();
 		$this->assertMatchesRegularExpression(
-			"/function enable_delta_batch\(\)\s*\{.*?disableInput\('pfb_alias_delta_batch'/s",
+			"/function enable_delta_batch\(\)\s*\{.*?hideInput\('pfb_alias_delta_batch'/s",
 			$source
 		);
 		$this->assertStringContainsString("$('#pfb_alias_delta_mode').val() == 'replace'", $source);
