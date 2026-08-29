@@ -550,8 +550,8 @@ $section = new Form_Section('Support');
 $section->addInput(new Form_StaticText(
 	null,
 	'
-<div>
-<div style="width: 75%; height: 180px; float: left;">
+<div class="row">
+<div class="col-sm-9">
 	<strong>pfBlockerNG</strong> is created, designed, developed, supported and maintained by:
 	<a target="_blank" rel="noopener noreferrer" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
 
@@ -572,11 +572,11 @@ $section->addInput(new Form_StaticText(
 	<span class="pull-right"><small>Based upon pfBlocker by Marcello Coutinho and Tom Schaefer.</small></span>
 </div>
 
-<div style="width: 25%; height: 170px; float: right;">
+<div class="col-sm-3">
 	<a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
 
-<svg width="180.0pt" height="180.0pt" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
-	 viewBox="30 225 560 470" style="enable-background:new 30 225 560 470;" xml:space="preserve">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="128 172 384 384" style="width:100%;height:auto;max-width:180pt;" xml:space="preserve">
 <style type="text/css">
 	.st0{fill:#8B181B;}
 	.st1{fill:#660818;}
