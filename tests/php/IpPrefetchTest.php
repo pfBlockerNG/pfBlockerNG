@@ -56,8 +56,8 @@ use PHPUnit\Framework\TestCase;
  *     the tail after its first ':' happens to equal some host's raw_entry.
  *
  *   Scenario: B3 -- a failed batched grep pass must never seed a false negative
- *     A child `php` process with `open_basedir` whitelisting only the repo tree (so
- *     sys_get_temp_dir()'s real system temp dir is off-limits) genuinely fails
+ *     A child `php` process with `open_basedir` whitelisting the repo tree and its
+ *     bootstrap sandbox (but not sys_get_temp_dir()'s real system temp dir) genuinely fails
  *     tempnam() -- the exact pattern-file-creation failure pfb_ip_prefetch_grep_lines()
  *     can hit in production. pfb_ip_prefetch() must leave the affected rows entirely
  *     UNSEEDED rather than caching a wrong/placeholder result.
@@ -897,6 +897,7 @@ final class IpPrefetchTest extends TestCase
 			// Apply the restriction after bootstrap creates its own sandbox. Keep that exact
 			// tree allowed so its shutdown cleanup works, while sys_get_temp_dir() itself
 			// remains outside open_basedir and the body still exercises tempnam() failure.
+			// issue #896: stderr routing keeps PHP 8.5's tempnam() warning out of JSON stdout.
 			$cmd = 'php -d display_errors=stderr ' . escapeshellarg($probe) . ' 2>/dev/null';
 			$output = shell_exec($cmd);
 		} finally {
