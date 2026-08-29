@@ -54,8 +54,8 @@ final class GateDisableUiTest extends TestCase
 		}
 
 		$ip = self::ip();
-		$this->assertStringContainsString("disableInput('pfb_alias_delta_batch'", $ip);
-		$this->assertStringNotContainsString("hideInput('pfb_alias_delta_batch'", $ip);
+		$this->assertStringContainsString("hideInput('pfb_alias_delta_batch'", $ip);
+		$this->assertStringNotContainsString("disableInput('pfb_alias_delta_batch'", $ip);
 	}
 
 	public function testWholeSectionsStayHidden(): void
@@ -96,8 +96,6 @@ final class GateDisableUiTest extends TestCase
 		$this->assertStringContainsString("$('form').submit", $dnsbl);
 
 		$ip = self::ip();
-		$this->assertStringContainsString('pfb_gated_ids', $ip);
-		$this->assertStringContainsString("disableInput(id, false)", $ip);
-		$this->assertStringContainsString("$('form').submit", $ip);
+		$this->assertStringNotContainsString('pfb_gated_ids', $ip);
 	}
 }

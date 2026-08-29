@@ -49,7 +49,7 @@ $pconfig['enable_agg']		= PfbConfig::read('ip/enable_agg');
 // (general section); presented here beside CIDR Aggregation. Default none -> [''] selects
 // nothing in the multi-select. Options defined here (before the POST handler) so the
 // save-time sanitiser and the rendered select share one source of allowed values.
-// Stored VALUES are Deny/Permit/Match/Native; the labels show the reference-only alias.
+// Stored VALUES are Deny/Permit/Match/Native; Native's label keeps "Alias Native".
 $options_pfb_agg_types		= [ 'Deny' => 'Deny', 'Permit' => 'Permit', 'Match' => 'Match', 'Native' => 'Alias Native' ];
 $pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('gen/pfb_agg_types'));
 
@@ -723,7 +723,7 @@ print ($form);
 var pagetype = null;
 
 function enable_delta_batch() {
-	disableInput('pfb_alias_delta_batch', $('#pfb_alias_delta_mode').val() == 'replace');
+	hideInput('pfb_alias_delta_batch', $('#pfb_alias_delta_mode').val() == 'replace');
 }
 
 events.push(function(){
@@ -733,13 +733,6 @@ events.push(function(){
 		enable_delta_batch();
 	});
 	enable_delta_batch();
-
-	var pfb_gated_ids = ['pfb_alias_delta_batch'];
-	$('form').submit(function() {
-		$.each(pfb_gated_ids, function(_, id) {
-			disableInput(id, false);
-		});
-	});
 });
 
 //]]>
