@@ -60,7 +60,7 @@ def _write_pkg(
     abi: str = "FreeBSD:15:*",
     arch: str = "freebsd:15:*",
     deps: dict[str, dict[str, str]] | None = None,
-    scripts: dict[str, str] | None = None,
+    scripts: dict[str, object] | None = None,
     files: dict[str, bytes] | None = None,
     omit_compact: bool = False,
     omit_manifest: bool = False,
@@ -689,6 +689,27 @@ def test_empty_lifecycle_script_rejected(tmp_path: Path) -> None:
     scripts = {"install": "", "deinstall": "echo bye\n"}
     pkg_path, export_dir = _happy_fixture(tmp_path, STABLE, ROW_15, scripts=scripts)
     with pytest.raises(bfv.ArtifactValidationError, match="scripts"):
+        bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
+
+
+@pytest.mark.parametrize("field", ["install", "deinstall"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(["unexpected"], id="truthy-list"),
+        pytest.param([], id="empty-list"),
+        pytest.param({"unexpected": "value"}, id="dict"),
+        pytest.param(0, id="zero"),
+        pytest.param(False, id="false"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_non_string_lifecycle_script_rejected_with_named_type_error(tmp_path: Path, field: str, value: object) -> None:
+    scripts: dict[str, object] = dict(DEMO_SCRIPTS)
+    scripts[field] = value
+    pkg_path, export_dir = _happy_fixture(tmp_path, STABLE, ROW_15, scripts=scripts)
+
+    with pytest.raises(bfv.ArtifactValidationError, match=rf"scripts\.{field} must be a string"):
         bfv.validate_artifact(pkg_path, export_dir, STABLE, ROW_15)
 
 
@@ -1505,6 +1526,48 @@ def test_issue_2021_stripped_real_payload_is_rejected_and_oracle_unchanged(
     original = report_path.read_bytes()
     assert _run_issue_2021_verify(stage, matrix_file, tmp_path) == 1
     assert report_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("report_exists", [True, False], ids=["existing-report", "absent-report"])
+def test_issue_2061_cli_rejects_non_string_script_without_rewriting_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    report_exists: bool,
+) -> None:
+    stage, matrix_file, report_path = _issue_2021_build_fixture(tmp_path, monkeypatch)
+    original = report_path.read_bytes()
+    if not report_exists:
+        report_path.unlink()
+    pkg_path, _ = _happy_fixture(
+        tmp_path / "malformed",
+        STABLE,
+        ROW_15,
+        scripts={**DEMO_SCRIPTS, "install": ["unexpected"]},
+    )
+    monkeypatch.setattr(bfv, "_invoke_build_leg", lambda argv, *, cwd: str(pkg_path))
+    capsys.readouterr()
+
+    rc = bfv.main(
+        [
+            "--out",
+            str(stage),
+            "--matrix-cmd",
+            f"cat {matrix_file}",
+            "--repo",
+            str(tmp_path),
+            "--no-deterministic-check",
+        ]
+    )
+
+    assert rc != 0
+    stderr = capsys.readouterr().err
+    assert "scripts.install must be a string" in stderr
+    assert "Traceback" not in stderr
+    if report_exists:
+        assert report_path.read_bytes() == original
+    else:
+        assert not report_path.exists()
 
 
 def test_issue_2021_artifact_checksum_mismatch_rejected_independently(

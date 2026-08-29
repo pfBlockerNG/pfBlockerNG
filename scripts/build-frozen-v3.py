@@ -344,8 +344,20 @@ def validate_artifact(pkg_path: Path, export_dir: Path, target: FrozenTarget, ro
         raise ArtifactValidationError(f"{pkg_path.name}: missing derived dependency name(s): {', '.join(missing_deps)}")
 
     scripts = manifest.get("scripts")
-    if not isinstance(scripts, dict) or not scripts.get("install") or not scripts.get("deinstall"):
+    if not isinstance(scripts, dict):
         raise ArtifactValidationError(f"{pkg_path.name}: manifest scripts.install/scripts.deinstall missing or empty")
+    for field in ("install", "deinstall"):
+        if field not in scripts:
+            raise ArtifactValidationError(
+                f"{pkg_path.name}: manifest scripts.install/scripts.deinstall missing or empty"
+            )
+        script = scripts[field]
+        if not isinstance(script, str):
+            raise ArtifactValidationError(f"{pkg_path.name}: manifest scripts.{field} must be a string, got {script!r}")
+        if not script:
+            raise ArtifactValidationError(
+                f"{pkg_path.name}: manifest scripts.install/scripts.deinstall missing or empty"
+            )
     install_sha = hashlib.sha256(scripts["install"].encode()).hexdigest()
     deinstall_sha = hashlib.sha256(scripts["deinstall"].encode()).hexdigest()
 
