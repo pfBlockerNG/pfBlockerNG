@@ -92,7 +92,11 @@ final class GeneralScheduleUiTest extends TestCase
 		$this->assertNotFalse($help);
 		$this->assertNotFalse($next);
 		$this->assertLessThan($next, $help, 'Default Schedule help must render inside its control group.');
-		$this->assertStringContainsString("print_info_box(gettext('Settings were saved, but schedule-cache generation failed.", $source);
+		// issue #2855: the warning names the failing stage instead of asking for a bug report.
+		$this->assertStringContainsString(
+			"print_info_box(sprintf(gettext('Settings were saved, but schedule-cache generation failed: %s.",
+			$source
+		);
 	}
 
 	public function testSaveWritesConfigBeforeRefreshingScheduleCacheAndRedirectsOnFailure(): void

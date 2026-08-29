@@ -132,6 +132,7 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 // defined on every request path (incl. a POST without 'save'). Initialise it once.
 $input_errors = array();
 $schedule_cache_failed = ($_GET['schcache'] ?? '') === 'failed';
+$schedule_cache_stage = pfb_schedule_cache_stage_label(is_string($_GET['schstage'] ?? NULL) ? $_GET['schstage'] : '');
 
 // Validate input fields and save
 if ($_POST) {
@@ -260,10 +261,23 @@ if ($_POST) {
 					$candidate_dir = '';
 				}
 			}
-			$cache_ok = $runtime_model !== NULL && $runtime_state !== NULL && $runtime_timezone instanceof DateTimeZone
-				&& $candidate_dir !== ''
-				&& pfb_schedule_cache_refresh($runtime_model, $runtime_state, time(), $runtime_timezone, $candidate_dir)
-				&& pfb_due_ledger_read_cache($candidate_dir, $runtime_model['config_hash']) !== NULL;
+			// issue #2855: name the stage that failed instead of collapsing six checks into
+			// one boolean. pfb_schedule_runtime_config() logs the 'config' detail itself.
+			$cache_stage = '';
+			if ($runtime_model === NULL) {
+				$cache_stage = 'config';
+			} elseif ($runtime_state === NULL) {
+				$cache_stage = 'state';
+			} elseif (!$runtime_timezone instanceof DateTimeZone) {
+				$cache_stage = 'timezone';
+			} elseif ($candidate_dir === '') {
+				$cache_stage = 'workdir';
+			} elseif (!pfb_schedule_cache_refresh($runtime_model, $runtime_state, time(), $runtime_timezone, $candidate_dir)) {
+				$cache_stage = 'refresh';
+			} elseif (pfb_due_ledger_read_cache($candidate_dir, $runtime_model['config_hash']) === NULL) {
+				$cache_stage = 'readback';
+			}
+			$cache_ok = $cache_stage === '';
 			if ($candidate_dir !== '') {
 				foreach (scandir($candidate_dir) ?: [] as $candidate_artifact) {
 					if ($candidate_artifact !== '.' && $candidate_artifact !== '..') {
@@ -274,8 +288,12 @@ if ($_POST) {
 			}
 			$pfb['save'] = TRUE;
 			sync_package_pfblockerng();
+			if (!$cache_ok) {
+				logger(LOG_NOTICE, localize_text('General save: schedule-cache generation failed - %s',
+					pfb_schedule_cache_stage_label($cache_stage)), LOG_PREFIX_PKG_PFBLOCKERNG);
+			}
 			header('Location: ' . pfb_general_schedule_save_redirect(
-				$cache_ok, '/pfblockerng/pfblockerng_general.php?schcache=failed'
+				$cache_ok, '/pfblockerng/pfblockerng_general.php?schcache=failed&schstage=' . $cache_stage
 			));
 			exit;
 		}
@@ -291,7 +309,9 @@ if ($input_errors) {
 	print_input_errors($input_errors);
 }
 if ($schedule_cache_failed) {
-	print_info_box(gettext('Settings were saved, but schedule-cache generation failed. This is likely a bug; please report it.'), 'warning');
+	print_info_box(sprintf(gettext('Settings were saved, but schedule-cache generation failed: %s. '
+		. 'The system log records the detail under pfBlockerNG; quote that line if you report this.'),
+		$schedule_cache_stage), 'warning');
 }
 
 // Load Wizard on new installations only
