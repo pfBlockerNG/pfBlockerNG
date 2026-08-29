@@ -232,6 +232,37 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		}
 	}
 
+	/** The caller's clock reaches the publication, rather than being silently dropped. */
+	public function testInjectedNowReachesThePublication(): void
+	{
+		// A model with an ACTIVE feed: an empty one publishes no due rows, so its ledger
+		// would be clock-independent and the assertion below would pass vacuously.
+		$model = pfb_schedule_runtime_model(self::GENERAL, ['ipv4' => [[
+			'aliasname' => 'Healthy', 'action' => 'Deny_Inbound', 'cron' => '01hour',
+			'row' => [['header' => 'healthy', 'url' => 'https://192.0.2.1/h', 'state' => 'Enabled']],
+		]], 'ipv6' => [], 'dnsbl' => []]);
+		$this->assertIsArray($model);
+		$this->assertNotSame([], $model['entries'], 'the fixture must schedule something');
+		$state = ['schema' => 1, 'items' => []];
+		$zone = new DateTimeZone('UTC');
+		$early = $this->candidateDir();
+		$later = $this->candidateDir();
+
+		try {
+			$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, $early, 1000000000));
+			$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, $later, 1600000000));
+			$this->assertNotSame(
+				file_get_contents($early . '/pfb_due_ledger.json'),
+				file_get_contents($later . '/pfb_due_ledger.json'),
+				'two different clocks must publish two different ledgers; identical bytes mean '
+				. '$now never reached the publication'
+			);
+		} finally {
+			$this->removeDir($early);
+			$this->removeDir($later);
+		}
+	}
+
 	/**
 	 * The ladder short-circuits: an earlier failure wins, and the publication behind it
 	 * is never attempted -- the property the original && chain provided for free.
@@ -258,11 +289,14 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		$this->assertNotFalse($save);
 		$this->assertNotFalse(strpos($source, 'schstage=', $save),
 			'the save redirect must carry the stage that failed');
-		$this->assertStringContainsString(
-			'pfb_schedule_cache_stage( $runtime_model, $runtime_state, $runtime_timezone, $candidate_dir )',
+		// Order, not just presence: no off-appliance test executes this page, so a transposed
+		// argument would otherwise reach an appliance unnoticed. Tolerant of a trailing comma
+		// so a benign reformat cannot fail the build.
+		$this->assertMatchesRegularExpression(
+			'/pfb_schedule_cache_stage\(\s*\$runtime_model,\s*\$runtime_state,'
+			. '\s*\$runtime_timezone,\s*\$candidate_dir,?\s*\)/',
 			$source,
-			'the save must resolve the stage through the tested helper, in that argument order: '
-			. 'no off-appliance test executes this page, so the order is pinned here');
+			'the save must call the stage helper with model, state, timezone, candidate dir -- in that order');
 		$this->assertStringContainsString('pfb_schedule_cache_stage_label(', $source,
 			'the warning must render the stage through the fixed label map');
 		$this->assertStringNotContainsString('This is likely a bug; please report it.', $source,
