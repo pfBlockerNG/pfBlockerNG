@@ -338,8 +338,14 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
         ).to_be_visible(timeout=JS_TIMEOUT_MS)
 
         _open(page, webui, GENERAL_PAGE + "?schcache=failed&schstage=not-a-stage")
-        expect(page.get_by_text("the failing stage was not recorded", exact=False)).to_be_visible(timeout=JS_TIMEOUT_MS)
-        assert "not-a-stage" not in page.content()
+        # Scoped to THIS message, never to ``.alert-warning`` alone: the pending-changes
+        # banner is also an alert-warning and may be set.
+        warning = page.locator(".alert-warning:has-text('schedule-cache generation failed')")
+        expect(warning).to_contain_text("the failing stage was not recorded", timeout=JS_TIMEOUT_MS)
+        # The stage token must not reach the reader. Asserted against the warning's text, not
+        # the document: pfSense's Form defaults its action to REQUEST_URI, so the query string
+        # is echoed into the form tag and page.content() would match there.
+        assert "not-a-stage" not in warning.inner_text()
 
         # Master Off suppresses scheduled work only; schedule and enabled window remain editable.
         window_toggle.check()

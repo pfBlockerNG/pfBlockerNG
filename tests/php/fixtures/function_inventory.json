@@ -10427,6 +10427,54 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_schedule_cache_stage": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "candidate_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "publish",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "readback",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_cache_stage_label": {
         "returnsRef": false,
         "returnType": "string",
