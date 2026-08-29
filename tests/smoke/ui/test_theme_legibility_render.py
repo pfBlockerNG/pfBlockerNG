@@ -55,6 +55,10 @@ def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
     has an empty log. The settings form is the reachable surface: light and
     dark groups both ship, and the ungated ``uniblock`` / ``uniblock2``
     placeholders are the ``uni_defaults`` hexes.
+
+    Dark defaults are measured against ``#e0e0e0`` because Alerts tables use
+    ``sortable-theme-bootstrap`` (pfSense-dark.css pins that class's colour).
+    Ungated events (block/permit/match) always render; dnsbl is gated.
     """
     path = "/pfblockerng/pfblockerng_alerts.php"
     resp = webui.get(path)
@@ -64,5 +68,8 @@ def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
     assert "Unified Log: Dark Background Theme" in resp.text
     assert 'name="uniblock"' in resp.text
     assert 'name="uniblock2"' in resp.text
+    assert "sortable-theme-bootstrap" in resp.text
     assert "#FFF9C4" in resp.text
-    assert "#83791D" in resp.text
+    assert "#665E17" in resp.text
+    assert "#2D6560" in resp.text
+    assert "#336279" in resp.text
