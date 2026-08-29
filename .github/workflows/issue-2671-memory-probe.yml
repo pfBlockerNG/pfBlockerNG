@@ -4,36 +4,47 @@ name: Issue 2671 memory probe
 # 8.3 1G worker crash). It measures, on the CI's OWN setup-php build, the
 # lowest --memory-limit at which `phpstan analyse` still passes -- the only
 # meaningful signal per that issue (binary pass/fail at a ceiling; never RSS,
-# never PHPStan's self-reported "Used memory"). It also records the scheduler
-# facts (cores / files / jobs / spawned processes) that decide how many workers
-# share the corpus, per candidate parallel.jobSize.
+# never PHPStan's self-reported "Used memory").
+#
+# Round 2 isolates ONE variable: what the PHPStan job's own PHP has loaded.
+# php-static-analysis passes no `coverage:` to setup-php, so the analysis runs
+# with Xdebug loaded. Xdebug's mode decides how much of the engine it hooks, so
+# the three legs are: the job's real configuration, Xdebug forced to its own
+# upstream default mode (develop), and Xdebug unloaded (coverage: none).
 #
 # Deleted before the issue closes unless the measurement turns it into the fix.
 on:
   push:
     branches:
       - 'issue/2671-**'
-  workflow_dispatch:
-    inputs:
-      ini_values:
-        description: 'extra setup-php ini-values (e.g. opcache.enable_cli=1) -- isolates one variable per dispatch'
-        type: string
-        default: ''
 
 permissions:
   contents: read
 
 jobs:
   ceiling:
-    name: Ceiling bisect / PHP ${{ matrix.php-version }}
+    name: Ceiling / PHP ${{ matrix.php-version }} ${{ matrix.variant.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
       matrix:
         # The two versions test.yml's php-static-analysis matrix carries today.
         php-version: ['8.3', '8.5']
+        variant:
+          # Byte-identical to the php-static-analysis leg that crashed.
+          - name: as-is
+            ini: ''
+            coverage: ''
+          # Xdebug's own default mode, in case the runner/PPA ini ever ships it.
+          - name: xdebug-develop
+            ini: 'xdebug.mode=develop'
+            coverage: ''
+          # setup-php's coverage:none unloads Xdebug (and pcov) entirely.
+          - name: no-xdebug
+            ini: ''
+            coverage: 'none'
 
     steps:
       - name: Checkout
@@ -41,14 +52,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up PHP ${{ matrix.php-version }}
-        # Identical to test.yml's php-static-analysis leg, so the build under
-        # measurement is the build that crashed -- not stock php:8.3-cli.
+      - name: Set up PHP ${{ matrix.php-version }} (${{ matrix.variant.name }})
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
           tools: composer:2.10.2
-          ini-values: ${{ inputs.ini_values }}
+          ini-values: ${{ matrix.variant.ini }}
+          coverage: ${{ matrix.variant.coverage }}
 
       - name: Install PHPStan
         run: composer install --no-interaction --prefer-dist --no-progress
@@ -56,131 +66,95 @@ jobs:
       - name: Environment facts
         run: |
           {
-            echo "## PHP ${{ matrix.php-version }} environment"
+            echo "## PHP ${{ matrix.php-version }} / ${{ matrix.variant.name }}"
             echo '```'
             php -v
-            echo "runner cores (nproc):    $(nproc)"
-            echo "runner cores (_NPROCESSORS_ONLN): $(getconf _NPROCESSORS_ONLN)"
+            echo "runner cores (nproc):        $(nproc)"
             grep MemTotal /proc/meminfo
-            echo "loaded php.ini:          $(php -r 'echo php_ini_loaded_file() ?: "(none)";')"
-            echo "ini memory_limit:        $(php -r 'echo ini_get("memory_limit");')"
-            echo "opcache enabled:         $(php -r 'echo function_exists("opcache_get_status") ? var_export((bool) ((@opcache_get_status(false) ?: [])["opcache_enabled"] ?? false), true) : "(no opcache ext)";')"
-            echo "opcache.enable_cli ini:  $(php -r 'echo var_export(ini_get("opcache.enable_cli"), true);')"
-            echo "opcache.jit ini:         $(php -r 'echo var_export(ini_get("opcache.jit"), true);')"
-            echo "PHPSTAN_PARALLEL_FORK:   ${PHPSTAN_PARALLEL_FORK:-(unset)}"
-            echo "scanned ini files:       $(php -r 'echo php_ini_scanned_files() ?: "(none)";' | tr -d " \n")"
-            echo "loaded extensions:       $(php -m | tr '\n' ' ')"
+            echo "loaded php.ini:              $(php -r 'echo php_ini_loaded_file() ?: "(none)";')"
+            echo "ini memory_limit:            $(php -r 'echo ini_get("memory_limit");')"
+            echo "xdebug loaded:               $(php -r 'echo var_export(extension_loaded("xdebug"), true);')"
+            echo "xdebug.mode:                 $(php -r 'echo var_export(ini_get("xdebug.mode"), true);')"
+            echo "xdebug.start_with_request:   $(php -r 'echo var_export(ini_get("xdebug.start_with_request"), true);')"
+            echo "xdebug version:              $(php -r 'echo phpversion("xdebug") ?: "(not loaded)";')"
+            echo "opcache enabled:             $(php -r 'echo function_exists("opcache_get_status") ? var_export((bool) ((@opcache_get_status(false) ?: [])["opcache_enabled"] ?? false), true) : "(no opcache ext)";')"
+            echo "loaded extensions:           $(php -m | tr '\n' ' ')"
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Ceiling bisect per parallel.jobSize
+      - name: Ceiling bisect
         env:
-          # Every probe re-analyses the whole tree: the result cache would make
-          # run N+1 skip the work whose memory we are measuring.
           PROBE_GRANULARITY_MB: '64'
         run: |
           set -u
           results=/tmp/probe-results.tsv
           : > "$results"
 
-          # $1 label, $2 config file, $3 memory limit (e.g. 1024M), $4 extra phpstan args
+          # $1 label, $2 memory limit (e.g. 1024M), $3 extra phpstan args
           probe() {
-            vendor/bin/phpstan clear-result-cache -c "$2" -q >/dev/null 2>&1 || true
+            vendor/bin/phpstan clear-result-cache -q >/dev/null 2>&1 || true
             _start=$(date +%s)
             set +e
-            _out="$(vendor/bin/phpstan analyse --no-progress -c "$2" --memory-limit="$3" $4 2>&1)"
+            _out="$(vendor/bin/phpstan analyse --no-progress --memory-limit="$2" $3 2>&1)"
             _rc=$?
             set -e
             _elapsed=$(( $(date +%s) - _start ))
-            case "$_out" in
-              *'reached configured PHP memory limit'*) _verdict='OOM' ;;
+            # PHPStan line-wraps its error table, so match on whitespace-collapsed
+            # output -- the literal message is not contiguous in the raw text.
+            _norm="$(printf '%s' "$_out" | tr -s ' \n\t' ' ')"
+            case "$_norm" in
+              *'reached configured PHP memory limit'*) _verdict='OOM-worker' ;;
+              *'Allowed memory size'*) _verdict='OOM-main' ;;
               *) if [ "$_rc" -eq 0 ]; then _verdict='PASS'; else _verdict="OTHER-FAIL(rc=$_rc)"; fi ;;
             esac
-            printf '%s\t%s\t%s\t%ss\n' "$1" "$3" "$_verdict" "$_elapsed" | tee -a "$results"
+            printf '%s\t%s\t%s\t%ss\n' "$1" "$2" "$_verdict" "$_elapsed" | tee -a "$results"
             if [ "$_verdict" != 'PASS' ]; then
-              printf '%s\n' "$_out" | tail -n 25
+              printf '%s\n' "$_out" | tail -n 20
             fi
-            if [ -n "$4" ]; then
+            if [ -n "$3" ]; then
               printf '%s\n' "$_out" | sed -n '/Parallel worker creation:/,/spawned processes/p'
             fi
             [ "$_verdict" = 'PASS' ]
           }
 
-          # $1 jobSize ("default" keeps phpstan.neon untouched) -> prints config path
-          config_for() {
-            if [ "$1" = 'default' ]; then
-              echo phpstan.neon
-              return
-            fi
-            _cfg="phpstan-probe-js$1.neon"
-            {
-              echo 'includes:'
-              echo '    - phpstan.neon'
-              echo 'parameters:'
-              echo '    parallel:'
-              echo "        jobSize: $1"
-            } > "$_cfg"
-            echo "$_cfg"
-          }
-
-          # $1 label, $2 config, $3 known-failing lower bound MB, $4 known-passing upper bound MB
-          bisect() {
-            _lo=$3
-            _hi=$4
-            if probe "$1/lower-bound" "$2" "${_lo}M" ''; then
-              echo "lower bound ${_lo}M unexpectedly passed -- minimum is at or below it"
-              printf '%s\tmin<=%sM\n' "$1" "$_lo" >> /tmp/probe-min.tsv
-              return 0
-            fi
-            while [ $(( _hi - _lo )) -gt "$PROBE_GRANULARITY_MB" ]; do
-              _mid=$(( (_lo + _hi) / 2 / PROBE_GRANULARITY_MB * PROBE_GRANULARITY_MB ))
-              if [ "$_mid" -le "$_lo" ] || [ "$_mid" -ge "$_hi" ]; then
-                break
-              fi
-              if probe "$1/bisect" "$2" "${_mid}M" ''; then
-                _hi=$_mid
-              else
-                _lo=$_mid
-              fi
-            done
-            printf '%s\tfails at %sM, passes at %sM\n' "$1" "$_lo" "$_hi" >> /tmp/probe-min.tsv
-          }
-
-          : > /tmp/probe-min.tsv
-
-          for js in default 10 5 3; do
-            cfg="$(config_for "$js")"
-            echo "===================== jobSize=$js (config $cfg) ====================="
-            # -vvv prints the scheduler block (cores/files/jobs/processes) and the
-            # worker-creation mechanism; it does NOT disable parallelism the way
-            # --debug does. Doubles as the known-passing upper bound at 2G.
-            if probe "jobSize=$js/upper-bound" "$cfg" '2048M' '-vvv'; then
-              bisect "jobSize=$js" "$cfg" 128 2048
+          if probe 'upper-bound' '2048M' '-vvv'; then
+            lo=128
+            hi=2048
+            if probe 'lower-bound' "${lo}M" ''; then
+              echo "MINIMUM: <= ${lo}M"
+              min_line="minimum passing ceiling <= ${lo}M"
             else
-              echo "2048M did not pass for jobSize=$js -- no usable upper bound"
-              printf '%s\tno pass at 2048M\n' "jobSize=$js" >> /tmp/probe-min.tsv
+              while [ $(( hi - lo )) -gt "$PROBE_GRANULARITY_MB" ]; do
+                mid=$(( (lo + hi) / 2 / PROBE_GRANULARITY_MB * PROBE_GRANULARITY_MB ))
+                if [ "$mid" -le "$lo" ] || [ "$mid" -ge "$hi" ]; then
+                  break
+                fi
+                if probe 'bisect' "${mid}M" ''; then
+                  hi=$mid
+                else
+                  lo=$mid
+                fi
+              done
+              min_line="fails at ${lo}M, passes at ${hi}M"
             fi
-          done
+          else
+            min_line='no pass even at 2048M'
+          fi
 
-          # Determinism: the ceiling CI actually uses, repeated. A ceiling that
+          # The ceiling CI used when it crashed, repeated: a ceiling that
           # sometimes passes and sometimes OOMs is a flake, not a ceiling.
-          echo '===================== repeats at 1024M, default jobSize ====================='
           i=1
-          while [ "$i" -le 4 ]; do
-            probe "default/repeat-1G-$i" phpstan.neon '1024M' '' || true
+          while [ "$i" -le 3 ]; do
+            probe "repeat-1G-$i" '1024M' '' || true
             i=$(( i + 1 ))
           done
 
           {
-            echo "## PHP ${{ matrix.php-version }} probe runs"
+            echo "### PHP ${{ matrix.php-version }} / ${{ matrix.variant.name }} runs"
             echo '| run | ceiling | verdict | elapsed |'
             echo '| --- | --- | --- | --- |'
             sed 's/^/| /; s/\t/ | /g; s/$/ |/' "$results"
             echo
-            echo "## PHP ${{ matrix.php-version }} minimum passing ceiling"
-            echo '```'
-            cat /tmp/probe-min.tsv
-            echo '```'
+            echo "**Minimum passing ceiling: $min_line**"
+            echo
           } | tee -a "$GITHUB_STEP_SUMMARY"
-
-          rm -f phpstan-probe-js*.neon
