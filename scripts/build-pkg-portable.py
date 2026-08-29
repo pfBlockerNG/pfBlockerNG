@@ -1697,10 +1697,8 @@ def run_build(args: argparse.Namespace) -> Build:
     # --repo-catalogue's pkg.freebsd.org lookup below); only the MANIFEST
     # fields are wildcarded here. --arch's existing override precedence is
     # preserved: an explicit --arch is never wildcarded, only the derived
-    # default is. --no-arch (issue #1676) forces the same wildcard for a port
-    # Makefile that predates NO_ARCH=yes.
     manifest_abi, manifest_arch = abi, arch
-    if _truthy(mk.get("NO_ARCH")) or args.no_arch:
+    if _truthy(mk.get("NO_ARCH")):
         major = abi.split(":")[1]
         manifest_abi = f"FreeBSD:{major}:*"
         if not args.arch:
@@ -1977,11 +1975,6 @@ def main(argv: list[str]) -> int:
     )
     g_target.add_argument(
         "--freebsd-version", default="", help="build host __FreeBSD_version for annotations, e.g. 1500068 (optional)"
-    )
-    g_target.add_argument(
-        "--no-arch",
-        action="store_true",
-        help="force the NO_ARCH manifest abi/arch wildcard even when the port Makefile lacks NO_ARCH=yes (issue #1676)",
     )
 
     g_snap = ap.add_argument_group("version and normalized project record (default off)")
