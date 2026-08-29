@@ -29,19 +29,20 @@
     "ZZ_v4.txt": "454debca5afcd37addd0dcca05094625dcde6402510f8fc664cd567893ec7096"
   },
   "continent_pages": {
-    "pfblockerng_Africa.php": "308442ad5185086b80810dccaca166e333d49e1d8f88d8cd24a50bf4c4bea32a",
-    "pfblockerng_Antarctica.php": "8e55cd2d836bdae45cfed1bfb3ca778dfd59097ed4ae357e2682def2a1716e31",
-    "pfblockerng_Asia.php": "e4d16675f7c6393c7e8d93b4d8ad76fdd943cb236e47438412914a2d347e864f",
-    "pfblockerng_Europe.php": "495f49c84868f33e6d5d79eebe0be3141ce71151d70885897a77d153fed9e3f9",
-    "pfblockerng_North_America.php": "c8eda77967c098825efc0ad67dbee84f16fe3af59a45a20b26bf4fccb141bef3",
-    "pfblockerng_Oceania.php": "b003b0937a271d74229e0a35a952e132d47817124204d2327dfb2b11d8267d59",
-    "pfblockerng_South_America.php": "a6b8a7c1eb42e39118d5046ce5d3ebb74009642a6c50792a5f1e623dd76c907a",
-    "pfblockerng_Proxy_and_Satellite.php": "43b8b297dbdbb9c5de31ca91cff33ec1588f2c0cc9a0f7eb23495fcd9cb55c62",
-    "pfblockerng_Top_Spammers.php": "e7e9dbbf0dc9f04ad7317341b3205eb16f686c6a285e050652780d216240dc8d"
+    "pfblockerng_Africa.php": "c3b683701a22175d2f52396c0a301336b58d462b5dacef657d022c53c8ec790e",
+    "pfblockerng_Antarctica.php": "7bede466a14735a5bf1de676d1834d83ecb026c4004187ccbc927fbfd7061103",
+    "pfblockerng_Asia.php": "f3d8553bb7ce000b69a71933731f48482c70a46b49350507e2403d9b23c79fc4",
+    "pfblockerng_Europe.php": "3f21044142d30512e90112a63fbb6c30a71b9325fe6d830fe7778195347e304e",
+    "pfblockerng_North_America.php": "65bdadba245570b39f7e319ca49c04288335ef19a7bf90c385a0b426d75f64b4",
+    "pfblockerng_Oceania.php": "6ec66b171da5006b790f30dd8bf5631d59b7d5b424bdb96c4f827eda946e9187",
+    "pfblockerng_South_America.php": "2de9a89d5d60ed303e8aed18f1d746d80b5d7235bf0533911e7b3f4997a59df1",
+    "pfblockerng_Proxy_and_Satellite.php": "bb79ace7c7d4325f54a30448ed96f4ff77aa56be1b253c128743e94090c78716",
+    "pfblockerng_Top_Spammers.php": "7e37603b035a82771b50aef8a07b3d689231ff6122a0cbe66f5657bedfcd2fcb"
   },
   "reputation_empty": "59a4fa81040c5691ddb1b13574dfe3669052530c0947535a74b30bb3af459b4e",
   "reputation_populated": "dcfe541ef16a5c9c74e8692354351bd9a78b52a17f3f50ea9b1efde42b240568",
   "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged",
   "reputation_hashes_amended": "issue #1896: the Reputation section's config_get_path/config_set_path calls now route through PfbConfig::readSection()/writeSection(); the pre-move template is otherwise unchanged",
-  "continent_behavior_amended": "issue #2103: generated pages route anchor layout and MaxMind documentation rendering through behavior-tested helpers"
+  "continent_behavior_amended": "issue #2103: generated pages route anchor layout and MaxMind documentation rendering through behavior-tested helpers",
+  "continent_copy_amended": "GUI reorg: generated country pages now name 'Force Global IP Logging' on the IP tab and point MaxMind credentials at the IP tab; the pre-move template is otherwise unchanged"
 }
