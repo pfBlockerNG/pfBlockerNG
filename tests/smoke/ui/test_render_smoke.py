@@ -81,10 +81,19 @@ class Page:
 PAGE_TABLE: tuple[Page, ...] = (
     # "Advanced Text Editor" is the issue #1888 label of the pfb_syntax_highlight checkbox
     # (renamed from "Syntax Highlighting") — a third marker for the rendered field label.
+    # "Block Private-Address Exceptions" is the pfb_feed_internal_allowlist textarea label
+    # added by the General reorg — the general row's only marker that did not already exist
+    # before it, so the row pins the reorg rather than passing on pre-reorg text alone.
     Page(
         "general",
         "/pfblockerng/pfblockerng_general.php",
-        ("pfBlockerNG", "General Settings", "Scheduling", "Advanced Text Editor"),
+        (
+            "pfBlockerNG",
+            "General Settings",
+            "Scheduling",
+            "Advanced Text Editor",
+            "Block Private-Address Exceptions",
+        ),
     ),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.
