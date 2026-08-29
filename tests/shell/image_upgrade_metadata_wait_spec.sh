@@ -217,6 +217,13 @@ Describe 'image-upgrade.sh package-metadata wait'
     The stdout should include 'waiting for the pfSense package metadata refresh'
   End
 
+  It 'falls back when the metadata interval has a leading zero'
+    When call run_wait_interval_once 09
+    The status should be success
+    The contents of file "$SLEEP_ARG" should equal '5'
+    The contents of file "$COUNT" should equal '2'
+  End
+
   It 'falls back when the metadata interval exceeds shell integer range'
     When call run_wait_interval_once 99999999999999999999999999
     The status should be success

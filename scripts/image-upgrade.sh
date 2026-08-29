@@ -834,7 +834,7 @@ pfb_wait_pkg_metadata() {
     # Validate before comparison/arithmetic; only bounded decimal values are
     # configured integers, so whitespace, zero intervals and shell overflows fall
     # back before they can hide the deadline or pin the elapsed counter.
-    case "$_pwpm_interval" in '' | *[!0-9]* | 0) _pwpm_interval=5 ;; esac
+    case "$_pwpm_interval" in '' | *[!0-9]* | 0 | 0[0-9]*) _pwpm_interval=5 ;; esac
     if ! [ "$_pwpm_interval" -ge 1 ] 2>/dev/null || ! [ "$_pwpm_interval" -le 3600 ] 2>/dev/null; then
         _pwpm_interval=5
     fi
