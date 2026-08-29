@@ -167,6 +167,10 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
 | `--freebsd-version N` | `1500068` | Native mode only: the build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
 
+For a port declaring `NO_ARCH=yes` (all active pfBlockerNG ports; issue #1806),
+the manifest ABI is CPU-wildcarded to `FreeBSD:<major>:*`; its derived manifest
+arch becomes `freebsd:<major>:*`, while an explicit `--arch` remains verbatim.
+
 ### Source (USE_GITHUB ports)
 
 | Option | Description |
