@@ -405,6 +405,9 @@ def test_action_select_toggles_advanced_firewall_sections(
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
+    # The controls below moved into the collapsed "dnsbl_ips" section in the DNSBL
+    # tab reorganisation; a closed panel is attached but not interactable.
+    _expand_section(page, "dnsbl_ips")
 
     action = page.locator("#action")
     adv_in = page.locator("#advinboundsettings")
@@ -939,6 +942,9 @@ def test_fill_buttons_populate_interface_selects(
         )
 
         _open(page, webui, DNSBL_PAGE)
+        # The controls below moved into the collapsed "dnsbl_bypass" section in the DNSBL
+        # tab reorganisation; a closed panel is attached but not interactable.
+        _expand_section(page, "dnsbl_bypass")
 
         # DNS Redirect fill.
         _assert_fill_button_populates(
@@ -1002,6 +1008,9 @@ def test_exception_fields_have_alias_autocomplete(
         )
 
         _open(page, webui, DNSBL_PAGE)
+        # The controls below moved into the collapsed "dnsbl_bypass" section in the DNSBL
+        # tab reorganisation; a closed panel is attached but not interactable.
+        _expand_section(page, "dnsbl_bypass")
 
         # The alias name must have reached the page's JS source array.
         alias_names = page.evaluate("pfb_alias_names")
