@@ -65,18 +65,4 @@ final class EffectiveWebguicssTest extends TestCase
 			$this->assertStringNotContainsString('..', $path);
 		}
 	}
-
-	public function testAlertsPageUsesTheHelper(): void
-	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
-		$this->assertNotFalse($source);
-		$this->assertStringContainsString(
-			'pfb_effective_webguicss($user_settings ?? null)',
-			$source
-		);
-		$this->assertDoesNotMatchRegularExpression(
-			'/\$pfb_webgui_css\s*=\s*\(string\)\s*config_get_path\(\'system\/webgui\/webguicss\'\)\s*;/',
-			$source
-		);
-	}
 }

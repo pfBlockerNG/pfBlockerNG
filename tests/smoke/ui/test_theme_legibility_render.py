@@ -46,3 +46,23 @@ def test_list_textareas_do_not_force_unpaired_fafafa(webui: WebUI) -> None:
         assert resp.status_code == 200, path
         assert marker in resp.text, path
         assert "background:#fafafa" not in resp.text, path
+
+
+def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
+    """Theme-resolution refactor: both palettes render; ungated rows always present.
+
+    ``pfb_webgui_dark`` chooses which palette paints log rows, but a fresh VM
+    has an empty log. The settings form is the reachable surface: light and
+    dark groups both ship, and the ungated ``uniblock`` / ``uniblock2``
+    placeholders are the ``uni_defaults`` hexes.
+    """
+    path = "/pfblockerng/pfblockerng_alerts.php"
+    resp = webui.get(path)
+    assert resp.status_code == 200, path
+    assert "Alert Settings" in resp.text
+    assert "Unified Log: Light Background Theme" in resp.text
+    assert "Unified Log: Dark Background Theme" in resp.text
+    assert 'name="uniblock"' in resp.text
+    assert 'name="uniblock2"' in resp.text
+    assert "#FFF9C4" in resp.text
+    assert "#83791D" in resp.text

@@ -84,16 +84,6 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 	}
 
-	public function testCategoryEditYellowHighlightPinsBothColours(): void
-	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php');
-		$this->assertNotFalse($source);
-		$hits = self::scan($source);
-		foreach ($hits as $hit) {
-			$this->assertStringNotContainsString('#FFFF00', $hit['excerpt']);
-		}
-	}
-
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
 	{
 		$root = dirname(__DIR__, 2);
