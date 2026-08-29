@@ -80,6 +80,9 @@ final class BootstrapSandboxTest extends TestCase
 
 	public function testForkedChildCannotRemoveParentSandbox(): void
 	{
+		if (!function_exists('pcntl_fork') || !function_exists('pcntl_waitpid')) {
+			$this->markTestSkipped('pcntl is required to prove fork-inherited shutdown ownership.');
+		}
 		$result = $this->runBootstrap($this->tmp, FALSE, 0, TRUE);
 		$this->assertSame(0, $result['status'], $result['stderr']);
 		$record = json_decode($result['stdout'], TRUE, flags: JSON_THROW_ON_ERROR);
@@ -138,7 +141,13 @@ PHP;
 		$environment = getenv();
 		$this->assertIsArray($environment);
 		$environment['TMPDIR'] = $tmpdir;
-		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes, self::ROOT, $environment);
+		$process = proc_open(
+			[PHP_BINARY, '-d', 'display_errors=stderr', '-r', $script],
+			$descriptors,
+			$pipes,
+			self::ROOT,
+			$environment
+		);
 		$this->assertIsResource($process);
 		stream_set_blocking($pipes[1], FALSE);
 		stream_set_blocking($pipes[2], FALSE);
