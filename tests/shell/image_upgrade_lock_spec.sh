@@ -19,7 +19,7 @@ Describe 'image-upgrade.sh upgrade-lock retry'
     COUNT="${WORK}/count"
     SLEEP_ARG="${WORK}/sleep-arg"
     printf '0\n' > "$COUNT"
-    : > "$SLEEP_ARG"
+    true > "$SLEEP_ARG"
     export WORK COUNT SLEEP_ARG
   }
   teardown() { rm -rf "$WORK"; }
