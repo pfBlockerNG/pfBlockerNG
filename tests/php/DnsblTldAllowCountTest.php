@@ -21,7 +21,8 @@ final class DnsblTldAllowCountTest extends TestCase
 
 	private const DATA_START = '$tld_list = array();';
 
-	private const TOTAL = '$tld_total = array_sum(array_map(\'count\', $tld_list));';
+	/** The derivation, as a pattern: a reformat of that line is not a defect. */
+	private const TOTAL = '/\$tld_total\s*=\s*array_sum\(\s*array_map\(\s*\'count\'\s*,\s*\$tld_list\s*\)\s*\)\s*;/';
 
 	private const HELP = "setHelp('Enable the TLD Allow feature (' . number_format(\$tld_total) . ' TLDs available). '";
 
@@ -41,11 +42,10 @@ final class DnsblTldAllowCountTest extends TestCase
 	{
 		$source = self::source();
 		$data = strpos($source, self::DATA_START);
-		$total = strpos($source, self::TOTAL);
+		$total = $this->derivationOffset($source);
 		$help = strpos($source, self::HELP);
 
 		$this->assertNotFalse($data, 'the TLD data block must exist: ' . self::DATA_START);
-		$this->assertNotFalse($total, 'the derived total must exist: ' . self::TOTAL);
 		$this->assertNotFalse($help,
 			'the TLD Allow help must render number_format($tld_total), not a literal count');
 		$this->assertLessThan($help, $total,
@@ -58,60 +58,78 @@ final class DnsblTldAllowCountTest extends TestCase
 
 	/**
 	 * Behaviour-preserving oracle for the move: the relocated block still defines the four
-	 * lists the pickers render, and the total is still derived from them.
+	 * lists the pickers render, with unique keys, and the total is still derived from them.
 	 *
 	 * Counted by tokenising, never by evaluating. Executing a slice of a page to measure it
 	 * put arbitrary code one edit away from running in this suite, and no allowlist of
-	 * tokens closes that -- `array_map` takes its callback as a string.
+	 * tokens closes that -- array_map takes its callback as a string.
 	 */
 	public function testTldTotalIsTheSumOfTheFourListsAndPlausible(): void
 	{
-		$lists = $this->entryCounts('$tld_list');
-		$info = $this->entryCounts('$tld_info');
+		$lists = $this->entryKeys('$tld_list');
+		$info = $this->entryKeys('$tld_info');
 
 		$this->assertSame(self::TYPES, array_keys($lists),
 			'the four TLD lists must be present, in their rendered order');
 		$this->assertSame(self::TYPES, array_keys($info),
 			'every list must carry the description its picker renders beside the count');
 
-		foreach ($lists as $type => $count) {
-			$this->assertGreaterThan(0, $count, "the {$type} list must not be empty");
+		$counts = [];
+		foreach ($lists as $type => $keys) {
+			$this->assertNotSame([], $keys, "the {$type} list must not be empty");
+			$duplicates = array_keys(array_filter(array_count_values($keys),
+				static fn (int $seen): bool => $seen > 1));
+			$this->assertSame([], $duplicates,
+				"the {$type} list must not repeat a TLD -- PHP keeps the last of a duplicate pair, so "
+				. 'the rendered count would silently drop one: ' . implode(', ', $duplicates));
+			$counts[$type] = count($keys);
 		}
-		$total = array_sum($lists);
+
+		$total = array_sum($counts);
 		$this->assertGreaterThanOrEqual(1000, $total,
 			"a total of {$total} is implausibly low -- an array was blanked or narrowed: "
-			. var_export($lists, TRUE));
+			. var_export($counts, TRUE));
 
 		// The page derives the aggregate with exactly this expression, so it IS the sum of
 		// these counts by construction; the ordering test pins that the expression is there.
-		$this->assertStringContainsString(self::TOTAL, self::source(),
+		$this->assertNotFalse($this->derivationOffset(self::source()),
 			'the total must stay derived from $tld_list, never restated');
 	}
 
+	/** Byte offset of the $tld_total derivation, or FALSE when it is absent. */
+	private function derivationOffset(string $source): int|false
+	{
+		return preg_match(self::TOTAL, $source, $match, PREG_OFFSET_CAPTURE) === 1
+			? $match[0][1] : FALSE;
+	}
+
 	/**
-	 * Entries per sub-array of $name in the TLD data block, keyed by sub-array name.
+	 * Entry keys per sub-array of $name in the TLD data block, keyed by sub-array name.
 	 *
-	 * @return array<string, int>
+	 * Keys rather than a tally: a repeated key is one entry at runtime but two arrows in
+	 * the source, so counting arrows would report a list larger than the page renders.
+	 *
+	 * @return array<string, list<string>>
 	 */
-	private function entryCounts(string $name): array
+	private function entryKeys(string $name): array
 	{
 		$tokens = token_get_all('<?php ' . $this->tldDataBlock());
-		$counts = [];
+		$keys = [];
 		$current = NULL;
 		$depth = 0;
 		foreach ($tokens as $index => $token) {
 			if (is_array($token) && $token[0] === T_VARIABLE && $token[1] === $name) {
-				$key = NULL;
+				$subscript = NULL;
 				for ($ahead = $index + 1; $ahead < $index + 6; $ahead++) {
 					$next = $tokens[$ahead] ?? NULL;
 					if (is_array($next) && $next[0] === T_CONSTANT_ENCAPSED_STRING) {
-						$key = trim($next[1], "'\"");
+						$subscript = trim($next[1], "'\"");
 						break;
 					}
 				}
-				if ($key !== NULL) {
-					$current = $key;
-					$counts[$key] = 0;
+				if ($subscript !== NULL) {
+					$current = $subscript;
+					$keys[$subscript] = [];
 					$depth = 0;
 				}
 			}
@@ -124,20 +142,36 @@ final class DnsblTldAllowCountTest extends TestCase
 				if (--$depth <= 0) {
 					$current = NULL;
 				}
-			} elseif (is_array($token) && $token[0] === T_DOUBLE_ARROW && $depth === 1) {
-				$counts[$current]++;
+			} elseif ($depth === 1 && is_array($token) && $token[0] === T_CONSTANT_ENCAPSED_STRING
+				&& $this->arrowFollows($tokens, $index)) {
+				$keys[$current][] = trim($token[1], "'\"");
 			}
 		}
-		return $counts;
+		return $keys;
+	}
+
+	/** @param array<int, array{0: int, 1: string}|string> $tokens */
+	private function arrowFollows(array $tokens, int $index): bool
+	{
+		for ($ahead = $index + 1; $ahead < $index + 4; $ahead++) {
+			$next = $tokens[$ahead] ?? NULL;
+			if (is_array($next) && $next[0] === T_DOUBLE_ARROW) {
+				return TRUE;
+			}
+			if (!is_array($next) || $next[0] !== T_WHITESPACE) {
+				return FALSE;
+			}
+		}
+		return FALSE;
 	}
 
 	private function tldDataBlock(): string
 	{
 		$source = self::source();
 		$start = strpos($source, self::DATA_START);
-		$end = strpos($source, self::TOTAL);
+		$end = $this->derivationOffset($source);
 		$this->assertNotFalse($start, 'the TLD data block must exist');
 		$this->assertNotFalse($end, 'the derived total must exist');
-		return substr($source, $start, ($end - $start) + strlen(self::TOTAL));
+		return substr($source, $start, $end - $start);
 	}
 }
