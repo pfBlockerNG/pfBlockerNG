@@ -516,13 +516,14 @@ The live, source-backed stage vocabulary now has five members:
   `pfb_list_script_failure_close()` performs the paired alias-pass close.
 - `parse` is Python-managed. `pfb_unbound.py` writes it through
   `pfb_py_status_open()` and `pfb_py_status_close()`.
-- `apply` is tick-managed. `pfb_pfctl_table_op()`,
-  `pfb_dnsbl_apply_ledger_update()`, and `pfb_reload_unbound()` write it, and
-  `pfblockerng_tick()` reconciles only this stage.
+- `apply` is tick-managed. `pfb_pfctl_table_op()` and
+  `pfb_dnsbl_apply_ledger_update()` write it; `pfb_reload_unbound()` also clears
+  it during disabled-mode teardown. `pfblockerng_tick()` reconciles only this
+  stage.
 - `dedup` uses the global constant key `ip` / `dedup` / `dedup`.
-  `pfb_sync_status_dedup_check()` writes and closes it, while
-  `sync_package_pfblockerng()` clears the same key when dedup is disabled; it is
-  never keyed by alias.
+  `pfb_sync_status_dedup_check()` writes and closes it, while the dedup-off
+  branch of `sync_package_pfblockerng()` final reporting clears the same key; it
+  is never keyed by alias.
 
 Alias removal therefore closes `download` and `script`: both use the removed
 alias's key shape, and neither can receive its ordinary paired close after that
