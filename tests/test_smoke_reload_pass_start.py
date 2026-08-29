@@ -260,3 +260,93 @@ def test_every_pass_start_marker_still_exists_in_production() -> None:
     )
     for marker in helpers.PASS_START_MARKERS:
         assert marker in sources, f"pass-start banner {marker!r} no longer exists in the package sources"
+
+
+# --------------------------------------------------------------------------- #
+# CodeRabbit review, PR #2875: a global banner count cannot attribute the start
+# to THIS dispatch, so reject our own deferral independently of other passes
+# --------------------------------------------------------------------------- #
+
+
+def test_own_deferral_is_rejected_even_when_another_pass_logs_a_banner() -> None:
+    """Given a CONCURRENT feed pass logs its own pass-start banner during our dispatch,
+        And our dispatch loses the lock race and stands down with rc=0,
+    When reload(vm, "update") runs,
+    Then it still raises: the banner count rose, but the rise belongs to the other pass.
+
+    The banner count is global to the log, so a rise alone cannot attribute the start to
+    this dispatch. Our own deferral always writes a deferral line, so rejecting a NEW
+    deferral line closes the gap regardless of what any other pass logged.
+    """
+    vm = _FakeVM(appends=_STARTED_ENABLED + _DEFERRED_FEED_PASS, rc=0)
+
+    with pytest.raises(RuntimeError, match="deferred"):
+        _reload(vm)
+
+
+@pytest.mark.parametrize(
+    ("scope", "deferral"),
+    [
+        # sync_package_pfblockerng(), dispatcher lock (pfblockerng_apply.inc:746).
+        ("update", f"\n{_STAMP} sync aborted: dispatcher lock unavailable; pending changes retained.\n"),
+        # pfb_feed_pass_begin('sync'), the shared choke point (pfblockerng.inc:18784).
+        ("update", f"\n{_STAMP}Feed pass [ sync ] skipped -- another pfBlockerNG feed pass is running.\n"),
+        # pfblockerng_sync_cron(), dispatcher lock (pfblockerng_cron.inc:266).
+        (
+            "cron",
+            f"\n{_STAMP} Scheduled feed pass deferred: dispatcher lock unavailable; "
+            "durable pending occurrences retained.\n",
+        ),
+        # pfblockerng_sync_cron(), feed lock (pfblockerng_cron.inc:293).
+        (
+            "cron",
+            f"\n{_STAMP} Scheduled feed pass deferred: feed lock unavailable; durable pending occurrences retained.\n",
+        ),
+        # pfb_feed_pass_begin('cron'), the same choke point under the cron funnel's label.
+        ("cron", f"\n{_STAMP}Feed pass [ cron ] skipped -- another pfBlockerNG feed pass is running.\n"),
+    ],
+)
+def test_every_funnel_deferral_line_is_rejected(scope: str, deferral: str) -> None:
+    """Each of the four deferral lines the two funnels can write must be recognised, even
+    when a concurrent pass's banner would otherwise satisfy the count rise."""
+    vm = _FakeVM(appends=_STARTED_ENABLED + deferral, rc=0)
+
+    with pytest.raises(RuntimeError, match="deferred"):
+        _reload(vm, scope)
+
+
+def test_deferral_diagnostic_names_the_deferral_evidence() -> None:
+    """The deferral failure names the scope and every deferral line it matched on, so the
+    reader sees WHICH lock stood the pass down without opening the guest log."""
+    vm = _FakeVM(appends=_STARTED_ENABLED + _DEFERRED_DISPATCHER, rc=0)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _reload(vm)
+
+    message = str(excinfo.value)
+    assert "update" in message
+    assert helpers.PFB_LOG in message
+    for marker in helpers.PASS_DEFERRED_MARKERS:
+        assert marker in message, f"diagnostic omits the {marker!r} deferral line it searched for: {message}"
+
+
+def test_a_stale_deferral_line_does_not_fail_a_started_pass() -> None:
+    """Given the log ALREADY carries a deferral line from an earlier reload,
+    When this pass genuinely starts,
+    Then reload returns — the rejection keys on a NEW deferral line, not a present one,
+    so an earlier deferral cannot red every later reload in the module.
+    """
+    vm = _FakeVM(log=_DEFERRED_FEED_PASS, appends=_STARTED_ENABLED, rc=0)
+
+    _reload(vm)
+
+
+def test_every_deferral_marker_still_exists_in_production() -> None:
+    """Tripwire sibling of the pass-start one: a reworded deferral line must fail here, in
+    the hermetic suite, rather than silently stop being recognised on a live box."""
+    sources = "".join(
+        (_SRC / name).read_text(encoding="utf-8")
+        for name in ("pfblockerng.inc", "pfblockerng_apply.inc", "pfblockerng_cron.inc")
+    )
+    for marker in helpers.PASS_DEFERRED_MARKERS:
+        assert marker in sources, f"deferral line {marker!r} no longer exists in the package sources"

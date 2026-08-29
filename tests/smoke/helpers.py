@@ -3337,6 +3337,7 @@ def reload(
     # scheduled tick dispatches no pass at all, so it is the one scope with no banner to wait for.
     assert_started = scope != "tick"
     start_before = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS) if assert_started else 0
+    deferred_before = count_log_marker(vm, PFB_LOG, PASS_DEFERRED_MARKERS) if assert_started else 0
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
     if scope in ("cron", "tick"):
@@ -3353,14 +3354,29 @@ def reload(
             f"reload({scope}) failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
         )
     if assert_started:
+        deferred_after = count_log_marker(vm, PFB_LOG, PASS_DEFERRED_MARKERS)
         start_after = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS)
+        evidence = (
+            f"in {PFB_LOG}: pass-start banners {list(PASS_START_MARKERS)} "
+            f"before={start_before} after={start_after}; "
+            f"deferral lines {list(PASS_DEFERRED_MARKERS)} "
+            f"before={deferred_before} after={deferred_after}"
+        )
+        # The deferral line is the signal this dispatch OWNS. The banner count is global to the
+        # log, so a CONCURRENT pass's banner can satisfy the rise below on a dispatch that was
+        # itself stood down — check the attributable signal first.
+        if deferred_after > deferred_before:
+            raise RuntimeError(
+                f"reload({scope}) exited 0 but the feed pass did not start: it was deferred — the pass "
+                f"lost the dispatcher or feed-pass lock race and stood down, and this request shape "
+                f"STILL exits 0 (issue #2591), so nothing was reloaded. Evidence {evidence}. The "
+                f"pfBlockerNG log tail in the smoke diagnostics names which lock."
+            )
         if start_after <= start_before:
             raise RuntimeError(
-                f"reload({scope}) exited 0 but the feed pass did not start: expected a NEW pass-start "
-                f"banner in {PFB_LOG} (before={start_before}, after={start_after}), searched for "
-                f"{list(PASS_START_MARKERS)}. A pass that loses the dispatcher or feed-pass lock race "
-                f"stands down and STILL exits 0 for this request shape (issue #2591), so nothing was "
-                f"reloaded — see the pfBlockerNG log tail in the smoke diagnostics for the deferral line."
+                f"reload({scope}) exited 0 but the feed pass did not start: no new pass-start banner "
+                f"was written, and no deferral line either, so the verb returned without ever reaching "
+                f"its pass. Evidence {evidence}. See the pfBlockerNG log tail in the smoke diagnostics."
             )
     if data_path:
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
@@ -4264,6 +4280,21 @@ SWAP_LOG_MARKER = "[ zero-downtime swap ]"
 # A lock deferral returns from those guards BEFORE any banner and — for the unattended
 # `trigger=cron force=false` shape (PR #2589) — exits 0, which is why rc alone cannot see it.
 PASS_START_MARKERS = ("UPDATE PROCESS START", "**Saving configuration**", "CRON  PROCESS  START")
+# The mirror image: the lines a funnel writes INSTEAD of a banner when it stands the pass
+# down. A pass writes exactly one of these or one of PASS_START_MARKERS, so a NEW deferral
+# line is attributable to OUR dispatch — the banner count is global to the log, and a
+# concurrent pass's banner would otherwise satisfy the count rise on a reload that was
+# itself deferred (CodeRabbit, PR #2875). Three cover all four sites, because
+# pfb_feed_pass_begin() is the shared choke point for both funnels' feed-pass guards and
+# both of pfblockerng_sync_cron()'s guards share a prefix:
+#   "sync aborted: dispatcher lock unavailable"          pfblockerng_apply.inc:746
+#   "skipped -- another pfBlockerNG feed pass is running" pfblockerng.inc:18784 (sync + cron)
+#   "Scheduled feed pass deferred:"                       pfblockerng_cron.inc:266 and :293
+PASS_DEFERRED_MARKERS = (
+    "sync aborted: dispatcher lock unavailable",
+    "skipped -- another pfBlockerNG feed pass is running",
+    "Scheduled feed pass deferred:",
+)
 # The DNSBL per-line parse-error log: pfb_parse_fail_log() appends one CSV record
 # ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
 # an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:91,
