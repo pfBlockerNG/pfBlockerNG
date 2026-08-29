@@ -830,11 +830,10 @@ PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo prese
 pfb_wait_pkg_metadata() {
     _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
     _pwpm_interval="${METADATA_INTERVAL:-5}"
-    # An unusable interval pins the elapsed counter and an unusable cap makes the
-    # deadline test error on every iteration ("Illegal number"); either way the
-    # loop never reaches its failure path, i.e. an unbounded wait. Floor both.
-    [ "$_pwpm_interval" -ge 1 ] 2>/dev/null || _pwpm_interval=5
-    [ "$_pwpm_timeout" -ge 0 ] 2>/dev/null || _pwpm_timeout=600
+    # Validate before comparison/arithmetic; whitespace-bearing decimal text is
+    # not a configured integer and must fall back to the documented finite cap.
+    case "$_pwpm_interval" in '' | *[!0-9]* | 0) _pwpm_interval=5 ;; esac
+    case "$_pwpm_timeout" in '' | *[!0-9]*) _pwpm_timeout=600 ;; esac
     _pwpm_elapsed=0
     _pwpm_seen=0
     log "waiting for the pfSense package metadata refresh to settle"
@@ -909,6 +908,8 @@ pfb_wait_upgraded_box() {
 # metadata wait belongs here, once, rather than at each call site (issue #2458).
 wait_guest_ssh() {
     _wgs_timeout="$1"
+    # issue #2488: validate before the AND-list can hide test(1)'s numeric error.
+    case "$_wgs_timeout" in '' | *[!0-9]*) _wgs_timeout=600 ;; esac
     _wgs_console="${2:-console.log}"
     _wgs_elapsed=0
     while ! ssh_guest true 2>/dev/null; do
