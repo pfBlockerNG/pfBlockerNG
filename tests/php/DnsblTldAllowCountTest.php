@@ -8,10 +8,10 @@ use PHPUnit\Framework\TestCase;
  * The TLD Allow count renders because its data is in scope where the control is built.
  *
  * The DNSBL tab reorganisation moved the TLD Allow checkbox above the four $tld_list
- * arrays, so number_format($tld_total) there read an undefined variable: the count
- * collapsed to 0 and every page load logged a warning. The live-VM guard that catches
- * the rendered value (test_dnsbl_page_renders_tld_pickers) only runs in the UI fan-out;
- * this pins the ordering invariant behind it on every PHPUnit run.
+ * arrays and dropped the "(N TLDs available)" figure, because $tld_total was no longer
+ * in scope to render it there. The live-VM guard that catches the rendered value
+ * (test_dnsbl_page_renders_tld_pickers) only runs in the UI fan-out; this pins the
+ * ordering invariant behind it on every PHPUnit run.
  */
 final class DnsblTldAllowCountTest extends TestCase
 {
@@ -35,7 +35,7 @@ final class DnsblTldAllowCountTest extends TestCase
 	/**
 	 * Scenario: the control's help text renders a figure derived from the TLD arrays.
 	 * Expected: those arrays are defined earlier in the file than the control that reads
-	 * them -- the single property whose loss produced "(0 TLDs available)".
+	 * them, and the figure is derived rather than restated as a literal.
 	 */
 	public function testTldDataIsDefinedBeforeTheControlThatRendersTheCount(): void
 	{
@@ -46,20 +46,12 @@ final class DnsblTldAllowCountTest extends TestCase
 
 		$this->assertNotFalse($data, 'the TLD data block must exist: ' . self::DATA_START);
 		$this->assertNotFalse($total, 'the derived total must exist: ' . self::TOTAL);
-		$this->assertNotFalse($help, 'the TLD Allow help must render the derived count');
+		$this->assertNotFalse($help,
+			'the TLD Allow help must render number_format($tld_total), not a literal count');
 		$this->assertLessThan($help, $total,
 			"\$tld_total is assigned at offset {$total} but read at offset {$help}: the control is "
-			. 'built before its own data, so the count renders as 0 and the load warns');
+			. 'built before its own data, so the count cannot render there');
 		$this->assertLessThan($total, $data, 'the arrays must precede the total derived from them');
-	}
-
-	/** The figure is derived from the arrays, never restated as a literal. */
-	public function testTldAllowCountIsDerivedAndNotHardcoded(): void
-	{
-		$source = self::source();
-
-		$this->assertStringContainsString(self::HELP, $source,
-			'the help text must render number_format($tld_total), not a literal count');
 		$this->assertStringNotContainsString('1,546 TLDs available', $source,
 			'the retired hardcoded total must not come back');
 	}
@@ -89,43 +81,54 @@ final class DnsblTldAllowCountTest extends TestCase
 	}
 
 	/**
-	 * The block sits outside form construction, so it must not reach for form state --
-	 * the property that made relocating it safe, and that a later edit could quietly lose.
+	 * The oracle above evaluates the block, so the block must stay inert data: it may bind
+	 * only its own three names and call only the array builders. Anything else would run
+	 * inside PHPUnit, in a scope where the page's own state does not exist.
 	 */
-	public function testTldDataBlockCarriesNoFormState(): void
+	public function testTldDataBlockIsInertEnoughToEvaluate(): void
 	{
-		$source = self::source();
-		$start = strpos($source, self::DATA_START);
-		$end = strpos($source, self::TOTAL);
-		$this->assertNotFalse($start);
-		$this->assertNotFalse($end);
-		$block = substr($source, $start, $end - $start);
-
-		foreach (['$pconfig', '$section', '$form', '$group'] as $symbol) {
-			$this->assertStringNotContainsString($symbol, $block,
-				"the TLD data block must stay pure data; it now references {$symbol}");
+		// Tokenised, not grepped: the TLD descriptions themselves contain parentheses
+		// ('List of Generic Top-Level-Domains (gTLD)'), which a regex reads as calls.
+		$tokens = token_get_all('<?php ' . $this->tldDataBlock());
+		$calls = [];
+		$names = [];
+		foreach ($tokens as $index => $token) {
+			if (!is_array($token)) {
+				continue;
+			}
+			if ($token[0] === T_VARIABLE
+				&& !in_array($token[1], ['$tld_list', '$tld_info', '$tld_total'], TRUE)) {
+				$names[$token[1]] = TRUE;
+			}
+			if (($tokens[$index + 1] ?? NULL) === '('
+				&& !in_array($token[1], ['array', 'array_sum', 'array_map'], TRUE)) {
+				$calls[$token[1]] = TRUE;
+			}
 		}
+
+		$this->assertSame([], array_keys($names),
+			'the TLD data block must bind only its own three names; it now reaches for: '
+			. implode(', ', array_keys($names)));
+		$this->assertSame([], array_keys($calls),
+			'the TLD data block must stay literal arrays plus the count it derives; evaluating it '
+			. 'would otherwise execute: ' . implode(', ', array_keys($calls)));
 	}
 
-	/** @return array{list: array<string, array<string, string>>, info: array<string, string>, total: int} */
-	private function evaluateTldDataBlock(): array
+	private function tldDataBlock(): string
 	{
 		$source = self::source();
 		$start = strpos($source, self::DATA_START);
 		$end = strpos($source, self::TOTAL);
 		$this->assertNotFalse($start, 'the TLD data block must exist');
 		$this->assertNotFalse($end, 'the derived total must exist');
-		$block = substr($source, $start, ($end - $start) + strlen(self::TOTAL));
+		return substr($source, $start, ($end - $start) + strlen(self::TOTAL));
+	}
 
-		$path = tempnam(sys_get_temp_dir(), 'pfb_tld_');
-		$this->assertNotFalse($path);
-		try {
-			file_put_contents($path,
-				"<?php\n" . $block . "\nreturn ['list' => \$tld_list, 'info' => \$tld_info, 'total' => \$tld_total];\n");
-			$data = (static fn (string $file): mixed => include $file)($path);
-		} finally {
-			@unlink($path);
-		}
+	/** @return array{list: array<string, array<string, string>>, info: array<string, string>, total: int} */
+	private function evaluateTldDataBlock(): array
+	{
+		$data = eval($this->tldDataBlock()
+			. ' return [\'list\' => $tld_list, \'info\' => $tld_info, \'total\' => $tld_total];');
 		$this->assertIsArray($data, 'the TLD data block must evaluate to its three bindings alone');
 		return $data;
 	}
