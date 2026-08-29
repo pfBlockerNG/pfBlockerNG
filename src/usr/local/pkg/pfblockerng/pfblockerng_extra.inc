@@ -4883,8 +4883,19 @@ function pfb_schedule_runtime_hash_projection(array $model): array
 }
 
 /** Build the strict, secret-free schedule image consumed by the tick planner. */
-function pfb_schedule_runtime_model(array $general, array $sections, array $extras = []): ?array
-{
+function pfb_schedule_runtime_model(
+	array $general,
+	array $sections,
+	array $extras = [],
+	?string &$reason = NULL
+): ?array {
+	$reason = NULL;
+	// issue #2855: every rejection names its check (and its alias) so the caller can
+	// log something actionable instead of asking the user to report an opaque bug.
+	$reject = static function (string $why) use (&$reason): ?array {
+		$reason = $why;
+		return NULL;
+	};
 	$token = static function (mixed $value, int $min, int $max): ?int {
 		if (!is_string($value) || !preg_match('/^(?:0|[1-9][0-9]*)$/D', $value)) {
 			return NULL;
@@ -4905,10 +4916,12 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 			: ['weekday' => $weekday, 'hour' => $hour, 'minute' => $minute_value];
 	};
 	if (count(array_diff(array_keys($sections), ['ipv4', 'ipv6', 'dnsbl'])) !== 0
-		|| count($sections) !== 3
-		|| !is_string($general['pfb_scheduled_feed_updates'] ?? NULL)
+		|| count($sections) !== 3) {
+		return $reject('sections: expected exactly the ipv4, ipv6 and dnsbl sections');
+	}
+	if (!is_string($general['pfb_scheduled_feed_updates'] ?? NULL)
 		|| !in_array($general['pfb_scheduled_feed_updates'], ['on', ''], TRUE)) {
-		return NULL;
+		return $reject('general: pfb_scheduled_feed_updates is neither "on" nor empty');
 	}
 	$default = [
 		'weekday' => $token($general['pfb_schedule_weekday'] ?? NULL, 1, 7),
@@ -4916,7 +4929,7 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 		'minute' => $minute($general['pfb_schedule_minute'] ?? NULL),
 	];
 	if (in_array(NULL, $default, TRUE)) {
-		return NULL;
+		return $reject('general: default schedule weekday/hour/minute is out of range');
 	}
 	$cadences = ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'];
 	$entries = [];
@@ -4927,46 +4940,60 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 	];
 	foreach (['ipv4', 'ipv6', 'dnsbl'] as $family) {
 		if (!is_array($sections[$family])) {
-			return NULL;
+			return $reject("{$family}: section is not a list of groups");
 		}
 		$suffix = $family === 'dnsbl' ? '' : ($family === 'ipv4' ? '_v4' : '_v6');
-		foreach ($sections[$family] as $group) {
-			if (!is_array($group) || !array_key_exists('action', $group)
-				|| !array_key_exists('cron', $group) || !array_key_exists('row', $group)
-				|| !is_string($group['cron']) || !in_array($group['cron'], $cadences, TRUE)
-				|| !is_array($group['row'])) {
-				return NULL;
+		foreach ($sections[$family] as $index => $group) {
+			if (!is_array($group)) {
+				return $reject("{$family} group #" . (string) $index . ': not an array');
+			}
+			$alias = $group['aliasname'] ?? '';
+			$label = is_string($alias) && preg_match('/^[A-Za-z0-9_]{1,64}$/D', $alias)
+				? "{$family} alias \"{$alias}\"" : "{$family} group #" . (string) $index;
+			// issue #2855: an absent 'row' means "no feed rows", not corrupt config -- one
+			// such group used to void schedule-cache generation for the entire install.
+			$rows = $group['row'] ?? [];
+			if (!array_key_exists('action', $group)) {
+				return $reject("{$label}: missing 'action'");
 			}
 			if (!is_string($group['action'])) {
-				return NULL;
+				return $reject("{$label}: 'action' is not a string");
+			}
+			if (!array_key_exists('cron', $group) || !is_string($group['cron'])
+				|| !in_array($group['cron'], $cadences, TRUE)) {
+				return $reject("{$label}: 'cron' is not one of the known cadences");
+			}
+			if (!is_array($rows)) {
+				return $reject("{$label}: 'row' is present but is not a list");
 			}
 			if (array_key_exists('srcint', $group) && !is_string($group['srcint'])) {
-				return NULL;
+				return $reject("{$label}: 'srcint' is not a string");
 			}
 			$override_token = $group['schedule_override'] ?? '';
 			if (!is_string($override_token) || !in_array($override_token, ['on', ''], TRUE)) {
-				return NULL;
+				return $reject("{$label}: 'schedule_override' is neither \"on\" nor empty");
 			}
 			$override = NULL;
 			if ($override_token === 'on') {
 				$override = $read_schedule($group);
 				if ($override === NULL) {
-					return NULL;
+					return $reject("{$label}: schedule override weekday/hour/minute is out of range");
 				}
 			}
 			$enabled = $general['pfb_scheduled_feed_updates'] === 'on'
 				&& pfb_group_action_valid($group['action'], $family)
 				&& $group['action'] !== 'Disabled'
 				&& $group['cron'] !== 'Never';
-			foreach ($group['row'] as $row) {
+			foreach ($rows as $row_index => $row) {
+				$at = "{$label} row #" . (string) $row_index;
 				if (!is_array($row)) {
-					return NULL;
+					return $reject("{$at}: not an array");
 				}
 				if (array_key_exists('format', $row) && !is_string($row['format'])) {
-					return NULL;
+					return $reject("{$at}: 'format' is not a string");
 				}
 				if (array_key_exists('url', $row) && !is_string($row['url'])) {
-					return NULL;
+					return $reject("{$at}: 'url' is not a string");
 				}
 				$url = $row['url'] ?? NULL;
 				if (!is_string($url) || $url === '') {
@@ -4974,7 +5001,7 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 				}
 				if (array_key_exists('state', $row)) {
 					if (!is_string($row['state']) || !in_array($row['state'], ['Enabled', 'Flex', 'Hold', 'Disabled'], TRUE)) {
-						return NULL;
+						return $reject("{$at}: 'state' is not one of Enabled/Flex/Hold/Disabled");
 					}
 					if ($row['state'] === 'Disabled') {
 						continue;
@@ -4982,11 +5009,11 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 				}
 				$header = $row['header'] ?? NULL;
 				if (!is_string($header) || $header === '' || !preg_match('/^[A-Za-z0-9_]+$/D', $header)) {
-					return NULL;
+					return $reject("{$at}: 'header' is missing or is not [A-Za-z0-9_]");
 				}
 				$id = $family . ':' . (string) $header . $suffix;
 				if (array_key_exists($id, $entries)) {
-					return NULL;
+					return $reject("{$at}: duplicate feed id \"{$id}\"");
 				}
 				$entry = [
 					'cadence' => $group['cron'],
@@ -5005,7 +5032,7 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 	}
 	if ($extras !== []) {
 		if (!array_key_exists('dcc', $extras) || !is_bool($extras['dcc'])) {
-			return NULL;
+			return $reject("extras: 'dcc' is missing or is not a bool");
 		}
 		$entries['extra:dcc'] = [
 			'cadence' => 'EveryDay',
@@ -5018,7 +5045,7 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 			|| !is_bool($bl['enabled'] ?? NULL)
 			|| !is_string($bl['cadence'] ?? NULL)
 			|| !in_array($bl['cadence'], ['EveryDay', 'Weekly'], TRUE)) {
-			return NULL;
+			return $reject("extras: 'bl' enabled/cadence is missing or invalid");
 		}
 		$entries['extra:bl'] = [
 			'cadence' => $bl['cadence'],
@@ -5046,6 +5073,13 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 /** Build the scheduled-feed runtime image from the config gateway. */
 function pfb_schedule_runtime_config(): ?array
 {
+	// issue #2855: name the failing check in the system log so a save that skips the
+	// schedule cache leaves a fact behind instead of an unactionable bug report.
+	$reject = static function (string $why): ?array {
+		logger(LOG_NOTICE, localize_text('Schedule: runtime model rejected - %s', $why),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
+		return NULL;
+	};
 	$valid_blacklist_identity = static fn (mixed $value): bool =>
 		is_string($value) && $value !== '' && $value !== '0'
 		&& preg_match('/^[a-zA-Z0-9,_-]+$/D', $value) === 1;
@@ -5069,7 +5103,7 @@ function pfb_schedule_runtime_config(): ?array
 	$blacklist_selected = $blacklist['blacklist_selected'] ?? '';
 	if (!is_string($blacklist_selected)
 		|| ($blacklist_selected !== '' && !$valid_blacklist_identity($blacklist_selected))) {
-		return NULL;
+		return $reject('blacklist: blacklist_selected is not a valid identity list');
 	}
 	$selected = array_flip(explode(',', $blacklist_selected));
 	if (is_array($blacklist['item'] ?? NULL)) {
@@ -5080,7 +5114,7 @@ function pfb_schedule_runtime_config(): ?array
 				|| !$valid_blacklist_identity($xml)
 				|| !is_string($item['title'] ?? NULL)
 				|| !is_string($item['feed'] ?? NULL)) {
-				return NULL;
+				return $reject('blacklist: an item carries an invalid xml/title/feed field');
 			}
 		}
 	}
@@ -5100,13 +5134,15 @@ function pfb_schedule_runtime_config(): ?array
 	if (!in_array($blacklist_frequency, ['EveryDay', 'Weekly'], TRUE)) {
 		$bl_enabled = FALSE;
 	}
-	return pfb_schedule_runtime_model($general, $sections, [
+	$reason = NULL;
+	$model = pfb_schedule_runtime_model($general, $sections, [
 		'dcc' => TRUE,
 		'bl' => [
 			'enabled' => $bl_enabled,
 			'cadence' => $blacklist_frequency === 'Weekly' ? 'Weekly' : 'EveryDay',
 		],
-	]);
+	], $reason);
+	return $model ?? $reject($reason ?? 'reason unavailable');
 }
 
 function pfb_schedule_state_update(
@@ -5429,6 +5465,20 @@ function pfb_schedule_cache_refresh(
 		$io,
 		$timeout_s
 	);
+}
+
+/** Label the schedule-cache stage that failed; unknown tokens degrade to the generic one. */
+function pfb_schedule_cache_stage_label(string $stage): string
+{
+	return match ($stage) {
+		'config'   => gettext('the saved schedule configuration was rejected'),
+		'state'    => gettext('the schedule state file could not be read'),
+		'timezone' => gettext('the system timezone is not usable'),
+		'workdir'  => gettext('no private work directory could be created'),
+		'refresh'  => gettext('the candidate cache could not be published'),
+		'readback' => gettext('the published cache did not read back'),
+		default    => gettext('the failing stage was not recorded'),
+	};
 }
 
 function pfb_general_schedule_save_redirect(

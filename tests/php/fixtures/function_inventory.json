@@ -10427,6 +10427,19 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_schedule_cache_stage_label": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "stage",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_dispatch_begin": {
         "returnsRef": false,
         "returnType": "bool",
@@ -10764,6 +10777,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            },
+            {
+                "name": "reason",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
