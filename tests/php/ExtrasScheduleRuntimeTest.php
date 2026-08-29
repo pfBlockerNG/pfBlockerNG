@@ -242,7 +242,9 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 	{
 		$script = $this->dir . '/php';
 		$args = $this->dir . '/args';
-		file_put_contents($script, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($args) . "\n");
+		file_put_contents($script, "#!/bin/sh\n"
+			. "printf '%s\\n' \"\$*\" >> " . escapeshellarg($args) . "\n"
+			. "printf 'child output: %s\\n' \"\$*\"\n");
 		chmod($script, 0755);
 		$GLOBALS['pfb']['php'] = $script;
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';
@@ -254,6 +256,10 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 			'/usr/local/www/pfblockerng/pfblockerng.php dcc scheduled',
 			'/usr/local/www/pfblockerng/pfblockerng.php bl scheduled one,two',
 		], file($args, FILE_IGNORE_NEW_LINES));
+		$this->assertSame([
+			'child output: /usr/local/www/pfblockerng/pfblockerng.php dcc scheduled',
+			'child output: /usr/local/www/pfblockerng/pfblockerng.php bl scheduled one,two',
+		], file($GLOBALS['pfb']['extraslog'], FILE_IGNORE_NEW_LINES));
 	}
 
 	public function testScheduledDccReportsTop1mChangeWithoutTreatingItAsFailure(): void
