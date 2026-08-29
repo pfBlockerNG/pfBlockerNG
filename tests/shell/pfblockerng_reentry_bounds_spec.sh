@@ -43,7 +43,7 @@ exit 0
 EOF
   chmod +x "${pathtimeout}"
   rec="${work}/argv.rec"
-  : > "${rec}"
+  true > "${rec}"
 }
 
 # Fake interpreter for pathphp: ignores $1 (the re-entry target) and branches on the verb.
@@ -138,7 +138,7 @@ dnsbl_control_arm() {
 Describe 'pfb_reentry() budget floor (issue #2016/#2488)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbrebudget.XXXXXX")"
-    errorlog="${work}/error.log"; : > "${errorlog}"
+    errorlog="${work}/error.log"; true > "${errorlog}"
     pathpfbphp="${work}/pfblockerng.php"
     make_fake_php
     make_timeout_recorder
@@ -211,7 +211,7 @@ End
 Describe 'pfb_reentry() expiry and pass-through (issue #2016)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbreexec.XXXXXX")"
-    errorlog="${work}/error.log"; : > "${errorlog}"
+    errorlog="${work}/error.log"; true > "${errorlog}"
     pathpfbphp="${work}/pfblockerng.php"
     pfbreentrytimeout=2
     make_fake_php
@@ -251,9 +251,9 @@ End
 Describe 'every shell re-entry call site reaches the bounded seam (issue #2016)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbreroute.XXXXXX")"
-    errorlog="${work}/error.log"; : > "${errorlog}"
-    geoiplog="${work}/geoip.log"; : > "${geoiplog}"
-    extraslog="${work}/extras.log"; : > "${extraslog}"
+    errorlog="${work}/error.log"; true > "${errorlog}"
+    geoiplog="${work}/geoip.log"; true > "${geoiplog}"
+    extraslog="${work}/extras.log"; true > "${extraslog}"
     now='2026-08-28 00:00:00'
     pathpfbphp="${work}/pfblockerng.php"
     make_fake_php
