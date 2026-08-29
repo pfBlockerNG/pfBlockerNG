@@ -166,7 +166,6 @@ interactive, the tool prompts; otherwise it exits with an error naming the flag.
 | `--py-flavor FLAVOR` | `py311` | The Python flavor used in dependency names (`py311-sqlite3`, …) and the `python<XY>` dep. |
 | `--php VERSION` | `8.3` | The PHP version for the `USES=php` dependency (`php83`, `php83-intl`). Asked **only** when the port uses PHP. |
 | `--freebsd-version N` | `1500068` | Native mode only: the build host's `__FreeBSD_version`, written to the manifest `annotations` block. Optional; the block is omitted if unset. |
-| `--no-arch` | off | Force the manifest `abi`/`arch` to the CPU-wildcarded form (`FreeBSD:<major>:*` / `freebsd:<major>:*`) even when the port Makefile has no `NO_ARCH=yes` — e.g. a frozen ports snapshot that predates that Makefile setting. Same effect as `NO_ARCH=yes`; an explicit `--arch` still overrides the derived wildcard. |
 
 ### Source (USE_GITHUB ports)
 
