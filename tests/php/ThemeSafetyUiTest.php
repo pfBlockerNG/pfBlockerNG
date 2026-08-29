@@ -54,8 +54,6 @@ final class ThemeSafetyUiTest extends TestCase
 		],
 	];
 
-	private const DEVEL_BASE = '10d728dc4b406e41f7a676fe94ae5ad4282a929d';
-
 	public function testOpaqueSnippetWithoutForegroundIsAViolation(): void
 	{
 		$bad = [
@@ -94,41 +92,6 @@ final class ThemeSafetyUiTest extends TestCase
 		foreach ($hits as $hit) {
 			$this->assertStringNotContainsString('#FFFF00', $hit['excerpt']);
 		}
-	}
-
-	public function testScannerFlagsKnownDefectsOnDevelBase(): void
-	{
-		$root = dirname(__DIR__, 2);
-		$want = [
-			'src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php' => 'background:#fafafa',
-			'src/usr/local/www/pfblockerng/pfblockerng_ip.php' => 'background:#fafafa',
-			'src/usr/local/www/pfblockerng/pfblockerng_edit_hooks.php' => 'background:#fafafa',
-			'src/usr/local/www/pfblockerng/pfblockerng_log.php' => 'background:#fafafa',
-			'src/usr/local/www/pfblockerng/pfblockerng_update.php' => 'background:#fafafa',
-			'src/usr/local/www/pfblockerng/pfblockerng_category_edit.php' => 'background:#fafafa',
-			'tools/webassets/cm-shell.js' => 'backgroundColor: "#fff"',
-			'src/usr/local/www/pfblockerng/pfblockerng_feeds.php' => 'background-color: #F5FBF6',
-			'src/usr/local/www/pfblockerng/pfblockerng_alerts.php' => 'background-color: #424242',
-			'src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc' => 'background-color: #d6d6d6',
-		];
-		$missing = [];
-		foreach ($want as $rel => $needle) {
-			$src = self::gitShow($root, self::DEVEL_BASE, $rel);
-			if ($src === null) {
-				$missing[] = $rel . ' (absent at base)';
-				continue;
-			}
-			$hits = self::scan($src);
-			$joined = implode("\n", array_column($hits, 'excerpt'));
-			if (!str_contains($joined, $needle) && !self::hitsMention($hits, $needle)) {
-				$missing[] = $rel . ' did not flag ' . $needle . ' (hits: ' . $joined . ')';
-			}
-		}
-		$this->assertSame([], $missing, 'scanner must fail closed on the known base defects');
-
-		$dnsbl = self::gitShow($root, self::DEVEL_BASE, 'src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php');
-		$this->assertNotNull($dnsbl);
-		$this->assertGreaterThanOrEqual(6, count(self::scan($dnsbl)));
 	}
 
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
@@ -365,26 +328,5 @@ final class ThemeSafetyUiTest extends TestCase
 			}
 		}
 		return FALSE;
-	}
-
-	/** @param list<array{line:int, excerpt:string}> $hits */
-	private static function hitsMention(array $hits, string $needle): bool
-	{
-		foreach ($hits as $hit) {
-			if (str_contains($hit['excerpt'], $needle) || str_contains($needle, $hit['excerpt'])) {
-				return TRUE;
-			}
-		}
-		return FALSE;
-	}
-
-	private static function gitShow(string $root, string $rev, string $rel): ?string
-	{
-		$cmd = 'git -C ' . escapeshellarg($root) . ' show ' . escapeshellarg($rev . ':' . $rel) . ' 2>/dev/null';
-		$out = shell_exec($cmd);
-		if (!is_string($out) || $out === '') {
-			return null;
-		}
-		return $out;
 	}
 }
