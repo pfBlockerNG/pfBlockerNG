@@ -116,20 +116,18 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
 
 
 def _expand_section(page: Page, section_id: str) -> None:
-    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so hideCheckbox rows inside are observable.
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so rows inside are observable.
 
-    The outer panel id (second Form_Section arg) stays visible when the section is
-    collapsed; the body (``#{id}-panel``) does not. hideCheckbox tests that assert
-    ``to_be_visible()`` on a field in ``dnsbl_suffix`` must expand first.
+    Form_Section body id is ``{id}_panel-body``. The outer panel stays in the
+    tree when collapsed; the body does not display. A locator of ``#{id}-panel``
+    matches nothing, so this must use the ``_panel-body`` suffix.
     """
     panel = page.locator(f"#{section_id}")
     expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
-    body = page.locator(f"#{section_id}-panel")
-    if body.count() == 0:
-        return
-    if body.is_visible():
-        return
-    panel.locator("a[data-toggle='collapse']").first.click()
+    body = page.locator(f"#{section_id}_panel-body")
+    expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
+    if "in" not in (body.get_attribute("class") or ""):
+        page.locator(f'a[data-toggle="collapse"][href="#{section_id}_panel-body"]').click()
     expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
 
 
