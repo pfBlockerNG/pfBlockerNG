@@ -303,8 +303,7 @@ final class ReentryBoundsTest extends TestCase
 
 	public function testHungChildAndGrandchildHoldingOutputStillReturnAtTheBudget(): void
 	{
-		// Both processes stall. Default reaper mode must cap the whole tree, while file
-		// output keeps the parent off the child's capture pipe.
+		// A stalled child with a stalled descendant must still return 124 at its budget.
 		$GLOBALS['pfb']['timeout'] = $this->realTimeout();
 		$GLOBALS['pfb']['php']     = $this->fakePhp();
 
@@ -361,8 +360,8 @@ final class ReentryBoundsTest extends TestCase
 		$scope = $this->scope(php_strip_whitespace(self::APPLY),
 			'function pfb_top1m_fetch_if_needed(', 'function pfb_top1m_reprocess_needed(');
 
-		$this->assertStringContainsString("pfb_reentry_exec('al', ['scheduled']);", $scope,
-			'the TOP1M refresh must preserve the scheduled child argument');
+		$this->assertSame(1, substr_count($scope, "pfb_reentry_exec('al', ['scheduled']);"),
+			'the TOP1M refresh must preserve exactly one scheduled child call');
 		$this->assertStringNotContainsString('pfblockerng.php', $scope,
 			'the TOP1M refresh must compose no re-entry command of its own');
 		$this->assertStringNotContainsString('/usr/local/bin/php', $scope,
@@ -374,10 +373,10 @@ final class ReentryBoundsTest extends TestCase
 		$scope = $this->scope(php_strip_whitespace(self::APPLY),
 			'Downloading Blacklist Database(s) [', 'pfb_prune_failed_bl_lists($lists, $pfb_return);');
 
-		$this->assertStringContainsString(
-			"pfb_reentry_exec('bls', ['scheduled', \$bl_string], NULL, \$pfb_return);",
-			$scope,
-			'$pfb_return must stay the destination of the child output lines'
+		$this->assertSame(
+			1,
+			substr_count($scope, "pfb_reentry_exec('bls', ['scheduled', \$bl_string], NULL, \$pfb_return);"),
+			'$pfb_return must stay the output destination of exactly one child call'
 		);
 		$this->assertStringNotContainsString('pfblockerng.php', $scope,
 			'the blacklist download must compose no re-entry command of its own');

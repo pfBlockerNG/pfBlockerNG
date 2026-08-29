@@ -16,9 +16,9 @@ flags), which is what stops an entry from degrading into a blanket per-file exem
 
 The allowlist is exactly SEVEN entries: the bounded shell seam plus the six crontab
 command strings. The single-sourced path/constant definition lines
-(`PFB_REENTRY_SCRIPT`, `pathpfbphp=`) are deliberately NOT listed -- each carries only
-ONE token, so it is clean by the token rule and an entry for it would be dead config
-that would silently exempt a future line composing the constant with an interpreter.
+(`PFB_REENTRY_SCRIPT`, `pathpfbphp=`) are deliberately NOT listed -- each names
+only the target half, never an interpreter, so the pairing rule leaves it clean
+without an exemption that could later hide a composition.
 `test_single_token_line_needs_no_allowlist_entry` pins that hazard shut.
 
 `test_src_tree_is_bounded` is issue #2016's red->green proof, written as the DEFINITIVE
@@ -381,16 +381,16 @@ _NO_ENTRY_IDS = [row.name for row in _NO_ENTRY_ROWS]
 
 @pytest.mark.parametrize("row", _NO_ENTRY_ROWS, ids=_NO_ENTRY_IDS)
 def test_single_token_line_needs_no_allowlist_entry(row: _InertRow, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Definition lines carry ONE token, so listing them would be dead config -- and a hazard.
+    """Definition lines name only the target half, so listing them would be a hazard.
 
     Each is clean with NO allowlist at all (first assertion), so an entry for it would
     never be load-bearing. It would, however, keep matching if someone later inlined the
-    other half into that same line -- silently exempting exactly the composition this
+    interpreter into that same line -- silently exempting exactly the composition this
     checker exists to catch. The second assertion pins that inlined form as a violation
     under the REAL allowlist, which only holds while no entry covers it.
     """
     monkeypatch.setattr(crb, "_ALLOWLIST", type(crb._ALLOWLIST)())
-    assert _find(row.single_token, row.source) == [], f"{row.name}: a one-token line was flagged"
+    assert _find(row.single_token, row.source) == [], f"{row.name}: a target-only line was flagged"
     monkeypatch.undo()
     violations = _find(row.inlined, row.source)
     assert len(violations) == 1, f"{row.name}: the inlined-literal form was not flagged ({violations!r})"
