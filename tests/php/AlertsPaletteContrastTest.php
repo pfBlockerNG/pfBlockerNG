@@ -7,12 +7,16 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Shipped Alerts event-row defaults must meet WCAG 2 AA (4.5:1).
- * Light values are measured against #212121; dark values against #ffffff.
+ * Light values are measured against #212121; dark values against #e0e0e0.
+ *
+ * DARK_FG is the colour pfSense-dark.css pins on
+ * table.sortable-theme-bootstrap (color: #e0e0e0 !important), which
+ * alerts.php uses for the event rows. Body text (#ffffff) does not apply.
  */
 final class AlertsPaletteContrastTest extends TestCase
 {
 	private const LIGHT_FG = '#212121';
-	private const DARK_FG = '#ffffff';
+	private const DARK_FG = '#e0e0e0';
 	private const AA = 4.5;
 
 	public function testUniDefaultsListsSixEvents(): void

@@ -52,10 +52,10 @@ $pfbreplyrec	= pfb_csv_list($pfb['aglobal']['pfbreplyrec'] ?? NULL);
 // was added after the rest -- an existing config predating it lacks the key, so a plain
 // `?:` would warn on the missing offset; the other keys have always been present.
 $uni_defaults = array(
-	'block'    => array('light_default' => '#FFF9C4', 'dark_default' => '#7A701B', 'light_help' => 'IP Block Event color',       'dark_help' => 'IP Block Event color',       'gated' => FALSE, 'safe_read' => FALSE),
-	'permit'   => array('light_default' => '#80CBC4', 'dark_default' => '#367A74', 'light_help' => 'IP Permit Event color',      'dark_help' => 'IP Permit Event color',      'gated' => FALSE, 'safe_read' => FALSE),
-	'match'    => array('light_default' => '#B3E5FC', 'dark_default' => '#3D7691', 'light_help' => 'IP Match Event color',       'dark_help' => 'IP Match Event color',       'gated' => FALSE, 'safe_read' => FALSE),
-	'dnsbl'    => array('light_default' => '#EF9A9A', 'dark_default' => '#DB1C1C', 'light_help' => 'DNSBL Block Event color',    'dark_help' => 'DNSBL Block Event color',    'gated' => TRUE,  'safe_read' => FALSE),
+	'block'    => array('light_default' => '#FFF9C4', 'dark_default' => '#665E17', 'light_help' => 'IP Block Event color',       'dark_help' => 'IP Block Event color',       'gated' => FALSE, 'safe_read' => FALSE),
+	'permit'   => array('light_default' => '#80CBC4', 'dark_default' => '#2D6560', 'light_help' => 'IP Permit Event color',      'dark_help' => 'IP Permit Event color',      'gated' => FALSE, 'safe_read' => FALSE),
+	'match'    => array('light_default' => '#B3E5FC', 'dark_default' => '#336279', 'light_help' => 'IP Match Event color',       'dark_help' => 'IP Match Event color',       'gated' => FALSE, 'safe_read' => FALSE),
+	'dnsbl'    => array('light_default' => '#EF9A9A', 'dark_default' => '#B81717', 'light_help' => 'DNSBL Block Event color',    'dark_help' => 'DNSBL Block Event color',    'gated' => TRUE,  'safe_read' => FALSE),
 	'upstream' => array('light_default' => '#CE93D8', 'dark_default' => '#9C27B0', 'light_help' => 'Upstream Block Event color', 'dark_help' => 'Upstream Block Event color', 'gated' => TRUE,  'safe_read' => TRUE),
 	'reply'    => array('light_default' => '#E8E8E8', 'dark_default' => '#54585E', 'light_help' => 'DNS Reply Event color (Resolver only)', 'dark_help' => 'DNS Reply Event color', 'gated' => TRUE, 'safe_read' => FALSE),
 );
