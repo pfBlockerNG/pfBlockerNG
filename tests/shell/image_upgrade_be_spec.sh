@@ -211,7 +211,7 @@ Describe 'image-upgrade.sh pre-push artifact verification'
   End
 End
 
-Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
+Describe 'image-upgrade.sh option parsing'
   SCRIPT="${PFB_ROOT}/scripts/image-upgrade.sh"
 
   # run_optparse ARGS... — drive the shipped option-parsing loop in isolation
@@ -223,6 +223,7 @@ Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
       die() { printf "ERROR: %s\n" "$*" >&2; exit 1; }
       _self="$1"; shift
       eval "$(sed -n "/^while \[ \$# -gt 0 \]; do\$/,/^done\$/p" "$_self")"
+      printf "UPGRADE_TIMEOUT=%s\n" "${UPGRADE_TIMEOUT:-<unset>}"
       printf "REACHED-AFTER-PARSE\n"
     ' _ "$SCRIPT" "$@"
   }
@@ -237,6 +238,48 @@ Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
   It 'accepts a numeric --expect-freebsd-major'
     When call run_optparse --expect-freebsd-major 16
     The status should be success
+    The output should include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'rejects a nonnumeric --upgrade-timeout before starting the upgrade'
+    When call run_optparse --upgrade-timeout not-a-number
+    The status should be failure
+    The stderr should include '--upgrade-timeout must be a decimal integer from 0 to 86400'
+    The output should not include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'rejects an overflowing --upgrade-timeout before starting the upgrade'
+    When call run_optparse --upgrade-timeout 99999999999999999999999999
+    The status should be failure
+    The stderr should include '--upgrade-timeout must be a decimal integer from 0 to 86400'
+    The output should not include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'rejects an --upgrade-timeout above 86400 before starting the upgrade'
+    When call run_optparse --upgrade-timeout 86401
+    The status should be failure
+    The stderr should include '--upgrade-timeout must be a decimal integer from 0 to 86400'
+    The output should not include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'accepts zero as an immediate --upgrade-timeout boundary'
+    When call run_optparse --upgrade-timeout 0
+    The status should be success
+    The output should include 'UPGRADE_TIMEOUT=0'
+    The output should include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'accepts the 86400 upper --upgrade-timeout boundary'
+    When call run_optparse --upgrade-timeout 86400
+    The status should be success
+    The output should include 'UPGRADE_TIMEOUT=86400'
+    The output should include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'preserves a valid positive --upgrade-timeout'
+    When call run_optparse --upgrade-timeout 45
+    The status should be success
+    The output should include 'UPGRADE_TIMEOUT=45'
     The output should include 'REACHED-AFTER-PARSE'
   End
 
@@ -261,7 +304,11 @@ Describe 'image-upgrade.sh boot-environment promotion'
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/upgbe.XXXXXX")"
     CMDS="${WORK}/guest-cmds"
     POLLS="${WORK}/polls"
-    export WORK CMDS POLLS
+    SLEEP_ARG="${WORK}/sleep-arg"
+    SLEEP_COUNT="${WORK}/sleep-count"
+    : > "$SLEEP_ARG"
+    printf '0\n' > "$SLEEP_COUNT"
+    export WORK CMDS POLLS SLEEP_ARG SLEEP_COUNT
   }
   teardown() { rm -rf "$WORK"; }
   BeforeEach 'setup'
@@ -273,14 +320,19 @@ Describe 'image-upgrade.sh boot-environment promotion'
   #   slow  — never promotes on its own; the fallback activate makes it stick
   #   stuck — never promotes, not even after the fallback activate
   run_promote() {
-    _mode="$1" sh -c '
+    _mode="$1" _timeout="${2-30}" _interval="${3-10}" timeout 10 sh -c '
       set -e
       log()  { printf "==> %s\n" "$*"; }
       warn() { printf "WARNING: %s\n" "$*" >&2; }
       die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
-      sleep() { true; }          # no real waiting in the spec
-      PROMOTE_TIMEOUT=30
-      PROMOTE_INTERVAL=10
+      sleep() {
+        _sleep_n=$(cat "$SLEEP_COUNT")
+        _sleep_n=$((_sleep_n + 1))
+        printf "%s\n" "$_sleep_n" > "$SLEEP_COUNT"
+        printf "%s\n" "$1" > "$SLEEP_ARG"
+      }
+      PROMOTE_TIMEOUT="$_timeout"
+      PROMOTE_INTERVAL="$_interval"
       eval "$(sed -n "/^# pfb_promote_be BEGIN/,/^# pfb_promote_be END/p" "$1")"
       ssh_guest() {
         printf "%s\n" "$*" >> "$CMDS"
@@ -325,7 +377,151 @@ Describe 'image-upgrade.sh boot-environment promotion'
       pfb_promote_be
       printf "REACHED-AFTER-PROMOTE\n"
     ' _ "$SCRIPT"
+    _status=$?
+    if [ "$_status" -eq 124 ]; then
+      printf 'stuck/environment: pfb_promote_be exceeded salvage cap\n' >&2
+      return 125
+    fi
+    return "$_status"
   }
+
+  It 'uses the documented promotion defaults when both knobs are empty'
+    When call run_promote slow '' ''
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 300s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '30'
+    The contents of file "$POLLS" should equal '32'
+  End
+
+  It 'falls back to 300s when the promotion timeout is nonnumeric'
+    When call run_promote slow not-a-number 10
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 300s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '30'
+    The contents of file "$POLLS" should equal '32'
+  End
+
+  It 'falls back to 10s when the promotion interval is nonnumeric'
+    When call run_promote slow 30 not-a-number
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'falls back to 10s when the promotion interval is zero'
+    When call run_promote slow 30 0
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'falls back to 10s when the promotion interval is zero-padded zero'
+    When call run_promote slow 30 00
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'falls back to 10s when the promotion interval is zero-padded 09'
+    When call run_promote slow 30 09
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'falls back to 10s when the promotion interval is octal-shaped 010'
+    When call run_promote slow 30 010
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'preserves the upper promotion timeout and interval boundaries'
+    When call run_promote slow 86400 3600
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 86400s'
+    The contents of file "$SLEEP_ARG" should equal '3600'
+    The contents of file "$SLEEP_COUNT" should equal '24'
+    The contents of file "$POLLS" should equal '26'
+  End
+
+  It 'falls back when the promotion timeout is above 86400'
+    When call run_promote slow 86401 10
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 300s'
+    The contents of file "$SLEEP_COUNT" should equal '30'
+    The contents of file "$POLLS" should equal '32'
+  End
+
+  It 'falls back when the promotion interval is above 3600'
+    When call run_promote slow 30 3601
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'falls back when the promotion timeout exceeds shell integer range'
+    When call run_promote slow 99999999999999999999999999 10
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 300s'
+    The contents of file "$SLEEP_COUNT" should equal '30'
+    The contents of file "$POLLS" should equal '32'
+  End
+
+  It 'falls back when the promotion interval exceeds shell integer range'
+    When call run_promote slow 30 99999999999999999999999999
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '10'
+    The contents of file "$SLEEP_COUNT" should equal '3'
+    The contents of file "$POLLS" should equal '5'
+  End
+
+  It 'treats a zero promotion timeout as immediate explicit fallback'
+    When call run_promote slow 0 10
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 0s'
+    The contents of file "$SLEEP_ARG" should equal ''
+    The contents of file "$SLEEP_COUNT" should equal '0'
+    The contents of file "$POLLS" should equal '2'
+  End
+
+  It 'preserves valid positive promotion values'
+    When call run_promote slow 30 15
+    The status should be success
+    The output should include 'REACHED-AFTER-PROMOTE'
+    The stderr should include 'after 30s'
+    The contents of file "$SLEEP_ARG" should equal '15'
+    The contents of file "$SLEEP_COUNT" should equal '2'
+    The contents of file "$POLLS" should equal '4'
+  End
 
   It 'waits for pfSense to promote the BE itself and does not touch bectl activate'
     # the box promotes its own running BE at the end of pfSense-rc; forcing an
