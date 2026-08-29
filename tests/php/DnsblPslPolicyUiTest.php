@@ -43,10 +43,8 @@ final class DnsblPslPolicyUiTest extends TestCase
 		$this->assertStringContainsString("PfbConfig::write('dnsbl/pfb_psl_allow_private'", $source);
 		$this->assertStringContainsString("$('#tld_wildcard')", $source);
 		$this->assertStringContainsString("$('#tld_allow')", $source);
-		// Row-level visibility rides the page's hideCheckbox() idiom (hides the
-		// whole form-group, label and help included), never a bare input hide().
-		$this->assertStringContainsString("hideCheckbox('pfb_psl_include_private'", $source);
-		$this->assertStringContainsString("hideCheckbox('pfb_psl_allow_private'", $source);
+		$this->assertStringContainsString("disableInput('pfb_psl_include_private'", $source);
+		$this->assertStringContainsString("disableInput('pfb_psl_allow_private'", $source);
 		$this->assertStringNotContainsString('psl-policy', $source);
 		$this->assertStringNotContainsString("config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_", $source);
 		$this->assertStringNotContainsString("config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_", $source);
