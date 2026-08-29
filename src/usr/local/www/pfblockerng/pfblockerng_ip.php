@@ -50,7 +50,7 @@ $pconfig['enable_agg']		= PfbConfig::read('ip/enable_agg');
 // nothing in the multi-select. Options defined here (before the POST handler) so the
 // save-time sanitiser and the rendered select share one source of allowed values.
 // Stored VALUES are Deny/Permit/Match/Native; the labels show the reference-only alias.
-$options_pfb_agg_types		= [ 'Deny' => 'Alias Deny', 'Permit' => 'Alias Permit', 'Match' => 'Alias Match', 'Native' => 'Alias Native' ];
+$options_pfb_agg_types		= [ 'Deny' => 'Deny', 'Permit' => 'Permit', 'Match' => 'Match', 'Native' => 'Alias Native' ];
 $pconfig['pfb_agg_types']	= explode(',', (string) PfbConfig::read('gen/pfb_agg_types'));
 
 // ADR-40: alias-table apply mode (gateway-registered, general section).
@@ -373,7 +373,9 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['enable_dup'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('Only used for IPv4 Deny Lists');
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'Remove duplicate IPv4 addresses across Deny lists so the same host is not listed more than once. '
+		. 'Only used for IPv4 Deny Lists.');
 
 $section->addInput(new Form_Checkbox(
 	'enable_agg',
@@ -381,49 +383,8 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['enable_agg'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
-
-// $options_pfb_agg_types is defined near the top (shared with the POST sanitiser).
-$section->addInput(new Form_Select(
-	'pfb_agg_types',
-	'Aggregated Aliases',
-	$pconfig['pfb_agg_types'],
-	$options_pfb_agg_types,
-	TRUE
-))->setHelp('Default: <strong>none</strong><br />'
-		. 'For each selected type, build a <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> alias holding the '
-		. 'CIDR-aggregated union of every feed of that action class &mdash; its directional and Alias variants alike '
-		. '(e.g. <em>Alias Deny</em> covers Deny Inbound/Outbound/Both and Alias Deny; <em>Alias Native</em> the '
-		. 'Alias&nbsp;Native feeds).<br />'
-		. 'Every aggregate is <strong>reference only &mdash; no firewall rule</strong> is added; use it by name where '
-		. 'needed (e.g. your own rule or an HAProxy ACL). Each loads as a pf table, so enable only the type(s) you use.')
-  ->setAttribute('size', count($options_pfb_agg_types))
-  ->setAttribute('style', 'width: auto');
-
-// ADR-40: alias-table apply mode + batch size.
-$section->addInput(new Form_Select(
-	'pfb_alias_delta_mode',
-	'Alias Table Apply Mode',
-	$pconfig['pfb_alias_delta_mode'],
-	$options_pfb_alias_delta_mode
-))->setHelp('Default: <strong>Auto</strong><br />'
-		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~5%); '
-		. 'full replace for initial load, boot, or large churn. Safe default.<br />'
-		. '<strong>Delta:</strong> always delta apply — no large-churn replace fallback. Power-user override; '
-		. 'can be slow on a full-table rebuild.<br />'
-		. '<strong>Replace:</strong> always full -T replace (pre-4.0 behaviour).')
-  ->setAttribute('id', 'pfb_alias_delta_mode')
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Input(
-	'pfb_alias_delta_batch',
-	'Alias Table Delta Batch Size',
-	'number',
-	$pconfig['pfb_alias_delta_batch'],
-	[ 'min' => '64', 'max' => '4096', 'placeholder' => '512' ]
-))->setHelp('Default: <strong>512</strong> (range 64–4096). '
-		. 'Entries applied per pfctl call in delta mode. '
-		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries.');
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'Optimise CIDRs - merge contiguous CIDRs into larger CIDR blocks.');
 
 $section->addInput(new Form_Checkbox(
 	'suppression',
@@ -431,7 +392,8 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_ip_suppression_enabled($pconfig['suppression'] ?? NULL),
 	'on'
-))->setHelp('Default enabled. This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128).'
+))->setHelp('Default: <strong>Enabled</strong><br />This will prevent Selected IPs (and private/reserved addresses) from being blocked. For IPv4 lists (/8 through /32) and IPv6 lists (/32 through /128). '
+	. pfb_list_section_help_note(['IPv4 Suppression', 'IPv6 Suppression'], FALSE)
 	. '<div class="infoblock">'
 	. 'GeoIP blocklist cannot be suppressed.<br /><br />'
 	. 'Alerts can be suppressed using the \'+\' icon in the Alerts tab; the IP is added to the matching family\'s (IPv4/IPv6) Suppression custom list.<br />'
@@ -446,8 +408,9 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['enable_log'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('The global logging option is only used to force logging for all IP Aliases, and not to disable the logging of all IP Aliases.<br />'
-		. 'This overrides any logging settings in the GeoIP/IPv4/v6 tabs.'
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'Forces logging on for every IP Alias, overriding the per-alias settings in the GeoIP/IPv4/IPv6 tabs. '
+		. 'It cannot turn logging off.'
 );
 
 $section->addInput(new Form_Checkbox(
@@ -456,24 +419,98 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['enable_rdns'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('Perform a reverse DNS (PTR) lookup to resolve the hostname of each blocked IP address shown in the Alerts and logs.<br />'
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'Perform a reverse DNS (PTR) lookup to resolve the hostname of each blocked IP address shown in the Alerts and logs.<br />'
 		. 'Enabling this increases the number of DNS queries performed, though the impact is usually negligible.');
 
-$section->addInput(new Form_Input(
-	'ip_placeholder',
-	gettext('Placeholder IP Address'),
-	'text',
-	$pconfig['ip_placeholder'],
-	[ 'placeholder' => '127.1.7.7' ]
-))->setHelp('Enter a single IPv4 placeholder address<br />'
-	. 'For IPv6 \'::\' will be prefixed to the placeholder IP.<br />'
-	. 'This address should be in an Isolated Range that is not used in your Network.<br />'
-	. 'This IP address will be used as a placeholder IP to avoid empty Feeds/Aliases.'
-);
+$section->addInput(new Form_Checkbox(
+	'killstates',
+	'Kill States',
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['killstates'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'When enabled, after a cron event or any Force command, any blocked IPs found in the Firewall states will be cleared.');
 
 $form->add($section);
-$section = new Form_Section('ASN configuration');
 
+$section = new Form_Section('IP Interface/Rules Configuration');
+
+$group = new Form_Group('Inbound Firewall Rules');
+$group->add(new Form_Select(
+	'inbound_interface',
+	'Interface(s)',
+	$pconfig['inbound_interface'],
+	$options_inbound_interface,
+	TRUE
+))->setHelp('Select the Inbound interface(s) you want to apply auto rules to:')
+  ->setAttribute('size', $options_interface_cnt);
+
+$group->add(new Form_Select(
+	'inbound_deny_action',
+	'Rule Action',
+	$pconfig['inbound_deny_action'],
+	$options_inbound_deny_action
+))->setHelp('Default: <strong>Block</strong><br />Select \'Rule action\' for Inbound rules:')
+  ->setAttribute('style', 'width: auto');
+$section->add($group);
+
+$group = new Form_Group('Outbound Firewall Rules');
+$group->add(new Form_Select(
+	'outbound_interface',
+	'Interface(s)',
+	$pconfig['outbound_interface'],
+	$options_outbound_interface,
+	TRUE
+))->setHelp('Select the Outbound interface(s) you want to apply auto rules to:')
+  ->setAttribute('size', $options_interface_cnt);
+
+$group->add(new Form_Select(
+	'outbound_deny_action',
+	'Rule Action',
+	$pconfig['outbound_deny_action'],
+	$options_outbound_deny_action
+))->setHelp('Default: <strong>Reject</strong><br />Select \'Rule action\' for Outbound rules:')
+  ->setAttribute('style', 'width: auto');
+$section->add($group);
+
+$section->addInput(new Form_Checkbox(
+	'enable_float',
+	'Floating Rules',
+	'Enable',
+	pfb_cfg_toggle_read($pconfig['enable_float'] ?? NULL) === PfbToggle::On,
+	'on'
+))->setHelp('Default: <strong>Off</strong><br />'
+		. '<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
+		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
+);
+
+$section->addInput(new Form_Select(
+	'pass_order',
+	'Firewall \'Auto\' Rule Order',
+	$pconfig['pass_order'],
+	$options_pass_order
+))->setHelp('Default Order:<strong> | pfB_Block/Reject | All other Rules | (original format)</strong><br />'
+		. '<span class="text-danger"><strong>Note: \'Auto type\' Firewall Rules will be \'ordered\' by this selection.</strong></span>'
+		. '<div class="infoblock">'
+		. 'Refer to the blue infoblock \'List Action\' icon in the IPv4 tab for details on how to use \'Alias type\'<br />'
+		. '(ie: \'Alias Deny\') instead of \'Auto generated rules\', if required for your network design.<br /><br />'
+		. 'Select the \'<strong>Order</strong>\' of the Rules<br /><br />'
+		. '&emsp;Selecting \'original format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
+		. '&emsp;Selecting any other \'Order\' will re-order <strong>all the rules to the format indicated!</strong></div>')
+  ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Select(
+	'autorule_suffix',
+	'Firewall \'Auto\' Rule Suffix',
+	$pconfig['autorule_suffix'],
+	$options_autorule_suffix
+))->setHelp('Default: <strong>auto rule</strong><br />Select \'Auto Rule\' description suffix for auto defined rules. pfBlockerNG must be disabled to modify suffix.')
+  ->setAttribute('style', 'width: auto');
+
+$form->add($section);
+
+$section = new Form_Section('ASN configuration');
 $section->addInput(new Form_StaticText(
 	'Attribution',
 	'<small>'
@@ -488,7 +525,7 @@ $section->addInput(new Form_Select(
 	'ASN Reporting',
 	$pconfig['asn_reporting'],
 	$options_asn_reporting
-))->setHelp('Query for the ASN (IPinfo downloaded ASN database) for each block/reject/permit/match IP entry. ASN values are cached as per the defined selection.')
+))->setHelp('Default: <strong>Disabled</strong><br />Query for the ASN (IPinfo downloaded ASN database) for each block/reject/permit/match IP entry. ASN values are cached as per the defined selection.')
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Input(
@@ -541,7 +578,7 @@ $section->addInput(new Form_Select(
 	'MaxMind Localized Language',
 	$pconfig['maxmind_locale'],
 	$options_maxmind_locale
-))->setHelp('Select the localized name data from the Language options available.<br />'
+))->setHelp('Default: <strong>English</strong><br />Select the localized name data from the Language options available.<br />'
 		. 'Changes to the Locale will be executed in the background, and will take a few minutes to complete.<br />'
 		. 'Upon completion, a pfSense Notice will be generated.')
   ->setAttribute('style', 'width: auto');
@@ -552,14 +589,10 @@ $section->addInput(new Form_Checkbox(
 	'Check to disable MaxMind CSV updates',
 	pfb_cfg_toggle_read($pconfig['database_cc'] ?? NULL) === PfbToggle::On,
 	'on'
-))->setHelp('This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
+))->setHelp('Default: <strong>Off</strong> (CSV updates run).<br />This will disable the MaxMind monthly CSV GeoIP database cron update. This does not affect the MaxMind binary cron update that is used for other GeoIP funcionality in the package.');
 
-// issue #1881: the "#Suppression" page anchor that used to live here was its own empty
-// Form_StaticText row drawing a stray separator. Its only consumer, the dashboard
-// widget, now links the IPv4 Suppression section's own id (#IPv4_Suppression_customlist).
 $form->add($section);
 
-// Print Custom List TextArea section
 $pfb_ip_anchor_layout = pfb_ip_anchor_layout_render();
 $section = new Form_Section('IPv4 Suppression', $pfb_ip_anchor_layout['suppression'], COLLAPSIBLE|SEC_CLOSED);
 $suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] IPv4 addresses only!</u></strong><br /><br />
@@ -591,7 +624,6 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-// Print Custom List TextArea section (ADR-53: v6 sibling of the v4 section above)
 $section = new Form_Section('IPv6 Suppression', 'IPv6_Suppression_customlist', COLLAPSIBLE|SEC_CLOSED);
 $suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /128 ] IPv6 addresses only!</u></strong><br /><br />
 
@@ -622,91 +654,66 @@ $section->addInput(new Form_Textarea(
 
 $form->add($section);
 
-$section = new Form_Section('IP Interface/Rules Configuration');
+$section = new Form_Section('Advanced Settings', 'ip_advanced', COLLAPSIBLE|SEC_CLOSED);
 
-$group = new Form_Group('Inbound Firewall Rules');
-$group->add(new Form_Select(
-	'inbound_interface',
-	'Interface(s)',
-	$pconfig['inbound_interface'],
-	$options_inbound_interface,
+$section->addInput(new Form_Select(
+	'pfb_agg_types',
+	'Aggregated Aliases',
+	$pconfig['pfb_agg_types'],
+	$options_pfb_agg_types,
 	TRUE
-))->setHelp('Select the Inbound interface(s) you want to apply auto rules to:')
-  ->setAttribute('size', $options_interface_cnt);
-
-$group->add(new Form_Select(
-	'inbound_deny_action',
-	'Rule Action',
-	$pconfig['inbound_deny_action'],
-	$options_inbound_deny_action
-))->setHelp('Default: <strong>Block</strong><br />Select \'Rule action\' for Inbound rules:')
+))->setHelp('Default: <strong>none</strong><br />'
+		. 'For each type selected, build a <strong>pfB_&lt;Type&gt;_Aggregated_v4/_v6</strong> '
+		. 'alias holding the CIDR-aggregated union of <strong>every feed of that type</strong>, '
+		. 'whichever List Action produced it &mdash; <em>Deny</em> covers Deny Inbound, Outbound '
+		. 'and Both as well as Alias Deny.<br />'
+		. 'Each aggregate is <strong>reference only &mdash; no firewall rule is added</strong>. '
+		. 'Use it by name where you need it (your own rule, an HAProxy ACL). Each one loads as a '
+		. 'pf table, so enable only the types you use.')
+  ->setAttribute('size', count($options_pfb_agg_types))
   ->setAttribute('style', 'width: auto');
-$section->add($group);
 
-$group = new Form_Group('Outbound Firewall Rules');
-$group->add(new Form_Select(
-	'outbound_interface',
-	'Interface(s)',
-	$pconfig['outbound_interface'],
-	$options_outbound_interface,
-	TRUE
-))->setHelp('Select the Outbound interface(s) you want to apply auto rules to:')
-  ->setAttribute('size', $options_interface_cnt);
-
-$group->add(new Form_Select(
-	'outbound_deny_action',
-	'Rule Action',
-	$pconfig['outbound_deny_action'],
-	$options_outbound_deny_action
-))->setHelp('Default: <strong>Reject</strong><br />Select \'Rule action\' for Outbound rules:')
+$section->addInput(new Form_Select(
+	'pfb_alias_delta_mode',
+	'Alias Table Apply Mode',
+	$pconfig['pfb_alias_delta_mode'],
+	$options_pfb_alias_delta_mode
+))->setHelp('Default: <strong>Auto</strong><br />'
+		. '<strong>Auto:</strong> delta apply (-T add/-T delete) for small churn (&lt;~5%); '
+		. 'full replace for initial load, boot, or large churn. Safe default.<br />'
+		. '<strong>Delta:</strong> always delta apply — no large-churn replace fallback. Power-user override; '
+		. 'can be slow on a full-table rebuild.<br />'
+		. '<strong>Replace:</strong> always full -T replace (pre-4.0 behaviour).')
+  ->setAttribute('id', 'pfb_alias_delta_mode')
   ->setAttribute('style', 'width: auto');
-$section->add($group);
 
-$section->addInput(new Form_Checkbox(
-	'enable_float',
-	'Floating Rules',
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['enable_float'] ?? NULL) === PfbToggle::On,
-	'on'
-))->setHelp('<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
-		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
+$section->addInput(new Form_Input(
+	'pfb_alias_delta_batch',
+	'Alias Table Delta Batch Size',
+	'number',
+	$pconfig['pfb_alias_delta_batch'],
+	[ 'min' => '64', 'max' => '4096', 'placeholder' => '512' ]
+))->setHelp('Default: <strong>512</strong> (range 64–4096). '
+		. 'Entries applied per pfctl call in delta mode. '
+		. 'Use 512 for typical tables; 1024+ for tables with 1M+ entries. '
+		. 'Applies in Auto and Delta modes.');
+
+$section->addInput(new Form_Input(
+	'ip_placeholder',
+	gettext('Placeholder IP Address'),
+	'text',
+	$pconfig['ip_placeholder'],
+	[ 'placeholder' => '127.1.7.7' ]
+))->setHelp('Default: <strong>127.1.7.7</strong><br />Enter a single IPv4 placeholder address<br />'
+	. 'For IPv6 \'::\' will be prefixed to the placeholder IP.<br />'
+	. 'This address should be in an Isolated Range that is not used in your Network.<br />'
+	. 'This IP address will be used as a placeholder IP to avoid empty Feeds/Aliases.'
 );
-
-$section->addInput(new Form_Select(
-	'pass_order',
-	'Firewall \'Auto\' Rule Order',
-	$pconfig['pass_order'],
-	$options_pass_order
-))->setHelp('Default Order:<strong> | pfB_Block/Reject | All other Rules | (original format)</strong><br />'
-		. '<span class="text-danger"><strong>Note: \'Auto type\' Firewall Rules will be \'ordered\' by this selection.</strong></span>'
-		. '<div class="infoblock">'
-		. 'Refer to the blue infoblock \'List Action\' icon in the IPv4 tab for details on how to use \'Alias type\'<br />'
-		. '(ie: \'Alias Deny\') instead of \'Auto generated rules\', if required for your network design.<br /><br />'
-		. 'Select the \'<strong>Order</strong>\' of the Rules<br /><br />'
-		. '&emsp;Selecting \'original format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
-		. '&emsp;Selecting any other \'Order\' will re-order <strong>all the rules to the format indicated!</strong></div>')
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Select(
-	'autorule_suffix',
-	'Firewall \'Auto\' Rule Suffix',
-	$pconfig['autorule_suffix'],
-	$options_autorule_suffix
-))->setHelp('Default: <strong>auto rule</strong><br />Select \'Auto Rule\' description suffix for auto defined rules. pfBlockerNG must be disabled to modify suffix.')
-  ->setAttribute('style', 'width: auto');
-
-$section->addInput(new Form_Checkbox(
-	'killstates',
-	'Kill States',
-	'Enable',
-	pfb_cfg_toggle_read($pconfig['killstates'] ?? NULL) === PfbToggle::On,
-	'on'
-))->setHelp('When \'Enabled\', after a cron event or any \'Force\' commands, any blocked IPs found in the Firewall states will be cleared.');
 
 $form->add($section);
 
-print ($form);
 print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
+print ($form);
 
 ?>
 <?=$pfb_ip_editor['asset']?>
@@ -715,8 +722,24 @@ print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Re
 
 var pagetype = null;
 
+function enable_delta_batch() {
+	disableInput('pfb_alias_delta_batch', $('#pfb_alias_delta_mode').val() == 'replace');
+}
+
 events.push(function(){
 <?=$pfb_ip_editor['lists']?>
+
+	$('#pfb_alias_delta_mode').change(function() {
+		enable_delta_batch();
+	});
+	enable_delta_batch();
+
+	var pfb_gated_ids = ['pfb_alias_delta_batch'];
+	$('form').submit(function() {
+		$.each(pfb_gated_ids, function(_, id) {
+			disableInput(id, false);
+		});
+	});
 });
 
 //]]>

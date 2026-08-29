@@ -54,6 +54,17 @@ AGG_LABEL = "Aggregated Aliases"
 JS_TIMEOUT_MS = 10_000
 
 
+def _expand_section(page: Page, section_id: str) -> None:
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section body so fields inside are visible."""
+    panel = page.locator(f"#{section_id}")
+    expect(panel).to_be_attached(timeout=JS_TIMEOUT_MS)
+    body = page.locator(f"#{section_id}-panel")
+    if body.count() == 0 or body.is_visible():
+        return
+    panel.locator("a[data-toggle='collapse']").first.click()
+    expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+
 def _open(page: Page, webui: WebUI, path: str) -> None:
     """Navigate the cookie-authenticated page to ``path`` and settle the DOM.
 
@@ -115,6 +126,9 @@ def test_ip_aggregate_types_multiselect(
     # field). The wizard form carries no IP-settings panel.
     assert "wizard.php" not in page.url, f"landed on the setup wizard, not IP settings: {page.url}"
 
+    # Aggregated Aliases now lives in collapsed Advanced Settings; expand so to_be_visible() holds.
+    _expand_section(page, "ip_advanced")
+
     # The field's enclosing form-group (label + multi-select + help-block) — located by
     # its LABEL, id-rendering-agnostic (see AGG_LABEL). Exactly one such group.
     field = page.locator("div.form-group").filter(has_text=AGG_LABEL)
@@ -147,3 +161,38 @@ def test_ip_aggregate_types_multiselect(
     )
     _shot(page, screenshot_dir, "ip_full_aggregate_selected")
     _shot_field(field, screenshot_dir, "ip_aggregate_types_selected")
+
+
+def test_delta_batch_hidden_when_apply_mode_is_replace(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Alias Table Delta Batch Size is hidden when Apply Mode is Replace.
+
+    The batch size only applies on the delta path. Replace mode leaves it
+    editable today would be a no-op the user can still change. Both directions,
+    before-state asserted. Advanced is expanded first so hideInput is observable.
+    """
+    page = browser_page
+    _open(page, webui, IP_PAGE)
+    _expand_section(page, "ip_advanced")
+
+    mode = page.locator("#pfb_alias_delta_mode")
+    batch = page.locator("#pfb_alias_delta_batch")
+    expect(mode).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(batch).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    mode.select_option("auto")
+    page.evaluate("$('#pfb_alias_delta_mode').trigger('change')")
+    expect(batch).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "ip_delta_batch_visible_auto")
+
+    mode.select_option("replace")
+    page.evaluate("$('#pfb_alias_delta_mode').trigger('change')")
+    expect(batch).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "ip_delta_batch_hidden_replace")
+
+    mode.select_option("delta")
+    page.evaluate("$('#pfb_alias_delta_mode').trigger('change')")
+    expect(batch).to_be_visible(timeout=JS_TIMEOUT_MS)

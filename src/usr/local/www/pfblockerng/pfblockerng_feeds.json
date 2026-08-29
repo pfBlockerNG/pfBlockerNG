@@ -878,7 +878,7 @@
 			]
 		},
 		"AWS_4": {
-			"info":		"IP ranges for Amazon AWS. Use the IPv4 Advanced Tunable to configure a Pre-Script to collect the AWS Region IPs",
+			"info":		"IP ranges for Amazon AWS. Use IPv4 Advanced Settings to configure a Pre-Script to collect the AWS Region IPs",
 			"description":	"IP ranges for Amazon AWS.",
 			"action":	"permit",
 			"cron":		"Weekly",
@@ -1027,7 +1027,7 @@
 			]
 		},
 		"AWS_6": {
-			"info":		"IP ranges for Amazon AWS. Use the IPv6 Advanced Tunable to configure a Pre-Script to collect the AWS Region IPs",
+			"info":		"IP ranges for Amazon AWS. Use IPv6 Advanced Settings to configure a Pre-Script to collect the AWS Region IPs",
 			"description":	"IP ranges for Amazon AWS.",
 			"action":	"permit",
 			"cron":		"Weekly",

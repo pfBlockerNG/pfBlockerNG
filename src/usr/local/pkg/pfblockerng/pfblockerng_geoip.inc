@@ -510,6 +510,7 @@ $section->addInput(new Form_StaticText(
 $section->addInput(new Form_StaticText(
 	'NOTES:',
 	'GeoIP data by MaxMind Inc. - GeoLite2<br />'
+	. 'MaxMind credentials are configured on the <a href="/pfblockerng/pfblockerng_ip.php">IP tab</a> (MaxMind GeoIP configuration).<br />'
 	. 'Click here for IMPORTANT info&emsp;-->&emsp;'
 	. pfb_geoip_doc_link()
 
@@ -532,7 +533,8 @@ $section->addInput(new Form_StaticText(
 // Maxmind credential verification
 $mmsg = pfb_maxmind_credential_notice($pfb['maxmind_key'], $pfb['maxmind_account']);
 if ($mmsg !== '') {
-	print_callout('<br /><br /><p><strong>' . $mmsg . '</strong></p><br />', 'danger', '');
+	print_callout('<p><strong>' . $mmsg . '</strong><br />'
+		. '<a href="/pfblockerng/pfblockerng_ip.php">IP tab &mdash; MaxMind GeoIP configuration</a></p>', 'danger', '');
 }
 
 $group = new Form_Group('');
@@ -633,7 +635,7 @@ $section->addInput(new Form_Select(
 	$options_aliaslog
 ))->setHelp("Default: <strong>Enable</strong><br />
 	Select - Logging to Status: System Logs: FIREWALL ( Log )<br />
-	This can be overriden by the 'Global Logging' Option in the General Tab.");
+	This can be overriden by the 'Force Global IP Logging' option on the IP Tab.");
 
 // Print Advanced Firewall Rule Settings (Inbound and Outbound) section
 foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_type) {
