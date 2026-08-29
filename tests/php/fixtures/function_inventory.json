@@ -4161,13 +4161,6 @@
                 "default": null
             },
             {
-                "name": "system_css",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            },
-            {
                 "name": "exists",
                 "byRef": false,
                 "variadic": false,

@@ -15,27 +15,35 @@ final class EffectiveWebguicssTest extends TestCase
 		$exists = static fn(string $path): bool => basename($path) === 'pfSense.css';
 		$css = pfb_effective_webguicss(
 			['webgui' => ['webguicss' => 'pfSense-dark.css']],
-			'pfSense-dark.css',
 			$exists
 		);
 		$this->assertSame('pfSense.css', $css);
 		$this->assertFalse(strpos($css, 'dark') !== FALSE);
 	}
 
-	public function testMissingSystemThemeFileSelectsLightPalette(): void
+	public function testMissingUserThemeFileDoesNotFallThroughToAPresentSystemTheme(): void
+	{
+		$exists = static fn(string $path): bool => in_array(basename($path), ['pfSense.css', 'pfSense-dark.css'], TRUE);
+		$css = pfb_effective_webguicss(
+			['webgui' => ['webguicss' => 'gone.css']],
+			$exists
+		);
+		$this->assertSame('pfSense.css', $css);
+	}
+
+	public function testMissingUserSettingsFallsBackToPfSenseCss(): void
 	{
 		$exists = static fn(string $path): bool => basename($path) === 'pfSense.css';
-		$css = pfb_effective_webguicss(null, 'gone-dark.css', $exists);
+		$css = pfb_effective_webguicss(null, $exists);
 		$this->assertSame('pfSense.css', $css);
 		$this->assertFalse(strpos($css, 'dark') !== FALSE);
 	}
 
-	public function testPresentUserDarkThemeWinsOverSystemLight(): void
+	public function testPresentUserDarkThemeIsUsed(): void
 	{
 		$exists = static fn(string $path): bool => in_array(basename($path), ['pfSense.css', 'pfSense-dark.css'], TRUE);
 		$css = pfb_effective_webguicss(
 			['webgui' => ['webguicss' => 'pfSense-dark.css']],
-			'pfSense.css',
 			$exists
 		);
 		$this->assertSame('pfSense-dark.css', $css);
@@ -51,12 +59,10 @@ final class EffectiveWebguicssTest extends TestCase
 		};
 		pfb_effective_webguicss(
 			['webgui' => ['webguicss' => '../pfSense-dark.css']],
-			'foo/bar.css',
 			$exists
 		);
 		foreach ($seen as $path) {
 			$this->assertStringNotContainsString('..', $path);
-			$this->assertStringNotContainsString('foo/bar', $path);
 		}
 	}
 
@@ -65,7 +71,7 @@ final class EffectiveWebguicssTest extends TestCase
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
 		$this->assertNotFalse($source);
 		$this->assertStringContainsString(
-			'pfb_effective_webguicss($user_settings ?? null, config_get_path(\'system/webgui/webguicss\'))',
+			'pfb_effective_webguicss($user_settings ?? null)',
 			$source
 		);
 		$this->assertDoesNotMatchRegularExpression(

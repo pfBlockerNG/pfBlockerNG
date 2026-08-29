@@ -160,9 +160,6 @@ final class ThemeSafetyUiTest extends TestCase
 				if (self::themeRootPinsForeground($source, $offset)) {
 					continue;
 				}
-				if (self::sameHexHasForegroundElsewhere($source, $value)) {
-					continue;
-				}
 				$line = substr_count(substr($source, 0, $offset), "\n") + 1;
 				$hits[] = ['line' => $line, 'excerpt' => trim($full)];
 			}
@@ -255,21 +252,6 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 		$chunk = substr($source, $pos, 2000);
 		return (bool)preg_match('/"&"\s*:\s*\{[^}]*\bcolor\s*:/', $chunk);
-	}
-
-	private static function sameHexHasForegroundElsewhere(string $source, string $value): bool
-	{
-		if (!preg_match('/#([0-9a-fA-F]{3,8})\b/', $value, $m)) {
-			return FALSE;
-		}
-		$hex = preg_quote($m[0], '/');
-		return (bool)preg_match(
-			'/(?<![A-Za-z-])color\s*:[^;]{1,40};[^"]{0,80}' . $hex . '/i',
-			$source
-		) || (bool)preg_match(
-			'/' . $hex . '[^"]{0,80}(?<![A-Za-z-])color\s*:/i',
-			$source
-		);
 	}
 
 	private static function firstColorToken(string $raw): string
