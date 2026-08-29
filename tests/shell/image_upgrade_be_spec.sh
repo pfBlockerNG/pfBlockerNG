@@ -306,7 +306,7 @@ Describe 'image-upgrade.sh boot-environment promotion'
     POLLS="${WORK}/polls"
     SLEEP_ARG="${WORK}/sleep-arg"
     SLEEP_COUNT="${WORK}/sleep-count"
-    : > "$SLEEP_ARG"
+    true > "$SLEEP_ARG"
     printf '0\n' > "$SLEEP_COUNT"
     export WORK CMDS POLLS SLEEP_ARG SLEEP_COUNT
   }
