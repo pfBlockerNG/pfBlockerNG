@@ -1,0 +1,61 @@
+================================================================================
+PHASE 3 PROMPT — Engine: DNSBL + IP matching (pfb_diag_dnsbl, pfb_diag_ip)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 3 adds the DNSBL and IP
+matching functions to the engine. Read-only. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+With the resolution chain (Phase 2) and the pinned classifier (Phase 1), the engine can check
+the domain + every CNAME against DNSBL data and the resolved IPs against pf aliases -- the core
+of the cross-layer triangulation.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/02_Results.txt AND 01_Results.txt. If
+  missing, STOP and report.
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 dnsbl/ip rows, SS2.2 contract).
+- The Phase-1 classifier; pfb_dnsbl_parse (~11703); the exact data vs wildcard/TLD zone view;
+  pfctl -t <table> -T test pattern + the pfB_* urltable aliases (config_get_path aliases/alias)
+  + alias dir files.
+- CLAUDE.md — PHP standards, PFBL-01, Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. pfb_diag_dnsbl($domain, $cname_chain): run the Phase-1 classifier over the domain AND every
+   CNAME against exact + wildcard/TLD data; for each hit record { name, match_type, feed/group,
+   active? }. Read-only (check cache read-only at most; never write).
+2. pfb_diag_ip($ips): validate each IP (is_ipaddr) BEFORE pfctl; for each active pfB_* urltable
+   alias, pfctl -t <table> -T test <ip>; map a hit to { ip, alias, action, feed } using the
+   alias dir files.
+3. Tests (PHPUnit): DNSBL match types (exact / parent-wildcard / TLD / CNAME-in-chain) on
+   fixtures; IP match maps to the right alias/feed; an invalid IP is rejected before pfctl;
+   no-match cases. Add the new input fns to PHPCS scopeFunctions.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- READ-ONLY: no config writes, no DNSBL cache writes.
+- Validate before pfctl/shell (PFBL-01); Unbound chroot -> reach data via existing helpers.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean (incl. PFBL-01).
+- python -m pytest -> green.
+- diff-read: additive; read-only.
+
+EXPECTED RESULT
+The engine can classify a domain+chain against DNSBL data and resolved IPs against pf aliases.
+
+COMMIT (single)
+    pfblockerng: add diagnostics DNSBL + IP matching (ADR-34 P3)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/03_Results.txt (plain .txt)
+Record: pfb_diag_dnsbl + pfb_diag_ip signatures + match record shapes; how feed/alias is
+identified; the scopeFunctions additions; verification numbers; go-ahead for Phase 4.

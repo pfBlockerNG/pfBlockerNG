@@ -1,0 +1,134 @@
+================================================================================
+PHASE 3 PROMPT — UI on the DNSBL settings page + server-side validation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_36_DNS_Redirection/ADR.md   (read §2.1, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/36-dns-redirection. Phase 3 adds the UI control
+block on the DNSBL settings page and the server-side validator. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The feature is non-functional without a UI; the UI's server-side validation is a PFBL-01
+surface (user-controlled interface names and alias names flow into config before they reach
+the builder). Build the UI and its validator together so they are tested as a unit.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_36_DNS_Redirection/RESULTS/02_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_36_DNS_Redirection/ADR.md — §2.1 (UI row, exception alias row), §5 (PFBL-01,
+  ADR-29, ADR-14 constraints).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php — find the DoH/DoT/DoQ blocking control
+  section; study the surrounding enable checkbox + multi-select pattern, the quick-fill
+  mechanism if one exists, and the POST handler that saves via PfbConfig::write(). The new
+  control block must match the visual and structural style of that section.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_build_if_list() signature and return
+  shape; the inbound_interface + outbound_interface config keys (read how the quick-fill
+  interface union is derived for similar features); pfb_filter() / is_validaliasname()
+  validation functions.
+- tests/php/ for test style; CLAUDE.md — PFBL-01, ADR-14 ui_render, PHP/UI standards.
+
+ACTION PLAN (ordered)
+
+1. Study pfblockerng_dnsbl.php carefully before writing any code:
+   - Locate the DoH/DoT/DoQ section (or nearest analogous control block with an enable checkbox
+     + multi-select). Note the HTML structure (table rows, input names, the form action).
+   - Identify where PfbConfig::read() is called to populate existing form fields.
+   - Identify the POST handler block and how it saves via PfbConfig::write().
+   - Note the help text style, length, and proximity to the field.
+   Do not guess; the existing pattern is the source of truth.
+
+2. Add the DNS redirect control block immediately after (or adjacent to) the DoH/DoT/DoQ
+   section. The block contains:
+
+   a. Enable checkbox:
+      - Label: "DNS Redirect" (or match the naming style of adjacent checkboxes).
+      - Bound to dns_redirect_enable via PfbConfig::read/write().
+      - Help text (one or two sentences, style matching neighbours): explain that this redirects
+        all outbound port-53 DNS traffic on selected interfaces to the firewall's own resolver;
+        note that DoH/DoT bypass is NOT covered; note that the firewall itself is always exempt.
+
+   b. Interface multi-select:
+      - Built from pfb_build_if_list() (WAN-excluded by default — check the existing calls for
+        the correct exclusion parameter).
+      - Pre-selected items read from dns_redirect_iface (PfbConfig::read(), comma-split to an
+        array for the selected attribute).
+      - A quick-fill mechanism (button or link — match the style of any existing quick-fill on
+        the page): when triggered, populates the multi-select with the union of the values from
+        inbound_interface and outbound_interface (the pfBlockerNG fw-rule interface set). This
+        may be a JavaScript helper; match the existing quick-fill pattern if one exists.
+
+   c. Exception alias field:
+      - A free-text input bound to dns_redirect_exception.
+      - Help text (brief): "Optional. Name of an existing Firewall Alias. Hosts/subnets in this
+        alias bypass the DNS redirect. The alias must be created separately in Firewall → Aliases."
+
+3. Server-side POST handler — add to the existing save/validation block:
+
+   a. Validate selected interfaces: split the POSTed multi-select value by comma; for each
+      name, verify it appears in the pfb_build_if_list() result. Reject (error message,
+      no write) if any name is invalid.
+
+   b. Validate exception alias name (when non-empty): run pfb_filter() (PFB_FILTER_ALIAS or
+      equivalent) and/or is_validaliasname() on the POSTed value. Reject if invalid.
+
+   c. Save all three fields via PfbConfig::write() on valid input.
+
+   d. Add the POST handler function (or the relevant code block, if inline) to the PHPCS
+      scopeFunctions allow-list in phpcs.xml.dist (PFBL-01 surface). Read the current
+      scopeFunctions list to confirm the right function name or scope.
+
+4. Tests (PHPUnit). Required cases:
+
+   a. Server-side validator (valid cases):
+      - Valid interface name in pfb_build_if_list() output → accepted.
+      - Empty exception alias → accepted.
+      - Valid alias name (only alphanumeric + underscore, pfSense alias name rules) → accepted.
+
+   b. Server-side validator (invalid cases — each rejected without a write):
+      - Interface name not in pfb_build_if_list() output → rejected.
+      - Invalid alias name (e.g. contains spaces, or shell-special chars) → rejected.
+      Assert that PfbConfig::write() is NOT called when validation fails. (Use a spy/mock
+      pattern consistent with the existing test doubles.)
+
+5. ADR-14 ui_render test for pfblockerng_dnsbl.php:
+   - Ensure the page is already in the ui_render test suite (tests/smoke/ui/). If not, add it.
+   - Confirm the test checks: HTTP 200; body free of Fatal error / Parse error / Warning /
+     Notice / Uncaught; a page-specific marker present; no new php_error.log line.
+   - The test must pass green (the new control block must not introduce any PHP error or warning).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in library code.
+- ADR-28: uppercase TRUE/FALSE in all new PHP.
+- ADR-29: read dns_redirect_* fields via PfbConfig::read(); write via PfbConfig::write() only.
+  Never call config_get_path / config_set_path directly for these registered keys.
+- PFBL-01: the POST handler is an in-scope surface. Validate interface names and alias names
+  BEFORE any call to pfb_build_dns_redirect_rules() or any config write. Add to scopeFunctions.
+- UI style: match the EXACT visual and structural conventions of the DoH/DoT/DoQ adjacent
+  section. Do not introduce a different table structure, naming convention, or help-text style.
+- Web UI help text: brief yet clear. Match the wording length and style of neighbours. Do not
+  over-explain.
+- Do not modify pfb_build_dns_redirect_rules() or sync wiring (Phase 2 is locked).
+
+VERIFICATION (must all pass before phase is done)
+- vendor/bin/phpunit -> green (all prior tests + new validator tests).
+- php -l on all touched files.
+- PHPStan + phpcs clean (PFBL-01 + ADR-28 + ADR-29 sniffs; scopeFunctions updated).
+- python -m pytest -> green.
+- ADR-14 ui_render: pfblockerng_dnsbl.php renders 200 with no PHP errors (requires SMOKE_ADMIN_
+  PASSWORD; if CI is unavailable, document the pending gate in the handoff).
+- diff-read: only pfblockerng_dnsbl.php + test files changed; no changes to builder or sync.
+
+EXPECTED RESULT
+A fully functional UI control block on the DNSBL page that correctly reads, validates, and
+saves the three new config fields, with PFBL-01 server-side validation and a passing ui_render
+gate.
+
+COMMIT (single)
+    pfblockerng: add DNS redirect UI + server-side validation on DNSBL page (ADR-36 P3)
+Push directly to adr/36-dns-redirection; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_36_DNS_Redirection/RESULTS/03_Results.txt (plain .txt)
+Record: the HTML input names used (for the smoke harness); the quick-fill mechanism implemented
+(JS or server-side); the scopeFunctions addition(s); ui_render result (green or pending — with
+reason if pending); any deviation from the plan; verification numbers; go-ahead for Phase 4.

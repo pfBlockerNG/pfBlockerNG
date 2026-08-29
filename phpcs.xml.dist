@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<ruleset name="pfBlockerNG-validation">
+    <description>
+        pfBlockerNG PHPCS gates. Runs two targeted rules from the project's
+        custom PfBlockerNG standard:
+
+        - PFBL-01 RequirePfbFilter: input-validation contract gate scoped to
+          pfblockerng.inc + pfblockerng_apply.inc (the ADR-06/07/10/13 surfaces).
+        - ADR-28 UppercaseBooleanLiteral: uppercase TRUE/FALSE value literals,
+          applied across all src/ PHP (pfblockerng.inc + pfblockerng_extra.inc
+          + pfblockerng_install.inc + pfb_unbound_include.inc + www/).
+
+        PHPStan + PHPUnit remain the broad PHP gates; these are single,
+        targeted rules, not a style standard.
+    </description>
+
+    <!-- Files scanned when phpcs runs with no explicit path (pre-commit hook
+         + CI). Each sniff further restricts its scope via include-pattern. -->
+    <file>src/usr/local/pkg/pfblockerng</file>
+    <file>src/usr/local/www</file>
+
+    <!-- Only scan PHP and include files; skip anything else under www/. -->
+    <arg name="extensions" value="php,inc"/>
+
+    <!-- ================================================================
+         PFBL-01 RequirePfbFilter — scoped to pfblockerng.inc +
+         pfblockerng_apply.inc. The in-scope surface (ADR-06/07/10/13 input
+         paths) lives there.
+         ================================================================ -->
+    <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/Validation/RequirePfbFilterSniff.php">
+        <include-pattern>pfblockerng(?:_apply)?\.inc$</include-pattern>
+    </rule>
+
+    <!-- ================================================================
+         ADR-28 UppercaseBooleanLiteral — all src/ PHP.
+         Phases 2-3 already normalised every value literal; this sniff
+         guards regressions. Type declarations (string|false, ?true, …)
+         are excluded by PHPCS's own context-aware tokenizer.
+         ================================================================ -->
+    <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php"/>
+
+    <!-- ================================================================
+         ADR-29 RequireConfigGateway — all src/ PHP except the gateway
+         implementation itself (pfblockerng_extra.inc) and the migration
+         driver shim (pfblockerng_migrate.inc).
+
+         Flags any raw config_get_path / config_set_path / config_del_path
+         call whose first argument is a static string literal that matches a
+         REGISTERED installedpackages/pfblockerng* key (from pfb_cfg_registry()).
+         All registered keys must be accessed through PfbConfig::read/write/delete.
+
+         Excluded:
+           - pfblockerng_extra.inc  — the gateway implementation itself.
+           - pfblockerng_migrate.inc — migration driver; uses gateway internally.
+           - Dynamic paths, foreign/non-registered keys, section-level reads,
+             and pfSense-core sections are not flagged (precision of the sniff).
+         ================================================================ -->
+    <rule ref="./tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php">
+        <exclude-pattern>pfblockerng_extra\.inc$</exclude-pattern>
+        <exclude-pattern>pfblockerng_migrate\.inc$</exclude-pattern>
+    </rule>
+
+</ruleset>

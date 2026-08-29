@@ -1,0 +1,2 @@
+{"kind":"domain","domain":"allowme.example","log":"1","feed":"permit_feed","group":"grp_permit"}
+{"kind":"abp","raw":"accidentalallow.example##.ad"}

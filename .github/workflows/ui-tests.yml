@@ -1,0 +1,835 @@
+name: UI tests fan-out (all CI legs, live pfSense VM)
+
+# Web-UI test FAN-OUT (ADR-14): a reusable, matrix-parametric harness that, by
+# default, fans out across EVERY ci:true leg (CE + Plus) — one job per (tier ×
+# leg). Each leg boots the SAME ADR-04 smoke pfSense VM under KVM, installs the
+# branch-under-test .pkg, and runs a SELECTED Web-UI tier against the live
+# webConfigurator:
+#
+#   tier=render      -> pytest -m ui_render   (Tier A: authenticated HTTP render-smoke; hermetic, cheap)
+#   tier=functional  -> pytest -m ui_e2e      (Tier B: CSRF-POST flows, effective-state oracle)
+#   tier=browser     -> pytest -m ui_browser  (Tier B: headless Playwright/Chromium + screenshots)
+#   tier=all         -> render + functional + browser (one job per tier)
+#
+# This MIRRORS smoke-single.yml's scaffolding exactly — the same build-pkg-linux.yml
+# build, the GHCR image pull + content-keyed (digest) cache, the KVM-perms udev
+# fix, the SSH-key/secret handling, and the diagnostics upload `if: always()`.
+# It is the ADR-14 sibling of smoke-single.yml; the assertions live in tests/smoke/ui/.
+#
+# TIERING (ADR §2):
+#   * Tier A (render) is the cheap/hermetic PR gate — test.yml runs it per-PR on
+#     PHP/JS changes and folds it into the "All tests passed" aggregate.
+#   * Tier B (functional + browser) is daily/on-demand and NEVER gates a PR:
+#     the `schedule` (daily; it also rides a Tier A render leg — see
+#     DEFAULT_SCHEDULE_TIERS below) + `workflow_dispatch` triggers here, plus the
+#     marker being off the default collection, keep it non-blocking by
+#     construction (RESULTS/04 §6). The browser leg's §7 demote/drop is a
+#     ONE-LINE switch: drop `browser` from DEFAULT_SCHEDULE_TIERS below to stop
+#     the nightly browser leg without touching anything else.
+#
+# RE-RUN GRANULARITY (ADR §2 C1): the matrix produces ONE GH job per
+# (tier × version), so GitHub's "Re-run failed jobs" re-runs ONLY the flaky leg.
+# There is NO auto-retry on assertions; the only bounded retry is on the infra
+# boot/readiness, which the smoke conftest already polls (wait_ready.sh), never
+# a fixed sleep.
+#
+# MATRIX AXIS (ADR-24): the version axis is now read from the ci-metadata CI
+# matrix (read-version-matrix action — the SAME source smoke.yml fans out
+# over), so the UI tiers run across EVERY ci:true leg (CE + Plus), not a hardcoded
+# CE label. Each leg carries its pfsense_version (the GHCR floating tag),
+# image_name (pfsense-ce / pfsense-plus) and channel; the matrix include is
+# (selected tier set) × (each ci:true leg). The `version` dispatch input narrows
+# to a single pfsense_version (blank = all ci:true legs).
+#
+# PLUS IDENTITY + REDACTION (ADR-24): a non-CE (Plus) leg is LICENSE/NDI-keyed to a
+# SECRET source-VM identity (SMOKE_PLUS_MAC / SMOKE_PLUS_SMBIOS_UUID [/ NDI]); the
+# `ui` job resolves it exactly like smoke-single.yml (fail-closed, masked), feeds it to
+# pytest, and scrubs the diagnostics before upload. A CE leg uses the public pin
+# and an empty redaction set, so its `ui-diagnostics` artifact is byte-identical to
+# today.
+#
+# Required config (Actions secrets/variables) — same set as smoke-single.yml, plus the
+# baked admin password the UI tier needs to log in:
+#   SMOKE_IMAGE_REPO/_NAME/_TAG  compose the GHCR ref (variables): the pull ref is
+#                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
+#                        the image_ref input (full ref) or version input (tag) override it.
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN     token with read:packages for the GHCR pull (defaults to GITHUB_TOKEN)
+#   SMOKE_SSH_PRIV_KEY   private SSH key matching the image's baked authorized_keys (secret)
+#   SMOKE_ADMIN_PASSWORD baked webConfigurator admin password (secret) — REQUIRED here:
+#                        the UI tier logs in over the CSRF form; without it the ui
+#                        fixtures FAIL (never skip — a skipped tier is a false pass).
+# Optional:
+#   SMOKE_ADMIN_USER     webConfigurator user (var; default "admin")
+#   SMOKE_DNSBL_VIP4     baked pfb_dnsvip4 (the functional DNSBL flow injects the VIP); default 10.10.10.1
+
+on:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars; `version` sets the tag)."
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "Optional narrow-to-one filter: when set, fan out only over the ci:true matrix leg whose pfsense_version matches (e.g. \"2.8\"). Blank = ALL ci:true legs (CE + Plus)."
+        required: false
+        type: string
+        default: ""
+      tier:
+        description: "Which tier(s) to run: render | functional | browser | all."
+        required: false
+        type: string
+        default: "all"
+      scope:
+        description: "impacted | full. Blank on a call = impacted (issue #906 — the callee sees the caller's event); test.yml/release.yml pass full explicitly."
+        required: false
+        type: string
+        default: ""
+      pytest_filter:
+        description: "pytest -k selector — overrides the impacted auto-derivation. Blank = scope decides."
+        required: false
+        type: string
+        default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally (the build-pkg job runs as before)."
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. Every other/absent status still runs and reports, loudly demoted, but cannot fail the run. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars; `version` sets the tag). Pin by @sha256:<digest>."
+        required: false
+        default: ""
+      version:
+        description: "Optional narrow-to-one filter: when set, fan out only over the ci:true matrix leg whose pfsense_version matches (e.g. \"2.8\"). Blank = ALL ci:true legs (CE + Plus)."
+        required: false
+        default: ""
+      tier:
+        description: "Which tier(s) to run."
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - render
+          - functional
+          - browser
+          - all
+      scope:
+        description: "impacted (DEFAULT for a bare dispatch): min CE leg + only the UI tests changed vs origin/devel. full: every ci:true leg, whole tier — the nightly/release behaviour."
+        required: false
+        type: choice
+        default: "impacted"
+        options:
+          - impacted
+          - full
+      pytest_filter:
+        description: "pytest -k selector — OVERRIDES the impacted auto-derivation. Blank in impacted scope = the UI tests changed vs origin/devel (whole tier if none). e.g. 'test_dnsbl' or 'feeds and not browser'."
+        required: false
+        default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default). Point a pre-merge run at a ports branch carrying a new plist entry."
+        required: false
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
+        required: false
+        default: ""
+      pkg_artifact_prefix:
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally."
+        required: false
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
+      release_gate:
+        description: "true = this run gates a RELEASE (issue #1855): only rows whose ci-metadata status is a released pfSense version (active | GA) may veto. false (default) = every row vetoes, as on PR/nightly runs."
+        required: false
+        default: false
+        type: boolean
+  # Daily run: Tier A render + Tier B (functional + browser). Non-PR-blocking
+  # by construction.
+  # The `prepare` job guards it to SKIP when there were no commits in the last
+  # day (mirrors a smoke-style nightly guard) so an idle repo does not boot a VM.
+  schedule:
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ui-tests-${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  # Build the branch's .pkg on a plain Linux runner (same builder the smoke gate
+  # consumes). ONE build PER ci:true leg (version/ABI), not one global build:
+  # pkg add refuses a cross-major-ABI .pkg, so a package built for one leg's
+  # FreeBSD major cannot install on another's — each leg needs its own ABI-matched
+  # package (majors/flavors per the ci-metadata version matrix). The build matrix
+  # is the distinct legs (prepare.build_matrix); each
+  # leg's artifact is named pfBlockerNG-pkg-<version> and the ui leg downloads the
+  # one matching its own version.
+  #
+  # Gated on the nightly guard too: when `prepare` sets run=false (an idle
+  # scheduled night, no commits in 24h) the `ui` legs are skipped, so building
+  # the .pkg would just burn CI minutes for nothing — skip it as well. On a
+  # dispatch/call run `prepare` always emits run=true, so the build runs.
+  build-pkg:
+    needs: prepare
+    # Skipped when the caller supplies pkg_artifact_prefix -- prebuilt per-leg
+    # artifacts (e.g. release.yml) replace this job's own build.
+    if: needs.prepare.outputs.run == 'true' && inputs.pkg_artifact_prefix == ''
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: edge
+      # Build the leg's .pkg for its own pfSense base, with the ABI/php/python
+      # values coming from the leg's version-matrix entry.
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      # Per-version artifact name so the CE + Plus builds in one run don't collide;
+      # the ui leg downloads the package matching its Variant + version.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.variant }}-${{ matrix.version }}
+      # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
+      # carrying a new plist entry. Blank -> build-pkg-linux's own defaults, so a
+      # normal run is byte-identical.
+      ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+      ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
+      # issue #1806 D1/D2: this leg's dep .pkgs — uploaded separately; the ui
+      # job below downloads it when non-empty (this job only runs when
+      # pkg_artifact_prefix is empty, so no ternary needed here).
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      # W1: this job matrixes over build_matrix (one row PER VERSION, never
+      # deduped by major) -- row identity prevents same-major collisions.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ matrix.variant }}-${{ matrix.version }}
+
+  # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
+  # JSON `include` list so each leg is a distinct, independently-re-runnable job.
+  prepare:
+    name: Resolve the (tier x version) matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+      build_matrix: ${{ steps.gen.outputs.build_matrix }}
+      run: ${{ steps.gen.outputs.run }}
+      pytest_filter: ${{ steps.gen.outputs.pytest_filter }}
+      scope: ${{ steps.gen.outputs.scope }}
+      leg_count: ${{ steps.gen.outputs.leg_count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need history to detect "commits in the last day" for the schedule guard
+          persist-credentials: false
+
+      # Read the ci:true legs (CE + Plus) from the ci-metadata CI matrix — the
+      # SAME source smoke.yml fans out over (ADR-24). Each leg carries
+      # pfsense_version, channel, image_name, mac, ci.
+      - name: Read CI matrix from ci-metadata
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Build the matrix include + the nightly guard
+        id: gen
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # For a dispatch/call the tier input narrows the matrix; the schedule
+          # ignores it and always runs the full DEFAULT_SCHEDULE_TIERS set.
+          TIER_INPUT: ${{ inputs.tier }}
+          # Optional narrow-to-one filter: a pfsense_version (e.g. "2.8"). Blank =
+          # scope decides (min CE for impacted, all legs for full).
+          VERSION_INPUT: ${{ inputs.version }}
+          # Run scope: impacted (default for a bare dispatch) | full.
+          SCOPE_INPUT: ${{ inputs.scope }}
+          # -k override for the auto-derivation.
+          PYTEST_FILTER_INPUT: ${{ inputs.pytest_filter }}
+          # The ci:true legs (CE + Plus) read from ci-metadata.
+          CI_MATRIX: ${{ steps.matrix.outputs.ci_matrix }}
+          # issue #1855: release-scoped veto rule. resolve-legs.sh stamps every leg
+          # with release_blocking and warns loudly for each demoted row; blank/false
+          # (every non-release caller) keeps every row blocking.
+          RELEASE_GATE_INPUT: ${{ inputs.release_gate }}
+        run: |
+          set -eu
+
+          # Tier set the daily schedule runs. DROP `browser` here to disable the
+          # nightly browser leg (§7 demote/drop one-liner). `render` rides along
+          # (issue #809 post-mortem): Tier A otherwise only runs on PR gates, so a
+          # red render tier on devel could sit unnoticed between PRs.
+          DEFAULT_SCHEDULE_TIERS="render functional browser"
+
+          # Decide the tier set.
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            TIERS="${DEFAULT_SCHEDULE_TIERS}"
+          else
+            case "${TIER_INPUT:-all}" in
+              render)     TIERS="render" ;;
+              functional) TIERS="functional" ;;
+              browser)    TIERS="browser" ;;
+              all|"")     TIERS="render functional browser" ;;
+              *) echo "::error::unknown tier '${TIER_INPUT}' (render|functional|browser|all)"; exit 1 ;;
+            esac
+          fi
+
+          # Nightly no-commit guard: skip the whole run when nothing landed in
+          # the last 24h (an idle repo should not boot a VM every night).
+          RUN=true
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            COMMITS="$(git log --since='24 hours ago' --oneline | wc -l | tr -d ' ')"
+            if [ "${COMMITS}" = "0" ]; then
+              RUN=false
+              echo "No commits in the last 24h — skipping the nightly UI run."
+            fi
+          fi
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
+
+          # ADR-47 P5: scope + legs + -k resolved by the shared script.
+          # Writes scope=, ci_matrix=, pytest_filter= to $GITHUB_OUTPUT; prints filtered legs JSON to stdout.
+          LEGS="$(sh scripts/resolve-legs.sh legs --test-dir tests/smoke/ui --label tier)"
+
+          # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
+          # the tier axis — the tiers for a version all install the SAME package.
+          BUILD_INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
+            '[ .[] | {version: .pfsense_version, variant, image_name, freebsd_major, php_version, py_flavor, extra_pkgs: (.extra_pkgs // [])} ]')"
+          printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
+
+          # Cross the tier set with the legs: one matrix item per (tier × leg),
+          # each carrying tier + version (= pfsense_version) + Variant for a
+          # row-qualified artifact name +
+          # image_name + channel + freebsd_major (issue #1806: the download-name
+          # discriminator when pkg_artifact_prefix is set -- release.yml builds one
+          # .pkg per Variant/version row.
+          INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
+            --arg tiers "${TIERS}" \
+            '($tiers | split(" ")) as $ts
+             | [ $ts[] as $t | .[]
+                 | {tier: $t, version: .pfsense_version, variant: (.variant // (.image_name | ltrimstr("pfsense-"))),
+                    image_name: .image_name, channel: .channel, freebsd_major: .freebsd_major,
+                    extra_pkgs: (.extra_pkgs // []),
+                    release_blocking: (.release_blocking // "true")} ]')"
+          printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
+          # leg_count = the (tier x leg) matrix size, for the all-ui-passed AND
+          # gate's zero-leg guard (distinct from $LEGS' own leg count -- one
+          # leg fans out to len(TIERS) matrix entries).
+          printf 'leg_count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
+          echo "tiers=[${TIERS}] legs=$(printf '%s' "$LEGS" | jq 'length') run=${RUN}"
+
+  ui:
+    name: ${{ matrix.tier }} / ${{ matrix.variant }}-${{ matrix.version }} (live pfSense VM)
+    needs: [build-pkg, prepare]
+    # !cancelled() (not the implicit success() `needs` would impose) so a
+    # cancelled/skipped build-pkg still lets a prefix-driven run through;
+    # prepare must have genuinely succeeded (a failed prepare yields no matrix
+    # to fromJSON); the nightly guard gates on run=='true'; build-pkg's result
+    # only matters when it actually ran (pkg_artifact_prefix empty) -- with a
+    # prefix set it is skipped by design and that is fine.
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.run == 'true' &&
+      (inputs.pkg_artifact_prefix != '' || needs.build-pkg.result == 'success')
+    # issue #1855: a leg whose ci-metadata status is not a RELEASED pfSense version
+    # (active | GA) is demoted when the caller asked for the release gate -- it runs
+    # every tier and still reports red, it just cannot veto the release. Absent
+    # field / release_gate off (PR gate, nightly, bare dispatch) = "true" = the hard
+    # veto, unchanged. The predicate itself lives in scripts/resolve-legs.sh.
+    continue-on-error: ${{ matrix.release_blocking == 'false' }}
+    runs-on: ubuntu-latest
+    # issue #2614: the UI tiers drive the live appliance through the same tests/smoke
+    # harness, so they reach the on-box flock(2) locks, which carry no timeout of their
+    # own; this budget is the only bound. Observed worst sampled tier 23.5 min.
+    timeout-minutes: 45
+    strategy:
+      # One leg's failure must NOT cancel the others — each (tier x version) is
+      # an independent, separately-re-runnable job (C1).
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # issue #1859: the test code comes from the ref the caller names — for a
+          # release that is the pinned release SHA, so the suite verifies the source
+          # it ships rather than whatever landed on the branch mid-run. Blank =
+          # actions/checkout's default (the caller's own ref), as before.
+          ref: ${{ inputs.checkout_ref }}
+          persist-credentials: false
+
+      - name: Map the tier to its pytest marker
+        id: tier
+        env:
+          TIER: ${{ matrix.tier }}
+        run: |
+          set -eu
+          case "${TIER}" in
+            render)     MARKER="ui_render" ;;
+            functional) MARKER="ui_e2e" ;;
+            browser)    MARKER="ui_browser" ;;
+            *) echo "::error::unknown tier '${TIER}'"; exit 1 ;;
+          esac
+          echo "marker=${MARKER}" >> "$GITHUB_OUTPUT"
+          echo "tier ${TIER} -> marker ${MARKER}"
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu, dnsutils)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Assert KVM acceleration is available
+        # The udev rule above makes /dev/kvm world-RW. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
+        run: |
+          set -eu
+          ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
+
+      - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
+        id: ref
+        env:
+          # image_ref input (full ref) wins. Otherwise compose from the
+          # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars; the per-leg matrix.image_name
+          # (pfsense-ce / pfsense-plus) overrides the NAME var and matrix.version
+          # (= pfsense_version) overrides the TAG. Same resolution as smoke-single.yml.
+          INPUT_REF: ${{ inputs.image_ref }}
+          INPUT_VERSION: ${{ matrix.version }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
+          SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
+        run: |
+          set -eu
+          # ADR-47 P5: image ref composed by the shared script (writes ref= to $GITHUB_OUTPUT).
+          # MATRIX_VERSION/MATRIX_IMAGE_NAME remapped to INPUT_VERSION/INPUT_IMAGE_NAME above.
+          sh scripts/resolve-legs.sh image-ref
+
+      # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
+      # uses the public pin (the CE source-VM MAC + uuid). A non-CE (Plus) image is
+      # LICENSE/NDI-keyed to its OWN source-VM identity, which is SECRET — it comes
+      # from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID secrets, NEVER the public
+      # ci-metadata matrix (the NDI is derived from MAC + uuid, so both are as
+      # license-keyed as the MAC). This resolves the effective identity and, for
+      # Plus, masks it + emits the diagnostics redaction set. Fail closed if a
+      # non-CE image is selected without those secrets. Mirrors smoke-single.yml exactly.
+      - name: Resolve VM identity (MAC + SMBIOS uuid)
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
+          PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
+        run: |
+          set -eu
+          # ADR-47 P5: VM identity resolved by the shared script (writes RESOLVED_* to $GITHUB_ENV).
+          # UI job has no civm data-NIC MAC — no --civm-mac flag (deny-by-default: empty).
+          sh scripts/resolve-legs.sh vm-identity
+
+      - name: Resolve image digest (cache key)
+        id: digest
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh digest "$IMAGE_REF"
+
+      - name: Restore cached pfSense image
+        id: pfcache
+        uses: actions/cache/restore@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      # Pull only on a cache miss.
+      - name: Pull pfSense image (by digest)
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -eu
+          sh scripts/resolve-legs.sh pull "$IMAGE_REF" "$DIGEST" image
+
+      # Save right after the pull (before the run) so the image is cached even if
+      # a later step fails. Key = the resolved digest, so it never serves stale.
+      - name: Save pfSense image to cache
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      - name: Write private SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        uses: actions/download-artifact@v7
+        with:
+          # pkg_artifact_prefix set: download the prebuilt artifact a caller
+          # (e.g. release.yml) already published, named
+          # '<prefix>-<Variant>-<pfsense_version>' -- the exact release row.
+          # Blank: the per-version artifact THIS run's build-pkg
+          # job just built (matrix is by version; this leg installs the
+          # package matching its own pfSense base).
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version) || format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.version) }}
+          path: pkg
+
+      # issue #1806 D1/D2/B1: this leg's extra_pkgs (e.g. py311-charset-normalizer
+      # for CE) — a SEPARATE artifact from the branch .pkg above (never folded
+      # into `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg).
+      # No longer gated on pkg_artifact_prefix being blank (B1 fix): release.yml's
+      # build-pkgs-portable job now builds + uploads the matching dep artifact
+      # too, so the release-verification path (prefix set) has one to download.
+      - name: Resolve dep-pkg artifact need
+        id: depmajor
+        env:
+          EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
+        run: |
+          set -eu
+          N="$(printf '%s' "$EXTRA_PKGS" | jq 'length')"
+          if [ "$N" -gt 0 ]; then
+            echo "needed=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      # dep-pkg artifact name mirrors the branch pkg's OWN pkg_artifact_prefix
+      # ternary just above: prefix set -> '<prefix>-deppkgs-<Variant>-<version>'
+      #; blank -> this run's own build-pkg job's dep_artifact_name.
+      - name: Download dep packages
+        if: steps.depmajor.outputs.needed == '1'
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version) || format('pfBlockerNG-deppkgs-{0}-{1}', matrix.variant, matrix.version) }}
+          path: deppkgs
+
+      - name: Export SMOKE_DEP_PKGS
+        if: steps.depmajor.outputs.needed == '1'
+        run: |
+          set -eu
+          N_DEP="$(find deppkgs -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_DEP" -ge 1 ] || { echo "::error::extra_pkgs was non-empty but the deppkgs artifact carried no .pkg"; ls -lR deppkgs || true; exit 1; }
+          DEP_PATHS=""
+          for f in $(find deppkgs -type f -name '*.pkg' | sort); do
+            DEP_PATHS="${DEP_PATHS}$(cd "$(dirname "$f")" && pwd)/$(basename "$f") "
+          done
+          echo "SMOKE_DEP_PKGS=${DEP_PATHS% }" >> "$GITHUB_ENV"
+          echo "resolved SMOKE_DEP_PKGS=${DEP_PATHS% }"
+
+      - name: Locate the .pkg + the pulled .qcow2
+        id: paths
+        run: |
+          set -eu
+          N_PKG="$(find pkg -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_PKG" -eq 1 ] || { echo "::error::expected exactly one .pkg in the build artifact, found ${N_PKG}"; ls -lR pkg || true; exit 1; }
+          PKGFILE="$(find pkg -type f -name '*.pkg')"
+          N_IMG="$(find image -type f -name '*.qcow2' | wc -l | tr -d ' ')"
+          [ "$N_IMG" -eq 1 ] || { echo "::error::expected exactly one .qcow2 in the pulled artifact, found ${N_IMG}"; ls -lR image || true; exit 1; }
+          IMG="$(find image -type f -name '*.qcow2')"
+          {
+            echo "pkg=$(cd "$(dirname "$PKGFILE")" && pwd)/$(basename "$PKGFILE")"
+            echo "img=$(cd "$(dirname "$IMG")" && pwd)/$(basename "$IMG")"
+          } >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKGFILE}  img=${IMG}"
+
+      - name: Set up uv and the pinned Python
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs;
+        # activate-environment puts the project environment on PATH, so the `python3`
+        # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
+        # pins the same minor the appliance carries).
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install the smoke + UI harness Python deps
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this suite with no diff.
+        run: uv sync --locked --group smoke
+
+      - name: Install the headless Chromium browser (browser tier only)
+        # The `playwright` wheel in the smoke group ships the Python bindings only; the
+        # Chromium BINARY is a separate download. Only the browser tier needs it — gate
+        # the ~150 MB pull so the render/functional legs stay lean. --with-deps pulls
+        # Chromium's shared libraries through apt.
+        if: matrix.tier == 'browser'
+        run: uv run playwright install --with-deps chromium
+
+      # NOTE: unlike the smoke matrix, the UI tier does NOT set SMOKE_BLOCK_EGRESS:
+      # the render/functional/browser tiers are hermetic from the box's own config
+      # (no feed download to render chrome) but want a working resolver + the
+      # Playwright browser, so egress is left OPEN here.
+      - name: Run the UI tier (pytest -m ${{ steps.tier.outputs.marker }})
+        env:
+          # Point the fixture at the ALREADY-PULLED qcow2 so the boot needs no network.
+          SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_PFSENSE_VERSION: ${{ matrix.version }}
+          SMOKE_ABI: FreeBSD:${{ matrix.freebsd_major }}:amd64
+          SMOKE_SSH_KEY: smoke_key
+          SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # issue #1806 D2: this leg's dep .pkgs (space-separated absolute paths),
+          # set by "Export SMOKE_DEP_PKGS" above when non-empty; stays unset
+          # (empty) otherwise — install-pkg.sh skips deps entirely then.
+          SMOKE_DEP_PKGS: ${{ env.SMOKE_DEP_PKGS }}
+          # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
+          # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
+          # identity" step — the CE pin for a CE image (byte-identical to today),
+          # the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES is the
+          # (masked) Plus identity the DOM/diagnostics scrubs value-redact; EMPTY
+          # for CE -> the scrub is a strict no-op (CE bundle/screenshots unchanged).
+          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
+          SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+          # The Phase-1 gap closed: the UI tier logs into the webConfigurator over
+          # the CSRF form, so the baked admin password MUST reach pytest. Without
+          # it the ui fixtures FAIL (never skip).
+          SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
+          # Screenshot artifact layout: <root>/<version>/<name>.png (browser tier).
+          SMOKE_UI_VERSION: ${{ matrix.version }}
+          # The functional DNSBL flow injects the sinkhole VIP; match the baked image.
+          SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+          # Resolved by the prepare step: an explicit -k input, else the impacted
+          # auto-derivation (UI tests changed vs origin/devel), else blank = whole tier.
+          PYTEST_FILTER: ${{ needs.prepare.outputs.pytest_filter }}
+          # impacted | full -- gates whether an empty-selection exit 5 below is a
+          # benign no-op (a narrowed run legitimately has nothing to select) or a
+          # real failure (a full, unfiltered run finding literally zero tests for
+          # this tier's marker means the marker/tier wiring itself is broken).
+          SCOPE: ${{ needs.prepare.outputs.scope }}
+          MARKER: ${{ steps.tier.outputs.marker }}
+        run: |
+          set -eu
+          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
+          export SMOKE_UI_SCREENSHOT_DIR="$GITHUB_WORKSPACE/test-results/ui-screenshots"
+          # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
+          # RUN_ID minted here (CI is the degenerate lease: runner IS the box).
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          # Build argv via set -- so --filter rides as ONE quoted arg.
+          set -- --paths tests/smoke/ui -m "${MARKER}" --timeout 300
+          [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
+          set -- "$@" --junitxml=/tmp/ui-junit.xml
+          rc=0
+          sh scripts/run-smoke.sh "$@" || rc=$?
+          # pytest exit 5 = no test carried this tier's marker under the
+          # requested selection. That is benign ONLY for a SELECTIVE run: a
+          # narrowed -k or an impacted-scope leg (whose changed modules may
+          # legitimately hold only e.g. e2e tests) can validly select nothing
+          # for this tier. A full-scope, unfiltered run selecting zero tests
+          # means the tier/marker wiring itself is broken -- stays a failure.
+          if [ "$rc" -eq 5 ]; then
+            if [ -n "${PYTEST_FILTER:-}" ] || [ "${SCOPE:-}" = "impacted" ]; then
+              echo "No tests selected for marker ${MARKER} under this scope/filter — empty selection, success."
+              rc=0
+            else
+              echo "::error::pytest exit 5 (no tests collected) for marker ${MARKER} on a full-scope, unfiltered run — treating as a failure."
+            fi
+          fi
+          [ "$rc" -eq 0 ] || exit "$rc"
+          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt /tmp/ui-junit.xml
+
+      # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
+      # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE
+      # screenshots (screen-*.png/.ppm) — boot-banner framebuffer PIXELS that no
+      # text redaction can reach; the Playwright UI shots under
+      # test-results/ui-screenshots/ are KEPT (masked in-browser at capture time,
+      # see test_browser.py _shot). Then literal-redact each secret value (MAC +
+      # uuid [+ NDI], from RESOLVED_REDACT) across every vm*.log and text file under
+      # smoke-diag/ AND test-results/. CE: RESOLVED_REDACT is empty -> no screenshots
+      # dropped, no redaction (the artifact is byte-identical to today). The literal
+      # escape mirrors smoke-single.yml's esc() (one -e per BRE metachar, NOT a bracket-class)
+      # so a regex-special value is matched literally; the `I` flag is case-insensitive.
+      # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
+      # resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots:
+      # non-CE QEMU screenshot deletion; literal redaction of RESOLVED_REDACT; CE no-op.
+      # test-results/ui-screenshots/ is KEPT (DOM-masked at Playwright capture time).
+      - name: Scrub Plus secret identity from diagnostics (runner side)
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ matrix.image_name }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+        run: |
+          set -eu
+          # ADR-47 P5: scrub delegated to the shared script.
+          sh scripts/resolve-legs.sh scrub --root "smoke-diag test-results" --keep ui-screenshots
+
+      - name: Upload UI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          # One artifact per leg so a re-run of a single leg overwrites only its own. The
+          # variant (ce/plus) qualifies the name so CE+Plus of the same pfSense major.minor
+          # never collide and the edition is obvious — e.g. ui-diagnostics-browser-ce-2.8.
+          name: ui-diagnostics-${{ matrix.tier }}-${{ matrix.variant }}-${{ matrix.version }}
+          path: |
+            test-results/ui-screenshots/**
+            **/vm*.log
+            **/screen-*.png
+            **/screen-*.ppm
+            smoke-diag/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── AND-gate: green only if EVERY (tier x leg) UI job passed ────────────────
+  #
+  # Mirrors smoke.yml's all-smoke-passed, plus one extra pass-arm: the nightly
+  # no-commit guard (prepare.outputs.run) legitimately skips the WHOLE run on
+  # an idle scheduled night -- that must read as a pass (nothing was supposed
+  # to run), not a gate failure. When run=='true' the same AND-gate semantics
+  # as all-smoke-passed apply: needs.ui.result == 'success' is the only pass.
+  all-ui-passed:
+    name: All UI legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [prepare, ui]
+    if: always()   # run even if ui failed/skipped/cancelled, or prepare declined the run
+    steps:
+      - name: Assert every UI leg passed
+        env:
+          UI_RESULT: ${{ needs.ui.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          RUN_GATE: ${{ needs.prepare.outputs.run }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+        run: |
+          set -eu
+          echo "Prepare job result  : ${PREPARE_RESULT}"
+          echo "Nightly run gate    : ${RUN_GATE}"
+          echo "UI matrix result    : ${UI_RESULT}"
+          echo "UI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          # Fail-closed FIRST (issue #1662 finding): if prepare itself did not
+          # genuinely succeed (crashed/cancelled/skipped), RUN_GATE is unset/empty
+          # -- the RUN_GATE check below would then read that as "scheduled idle,
+          # pass" even though nothing ran because prepare blew up, not because it
+          # declined the run on purpose. Must run BEFORE the RUN_GATE branch.
+          if [ "${PREPARE_RESULT}" != "success" ]; then
+            echo "::error::AND gate FAIL — prepare job did not succeed (result='${PREPARE_RESULT}')."
+            exit 1
+          fi
+
+          # From here PREPARE_RESULT=='success' is guaranteed, so RUN_GATE is only
+          # ever the literal true/false prepare emits and LEG_COUNT only ever a jq
+          # integer -- a garbage RUN_GATE or non-numeric LEG_COUNT below is
+          # unreachable in practice, defensive-only, mirroring all-smoke-passed's
+          # tolerant catch-all (`*)` arm).
+
+          # The nightly no-commit guard legitimately skips the whole run (an
+          # idle scheduled night) -- that is a PASS, not a gate failure: the
+          # prepare/ui jobs never ran anything on purpose.
+          if [ "${RUN_GATE}" != "true" ]; then
+            echo "run gate declined (scheduled idle) — pass"
+            exit 0
+          fi
+
+          # Zero/empty-leg guard: run=='true' with no legs means the matrix
+          # itself broke -- fail closed rather than silently skip.
+          if [ -z "${LEG_COUNT:-}" ] || [ "${LEG_COUNT}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — UI matrix was empty (leg_count=${LEG_COUNT:-<empty>}) despite run=true."
+            exit 1
+          fi
+
+          # Main gate: the ui job result must be 'success'.
+          case "$UI_RESULT" in
+            success)
+              echo "AND gate PASS — all ${LEG_COUNT} UI leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more UI legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — ui job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — ui job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected ui result '${UI_RESULT}'."
+              exit 1
+              ;;
+          esac

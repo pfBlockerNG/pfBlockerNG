@@ -1,0 +1,103 @@
+ADR-12 Phase 5 (post-merge add-on) — live-VM smoke coverage for the update hooks
+==================================================================================
+
+Scope: add the missing AUTOMATED smoke coverage for the ADR-12 pre/post update
+command hooks (the feature shipped P1-P4 on branch adr/12, PR #75). This add-on
+lands on the SAME branch and joins PR #75. No production code touched.
+
+WHAT WAS ADDED
+--------------
+- tests/smoke/test_smoke_hooks.py — new live-VM smoke module (mirrors the matrix
+  module's module-scoped `deployed_vm` fixture: deploy + ensure_dnsbl_vip +
+  use_system_dns_upstream + collect diagnostics on teardown; clears hooks on
+  enter AND teardown so none bleed into other modules' reloads).
+- tests/smoke/helpers.py — new "Update hooks (ADR-12)" helper section:
+    HOOK_MARKER_DIR, hook_marker_path(token, when), env_dump_hook(...),
+    set_update_hooks(vm, hooks)  -> merges into CFG_GLOBAL (keeps enable_cb),
+    clear_update_hooks(vm)       -> empty hooks list,
+    clear_hook_markers(vm, token)-> rm -f the pre/post markers,
+    hook_marker_exists(vm, path) -> test -f rc==0,
+    read_hook_env(vm, path)      -> parse PFB_* lines; None if the file is absent.
+- .ADRs/ADR_12_Update_Hooks/ADR.md §7 — manual-smoke checklist annotated: the
+  no-op, pre/post fire+context, trigger values, IP/DNSBL-changed, and both safety
+  (non-zero / timeout) items marked "(automated: tests/smoke/test_smoke_hooks.py::...)".
+  HA sync + HAProxy recipe explicitly kept maintainer-manual (smoke image has
+  neither a CARP pair nor the HAProxy package). Status stays Proposed.
+
+TESTS (each maps to an observable branch; before-state asserted then transition)
+--------------------------------------------------------------------------------
+1. test_hooks_noop_no_marker
+   OFF branch + byte-identical no-op: no hooks configured -> marker ABSENT after
+   reload, update succeeds (reload raises on failure).
+2. test_hooks_disabled_entry_not_run_then_enabled_runs
+   `enabled` flag branch: same hook enabled='' -> ABSENT (before); flip to 'on'
+   -> PRESENT (after). Proves enabling caused the firing.
+3. test_hooks_pre_and_post_fire_with_context
+   pre-vs-post context branch: IpCase feed + updateip. pre marker = {PFB_WHEN=pre,
+   PFB_TRIGGER=force-reload, NO PFB_IP_CHANGED}; post marker = {PFB_WHEN=post,
+   PFB_TRIGGER=force-reload, PFB_IP_CHANGED present, PFB_DNSBL_CHANGED present,
+   PFB_STATUS=ok, PFB_CHANGED_ALIASES present-and-empty}.
+4. test_hooks_trigger_values
+   pfb_hook_trigger branch: reload "update" -> PFB_TRIGGER=cron; clear; reload
+   "updatednsbl" -> PFB_TRIGGER=force-reload.
+5. test_hooks_ip_changed_reflects_pass
+   Both PFB_IP_CHANGED sides: IpCase+DnsblCase, full update -> IP_CHANGED='1';
+   then updatednsbl over the settled ruleset -> IP_CHANGED='0' + DNSBL_CHANGED='1'.
+6. test_hooks_failing_hook_does_not_abort_update
+   Safety/non-zero: pre hook `echo RAN > m; exit 7` + post env-dump. Both markers
+   present -> the non-zero pre hook did not abort the pass.
+7. test_hooks_timeout_killed_update_continues
+   Safety/timeout: pre hook `echo START; sleep 30; echo DONE` timeout='2' + post
+   env-dump. pre marker has START but NOT DONE (killed mid-run); post marker
+   present (pass continued). Best-effort grep of the log for "TIMED OUT".
+
+CODE FACTS VERIFIED FROM SOURCE (re-confirmed while writing)
+------------------------------------------------------------
+- CLI dispatch (src/usr/local/www/pfblockerng/pfblockerng.php):
+    case 'update'     -> sync_package_pfblockerng('cron')   (line ~205)
+    case 'updateip'   -> sync_package_pfblockerng('updateip')
+    case 'updatednsbl'-> sync_package_pfblockerng('updatednsbl')   (line ~202)
+  => via helpers.reload(): "update" -> PFB_TRIGGER=cron; "updateip"/"updatednsbl"
+  -> force-reload. The nominal PFB_TRIGGER=update value ($cron='') is the
+  settings-save / de-install path, NOT reachable through any reload() verb -> OUT
+  of smoke scope (documented in the module docstring + ADR §7).
+- pfb_hook_trigger (inc:1853): updateip/updatednsbl->force-reload;
+  cron/noupdates->cron; default('')->update.
+- Hook config shape (inc:1723 pfb_get_hooks): PLAIN NUMERIC array under
+  installedpackages/pfblockerng/config/0/hooks; only enabled==='on' + matching
+  `when` + non-empty trim(command) entries run. set_update_hooks matches this
+  exactly (numeric array of {command,when,enabled,description,timeout}).
+- Fire points: pre at inc:7388 (ctx = {TRIGGER}); post at inc:11227 (ctx =
+  {TRIGGER, IP_CHANGED, DNSBL_CHANGED, STATUS='ok', CHANGED_ALIASES=''}).
+- Execution (inc:1813): PFB_<K>=<v> ... /usr/bin/timeout -s TERM -k 5 <t>
+  /bin/sh -c <escapeshellarg(command)> 2>&1 via exec() as root in HOST context
+  (NOT chrooted) -> a hook writing /tmp/<file> is readable over SSH. rc 124
+  (timeout) and rc!=0 are both logged + continue (inc:1824-1827).
+- updatednsbl -> PFB_IP_CHANGED='0' is reliable: updatednsbl sets $pfb['reuse']='on'
+  + reuse_dnsbl='on' (inc:7407) and does not touch IP feeds; $pfb['filter_configure']
+  is set TRUE only when the IP-rules section finds an autorule/aliastable change
+  (inc:10840 -> :10879). Test 5 runs a full `update` FIRST to settle the IP rules,
+  so the following updatednsbl is a genuine no-IP-change pass -> filter_configure
+  stays FALSE -> IP_CHANGED='0'.
+
+STAYS MANUAL (documented, not faked)
+------------------------------------
+- HA sync: the smoke image is a single-NIC box with no CARP secondary.
+- HAProxy recipe end-to-end: no HAProxy package on the image (no CARP either).
+Both kept as unchecked maintainer-manual items in ADR §7.
+
+GATES (run in the worktree, .venv)
+----------------------------------
+- ruff check tests/smoke/ src/                      -> All checks passed
+- ruff format --check tests/smoke/                  -> 9 files already formatted
+  (env_dump_hook signature auto-wrapped by `ruff format` to satisfy E501)
+- pytest tests/smoke/test_smoke_hooks.py -m smoke --override-ini="addopts=" --co -q
+                                                    -> 7 tests collected, no errors
+- pytest tests/smoke/test_smoke_hooks.py -m smoke --override-ini="addopts=" -q
+                                                    -> 7 skipped (no KVM/SMOKE_PKG)
+- pytest -q (default suite)                         -> 1019 passed
+- markdownlint-cli2 (ADR.md)                         -> 0 error(s)
+- php -l: NOT run (no production PHP touched).
+
+The smoke gate runs these on a real pfSense CE VM in CI (smoke.yml,
+workflow_dispatch) where SMOKE_PKG + KVM are present; locally they skip cleanly.

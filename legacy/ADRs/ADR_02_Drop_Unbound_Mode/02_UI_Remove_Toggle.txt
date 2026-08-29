@@ -1,0 +1,102 @@
+================================================================================
+PHASE 2 PROMPT — Web UI: remove the mode selector + native-only controls
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md  (read §2 "What is removed" / "kept")
+================================================================================
+
+ROLE
+You are on the `edge` branch performing Phase 2 of ADR-02. Phase 1 already pinned
+DNSBL to Python-only in code + config. Now remove the user-facing controls that
+selected the mode or the native-only behavior from the DNSBL settings page. The
+page must still save and render with no PHP notices.
+
+WHY THIS PHASE EXISTS
+With Python the only mode, the "DNSBL Mode" selector and the "Python blocking"
+(pfb_py_block) checkbox are meaningless, and the native-only "TLD Whitelist" UI
+no longer applies. Several JS handlers gate fields on `dnsbl_mode == 'dnsbl_python'`
+or on pfb_py_block; with one mode these collapse to "always shown".
+
+CRITICAL DISTINCTION (do not get this wrong — ADR §2 "kept")
+- REMOVE: "DNSBL Mode" select (dnsbl_mode), "Python blocking" checkbox
+  (pfb_py_block), the `.dnsbl_unbound_tld` infoblocks, and the **TLD Whitelist**
+  UI (tld_segment / dnsbl_tld_remove consolidation — native-only).
+- KEEP: the "Wildcard Blocking (TLD)" checkbox (pfb_tld) — this is the shared
+  wildcard-blocking feature used in Python mode too. KEEP all other python
+  feature controls (pfb_py_reply, pfb_py_nolog, pfb_noaaaa, pfb_pytld, pfb_hsts,
+  pfb_cname, pfb_gp, pfb_regex, pfb_control).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/01_Results.txt — it states the actual
+  post-Phase-1 code state and any deviations from plan. If it is missing, Phase 1
+  is not complete; STOP and report.
+- .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+    * pconfig defaults for dnsbl_mode (~L57–62) and pfb_py_block (~L67).
+    * $options_dnsbl_mode (~L118).
+    * POST save: pfb_py_block + dnsbl_mode handling and the reload-on-mode-change
+      logic (~L611–622); the select_options validation default
+      'dnsbl_mode' => 'dnsbl_unbound' (~L356).
+    * dnsbl_mode Form_Select (~L769–784) and pfb_py_block Form_Checkbox (~L834+).
+    * `.dnsbl_unbound_tld` infoblocks (~L724–768) and TLD-Whitelist UI; the note
+      at ~L2894 ("TLD Whitelist is not utilized for Unbound python mode").
+    * JS block ~L3106–3220: hideCheckbox(... !python) calls, the
+      `dnsbl_mode == 'dnsbl_unbound'` / `pfb_py_block` show/hide, `.dnsbl_unbound_tld`
+      toggles, and the `$('#dnsbl_mode').click(...)` / `$('#pfb_py_block').click(...)` handlers.
+
+ACTION PLAN
+1. Remove the pconfig blocks that derive/seed dnsbl_mode (~L57–62) and
+   pfb_py_block (~L67).
+2. Remove $options_dnsbl_mode (~L118).
+3. Remove the dnsbl_mode Form_Select and the pfb_py_block Form_Checkbox inputs.
+4. POST/save: remove reads of $_POST['dnsbl_mode'] and $_POST['pfb_py_block'],
+   the reload-on-mode-change branch (~L611–612), the `?: 'dnsbl_unbound'` default
+   write (~L622), and the 'dnsbl_mode' entry in the select_options validation
+   array (~L356). Do not break neighboring field saves.
+5. Remove the `.dnsbl_unbound_tld` infoblocks and the TLD-Whitelist UI section
+   (and its ~L2894 conditional message). Keep the pfb_tld "Wildcard Blocking"
+   checkbox.
+6. JS (~L3106–3220): simplify. The page now always runs Python mode, so:
+   - treat the `python` condition as always-true: remove `hideCheckbox(..., !python)`
+     gating so those fields are unconditionally shown; delete branches keyed on
+     `dnsbl_mode == 'dnsbl_unbound'` and on `pfb_py_block` visibility.
+   - remove `.dnsbl_unbound_tld` show/hide logic entirely.
+   - remove the `$('#dnsbl_mode').click(...)` and `$('#pfb_py_block').click(...)`
+     handlers and any function that only existed to react to them.
+   - keep handlers for surviving fields (pfb_pytld text, pfb_regex, pfb_noaaaa,
+     pfb_gp visibility) — but since they were gated on `dnsbl_mode=='dnsbl_python'`
+     (now always true), unwrap that guard.
+
+CONSTRAINTS
+- PHP: tabs; no die()/exit(); keep Form_* API usage consistent with the page.
+- Do NOT remove pfb_tld or any python feature control. Do NOT touch
+  pfblockerng.inc native branches yet (Phase 3), the shell, alerts, or widget.
+
+VERIFICATION
+- `php -l src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php` → clean.
+- grep the file: no remaining `dnsbl_mode`, `pfb_py_block`, `$options_dnsbl_mode`,
+  or `dnsbl_unbound_tld` references.
+- Diff-read the JS: no references to removed element IDs/classes; surviving
+  field toggles still wired.
+- `python -m pytest` → green (sanity).
+
+EXPECTED RESULT
+- DNSBL settings page shows no mode selector and no Python-blocking checkbox;
+  saving works; python feature fields render unconditionally; TLD Whitelist UI
+  is gone; Wildcard Blocking (pfb_tld) remains.
+
+COMMIT
+    pfblockerng: remove DNSBL mode selector and native-only UI (ADR-02 P2)
+Land on `edge`. Push directly; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/02_Results.txt`
+This file is a HANDOFF for the agent that will perform the NEXT phase
+(03_Core_Remove_Native.txt) — NOT merely a changelog of this phase. Write it as
+plain text (.txt, not markdown), self-sufficient for the next agent. Include:
+- State after this phase: the DNSBL settings page no longer posts dnsbl_mode or
+  pfb_py_block; native-only UI (TLD Whitelist, .dnsbl_unbound_tld) is gone;
+  pfb_tld and the python feature controls remain.
+- What changed: inputs and JS handlers removed; POST/validation edits.
+- Verification results: php -l / grep / pytest output.
+- Watch-outs and any deviation from this prompt the next agent must know.
+- Go-ahead for Phase 3: the core can collapse branches knowing the UI is clean.

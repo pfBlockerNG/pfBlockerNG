@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "pytest: pfb_unbound",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      // testpaths is set in pyproject.toml; conftest.py uses __file__ to resolve
+      // sys.path regardless of cwd, so we can run from the workspace root.
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

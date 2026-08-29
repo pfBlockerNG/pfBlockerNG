@@ -1,0 +1,61 @@
+================================================================================
+PHASE 1 PROMPT — Extract the provider descriptor table (behaviour-preserving)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §1, §2.1, §6 Phase 1 first)
+================================================================================
+
+ROLE
+Work on branch adr/59-top1m-provider-framework (off devel). Phase 1 of 6.
+BEHAVIOUR-PRESERVING refactor. Inline on the branch, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The TOP1M provider URL is chosen by a hardcoded if/else on the Top1mSource enum
+(pfblockerng.php:162). Adding providers by extending that if/else does not scale
+and spreads per-provider facts across files. Introduce ONE descriptor table now,
+with tranco+cisco only, so later phases add a provider as a table row. No new
+provider and no behaviour change in this phase — this de-risks all that follows.
+
+REQUIRED READING
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§1, §2.1, §2.2)
+- src/usr/local/www/pfblockerng/pfblockerng.php — the `// TOP1M database` block
+  (~line 161-173): the extras[2] slot + the `if ($pfb['dnsbl_top1m_type'] ===
+  Top1mSource::Tranco) {...} else {...}` URL selection.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — the Top1mSource enum.
+- tests/php/ (find an off-appliance test that loads pfblockerng.php-adjacent
+  logic; if none, the descriptor function must be unit-testable in pfblockerng.inc).
+- CLAUDE.md (PHP standards; PFBL sniffs).
+
+ACTION PLAN
+1. Add `pfb_top1m_providers()` (place it where both www + inc can reach — likely
+   pfblockerng.inc or a shared include) returning an array keyed by the enum
+   value: for now `tranco` and `cisco`, each with { 'url' => <literal>,
+   'container' => 'zip', 'parse' => 'rank_domain', 'auth' => 'none', 'label',
+   'licence' => '' }. Use the CURRENT literal URLs verbatim.
+2. Rewire pfblockerng.php's URL if/else to look up `$pfb['dnsbl_top1m_type']`
+   (its ->value / toStored) in that table and set `$pfb['extras'][2]['url']` from
+   the descriptor. Keep the extras filename/type/folder unchanged.
+3. Do NOT touch pfblockerng_top1m() or pfb_download() yet (Phases 2, 3).
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE. Keep PFBL-01/RequireConfigGateway/UppercaseBool green.
+- Do NOT add any provider, change any URL, or alter the parser/downloader.
+
+VERIFICATION (all must pass)
+- /opt/homebrew/bin/php -l on touched files → clean.
+- vendor/bin/phpunit → green (add an oracle test: the resolved URL for tranco and
+  for cisco equals the exact pre-change literal — this pins byte-identity).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ → clean; phpstan → 0 errors.
+- diff-read: only the provider-table + the pfblockerng.php URL-selection changed.
+
+EXPECTED RESULT
+The two current providers resolve their URLs via the descriptor; behaviour and
+output are identical; a test pins the resolved URLs.
+
+COMMIT (single)
+    pfblockerng: introduce the TOP1M provider descriptor table (ADR-59 P1)
+Push directly to adr/59-top1m-provider-framework; PR only if the push is rejected.
+
+HANDOFF — write .ADRs/ADR_59_Top1M_Provider_Framework/RESULTS/01_Results.txt
+State: the `pfb_top1m_providers()` signature + where it lives; the exact table
+shape; that tranco/cisco URLs are pinned unchanged; verification numbers; go-ahead
+for Phase 2 (the parser reads `parse`/`container` from this table).

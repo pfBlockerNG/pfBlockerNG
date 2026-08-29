@@ -1,0 +1,11 @@
+{
+  "_doc": "Per-feed manifest (Phase 1 §1i / §2 contract). One row per raw feed file mapping it to {feed, group, dialect, log_flag}. 'dialect' is ONLY the ReferencePipeline oracle's own per-line CSV-type tag (hosts/plain/abp), simulating the pre-ADR-62 PHP loop it re-implements -- production build()'s manifest carries no such field (#1083 P4 retired format_hint end-to-end); the oracle uses it to drive the reference preprocessor in the same order the current pipeline concatenates feeds.",
+  "version": 1,
+  "feeds": [
+    { "raw": "feed_hosts.txt",   "feed": "HostsFeed", "group": "Ads",     "dialect": "hosts", "log_flag": "1" },
+    { "raw": "feed_plain.txt",   "feed": "PlainFeed", "group": "Malware", "dialect": "plain", "log_flag": "1" },
+    { "raw": "feed_abp.txt",     "feed": "AbpFeed",   "group": "AbpAds",  "dialect": "abp",   "log_flag": "1" },
+    { "raw": "feed_extra.txt",   "feed": "ExtraFeed", "group": "Extra",   "dialect": "plain", "log_flag": "1" },
+    { "raw": "feed_nolog.txt",   "feed": "NoLogFeed", "group": "NoLog",   "dialect": "plain", "log_flag": "2" }
+  ]
+}

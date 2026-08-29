@@ -1,0 +1,63 @@
+HISTORICAL — EXECUTED 2026-06-17/18; DO NOT RE-RUN. Every phase below already landed on devel
+(ADR-28 is Accepted; see ADR.md Status). Line anchors are stale and the "hard-freeze /
+byte-identical storage" doctrine in this prompt was superseded by the behaviour-not-bytes rule in CLAUDE.md.
+
+================================================================================
+PHASE 9 PROMPT — Shell conventions (pfblockerng.sh + list_scripts/)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.1, §2.4 ADR-26 carve-out, §6 Phase 9)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 9 of 11, BEHAVIOUR-PRESERVING; must
+coordinate with ADR-26. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Shell has no boolean/enum type, so items 1 and 5 are N/A. The applicable conventions are item 2
+(short-circuit `&&`/`||`, `case` guard before `grep`), item 4 (string-ops over regex: parameter
+expansion / `case` over `grep -E`/`sed` where equivalent), and item 3 (opportunistic alignment).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/08_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.1 shell column, §2.4 — ADR-26 LC_ALL=C prefixes
+  are OFF LIMITS)
+- .ADRs/ADR_26_Locale_Policy_And_Shell_Portability/ADR.md (§2.1 — the inline LC_ALL=C sinks you must
+  NOT disturb)
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh + list_scripts/*.sh. Note the shared
+  list_scripts/aws_region_prefixes.sh (change the shared script, not the 25 wrappers).
+- CLAUDE.md (Shell standards: POSIX sh, quote expansions, path rules, locale policy).
+
+ACTION PLAN
+1. Short-circuit: order cheap tests first in `&&`/`||`; use `case` to guard before invoking `grep`
+   on the common path. Only where provably side-effect-free (same rule as Phase 6).
+2. String-ops over regex: where a `grep -E`/`sed`/`expr` is matching a fixed substring/prefix/suffix
+   or doing a literal replace, use POSIX parameter expansion (${var#...}, ${var%...}, ${var%%*},
+   case "$x" in pattern) instead — only when exactly equivalent. Keep real pattern matching as-is.
+3. Alignment: opportunistic, within blocks already touched. No standalone realign of untouched lines.
+4. DO NOT touch any ADR-26 LC_ALL=C prefix, the collation sinks, or the locale handling. Keep all
+   add-on/privileged binaries as their path* vars; base utils may stay bare per CLAUDE.md.
+
+CONSTRAINTS
+- POSIX /bin/sh; no bashisms; quote all expansions.
+- Behaviour-preserving; ADR-26 untouched.
+- shellcheck clean (respect .shellcheckrc); sh -n clean.
+
+VERIFICATION (must all pass)
+- shellcheck on touched scripts -> clean
+- sh -n on touched scripts -> clean
+- python -m pytest -> green (any extractable-helper tests)
+- diff-read: no LC_ALL=C prefix moved/removed; swaps provably equivalent; alignment only in touched
+  blocks.
+
+EXPECTED RESULT
+Shell scripts use cheap-guard-first conditionals and string-ops where equivalent; ADR-26 locale
+handling intact; behaviour identical.
+
+COMMIT (single)
+    pfblockerng: short-circuit + string-ops over regex in shell (ADR-28 P9)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/09_Results.txt
+State: reorders + string-op swaps done; constructs left (why); explicit confirmation no ADR-26
+LC_ALL=C prefix was touched. Go-ahead for Phase 10.

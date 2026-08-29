@@ -1,0 +1,76 @@
+================================================================================
+PHASE 4 PROMPT — Source-bound smoke + docs + DoD sweep
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_55_Client_Groups_Group_Policy/ADR.md   (read SS3, SS7)
+================================================================================
+
+ROLE
+Implementer in the adr/55-client-groups-group-policy worktree. One commit. No sub-agents.
+MODE: behaviour change — new smoke/UI tests prove the feature red->green against pre-ADR code where dispatchable; any out-of-CI item is documented, not skipped silently.
+
+WHY THIS PHASE EXISTS
+Per-CG rules are unit-pinned but only live traffic proves pf actually scopes them. Extend
+the ADR-04 smoke harness with SOURCE-BOUND probes, prove the headline journeys on the VM,
+finish docs, sweep the DoD. This also builds the harness capability ADR-25 Phase 7 reuses
+for per-client DNSBL probes — design it for reuse, not one-off.
+
+REQUIRED READING
+- ADR SS7 (DoD list — you are closing it), SS2.3 (semantics to prove live).
+- tests/smoke/ helpers + conftest — SmokeVM.ssh (/bin/sh wrapper), unique_domain,
+  ensure_dnsbl_vip, the diagnostics bundle; CLAUDE.md "Smoke tests" section IN FULL
+  (probe on-box, tcsh trap, first-response-authoritative, RFC 5737 fixtures).
+- docs/misc/local-smoke-debian.md + scripts/local-smoke.sh — how to iterate locally.
+- The ADR-41 deferred smoke (test_smoke_autorule_immutable.py skip) — pattern for
+  rule-order assertions via pfctl -sr parsing (with rendered-form matching, e.g. port 53
+  prints as 'domain').
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. HARNESS: source-bound probing from the VM guest — add a second guest address (alias IP
+   on the LAN interface, or a second interface where the harness permits) so traffic can
+   originate from an in-CG source and an out-of-CG source. Expose as a reusable fixture
+   (client_source(ip)) — ADR-25 P7 will reuse it for drill -I. Document limits honestly.
+2. SMOKE CASES (each asserts the BEFORE state, then the AFTER):
+   a. Scoped Deny_Outbound: FG with an RFC 5737 fixture member, default Alias_Native
+      (policy-only), binding to CG containing source A. From A: traffic to a listed IP is
+      blocked; from non-member source B: passes. Before the binding exists: both pass.
+   b. Permit carve-out: FG default Deny_Outbound (global), CG binding with
+      Permit_Outbound override for A. A reaches the listed IP; B is blocked. Assert rule
+      order in pfctl -sr matches the bucket contract.
+   c. Schedule: binding with a short pfSense Schedule window — rule present but inactive
+      outside the window (pfctl shows the rule; traffic passes), enforced inside. If
+      driving the clock is infeasible in CI, codify the manual-smoke fallback per the
+      ADR-acceptance rule and assert the sched field lands in the rule.
+   d. Legacy_Bypass end-to-end: migrated config still bypasses DNSBL for its IPs (the
+      legacy gpListDB path — unchanged by this ADR — still works post-migration).
+   e. Zero-CG parity: the standing smoke journeys green unchanged.
+3. DIAGNOSTICS: every new wait/assert prints expected-vs-actual (the pfctl ruleset slice,
+   the probe result) — no bare booleans.
+4. DOCS: architecture-notes.md gains the Client-Groups section (entities, shapes, bucket
+   interplay, locked-dnsbl note, rule-count surface); config-gateway.md foreign-key list;
+   README only if workflow changed.
+5. DoD SWEEP: walk ADR SS7 checkbox by checkbox; each verified or explicitly annotated
+   (e.g. schedule item's manual fallback). Update the ADR Status line to reflect
+   completion state per the repo's ADR-acceptance rule (green CE+Plus fan-out = Accepted).
+6. Dispatch: rebase onto latest devel first; selective smoke dispatch for the new module
+   (-f pytest_filter), then the full fan-out for acceptance.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
+
+KILL-GATES
+- Every smoke case proves the before-state (no false passes).
+- Harness reusability: client_source() documented for ADR-25 P7.
+- Fan-out green CE+Plus before Status flips.
+
+HANDOFF (RESULTS/04_Results.txt)
+Harness design + limits, case list with run ids, DoD checklist state, docs diffs.

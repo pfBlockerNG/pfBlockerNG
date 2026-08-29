@@ -1,0 +1,107 @@
+ADR-27 Phase 1 Results — Extract + pin a channel-keyed release-retention seam (prep)
+======================================================================================
+
+Status: COMPLETE — go-ahead for Phase 2.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=2
+
+------------------------------------------------------------------------
+Helper added
+------------------------------------------------------------------------
+
+File: scripts/build-repo-portable.py
+
+Signature:
+    def retain_by_channel(
+        pkg_paths: list[Path],
+        *,
+        keep_devel: int,
+        keep_stable: int,
+    ) -> list[Path]:
+
+Channel-detection rule (by the ``name`` field in each path's +COMPACT_MANIFEST):
+  * name ending "-nightly"  → nightly channel  (passed through untouched; caller owns its retention)
+  * name ending "-devel"    → devel channel
+  * anything else           → stable channel
+
+Pruning rules (reuses the existing ``_retain_newest`` for version-sorted ordering):
+  * keep == 0                   → keep ALL of that channel ("unbounded / disabled" sentinel)
+  * keep >= len(bucket)         → keep all (no-op)
+  * keep < len(bucket)          → prune to the ``keep`` newest by version order
+
+Return order: devel (newest-first) + stable (newest-first) + nightly (input order preserved).
+
+Version-order function reused: ``_retain_newest(bucket, keep)``
+  (defined at line ~601 in scripts/build-repo-portable.py;
+   uses ``_pkg_version_key`` for component-wise numeric sort).
+
+------------------------------------------------------------------------
+No call-site change
+------------------------------------------------------------------------
+
+``build_repo_matrix`` is NOT modified BY PHASE 1. The helper is defined and tested only.
+The Phase-1 commit diff confirms: only additions (the new function + 8 test functions +
+a private helper ``_make_pkg_channel``); catalog output is byte-identical to before.
+(Scope note: Phase 2 DOES extend ``build_repo_matrix`` to call this helper — so this
+no-modification claim is about the Phase-1 snapshot, not branch HEAD.)
+
+------------------------------------------------------------------------
+Tests added (tests/test_build_repo_portable.py)
+------------------------------------------------------------------------
+
+8 new test functions, all under the ADR-27 Phase 1 block:
+
+1. test_retain_by_channel_devel_pruned_independently
+   — devel pruned to keep_devel=2; stable untouched (keep_stable=0)
+   — before-state: 5 inputs; after-state: 4 (oldest devel dropped)
+
+2. test_retain_by_channel_stable_pruned_independently
+   — stable pruned to keep_stable=1; devel untouched (keep_devel=0)
+   — before-state: 5 inputs; after-state: 3 (2 oldest stable dropped)
+
+3. test_retain_by_channel_keep_zero_is_unbounded_sentinel
+   — keep_devel=0 + keep_stable=0 → all 6 paths returned (no pruning)
+
+4. test_retain_by_channel_keep_larger_than_bucket_is_noop
+   — keep_devel=100, keep_stable=100 with 2+2 paths → all 4 returned
+
+5. test_retain_by_channel_version_order_deterministic
+   — versions 3.0.1 / 3.0.9 / 3.0.10 (non-lexicographic); keep_devel=2
+   — before-state: all 3 kept when keep=0; after-state: 3.0.10+3.0.9 kept, 3.0.1 dropped
+   — proves numeric component sort, not lexicographic
+
+6. test_retain_by_channel_nightly_untouched
+   — 1 devel + 1 stable + 2 nightly; keep_devel=1, keep_stable=1
+   — nightly passes through regardless; total kept = 4
+
+7. test_retain_by_channel_mixed_prune_nightly_untouched
+   — 3 devel + 3 stable + 2 nightly; keep_devel=1, keep_stable=2
+   — devel: 2 dropped; stable: 1 dropped; nightly: both pass through
+   — total kept = 5; channels pruned independently
+
+8. test_retain_by_channel_empty_channel_is_noop
+   — only stable pkgs provided, empty devel/nightly buckets
+   — no KeyError; both stable pkgs returned
+
+------------------------------------------------------------------------
+Gate outputs
+------------------------------------------------------------------------
+
+python -m pytest -q:
+  1744 passed in 16.60s  (+ 8 new; 0 failures)
+
+ruff check .:
+  All checks passed!
+
+ruff format --check .:
+  112 files already formatted
+
+mypy tests/:
+  Success: no issues found in 46 source files
+
+------------------------------------------------------------------------
+Commit
+------------------------------------------------------------------------
+
+Message: dev: add channel-keyed release-retention helper (ADR-27 P1)
+Branch:  adr/27-release-rollback-and-eol-rou

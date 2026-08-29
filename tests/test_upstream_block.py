@@ -1,0 +1,690 @@
+"""Tests for upstream/external DNS block detection — issue #267 (Quad9 domain logging).
+
+Covers:
+- ``_parse_ede_options`` (pure EDE wire parser)
+- ``classify_upstream_block`` (NXRA / EDE15 / EDE17 classifier)
+- ``UpstreamBlock`` result type
+- ``_log_upstream_block`` counter enqueue branch (sqlite3_dnsbl_con guard)
+- ``_dnsbl_stats_wanted`` init-time DB-open gate (issue #860: forwarding-mode-only
+  installs must open the dnsbl stats DB too, not just blacklist-loaded ones)
+- ``_db_flush_dnsbl`` self-healing the 'Upstream' row when it goes missing
+  mid-connection (issue #858)
+
+All tests are off-box — no Unbound API calls, no live VM. Most are pure
+(no fixtures, no I/O); the sqlite-backed classes (``TestDnsblFlushSelfHealsUpstreamRow``,
+``TestDnsblDbOpensInForwardingMode``) use the ``tmp_path`` fixture and a real
+on-disk dnsbl.sqlite file.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+import pytest
+from unboundmodule import RCODE_NOERROR, RCODE_NXDOMAIN
+
+import pfb_unbound
+from pfb_unbound import (
+    DB_DNSBL,
+    EDE_BLOCKED,
+    EDE_FILTERED,
+    EDNS_OPT_CODE_EDE,
+    UpstreamBlock,
+    _db_create,
+    _db_flush_dnsbl,
+    _dnsbl_stats_wanted,
+    _log_upstream_block,
+    _parse_ede_options,
+    classify_upstream_block,
+    pfb_db_validate,
+)
+
+# ---------------------------------------------------------------------------
+# NXRA path — NXDOMAIN + RA cleared
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockNXRA:
+    def test_nxdomain_ra_cleared_returns_nxra_block(self) -> None:
+        # NXDOMAIN reply with RA bit CLEARED -> upstream block signal NXRA.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=False)
+        assert result is not None
+        assert result.signal == "NXRA"
+        assert result.label == "NXRA"
+        assert result.provider == ""
+
+    def test_nxdomain_ra_set_returns_none(self) -> None:
+        # BEFORE/AFTER pair: same NXDOMAIN rcode but RA SET -> natural NXDOMAIN, not blocked.
+        # Proves RA=False is the discriminator, not the rcode alone.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=True)
+        assert result is None
+
+    def test_noerror_ra_cleared_no_ede_returns_none(self) -> None:
+        # NOERROR + RA cleared (no EDE) -> not a block. Proves rcode gate.
+        result = classify_upstream_block(rcode=RCODE_NOERROR, ra_available=False)
+        assert result is None
+
+    def test_nxra_with_ede_none_still_detected(self) -> None:
+        # ede=None (omitted / not present in reply) -> NXRA logic fires normally.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=False, ede=None)
+        assert result is not None
+        assert result.signal == "NXRA"
+
+    def test_nxra_with_ede_empty_list_still_detected(self) -> None:
+        # ede=[] (option present but empty list) -> NXRA logic fires normally.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=False, ede=[])
+        assert result is not None
+        assert result.signal == "NXRA"
+
+
+# ---------------------------------------------------------------------------
+# EDE 15 (Blocked) path
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockEDE15:
+    def test_ede15_returns_ede15_block(self) -> None:
+        # EDE info_code 15 -> EDE15 block, regardless of rcode/RA.
+        # Tests with NOERROR + RA set to prove EDE wins independently of NXRA logic.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_BLOCKED, "Quad9")],
+        )
+        assert result is not None
+        assert result.signal == "EDE15"
+        assert result.label == "EDE15 (Blocked)"
+        assert result.provider == "Quad9"
+
+    def test_ede15_extra_text_stripped(self) -> None:
+        # Extra-text with surrounding whitespace is stripped; provider is the stripped value.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_BLOCKED, "  Quad9  ")],
+        )
+        assert result is not None
+        assert result.provider == "Quad9"
+
+    def test_ede15_empty_extra_text_provider_is_empty_string(self) -> None:
+        # Empty extra_text -> provider == "".
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_BLOCKED, "")],
+        )
+        assert result is not None
+        assert result.provider == ""
+
+    def test_ede15_whitespace_only_extra_text_provider_is_empty_string(self) -> None:
+        # Whitespace-only extra_text -> strips to "" -> provider == "".
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_BLOCKED, "   ")],
+        )
+        assert result is not None
+        assert result.provider == ""
+
+
+# ---------------------------------------------------------------------------
+# EDE 17 (Filtered) path
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockEDE17:
+    def test_ede17_returns_ede17_block(self) -> None:
+        # EDE info_code 17 -> EDE17 block; label and provider set correctly.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_FILTERED, "CleanBrowsing")],
+        )
+        assert result is not None
+        assert result.signal == "EDE17"
+        assert result.label == "EDE17 (Filtered)"
+        assert result.provider == "CleanBrowsing"
+
+    def test_ede17_empty_provider(self) -> None:
+        # EDE 17 with no extra-text -> provider == "".
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_FILTERED, "")],
+        )
+        assert result is not None
+        assert result.signal == "EDE17"
+        assert result.provider == ""
+
+
+# ---------------------------------------------------------------------------
+# EDE 15 and 17 both present — 15 (Blocked) wins
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockEDEPrecedence:
+    def test_ede15_and_ede17_both_present_ede15_wins(self) -> None:
+        # When both EDE 15 and 17 appear, EDE 15 (Blocked) takes precedence.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_FILTERED, "provB"), (EDE_BLOCKED, "provA")],
+        )
+        assert result is not None
+        assert result.signal == "EDE15"
+        assert result.provider == "provA"
+
+    def test_ede15_before_ede17_in_list_ede15_wins(self) -> None:
+        # 15 listed first -> same result; 15 always wins over 17.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(EDE_BLOCKED, "first"), (EDE_FILTERED, "second")],
+        )
+        assert result is not None
+        assert result.signal == "EDE15"
+        assert result.provider == "first"
+
+
+# ---------------------------------------------------------------------------
+# Unrecognised EDE info_codes — fall through to NXRA / None
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockUnrecognisedEDE:
+    def test_unrecognised_ede_plus_nxra_returns_nxra(self) -> None:
+        # Unrecognised EDE (e.g. info_code 0) does not trigger a block on its own;
+        # falls through to NXRA path if NXDOMAIN + RA cleared.
+        result = classify_upstream_block(
+            rcode=RCODE_NXDOMAIN,
+            ra_available=False,
+            ede=[(0, "something")],
+        )
+        assert result is not None
+        assert result.signal == "NXRA"
+
+    def test_unrecognised_ede_plus_noerror_returns_none(self) -> None:
+        # Unrecognised EDE + NOERROR -> neither EDE path nor NXRA fires -> None.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(0, "something"), (1, "another"), (18, "")],
+        )
+        assert result is None
+
+    def test_unrecognised_ede_18_ignored(self) -> None:
+        # EDE 18 (Prohibited) is not a recognised upstream-block signal -> None.
+        result = classify_upstream_block(
+            rcode=RCODE_NOERROR,
+            ra_available=True,
+            ede=[(18, "")],
+        )
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Constants correctness
+# ---------------------------------------------------------------------------
+
+
+class TestUpstreamBlockConstants:
+    def test_ede_blocked_constant(self) -> None:
+        # RFC 8914 INFO-CODE 15 = Blocked.
+        assert EDE_BLOCKED == 15
+
+    def test_ede_filtered_constant(self) -> None:
+        # RFC 8914 INFO-CODE 17 = Filtered.
+        assert EDE_FILTERED == 17
+
+
+# ---------------------------------------------------------------------------
+# UpstreamBlock result type fields
+# ---------------------------------------------------------------------------
+
+
+class TestUpstreamBlockType:
+    def test_upstream_block_fields_accessible(self) -> None:
+        # UpstreamBlock is a frozen/immutable type with signal, label, provider fields.
+        b = UpstreamBlock(signal="NXRA", label="NXRA", provider="")
+        assert b.signal == "NXRA"
+        assert b.label == "NXRA"
+        assert b.provider == ""
+
+    def test_upstream_block_is_immutable(self) -> None:
+        # UpstreamBlock cannot be mutated (frozen dataclass / NamedTuple).
+        b = UpstreamBlock(signal="EDE15", label="EDE15 (Blocked)", provider="Quad9")
+        try:
+            b.signal = "other"  # type: ignore[misc]
+            raise AssertionError("Expected AttributeError — UpstreamBlock must be immutable")
+        except (AttributeError, TypeError):
+            pass  # expected: frozen dataclass raises AttributeError; NamedTuple raises TypeError
+
+
+# ---------------------------------------------------------------------------
+# _parse_ede_options — pure EDE wire parser
+# ---------------------------------------------------------------------------
+
+
+class TestParseEdeOptions:
+    """Unit tests for the pure _parse_ede_options helper (issue #267, Part A).
+
+    All inputs are (opt_code, opt_data) pairs; outputs are (info_code, extra_text).
+    No Unbound API calls; no fixtures.
+    """
+
+    def test_valid_ede15_option_parses_correctly(self) -> None:
+        # EDNS_OPT_CODE_EDE (15) + 2-byte info_code (15) + UTF-8 text -> (15, "Quad9").
+        # info_code 15 (0x000F) in 2 big-endian bytes, followed by "Quad9".
+        opt_data = (15).to_bytes(2, "big") + b"Quad9"
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt_data)])
+        assert result == [(15, "Quad9")]
+
+    def test_valid_ede17_option_parses_correctly(self) -> None:
+        # INFO-CODE 17 (0x0011) + "CleanBrowsing" -> (17, "CleanBrowsing").
+        opt_data = (17).to_bytes(2, "big") + b"CleanBrowsing"
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt_data)])
+        assert result == [(17, "CleanBrowsing")]
+
+    def test_ede_option_with_empty_extra_text(self) -> None:
+        # 2-byte info_code only (no EXTRA-TEXT) -> extra_text == "".
+        opt_data = (15).to_bytes(2, "big")
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt_data)])
+        assert result == [(15, "")]
+
+    def test_non_ede_opt_code_is_skipped(self) -> None:
+        # opt_code 12 (NSID) is not EDE — must be skipped; empty result.
+        opt_data = b"\x00\x0f" + b"ignored"
+        result = _parse_ede_options([(12, opt_data)])
+        assert result == []
+
+    def test_ede_opt_data_shorter_than_2_bytes_is_skipped(self) -> None:
+        # A 1-byte opt_data cannot hold a 2-byte info_code — skip it.
+        # Before-state: len(opt_data) == 1 < 2 → skipped. ZERO entries returned.
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, b"\x0f")])
+        assert result == []
+
+    def test_zero_length_opt_data_is_skipped(self) -> None:
+        # Empty opt_data — skip; no entry in result.
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, b"")])
+        assert result == []
+
+    def test_multiple_options_only_ede_included(self) -> None:
+        # Mix of EDE and non-EDE: only the EDE one is returned.
+        opt_data_ede = (15).to_bytes(2, "big") + b"Provider"
+        result = _parse_ede_options([(12, b"nsid-data"), (EDNS_OPT_CODE_EDE, opt_data_ede), (10, b"other")])
+        assert result == [(15, "Provider")]
+
+    def test_multiple_ede_options_all_returned(self) -> None:
+        # Two EDE options in sequence: both parsed.
+        # Before-state: 1 EDE option → 1 result. After adding a second → 2 results.
+        opt15 = (15).to_bytes(2, "big") + b"ProvA"
+        result_one = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt15)])
+        assert len(result_one) == 1
+        opt17 = (17).to_bytes(2, "big") + b"ProvB"
+        result_two = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt15), (EDNS_OPT_CODE_EDE, opt17)])
+        assert result_two == [(15, "ProvA"), (17, "ProvB")]
+
+    def test_empty_input_returns_empty(self) -> None:
+        # Empty iterable -> empty result; no error.
+        assert _parse_ede_options([]) == []
+
+    def test_edns_opt_code_ede_constant_value(self) -> None:
+        # EDNS option code 15 carries RFC 8914 EDE data (distinct from INFO-codes).
+        assert EDNS_OPT_CODE_EDE == 15
+
+    def test_utf8_extra_text_decoded(self) -> None:
+        # Non-ASCII UTF-8 in EXTRA-TEXT is decoded correctly.
+        text = "Föö"
+        opt_data = (15).to_bytes(2, "big") + text.encode("utf-8")
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt_data)])
+        assert result == [(15, "Föö")]
+
+    def test_invalid_utf8_replaced_not_raised(self) -> None:
+        # Malformed UTF-8 bytes are replaced (decode(..., "replace")), not raised.
+        opt_data = (15).to_bytes(2, "big") + b"\xff\xfe"
+        result = _parse_ede_options([(EDNS_OPT_CODE_EDE, opt_data)])
+        assert len(result) == 1
+        assert result[0][0] == 15
+        # The invalid bytes are replaced with U+FFFD; just assert no exception
+        # and info_code is correct.
+        assert "�" in result[0][1]
+
+
+# ---------------------------------------------------------------------------
+# AA guard — authoritative NXDOMAIN excluded from NXRA detection
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyUpstreamBlockAAGuard:
+    def test_nxdomain_ra0_aa0_detected_as_nxra(self) -> None:
+        # NXDOMAIN + RA=0 + AA=0 (Quad9 block shape) -> NXRA block.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=False, aa_authoritative=False)
+        assert result is not None
+        assert result.signal == "NXRA"
+
+    def test_nxdomain_ra0_aa1_not_detected(self) -> None:
+        # BEFORE/AFTER pair with above: same NXDOMAIN+RA=0, but AA=1 (authoritative NXDOMAIN).
+        # AA=1 excludes it — must return None, not NXRA.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=False, aa_authoritative=True)
+        assert result is None
+
+    def test_nxdomain_ra1_aa0_not_detected(self) -> None:
+        # NXDOMAIN + RA=1 + AA=0 (forwarder-natural) -> excluded by RA=1 guard.
+        result = classify_upstream_block(rcode=RCODE_NXDOMAIN, ra_available=True, aa_authoritative=False)
+        assert result is None
+
+    def test_ede15_wins_regardless_of_flags(self) -> None:
+        # EDE15 present + NXDOMAIN + RA=1 + AA=1 -> EDE15 block (EDE wins regardless of RA/AA).
+        result = classify_upstream_block(
+            rcode=RCODE_NXDOMAIN,
+            ra_available=True,
+            aa_authoritative=True,
+            ede=[(EDE_BLOCKED, "Quad9")],
+        )
+        assert result is not None
+        assert result.signal == "EDE15"
+        assert result.provider == "Quad9"
+
+
+# ---------------------------------------------------------------------------
+# _log_upstream_block — sqlite3_dnsbl_con guard (counter enqueue)
+# ---------------------------------------------------------------------------
+
+
+class TestLogUpstreamBlockCounterEnqueue:
+    """Scenario: _log_upstream_block enqueues a dnsbl counter task iff sqlite3_dnsbl_con is truthy.
+
+    Background:
+        The function writes CSV to dnsbl.log, then — when the SQLite
+        DNSBL connection is active — calls pfb_db_enqueue(("dnsbl", "Upstream")) to
+        increment the aggregate Upstream row counter.  The guard ``if pfb["sqlite3_dnsbl_con"]``
+        must be the discriminator: the enqueue fires when truthy and is suppressed when falsy.
+
+    Given:
+        A valid UpstreamBlock result (NXRA signal, no provider) and a monkeypatched
+        pfb_db_enqueue that records calls.  pfb_log is patched to a no-op so no real
+        file I/O occurs.
+    """
+
+    _RESULT = UpstreamBlock(signal="NXRA", label="NXRA", provider="")
+
+    def test_enqueues_upstream_counter_when_connection_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """
+        When sqlite3_dnsbl_con is truthy, _log_upstream_block enqueues ("dnsbl", "Upstream").
+
+        Before-state (con=False): no enqueue occurs (proven in the companion test).
+        After-state (con=True): exactly one ("dnsbl", "Upstream") task is enqueued.
+        """
+        calls: list[tuple[str, ...]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
+
+        # Before: connection inactive -> no enqueue (verified in companion test; establish
+        # that the initial fixture state is falsy so the flip is meaningful).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        # Flip to active.
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+
+        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
+        assert dnsbl_tasks == [("dnsbl", "Upstream")], f"Expected exactly one ('dnsbl', 'Upstream') task; got: {calls}"
+
+    def test_no_enqueue_when_connection_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """
+        When sqlite3_dnsbl_con is falsy, _log_upstream_block does NOT enqueue any dnsbl task.
+
+        This is the discriminating before-state: same function call, con=False -> no task.
+        Proves the guard is real and the counter is not always incremented.
+        """
+        calls: list[tuple[str, ...]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda task: calls.append(task))
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda _log, _line: None)
+
+        # Fixture default: sqlite3_dnsbl_con is False (see conftest reset_pfb_globals).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        _log_upstream_block("example.com", "192.0.2.1", self._RESULT, "A")
+
+        dnsbl_tasks = [t for t in calls if len(t) == 2 and t[0] == "dnsbl"]
+        assert dnsbl_tasks == [], f"Expected no dnsbl enqueue with sqlite3_dnsbl_con=False; got: {calls}"
+
+
+# ---------------------------------------------------------------------------
+# _db_create — the dnsbl table seeds the synthetic 'Upstream' row at zero
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblDbSeedsUpstreamRow:
+    """Scenario: creating the dnsbl DB seeds an 'Upstream' counter row at zero.
+
+    Background:
+        The per-block counter is applied as a bare ``UPDATE dnsbl SET counter =
+        counter + ? WHERE groupname = ?`` (_db_flush_dnsbl), which no-ops on a
+        missing row. 'Upstream' is synthetic (never a feed), so _db_create seeds it
+        on DB creation -- mirroring the resolver row-0 seed -- so the increment has
+        a row to hit. The seed must be idempotent and must never reset an already
+        accumulated counter on a later init/reconnect.
+    """
+
+    @staticmethod
+    def _counter_rows(con: sqlite3.Connection) -> list[tuple[int]]:
+        return con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchall()
+
+    def test_create_seeds_upstream_row_at_zero(self) -> None:
+        # Given/When: a fresh dnsbl DB is created.
+        con = sqlite3.connect(":memory:")
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+        # Then: exactly one 'Upstream' row exists, entries and counter both 0.
+        row = con.execute("SELECT entries, counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (0, 0), f"Upstream row not seeded at zero: {row!r}"
+        assert len(self._counter_rows(con)) == 1, "expected exactly one Upstream row"
+
+    def test_create_is_idempotent_and_preserves_counter(self) -> None:
+        # Given: a created DB whose Upstream counter has since accumulated.
+        con = sqlite3.connect(":memory:")
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+        assert self._counter_rows(con) == [(0,)]  # before: seeded at 0
+        con.execute("UPDATE dnsbl SET counter = counter + 5 WHERE groupname = 'Upstream'")
+        con.commit()
+        assert self._counter_rows(con) == [(5,)]  # accumulated
+
+        # When: the DB is (re-)created again (a later module init / fault reconnect).
+        _db_create(DB_DNSBL, con.cursor())
+        con.commit()
+
+        # Then: still a single row, counter PRESERVED (not reset, not duplicated).
+        assert self._counter_rows(con) == [(5,)], "re-create must not reset or duplicate the Upstream row"
+
+
+# ---------------------------------------------------------------------------
+# _db_flush_dnsbl — self-heals a mid-connection-cleared 'Upstream' row (#858)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblFlushSelfHealsUpstreamRow:
+    """Scenario: _db_flush_dnsbl re-seeds the 'Upstream' row if it goes missing
+    mid-connection, so the counter increment is never a silent no-op.
+
+    Background:
+        _db_create only seeds 'Upstream' at DB *connect* time. With ADR-10's
+        zero-downtime swaps, Unbound's Python module can hold one connection
+        across many reloads, so a mid-connection TABLE REBUILD --
+        dnsbl_save_stats()'s empty-stats DROP TABLE, or pfb_open_sqlite's
+        corrupt-DB recovery -- leaves the row absent (a baseline reset / GUI
+        report clear does NOT: cleardnsbl only runs
+        ``UPDATE dnsbl SET counter = 0`` and keeps every row) -- and the bare
+        ``UPDATE dnsbl SET counter = counter + ? WHERE groupname = ?`` silently
+        no-ops on a missing row until the next Unbound restart re-runs
+        _db_create. The fix re-seeds the row inside the flush itself, gated on
+        an actual 'Upstream' delta so a feed-only flush does not pay for it.
+
+    Given:
+        A connected dnsbl DB (via pfb_db_validate, which runs _db_create) whose
+        table is then emptied mid-connection (simulating the empty-stats
+        DROP TABLE / corrupt-DB recovery path, never an intervening
+        reconnect/restart).
+    """
+
+    @staticmethod
+    def _connect(tmp_path: Any) -> sqlite3.Connection:
+        db = str(tmp_path / "dnsbl.sqlite")
+        pfb_unbound.pfb["pfb_py_dnsbl"] = db
+        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+        pfb_unbound.pfb_db_validate(DB_DNSBL)  # connects + seeds via _db_create
+        return pfb_unbound._db_conns[DB_DNSBL]
+
+    def test_flush_recreates_absent_upstream_row_with_the_delta(self, tmp_path: Any) -> None:
+        """
+        When: the dnsbl table is cleared mid-connection and a flush carrying an
+        'Upstream' delta then runs.
+        Then: the row exists again with counter == the delta, proving the
+        flush self-heals rather than letting the UPDATE silently no-op.
+
+        RED on the unfixed code: the bare UPDATE has no row to match, the row
+        stays absent, and the final assertion fails on `row is None`.
+        """
+        con = self._connect(tmp_path)
+
+        # Before: the connect-time seed left a row at 0.
+        assert con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone() == (0,)
+
+        # Given: a mid-connection clear (baseline reset) -- row now absent.
+        con.execute("DELETE FROM dnsbl")
+        con.commit()
+        assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None
+
+        # When: a flush carrying an Upstream delta runs.
+        assert _db_flush_dnsbl({"Upstream": 3})
+
+        # Then: the row exists again with the flushed delta -- not silently dropped.
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (3,), f"Upstream row not self-healed at flush: {row!r}"
+
+    def test_feed_only_flush_does_not_create_the_upstream_row(self, tmp_path: Any) -> None:
+        """
+        Branch coverage of the 'Upstream' in deltas guard: a flush carrying
+        only a feed delta (no 'Upstream' key) must not seed the row. Proves
+        the self-heal is scoped to an actual Upstream write, not a blanket
+        seed-on-every-flush.
+        """
+        con = self._connect(tmp_path)
+        con.execute("DELETE FROM dnsbl")
+        con.commit()
+
+        assert _db_flush_dnsbl({"SomeFeed": 1})
+
+        assert con.execute("SELECT * FROM dnsbl WHERE groupname = 'Upstream'").fetchone() is None, (
+            "a feed-only flush (no 'Upstream' delta) must not seed the Upstream row"
+        )
+
+
+# ---------------------------------------------------------------------------
+# _dnsbl_stats_wanted — init-time DB-open gate (issue #860)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblStatsWanted:
+    """Scenario: the dnsbl stats DB must open whenever EITHER a blacklist loaded OR
+    forwarding mode is enabled -- not blacklist-loaded alone.
+
+    Background:
+        init_standard's "Enable DNSBL statistics" block used to gate on
+        ``pfb["python_blacklist"]`` only. Upstream/external-block detection
+        (issue #267) is gated on forwarding mode alone (inplace_cb_query_response),
+        so a forwarding-only install (no DNSBL blacklist loaded) left the gate
+        False forever -- sqlite3_dnsbl_con never became True, so
+        _log_upstream_block's counter enqueue (and _db_flush_dnsbl's guard) was
+        permanently skipped even though blocks were being logged.
+    """
+
+    def test_wanted_when_blacklist_loaded_no_forwarding(self) -> None:
+        # Pre-existing behaviour preserved: a loaded blacklist alone still wants the DB.
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["forwarding"] = False
+        assert _dnsbl_stats_wanted()
+
+    def test_wanted_when_forwarding_enabled_no_blacklist(self) -> None:
+        """
+        The issue #860 fix: forwarding alone (no blacklist) must also want the DB.
+
+        RED on the unfixed gate (`pfb["python_blacklist"]` only): forwarding=True
+        with blacklist=False evaluates False, failing this assertion.
+        """
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = True
+        assert _dnsbl_stats_wanted(), "forwarding-only must want the dnsbl stats DB (issue #860)"
+
+    def test_not_wanted_when_neither_flag_set(self) -> None:
+        # Branch coverage: guard intact when neither condition holds.
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = False
+        assert not _dnsbl_stats_wanted()
+
+
+# ---------------------------------------------------------------------------
+# init's DB-open block composed with the gate (issue #860)
+# ---------------------------------------------------------------------------
+
+
+class TestDnsblDbOpensInForwardingMode:
+    """Scenario: with the gate fixed, a forwarding-only init actually opens the
+    dnsbl stats DB, and a subsequent Upstream flush lands the counter -- the full
+    effect the issue's live evidence showed missing (a logged block, dead counter).
+
+    Given:
+        init_standard itself needs the live Unbound env and can't run off-box (see
+        the sibling suites' same note), so this reproduces its "Enable DNSBL
+        statistics" retry-loop shape verbatim, calling the SAME production gate
+        (_dnsbl_stats_wanted) and DB-open call (pfb_db_validate) the source uses.
+    """
+
+    @staticmethod
+    def _open_dnsbl_db_like_init_standard(tmp_path: Any) -> None:
+        pfb_unbound.pfb["pfb_py_dnsbl"] = str(tmp_path / "dnsbl.sqlite")
+        if _dnsbl_stats_wanted():
+            for _ in range(2):
+                try:
+                    if pfb_db_validate(DB_DNSBL):
+                        pfb_unbound.pfb["sqlite3_dnsbl_con"] = True
+                        break
+                except Exception:
+                    pass
+
+    def test_forwarding_only_opens_db_and_flush_lands_counter(self, tmp_path: Any) -> None:
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = True
+
+        # Before: connection inactive (fixture default).
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+
+        self._open_dnsbl_db_like_init_standard(tmp_path)
+
+        # Then: the gate fix opens the connection -- RED on the unfixed gate (stays False).
+        assert pfb_unbound.pfb["sqlite3_dnsbl_con"], "forwarding-only init must open the dnsbl stats DB (issue #860)"
+
+        # When: an Upstream flush runs (as the DB worker would after _log_upstream_block).
+        assert _db_flush_dnsbl({"Upstream": 1})
+
+        # Then: the counter actually landed -- not silently dropped as before the fix.
+        con = pfb_unbound._db_conns[DB_DNSBL]
+        row = con.execute("SELECT counter FROM dnsbl WHERE groupname = 'Upstream'").fetchone()
+        assert row == (1,), f"Upstream counter not incremented after forwarding-only init: {row!r}"
+
+    def test_neither_flag_leaves_db_closed_and_flush_a_no_op(self, tmp_path: Any) -> None:
+        # Branch coverage: guard intact -- no forwarding, no blacklist -> DB never opens,
+        # and a later flush is a no-op (short-circuited by _db_flush_dnsbl's own guard).
+        pfb_unbound.pfb["python_blacklist"] = False
+        pfb_unbound.pfb["forwarding"] = False
+
+        self._open_dnsbl_db_like_init_standard(tmp_path)
+
+        assert not pfb_unbound.pfb["sqlite3_dnsbl_con"]
+        assert DB_DNSBL not in pfb_unbound._db_conns
+
+        assert _db_flush_dnsbl({"Upstream": 1})
+        assert DB_DNSBL not in pfb_unbound._db_conns, "guard must keep the DB closed with neither flag set"

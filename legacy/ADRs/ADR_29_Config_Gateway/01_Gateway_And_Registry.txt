@@ -1,0 +1,79 @@
+================================================================================
+PHASE 1 PROMPT — Gateway + field registry infrastructure + policy
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.4, §2.5 first)
+================================================================================
+
+ROLE
+You implement Phase 1 of ADR-29 on branch `adr/29-config-gateway`. This phase is
+BEHAVIOUR-PRESERVING and UNUSED-IN-PROD: it adds the gateway + registry + tests and
+the CLAUDE.md policy, but changes NO existing call site. Work inline on the branch,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The config surface is scattered (204 config_get_path / 132 config_set_path / 25
+config_del_path across src/) with per-site defaulting; issue #281 was a divergent
+default between two read sites. The gateway + a single declarative field registry
+give one canonical default/vocabulary per key. It must land FIRST as a tested safety
+net before any call site is routed through it (later phases).
+
+REQUIRED READING
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§1 context, §2.1 gateway/registry, §2.4 contract,
+  §2.5 out-of-scope).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — the existing ADR-28 enums
+  (PfbToggle:47, PfbLenient:66, PfbIdnMode:95) + adapters (pfb_cfg_toggle_read/write:114/127,
+  pfb_cfg_lenient_read/write:140/156, pfb_cfg_idn_mode_read/write:172/192). REUSE these.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_global() read seam (~:1302-1309) to
+  see which keys/sections are read and their current defaults.
+- tests/php/CfgAdaptersTest.php — the existing round-trip test style to mirror.
+- CLAUDE.md — "Config storage hard-freeze + field-aware adapter rule (ADR-28 §2.2)", PHP
+  standards (tabs, uppercase TRUE/FALSE/NULL), the test-coverage mandate.
+
+ACTION PLAN (oracle/round-trip tests FIRST where possible)
+1. Inventory the `installedpackages/pfblockerng*` keys actually read/written in src/ (grep
+   config_get_path/config_set_path/config_del_path). Build the declarative FIELD REGISTRY in
+   pfblockerng_extra.inc: an array/structure mapping each key -> { section, default,
+   vocabulary, read-adapter, write-adapter, since-version }. Wire the ADR-28 enums/adapters as
+   the read/write adapters for the fields they already cover; plain-string fields get an
+   identity adapter + their documented default (e.g. pfb_keep default 'on' per #281). List any
+   foreign/out-of-scope key explicitly (§2.5).
+2. Add the `PfbConfig` gateway (same file): `read($key)`, `write($key, $value)`, `delete($key)`
+   wrapping config_get_path/set_path/del_path and applying the registered default + adapter;
+   plus section-level helpers (read/write/delete a whole `installedpackages/pfblockerng*`
+   section) for the bulk www/ + wipe sites later phases need. No call site is changed in THIS
+   phase.
+3. Tests in tests/php/: (a) ROUND-TRIP identity — for every registered field, write(read(v))==v
+   over its full stored vocabulary incl. ''/unset/legacy; (b) DEFAULT — read of an absent key
+   returns the registered default; (c) INVENTORY COMPLETENESS — every pfblockerng* key grepped
+   from src/ is present in the registry or in the explicit out-of-scope list (fail if a key is
+   neither). Mirror CfgAdaptersTest style; BDD where non-trivial.
+4. Write the gateway policy into CLAUDE.md (a subsection under the ADR-28 config rule): all
+   reads/writes of registered keys go through PfbConfig; the registry owns defaults/adapters/
+   migrations/since-version; stored format stays frozen.
+
+CONSTRAINTS
+- Do NOT change pfb_global(), the www/ pages, install.inc, or any existing call site — infra only.
+- Do NOT change any stored config.xml value or vocabulary (ADR-28 §2.2 freeze).
+- PHP: tabs; uppercase TRUE/FALSE/NULL; no die/exit; keep PFBL-01 + ADR-28 sniffs green.
+- Registry keys are the EXACT existing config.xml keys — no renames.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the new registry/round-trip/inventory tests
+- vendor/bin/phpstan analyse    -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  -> clean
+- php -l on pfblockerng_extra.inc
+- python -m pytest              -> green (unaffected)
+- diff-read: pfblockerng_extra.inc additions only; no call-site diffs elsewhere
+
+EXPECTED RESULT
+PfbConfig + field registry + section helpers exist and are fully tested, but nothing in prod
+calls them yet. CLAUDE.md documents the policy.
+
+COMMIT (single)
+    pfblockerng: add config gateway and field registry (ADR-29 P1)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/01_Results.txt
+Record: the gateway API surface (method names/signatures), the registry shape + the exact key
+list it covers + the out-of-scope/foreign keys, every field's default + adapter, which fields
+are plain-string vs enum-adapted, the test names + counts, and the go-ahead for Phase 2.

@@ -1,0 +1,220 @@
+ADR-53 Phase 6 -- v6suppression: config + UI + update-flow wiring
+====================================================================
+
+STATUS: Done. v6suppression now exists end-to-end: registered config key, IP-page
+UI section, pfbsuppression_v6.txt file, and the alias-build loop's direct-PHP
+invocation of Phase 5's pfb_suppress_file_v6() engine for `_v6` member files --
+the same UX and gating shape as v4, mirrored (not shared) per the ADR's
+per-family split. Red->green proven for all three layers named in the phase
+prompt (validator, config round-trip, wiring).
+
+Key registered
+--------------
+`v6suppression` in pfb_cfg_registry() (pfblockerng_extra.inc), right after
+v4suppression's entry:
+    'v6suppression' => [
+        'section'       => $ip,   // installedpackages/pfblockerngipsettings/config/0
+        'default'       => '',
+        'read_adapter'  => NULL,
+        'write_adapter' => NULL,
+        'since'         => '4.0.0',
+    ],
+Plain blob, same base64/newline shape as v4suppression -- but `since` = '4.0.0'
+(current dev version), NOT v4suppression's legacy '1.0.0': this is a genuinely
+NEW key with no pre-registry era to inherit from, unlike v4's migration-era blob.
+Sniff `$registeredPaths` (tests/phpcs/PfBlockerNG/Sniffs/Config/
+RequireConfigGatewaySniff.php) gained the matching path.
+
+supptxt_v6 path var
+--------------------
+`$pfb['supptxt_v6']` = "{$pfb['dbdir']}/pfbsuppression_v6.txt", defined beside
+`$pfb['supptxt']` at pfblockerng.inc:95 (top-of-file `$pfb` array build).
+pfb_create_suppression_file() (pfblockerng.inc) now decodes+writes BOTH files:
+v4suppression -> supptxt (unchanged), v6suppression -> supptxt_v6 (new,
+identical decode/write/unlink-when-empty shape). pfb_clear_contents() (the
+package's cleanup routine) also unlinks supptxt_v6 alongside supptxt.
+
+UI section
+----------
+New collapsible Form_Section on pfblockerng_ip.php, immediately after the
+existing "IPv4 Suppression" section:
+  - Section id: `IPv6_Suppression_customlist` (mirrors `IPv4_Suppression_customlist`)
+  - Title: "IPv6 Suppression"
+  - Textarea field name: `v6suppression` (same widget shape/attrs as v4's:
+    columns=90, rows=15, wrap=off, background styling)
+  - Help text: masks "/32 through /128"; the alerts-"+"-icon sentence from the
+    v4 help text was deliberately OMITTED for v6 (that flow isn't wired for v6
+    yet -- Phase 8's job; stating it now would be false).
+  - The shared "Suppression" toggle's help text (governs BOTH families, no new
+    checkbox per the phase constraints) gained the v6 range: "For IPv4 lists
+    (/8 through /32) and IPv6 lists (/32 through /128)." (was "Only for IPv4
+    lists...").
+  - $pconfig['v6suppression'] read (base64_decode, mirrors v4's line exactly)
+    + POST validate (family='ipv6' per line, one $input_errors push max) + POST
+    save (base64_encode) added at the same call sites as v4's.
+  - PHPStan note: the v6 validation loop skips the vestigial `!empty($array)`
+    wrapper v4's block has (explode() never returns an empty array, so that
+    check is always true) -- avoids replicating the pre-existing
+    empty.variable finding already baselined for v4suppression at the
+    identical call shape (phpstan-baseline.neon:917), without touching v4's
+    baselined line.
+
+Wiring gates (alias-build loop, pfblockerng.inc ~16700 region)
+-----------------------------------------------------------------
+Added immediately after the existing v4 suppression block (`$vtype == '_v4'`),
+before `$alias_ips .= file_get_contents(...)` -- the v4 block itself is
+BYTE-IDENTICAL, untouched (confirmed via diff read):
+
+  - Header (print-once): `if ($pfbrunonce && $pfb['supp']=='on' && $vtype=='_v6'
+    && $pfb['supp_update'])` -- writes a "Suppression Stats (v6)" table header
+    directly to $pfb['log'] (no exec/shell -- ADR-53 SS2.1 "direct PHP call, no
+    shell round-trip"). Reuses the SAME $pfbrunonce flag v4 gates its own header
+    with: it resets TRUE at the top of EVERY vtype pass (the existing
+    "$pfbrunonce = TRUE;" above the alias loop, unconditional on vtype), so it
+    is still fresh and available during the '_v6' pass, untouched by the v4
+    branch's own consumption of it during the '_v4' pass. This directly
+    "respects the suppressheader print-once behaviour" the phase prompt asked
+    for, with no new flag variable.
+  - Body: `if ($pfb['supp']=='on' && $vtype=='_v6' && $pfb['supp_update'] &&
+    $pfbadv && in_array($alias, $final_alias_old) && is_readable(supptxt_v6) &&
+    filesize(supptxt_v6) > 0)` -- the same gate shape as v4 (suppression
+    enabled, this pass, update-on-change toggle, deny-folder alias
+    ($pfbadv), feed-changed ($final_alias_old membership)) PLUS an explicit
+    "is v6suppression actually configured" check (is_readable + filesize>0) --
+    the caller-level opt-out gate Phase 5's handoff explicitly asked Phase 6 to
+    add (pfb_suppress_file_v6() itself has no such gate; it fails-safe FALSE on
+    ANY missing/unreadable input, which is not the same as "nothing to do").
+    On this gate: pre-count the member file, call pfb_suppress_file_v6()
+    directly (no exec), post-count on success and append one
+    "%-20s %-10s %-10s\n" stats row (List/Pre/Suppress -- no Master column,
+    since dedup/masterfile bookkeeping is v4-only per SS1.2/ADR text); on
+    failure, pfb_logger() the failure (keep-previous is pfb_suppress_file_v6's
+    own contract -- it never touches the target file on a fail-safe path).
+  - No masterfile/dedup resync for v6 anywhere (deliberately absent, per SS1.2).
+
+Tier A / Tier B
+---------------
+- Tier A: added "IPv6 Suppression" to the ip page's PAGE_TABLE marker tuple
+  (tests/smoke/ui/test_render_smoke.py) for sweep continuity, PLUS a dedicated
+  stricter test `test_ip_page_renders_v6_suppression_section` (GETs the page,
+  asserts the section title, the `name="v6suppression"` textarea, AND that the
+  pre-existing "IPv4 Suppression" sibling still renders) -- the PAGE_TABLE
+  tuple alone is an `any()` match (see render_oracle.evaluate_render), so the
+  dedicated test is the real proof this specific section renders, following the
+  same pattern as the existing `test_ip_page_renders_aggregate_select`.
+- Tier B (REQUIRED -- new field, multi-step save->persist flow):
+  `test_ip_v6suppression_mask_validation_base64_and_reject_unchanged`
+  (tests/smoke/ui/test_functional.py), mirroring the v4 sibling test exactly:
+  valid /128 host mask stores base64 verbatim; valid /64 containing block also
+  stores (any in-range mask, not just /128); empty clears to ''; /31 (below the
+  /32 floor) aborts the WHOLE save -> config unchanged.
+- Collection proven (no live box touched, per the orchestrator's constraint):
+    .venv/bin/python -m pytest tests/smoke/ui --collect-only -q --override-ini="addopts="
+      -> 186 tests collected, 0 errors (was 184 pre-phase; +2 = the two new tests)
+    -m ui_render --collect-only -> 80/186 selected (was 79/184; +1, the new Tier A test)
+    -m ui_e2e    --collect-only -> 107/186 selected (the new Tier B test is in this set)
+  Live CE+Plus runs ride Phase 9's fan-out, per the orchestrator's UI-tier note.
+
+Tests FIRST (red->green) -- all three layers named in the phase prompt
+--------------------------------------------------------------------------
+1. Validator flip (tests/php/SuppressionValidatorTest.php): replaced
+   testIpv6NotYetSupported() (P4's pinned tripwire) with 10 new v6 tests
+   (valid /64, /128, /32 floor; /31 and /129 rejected naming the range; garbage;
+   missing mask; comment/blank tolerance). Temporarily reverted
+   pfb_validate_suppression_line()'s v6 branch to the pre-Phase-6
+   "not yet supported" stub and re-ran: 6 FAILURES, each for the exact
+   documented reason (old stub message, or missing '/32'/'128' in the error
+   text). Restored the real implementation: 21/21 green.
+2. Config round-trip (tests/php/CfgGatewayTest.php): added
+   testV6SuppressionAbsentKeyReturnsDefaultEmptyString +
+   testV6SuppressionRoundTrips (mirrors the v4 pair exactly) + added
+   'v6suppression' to the registered-inventory list. Temporarily removed the
+   v6suppression registry entry and re-ran the filter: 2 ERRORS
+   (InvalidArgumentException: key not in the field registry -- the exact
+   documented reason). Restored the entry: 4/4 green (the 2 CfgGatewayTest
+   cases + 2 CreateSuppressionFileTest cases matched by the same filter
+   substring, unaffected by the registry -- confirming they exercise a
+   different layer).
+3. Wiring (tests/php/CreateSuppressionFileTest.php, NEW FILE -- grep of
+   tests/php/ found pfb_create_suppression_file() previously uncovered by
+   PHPUnit, so this phase covers BOTH families per the phase prompt's "cover
+   BOTH now" instruction): 5 tests -- v4 written/unlinked (regression oracle,
+   pre-existing behaviour), v6 written/unlinked (the NEW proof), and both
+   families written independently in one call. Temporarily reverted
+   pfb_create_suppression_file() to the pre-Phase-6 (v4-only) 2-branch shape
+   and re-ran: 3 FAILURES, each for the exact documented reason (pfbsuppression_v6.txt
+   never written/unlinked). Restored the v6 branch: 5/5 green.
+
+Gate results
+------------
+- vendor/bin/phpunit -> 1914 tests, 15788 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). Test count is P5's
+  1898 + 9 net new SuppressionValidatorTest (10 added, 1 removed) + 2 new
+  CfgGatewayTest + 5 new CreateSuppressionFileTest = 1914, confirmed by direct
+  arithmetic.
+- php -l on every touched/new PHP file -> clean (pre-existing unrelated
+  E_DEPRECATED notices in pfblockerng.inc, untouched by this phase).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output.
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files) --
+  required one design choice to get there (the vestigial-!empty()-removal
+  above); documented, not baselined.
+- .venv/bin/python -m pytest -q -> 2057 passed, 4 skipped. No Python file
+  touched this phase (only tests/smoke/ui/*.py, which the default run
+  `--ignore`s -- confirmed via pyproject.toml addopts). The +5 vs P5's 2052 is
+  the SAME unexplained environment/collection drift P4 (+0) and P5 (+10 vs
+  P4's 2042->2052, "unrelated to this phase's change") already flagged --
+  recorded honestly, not silently matched to a prior number.
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "160 files already formatted" (+2 vs P5's 159, consistent with the same
+  untouched-Python-tree drift note -- both smoke/ui files this phase touched
+  ARE Python and already ruff-clean, formatted on write).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to P3/P4/P5's baseline (no shell touched this phase).
+- UI collection (Tier A + Tier B) -> 186 tests collected (was 184), 0 errors;
+  80/186 ui_render (was 79/184), 107/186 ui_e2e -- see "Tier A / Tier B" above.
+
+Self-review (per the orchestrator's REVIEW step)
+-----------------------------------------------------
+- Every ACTION-PLAN item (1-7) done: tests-first with red evidence for all
+  three named layers; key registered + sniff path; pfb_create_suppression_file()
+  writes/unlinks supptxt_v6; UI section with validator+help text; wiring at the
+  suppress block under matching gates + stats logging + suppressheader
+  print-once respected; Tier A+B written and proven to collect; full gates
+  green.
+- _v4 call path byte-identical: confirmed by direct diff read of
+  pfblockerng.inc -- every pre-existing v4 line in the alias-build block is
+  unchanged; the new v6 block is purely additive, inserted after the v4 body
+  and before the shared `$alias_ips .= file_get_contents(...)` line.
+- v6 wiring under the same gates as v4: verified line-by-line above (supp
+  toggle, supp_update, $pfbadv, feed-changed) plus the v6-specific
+  "is configured" gate Phase 5's handoff called for.
+- Help texts neighbour-styled: v6 textarea help mirrors v4's structure/tone
+  (mask range statement, entry-per-line instructions, comment-suffix example,
+  Force-Reload note) minus the not-yet-true alerts-icon sentence; the shared
+  Suppression-toggle help gained exactly the one v6 clause the phase prompt
+  asked for.
+- Scope clean: `git diff --stat` touches exactly the files the phase prompt
+  named (pfblockerng.inc, pfblockerng_extra.inc, pfblockerng_ip.php, the sniff,
+  2 PHP test files + 1 new PHP test file, 2 UI test files) -- no killstates
+  (Phase 7), no Alerts "+"/widget (Phase 8), no ADR.md edit, no other ADR's
+  files touched. pfblockerng.widget.php's "Suppression" stats column (a
+  v4-only count display, distinct from the Alerts "+" live-punch mechanism)
+  was deliberately left untouched -- it is documentary display infrastructure
+  the ADR routes through Phase 8's "widget" rework, not this phase's config/UI/
+  update-flow wiring; flagging this explicitly rather than silently expanding
+  scope.
+
+Go-ahead for Phase 7 (killstates)
+-------------------------------------
+Phase 6 is complete and green (PHPUnit, PHPCS, PHPStan, pytest, ruff, shellspec,
+UI-test collection). v6suppression is a first-class registered key with a
+working UI, an on-disk file (pfbsuppression_v6.txt / $pfb['supptxt_v6']), and a
+live wiring path into the alias-build loop -- the same UX and gating shape as
+v4, per ADR SS2.1's "v6 wiring" row. Phase 7 (killstates prefix-aware exclusion)
+can now read BOTH v4suppression and v6suppression entries when building its
+exclusion set (`pfb_ip_suppressed(string $ip, array $entries): bool`, replacing
+the exact-IP hashmap + subnetv4_expand block at pfblockerng.inc ~10151-10163,
+now shifted by this phase's earlier edits -- locate by name/context, not the
+stale line numbers in the ADR text). No masterfile/killstates code was touched
+this phase.

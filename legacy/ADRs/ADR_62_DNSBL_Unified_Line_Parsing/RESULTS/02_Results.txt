@@ -1,0 +1,360 @@
+ADR-62 Phase 2 -- De-tangle prep: IP collector + pure predicates -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 0 at session start (branch
+already up to date with origin/adr/62-dnsbl-unified-line-parsing, itself 2 commits ahead
+of devel @753f2e7b: e97b80d0 Phase 1 tests + 91f0d29e Phase 1 gate record). No rebase
+needed.
+
+REALITY-OVERRIDE FINDINGS (prompt claims vs live tree)
+--------------------------------------------------------
+The orchestrator brief's PLANNER-VERIFIED site lines (ABP @16427/16435, CSV pon
+@16578/16588, host @16737/16749) were grep-confirmed EXACT against the live tree before
+any edit -- no drift, no blocker. All three sites matched the brief's asymmetry notes
+(a)-(e) verbatim on read (confirmed by direct source inspection, not assumed):
+  a. v4 sanitizes-then-validates; v6 validates-raw-then-appends-raw -- confirmed at all
+     3 sites (16428-16429/16435 ABP; 16580-16581/16590 CSV; 16739-16740/16751 host).
+  b. ABP site: dnsbl_ip guard wraps the WHOLE extract+collect block (inc:16424); the
+     $abp_ip!=='' continue (inc:16442) fires for any non-empty extract regardless of
+     validation outcome -- confirmed, kept at call site.
+  c. CSV pon: family check on $csvline[0], sanitized/validated/appended value is $line
+     (=$csvline[2]) -- confirmed distinct guard vs candidate; no continue (switch break)
+     -- confirmed.
+  d. host site: dnsbl_ip check nested INSIDE each family branch, continue fires
+     regardless of dnsbl_ip state -- confirmed; collapsed the original TWO separate
+     is_ipaddrv4/is_ipaddrv6 blocks into one `is_ipaddrv4($line) || is_ipaddrv6($line)`
+     guard (provably equivalent -- the two predicates are mutually exclusive and both
+     original blocks had identical dnsbl_ip-guard + continue shape; a bare deviation
+     noted below).
+  e. Every success path sets $pfb['updateip']=TRUE and $ipcount++ -- confirmed; kept at
+     call sites via the helper's TRUE return.
+No contradiction found between the brief and the live tree at any of the 3 sites, the
+helper cluster (~6360-6660), or pfb_unbound.py's parse_abp (3905)/_dnsbl_parse_abp_regex
+(3874). No STOP triggered.
+
+WHAT CHANGED
+--------------
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- added 3 pure helpers
+  (pfb_dnsbl_collect_feed_ip, pfb_dnsbl_is_skippable_control_line,
+  pfb_dnsbl_is_abp_rule_line) after pfb_dnsbl_hash_line_classify (~6657-6721); rewired
+  the 3 IP-collection sites (ABP-anchored @~16491, CSV csv:pon @~16634, host-format
+  @~16782) to call pfb_dnsbl_collect_feed_ip() instead of duplicating the
+  is_ipaddrvN->sanitize->validate->append shape; ZERO capture/routing/skip-site changes
+  (the $easylist header sniff, the ADR-21 '||'/'@@||' verbatim capture, the plain-path
+  '!'/'//' skip, and the '#'-classifier are all byte-identical, untouched).
+- tests/php/Adr62DnsblCollectFeedIpTest.php -- new: 8 tests pinning the v4-sanitizes /
+  v6-raw asymmetry, the guard-vs-candidate split (csv:pon shape), the $custom pass-
+  through, family-mismatch/failure paths, and cross-call array accumulation.
+- tests/php/Adr62DnsblIsSkippableControlLineTest.php -- new: 15 tests (12-row provider +
+  3 dedicated) covering every ADR §2/§brief hostile-input row plus the two "probe"
+  findings (whitespace-only untrimmed, tab-led untrimmed) and a fail-on-mutation oracle
+  for the bracketed-IPv6 carve-out.
+- tests/php/Adr62DnsblIsAbpRuleLineTest.php -- new: 27 tests (21-row provider + 6
+  dedicated) covering every ADR §2/§brief hostile-input row, both PHP-vs-Python "probe"
+  findings, the D1 bare-domain-stays-FALSE contract, and a fail-on-mutation oracle for
+  the regex closing-slash rule.
+
+Commit hash: 1949efc790132c1fec5647a0502e3ad71b187299 (pre-push amend to backfill this
+field into the same single commit -- same accepted pattern as Phase 1's handoff).
+
+HELPER SIGNATURES
+-------------------
+1. function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
+   bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool
+   -- is_ipaddrv4($guard_value): sanitize_ipaddr($candidate_value,$custom,'Disabled')
+      then validate_ipv4(parsed); on pass, append PARSED to $domain_data_ip, return TRUE.
+   -- is_ipaddrv6($guard_value): validate_ipv6($candidate_value) RAW (no sanitize); on
+      pass, append RAW $candidate_value to $domain_data_ip6, return TRUE.
+   -- neither family, or validation fails: return FALSE, arrays untouched.
+   UPDATEIP-FLIP DECISION: rides the RETURN VALUE, not a $pfb-writing side effect inside
+   the helper. The helper never touches $pfb['updateip'] or $ipcount -- every call site
+   still does `if (pfb_dnsbl_collect_feed_ip(...)) { $pfb['updateip']=TRUE; $ipcount++; }`
+   itself. Chosen because the 3 sites' surrounding control flow (continue placement,
+   dnsbl_ip-guard placement) genuinely differs (asymmetries b/c/d) -- a helper that also
+   owned the $pfb write would need to know about that per-site continue/guard shape,
+   defeating the extraction. Returning a bool keeps the helper decoupled from $pfb
+   entirely (pure w.r.t. globals beyond its declared array-by-ref params).
+
+2. function pfb_dnsbl_is_skippable_control_line(string $line): bool
+   -- TRUE iff $line === '' (exact match, NOT empty()/whitespace-trimming -- mirrors the
+      pfb_is_blank_or_comment_line contract: caller trims first), OR starts '!'/'//', OR
+      is a '[...]'  wrapper that pfb_dnsbl_unbracket_ip6() does NOT unwrap (i.e. NOT a
+      valid bracketed IPv6 literal). Deliberately excludes '#' (hash-classifier's job).
+
+3. function pfb_dnsbl_is_abp_rule_line(string $line): bool
+   -- TRUE iff starts '||' or '@@' (blanket prefix, covers @@||/@@/re/@@-anything per
+      ADR §2 Decision 2's literal wording), OR contains any of '##'/'#@#'/'#?#'/'#%#'/
+      '#$#' ANYWHERE (str_contains, mirroring parse_abp's `X in s` substring test, not a
+      prefix test), OR is a bare '/regex/' shape (mirrors _dnsbl_parse_abp_regex's
+      closing-slash rule: ends '/' with length>1, or has a '/$' marker at index>0 for the
+      $options-tail form). Bare domain lines are FALSE by design (D1, Phase 5's split).
+
+NOT WIRED THIS PHASE (per WIRING DISCIPLINE)
+-----------------------------------------------
+Investigated both predicates against every existing skip/capture site in the DNSBL loop
+and found NO site where wiring is "provably exact-equivalent":
+- The ABP-branch control skip (inc:~16513, `$line===''||starts('!')||starts('[')`) sits
+  AFTER the IP-extraction attempt at a point where a bracketed-IPv6 literal was NEVER
+  extracted as an IP by pfb_dnsbl_abp_extract_ip() (it only recognises `||host^` and
+  `<ip> <ip>` hosts shapes, not a bare `[...]` wrapper) -- swapping in
+  pfb_dnsbl_is_skippable_control_line() here would newly EXEMPT a bracketed-IPv6 line
+  from this skip (since the new predicate's carve-out returns FALSE for it), changing
+  behaviour (today it is silently skipped/dropped here; Phase 4/5 territory). Left
+  untouched.
+- The plain-path '!'/'//' skip (inc:~16561, `starts('!')||starts('//')`) does NOT
+  already exclude blank or '[...]' lines the way pfb_dnsbl_is_skippable_control_line()
+  would additionally catch -- a blank line here already falls through harmlessly to the
+  existing `if (empty($line)) continue;` a few lines later (behaviourally a no-op either
+  way), but a '[...]'-non-IPv6 line here currently falls through to domain validation and
+  the #1004 parse-error log (delta D3, explicitly a Phase 4 change) -- NOT wiring the
+  predicate here preserves that. Confirmed exactly the brief's own worked example
+  ("if that is not clean, leave the site untouched"). Left untouched.
+- pfb_dnsbl_is_abp_rule_line() is strictly BROADER than every existing single check
+  (ADR-21's `starts('||')||starts('@@||')` at inc:~16404; the ABP-branch's narrower
+  control skip) -- wiring it anywhere would route additional shapes (regex, element-
+  hiding) that today are NOT captured, a behaviour change reserved for Phase 4. Not
+  wired anywhere.
+Result: zero routing/capture change anywhere in the file; only the 3 IP-collection
+sites' internals changed shape (call the new helper), never which lines they accept.
+
+GATES (exact commands + pasted tails)
+----------------------------------------
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(+ 5 PRE-EXISTING "Optional parameter declared before required" deprecation notices,
+unrelated to this phase's lines)
+
+$ php -l on all 3 new test files
+No syntax errors detected in tests/php/Adr62DnsblCollectFeedIpTest.php
+No syntax errors detected in tests/php/Adr62DnsblIsSkippableControlLineTest.php
+No syntax errors detected in tests/php/Adr62DnsblIsAbpRuleLineTest.php
+
+$ vendor/bin/phpunit
+Tests: 2643, Assertions: 19360, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(2643 = Phase-1's 2593 baseline + 50 new tests (8+15+27); the 1 warning is the SAME
+pre-existing "$tlds accessed before init" notice Phase 1 already flagged, inc:7746,
+unrelated to this phase -- 0 failures/errors.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations; PFBL-01/UppercaseBooleanLiteral/RequireConfigGateway all
+green -- confirmed by running, not assumed)
+
+$ python3 -m pytest -q
+2563 passed, 4 skipped in 49.94s
+(IDENTICAL pass/skip count to Phase 1's baseline -- no Python touched this phase, the
+byte-identity corpus oracle stayed green throughout)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+208 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 88 source files
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel ; echo exit:$?
+exit:0 (clean -- no ADR phase numbers / RESULTS refs / review archaeology on added lines)
+
+$ python3 scripts/check_retired_tokens.py --diff origin/devel ; echo exit:$?
+exit:0 (clean -- no quoted-literal retirements this phase)
+
+$ python3 scripts/check_version_literals.py --diff origin/devel ; echo exit:$?
+exit:0 (clean)
+
+PHASE-1 BYTE-IDENTITY CORPUS ORACLE -- STAYED GREEN
+------------------------------------------------------
+$ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest|Adr62TldAnalysisCorpusTest'
+Tests: 6, Assertions: 102, Warnings: 1 (the same pre-existing $tlds notice).
+OK, but there were issues! (0 failures)
+
+$ python3 -m pytest tests/test_adr62_byte_identity_corpus.py -v
+19 passed in 0.03s
+
+Both oracles run AFTER the full rewire, byte-identical to Phase 1's own gate record
+(6 tests/102 assertions PHPUnit side; 19 passed pytest side) -- proves the extraction
+changed zero output.
+
+FAIL-ON-MUTATION ORACLES (executed RED, pasted; then reverted + re-confirmed GREEN)
+----------------------------------------------------------------------------------------
+1) pfb_dnsbl_is_skippable_control_line -- broke the IPv6 carve-out (bracket branch
+   collapsed to bare `return TRUE;`, dropping the pfb_dnsbl_unbracket_ip6() consult):
+   $ vendor/bin/phpunit --filter 'Adr62DnsblIsSkippableControlLineTest'
+   ...........F..F   15 / 15 (100%)
+   1) Adr62DnsblIsSkippableControlLineTest::testBracketedIpv6LiteralIsNeverSkipped
+   Failed asserting that true is false.
+   2) Adr62DnsblIsSkippableControlLineTest::testBreakingTheIpv6CarveOutTurnsBracketedLiteralSkippable
+   Failed asserting that true is false.
+   Tests: 15, Assertions: 15, Failures: 2.
+   -> reverted (cp backup back over the file); re-ran: OK (15 tests, 17 assertions);
+   `diff` against the pre-mutation backup: IDENTICAL (clean revert confirmed).
+
+2) pfb_dnsbl_is_abp_rule_line -- broke the regex closing-slash rule (the '/' branch
+   collapsed to bare `return TRUE;` on any '/'-prefix, dropping the closing-slash /
+   '$options'-marker check):
+   $ vendor/bin/phpunit --filter 'Adr62DnsblIsAbpRuleLineTest'
+   ..........F...........F.FF.   27 / 27 (100%)
+   1) testShape with data set "regex missing closing slash" ('/no-closing-slash', false)
+      Failed asserting that true is identical to false.
+   2) testCStyleCommentIsNotTreatedAsARegexRule -- Failed asserting that true is false.
+   3) testBareRegexSlashAloneIsNotCapturable -- Failed asserting that true is false.
+   4) testBreakingTheClosingSlashRuleTurnsAMalformedRegexCapturable -- Failed asserting
+      that true is false.
+   Tests: 27, Assertions: 28, Failures: 4.
+   -> reverted; re-ran: OK (27 tests, 29 assertions); diff IDENTICAL.
+
+3) pfb_dnsbl_collect_feed_ip -- broke the v6-never-sanitizes asymmetry (routed the v6
+   append through sanitize_ipaddr(), simulating an accidental "unify the branches"
+   refactor):
+   $ vendor/bin/phpunit --filter 'Adr62DnsblCollectFeedIpTest'
+   .F......   8 / 8 (100%)
+   1) testV6CandidateAppendedRawNeverSanitized
+   Failed asserting that two arrays are identical.
+   --- Expected      +++ Actual
+    Array &0 [
+   -    0 => '0::1',
+   +    0 => '::1',
+    ]
+   Tests: 8, Assertions: 24, Failures: 1.
+   -> reverted; re-ran: OK (8 tests, 25 assertions); diff IDENTICAL.
+
+All 3 mutation targets demonstrably fail-on-mutation; all 3 reverts verified BYTE-
+IDENTICAL against a pre-mutation backup (not just "tests pass again" -- the source file
+itself was diffed clean).
+
+PREDICATE <-> parse_abp AGREEMENT TABLE (every hostile row; PHP + Python, EXECUTED)
+---------------------------------------------------------------------------------------
+Python side run via: `python3 -c "...sys.path stub injection...pu.parse_abp(r)..."`
+against the live pfb_unbound.py this session (not hand-traced, not recalled).
+
+pfb_dnsbl_is_skippable_control_line (parse_abp() is not consulted here by design --
+this predicate never routes to Python, it is a plain-path candidate skip; N/A column
+where irrelevant):
+| line              | PHP predicate | note |
+|-------------------|---------------|------|
+| ''                | TRUE          | exact blank match |
+| '   '             | FALSE         | PROBE: caller-trims-first contract (see below) |
+| '!comment'        | TRUE          | |
+| '! Title: X'      | TRUE          | |
+| '//comment'       | TRUE          | |
+| '[Adblock Plus 2.0]' | TRUE       | |
+| '[2604:2dc0::]'   | FALSE         | bracketed-IPv6 carve-out (Semantics #3) |
+| '[2001:db8::1]'   | FALSE         | same |
+| '[not-an-ip]'     | TRUE          | |
+| '[]'              | TRUE          | PROBE: is_ipaddrv6('')=FALSE (confirmed by
+|                   |               | executed php -r probe) -> not the carve-out |
+| 'domain.com'      | FALSE         | |
+| '#comment'         | FALSE        | classifier's job, deliberately excluded |
+| '||x^'            | FALSE         | |
+| '/re/'            | FALSE         | |
+PROBE findings (both executed, not assumed):
+- Whitespace-only: `$line = trim($line, " \t\n\r\0\x0B\xC2\xA0");` runs at inc:~16389,
+  BEFORE any capture-guard call site in the download loop -- confirmed by reading the
+  loop's own source this phase. A whitespace-only line never reaches any call site
+  untrimmed in production. The helper itself, called directly with '   ' (bypassing the
+  loop), returns FALSE -- it follows pfb_is_blank_or_comment_line's own documented
+  contract ("callers MUST trim() first"), not a bug.
+- Tab-led "\t||x^": same finding -- the loop trims before any capture site, so this
+  never reaches a call site untrimmed in production; called directly it returns FALSE
+  for the same caller-trims-first reason.
+
+pfb_dnsbl_is_abp_rule_line vs parse_abp() / _dnsbl_parse_abp_regex() (EXECUTED,
+tests/php/Adr62DnsblIsAbpRuleLineTest.php's data mirrored 1:1 against a live Python run):
+| line                          | PHP predicate | parse_abp() (executed)            | agree? |
+|-------------------------------|---------------|-----------------------------------|--------|
+| '||domain^'                   | TRUE          | None (single-label 'domain' fails normalise -- unrelated to capture) | YES (capture != final accept, by design) |
+| '||1.2.3.4^'                  | TRUE          | None (IP-anchored, Python's own no-leak skip) | YES |
+| '@@||d^'                      | TRUE          | None (single-label 'd' fails normalise) | YES |
+| '@@/re/'                      | TRUE          | Rule(allow,regex,'re')            | YES |
+| '@@plain'                     | TRUE          | None ('@' invalid in domain shape)| YES (structural capture per Decision 2's blanket '@@' prefix) |
+| '@@' (bare)                   | TRUE          | None (empty host after strip)     | YES -- PROBE, see below |
+| '||' (bare)                   | TRUE          | None (empty host after strip)     | YES -- PROBE, see below |
+| '/re/'                        | TRUE          | Rule(block,regex,'re')            | YES |
+| '/re/$important'              | TRUE          | Rule(important=True)              | YES |
+| '/re/$badfilter'              | TRUE          | Rule(badfilter=True)              | YES |
+| '/no-closing-slash'           | FALSE         | None (regex_shape None too)       | YES |
+| 'example.com##.ad'            | TRUE          | None (element-hiding skip)        | YES |
+| '##.ad'                       | TRUE          | None                               | YES |
+| 'a#@#b'                       | TRUE          | None                               | YES |
+| 'a#?#b'                       | TRUE          | None                               | YES |
+| 'a#%#b'                       | TRUE          | None                               | YES |
+| 'a#$#b'                       | TRUE          | None                               | YES |
+| 'example.com#plain-comment'   | FALSE         | None ('#' invalid in domain shape)| YES |
+| 'domain.com'                  | FALSE         | Rule(block,domain,wildcard)       | INTENTIONAL DISAGREEMENT (D1, bare-line-stays-plain, per brief's explicit NOTE) |
+| 'xn--nxasmq6b.com'            | FALSE         | Rule(block,domain,wildcard)       | INTENTIONAL DISAGREEMENT (same D1 reason) |
+| '[Adblock'                    | FALSE         | None                               | YES |
+| '|single'                     | FALSE         | None                               | YES |
+| tab-led '\t||x^'              | FALSE (untrimmed) | N/A (Python strips internally, s=line.strip() at top of parse_abp -- so Python WOULD handle it if reached; but production never feeds it untrimmed, per the PHP-loop-trims-first finding above) | consistent, no disagreement in production |
+| '//comment'                   | FALSE         | None; _dnsbl_parse_abp_regex('//comment') ALSO None (rejects: no closing '/' after the opening one, no '/$' marker) | YES -- explicit PROBE requested by brief: NO PHP<->Python disagreement found |
+
+PROBE findings ('@@' / '||' bare, executed):
+Both bare anchors capture TRUE (structural, per ADR §2 Decision 2's literal "starts
+'||' or '@@'" wording) even though parse_abp() itself returns None for them (empty
+host after anchor-strip fails _normalise_verdict downstream). This is NOT a bug: the
+predicate answers "should Python decide this line", never "will Python accept it" --
+parse_abp is still the one deciding (and correctly rejecting) the malformed anchor.
+Confirmed via an actual executed `pu.parse_abp('@@')` / `pu.parse_abp('||')` call this
+session (both -> None), not assumed.
+
+CONFIRMATION: PHASE-1 CORPUS STAYED GREEN
+--------------------------------------------
+See GATES above ("PHASE-1 BYTE-IDENTITY CORPUS ORACLE") -- both oracles re-run after the
+full rewire, identical pass counts to Phase 1's own gate record, 0 failures.
+
+DEVIATIONS
+------------
+1. Site (d) (host-format IP collection): the brief's asymmetry note (d) described the
+   ORIGINAL code as two separate `is_ipaddrv4($line){...continue;}` /
+   `is_ipaddrv6($line){...continue;}` blocks and said "that flow stays at the call
+   site" (meaning the continue-outside-dnsbl_ip-guard SHAPE, not necessarily the
+   literal two-block syntax). I collapsed them into one
+   `if (is_ipaddrv4($line) || is_ipaddrv6($line))` guard wrapping a single
+   pfb_dnsbl_collect_feed_ip() call, since is_ipaddrv4/is_ipaddrv6 are mutually
+   exclusive and both original blocks had byte-identical dnsbl_ip-guard + continue
+   shape -- provably behaviour-equivalent, and it collapses 23 lines to 8. Verified via
+   the full corpus oracle staying green (both PHPUnit and pytest surfaces) and via
+   direct source re-read confirming the collapsed condition preserves "continue fires
+   on IP-shape match regardless of dnsbl_ip" exactly. Flagging this as a deviation from
+   the brief's literal wording (not a behaviour change) so the gate can independently
+   verify the equivalence claim rather than trust it.
+2. All other items: none. Followed the brief's WIRING DISCIPLINE exactly -- investigated
+   and rejected wiring both predicates at every plausible existing site (documented
+   above under "NOT WIRED THIS PHASE"), never wired anywhere.
+
+CARRY-FORWARD for Phase 3
+----------------------------
+1. Two intentional PHP<->Python predicate/parser disagreements exist and are BY DESIGN,
+   not bugs to fix: pfb_dnsbl_is_abp_rule_line('domain.com'/'xn--...') is FALSE while
+   parse_abp() would accept the same string if it ever reached it -- this is exactly
+   delta D1 (bare-domain-stays-plain), Phase 5's split point. Do not "fix" this
+   agreement gap; it is the intended capture/parse boundary.
+2. Two structural-capture-vs-final-accept gaps found and confirmed harmless: bare '@@'
+   and bare '||' both capture TRUE but parse_abp() rejects them (empty host). Not a
+   defect -- Phase 3/4's routing wiring should expect parse_abp to legitimately return
+   None for some captured lines and just skip silently (already parse_abp's contract).
+3. The 3 new helpers are NOT wired into the loop anywhere (per WIRING DISCIPLINE) --
+   Phase 3 works purely in pfb_unbound.py/build() (extending Python's routing); Phase 4
+   is where pfb_dnsbl_is_abp_rule_line()/pfb_dnsbl_is_skippable_control_line() actually
+   replace/broaden the PHP-side capture and universal skip. Both are available and
+   fully tested now.
+4. The NOT-WIRED site investigation (above) is a ready-made "why not here" answer for
+   any Phase-4 reviewer question about why this phase didn't already touch inc:~16404/
+   ~16513/~16561 -- reuse it rather than re-deriving.
+5. pfb_dnsbl_collect_feed_ip()'s updateip-flip-rides-the-return-value design means
+   Phase 4/5, if they add MORE IP-collection call shapes, should follow the same
+   pattern (call site owns $pfb['updateip']/$ipcount/continue; helper stays pure).
+6. Corpus (tests/fixtures/dnsbl_corpus/) untouched this phase -- still Phase 1's asset,
+   regenerate only via the real functions per its README, as Phase 1's carry-forward
+   #5 already states.
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean (see GATES
+above) -- no quoted-literal retirements, no ADR-phase-number/RESULTS-ref/review-
+archaeology comments, no version-literal introductions on the touched src/ file.

@@ -1,0 +1,88 @@
+-pa-r--	LAN__NETWORK
+	Addresses:   1
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 3                  ]
+	Evaluations: [ NoMatch: 68                 Match: 1501               ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 11513              Bytes: 4307483            ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+-pa----	WAN__NETWORK
+	Addresses:   0
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 0                  ]
+	Evaluations: [ NoMatch: 0                  Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+-pa-r--	bogons
+	Addresses:   10
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 1                  ]
+	Evaluations: [ NoMatch: 12484              Match: 68                 ]
+	In/Block:    [ Packets: 68                 Bytes: 25144              ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+-pa-r--	bogonsv6
+	Addresses:   0
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 1                  ]
+	Evaluations: [ NoMatch: 12484              Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+-pa-r--	pfB_PRI1_v4
+	Addresses:   16733
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 1                  ]
+	Evaluations: [ NoMatch: 1569               Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+--a-r--	snort2c
+	Addresses:   0
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 2                  ]
+	Evaluations: [ NoMatch: 31502              Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+-pa-r--	sshguard
+	Addresses:   0
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 2                  ]
+	Evaluations: [ NoMatch: 29                 Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]
+--a-r--	virusprot
+	Addresses:   0
+	Cleared:     Sun Aug 23 00:51:40 2026
+	References:  [ Anchors: 0                  Rules: 1                  ]
+	Evaluations: [ NoMatch: 15211              Match: 0                  ]
+	In/Block:    [ Packets: 0                  Bytes: 0                  ]
+	In/Pass:     [ Packets: 0                  Bytes: 0                  ]
+	In/XPass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/Block:   [ Packets: 0                  Bytes: 0                  ]
+	Out/Pass:    [ Packets: 0                  Bytes: 0                  ]
+	Out/XPass:   [ Packets: 0                  Bytes: 0                  ]

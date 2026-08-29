@@ -1,0 +1,88 @@
+================================================================================
+PHASE 6 PROMPT — UI unlock (dnsbl bindings in the ADR-55 pages) + legacy bypass handover
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS6 Phase 6)
+================================================================================
+
+RE-SCOPED 2026-07-04: the policy pages shipped with ADR-55 (pfblockerng_group_policy.php +
+pfblockerng_group_policy_edit.php, from that ADR's UI/ references). This phase UNLOCKS their
+dnsbl half — now that Phases 4-5 enforce it — and RETIRES the legacy bypass.
+
+ROLE
+Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl. PRE-FLIGHT: read
+RESULTS/05_Results.txt (decision layer landed + scheme). Missing => STOP. One commit. No
+sub-agents.
+
+WHY THIS PHASE EXISTS
+ADR-55 deliberately locked dnsbl-family bindings out of its UI and generator so no control
+ever shipped that silently did nothing (ADR-55 SS2.4). With the decision layer live, the
+lock comes off — and two enforcement paths for the same feature (legacy gpListDB + the CG
+engine) must become one.
+
+REQUIRED READING
+- ADR-55 ADR.md SS2.2/SS2.4 (binding vocabulary + the lock) and its Phase-2 validator +
+  Phase-3 pages as landed (read the actual src/ files, not the UI/ references).
+- pfblockerng.inc: the legacy GP ini write ([GP_Bypass_List], ~:6980-6995 at original
+  authoring) + pfb_gp/pfb_gp_bypass_list registry entries (pfblockerng_extra.inc) + the
+  DNSBL-page pointer text ADR-55 left.
+- pfb_unbound.py: gpListDB load (~:1347-1357) + the python_control addbypass/removebypass
+  path (~:3000-3090) — the transient-bypass contract you must preserve observably.
+- docs/misc/config-gateway.md — registered-key retirement procedure (delete via PfbConfig;
+  registry entry disposition documented there).
+- CLAUDE.md — Web UI help text rules; test principles (red->green for the handover).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. UI UNLOCK in pfblockerng_group_policy_edit.php: the binding Feed-Group select now offers
+   dnsbl-family groups (family-prefixed labels as the ipv4/ipv6 ones); the override select
+   gains Block / 'Warn (log only)' / Bypass for them; the Phase-2 validator's vocabulary
+   matrix extended (dnsbl overrides valid on dnsbl groups only; IP overrides rejected there
+   — table-driven, red->green). CG allow_domains/deny_domains help text updated: now
+   enforced (drop any "stored, not yet enforced" wording). In
+   pfblockerng_category_edit.php: the 'Unbound (Policy-only)' help drops its inert note.
+2. LEGACY HANDOVER (one enforcement path):
+   - python_control addbypass/removebypass [duration]: rewire to a transient CG-equivalent
+     entry (same observable behaviour: exact-IP bypass, optional duration expiry) riding the
+     Phase-5 engine — the command interface is UNCHANGED for callers.
+   - The [GP_Bypass_List] ini section + gpListDB load path: removed AFTER the migrated
+     Legacy_Bypass CG (ADR-55 SS2.5) is confirmed equivalent (test first: same IP set
+     bypasses via rung 4 with the legacy path disabled).
+   - pfb_gp / pfb_gp_bypass_list: retired per the config-gateway registered-key procedure
+     (PfbConfig::delete at migration finalisation; registry entries updated/documented).
+   - The DNSBL-page pointer text updated (no longer "was migrated" future tense).
+3. TESTS (red->green for every behaviour change):
+   - validator vocabulary matrix (dnsbl x override tokens, cross-family rejection);
+   - handover: fixture with legacy keys -> after this phase exactly ONE enforcement path;
+     bypass IPs still bypass (assert BEFORE via legacy path on pre-change code, AFTER via
+     CG path); python_control addbypass round-trip incl. duration expiry;
+   - Tier A ui_render on both policy pages + category_edit + dnsbl page;
+   - Tier B ui_e2e (REQUIRED): dnsbl binding create -> save -> reload -> persisted; the
+     Warn/Bypass options render for a dnsbl group and NOT for an ipv4 group.
+4. Ports lockstep re-check (no new files expected — verify no plist change needed).
+5. Gates: full phpunit + pytest + linters + PHPCS; Tier A locally.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
+
+KILL-GATES
+- Exactly one enforcement path after the phase (grep: no gpListDB ini writer left).
+- python_control interface observably unchanged (round-trip test incl. duration).
+- Validator cross-family rejection table-driven and red->green proven.
+
+COMMIT (single)
+    pfblockerng: unlock dnsbl policy bindings + retire legacy bypass (ADR-25 P6)
+Push directly to adr/25-group-policy-dnsbl.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/06_Results.txt (plain .txt)
+Record: UI diffs (files + controls), validator matrix, the handover disposition of every
+legacy artifact (keys, ini section, gpListDB, python_control), test names, gate outputs,
+go-ahead for Phase 7.

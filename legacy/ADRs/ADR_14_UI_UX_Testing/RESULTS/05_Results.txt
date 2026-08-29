@@ -1,0 +1,246 @@
+ADR-14 — Phase 5 RESULTS: Workflows (reusable ui-tests.yml + PR/schedule gates)
+================================================================================
+
+Status: Implemented (workflows authored + STATICALLY validated; live CI run is
+the confirmation, which executes only in GitHub Actions). This dev box cannot run
+GitHub Actions, so every workflow was validated with a REAL YAML parser (PyYAML
+6.0.3) and its job/matrix structure read back programmatically; every inline
+shell block was extracted and run through `sh -n` + `shellcheck 0.11.0` clean;
+the matrix-generation shell was dry-run for each tier input and its emitted JSON
+parsed. `actionlint` is NOT installed on this machine (recorded; not blocking —
+the YAML + structure + shell are independently validated). NO claim that any
+workflow "ran" in CI is made.
+
+NO src/ change. Default `python -m pytest` byte-identical at 1019. test.yml's
+existing jobs are byte-identical except the added Tier-A gate + the aggregate
+fold. release.yml is UNTOUCHED (Phase 6).
+
+Builds on Phases 1-4: the markers (ui_render / ui_e2e / ui_browser), the
+SMOKE_ADMIN_PASSWORD env-plumbing requirement (Phase-1 handoff), the
+`playwright install chromium` CI step (Phase-4), and the screenshot dir env
+(SMOKE_UI_SCREENSHOT_DIR / SMOKE_UI_VERSION).
+
+--------------------------------------------------------------------------------
+1) NEW: .github/workflows/ui-tests.yml — reusable, matrix-parametric
+--------------------------------------------------------------------------------
+
+Mirrors smoke.yml's scaffolding EXACTLY (the ADR-14 sibling of smoke.yml): the
+build-pkg-linux.yml `.pkg` build, the GHCR image pull + content-keyed (digest)
+cache, the KVM-perms udev fix, the SSH-key/secret handling, the
+input>secret>variable image-ref resolution, and the diagnostics upload
+`if: always()`.
+
+TRIGGERS (`on:`):
+  * workflow_call    — inputs: image_ref, version, tier  (the release pipeline + test.yml call it)
+  * workflow_dispatch— inputs: image_ref, version, tier (choice: render|functional|browser|all)
+  * schedule         — cron "0 5 * * *" (daily Tier-B run; non-PR-blocking)
+
+INPUTS (workflow_call + workflow_dispatch, same names):
+  * image_ref  GHCR pfSense CE ref; blank => SMOKE_IMAGE_REF secret/variable. Pin by @sha256:<digest>.
+  * version    version LABEL for the matrix leg / screenshot dir; blank => the default CE label "ce".
+  * tier       render | functional | browser | all  (default "all").
+
+JOBS:
+  * build-pkg  — `uses: ./.github/workflows/build-pkg-linux.yml` (channel: devel); one build feeds every leg.
+  * prepare    — computes the (tier x version) matrix `include` JSON + the nightly
+                 no-commit guard; outputs `matrix` and `run`.
+  * ui         — `needs: [build-pkg, prepare]`, `if: needs.prepare.outputs.run == 'true'`,
+                 `strategy: { fail-fast: false, matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }} }`,
+                 timeout-minutes: 30. ONE GH JOB PER (tier x version) leg.
+
+MATRIX SHAPE (tier x version) — verified by dry-run + JSON parse:
+  prepare emits `matrix={"include":[{"tier":"<t>","version":"<v>"},...]}`. Examples
+  (DEFAULT_VERSIONS="ce", DEFAULT_SCHEDULE_TIERS="functional browser"):
+    dispatch tier=all  -> render/ce, functional/ce, browser/ce       (3 legs)
+    dispatch tier=render -> render/ce                                 (1 leg)
+    schedule (ignores tier input) -> functional/ce, browser/ce       (2 legs, Tier B)
+    two versions "ce plus" tier=all -> 6 legs (3 tiers x 2 versions)
+  fail-fast: false => one leg's failure never cancels the others; GH "Re-run failed
+  jobs" re-runs ONLY the flaky leg (C1).
+
+  B1 (one-line image add): append a label to DEFAULT_VERSIONS in the `prepare` step
+  (and wire its image ref). The axis is BUILT parametric; it runs the single CE
+  image today.
+
+TIER -> MARKER map (the `ui` job's "Map the tier" step, re-derived per leg so the
+matrix stays a plain {tier,version}):
+    render -> ui_render   |   functional -> ui_e2e   |   browser -> ui_browser
+The `ui` job then runs:
+    python3 -m pytest tests/smoke/ui -m "<marker>" \
+      --override-ini="addopts=" --override-ini="timeout_func_only=true" \
+      --timeout=300 --timeout-method=signal -v
+  (--timeout=300 because the General save's sync pass can run ~300s, Phase-3 note;
+  timeout_func_only=true scopes it to the TEST BODY, not the slow module fixtures.
+  NO assertion auto-retry — C1. The only "retry" is the smoke conftest's
+  wait_ready.sh polling the boot/readiness signal, never a fixed sleep.)
+
+BROWSER DEP: the "Install the headless Chromium browser" step is gated
+`if: matrix.tier == 'browser'` and runs `python3 -m playwright install --with-deps
+chromium` — so only the browser leg pulls the ~150 MB binary; render/functional
+stay lean.
+
+EGRESS: unlike the smoke matrix, the UI tier does NOT set SMOKE_BLOCK_EGRESS — the
+tiers are hermetic from the box's own config (no feed download to render chrome)
+but want a working resolver + the Playwright browser, so egress is left OPEN.
+
+--------------------------------------------------------------------------------
+2) SMOKE_ADMIN_PASSWORD plumbing — the Phase-1 gap CLOSED
+--------------------------------------------------------------------------------
+
+The `ui` job's "Run the UI tier" step `env:` block now exports (the Phase-1
+handoff flagged Phase 5 must do exactly this):
+    SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+    SMOKE_ADMIN_USER:     ${{ vars.SMOKE_ADMIN_USER }}          # optional; default "admin"
+    SMOKE_UI_SCREENSHOT_DIR: ${{ github.workspace }}/test-results/ui-screenshots
+    SMOKE_UI_VERSION:     ${{ matrix.version }}
+    SMOKE_DNSBL_VIP4:     ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+  plus the smoke essentials (SMOKE_IMAGE_DIR/REF, SMOKE_SSH_KEY, SMOKE_PKG).
+Without SMOKE_ADMIN_PASSWORD the ui fixtures SKIP cleanly (admin_credentials skip),
+never fail — but with it the webui fixture authenticates and the tier actually
+runs. test.yml's Tier-A caller uses `secrets: inherit`, so the secret flows
+through the reusable workflow.
+
+--------------------------------------------------------------------------------
+3) TIER A — PR gate, paths-gated, FOLDED into the "All tests passed" aggregate
+--------------------------------------------------------------------------------
+
+test.yml changes (existing jobs byte-identical; only these added):
+
+  * permissions: added `packages: read` (the Tier-A reusable workflow pulls the
+    pfSense image from private GHCR). `contents: read` unchanged.
+
+  * NEW job `ui-changes` — detects whether the PR/push touched PHP/JS, with a
+    plain `git diff` (NO third-party paths-filter action, matching the repo's
+    minimal-dep style). Diffs against `github.event.pull_request.base.sha` (PR) or
+    `github.event.before` (push) over the ADR §2 3a path set:
+        src/**/*.php   **/*.inc   src/**/*.js
+    Outputs `php_js` = true|false. An all-zero / unreachable base (first push to a
+    new branch) falls back to `true` (run the gate conservatively).
+
+  * NEW job `ui-render` — `needs: ui-changes`, `if: needs.ui-changes.outputs.php_js
+    == 'true'`, `uses: ./.github/workflows/ui-tests.yml` with `tier: render`,
+    `secrets: inherit`. So Tier A boots a VM ONLY on a PHP/JS-touching PR; on a
+    docs/Python-only PR the job is SKIPPED (it never boots a VM).
+
+  * AGGREGATE FOLD — the exact mechanism release.yml's verify-checks reads:
+    `release.yml`'s verify-checks asserts the SINGLE check-run NAMED
+    "All tests passed" for the tagged commit is `success`. That check-run is the
+    `all-tests-passed` job (job `name: All tests passed`). Folding Tier A in =
+    extend THAT job (no new required check to wire):
+      - added `ui-render` to its `needs:` list, and
+      - added a result check at the end of "Check matrix results":
+            case "${{ needs.ui-render.result }}" in
+              success|skipped) ;;
+              *) echo "Tier-A UI render-smoke failed or was cancelled."; exit 1 ;;
+            esac
+    `skipped` (no PHP/JS change => the gate legitimately did not run) is a PASS;
+    only an actual `failure`/`cancelled` blocks. `all-tests-passed` keeps
+    `if: always()`, so it still runs (and the case still evaluates) regardless of
+    upstream job state. The check-run NAME is unchanged => verify-checks already
+    covers Tier A with zero release.yml edit. Phase 6 adds the SEPARATE release
+    gate (release.yml `needs:` the reusable UI workflow); that is NOT done here.
+
+  REBASE NOTE: origin/devel landed a new informational `benchmarks` job (issue #42)
+  in test.yml during this phase. The rebase conflict was resolved keeping BOTH —
+  `benchmarks` stays (and stays INTENTIONALLY ABSENT from the aggregate `needs`,
+  per its own comment) and the Tier-A jobs were added alongside. Final test.yml
+  jobs: test, test-typing, ruff, shellcheck, shell-tests, php-syntax,
+  php-static-analysis, php-unit, markdownlint, benchmarks, ui-changes, ui-render,
+  all-tests-passed.
+
+--------------------------------------------------------------------------------
+4) TIER B — schedule (daily-if-commits) + dispatch; NON-PR-BLOCKING
+--------------------------------------------------------------------------------
+
+Tier B (functional + browser) is triggered ONLY by ui-tests.yml's own
+`schedule` (daily cron "0 5 * * *") and `workflow_dispatch` — it is NOT referenced
+by test.yml, so it can NEVER gate a PR (non-blocking BY CONSTRUCTION, matching
+RESULTS/04 §6's "non-PR-blocking by construction").
+
+  * Nightly no-commit guard: the `prepare` job sets `run=false` when
+    `git log --since='24 hours ago'` is empty on a `schedule` event, and the `ui`
+    job is `if: needs.prepare.outputs.run == 'true'` — an idle repo boots no VM.
+    On dispatch/call, `run` is always true.
+  * The daily schedule runs DEFAULT_SCHEDULE_TIERS="functional browser" (Tier B).
+  * §7 BROWSER DEMOTE/DROP — ONE-LINE SWITCH (documented in the workflow header +
+    inline): drop `browser` from DEFAULT_SCHEDULE_TIERS in the `prepare` step to
+    stop the nightly browser leg without touching anything else. (Per RESULTS/04
+    §6 the browser tier is already non-blocking; the §7 reliability numbers are
+    CI-measured and the demote/drop is applied on the first evidence.)
+
+--------------------------------------------------------------------------------
+5) DIAGNOSTICS — `ui-diagnostics-<tier>-<version>` artifact, if: always()
+--------------------------------------------------------------------------------
+
+The `ui` job's final step (`if: always()`) uploads, per leg (so a single-leg
+re-run overwrites only its own artifact):
+    test-results/ui-screenshots/**     (Phase-4 per-page screenshots, browser leg)
+    **/vm*.log                         (the QEMU/boot logs, smoke pattern)
+    **/screen-*.png  **/screen-*.ppm   (VM console captures, smoke pattern)
+    smoke-diag/**                      (the existing smoke state snapshot:
+                                        /var/log, pfctl, unbound, config.xml, etc.)
+  if-no-files-found: ignore; retention-days: 7. This EXTENDS smoke.yml's
+  `smoke-diagnostics` collection pattern (RESULTS/04 §3: php_error.log + page
+  bodies on failure land in the smoke-diag snapshot the harness already collects).
+
+--------------------------------------------------------------------------------
+6) GATES (local / static — NO CI run claimed)
+--------------------------------------------------------------------------------
+- YAML parse (PyYAML 6.0.3):
+    ui-tests.yml  => OK
+    test.yml      => OK  (+ smoke.yml / build-pkg-linux.yml / release.yml re-parsed OK)   [VERIFIED]
+- Structure read-back (parsed): ui-tests.yml exposes workflow_call inputs
+  {image_ref, version, tier} + a (tier x version) job matrix with
+  fail-fast: false; test.yml aggregate `needs` includes ui-render; permissions
+  has packages: read.                                                          [VERIFIED]
+- Matrix-gen shell dry-run (each tier input) -> emitted JSON parsed -> correct
+  per-(tier x version) legs (render/functional/browser/all, schedule, 2 versions). [VERIFIED]
+- Inline shell: `sh -n` + `shellcheck 0.11.0` clean on all 3 extracted blocks
+  (ui-changes diff, prepare matrix-gen, tier->marker map).                     [VERIFIED]
+- actionlint: ABSENT on this machine (recorded; not blocking).                 [NOT RUN]
+- python -m pytest --collect-only => 1019 collected (== baseline, UNCHANGED).  [VERIFIED]
+- ruff check . => All checks passed!  ;  ruff format --check . => 47 formatted. [VERIFIED]
+- NO src/ change (git diff origin/devel..HEAD --name-only -- src/ empty).       [VERIFIED]
+- release.yml UNTOUCHED (Phase 6).                                             [VERIFIED]
+
+--------------------------------------------------------------------------------
+7) DRY-RUN EVIDENCE (what a real run WOULD show — CI-PENDING, honest)
+--------------------------------------------------------------------------------
+The VERIFICATION items from the phase prompt that need the live VM are CI-PENDING
+(this box can't boot/reach it). What IS proven here, statically:
+  * ui-tests.yml exposes the workflow_call inputs (image_ref/version/tier) and a
+    per-(tier x version) job matrix with fail-fast: false  — read back from the
+    parsed YAML (§1).                                                          [PROVEN]
+  * A single forced leg failure is re-runnable in isolation — `fail-fast: false`
+    + one job per leg is the GH mechanism for "Re-run failed jobs".            [STRUCTURAL]
+  * The PR-path Tier-A job is paths-gated (ui-changes git diff) and part of the
+    aggregate (ui-render in all-tests-passed.needs + the result case).         [PROVEN, parsed]
+What a CI run must still confirm (Phase-6 / maintainer manual smoke):
+  * Tier A GREEN on the CE image (the ui_render sweep passes live).
+  * The ui-diagnostics artifact is present after a run.
+  * Tier B daily run is green / the §7 browser pass-rate + wall-time numbers
+    (RESULTS/04 §6 measurement procedure) — feeds the demote/drop decision.
+
+--------------------------------------------------------------------------------
+8) FILES
+--------------------------------------------------------------------------------
+- .github/workflows/ui-tests.yml  — NEW. Reusable (workflow_call + dispatch +
+  schedule), (tier x version) matrix, build-pkg + boot + tier run + ui-diagnostics.
+- .github/workflows/test.yml       — EDIT. permissions: packages:read; NEW jobs
+  ui-changes + ui-render (Tier-A PR gate, paths-gated); ui-render folded into the
+  "All tests passed" aggregate (needs + result case). Existing jobs (incl. the
+  rebased-in `benchmarks`) unchanged.
+No src/ change; default pytest unchanged at 1019; release.yml untouched.
+
+--------------------------------------------------------------------------------
+9) GO-AHEAD FOR PHASE 6
+--------------------------------------------------------------------------------
+Proceed. The reusable ui-tests.yml (matrix-parametric, per-leg re-run isolation,
+diagnostics) is in place; Tier A gates PHP/JS PRs and is folded into the
+"All tests passed" check-run release.yml already reads; Tier B is schedule +
+dispatch and non-PR-blocking. Phase 6 wires release.yml to `needs:` the reusable
+UI workflow (Tier A + Tier B) before release/ports-pr — each leg a SEPARATE job
+re-runnable in isolation — updates README/CLAUDE.md (tiers, markers, local-run,
+the version-matrix axis + IMAGE_RUNBOOK note), finalises §7 manual smoke, and
+sets Status after the maintainer confirms. release.yml was deliberately left
+untouched here.

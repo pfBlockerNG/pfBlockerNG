@@ -1,0 +1,104 @@
+name: Republish immutable Release through pkg
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Immutable source Release id
+        required: true
+        type: string
+      release_tag:
+        description: Immutable source Release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: pkg-repository-mutation
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      source_repository: ${{ steps.resolve.outputs.source_repository }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      destinations: ${{ steps.resolve.outputs.destinations }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      portversion: ${{ steps.resolve.outputs.portversion }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve exact immutable Release
+        id: resolve
+        env:
+
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          case "$RELEASE_ID" in ''|*[!0-9]*) echo "::error::release_id must be decimal"; exit 1 ;; esac
+          META=$(gh api "repos/${SOURCE_REPOSITORY}/releases/${RELEASE_ID}")
+          [ "$(printf '%s' "$META" | jq -r '.tag_name')" = "$RELEASE_TAG" ] || {
+            echo "::error::Release id/tag mismatch"; exit 1; }
+          [ "$(printf '%s' "$META" | jq -r '.draft')" = false ] || {
+            echo "::error::Release is a draft"; exit 1; }
+          [ "$(printf '%s' "$META" | jq -r '.immutable // false')" = true ] || {
+            echo "::error::Release is not immutable"; exit 1; }
+          CHANNEL=$(python3 - "$RELEASE_TAG" <<'PY'
+          import sys
+          from scripts.release_version import primary_channel_for_tag
+          print(primary_channel_for_tag(sys.argv[1]))
+          PY
+          )
+          eval "$(sh scripts/release-version.sh "$RELEASE_TAG" "$CHANNEL")"
+          RELEASE_PRERELEASE=$(printf '%s' "$META" | jq -r '.prerelease')
+          [ "$RELEASE_PRERELEASE" = "$prerelease" ] || {
+            echo "::error::Release prerelease flag does not match tag"; exit 1; }
+
+
+          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
+          SOURCE_SHA=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          DESTINATIONS=$(python3 - "$RELEASE_TAG" "$release_line" "$SOURCE_SHA" <<'PY'
+          import json
+          import sys
+          from scripts.release_version import derive_destinations_from_git
+          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
+          PY
+          )
+          {
+            echo "source_repository=$SOURCE_REPOSITORY"
+            echo "release_id=$RELEASE_ID"
+            echo "release_tag=$RELEASE_TAG"
+            echo "source_sha=$SOURCE_SHA"
+            echo "destinations=$DESTINATIONS"
+            echo "channel=$release_channel"
+            echo "portversion=$portversion"
+          } >> "$GITHUB_OUTPUT"
+
+  publish-pkg:
+    needs: resolve
+    if: vars.PKG_PUBLICATION_ENABLED == 'true'
+    uses: ./.github/workflows/pkg-tagged-ingest.yml
+    with:
+      source_repository: ${{ needs.resolve.outputs.source_repository }}
+      release_id: ${{ needs.resolve.outputs.release_id }}
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      destinations: ${{ needs.resolve.outputs.destinations }}
+      channel: ${{ needs.resolve.outputs.channel }}
+      portversion: ${{ needs.resolve.outputs.portversion }}
+    secrets: inherit

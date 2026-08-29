@@ -1,0 +1,82 @@
+================================================================================
+PHASE 4 PROMPT — Sample feeds: representative fixtures for the supported formats
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §1 Context 6-7 + §2 B FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 4 of ADR-16. Author representative, inert
+SAMPLE FEED files (IP + DNSBL) in the formats pfBlockerNG ingests, to be served by the
+EXISTING mock HTTP server in Phase 5. Fixtures only — no test wiring, no src/ change. Work in
+this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+Part C drives the live HTTP feed-fetch path (never tested today). It needs feed bodies whose
+line shapes match the real formats so the load asserts something meaningful. Separating the
+fixture authoring (this phase) from the test wiring (Phase 5) keeps Phase 5 to pure assertions
+and makes the format coverage reviewable on its own. NO new HTTP server (Context 4 — reuse
+`_MockFeedServer`).
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/03_Results.txt — Part A landed. If missing,
+  STOP and report. (Part C does not depend on the UI split, but the phases share the branch.)
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§1 Context 6 fetch contract, Context 7 format
+  catalogue, §2 B, §2 out-of-scope).
+- tests/smoke/conftest.py — `_MockFeedServer` (~:374): how it serves files (FIXTURES_DIR) and
+  `.register(name, content)`; the `mock_feeds` fixture (~:816); GUEST_TO_HOST_ALIAS (10.0.2.2).
+  Find FIXTURES_DIR's path so the sample files land where the server serves them.
+- tests/smoke/helpers.py — `write_local_feed` (the local-file shape, for contrast) and the
+  `IpCase`/`DnsblCase` fields (so the fixtures match what Phase 5 will point at).
+- The parser references (read-only, to get shapes EXACTLY right):
+  src/usr/local/pkg/pfblockerng/pfb_unbound.py (DNSBL parse: plain domain, hosts `0.0.0.0 d`,
+  ABP `||d^` / `@@`); src/usr/local/pkg/pfblockerng/pfblockerng.inc (IP auto: plain IP/CIDR,
+  ranges, IPv6; comment handling).
+- CLAUDE.md (inert test data only — TEST-NET / documentation ranges, uuid-style domains; no
+  real/abusable hosts).
+
+ACTION PLAN (ordered)
+1. IP fixtures (format `auto`): one file each for the representative shapes —
+   (a) plain IPv4 + CIDR (TEST-NET-3 198.51.100.0/24, 203.0.113.5), with a `#` comment line;
+   (b) an IPv4 range (e.g. 198.51.100.10-198.51.100.20);
+   (c) IPv6 (2001:db8::/48 + a single 2001:db8::1).
+   Use documentation ranges ONLY. Each file = the body curl would fetch.
+2. DNSBL fixtures: one file each —
+   (a) plain domain list (uuid-style `*.test`-AVOIDING names — use `<uuid>.com` so Unbound's
+       built-in local-zones don't shadow them, per the smoke-domain rule);
+   (b) hosts format (`0.0.0.0 <uuid>.com`);
+   (c) ABP/EasyList (`[Adblock Plus 2.0]` header + `||<uuid>.com^` + an `@@||<uuid>.com^` allow).
+   Keep them tiny (a handful of lines) — enough to assert a known member loads/blocks and a
+   known non-member does not.
+3. Place the files under the FIXTURES_DIR the `_MockFeedServer` serves; give each a clear name
+   encoding its format (e.g. `ip_plain_cidr.txt`, `ip_range.txt`, `ip_ipv6.txt`,
+   `dnsbl_plain.txt`, `dnsbl_hosts.txt`, `dnsbl_abp.txt`).
+4. Add a short README or header comments documenting each file's format + which known
+   member/non-member Phase 5 will assert. NO test code yet.
+
+CONSTRAINTS
+- Fixtures only. No src/ change, no test wiring, no new server. Inert data only (documentation
+  ranges / uuid domains) — never a real blocklist host.
+- Match the real line shapes (Context 7) so the format is genuinely exercised; keep files small.
+- Respect the smoke-domain rule: never RFC-6761 (.test/.example/.invalid) or HSTS-preload names.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → unchanged; ruff clean (if any .py added — likely none); the fixture files
+  exist under FIXTURES_DIR with documented formats.
+- Eyeball: each file's lines match the intended format; members/non-members noted for Phase 5.
+
+EXPECTED RESULT
+A small, documented set of inert sample feeds (IP {plain/CIDR, range, IPv6} + DNSBL {plain,
+hosts, ABP}) under the mock server's fixtures dir, ready for Phase 5 to register + load.
+
+COMMIT (single)
+    tests: add representative sample feed fixtures (IP + DNSBL formats) (ADR-16 P4)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`, push
+`adr/16`. Touches tests/ (fixtures) → lands on `devel` via a rebase-only PR (carry the
+`ui-tests` label if it triggers the suite; otherwise a normal PR). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/04_Results.txt` (plain .txt)
+State: each fixture file's path + format + the exact known member + known non-member Phase 5
+must assert (the IP to find in the pf table / the domain that must block, and the ones that must
+NOT); the FIXTURES_DIR + guest URL shape (`http://10.0.2.2:<port>/<name>`); any format omitted
+and why; the go-ahead for Phase 5.

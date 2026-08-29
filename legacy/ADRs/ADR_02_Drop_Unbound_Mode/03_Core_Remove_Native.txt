@@ -1,0 +1,116 @@
+================================================================================
+PHASE 3 PROMPT — Core: delete native blocking + the queries daemon
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md  (read §2 in full — the deletion rule
+     and the KEPT list are load-bearing)
+================================================================================
+
+ROLE
+You are on the `edge` branch performing Phase 3 of ADR-02 — the largest phase.
+Phases 1–2 pinned Python-only and removed the UI controls. Now delete the native
+Unbound DNSBL machinery from src/usr/local/pkg/pfblockerng/pfblockerng.inc. This
+is mechanical but high-volume (~50 branch sites); work methodically and keep the
+package coherent at the end.
+
+THE DELETION RULE (apply literally — ADR §2)
+$pfb['dnsbl_py_blacklist'] is now always TRUE (Phase 1). Therefore:
+  - `if (!$pfb['dnsbl_py_blacklist']) { BLOCK }`         → delete BLOCK (dead).
+  - `if (!$pfb['dnsbl_py_blacklist'] && COND) { BLOCK }` → delete BLOCK (dead;
+        COND can't make a false-AND true). If there's an `else`, keep+unwrap it.
+  - `if ($pfb['dnsbl_py_blacklist']) { BLOCK }`          → unwrap BLOCK (always runs).
+  - `if ($pfb['dnsbl_py_blacklist'] && COND) { BLOCK }`  → reduce to `if (COND)`.
+  - ternary `$pfb['dnsbl_py_blacklist'] ? A : B`         → A.
+  - `!$pfb['dnsbl_py_blacklist'] ? A : B`                → B.
+After collapsing all sites, delete the $pfb['dnsbl_py_blacklist'] definition.
+Also collapse inc-internal `$pfb['dnsbl_mode'] == 'dnsbl_python'` guards to
+unconditional (always true now). LEAVE the Phase-1 keystone assignment
+`$pfb['dnsbl_mode'] = 'dnsbl_python';` in place for now — alerts/widget still read
+it cross-file; Phase 5 removes it once those are converted.
+
+KEEP — DO NOT DELETE (ADR §2 "kept" — common traps)
+- lighttpd webserver, DNSBL VIP, NAT rules, pfb_dnsbl service, pfb_create_lighttpd().
+  These serve the Python block page + logging. NOT native-only.
+- pfb_tld / $pfb['dnsbl_tld'] (Wildcard Blocking TLD) — used in Python mode too.
+- pfb_py_reply / pfb_py_nolog and the webserver-vs-python logging selection.
+- The `python_blocking = on` emission in the resolver-config generation.
+
+PURE-NATIVE ARTIFACTS TO REMOVE (regardless of branch form)
+- pfb_dnsbl.conf (the "<dnsbl_file>.conf") local-zone/local-data generation and
+  the code that includes it in the resolver config; the `pfb_dnsbl.*conf`
+  include manipulation that pertains to the native local-data file (keep python
+  data file handling).
+- Native safesearch/youtube/doh `.conf` writes — the `!$pfb['dnsbl_py_blacklist']`
+  branches in the safesearch section. Keep the python-side safesearch handling.
+- The "queries" log-tailing daemon:
+    * in pfb_dnsbl_service() the rc script: remove the `unbound_mode` read and the
+      `if [ "${unbound_mode}" == 'dnsbl_unbound' ]; then php ... queries &` branch
+      (the daemon is never started now). Keep the lighttpd start.
+    * remove the `queries` dispatch in this file and pfb_dnsbl_parse('daemon', …)
+      and any helper used ONLY by that daemon path. VERIFY callers first: if
+      pfb_dnsbl_parse is also used by the webserver path, keep the function and
+      remove only the 'daemon' branch/loop and the `queries` invocation.
+- Live-update-without-reload: the `dnsbl_sync` / dnsbl_livesync feature is native-
+  only (gated by !dnsbl_py_blacklist, ~L3412 and ~L3501). Remove those branches,
+  including `exec("{$pfb['script']} dnsbl_livesync …")` (~L3418). (The shell
+  function itself is removed in Phase 4.)
+- Builder selection: at the domaintld/domaintldpy fork (~L3136–3151), keep only
+  `exec("{$pfb['script']} domaintldpy …")` and remove the native
+  `exec("{$pfb['script']} domaintld x x x …")` branch.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/02_Results.txt — it states the actual
+  post-Phase-2 code state and any deviations from plan. If it is missing, Phase 2
+  is not complete; STOP and report.
+- .ADRs/ADR_02_Drop_Unbound_Mode/ADR.md
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — grep your worklist first:
+    grep -n "dnsbl_py_blacklist\|dnsbl_mode\|pfb_dnsbl.conf\|pfb_dnsbl.\*conf\|queries\|dnsbl_livesync\|dnsbl_sync\|domaintld" src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  Work through every hit and classify it by the deletion rule above.
+- CLAUDE.md — PHP standards.
+
+ACTION PLAN
+1. Build the worklist via the grep above; tag each line: delete / unwrap / keep.
+2. Collapse all dnsbl_py_blacklist and inc-internal dnsbl_mode sites.
+3. Remove the pure-native artifacts listed above (conf gen, native safesearch/
+   youtube/doh writes, queries daemon + parser path, livesync, native builder exec).
+4. Delete the $pfb['dnsbl_py_blacklist'] definition (~L861–863, now reduced).
+5. Confirm `python_blocking = on` still emitted and lighttpd/VIP/NAT/pfb_tld intact.
+6. Lint + sanity.
+
+CONSTRAINTS
+- PHP: tabs; PHP 8.3; no die()/exit(); pfSense fns via stubs/pfsense/.
+- Do NOT remove webserver/VIP/NAT, pfb_tld, or python feature handling.
+- Do NOT remove the Phase-1 keystone `$pfb['dnsbl_mode']='dnsbl_python';` yet.
+- Do NOT touch the shell functions yet (Phase 4) — only the PHP exec call sites.
+
+VERIFICATION
+- `php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc` → clean.
+- grep: zero `dnsbl_py_blacklist`; zero inc-internal `dnsbl_mode == 'dnsbl_python'`
+  guards remaining; no `queries` daemon launch; no `domaintld ` / `dnsbl_livesync`
+  exec; no `pfb_dnsbl.conf` local-data generation.
+- grep confirms still present: pfb_create_lighttpd, VIP/NAT logic, $pfb['dnsbl_tld'],
+  `python_blocking`, `domaintldpy` exec.
+- `python -m pytest` → green (sanity).
+
+EXPECTED RESULT
+- pfblockerng.inc contains a single DNSBL code path (Python). Native conf
+  generation, the queries daemon, live-sync, and native safesearch writes are gone.
+  Webserver/VIP/NAT and wildcard-TLD blocking remain.
+
+COMMIT
+    pfblockerng: remove native Unbound DNSBL blocking and queries daemon (ADR-02 P3)
+Land on `edge`. Push directly; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_02_Drop_Unbound_Mode/RESULTS/03_Results.txt`
+This file is a HANDOFF for the agent that will perform the NEXT phase
+(04_Shell_Remove_domaintld.txt) — NOT merely a changelog of this phase. Write it
+as plain text (.txt, not markdown), self-sufficient for the next agent. Include:
+- State after this phase: pfblockerng.inc has a single (Python) DNSBL path;
+  $pfb['dnsbl_py_blacklist'] is deleted; webserver/VIP/NAT and pfb_tld retained;
+  `python_blocking = on` still emitted.
+- What changed: count of branch sites collapsed; native artifacts removed.
+- Which shell execs were removed (domaintld, dnsbl_livesync) so Phase 4 can
+  delete the matching shell functions + dispatch cases; confirm domaintldpy is
+  the only builder invocation left.
+- Verification results: php -l / grep / pytest output.
+- Watch-outs and any deviation from this prompt the next agent must know.

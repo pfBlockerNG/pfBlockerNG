@@ -1,0 +1,70 @@
+================================================================================
+PHASE 2 PROMPT — Tier A: HTTP render-smoke sweep (all pages) + the real oracle
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_14_UI_UX_Testing/ADR.md   (read §2 "Tier A" + fact 3 + contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/14` branch performing Phase 2 of ADR-14. This lands the CHEAP,
+HERMETIC, standalone-valuable tier: an authenticated HTTP render-smoke sweep over every
+pfBlockerNG page with a REAL pass/fail oracle (not bare HTTP 200). NO src/ change;
+default `python -m pytest` unchanged. Work in this ADR's `adr/14` worktree; one commit for this phase.
+
+WHY THIS PHASE EXISTS
+This is the tier that gates PRs (Phase 5) and the highest signal-per-flake check: it
+catches pages that 500, render a PHP Warning/Notice, or come back blank — none of which
+`php -l`/PHPStan can see (ADR §1 fact 3). It must NOT trust HTTP 200 alone.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_14_UI_UX_Testing/RESULTS/01_Results.txt — it must confirm the `webui` helper
+  API + the login mechanics. If it is missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md (§2 Tier A row, fact 3, contract, §4.3).
+- The page set: src/usr/local/www/pfblockerng/*.php (the 18), the dashboard widget
+  (src/usr/local/www/widgets/widgets/pfblockerng.widget.php), and the DNSBL VIP pages
+  (src/usr/local/www/pfblockerng/www/index.php, www/dnsbl_default.php). Read each page's
+  top-of-file title/heading to choose a stable per-page content marker.
+- tests/smoke/helpers.py (SmokeVM.ssh for reading php_error.log on-box) + tests/smoke/ui/
+  (the Phase-1 helper).
+- CLAUDE.md.
+
+ACTION PLAN (ordered — oracle design FIRST)
+1. ORACLE (the load-bearing part): for a fetched page, PASS requires ALL of:
+   (a) HTTP 200; (b) body contains NONE of `Fatal error`, `Parse error`, `Warning`,
+   `Notice`, `Uncaught`, `Stack trace`; (c) a page-SPECIFIC content marker is present
+   (so a blank/redirected 200 is not a false pass); (d) the on-box php_error.log gained
+   NO new lines during the sweep (snapshot line count before, compare after, via
+   SmokeVM.ssh — source of truth, fact 3).
+2. PAGE TABLE: enumerate every pfBlockerNG page with its URL path + expected marker.
+   Pages that REQUIRE a feed download / network to render must be flagged and either
+   excluded from the hermetic Tier A or run with the egress the smoke harness already
+   allows — keep Tier A hermetic by default.
+3. PARAMETRIZE a `ui_render` test over the page table, reusing the authenticated session.
+4. PROVE THE ORACLE: add a check that a deliberately-broken/known-warning condition is
+   CAUGHT (the oracle fails it) — so we know a bare 200 can never pass. Document how.
+
+CONSTRAINTS
+- NO src/ change (do not "fix" a warning you find here — record it; a real fix is its own
+  change). Reuse the Phase-1 session + `smoke_vm`; no second VM boot. Python 4-space/3.11+.
+- Keep Tier A HERMETIC (no required feed fetches) so it is cheap enough to gate PRs.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest        -> green, default count UNCHANGED.
+- pytest -m ui_render (against the smoke VM) -> every page passes the full oracle.
+- The deliberately-broken probe -> FAILS the oracle (proves it).
+- ruff check . / ruff format .   -> clean.
+- diff-read: the page table covers all 18 pages + widget + 2 DNSBL VIP pages.
+
+EXPECTED RESULT
+A parametrized, hermetic Tier-A render sweep over every pfBlockerNG page with a
+body + marker + php_error.log oracle, proven to catch a broken page.
+
+COMMIT (single)
+    tests: add Tier-A HTTP render-smoke sweep for the WebUI (ADR-14 P2)
+In this ADR's `adr/14` worktree (reuse it if already implementing this ADR, else create off the latest `origin/devel`): `git fetch` + rebase onto the latest `origin/devel`, then push `adr/14`. The ADR lands on `devel` via a rebase-only PR (never a merge). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_14_UI_UX_Testing/RESULTS/02_Results.txt`
+State: the page table (path + marker per page) and any pages excluded-from-hermetic +
+why; the exact oracle (the forbidden-strings list + the php_error.log diff mechanism);
+how the broken-page probe proves the oracle; any pages that rendered a real warning
+(recorded, NOT fixed); the go-ahead for Phase 3.

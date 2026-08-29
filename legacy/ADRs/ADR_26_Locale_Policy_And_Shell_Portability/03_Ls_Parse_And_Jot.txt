@@ -1,0 +1,44 @@
+ADR-26 — Phase 3: Replace the FreeBSD-only / locale-fragile shell constructs
+
+GOAL
+Remove the two cross-platform shell hazards adjacent to the locale work in
+src/usr/local/pkg/pfblockerng/pfblockerng.sh (ADR §1.4, §2.4).
+
+ITEM A — the ls-column parse (lines 1226 + 1230, as of ADR authoring)
+  ls -lahtr "${pfborig}"*.orig     | sed -e 's/\/.*\// /' -e 's/.orig//' | awk -v OFS='\t' '{print $6" "$7,$8,$9}'
+  ls -lahtr "${pfbdomainorig}"*.orig| sed ...                          | awk ...
+Problem: parses `ls -l` by COLUMN POSITION ($6..$9) — field layout shifts with locale (date
+format / field count) and across BSD vs GNU `ls` (`-h` spacing, timestamp format). It is a
+DIAGNOSTIC dump (no shipped decision reads it), so blast radius is cosmetic — but it is the
+canonical "don't parse ls" anti-pattern and breaks first on Linux.
+Fix: list `*.orig` by mtime via a metadata API that is neither locale- nor ls-layout-bound:
+  - GNU path: `find "${dir}" -maxdepth 1 -name '*.orig' -printf '%T@ %p\n' 2>/dev/null \
+               | LC_ALL=C sort -n | cut -d' ' -f2- | sed 's#.*/##; s/\.orig$//'`
+  - `find -printf` is GNU-only; if BSD must also be supported, either use a `stat`-based
+    equivalent (BSD `stat -f '%m %N'` vs GNU `stat --format='%Y %n'` differ — wrap or branch)
+    or keep the field count under explicit `LC_ALL=C`. Implementer decides the portable form;
+    the project target today is FreeBSD, so a FreeBSD-correct + Linux-friendly form is the bar.
+  - PRESERVE the existing output FORMAT (the same name + timestamp columns, tab-separated) so
+    anyone reading the diagnostic log sees no surprise.
+
+ITEM B — jot (line 327)
+  for i in $(/usr/bin/jot 255); do ...
+Problem: `jot(1)` is BSD-only and hardcoded to /usr/bin/jot; Linux ships `seq(1)`.
+Fix: emit the 1..255 sequence portably — `seq 255`, or a tiny jot/seq compatibility shim
+(`have_command`-style detection), or a pure-sh `while` counter if neither is guaranteed. Drop
+the hardcoded path. Keep the loop body unchanged.
+
+RULES
+- POSIX sh; quote expansions; minimal diff (only these constructs + any small shim).
+- Do NOT touch the `ls -A "${dir}"` emptiness checks (1090/1174/1195/1203/1207/1211/1220/
+  1224/1228) — they are portable and out of scope.
+
+VALIDATION
+- shellcheck + `sh -n` clean.
+- ADR-04 smoke (Phase 4) exercises the live paths. If the mtime-listing or sequence logic is
+  cleanly extractable, add a pytest demonstrating the new form yields the same ordering/format
+  as before — only if it does not contort production code.
+
+HANDOFF
+RESULTS/ADR26_Phase3_Results.txt: before/after for both items, the portable form chosen and
+why, and confirmation the diagnostic output format is unchanged.

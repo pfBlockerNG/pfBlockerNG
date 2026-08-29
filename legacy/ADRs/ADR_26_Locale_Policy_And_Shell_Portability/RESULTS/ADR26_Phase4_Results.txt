@@ -1,0 +1,74 @@
+ADR-26 — Phase 4 Results: Definition of Done
+
+OUTCOME: all seven DoD gates hold; implementation PRs (Phases 1-3) merged to devel;
+ADR.md Status flipped Proposed -> Accepted (2026-06-16).
+
+Implementation commits on devel (the shell file):
+  46e659c  pfblockerng: inline LC_ALL=C on byte-exact dedup sinks (ADR-26)   [Phase 1]
+  690915f  pfblockerng: portable mtime listing + seq (ADR-26)               [Phase 3]
+  (Phase 2 = policy docs: CLAUDE.md Shell standards + docs/misc/architecture-notes.md.)
+
+GATE CHECKLIST + EVIDENCE (verified against the devel tree at 95be282)
+
+Gate 1 — every HIGH + MEDIUM collation sink (ADR §1.3) carries an inline LC_ALL=C; the
+already-correct reference sink is unchanged; numeric/display sinks deliberately left alone.
+  Confirmed inline LC_ALL=C at (current line numbers; the file drifted off the §1.3 audit):
+    310   data="$(LC_ALL=C sort -u "${pfbsuppression}")"           (§1.3 L282, suppression)
+    559   cut -d ' ' -f1 "${masterfile}" | LC_ALL=C sort -u         (§1.3 L531, alias compare)
+    571   LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > tmp; mv       (§1.3 L543, deny in-place)
+    787   LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > tmp          (§1.3 L759, deny)
+    881   LC_ALL=C sort -u "${pfbdeny}${alias}.txt" > tmp; mv       (§1.3 L853, deny in-place)
+    1186  grep -aoEw '<ipv4>' | LC_ALL=C sort -u > ...orig          (§1.3 L1158, extracted IP)
+    1208  LC_ALL=C sort -o "${masterfile}" "${masterfile}"          (§1.3 L1180, order MEDIUM)
+  Reference sink (§1.3 L479, "already correct") intact at L507:
+    LC_ALL=C sort -u "${tempfile}" > "${dedupfile}"
+  Collation-insensitive numeric/display sinks (sort -n / -nu / -t . -k1,1n / wc|sort -n -r)
+  left unprefixed by design (§1.3) — no false omission.
+
+Gate 2 — no process-wide locale export.
+  grep -nE 'export[[:space:]]+(LC_ALL|LANG)' pfblockerng.sh  =>  NONE.
+
+Gate 3 — locale policy recorded, citing ADR-26.
+  CLAUDE.md (Shell standards) L524-530: the three rules (inline LC_ALL=C on byte-exact machine-
+  data set ops; split LC_COLLATE=C / LC_CTYPE=<resolved UTF-8> for raw-Unicode text; never
+  export LC_ALL/LANG), pointing at the resolver snippet.
+  docs/misc/architecture-notes.md L206+ ("Locale policy (ADR-26)"): the three rules, the
+  C-vs-C.UTF-8 availability table (FreeBSD / glibc 2.35+ / musl / macOS), and the deferred
+  copy-ready resolver snippet (no caller today -> not shipped as a function).
+
+Gate 4 — FreeBSD-only / locale-fragile constructs replaced, diagnostic output format preserved.
+  ls -lahtr | sed | awk column-parse: GONE (only a comment mentions it, L174). Replaced by
+  pfb_list_orig_by_mtime() (def L177; calls L1254 + L1258), which lists '*.orig' oldest-first
+  and emits "<Mon> <Day><TAB><HH:MM><TAB><name>" byte-for-byte as before, via stat(1) + LC_ALL=C
+  date with a one-time GNU-vs-BSD detection (stat --version).
+  jot: /usr/bin/jot GONE; `for i in $(seq 255)` at L355. The L18 `jot` mention is a comment
+  (mktemp entropy), not a call — left as-is per ADR §1.4.
+
+Gate 5 — linters clean.
+  sh -n pfblockerng.sh => OK (run locally in the acceptance worktree).
+  shellcheck + markdownlint: green in CI on every Phase 1-3 PR and on the latest devel test.yml
+  run (the ShellCheck + markdownlint jobs both reported success). check_url_encoding.py
+  unaffected — no new HTTP-client URL interpolation introduced.
+
+Gate 6 — ADR-04 live-VM smoke green (CE + Plus fan-out).
+  smoke-fanout.yml run 27614011634, head 95be282 (devel), conclusion: success.
+    Smoke (CE 2.8)   / pytest -m smoke : success (full ~7 min live-VM run, 11:25 -> 11:32)
+    Smoke (Plus 26.03)/ pytest -m smoke : success
+    All smoke legs passed (AND gate)   : success
+  https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/27614011634
+  The dedup/aggregate, masterfile, and reputation/.orig paths produce identical block sets and
+  the diagnostic dump still renders (the live legs exercise the BSD branch of
+  pfb_list_orig_by_mtime — stat -f / date -r — on the FreeBSD VM).
+
+  Fan-out blocker resolved en route: the prior fan-out legs aborted at pytest collection in ~1s
+  because tests/smoke/test_nightly_install.py still imported GUEST_ABI, removed by b7ccf0e in
+  favour of matrix_abi(). Fixed in PR #262 (merged 95be282) — unrelated to ADR-26, but it gated
+  this acceptance run. With it merged, both legs ran the full suite.
+
+Gate 7 — minimal diff.
+  Two focused shell commits (46e659c inline prefixes; 690915f the mtime helper + seq) plus the
+  Phase-2 docs; no incidental reformatting of untouched lines.
+
+STATUS FLIP
+  ADR.md: Status Proposed (2026-06-15) -> Accepted (2026-06-16). Per the ADR-doc rule this text
+  + RESULTS land direct-to-devel (no PR); the implementation already landed via the full PR flow.

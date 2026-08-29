@@ -1,0 +1,88 @@
+================================================================================
+PHASE 4 PROMPT — v4 UI mask lift (/8–/32) with an extracted pure validator
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §2.1 UI row, §2.3 fork 1)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 4 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly. BEHAVIOUR
+CHANGE (accepted input widens): red->green via the extracted validator's unit
+tests. You implement with Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+The /32-or-/24 ceiling exists only because the old engine could not carve other
+masks. Phase 3 removed that constraint; the UI must now accept v4 /8–/32
+(user-confirmed fork: the /8 floor is a fail-open-typo guard, not an engine
+limit). Validation today is inline in the POST handler
+(pfblockerng_ip.php:147-165) — unreachable by PHPUnit; extract it.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/03_Results.txt — confirms
+  the engine accepts any mask. If missing, STOP and report.
+- src/usr/local/www/pfblockerng/pfblockerng_ip.php:140-170 (the POST validation
+  loop), :364-380 (the Suppression toggle help text), :491-510 (the v4
+  suppression section + $suppression_text "/32 or /24 only" copy).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — where pure helpers live
+  (home for the validator).
+- tests/php/ — suite conventions (bootstrap, doubles); tests/smoke/ui/ — Tier A
+  pattern for the IP settings page (find the existing ui_render case for
+  pfblockerng_ip.php and its marker).
+- CLAUDE.md — web-UI help-text style (match neighbours, no out-prosing), naming
+  conventions (pfb_* prefix).
+
+ACTION PLAN
+1. Tests FIRST (red): tests/php/SuppressionValidatorTest.php against a
+   not-yet-existing pfb_validate_suppression_line(string $line, string $family):
+   ?string (NULL = valid; else the input_errors message). v4 family cases,
+   branch-covered:
+   - '10.0.0.1/32' and '10.0.0.0/24' valid (the legacy shapes — upgrade
+     contract §2.2);
+   - '10.0.0.0/16' and '10.0.0.0/8' valid (NEW — these FAIL against today's
+     rule, the red);
+   - '10.0.0.0/7' and '/33' invalid (floor + ceiling), each with a distinct
+     message naming the accepted range;
+   - non-CIDR garbage, bad octets, an entry with a trailing ' # description'
+     comment (match today's tolerated textarea shapes — read the current loop
+     and pin whatever it accepts today);
+   - family='ipv6' returns errors for now (Phase 6 implements it) — pin that
+     explicitly so P6 has a red to flip.
+2. Implement the validator in pfblockerng_extra.inc (pure — no config access,
+   no pfSense calls beyond is_ipaddrv4/subnet helpers already doubled for
+   PHPUnit; add a faithful double if one is missing, per tests/php/README.md).
+3. Swap pfblockerng_ip.php's inline loop to call it; update the two help texts
+   ("/32 or /24 only" -> the new /8–/32 wording, keeping neighbour tone/length).
+4. Tier A: confirm the existing ui_render case for the IP settings page still
+   passes (page renders, marker, no php_error.log line). If the marker text was
+   the old help copy, update the marker choice.
+5. Full gates.
+
+CONSTRAINTS
+- The validator is PURE and family-parameterised — Phase 6 reuses it for v6;
+  do not hardcode v4.
+- Storage format unchanged (base64 textarea, same tokens) — only accepted
+  RANGE widens.
+- Do NOT touch the alerts page or the shell (later phases).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit -> green, with the /16 + /8 cases proven red pre-change
+- php -l on both touched files; PHPCS; PHPStan -> clean
+- python -m pytest ; shellspec -> green
+- Tier A ui_render for pfblockerng_ip.php (locally with SMOKE_ADMIN_PASSWORD, or
+  note the dispatch for Phase 9's fan-out)
+
+EXPECTED RESULT
+v4 suppression accepts /8–/32 through a unit-tested validator; help text says
+so; the page renders clean.
+
+COMMIT (single)
+    pfblockerng: accept /8-/32 v4 suppression masks via pure validator (ADR-53 P4)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/04_Results.txt
+State: validator signature + message texts; the pinned v6-not-yet contract P6
+must flip; help-text wording chosen; test counts; go-ahead for Phase 5 (pure v6
+engine, no UI).

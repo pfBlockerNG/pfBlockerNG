@@ -1,0 +1,67 @@
+ADR-66 PHASE 3 — ORCHESTRATOR GATE RECORD
+==========================================
+
+VERDICT: PASS
+
+TRANSACTION
+-----------
+Commit 6efa070c "pfblockerng: rename the Wildcard Blocking feature to the tld_wildcard stem
+(ADR-66 P3)", parent 9619a81e (base_sha matches), pushed — remote tip == HEAD, worktree
+clean (orchestrator-verified). Handoff verdict DONE; RESULTS/03_Results.txt complete
+(363 lines, all fixed sections). Verify stage ran on Sonnet per the 2026-07-14 model split
+(first phase under it).
+
+COMMANDS + RESULTS (verifier-executed; orchestrator re-ran the targeted oracle+bridges run
+— 37 passed — and re-confirmed the frozen hash + remote tip)
+--------------------------------------------------------------
+- python3 -m pytest -q -> 2876 passed, 4 skipped; targeted oracle+bridges -> 37 passed
+- ruff check / format --check -> clean; python3 -m mypy tests/ -> clean
+- php -l (.inc + 4 touched tests/php files) -> no syntax errors (5 pre-existing PHP 8.3
+  deprecation lines on .inc, matching baseline)
+- vendor/bin/phpunit -> 3338 tests, 21009 assertions, OK; composer phpstan -> no errors;
+  phpcs -> exit 0
+- check_comment_narration / check_version_literals --diff <base> -> clean;
+  check_retired_tokens --diff <base> -> survivors all match the disclosed intentional stays
+
+RED/GREEN
+---------
+Behaviour-preserving pure rename (CLAUDE.md Test coverage #1 exception). Frozen oracle
+tests/test_adr66_tld_naming_oracle.py: hash 4ae3ad28 identical at base_sha and HEAD, zero
+edits in the diff, GREEN in both the targeted and full runs.
+
+PER-ITEM DIFF VERDICTS (verifier, full git show read)
+-----------------------------------------------------
+- .inc: all 12 $pfb['dnsbl_tld'] -> $pfb['dnsbl_tld_wildcard'] sites at the enumerated
+  lines; manifest-writer locals + keys (tld_wildcard_blacklist/tld_wildcard_exclusion)
+  renamed :8216-8227; comments reconciled; the ADR-65-doomed cluster (tld_analysis,
+  tld_search, pfb_dnsbl_py_swap + its local $dnsbl_tld param, the /tmp/dnsbl_tld* glob)
+  zero hunks. PASS
+- .py: classify -> tld_wildcard_classify, _dnsbl_load_tld_master ->
+  _dnsbl_load_tld_wildcard_master, _dnsbl_tld_search -> _dnsbl_tld_wildcard_search
+  (defs + all calls); blob keys tld_master/tld_blacklist/tld_exclusion -> tld_wildcard_*
+  in build() + _dnsbl_config_from_manifest (reader-side only — no manifest config.tld_master
+  key exists post-#1255); per-line comment dispositions verified (retired-key mentions and
+  classify_idn/classify_label correctly untouched). PASS
+- Seam: exactly the 3-line update in test_adr66_tld_bridges.py; G1/G2 stays untouched. PASS
+- Test honesty: identifier substitution only; assertArrayNotHasKey('tld_master') x3 kept
+  verbatim (pins the retired key never reappearing); golden-corpus pairing non-vacuous. PASS
+- Conventions: _dnsbl_load_tld_wildcard_master beside 3 _dnsbl_* siblings;
+  tld_wildcard_* keys mirror P2's tld_allow siblings. PASS
+
+DEVIATIONS (disclosed, judged non-blocking)
+-------------------------------------------
+1. dnsbl_corpus/feeds.json prose annotation renamed (stale classify() reference surfaced by
+   a post-edit sweep — JSON fixtures were outside the brief's grep scope).
+2. pfblockerng.inc:125 $pfb['dnsbl_tld_data'] = '.../dnsbl_tld' identified as an additional
+   legitimate stays-survivor (file path, not the flag).
+3. pfb_unbound.py numstat 42/39 (net +3): three comment/docstring lines wrapped past the
+   120-col limit by the longer identifiers; hunk-by-hunk read confirmed zero logic changes.
+
+Orchestrator spot-check note: a `classify(` grep hit at pfblockerng.inc:7652 is the
+function name pfb_dnsbl_hash_line_classify() wrapped across two comment lines — a designed
+stay, not a straggler.
+
+SKIPPED
+-------
+- verify-red-proof.sh revert dance: behaviour-preserving pure rename; the hash-pinned
+  frozen oracle staying byte-identical GREEN is the sanctioned substitute (re-verified).

@@ -1,0 +1,67 @@
+# tests/skip-allowlist.txt -- recorded skip allowlist for scripts/check_skip_allowlist.py
+# (issues #2359 and #2369). One entry per line: <suite>:<classname>::<name>, the id the script derives
+# from each suite's JUnit report (`#` starts a comment; blank lines ignored).
+#
+# Every entry MUST carry a trailing `# <reason>` comment -- an entry with none is a parse
+# error (exit 2), so this file cannot rot into a bare id list with no record of WHY a test
+# currently skips. Add a legitimately new skip as its own entry with its own reason; never
+# widen an existing reason to cover an unrelated test.
+#
+# An allowlisted id this run did NOT observe is informational only (exit 0 unaffected) --
+# the skip set legitimately differs per matrix leg (a PHP-build-gated case skips on PHP 8.3
+# and not 8.5), per host OS (a macOS-only case skips on CI's Linux runner) and per invoking
+# uid, so a local run may observe MORE skips than CI (any chmod/permission-guarded case that
+# denies only under a non-root uid). Only an id observed in a report but absent from this
+# file fails the gate.
+#
+# An entry is "<id>  # <reason>" with TWO OR MORE spaces before the '#', and the split takes
+# the RIGHTMOST one, so ids keep every '#' they carry -- a pytest parametrised id renders
+# its parameter verbatim, even when that parameter contains the separator shape itself, and
+# PHPUnit names an unnamed data-set case `testFoo with data set #0`. A single space before
+# the '#' is a parse error, not a guess.
+#
+# Copy an id from the report the suite wrote, never from its source: a pytest parametrised
+# id can be index-derived (channel_args1), and the checker replaces XML-illegal control
+# bytes with '?' before parsing, so an id built from a description carrying one is recorded
+# in that replaced form. PHPUnit writes a bare <skipped/> with no message, so the gate can
+# name an unlisted PHPUnit skip but never its reason -- read the suite output for that.
+
+# PHPUnit -- union of PHP 8.3 and PHP 8.5 (issue #2356's four remaining skips).
+phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zip  # host file(1) classification (PHP 8.3 and 8.5)
+phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform locale data (PHP 8.3 and 8.5)
+phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
+phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
+phpunit:RsyncSizeRefusalTest::test_rsync_body_over_the_ceiling_is_refused_with_a_named_reason  # macOS host lacks /usr/local/bin/rsync (openrsync lives at /usr/bin); Linux CI installs it there (issue #2667)
+phpunit:RsyncSizeRefusalTest::test_rsync_body_under_the_ceiling_still_downloads  # macOS host lacks /usr/local/bin/rsync; Linux CI installs it there (issue #2667)
+phpunit:RsyncSizeRefusalTest::test_rsync_fetch_under_a_kernel_tiny_ceiling_never_succeeds  # macOS host lacks /usr/local/bin/rsync; Linux CI installs it there (issue #2667)
+phpunit:PfbTarMimeRejectionTest::test_tar_bzip2_is_accepted_at_inner_gate  # ext-bz2 absent on some host PHP builds; CI loads it
+phpunit:PfbTarMimeRejectionTest::test_plain_bzip2_remains_accepted  # ext-bz2 absent on some host PHP builds; CI loads it
+phpunit:DownloadExtractedPayloadSanityTest::test_extracted_payload_verdict_fails_the_download_and_keeps_the_publication with data set "zip payload is an HTML error page"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractedPayloadSanityTest::test_extracted_payload_verdict_fails_the_download_and_keeps_the_publication with data set "zip payload is empty"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractedPayloadSanityTest::test_healthy_archive_payload_still_ingests_with_the_scan_on with data set "zip"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractedPayloadSanityTest::test_scan_stays_inert_while_the_flag_is_off with data set "zip payload is an HTML error page"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractedPayloadSanityTest::test_scan_stays_inert_while_the_flag_is_off with data set "zip payload is empty"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractedPayloadSanityTest::test_earlier_gate_keeps_its_own_reason with data set "zip NUL payload is an inner-MIME reject"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`; FreeBSD sh has it, so the arm is covered live by ADR-04 smoke (issue #2660)
+phpunit:DownloadExtractRestrictiveFlagsTest::test_the_flag_set_strips_what_the_archive_carries  # GNU tar rejects --uid (fixture) and --no-fflags (exit 64), so a Linux runner can neither author the archive nor run the appliance's flag set; the privileged proof is tests/smoke/test_smoke_feeds.py::test_extraction_refuses_archive_supplied_metadata
+phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip payload is an HTML error page"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
+phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip payload MIME is not allowed"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
+phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip archive fails its probe"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
+
+# ShellSpec -- macOS/BSD host lacks the GNU stat/date/touch branch exercised in Linux CI.
+shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3) lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)  # GNU-only off-box branch; BSD branch is covered live by ADR-04 smoke
+
+# pytest -- 4 observed on the Linux CI runner.
+pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner
+pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present on the runner
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the runner is Linux
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the runner is Linux
+pytest:tests.test_cross_agent_tooling::test_ast_grep_parses_a_php_inc_file_as_php  # ast-grep is an agent-host uv tool, not in CI's locked dev group
+pytest:tests.test_cross_agent_tooling::test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag  # semgrep is an agent-host uv tool, not in CI's locked dev group
+
+# ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
+# Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when
+# none render; the `ui-tests` label gates that fan-out, so the gate had not observed it.
+ui:tests.smoke.ui.test_browser_misc::test_feeds_alt_radio_submit_wiring  # no pre-defined feed exposes an Alternate-URL radio on this box
+
+# phpunit -- only on a host that carries the pkg(8) port binary (a FreeBSD/pfSense dev box).
+phpunit:SoftwareFailedCheckStateTest::testPkgLatestReportsAFailedAttemptToItsCaller  # drives the real pkg shellout; its outcome is host repository state where /usr/local/sbin/pkg exists

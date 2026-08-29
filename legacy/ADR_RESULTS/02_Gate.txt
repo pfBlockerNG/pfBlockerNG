@@ -1,0 +1,147 @@
+================================================================================
+ADR-61 PHASE 2 GATE RECORD — orchestrator (independent Sonnet 5 verifier via
+phase-step workflow), CLAUDE.md "THE GATE"
+================================================================================
+
+VERDICT: PASS
+
+Commit gated: 0f03b00a6371d18728d1184e9636000434496368
+"pfblockerng: wire IP-side sync-status ledger writers/clearers (ADR-61 P2)"
+
+--- 1. handoff-fields ---
+PASS. git -C worktree log -1 matches the handoff's commit field exactly. All
+fixed fields present and non-empty: Verdict=DONE, What changed (4 files, one-
+line why + commit hash each), Gates (6 commands + tails), Coverage matrix (11
+rows), Deviations (3, stated), Carry-forward (line-drift + 2 reusable-pattern
+notes for Phase 3).
+
+--- 2. gate-rerun (canonical PHP gates, independently re-executed) ---
+PASS.
+$ find src -name '*.php' -o -name '*.inc' | xargs -n1 php -l
+28 files, all "No syntax errors detected" (only pre-existing unrelated
+Deprecated notices, none on touched functions).
+
+$ vendor/bin/phpunit
+Tests: 2478, Assertions: 19190, PHPUnit Deprecations: 2, Skipped: 4 — 0
+failures/errors, matches Phase 1 baseline drift (+17 tests: 11 new + Phase-1's
+own suite growth from the rebase).
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors.
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+Exit 0, no output.
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+Exit 0, no output.
+
+$ python3 scripts/check_version_literals.py --diff origin/devel
+Exit 0, no output.
+
+All match the handoff's claimed tails exactly.
+
+--- 3. red-proof (independently re-executed) ---
+PASS.
+git checkout HEAD~1 -- src/usr/local/pkg/pfblockerng/pfblockerng.inc (only —
+per the brief's literal srcPaths) → vendor/bin/phpunit --filter
+PfbSyncStatusIpWritersTest → Tests: 11, Assertions: 54, Failures: 3 — the 3
+pfctl-apply-pair tests genuinely red ("Failed asserting that actual size 0
+matches expected size 1"); download/dedup tests stayed green since their
+functions live untouched in pfblockerng_extra.inc at this revert depth. RED
+confirmed for the reverted surface.
+
+git checkout HEAD -- . (restore) → re-run → Tests: 11, Assertions: 63, all
+green (11/11). GREEN confirmed.
+
+Additionally independently re-validated the implementer's own STRONGER claim
+(revert BOTH pfblockerng.inc + pfblockerng_extra.inc): Tests: 11, Errors: 7,
+Failures: 3 (7x "Call to undefined function pfb_ip_download_ledger_update()"/
+"pfb_sync_status_dedup_check()" + the same 3 pfctl failures; only
+testPfctlApplyFailureLoggingLevelUnchanged stayed green, correctly pinning
+pre-existing #980/#987 behavior) — byte-for-byte matches RESULTS/02_Results.txt's
+pasted RED block. Restored to HEAD; git status --short empty; full suite green
+again (2478/2478).
+
+--- 4. diff-vs-plan (full `git show`, not --stat) ---
+PASS, all four ACTION-PLAN items ticked:
+- Download fail/success: wired at the IP call site inside the
+  `installedpackages/{$ip_type}/config` foreach (:17496 loop start), NOT the
+  DNSBL foreach at :15842 — confirmed via diff read. DNSBL call site (:16007)
+  correctly untouched (Phase 3's job).
+- Dedup sanity: new pfb_sync_status_dedup_check(string $log_path, string
+  $ledger_dir) added in pfblockerng_extra.inc, reads $pfb['log'], tail-1-wins
+  scan for "Sanity check" lines, FAILED->open, PASSED->close. Called from the
+  FINAL REPORTING block right after the exec() that appends the Sanity-check
+  line. Widget's existing inline exec+grep (pfblockerng.widget.php:602-603)
+  verified untouched — confirmed via diff (Phase 6's job).
+- Pfctl apply fail/success: wired INSIDE pfb_pfctl_table_op() itself (a
+  deliberate superset of the brief's literal suggestion — see Deviation #2
+  below). pfb_logger(...,2) call verified byte-identical (pure context line
+  in the diff, no +/-) — issue #980/PR #987's fix untouched.
+- Every open() has a same-phase close() for the identical (facility,item,
+  stage) triple: all 3 triples confirmed paired in the same commit —
+  Semantics #4 satisfied.
+
+--- 5. Coverage matrix (all 12 rows) ---
+PASS — every row independently re-run and confirmed, including the vacuity
+check on testDedupSanityNoLineRecordedIsNoOp (irrelevant log content -> empty
+list AND no ledger file created — a buggy "always open" implementation would
+fail both assertions) and the discrimination check on
+testPfctlApplyFailureLoggingLevelUnchanged (stayed GREEN even under the full
+revert, correctly pinning pre-existing #980/#987 behavior rather than this
+phase's new code).
+
+--- 6. test-honesty ---
+PASS. No weakened/removed assertions (new file). Every negative assertion
+(assertSame([],...), assertFileDoesNotExist) has a fixture shape that would
+fail it on a regression. Red run produced by a real src revert
+(git checkout HEAD~1), not monkeypatching/injected exceptions — independently
+re-executed, not merely accepted. www/ untouched, Tier-A N/A for this phase.
+
+--- 7. conventions ---
+PASS. pfb_sync_status_dedup_check matches siblings pfb_sync_status_{open,
+close,list_open,read_all,write_all} plus the existing "*_check" suffix
+pattern (pfb_dnsblip_rebuild_check, pfb_software_update_check).
+pfb_ip_download_ledger_update matches the pfb_due_ledger_{write_entry,
+mark_ran,set_pending} domain-ledger-verb pattern. In-repo claims verified by
+grep (widget's grep+tail-1 claim; pfblockerng.sh closingprocess() line
+numbers). Comment budget respected; check_comment_narration.py clean.
+
+--- DEVIATIONS (all documented, none blocking) ---
+1. pfb_ip_download_ledger_update() extracted as a new helper instead of
+   inlining — the download loop lives inside the large sync_package_
+   pfblockerng() which no existing test invokes directly; the brief allowed
+   a minimal seam.
+2. Pfctl apply open/close wired INSIDE pfb_pfctl_table_op() itself (not its
+   caller pfb_apply_alias_delta()) — verifier independently re-checked the
+   underlying claim ("every $table here is pfB_*-prefixed") across all 11
+   call sites (handoff said 8 — a harmless undercount, corrected here) and
+   confirmed facility='ip' is correct unconditionally at this choke point.
+   Covers every caller (aggregate build/teardown too) — a superset of the
+   brief's literal suggestion, still strictly additive and in-scope.
+3. Added a close-only else-branch for the dedup key when dedup is toggled
+   OFF, preventing a stale entry surviving forever once dedup is disabled —
+   cannot introduce a false positive, cannot violate the writer-needs-clearer
+   rule.
+
+--- SKIPPED ---
+- Python/Shell/Markdown canonical gates: no .py/.sh/.md files in this phase's
+  diff (confirmed via git show --stat).
+
+--- CARRY-FORWARD FOR PHASE 3 ---
+- pfb_pfctl_table_op() is now ledger-instrumented for EVERY caller (deviation
+  #2) — Phase 3/5 do NOT need to re-wire IP-side pfctl apply failures; only
+  Phase 3's genuinely DNSBL-only classes (conf/build fail, swap-not-confirmed
+  fallback) remain.
+- DNSBL download-fail call site at pfblockerng.inc:16007 (inside the
+  pfblockerngdnsbl config foreach at :15842) is untouched and is Phase 3's to
+  wire with facility='dnsbl' — do NOT reuse pfb_ip_download_ledger_update()
+  (it hardcodes facility='ip').
+- pfb_sync_status_dedup_check()'s "shell writes a signal line, PHP translates
+  it" pattern is available in pfblockerng_extra.inc if useful, but the DNSBL
+  conf/build-fail path already has its own decision point
+  (pfb_stop_start_unbound()'s retval != 0) so is likely not directly
+  reusable.
+- Line numbers below this phase's insertions (:17750/:4749 area) have shifted
+  a few lines forward from THIS phase's own edits — Phase 3 must re-grep, not
+  trust any prior phase's absolutes.

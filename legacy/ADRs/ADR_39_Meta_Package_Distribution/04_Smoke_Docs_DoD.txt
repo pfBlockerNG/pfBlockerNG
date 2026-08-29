@@ -1,0 +1,64 @@
+ADR-39 — Phase 4: smoke (conf regeneration) + docs + DoD
+================================================
+
+>>> FINAL-DESIGN NOTE (supersedes the specifics below). The hook is a conf REGENERATOR
+>>> (no pkg/network/snapshot/reconcile at boot), so the smoke proves: orphan guard
+>>> (absent conf => no-op), stale-varver REGENERATION to the box's real <varver>/<arch>
+>>> with an end-to-end resolve from the corrected conf (the hook's folded detection
+>>> cross-checked against an independent Python oracle), and idempotence. There is NO
+>>> "reconcile activation" or boot-ordering/DNS check (the hook touches no network).
+>>> Smoke lives in tests/smoke/test_repo_install.py (test_generate_hook_*). Read ADR.md
+>>> §6 Phase 4 + §7 for the authoritative design; the text below is the original record.
+
+GOAL
+Prove the on-box path end-to-end on the live-VM fan-out and reconcile the docs. This phase is
+the ADR acceptance gate (CLAUDE.md: an ADR flips to Accepted on green automated coverage that
+proves the behaviour AND guards regression).
+
+READ FIRST
+- ADR.md §4 (acceptance), §6 Phase 4, §7 (DoD + manual checklist).
+- tests/smoke/test_repo_install.py (the `repo` marker; helpers, _matrix.py, ensure_dnsbl_vip
+  patterns) and the smoke README in docs/misc/architecture-notes.md.
+- CLAUDE.md → "Self-hosted pkg repository (ADR-17)" (the hard-rule block I added + the Worker
+  bullets that are now superseded) and "Cloudflare routing Worker (ADR-20)".
+- docs/misc/architecture-notes.md → the "ABI is NOT 1:1 / self-hosted pkg distribution" section.
+- ADR-20's ADR.md (to add the supersession amendment).
+
+DO
+1. Smoke (`repo` marker, deselected from -m smoke), each case before+after, every branch:
+   - FRESH INSTALL: run add-repo.sh on the VM (no Worker) -> assert the resolved conf
+     (correct <varver>/<arch>, priority 100) -> `pkg update` accepts the catalog ->
+     `pkg install pfSense-pkg-pfBlockerNG*` pulls OUR build (priority 100 dominates a decoy).
+   - SELF-HEAL: write a DELIBERATELY-STALE <varver> into the conf (BEFORE: assert it points at
+     the wrong subtree / the wrong build would be selected); fire the rc.d hook; AFTER: assert
+     the url: flipped to the box's correct <varver>/<arch>, `pkg update` re-accepts, and the
+     correct pfBlockerNG build is installed and serving (DNSBL probe per the existing harness).
+   - HOOK SAFETY: conf-absent -> hook exits 0, no change (guard).
+   - EOL/route-only: a box whose <varver> is a retained EOL catalog still resolves its frozen
+     subtree (reuse the ADR-27 topology from _matrix.py).
+   Keep using helpers.unique_domain(), on-box drill probes, ensure_dnsbl_vip — per the smoke
+   rules in architecture-notes.md / CLAUDE.md.
+2. Docs:
+   - CLAUDE.md: in the ADR-17 section, mark the Worker/routing bullets SUPERSEDED by ADR-39;
+     keep the ABI-not-1:1 hard rule; replace the meta-package wording (if Phase work added any)
+     with the rc.d self-heal-hook mechanism. Remove the "Cloudflare routing Worker (ADR-20)"
+     bullet (or mark retired).
+   - docs/misc/architecture-notes.md: under the distribution section, add the self-heal-hook
+     mechanism (boot rc.d, self-guarding, reconciles on varver change) + the "every
+     varver-changing upgrade reboots" + "no third-party pre-solve hook" findings.
+   - README.md: update the self-hosted-repo bootstrap description (add-repo.sh installs a
+     self-heal hook; no Worker) if it mentions the Worker.
+   - ADR-20 ADR.md: add a dated amendment "Routing layer superseded by ADR-39 (Worker +
+     routing.json removed; on-box detection + rc.d self-heal). Variant catalog tree retained."
+3. Reconcile any stale meta-package text left anywhere (grep `meta-package`/`pfblockerng-repo`
+   in docs) so the docs match the shipped design.
+
+TESTS / GATES
+- Dispatch the `repo`-marker smoke on the live-VM fan-out (CE + Plus); all cases green.
+- python -m pytest + markdownlint clean; no dangling Worker/meta-package references in docs
+  except as "superseded/deleted" history.
+
+HANDOFF (RESULTS/04_Results.txt)
+The smoke run id + per-case GO, the before/after assertions for the self-heal case, the doc
+diffs summary, and a DoD checklist (every §7 item) marked done with evidence. Note the
+out-of-CI items (true cross-major OS upgrade; rc.d-survives-BE-clone) as maintainer-smoke.

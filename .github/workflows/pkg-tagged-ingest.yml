@@ -1,0 +1,197 @@
+name: Tagged pkg ingestion
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        required: true
+        type: string
+      release_id:
+        required: true
+        type: string
+      release_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      destinations:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      portversion:
+        required: true
+        type: string
+    secrets:
+      PKG_GITHUB_APP_ID:
+        required: true
+      PKG_GITHUB_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  stage-pkg:
+    runs-on: ubuntu-latest
+    outputs:
+      staging_prefix: ${{ steps.result.outputs.staging_prefix }}
+      touched: ${{ steps.result.outputs.touched }}
+      noop: ${{ steps.result.outputs.noop }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Dispatch exact tagged stage
+        env:
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DESTINATIONS: ${{ inputs.destinations }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-stage-result.json
+        run: |
+          set -eu
+          export PKG_OPERATION=tagged-stage # operation=tagged-stage
+          sh scripts/dispatch-pkg-publication.sh
+
+      - name: Expose exact stage result
+        id: result
+        env:
+          RESULT_FILE: ${{ runner.temp }}/pkg-stage-result.json
+        run: |
+          set -eu
+          {
+            echo "staging_prefix=$(jq -r '.staging_prefix' "$RESULT_FILE")"
+            echo "touched=$(jq -c '.touched' "$RESULT_FILE")"
+            echo "noop=$(jq -r '.noop' "$RESULT_FILE")"
+          } >> "$GITHUB_OUTPUT"
+
+  prepare-live-gate:
+    runs-on: ubuntu-latest
+    needs: stage-pkg
+    if: needs.stage-pkg.outputs.noop != 'true'
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - id: ci
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Build live-install matrix from exact staged targets
+        id: build
+        env:
+          DESTINATIONS: ${{ inputs.destinations }}
+          TOUCHED: ${{ needs.stage-pkg.outputs.touched }}
+          CI_MATRIX: ${{ steps.ci.outputs.ci_matrix }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          import os
+
+          from scripts.live_gate_matrix import compute_live_gate_matrix
+
+          matrix, untestable, drifted = compute_live_gate_matrix(
+              json.loads(os.environ["DESTINATIONS"]),
+              json.loads(os.environ["TOUCHED"]),
+              json.loads(os.environ["CI_MATRIX"]),
+          )
+          if untestable or drifted or not matrix:
+              raise SystemExit(f"untestable={untestable} drifted={drifted} matrix={matrix}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
+          PY
+
+  validate-live-pages-install:
+    needs: [stage-pkg, prepare-live-gate]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-live-gate.outputs.matrix) }}
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      pytest_marker: repo
+      pytest_filter: test_install_from_live_pages_url
+      smoke_repo_live_url: https://pkg.pfblockerng.com/${{ needs.stage-pkg.outputs.staging_prefix }}/${{ matrix.channel }}
+      smoke_repo_expected_source_sha: ${{ inputs.source_sha }}
+      smoke_repo_expected_version: ${{ inputs.portversion }}
+      smoke_repo_expected_channel: ${{ inputs.channel }}
+      checkout_ref: ${{ github.workflow_sha }}
+    secrets: inherit
+
+  finalize-pkg:
+    runs-on: ubuntu-latest
+    needs: [stage-pkg, prepare-live-gate, validate-live-pages-install]
+    if: always() && needs.stage-pkg.result == 'success' && needs.stage-pkg.outputs.noop != 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Promote a green stage or discard every other outcome
+        env:
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DESTINATIONS: ${{ inputs.destinations }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          STAGING_PREFIX: ${{ needs.stage-pkg.outputs.staging_prefix }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-final-result.json
+          GATE_GREEN: ${{ needs.prepare-live-gate.result == 'success' && needs.validate-live-pages-install.result == 'success' }}
+        run: |
+          set -eu
+          if [ "$GATE_GREEN" = true ]; then
+            export PKG_OPERATION=tagged-promote # operation=tagged-promote
+          else
+            export PKG_OPERATION=tagged-discard # operation=tagged-discard
+          fi
+          sh scripts/dispatch-pkg-publication.sh
+          if [ "$PKG_OPERATION" = tagged-discard ]; then
+            echo "::error::live Pages install gate did not pass; staging discarded"
+            exit 1
+          fi

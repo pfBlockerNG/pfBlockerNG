@@ -1,0 +1,82 @@
+================================================================================
+PHASE 2 PROMPT — The due-ledger library (pure, not yet wired)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §2.C + §1.3 first)
+================================================================================
+
+ROLE
+You implement Phase 2 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-PRESERVING — it adds a pure, tested due-ledger library and WIRES IT
+INTO NOTHING (no scheduling change). Work inline on the branch, one commit, push directly
+(open a PR only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+The cron-consolidation (Phase 4) needs a place to record "when is job/feed X next due" so a
+single tick can decide what to run. Today only `.update`/`.last` last-run markers exist under
+$pfb['dbdir']. Build the next-due ledger as a standalone, clock-injectable library FIRST, fully
+tested, so Phase 4 wires a proven component. Two load-bearing facts drive the design:
+  (a) $pfb['dbdir'] is on the MFS RAM disk on the issue-#468 reboot path → wiped on reboot
+      unless persisted. ABSENT ledger MUST mean "due-now-but-jittered", never a stampede.
+  (b) dcc/bl jitter (rand(0,23) today) is deliberate to spare upstreams → the ledger stores a
+      STABLE seeded jitter offset, not a per-pass re-randomisation.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/01_Results.txt — it confirms the verb map is
+  pinned and Phase 1 is complete. If it is missing, STOP and report (Phase 1 is not done).
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§2.C the ledger decision, §1.3 the RAM-disk/
+  jitter facts, §2 contract #3/#4/#5/#6, §5 the "injectable clock + seed" constraint)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — $pfb path setup (:42-:92, esp. dbdir/origdir);
+  the existing `.update`/`.last`/`.orig` marker reads/writes (grep `.update"` / `.last"`); the
+  issue-#468 persist/restore set + earlyshellcmd restore (grep the #468 DNSBL-cache persist code).
+- tests/php/bootstrap.php, tests/php/README.md (off-appliance load model).
+- CLAUDE.md (PHP standards; the test-coverage mandate; ADR-26 LC_ALL=C if any sort touches data —
+  unlikely here).
+
+ACTION PLAN (oracle/unit tests FIRST — pure library)
+1. Implement a due-ledger module (functions in pfblockerng.inc, or a small included file loaded by
+   bootstrap.php — match how the codebase already factors helpers). Core API (names per house
+   style), all CLOCK- and SEED-INJECTABLE (pass `now` epoch + a per-install seed; never call
+   time()/rand() inside the pure core):
+     - read_entry(job_key)  -> { last_run, next_due, jitter } | absent-sentinel
+     - is_due(job_key, interval, now) -> bool   (absent ⇒ TRUE/“due-now-jittered”; next_due≤now ⇒ TRUE)
+     - mark_ran(job_key, interval, now) -> persists last_run=now, next_due=now+interval(+stable jitter)
+     - seeded_jitter(job_key, max) -> deterministic offset for a fixed (seed, job_key) — the dcc/bl spread
+   Persist under $pfb['dbdir'] (atomic write, LOCK_EX), evolving — not duplicating — the existing
+   `.update`/`.last` markers. Keep it a sidecar; NO config field.
+2. WIRE IT INTO NOTHING. No cron change, no call from sync_package_pfblockerng. This phase only
+   delivers the tested library + (optionally) a note in the handoff on how Phase 4 will use it.
+3. Add PHPUnit tests (tests/php/) covering every branch:
+     - absent entry ⇒ is_due TRUE with a NON-ZERO, STABLE jitter (same seed ⇒ same offset);
+     - next_due in the future ⇒ not due; next_due in the past ⇒ due (catch-up);
+     - a missed window ⇒ exactly ONE due (mark_ran advances next_due past now, no double-run);
+     - round-trip read(write(x)) == x; corrupt/partial file ⇒ treated as absent (fail-safe due);
+     - two different jobs get DIFFERENT stable jitters (no synchronised stampede).
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); PFBL-01 green for any path build/exec. The pure core
+  takes `now`+`seed` as ARGUMENTS (deterministic tests); only a thin outer wrapper may read the real
+  clock/seed. Do NOT change scheduling or any live behaviour. Do NOT touch Python or shell.
+
+VERIFICATION
+- vendor/bin/phpunit  → green (+ the new ledger tests)
+- php -l / phpstan / phpcs (phpcs.xml.dist) → clean
+- diff-read: confirm NOTHING in the live scheduling path changed (the library is unreferenced by
+  production code this phase).
+
+EXPECTED RESULT
+A pure, fully-tested due-ledger library exists under $pfb['dbdir'] semantics, with absent-⇒-due-now-
+jittered and catch-up proven; wired into no live path yet.
+
+COMMIT (single)
+    pfblockerng: add the pure due-ledger library (next-due + seeded jitter) (ADR-43 P2)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/02_Results.txt`
+Record: the ledger API (signatures), the on-disk file layout + where under dbdir, the jitter scheme
+(seed source, max), how absent/corrupt is handled, how Phase 4 should call it (is_due in the tick,
+mark_ran after a run), the #468-persist integration point you identified; verification output; the
+go-ahead for Phase 3.

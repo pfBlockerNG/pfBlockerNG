@@ -1,0 +1,199 @@
+ADR-28 Phase 1 Results
+======================
+Branch: claude/adr-28-an92ut
+Date: 2026-06-17
+
+
+1. ENUM TYPES AND BACKING VALUES
+---------------------------------
+
+PHP (src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php):
+
+  PfbToggle : string  (backed)
+    case On  = 'on'
+    case Off = ''
+    default(): Off
+    Field: pfb_dnsvip_auto (pfb_dnsblconfig['pfb_dnsvip_auto'])
+
+  PfbLenient : string  (backed)
+    case On  = 'on'
+    case Off = 'off'
+    default(): Off
+    Field: pfb_dnsbl_lenient (pfb_dnsblconfig['pfb_dnsbl_lenient'])
+
+  PfbIdnMode : string  (backed)
+    case All        = 'all'
+    case Confusable = 'confusable'
+    case Off        = 'off'
+    default(): Off
+    Field: pfb_idn / dnsbl_idn (pfb_dnsblconfig['pfb_idn'])
+
+Python (src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py):
+
+  IdnMode(Enum)
+    All        = "all"
+    Confusable = "confusable"
+    Off        = "off"
+    default(): Off
+    Mirrors PHP PfbIdnMode; same stored-value contract.
+
+  PfbToggle(Enum)
+    On  = "on"
+    Off = ""
+    default(): Off
+    Mirrors PHP PfbToggle.
+
+  PfbLenient(Enum)
+    On  = "on"
+    Off = "off"
+    default(): Off
+    Mirrors PHP PfbLenient.
+
+
+2. ADAPTER HELPER SIGNATURES
+------------------------------
+
+PHP:
+  pfb_cfg_toggle_read(mixed $stored): PfbToggle
+  pfb_cfg_toggle_write(PfbToggle $toggle): string
+
+  pfb_cfg_lenient_read(mixed $stored): PfbLenient
+  pfb_cfg_lenient_write(PfbLenient $lenient): string
+
+  pfb_cfg_idn_mode_read(mixed $stored): PfbIdnMode
+  pfb_cfg_idn_mode_write(PfbIdnMode $mode): string
+
+Python:
+  pfb_cfg_idn_mode_read(stored: str | None) -> IdnMode
+  pfb_cfg_idn_mode_write(mode: IdnMode) -> str
+
+  pfb_cfg_toggle_read(stored: str | None) -> PfbToggle
+  pfb_cfg_toggle_write(toggle: PfbToggle) -> str
+
+  pfb_cfg_lenient_read(stored: str | None) -> PfbLenient
+  pfb_cfg_lenient_write(lenient: PfbLenient) -> str
+
+How a field declares its "off" vocabulary:
+  - PfbToggle: "off" is '' (empty string — checkbox unchecked / key absent).
+  - PfbLenient: "off" is 'off' (explicit string — ADR-22 strict mode).
+  - PfbIdnMode: "off" is 'off' (explicit string — IDN feature disabled).
+  No single global toggle: each field's adapter is field-specific per ADR-28 §2.2.
+
+
+3. PER-FIELD STORED-VALUE LIST COVERED BY ROUND-TRIP TESTS
+------------------------------------------------------------
+
+PfbToggle / pfb_dnsvip_auto:
+  Canonical: 'on', ''
+  Junk (-> Off = ''): 'yes', '1', 'off'
+  null / None (-> Off)
+  Round-trip: write(read('on')) == 'on'  ✓
+              write(read(''))  == ''     ✓
+
+PfbLenient / pfb_dnsbl_lenient:
+  Canonical: 'on', 'off'
+  Absent/blank (-> Off = 'off'): ''
+  null / None (-> Off)
+  Junk (-> Off): 'yes', '1', 'enabled'
+  Round-trip: write(read('on'))  == 'on'  ✓
+              write(read('off')) == 'off' ✓
+  Non-lossless: write(read('')) == 'off' != ''
+    Explanation: '' is a pre-ADR-22 absent-key state; pfb_global() also normalises
+    to 'off'. This is consistent behaviour, not a regression.
+
+PfbIdnMode / pfb_idn (dnsbl_idn):
+  Canonical: 'all', 'confusable', 'off'
+  Legacy: 'on' (pre-ADR-08 UI value)
+  Absent/blank (-> Off = 'off'): ''
+  null / None (-> Off)
+  Junk (-> Off): 'yes', 'enabled', 'IDN_MODE_ALL', '1'
+  Round-trip: write(read('all'))        == 'all'        ✓
+              write(read('confusable')) == 'confusable' ✓
+              write(read('off'))        == 'off'        ✓
+  Non-lossless (documented): write(read('on')) == 'all' != 'on'
+  Non-lossless (normalised):  write(read(''))  == 'off' != ''
+
+
+4. FIELDS NOT ROUND-TRIPPING LOSSLESSLY (EXCLUSION CANDIDATES)
+----------------------------------------------------------------
+
+PfbIdnMode / 'on' (legacy):
+  write(read('on')) == 'all', not 'on'.
+  This is INTENTIONAL: 'on' is a pre-ADR-08 legacy value that pfb_global() already
+  migrates to 'all' at runtime (:1373). The adapter replicates that normalisation.
+  New saves always write 'all'; 'on' is never re-emitted. This is a one-way migration
+  that cannot corrupt stored data (the canonical 'all' is safe on older installs because
+  pfb_global() accepts 'all' as a valid IDN mode value).
+  Status: NOT excluded — the one-way migration is intentional and matches existing
+  pfb_global() behaviour.
+
+PfbLenient / '' (absent key):
+  write(read('')) == 'off', not ''.
+  This is normalisation of a pre-ADR-22 absent-key state — consistent with pfb_global()
+  :1364. No functional difference: '' and 'off' both map to strict mode.
+  Status: NOT excluded — normalisation is intentional.
+
+No field required exclusion. All three fields adopt cleanly.
+
+
+5. TEST FILES ADDED
+--------------------
+
+PHP:
+  tests/php/CfgAdaptersTest.php — 33 tests, 54 assertions
+    testToggleReadOnReturnsOn, testToggleReadEmptyReturnsOff,
+    testToggleReadNullReturnsOff, testToggleReadJunkReturnsDefault,
+    testToggleRoundTripOn, testToggleRoundTripOff, testToggleDefaultIsOff,
+    testToggleWriteValues,
+    testLenientReadOnReturnsOn, testLenientReadOffReturnsOff,
+    testLenientReadEmptyReturnsOff, testLenientReadNullReturnsOff,
+    testLenientReadJunkReturnsDefault, testLenientRoundTripOn,
+    testLenientRoundTripOff, testLenientEmptyNormalisesToOff,
+    testLenientDefaultIsOff, testLenientWriteValues,
+    testIdnModeReadAllReturnsAll, testIdnModeReadConfusableReturnsConfusable,
+    testIdnModeReadOffReturnsOff, testIdnModeReadEmptyReturnsOff,
+    testIdnModeReadNullReturnsOff, testIdnModeReadLegacyOnReturnsAll,
+    testIdnModeReadJunkReturnsDefault, testIdnModeRoundTripAll,
+    testIdnModeRoundTripConfusable, testIdnModeRoundTripOff,
+    testIdnModeLegacyOnNormalisesToAll, testIdnModeEmptyNormalisesToOff,
+    testIdnModeDefaultIsOff, testIdnModeWriteValues,
+    testOffValuesAreDifferentAcrossFields
+
+Python:
+  tests/test_adr28_cfg_adapters.py — 41 tests
+    TestIdnModeRead (7), TestIdnModeWrite (4), TestIdnModeRoundTrip (5),
+    TestIdnModeDefault (1), TestPfbToggleRead (4), TestPfbToggleWrite (2),
+    TestPfbToggleRoundTrip (3), TestPfbLenientRead (5), TestPfbLenientWrite (2),
+    TestPfbLenientRoundTrip (4), TestCrossFieldOffValues (3)
+
+tests/php/bootstrap.php — one require_once added to load pfb_cfg_adapters.php.
+
+
+6. WHERE THE CODE LIVES
+------------------------
+
+Production (src/, shipped):
+  src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php  — PHP enums + adapters
+  src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py   — Python enums + adapters
+
+Tests (dev-only):
+  tests/php/CfgAdaptersTest.php                       — PHP round-trip tests
+  tests/test_adr28_cfg_adapters.py                    — Python round-trip tests
+  tests/php/bootstrap.php                             — require_once added (line 71)
+
+No production call site (`pfblockerng.inc`, `pfb_unbound.py`, `www/`) was changed.
+
+
+7. VERIFICATION RESULTS
+------------------------
+
+  python -m pytest                1691 passed  ✓
+  vendor/bin/phpunit               585 tests, 1177 assertions  ✓
+  vendor/bin/phpstan analyse       0 errors  ✓
+  vendor/bin/phpcs                 0 errors  ✓
+  ruff check . && ruff format ...  All checks passed, 107 files formatted  ✓
+  npx markdownlint-cli2 CLAUDE.md  0 error(s)  ✓
+  diff production call sites       empty — no call site changed  ✓
+
+
+Go-ahead for Phase 2.

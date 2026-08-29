@@ -1,0 +1,39 @@
+================================================================================
+ADR-15 PHASE 4 RESULTS — Unify all query-time caches (Stage 2) (#70)
+Status: Implemented — PR #70 merged (devel d62336a + b9242b4 + 917790a, 2026-06-04)
+Component: src/usr/local/pkg/pfblockerng/pfb_unbound.py, tests/
+(Verbatim from the former .Plans/04_Unify_All_Query_Caches/README.md)
+================================================================================
+
+CONTEXT / PROBLEM
+Stage 1 (phase 02) unified only the DNSBL axis. Three query-time memos remained for
+the other subsystems: excludeAAAADB (noAAAA negative, list), excludeSS (SafeSearch
+negative, list), and noAAAADB[name] = True (the noAAAA wildcard->exact query-time
+memo). These are exactly the "should've been sets" warts.
+
+DECISION
+Make the Decision the single per-domain verdict across ALL axes. decisionDB values
+become a COMPOSED Decision with three lazily-filled axes (dnsbl / noaaaa /
+safesearch); an UNSET sentinel distinguishes "axis not yet evaluated" from an
+evaluated allow/no-match. Each axis decides at its own point in operate() (noAAAA +
+SafeSearch pre-resolution on q_name_original, DNSBL post-resolution on the chain), so
+the entry is created on first touch (_decision_for) and filled per axis. The lists +
+the memo dissolve -- their negative-memo role becomes a cached noaaaa = False /
+safesearch = None, so the set-vs-list question disappears by REMOVAL.
+
+FINDINGS
+- find_noaaaa_wildcard_parent uses a TRUTHY check, so the SOURCE noAAAADB value
+  (wildcard flag) is load-bearing -- it stays a dict[str,bool], NOT a set. Only the
+  query-time memo was set-like, and it's gone.
+- get_details_reply's two noAAAA-label reads were coupled to the removed memo ->
+  switched to evaluate_noaaaa (exact + wildcard), so wildcard-child replies are now
+  labelled correctly. Pinned by test_reply_x_aaaa_wildcard_child_proceeds (proven to
+  fail without the switch).
+- The SafeSearch cname branch's pre-existing "wait for Unbound code changes" TODO was
+  researched: no native pythonmod CNAME-chasing exists in Unbound 1.22.0 (pfSense
+  2.8.0) through 1.25.x. The underlying defect is tracked open as NLnetLabs/unbound#976
+  ("CNAME in local-data: is not resolved") -- now referenced in the TODO.
+
+RESULT
+PR #70 merged. CodeRabbit nitpicks (dead global decls, test before-state) applied.
+decisionDB grows unbounded -> phase 05.

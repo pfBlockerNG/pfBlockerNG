@@ -1,0 +1,69 @@
+================================================================================
+PHASE 1 PROMPT — Prep: extract + pin the current MaxMind/ASN paths (oracle)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS1, SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip (off devel; create off the latest
+devel if absent). Phase 1 is BEHAVIOUR-PRESERVING: it adds tests + extracts functions but
+changes NO observable output. One commit, push directly to the branch.
+
+WHY THIS PHASE EXISTS
+GeoIP/ASN data is reached by FIVE independent consumers (GeoIP country build, firewall-log
+enrichment, DNSBL-log enrichment, Reputation) plus the DB download/convert, each calling
+MaxMind/IPinfo directly. Before introducing a provider seam, freeze today's output as an
+oracle so later phases cannot silently regress MaxMind users.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- the in-tree country/continent truth. It is a
+  BLOCKING PREREQUISITE for this ADR and OWNS everything about country/continent identity: which
+  countries exist, their names and locales, the ISO->continent mapping, the frozen structural
+  bindings, the unknown-country buckets. This ADR's provider seam supplies ONE thing: network -> ISO.
+  Do not re-derive or re-decide any of it here -- if this prompt and ADR-64 disagree, ADR-64 wins.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md
+- src/usr/local/www/pfblockerng/pfblockerng.php (GeoIP/Reputation/ASN build + per-continent
+  option lists; geoname usage).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — mmdblookup enrichment (~11129), ASN
+  (~9156), maxmind_key (~2042/12462/12495/12780), asn_token (~2038/12791).
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — GeoIP/ASN DB download + convert.
+- tests/php/ — bootstrap.php, pfsense_doubles.php; an existing manifest/UI decider test for
+  style. CLAUDE.md — PHP standards, Test coverage (branch + before/after + BDD).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered — tests FIRST when behaviour-preserving)
+1. ENUMERATE every MaxMind/IPinfo call site (the five consumers + the DB build) with
+   file:line; record the current output shape of each (option-list rows, enrichment strings,
+   ASN fields, per-continent membership).
+2. EXTRACT the read/lookup pieces into named functions WITHOUT changing output (e.g. a
+   country-record reader, an enrichment formatter, an ASN reader). Keep call sites behaving
+   identically.
+3. ORACLE tests (PHPUnit, tests/php/): freeze the GeoIP option lists, MMDB enrichment
+   strings, ASN output, and per-continent membership for a committed fixture corpus. This is
+   the regression net for Phases 2-6.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit() in lib code; new pfSense fns stubbed + doubled.
+- Do NOT change any output, config, or DB-build behaviour in this phase.
+- Do NOT introduce the provider interface or any new setting yet (Phase 2/5).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (new oracle tests); php -l; PHPStan + phpcs clean.
+- python -m pytest -> still green.
+- diff-read: extraction only; outputs byte-identical vs base.
+
+EXPECTED RESULT
+The MaxMind/ASN read paths are extracted into named functions and pinned by a golden oracle;
+no behaviour change.
+
+COMMIT (single)
+    pfblockerng: extract GeoIP/ASN read paths + add oracle tests (ADR-32 P1)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/01_Results.txt (plain .txt)
+Record: the enumerated call sites (file:line); the extracted function names/signatures; the
+oracle test file + fixture corpus; verification numbers; go-ahead for Phase 2.

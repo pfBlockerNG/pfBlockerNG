@@ -1,0 +1,5 @@
+interface:
+  display_name: "Release"
+  short_description: "Cut a pfBlockerNG release"
+policy:
+  allow_implicit_invocation: false

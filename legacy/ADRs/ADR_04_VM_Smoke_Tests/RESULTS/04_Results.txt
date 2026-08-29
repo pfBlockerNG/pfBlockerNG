@@ -1,0 +1,224 @@
+ADR-04 — Phase 4: deploy / config-inject / reload / probe helpers
+=================================================================
+
+Branch: adr/04   Phase: 4 of 6   Date: 2026-06-02
+
+-------------------------------------------------------------------
+SUMMARY
+-------------------------------------------------------------------
+Built the per-case loop PRIMITIVES the Phase-5 matrix calls — deploy,
+config-inject, reload, reset, DNS probe, IP probe — each pinned by a smoke
+self-test, composed into one per-case context manager. NO matrix content. All
+VM-touching code under tests/smoke/, marked @pytest.mark.smoke, --ignore'd at
+default collection.
+
+Default `python -m pytest` is byte-for-byte unchanged: 169 collected/passed.
+Helpers import WITHOUT the smoke third-party deps present (dnspython deferred).
+
+RECONCILED vs the evolved harness (READ THIS):
+  - DEPLOY = install the branch .pkg via scripts/install-pkg.sh (pkg add ->
+    POST-INSTALL -> registered, deps from repo, waits on unbound-control). NOT
+    scripts/deploy.sh rsync (that overlay does not register the pkg / run
+    POST-INSTALL). The .pkg path = pkg_path arg or env SMOKE_PKG (Phase 6 /
+    build-pkg.yml provides it).
+  - CONTROL DATA injection moved to the CONFIG API (unbound/custom_options
+    local-zone:/local-data:, base64), set BEFORE the feed update so it survives
+    the reload that regenerates unbound.conf. The Phase-1 spike used live
+    `unbound-control` (roundtrip.sh) — a reload WIPES that, so it is not used
+    for per-case control records.
+
+-------------------------------------------------------------------
+WHAT WAS BUILT (this phase) — all dev-only, src/ untouched
+-------------------------------------------------------------------
+  tests/smoke/helpers.py              the per-case primitives (below)
+  tests/smoke/test_smoke_helpers.py   10 self-tests (2 pure, 8 VM-gated)
+
+No new .sh (deploy wraps the existing scripts/install-pkg.sh). No new deps
+(reuses tests/smoke/requirements.txt: dnspython). pyproject.toml unchanged.
+
+-------------------------------------------------------------------
+PER-CASE LOOP API (the stable contract Phase 5 builds on)
+-------------------------------------------------------------------
+All in tests/smoke/helpers.py. `vm` is the session SmokeVM fixture.
+
+  deploy(vm, pkg_path=None, *, timeout=600.0) -> None
+      Install the branch .pkg (pkg_path or env SMOKE_PKG) via install-pkg.sh.
+      On return: pkg registered, POST-INSTALL ran, Unbound ready.
+
+  php_eval(vm, snippet, *, timeout=60.0) -> CompletedProcess[str]
+      Run a PHP snippet with config.inc/util.inc required + parse_config(true)
+      pre-loaded. The snippet calls write_config itself when it mutates.
+  config_get(vm, path, *, timeout=60.0) -> str        # scalar read-back
+
+  set_control_records(vm, local_data, local_zone, *, timeout=60.0) -> None
+      local_data: {name: {"A": ip, "AAAA": ip6}} ; local_zone: {zone: kind}
+      Decode unbound/custom_options, append (idempotent) local-zone:/local-data:
+      lines, re-encode base64, write_config. Survives reload.
+
+  inject(vm, spec: DnsblCase | IpCase, *, timeout=90.0) -> None
+      1) set_control_records(spec.control_*) FIRST (own write_config)
+      2) set the pfBlockerNG list + settings config, one write_config.
+
+  reload(vm, scope="update", *, timeout=600.0) -> None
+      scope in {update, updateip, updatednsbl}. Runs
+      `php /usr/local/www/pfblockerng/pfblockerng.php <scope>`, then waits on
+      Unbound readiness (no fixed sleep).
+  reset(vm, *, timeout=600.0) -> None
+      clearip + cleardnsbl, then a forced `update` (feeds cached -> force).
+  wait_unbound_ready(vm, *, attempts=30, delay=2.0) -> None
+      Poll `unbound-control ... status` (mirrors install-pkg.sh).
+
+  dns_probe(vm, name, rtype="A", *, timeout=5.0) -> DnsAnswer(rcode, records)
+      Query the guest's real Unbound (dnspython, deferred import). rtype any.
+  is_nxdomain(answer) -> bool          # rcode NXDOMAIN + no records
+  is_null_ip(answer, null_ip="0.0.0.0") -> bool
+  is_vip(answer, vip=DEFAULT_DNSBL_VIP4) -> bool    # SMOKE_DNSBL_VIP4 env
+  resolves_to(answer, addr) -> bool    # a true pass
+  resolve_control(vm, name) -> list[str]            # reuses conftest.resolve_a
+
+  pfctl_table_members(vm, alias, *, timeout=30.0) -> list[str]
+      `pfctl -t <alias> -T show`.
+  pfctl_tables(vm, *, timeout=30.0) -> list[str]    # `pfctl -sTables`
+  rule_references(vm, alias, *, timeout=30.0) -> bool   # `pfctl -sr` | grep
+  member_present(members, ip) -> bool   # CIDR-tolerant membership
+
+  CaseContext(vm, spec, *, scope=None)  (context manager)
+      __enter__: inject(spec) -> reload(scope). __exit__: reset(vm).
+      scope auto = updatednsbl (DnsblCase) / updateip (IpCase); override via
+      scope=. The composed inject->reload->probe(body)->reset per-case loop.
+
+-------------------------------------------------------------------
+case_spec SHAPE (every field a case sets + its config path)
+-------------------------------------------------------------------
+DnsblCase (helpers.py):
+  aliasname            -> CFG_DNSBL_LISTS/0/aliasname  (alias = DNSBL_<aliasname>)
+  feed_url             -> CFG_DNSBL_LISTS/0/row/0/url  (a mock_feeds.feed_url(...))
+  header   ="smoketest"-> CFG_DNSBL_LISTS/0/row/0/header
+  mode     =NXDOMAIN   -> DnsblMode {NXDOMAIN, NULL, VIP}; sets, in
+                          CFG_DNSBL_SETTINGS: dnsbl_mode + pfb_py_block, and per
+                          list row 'logging' (see RESPONSE-MODE MAP below)
+  wildcard =False      -> feed-entry style (Phase 5 picks the feed body; a
+                          wildcard feed line blocks subdomains + self)
+  whitelist=[]         -> CFG_DNSBL_SETTINGS/suppression (newline list; a
+                          leading '.' suppresses the whole subtree)
+  control_local_data={}-> unbound/custom_options local-data: (before update)
+  control_local_zone={}-> unbound/custom_options local-zone:  (before update)
+  .alias property      -> "DNSBL_<aliasname>"
+
+IpCase (helpers.py):
+  aliasname            -> CFG_IP_{V4,V6}_LISTS/0/aliasname (table = pfB_<aliasname>)
+  feed_url             -> .../0/row/0/url
+  header   ="smoketest"-> .../0/row/0/header
+  action   ="Deny_Both"-> .../0/action
+  family   ="v4"       -> "v4" => CFG_IP_V4_LISTS ; "v6" => CFG_IP_V6_LISTS
+  control_local_data/zone -> as DnsblCase
+  .alias property      -> "pfB_<aliasname>"
+
+Config-path constants (helpers.py):
+  CFG_DNSBL_SETTINGS = installedpackages/pfblockerngdnsblsettings/config/0
+  CFG_DNSBL_LISTS    = installedpackages/pfblockerngdnsbl/config
+  CFG_IP_V4_LISTS    = installedpackages/pfblockernglistsv4/config
+  CFG_IP_V6_LISTS    = installedpackages/pfblockernglistsv6/config
+  CFG_UNBOUND_CUSTOM = unbound/custom_options
+
+-------------------------------------------------------------------
+DNSBL RESPONSE-MODE MAP (verified against src/usr/local/pkg/pfblockerng)
+-------------------------------------------------------------------
+  NXDOMAIN : dnsbl_mode=dnsbl_python, pfb_py_block=on   (pfb_unbound.py
+             synthesises NXDOMAIN for matched names; rcodeDB[3]="NXDOMAIN")
+  NULL     : dnsbl_mode=dnsbl_unbound, per-list logging='disabled'
+             -> sinkhole 0.0.0.0 / ::0 (pfblockerng.inc:8205)
+  VIP      : dnsbl_mode=dnsbl_unbound, per-list logging='enabled'
+             -> sinkhole pfb_dnsvip4 (the DNSBL webserver VIP; match the baked
+                image via env SMOKE_DNSBL_VIP4, default 10.10.10.1)
+  Whitelist (suppression) is the pass path: a suppressed name resolves via its
+  control local-data (resolves_to / resolve_control), not a block shape.
+
+-------------------------------------------------------------------
+WHICH RELOAD VERB WHEN
+-------------------------------------------------------------------
+  DnsblCase -> updatednsbl  (targeted, faster)
+  IpCase    -> updateip     (targeted, faster)
+  reset()/full force/control-record-only changes -> update
+  CaseContext auto-selects the targeted verb by spec type; override with scope=.
+  All three are the production cron entry point (ADR §1 fact 2); reload always
+  waits on unbound-control status afterwards (the reload restarts Unbound).
+
+-------------------------------------------------------------------
+HOW THE FALSE-GREEN GUARD IS EXPRESSED (no-weaken)
+-------------------------------------------------------------------
+  test_smoke_helpers.py::test_false_green_guard (PURE, no VM): asserts a real
+  NXDOMAIN block is REJECTED by the pass/other-shape asserts
+  (not resolves_to(...,passIP); not is_null_ip; not is_vip) and a real pass is
+  not is_nxdomain. The test passes ONLY because the wrong assertion is false.
+  PROVEN this run: temporarily making is_null_ip() return True (lenient)
+  turned the guard RED (1 failed); restoring made it GREEN. So a lenient probe
+  cannot silently false-green. Phase 5 must keep this guard intact and add the
+  VM-level deliberately-wrong case (xfail/assert-red) on top.
+
+-------------------------------------------------------------------
+RELOAD TIMING / RETRY NEEDS
+-------------------------------------------------------------------
+  - No fixed sleeps for "reload done": reload() polls unbound-control status
+    (30 attempts x 2s = ~60s ceiling) after every verb.
+  - deploy() inherits install-pkg.sh's own unbound poll.
+  - Default timeouts: deploy/reload/reset 600s; inject 90s; php_eval 60s;
+    pfctl probes 30s; dns_probe 5s. Tune in Phase 5/6 if a slow runner flakes.
+  - dns_probe uses TCP (deterministic; hostfwd maps tcp+udp 5353->53).
+
+-------------------------------------------------------------------
+SELF-TESTS (pin each primitive)
+-------------------------------------------------------------------
+  test_smoke_helpers.py (module pytestmark=smoke):
+    deployed_vm (module fixture)         deploy once; skips if SMOKE_PKG unset
+    test_deploy_registers_package        PFB_CLI exists + `update` exit 0
+    test_inject_value_roundtrips         config_set -> config_get read-back
+    test_inject_control_record_resolves  inject control local-data -> reload ->
+                                         dns_probe resolves it (survives reload)
+    test_reset_returns_to_baseline       reset() -> baked control still resolves
+    test_dns_assert_helpers_pure  (PURE) shape asserts classify each shape
+    test_false_green_guard        (PURE) wrong-shape assertion must be false
+    test_dns_probe_nxdomain_shape        absent name -> no spurious A
+    test_ip_probe_membership_and_rule    fed IP in table, non-fed not, rule refs
+
+-------------------------------------------------------------------
+LOCAL VERIFICATION (this autonomous run)
+-------------------------------------------------------------------
+  python -m pytest -q                                : 169 passed (UNCHANGED)
+  python -m pytest --collect-only | grep tests/smoke : 0 (smoke ignored)
+  pytest tests/smoke -m smoke --override-ini=addopts=
+     --collect-only                                  : 10 tests collected
+     (dnspython NOT installed — deferred import keeps collection clean)
+  pytest ...::test_false_green_guard ::test_dns_assert_helpers_pure (pure)
+                                                     : 2 passed
+  false-green guard fail-injection                   : is_null_ip->True made the
+                                                       guard RED; restored GREEN
+  ruff check .                                       : All checks passed
+  ruff format --check .                              : all 20 files formatted
+  no bare except                                     : confirmed
+  type hints on new fns                              : yes (from __future__
+                                                       import annotations)
+  src/ untouched                                     : confirmed (git status)
+
+-------------------------------------------------------------------
+PENDING — orchestrator `gh` CI dispatch (NOT fabricated)
+-------------------------------------------------------------------
+  `pytest -m smoke` EXECUTION of the VM-gated self-tests is NOT run here: no
+  /dev/kvm, no GHCR image, no .pkg (SMOKE_PKG), no secrets in this environment.
+  It is verified in CI by the orchestrator via `gh` AFTER this phase. No
+  smoke-run pass/fail or boot/reload numbers are fabricated. The 2 PURE
+  self-tests DID run here (2 passed) and the guard fail-injection DID fire.
+
+-------------------------------------------------------------------
+NEXT (Phase 5) — thin vertical-slice matrix
+-------------------------------------------------------------------
+  Compose these primitives into the cases (helpers.CaseContext per case):
+    - IP: feed N IPs -> assert table membership + rule; non-fed IP absent.
+    - IP (DNSBL-embedded dual-stack): both pfB_DNSBLIP_v4 AND pfB_DNSBLIP_v6
+      tables, partitioned by family, inet/inet6 rules reference the right one.
+    - DNSBL parametrised: exact -> NXDOMAIN and NULL modes; one wildcard; one
+      whitelist passthrough (resolves via control local-data).
+    - Hermetic (egress blocked) + the VM-level deliberately-wrong case red.
+  Feed bodies come from mock_feeds.register(name, body)/feed_url(name). Set the
+  case's control_local_data on the spec so passthrough resolves hermetically.
+  Confirm SMOKE_DNSBL_VIP4 matches the baked image's pfb_dnsvip4 for VIP cases.

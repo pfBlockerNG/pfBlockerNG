@@ -1,0 +1,95 @@
+name: Read version matrix
+description: >
+  Read supported-versions.json from the ci-metadata orphan ref and emit
+  the workflow output matrices: the BUILD matrix (deduped to one row per
+  freebsd_major, issue #1806), the CI matrix (ci:true entries of any
+  channel, one row per version), and the derived test matrices
+  python_versions / php_versions (the distinct, supported-only python +
+  php versions test.yml fans out over). Pure read — no writes anywhere.
+
+inputs:
+  ref:
+    description: >
+      Git ref to fetch the matrix from. Defaults to 'origin/ci-metadata'.
+      Override for testing (e.g. point at a local branch).
+    required: false
+    default: "origin/ci-metadata"
+  matrix_file:
+    description: >
+      Path to the JSON matrix file on the ref. Defaults to
+      'supported-versions.json'.
+    required: false
+    default: "supported-versions.json"
+  variant:
+    description: >
+      Optional variant filter: 'CE' or 'Plus' (case-insensitive). When set,
+      only entries whose `variant` field matches are returned. Without this
+      input all entries are returned (backward-compatible).
+    required: false
+    default: ""
+
+outputs:
+  release_matrix:
+    description: >
+      JSON array of every build-role row, one row per pfSense version/variant.
+      Unlike build_matrix this output is not deduped by FreeBSD major; release
+      jobs use it to emit one artifact for each release/version row.
+    value: ${{ steps.read.outputs.release_matrix }}
+  build_matrix:
+    description: >
+      JSON array of build-role entries, ALREADY DEDUPED to one row per
+      distinct freebsd_major (issue #1806: every pfSense-pkg-pfBlockerNG port
+      is NO_ARCH, so one wildcard-ABI .pkg build serves every arch and every
+      edition/version sharing a major — no separate per-caller dedup needed).
+      Each row carries freebsd_major, php_version, py_flavor, extra_pkgs
+      (deduped union across merged rows), plus pfsense_version/channel/
+      freebsd_version/variant/status/ci/... inherited from whichever merged
+      row is last in matrix order. There is no `arch` field. A consumer
+      needing every distinct version (never deduped) reads ci_matrix instead.
+    value: ${{ steps.read.outputs.build_matrix }}
+  ci_matrix:
+    description: >
+      JSON array of the ci:true entries (any channel), ONE ROW PER VERSION
+      (never deduped by freebsd_major — a smoke/UI leg boots one VM per
+      pfSense version). Feed this into a strategy.matrix job to fan out the
+      smoke suite across all supported versions.
+    value: ${{ steps.read.outputs.ci_matrix }}
+  variant:
+    description: >
+      JSON array of distinct variant values present in the build_matrix
+      output (e.g. ["CE"] or ["CE","Plus"]). Useful for downstream jobs
+      that need to know which variants are present.
+    value: ${{ steps.read.outputs.variant }}
+  python_versions:
+    description: >
+      JSON array of the distinct python versions derived from each entry's
+      py_flavor (py311 => "3.11"), sorted + deduped. test.yml's pytest
+      matrix — supported-only (only the pythons the matrix ships).
+    value: ${{ steps.read.outputs.python_versions }}
+  php_versions:
+    description: >
+      JSON array of the distinct php_version values, sorted + deduped.
+      test.yml's PHP-jobs matrix — supported-only.
+    value: ${{ steps.read.outputs.php_versions }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read matrix from ci-metadata
+      id: read
+      shell: sh
+      env:
+        MATRIX_REF: ${{ inputs.ref }}
+        MATRIX_FILE: ${{ inputs.matrix_file }}
+        VARIANT_INPUT: ${{ inputs.variant }}
+      run: |
+        VARIANT_ARG=""
+        if [ -n "$VARIANT_INPUT" ]; then
+          VARIANT_ARG="--variant $VARIANT_INPUT"
+        fi
+        # shellcheck disable=SC2086
+        sh "$GITHUB_WORKSPACE/scripts/read-version-matrix.sh" \
+          --ref "$MATRIX_REF" \
+          --file "$MATRIX_FILE" \
+          $VARIANT_ARG \
+          --github-output

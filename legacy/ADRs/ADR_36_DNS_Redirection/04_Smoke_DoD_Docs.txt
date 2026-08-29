@@ -1,0 +1,147 @@
+================================================================================
+PHASE 4 PROMPT — Smoke tests + DoD + docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_36_DNS_Redirection/ADR.md   (read §6 Phase 4, §7 DoD first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/36-dns-redirection. Phase 4 writes the live-VM
+smoke tests, verifies all gates are green, adds an architecture-notes blurb, and closes the
+ADR. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The builder and sync logic are unit-tested against config.xml fixtures; the real pf interaction
+(natd loading the rdr rule, pfctl -sn confirmation) and the full install/disable/uninstall
+lifecycle can only be verified on a real pfSense VM. This phase provides the authoritative
+end-to-end gate that no off-appliance test can substitute.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_36_DNS_Redirection/RESULTS/03_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_36_DNS_Redirection/ADR.md — §6 Phase 4 (required smoke cases), §7 (DoD checklist
+  + manual smoke + reject criteria).
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — §6 Phase 5 (smoke pattern for the sweep test);
+  reuse the uninstall + orphan-sweep test structure.
+- tests/smoke/ — the existing smoke test file layout, conftest.py, helpers.py; how config.xml
+  is written via SSH helpers; how pfctl is queried; the smoke_vm fixture and skip conventions.
+- CLAUDE.md — ADR-04 smoke (read before touching tests/smoke/), ADR-14 ui_render gate,
+  test coverage mandate (before/after, branch coverage, BDD-style for multi-step flows).
+
+ACTION PLAN (ordered)
+
+1. Write tests/smoke/test_dns_redirect.py (new file, or append to an appropriate existing
+   smoke file if one covers NAT lifecycle — check before creating). Each test case is a
+   distinct test function with explicit Given/When/Then structure.
+
+   Required test cases (all mandatory — read §6 Phase 4 for the full list):
+
+   Case 1 — Enable path (basic lifecycle, both families):
+   Given: redirect disabled, no pfB_DNS_Redirect_* rules in config.xml.
+   When: enable redirect on LAN interface via PfbConfig (or SSH config write) + sync.
+   Then:
+     - config.xml nat/rule contains exactly 2 pfB_DNS_Redirect_lan_* entries (v4 + v6).
+     - config.xml filter/rule contains exactly 2 corresponding associated filter entries.
+     - Each nat/rule entry: verify ipprotocol, target, destination (negated (self) + port 53),
+       natreflection disable, protocol tcp/udp, local-port 53 — field-by-field.
+     - pfctl -sn output (via SSH) contains rdr rules on the LAN interface for port 53.
+   Note: assert before-state (no rdr rules) before enabling.
+
+   Case 2 — Disable path:
+   Given: redirect enabled on LAN (from Case 1 or re-setup).
+   When: disable redirect + sync.
+   Then:
+     - No pfB_DNS_Redirect_* entries in config.xml nat/rule or filter/rule.
+     - pfctl -sn shows no pfBlockerNG rdr rules for port 53.
+   Note: assert the before-state (rules present) before disabling.
+
+   Case 3 — User-rule survival:
+   Given: a user nat/rule entry present in config.xml (no pfBlockerNG marker), redirect
+          disabled initially.
+   When: enable redirect (rules appear) → disable (rules removed).
+   Then: the user nat/rule entry is still present, byte-identical to the original.
+
+   Case 4 — Stale-interface prune:
+   Given: redirect enabled on LAN + OPT1 (or two available interfaces — pick from the VM's
+          interface list; use helpers to discover available interfaces).
+   When: reduce selection to LAN only + sync.
+   Then:
+     - OPT1 pfB_DNS_Redirect_opt1_* rules are gone (both nat/rule and filter/rule).
+     - LAN pfB_DNS_Redirect_lan_* rules remain (both families, all 4 entries).
+   Note: assert both sets present before the reduction.
+
+   Case 5 — Exception alias branch (config.xml assertion):
+   Given: redirect disabled.
+   When: enable with dns_redirect_exception set to a valid alias name (e.g. 'DNS_Exceptions').
+   Then: each nat/rule entry has source with address 'DNS_Exceptions' and not present.
+   When: clear the exception alias (empty string) + sync.
+   Then: each nat/rule entry has source as <any>.
+   Note: assert both branches (alias set and alias empty) in both IP families.
+
+   Case 6 — Uninstall sweep:
+   Given: redirect enabled on LAN; a user nat/rule present (no marker).
+   When: uninstall pfBlockerNG (pkg delete / the standard uninstall path).
+   Then:
+     - All pfB_DNS_Redirect_* entries gone from config.xml.
+     - No pfBlockerNG nat/rule or filter/rule entries remain.
+     - installedpackages/pfblockerng* gone.
+     - User nat/rule entry is still present and unchanged.
+   Reuse the ADR-35 sweep test fixture pattern; see ADR-35 §6 Phase 5 smoke for the uninstall
+   invocation pattern.
+
+2. Mark the smoke tests with the appropriate pytest marker (check the existing smoke file
+   markers — likely @pytest.mark.smoke or similar). If any test requires a specific env var
+   gate (e.g. a second host for the full client-redirect behaviour), add a skip decorator with
+   a clear message and document the gate in the handoff.
+
+3. Verify all gates are green (see VERIFICATION below).
+
+4. Add a blurb to docs/misc/architecture-notes.md under an appropriate heading (e.g. "DNS
+   enforcement" or adjacent to the DoH/DoT section if one exists). The blurb covers:
+   - What the DNS redirect feature does (port-53 rdr to loopback).
+   - The structural self-exempt (negated (self) destination).
+   - Complementary relationship with DoH/DoT domain NXDOMAIN (DNSBL) and ADR-37 port-853 block.
+   - ADR-35 ownership model (pfB_DNS_Redirect_* marker, registered via pfb_fwobj_register).
+   Keep it brief (3–5 sentences); no security framing; no PFBL references.
+
+5. Check off the §7 DoD items against the evidence collected across all four phases. Document
+   any item that cannot be checked automatically (full client-redirect behaviour) as a
+   maintainer manual-smoke item with a clear test description. Update the ADR.md §7 checklist
+   if the implementer has the ADR doc in scope (or leave it for the maintainer to tick — the
+   handoff documents the evidence either way).
+
+CONSTRAINTS
+- CLAUDE.md smoke rules: probe on-box (SSH), never runner-side SLIRP; assert before-state
+  before any change; use helpers.unique_domain() if any domain lookup is needed (unlikely here —
+  this is a NAT smoke, not a DNSBL domain smoke); never hardcode interface names (discover from
+  the VM or the version matrix).
+- ADR-04: every run uploads smoke-diagnostics; on failure, read that artifact first.
+- ADR-14 ui_render: if the pfblockerng_dnsbl.php ui_render gate was pending in Phase 3,
+  confirm it is green now. If it requires a live VM, run it here.
+- Docs: Markdown lint clean (markdownlint-cli2); blank line around headings/lists/fences;
+  language on every fence; professional prose (documentation exception to caveman mode).
+- Full client-redirect behaviour (a client bypassing the redirect is answered by the pfSense
+  resolver) requires a second host. This is a documented maintainer manual-smoke item, NOT a
+  CI gate. The CI-feasible gate is config.xml rule presence + pfctl -sn rdr confirmation.
+
+VERIFICATION (must all pass before phase is done)
+- vendor/bin/phpunit -> green (all phases).
+- php -l on all touched files.
+- PHPStan + phpcs clean.
+- python -m pytest -> green (unit suite; smoke tests skipped off-VM as expected).
+- ADR-14 ui_render -> green (pfblockerng_dnsbl.php, or document pending gate).
+- markdownlint-cli2 -> 0 errors on all touched .md files.
+- Smoke test file: python -m pytest tests/smoke/test_dns_redirect.py --collect-only -> all
+  cases collected without import error.
+
+EXPECTED RESULT
+A complete live-VM smoke suite covering the full lifecycle; all prior gates green; a brief
+architecture-notes blurb; a fully checked §7 DoD with documented manual-smoke items.
+
+COMMIT (single)
+    pfblockerng: add DNS redirect smoke tests + docs (ADR-36 P4)
+Push directly to adr/36-dns-redirection; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_36_DNS_Redirection/RESULTS/04_Results.txt (plain .txt)
+Record: smoke test file path and case count; any env-var-gated cases and their skip
+conditions; ui_render status (green / pending with reason); docs path updated;
+full verification matrix; open items for the maintainer manual smoke; ADR-36 DONE.

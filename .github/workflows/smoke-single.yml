@@ -1,0 +1,894 @@
+name: Smoke (single leg, live pfSense VM)
+
+# End-to-end smoke harness (ADR-04): boot a real pfSense CE VM under KVM,
+# install the branch-under-test .pkg, and run the `pytest -m smoke` matrix
+# (tests/smoke/) against the live box — the real Unbound + pfb_unbound.py DNS
+# path and the real pfctl IP path, asserted over SSH/dig, hermetic (egress
+# blocked). This REPLACES the Phase-1 shell round-trip spike (smoke-spike.yml,
+# retired): same scaffolding (build-pkg job, GHCR image pull+cache, KVM-perms
+# fix, SSH-key/secret handling, build->smoke .pkg passing, egress block), but
+# the assertions now live in pytest, not an inline loop.
+#
+# TRIGGER (gated, NOT every-PR): the per-run wall-time is not yet measured
+# (RESULTS/05 leaves it PENDING the first CI dispatch), so this runs on
+# workflow_dispatch + workflow_call only. A nightly `schedule` is provided,
+# commented, ready to enable. Once a dispatched run confirms the wall-time is
+# within §7's ~20 min/job budget, this can move to `pull_request` (every-PR)
+# by adding that trigger — see README "Smoke tests".
+#
+# FORWARD-COMPAT (ADR-09): the pfSense image ref is an INPUT (image_ref),
+# defaulting to the single supported CE version's GHCR ref/secret. ADR-09 owns
+# the version fan-out / matrix / scheduled refresh — this workflow stays a
+# single-version, parameterised callee.
+#
+# Required config (Actions secrets/variables — see RESULTS/02_Results.txt):
+#   SMOKE_IMAGE_REPO     GHCR namespace (variable), e.g. ghcr.io/pfblockerng
+#                        (default ghcr.io/<owner-lowercased>).
+#   SMOKE_IMAGE_NAME     image name appended to it (variable, default pfsense-ce).
+#   SMOKE_IMAGE_TAG      default tag (variable, default 2.8). The pull ref is
+#                        ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}:${SMOKE_IMAGE_TAG};
+#                        the image_ref input (full ref) or pfsense_version input
+#                        (tag) override it.
+#   SMOKE_GHCR_USER      username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN     token with read:packages for the GHCR pull (defaults to GITHUB_TOKEN)
+#   SMOKE_SSH_PRIV_KEY   private SSH key; matching public key is baked into the
+#                        image's root authorized_keys (secret)
+# Optional (match the baked image; defaults track RESULTS/02):
+#   SMOKE_DNSBL_VIP4     var/secret  baked pfb_dnsvip4 (VIP cases); default 10.10.10.1
+#   SMOKE_CONTROL_NAME / SMOKE_CONTROL_IP  baked Unbound control local-data
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars). Pin by @sha256:<digest>."
+        required: false
+        default: ""
+      pfsense_version:
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
+        required: false
+        default: ""
+      image_name:
+        description: "Image name in the GHCR ref (default pfsense-ce). The fan-out passes the per-leg matrix.image_name (Plus = pfsense-plus). Ignored when image_ref is set."
+        required: false
+        default: "pfsense-ce"
+      mac:
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). Used for CE only; a non-CE (Plus) image takes its license/NDI-keyed MAC from the SMOKE_PLUS_MAC secret, never this input."
+        required: false
+        default: "BC:24:11:37:9C:AC"
+      abi:
+        description: "Target ABI for the .pkg the smoke leg installs — MUST match the image's pfSense base, per the ci-metadata version matrix. pkg add refuses a cross-major-ABI .pkg. The fan-out passes FreeBSD:<matrix.freebsd_major>:amd64."
+        required: false
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      php_version:
+        description: "PHP version for the .pkg's dep names, per the ci-metadata version matrix. The fan-out passes matrix.php_version."
+        required: false
+        default: "8.3"
+      py_flavor:
+        description: "Python flavor for the .pkg's dep names, per the ci-metadata version matrix. The fan-out passes matrix.py_flavor."
+        required: false
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
+        required: false
+        default: "smoke"
+      pytest_filter:
+        description: "pytest -k selector to run only a subset of the marker's tests (e.g. 'test_dns_redirect' or 'redirect and not browser'). Blank = the whole marker."
+        required: false
+        default: ""
+      shard:
+        description: "0-based module-shard index for this leg (issue #797). The fan-out passes matrix.shard; a bare dispatch stays 0 (no-op)."
+        required: false
+        default: "0"
+      shard_total:
+        description: "Module-shard count for this leg (issue #797). The fan-out passes matrix.shard_total; 1 = no sharding (byte-identical to pre-#797)."
+        required: false
+        default: "1"
+      smoke_nightly_live_url:
+        description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pkg.pfblockerng.com/nightly). Blank -> SKIP."
+        required: false
+        default: ""
+      smoke_nightly_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live Nightly package. Required with smoke_nightly_live_url."
+        required: false
+        default: ""
+      smoke_nightly_expected_version:
+        description: "Expected installed version for the live Nightly package. Required with smoke_nightly_live_url."
+        required: false
+        default: ""
+      smoke_repo_live_url:
+        description: "Live channel Pages base URL for test_install_from_live_pages_url (e.g. https://pkg.pfblockerng.com/stable). Blank -> SKIP."
+        required: false
+        default: ""
+      smoke_repo_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live channel package. Required with smoke_repo_live_url."
+        required: false
+        default: ""
+      smoke_repo_expected_version:
+        description: "Expected installed version for the live channel package. Required with smoke_repo_live_url."
+        required: false
+        default: ""
+      smoke_repo_expected_channel:
+        description: "Expected pfb_build_record.channel (tag primary). Required with smoke_repo_live_url. Dest folder is not the channel."
+        required: false
+        default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default pfBlockerNG/FreeBSD-ports). Point a pre-merge run at a ports branch carrying a new plist entry."
+        required: false
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default pfblockerng/use-github)."
+        required: false
+        default: ""
+      pkg_artifact:
+        description: "Name of a pre-built .pkg artifact to download instead of building one here. The smoke.yml fan-out builds one .pkg per version leg and passes its artifact name in; blank = build the .pkg in this workflow (bare dispatch + repo-install path)."
+        required: false
+        default: ""
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download the dep-pkgs artifact (dep_artifact, or this workflow's own self-built default) and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        required: false
+        default: "[]"
+      dep_artifact:
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
+        required: false
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
+      nonblocking:
+        description: "true = this leg cannot veto the caller (issue #1855): it runs and reports as usual, but its failure does not fail the run. Set by smoke.yml for a leg whose ci-metadata status is not a released pfSense version, and only when the caller asked for the release gate."
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "Full GHCR image ref override (blank = compose from the SMOKE_IMAGE_REPO/NAME/TAG vars)."
+        required: false
+        type: string
+        default: ""
+      pfsense_version:
+        description: "Image tag to pull (blank = SMOKE_IMAGE_TAG var, else 2.8). Ignored when image_ref is set."
+        required: false
+        type: string
+        default: ""
+      image_name:
+        description: "Image name in the GHCR ref (default pfsense-ce). The fan-out passes the per-leg matrix.image_name (Plus = pfsense-plus). Ignored when image_ref is set."
+        required: false
+        type: string
+        default: "pfsense-ce"
+      mac:
+        description: "QEMU NIC MAC for the VM boot (default the CE pin BC:24:11:37:9C:AC). Used for CE only; a non-CE (Plus) image takes its license/NDI-keyed MAC from the SMOKE_PLUS_MAC secret, never this input."
+        required: false
+        type: string
+        default: "BC:24:11:37:9C:AC"
+      abi:
+        description: "Target ABI for the .pkg the smoke leg installs — MUST match the image's pfSense base, per the ci-metadata version matrix. pkg add refuses a cross-major-ABI .pkg. The fan-out passes FreeBSD:<matrix.freebsd_major>:amd64."
+        required: false
+        type: string
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      php_version:
+        description: "PHP version for the .pkg's dep names, per the ci-metadata version matrix. The fan-out passes matrix.php_version."
+        required: false
+        type: string
+        default: "8.3"
+      py_flavor:
+        description: "Python flavor for the .pkg's dep names, per the ci-metadata version matrix. The fan-out passes matrix.py_flavor."
+        required: false
+        type: string
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      pytest_marker:
+        description: "pytest marker to select (default 'smoke'; 'repo' = the ADR-17 repository-install flow)."
+        required: false
+        type: string
+        default: "smoke"
+      pytest_filter:
+        description: "pytest -k selector to run only a subset of the marker's tests. Blank = the whole marker."
+        required: false
+        type: string
+        default: ""
+      shard:
+        description: "0-based module-shard index for this leg (issue #797). The fan-out passes matrix.shard; a bare dispatch stays 0 (no-op)."
+        required: false
+        type: string
+        default: "0"
+      shard_total:
+        description: "Module-shard count for this leg (issue #797). The fan-out passes matrix.shard_total; 1 = no sharding (byte-identical to pre-#797)."
+        required: false
+        type: string
+        default: "1"
+      smoke_nightly_live_url:
+        description: "Live nightly Pages base URL for test_install_from_live_nightly_url. Blank -> SKIP."
+        required: false
+        type: string
+        default: ""
+      smoke_nightly_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live Nightly package."
+        required: false
+        type: string
+        default: ""
+      smoke_nightly_expected_version:
+        description: "Expected installed version for the live Nightly package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_live_url:
+        description: "Live channel Pages base URL for test_install_from_live_pages_url. Blank -> SKIP."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live channel package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_version:
+        description: "Expected installed version for the live channel package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_channel:
+        description: "Expected pfb_build_record.channel (tag primary). Required with smoke_repo_live_url. Dest folder is not the channel."
+        required: false
+        type: string
+        default: ""
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      ports_ref:
+        description: "FreeBSD-ports branch (blank = build-pkg-linux default)."
+        required: false
+        type: string
+        default: ""
+      pkg_artifact:
+        description: "Name of a pre-built .pkg artifact to download instead of building one here. The smoke.yml fan-out builds one .pkg per version leg and passes its artifact name in; blank = build the .pkg in this workflow (bare dispatch + repo-install path)."
+        required: false
+        type: string
+        default: ""
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins for this leg (the matrix row's extra_pkgs, e.g. [\"textproc/py-charset-normalizer\"]). Non-empty -> download the dep-pkgs artifact (dep_artifact, or this workflow's own self-built default) and export SMOKE_DEP_PKGS (space-separated absolute .pkg paths) for install-pkg.sh. Empty/blank -> SMOKE_DEP_PKGS stays unset."
+        required: false
+        type: string
+        default: "[]"
+      dep_artifact:
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
+        required: false
+        type: string
+        default: ""
+      checkout_ref:
+        description: "Git ref the test code itself is checked out from (issue #1859). Set by release.yml to the pinned release SHA so the suite verifies the source it ships. Empty (default) = inherit the caller's ref, which is correct for every non-release run."
+        required: false
+        type: string
+        default: ""
+      nonblocking:
+        description: "true = this leg cannot veto the caller (issue #1855): it runs and reports as usual, but its failure does not fail the run. Set by smoke.yml for a leg whose ci-metadata status is not a released pfSense version, and only when the caller asked for the release gate."
+        required: false
+        type: boolean
+        default: false
+  # Nightly gated run — enable once the wall-time is confirmed within budget.
+  # schedule:
+  #   - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Build the branch's .pkg on a PLAIN Linux runner via the portable builder
+  # (scripts/build-pkg-portable.py) and publish it as the `pfBlockerNG-pkg`
+  # artifact the smoke job installs. This replaces the old FreeBSD-VM build for
+  # the smoke gate — same artifact, but no KVM/image-cache/SSH setup, so it's far
+  # faster. `pkg add` on the baked-deps image checks deps are PRESENT (not their
+  # version), so the portable .pkg installs identically to a `make package` one.
+  # The portable builder is the SOLE .pkg builder (the FreeBSD make-package path
+  # was retired — pfBlockerNG is NO_BUILD, so there is nothing to compile).
+  #
+  # This build-if-absent path only runs when no pkg_artifact was supplied (issue
+  # #857): the smoke.yml fan-out now builds one shared .pkg per version leg in
+  # its own build-pkg job and passes its artifact name via pkg_artifact, so
+  # every shard of that leg downloads it below instead of rebuilding here. A
+  # bare workflow_dispatch and repo-install.yml's direct call pass no
+  # pkg_artifact, so they keep building their own .pkg exactly as before.
+  build-pkg:
+    if: ${{ inputs.pkg_artifact == '' }}
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: edge
+      # Build a .pkg whose ABI + dep names match THIS leg's image. A bare dispatch
+      # keeps the workflow's min-CE defaults; the fan-out passes per-leg values from
+      # the ci-metadata version matrix so each leg gets an ABI/flavor-matched .pkg
+      # (pkg add refuses a cross-major-ABI .pkg).
+      abi: ${{ inputs.abi }}
+      php_version: ${{ inputs.php_version }}
+      py_flavor: ${{ inputs.py_flavor }}
+      # Per-leg artifact name: the fan-out builds a CE and a Plus .pkg in ONE run,
+      # so a shared name would collide / cross-feed. Keying on image_name AND
+      # pfsense_version keeps each leg's artifact distinct (issue #2453: CE 2.8 and
+      # CE 2.9 share image_name=pfsense-ce, so image_name alone let the CE 2.9 leg
+      # download the CE 2.8 FreeBSD:15 .pkg -> "wrong architecture"); the download
+      # below follows build-pkg.outputs.artifact.
+      # The `-s<shard>` suffix (issue #797) keys it further: two shards of the SAME
+      # leg each build their own .pkg on THIS path — only reached when pkg_artifact
+      # is blank, so it never collides with the shared per-leg artifact smoke.yml builds.
+      # issue #1806: deliberately NOT the fbsd<major> convention — this artifact is
+      # produced and consumed entirely within THIS run (the .pkg download follows
+      # build-pkg.outputs.artifact, which build-pkg-linux.yml echoes from this
+      # artifact_name input; the dep download below repeats the dep literal), so the
+      # major-collapse naming that matters for cross-workflow/cross-run consumers
+      # (release.yml/smoke.yml) buys nothing here.
+      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+      # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
+      # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
+      # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
+      ports_repo: ${{ inputs.ports_repo || 'pfBlockerNG/FreeBSD-ports' }}
+      ports_ref: ${{ inputs.ports_ref || 'pfblockerng/use-github' }}
+      # issue #1806 D1/D2: this leg's extra_pkgs, straight through — this build-pkg
+      # job only runs on the build-if-absent path (bare dispatch / repo-install.yml),
+      # so it is the SOLE builder for this leg; if extra_pkgs is non-empty it also
+      # uploads its dep artifact, which the "Download dep packages" step below
+      # (same workflow, same run) then downloads.
+      extra_pkgs: ${{ inputs.extra_pkgs }}
+      # W1: mirror artifact_name's OWN discriminator (image_name + pfsense_version + shard) — this
+      # build-pkg job's matrix (indirectly, one invocation per caller-side leg)
+      # can share a run with sibling invocations of THIS reusable workflow (e.g.
+      # repo-install.yml's fan-out); the plain per-major default would collide.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+
+  smoke:
+    name: pytest -m smoke (live pfSense VM)
+    needs: build-pkg
+    # Run whether build-pkg built (pkg_artifact blank) or was skipped
+    # (pkg_artifact set — build-pkg's `if` above never even started it); skip
+    # only if build-pkg actually ran and failed/was cancelled.
+    if: ${{ always() && (needs.build-pkg.result == 'success' || needs.build-pkg.result == 'skipped') }}
+    # issue #1855: a leg the caller demoted to non-blocking still runs every step
+    # and still reports its failure -- it just does not fail the run, so the
+    # caller's fan-out (and the release it gates) is not vetoed by a pfSense
+    # version that is not a released one. Applied HERE because GitHub forbids
+    # continue-on-error on smoke.yml's `uses:` fan-out job. Default false: every
+    # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
+    continue-on-error: ${{ inputs.nonblocking }}
+    runs-on: ubuntu-latest
+    # issue #2614: the smoke suite stands a real on-box flock holder up against the
+    # feed-pass lock, and a flock(2) acquire has no timeout of its own, so this budget
+    # is the only bound on a stuck lock. Observed worst sampled leg 17.8 min.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # issue #1859: the test code comes from the ref the caller names — for a
+          # release that is the pinned release SHA, so the suite verifies the source
+          # it ships rather than whatever landed on the branch mid-run. Blank =
+          # actions/checkout's default (the caller's own ref), as before.
+          ref: ${{ inputs.checkout_ref }}
+          persist-credentials: false
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        #
+        # `udevadm trigger` queues the uevent and returns; udevd applies the rule
+        # asynchronously. `settle` (hard-capped, so it can never hang the job) makes the
+        # new mode a fact before anything opens /dev/kvm, rather than relying on the
+        # steps in between being slow enough.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle --timeout=10
+
+      - name: Install host tools (qemu, dnsutils, iptables, zstd)
+        # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
+        # the runner to forge a lower+higher build for the pkg-upgrade transition
+        # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
+        # Harmless for the default `smoke` marker (the helper just isn't called).
+        # iptables: the hermetic egress gate (tests/smoke/helpers.py block_egress,
+        # issue #2261) flips the runner's OUTPUT policy.
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Assert KVM acceleration and the egress gate are available
+        # The udev rule above makes /dev/kvm world-RW. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
+        run: |
+          set -eu
+          ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
+          # Same assert-early contract for the hermetic egress gate (issue #2261): the
+          # suite arms SMOKE_BLOCK_EGRESS, and a missing iptables binary or a runner
+          # that denies the capability would otherwise surface as dozens of per-case
+          # errors an hour from now. `-S` lists rules without modifying anything; it
+          # fails on either a missing binary or a capability denial.
+          sudo iptables -w -S OUTPUT >/dev/null || {
+            echo '::error::iptables unusable on the runner (missing package or insufficient privileges) -- block_egress would fail every hermetic case'
+            exit 1; }
+          echo 'Egress gate: iptables usable'
+
+      - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the variant topology)
+        # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
+        # ci-metadata version matrix (no hardcoded CE/Plus). Resolve it HERE — at job start,
+        # while egress is open — and export it. The test reads SMOKE_MATRIX_JSON; without it
+        # the test falls back to running this script itself, which needs network the pytest
+        # phase may not have. Best-effort: on failure the topology cases SKIP, never fail the
+        # whole smoke job. (read-version-matrix.sh self-fetches the ci-metadata orphan ref.)
+        # W3: --print-ci (ONE ROW PER VERSION, never deduped by major), not --print-build
+        # (issue #1806 dedupes BUILD to one row per freebsd_major) -- a deduped feed means
+        # _matrix.py's matrix_variants() can never see two editions sharing a major at once,
+        # so its SMOKE_IMAGE_REF disambiguator (own_entry()) can never actually fire, and a
+        # merged row's last-wins fields could misreport which edition is booted. --print-ci
+        # is also the honest source here: every leg this topology ever runs against IS a
+        # ci:true leg (a live VM only ever boots for one), so nothing --print-ci excludes was
+        # ever reachable by this topology anyway.
+        run: |
+          set -u
+          if matrix="$(sh scripts/read-version-matrix.sh --print-ci 2>/dev/null)" && [ -n "$matrix" ]; then
+            # --print-ci emits pretty (multi-line) JSON, so write it via the heredoc
+            # delimiter form (as RESOLVED_REDACT below does): a single-line KEY=value write
+            # of a multi-line value errors the step ("Invalid format") and drops the matrix.
+            { printf 'SMOKE_MATRIX_JSON<<__EOF__\n%s\n__EOF__\n' "$matrix"; } >> "$GITHUB_ENV"
+            echo "Resolved $(printf '%s' "$matrix" | jq 'length') CI-matrix entries for the smoke topology."
+          else
+            echo "::warning::could not resolve the version matrix — ADR-20 variant-topology cases will SKIP"
+          fi
+
+      - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
+        id: ref
+        env:
+          # image_ref input (full ref) wins. Otherwise compose from the
+          # SMOKE_IMAGE_{REPO,NAME,TAG} repo vars; the pfsense_version input (the
+          # per-version caller, e.g. the smoke fan-out) overrides the TAG, and the
+          # image_name input (the per-leg matrix.image_name) overrides the NAME var
+          # (Plus = pfsense-plus). None are sensitive, so they are variables, not
+          # secrets.
+          INPUT_REF: ${{ inputs.image_ref }}
+          INPUT_VERSION: ${{ inputs.pfsense_version }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
+          SMOKE_IMAGE_TAG: ${{ vars.SMOKE_IMAGE_TAG }}
+        run: |
+          set -eu
+          # ADR-47 P5: image ref composed by the shared script (writes ref= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh image-ref
+
+      - name: Resolve image digest (cache key)
+        id: digest
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
+          sh scripts/resolve-legs.sh digest "$IMAGE_REF"
+
+      - name: Restore cached pfSense image
+        id: pfcache
+        uses: actions/cache/restore@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      # Pull only on a cache miss.
+      - name: Pull pfSense image (by digest)
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -eu
+          sh scripts/resolve-legs.sh pull "$IMAGE_REF" "$DIGEST" image
+
+      # Save right after the pull (before the run) so the image is cached even if
+      # a later step fails. Key = the resolved digest, so it never serves stale.
+      - name: Save pfSense image to cache
+        if: steps.pfcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: image
+          key: pfsense-img-${{ steps.digest.outputs.k }}
+
+      # The civm client VM (ADR-04 two-VM topology) — the realistic LAN client the
+      # DNS probes run on. Resolve its digest (cache key), restore-or-pull, and
+      # cache it exactly like the pfSense image. The oras login from the digest
+      # step above persists in-job. SMOKE_CLIENT_IMAGE_NAME/_TAG are repo
+      # VARIABLES (default civm:v1).
+      - name: Resolve civm image ref + digest (cache key)
+        id: civm
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          CLIENT_NAME: ${{ vars.SMOKE_CLIENT_IMAGE_NAME }}
+          CLIENT_TAG: ${{ vars.SMOKE_CLIENT_IMAGE_TAG }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # ADR-47 P5: compose the civm ref from env vars (map CLIENT_* -> INPUT_*),
+          # then resolve its digest — both via the shared script.
+          # The civm uses CLIENT_NAME/TAG rather than INPUT_IMAGE_NAME/VERSION; map them.
+          # image-ref writes ref= to $GITHUB_OUTPUT and prints the ref to stdout.
+          NAME="${CLIENT_NAME:-civm}"
+          TAG="${CLIENT_TAG:-v1}"
+          REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
+          sh scripts/resolve-legs.sh digest "$REF"
+
+      - name: Restore cached civm image
+        id: civmcache
+        uses: actions/cache/restore@v5
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
+      - name: Pull civm image (by digest)
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        env:
+          CIVM_REF: ${{ steps.civm.outputs.ref }}
+          DIGEST: ${{ steps.civm.outputs.digest }}
+        run: |
+          set -eu
+          sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
+
+      - name: Save civm image to cache
+        if: steps.civmcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: client-image
+          key: civm-img-${{ steps.civm.outputs.k }}
+
+      - name: Write private SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        # pkg_artifact set (issue #857): download the shared per-leg .pkg
+        # smoke.yml's build-pkg job already built. Blank: fall back to the
+        # artifact this workflow's OWN build-pkg job just built above.
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}
+          path: pkg
+
+      # issue #1806 D2/B1: this leg's extra_pkgs (e.g. py311-charset-normalizer for
+      # CE) — a SEPARATE artifact from the branch .pkg above (never folded into
+      # `pkg/`, so the N_PKG -eq 1 guard below stays exactly one .pkg). dep_artifact
+      # set (smoke.yml's fan-out, either self-build or release-prefix path):
+      # download that exact name. Blank: fall back to THIS workflow's own
+      # build-pkg job's dep_artifact_name above (bare dispatch / repo-install.yml).
+      - name: Download dep packages
+        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-{1}-s{2}', inputs.image_name, inputs.pfsense_version, inputs.shard) }}
+          path: deppkgs
+
+      - name: Export SMOKE_DEP_PKGS
+        if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
+        run: |
+          set -eu
+          N_DEP="$(find deppkgs -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_DEP" -ge 1 ] || { echo "::error::extra_pkgs was non-empty but the deppkgs artifact carried no .pkg"; ls -lR deppkgs || true; exit 1; }
+          DEP_PATHS=""
+          for f in $(find deppkgs -type f -name '*.pkg' | sort); do
+            DEP_PATHS="${DEP_PATHS}$(cd "$(dirname "$f")" && pwd)/$(basename "$f") "
+          done
+          echo "SMOKE_DEP_PKGS=${DEP_PATHS% }" >> "$GITHUB_ENV"
+          echo "resolved SMOKE_DEP_PKGS=${DEP_PATHS% }"
+
+      - name: Locate the .pkg + the pulled .qcow2
+        id: paths
+        run: |
+          set -eu
+          # The build artifact preserves the out/ subdir (multi-path upload), so
+          # search recursively rather than assuming pkg/*.pkg.
+          N_PKG="$(find pkg -type f -name '*.pkg' | wc -l | tr -d ' ')"
+          [ "$N_PKG" -eq 1 ] || { echo "::error::expected exactly one .pkg in the build artifact, found ${N_PKG}"; ls -lR pkg || true; exit 1; }
+          PKGFILE="$(find pkg -type f -name '*.pkg')"
+          # The pulled artifact carries exactly one disk image.
+          N_IMG="$(find image -type f -name '*.qcow2' | wc -l | tr -d ' ')"
+          [ "$N_IMG" -eq 1 ] || { echo "::error::expected exactly one .qcow2 in the pulled artifact, found ${N_IMG}"; ls -lR image || true; exit 1; }
+          IMG="$(find image -type f -name '*.qcow2')"
+          {
+            echo "pkg=$(cd "$(dirname "$PKGFILE")" && pwd)/$(basename "$PKGFILE")"
+            echo "img=$(cd "$(dirname "$IMG")" && pwd)/$(basename "$IMG")"
+          } >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKGFILE}  img=${IMG}"
+
+      - name: Set up uv and the pinned Python
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs;
+        # activate-environment puts the project environment on PATH, so the `python3`
+        # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
+        # pins the same minor the appliance carries).
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install the smoke harness Python deps
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this suite with no diff.
+        run: uv sync --locked --group smoke
+
+      # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
+      # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).
+      # Build it here from the exact checked-out source via the portable builder +
+      # --channel nightly, off the SAME ports ref build-pkg-linux uses; export its path.
+      # Only for the `repo` marker (the default `smoke` flow doesn't read it).
+      - name: Build a nightly .pkg (repo-flow nightly smoke)
+        # build-leg.sh: shared build path; prints the resolved .pkg path on stdout.
+        if: ${{ (inputs.pytest_marker || 'smoke') == 'repo' }}
+        env:
+          PHP_VERSION:  ${{ inputs.php_version }}
+          PY_FLAVOR:    ${{ inputs.py_flavor }}
+          ABI:          ${{ inputs.abi }}
+        run: |
+          set -eu
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
+          # AMENDMENT 7: slug a nightly-specific LEG for the run-id so CI artifacts
+          # land in a distinct nightly-tagged dir (no collision with the smoke .pkg).
+          LEG="nightly-$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          NIGHTLY_VERSION="$(sh scripts/nightly-pkgversion.sh "$SOURCE_SHA")"
+          PKG="$(sh scripts/build-leg.sh \
+            --channel    nightly \
+            --abi        "$ABI" \
+            --py-flavor  "$PY_FLAVOR" \
+            --php        "$PHP_VERSION" \
+            --pkgversion "$NIGHTLY_VERSION" \
+            --annotate   "commit=${SOURCE_SHA}")"
+          echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"
+
+      # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE
+      # uses the public pin (the `mac` input + the CE source-VM uuid). A non-CE
+      # (Plus) image is LICENSE/NDI-keyed to its OWN source-VM identity, which is
+      # SECRET — it comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID secrets,
+      # NEVER the public ci-metadata matrix (the NDI is derived from MAC + uuid, so
+      # both are as license-keyed as the MAC). This resolves the effective identity
+      # and, for Plus, masks it + emits the diagnostics redaction set. Fail closed
+      # if a non-CE image is selected without those secrets.
+      - name: Resolve VM identity (MAC + SMBIOS uuid)
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_MAC: ${{ inputs.mac }}
+          PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          PLUS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          PLUS_NDI: ${{ secrets.SMOKE_PLUS_NDI }}
+          # The civm data-NIC MAC is a secret in BOTH editions (it keys pfSense's
+          # static DHCP lease for the client). Mask + redact it regardless of edition.
+          CLIENT_MAC: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
+        run: |
+          set -eu
+          # ADR-47 P5: VM identity resolved by the shared script (writes RESOLVED_* to $GITHUB_ENV).
+          # --civm-mac passes the civm data-NIC MAC for masking + redaction (deny-by-default: empty).
+          sh scripts/resolve-legs.sh vm-identity --civm-mac "${CLIENT_MAC:-}"
+
+      # HERMETICITY (ADR §2/§4): the egress block is done INSIDE pytest, by the
+      # matrix's `deployed_vm` fixture, after deploy() and before the per-case
+      # assertions (helpers.block_egress, gated by SMOKE_BLOCK_EGRESS=1 below;
+      # unblocked on teardown). deploy() no longer needs egress for dependencies:
+      # the pre-baked image ships pfBlockerNG's RUN_DEPENDS, so `pkg add` of the
+      # branch .pkg resolves them from the local pkg db offline (convention — a
+      # missing dep means a bad image). The block is kept in-fixture (not pre-
+      # pytest) because the per-case pfBlockerNG reload still wants a working
+      # resolver, and it's unblocked only for the hermetic probe. The matrix then
+      # resolves every answer from the in-runner mock-feed server (guest ->
+      # SLIRP 10.0.2.2 -> runner loopback) + injected Unbound local-data, so it
+      # still passes with real egress dark.
+      - name: Run the live-VM matrix (pytest -m ${{ inputs.pytest_marker || 'smoke' }})
+        env:
+          # Selected marker: 'smoke' by default (byte-identical to before); 'repo'
+          # for the ADR-17 repository-install flow (repo-install.yml calls in with it).
+          PYTEST_MARKER: ${{ inputs.pytest_marker || 'smoke' }}
+          # Optional -k selector to run only a subset of the marker's tests
+          # (blank = the whole marker). Lets a dispatcher fire a specific set.
+          PYTEST_FILTER: ${{ inputs.pytest_filter }}
+          # Module-shard identity (issue #797): forwarded verbatim to
+          # run-smoke.sh; shard_total=1 (the default) is a byte-identical no-op.
+          SHARD: ${{ inputs.shard }}
+          SHARD_TOTAL: ${{ inputs.shard_total }}
+          # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
+          # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
+          SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_PFSENSE_VERSION: ${{ inputs.pfsense_version }}
+          # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
+          # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
+          # identity" step — the CE pin for a CE image (byte-identical to a bare
+          # dispatch), the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES
+          # is the (masked) Plus identity the diagnostics scrub value-redacts; EMPTY
+          # for CE when no civm MAC secret is set (the civm MAC is redacted on CE too).
+          SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
+          SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+          # civm client VM (ADR-04): the pre-pulled image dir + its data-NIC MAC
+          # (the static-lease key). conftest's client_vm fixture boots it after
+          # pfSense and auto-allocates the shared LAN socket port.
+          SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
+          SMOKE_SSH_KEY: smoke_key
+          SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
+          # issue #1806 D2: this leg's dep .pkgs (space-separated absolute paths),
+          # set by "Export SMOKE_DEP_PKGS" above when extra_pkgs is non-empty;
+          # stays unset (empty) otherwise — install-pkg.sh skips deps entirely then.
+          SMOKE_DEP_PKGS: ${{ env.SMOKE_DEP_PKGS }}
+          # Matrix-derived build target (ADR-24): the per-leg ABI / PHP / Python flavor
+          # the .pkg was built for, straight from the ci-metadata matrix (the fan-out
+          # passes them as inputs; a bare dispatch defaults to the CE values). The ADR-20
+          # variant repo-install cases assert the box's php dep / ABI against THESE rather
+          # than hardcoding php83 / FreeBSD:15, so the CE and Plus legs each assert their
+          # own flavor.
+          SMOKE_ABI: ${{ inputs.abi }}
+          SMOKE_PHP_VERSION: ${{ inputs.php_version }}
+          SMOKE_PY_FLAVOR: ${{ inputs.py_flavor }}
+          # The builder-produced -nightly .pkg (set above for the `repo` marker; the
+          # nightly cases SKIP when unset). Propagated via $GITHUB_ENV from that step.
+          SMOKE_NIGHTLY_PKG: ${{ env.SMOKE_NIGHTLY_PKG }}
+          # Live nightly Pages URL for test_install_from_live_nightly_url (ADR-18 §7).
+          # Unset (blank) -> the test SKIPS; set to .../nightly to run it post-deploy.
+          SMOKE_NIGHTLY_LIVE_URL: ${{ inputs.smoke_nightly_live_url }}
+          SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_nightly_expected_source_sha }}
+          SMOKE_NIGHTLY_EXPECTED_VERSION: ${{ inputs.smoke_nightly_expected_version }}
+          # Live channel Pages URL for test_install_from_live_pages_url (issue #2389).
+          # Unset (blank) -> the test SKIPS; set post-publish to a staged or live channel root.
+          SMOKE_REPO_LIVE_URL: ${{ inputs.smoke_repo_live_url }}
+          SMOKE_REPO_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_repo_expected_source_sha }}
+          SMOKE_REPO_EXPECTED_VERSION: ${{ inputs.smoke_repo_expected_version }}
+          SMOKE_REPO_EXPECTED_CHANNEL: ${{ inputs.smoke_repo_expected_channel }}
+          # Turn on the in-test hermetic egress block (after deploy, see fixture).
+          SMOKE_BLOCK_EGRESS: "1"
+          # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
+          # pfctl + rules.debug) — ON by default; snapshots are secret-scrubbed
+          # (same pass as the diagnostics bundle) before diffing, so the job log
+          # carries no secrets. SMOKE_REDACT_VALUES mirrors the diagnostics-bundle
+          # value-redaction (Plus MAC/uuid) — SMOKE_REDACT_VALUES is already exported
+          # above for this step; CE legs: empty only when no civm MAC secret is set.
+          SMOKE_STATE_DIFF: "1"
+          # Match the baked image (RESULTS/02); harmless if unset.
+          SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
+          SMOKE_CONTROL_NAME: ${{ secrets.SMOKE_CONTROL_NAME || vars.SMOKE_CONTROL_NAME }}
+          SMOKE_CONTROL_IP: ${{ secrets.SMOKE_CONTROL_IP || vars.SMOKE_CONTROL_IP }}
+          # System-DNS upstream wiring: the mock binds the runner loopback :53, and
+          # pfSense forwards to the SLIRP host alias 192.168.89.2 which libslirp NATs
+          # (port-preserving) straight to that mock — no /etc/resolv.conf involvement.
+          SMOKE_STUB_DNS_ADDR: "127.0.0.1"
+          SMOKE_STUB_DNS_PORT: "53"
+        run: |
+          # pipefail is REQUIRED: run-smoke.sh's output is teed to a log below, so
+          # its exit status must survive the pipe or a genuine smoke failure would
+          # read green. This step leaves `shell:` unset, so the runner uses `bash -e`
+          # WITHOUT pipefail (only an explicit `shell: bash` implies `-o pipefail`) —
+          # this `set -o pipefail` is what actually turns it on.
+          set -euo pipefail
+          python3 scripts/check_skip_allowlist.py --suite smoke --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
+          export SMOKE_CLIENT_IMAGE_DIR="$GITHUB_WORKSPACE/client-image"
+          # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
+          # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias
+          # path the mock-feed HTTP server already rides. So the ONLY runner-side prep is
+          # lowering the privileged-port floor so the non-root mock (in pytest) can bind
+          # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
+          # throughout; nothing to restore, and immune to how the runner does resolution).
+          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
+          # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
+          # RUN_ID minted here (CI is the degenerate lease: runner IS the box,
+          # --print-id emits the id without acquiring a real lease).
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          # Build argv via set -- so --filter rides as ONE quoted arg (word-split on a
+          # multi-token expression like "a and not b" would break pytest matching).
+          set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
+          [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
+          set -- "$@" --shard "${SHARD}" --shard-total "${SHARD_TOTAL}"
+          set -- "$@" --junitxml=smoke-diag/pytest-junit.xml
+          # Tee the run into the diagnostics dir so its pytest --durations=0 lines
+          # ride the smoke-diagnostics artifact. module-durations.yml aggregates
+          # every leg/shard's log after a green nightly to refresh the sharding
+          # duration table (issue #816). Stderr is folded in — the parser ignores
+          # non-duration lines. pipefail (above) keeps run-smoke.sh's exit status.
+          mkdir -p smoke-diag
+          sh scripts/run-smoke.sh "$@" 2>&1 | tee smoke-diag/pytest-durations.log
+          python3 scripts/check_skip_allowlist.py --suite smoke --allowlist tests/skip-allowlist.txt smoke-diag/pytest-junit.xml
+
+      # issue #1767: a tiny per-shard marker recording whether THIS shard's
+      # slice selected any tests ('selected') or hit the #855 empty-partition
+      # tolerance ('empty') -- scripts/run-smoke.sh writes it only for sharded
+      # (shard_total > 1) invocations, so a single-shard leg (shard_total=1)
+      # produces no file here and this step no-ops (if-no-files-found: ignore).
+      # smoke.yml's all-smoke-passed job downloads every shard's marker and
+      # fails the LEG unless at least one says 'selected' -- the per-shard
+      # #855 tolerance stays, but a whole-leg zero-selection (every shard
+      # empty -- a marker typo or collection bug) no longer silently passes
+      # the release gate (#1662).
+      - name: Upload shard selection-status marker (leg-level empty-selection gate, issue #1767)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-shard-status-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+          path: smoke-diag/shard-selection-status
+          if-no-files-found: ignore
+          retention-days: 1
+
+      # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
+      # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion,
+      # literal-redaction of RESOLVED_REDACT values, and CE no-op (empty RESOLVED_REDACT).
+      - name: Scrub Plus secret identity from diagnostics (runner side)
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
+        run: |
+          set -eu
+          # ADR-47 P5: scrub delegated to the shared script.
+          sh scripts/resolve-legs.sh scrub --root smoke-diag
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          # Per-leg-per-shard name (issue #797) — also fixes the pre-existing
+          # wart where every leg of a fan-out run uploaded the SAME bare
+          # "smoke-diagnostics" name (a green nightly produced N artifacts all
+          # named identically; only the run UI's per-job grouping told them apart).
+          name: smoke-diagnostics-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+          path: |
+            **/vm*.log
+            **/screen-*.png
+            **/screen-*.ppm
+            smoke-diag/**
+          if-no-files-found: ignore
+          retention-days: 7

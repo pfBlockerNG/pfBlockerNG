@@ -1,0 +1,48 @@
+================================================================================
+ADR-49 §7 ACCEPTANCE GATE — offline false-positive survey (Phase 3)
+================================================================================
+Command:
+    $ vendor/bin/phpunit --filter FeedCorpusSurveyTest --testdox
+
+Result: PASS — zero false positives over the committed catalogue corpus.
+
+PHPUnit 11.5.55 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.5.7
+Configuration: /Users/andre/git/pfBlockerNG/.claude/worktrees/adr-49/phpunit.xml
+
+..                                                                  2 / 2 (100%)
+
+Time: 00:00.070, Memory: 30.00 MB
+
+Feed Corpus Survey
+ ✔ Corpus is present and coherent
+ ✔ Catalogue survey has zero false positives
+
+OK (2 tests, 1441 assertions)
+
+--------------------------------------------------------------------------------
+Notes
+--------------------------------------------------------------------------------
+- "Corpus is present and coherent": the manifest.json / samples/ integrity checks
+  (file existence, size, sha256, no case-collisions, >150 fetched / >100 text
+  samples) — unrelated to the scanner, always runs.
+- "Catalogue survey has zero false positives": the ADR-49 gate itself. Runs
+  pfb_text_sanity() over every non-archive text sample in
+  tests/fixtures/feed_corpus/ (from PR #827's one-time offline capture) and
+  asserts NULL for every one EXCEPT the 5 documented KNOWN_NON_FEED entries
+  (MaxMind_BD_Proxy, Abuse_SSLBL, Abuse_SSLBL_Agr, Darklist, MPatrol — see
+  RESULTS/01_Results.txt for the byte-level inspection proving each is a
+  stale/gated/wrong-URL capture, not a scanner false positive), which are
+  asserted to STILL be flagged (so a live comeback would fail loudly as
+  "stale exclusion" rather than silently mask a real regression).
+- #[CoversFunction('pfb_text_sanity')] is back on FeedCorpusSurveyTest (removed
+  in PR #827 while the function did not exist yet, per its own docblock) — no
+  PHPUnit warning: the full suite run (`vendor/bin/phpunit`, RESULTS/03_Results.txt)
+  confirms zero warnings/skips beyond the 4 pre-existing unrelated skips.
+- No network at test time — the corpus is a committed, offline artifact; this
+  gate is fully reproducible / CI-safe with no live catalogue fetch.
+
+CONCLUSION: the §7 acceptance survey gate is GREEN. Combined with green CE+Plus
+live smoke (the remaining orchestrator step, not run by this phase), ADR-49 is
+ready to flip to Accepted.

@@ -1,0 +1,735 @@
+name: Upgrade pfSense smoke images
+
+# Upgrade published pfSense CE and Plus GHCR smoke base images to new releases and
+# publish the results as new tags. The generation engine of the daily reconcile
+# loop (issue #1823): the version tracker plans actions from the booted boxes and
+# dispatches each one here as a fully-specified `direct_leg`. A dispatch with
+# self_refresh=true re-publishes the newest entry per channel under its own
+# floating tag (from == to, --force) — manual operator refresh. A bare dispatch
+# plans NOTHING (the old upgrade.available matrix mode is retired).
+# Fail-closed: a bad upgrade MUST NEVER be published and the old tag MUST be left
+# untouched.
+#
+# PUBLISH GUARD (inside scripts/image-upgrade.sh):
+#   1. Prior GHCR tag pulled and booted writable under QEMU/KVM.
+#   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f → pkg upgrade -n
+#      dry-run → ONLY if upgrades pending: pkg upgrade -y + reboot + wait SSH
+#      (baked deps updated; pfBlockerNG is NOT on the base image and is never touched).
+#      Cross-version legs omit --upgrade-pkgs so pfSense-upgrade owns the OS transition.
+#   3. pfSense-upgrade (reboots the box).
+#   4. Wait until version changes.
+#   5. Health gate: poll up to 300 s for EITHER the webConfigurator to answer
+#      HTTP on-box (fetch https://127.0.0.1/) OR pfctl -sr to show a live ruleset.
+#      If NEITHER within 300 s → die, fail-closed, nothing is published.
+#   6. Boot-environment promotion: wait for pfSense's own boot verification to
+#      make the new BE permanent on disk (fallback: explicit bectl activate);
+#      die if the disk would still boot the pre-upgrade system (issue #1858).
+#   7. Clean shutdown → compress to qcow2 (zstd) → stream back.
+#   8. Artifact verification: boot the exported qcow2 once and refuse to push
+#      it under a tag whose family it does not come up with (issue #1858).
+#   9. oras push new tag.
+#
+# pfBlockerNG SMOKE (non-blocking, after publish):
+#   A separate step with continue-on-error: true boots a throwaway copy-on-write
+#   overlay of the JUST-PUBLISHED image, installs pfBlockerNG from the repo, runs
+#   pfblockerng.php update, and digs the sanity control record — purely informational.
+#   Because it runs on a discarded overlay AFTER publish and with continue-on-error:
+#   true, it CANNOT pollute the published image and CANNOT fail the refresh job.
+#   The authoritative pfBlockerNG validation is the smoke fan-out (smoke.yml).
+#
+# FALLBACK: when the health gate fails, use scripts/image-publish.sh (off-runner
+# manual seed) to publish the image for that version.
+#
+# Required secrets/vars (shared with build-image.yml and smoke-single.yml):
+#   SMOKE_GHCR_USER         username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN        token with write:packages (publish) / read:packages (defaults to GITHUB_TOKEN)
+#   SMOKE_SSH_PRIV_KEY      guest SSH private key baked into the image            (secret)
+#   SMOKE_PLUS_MAC          Plus VM: newline-separated list of 8 MAC addresses    (secret)
+#   SMOKE_PLUS_SMBIOS_UUID  Plus VM: SMBIOS type-1 UUID (Netgate Device ID key)   (secret)
+#   SMOKE_IMAGE_REPO        GHCR namespace, e.g. ghcr.io/pfblockerng             (variable)
+#                           (default ghcr.io/<owner-lowercased>)
+#
+# INVARIANT: this workflow NEVER writes to main/devel/next or any channel branch.
+# It writes ONLY to GHCR (packages). The tracker dispatches it; it publishes or fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pfsense_version:
+        description: "Optional filter for self_refresh mode: only the entry whose pfsense_version matches."
+        required: false
+        default: ""
+        type: string
+      self_refresh:
+        description: "If 'true', re-publish the newest entry per channel under its own tag (from == to, --force) — manual operator refresh."
+        required: false
+        default: "false"
+        type: string
+      dry_run:
+        description: "If 'true', log the activation PR that WOULD be proposed but do not push or open it."
+        required: false
+        default: "false"
+        type: string
+      direct_leg:
+        description: "One fully-specified leg as JSON ({variant,label,pfsense_version,freebsd_version,image_name,branch,target,from,force_flag}) — how the reconcile loop (issue #1823) dispatches its planned actions. Takes precedence over self_refresh."
+        required: false
+        default: ""
+        type: string
+      compression:
+        description: "qcow2 compression for the published image (zstd|zlib|off)"
+        required: false
+        default: "zstd"
+        type: string
+      upgrade_timeout:
+        description: "MAX seconds to wait for pfSense-upgrade + reboot (poll exits on version change; bounds a stuck upgrade only)"
+        required: false
+        default: "1200"
+        type: string
+      sanity_local_data_name:
+        description: "pfBlockerNG smoke (non-blocking): Unbound local-data name to inject + query on-box"
+        required: false
+        default: "smoke-sanity.pfb.test"
+        type: string
+      sanity_local_data_ip:
+        description: "pfBlockerNG smoke (non-blocking): A-record asserted for sanity_local_data_name"
+        required: false
+        default: "192.0.2.99"
+        type: string
+
+# Least-privilege default; the refresh job elevates for its publish + the
+# activation PR (review: CWE-276).
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: image-refresh
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
+  # Validate the direct_leg input (the reconcile loop's dispatch), or derive the
+  # newest-per-channel self_refresh legs from ci-metadata. A bare dispatch emits
+  # an empty include array — the refresh job runs zero legs, a clean no-op.
+  plan:
+    name: Resolve refresh matrix (CE + Plus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build refresh matrix from ci-metadata
+        id: plan
+        env:
+          FILTER_VERSION: ${{ inputs.pfsense_version }}
+          SELF_REFRESH: ${{ inputs.self_refresh }}
+          DIRECT_LEG: ${{ inputs.direct_leg }}
+        run: |
+          set -eu
+          git fetch origin ci-metadata -q
+          MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
+
+          # Build the include array (issue #1823 modes; contract pinned by
+          # tests/test_image_refresh_plan_contract.py):
+          #  - DIRECT_LEG: one fully-specified leg from the reconcile loop —
+          #    validated, passed through verbatim; wins over self_refresh.
+          #  - SELF_REFRESH=true: the newest amd64 entry per channel gets a
+          #    from==to --force leg (manual operator re-publish).
+          #  - bare dispatch: NOTHING (the upgrade.available matrix mode is
+          #    retired — the reconcile loop decides what runs).
+          # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
+          if [ -n "${DIRECT_LEG:-}" ]; then
+            # Validation is load-bearing: leg fields reach the matrix.*
+            # interpolation in the refresh job's run bodies, so every value is
+            # charset-constrained and force_flag is an enum (review F4).
+            INCLUDE="$(printf '%s' "$DIRECT_LEG" | jq -c '
+              if type == "object"
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
+                       .branch, .target, .from, .force_flag] | all(type == "string"))
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
+                       .branch, .target, .from]
+                      | all(test("[^0-9A-Za-z._@:-]") | not))
+                 and (.force_flag == "" or .force_flag == "--force")
+              then [.] else [] end' 2>/dev/null || printf '[]')"
+            if [ "$(printf '%s' "$INCLUDE" | jq 'length')" -eq 0 ]; then
+              echo "::warning::direct_leg rejected (malformed or missing fields)"
+            fi
+          elif [ "${SELF_REFRESH:-false}" = "true" ]; then
+            # The version filter applies BEFORE newest-per-channel selection —
+            # deliberate: a manual dispatch naming an OLDER version re-publishes
+            # that frozen tag (seed/repair override). Tracker dispatches always
+            # name the channel's newest, so the automated path stays newest-only.
+            INCLUDE="$(printf '%s' "$MATRIX_JSON" | jq -c --arg filter "$FILTER_VERSION" '
+              [
+                .versions[]
+                | select((.role // "build") != "route-only")
+                | select((.arch // "amd64") == "amd64")
+                | select($filter == "" or .pfsense_version == $filter)
+              ]
+              | group_by(.channel)
+              | map(max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)))
+              | map({
+                  variant:          (.channel | ascii_downcase),
+                  label:            .channel,
+                  pfsense_version:  .pfsense_version,
+                  freebsd_version:  .freebsd_version,
+                  image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
+                  branch:           "",
+                  target:           .pfsense_version,
+                  from:             .pfsense_version,
+                  force_flag:       "--force"
+                })
+            ')"
+          else
+            INCLUDE='[]'
+          fi
+
+          printf 'matrix={"include":%s}\n' "$INCLUDE" >> "$GITHUB_OUTPUT"
+          # Count of eligible legs — the refresh job is gated on this so an empty
+          # matrix (the common case) is an unambiguous clean skip, not a matrix edge case.
+          printf 'count=%s\n' "$(printf '%s' "$INCLUDE" | jq 'length')" >> "$GITHUB_OUTPUT"
+
+          # Human-readable summary for the run log.
+          if [ "${SELF_REFRESH:-false}" = "true" ]; then
+            printf '%s' "$INCLUDE" | jq -r '
+              .[] | "  \(.label) \(.pfsense_version): SELF-REFRESH (from==to, --force)"'
+          else
+            printf '%s' "$INCLUDE" | jq -r '
+              if length == 0 then "  no legs (bare dispatch plans nothing — use direct_leg or self_refresh)"
+              else .[] | "  \(.label) \(.pfsense_version): DIRECT (from=\(.from) target=\(.target) branch=\(.branch // "(image default)"))"
+              end'
+          fi
+
+  # ── Upgrade in place → health gate → publish; then non-blocking smoke ──────
+  refresh:
+    name: Upgrade pfSense ${{ matrix.label }} Smoke Image
+    needs: plan
+    if: ${{ needs.plan.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    # issue #2614: this job SSH-runs the production `pfblockerng.php update` entry point
+    # on the image it is upgrading, so it reaches src/'s unbounded
+    # file_put_contents(..., LOCK_EX) acquires. This budget is the only bound.
+    timeout-minutes: 120
+    permissions:
+      contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
+      packages: write        # publish the upgraded image to GHCR
+      pull-requests: write   # open the activation PR
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout (for scripts/ + tests/smoke/)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
+          fetch-depth: 0              # reach the ci-metadata orphan ref
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu, dig, curl, rsync)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client rsync
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Assert KVM acceleration is available
+        # The udev rule above makes /dev/kvm world-RW. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
+        run: |
+          set -eu
+          ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
+
+      - name: Write guest SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Resolve the GHCR image ref
+        id: ref
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          # Pass the matrix value through env (never interpolate ${{ }} into the
+          # shell body — template-injection hardening), then validate before use.
+          MATRIX_IMAGE_NAME: ${{ matrix.image_name }}
+        run: |
+          set -eu
+          # Compose the untagged image from the namespace var + per-matrix image_name.
+          # Fallback: lowercased owner (GHCR refs MUST be lowercase).
+          # issue #1148: LC_ALL=C tr + '/' sentinel, not a `case` range — a
+          # collating locale lets [a-z] admit uppercase/accented letters, and
+          # an emptiness check would let $(...) strip a trailing newline.
+          if [ -z "$MATRIX_IMAGE_NAME" ] || \
+             [ "$(printf '%s/' "$MATRIX_IMAGE_NAME" | LC_ALL=C tr -d 'a-z0-9._-')" != '/' ]; then
+            echo "::error::invalid matrix.image_name: '$MATRIX_IMAGE_NAME'"
+            exit 1
+          fi
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${MATRIX_IMAGE_NAME}"
+          printf 'image=%s\n' "$IMAGE" >> "$GITHUB_OUTPUT"
+          printf 'Image base ref: %s\n' "$IMAGE"
+
+      # ── Upgrade + health gate + publish ────────────────────────────────────
+      # scripts/image-upgrade.sh runs locally (runner IS the KVM host — no
+      # --proxmox, mirroring build-image.yml). It:
+      #   1. Pulls --from tag (oras), boots writable copy under KVM.
+      #   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f + pkg upgrade
+      #      -n (dry-run detect); ONLY if upgrades pending → pkg upgrade -y + reboot
+      #      + wait SSH. Cross-version legs omit it; pfSense-upgrade owns the transition.
+      #      EVERY leg passes --expect-freebsd-major, derived from matrix.freebsd_version
+      #      (the TARGET row's value in both leg modes): the published artifact's pkg ABI
+      #      major must match the matrix row, whether refreshing in place or crossing a
+      #      major (issue #2242). Omitted when the derived value isn't plain digits (an
+      #      empty/malformed freebsd_version) — the artifact's own ABI-vs-kernel
+      #      self-consistency check in pfb_verify_artifact still applies regardless.
+      #   3. Runs pfSense-upgrade (reboots the box), waits for version to change.
+      #   4. Health gate: polls up to 300 s for webConfigurator HTTP or pfctl live
+      #      ruleset; fail-closed (die → no publish) if neither answers.
+      #   5. Shuts down cleanly, compresses to qcow2 (zstd), oras-pushes new tag.
+      # The published image is a CLEAN upgraded qcow2; pfBlockerNG is NEVER
+      # installed on it (the non-blocking step below uses a discarded overlay).
+      - name: >-
+          Upgrade ${{ matrix.label }} in place + publish
+          (${{ matrix.from }} -> ${{ matrix.pfsense_version }}${{ matrix.branch != '' && format(' @ {0}', matrix.branch) || '' }})
+        id: upgrade
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          FROM_TAG: ${{ matrix.from }}
+          TARGET_TAG: ${{ matrix.pfsense_version }}
+          VARIANT: ${{ matrix.variant }}
+          FORCE_FLAG: ${{ matrix.force_flag }}
+          BRANCH: ${{ matrix.branch }}
+          FREEBSD_VERSION: ${{ matrix.freebsd_version }}
+        run: |
+          set -eu
+          # Run-body export, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
+          UPGRADE_PKGS_FLAG=
+          [ "$FROM_TAG" = "$TARGET_TAG" ] && UPGRADE_PKGS_FLAG=--upgrade-pkgs
+          EXPECT_MAJOR=${FREEBSD_VERSION%%.*}
+          case "$EXPECT_MAJOR" in
+            ''|*[!0-9]*) EXPECT_MAJOR= ;;
+          esac
+          sh scripts/image-upgrade.sh \
+            ${FORCE_FLAG:+"$FORCE_FLAG"} \
+            --from "$FROM_TAG" \
+            --to "$TARGET_TAG" \
+            --type "$VARIANT" \
+            ${BRANCH:+--branch "$BRANCH"} \
+            --image "$SMOKE_IMAGE" \
+            --ssh-key "$PWD/smoke_key" \
+            --compression "${{ inputs.compression }}" \
+            --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
+            --facts-out "$PWD/box-facts.env" \
+            ${UPGRADE_PKGS_FLAG:+"$UPGRADE_PKGS_FLAG"} \
+            ${EXPECT_MAJOR:+--expect-freebsd-major "$EXPECT_MAJOR"}
+
+      # ── Activation PR: box-verified matrix update (issue #1837) ────────────
+      # The upgrade leg is the only moment automation has SSH into a live box
+      # running the NEW version. image-upgrade.sh gathered its facts
+      # (box-facts.env); if the leg family's matrix entry is not yet
+      # active-and-accurate, open ONE tracker/* PR setting ci: true and the
+      # box-verified php_version / py_flavor. The matrix is human-curated: a
+      # guest-reported freebsd_major that disagrees with the matrix row is a
+      # broken guest, not new truth, and hard-stops the step instead of
+      # rewriting freebsd_major/freebsd_version (issue #2242).
+      # Matrix writes remain auto-PR ONLY — never a ci-metadata push.
+      # Contract pinned by tests/test_image_refresh_plan_contract.py.
+      # continue-on-error is deliberate: the image already published, so a failure here
+      # (including the refusal above) surfaces as an ::error:: annotation with no PR,
+      # never a red run.
+      - name: Open activation PR (box-verified matrix update)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHANNEL: ${{ matrix.label }}
+          FAMILY: ${{ matrix.pfsense_version }}
+          VARIANT: ${{ matrix.variant }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ ! -s box-facts.env ]; then
+            echo "No box facts gathered — skipping the activation PR."
+            exit 0
+          fi
+          # NEVER source this file: its values come from the guest. Read the
+          # keys instead (image_facts_put already charset-gates them; parsing
+          # keeps a hostile or anomalous line inert either way — review B1).
+          fact() { sed -n "s/^$1=\\(.*\\)$/\\1/p" box-facts.env | head -1; }
+          etc_version=$(fact etc_version)
+          php_version=$(fact php_version)
+          py_flavor=$(fact py_flavor)
+          freebsd_version=$(fact freebsd_version)
+          freebsd_major=$(fact freebsd_major)
+          echo "Box facts: etc=${etc_version:-} php=${php_version:-} py=${py_flavor:-} fbsd=${freebsd_version:-}/${freebsd_major:-}"
+
+          git fetch origin ci-metadata -q
+          git show origin/ci-metadata:supported-versions.json > matrix_current.json
+          ENTRY=$(jq -c --arg v "$FAMILY" --arg c "$CHANNEL" '
+            first(.versions[] | select(.pfsense_version == $v and .channel == $c
+                                        and ((.arch // "amd64") == "amd64"))) // empty' matrix_current.json)
+          if [ -z "$ENTRY" ]; then
+            echo "::warning::no ${CHANNEL} ${FAMILY} matrix entry — nothing to activate"
+            exit 0
+          fi
+
+          # The matrix is human-curated; a surprise major means a broken guest,
+          # not new truth — hard stop before any write (issue #2242). An EMPTY side
+          # (unreachable on the live matrix, but must not go silent) warns naming
+          # which side is missing and proceeds as today rather than refusing.
+          cur_major=$(printf '%s' "$ENTRY" | jq -r '.freebsd_major // ""')
+          if [ -n "$freebsd_major" ] && [ -n "$cur_major" ] && [ "$freebsd_major" != "$cur_major" ]; then
+            echo "::error::${CHANNEL} ${FAMILY}: guest reports FreeBSD major ${freebsd_major} (${freebsd_version}) but the matrix row says ${cur_major} — refusing to activate; the matrix is human-curated and a surprise major means a broken guest, not new truth (issue #2242)"
+            exit 1
+          elif [ -z "$freebsd_major" ] && [ -n "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: guest reported no freebsd_major fact — cannot verify against matrix major ${cur_major} (issue #2242)"
+          elif [ -n "$freebsd_major" ] && [ -z "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: matrix row has no freebsd_major recorded — cannot verify against guest major ${freebsd_major} (issue #2242)"
+          elif [ -z "$freebsd_major" ] && [ -z "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: neither guest nor matrix report a freebsd_major fact — skipping major verification (issue #2242)"
+          fi
+
+          NEWM=$(mktemp)
+          jq --arg v "$FAMILY" --arg c "$CHANNEL" \
+             --arg php "${php_version:-}" --arg py "${py_flavor:-}" '
+            (.versions[] | select(.pfsense_version == $v and .channel == $c
+                                   and ((.arch // "amd64") == "amd64"))) |= (
+              .ci = true
+              | (if $php != "" then .php_version = $php else . end)
+              | (if $py != "" then .py_flavor = $py else . end)
+            )' matrix_current.json > "$NEWM"
+
+          # Semantic compare — immune to on-disk formatting drift.
+          if [ "$(jq -S . matrix_current.json)" = "$(jq -S . "$NEWM")" ]; then
+            echo "Matrix entry already active and accurate — nothing to do."
+            rm -f "$NEWM"
+            exit 0
+          fi
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "[DRY-RUN] WOULD open the activation PR for ${CHANNEL} ${FAMILY}:"
+            diff -u matrix_current.json "$NEWM" || true
+            rm -f "$NEWM"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BR="tracker/matrix-activate-${VARIANT}-${FAMILY}"
+          # Build the PR branch in a SEPARATE worktree: `git checkout -B` here
+          # would swap the JOB's tree to the ci-metadata ref and break the
+          # non-blocking smoke step that runs after this one (review CR2).
+          WT=$(mktemp -d)
+          # Reap the worktree even when a git op below fails (set -e would
+          # otherwise skip the cleanup line).
+          trap 'git worktree remove --force "$WT" >/dev/null 2>&1 || true' EXIT
+          git worktree add --force -B "$BR" "$WT" origin/ci-metadata
+          cp "$NEWM" "$WT/supported-versions.json"
+          git -C "$WT" add supported-versions.json
+          git -C "$WT" commit -m "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)"
+          git -C "$WT" push --force origin "$BR"
+          git worktree remove --force "$WT" || true
+
+          BODY_FILE=$(mktemp)
+          # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
+          {
+            printf '## Activate pfSense %s %s (box-verified)\n\n' "$CHANNEL" "$FAMILY"
+            printf 'The %s image for `%s` was just published; these values were read from\n' "$CHANNEL" "$FAMILY"
+            printf 'the upgraded box itself right before poweroff:\n\n'
+            printf '| Fact | Box value |\n| --- | --- |\n'
+            printf '| /etc/version | `%s` |\n' "${etc_version:-?}"
+            printf '| PHP | `%s` |\n' "${php_version:-?}"
+            printf '| Python flavor | `%s` |\n' "${py_flavor:-?}"
+            printf '| FreeBSD | `%s` (major %s) |\n\n' "${freebsd_version:-?}" "${freebsd_major:-?}"
+            printf 'This PR sets `ci: true` (the image now exists for the smoke fan-out) and\n'
+            printf 'corrects `php_version`/`py_flavor` from the box facts; a FreeBSD major\n'
+            printf 'mismatch refuses to activate instead of rewriting the matrix (issue #2242).\n\n'
+            printf '_Opened automatically by image-refresh (issue #1837). Matrix changes are\n'
+            printf 'PRs only — merging is a human decision and re-fires the reconcile._\n'
+          } > "$BODY_FILE"
+
+          PR=$(gh pr list --repo "$REPO" --head "$BR" --base ci-metadata --state open \
+            --json number --jq '.[0].number // empty' || true)
+          if [ -z "$PR" ]; then
+            gh pr create --repo "$REPO" --base ci-metadata --head "$BR" \
+              --title "ci-metadata: activate ${CHANNEL} ${FAMILY} (box-verified)" \
+              --body-file "$BODY_FILE" \
+              || echo "::warning::Could not open the activation PR from $BR"
+          else
+            echo "  open PR #${PR} from $BR already exists — the force-push updated it"
+          fi
+          rm -f "$BODY_FILE" "$NEWM"
+          echo "Invariant confirmed: matrix changes proposed as PRs only — no ci-metadata push."
+
+      # ── pfBlockerNG smoke (non-blocking, post-publish) ──────────────────────
+      # Boots a THROWAWAY copy-on-write overlay of the JUST-PUBLISHED image
+      # (qemu-img create -b), installs pfBlockerNG from the repo, runs
+      # pfblockerng.php update, and digs the sanity control record.
+      # continue-on-error: true + post-publish overlay → can NEVER pollute the
+      # published image and can NEVER fail the refresh job.
+      # The authoritative pfBlockerNG validation is smoke.yml.
+      #
+      # CE: single NIC, standard SLIRP hostfwd to 127.0.0.1:$GUEST_PORT.
+      # Plus: 8-NIC topology matching image-upgrade.sh + smoke boot_vm.sh; full
+      #       Plus identity (SMBIOS + 8 MACs from SMOKE_PLUS_MAC) required — NEVER
+      #       boot Plus with wrong identity (Netgate Device ID derives from MAC +
+      #       SMBIOS uuid; a mismatch breaks licensing). If identity secrets are
+      #       absent or the MAC list is malformed the step warns and exits cleanly.
+      - name: pfBlockerNG smoke (non-blocking)
+        continue-on-error: true
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -eu
+          # Run-body export, not an env: map value (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
+          LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
+          LOCAL_DATA_IP="${{ inputs.sanity_local_data_ip }}"
+          IMAGE="${SMOKE_IMAGE}"
+          TAG="${{ matrix.pfsense_version }}"
+          GUEST_PORT=2223
+          WORK_DIR="$(mktemp -d)"
+          printf 'SMOKE_WORK_DIR=%s\n' "$WORK_DIR" >> "$GITHUB_ENV"
+
+          # Plus: validate identity secrets before booting (wrong identity breaks licensing).
+          if [ "$VARIANT" = "plus" ]; then
+            if [ -z "${SMOKE_PLUS_MAC:-}" ] || [ -z "${SMOKE_PLUS_SMBIOS_UUID:-}" ]; then
+              printf '::warning::[non-blocking smoke] Plus identity secrets absent — skipping Plus post-publish smoke\n'
+              exit 0
+            fi
+            # Count non-empty MAC lines.
+            _mac_count="$(printf '%s\n' "$SMOKE_PLUS_MAC" | grep -c '[^[:space:]]' || true)"
+            if [ "${_mac_count:-0}" -ne 8 ]; then
+              printf '::warning::[non-blocking smoke] Plus identity secrets absent/invalid — skipping Plus post-publish smoke\n'
+              exit 0
+            fi
+          fi
+
+          # Pull the just-published image.
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          printf '==> [non-blocking smoke] pulling %s:%s\n' "$IMAGE" "$TAG"
+          oras pull "${IMAGE}:${TAG}" --output "$WORK_DIR"
+          BASE_IMG="$(find "$WORK_DIR" -maxdepth 1 -name '*.qcow2' | head -1)"
+          [ -n "$BASE_IMG" ] || { printf '::warning::no qcow2 in pulled artifact %s:%s\n' "$IMAGE" "$TAG"; exit 0; }
+
+          # Create a throwaway CoW overlay — the published image is never mutated.
+          OVERLAY="${WORK_DIR}/smoke-overlay.qcow2"
+          qemu-img create -b "$BASE_IMG" -F qcow2 -f qcow2 "$OVERLAY"
+
+          printf '==> [non-blocking smoke] booting overlay (%s, guest :%d -> 127.0.0.1:%d)\n' "$VARIANT" 22 "$GUEST_PORT"
+
+          if [ "$VARIANT" = "ce" ]; then
+            # CE: single NIC, standard SLIRP.
+            CE_MAC="BC:24:11:37:9C:AC"
+            qemu-system-x86_64 \
+              -enable-kvm -machine pc -cpu host \
+              -smp 2,sockets=1,cores=2 -m 4096 \
+              -device virtio-scsi-pci,id=virtioscsi0 \
+              -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
+              -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
+              -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-:22" \
+              -device "virtio-net-pci,mac=${CE_MAC},netdev=net0,id=net0" \
+              -display none \
+              -serial "file:${WORK_DIR}/smoke-console.log" \
+              -pidfile "${WORK_DIR}/smoke-qemu.pid" \
+              -daemonize
+          else
+            # Plus: 8-NIC topology matching image-upgrade.sh + boot_vm.sh.
+            # net0 WAN  192.168.89.0/24 (internet egress for pfSense-upgrade downloads)
+            # net1 MGMT 192.168.43.0/24  (SSH hostfwd → mgmt NIC's DHCP IP 192.168.43.15;
+            #            a /24 so qemu's SLIRP DHCP is predictable — a /16 leased a wrong addr)
+            # net2..net7 isolated stub NICs (must be present; unassigned in image)
+            SMBIOS_UUID="${SMOKE_PLUS_SMBIOS_UUID}"
+            _mac0="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '1p')"
+            _mac1="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '2p')"
+            _mac2="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '3p')"
+            _mac3="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '4p')"
+            _mac4="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '5p')"
+            _mac5="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '6p')"
+            _mac6="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '7p')"
+            _mac7="$(printf '%s\n' "$SMOKE_PLUS_MAC" | sed -n '8p')"
+            qemu-system-x86_64 \
+              -enable-kvm -machine pc -cpu host \
+              -smp 2,sockets=1,cores=2 -m 4096 \
+              -smbios "type=1,uuid=${SMBIOS_UUID}" \
+              -device virtio-scsi-pci,id=virtioscsi0 \
+              -drive "file=${OVERLAY},if=none,id=drive-scsi0,format=qcow2,discard=unmap,detect-zeroes=unmap" \
+              -device scsi-hd,bus=virtioscsi0.0,drive=drive-scsi0,bootindex=100,rotation_rate=1 \
+              -netdev "user,id=net0,net=192.168.89.0/24,host=192.168.89.2" \
+              -device "virtio-net-pci,mac=${_mac0},netdev=net0,id=nic0" \
+              -netdev "user,id=net1,net=192.168.43.0/24,host=192.168.43.2,hostfwd=tcp:127.0.0.1:${GUEST_PORT}-192.168.43.15:22" \
+              -device "virtio-net-pci,mac=${_mac1},netdev=net1,id=nic1" \
+              -netdev "user,id=net2,net=10.20.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac2},netdev=net2,id=nic2" \
+              -netdev "user,id=net3,net=10.30.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac3},netdev=net3,id=nic3" \
+              -netdev "user,id=net4,net=10.40.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac4},netdev=net4,id=nic4" \
+              -netdev "user,id=net5,net=10.50.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac5},netdev=net5,id=nic5" \
+              -netdev "user,id=net6,net=10.60.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac6},netdev=net6,id=nic6" \
+              -netdev "user,id=net7,net=10.70.0.0/24,restrict=on" \
+              -device "virtio-net-pci,mac=${_mac7},netdev=net7,id=nic7" \
+              -display none \
+              -serial "file:${WORK_DIR}/smoke-console.log" \
+              -pidfile "${WORK_DIR}/smoke-qemu.pid" \
+              -daemonize
+          fi
+
+          SMOKE_QPID="$(cat "${WORK_DIR}/smoke-qemu.pid" 2>/dev/null | tr -d '\r' || true)"
+
+          # Wait for SSH (180 s).
+          _elapsed=0
+          SSH_UP=0
+          while [ "$_elapsed" -lt 180 ]; do
+            if ssh -p "$GUEST_PORT" -i smoke_key \
+                -o BatchMode=yes -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+                root@127.0.0.1 true 2>/dev/null; then
+              SSH_UP=1; break
+            fi
+            sleep 5; _elapsed=$((_elapsed + 5))
+          done
+          if [ "$SSH_UP" -ne 1 ]; then
+            printf '::warning::[non-blocking smoke] VM did not answer SSH within 180 s\n'
+            [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true
+            exit 0
+          fi
+
+          run_ssh() {
+            ssh -p "$GUEST_PORT" -i smoke_key \
+              -o BatchMode=yes -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+              root@127.0.0.1 "$@"
+          }
+
+          # Install pfBlockerNG from the repo (egress open on SLIRP net).
+          printf '==> [non-blocking smoke] install-from-repo.sh\n'
+          scripts/install-from-repo.sh root@127.0.0.1 \
+            --port "$GUEST_PORT" --ssh-key smoke_key || \
+            { printf '::warning::[non-blocking smoke] install-from-repo.sh failed\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          # pfblockerng.php update.
+          printf '==> [non-blocking smoke] pfblockerng.php update\n'
+          run_ssh '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update' || \
+            { printf '::warning::[non-blocking smoke] pfblockerng.php update returned non-zero\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          # Dig the sanity control record.
+          printf '==> [non-blocking smoke] waiting for Unbound\n'
+          UB_READY=0
+          _ub_i=0
+          while [ "$_ub_i" -lt 30 ]; do
+            if run_ssh '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status >/dev/null 2>&1'; then
+              UB_READY=1; break
+            fi
+            _ub_i=$((_ub_i + 1)); sleep 2
+          done
+          if [ "$UB_READY" -ne 1 ]; then
+            printf '::warning::[non-blocking smoke] Unbound did not come back up\n'
+            [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true
+            exit 0
+          fi
+
+          run_ssh "/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf local_data '${LOCAL_DATA_NAME}. 3600 IN A ${LOCAL_DATA_IP}'" || \
+            { printf '::warning::[non-blocking smoke] unbound-control local_data injection failed\n'; \
+              [ -n "$SMOKE_QPID" ] && kill "$SMOKE_QPID" 2>/dev/null || true; exit 0; }
+
+          DNS_OUT="$(run_ssh "if command -v drill >/dev/null 2>&1; then drill ${LOCAL_DATA_NAME} @127.0.0.1 A; elif command -v host >/dev/null 2>&1; then host -t A ${LOCAL_DATA_NAME} 127.0.0.1; else echo NO_GUEST_DNS_TOOL; fi" 2>/dev/null || true)"
+          if printf '%s' "$DNS_OUT" | grep -qw "$LOCAL_DATA_IP"; then
+            printf '==> [non-blocking smoke] PASS: guest Unbound resolved %s -> %s\n' \
+              "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP"
+          else
+            printf '::warning::[non-blocking smoke] guest Unbound did not return %s for %s\n' \
+              "$LOCAL_DATA_IP" "$LOCAL_DATA_NAME"
+            printf '%s\n' "$DNS_OUT" | sed 's/^/      /' >&2
+          fi
+
+          # Shut down the smoke VM.
+          run_ssh '/sbin/shutdown -p now' 2>/dev/null || true
+          if [ -n "$SMOKE_QPID" ]; then
+            _elapsed=0
+            while kill -0 "$SMOKE_QPID" 2>/dev/null; do
+              [ "$_elapsed" -lt 60 ] || { kill "$SMOKE_QPID" 2>/dev/null || true; break; }
+              sleep 3; _elapsed=$((_elapsed + 3))
+            done
+          fi
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-refresh-diagnostics-${{ matrix.variant }}-${{ matrix.pfsense_version }}
+          path: |
+            ${{ env.SMOKE_WORK_DIR }}/smoke-console.log
+          if-no-files-found: ignore
+          retention-days: 14

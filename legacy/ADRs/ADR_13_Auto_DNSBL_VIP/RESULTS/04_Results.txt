@@ -1,0 +1,156 @@
+ADR-13 — Phase 4 Results (Settings UI: "Create VIPs automatically" checkbox + prefill/disable + warning + save)
+================================================================================================================
+
+Status: DONE. All gates green. Box OFF => render/validate/save byte-identical (one new
+empty config key only). Go-ahead for Phase 5.
+
+What landed (one commit on adr/13)
+----------------------------------
+File: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php  (+122 / -17, single file)
+  - $pconfig read of pfb_dnsvip_auto (top pconfig block).
+  - POST handler: gate the manual VIP validation on the auto flag (skip when auto on).
+  - Save: persist pfb_dnsvip_auto; skip saving the manual pfb_dnsvip4/6 ids when auto on.
+  - Render: compute the would-be auto addresses + exhaustion; add the Form_Checkbox to the
+    'DNSBL Virtual IP' Form_Group; update the group help.
+  - Inline JS: enable_dnsvip_auto() toggle (prefill + disableInput + restore) + click wiring.
+No .inc / Python / test changes. (Phases 2+3 already wired the manager + validator this UI drives.)
+
+The checkbox
+------------
+  id     : pfb_dnsvip_auto         (config key from Phase 2; on/off; default off)
+  title  : 'Auto VIP'              (row sub-label inside the group, matches IPv4 VIP / IPv6 VIP)
+  label  : 'Create VIPs automatically'   (text beside the box)
+  value  : 'on'
+  checked: (!$pfb_auto_exhausted && $pconfig['pfb_dnsvip_auto'] === 'on')
+  help (setHelp, raw HTML): documents the address scheme (10.10.10.53 / fd00::53, sweeping
+    to the next free .53 on conflict), the pfB_AUTO_VIP_v4 / pfB_AUTO_VIP_v6 ownership
+    marker, the create-on-enable / remove-on-disable lifecycle, and that a v6 VIP is added
+    automatically when the resolver listens on IPv6.
+  Placed as the FIRST element of the existing 'DNSBL Virtual IP' Form_Group, directly above
+  the pfb_dnsvip4 / pfb_dnsvip6 dropdowns it controls.
+
+How the prefill address is computed + passed to JS
+--------------------------------------------------
+Server-side, at render, against the SELECTED Web Server interface ($pconfig['dnsbl_interface']):
+    $pfb_auto_iface    = $pconfig['dnsbl_interface'] ?: 'lo0';
+    $pfb_auto_v6_needed = pfb_unbound_listens_v6();                       // Phase 1 predicate
+    $pfb_auto_vip4     = pfb_pick_free_dnsbl_vip(AF_INET,  $pfb_auto_iface);  // ?string
+    $pfb_auto_vip6     = $pfb_auto_v6_needed ? pfb_pick_free_dnsbl_vip(AF_INET6, $pfb_auto_iface) : null;
+pfb_pick_free_dnsbl_vip() (Phase 1) returns the first free 10.10.X.53 / fd00:X::53 candidate
+(null when every candidate conflicts). The two addresses are emitted to JS as escaped string
+literals (htmlspecialchars(..., ENT_QUOTES); '' when null/not-needed):
+    var pfb_auto_vip4 = "<?=htmlspecialchars($pfb_auto_vip4 ?? '', ENT_QUOTES)?>";
+    var pfb_auto_vip6 = "<?=htmlspecialchars($pfb_auto_vip6 ?? '', ENT_QUOTES)?>";
+
+Disable/restore JS behaviour (enable_dnsvip_auto)
+-------------------------------------------------
+Matches the page's existing inline-jQuery toggle idiom (the enable_*()+'.click()'+init pattern
+used for pfb_tld / dnsbl_interface / pfb_pytld / ...). For each of pfb_dnsvip4 / pfb_dnsvip6:
+  ON check :
+    - remember the manual selection once: $sel.data('pfbManualVal', $sel.val()) (idempotent),
+    - remove any prior synthetic option, then (if an address is available) append a synthetic
+      <option class="pfb-auto-opt" value="_pfb_auto">ADDRESS</option> and select it (display),
+    - disableInput(id, true) (pfSense global helper -> .prop('disabled', true)).
+  OFF uncheck:
+    - disableInput(id, false), remove the synthetic option, restore the remembered manual
+      selection ($sel.val(pfbManualVal)) and drop the saved value.
+Wired in events.push: $('#pfb_dnsvip_auto').click(enable_dnsvip_auto); enable_dnsvip_auto();
+so the page is in the correct state on load and on every toggle. Per-interface: the prefill
+addresses are computed for the selected dnsbl_interface at render time.
+
+Why a DISABLED select is the linchpin of the save wiring
+--------------------------------------------------------
+disableInput sets the DOM 'disabled' property, and a disabled form control is NOT submitted.
+So when auto is ON and the form is saved, $_POST carries NO pfb_dnsvip4 / pfb_dnsvip6 (and the
+synthetic '_pfb_auto' sentinel never reaches PHP). The POST handler therefore never sees a bad
+id; it skips the manual VIP validation and skips saving those ids entirely. The actual VIP +
+the real _vip{uniqid} ids are provisioned server-side on the next pfb_create_dnsbl('enabled')
+pass (pfb_manage_dnsbl_vip, Phase 2), which repoints pfb_dnsvip4/6.
+
+Exhausted-conflict treatment (admin cannot enable auto)
+-------------------------------------------------------
+    $pfb_auto_exhausted = ($pfb_auto_vip4 === null) || ($pfb_auto_v6_needed && $pfb_auto_vip6 === null);
+v4 is always required; v6 only when the resolver listens on IPv6. When exhausted:
+  - the checkbox is rendered DISABLED ($chk->setAttribute('disabled','disabled')) and unchecked
+    (the checked expression ANDs in !$pfb_auto_exhausted) -> the admin cannot enable auto-create
+    into a known-conflicting state, per the phase requirement;
+  - its help gains the STOCK warning: <i class="fa fa-exclamation-triangle text-warning"
+    data-toggle="tooltip" title="No free address ... Free one ... or create a DNSBL VIP manually
+    at Firewall > Virtual IPs"></i> plus a text-warning <span> with the same guidance. No custom
+    CSS/markup; pfSense's global tooltip init handles data-toggle="tooltip".
+
+Save wiring (auto-on relaxes manual validation, KEEPS the v6 rule)
+-----------------------------------------------------------------
+  $pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+  POST validation:
+    - auto OFF -> run pfb_validate_vips($iface, $vip4, $vip6) with require_v6 DEFAULT (null) ->
+      the validator computes pfb_unbound_listens_v6() live, so a v6-listening resolver in manual
+      mode STILL requires a v6 VIP (Phase-3 rule INTACT, unchanged from before this phase).
+    - auto ON  -> SKIP the manual VIP validation block entirely. Rationale: the manual dropdowns
+      are disabled (no values submitted) and the package owns provisioning — it picks a
+      conflict-free address and provisions the required v6 VIP itself (pfb_manage_dnsbl_vip on
+      the next enable pass; pfb_global passes require_v6=false in auto mode, Phase 3). The v6
+      rule's machinery is untouched; it is correctly suppressed for auto (the package satisfies
+      it), not deleted.
+  Persist:
+    - $pfb['dconfig']['pfb_dnsvip_auto'] = $pfb_auto ? 'on' : '';   (always)
+    - pfb_dnsvip6 / pfb_dnsvip4 saved from POST ONLY when !$pfb_auto (manual mode). In auto mode
+      the stored ids are left untouched here for the manager to reuse/repoint.
+
+Box-OFF byte-identical (traced)
+-------------------------------
+  RENDER: checkbox renders unchecked (or disabled+unchecked when exhausted); the two dropdowns
+    render exactly as before. On load enable_dnsvip_auto() sees on=false -> else branch -> no
+    pfbManualVal saved, no synthetic option, disableInput(id,false) (no-op) -> dropdowns
+    untouched and fully functional. The new JS is INERT while unchecked.
+  VALIDATE: $pfb_auto=false -> the 'none'->'' normalisation runs (dropdowns submit normally, so
+    the ?? '' coalescing is a no-op) and pfb_validate_vips($iface,$vip4,$vip6) runs with the
+    default require_v6=null -- identical to the pre-Phase-4 call (which derived null from the
+    same off-state ternary). Same errors, same messages.
+  SAVE: pfb_dnsvip4 / pfb_dnsvip6 / dnsbl_interface saved from POST as before. The ONLY new
+    persisted datum is pfb_dnsvip_auto='' -- an empty key that Phase 2 already treats as "off"
+    (absent or != 'on' => off), so behaviour is unchanged. Manual-mode UX is intact.
+
+UI-consistency self-review (ADR §5) — PASS
+------------------------------------------
+  - Components: Form_Checkbox + setHelp + setAttribute('disabled',...) + $group->add() -- all
+    existing page idioms; the checkbox sits in the existing 'DNSBL Virtual IP' Form_Group above
+    the dropdowns it governs. No bespoke widget, no custom CSS, no one-off markup.
+  - Warning: stock fa fa-exclamation-triangle + text-warning + data-toggle="tooltip" (pfSense's
+    own Font-Awesome + Bootstrap-tooltip idiom; global init applies). No custom styling.
+  - JS: the page's own inline-jQuery enable_*()/'.click()'/init pattern; uses pfSense's global
+    disableInput(). Standard jQuery ($.each/.data/.append).
+  - Tabs preserved (PHP 8.3). Label/help phrasing matches the surrounding DNSBL settings.
+
+Gate results
+------------
+  - php -l (pfblockerng_dnsbl.php): No syntax errors. (Pre-existing PHP-8.5-only "Optional
+    parameter ... before required" Deprecated notice in pfb_unlock is unrelated; target 8.3.)
+  - PHPStan (level 0, --memory-limit=1G): [OK] No errors.
+  - PHPUnit (full suite): OK (97 tests, 157 assertions) -- unchanged from Phase 3 (UI-only;
+    no new PHP unit harness for the page, per ADR §Test-suite).
+  - pytest (worktree .venv): 991 passed (green/unchanged; no Python touched).
+  - ruff check .: All checks passed.
+  - ShellCheck: no shell files touched -> N/A.
+
+Scope confirmation
+------------------
+  Only pfblockerng_dnsbl.php (pconfig read + POST gate + save gate + render checkbox/warning +
+  inline JS). No .inc change (pfb_manage_dnsbl_vip P2 / pfb_validate_vips P3 semantics untouched
+  -- only CALLED/wired). No Python/Unbound, no tests, no shell.
+
+Notes / minor edge for Phase 5 docs
+-----------------------------------
+  - If auto was enabled earlier and the candidate range LATER fills up, the checkbox renders
+    disabled+unchecked with the warning; the stored pfb_dnsvip_auto stays 'on' until the next
+    save (the manager already no-ops safely when no address is free -- Phase 2: "if null -> DO
+    NOT create, log, leave config as-is"). Worth a line in the docs/manual-smoke.
+  - Carry the Phase-1 on-box v6 caveat (link-local vs global; interface-automatic v6 accept)
+    into the §7 manual smoke; the UI's v6 prefill/exhaustion follows pfb_unbound_listens_v6().
+
+Go-ahead for Phase 5
+--------------------
+GO. Phase 5 (Docs + smoke note + DoD): document the checkbox, the pfB_AUTO_VIP_v* marker, the
+address scheme, the enable/disable lifecycle, the v6-mandatory rule, and HA behaviour in
+README/CLAUDE.md + settings help; note the smoke interplay (default-off keeps ensure_dnsbl_vip
+valid); finalise the §7 manual-smoke + reject criteria.

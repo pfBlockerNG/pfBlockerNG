@@ -1,0 +1,37 @@
+ISSUE #1542 -- FIXED-FILE TOP1M BENCHMARK
+==========================================
+command: python3 scripts/bench_top1m_fixed_file.py run --base-ref a67d3efe680e99de5d5e7b5743029c29ef2cfd25 --lines 1000000 --trials 3 --timeout-seconds 900
+base_sha: a67d3efe680e99de5d5e7b5743029c29ef2cfd25
+branch_sha: 493d97fa31162c30b3ef7543fb830807e8815c42
+branch_worktree_dirty: no
+branch_pfblockerng_inc_sha256: a7f3421e7ab703070992eb87119dbce6192109c342e1bd594d6b8e1a1ba54e60
+branch_pfb_unbound_py_sha256: aaceb3b2ef2220f268d529b1b4b2181798e5bb9ab163067ab24d996e996bd9c7
+host: macOS-26.5.2-arm64-arm-64bit-Mach-O machine=arm64 logical_cpus=10
+python: 3.14.6 (/opt/homebrew/opt/python@3.14/bin/python3.14)
+php: 8.5.8
+php_worker_memory_limit: -1 (disabled so peak RSS remains measurable)
+time: /usr/bin/time -l
+fixture: deterministic unique domains=1000000 generated_bytes=32000000
+base_contract: embedded manifest_bytes=47000257 fixed_file_bytes=0
+branch_contract: fixed manifest_bytes=223 fixed_file_bytes=32000000
+trials_per_phase_ref: 3
+per_process_deadline_seconds: 900
+
+Measurements (isolated seam wall time; whole fresh-process peak RSS)
+------------------------------------------------------------------
+phase1.php_full_writer base[embedded]: trials=3 wall_median=0.077760s wall_range=0.076748..0.080487s peak_rss_max=223019008B (212.69MiB)
+phase1.php_full_writer branch[fixed]: trials=3 wall_median=0.012855s wall_range=0.012834..0.012983s peak_rss_max=35635200B (33.98MiB)
+phase2.php_scalar_patch base: trials=3 wall_median=0.137366s wall_range=0.137208..0.137727s peak_rss_max=199393280B (190.16MiB)
+phase2.php_scalar_patch branch: trials=3 wall_median=0.001717s wall_range=0.001434..0.001827s peak_rss_max=33456128B (31.91MiB)
+phase3.python_json_validate base: trials=3 wall_median=0.106715s wall_range=0.106263..0.107652s peak_rss_max=229343232B (218.72MiB)
+phase3.python_json_validate branch: trials=3 wall_median=0.000097s wall_range=0.000090..0.000100s peak_rss_max=32653312B (31.14MiB)
+phase4.python_full_build base[embedded]: trials=3 wall_median=0.528474s wall_range=0.488569..0.529459s peak_rss_max=448479232B (427.70MiB)
+phase4.python_full_build branch[fixed]: trials=3 wall_median=0.623396s wall_range=0.620863..0.623997s peak_rss_max=366985216B (349.98MiB)
+
+Contract assertions executed in every applicable trial
+------------------------------------------------------
+base manifest embeds exactly 1000000 deterministic TOP1M domains: PASS
+branch manifest has no top1m_list, top1m_ref, or sampled TOP1M domain: PASS
+branch fixed file has exactly 1000000 lines: PASS
+both native full builds expose exactly 1000000 unique TOP1M white_db domains: PASS
+thresholds: none (measurements only; no invented pass/fail gate)

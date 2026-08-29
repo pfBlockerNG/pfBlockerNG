@@ -1,0 +1,83 @@
+================================================================================
+PHASE 3 PROMPT — The explicit trigger API + deprecated verb adapters
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md   (read §2.A/§2.B + contract #1/#2/#7/#8)
+================================================================================
+
+ROLE
+You implement Phase 3 of ADR-43 on branch `adr/43-update-and-scheduling-revamp`.
+This phase is BEHAVIOUR-CHANGING — it makes the explicit {scope,force,trigger} request the primary
+reload entry and turns the old verbs into DEPRECATED, warning-logging adapters; it migrates the
+internal callers (HA-sync + smoke PFB_CLI) onto the new API. Work inline on the branch, one commit,
+push directly (open a PR only if the direct push is rejected).
+
+If the ponytail plugin is active in this session, FIRST line of your work: run
+/ponytail:ponytail full.
+
+WHY THIS PHASE EXISTS
+The $cron string overloads trigger+scope+force. Phase 1 pinned the exact mapping; now make the named
+request the real API so callers stop guessing, while keeping every old verb working (deprecate-then-
+remove, per the ADR's chosen back-compat). "force vs reuse" is defined against ADR-42's content
+detector (the prerequisite): force=false ⇒ respect the detector (unchanged ⇒ no reparse, the
+#517-style no-change pass); force=true ⇒ always reparse.
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt (ledger ready) AND RESULTS/01_Results.txt (the pinned verb
+  table — the contract). If either is missing, STOP and report.
+- .ADRs/ADR_43_Update_And_Scheduling_Revamp/ADR.md (§2.A/§2.B, contract #1/#2/#7/#8, §5)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — `sync_package_pfblockerng()` (:10916), the
+  Phase-1 `pfb_trigger_request()` helper + `pfb_trigger()`, the ADR-42 detector entry (how a feed's
+  "changed?" is now decided — call it, do NOT reimplement), the ADR-12 hook env builder.
+- src/usr/local/www/pfblockerng/pfblockerng.php — the CLI verb dispatch.
+- The HA-sync caller (grep `sync_package_pfblockerng` across src/ + the XMLRPC/HA sync path) and the
+  smoke PFB_CLI: tests/smoke/conftest.py + tests/smoke/helpers.py `reload(...)` (the verb strings it
+  sends).
+- CLAUDE.md (PHP standards; logging conventions — use the existing pfb_logger/log_error, NOT bare
+  logger() on a boot-fatal path; the test-coverage mandate).
+
+ACTION PLAN (red→green)
+1. Make `sync_package_pfblockerng()` accept the {scope,force,trigger} request as its primary input
+   (keep a back-compat string arg that routes through `pfb_trigger_request()` so old callers still
+   work). Inside, read scope/force/trigger from the request — no more re-deriving from $cron.
+2. Define `force` against ADR-42's detector: force=false ⇒ a feed the detector reports unchanged is
+   NOT reparsed (reuse); force=true ⇒ always reparse. Preserve the #517-style "reuse-cache no-change"
+   pass exactly.
+3. Turn each old verb/Force path into a thin ADAPTER: build the request via `pfb_trigger_request()`,
+   emit ONE deprecation log line (e.g. `pfb_logger("DEPRECATED verb 'update' → use scope=both
+   force=false; removal scheduled", ...)`), then call the new entry. Keep PFB_TRIGGER identical
+   (contract #2).
+4. Migrate the INTERNAL callers onto the new API: HA-sync builds the request directly; update the
+   smoke harness `helpers.reload()` to send the new API form (keeping a thin path that still exercises
+   the deprecated verbs in a dedicated test, so the adapters stay covered).
+5. Tests (red→green):
+   - PHPUnit: each old verb → today's effective {scope,force} behaviour AND now emits the deprecation
+     log (FAILS before: no log / no named API); PFB_TRIGGER unchanged per verb.
+   - PHPUnit/contract: force=false respects a (doubled) ADR-42 detector verdict (unchanged ⇒ no
+     reparse); force=true reparses regardless.
+   - Smoke (live): a feed update via the NEW API reloads; a deprecated-verb call still reloads AND
+     logs the deprecation (assert the log line); HA-sync path still reloads on the secondary.
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); use pfb_logger/log_error (never a boot-fatal bare
+  logger()); PFBL-01 green. Do NOT reimplement ADR-42's detector or ADR-40's apply — CALL them. Do
+  NOT change the cron blocks yet (Phase 4) or the GUI (Phase 6). Keep the deprecated verbs FUNCTIONAL.
+
+VERIFICATION
+- vendor/bin/phpunit → green (new mapping+force tests)
+- php -l / phpstan / phpcs (phpcs.xml.dist) → clean
+- Live-VM smoke (the trigger/HA cases) → green; deprecation log asserted
+- diff-read: every old verb still resolves; PFB_TRIGGER unchanged; HA-sync + PFB_CLI on the new API.
+
+EXPECTED RESULT
+The named {scope,force,trigger} request is the primary reload API; old verbs are deprecated,
+warning-logging adapters that preserve today's behaviour + PFB_TRIGGER; HA-sync and the smoke
+harness run on the new API; force is defined against ADR-42's detector.
+
+COMMIT (single)
+    pfblockerng: explicit scope/force/trigger reload API; deprecate the verb strings (ADR-43 P3)
+Push directly to `adr/43-update-and-scheduling-revamp`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/03_Results.txt`
+Record: the new entry signature; the verb→request adapter table (with the deprecation log text); how
+force binds to ADR-42's detector; the HA-sync + PFB_CLI migration done; any call site still on the
+old string; verification numbers; the go-ahead for Phase 4.

@@ -1,0 +1,49 @@
+geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name,is_in_european_union
+102358,en,AS,Asia,SA,Saudi Arabia,0
+130758,en,AS,Asia,IR,Iran,0
+174982,en,AS,Asia,AM,Armenia,0
+248816,en,AS,Asia,JO,Hashemite Kingdom of Jordan,0
+272103,en,AS,Asia,LB,Lebanon,0
+285570,en,AS,Asia,KW,Kuwait,0
+290291,en,AS,Asia,BH,Bahrain,0
+290557,en,AS,Asia,AE,United Arab Emirates,0
+294640,en,AS,Asia,IL,Israel,0
+298795,en,AS,Asia,TR,Turkey,0
+587116,en,AS,Asia,AZ,Azerbaijan,0
+630336,en,EU,Europe,BY,Belarus,0
+660013,en,EU,Europe,FI,Finland,1
+690791,en,EU,Europe,UA,Ukraine,0
+719819,en,EU,Europe,HU,Hungary,1
+732800,en,EU,Europe,BG,Bulgaria,1
+783754,en,EU,Europe,AL,Albania,0
+798544,en,EU,Europe,PL,Poland,1
+798549,en,EU,Europe,RO,Romania,1
+1252634,en,AS,Asia,BT,Bhutan,0
+1668284,en,AS,Asia,TW,Taiwan,0
+1694008,en,AS,Asia,PH,Philippines,0
+1814991,en,AS,Asia,CN,People's Republic of China,0
+1819730,en,AS,Asia,HK,Hong Kong,0
+1835841,en,AS,Asia,KR,South Korea,0
+1861060,en,AS,Asia,JP,Japan,0
+2017370,en,EU,Europe,RU,Russia,0
+2215636,en,AF,Africa,LY,Libya,0
+2411586,en,EU,Europe,GI,Gibraltar,0
+2510769,en,EU,Europe,ES,Spain,1
+2623032,en,EU,Europe,DK,Denmark,1
+2635167,en,EU,Europe,GB,United Kingdom,0
+2658434,en,EU,Europe,CH,Switzerland,0
+2661886,en,EU,Europe,SE,Sweden,1
+2750405,en,EU,Europe,NL,Netherlands,1
+2782113,en,EU,Europe,AT,Austria,1
+2802361,en,EU,Europe,BE,Belgium,1
+2921044,en,EU,Europe,DE,Germany,1
+2963597,en,EU,Europe,IE,Ireland,1
+3017382,en,EU,Europe,FR,France,1
+3042225,en,EU,Europe,IM,Isle of Man,0
+3077311,en,EU,Europe,CZ,Czech Republic,1
+3144096,en,EU,Europe,NO,Norway,0
+3175395,en,EU,Europe,IT,Italy,1
+6252001,en,NA,North America,US,United States,0
+6255147,en,AS,Asia,,,0
+6255148,en,EU,Europe,,,0
+6290252,en,EU,Europe,RS,Serbia,0

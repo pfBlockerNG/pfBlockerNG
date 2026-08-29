@@ -1,0 +1,133 @@
+## ADR-23 Phase 1 — Wizard XML + .inc changes
+
+Implement the two-file core change described in ADR-23 §4.1 and §4.2.
+
+### Context
+
+ADR-13 added `pfb_dnsvip_auto` auto-VIP creation to the DNSBL settings page
+(`pfblockerng_dnsbl.php`). The wizard (step 4) still requires users to pre-create a VIP
+manually. This phase wires the existing ADR-13 engine into the wizard.
+
+Issue #178. Slack:
+https://pfblockerng.slack.com/archives/C0B9QBZBEQG/p1781160111017199?thread_ts=1781008355.595609&cid=C0B9QBZBEQG
+
+### Prior art — canonical ADR-13 implementation to mirror exactly
+
+**POST handling gate** (`pfblockerng_dnsbl.php` lines ~490–510):
+```php
+$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+if (!$pfb_auto) {
+    // run pfb_validate_vips() — manual mode only
+}
+```
+
+**Save gate** (`pfblockerng_dnsbl.php` lines ~534–538):
+```php
+$pfb['dconfig']['pfb_dnsvip_auto'] = $pfb_auto ? 'on' : '';
+if (!$pfb_auto) {
+    $pfb['dconfig']['pfb_dnsvip6'] = $_POST['pfb_dnsvip6'] ?: '';
+}
+```
+
+**Auto checkbox render** (`pfblockerng_dnsbl.php` lines ~2615–2656):
+- Label: "Create VIPs automatically"
+- Help references "10.10.X.53" / "fd00:X::53" range
+
+### File 1 — `src/usr/local/www/wizards/pfblockerng_wizard.xml`
+
+Edit step id=4 (lines 249–327):
+
+**a. Replace `<description>` (line 252):**
+Old: "On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />A VIP on
+the Localhost interface <strong>must be configured first</strong> at
+<a target="_blank" href="/firewall_virtual_ip.php">Firewall > Virtual IPs</a>."
+
+New:
+```xml
+<description><![CDATA[On this screen the pfBlockerNG DNSBL Category parameters will be set.<br />
+Enable <strong>Create VIPs automatically</strong> below to have pfBlockerNG manage the
+DNSBL sinkhole Virtual IP, or configure a VIP on the Localhost interface manually first at
+<a target="_blank" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>.]]></description>
+```
+
+**b. Add checkbox field** immediately after the `DNSBL Webserver Configuration` listtopic
+field (after line 257, before the `pfb_dnsvip4` field at line 258):
+```xml
+<field>
+	<name>pfb_dnsvip_auto</name>
+	<displayname>Auto VIP</displayname>
+	<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip_auto</bindstofield>
+	<description><![CDATA[Create VIPs automatically. When enabled, pfBlockerNG creates and
+manages the DNSBL sinkhole Virtual IP in the <strong>10.10.X.53</strong> range
+(IPv6: <strong>fd00:X::53</strong>) &#8212; the manual selections below are ignored.<br />
+<span class="text-danger">Note:</span> auto-created VIPs are
+<strong>not HA/CARP aware</strong>. On a CARP/HA cluster, configure the DNSBL Virtual IP
+manually instead.]]>
+	</description>
+	<type>checkbox</type>
+	<value>on</value>
+</field>
+```
+
+**c. Update `pfb_dnsvip4` `<description>` (line ~264):**
+Append ` (manual mode only — ignored when Auto VIP is enabled)`.
+
+**d. Update `pfb_dnsvip6` `<description>` (line ~274):**
+Append ` (manual mode only — ignored when Auto VIP is enabled)`.
+
+Indentation: tabs (`.editorconfig`). XML attribute quoting: match surrounding file.
+
+### File 2 — `src/usr/local/www/wizards/pfblockerng_wizard.inc`
+
+**`step3_submitphpaction()` — replace lines ~114–124 (VIP validation block):**
+
+```php
+	// Validate DNSBL VIP address
+	$pfb_auto = (isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on');
+	if (!$pfb_auto) {
+		if ($_POST['pfb_dnsvip4'] == 'none') {
+			$_POST['pfb_dnsvip4'] = '';
+		}
+		if ($_POST['pfb_dnsvip6'] == 'none') {
+			$_POST['pfb_dnsvip6'] = '';
+		}
+		list($vips_valid, $error) = pfb_validate_vips('lo0', $_POST['pfb_dnsvip4'], $_POST['pfb_dnsvip6']);
+		if (!$vips_valid) {
+			$input_errors[] = "DNSBL: {$error}";
+		}
+	}
+```
+
+The port validation block (lines ~126–129) and the `$input_errors → $stepid=2` block
+(lines ~131–133) are unchanged.
+
+**`step4_submitphpaction()` — replace lines 165–166 (VIP id writes) with:**
+
+```php
+	$pfb_auto_wiz = (config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto') == 'on');
+	$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip_auto'] = $pfb_auto_wiz ? 'on' : '';
+	if (!$pfb_auto_wiz) {
+		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip4'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip4');
+		$new_config['pfblockerngdnsblsettings']['config'][0]['pfb_dnsvip6'] = config_get_path('pfblockerng_wizard/step3/pfb_dnsvip6');
+	}
+```
+
+Variable name `$pfb_auto_wiz` avoids shadowing any outer `$pfb_auto` from a future refactor.
+
+### Verify
+
+```sh
+php -l src/usr/local/www/wizards/pfblockerng_wizard.inc
+php -l src/usr/local/www/wizards/pfblockerng_wizard.xml   # not needed — not PHP
+vendor/bin/phpunit
+python -m pytest
+```
+
+All must be green. Commit message: `pfblockerng: add Auto VIP toggle to DNSBL wizard step`
+
+### Handoff to Phase 2
+
+Pass:
+- Whether `step4_submitphpaction()` is exercisable under `bootstrap.php` doubles (i.e., does
+  calling it with a mocked `pfblockerng_wizard/step3/*` config avoid hard exits/redirects).
+- Line numbers of the final changed hunks in each file.

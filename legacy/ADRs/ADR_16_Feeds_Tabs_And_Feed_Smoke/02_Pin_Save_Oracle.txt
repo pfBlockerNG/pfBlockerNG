@@ -1,0 +1,73 @@
+================================================================================
+PHASE 2 PROMPT — PREP (test-first): pin the CURRENT per-type Feeds save semantics
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §1 Context 2 + the contract
+     "No save regression / no clobber" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 2 of ADR-16. Test-first prep: add live-VM
+`ui_e2e` functional tests pinning the CURRENT Feeds save behaviour (per-type rename persists)
+on the single (pre-split) page — the oracle Phase 3's type-scoped save MUST keep green. NO
+src/ change this phase. Work in this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+Phase 3 rewrites the save to be type-scoped (Context 2: today the save loops ALL types and
+writes `$_POST['feed_x'] ?: ''`, so a per-type POST would reset other types to ''). Before
+that rewrite, pin what works today so a regression is caught: a DNSBL rename and an IPv6
+rename each round-trip to config.xml from the current all-types page. (The cross-type
+NON-clobber test is added in Phase 3 — it only becomes possible once the split makes a
+partial, single-type POST exist.)
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/01_Results.txt — it must confirm the
+  per-type render helpers landed with the full-page render unchanged. If missing, STOP and report.
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§1 Context 2, the contract).
+- tests/smoke/ui/test_feeds.py — the existing rename + invalid-alias flows (IPv4 `feed_pri1`
+  → installedpackages/pfblockerngglobal/feed_pri1), the `webui.post` form-scrape pattern, the
+  `_config_del` helper, and the module docstring's description of the save handler.
+- src/usr/local/www/pfblockerng/pfblockerng_feeds.php — confirm the live config keys/aliases
+  for a DNSBL group and an IPv6 alias (read $feeds_list + pfblockerng_feeds.json) so the test
+  targets a real `feed_<lower(alias)>` field/node for each.
+- src/usr/local/www/pfblockerng/pfblockerng_feeds.json — pick a stable DNSBL group + IPv6 group
+  to rename.
+- CLAUDE.md "## Test coverage (mandatory)" (transition tests: assert before-state, then prove
+  the POST caused the change; branch coverage: valid accepted AND invalid rejected).
+
+ACTION PLAN (ordered — oracle tests only, no prod change)
+1. Add a `ui_e2e` test: a DNSBL group rename via the current Feeds form persists
+   `installedpackages/pfblockerngglobal/feed_<lower(dnsbl_alias)>` (assert empty/default
+   before, the new value after, restore in finally — mirror the existing IPv4 rename test).
+2. Add a `ui_e2e` test: an IPv6 group rename persists `feed_<lower(ipv6_alias)>` the same way.
+3. (Optional, if cheaply pinnable) extend the invalid-alias reject to a DNSBL/IPv6 field so
+   the reject branch is covered per-type too.
+4. Run against the live VM via the `ui-tests` label; confirm the new tests pass on the CURRENT
+   page (they describe today's behaviour). Default `python -m pytest` unchanged.
+
+CONSTRAINTS
+- NO src/ change. Tests only, marker `ui_e2e`, under tests/smoke/ui/. Reuse `webui`/`smoke_vm`/
+  `helpers.config_get`/`_config_del`; do NOT add a new fixture or VM path.
+- These tests must reflect TODAY's behaviour (the single all-types page) — they are the oracle,
+  do NOT pre-encode the split.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → unchanged (smoke ignored by default); ruff check . / ruff format . → clean.
+- Live (ui-tests label): the new DNSBL + IPv6 rename tests pass on the current page; restore
+  leaves config.xml clean.
+
+EXPECTED RESULT
+The per-type Feeds save behaviour (DNSBL + IPv6 rename round-trip) is pinned by live `ui_e2e`
+tests — the green-bar oracle Phase 3's type-scoped save must preserve.
+
+COMMIT (single)
+    tests: pin per-type Feeds save semantics before the type split (ADR-16 P2)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`, push
+`adr/16`. Touches tests/ → lands on `devel` via a rebase-only PR (carry the `ui-tests` label).
+PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/02_Results.txt` (plain .txt)
+State: the exact DNSBL + IPv6 aliases/config nodes the oracle tests target; their pass result
+on the live VM; the test function names (so Phase 3 keeps them green and ADDS the cross-type
+non-clobber case beside them); any save-handler quirk observed (e.g. alt_selected always present);
+the go-ahead for Phase 3.

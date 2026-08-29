@@ -1,0 +1,37 @@
+# CodeRabbit configuration.
+#
+# Reviews are beneficial and stay advisory (they never gate merge).
+# Automatic review is OFF: a PR is reviewed only when we ask for it
+# with an `@coderabbitai review` comment, once the change is finished,
+# self-reviewed and green. Fair Usage slots are scarce enough that
+# spending them on every intermediate push is not worth it.
+# Path: .agents/policy/coderabbit.md.
+reviews:
+  auto_review:
+    enabled: false
+  # Hide "Review skipped" / status-only comments (quota + no-new-commits).
+  review_status: false
+
+  path_filters:
+    # Documentation and historical artifacts.
+    - "!**/*.md"
+    - "!docs/**"
+    - "!legacy/**"
+    # Agent policy and its Claude symlink adapters.
+    - "!.agents/**"
+    - "!.claude/skills/**"
+    - "!src/usr/local/www/pfblockerng/vendor/**"
+
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: >-
+        Fail closed on missing package artifacts. Upload and download
+        artifact actions must share one major. Do not invent undeclared
+        workflow_call inputs. Nightly BUILD must clone ports at the
+        prepare SHA, not PORTS_REF.
+    - path: "tests/**"
+      instructions: >-
+        A negative assertion needs a fixture that can fail it. Do not
+        treat ABI-only dest isolation as extra_pkgs row-scope coverage.
+        A write_site date pin must call production read_compact_manifest
+        on a real compact-manifest fixture. Do not monkeypatch that reader.

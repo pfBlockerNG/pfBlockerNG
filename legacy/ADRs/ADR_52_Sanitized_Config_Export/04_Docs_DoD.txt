@@ -1,0 +1,72 @@
+================================================================================
+PHASE 4 PROMPT — Docs + Definition-of-done / live-VM
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_52_Sanitized_Config_Export/ADR.md   (read §6 Phase 4, §7 first)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 4 implementer for ADR-52, working inline on branch
+`adr/52-sanitized-config-export`, one commit, pushed directly. This phase is docs
++ the validation fan-out. You implement yourself; you do NOT spawn further agents.
+MODE: docs/DoD phase — no production behaviour change (behaviour-preserving); any new smoke coverage proves red->green where dispatchable.
+
+WHY THIS PHASE EXISTS
+The feature is built and packaged; this phase records it where developers look and
+runs the CE+Plus validation that flips the ADR to Accepted.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/03_Results.txt — it must confirm
+  the ports are wired and --dry-run passes. If missing, Phase 3 is not complete;
+  STOP and report.
+- .ADRs/ADR_52_Sanitized_Config_Export/ADR.md  (§2.2, §7)
+- docs/misc/architecture-notes.md — find the most similar existing feature section
+  to match heading depth + tone; the change-detection / smoke sections are good
+  exemplars
+- CLAUDE.md — "Updating documentation" (docs-only commits skip CI); ADR acceptance
+  (green automated coverage is the acceptance; document the one out-of-CI item)
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN
+1. Add a concise "Diagnostics page / sanitized config export (ADR-52)" section to
+   docs/misc/architecture-notes.md: the new top-level Diagnostics tab; the export
+   produces a pfBlockerNG-only, secret-free XML; the HYBRID redaction model
+   (denylist tag-name + explicit maxmind_account + feed-URL query/userinfo strip,
+   PLUS wholesale drop of the sync section and the hooks subtree); the engine is
+   pure + off-appliance PHPUnit-tested; the ADR-34/#364 coordination (this page is
+   the shared home for the future triangulator / rule-lookup cards). Keep it
+   short; link the ADR.
+2. Update the ADR's §1 Status line to note Phases 1–4 landed (leave the Status
+   word as Proposed; the maintainer flips it to Accepted on the green fan-out +
+   manual check — do NOT self-accept).
+3. Dispatch / run the CE+Plus Tier A fan-out (+ the Tier B download check) for the
+   UI changes; record pass/fail and the run id in the handoff. If dispatching,
+   rebase onto latest origin/devel first.
+
+CONSTRAINTS
+- Markdown must pass markdownlint-cli2 (blank lines around headings/lists/fences;
+  a language on every fence; single trailing newline).
+- Do not change behaviour or tests in this phase.
+
+VERIFICATION (all must pass)
+- npx markdownlint-cli2 on the edited docs -> 0 errors
+- the CE+Plus Tier A fan-out is green (record the run id); Tier B download check
+  green
+
+EXPECTED RESULT
+architecture-notes documents the Diagnostics page + export; the validation
+evidence for acceptance is recorded.
+
+COMMIT (single)
+    docs: record ADR-52 Diagnostics page + sanitized export (ADR-52 P4)
+Push directly to adr/52-sanitized-config-export; open a PR only if rejected.
+
+HANDOFF — write .ADRs/ADR_52_Sanitized_Config_Export/RESULTS/04_Results.txt
+State: the docs section added; the fan-out run id + result; the manual-smoke
+checklist (ADR §7) left for the maintainer; and that the ADR is ready for the
+maintainer to flip to Accepted on the green evidence.

@@ -1,0 +1,77 @@
+================================================================================
+PHASE 8 PROMPT — Log Settings UI: swap log_rotate_<type>/log_reset_keep_<type> for log_max_days_<type>
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §2.1, §6 Phase 8 first)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 8 of 10. Behaviour-CHANGING (UI surface).
+One commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 7 removed the `log_rotate_<type>`/`log_reset_keep_<type>` config keys the Log Settings page
+still renders controls for. This phase removes those controls and adds the Phase-6
+`log_max_days_<type>` field next to each existing `log_max_<type>` line-count field.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/07_Results.txt` — confirm Phase 7's
+  removal landed and is green. If missing, STOP and report.
+- ADR.md §2.1 (the per-area decision table's UI-relevant rows), §6 Phase 8.
+- src/usr/local/www/pfblockerng/pfblockerng_general.php — the Log Settings section: the per-suffix
+  loop building `$pconfig` (~:75-:95, currently reads `log_max_*`/`log_rotate_*`/`log_reset_keep_*`),
+  the default-value block (~:137-:146), the `$_POST` handling (~:216-:230), and the actual
+  `Form_Select`/`Form_Input` rendering block (~:432-:450 area — find the exact rendering loop that
+  emits one row per log type).
+- ADR-30's own Phase 4 prompt (`.ADRs/ADR_30_Scheduled_Log_Reset/04_Ui.txt`, on `devel` if still
+  present, or its RESULTS/04_Results.txt) for how the ADR-30 fields were originally wired in — useful
+  as a "what to remove" map, not a template to follow (you're removing this shape, not extending it).
+
+ACTION PLAN
+1. Remove the `log_rotate_<type>`/`log_reset_keep_<type>` reads from the `$pconfig`-building loop,
+   the default-value block, the `$_POST` handling, and the rendering loop.
+2. Add `log_max_days_<type>` to all four: read via `PfbConfig::read('log_max_days_' . $log_suffix)`
+   into `$pconfig`, default `'0'` in the default-value block, `$_POST['log_max_days_' . $log_suffix]
+   ?: '0'` on save, and a `Form_Input` (numeric, type text or number per whatever the existing
+   `log_max_<type>` field uses — mirror it exactly) rendered right next to each `log_max_<type>`
+   field in the per-log-type row.
+3. Help text: brief, matching neighbouring help texts' wording/length/style (CLAUDE.md "Web UI help
+   text"). Something like "Trim lines older than this many days (0 = disabled)."
+4. Verify no other page (widget, alerts/reports page) reads `log_rotate_<type>`/`log_reset_keep_<type>`
+   for display purposes — grep before assuming this file is the only consumer.
+
+CONSTRAINTS
+- PHP: tabs, uppercase `TRUE`/`FALSE`, match the file's existing `Form_Select`/`Form_Input`/
+  `Form_Group` idioms exactly — no new UI pattern for one field.
+- Read through `PfbConfig` (ADR-29 `RequireConfigGateway` sniff must stay green).
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff (Phase 7 may have shifted
+  nearby lines in other files, but this file wasn't touched yet — confirm).
+
+TEST MODE: red→green. Before your change, `ui_render` would find the OLD `log_rotate_<type>`/
+`log_reset_keep_<type>` controls present and the new `log_max_days_<type>` fields absent — run the
+Tier-A assertion against the pre-Phase-8 page first (red: new fields missing) and after (green: new
+fields present, old ones gone); paste both.
+
+VERIFICATION
+- `vendor/bin/phpcs --standard=phpcs.xml.dist src/` clean.
+- Tier-A `ui_render` (CLAUDE.md test mandate #4 — always required for a `www/` change):
+  `python3 -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="` (needs
+  `SMOKE_ADMIN_PASSWORD` set) — GET the Log Settings page, assert 200, no PHP error/warning in the
+  body or a new `php_error.log` line, the new `log_max_days_<type>` fields present (all 10), and the
+  removed `log_rotate_<type>`/`log_reset_keep_<type>` selects ABSENT from the rendered page.
+- A save round-trip test (PHPUnit, off-appliance via the existing pattern for this page if one
+  exists, or a focused test of the `$_POST` handling function alone): posting a `log_max_days_ip_blocklog`
+  value persists and reads back correctly via `PfbConfig`.
+
+EXPECTED RESULT
+The Log Settings page shows a `log_max_days_<type>` field beside each `log_max_<type>` field, for all
+10 log types; the old ADR-30 schedule/keep-buffer selects are gone.
+
+COMMIT (single)
+    www: replace scheduled-reset controls with log_max_days_<type> in Log Settings (ADR-60 P8)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/08_Results.txt` with: verdict; what
+changed + commit; gates + pasted output including the `ui_render` run; the round-trip test result;
+deviations (or "none"); carry-forward for Phase 9 (final live-VM validation + docs).

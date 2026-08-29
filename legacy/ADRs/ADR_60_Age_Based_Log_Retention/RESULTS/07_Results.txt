@@ -1,0 +1,363 @@
+ADR-60 Phase 7 -- Retire pfb_log_reset() / ADR-30's mechanism -- RESULTS
+================================================================================
+
+VERDICT: DONE-WITH-DEVIATION
+
+--------------------------------------------------------------------------------
+REALITY CHECK AGAINST THE BRIEF (verified this session, before editing)
+--------------------------------------------------------------------------------
+Read RESULTS/06_Results.txt first: confirmed Phase 6's log_max_days_<type>
+landed (commit 9e3b8b8f) and is green. Read ADR-60's header "Supersedes:
+ADR-30", S2.1 last row, S2.3 item 7, S6 Phase 7, and the full phase prompt
+file (07_Retire_Adr30.txt) verbatim. Read ADR-30's own ADR.md (read-only,
+not edited) to understand the retired mechanism's scope.
+
+Re-derived every claimed location against the live tree before deleting:
+- pfb_log_mgmt() :2881-:2971, pfb_log_rotate_marker_parse() :2991-:3014,
+  pfb_log_rotate_marker_serialize() :3028-:3039, pfb_log_reset() :3063-:3186
+  (pfblockerng.inc) -- all confirmed via Read, matching the planner's
+  "VERIFIED THIS SESSION" section exactly.
+- pfb_log_rotate_period() :1904, pfb_log_should_reset() :1932
+  (pfblockerng_extra.inc) -- confirmed.
+- pfb_cfg_registry()'s registration block -- confirmed the EXACT shape the
+  planner pasted: $log_types (:605-608, KEEP), the log_rotate_/
+  log_reset_keep_ foreach (:609-626, DELETE), Phase 6's own log_max_days_
+  foreach (:628-639, KEEP UNTOUCHED) -- via
+  `grep -n "log_types\|log_rotate_\|log_reset_keep_\|log_max_days_"`.
+- pfblockerng_tick() call site :2789-2791 (`pfb_log_mgmt(); pfb_log_reset();`)
+  plus 4 comment sites mentioning pfb_log_reset() at :2652, :2673, :2722,
+  :2779-2792 (line numbers per the pre-edit tree) -- all confirmed and
+  reworded.
+- Sniff $registeredPaths 20-entry block (RequireConfigGatewaySniff.php
+  :81-:100) -- confirmed exact shape, deleted.
+- tests/php/LogRotateScheduleTest.php, LogRotateResetTest.php -- confirmed
+  ADR-30-only (grep for any non-ADR-30 test in either file: none), deleted
+  entirely.
+- tests/smoke/test_log_rotate.py -- confirmed all 6 top-level test functions
+  match ADR-30's own ADR.md header's live-VM case list verbatim (grep
+  `^def test`), deleted entirely.
+- tests/php/RollbackContractTest.php sections F (:985-1086, log_rotate_)
+  and G (:1087-1188, log_reset_keep_) -- confirmed exact boundaries via
+  Read, deleted; section J (ADR-60, Phase 6's own) at :1313 onward
+  confirmed untouched.
+- tests/php/CfgGatewayTest.php inventory list 20 entries (:950-969) and the
+  two round-trip sections (ADR-30 :1491-, ADR-30 amendment :1614-, ending
+  right before ADR-60's own section at :1737) -- confirmed exact
+  boundaries, deleted; ADR-60's own inventory entries (:970-980) and
+  round-trip section confirmed untouched.
+
+GAP FOUND vs the brief (flagged per CLAUDE.md's "flag contradictions
+loudly" -- not a blocker, handled in-scope, see DEVIATIONS): the brief's
+"Test files with confirmed ADR-30 sections" list did NOT enumerate
+tests/php/TickEntrypointTest.php. A full-repo pre-deletion grep (the RED
+baseline, below) surfaced it: it drives the REAL pfblockerng_tick()
+entrypoint and asserts on BOTH pfb_log_mgmt() (line-cap, 'log' file) AND
+pfb_log_reset() (calendar reset, 'errlog' file + log_rotate.last marker)
+distinguishably, across 3 of its 4 test methods (Cases A, B, D; Case C is
+untouched -- pure cron-anchoring, no log-reset involvement). Deleting
+pfb_log_reset() without updating this file would have left it calling an
+undefined function -- a real vendor/bin/phpunit break the brief's own
+VERIFICATION section requires green. Not a "brief contradicted by code"
+STOP case and not an invented mechanism -- ordinary test maintenance
+squarely inside "full suite green with the deletions". Fixed in this same
+commit (see WHAT CHANGED).
+
+Also found (grep RED baseline) and handled:
+- tests/smoke/helpers.py:2510-2512 -- a docstring in reload() naming
+  pfb_log_reset() as a thing pfblockerng_tick() "NOW" runs. Stale the
+  moment the function is deleted (CLAUDE.md gate item 5: reconcile
+  comments/docs naming touched symbols). Reworded to drop the mention.
+- docs/misc/adr-7day-review-2026-06-26.md:42,138 -- a DATED, point-in-time
+  audit report (finding ADR30-1, "Scheduled log reset dead on-box",
+  2026-06-26). Left untouched: same category as ".ADRs/ historical
+  mentions are fine" -- rewriting a past audit finding to match today's
+  code would fabricate history, not document it. Not under .ADRs/ so the
+  grep -v doesn't exclude it -- residual match is EXPECTED, explained
+  below (grep-gate GREEN section).
+- src/usr/local/www/pfblockerng/pfblockerng_general.php still has the
+  log_rotate_<type>/log_reset_keep_<type> Form_Select controls, and
+  tests/smoke/ui/test_render_smoke.py:1567-1570 asserts their field-name
+  markers are present. This is explicitly Phase 8's job (ADR.md's own
+  component list + this phase's own carry-forward instruction) -- NOT
+  touched here per the brief's constraints ("this phase is pure removal of
+  the ADR-30 surface" in pfblockerng.inc/pfblockerng_extra.inc/tests, UI
+  is out of scope). This means the brief's literal claim "grep-gate must
+  be EMPTY after" is CONTRADICTED by the ADR's own phase split -- a truly
+  empty grep is impossible until Phase 8 lands. Flagged loudly here per
+  the ESCALATE contract's "reality overrides the brief" rule; not a
+  blocker since the phase's actual, achievable scope (delete the src/
+  pfb_log_reset() surface + its non-UI tests) was completed in full.
+
+No other blocker found. Proceeded per the action plan, with the
+TickEntrypointTest.php fix added as necessary in-scope work.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: eb1f31219c0b2706fd42aa62a0feaa4d08cfd5a3
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  Deleted pfb_log_reset(), pfb_log_rotate_marker_parse(),
+  pfb_log_rotate_marker_serialize() (the whole "ADR-30 -- Scheduled
+  (calendar-boundary) per-log reset helpers + action" block, :2972-:3186)
+  -- superseded by Phase 6's pfb_log_mgmt() age cap. pfb_log_mgmt() itself
+  and every Phase-6 helper (pfb_log_max_days, pfb_log_age_field_mode,
+  pfb_log_age_cutoff, pfb_log_age_trim_temp) untouched.
+
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  - Deleted pfb_log_rotate_period(), pfb_log_should_reset() (the "ADR-30
+    -- Pure schedule-period deciders" block).
+  - pfb_cfg_registry(): removed the log_rotate_<type>/log_reset_keep_<type>
+    foreach loop (20 registry entries) + its ADR-30 comment block; kept
+    $log_types (Phase 6's own log_max_days_<type> loop reuses it) and
+    Phase 6's loop verbatim.
+  - pfblockerng_tick(): removed the `pfb_log_reset();` call; kept
+    `pfb_log_mgmt();` and its pfb_update_pass_running() gate unchanged.
+    Reworded 4 comment sites (2 docblock paragraphs + 2 inline comments)
+    that named pfb_log_reset() so none mention the now-deleted function;
+    the surviving prose accurately describes pfb_log_mgmt() as the sole
+    mechanism.
+
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+  Removed the 20 log_rotate_<type>/log_reset_keep_<type> $registeredPaths
+  entries; the 10 log_max_days_<type> entries (Phase 6) untouched.
+
+- tests/php/LogRotateScheduleTest.php, tests/php/LogRotateResetTest.php
+  Deleted entirely -- 100% ADR-30-specific (pure deciders + pfb_log_reset()
+  file-I/O respectively).
+
+- tests/php/CfgGatewayTest.php
+  Removed the 20 log_rotate_<type>/log_reset_keep_<type> entries from the
+  inventory-completeness list, and the two ADR-30/ADR-30-amendment
+  round-trip+inventory sections (registered-check, vocabulary provider,
+  round-trip test, absent-default test -- x2 for log_rotate_ and
+  log_reset_keep_). Phase 6's own ADR-60 inventory entries + round-trip
+  section untouched (confirmed via grep, see REALITY CHECK).
+
+- tests/php/RollbackContractTest.php
+  Removed lettered sections F (log_rotate_<type> rollback contract) and G
+  (log_reset_keep_<type> rollback contract) entirely. Sections H/I/J left
+  as-is (NOT relabeled to F/G/H) -- see DEVIATIONS.
+
+- tests/php/TickEntrypointTest.php (fix not named in the brief -- see GAP
+  FOUND above)
+  Removed all pfb_log_reset()-coupled scaffolding/assertions: the
+  `writeStaleMarker()` helper, the `log_rotate_errlog`/`log_reset_keep_errlog`
+  seeding in seedTickPrereqs(), and every 'errlog'/marker-file
+  before/after assertion in Cases A, B, D. Each test's remaining
+  pfb_log_mgmt()-based ('log' file) assertions are UNCHANGED and still
+  prove the exact same tick-semantics intent (issue #573: log maintenance
+  survives pfb_interval='Disabled'; runs even when the feed cron isn't due;
+  is skipped on a dispatching tick) -- Case C (cron next_due anchoring) was
+  never log-reset-coupled and is untouched. Docblock/comment prose reworded
+  to drop every pfb_log_reset() mention.
+
+- tests/smoke/helpers.py
+  Reworded reload()'s docstring (the 'cron'/'tick' scope description) to
+  drop the pfb_log_reset() mention -- it named a function this phase
+  deletes.
+
+- tests/smoke/module-durations.txt
+  Removed the 7 stale test_log_rotate.py rows (1 module-sum + 6 per-test)
+  that `python3 -m pytest` (tests/test_shard_union.py::
+  test_committed_table_rows_exist_in_the_live_collection) flagged as
+  orphaned once the module was deleted -- required to keep the gate green,
+  not optional cleanup.
+
+- tests/smoke/test_log_rotate.py
+  Deleted entirely (all 6 test functions ADR-30-specific per the brief's
+  own verified claim -- confirmed independently via
+  `grep '^def test' tests/smoke/test_log_rotate.py`).
+
+Untouched, per constraints: pfb_log_mgmt() and every Phase-6 symbol/loop;
+.ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (read-only); stored config.xml
+values for the removed keys (no migration -- USER GUIDANCE + ADR §2.3
+item 7 hard-frozen policy); src/usr/local/www/pfblockerng/
+pfblockerng_general.php and tests/smoke/ui/test_render_smoke.py (Phase 8's
+job).
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit eb1f3121)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(same 5 pre-existing E_DEPRECATED notices as every prior phase, unrelated)
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+$ vendor/bin/phpunit
+............................................................. 2318 / 2371 ( 97%)
+.....................................................         2371 / 2371 (100%)
+Time: 00:11.287, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2371, Assertions: 18572, PHPUnit Deprecations: 2, Skipped: 4.
+(2371 = Phase 6's 2563 baseline minus every ADR-30 test: LogRotateScheduleTest
++ LogRotateResetTest files (deleted) + CfgGatewayTest's 2 sections + 20
+inventory entries + RollbackContractTest's sections F/G -- same 2
+pre-existing PHPUnit Deprecations and 4 skips as every prior phase, no new
+skips introduced.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+2436 passed, 4 skipped in 40.08s
+(first run failed on tests/test_shard_union.py::
+test_committed_table_rows_exist_in_the_live_collection -- stale
+test_log_rotate.py rows in tests/smoke/module-durations.txt; fixed by
+removing those 7 rows, see WHAT CHANGED; re-run above is the green result.)
+
+$ ruff check tests/smoke/helpers.py
+All checks passed!
+
+$ ruff format --check tests/smoke/helpers.py
+1 file already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(exit 0, clean)
+
+$ python3 scripts/check_version_literals.py
+(exit 0, clean)
+
+$ python3 scripts/check_appliance_python.py
+(exit 0, clean)
+
+Pre-commit hook (ran automatically on `git commit`): ruff check, ruff
+format --check, no-appliance-python, version-literals, comment-narration,
+php -l, phpstan, phpcs all passed; mypy reported "skipped (tool not found)"
+in the hook's own sandboxed PATH -- re-run manually above via
+`python3 -m mypy tests/`, green.
+
+--------------------------------------------------------------------------------
+GREP-GATE -- RED (pre-deletion tree) THEN GREEN (post-deletion tree)
+--------------------------------------------------------------------------------
+Command (identical before/after, per the brief):
+grep -rniE 'log_rotate_[a-z_]+|log_reset_keep_[a-z_]+|pfb_log_reset|log_rotate\.last|pfb_log_rotate_period|pfb_log_should_reset|pfb_log_rotate_marker' --include=*.php --include=*.inc --include=*.py --include=*.md . | grep -v '\.ADRs/'
+
+RED (before any edit this phase -- 278 matching lines, truncated to the
+distinct files/reasons; every line is a genuine ADR-30 reference this
+phase's action plan accounts for):
+  tests/smoke/test_log_rotate.py            (many -- whole file, deleted)
+  tests/smoke/ui/test_render_smoke.py:1567,1568,1570  (UI markers -- Phase 8)
+  tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php:81-100
+  tests/smoke/helpers.py:2512 (stale docstring -- reworded)
+  tests/php/TickEntrypointTest.php:10,207-542 (GAP FOUND -- fixed)
+  tests/php/CfgGatewayTest.php:950-969,1491-1735 (deleted)
+  tests/php/LogRotateScheduleTest.php               (whole file, deleted)
+  tests/php/LogRotateResetTest.php                  (whole file, deleted)
+  docs/misc/adr-7day-review-2026-06-26.md:42,138 (dated audit doc -- left)
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc (registry+deciders+
+    tick call site -- all deleted/reworded)
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc (pfb_log_reset() + helpers
+    -- all deleted)
+Total: 278 lines (captured via `wc -l` on the raw command output before
+any edit).
+
+GREEN (after all edits, final tree):
+tests/smoke/ui/test_render_smoke.py:1567:        'name="log_rotate_dnslog"',  # DNSBL
+tests/smoke/ui/test_render_smoke.py:1568:        'name="log_reset_keep_unilog"',  # General: Unified
+tests/smoke/ui/test_render_smoke.py:1570:        'name="log_rotate_dnsreplylog"',  # DNS Reply
+docs/misc/adr-7day-review-2026-06-26.md:42:`pfb_log_reset()` and the `pfb_log_mgmt()` line-cap trim are scheduled only from
+docs/misc/adr-7day-review-2026-06-26.md:138:  calls `pfb_log_reset()` directly), which is exactly why #2 shipped invisibly.
+Total: 5 lines. NOT literally empty -- both residues are EXPECTED and
+explained above (UI removal is Phase 8's job; the doc is a dated historical
+audit, same category as the .ADRs/ exemption). Every genuinely-in-scope
+match from the RED baseline is gone. `function pfb_log_reset|pfb_log_rotate_period|
+pfb_log_should_reset|pfb_log_rotate_marker_parse|pfb_log_rotate_marker_serialize`
+grepped directly against src/*.inc: zero matches (functions genuinely gone,
+not merely uncalled).
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (brief's action-plan items 1-9)
+--------------------------------------------------------------------------------
+| Item | Status |
+| --- | --- |
+| 1. Delete pfb_log_reset/marker parse+serialize (pfblockerng.inc) | DONE |
+| 2. Delete pfb_log_rotate_period/pfb_log_should_reset (extra.inc) | DONE |
+| 3. Remove pfb_log_reset() call site, keep pfb_log_mgmt()+gate | DONE (+ reworded 4 stale comment sites) |
+| 4. Remove 20-entry registry loop + 20 sniff paths, keep $log_types + Phase 6 loop | DONE |
+| 5. Delete LogRotateScheduleTest.php + LogRotateResetTest.php | DONE |
+| 6. Delete/empty tests/smoke/test_log_rotate.py | DONE (deleted entirely, all 6 cases confirmed ADR-30-only) |
+| 7. No config.xml migration for removed keys | DONE (no migration code added, per USER GUIDANCE) |
+| 8. Grep-gate red-before/green-after pasted | DONE (above) |
+| (unlisted) TickEntrypointTest.php ADR-30 coupling | DONE (gap found + fixed, see GAP FOUND) |
+| (unlisted) stale module-durations.txt rows | DONE (gate-forced fix) |
+| (unlisted) stale helpers.py docstring | DONE (comment reconciliation) |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. tests/smoke/test_log_rotate.py: DELETED outright (not emptied), per the
+   brief's own stated preference ("prefer deleting and letting Phase 9
+   create fresh") -- all 6 cases confirmed ADR-30-only.
+2. Found tests/php/TickEntrypointTest.php was NOT in the brief's file
+   enumeration but had real pfb_log_reset()-coupled assertions that would
+   have broken `vendor/bin/phpunit` on deletion. Fixed it (removed the
+   ADR-30-coupled scaffolding/assertions, kept the pfb_log_mgmt()-based
+   ones intact, preserving each test's original tick-semantics intent).
+   This is the reason for the DONE-WITH-DEVIATION verdict rather than
+   plain DONE -- flagged per CLAUDE.md's "flag contradictions loudly"
+   instruction even though it did not rise to a STOP/blocker (no invented
+   mechanism, no falsified premise -- ordinary test upkeep the brief's own
+   "full suite green" requirement already demanded).
+3. RollbackContractTest.php: after deleting sections F/G, the remaining
+   sections keep their ORIGINAL letters H/I/J (not relabeled to F/G/H).
+   Relabeling would touch section J, which is Phase 6's own
+   (ADR-60 log_max_days_<type>) and the brief/CLAUDE.md forbid touching
+   Phase 6's work; leaving a letter gap is cosmetic and lower-risk than an
+   unnecessary edit to a section outside this phase's scope.
+4. docs/misc/adr-7day-review-2026-06-26.md left untouched (2 pfb_log_reset()
+   mentions survive the grep-gate) -- it's a DATED point-in-time audit
+   report of a since-fixed finding (ADR30-1), not living documentation;
+   rewriting it to match current code would fabricate history. Treated
+   the same as the grep-gate's own ".ADRs/ historical mentions are fine"
+   carve-out, even though the path itself isn't under .ADRs/.
+5. src/usr/local/www/pfblockerng/pfblockerng_general.php and
+   tests/smoke/ui/test_render_smoke.py NOT touched -- explicitly Phase 8's
+   job per the ADR's own component list and this phase's own carry-forward
+   instruction; the brief's literal "grep-gate must be EMPTY after" claim
+   is therefore unsatisfiable within Phase 7 alone, flagged loudly above
+   (GAP FOUND) rather than silently accepted or used to block the phase.
+None of the above weakens any CLAUDE.md MUST rule; the retained UI/doc
+residue is explained, not hidden.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 8 (Log Settings UI)
+--------------------------------------------------------------------------------
+- URGENT, confirmed BROKEN NOW (not merely a future-partial-Phase-8 risk):
+  src/usr/local/www/pfblockerng/pfblockerng_general.php unconditionally
+  calls PfbConfig::read('log_rotate_log') / read('log_reset_keep_unilog')
+  (and siblings) at the TOP of every page request (lines ~87, 92, before any
+  $_POST branch) -- since this phase deregistered those keys, on the CURRENT
+  commit (eb1f3121) that page throws an uncaught InvalidArgumentException on
+  every load (verified this session via an executed PHPUnit probe: both
+  calls threw). Phase 8 is not cosmetic Form_Select cleanup -- it is a
+  required fix to a page that is presently non-functional. Phase 8 removes
+  every read/write site (lines ~87, 92, 169, 179, 223, 228, 438-447
+  pre-Phase-7 numbering) and the Form_Select controls, adding
+  log_max_days_<type> Form_Input controls per the ADR's Phase 8 text.
+- tests/smoke/ui/test_render_smoke.py:1567-1570 asserts the presence of
+  `name="log_rotate_dnslog"`, `name="log_reset_keep_unilog"`,
+  `name="log_rotate_dnsreplylog"` field-name markers -- Phase 8 must flip
+  these to assert their ABSENCE (mirroring the existing "ABSENT: old ..."
+  assertions already in that test) and add presence assertions for the new
+  log_max_days_<type> fields, in the same file/test.
+- Once Phase 8 lands, the grep-gate from this phase
+  (07_Retire_Adr30.txt's action item 8) will finally return truly empty
+  (modulo .ADRs/ and the dated docs/misc/adr-7day-review-2026-06-26.md
+  audit report) -- re-run it as part of Phase 8's own verification to
+  confirm.
+- Maintainer note (not done by this phase, per its own constraint):
+  .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md's header could use a manual
+  "Superseded by ADR-60" pointer alongside its existing Accepted status --
+  left for the maintainer to add by hand.

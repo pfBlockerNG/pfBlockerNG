@@ -1,0 +1,71 @@
+================================================================================
+PHASE 5 PROMPT — Masked token field + Cloudflare Radar (token via header)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md   (read §2.4, §2.5, §2.6, §6 P5 first)
+================================================================================
+
+ROLE
+Branch adr/59-top1m-provider-framework. Phase 5 of 6. BEHAVIOUR-CHANGING (secret
+field + a token provider). www/ → Tier-A + a Tier-B persistence check. Inline,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The only token provider worth wiring is Cloudflare Radar (Authorization: Bearer;
+clean single-domain CSV; CC BY-NC). It needs a masked user token field + a laxer
+validator + the header plumbing (P3) + safe-on-missing-token behaviour.
+
+REQUIRED READING
+- FIRST read RESULTS/04_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_59_Top1M_Provider_Framework/ADR.md (§2.4, §2.5, §2.6)
+- docs/misc/config-gateway.md (adding a registered field + round-trip + inventory
+  + the RequireConfigGateway $registeredPaths).
+- The masked-field precedent: pfblockerng_sync.php Form_Input type 'password'
+  (varsyncpassword). The over-strict validator: PFB_FILTER_WORD in pfblockerng.inc
+  (~1364, [A-Za-z0-9_] only). #886's preserve+warn in pfblockerng_top1m().
+- Cloudflare Radar domain-ranking dataset API (bucket endpoint; Bearer header;
+  CSV single 'domain' column). Confirm the current endpoint before coding.
+
+ACTION PLAN
+1. Register a `top1m_token` field in pfb_cfg_registry() (section dnsbl, default '',
+   since=<next ver>); add its path to the RequireConfigGateway sniff
+   $registeredPaths; add a round-trip test; update the config-gateway.md inventory.
+2. Add a token sanitiser/validator (PFB_FILTER_TOKEN or a dedicated filter) that
+   accepts a base64url/JWT charset [A-Za-z0-9._~+/=-] with a bounded length — do
+   NOT use PFB_FILTER_WORD (it rejects real tokens). Validate on POST.
+3. UI: render top1m_token as a MASKED Form_Input type 'password', write-only (do
+   not echo the stored value back on GET). JS-toggle it visible only when the
+   selected provider's auth needs a token. Render the Cloudflare CC BY-NC note.
+4. Add `cloudflare` to Top1mSource + its descriptor: url_builder for the ranking
+   bucket, parse {csv, domain_col:1, header:true} (or {json, field} if that is the
+   actual shape — verify), auth {header:'Authorization', scheme:'Bearer'}. Set
+   $feed['headers'] from top1m_token via the P3 plumbing. If the token is empty or
+   the download fails → the #886 preserve+warn path keeps the prior whitelist and
+   logs NO token.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, no die/exit. PFBL/config-gateway/UppercaseBool green.
+- The token must NEVER reach a log or the request URL (header only). Confirm against
+  the #890-redacted logger.
+
+VERIFICATION
+- php -l / phpcs / phpstan clean; vendor/bin/phpunit green.
+- Token round-trip (read/write via PfbConfig) + the validator accepts a realistic
+  token and rejects junk.
+- FAIL-BEFORE/PASS-AFTER: a Cloudflare-format sample parses to the expected
+  whitelist; a missing/invalid-token run PRESERVES the prior whitelist + WARNS +
+  the (redacted) log contains NO token.
+- Tier-A: the page renders the cloudflare option, the masked token field, the
+  CC BY-NC note; Tier-B (ui_e2e): set a token → Save → reload → the field is masked
+  and the value persisted (not echoed in cleartext).
+
+EXPECTED RESULT
+Cloudflare Radar selectable with a user token via a masked field + Bearer header;
+safe on missing token; token never logged.
+
+COMMIT (single)
+    pfblockerng: add masked TOP1M token field + Cloudflare Radar provider (ADR-59 P5)
+Push directly; PR only if rejected.
+
+HANDOFF — RESULTS/05_Results.txt
+The token field + validator + masking; the Cloudflare descriptor + parse shape
+(CSV vs JSON as verified); the no-token-in-log proof; go-ahead for Phase 6.

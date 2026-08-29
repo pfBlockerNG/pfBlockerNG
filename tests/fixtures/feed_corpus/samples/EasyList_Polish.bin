@@ -1,0 +1,160 @@
+[Adblock Plus 3.13]
+! Title: Official Polish Filters for AdBlock, uBlock Origin & AdGuard
+! Oficjalne Polskie Filtry do AdBlocka, uBlocka Origin i AdGuarda
+! Collaborators: bzyku, Wiesiek, Robert, Marek, buuuuuuu190, Caleb, Ryszard, Kruk, Weronika, Adam, xxcriticxx, maxoku, F4z, mathew85, Piter432, Adam K, Piotr S, Szymon D, Marek R, adreporter, kacper93, FadeMind, kerbenii, gzenio22, blocker999, hawkeye116477, gwarser, KonoromiHimaries
+! Homepage: https://www.certyficate.it
+! Używanie Oficjalnych Polskich Filtrów jest jednoznaczne ze świadomością co do ich zawartości (co blokują itp.) a twórcy nie ponoszą odpowiedzialności za niewiedzę użytkownika.
+! Works best with EasyList - be sure to subscribe it as well!
+! Działa najlepiej z EasyList - pamiętaj aby zasubskrybować!
+!   Patronite ==> https://patronite.pl/polskiefiltry
+! Last modified: 24 June 2026
+! Expires: 1 day
+! Version: 2026062402
+! Support:
+!   Email >> errorsfilters@certyficate.it
+!   Github >> https://github.com/MajkiIT/polish-ads-filter/issues
+! Redundant Checker >> https://www.certyficate.it/redundant_checker/redundantRuleChecker.html
+! License: https://creativecommons.org/licenses/by-nc-sa/4.0/
+! Copyright © 2026 Certyficate IT
+! Najnowsza wersja zawsze na: https://www.certyficate.it/adblock
+! v.2026062402 aktualizacja: sr, 24 czerwca 2026, 15:00:00
+!
+!
+!1#-----------------------General advert blocking filters-----------------------!
+##a[href*="techmaniak.pl/www/gact/ckk.php"]
+.*sales*.pl/offers/$image
+*/files/rek/$image,domain=siechnice.com.pl|rybnik.com.pl|tuwodzislaw.pl
+.pl/*/adds/$domain=~vvena.pl|~transport.zamosc.pl
+.pl/*/ads/$domain=~tubagliwic.pl|~m.olx.pl|~niezalezna.pl
+.pl/data/cameras/banner_$image,domain=tvmalbork.pl|tvsztum.pl|zulawyimierzeja24.pl|tvregionalna24.pl
+.pl/images/reklama120x60.jpg$image
+.pl/img/ad/
+.pl/wp-content/banners/
+.pl/www/sys/ajs*.php?$script
+/\/(images|img|data|uploads|upload|assets)\/banners\//$image,object,domain=tsk24.pl|wschodnik.pl|nowawrzesnia.pl|glucholazyonline.com.pl|informacjelokalne.pl|muzyczneradio.com.pl|tvrep.pl|chwaszczyno.pl|msfera.pl|tygodnik-krapkowicki.info|darkplanet.pl|wroclawskiejedzenie.pl|magazyngitarzysta.pl|przegladkoninski.pl|radiopoznan.fm|fishing-test.pl|gostynin24.pl|wkonin.pl|orawa24.info|krakowski24.pl|muzyczneradio.pl|skijumping.pl|brwinow.com|www.informacje.kolobrzeg.pl|eoborniki.pl|zywiecinfo.pl|www.konstrukcjeinzynierskie.pl|portalrolniczy.info|packaging-polska.pl|goniec.com|janosik.info|livingroom24.pl|skawina24.com|ogloszenia.gazeta.ie|pogoda.info|cenyrolnicze.pl|fakty-wwl.pl
+/_adv/*
+/_baner/*$domain=www.ipon.pl|tygodnikzamojski.pl|enowiny.pl
+/adv/*$image,domain=~4chan.org|~arriva.pl|~filmweb.pl
+*/affiliates/$image,domain=www.pasazer.com
+*/baner/$image,domain=nowiny.rybnik.pl|macronext.pl|katowicetv.eu
+*/baners/$image,domain=raciborz24.pl
+*/banery/$image,subdocument,object,domain=oknoserwis.pl|sps24.pl|www.chojnice.com|usa.info.pl|jarocinska.pl|www.obud.pl|skijumping.pl|gintama.wbijam.pl|haczyk.pl|instalacjebudowlane.pl|jagiellonia.net|kdega.e-kei.pl|naszalomza.pl|pionki24.pl|mragowo24.info|lokalna24.pl|ebarlinek.pl|kuriergarwolinski.pl|bielsko.biala.pl|www.budownictwo.org|www.serwer.brodnica.net|staleo.pl|super-nowa.pl|zwolen24.pl|7dni.pila.pl|www.gostynska.pl|reszel.eu|e-stargard.pl|medicusveterinarius.pl|polskicaravaning.pl|kielkismaku.pl|obud.pl|swiatrolnika.info|warsztat.pl|rawicz24.pl|ostrowmaz24.pl|kozienice24.pl|bialogardzianin.pl|mazury24.eu|pojezierze24.pl|ikrotoszyn.pl|ipleszew.pl|ijarocin.pl|iostrowwlkp.pl|igostyn.pl|zywiecsupernowa.pl|lipsko24.pl|pch24.pl|speedwaynews.pl|przemyskie.info|chemiabudowlana.info
+/banery/*110x90
+/banery/*750x100
+/banery/*750x200
+/banery/*980x100
+/banery/*980x90
+/*BANER-BOHEMA-*.jpg$image
+*/banery_nowe/$image,domain=lazienkowy.pl|wentylacyjny.pl
+*/banners/$image,domain=files.biala24.pl|carpatiabiznes.pl|centrumdruku3d.pl|motocyklistow.pl|portal-firma.pl|cashbackrabat.pl|koscianiak.pl|pmi24.info|masarnieonline.pl|piekarnieonline.pl|mleczarnieonline.pl|przeglad-ogrodniczy.pl|fit-online.pl|edzieci.pl|www.glogow-info.pl|motonews.pl
+/bannery/*$image,subdocument,domain=em.kielce.pl|czasdzieci.pl|kolporter.com.pl|sklep-tvsat.hcore.pl|www.walbrzych24.com|zlotoryja.info|skijumping.pl|icomp.pl|forum.cs-classic.pl|nocnygdansk.pl|wagaciezka.com|obud.pl|beskid-niski.pl|ezakopane.pl|czytelniamedyczna.pl|portalrolniczy.info|gawex.pl
+/content-generator/published/frame/generate?*frameId=*&placementId=*&guid=
+/data/ap3bo6/*.gif$image,domain=tvmalbork.pl|tvsztum.pl|zulawyimierzeja24.pl|tvregionalna24.pl
+/data/ap3bo6/*.jpg$image,domain=tvmalbork.pl|tvsztum.pl|zulawyimierzeja24.pl|tvregionalna24.pl
+/data/ap3bo6/*.swf$object,domain=tvmalbork.pl|tvsztum.pl|zulawyimierzeja24.pl|tvregionalna24.pl
+*/images/reklama/$image,domain=dziennikpolicki.pl
+/overlay*.png$domain=mapa.targeo.pl,image
+*/reklama/$image,domain=rybomania.pl
+/reklamy/*$image,object,subdocument,domain=~selgros24.pl|~jacus.pl|~csbydgoszcz.pl
+/rotator.php$subdocument,domain=minecraftpolska.net|q4.pl
+/screening/*$domain=telepolis.pl,image
+/scripts/click.php$popup
+/upload_module//C_reklamy/*$domain=infobus.pl|transinfo.pl|inforail.pl|infotram.pl|infobike.pl|infoair.pl|infoship.pl
+/upload_module/C_reklamy/*$domain=infobus.pl|transinfo.pl|inforail.pl|infotram.pl|infobike.pl|infoair.pl|infoship.pl
+/wp-content/plugins/bsa-pro-scripteo/*$script,stylesheet
+/wp-content/plugins/unblock-adsense/*/adunblock$stylesheet,script
+/wp-content/uploads/*/*/banner$image,domain=portalgwiazd.pl|swiatoze.pl
+/wp-content/uploads/*/*300x600$image,domain=republikakobiet.pl
+://*.*/banery_foto/$image,domain=ki24.info|portalplock.pl|faktypilskie.pl|ddtorun.pl|ddwloclawek.pl|koronowo.net.pl|zyciesiedleckie.pl
+\//$image,domain=strzelecopolski.pl|kabaret.tworzymyhistorie.pl|pch24.pl|skijumping.pl|rawicz24.pl|wiadomoscihandlowe.pl|wagaciezka.com
+\/images/banner\/$image,domain=2x45.info|polskiinternet.com
+*/uploads/banner/$image,domain=www.ciechanowonline.pl
+_baner/980x200
+_banery/980x200
+gomoney.pl/article
+pl##a[href*="/adserwer/"]
+pl/*/rodzinnawycieczka/$image,domain=wp.pl
+/import_frame?version=*
+*/tmpl/images/$image,domain=ikrotoszyn.pl|ipleszew.pl|ijarocin.pl|iostrowwlkp.pl|igostyn.pl
+*/zaufali_nam/$image,domain=janosik.info
+/wp-content/plugins/burst-statistics/endpoint.php$ping,1p
+!
+!2#-----------------------Block pages-----------------------!
+/premium/player.php$domain=cyberkino.pl
+!
+!3#-----------------------Popup filters-----------------------!
+||gasurvey.gemius.com^$popup
+!
+!4#-----------------------Popup filters on movie-----------------------!
+||ankieta-online.pl/q/*/*/invitation.html$domain=lab.ankieta-online.pl
+||nextclick.pl^$script
+||reklamy.sterta.pl/$object-subrequest,domain=patrz.pl
+||upvid.co/$popup,domain=~mirrorace.com
+||zalukaj.com/sdm.php$xmlhttprequest
+!
+!5#-----------------------Elements hide on movie-----------------------!
+iitvx.pl###player-above-2
+!
+!6#-----------------------Privacy filters hide-----------------------!
+!
+!7#-----------------------Privacy filters block-----------------------!
+!
+!8#------------------------General element hiding rules-------------------------!
+###a-d-s
+###a_201
+###a_d_billboard
+###ad_gora_srodek
+###adsense_main_lewa
+###adtify-widget
+###arlington-optin
+###ceneo-placeholder-ceneo-12
+###ceneo_slider
+###goback
+###like-us-adblock-modal
+###main_advertisement
+###middleboxrectangle
+###nsix_baloon
+###oponeoWidget
+###poza-gridem
+###seeAlsoBox
+##.BanerHPBig
+##.Reklama
+##.a-d-v
+##.ad-offers
+##.ad_Handle
+##.addv-container
+##.adexonModuleportel.pl
+##.adoceanGora1Wrapper
+##.boxAdvert
+##.advContainer
+##.adverstiment-box
+##.advertisemen-block
+##.advertisment-panel
+##.adviewDFPBanner
+##.appAdvContainer
+##.article_advertisement
+##.banery_750_100
+##.box.ofero24
+##.boxAdv
+###ceneokobieta2
+##.ceneo-products.clearfix
+##.cg2-ad
+##.cookemessagecloseico
+##.dynamicAD
+##.hide-for-small.baner-promo-euro
+##.home_ads
+##.homeadv
+##.houdini
+##.jqmOverlay
+##.mod.mod_cpCommerce.small
+##.opacitybox
+##.oponeoWidget
+##.popup-premium__apla
+~lubartow24.pl##.rek_kontener
+##.reklama-gora
+##.sec.ecommerce
+##.tvn-advertisement
+##.zalando-ad
+##.zalando-placeholder
+##A[href*="/emisja.contentstream.pl/_/ctr/"]
+##IMG[src^="http://ww

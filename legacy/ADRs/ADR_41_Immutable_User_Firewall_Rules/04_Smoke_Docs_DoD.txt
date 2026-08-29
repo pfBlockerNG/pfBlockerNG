@@ -1,0 +1,68 @@
+================================================================================
+PHASE 4 PROMPT — Live precedence + smoke + docs + DoD
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md   (read §4, §6 Phase 4, §7 DoD)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active; otherwise
+/caveman. You are the Phase-4 implementer for ADR-41, on branch
+`adr/41-immutable-user-firewall-rules`. This phase proves PRECEDENCE (not just config order) on the
+live VM, completes the smoke matrix, and updates docs. You implement; you do NOT re-delegate.
+
+WHY THIS PHASE EXISTS
+Phase 3 proved user rules are preserved in config.xml. This phase proves the new placement also
+preserves the FUNCTIONAL precedence pass_order intends (a block is still a block; the LAN allow
+still passes) on real pf, and records the model + the deliberate behaviour change for users.
+
+REQUIRED READING
+- FIRST: .ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/03_Results.txt — the implemented anchor
+  + live red->green. If missing, Phase 3 is incomplete; STOP and report. Also re-read
+  RESULTS/02_Results.txt (the precedence mapping to assert against).
+- .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md (§4 acceptance, §6 Phase 4, §7 DoD + manual
+  smoke + reject criteria).
+- tests/smoke/test_smoke_lan_rule_preserve.py + the Phase-3 oracle smoke + helpers.py.
+- docs/misc/architecture-notes.md (the IP autorule / reconciliation description) and CLAUDE.md
+  ("Running tests" / autorule mechanics).
+
+ACTION PLAN (ordered)
+1. Live PRECEDENCE assertions: for each pass_order (and an inbound!=outbound case + a Permit_*
+   case), probe through pf that a destination in the pfB deny set is actually blocked AND the LAN
+   allow still passes — i.e. assert the Phase-2 precedence mapping holds in the data plane, not just
+   config.xml order. Use the live-VM harness (a public RFC 5737 victim; SYN_SENT-state instrument
+   per the killstates pattern if traffic is needed; or pfctl rule-position checks where a probe
+   isn't feasible — state which is precedence-proven vs config-order-proven).
+2. Complete the smoke matrix and keep #544's test green. Ensure the Phase-3 oracle sweep is wired
+   into the live-VM fan-out (CE + Plus) per ADR-04.
+3. Docs: update docs/misc/architecture-notes.md to describe the immutable-user reconciliation model
+   (replace the strip-and-rebuild description); update the CLAUDE.md autorule mechanics if it
+   references the old model; add a release-notes-worthy note that order_4 (and the managed/non-
+   managed split) no longer reorders user rules (deliberate behaviour change). Update this ADR's
+   Status to Accepted ONLY per §7 DoD (green live fan-out + precedence evidence).
+4. Fill the §7 manual-smoke checklist as the maintainer hand-off (the hardware-only items).
+
+CONSTRAINTS
+- Live-VM precedence is the gate; do not claim precedence preserved from config.xml order alone —
+  prove it in the data plane or clearly label what is config-order-only.
+- Drive the guest via /bin/sh. Python smoke: ruff/format/mypy clean; intent-named tests; no
+  coverage theater.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest             → green; ruff check . / ruff format .  → clean
+- LIVE fan-out (CE + Plus): the user-rule preservation sweep + the precedence assertions + #544
+  green; record the run.
+- npx markdownlint-cli2        → clean (docs touched)
+- diff-read: docs describe the new model; no stale strip-and-rebuild references remain.
+
+EXPECTED RESULT
+Precedence proven on live pf for every pass_order; smoke matrix green on the fan-out; docs updated;
+the deliberate order_4 change recorded; ADR §7 DoD satisfied.
+
+COMMIT (single — or split src/tests from docs if cleaner)
+    tests/smoke+docs: ADR-41 live precedence + immutable-user docs (ADR-41 P4)
+Land src/tests via the full worktree + rebase-only PR flow (/pr-merge-flow); the ADR.md Status flip
++ docs may ride the same PR (they touch docs) or a direct-to-devel docs commit per CLAUDE.md.
+
+HANDOFF — write `.ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/04_Results.txt` (plain .txt)
+Record: the live precedence evidence per pass_order; the fan-out result; docs updated; the manual
+smoke checklist state; and the final DoD verdict (Accepted or what remains).

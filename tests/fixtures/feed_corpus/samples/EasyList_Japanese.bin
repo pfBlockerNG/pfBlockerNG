@@ -1,0 +1,109 @@
+[Adblock Plus 2.3.1]
+! Checksum: R7sP3OQkLXcgv5VXTwiGJw
+! Homepage: https://code.google.com/p/adblock-plus-japanese-filter/
+! Title: ABP Japanese filters (ONLY for Japanese: see Support Policy)
+! Expires: 6 hours
+! Version: 201411250631
+! Redirect: https://bit.ly/11QrCfx
+
+! Last modified: 2014-11-25 06:31 JST(UTC+0900)
+! Change log: https://code.google.com/p/adblock-plus-japanese-filter/wiki/FilterChangeLog
+! Code license: GNU GPL v3: http://www.gnu.org/licenses/gpl.html
+! Content license: Creative Commons 3.0 BY-SA: http://creativecommons.org/licenses/by-sa/3.0/
+! Support policy:  https://code.google.com/p/adblock-plus-japanese-filter/wiki/Support_Policy
+! Project owners: k2japan
+! Project committers: looter, lostincarnation, tanahata
+! Project contributors: 
+!
+!
+! ########## Temporary white list START ##########
+! Workaround to avoid a "ReferenceError: YMAP is not defined" false positive with the script ended with meaningless "?_t=pPc" like http://map.yahoo.co.jp/js/scroll.js?_t=pPc, using ^ppc^ Pay-Per-Click filter, reported via Issue Report, Jul 15, 2014
+@@.js?_t=pPc^$script,domain=map.yahoo.co.jp
+! video-cdn.ea.com distributes mp4 videos with "&affiliateid="...
+@@.mp4?*&affiliateid=
+! Added to avoid a never-ending "loading..." gif
+@@/history/external/*$domain=amazon.ca|amazon.cn|amazon.co.jp|amazon.co.uk|amazon.com|amazon.de|amazon.es|amazon.fr|amazon.it
+! False positives with theme css by adaptivethemes.com, Jun 11, 2012
+@@_Ad/css/theme/
+! False positives with Ameblo skin named "colors_ad" or "ad_viva-cutieblog", reported via Issue Report, Jan 12, 2012, Dec 29, 2011, Apr 11, 2014
+@@||ameba.jp/p_skin/
+! autoblog(AOL) sucks! It requires some trackings to render correctly, reported twice by Issue Report
+@@||aolcdn.com/js/mg2.$domain=autoblog.com
+@@||aolcdn.com/omniunih.$domain=autoblog.com
+! imdb.com sucks! To avoid false positives you have to load some AD scripts.
+@@||doubleclick.net/adj/imdb2.
+! Workaround to fix layout collapse 2011-10-17
+@@||fc2.com^*/kanasoku/advertisement.js
+! Workaround to fix false positive with a mis-named background image which cause white title and menu background, reported by edogawakuryu via [https://code.google.com/p/adblock-plus-japanese-filter/issues/detail?id=23 Issue 23], Feb 3, 2012
+@@||foreignaffairs.com^*/sitetheme/images/body-top-ad-background.$image
+! Many false positive with stylesheets and JavaScripts, reported via Issue Report, Jan 6, 2012
+@@||goal.com^*-ad-
+! False positive at gamers-review.net . common.css isn't loaded if javascript is enabled, and adbg.js and gyoen.minpos.com/delivery/ajs.php?zoneid=77 are blocked. 2012-01-05
+@@||gamers-review.net/data/js/adbg.$script
+! False positives with XHRs including ,ads, in the parameter at Google Map, with ^ads^ filter, Sep 28, 2014
+@@||google.*/maps/_/js/k=maps.*,ads,$xmlhttprequest
+! False positives with Google Custom Search(.co.jp), reported via Issue Report, Mar 10, 2012
+! False positives with Google Custom Search(.com), reported via Issue Report, Feb 7, 2012
+@@||google.*/cse?*&ad=
+! False positives when you test a new filter via Gmail config, reported by pooh via blog, Jun 16, 2012
+! Another false positives when you try advanced search as a multi-user accout, reported by @mushroom080 via issue report, Mar 3, 2014
+! Another false positives causing 「システムで問題が発生しました」 after a while, reported by trineutron and sh, via blog, Oct 25, 2014
+@@||mail.google.com/mail/*?ui=*^adv^
+! A filter -ads^ causes a false positive with a [http://translate.google.com/translate/static/kcpbtI_-aDs/css/desktop_ltr.css css stylesheet] at translate.google.com and translate.google.co.jp, reported by @dullneko, July 18, 2012
+@@||translate.google.*/translate/static/*-aDs/css/*.$stylesheet
+@@||gyoen.minpos.com/delivery/ajs.php?zoneid=76&
+@@||gyoen.minpos.com/delivery/ajs.php?zoneid=77&
+! ^urchin. filter causes false positives with the Japanese Amazon external audio player at web-cache.chocomaru.com, reporeted by 鳥 via blog, May 12, 2013
+@@||google-analytics.com/urchin.js$domain=web-cache.chocomaru.com
+! Workaround to avoid an UNABLE TO LOAD PLUGIN error with .analytics- filter, Jan 26, 2014
+@@||hitbox.tv/static/player/flowplayer/flowplayer.analytics-3.2.9*.swf
+! A ^beacon^ filter causes false positives with css sprite images below, Oct 3rd, 2012
+! http://g-ec2.images-amazon.com/images/G/09/gno/beacon/BeaconSprite-JP-02._V393500380_.png
+! http://g-ecx.images-amazon.com/images/G/01/gno/beacon/BeaconSprite-US-01._V394051227_.png
+@@||images-amazon.com^*/beacon/BeaconSprite-$image
+! A -beacon^ filter causes false positives with combined script and stylesheet below, Oct 3rd, 2012
+! http://z-ecx.images-amazon.com/images/G/01/browser-scripts/site-wide-js-1.2.6-beacon/site-wide-11878695216._V1_.js
+! http://z-ecx.images-amazon.com/images/G/01/browser-scripts/jp-site-wide-css-beacon/site-wide-7797898918._V1_.css
+! http://z-ecx.images-amazon.com/images/G/01/browser-scripts/us-site-wide-css-beacon/site-wide-7681525081._V1_.css
+@@||images-amazon.com^*/browser-scripts/*-beacon/$script,stylesheet
+! A ^beacon^ filter causes false positives with css sprite images below when used via https, Nov 14, 2012
+! https://images-na.ssl-images-amazon.com/images/G/09/gno/beacon/BeaconSprite-JP-02._V393500380_.png
+@@||ssl-images-amazon.com^*/beacon/BeaconSprite-$image
+! -beacon^ and -beacon- filters cause false positives with combined script and stylesheet below when used via https, Nov 14, 2012
+! https://images-na.ssl-images-amazon.com/images/G/01/browser-scripts/navbarCSSJP-beacon/navbarCSSJP-beacon-630467669._V401873068_.css
+! https://images-na.ssl-images-amazon.com/images/G/01/browser-scripts/navbarJS-beacon/navbarJS-beacon-4140286522._V401873127_.js
+@@||ssl-images-amazon.com^*/browser-scripts/*-beacon/$script,stylesheet
+@@||imdb.com^*/doubleclick/
+! Workaround for adblock detector, which includes "adblock = false;" only.
+@@||static.isohunt.com/js/adframe.$script
+! False positives with online office application view at skydrive.live.com, Apr 24, 2012
+! Example of a false positive: &ad=ja-JP&
+@@||officeapps.live.com^*frame.*&ad=
+! False positives at own3d.tv reported via Issue Report, Nov 21, 2011
+@@||liverail.com/crossdomain.xml|
+@@||liverail.com^*plugins/flowplayer/
+! Flase positive at twitch.tv reported and resolved via Issue Report, Dec 11, 2011
+! Another false positive found at justin.tv ,reported and resolved via Issue Report, Dec 16, 2011
+@@||vox-static.liverail.com/swf/*/admanager.$domain=justin.tv|twitch.tv
+@@||media-imdb.com^*/ads.$script
+! False positive at xbox-news.com . common.css isn't loaded if javascript is enabled, and adbg.js and gyoen.minpos.com/delivery/ajs.php?zoneid=79 are blocked. 2011-09-23
+@@||gyoen.minpos.com/delivery/ajs.php?zoneid=79&
+! False positive with data used for dynamic photo slides, reported via Issue Report, Feb 28, 2012
+@@||nationalgeographic.co.jp/DynamicLead/xml/Top/promo.$xmlhttprequest
+! False positive at ndrive2.naver.jp . Login stops displaying "Loading N Drive" forever, Jan 23, 2012
+! Commented out the following obsolete filter, reported by [https://twitter.com/mushroom080/status/292261877227085826 @mushroom080], Jan 18, 2013
+! @@||ndrive.naver.jp/js/lcslog.$script
+! Japanese biggest computer vendor uses cliant-side script to display RSS titles. It seems that they don't trust server-side performance of their own servers.
+@@||nec.co.jp^*/rss.$script
+! False positives with Java SE 7u4 downloading 2012-04-27
+@@||oracleimg.com^*/assets/metrics/ora_$domain=oracle.com
+! False positive at psmk2.net . common.css isn't loaded if javascript is enabled, and adbg.js and gyoen.minpos.com/delivery/ajs.php?zoneid=76 are blocked. 2011-08-29
+@@||psmk2.net/data/js/adbg.$script
+! False positives with combined script and stylesheet 2011-10-17
+@@||rottentomatoescdn.com/assets/*/ads.
+! False positive at store.steampowered.com . Layout collapse with /promo/* filter 2011-11-27
+@@||steampowered.com/public/css/promo/$stylesheet
+! Why does teacup.com use adimg.teacup.com for normal JavaScript ? (?_?)...
+@@||teacup.com/rchat-common/
+! False positive with objects on the TERMS OF SERVICE(TOS) page, reported via Issue Report, Apr 11, 2012
+@@||sp.toeic.or

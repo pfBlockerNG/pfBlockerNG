@@ -1,0 +1,6 @@
+# issue #2807: pfSense names PHP includes `.inc`, and ast-grep resolves a target's
+# language from its extension before applying `--lang`, so an unmapped `.inc` is
+# indistinguishable from a clean no-match. No `ruleDirs`: no rule packs ship here.
+languageGlobs:
+  php:
+    - "*.inc"

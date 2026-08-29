@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<threatlist>
+<erratasec><ipv4>209.126.230.71</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec><erratasec><ipv4>209.126.230.72</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec><erratasec><ipv4>209.126.230.73</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec><erratasec><ipv4>209.126.230.74</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec><erratasec><ipv4>209.126.230.75</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec><erratasec><ipv4>209.126.230.76</ipv4><date>2015-11-04</date><lastseen>2026-07-04</lastseen></erratasec>
+</threatlist>

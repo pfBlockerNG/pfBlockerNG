@@ -1,0 +1,73 @@
+ADR-03 Phase 3 Results — Integration validation + benchmark + smoke (FINAL PHASE)
+=================================================================================
+
+Recipient: the MAINTAINER. Code for ADR-03 is complete; acceptance is blocked only
+on the manual smoke test below (no live Unbound in CI). No next-phase agent.
+
+Files: tests/test_pfb_unbound.py (+TestDbConcurrencyAndPerf), benchmarks/test_bench_io.py,
+.ADRs/ADR_03_Persistent_IO/ADR.md (status).
+
+WHAT WAS VALIDATED (automated, CI-collected)
+--------------------------------------------
+- WAL coexistence (the riskiest claim): test_wal_concurrent_writers_no_lock runs the
+  persistent Python writer and a separate PHP-style connection (mimicking
+  pfBlockerNG_clearsqlite / the widget) writing the SAME WAL db concurrently (100
+  increments each). Asserts: no 'database is locked' raised, and the final counter ==
+  200 (every relative += 1 from both writers applied; busy_timeout serialized them).
+- Persistent connection win: test_persistent_connection_single_connect counts
+  sqlite3.connect() calls -> exactly 1 for 20 writes (the per-call design connected 20
+  times). Deterministic proof of the syscall reduction.
+- Plus, from earlier phases (still green): relative-increment-survives-reset (no
+  clobber), reconnect-after-db-removed, worker batch+flush-on-stop (shutdown drain for
+  the DB side), per-group counters, cache FIFO; and for logging: byte-identical lines /
+  routing / literal '%', synchronous fallback, and WatchedFileHandler reopen-after-
+  rename (the line-cap trim / viewer clear are tolerated untouched).
+
+PERFORMANCE (benchmarks/test_bench_io.py; dev-only, needs benchmarks/requirements.txt)
+-------------------------------------------------------------------------------------
+Self-contained microbenchmark of the I/O *patterns* (500 writes per batch),
+CPython 3.14 / macOS. Treat ratios as the signal.
+  DB  : per-call connect+CREATE+commit+close   ~156 ms   (~312 us/write)
+        persistent + one batched relative UPDATE ~0.01 ms  (negligible/write)
+  Log : open/append/close per line             ~13.7 ms  (~27 us/line)
+        persistent handle (one flush)           ~0.06 ms  (~0.13 us/line)
+The WatchedFileHandler stat()-per-emit cost is included in the persistent log figure
+and is not a concern at these magnitudes. The win is the eliminated per-write
+connect()/open() syscalls + (for counters) batching.
+
+VERIFICATION
+------------
+- python -m pytest -> 169 passed.  ruff check / ruff format -> clean.
+- php -l pfblockerng.inc -> clean (P1).  benchmarks run: 4 passed.
+
+================================================================================
+OUTSTANDING — MANUAL SMOKE TEST (owner: MAINTAINER)  ** required before Accept **
+================================================================================
+No live Unbound in dev/CI. Deploy via scripts/deploy.sh to a live pfSense box and
+verify on a running Unbound, then record results here and set ADR Status to Accepted.
+
+[ ] DNSBL blocking works; dnsbl.log / unified.log / dns_reply.log lines are
+    byte-identical to before (spot-check the formats the Reports/Alerts viewer parses).
+[ ] Dashboard widget: resolver query counter + per-Group counters increment over time.
+[ ] UI "Clear" (pfBlockerNG_clearsqlite) resets the counters AND counting resumes
+    correctly afterwards (no clobber); no 'database is locked' in the logs.
+[ ] Reports / Alerts pages read the DNSBL cache normally under load (no lock errors).
+[ ] Force Reload + a normal reload (Unbound restart): counters/logs resume; no stuck
+    -wal/-shm files; py_error.log still captured.
+[ ] Line-cap: with log_max_dnslog/dnsreplylog/unilog set, the cron trim caps the files
+    and the live logger keeps writing to the trimmed file (WatchedFileHandler reopen);
+    the log-viewer "Clear" still works.
+[ ] Sustained load: confirm no growth in open fds / connections over time (persistent,
+    not leaking) and that the DB-write / log queues are not chronically dropping
+    (pfb["db_dropped"] / pfb["log_dropped"] stay ~0 under normal load).
+
+Once all pass: set the ADR header Status to "Accepted" and record the date/result.
+
+KNOWN RESIDUALS / NOTES
+-----------------------
+- pfb_async (+ its worker) is retained solely for the py_error stderr capture
+  (log_stderr); only the app-log writes moved to the new pipeline.
+- Tunables: PFB_DB_FLUSH_INTERVAL=1.0s, PFB_DB_QUEUE_MAXSIZE / PFB_LOG_QUEUE_MAXSIZE
+  =5000, PFB_DB_MAX_BATCH=2000. Adjust if the smoke test shows drops under real load.
+- check_same_thread=False + _db_lock serializes the DB worker and the init/test
+  synchronous fallback; the Python side is a single logical writer.

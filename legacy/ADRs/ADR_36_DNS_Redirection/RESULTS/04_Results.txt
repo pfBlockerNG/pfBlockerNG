@@ -1,0 +1,112 @@
+ADR-36 Phase 4 — DNS Redirect Smoke Tests + Docs
+=================================================
+Date: 2026-06-22
+Implementer: Claude Sonnet 4.6
+
+--------------------------------------------------------------------------------
+SMOKE TEST FILE
+--------------------------------------------------------------------------------
+Path:  tests/smoke/test_dns_redirect.py
+Cases: 6 (all mandatory per §6 Phase 4)
+
+Case 1 — test_dns_redirect_enable_creates_nat_and_filter_rules
+  Enable redirect on LAN → 2 nat/rule + 2 filter/rule pfB_DNS_Redirect_lan_*
+  entries; field-by-field assertion (ipprotocol, target, protocol, local-port,
+  natreflection, destination.(self)+not+port); pfctl -sn confirms rdr active.
+  Asserts before-state (clean) before enabling.
+
+Case 2 — test_dns_redirect_disable_removes_nat_and_filter_rules
+  Disable redirect → all pfB_DNS_Redirect_* entries gone from nat/rule and
+  filter/rule; pfctl -sn shows no rdr on LAN for port 53.
+  Asserts before-state (rules present) before disabling.
+
+Case 3 — test_dns_redirect_user_nat_rule_survives_enable_disable
+  User nat/rule (no pfB marker) seeded before enable; asserted present after
+  enable (pfB rules appear) AND after disable (pfB rules removed).
+
+Case 4 — test_dns_redirect_stale_interface_pruned_on_reduce
+  SKIP CONDITION: VM has fewer than 2 non-WAN interfaces
+  (skip message: "Case 4 (stale-interface prune) requires ≥2 non-WAN interfaces").
+  When skipped: interface discovery runs (pfSense config API), skip is clean.
+  When available: enable on iface_keep + iface_drop → reduce to iface_keep →
+  iface_drop rules gone (both sections); iface_keep rules remain (4 entries).
+
+Case 5 — test_dns_redirect_exception_alias_branch
+  Alias set (DNS_Exceptions_Test) → source.address == alias + source.not key
+  present, for both v4 and v6 rules.
+  Alias cleared → source.any key present; source.address == '', both families.
+
+Case 6 — test_dns_redirect_uninstall_sweeps_owned_rules_preserves_user_nat
+  Enable on LAN + seed user NAT → pkg delete → all pfB_DNS_Redirect_* gone
+  (nat/rule + filter/rule); user NAT survives; installedpackages/pfblockerng*
+  gone.
+
+Env-gated cases:
+  - Case 4: env gate is interface count (≥2 non-WAN), discovered at runtime
+    from the VM's configured interface list (not an env var gate). Single-NIC
+    pfSense VMs will skip this case cleanly.
+
+--------------------------------------------------------------------------------
+ADR-14 ui_render GATE
+--------------------------------------------------------------------------------
+PENDING — requires SMOKE_ADMIN_PASSWORD + live pfSense VM.
+Status inherited from Phase 3: the DNSBL page marker tuple in
+tests/smoke/ui/test_render_smoke.py was updated to assert "DNS Redirect" is
+present in the page body. CI will run this via ui-tests.yml on the PR.
+Reason pending: no live VM / SMOKE_ADMIN_PASSWORD available locally.
+
+--------------------------------------------------------------------------------
+DOCS UPDATED
+--------------------------------------------------------------------------------
+docs/misc/architecture-notes.md — new section "Optional NAT DNS-redirection
+(ADR-36)" appended after the ADR-35 section. Covers: what the redirect does
+(port-53 rdr per interface pair), the structural self-exempt (negated (self)
+destination), the complementary relationship with DoH/DoT NXDOMAIN (DNSBL feeds)
+and ADR-37 port-853 blocking, and the ADR-35 ownership model.
+
+.ADRs/ADR_36_DNS_Redirection/ADR.md — status line updated to:
+  "Implemented — pending live-VM smoke" (2026-06-22)
+
+§7 DoD checklist: ticked the 5 off-VM automated items; live-VM smoke item left
+unchecked (pending fan-out dispatch).
+
+--------------------------------------------------------------------------------
+VERIFICATION MATRIX
+--------------------------------------------------------------------------------
+php -l:       src/usr/local/pkg/pfblockerng/pfblockerng_dns_redirect.inc — OK
+              src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php         — OK
+PHPUnit:      1210 tests, 4812 assertions — OK (31 pre-existing warnings, 3 skips)
+PHPStan:      No errors
+PHPCS:        Clean (PFBL-01 + ADR-28 UppercaseBooleanLiteral + ADR-29 RequireConfigGateway)
+pytest:       1930 passed, 2 skipped — no regressions
+ruff check:   All checks passed
+ruff format:  128 files already formatted (0 to reformat)
+collect-only: 6 cases collected, 0 import errors
+markdownlint: 0 error(s) on docs/misc/architecture-notes.md + ADR.md
+
+--------------------------------------------------------------------------------
+MAINTAINER MANUAL-SMOKE ITEMS (out of CI scope — documented in §7)
+--------------------------------------------------------------------------------
+1. Enable DNS redirect on LAN with empty exception alias → confirm a client with
+   8.8.8.8 as DNS has its port-53 queries answered by the pfSense resolver (verified
+   by a DNS query to an external server that returns a DNSBL-blocked result — block
+   is applied).
+2. Populate the exception alias with the client's IP → confirm that client now bypasses
+   the redirect (external DNS server answers again).
+3. Enable redirect on LAN + OPT1 → disable on OPT1 only → confirm OPT1 rules gone,
+   LAN rules remain.
+4. Uninstall pfBlockerNG with redirect enabled → confirm no pfB_DNS_Redirect_* rules
+   remain in Firewall → NAT and no dangling filter rules.
+
+Full client-redirect behaviour requires a second host. The CI-feasible gate is
+config.xml rule presence + pfctl -sn rdr confirmation (Cases 1 and 2).
+
+--------------------------------------------------------------------------------
+OPEN ITEMS FOR NEXT STEPS
+--------------------------------------------------------------------------------
+- Dispatch smoke-fanout.yml (or smoke.yml with -m smoke) against the PR branch
+  to run the 6 cases on the live CE VM.
+- When smoke fan-out is green: flip ADR.md status to "Accepted".
+- ADR-14 ui_render: will run automatically via ui-tests.yml CI on the PR.
+
+ADR-RESUME: branch=adr/36-dns-redirection next-phase=COMPLETE

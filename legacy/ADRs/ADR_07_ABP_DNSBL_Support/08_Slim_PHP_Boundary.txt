@@ -1,0 +1,79 @@
+================================================================================
+PHASE 8 PROMPT — Slim PHP: full-Python ABP boundary + DNSBL-IP coexistence
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 Parse-boundary + DNSBL-IP rows)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 8 of ADR-07. Redraw the shell<->Python boundary to
+the aggressive ADR-06 target for ABP feeds: PHP tags ABP feeds and passes RAW lines; the
+PHP $easylist lite pass is DELETED; the DNSBL-IP firewall pass keeps working. Decision-
+preserving for observable DNS output. Work inline on `adr/07`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 4-7 made Python the full ABP parser, but PHP still pre-cleans ABP feeds to 'plain'
+(format_hint='plain', $easylist strips @@/regex away before Python sees them). This phase
+removes that so the raw ABP lines actually reach the new parser, deletes the now-dead lite
+pass, and ensures the "DNSBL IP" firewall feature still extracts embedded IPs (incl. ABP-
+anchored) now that PHP no longer parses those feeds line-by-line.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/07_Results.txt — the regex safeguard + setting. If
+  missing, STOP and report.
+- RESULTS/01_Results.txt — the contract-to-preserve + the minimal manifest change for 'abp'
+  + the DNSBL-IP coexistence note; RESULTS/06_Results.txt — the counts / inc:3149 note.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 Parse-boundary + DNSBL-IP rows; §2 contract DNSBL-IP).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    * $easylist lite parser ~7796-7847 (DELETE), header sniff strings (Adblock Plus/uBlock/AdGuard).
+    * manifest writer pfb_unbound_python_sources ~2319-2427 (emit 'abp' for ABP feeds, raw passthrough).
+    * the DNSBL-IP pass (ADR-06 fact 7): embedded-IP extraction -> *_v4.ip/*_v6.ip ->
+      DNSBLIP_v4/_v6 (teach it ABP-anchored IPs: ||1.2.3.4^, hosts IP).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: parse('abp') (must receive raw lines now);
+  IP-anchor skip (returns None).
+- tests/test_adr07_* + tests/test_adr06_* (both oracles are the gate); the PHP-boundary test
+  pattern from tests/test_adr06_php_boundary.py.
+- CLAUDE.md (PHP tabs, no die/exit in lib, pfSense fns via stubs; POSIX sh; ShellCheck).
+
+ACTION PLAN
+1. MANIFEST: in pfb_unbound_python_sources, header-sniff ABP feeds and write
+   format_hint='abp' for them, passing the RAW (un-stripped) lines into the per-feed raw the
+   manifest references. Non-ABP feeds keep their ADR-06 'plain'/'hosts'/'csv:pon' handling.
+2. DELETE the $easylist lite pass ($e_replace and its branch) — Python now does ABP parsing.
+   Remove only the now-dead ABP-domain extraction; do NOT remove the header sniff (reused to
+   tag 'abp') and do NOT remove the IP extraction.
+3. DNSBL-IP COEXISTENCE: ensure the firewall IP pass still runs over the (now raw) ABP feeds
+   and recognises ABP-anchored IPs (||1.2.3.4^) + hosts IPs -> DNSBLIP_v4/_v6 with the
+   configured action, exactly as today. Python parse('abp') skips IP-valued anchors (0 leak).
+   Confirm no double-handling: IP -> firewall only, domain/regex -> Python only.
+4. COUNTS: point the UI at the Python-emitted counts; reconcile the inc:3149 sync-check per
+   RESULTS/06 if the loaded-total expectation shifted (ABP adds @@/regex; value changes by design).
+5. GATE: both oracles green; a php boundary test (extend tests/test_adr07_* or the ADR-06
+   php-boundary pattern) proves a raw ABP feed round-tripped through PHP-tag -> Python build
+   yields the Phase-2 decisions with no IP leak and the IPs landing in the firewall set.
+
+CONSTRAINTS
+- Decision-preserving for observable DNS output (both oracles); behaviour changes are only the
+  intended ABP additions (@@/regex/important/badfilter) + counts.
+- Keep the firewall IP feature working — it is pf/PHP and must not regress (ADR-06 fact 7).
+- PHP: tabs, 8.3, no die()/exit() in lib, pfSense fns via stubs (add to stubs/pfsense/ if a new
+  one is called, per CLAUDE.md — prefer a stub over a phpstan baseline). POSIX sh; ShellCheck-clean.
+
+VERIFICATION
+- python -m pytest → green (both oracles). php -l on changed .inc; ShellCheck on changed .sh;
+  ruff clean on any .py touched.
+- Diff-read: $easylist branch gone; header sniff retained for tagging; IP pass intact + ABP-aware.
+
+EXPECTED RESULT
+ABP feeds reach the Python parser as raw lines (format_hint='abp'); the PHP lite parser is
+deleted; the DNSBL-IP firewall feature still builds DNSBLIP_v4/_v6 (incl. ABP-anchored IPs);
+DNS decisions are the ADR-07 target with no regression.
+
+COMMIT (single)
+    pfblockerng: ADR-07 P8 — slim PHP to abp tag+raw passthrough; delete lite parser; keep DNSBL-IP
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/08_Results.txt`
+For Phase 9. Include: the manifest 'abp' tagging + what raw now contains; exactly what PHP was
+deleted vs kept (header sniff, IP pass); the DNSBL-IP ABP-anchor handling; the counts/sync-check
+resolution; both-oracle + php -l/ShellCheck green; and the go-ahead to final validation + smoke.

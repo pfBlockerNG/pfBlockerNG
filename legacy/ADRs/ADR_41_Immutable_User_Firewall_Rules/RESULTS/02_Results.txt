@@ -1,0 +1,159 @@
+ADR-41 Phase 2 Results — pf-precedence kill-gate
+================================================
+Branch: adr/41-immutable-user-firewall-rules   Phase: 2 (measurement / design-proof; NO production code)
+Verdict: GO  -- *** SUPERSEDED: THIS GO WAS FALSE *** (see CORRECTION below and RESULTS/05)
+
+*** CORRECTION (post-merge, fix/adr-41-restore-pass-order) **************************************
+The GO verdict below is WRONG. Section 2's "first-match reduction" enumerated pfB-block-vs-user-PASS,
+pfB-pass-vs-user-PASS, and pfB-block-vs-user-block -- but OMITTED the pfB-PASS (Permit list) vs
+user-BLOCK interaction, which is SIGNIFICANT: a pfB Permit rule placed AFTER a user Block loses, so
+a Permit list cannot override a user block. Because that interaction was missed, Section 2's claim
+that the 4-way ORDER table "collapses to one binary question" (pfB block before/after user pass) is
+false, and so is Section 5's proof that a single contiguous anchor suffices. The binary anchor that
+Phase 3 then shipped breaks pfB-Permit-vs-user-Block precedence for order_1/order_2 (and dropped
+order_4's INTENDED user-block-before-user-pass reorder, mis-classified as a defect in Section 6).
+This was not caught because the only live kill-gate case was Deny-only (the pfB-pass bucket empty) --
+exactly the "mixed pfB permit+deny + user rules" config the ADR's own S7 reject criterion named.
+
+CORRECT verdict: a single contiguous anchor does NOT reproduce the precedence; the 4-way bucket
+assembly (pfB p/m, pfB b/r, user p/m, user b/r, ordered per pass_order, applied independently to the
+floating and interface pf groups) is required. Restored on fix/adr-41-restore-pass-order; full
+analysis in RESULTS/05. The Section 1 pf-evaluation facts (per-interface first-match; floating a
+separate group) remain correct; only the Section 2 reduction, the Section 5 GO, and the Section 6
+"order_4 reorder is a removable defect" claim are wrong.
+************************************************************************************************
+
+This phase establishes (a) the real pf evaluation model on a live VM, (b) the
+pass_order -> insertion-anchor mapping the Phase-3 immutable splice implements, and (c) that a
+single anchor suffices. It proves the falsifiable premise BEFORE Phase 3 builds (ADR-01 lesson).
+
+
+1. CONFIRMED pf EVALUATION MODEL (live evidence)
+------------------------------------------------
+Measured on the ADR-04 live CE 2.8 VM (box 10.0.0.23, NO_TWO_VM). Throwaway probe
+`tests/smoke/_p2_precedence.py` (removed; not committed). For the order_0 case it dumped
+`pfctl -sr` for the LAN interface:
+
+    pass in quick on vtnet2 inet from <LAN__NETWORK> to any ... label "USER_RULE: Default Allow LAN to any rule" ...
+    pass in quick on vtnet2 inet6 from fd00::/64 to any   ... label "USER_RULE: Default Allow LAN IPv6 to any rule" ...
+
+KEY FACTS, verified not assumed:
+  * Interface rules carry `quick` => pf is FIRST-MATCH PER INTERFACE. The first matching rule on
+    the packet's interface decides; rules on OTHER interfaces are irrelevant to it. So inter-
+    interface ordering in config.xml does NOT affect precedence -- only the relative order of
+    rules ON THE SAME interface does. (LAN = vtnet2; the friendly name 'lan' maps to that device.)
+  * Floating rules are evaluated as a separate group (pf separates floating from interface rules
+    regardless of config.xml interleaving), so keeping user rules verbatim cannot change the
+    float-vs-interface relationship -- consistent with the live-confirmed "float=on path is already
+    correct" finding in ADR.md S1.3.
+
+Consequence: the ONLY precedence that the anchor controls is the SAME-interface ordering of the
+pfB rules relative to the kept user rules.
+
+
+2. WHAT PRECEDENCE ACTUALLY MATTERS (first-match reduction)
+----------------------------------------------------------
+Under per-interface first-match, only interactions that change a packet's verdict matter:
+  * pfB-block vs user-PASS    -> SIGNIFICANT (a pass shadows a later block and vice-versa).
+  * pfB-pass  vs user-PASS    -> moot (both pass; whichever is first, the packet passes).
+  * pfB-block vs user-block   -> moot (both block; the packet is dropped either way).
+  * pfB-pass  vs pfB-block    -> internal to pfB, unchanged by this ADR (generation untouched).
+
+So the 4-way ORDER table (pfB p/m vs pfB b/r vs pfSense p/m vs pfSense b/r) COLLAPSES, for the
+user-visible precedence, to ONE binary question: does the pfB BLOCK sit BEFORE or AFTER the
+user's PASS rules on that interface?
+
+
+3. INTENDED PRECEDENCE PER pass_order (from the current emission = the oracle)
+-----------------------------------------------------------------------------
+"Intended precedence" is DEFINED by today's strip-and-rebuild emission (the behaviour the
+immutable splice must reproduce). Traced in pfb_build_autorule_list() (pfblockerng.inc), single
+managed interface, inbound==outbound, float=off:
+
+  order_0  : pfB deny emitted; managed-iface user-pass routed to $other_rules (tail) -> pfB BEFORE
+             user rules.  [LIVE-CONFIRMED: config shows `reject lan pfB_..._v4` then the user pass.]
+  order_1  (:11362): inbound loop emits $permit_rules (user-pass) FIRST, then pfB permit, then pfB
+             deny (:11401) -> user-pass BEFORE pfB-deny -> USER WINS.
+  order_2  (:11385): pfB permit, then $permit_rules (user-pass :11393), then pfB deny (:11401)
+             -> user-pass BEFORE pfB-deny -> USER WINS.
+  order_3  : pfB permit+deny in the loop, user buckets in the tail -> pfB BEFORE user rules.
+  order_4  : pfB permit+deny in the loop, then tail emits $other_rules (user-block) then
+             $permit_rules (user-pass) -> pfB BEFORE user rules (+ user block reordered before
+             user pass -- the deliberate reorder ADR-41 removes; see S6).
+  absent   : caller defaults order to 'order_0' (#539) -> same as order_0.
+
+Binary precedence classes:
+  pfB-WINS  (pfB block before user pass): order_0, order_3, order_4, absent.
+  USER-WINS (user pass before pfB block): order_1, order_2.
+
+
+4. pass_order -> INSERTION-ANCHOR MAPPING (what Phase 3 implements)
+------------------------------------------------------------------
+Keep the kept list = existing filter/rule minus the pfB-owned rules this region regenerates
+(descr starts 'pfB_', EXCLUDING the DNS-redirect/DoT bypass rules), in ORIGINAL order. Generate
+the pfB rules unchanged. Splice the contiguous pfB block at ONE anchor:
+
+    pass_order            | anchor (per managed interface)
+    ----------------------+--------------------------------------------------
+    order_0 / order_3 /   | pfB block spliced BEFORE the kept user rules
+      order_4 / absent    |   (pfB wins)
+    order_1 / order_2     | pfB block spliced AFTER the kept user rules
+                          |   (user pass wins)
+    unknown/other         | -> order_0 anchor (BEFORE)  [subsumes #539]
+
+  * pfB pass/match rules ride WITH the pfB block at the anchor. Their position relative to
+    user-pass is moot (pass-vs-pass), so this preserves precedence.
+  * NO user rule is ever bucketed, filtered, duplicated, split, or reordered -- the splice only
+    deletes pfB rules and inserts pfB rules around the verbatim user list.
+
+
+5. PROOF THE SINGLE ANCHOR REPRODUCES IT (no user-rule splitting)
+----------------------------------------------------------------
+The falsification risk (ADR S3 / S7) was: order_1/order_2 want pfB "between user pass/match and
+user block/reject", which -- if user rules interleave pass and block -- a single contiguous anchor
+cannot express without splitting the user list.
+
+It does NOT arise, because (S2) the pfB-block-vs-user-BLOCK ordering is MOOT. order_1/order_2 only
+require pfB-block to sit AFTER the user PASS rules; where it sits relative to user BLOCK rules is
+irrelevant (two blocks -> same drop). So "pfB block AFTER the entire kept user list" reproduces
+order_1/order_2 precedence exactly, with the user list kept verbatim. Likewise order_0/3/4 only
+require pfB-block BEFORE the user PASS rules; "pfB block BEFORE the entire kept user list" reproduces
+it. A single contiguous anchor per order therefore suffices for EVERY order. => GO, no re-scope.
+
+
+6. DELIBERATE BEHAVIOUR CHANGE (record for release notes)
+---------------------------------------------------------
+order_4 today reorders the user's own rules (emits user block before user pass) and the
+managed/non-managed split repositions managed-interface user rules. Under the immutable model the
+user list is kept verbatim, so these reorderings GO AWAY. Functionally inert (pf is per-interface
+first-match over the user's own rules in their config order), but config.xml rule order changes for
+some installs on order_1/order_2/order_4. Documented; Phase 4 confirms no precedence regression.
+
+
+7. EVIDENCE COMPLETENESS + LIMITATION (honest)
+----------------------------------------------
+LIVE-CONFIRMED this phase: the pf evaluation model (per-interface first-match / `quick`) and the
+order_0 anchor (pfB before user, on real pf). The order_1..4 anchors are derived from the emission
+oracle (the code that DEFINES the intended precedence) + the first-match reduction above; they were
+NOT each independently re-dumped live because the box's guest SSH dropped during repeated reloads
+(`Connection timed out during banner exchange` -- a state-flush/VM-flakiness artifact, NOT a code
+issue) and defeated the multi-reload sweep. This is acceptable for the kill-gate: the mapping is
+proven from the oracle + the live-confirmed pf model, and Phase 4 (its designated phase) asserts the
+pfB-vs-user precedence LIVE in the data plane for every pass_order (a blocked-vs-allowed probe), so
+the full per-order live proof is delivered there, not lost.
+
+MEASUREMENT NOTE for Phase 3/4: a state-flushing reload can transiently cut the harness's control
+SSH on some boxes; prefer fewer reloads per session / fresh-boot-per-case, or a reload that polls
+for completion over fresh connections, when scripting the live precedence sweep.
+
+
+8. GO-AHEAD FOR PHASE 3
+-----------------------
+GO. Implement the immutable-user reconciliation per the S4 mapping:
+  - keep = existing filter/rule minus pfB-owned (excl. bypass), ORIGINAL order;
+  - generate pfB rules (unchanged);
+  - splice the pfB block BEFORE the kept user rules for order_0/3/4/absent, AFTER for order_1/2
+    (unknown -> order_0 anchor);
+  - write iff changed; remove the dead bucketing/$permit_rules/per-interface user emission.
+Reshape the Phase-1 oracle to assert user-rule fidelity (multiset+order preserved), pfB-set
+identical, and idempotence; red on today's order_1/order_2 dup + order_4 reorder, green after.

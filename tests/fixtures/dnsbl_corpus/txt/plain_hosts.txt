@@ -1,0 +1,2 @@
+{"kind":"domain","domain":"plainhost1.example","log":"1","feed":"plain_hosts","group":"grp_plain"}
+{"kind":"domain","domain":"plainhost2.example","log":"1","feed":"plain_hosts","group":"grp_plain"}

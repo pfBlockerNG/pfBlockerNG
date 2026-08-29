@@ -1,0 +1,100 @@
+================================================================================
+PHASE 5 PROMPT — Build the trie at load (dual-populate in init_standard)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phases 1-4 committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing Phase 5. You will
+populate the Phase 4 trie from the same files/config that currently fill the
+dicts, DURING init_standard(), alongside the existing dicts (transitional
+dual-populate). Readers are NOT switched in this phase.
+
+WHY THIS PHASE EXISTS
+Dual-populating first lets the trie be built and validated under realistic load
+conditions while the dicts still serve the runtime path, so the reader switch in
+Phase 6 is a pure, reversible change. It also gives a natural place to assert
+trie==dict consistency during development.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md — Section 4 Phase 5.
+- .ADRs/ADR_01_Trie/RESULTS/04_Results.txt — Phase 4 handoff: TrieNode shape,
+  insert/lookup signatures, and equivalence test results (esp. tld_seg and hsts
+  -2 stride cases).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — init_standard():
+    * the container initialization block (dataDB/zoneDB/dnsblDB/safeSearchDB/
+      feedGroupIndexDB = defaultdict(list); regexDB/whiteDB/hstsDB/gpListDB/
+      noAAAADB = defaultdict(str); excludeDB/excludeAAAADB/excludeSS = []),
+    * the module-level annotated globals block (dataDB: defaultdict[str, Any], etc.)
+      and the `global ...` statement at the top of init_standard(),
+    * the SafeSearch / noAAAA / GP_Bypass ini parsing,
+    * the zone CSV loader (rows of len 6 -> zoneDB[row[1]] = {'log': row[3],
+      'index': final_index}; feedGroup index dedup via feedGroupDB),
+    * the data CSV loader (analogous -> dataDB[row[1]]),
+    * the whitelist CSV loader (rows of len 2 -> whiteDB[row[0]] = wildcard bool),
+    * the HSTS loader (one domain per line -> hstsDB[line]=0),
+    * the noAAAA ini loader (-> noAAAADB[data[0]] = wildcard bool).
+  Note exactly how malformed rows are handled (logged + skipped) and how the
+  feed/group index is assigned, so the trie payload uses the SAME {log, index}.
+- Phase 4 trie insert API (trie_insert_data/zone/white/noaaaa/hsts).
+- tests/test_pfb_unbound.py — must remain green.
+
+ACTION PLAN (ordered)
+
+1. Add a module-level `domainTrie` (a TrieNode root) to the annotated globals
+   block and to the `global` declaration in init_standard(). Initialize it
+   (`domainTrie = TrieNode()`) in the same place the dicts are initialized, so a
+   reload rebuilds it cleanly.
+
+2. In EACH loader, immediately after the existing dict write, add the
+   corresponding trie insert using the SAME key and payload:
+     - zone loader:      trie_insert_zone(domainTrie, row[1], {'log': row[3], 'index': final_index})
+     - data loader:      trie_insert_data(domainTrie, row[1], {'log': row[3], 'index': final_index})
+     - whitelist loader: trie_insert_white(domainTrie, row[0], wildcard)
+     - hsts loader:       trie_insert_hsts(domainTrie, <domain>)
+     - noAAAA loader:     trie_insert_noaaaa(domainTrie, data[0], wildcard)
+   Keep the dict writes intact (dual-populate). Apply identical malformed-row
+   skipping (do not insert into the trie what you would not insert into the dict).
+
+3. Payload sharing: the trie data/zone payload dict should be the SAME object
+   shape the dicts use ({'log', 'index'}); reuse feedGroupIndexDB unchanged.
+   Do not duplicate feed/group strings into the trie.
+
+4. (Recommended, dev-only) Add a lightweight consistency self-check guarded so
+   it does not run on the hot path — e.g. a helper used by a test that rebuilds
+   from a fixture and asserts trie lookups match dict lookups for all loaded
+   keys. Do NOT add per-query asserts to operate().
+
+5. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- Behavior-preserving: operate() still reads the dicts; the trie is built but
+  unused at runtime. No blocking-outcome changes.
+- Do not regress load-time error handling (the try/except around each loader,
+  the stderr writes, the pfb[...] enable flags). The trie inserts must live
+  inside the same try blocks so a malformed feed cannot half-populate one
+  structure and not the other.
+- stdlib only; type hints on new globals; 4-space indent.
+
+VERIFICATION
+- `python -m pytest` → all green (existing + Phase 3/4 tests).
+- `ruff check .` / `ruff format .` → clean.
+- If you added the dev consistency check as a test: it passes (trie == dicts for
+  every loaded entry across data/zone/white/noaaaa/hsts).
+
+EXPECTED RESULT / OBSERVATIONS
+- After init_standard(), domainTrie contains exactly the same membership as the
+  five dicts, with shared {log,index} payloads.
+- Runtime blocking is still dict-driven and unchanged.
+
+COMMIT
+    pfb_unbound: populate domain trie at load alongside dicts (dual-populate)
+Push policy as in earlier phases.
+
+HANDOFF
+Report where domainTrie is declared/initialized, which loaders now dual-write,
+and the consistency-check result. Phase 6 will flip operate()/evaluate_* readers
+to the trie.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/05_Results.txt`.

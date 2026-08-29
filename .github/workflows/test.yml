@@ -1,0 +1,1281 @@
+name: Tests
+
+# push: runs on direct commits to main/devel (post-merge, admin bypass).
+# pull_request: covers feature branches — the push trigger intentionally
+# omits them to avoid running two sets of checks on every PR commit.
+# For pull requests from forks, GitHub's built-in fork PR approval
+# (Settings → Actions → "Require approval for all outside collaborators")
+# gates the run: any repository collaborator can approve via the
+# "Approve and run" button on the PR page.
+#
+# paths-ignore: documentation-only changes skip CI entirely (nothing here builds
+# or tests docs). A run is skipped only when EVERY changed file matches a pattern
+# below, so any commit that also touches code still runs the full suite.
+# Caveat: `devel` is not branch-protected today; if the "All tests passed" check is
+# ever made a *required* status check, paths-ignore would leave docs-only PRs with a
+# never-reported required check (GitHub treats a skipped workflow's check as missing,
+# not passing) — at that point pair this with a companion workflow that reports the
+# same check name as a success for the ignored paths.
+on:
+  push:
+    branches:
+      - main
+      - devel
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
+      - 'legacy/**'
+  pull_request:
+    # labeled/unlabeled so adding or removing a gate label re-evaluates the
+    # label-gated jobs — TWO depend on these types: `ui-tests` (the UI suite gate)
+    # and `no-test-needed` (the coverage-pairing escape hatch, issue #921). Without
+    # them a failed coverage-pairing gate would stay failed after the label is
+    # applied: label changes trigger no run, and a manual re-run reuses the stale
+    # event payload (the label list at original event time). synchronize re-runs
+    # the gates on new pushes while labeled.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
+      - 'legacy/**'
+  # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
+  # the automated push/PR flow: a synthetic corpus on a generic runner is not the
+  # number that matters — the production-faithful build-time/RAM measurement belongs
+  # on the live smoke VM, timing `updatednsbl` start→finish + unbound RSS. Dispatch
+  # Tests with this box ticked to run the offline spikes on demand.
+  workflow_dispatch:
+    inputs:
+      run_benchmarks:
+        description: 'Run the ReDoS + build/RAM benchmark kill-gates (offline spike scripts)'
+        type: boolean
+        default: false
+
+# Least-privilege GITHUB_TOKEN: every job only reads the repo (checkout, tests,
+# lint) — upload-artifact uses the Actions runtime token, not GITHUB_TOKEN — so
+# read-only is sufficient. Matches the other workflows (build-*/smoke).
+# packages:read is for the ADR-14 Tier-A UI gate (ui-tests.yml pulls the pfSense
+# image from private GHCR); it runs only when a PR/push touches PHP/JS.
+permissions:
+  contents: read
+  packages: read
+
+# Cancel in-progress Tests runs on pull_request events only (#2673).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Derive the pytest + PHP test matrices from the single-source-of-truth
+  # supported-versions matrix (ci-metadata orphan branch). The pytest matrix is
+  # the distinct python versions (from each entry's py_flavor) and the PHP matrix
+  # the distinct php_version values, across ALL entries (CE + Plus) — supported-only
+  # (only versions the matrix actually ships; nothing hardcoded). Adding/dropping a
+  # version on ci-metadata changes these legs automatically — no YAML edit here.
+  read-matrix:
+    name: Read supported-version matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python_versions: ${{ steps.matrix.outputs.python_versions }}
+      php_versions: ${{ steps.matrix.outputs.php_versions }}
+    steps:
+      - name: Checkout (for scripts/read-version-matrix.sh + the action)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Fetch the ci-metadata orphan ref
+        # The reader reads origin/ci-metadata; checkout doesn't bring orphan refs.
+        run: git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+
+      - name: Read derived test matrices
+        id: matrix
+        uses: ./.github/actions/read-version-matrix
+
+  test:
+    name: pytest / Python ${{ matrix.python-version }}
+    needs: read-matrix
+    runs-on: ubuntu-latest
+    # issue #2614: kernel-lock reachable, and a flock(2) acquire has no timeout of its
+    # own -- without this budget a stuck lock burns GitHub's 360-minute default rather
+    # than failing here. Observed median 3.5 min, worst 3.9.
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) from supported-versions.json — the
+        # distinct pythons across all entries' py_flavor. Today: ["3.11"]. This
+        # intentionally tracks only shipped pythons (no speculative 3.12/3.13 leg).
+        python-version: ${{ fromJSON(needs.read-matrix.outputs.python_versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP (lowest supported)
+        # Not a PHP job, but part of the unit suite shells out to `php` — the ADR-45
+        # archive cases, the DNSBL CSV quoting oracle, the landing generator and the
+        # portable builders all cross-check real PHP behaviour, and they FAIL rather
+        # than skip when the binary is absent. The lowest supported version is the
+        # floor a diagnostic has to clear; the PHP-version matrix that catches
+        # divergence between 8.3 and 8.5 lives in the php-* jobs, so paying for a
+        # second full 5500-test leg here would buy nothing those already cover.
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions)[0] }}
+          tools: none
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the test environment (Python ${{ matrix.python-version }})
+        # --locked resolves against the committed uv.lock, so a transitive package cannot
+        # move a gate with no diff. --python carries the matrix version: without it the
+        # leg runs whatever interpreter uv defaults to, so a second matrix entry would
+        # silently test the same one twice and report two green legs for one version.
+        run: uv sync --locked --group dev --python "${{ matrix.python-version }}"
+
+      - name: Run tests
+        # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
+        # the skip-allowlist gate below (issue #2359) -- additive only, never
+        # changes what runs or this step's own pass/fail verdict.
+        run: uv run pytest --junitxml=/tmp/pytest-junit.xml
+
+      - name: Skip allowlist
+        # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
+        # found nine PHPUnit cases silently skipped for a year). Red canary in
+        # this same run: block feeds the fixture's un-allowlistable skip through
+        # the identical command shape and requires nonzero before trusting the
+        # real report below (testing.md's red-canary rule).
+        run: |
+          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
+
+      - name: Branch coverage (informational)
+        # Issue #38: measure BRANCH coverage of pfb_unbound.py (line coverage hides
+        # one-sided decision branches). Informational only -- no enforced floor yet
+        # (mirrors the shell kcov / PHP pcov steps). continue-on-error so a coverage
+        # hiccup never blocks the gate; the canonical `uv run pytest` above is the
+        # authority. coverage knobs (branch=true, TYPE_CHECKING exclude) live in
+        # pyproject.toml [tool.coverage.*].
+        continue-on-error: true
+        # Swallow a non-zero exit (e.g. a timing-sensitive test that flakes only under
+        # the slower coverage instrumentation): this run is informational and the
+        # canonical `uv run pytest` step above is the authority + gate. Keeping the
+        # step at exit 0 avoids a spurious error annotation on a green job.
+        run: uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
+
+  test-typing:
+    name: Test type checking (mypy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the dev environment
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this gate with no diff.
+        run: uv sync --locked --group dev
+
+      - name: mypy tests/
+        # Config in pyproject.toml: the tests.* override requires
+        # disallow_untyped_defs/disallow_incomplete_defs, including tests/smoke;
+        # follow_imports=silent keeps production (incremental) typing out of scope.
+        run: uv run mypy tests/
+
+  ruff:
+    name: Ruff (lint + format)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the dev environment
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this gate with no diff.
+        run: uv sync --locked --group dev
+
+      - name: Ruff lint
+        # Config in pyproject.toml.
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck
+        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
+        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
+        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
+        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
+        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
+        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
+            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
+
+      - name: Forbid bash shebangs
+        # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
+        # the ancient 3.2). Scans ALL tracked files, so it also covers tests/.
+        run: |
+          # pipefail: a step with no `shell:` keyword runs under `bash -e {0}`
+          # (no pipefail), so a failing `git ls-files` would become an empty
+          # listing and pass this gate silently.
+          set -o pipefail
+          # -z + xargs -0, never a newline-separated listing: git C-quotes a path
+          # holding a quote, backslash, control byte or non-ASCII byte, and
+          # `head` on a quoted name reads nothing — the file's shebang would go
+          # unchecked (issue #2212). The exemption fence moved inside the loop
+          # for the same reason: a `grep` over the listing cannot see NULs.
+          # shellcheck disable=SC2016  # $f expands in the inner `sh -c` script, not here
+          bad=$(git ls-files -z | xargs -0 sh -c '
+            for f; do
+              case $f in
+                legacy/*) continue ;;
+              esac
+              case $(head -n1 "$f" 2>/dev/null) in "#!"*bash*) echo "$f" ;; esac
+            done' _)
+          if [ -n "$bad" ]; then
+            echo "bash shebang not allowed (use #!/bin/sh):"; echo "$bad"; exit 1
+          fi
+
+      - name: Parse-check all shell scripts (sh -n)
+        # Cheap syntax gate (shell analogue of php -l). Catches unterminated quotes and
+        # other parse errors even if ShellCheck is ever disabled. Covers tests/ too
+        # (ShellCheck below cannot — shellspec specs trip SC2034 false-positives).
+        run: find src scripts tests -name '*.sh' | sort | xargs -n1 sh -n
+
+      - name: Run ShellCheck
+        # .shellcheckrc in the repo root configures suppressions. Scoped to src+scripts;
+        # tests/ shellspec specs trip SC2034 false-positives (separate cleanup).
+        # --severity=info also gates the unquoted-variable class (SC2086) so the
+        # quoting / word-splitting bugs the shell audit found cannot silently regress.
+        run: find src scripts .claude/hooks -name '*.sh' | sort | xargs shellcheck --severity=info
+
+      - name: Forbid naked $var in curl/wget/fetch URLs
+        # Preventative: a query value jammed straight into a URL (`?ip=$VAR`) breaks
+        # on empty/space-bearing values (e.g. pfBlockerNG's PFB_CHANGED_IP_ALIASES).
+        # Use `--data-urlencode` instead. Scans tracked src shell + Markdown shell
+        # fences (the checker's defaults). ubuntu-latest ships python3.
+        run: python3 scripts/check_url_encoding.py
+
+      - name: Forbid target="_blank" links with no adjacent rel="noopener noreferrer"
+        # Reverse-tabnabbing defence-in-depth (issue #1217): a new-tab link whose
+        # page can reach back via window.opener. Scans tracked src/usr/local/www
+        # .php/.inc/.xml (the checker's defaults). ubuntu-latest ships python3.
+        run: python3 scripts/check_noopener.py
+
+      - name: Forbid an on/off toggle declaring its default in the page
+        # issue #2123: a PFB_FILTER_ON_OFF save into a registered config section must
+        # name a pfb_cfg_registry() entry, and a registered toggle's default must not be
+        # restated by the page. The --self-test run is this gate's red canary: it feeds a
+        # known-violating synthetic page through the same matchers and fails if either
+        # rule stops firing, so a matcher that rots cannot green the real scan.
+        run: |
+          python3 scripts/check_toggle_registry.py --self-test
+          python3 scripts/check_toggle_registry.py
+
+      - name: Forbid an unbounded nested pfblockerng.php re-entry
+        # issue #2016: every BLOCKING re-entry into pfblockerng.php must run through the
+        # bounded spawn seam -- pfb_reentry_exec() (PHP) / pfb_reentry() (shell) -- so a
+        # stalled child cannot hold an update pass open forever. Scans tracked src/
+        # .php/.inc/.sh (the checker's defaults). The --self-test run is this gate's red
+        # canary: a matcher that stops firing fails here instead of greening the scan.
+        run: |
+          python3 scripts/check_reentry_bounds.py --self-test
+          python3 scripts/check_reentry_bounds.py
+
+      - name: Forbid direct Python paths on the pfSense appliance
+        # pfb_python.sh alone constructs the dependency-derived versioned path; all
+        # appliance consumers invoke that wrapper. Scans tracked src/ + tests.
+        run: python3 scripts/check_appliance_python.py
+
+      - name: Forbid hardcoded pfSense/FreeBSD version literals
+        # supported-versions.json (origin/ci-metadata) is the single source of truth for
+        # every supported version pairing. A version token restated as a literal (CE 2.8,
+        # FreeBSD:15, py311, ...) silently drifts when the matrix moves — read it at
+        # runtime via read-version-matrix.sh instead. Scans tracked src/ + scripts/ +
+        # .github/workflows/ (the checker's defaults); escape a real one-off inline with
+        # `# version-literal-ok: <reason>`.
+        run: python3 scripts/check_version_literals.py
+
+      - name: Version-literal patterns cover the live matrix (tripwire)
+        # The checker's windowed CE/Plus numeric shapes restate the matrix window, in a
+        # file self-excluded from its own scan (issue #940). Fail loudly the moment
+        # supported-versions.json carries a version those patterns no longer cover,
+        # instead of the gate narrowing silently. Checkout doesn't bring orphan refs,
+        # so fetch ci-metadata first (same fetch as the read-matrix job above).
+        run: |
+          git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
+          python3 scripts/check_version_literals.py --verify-matrix
+
+  actionlint:
+    name: actionlint (workflow files)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false # lint-only job; no git writes
+
+      - name: Install ShellCheck
+        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
+        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
+        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
+        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
+        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
+        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
+            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
+
+      - name: Install actionlint
+        # Pinned upstream release asset, verified by SHA-256 before extraction — same
+        # shape as the ShellCheck pin above (#2185): a lint verdict is only as
+        # trustworthy as the tool that decides it, and an unpinned actionlint would
+        # move this gate on its own schedule.
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl -fsSLo actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f actionlint.tar.gz actionlint
+          installed="$(actionlint -version | head -n1)"
+          [ "$installed" = "${ACTIONLINT_VERSION}" ] || {
+            echo "actionlint on PATH is $installed, expected ${ACTIONLINT_VERSION}"; exit 1; }
+
+      - name: Lint the workflow files
+        # GitHub silently disables a workflow whose YAML its parser rejects (a
+        # duplicate mapping key disabled five scheduled workflows — issue #2231);
+        # PyYAML-based checks could never see that class. actionlint's own parser
+        # rejects what GitHub rejects, plus expression/schema errors. The binary is
+        # pinned and checksum-verified in the step above (#2232).
+        # The embedded shellcheck pass over `run:` bodies is ON (#2241). It reads no
+        # .shellcheckrc (actionlint runs shellcheck --norc), and a body-level directive is
+        # ignored: suppress per statement with `# shellcheck disable=` inside the body.
+        # Explicit file arguments, never auto-discovery: with no args actionlint
+        # looks for a git project and, finding none, reports nothing and exits 0
+        # — a silently green gate.
+        run: |
+          set -eu
+          AL=/usr/local/bin/actionlint
+          # Red canary: the gate must be able to fail on the exact class that
+          # motivated it (a duplicate job-level key) before it grades the tree.
+          printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    env:\n      A: "1"\n    env:\n      A: "2"\n    steps:\n      - run: "true"\n' \
+            > "$RUNNER_TEMP/canary-dup.yml"
+          if "$AL" "$RUNNER_TEMP/canary-dup.yml" >/dev/null 2>&1; then
+            echo "::error::actionlint red canary did not fail on a duplicate key"
+            exit 1
+          fi
+          # Second canary: actionlint SKIPS its embedded shellcheck pass in silence
+          # when the binary is unresolvable (exit 0, no diagnostic), so run-body
+          # coverage would go quiet if the install step above ever stopped landing it.
+          # shellcheck disable=SC2016  # $CANARY is fixture text for actionlint to flag
+          printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo $CANARY\n' \
+            > "$RUNNER_TEMP/canary-sc.yml"
+          if "$AL" "$RUNNER_TEMP/canary-sc.yml" >/dev/null 2>&1; then
+            echo "::error::actionlint's embedded shellcheck pass is not running (shellcheck missing from PATH?)"
+            exit 1
+          fi
+          # find, not a bare *.yml glob: covers a future .yaml spelling too, and
+          # never hands actionlint an unexpanded literal pattern.
+          find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 \
+            | xargs -0 "$AL" -color
+
+  shell-tests:
+    name: shellspec (POSIX sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
+    # cache keys below can carry it: a tag is a moving reference, so re-pinning kcov has
+    # to roll the cache over too, or a stale build would answer the new key (#2198).
+    env:
+      KCOV_COMMIT: a39874f938ce13f7a65f253120d1ec946b349ffe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Require jq and dash
+        # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
+        # shellspec run below pins. ubuntu-24.04 ships both, and neither changes a gate
+        # verdict by version, so installing them over the image bought nothing. Assert
+        # them instead: a runner image that drops one must fail this job loudly rather
+        # than let the suite fall back to whatever /bin/sh is (#2185).
+        run: |
+          command -v jq >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: jq'; exit 1; }
+          command -v dash >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: dash'; exit 1; }
+          jq --version
+          # shellcheck disable=SC2016  # the substitution runs in the dash child, not here
+          dash -c 'echo "dash: $(command -v dash)"'
+
+      - name: Install iprange
+        # Real `iprange --except` set-subtraction (ADR-53 P3): the same
+        # FireHOL iprange tool pfblockerng.sh's pathaggregate assumes at
+        # /usr/local/bin/iprange on the appliance. Locally the shellspec
+        # cases needing it skip when absent (house pattern); here it must be
+        # present so they actually run.
+        run: sudo apt-get update && sudo apt-get install -y iprange
+
+      - name: Install the de_DE.UTF-8 locale
+        # ADR-26's collation contract is asserted against a real non-C locale:
+        # tests/shell/pfblockerng_adr26_locale_spec.sh SELF-SKIPS when it is absent, so
+        # without this the contract goes untested while the suite still reads green
+        # (issue #2318). ubuntu-latest ships C/C.UTF-8 only.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mawk locales
+          # The runner defaults `awk` to gawk, which honours LC_NUMERIC only in POSIX
+          # mode; Debian (and so the old image) defaults to mawk, which takes the decimal
+          # point from the C library. The locale-independence specs probe through `awk`,
+          # so the alternative decides whether they demonstrate their guard or skip.
+          sudo update-alternatives --set awk /usr/bin/mawk
+          sudo locale-gen de_DE.UTF-8
+          locale -a | grep -Eqi '^de_DE\.utf-?8$'
+          LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=","'
+          # The specs probe the locale through awk, not through locale(1): assert the
+          # same thing they do, so a libc that generates the locale but leaves awk
+          # dotted fails HERE with a reason instead of silently skipping them.
+          LC_ALL=de_DE.UTF-8 awk 'BEGIN { printf "%.2f", 1.5 }' | grep -q ','
+
+      - name: Install shellspec
+        # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
+        # the executable then runs from that tree. This replaced a source-archive tarball
+        # piped straight into tar: GitHub generates that archive on demand from the tag,
+        # so its bytes are not a stable artifact — a re-tag upstream would swap what runs
+        # the POSIX gate and the workflow would not notice (#2194). An uploaded release
+        # asset is immutable. Extracted outside the checkout so the repo tree stays clean.
+        # Same shape as the ShellCheck pin above.
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
+        run: |
+          curl -fsSLo shellspec-dist.tar.gz \
+            "https://github.com/shellspec/shellspec/releases/download/${SHELLSPEC_VERSION}/shellspec-dist.tar.gz"
+          echo "${SHELLSPEC_SHA256}  shellspec-dist.tar.gz" | sha256sum -c -
+          tar -xzf shellspec-dist.tar.gz -C "$HOME"
+          rm -f shellspec-dist.tar.gz
+          echo "$HOME/shellspec" >> "$GITHUB_PATH"
+          installed="$("$HOME/shellspec/shellspec" --version)"
+          [ "$installed" = "$SHELLSPEC_VERSION" ] || {
+            echo "shellspec is $installed, expected $SHELLSPEC_VERSION"; exit 1; }
+
+      - name: Run shellspec
+        # Functional gate for the shell scripts, pinned to dash — the
+        # strict-POSIX ash sibling of FreeBSD /bin/sh (the appliance shell) —
+        # instead of relying on the runner's /bin/sh happening to be dash.
+        # bash-as-sh masks ash divergences (e.g. a special-builtin
+        # redirection error aborts ash/dash but not bash).
+        # Red canary: prove dash exhibits the divergence this pin exists to
+        # catch, in the same run block, before the real suite. The trailing
+        # SURVIVED marker discriminates a genuine mid-script abort from a
+        # permissive shell (bash prints it) or a missing binary (guarded
+        # separately) — a bare nonzero rc cannot tell those apart.
+        run: |
+          DASH="$(command -v dash)"
+          [ -n "$DASH" ] || { echo 'red canary failed: dash not found'; exit 1; }
+          out="$("$DASH" -c ': > /tmp; echo SURVIVED' 2>/dev/null)" || true
+          [ "$out" != "SURVIVED" ] || { echo 'red canary failed: dash did not abort on special-builtin redirection error'; exit 1; }
+          shellspec --shell "$DASH" -o junit --reportdir /tmp/shellspec-report
+
+      - name: Skip allowlist
+        # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
+        # found nine PHPUnit cases silently skipped for a year). Red canary in
+        # this same run: block feeds the fixture's un-allowlistable skip through
+        # the identical command shape and requires nonzero before trusting the
+        # real report below (testing.md's red-canary rule). shellspec's own JUnit
+        # writer embeds a raw XML-illegal control byte for the C-quoted-path
+        # specs (tests/shell/agent_run_gates_git_spec.sh and siblings, by design)
+        # -- the checker heals that before parsing; see its module docstring.
+        run: |
+          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt /tmp/shellspec-report/results_junit.xml
+
+      - name: Run parity-guard on .github/workflows
+        # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
+        run: sh scripts/parity-guard.sh .github/workflows
+
+      - name: Resolve runner image id for the kcov cache key
+        # ImageOS/ImageVersion are runner machine env vars, NOT part of the GHA
+        # `env` context — `${{ env.ImageOS }}` renders empty, so a key built from it
+        # never rolls over with the runner image. Export them via a step output.
+        id: runner-image
+        run: echo "id=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached kcov binary
+        # kcov was removed from ubuntu-latest's apt repos; build from source and
+        # cache the install dir so subsequent runs skip the compile step.
+        id: cache-kcov
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+
+      - name: Build kcov from source (cache miss)
+        # Only runs when the cache is cold. best-effort: a compile failure still
+        # leaves CI green (coverage is informational).
+        # KCOV_COMMIT (kcov v43) is fetched by commit id, so a re-tag upstream cannot
+        # change what gets built: the moving reference is never consulted. `git clone
+        # --branch` takes a ref only, hence the init + fetch-by-SHA + checkout shape —
+        # GitHub serves any reachable commit over smart HTTP (#2202).
+        # kcov's CMakeLists derives its version from `git describe --tags` when a .git is
+        # present; a commit-only shallow fetch has no tags, so that aborts configure. The
+        # checkout is dropped to its working tree, which takes the ChangeLog path instead.
+        id: build-kcov
+        if: steps.cache-kcov.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
+          git init -q kcov
+          git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
+          git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
+          git -C kcov checkout -q FETCH_HEAD
+          rm -rf kcov/.git
+          cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
+          cmake --build kcov/build --parallel "$(nproc)"
+          cmake --install kcov/build
+
+      - name: Save kcov binary to cache
+        # Persist the install dir so the next run restores instead of rebuilding.
+        # Gate on build success: a failed (swallowed) build would otherwise cache an
+        # empty/partial dir and poison the key until the runner image rolls over.
+        if: steps.cache-kcov.outputs.cache-hit != 'true' && steps.build-kcov.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+
+      - name: Install kcov runtime deps and add to PATH
+        # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
+        # and fresh build; also adds the install dir to PATH for the coverage step.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y libcurl4 libelf1 libdw1
+          echo "$HOME/.local/kcov/bin" >> "$GITHUB_PATH"
+
+      - name: Coverage (kcov) — informational
+        # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
+        # kcov being present so a missing tool does not leave an error annotation.
+        # shellspec's kcov integration refuses a plain POSIX shell ("Require to
+        # use bash/zsh/ksh to run kcov") — override to bash for this re-run only; the
+        # gating `shellspec` run above stays pinned to dash, and the POSIX specs run
+        # unchanged under bash (a superset) purely to collect coverage.
+        continue-on-error: true
+        run: |
+          if command -v kcov >/dev/null 2>&1; then
+            shellspec --kcov --shell bash \
+              tests/shell/ip_pre_aws_spec.sh \
+              tests/shell/pfb_python_spec.sh \
+              tests/shell/pfblockerng_*_spec.sh
+          else
+            echo "kcov absent; skipping informational shell coverage"
+          fi
+
+      - name: Upload coverage report
+        # if-no-files-found: warn (not ignore) — a coverage run that produced nothing
+        # is exactly the silent-failure mode that hid the broken kcov invocation.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shell-coverage
+          path: coverage/
+          if-no-files-found: warn
+
+  php-syntax:
+    name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
+    needs: read-matrix
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — the distinct php_version values across
+        # all supported-versions.json entries (CE + Plus). Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: none
+
+      - name: Syntax-check all PHP and .inc files
+        run: find src -name '*.php' -o -name '*.inc' | sort | xargs -n1 php -l
+
+  php-static-analysis:
+    name: PHPStan static analysis / PHP ${{ matrix.php-version }}
+    needs: read-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — see php-syntax. Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer:2.10.2
+
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install PHPStan
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPStan
+        # phpstan.neon configures paths, level, stubs, and includes the
+        # baseline (phpstan-baseline.neon) so existing legacy errors are
+        # suppressed; new errors introduced by future changes will fail CI.
+        # 2G, not 1G: a parallel worker analysing pfblockerng.inc peaks around
+        # 700 MiB on its own, so 1G left single-digit-percent headroom and any
+        # growth in that one file crashed a worker with "reached configured PHP
+        # memory limit" — a resource ceiling, never an analysis result. The real
+        # fix is splitting the file (issue #1122).
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=2G
+
+  php-codesniffer:
+    name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
+    needs: read-matrix
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — see php-syntax. Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer:2.10.2
+
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPCS
+        # Config auto-discovered from phpcs.xml.dist: the custom PfBlockerNG standard
+        # (RequirePfbFilter + UppercaseBooleanLiteral + RequireConfigGateway) over src/.
+        run: vendor/bin/phpcs
+
+  php-unit:
+    name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
+    needs: read-matrix
+    runs-on: ubuntu-latest
+    # issue #2614: PHPUnit loads the real .inc and its fixtures fork workers that
+    # contend for the same lock, and a flock(2) acquire has no timeout of its own, so
+    # this budget is the only bound. Observed median 2.2 min, worst 2.6.
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matrix-derived (supported-only) — the distinct php_version values across
+        # all supported-versions.json entries (CE + Plus). Today: ["8.3","8.5"].
+        php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        # PfbFeedNormalizeTest's converter leg shells out to `python3 -c "import
+        # charset_normalizer"` and SKIPS without it, so this job needs the locked
+        # environment even though it is a PHP leg. activate-environment puts the venv
+        # python first on PATH, which is what the test's `command -v python3` finds.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Sync the test environment
+        run: uv sync --locked --group dev
+
+      - name: Put bsdtar at /usr/bin/tar
+        # The appliance's /usr/bin/tar is bsdtar, which reads ZIP; Debian's is GNU tar,
+        # which does not. The ADR-45 archive cases and the TOP1M/GeoIP zip publication
+        # cases probe that exact path and SKIP when it cannot read a zip, so without this
+        # they vanish from the run while the suite still reads green (issue #2356).
+        # --no-rename plus an explicit mv, not --rename: dpkg-divert refuses to rename a
+        # file out of an Essential package, and the diversion keeps a future tar upgrade
+        # from overwriting the symlink.
+        #
+        # GNU tar moves to /usr/sbin/tar rather than going away, and the runner's PATH
+        # searches /usr/sbin before /usr/bin, so everything resolving `tar` by NAME still
+        # gets it — dpkg-deb passes the GNU-only --warning=no-timestamp, and actions/cache
+        # and the release tarball step read GNU archives. Hence the two checks: the
+        # absolute path the code under test hardcodes must be bsdtar, and the second is
+        # deliberately a BARE `tar`, because a name lookup is the only thing that proves
+        # what those callers get.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+          sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
+          sudo mv /usr/bin/tar /usr/sbin/tar
+          sudo ln -s bsdtar /usr/bin/tar
+          /usr/bin/tar --version | grep -q '^bsdtar'
+          tar --version | grep -q 'GNU tar'
+
+      - name: Put rsync at /usr/local/bin/rsync
+        # The code under test execs the absolute path /usr/local/bin/rsync (where the
+        # appliance ships it); Debian's package installs /usr/bin/rsync, so without the
+        # symlink the issue #2667 rsync cases skip on every matrix leg while the suite
+        # still reads green -- the same trap as the bsdtar step above.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rsync
+          sudo ln -sf "$(command -v rsync)" /usr/local/bin/rsync
+          /usr/local/bin/rsync --version | grep -qi '^rsync'
+
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          # pcov drives informational coverage.
+          php-version: ${{ matrix.php-version }}
+          extensions: curl, intl, mbstring, ctype, filter
+          coverage: pcov
+          tools: composer:2.10.2
+
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPUnit (with coverage)
+        # Config in phpunit.xml. tests/php/bootstrap.php loads the real
+        # pfblockerng.inc via include shims + pfSense doubles — no live box.
+        # Single run: still gates on test failure AND prints the informational
+        # coverage text (no enforced floor yet — see issue #39 / #38; pcov drives
+        # it). NOT suffixed with `|| true` — that would mask a failing suite.
+        # --log-junit feeds the skip-allowlist gate below (issue #2359) --
+        # additive only, never changes this step's own pass/fail verdict.
+        run: vendor/bin/phpunit --coverage-text --log-junit /tmp/phpunit-junit.xml
+
+      - name: Skip allowlist
+        # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
+        # found nine PHPUnit cases silently skipped for a year). Red canary in
+        # this same run: block feeds the fixture's un-allowlistable skip through
+        # the identical command shape and requires nonzero before trusting the
+        # real report below (testing.md's red-canary rule). This job is matrixed
+        # over PHP 8.3/8.5, so the gate runs once per PHP version too.
+        run: |
+          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt /tmp/phpunit-junit.xml
+
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npx/node --test here.
+        continue-on-error: true
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+
+      - name: Run markdownlint-cli2
+        # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
+        env:
+          MARKDOWNLINT_CLI2_VERSION: 0.23.2
+        run: npx --yes "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
+
+  widget-js-tests:
+    name: Widget JS unit tests (node --test)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+
+      - name: Run the Dashboard widget JS tests
+        # Native Node JUnit keeps this dependency-free. The spec reporter preserves
+        # the existing live log while JUnit records the skip set.
+        run: |
+          command node --test --test-reporter=junit --test-reporter-destination=/tmp/widget-js-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
+          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/widget-js-junit.xml tests/js/*.test.js
+          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-junit.xml
+
+  webassets-vendor:
+    name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.19.0'
+
+      - name: Rebuild the vendor tree and diff against what's committed
+        # Node/npm are dev+CI-only (never shipped to the appliance): this
+        # re-runs scripts/build-webassets.sh from the pinned tools/webassets/
+        # source (the two Lezer grammar packages, the CodeMirror 6 + Lezer
+        # devDependency pins, and the cm-regex.js esbuild entry, all
+        # exact-pinned in package-lock.json) and fails if the committed
+        # src/usr/local/www/pfblockerng/vendor/codemirror/ tree has drifted.
+        # ubuntu-latest ships python3.
+        run: python3 scripts/check_webassets_vendor.py
+
+      - name: Lezer grammar parse tests (regexp + pfb regex-list)
+        # Generate each grammar exactly as the package pretest hooks do, then use
+        # Node's native reporters so every invocation has its own skip-set prefix.
+        run: |
+          npm --prefix tools/webassets ci --no-audit --no-fund
+          npm --prefix tools/webassets/lezer-regexp run generate
+          npm --prefix tools/webassets/lezer-pfb-regex-list run generate
+          command node --test --test-reporter=junit --test-reporter-destination=/tmp/webassets-node-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
+          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-grammar-junit.xml tools/webassets/lezer-regexp/test/parse.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-grammar-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-listgrammar-junit.xml tools/webassets/lezer-pfb-regex-list/test/parse.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-listgrammar-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-bundle-junit.xml tools/webassets/test/cm-lint.test.js tools/webassets/test/cm-regex-source.test.js tools/webassets/test/cm-hooks-source.test.js tools/webassets/test/cm-shell-source.test.js tools/webassets/test/plain-list-language.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-bundle-junit.xml
+
+  benchmarks:
+    name: Benchmark kill-gates (ReDoS + build RAM)
+    # MANUAL-ONLY (issue #76). The spikes carry their GO/NO-GO verdict in their EXIT
+    # CODE (issue #42), but the build-time/RAM number is a synthetic `build()` on a
+    # generic runner — NOT what a user experiences. So this job is OFF in the
+    # automated push/PR flow and runs only when Tests is dispatched with the
+    # `run_benchmarks` input ticked. The production-faithful build-time/RAM
+    # regression gate is being moved to the live smoke VM (timing `updatednsbl`
+    # start→finish + unbound RSS, baked synthetic fixture) — tracked in #76. The
+    # ReDoS gate stays a useful offline check here. Never in `all-tests-passed.needs`.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
+    runs-on: ubuntu-latest
+    # Job-specific timeout: the 1M-entry build spike is the slow step; bound it here
+    # rather than touching any shared/default timeout.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the benchmark environment
+        # pympler drives the retained-bytes/entry RAM gate in spike_adr06_build.py;
+        # without it that gate is skipped (treated as PASS). The `bench` dependency
+        # group in pyproject.toml pins that set and --locked resolves it against the
+        # committed uv.lock, so its pins govern resolution (#1337).
+        run: uv sync --locked --group bench
+
+      - name: ReDoS / regex-latency kill-gate
+        # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
+        # first-hit). No `|| true` — the exit code IS the gate.
+        run: uv run --group bench python legacy/benchmarks/spike_adr07_regex.py
+
+      - name: Build init-time / peak-RAM kill-gate
+        # Non-zero exit on NO-GO (build seconds / retained B/entry) at the default
+        # 1M-entry un-pruned corpus.
+        run: uv run --group bench python legacy/benchmarks/spike_adr06_build.py
+
+  # ── ADR-14 UI suite (opt-in PR gate, label-gated) ────────────────────────
+  # PURE-LABEL model: the live-VM UI suite (render + functional + browser) runs,
+  # and BLOCKS the PR, ONLY when the PR carries the `ui-tests` label — there is no
+  # automatic per-PR run. Add the label to a WebUI-affecting PR to get the full UI
+  # check before merge; remove it to drop the gate. (Devel also gets a daily
+  # backstop run via ui-tests.yml's own schedule, so a forgotten label is caught
+  # within a day.) `tier: all` -> one re-runnable job per (tier × version).
+  #
+  # Blocking is via the "All tests passed" aggregate fold below (skipped == pass
+  # when unlabeled; a labeled failure blocks) — GitHub branch protection can't
+  # require a check conditionally-by-label, so this is how a label gates a merge.
+  #
+  # FUTURE: auto-run + block Tier A (render) on PHP/JS PRs without a label, once
+  # its reliability/speed warrant it — tracked as a follow-up issue.
+  ui-suite:
+    name: UI fan-out (all CI legs, live pfSense VM)
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ui-tests')
+    uses: ./.github/workflows/ui-tests.yml
+    with:
+      tier: all
+      # Explicit on purpose (issue #906): a reusable-workflow callee sees the
+      # CALLER's event (pull_request here), so without this the scope ladder
+      # resolved `impacted` — min-CE leg + changed-UI-modules only — silently
+      # shrinking the labeled gate. The label opts into the FULL fan-out.
+      scope: full
+    secrets: inherit
+
+  # ── Coverage-pairing gate (issue #921) ───────────────────────────────────
+  # PR-only: diffs the PR head against its base and enforces src<->tests and
+  # www<->ui-tests pairing (scripts/check_coverage_pairing.py). On push (post-
+  # merge, no PR base) it is skipped and folds into all-tests-passed as a pass,
+  # same shape as the ui-suite label fold below.
+  coverage-pairing:
+    name: Coverage pairing (src/tests + www/ui)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Job-level override (replaces the workflow-level set entirely): the live
+    # label/body reads need issues+pull-requests read, which the workflow-level
+    # contents+packages grant forces to none (issue #969).
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
+
+      - name: Compute changed files vs base
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
+          # Status + NUL preserve deletions, both rename sides, and exact path bytes.
+          git diff --name-status -z --find-renames "origin/$BASE...HEAD" > changed.txt
+          echo "Changed status/path fields vs origin/$BASE:"; tr '\0' '\n' < changed.txt
+
+      - name: Enforce src<->tests and www<->ui coverage pairing
+        # ubuntu-latest ships python3. --warn-only downgrades a violation to a
+        # visible warning when the PR carries the no-test-needed label.
+        # `pipefail` is REQUIRED here: a step with no `shell:` keyword runs under
+        # `bash -e {0}` (the default template — NOT `-o pipefail`), so without it
+        # the tee's exit 0 would mask the script's exit 1 and this gate would
+        # silently always pass. Setting it explicitly makes the exit code of the
+        # script (not tee) decide the job result — and the red canary below pins
+        # that on every run (CLAUDE.md "CI-gate wiring proves its red path in-job").
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Red canary 1: a release-plane change with no shipped test must fail
+          # through the same `| tee` pipeline as the real run.
+          echo "Red canary: the two FAILED outputs below are expected."
+          if printf "M\0scripts/canary.py\0" | python3 scripts/check_coverage_pairing.py --name-status-z | tee /dev/null; then
+            echo "::error::coverage-pairing red canary failed: release-plane code without a test passed"
+            exit 1
+          fi
+          # Red canary 2: a shipped test whose recorded RED hash differs from its
+          # current blob must fail before the live PR body is trusted.
+          cat > frozen-red-canary-body.txt <<'EOF'
+          | Frozen RED test | git hash-object | RED run tail |
+          | --- | --- | --- |
+          | `tests/test_coverage_pairing_check.py` | `0000000000000000000000000000000000000000` | `FAILED planted hash offence` |
+          EOF
+          if printf "M\0scripts/canary.py\0M\0tests/test_coverage_pairing_check.py\0" | python3 scripts/check_coverage_pairing.py --name-status-z --pr-body-file frozen-red-canary-body.txt | tee /dev/null; then
+            echo "::error::coverage-pairing red canary failed: mismatched frozen-RED hash passed"
+            exit 1
+          fi
+          # LIVE label + body read — never the trigger-time event payload. A
+          # payload read breaks the escape hatch twice over (issue #969): a
+          # manual re-run reuses the stale payload, and the `labeled`-event run
+          # snapshots the body BEFORE the justification edit when the label is
+          # applied first. A failed fetch is reported loudly and leaves
+          # WARN_ONLY/body empty = strict mode: an API failure tightens the
+          # gate, never skips it. Label/body content is attacker-influenced but
+          # only ever flows into grep/a file redirect — never eval'd.
+          WARN_ONLY=''
+          if labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUM}/labels" --jq '.[].name'); then
+            if printf '%s\n' "$labels" | grep -qx 'no-test-needed'; then
+              WARN_ONLY=1
+            fi
+          else
+            echo "::warning::coverage-pairing: label fetch failed — strict mode, the no-test-needed escape is unavailable this run"
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" --jq '.body // ""' > pr_body.txt; then
+            echo "::warning::coverage-pairing: PR body fetch failed — strict mode"
+            : > pr_body.txt
+          fi
+          # Escape-hatch justification (issue #921's "applied deliberately" constraint,
+          # enforced per #934): with the no-test-needed label set, the PR body is
+          # handed to the script (--pr-body-file), which requires a line starting
+          # `no-test-needed: <why>` — else it FAILS instead of downgrading. The
+          # decision logic lives in the tested script, not in shell (mid-sentence
+          # mentions and blockquotes must not count; pinned by its unit tests).
+          python3 scripts/check_coverage_pairing.py --name-status-z ${WARN_ONLY:+--warn-only} --pr-body-file pr_body.txt < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── Comment-narration gate (CLAUDE.md "Comments — constraint, not narration") ──
+  # PR-only, diff-scoped: judges only the lines this PR ADDS under src/ + scripts/,
+  # so the pre-existing narration is grandfathered until its cleanup lands. Forbids
+  # ADR phase numbers, RESULTS/ handoff refs, and review archaeology in new
+  # comments — that evidence belongs in the ADR / handoff / PR body. On push
+  # (post-merge, no PR base) it is skipped and folds into all-tests-passed as a
+  # pass, same shape as coverage-pairing above.
+  comment-narration:
+    name: Comment narration (no process narration in new comments)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
+
+      - name: Forbid process narration in added comments
+        # ubuntu-latest ships python3. Escape a genuine need inline with
+        # `# narration-ok: <reason>`.
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
+          python3 scripts/check_comment_narration.py --diff "origin/$BASE"
+
+  # Single stable job name for branch-protection required-status-checks.
+  # Must use if: always() so it runs (and fails) even when 'test' fails.
+  all-tests-passed:
+    name: All tests passed
+    if: always()
+    # NOTE: `benchmarks` is intentionally absent while it is informational-only
+    # (issue #42). Add it here + a result check below to make the kill-gates
+    # required once their on-runner baseline is stable.
+    # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
+    # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
+    # blocks here — that is how the opt-in label gates a merge.
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix results
+        run: |
+          if [ "${{ needs.read-matrix.result }}" != "success" ]; then
+            echo "Reading the supported-version matrix failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "One or more Python test jobs failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.test-typing.result }}" != "success" ]; then
+            echo "Test type checking (mypy) failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.ruff.result }}" != "success" ]; then
+            echo "Ruff lint/format check failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.shellcheck.result }}" != "success" ]; then
+            echo "ShellCheck failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.actionlint.result }}" != "success" ]; then
+            echo "actionlint (workflow files) failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.shell-tests.result }}" != "success" ]; then
+            echo "shellspec shell tests failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-syntax.result }}" != "success" ]; then
+            echo "PHP syntax check failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-static-analysis.result }}" != "success" ]; then
+            echo "PHPStan static analysis failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-codesniffer.result }}" != "success" ]; then
+            echo "PHPCS PFBL-01 RequirePfbFilter sniff failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.php-unit.result }}" != "success" ]; then
+            echo "PHPUnit unit tests failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.markdownlint.result }}" != "success" ]; then
+            echo "markdownlint failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.widget-js-tests.result }}" != "success" ]; then
+            echo "Widget JS unit tests (node --test) failed or were cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.webassets-vendor.result }}" != "success" ]; then
+            echo "Webassets vendor drift guard (CodeMirror 6 + Lezer) failed or was cancelled."
+            exit 1
+          fi
+          # ADR-14 UI suite (label-gated): 'skipped' (unlabeled PR / push) is a
+          # PASS; only a `ui-tests`-labeled PR whose live-VM UI suite actually
+          # FAILED (or was cancelled) blocks the merge.
+          case "${{ needs.ui-suite.result }}" in
+            success|skipped) ;;
+            *) echo "Labeled UI suite (ui-tests) failed or was cancelled."; exit 1 ;;
+          esac
+          # Coverage-pairing gate (issue #921): 'skipped' (push, no PR base) is a
+          # PASS; a PR whose src<->tests / www<->ui-tests pairing actually FAILED
+          # (or was cancelled) blocks the merge, unless the no-test-needed label
+          # already downgraded it to a warning (job still reports success).
+          case "${{ needs.coverage-pairing.result }}" in
+            success|skipped) ;;
+            *) echo "Coverage-pairing gate (src/tests, www/ui) failed or was cancelled."; exit 1 ;;
+          esac
+          # Comment-narration gate: 'skipped' (push, no PR base) is a PASS; a PR
+          # that ADDS process-narration comments (Phase N, RESULTS/, review
+          # archaeology) blocks here.
+          case "${{ needs.comment-narration.result }}" in
+            success|skipped) ;;
+            *) echo "Comment-narration gate (no process narration in new comments) failed or was cancelled."; exit 1 ;;
+          esac

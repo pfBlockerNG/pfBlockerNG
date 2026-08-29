@@ -1,0 +1,66 @@
+================================================================================
+PHASE 2 PROMPT — Engine: DNS resolution chain (pfb_diag_resolve)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 2 creates the
+diagnostics engine file and the DNS resolution function. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+Triangulation starts from the resolution chain: A/AAAA + every CNAME. On-demand lookups for
+user input are an abuse surface, so input validation + depth/timeout bounds are part of the
+function, not an afterthought.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/01_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 resolve row, SS2.2 contract).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_ss_resolve_target (~5467) and the drill
+  / pfb['extdns'] usage around it (~2125 for the extdns assignment); pfb_filter
+  PFB_FILTER_DOMAIN usage.
+- docs/misc/external-process-waits.md — MANDATORY before writing the timeout mechanics
+  (FreeBSD timeout(1) is a process reaper by default).
+- CLAUDE.md — PHP standards, PFBL-01 (validate before exec), Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Create src/usr/local/pkg/pfblockerng/pfblockerng_diagnostics.inc with the standard header +
+   global $pfb. Define the report data structure (input type/parsed input, resolution chain,
+   final IPs v4/v6, dnsbl matches, ip matches, classification, explanation) + match-type
+   constants.
+2. pfb_diag_resolve($domain): validate the domain (pfb_filter PFB_FILTER_DOMAIN) BEFORE any
+   shell; resolve A/AAAA + follow the CNAME chain iteratively with a depth limit (~10) and a
+   timeout, reusing the drill/extdns pattern. Return { steps[], final_ips{v4,v6}, cname_chain[] }.
+3. Tests (PHPUnit): feed fixture drill outputs -> chain + final IPs; depth-limit + loop guard
+   (a CNAME loop terminates); malformed/empty domain rejected BEFORE shell (assert no command
+   composed); add pfb_diag_resolve (and the new file's input fns) to PHPCS scopeFunctions.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- READ-ONLY: no config writes, no cache writes.
+- Validate before shell (PFBL-01); never interpolate unvalidated input into drill.
+- Unbound chroot: do not re-derive resolver paths; use the existing resolve helper/pattern.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean (incl. PFBL-01).
+- python -m pytest -> green.
+- diff-read: new file additive; engine read-only.
+
+EXPECTED RESULT
+The diagnostics engine file exists; pfb_diag_resolve returns a bounded, validated resolution
+chain.
+
+COMMIT (single)
+    pfblockerng: add diagnostics engine + DNS resolution chain (ADR-34 P2)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/02_Results.txt (plain .txt)
+Record: the report structure + constants; pfb_diag_resolve signature + the bounds (depth/
+timeout); the scopeFunctions additions; verification numbers; go-ahead for Phase 3.

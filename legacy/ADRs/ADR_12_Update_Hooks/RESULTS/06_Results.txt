@@ -1,0 +1,232 @@
+ADR-12 PHASE 6 RESULTS — Populate PFB_CHANGED_IP_ALIASES + PFB_CHANGED_DNSBL_GROUPS
+==================================================================================
+
+STATUS: DONE. The single reserved-placeholder PFB_CHANGED_ALIASES is SPLIT BY SIDE
+into TWO post-only env vars, because DNSBL groups are not firewall aliases:
+  - PFB_CHANGED_IP_ALIASES   = space-separated pfB_*_v4/_v6 IP firewall aliases updated
+                               this pass (the RENAME of the old PFB_CHANGED_ALIASES).
+  - PFB_CHANGED_DNSBL_GROUPS = space-separated DNSBL_<group> groups updated this pass.
+Each is sourced from the signal the pass already computes (Reputation-mode-independent,
+NOT a byte-level diff, NOT the rep-inflated $final_alias). Additive no-op preserved.
+The two booleans PFB_IP_CHANGED / PFB_DNSBL_CHANGED are UNCHANGED; PFB_STATUS stays the
+sole reserved 'ok' placeholder; PFB_TRIGGER / PFB_WHEN unchanged.
+
+Files changed (single commit):
+  - src/usr/local/pkg/pfblockerng/pfblockerng.inc            (two accumulator inits,
+        DNSBL seam append into the DNSBL accumulator, IP merge + two ctx keys + comments)
+  - src/usr/local/www/pfblockerng/pfblockerng.php            (synthetic runhooks test
+        path -- NOT the live ctx; both keys stay '' because no pass runs)
+  - src/usr/local/www/pfblockerng/pfblockerng_hooks.php      (UI help: two lines)
+  - README.md, CLAUDE.md, .ADRs/ADR_12_Update_Hooks/ADR.md, 06_Populate_Changed_Aliases.txt
+                                                             (env-var docs + the prompt)
+  - tests/smoke/test_smoke_hooks.py, tests/smoke/helpers.py  (two-var smoke case + ctx
+        test flipped to assert both keys; helper comments)
+  - tests/php/DnsblAliasUpdateChangedTest.php                (PHPUnit, 4 tests, renamed
+        accumulator)
+
+
+1. THE TWO ACCUMULATORS — where declared
+----------------------------------------
+$pfb['changed_ip_aliases'] = array();  and  $pfb['changed_dnsbl_groups'] = array();
+BOTH initialised together at the TOP of sync_package_pfblockerng (pfblockerng.inc,
+immediately after $pfb['filter_configure'] = FALSE, ~:7739) so each is ALWAYS defined
+at the post hook, even on a pass that processes nothing. Each is the single source its
+post ctx key reads. They live in $pfb (global), so the DNSBL seam (which uses
+`global $pfb`) appends to the SAME changed_dnsbl_groups accumulator the post fire reads.
+
+
+2. IP SOURCE USED + REP-MODE VERIFICATION
+-----------------------------------------
+SOURCE = $pfb_alias_lists (the genuinely-UPDATED set), NOT $final_alias.
+
+Rep-mode verification (read each population site): $pfb_alias_lists[] is appended ONLY
+inside per-feed "changed"/"removed" branches and is rep-mode-INDEPENDENT:
+  - :8311  alias removed (SKIP-list purge), inside `if ($pfb['enable']=='on' && ...)`
+  - :9905  continent table empty-and-recopied; :9931 continent MD5 changed
+  - :10583 IP feed updated (the main per-feed "Changes found... Updating" branch)
+Each of these ALSO appends to $pfb_alias_lists_all, but $pfb_alias_lists_all is the
+REPUTATION set (all active aliases). The post-fire `$final_alias` is built FROM
+$pfb_alias_lists_all under rep mode (array_intersect with active aliases) => it inflates
+to all active aliases when rep is on, and the no-rule branch's $final_alias is guarded
+by `if (!$pfb['save'])` => unreliable at the hook. So $final_alias was correctly
+REJECTED; $pfb_alias_lists is the honest cheap signal.
+
+WIRING: $pfb_alias_lists is a LOCAL of sync_package_pfblockerng, in scope only at the
+closing tail, so it is merged into $pfb['changed_ip_aliases'] right before the post fire
+(guarded `if (!empty($pfb_alias_lists) && is_array(...))`). Names are already
+pfB_<aliasname>_v4/_v6.
+
+
+3. DNSBL RECORDING POINT + 'update' CALLERS COUNTED
+---------------------------------------------------
+RECORDING POINT = inside dnsbl_alias_update() (def :2167), at the END of the
+`$mode == 'update'` block: `$pfb['changed_dnsbl_groups'][] = $alias;` (guarded by
+isset()+is_array() so a caller outside the pass is a no-op, never a fatal). This
+CENTRALISES every 'update' caller — recording $alias (always "DNSBL_<group>") into the
+DNSBL accumulator only (groups never reach the IP var).
+
+All FIVE 'update' callers counted, each confirmed change-gated:
+  - :9509  per-group feed loop — gated by `if ($pfb['aliasupdate'] && !$pfb['dnsbl_tld'])`
+           ($pfb['aliasupdate'] = the per-list "this list changed" flag).
+  - :4054  TLD-finalize loop — gated by `if (!empty($pfb['tld_update']))`, and
+           $pfb['tld_update'][$alias] is populated only under the same $pfb['aliasupdate']
+           gate => fires only for TLD groups that changed.
+  - :9542  DNSBL_IDN  — under `if ($pfb['dnsbl_idn'] == 'on')` (feature rebuilt).
+  - :9556  DNSBL_TLD_Allow — under `if ($pfb['dnsbl_pytld'] == 'on')`.
+  - :9583  DNSBL_Regex — under `if ($pfb['dnsbl_regex']=='on' || py-admitted regex>0)`.
+The three specials rebuild when their feature is enabled — acceptable as "updated this
+pass"; none fires unconditionally every pass. The 'disabled' mode records NOTHING
+(a disabled alias is not an update).
+
+
+4. THE TWO CTX WIRING KEYS + SITE(S)
+------------------------------------
+LIVE site (the only real one): pfblockerng.inc post fire (~:11637), the array passed to
+pfb_run_hooks('post', ...):
+  'CHANGED_IP_ALIASES'   => implode(' ', array_unique($pfb['changed_ip_aliases']))
+  'CHANGED_DNSBL_GROUPS' => implode(' ', array_unique($pfb['changed_dnsbl_groups']))
+Each de-duped via array_unique. 'STATUS' => 'ok' left as-is. The runner builds env vars
+as `'PFB_' . strtoupper($name) . '=' . escapeshellarg($value)` (pfb_run_hooks ~:1825),
+so these two keys yield exactly PFB_CHANGED_IP_ALIASES / PFB_CHANGED_DNSBL_GROUPS.
+
+SECOND ctx site (pfblockerng.php:~87, the `runhooks <pre|post>` MANUAL test path): this
+is NOT the live update ctx — it does not run sync_package_pfblockerng, so nothing is
+updated and there are no accumulators to read. Its post keys are FIXED SYNTHETIC values
+for exercising the runner without a pass. Both CHANGED_IP_ALIASES and CHANGED_DNSBL_GROUPS
+left => '' (correct: no update performed); a comment documents that the live, populated
+values are built only in pfblockerng.inc's tail. Both sites are consistent and documented.
+
+
+5. UI / README / CLAUDE / ADR / PROMPT EDITS
+--------------------------------------------
+- pfblockerng_hooks.php (~:221): the single changed-alias help line replaced by TWO:
+  PFB_CHANGED_IP_ALIASES ("space-separated list of IP firewall aliases (pfB_*) updated
+  this pass; empty when none") and PFB_CHANGED_DNSBL_GROUPS ("space-separated list of
+  DNSBL groups (DNSBL_*) updated this pass; empty when none"). PFB_STATUS help line
+  LEFT unchanged (still "reserved for future use").
+- README.md (~:385): the single env-var table row split into TWO rows (IP aliases +
+  DNSBL groups); prose updated to name both vars; PFB_STATUS kept as the reserved
+  placeholder.
+- CLAUDE.md: the env-var contract sentence now names both new vars; PFB_STATUS is the
+  sole remaining stable reserved placeholder.
+- ADR.md: §2 context row, §4 req 3, the Phase 2 wiring bullet, the §6 Phase 6 heading +
+  description, the §7 shipped-contract note, and the §7 DoD manual-smoke checklist item
+  all reference the two split vars.
+- 06_Populate_Changed_Aliases.txt: the phase prompt rewritten to the final two-var
+  design (title, role, decision, action plan, tests, expected result, commit message).
+
+
+6. TESTS ADDED (branch coverage + before/after, both required)
+--------------------------------------------------------------
+PHPUnit — tests/php/DnsblAliasUpdateChangedTest.php (4 tests; the DNSBL recording SEAM
+dnsbl_alias_update() IS a standalone function and is pinned here; the IP merge + final
+implode/array_unique live inside sync_package_pfblockerng and are NOT unit-reachable
+off-appliance, so they ride the live smoke below):
+  - testUpdateModeRecordsGroupWithBeforeState: asserts $pfb['changed_dnsbl_groups'] EMPTY
+    before, then 'update' => ['DNSBL_ads'] (before/after transition).
+  - testDisabledModeRecordsNothing: the OFF branch — 'disabled' records nothing.
+  - testMultipleUpdatesAccumulateInOrder: three 'update' calls fold in call order.
+  - testUpdateIsToleratedWhenAccumulatorUnset: guarded no-op when key unset (no fatal).
+
+Smoke — tests/smoke/test_smoke_hooks.py:
+  - test_hooks_changed_aliases_ip_and_dnsbl: BEFORE = a second update over the SAME,
+    unchanged IP+DNSBL feeds => BOTH PFB_CHANGED_IP_ALIASES and PFB_CHANGED_DNSBL_GROUPS
+    present-and-EMPTY (the no-op/empty branch, hook enabled); AFTER = rewrite BOTH feeds
+    => the updated IP table pfB_smokehookchgip_v4 appears in PFB_CHANGED_IP_ALIASES and
+    the DNSBL group DNSBL_smokehookchgd in PFB_CHANGED_DNSBL_GROUPS (each on its own var).
+    The empty-first-then-populated ordering proves the feed change CAUSED the report.
+  - test_hooks_pre_and_post_fire_with_context: this case injects an IpCase feed and runs
+    `updateip` (IP-only), which re-processes the feed => PFB_CHANGED_IP_ALIASES contains
+    pfB_smokehookctx_v4 (asserted present) while PFB_CHANGED_DNSBL_GROUPS is
+    present-and-EMPTY (asserted — the DNSBL side's empty branch under an IP-only reload).
+  - Module docstring "WHAT THIS FILE AUTOMATES" + the helpers.py ctx-set comment updated
+    to the two-var names.
+  test_hooks_noop_no_marker (no hook at all => marker ABSENT) remains the no-hook OFF
+  branch.
+
+
+7. ADDITIVE NO-OP CONFIRMATION
+------------------------------
+With no enabled 'post' hook, pfb_run_hooks('post', ...) returns at its
+`if (empty($hooks))` guard BEFORE touching the environment => byte-identical pass.
+The new statements are: (a) the two accumulator inits (new $pfb keys, read only by the
+post ctx); (b) the DNSBL seam append (mutates only changed_dnsbl_groups, guarded); (c)
+the IP array_merge (pure local op on changed_ip_aliases); (d) the two implode/array_unique
+inside the ctx ARRAY ARGUMENT passed to pfb_run_hooks (built but never consumed when
+hooks are empty). No existing update/reload/filter_configure logic was changed, moved, or
+duplicated. php -l / PHPStan / PHPUnit / pytest all green.
+
+
+8. PFB_STATUS / BOOLEANS
+------------------------
+PFB_STATUS UNTOUCHED — still 'ok' at the post fire and described as the SOLE remaining
+stable reserved placeholder in the UI help, README, CLAUDE.md, and ADR. The two booleans
+PFB_IP_CHANGED / PFB_DNSBL_CHANGED are UNCHANGED. PFB_TRIGGER / PFB_WHEN unchanged. No
+pass-wide ok/partial/error accumulator was invented (out of scope).
+
+
+9. GREP — ZERO STALE OLD-NAME REFERENCES
+----------------------------------------
+A worktree grep for `CHANGED_ALIASES` / `changed_aliases` (the old single name) finds NO
+stale reference in live code/tests/UI/README/CLAUDE/ADR.md. Remaining hits are
+intentional: the prior-phase frozen handoffs (RESULTS/01-05, prompts 02/03) describe what
+phases 1-5 shipped (the single placeholder) and are historically accurate; this phase's
+prompt deliberately names "the old PFB_CHANGED_ALIASES" when describing the rename; the
+smoke test function NAME test_hooks_changed_aliases_ip_and_dnsbl is a generic descriptor
+(not an env-var reference).
+
+
+10. GATE RESULTS
+----------------
+  python -m pytest                 PASS  (unchanged; smoke deselected as usual)
+  ruff check . / ruff format        PASS  (All checks passed)
+  php -l (inc / php / hooks.php)    PASS  (only the pre-existing pfb_unlock E_DEPRECATED)
+  PHPStan (--memory-limit=1G)       PASS  ([OK] No errors)
+  PHPUnit (full)                    PASS  (4 Phase-6 tests among them)
+  smoke collect (test_smoke_hooks)  PASS  (8 tests collected)
+  markdownlint-cli2                 PASS  (0 error(s))
+  ShellCheck                        N/A   (no shell file touched)
+
+
+11. POST-MERGE CORRECTION (DNSBL per-group seam + webhook guard)
+----------------------------------------------------------------
+A live smoke run after #114 merged caught two real defects; the maintainer chose the
+full fix (new commit on top, not an amend):
+
+A) DNSBL RECORDING POINT WAS WRONG (over-recorded). Section 3 above recorded the group
+   from INSIDE dnsbl_alias_update() on $mode=='update'. That swept in the three
+   always-rebuilt specials (DNSBL_IDN/DNSBL_TLD_Allow/DNSBL_Regex), whose 'update' calls
+   (inc:~9572/:9586/:9613) are gated on the FEATURE being on — NOT on a change — so they
+   produced PFB_CHANGED_DNSBL_GROUPS noise on every pass that has any of those features
+   enabled. (Section 3's claim "none fires unconditionally" missed that "feature on" is
+   not "changed".) FIX: removed the in-function append; ADDED the recording at the
+   per-group feed-loop site where $pfb['aliasupdate'] is final for the group, BEFORE the
+   TLD/non-TLD routing split, so it covers BOTH modes and records ONLY groups whose feed
+   was genuinely (re)parsed (aliasupdate TRUE; FALSE on file-reuse). The specials, added
+   OUTSIDE that loop, are now naturally EXCLUDED. De-dup at emit (array_unique) unchanged.
+   New PHPUnit (DnsblAliasUpdateChangedTest) pins that dnsbl_alias_update() no longer
+   touches the accumulator (both modes + specials + preserve-existing).
+
+B) WEBHOOK GUARD SEMANTIC MISMATCH. PFB_IP_CHANGED = $pfb['filter_configure'], set TRUE
+   only on a RULE change (inc:~11241). A pure alias-CONTENT change takes the else-branch
+   (inc:~11277) that `pfctl -T replace`s the table WITHOUT setting filter_configure — so
+   PFB_IP_CHANGED=0 on a content-only change even though PFB_CHANGED_IP_ALIASES IS
+   populated and the table changed. A webhook guarded on `[ "$PFB_IP_CHANGED" = 1 ]`
+   therefore MISSES the content-only reload — the exact case it wants. FIX (docs + smoke
+   recipe helper): the data-changed guard is a NON-EMPTY changed list,
+   `[ -n "$PFB_CHANGED_IP_ALIASES" ]` (resp. PFB_CHANGED_DNSBL_GROUPS). The HAProxy recipe
+   still guards on PFB_IP_CHANGED on purpose (it reloads only when rules change).
+
+C) SMOKE TESTS FORCE A GENUINE CHANGE. The earlier tests changed feed CONTENT but hit the
+   reuse-cache gate (DNSBL inc:~8917, IP inc:~10211 — even on a full `update`, $pfbreuse
+   is empty so an unchanged-on-disk feed is reused), so the feed was NOT re-parsed and
+   neither changed list was populated. The tests now touch the feed's `.update` marker
+   (force_dnsbl_refetch / the new force_ip_refetch) to force the re-parse fork, and assert
+   the specials are excluded and the PFB_IP_CHANGED-vs-PFB_CHANGED_IP_ALIASES distinction
+   (content-only IP change ⇒ PFB_IP_CHANGED=0 but PFB_CHANGED_IP_ALIASES populated).
+
+D) ABP MODULE ISOLATION. test_smoke_abp enabled pfb_regex/pfb_regex_list (+cap/cname) and
+   never cleared them; inject() MERGES the DNSBL-settings node and reset() doesn't clear
+   it, so those toggles bled into later modules (rebuilding DNSBL_Regex / flipping
+   PFB_DNSBL_CHANGED). Added a module finalizer (clear_dnsbl_settings) that deletes the
+   DNSBL-settings node on ABP teardown.

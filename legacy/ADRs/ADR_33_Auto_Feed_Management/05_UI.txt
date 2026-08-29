@@ -1,0 +1,63 @@
+================================================================================
+PHASE 5 PROMPT — UI: mode selector + "Recheck Feeds" + change review
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS2, SS4 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 5 adds the UI for
+the mode + manual recheck + change review. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+Phases 3-4 made the engine config-driven. Admins need to pick the mode, trigger a manual
+recheck, and SEE what was proposed (notify) or applied (auto).
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_33_Auto_Feed_Management/RESULTS/04_Results.txt AND 03_Results.txt. If
+  missing, STOP and report.
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md
+- src/usr/local/www/pfblockerng/ — the feeds / general settings page that should host the mode
+  selector + recheck action; the menu/tab wiring; pfblockerng.inc page deciders for extractable
+  logic.
+- tests/smoke/ui/ test_render_smoke.py (ADR-14 Tier A); tests/php/ for an extracted decider.
+- CLAUDE.md — Naming (pfb_*/element ids), PHP standards, Web UI help text, Smoke (ui_render).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Add the pfb_feed_mgmt_mode selector (Off/Notify/Auto) reading/writing via PfbConfig; help text
+   per neighbours explaining each mode + that custom feeds are never touched and discontinued
+   feeds are disabled (not deleted).
+2. Add a "Recheck Feeds" action that calls the Phase-4 orchestrator and renders the change
+   list (proposed for notify; applied for auto) in a clean review panel.
+3. Extract any non-trivial save/validate/render logic into a pure decider in pfblockerng.inc
+   (testable off-appliance). Validate inputs server-side (PFBL-01).
+4. Tests: PHPUnit for the extracted decider (each mode; empty vs non-empty change list);
+   ADR-14 ui_render for the page (200; no Fatal/Parse/Warning/Notice/Uncaught; marker present;
+   no new php_error.log line).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Registered key via PfbConfig only; new save fn -> PFBL-01 validator + PHPCS scopeFunctions.
+- ui_render asserts MORE than HTTP 200.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean.
+- python -m pytest -> green.
+- ADR-14 ui_render green (SMOKE_ADMIN_PASSWORD set; else SKIP).
+
+EXPECTED RESULT
+Admins can set the mode, run a manual recheck, and review proposed/applied changes; page
+renders clean.
+
+COMMIT (single)
+    pfblockerng: add auto-feed-management UI + recheck action (ADR-33 P5)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/05_Results.txt (plain .txt)
+Record: the page file(s) + element ids; the extracted decider; the ui_render marker; how the
+change list renders; verification numbers; go-ahead for Phase 6.

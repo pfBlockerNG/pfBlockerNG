@@ -1,0 +1,67 @@
+# ADR-23 Phase 1 Results — Wizard XML + .inc (handoff to Phase 2)
+
+## Scope delivered
+Wired ADR-13 `pfb_dnsvip_auto` auto-VIP toggle into the setup wizard (step 4 / step3-temp
+config). Two files changed; ADR-13 engine in pfblockerng.inc untouched.
+
+## Final changed hunks (post-rebase line numbers — re-verify if devel moved)
+
+### src/usr/local/www/wizards/pfblockerng_wizard.inc
+- step3_submitphpaction(): lines ~114–126
+  VIP-validation block now gated on `$pfb_auto = isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on'`;
+  pfb_validate_vips() + the 'none'->'' normalisation run ONLY when auto is OFF.
+- step4_submitphpaction(): lines ~168–173
+  Persists `pfb_dnsvip_auto` (=> 'on' | '') always; writes pfb_dnsvip4/pfb_dnsvip6 from
+  step3 config ONLY when auto is OFF. Var named $pfb_auto_wiz (no shadow).
+
+### src/usr/local/www/wizards/pfblockerng_wizard.xml  (step id=4)
+- line 252: <description> rewritten to choice framing (Create VIPs automatically vs manual VIP).
+- lines 258–265: NEW pfb_dnsvip_auto checkbox field (displayname "Auto VIP", bound to
+  pfblockerng_wizard->step3->pfb_dnsvip_auto, HA/CARP disclaimer + 10.10.X.53 / fd00:X::53
+  help), inserted after the "DNSBL Webserver Configuration" listtopic, before pfb_dnsvip4.
+- line 272: pfb_dnsvip4 <description> + " (manual mode only — ignored when Auto VIP is enabled)".
+- line 282: pfb_dnsvip6 <description> + same suffix.
+
+## step4_submitphpaction() testability verdict: NOT-WITHOUT-REFACTOR
+
+bootstrap.php loads the REAL pfblockerng.inc only — it does NOT include
+pfblockerng_wizard.inc, so the wizard fns are absent from the PHPUnit suite as-is. Even after
+manually including the wizard .inc, step4_submitphpaction() is NOT directly exercisable under
+the current tests/php/ doubles. Blockers found by reading it end-to-end:
+
+1. HARD EXIT at the tail: `header("Location: .../pfblockerng_update.php?wizard=reload"); exit;`
+   — `exit` terminates the PHPUnit process. (pfb_wizard_skip_check() at the top is SAFE — with
+   no `skip` in $_POST, pfb_wizard_skip_action() returns null and it just returns; it would
+   only header()+exit if $_POST['skip'] were set.)
+2. Early hard return needs a feeds DB: `json_decode(@file_get_contents($pfb['feeds']))`; absent
+   a valid feeds JSON fixture at $pfb['feeds'] it returns early with an input_error before any
+   persistence runs — must seed a feeds fixture + point $pfb['feeds'] at it.
+3. Undoubled pfSense calls reached before the exit: services_unbound_configure(),
+   system_resolvconf_generate(), system_dhcpleases_configure() — NONE in pfsense_doubles.php
+   (only config_get_path + write_config are doubled there). is_port() (step3) also undoubled.
+   pfb_remove_config_settings / pfb_clear_contents / pfb_global / pfb_unbound_dnsbl are real
+   (in pfblockerng.inc) and would run with live side effects.
+
+### Phase 2 recommendation (Part B vs fallback)
+Take the FALLBACK, not Part B's direct step4 invocation. Two clean options:
+
+- PREFERRED: test the decision PREDICATE in isolation. The auto gate is the pure expression
+  `config_get_path('pfblockerng_wizard/step3/pfb_dnsvip_auto') == 'on'` (step4) and
+  `isset($_POST['pfb_dnsvip_auto']) && $_POST['pfb_dnsvip_auto'] == 'on'` (step3). Pin branch
+  coverage via a tiny extracted helper OR by asserting config_get_path/$_POST inputs map to the
+  on/off branch — values: 'on'->true ; absent/''/'0'->false. Mirrors ADR.md §4.3 "Decision
+  predicate" bullet, which itself flags step4 as "if testable under bootstrap doubles".
+- IF full step4 persistence-shape coverage is required: it needs a refactor — extract the
+  config-mutation block (the `$new_config[...]['pfblockerngdnsblsettings'][0][...]` writes +
+  the auto gate) into a pure helper returning the array, callable without header()/exit/feeds/
+  unbound. That is a src/ change (engine-adjacent) -> its own ADR phase/PR, out of Phase-1 scope.
+
+## Gate results
+- php -l pfblockerng_wizard.inc : No syntax errors detected.
+- xmllint --noout pfblockerng_wizard.xml : OK (well-formed).
+- vendor/bin/phpunit : OK (295 tests, 580 assertions) — unchanged count, no regression.
+- python -m pytest -q : 1480 passed — no regression.
+- ruff check . : All checks passed.
+
+(PHPStan/PHPCS not run locally — vendor lacks them in this env; CI is the gate. The wizard
+.inc adds no new un-stubbed pfSense call: only isset/config_get_path, both already known.)

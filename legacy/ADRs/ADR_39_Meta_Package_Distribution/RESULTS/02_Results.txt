@@ -1,0 +1,224 @@
+ADR-39 Phase 2 Results — add-repo.sh resolved conf + self-heal rc.d hook
+=========================================================================
+
+Status: COMPLETE — all verification gates green; ready for Phase 3.
+
+Commit: see post-push SHA below (branch adr/39-meta-package-distribution).
+Repo:   pfBlockerNG/pfBlockerNG  branch adr/39-meta-package-distribution
+
+
+## 1. URL shape (load-bearing facts — no deviation)
+
+Base:    https://pfblockerng.github.io/pkg
+Pattern: <base>/<channel>/<varver>/<arch>
+
+channel = "release" (default) | "nightly" (--nightly flag)
+varver  = pfb_detect_varver() from detect_variant.sh (e.g. "ce-2.8", "plus-26.03")
+arch    = pfb_detect_arch()   from detect_variant.sh (e.g. "amd64", "aarch64")
+
+NO ${ABI} token anywhere in the emitted conf. NO Cloudflare Worker URL.
+
+
+## 2. Exact emitted confs (all four combinations)
+
+=== release / ce-2.8/amd64 ===
+# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
+# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
+# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# rc.d hook updates it on a pfSense OS upgrade.
+# priority 100 sits above the base Netgate `pfSense` repo so cross-repo
+# resolution (pkg install/upgrade, GUI Install) selects our build.
+pfblockerng: {
+  url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64",
+  mirror_type: none,
+  signature_type: none,
+  priority: 100,
+  enabled: yes
+}
+
+=== nightly / ce-2.8/amd64 ===
+# pfBlockerNG (nightly channel) — self-hosted pkg repository (ADR-17).
+# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
+# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# rc.d hook updates it on a pfSense OS upgrade.
+# priority 100 sits above the base Netgate `pfSense` repo so cross-repo
+# resolution (pkg install/upgrade, GUI Install) selects our build.
+pfblockerng-nightly: {
+  url: "https://pfblockerng.github.io/pkg/nightly/ce-2.8/amd64",
+  mirror_type: none,
+  signature_type: none,
+  priority: 100,
+  enabled: yes
+}
+
+=== release / plus-26.03/amd64 ===
+# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
+# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
+# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# rc.d hook updates it on a pfSense OS upgrade.
+# priority 100 sits above the base Netgate `pfSense` repo so cross-repo
+# resolution (pkg install/upgrade, GUI Install) selects our build.
+pfblockerng: {
+  url: "https://pfblockerng.github.io/pkg/release/plus-26.03/amd64",
+  mirror_type: none,
+  signature_type: none,
+  priority: 100,
+  enabled: yes
+}
+
+=== nightly / plus-26.03/amd64 ===
+# pfBlockerNG (nightly channel) — self-hosted pkg repository (ADR-17).
+# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
+# fully resolved for this box's edition/version/arch (ADR-39); the self-heal
+# rc.d hook updates it on a pfSense OS upgrade.
+# priority 100 sits above the base Netgate `pfSense` repo so cross-repo
+# resolution (pkg install/upgrade, GUI Install) selects our build.
+pfblockerng-nightly: {
+  url: "https://pfblockerng.github.io/pkg/nightly/plus-26.03/amd64",
+  mirror_type: none,
+  signature_type: none,
+  priority: 100,
+  enabled: yes
+}
+
+
+## 3. Byte-identity contract (all three generators)
+
+When called with the same --catalog-path <varver>/<arch> and the same channel flag,
+the following three generators produce byte-identical release confs:
+
+  scripts/add-repo.sh          --print-conf --catalog-path <varver>/<arch>
+  scripts/build-repo.sh        --print-conf --catalog-path <varver>/<arch>
+  scripts/build-repo-portable.py --print-conf --catalog-path <varver>/<arch>
+
+Pinned by: tests/test_add_repo_conf.py::test_release_conf_byte_identical_across_all_three_generators
+           tests/test_add_repo_conf.py::test_release_conf_byte_identical_plus_26_03_amd64
+
+
+## 4. Self-heal rc.d hook
+
+Installed path:        /usr/local/etc/rc.d/pfblockerng_repo_selfheal.sh
+Source (in repo):      scripts/rc.d/pfblockerng_repo_selfheal.sh
+Installed by:          scripts/add-repo.sh (cp of the file shipped alongside it)
+
+rc.d ordering:
+  PROVIDE: pfblockerng_repo_selfheal
+  REQUIRE: NETWORKING
+  BEFORE:  pfblockerng unbound
+
+HARD RULE: every code path ends in `exit 0`. The hook NEVER wedges boot.
+
+Logic on each boot:
+  a. GUARD: if neither PFB_RELEASE_CONF nor PFB_NIGHTLY_CONF exists → return 0 (inert).
+  b. Source PFB_DETECT_HELPER (the detection helper installed alongside the hook).
+  c. For each present conf: parse <varver>/<arch> from the url: line.
+  d. Detect the box's current <varver>/<arch> via pfb_detect_catalog().
+  e. MATCH → return 0 (no-op; zero pkg calls; fast path on every normal boot).
+  f. MISMATCH → rewrite only the <varver>/<arch> segment of the url: line in-place
+     (every other byte is preserved); run `pkg update -r <repo>`; reconcile the
+     pfBlockerNG package (install/upgrade). All pkg failures are logged and swallowed.
+
+Testable env overrides (all default to on-box paths):
+  PFB_DETECT_HELPER  (default /usr/local/lib/pfblockerng/detect_variant.sh)
+  PFB_RELEASE_CONF   (default /usr/local/etc/pkg/repos/pfblockerng.conf)
+  PFB_NIGHTLY_CONF   (default /usr/local/etc/pkg/repos/pfblockerng-nightly.conf)
+  PFB_PKG_BIN        (default /usr/local/sbin/pkg)
+
+
+## 5. Installed detection helper path
+
+Source:    scripts/lib/detect_variant.sh  (Phase 1 output)
+Installed: /usr/local/lib/pfblockerng/detect_variant.sh
+
+Installed by add-repo.sh:
+  ON_BOX_LIB_DIR=/usr/local/lib/pfblockerng
+  ON_BOX_DETECT_HELPER="${ON_BOX_LIB_DIR}/detect_variant.sh"
+  mkdir -p "${ON_BOX_LIB_DIR}"
+  cp "${DETECT_VARIANT_SRC}" "${ON_BOX_DETECT_HELPER}"
+
+The hook self-contains after add-repo.sh: it sources this installed helper, so
+no dependency on the repo checkout or any package manager after initial setup.
+
+
+## 6. Files changed
+
+  scripts/add-repo.sh                       (repointed to Pages URL; installs hook+helper)
+  scripts/build-repo.sh                     (repointed to Pages URL; --catalog-path added)
+  scripts/build-repo-portable.py            (repointed to Pages URL; --catalog-path added)
+  scripts/rc.d/pfblockerng_repo_selfheal.sh (NEW — POSIX-sh rc.d self-heal hook)
+  tests/test_add_repo_conf.py               (rewritten for resolved URL; byte-identity pins)
+  tests/test_build_repo_portable.py         (updated --print-conf assertions for Pages URL)
+  tests/shell/selfheal_hook_spec.sh         (NEW — 13 shellspec tests for the hook)
+
+
+## 7. Test results
+
+Python (pytest):
+  Command: python -m pytest tests/test_add_repo_conf.py tests/test_build_repo_portable.py
+  Result:  103 passed, 2 skipped
+
+shellspec (POSIX sh):
+  Command: shellspec  (from repo root; all specs)
+  Result:  123 examples, 0 failures, 1 skip  (skip = LC_ALL UTF-8 locale not installed)
+  New spec: tests/shell/selfheal_hook_spec.sh — 13 examples, 0 failures
+    guard test:       conf absent → exit 0, nothing written (before-state asserted)
+    match test:       conf varver == box varver → exit 0, conf byte-unchanged
+    mismatch tests:   stale varver → only url: segment rewritten, pkg update called
+    fail-proof tests: broken pkg / detect helper → still exit 0
+
+sh -n (syntax): clean on all shell scripts
+  scripts/add-repo.sh, scripts/build-repo.sh,
+  scripts/rc.d/pfblockerng_repo_selfheal.sh, scripts/lib/detect_variant.sh
+
+
+## 8. Deviations from the brief
+
+None. All deliverables per 02_AddRepo_And_Hook.txt implemented as specified.
+
+Notable implementation details:
+- _parse_catalog_from_conf() uses sed (not parameter expansion) to extract the URL
+  from the conf's url: line, avoiding \"  inside ${...} which is not POSIX-portable
+  in dash (the sh on this CI runner).
+- add-repo.sh installs the hook via `cp` (not a heredoc) — the hook lives as a
+  standalone file at scripts/rc.d/pfblockerng_repo_selfheal.sh in the repo, and
+  cp preserves it byte-for-byte on the box.
+- --catalog-path <varver>/<arch> was added to all three generators to enable
+  deterministic byte-identity tests without needing a live pfSense box.
+
+
+## 9. Go-ahead for Phase 3
+
+Phase 3 deliverables per 03_Retire_Worker_And_Metapkg.txt:
+  - Retire the Cloudflare Worker (scripts/worker/) — now superseded.
+  - Retire the meta-package port (pfSense-pkg-pfblockerng-repo) — no longer needed;
+    add-repo.sh + self-heal hook is the bootstrap mechanism.
+  - Update build-repo-portable.py routing logic if the Worker is removed.
+  - CI / smoke test wiring for the self-heal hook (if applicable).
+
+
+## 10. Post-ADR follow-up — piped-invocation fix (branch fix/add-repo-embed-hook)
+
+The Phase-2 note above ("add-repo.sh installs the hook via `cp` — the hook lives as a
+standalone file") describes the checkout case correctly, but the published one-file
+bootstrap breaks when piped: `$0` is `sh` (not the script path), so
+`dirname "$0"` resolves to the shell's directory (`/root`, `/tmp`, etc.) and
+`HOOK_SRC` points at a non-existent path → `cp` fails with "No such file or directory".
+
+Fix committed on branch fix/add-repo-embed-hook:
+
+  scripts/add-repo.sh        — pfb_emit_embedded_hook() stub; install block now
+                               `if [ -f "${HOOK_SRC}" ]; then cp ...; else emit > ...; fi`
+  scripts/gen_landing.py     — write_add_repo() splices the hook via a single-quoted
+                               heredoc between PFB_EMBED_{BEGIN,END} markers;
+                               write_site() calls it → site/add-repo.sh is self-contained
+  tests/test_gen_landing.py  — BDD test: pipes published add-repo.sh via stdin to sh,
+                               asserts hook installed + conf written with the marker
+
+Public landing page one-liners updated from:
+  fetch -qo - https://raw.githubusercontent.com/.../scripts/add-repo.sh | sh
+to:
+  fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh
+
+(self-hosted, self-contained, always in sync with the published catalog).
+
+Phase 3 is NOT blocked on any Phase 2 item.

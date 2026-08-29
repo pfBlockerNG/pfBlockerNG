@@ -1,0 +1,72 @@
+================================================================================
+PHASE 1 PROMPT — Measure the union cost (de-risk)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §1 facts, §6 Phase 1, §7 reject FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/11` branch performing Phase 1 of ADR-11. DE-RISKING measurement,
+not a feature: characterise the cost of unioning the effective block set so we know
+whether a full per-pass rebuild fits, or whether an incremental (rebuild-on-member-
+change) build is needed. No shipped behaviour change — a benchmark/script + recorded
+numbers only. Work inline on `adr/11`, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The feature is already proven in production (the maintainer runs the union via an
+external-script workaround), so this is NOT a viability gate — it is a COST gate that
+decides the build strategy (full vs incremental) and the documented RAM caveat. The
+union of all deny feeds can be millions of CIDRs; the loaded (unused) pf table costs
+kernel memory, and cat+sort -u+cidr_aggregate costs pass time.
+
+REQUIRED READING (inspect before measuring)
+- .ADRs/ADR_11_Uber_Aliases/ADR.md — §1 (load-bearing facts), §6 Phase 1, §7 reject.
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — cidr_aggregate() (:268, dispatch
+  :956), aliastables() (:111/:989), the deny member files ${pfbdeny}${alias}.txt
+  (sort -u at :323/:519/:585), pfbsuppression (:189), pfsensealias=/var/db/aliastables
+  (:61).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — denydir/nativedir (:47-50), the
+  urltable registration (:9512-9520), empty-alias prune (:9495-9498), the update pass
+  sync_package_pfblockerng (:6556), pfb_aliastables (:4402).
+- CLAUDE.md (POSIX sh, absolute paths, ShellCheck).
+
+ACTION PLAN (ordered)
+1. BENCHMARK (agent-runnable on synthetic data): generate representative deny-feed
+   member files totalling millions of IPv4 + IPv6 CIDRs; measure for the union step
+   (cat -> sort -u -> cidr_aggregate): wall-time, peak RAM, input vs output entry
+   count (the dedup/aggregation ratio). Record method + numbers.
+2. PF TABLE LOAD (procedure; maintainer runs live): document how to measure the pf
+   table memory + load time for a table of the resulting size on a real box
+   (pfctl -t ... and the table memory accounting). Provide the commands + a result
+   slot.
+3. STRATEGY DECISION: from the numbers, recommend full-rebuild-each-pass vs
+   incremental (rebuild only when a member file's mtime/hash changed). If incremental,
+   specify the exact change-detection trigger. Propose a soft budget (pass-time +
+   RAM) and the documented RAM caveat for the opt-in setting.
+4. Record everything in RESULTS/01_Results.txt with a GO + chosen strategy (this phase
+   does not reject the feature; it chooses the build approach).
+
+CONSTRAINTS
+- NO shipped (src/) behaviour change — a benchmark script + docs + numbers only. Any
+  shell is POSIX sh, ShellCheck-clean, absolute binary paths.
+- Reuse the existing cidr_aggregate; do NOT write a new aggregation algorithm here.
+- Do NOT edit other ADRs' docs or benchmarks/README.md.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest (default) → green/unchanged (no Python touched).
+- ShellCheck clean on any new script; php -l/PHPStan unaffected.
+- RESULTS/01_Results.txt records real synthetic-scale numbers + the live procedure +
+  the chosen build strategy + the soft budget.
+
+EXPECTED RESULT
+A cost characterisation (union build time / peak RAM / dedup ratio / table load) and a
+decision: full vs incremental build, plus the RAM caveat to document. No machinery yet.
+
+COMMIT (single)
+    bench: ADR-11 P1 measure aggregate-alias union cost (ADR-11 P1)
+Push directly to `adr/11`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/01_Results.txt` (plain .txt)
+State: the synthetic-scale numbers + dedup ratio; the live pf-table-load procedure +
+slot; the chosen build strategy (full vs incremental) + the change-detection trigger
+if incremental; the soft budget + RAM caveat; the go-ahead for Phase 2.

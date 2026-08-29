@@ -1,0 +1,163 @@
+ADR-12 PHASE 3 RESULTS — Settings UI (hooks table, admin-only)
+==============================================================
+
+STATUS: DONE. Admin-only Update Hooks table added; entries round-trip to the exact
+Phase-1 config schema the runner consumes. Phase 4 (recipe + docs + smoke) GO.
+
+Files changed (single commit):
+  - src/usr/local/www/pfblockerng/pfblockerng_hooks.php   (NEW — the hooks table page)
+  - src/etc/inc/priv/pfblockerng.priv.inc                 (+1 — admin priv match for the page)
+  - src/usr/local/www/pfblockerng/pfblockerng_general.php       (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_ip.php            (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php         (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_update.php        (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_alerts.php        (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_feeds.php         (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_log.php           (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_sync.php          (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_blacklist.php     (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_safesearch.php    (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_category.php      (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng_category_edit.php (+1 tab)
+  - src/usr/local/www/pfblockerng/pfblockerng.php               (+2 tabs — two standard tab strips)
+
+No Python/pytest change. No runner / fire-point change (Phases 1-2 untouched).
+
+
+1. UI LOCATION + FEATURE NAME
+-----------------------------
+  Page : src/usr/local/www/pfblockerng/pfblockerng_hooks.php
+  Tab  : "Update Hooks", inserted in the pfBlockerNG settings top-tab strip
+         immediately AFTER "Update" and before "Reports", on every page that
+         renders that strip (the 14 files above). The hooks page's own strip
+         marks "Update Hooks" active.
+  Name : "Update Hooks (Pre/Post Update Commands)" (section title), tab "Update
+         Hooks". The page's "About" help explicitly disambiguates these from the
+         per-feed ip_pre_*.sh list pre-scripts: Update Hooks run ONCE PER UPDATE
+         PASS (a 'pre' at the start, a 'post' at the end), NOT once per feed.
+
+
+2. FIELDS + VALIDATION
+----------------------
+  Repeatable rowhelper table (mirrors pfblockerng_sync.php's XMLRPC-targets editor
+  exactly — Form_Group->addClass('repeatable') + Add/Delete buttons; pfSense's
+  rowhelper JS drives Add, Delete, AND drag-reorder natively). One row per hook:
+
+    enabled      Form_Checkbox  -> 'on' | ''      (pfSense checkbox convention)
+    when         Form_Select    -> 'pre' | 'post' (options ['pre'=>'Pre','post'=>'Post'])
+    command      Form_Input(text)  the sh command line (run as root via /bin/sh -c)
+    timeout      Form_Input(number) optional per-hook seconds (blank => default 60)
+    description  Form_Input(text)  optional log label
+    [Delete]     Form_Button (trash) per row; [Add] button below
+
+  POST field names: <field>-<rowid> (hook_enabled-N, hook_when-N, hook_command-N,
+  hook_timeout-N, hook_description-N), parsed by the same explode('-') rowhelper
+  loop pattern as the sync page.
+
+  Validation (on Save; any failure => print_input_errors, nothing written):
+    - command   : reject control characters (\p{C}); reject empty/whitespace-only.
+                  Shell metacharacters (; | & $ quotes) are INTENTIONALLY allowed —
+                  the command is data passed to /bin/sh -c (the runner escapeshellarg's
+                  it; Phase 1 proved injection-safe). NOT over-sanitised, matching how
+                  pfSense shellcmd stores raw command text.
+    - when      : must be a key of options_when ('pre'|'post').
+    - timeout   : optional; if non-empty must pass PFB_FILTER_NUM (digits only). Blank
+                  is allowed and means "use the default" (the runner's pfb_hook_timeout
+                  falls back to PFB_HOOK_TIMEOUT_DEFAULT=60 for blank/invalid/<=0).
+    - description: reject control characters.
+
+
+3. ADMIN-GATING
+---------------
+  Added one priv match line to src/etc/inc/priv/pfblockerng.priv.inc under the
+  EXISTING privilege 'page-firewall-pfblockerng' ("WebCfg - Firewall: pfBlockerNG"):
+      $priv_list['page-firewall-pfblockerng']['match'][] = "pfblockerng/pfblockerng_hooks.php";
+  i.e. the hooks page sits behind the SAME admin privilege as every other pfBlockerNG
+  settings page (General/IP/DNSBL/Update/Sync/...). No new or weaker privilege is
+  introduced; only a user holding the pfBlockerNG WebCfg priv (admins) can reach it.
+  This is the correct trust class per ADR §2 (same as pfSense shellcmd/cron).
+
+
+4. CONFIG ROUND-TRIP — EXACT PHASE-1 SCHEMA (verified)
+------------------------------------------------------
+  The page reads/writes the SAME path + keys the Phase-1 runner consumes:
+      Path : installedpackages/pfblockerng/config/0/hooks      (a numeric list)
+      Keys : { command, when, enabled, description, timeout }  per entry
+
+  Save rebuilds the list from POST IN ROW ORDER (config_set_path on the whole list;
+  config_del_path when the list is emptied — i.e. all rows deleted), so list order ==
+  hook run order, matching pfb_get_hooks (which preserves list order).
+
+  Verified end-to-end with a standalone PHP simulation: a 2-row submit (an enabled
+  post hook + a disabled pre hook) through the page's save logic produced
+      hooks[0] = {command,when:'post',enabled:'on',description,timeout:'30'}
+      hooks[1] = {command,when:'pre',enabled:'',...}
+  and the VERBATIM Phase-1 pfb_get_hooks($cfg,'post') returned 1 entry,
+  pfb_get_hooks($cfg,'pre') returned 0 (the disabled row correctly skipped). Schema
+  match confirmed by feeding the read helper, not by eyeballing keys.
+
+
+5. HELP TEXT (truthful per Phase-2 RESULTS/02)
+----------------------------------------------
+  Four StaticText help blocks in the first section:
+    - About      : once-per-pass semantics; disambiguation from ip_pre_*.sh.
+    - Run as root: runs AS ROOT via /bin/sh -c (same trust as shellcmd/cron);
+                   admin-only; /usr/bin/timeout kills a hung hook (SIGTERM, then
+                   SIGKILL after a grace period); non-zero exit OR timeout is logged
+                   and the update CONTINUES (a hook can never abort/stall an update);
+                   Pre hooks run before processing, Post hooks after everything, in
+                   list order.
+    - Environment: documents EXACTLY what Phase 2 emits —
+                   PFB_WHEN (pre|post; both fire points),
+                   PFB_TRIGGER (cron | update | force-reload; both fire points) with
+                     the honest note that GUI Force Update / Force Reload(All) arrive
+                     as 'cron' (the ADR's nominal 'force-update' collapses to 'cron'),
+                     'update' = a settings save, 'force-reload' = a GUI IP-only/DNSBL-only
+                     Force Reload,
+                   and the POST-ONLY vars (a pre hook runs before anything is downloaded):
+                     PFB_IP_CHANGED (0|1), PFB_DNSBL_CHANGED (0|1),
+                     PFB_STATUS (currently always 'ok' — reserved/placeholder),
+                     PFB_CHANGED_ALIASES (currently always empty — reserved/placeholder).
+                   No value the code does not emit is promised.
+    - HA / sync  : hooks live in config => replicate to a CARP/HA secondary and run on
+                   whichever node performs the update.
+  A page-foot callout notes hooks run on the next CRON update or Force Update|Reload.
+
+
+6. GATE RESULTS
+---------------
+  python -m pytest          PASS  (1019 passed — unchanged baseline; no Python touched)
+  ruff check .              PASS  (All checks passed)
+  php -l (all touched files) PASS  (No syntax errors — 14 modified + the new page + priv)
+  PHPStan                   PASS  (No errors; --memory-limit=1G, 25 files incl. the new page)
+  PHPUnit (full)            PASS  (125 tests / 207 assertions — Phase-1 PfbGetHooksTest still green)
+  markdownlint              N/A   (no .md touched)
+  ShellCheck                N/A   (no shell files touched)
+
+
+7. SELF-REVIEW (Phase-3 plan + ADR §2 Security/UI row)
+------------------------------------------------------
+  [x] Hooks table: add / edit / enable / reorder / delete (reorder = native rowhelper drag).
+  [x] Fields command/when/enabled/description/timeout; validation (command non-empty,
+      timeout numeric, when in pre|post).
+  [x] Feature name disambiguates from the per-list ip_pre_*.sh pre-scripts; once-per-pass
+      stated.
+  [x] Help documents the env vars truthfully (pre vs post; force-update->cron reality;
+      STATUS/CHANGED_ALIASES placeholders), run-as-root, timeout/log-and-continue, HA-sync.
+  [x] Admin-gated via the existing pfBlockerNG WebCfg privilege (same class as all settings).
+  [x] Reuses the package's existing list-editor idiom (pfblockerng_sync.php), no new UI pattern.
+  [x] Writes the EXACT Phase-1 schema; round-trip to pfb_get_hooks verified.
+  [x] No Python / pytest change; runner + fire points untouched.
+
+
+8. GO-AHEAD FOR PHASE 4 (HAProxy recipe + docs + smoke + DoD)
+-------------------------------------------------------------
+GO. The feature is now end-to-end usable from the GUI: an admin adds pre/post hooks in the
+"Update Hooks" tab; they persist in installedpackages/pfblockerng/config/0/hooks and are
+consumed by the Phase-1/2 runner on the next update pass. Phase 4 should:
+  - document the worked HAProxy recipe (a 'post' hook guarded on [ "$PFB_IP_CHANGED" = "1" ]
+    that triggers a graceful HAProxy reload), the source_ip-ACL + header-ACL config, and the
+    HA double-run note, in README/CLAUDE.md;
+  - run the manual smoke checklist (ADR §7) on a live pfSense box and finalise the DoD.
+Note for Phase 4 docs: PFB_STATUS / PFB_CHANGED_ALIASES are stable PLACEHOLDERS today
+('ok' / '') — document them as reserved, do not write a recipe that branches on their value.

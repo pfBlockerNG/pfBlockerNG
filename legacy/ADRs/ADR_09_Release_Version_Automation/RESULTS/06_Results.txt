@@ -1,0 +1,285 @@
+================================================================================
+ADR-09 Phase 6 Results — CI smoke fan-out across CE images (never Plus)
+================================================================================
+
+Status: GO — smoke-fanout.yml implemented; fail-fast:false matrix fan-out;
+explicit AND-gate; Plus excluded; Phase-4 dispatch contract honoured; all gates
+green.
+
+
+--------------------------------------------------------------------------------
+1. WHAT WAS DONE
+--------------------------------------------------------------------------------
+
+Added .github/workflows/smoke-fanout.yml:
+
+  Trigger:    workflow_dispatch (NO version inputs — reads ci_matrix internally)
+              workflow_call    (callable by release.yml etc. — no version inputs)
+              schedule         (daily at 07:00 UTC)
+
+  Jobs:
+    prepare         — reads ci_matrix from read-version-matrix action;
+                      emits ci_matrix JSON array + leg_count;
+                      PLUS GUARD: hard-fails if any entry is non-CE or ci:false.
+
+    smoke           — strategy.matrix (include: ci_matrix), fail-fast: false;
+                      one leg per ci:true CE entry;
+                      calls smoke.yml (ADR-04 reusable callee) via `uses:`;
+                      passes per-version image_ref:
+                        ghcr.io/<owner>/pfsense-ce:<pfsense_version>
+                      secrets: inherit (passes all smoke secrets to callee)
+
+    all-smoke-passed — AND-gate; needs: [prepare, smoke]; if: always();
+                       hard-fails unless needs.smoke.result == 'success'
+
+No changes to src/, tests/, or any existing workflow.
+
+
+--------------------------------------------------------------------------------
+2. HOW THE SMOKE MATRIX IS BUILT FROM THE CI MATRIX
+--------------------------------------------------------------------------------
+
+The `prepare` job calls the read-version-matrix composite action (Phase 2) which
+reads supported-versions.json from the ci-metadata orphan branch via:
+  git show origin/ci-metadata:supported-versions.json | jq filter
+
+The reader already filters to ci:true CE entries only (ci_matrix output).
+With the seed matrix (CE 2.8.x ci:true, Plus 25.03 ci:false), ci_matrix is:
+  [{"pfsense_version":"2.8.x","channel":"CE","freebsd_version":"15.0-RELEASE",
+    "freebsd_major":"15","php_version":"8.3","py_flavor":"py311",
+    "status":"GA","ci":true}]
+
+The `smoke` job uses:
+  strategy:
+    fail-fast: false
+    matrix:
+      include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
+
+Each matrix leg carries the full entry fields (pfsense_version, channel,
+freebsd_version, freebsd_major, php_version, py_flavor, status, ci) as
+${{ matrix.<field> }} in the job context.
+
+One leg per entry → currently 1 leg (CE 2.8.x). Adding a new CE entry to
+ci-metadata is a one-line edit; the fan-out adds a leg automatically.
+
+
+--------------------------------------------------------------------------------
+3. FAIL-FAST:FALSE + AND-GATE WIRING
+--------------------------------------------------------------------------------
+
+fail-fast: false
+  Set at strategy level on the `smoke` matrix job. GitHub Actions will NOT
+  cancel pending/running legs when any leg fails. All legs always run to
+  completion regardless of any individual leg's outcome.
+
+AND-gate: `all-smoke-passed` job
+  needs: [prepare, smoke]
+  if: always()          ← runs even when smoke failed/skipped/cancelled
+
+  GitHub Actions matrix result semantics (verified):
+    needs.smoke.result == 'success'   → all legs passed
+    needs.smoke.result == 'failure'   → at least one leg failed (fail-fast off)
+    needs.smoke.result == 'skipped'   → matrix job did not run (e.g. zero legs,
+                                        or the `if:` condition was false)
+    needs.smoke.result == 'cancelled' → run was cancelled before completion
+
+  Gate logic (exhaustive case statement):
+    'success'   → echo "AND gate PASS — all N leg(s) succeeded."        EXIT 0
+    'failure'   → ::error:: AND gate FAIL                                EXIT 1
+    'skipped'   → ::error:: AND gate FAIL                                EXIT 1
+    'cancelled' → ::error:: AND gate FAIL                                EXIT 1
+    *           → ::error:: AND gate FAIL (unexpected)                   EXIT 1
+
+  ZERO-LEGS EDGE CASE:
+    When ci_matrix is empty (no ci:true CE entries), leg_count=0. The smoke
+    job is conditional: `if: needs.prepare.outputs.leg_count != '0'`. With
+    zero legs, the smoke job is SKIPPED → needs.smoke.result = 'skipped'.
+    The gate also checks leg_count independently first:
+      if [ "${LEG_COUNT:-0}" -eq 0 ]; then exit 1; fi
+    This ensures the gate fails on an empty matrix even if the smoke job
+    result were somehow 'success' (belt-and-suspenders).
+
+  HOW THE GATE FAILS ON EACH FAILURE MODE:
+    - Any single leg fails  → smoke.result = 'failure' → gate exits 1    RED
+    - All legs fail         → smoke.result = 'failure' → gate exits 1    RED
+    - Zero legs             → smoke.result = 'skipped', leg_count=0
+                              → gate hits zero-legs guard, exits 1        RED
+    - Run cancelled mid-leg → smoke.result = 'cancelled' → gate exits 1  RED
+    - All legs pass         → smoke.result = 'success' → gate exits 0    GREEN
+
+  The gate job is the REQUIRED STATUS CHECK. Configuring branch protection to
+  require `all-smoke-passed` gives the AND-of-all-legs guarantee with no
+  partial-pass escape.
+
+
+--------------------------------------------------------------------------------
+4. PLUS EXCLUSION GUARD
+--------------------------------------------------------------------------------
+
+Two-layer defence:
+
+  Layer 1 — ci_matrix reader (scripts/read-version-matrix.sh):
+    Filters with jq: `select(.ci == true and .channel == "CE")`.
+    Plus entries (ci:false, channel:Plus) are NEVER present in ci_matrix.
+    The guard at the reader level is sufficient for normal operation.
+
+  Layer 2 — runtime assertion in `prepare` job (count + assert step):
+    After reading ci_matrix, the step runs:
+      PLUS_COUNT=$(printf '%s' "$CI_MATRIX" \
+        | jq '[.[] | select(.channel != "CE" or .ci != true)] | length')
+      if [ "$PLUS_COUNT" -ne 0 ]; then ... exit 1; fi
+
+    This is a belt-and-suspenders hard fail-safe: if the matrix schema changes,
+    the reader is buggy, or the action is called with a custom matrix ref that
+    contains Plus entries, the prepare job fails BEFORE any smoke legs launch.
+
+Result: Plus images can NEVER enter the smoke matrix regardless of matrix content.
+
+
+--------------------------------------------------------------------------------
+5. TRACKER TRIGGER (PHASE 4 WIRING)
+--------------------------------------------------------------------------------
+
+The version-tracker.yml (Phase 4) Step C dispatches smoke-fanout.yml:
+
+  gh workflow run smoke-fanout.yml \
+    --repo "$REPO" \
+    --ref "$REF"
+
+No inputs are passed. The smoke-fanout.yml workflow_dispatch trigger accepts NO
+required inputs. This matches the Phase-4 contract exactly (RESULTS/04_Results.txt
+§3 forward reference):
+
+  Workflow file name: .github/workflows/smoke-fanout.yml  ✓
+  Trigger:            workflow_dispatch                    ✓
+  Required inputs:    NONE                                 ✓
+
+When the tracker runs daily at 06:00 UTC (after it dispatches image-refresh.yml
+per CE version at Step B), Step C dispatches smoke-fanout.yml once. The fan-out
+workflow then internally reads ci_matrix and expands it to parallel legs.
+
+
+--------------------------------------------------------------------------------
+6. IMAGE REF RESOLUTION PER VERSION
+--------------------------------------------------------------------------------
+
+Each smoke leg receives:
+  image_ref: "ghcr.io/${{ github.repository_owner }}/pfsense-ce:${{ matrix.pfsense_version }}"
+
+The smoke.yml callee (ADR-04) uses the image_ref input to override the
+SMOKE_IMAGE_REF secret/variable for that run. This enables per-version image
+targeting:
+  CE 2.8.x → ghcr.io/<owner>/pfsense-ce:2.8.x  (published by image-refresh.yml)
+
+When no per-version image is available (tag not yet pushed to GHCR), the smoke
+leg will fail at the GHCR pull step — this is the correct, visible failure mode.
+
+
+--------------------------------------------------------------------------------
+7. PHASE-4 CONTRACT — CONFIRMED HONOURED
+--------------------------------------------------------------------------------
+
+Phase 4 (RESULTS/04_Results.txt §3) requires:
+
+  Workflow file name: .github/workflows/smoke-fanout.yml       CONFIRMED ✓
+  Trigger:            workflow_dispatch (AND workflow_call)     CONFIRMED ✓
+  Required inputs:    NONE                                      CONFIRMED ✓
+  Reads ci_matrix internally via read-version-matrix action     CONFIRMED ✓
+  strategy.matrix (fail-fast: false) over ci_matrix legs        CONFIRMED ✓
+  gating job needs: all legs (AND gate)                         CONFIRMED ✓
+  never Plus                                                    CONFIRMED ✓
+
+
+--------------------------------------------------------------------------------
+8. GATE RESULTS
+--------------------------------------------------------------------------------
+
+python -m pytest:            1069 passed (unchanged)   [GREEN]
+ruff check .:                All checks passed          [CLEAN]
+ruff format --check .:       54 files already formatted [CLEAN]
+YAML (smoke-fanout.yml):     valid (yaml.safe_load)    [CLEAN]
+YAML (all 11 workflows):     all valid                  [CLEAN]
+markdownlint-cli2:            0 error(s), 33 .md files  [CLEAN]
+src/: no changes                                        [CONFIRMED]
+tests/: no changes                                      [CONFIRMED]
+
+Shell in smoke-fanout.yml run: blocks are POSIX sh (no bash-isms: no [[, arrays,
+$RANDOM). ShellCheck does not run on inline workflow run: blocks; the logic uses
+only portable sh constructs (case/esac, printf, jq, set -eu).
+
+
+--------------------------------------------------------------------------------
+9. SELF-REVIEW VERDICT
+--------------------------------------------------------------------------------
+
+fail-fast:false: SET at strategy level on the smoke job. ✓
+
+AND-gate fails on any-leg-fail:
+  smoke.result = 'failure' → gate case 'failure' → exit 1. ✓
+
+AND-gate fails on skipped/cancelled:
+  'skipped' → exit 1; 'cancelled' → exit 1.  The if: always() ensures the
+  gate runs regardless of smoke job outcome. ✓
+
+AND-gate fails on zero legs:
+  prepare emits leg_count; gate checks leg_count first (before the case
+  statement) and exits 1 if zero. ✓
+
+Plus excluded:
+  Layer 1: ci_matrix reader filters to ci:true CE entries only.
+  Layer 2: prepare job asserts no non-CE or ci:false entries. ✓
+
+Workflow name: .github/workflows/smoke-fanout.yml ✓
+No version inputs on workflow_dispatch ✓
+workflow_call added as second trigger (additive, matches Phase-4 suggestion) ✓
+Phase-4 tracker dispatches with no --field args → matches ✓
+
+Scope clean: no src/, tests/, or other workflow touched. ✓
+
+
+--------------------------------------------------------------------------------
+10. FILES CHANGED (adr/09 branch commit)
+--------------------------------------------------------------------------------
+
+New files:
+  .github/workflows/smoke-fanout.yml                                (this workflow)
+  .ADRs/ADR_09_Release_Version_Automation/RESULTS/06_Results.txt   (this file)
+
+
+--------------------------------------------------------------------------------
+11. HANDOFF FOR PHASE 7
+--------------------------------------------------------------------------------
+
+Phase 7 (07_Docs_DoD.txt — Docs + DoD + reject criteria):
+
+The full CI pipeline is now implemented:
+  Phase 2: ci-metadata matrix + reader
+  Phase 3: release.yml extended with per-matrix .pkg builds
+  Phase 4: version-tracker.yml (daily schedule + dispatch)
+  Phase 5: image-refresh.yml (upgrade-in-place + sanity gate)
+  Phase 6: smoke-fanout.yml (this phase — fan-out across CE, AND gate)
+
+Phase 7 should:
+  - Update scripts/README.md with the matrix lifecycle doc (Phase 2 added a
+    static pointer; Phase 7 should flesh out the full "how to add/drop a version"
+    workflow including the image-refresh + smoke-fanout re-run).
+  - Update CLAUDE.md CE-version-change checklist: add the smoke-fanout step
+    (after image refresh, the fan-out validates the new image end-to-end).
+  - Update README.md: document the CI fan-out (smoke suite runs across all
+    supported CE images; link to smoke-fanout.yml).
+  - Finalize ADR-09 §7 manual checklist + reject criteria (the manual DoD
+    checkboxes should be verified by the maintainer against the live CI).
+  - The ADR status moves from Proposed → Accepted once the maintainer runs
+    the §7 manual checklist.
+
+Key facts for the docs:
+  - ONE place to add a CE version: ci-metadata:supported-versions.json
+  - Adding a ci:true CE entry triggers (via version-tracker.yml):
+    a) build-pkg-linux.yml (portable .pkg build smoke-check)
+    b) image-refresh.yml (upgrade GHCR image to new CE version + sanity gate)
+    c) smoke-fanout.yml (live-VM smoke across ALL ci:true CE images in parallel)
+  - Plus is build-only: ci:false, never in the smoke fan-out.
+  - The smoke gate is the AND of all legs (all-smoke-passed job).
+  - fail-fast:false: one failing CE leg never cancels the others.
+
+GO.

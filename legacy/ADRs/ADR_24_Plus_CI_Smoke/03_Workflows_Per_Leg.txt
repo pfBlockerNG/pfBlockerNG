@@ -1,0 +1,77 @@
+================================================================================
+PHASE 3 PROMPT — Workflows: per-leg image name + MAC through smoke.yml/fan-out
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_24_Plus_CI_Smoke/ADR.md   (read §1.2, §2.1, §2.2, §4.3–4.6 first)
+================================================================================
+
+ROLE
+You are on `adr/24-pfsense-plus-in-the-ci-smoke` performing Phase 3 of ADR-24.
+Behaviour-preserving pre-flip: with the live matrix (Plus ci:false) and default
+inputs, every resolved ref and QEMU arg is identical to today. One commit, push
+directly.
+
+WHY THIS PHASE EXISTS
+smoke.yml composes one global SMOKE_IMAGE_NAME for all legs and exports no MAC;
+smoke-fanout.yml passes only pfsense_version and hard-fails on any non-CE entry.
+Phase 2 made the matrix carry per-leg image_name/mac — this phase routes them
+through to the harness.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_24_Plus_CI_Smoke/RESULTS/02_Results.txt — confirm Phase 2
+  complete. If missing: STOP and report.
+- .ADRs/ADR_24_Plus_CI_Smoke/ADR.md — §2.1 rows 5–6, §2.2 items 1–5.
+- .github/workflows/smoke.yml — inputs block; the "Resolve image ref" step
+  (~lines 144–161); where pytest gets its env (find the step exporting
+  SMOKE_IMAGE_DIR etc.) — that is where SMOKE_VM_MAC joins.
+- .github/workflows/smoke-fanout.yml — entire file (header comments, PLUS GUARD,
+  matrix include, leg naming, secrets: inherit).
+- CLAUDE.md — Smoke-tests section (the egress model; don't disturb it).
+
+ACTION PLAN (ordered)
+1. smoke.yml:
+   - inputs: add `image_name` (string, default "pfsense-ce") and `mac` (string,
+     default "BC:24:11:37:9C:AC") to BOTH workflow_dispatch and workflow_call.
+   - Resolve-ref step: NAME="${INPUT_IMAGE_NAME:-${SMOKE_IMAGE_NAME:-pfsense-ce}}"
+     (input wins over the repo variable; default unchanged).
+   - pytest step env: SMOKE_VM_MAC=${{ inputs.mac }} (with the CE default so a
+     bare dispatch is unchanged).
+2. smoke-fanout.yml:
+   - prepare: replace the PLUS GUARD with a CI GUARD — fail if any entry has
+     `.ci != true`; the channel assertion is REMOVED. Update the header comment
+     block + INVARIANT box (now: "runs every ci:true entry, CE and Plus; Plus
+     image is private — pulled, never published").
+   - smoke job: name `Smoke (${{ matrix.channel }} ${{ matrix.pfsense_version }})`;
+     pass `image_name: ${{ matrix.image_name }}` and `mac: ${{ matrix.mac }}`.
+   - AND-gate untouched.
+3. VALIDATE YAML: actionlint if available, else yamllint/python -c yaml.safe_load.
+4. EVIDENCE for §4.6: dispatch smoke-fanout.yml (matrix still CE-only) — the
+   resolved ref logs must equal today's; record the run id. Also dispatch a bare
+   smoke.yml (no inputs) — identical ref. These are the live regression pins.
+5. RUN: python -m pytest; ruff/mypy (nothing should change, but the gates run).
+
+CONSTRAINTS
+- Touch ONLY .github/workflows/smoke.yml and .github/workflows/smoke-fanout.yml.
+- Do NOT touch image-refresh.yml, build-image.yml, repo-install.yml (CE-only by
+  design — ADR §2.3).
+- secrets: inherit stays; no new secret is introduced (GHCR auth already falls
+  back to GITHUB_TOKEN).
+- Default-path behaviour byte-identical (§2.2.1).
+
+VERIFICATION (must all pass before the phase is done)
+- YAML valid; pytest/ruff/mypy green.
+- Live CE-only fan-out run green with refs identical to a pre-change run
+  (record both run ids — this is the §4.6 acceptance evidence).
+- git diff origin/devel...HEAD → only the two workflow files (+ prior phases).
+
+EXPECTED RESULT
+Fan-out legs carry per-entry image_name/mac end-to-end into boot_vm.sh's
+SMOKE_VM_MAC; CE-only behaviour unchanged; guard now keyed purely on ci:true.
+
+COMMIT (single)
+    ci: route per-leg image_name + MAC through smoke fan-out (ADR-24 P3)
+Push directly to `adr/24-pfsense-plus-in-the-ci-smoke`.
+
+HANDOFF — write `.ADRs/ADR_24_Plus_CI_Smoke/RESULTS/03_Results.txt` (plain .txt)
+Record: both run ids + ref logs (pre/post identical); the guard diff; go-ahead
+for Phase 4 INCLUDING the maintainer-precondition checklist state (image
+published+private? repo access granted? deps baked? — from ADR §6 Phase 4).

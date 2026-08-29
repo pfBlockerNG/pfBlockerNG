@@ -1,0 +1,397 @@
+#!/bin/sh
+# Runs the project's fast lint, style, and policy gates before each commit and
+# blocks the commit on any failure. Mirrors the lint commands in CLAUDE.md and
+# .github/workflows/test.yml.
+#
+# Two deliberate scoping rules keep this hook fast:
+#   1. Test suites and static analysis run in CI only — too slow for a per-commit
+#      gate. Run them yourself while iterating when useful.
+#   2. Each language's gates run ONLY when this commit stages a file of that type
+#      (a PHP-only commit doesn't pay for the markdown/python/shell linters, etc.).
+#
+# Each check also runs only when its tool is available: a contributor missing a
+# tool is warned and that check is skipped, never blocked (CI is the hard gate),
+# except the mandatory Composer vendor guard for staged PHP and the two PHP style
+# gates, which run against the host toolchain and skip when php is absent. The Composer
+# vendor guard is the exception: it is fail-closed, because a stale vendor tree makes the
+# gates behind it grade against the wrong tool versions.
+# All applicable checks run even after one fails, so every problem is reported in
+# a single pass. Bypass in an emergency with `git commit --no-verify`.
+#
+# Enable: git config core.hooksPath .githooks
+
+set -u
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+# Put Homebrew bin/sbin on PATH so node/npx (markdownlint-cli2), php, etc. resolve even
+# when this hook runs from a NON-login shell (sub-agent / worktree), where ~/.zprofile
+# (which runs `brew shellenv`) is not sourced. PATH-only and subprocess-free; deduped;
+# a no-op unless Homebrew is actually installed (Apple Silicon or Intel prefix).
+for _brew_pre in /opt/homebrew /usr/local; do
+	if [ -x "$_brew_pre/bin/brew" ]; then
+		case ":$PATH:" in
+			*":$_brew_pre/bin:"*) ;;
+			*) PATH="$_brew_pre/bin:$_brew_pre/sbin:$PATH"; export PATH ;;
+		esac
+		break
+	fi
+done
+unset _brew_pre
+
+fail=0
+skipped=''
+
+have() { command -v "$1" >/dev/null 2>&1; }
+step() { printf '[pre-commit] %s\n' "$1"; }
+failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
+skip() { skipped="${skipped}${skipped:+,} $1"; }
+
+# Explicit legacy-branch opt-out (issue #2633): every worktree runs THIS hook via the
+# absolute shared core.hooksPath, but release-line trees never shipped the devel
+# checker corpus. A repo-script gate whose checker is absent from the tree is skipped
+# only when the tree explicitly commits that exact script path in .githooks-exempt.
+# The manifest is graded from the STAGED index blob, never the working tree: an
+# untracked file or an unstaged edit is invisible to review and exempts nothing,
+# and a symlinked manifest (index mode 120000) is rejected outright. A missing
+# checker with no listed exemption stays a hard failure -- deleting a checker on
+# devel can never silently open its gate (devel commits no manifest) -- and a
+# listed checker that IS present still runs; -e also counts a directory at the
+# path as present, so it runs (and fails) rather than exempts. Manifest comment
+# lines are inert: with grep -x a '# ...' line never equals a path.
+exempted() {
+	[ ! -e "$1" ] || return 1
+	case $(git ls-files --stage -- .githooks-exempt 2>/dev/null) in
+	100*) ;;
+	*) return 1 ;;
+	esac
+	git show :.githooks-exempt 2>/dev/null | grep -qxF -e "$1"
+}
+exempt() { printf '[pre-commit] exempt (checker not shipped on this branch; listed in .githooks-exempt): %s\n' "$1"; }
+
+# A branch may also decline a TOOL gate -- ruff, shellcheck, phpcs -- with a
+# `gate:<name>` line in the same manifest (issue #2696). Every worktree runs the
+# PRIMARY checkout's hook (core.hooksPath is absolute), so without this a
+# maintenance line is graded by rules it never adopted: release/3.3 runs pytest
+# alone in CI, has no ruff config of its own -- ruff then walks up out of the
+# worktree and uses devel's -- and carries legacy shell that devel's shellcheck
+# sweep rejects. The escapes otherwise are --no-verify, or adopting the gate with
+# an allowlist for its pre-existing findings; both are worse than recording that
+# the line's contract is narrower.
+#
+# Graded from the STAGED blob by exempted(), exactly like a checker path: an
+# untracked or unstaged manifest declines nothing.
+gate_exempted() { exempted "gate:$1"; }
+gate_exempt() { printf '[pre-commit] exempt (gate not adopted on this branch; listed in .githooks-exempt): %s\n' "$1"; }
+
+# --- Stage classification: run a language's gates ONLY when this commit stages a
+#     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
+#     deletion stages nothing to lint.) Nothing staged -> nothing to do.
+#     -z + tr: the newline listing C-quotes a path holding a quote, backslash,
+#     control byte or non-ASCII byte, so the suffix regexes below match nothing
+#     and that commit's language gates silently never run (issue #2212). ---
+staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n' | grep -v '^legacy/' || true)
+[ -n "$staged_all" ] || exit 0
+staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n' | grep -v '^legacy/' || true)
+staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
+staged_py=0;  staged_has '\.py$'        && staged_py=1
+staged_md=0;  staged_has '\.md$'        && staged_md=1
+staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
+staged_xml=0; staged_has '\.xml$'       && staged_xml=1
+staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
+staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
+staged_agentcfg=0
+printf '%s\n' "$staged_all" | grep -qE \
+	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|context/|model-tiers\.conf$)|\.codex/|\.github/agents/|\.github/copilot-instructions\.md|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
+	&& staged_agentcfg=1
+
+# The detailed policy/procedures have one canonical source. Codex files are
+# discovery/runtime adapters only; catch a new or removed source with no mapping.
+if [ "$staged_agentcfg" = 1 ]; then
+	if exempted scripts/agent/check-agent-config-parity.sh; then
+		exempt 'agent-config parity'
+	else
+		step 'agent-config parity (shared sources, adapters, and model tiers)'
+		sh scripts/agent/check-agent-config-parity.sh || failed 'agent-config parity'
+	fi
+fi
+
+# =============================== Python (*.py) =============================== #
+if [ "$staged_py" = 1 ]; then
+	# ruff lint + format (canonical per CLAUDE.md; also enforced in CI).
+	ruff_bin=''
+	if [ -x .venv/bin/ruff ]; then
+		ruff_bin=.venv/bin/ruff
+	elif have ruff; then
+		ruff_bin=ruff
+	fi
+	if gate_exempted ruff; then
+		gate_exempt ruff
+		ruff_bin=''
+	fi
+	if [ -n "$ruff_bin" ]; then
+		step 'ruff check'
+		"$ruff_bin" check . || failed 'ruff check .'
+		step 'ruff format --check'
+		"$ruff_bin" format --check . || failed 'ruff format --check .'
+	else
+		skip ruff
+	fi
+fi
+
+# Python interpreter resolution (used by the URL-encoding check below).
+py_bin=''
+if [ -x .venv/bin/python ]; then
+	py_bin=.venv/bin/python
+elif have python; then
+	py_bin=python
+elif have python3; then
+	py_bin=python3
+fi
+
+# =============================== Markdown (*.md) ============================= #
+if [ "$staged_md" = 1 ]; then
+	if have npx; then
+		step 'markdownlint'
+		npx --yes markdownlint-cli2 || failed 'markdownlint-cli2'
+	else
+		skip markdownlint
+	fi
+fi
+
+# =============================== Shell (*.sh) =============================== #
+if [ "$staged_sh" = 1 ]; then
+	# Forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense target
+	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
+	# files, so it also covers tests/ (not lint-globbed below).
+	step 'shebang policy (no #!bash)'
+	# -z + xargs -0, never a newline listing: git C-quotes a path holding a
+	# quote, backslash, control byte or non-ASCII byte, and `head` on a quoted
+	# name reads nothing — that file's shebang would go unchecked (issue #2212).
+	# The exemption fence sits inside the loop for the same reason: a `grep`
+	# over the listing cannot see NULs.
+	git ls-files -z | xargs -0 sh -c '
+		for f; do
+			case $f in
+			legacy/*) continue ;;
+			esac
+			case $(head -n1 "$f" 2>/dev/null) in
+			"#!"*bash*)
+				printf "[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n" "$f" >&2
+				exit 1
+				;;
+			esac
+		done' _ || failed 'shebang policy'
+
+	# sh -n parse gate (src + scripts + tests + .claude/hooks; cheap, tool-free).
+	step 'shell (sh -n)'
+	find src scripts tests .claude/hooks -name '*.sh' | sort | while IFS= read -r f; do
+		sh -n "$f" || exit 1
+	done || failed 'sh -n'
+
+	# ShellCheck (src + scripts only; tests/ shellspec specs trip SC2034
+	# false-positives — tracked as a separate cleanup).
+	if gate_exempted shellcheck; then
+		gate_exempt shellcheck
+	elif have shellcheck; then
+		step 'shellcheck'
+		find src scripts .claude/hooks -name '*.sh' | sort \
+			| xargs shellcheck --severity=info || failed 'shellcheck'
+	else
+		skip shellcheck
+	fi
+fi
+
+# --- Shell + docs: forbid naked $var interpolation into curl/wget/fetch URLs.
+#     Relevant to shell scripts AND Markdown shell fences, so it runs when either
+#     is staged. Reuses the python resolved above (CI is the hard gate when absent). ---
+if [ "$staged_sh" = 1 ] || [ "$staged_md" = 1 ]; then
+	if exempted scripts/check_url_encoding.py; then
+		exempt url-encoding
+	elif [ -n "$py_bin" ]; then
+		step 'url-encoding (no naked $var in curl URLs)'
+		"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
+	else
+		skip url-encoding
+	fi
+fi
+
+# --- Forbid a target="_blank" link with no adjacent rel="noopener noreferrer"
+#     (issue #1217, reverse-tabnabbing defence). Relevant to the Web UI surface:
+#     PHP/inc pages and the wizard XML under src/usr/local/www. ---
+if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
+	if exempted scripts/check_noopener.py; then
+		exempt noopener
+	elif [ -n "$py_bin" ]; then
+		step 'noopener (target=_blank needs adjacent rel=noopener noreferrer)'
+		"$py_bin" scripts/check_noopener.py || failed 'noopener'
+	else
+		skip noopener
+	fi
+fi
+
+# --- Forbid an on/off toggle declaring its default in the page (issue #2123):
+#     a PFB_FILTER_ON_OFF save into a registered section must name a registry entry,
+#     and a registered toggle's default must not be restated by the page. Relevant to
+#     the settings pages and to the registry itself, so it runs on staged PHP/.inc. ---
+if [ "$staged_php" = 1 ]; then
+	if exempted scripts/check_toggle_registry.py; then
+		exempt toggle-registry
+	elif [ -n "$py_bin" ]; then
+		step 'toggle-registry (on/off default belongs to pfb_cfg_registry())'
+		"$py_bin" scripts/check_toggle_registry.py --self-test > /dev/null \
+			|| failed 'toggle-registry (red canary)'
+		"$py_bin" scripts/check_toggle_registry.py || failed 'toggle-registry'
+	else
+		skip toggle-registry
+	fi
+fi
+
+# --- Nested pfblockerng.php re-entry commands must use the bounded seam. ---
+if [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
+	if exempted scripts/check_reentry_bounds.py; then
+		exempt reentry-bounds
+	elif [ -n "$py_bin" ]; then
+		step 'reentry-bounds (nested pfblockerng.php re-entry must be bounded)'
+		"$py_bin" scripts/check_reentry_bounds.py --self-test > /dev/null \
+			|| failed 'reentry-bounds (red canary)'
+		"$py_bin" scripts/check_reentry_bounds.py || failed 'reentry-bounds'
+	else
+		skip reentry-bounds
+	fi
+fi
+
+# --- Forbid direct Python interpreter paths ON the pfSense appliance. Consumers
+#     invoke pfb_python.sh, the sole dependency-derived resolver. ---
+if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
+	if exempted scripts/check_appliance_python.py; then
+		exempt no-appliance-python
+	elif [ -n "$py_bin" ]; then
+		step 'no-direct-appliance-python'
+		"$py_bin" scripts/check_appliance_python.py || failed 'no-appliance-python'
+	else
+		skip no-appliance-python
+	fi
+fi
+
+# --- Forbid hardcoded pfSense/FreeBSD version tokens in value positions (CE 2.8,
+#     FreeBSD:15, py311, ...): they must be read from the ci-metadata matrix at
+#     runtime, not restated as literals that silently drift when the matrix moves.
+#     Relevant to any scan-root language (src/scripts/.github/workflows carry
+#     py/php/sh/yaml). Scans the whole tracked set; escape a real one-off inline
+#     with `# version-literal-ok: <reason>`. ---
+if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ] || [ "$staged_yaml" = 1 ]; then
+	if exempted scripts/check_version_literals.py; then
+		exempt version-literals
+	elif [ -n "$py_bin" ]; then
+		step 'version-literals (no hardcoded version tokens)'
+		"$py_bin" scripts/check_version_literals.py || failed 'version-literals'
+	else
+		skip version-literals
+	fi
+fi
+
+# --- Forbid delegation-process narration (Phase N, RESULTS/ refs, review
+#     archaeology) in ADDED comment lines under src/ + scripts/. Diff-scoped:
+#     judges only the staged diff, so pre-existing narration is grandfathered
+#     until its cleanup lands. Escape inline with `# narration-ok: <reason>`. ---
+if exempted scripts/check_comment_narration.py; then
+	exempt comment-narration
+elif [ -n "$py_bin" ]; then
+	step 'comment-narration (no process narration in new comments)'
+	"$py_bin" scripts/check_comment_narration.py --staged || failed 'comment-narration'
+else
+	skip comment-narration
+fi
+
+# --- Agent role-family parity (issue #1387): the shared role registry
+#     (.agents/policy/agent-roles.md) vs both vendors' role definitions. The
+#     checker self-scopes: it validates iff the staged diff touches a role
+#     surface (.agents/policy/, model-tiers.conf, .codex/agents/,
+#     .claude/workflows/, .agents/skills/); otherwise it reports the skip. ---
+if exempted scripts/check_agent_roles.py; then
+	exempt agent-roles
+elif [ -n "$py_bin" ]; then
+	step 'agent-roles (role registry vs vendor role definitions)'
+	"$py_bin" scripts/check_agent_roles.py --staged || failed 'agent-roles'
+else
+	skip agent-roles
+fi
+
+# --- Context byte budgets + routing headers (map #1383): the bootstrap, the
+#     .agents/policy|context files, dir stubs, and hook capsules stay within
+#     their byte budgets, and every AGENTS.md routing-table target keeps its
+#     Scope/Load-when header. Self-scopes: validates iff the staged diff
+#     touches a context surface; otherwise reports the skip. ---
+if exempted scripts/check_context_budget.py; then
+	exempt context-budget
+elif [ -n "$py_bin" ]; then
+	step 'context-budget (bootstrap/policy byte budgets + routing headers)'
+	"$py_bin" scripts/check_context_budget.py --staged || failed 'context-budget'
+else
+	skip context-budget
+fi
+
+# =============================== PHP (*.php, *.inc) ========================== #
+if [ "$staged_php" = 1 ]; then
+	composer_vendor_ok=1
+	# An exempted vendor check deliberately leaves the style gates enabled: php -l
+	# grades against the host interpreter regardless of vendor state, and phpcs
+	# self-skips when vendor/bin/phpcs is absent (the release-line case), so the
+	# fail-closed rationale (grading against wrong Composer tool versions) cannot
+	# bite on a tree that ships no Composer machinery at all.
+	if exempted scripts/check_composer_vendor.py; then
+		exempt 'composer vendor'
+	elif [ -n "$py_bin" ]; then
+		step 'composer vendor'
+		"$py_bin" scripts/check_composer_vendor.py || {
+			failed 'composer vendor'
+			composer_vendor_ok=0
+		}
+	else
+		failed 'composer vendor (python interpreter unavailable)'
+		composer_vendor_ok=0
+	fi
+
+	# Composer PHP tools are unsafe against a missing, shared, or stale vendor tree.
+	# The guard is fail-closed and runs before every PHP style gate.
+	if [ "$composer_vendor_ok" != 1 ]; then
+		printf '[pre-commit] Composer vendor check failed; skipping PHP style gates.\n' >&2
+	else
+	# php -l syntax check (output shown only for files that fail). One pass over the
+	# whole tree, not one invocation per file. A host without php SKIPS rather than
+	# fails: the matrix versions are what grade a release, and blocking every commit on
+	# a local PHP install buys nothing CI does not already cover.
+	if command -v php >/dev/null 2>&1; then
+		step 'php -l'
+		sh -c '
+			find src \( -name "*.php" -o -name "*.inc" \) | sort | while IFS= read -r f; do
+				out=$(php -l "$f" 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }
+			done' || failed 'php -l'
+	else
+		skip 'php -l'
+	fi
+
+	# PHPCS sniffs (only when the vendor tree is installed). Config auto-discovered
+	# from phpcs.xml.dist.
+	if command -v php >/dev/null 2>&1 && [ -x vendor/bin/phpcs ]; then
+		step 'phpcs'
+		# issue #895: cap memory because phpcs tokenising a
+		# large file (pfblockerng.inc ~19.5k lines) exhausts PHP's default 128M and
+		# aborts, which forces --no-verify and skips ALL gates. CI runs at
+		# memory_limit=-1 so it never OOMs there; this closes the local-only gap.
+		vendor/bin/phpcs -d memory_limit=1G || failed 'phpcs'
+	else
+		skip phpcs
+	fi
+	fi
+fi
+
+[ -n "$skipped" ] && printf '[pre-commit] skipped (tool not found):%s\n' "$skipped" >&2
+
+if [ "$fail" != 0 ]; then
+	printf '[pre-commit] One or more checks failed (see above). Fix them, or bypass with: git commit --no-verify\n' >&2
+	exit 1
+fi
+exit 0

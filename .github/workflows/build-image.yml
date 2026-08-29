@@ -1,0 +1,460 @@
+name: Build pfSense CE smoke image
+
+# Publish a version-tagged pfSense CE qcow2 to PRIVATE GHCR via oras, then
+# VERIFY the published image passes the Phase-1 round-trip. One output contract:
+# the published qcow2 at ghcr.io/<org>/pfsense-ce:<PFSENSE_CE_VERSION>.
+#
+# Build mode is "seed once, upgrade in place" (ADR-04 §2):
+#   * SEED  — a maintainer's ONE clean manual CE install, exported wholesale to
+#             a qcow2 and pushed with scripts/image-publish.sh. That export reads
+#             a powered-off Proxmox VM disk, so it CANNOT run on a GH runner
+#             (no Proxmox, no LAN — see RESULTS/02_Results.txt + scripts/README.md).
+#             This workflow's `seed` mode therefore only RE-VERIFIES an already
+#             published seed tag (it does not create one); creation is the
+#             maintainer runbook step.
+#   * UPGRADE — pull a prior published tag, boot it under the runner's own KVM,
+#             run pfSense-upgrade in place, re-snapshot, publish the new tag.
+#             This IS automatable on the runner and is the canonical CI path.
+#             It reuses scripts/image-upgrade.sh run LOCALLY (the runner is the
+#             KVM host: no --proxmox), so the upgrade logic is not duplicated.
+#
+# RETENTION: every tag is its own immutable snapshot; older tags are never
+# overwritten (both scripts refuse to clobber without --force). The seed tag and
+# every upgrade snapshot stay in GHCR — the upgrade chain is recoverable and
+# auditable (ADR-04 §2 "Retain the archived seed AND every snapshot").
+#
+# This builds CE ONLY (no Plus) and a single latest-stable version per run; the
+# per-minor matrix + automated refresh are ADR-09. The GHCR package is PRIVATE.
+#
+# Required config (Actions secrets/vars — NEVER commit secrets):
+#   SMOKE_GHCR_USER     username for `oras login ghcr.io` (defaults to github.actor)
+#   SMOKE_GHCR_TOKEN    token with write:packages (publish) /        (defaults to GITHUB_TOKEN)
+#                       read:packages (verify pull)
+#   SMOKE_SSH_PRIV_KEY  guest SSH private key; its public half is     (secret)
+#                       baked into the image's root authorized_keys
+#   SMOKE_IMAGE_REPO    GHCR namespace, e.g. ghcr.io/pfblockerng      (variable)
+#                       (default ghcr.io/<owner-lowercased>); the untagged image
+#                       is ${SMOKE_IMAGE_REPO}/${SMOKE_IMAGE_NAME}.
+#   SMOKE_IMAGE_NAME    image name appended to it (default pfsense-ce) (variable)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pfsense_ce_version:
+        description: "Target pfSense CE floating tag to publish (e.g. 2.8)"
+        required: true
+        default: "2.8"  # version-literal-ok: dispatch fallback default; the CE floating tag to publish
+      base_source:
+        description: "Base source: 'upgrade' (boot a prior tag + pfSense-upgrade in place) or 'seed' (re-verify an existing maintainer seed; seeds are created off-runner via image-publish.sh)"
+        required: true
+        default: "upgrade"
+        type: choice
+        options:
+          - upgrade
+          - seed
+      from_version:
+        description: "UPGRADE mode: the prior published CE tag to boot and upgrade from (e.g. 2.8.0)"
+        required: false
+        default: ""
+      compression:
+        description: "qcow2 compression for the published image (zstd|zlib|off)"
+        required: false
+        default: "zstd"
+      upgrade_timeout:
+        description: "UPGRADE mode: seconds to wait for pfSense-upgrade + reboot"
+        required: false
+        default: "1800"
+      verify_boot_timeout:
+        description: "Verify: hard boot-to-ready timeout, seconds"
+        required: false
+        default: "120"
+      local_data_name:
+        description: "Verify: Unbound local-data name the round-trip injects + digs"
+        required: false
+        default: "smoke-control.pfb.test"
+      local_data_ip:
+        description: "Verify: A-record the round-trip asserts for local_data_name"
+        required: false
+        default: "192.0.2.123"
+  # ADR-09 hook: a scheduled refresh reads the supported-version matrix and
+  # dispatches this workflow per version. Left commented so ADR-04 does not
+  # silently start auto-publishing; ADR-09 enables + drives it.
+  # schedule:
+  #   - cron: "0 5 * * 1"   # weekly, Monday 05:00 UTC
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pfsense_ce_version }}
+  cancel-in-progress: false
+
+jobs:
+  # ── 0. Map the target CE version to its FreeBSD base + PHP runtime ────────
+  # The branch .pkg MUST be built against the FreeBSD ABI + PHP runtime of the
+  # target pfSense CE version (else `pkg add` ABI-mismatches / the wrong PHP is
+  # pinned). This job derives (freebsd_version, php_version) by looking up the
+  # input CE version in the decoupled supported-versions matrix on the
+  # ci-metadata orphan ref (ADR-09 Phase 2). It HARD-FAILS on any version not
+  # present in the matrix — the same reject-unknown contract as the former
+  # hardcoded case-map (issue #22), now with ONE place to add a version:
+  # edit supported-versions.json on ci-metadata; no workflow change needed.
+  # Runs first and is cheap (no KVM), so an unknown version fails in seconds.
+  resolve-version:
+    name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      freebsd_major: ${{ steps.lookup.outputs.freebsd_major }}
+      php_version: ${{ steps.lookup.outputs.php_version }}
+      py_flavor: ${{ steps.lookup.outputs.py_flavor }}
+    steps:
+      - name: Checkout (for scripts/read-version-matrix.sh)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Look up pfsense_ce_version in the supported-version matrix
+        id: lookup
+        env:
+          CE_VERSION: ${{ inputs.pfsense_ce_version }}
+        run: |
+          set -eu
+          # Fetch ci-metadata and read the matrix JSON.
+          git fetch origin ci-metadata
+          MATRIX_JSON="$(git show origin/ci-metadata:supported-versions.json)"
+
+          # Find the CE entry whose pfsense_version exactly matches CE_VERSION.
+          # pfsense_version is now the floating Major.Minor tag (e.g. "2.8"), so
+          # build-image.yml inputs must use the same tag (not a patch version like
+          # "2.8.1"). Exit 2 = no match -> hard-fail with actionable error.
+          MATCH="$(printf '%s' "$MATRIX_JSON" | jq -e --arg ver "$CE_VERSION" '
+            .versions[]
+            | select(.channel == "CE" and .pfsense_version == $ver)
+          ' 2>/dev/null | jq -s '.[0] // empty')" || true
+
+          if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
+            printf '::error::no FreeBSD/PHP mapping for pfSense CE '"'"'%s'"'"' in supported-versions.json on ci-metadata. Add a CE entry with pfsense_version='"'"'%s'"'"' and update docs/misc/pfSense_versions.md before publishing this version.\n' \
+              "$CE_VERSION" "$CE_VERSION"
+            exit 1
+          fi
+
+          FREEBSD_VERSION="$(printf '%s' "$MATCH" | jq -r '.freebsd_version')"
+          FREEBSD_MAJOR="$(printf '%s' "$MATCH" | jq -r '.freebsd_major')"
+          PHP_VERSION="$(printf '%s' "$MATCH" | jq -r '.php_version')"
+          PY_FLAVOR="$(printf '%s' "$MATCH" | jq -r '.py_flavor')"
+          {
+            printf 'freebsd_major=%s\n' "$FREEBSD_MAJOR"
+            printf 'php_version=%s\n' "$PHP_VERSION"
+            printf 'py_flavor=%s\n' "$PY_FLAVOR"
+          } >> "$GITHUB_OUTPUT"
+          printf 'CE %s -> FreeBSD %s (major %s), PHP %s, %s (from ci-metadata matrix)\n' \
+            "$CE_VERSION" "$FREEBSD_VERSION" "$FREEBSD_MAJOR" "$PHP_VERSION" "$PY_FLAVOR"
+
+  # ── 1. Publish the version-tagged qcow2 to private GHCR ──────────────────
+  publish-image:
+    name: Publish pfSense CE ${{ inputs.pfsense_ce_version }} to GHCR
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ inputs.pfsense_ce_version }}
+    steps:
+      - name: Checkout (for scripts/)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs
+        env:
+          BASE_SOURCE: ${{ inputs.base_source }}
+          FROM_VERSION: ${{ inputs.from_version }}
+        run: |
+          set -eu
+          if [ "$BASE_SOURCE" = "upgrade" ] && [ -z "${FROM_VERSION:-}" ]; then
+            echo "::error::base_source=upgrade requires from_version (the prior published tag to upgrade)"
+            exit 1
+          fi
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils openssh-client
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Write guest SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Resolve the GHCR image ref
+        id: ref
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
+        run: |
+          set -eu
+          # Compose the untagged image from the namespace + name vars (org-transfer
+          # scheme; one namespace, many images). Fallback: lowercased owner —
+          # GHCR/OCI refs MUST be lowercase (a literal pfBlockerNG owner would 400).
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "publishing target: ${IMAGE}:${{ inputs.pfsense_ce_version }}"
+
+      - name: Upgrade in place and publish (canonical path)
+        if: inputs.base_source == 'upgrade'
+        # Reuse scripts/image-upgrade.sh LOCALLY: the runner IS the KVM host, so
+        # no --proxmox. It pulls FROM_VERSION (local oras), boots a writable copy
+        # under the runner's KVM, runs `pfSense-upgrade` over SSH (guest key from
+        # the secret), waits for the new version, powers off, compresses, and
+        # pushes the new tag. The source tag is left untouched (snapshot kept).
+        env:
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # Run-body export, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
+          sh scripts/image-upgrade.sh \
+            --image "${{ steps.ref.outputs.image }}" \
+            --from "${{ inputs.from_version }}" \
+            --to "${{ inputs.pfsense_ce_version }}" \
+            --compression "${{ inputs.compression }}" \
+            --upgrade-timeout "${{ inputs.upgrade_timeout }}"
+
+      - name: Seed mode — re-verify only (creation is off-runner)
+        if: inputs.base_source == 'seed'
+        # A SEED is one clean manual CE install exported wholesale via
+        # scripts/image-publish.sh from a powered-off Proxmox VM. That export
+        # reads a host disk and cannot run on a GH runner. So `seed` mode here
+        # does NOT create a tag: it asserts the requested seed tag already
+        # exists in GHCR (published by the maintainer per the runbook) and lets
+        # the verify job round-trip it.
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          if ! oras manifest fetch "${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }}" >/dev/null 2>&1; then
+            echo "::error::seed tag ${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }} not found. Create it off-runner with scripts/image-publish.sh (see RESULTS/02_Results.txt)."
+            exit 1
+          fi
+          echo "seed tag ${SMOKE_IMAGE}:${{ inputs.pfsense_ce_version }} present — verify job will round-trip it"
+
+  # ── 2. Build the branch .pkg (for the verify round-trip) ─────────────────
+  # Verification installs the branch-under-test onto the freshly published image
+  # exactly as the smoke spike does, so it needs the .pkg. Built by the portable
+  # Linux builder (the sole .pkg builder; pfBlockerNG is NO_BUILD so it reproduces
+  # `make package` and pkg add checks dep PRESENCE, not version).
+  build-pkg:
+    name: Build branch .pkg (portable Linux)
+    needs: [resolve-version, publish-image]
+    uses: ./.github/workflows/build-pkg-linux.yml
+    with:
+      channel: edge
+      # Pass the CE-version-derived target EXPLICITLY (issue #22) — never rely on
+      # the builder's defaults, which match the min CE only.
+      abi: FreeBSD:${{ needs.resolve-version.outputs.freebsd_major }}:amd64
+      php_version: ${{ needs.resolve-version.outputs.php_version }}
+      py_flavor: ${{ needs.resolve-version.outputs.py_flavor }}
+
+  # ── 3. Verify the published image passes the Phase-1 round-trip ──────────
+  verify-image:
+    name: Round-trip the freshly published image
+    needs: [publish-image, build-pkg]
+    runs-on: ubuntu-latest
+    # issue #2614: this job runs tests/smoke/roundtrip.sh, which drives the production
+    # `pfblockerng.php update` entry point on the live image, so it reaches src/'s
+    # unbounded file_put_contents(..., LOCK_EX) acquires. This budget is the only bound.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu, dig, curl)
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Resolve the GHCR image ref
+        id: ref
+        env:
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_IMAGE_NAME: ${{ vars.SMOKE_IMAGE_NAME }}
+        run: |
+          set -eu
+          REPO="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          IMAGE="${REPO%/}/${SMOKE_IMAGE_NAME:-pfsense-ce}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull the freshly published image from private GHCR
+        env:
+          SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+          mkdir -p image
+          oras pull "${SMOKE_IMAGE}:${{ needs.publish-image.outputs.version }}" --output image
+          ls -l image
+
+      - name: Write guest SSH key (mode 600)
+        env:
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+        run: |
+          set -eu
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::error::SMOKE_SSH_PRIV_KEY secret is not set"
+            exit 1
+          fi
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          chmod 600 smoke_key
+
+      - name: Download the built pfBlockerNG package
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.build-pkg.outputs.artifact }}
+          path: pkg
+
+      - name: Locate the .pkg
+        run: |
+          set -eu
+          PKGFILE="$(find pkg -type f -name '*.pkg' 2>/dev/null | head -1)"
+          [ -n "$PKGFILE" ] || { echo "::error::no .pkg in the build artifact"; ls -lR pkg || true; exit 1; }
+          echo "PKGFILE=${PKGFILE}" >> "$GITHUB_ENV"
+          echo "using package: ${PKGFILE}"
+
+      - name: Boot + round-trip the published image
+        env:
+          LOCAL_DATA_NAME: ${{ inputs.local_data_name }}
+          LOCAL_DATA_IP: ${{ inputs.local_data_ip }}
+          BOOT_TIMEOUT: ${{ inputs.verify_boot_timeout }}
+        run: |
+          set -eu
+          BASE_IMG="$(find image -type f -name '*.qcow2' | head -1)"
+          [ -n "$BASE_IMG" ] || { echo "::error::no .qcow2 in the pulled artifact"; ls -lR image || true; exit 1; }
+          echo "round-tripping image: $BASE_IMG"
+
+          QMP_SOCK="${RUNNER_TEMP:-/tmp}/pfb-qmp-verify.sock"
+          QMP_SOCK="$QMP_SOCK" tests/smoke/boot_vm.sh "$BASE_IMG" > vm-verify.log 2>&1 &
+          VM_PID=$!
+
+          if BOOT_OUT="$(tests/smoke/wait_ready.sh smoke_key 127.0.0.1 2222 "$BOOT_TIMEOUT" "$VM_PID" 8080)"; then
+            echo "$BOOT_OUT"
+            # Clean pfSense (pfBlockerNG NOT baked) — install the branch .pkg,
+            # then run the exact Phase-1 control round-trip.
+            # Wrapped in if/else so set -eu does not exit before the screendump
+            # and VM cleanup below when either script returns non-zero.
+            if scripts/install-pkg.sh root@127.0.0.1 \
+                 --port 2222 --ssh-key smoke_key --pkg "$PKGFILE" \
+               && tests/smoke/roundtrip.sh smoke_key "$LOCAL_DATA_NAME" "$LOCAL_DATA_IP" \
+                    127.0.0.1 2222 5353 8080; then
+              RC=0
+            else
+              RC=$?
+            fi
+          else
+            echo "::error::published image never became ready"
+            tail -n 40 vm-verify.log || true
+            RC=1
+          fi
+
+          if [ "$RC" -ne 0 ] && kill -0 "$VM_PID" 2>/dev/null; then
+            python3 tests/smoke/screendump.py "$QMP_SOCK" "${PWD}/screen-verify.png" \
+              || echo "screendump failed"
+          fi
+          kill "$VM_PID" 2>/dev/null || true
+          wait "$VM_PID" 2>/dev/null || true
+          rm -f "$QMP_SOCK"
+          exit "$RC"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-image-verify-diagnostics
+          path: |
+            vm-verify.log
+            screen-verify.png
+          if-no-files-found: ignore
+          retention-days: 7

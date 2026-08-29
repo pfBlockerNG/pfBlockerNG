@@ -1,0 +1,5 @@
+interface:
+  display_name: "CodeRabbit"
+  short_description: "Fair Usage gate and CLI review"
+policy:
+  allow_implicit_invocation: true

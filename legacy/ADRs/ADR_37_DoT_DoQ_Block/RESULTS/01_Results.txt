@@ -1,0 +1,112 @@
+ADR-37 Phase 1 Results — Config Fields + Golden Rule-Builder Tests
+===================================================================
+Branch: adr/37-dot-doq-block
+Committed by Phase 1 agent (Sonnet 4.6)
+
+
+1. REGISTRY ENTRIES ADDED
+--------------------------
+All three fields added to pfb_cfg_registry() in:
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  (after the ADR-36 dnsbl_redir_exclude entry)
+
+  Key                    Section                                              Adapter        Default  Since
+  dnsbl_dot_block        installedpackages/pfblockerngdnsblsettings/config/0  toggle         ''       4.0.0
+  dnsbl_dot_block_int    installedpackages/pfblockerngdnsblsettings/config/0  plain NULL/NULL ''       4.0.0
+  dnsbl_dot_block_exclude installedpackages/pfblockerngdnsblsettings/config/0 plain NULL/NULL ''      4.0.0
+
+  dnsbl_dot_block:         pfb_cfg_toggle_read / pfb_cfg_toggle_write
+                           stored vocabulary: {'on', ''}, round-trip clean
+  dnsbl_dot_block_int:     NULL/NULL (identity), any stored string passes through unchanged
+  dnsbl_dot_block_exclude: NULL/NULL (identity), any stored string passes through unchanged
+
+  Collision check: no prior dnsbl_dot_block* keys existed in the registry.
+
+
+2. $registeredPaths ADDITIONS
+--------------------------------
+Added to tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php:
+
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block',
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_int',
+  'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block_exclude',
+
+  (placed after the ADR-36 dnsbl_redir_exclude entry, before the safesearch section)
+
+
+3. CfgGatewayTest.php ADDITIONS
+---------------------------------
+File: tests/php/CfgGatewayTest.php
+Added in a new section "ADR-37 — dnsbl_dot_block / dnsbl_dot_block_int / dnsbl_dot_block_exclude":
+
+  testDnsblDotBlockToggleRoundTripOn        — 'on' -> PfbToggle::On -> 'on' (round-trip)
+  testDnsblDotBlockToggleRoundTripOff       — '' -> PfbToggle::Off -> '' (round-trip)
+  testDnsblDotBlockAbsentKeyReturnsOff      — absent -> PfbToggle::Off (default '')
+  testDnsblDotBlockIntPlainRoundTripNonEmpty — 'lan,opt1' -> 'lan,opt1' (identity)
+  testDnsblDotBlockIntAbsentKeyReturnsDefaultEmpty — absent -> '' (default)
+  testDnsblDotBlockExcludePlainRoundTripNonEmpty   — 'DoT_Exceptions' -> 'DoT_Exceptions' (identity)
+  testDnsblDotBlockExcludeAbsentKeyReturnsDefaultEmpty — absent -> '' (default)
+
+  Also added 3 keys to the $inventory list in testInventoryCompletenessAllKnownKeysAccountedFor():
+    'dnsbl_dot_block', 'dnsbl_dot_block_int', 'dnsbl_dot_block_exclude'
+
+  CfgGatewayTest + RollbackContractTest: 213 tests, 2184 assertions — all GREEN.
+  (RollbackContractTest derives toggle keys from the registry dynamically via
+   toggleAdaptedKeys(); dnsbl_dot_block is automatically included — no separate update needed.)
+
+
+4. SKELETON BUILDER
+--------------------
+Function: pfb_build_dot_block_rule(string $iface, string $exclude_alias): array
+File:     src/usr/local/pkg/pfblockerng/pfblockerng.inc
+Location: Placed directly before pfb_firewall_rule() (the nearest sibling function).
+          No new shipped file — inlined per the orchestrator constraint.
+
+The skeleton throws \LogicException('pfb_build_dot_block_rule: not yet implemented (ADR-37 Phase 2)')
+so that the 10 golden tests all ERROR (oracle-first: tests fail against the skeleton as required).
+
+
+5. GOLDEN TEST FILE
+--------------------
+File: tests/php/DotDoQBlockRuleTest.php (new)
+
+Test method names and RED/GREEN status against the Phase 1 skeleton:
+  test_source_is_any_when_no_exception_alias                  [RED - expected, skeleton throws]
+  test_source_is_negated_alias_when_exception_alias_set       [RED - expected, skeleton throws]
+  test_type_is_block                                          [RED - expected, skeleton throws]
+  test_ipprotocol_is_inet46                                   [RED - expected, skeleton throws]
+  test_protocol_is_tcp_udp                                    [RED - expected, skeleton throws]
+  test_destination_has_self_not_and_port_853_alias_empty      [RED - expected, skeleton throws]
+  test_destination_has_self_not_and_port_853_alias_set        [RED - expected, skeleton throws]
+  test_statetype_is_keep_state                                [RED - expected, skeleton throws]
+  test_descr_marker_contains_iface                            [RED - expected, skeleton throws]
+  test_multiple_interfaces_produce_independent_rules          [RED - expected, skeleton throws]
+
+All 10 red — correct oracle-first behavior.
+
+
+6. VERIFICATION RESULTS
+------------------------
+  php -l (touched files)    CLEAN (no syntax errors; pre-existing deprecation warnings in pfblockerng.inc unchanged)
+  PHPUnit:                  1227 tests total; 10 errors (all DotDoQBlockRuleTest, expected); 213 CfgGateway+Rollback GREEN
+  PHPStan:                  OK - No errors
+  PHPCS:                    CLEAN (no output; all 3 sniffs pass including RequireConfigGateway with new paths)
+  pytest:                   1930 passed, 2 skipped
+  ruff check:               All checks passed
+  ruff format --check:      128 files already formatted
+
+  Warnings in PHPUnit output (31 total) are pre-existing FwobjCurrentBehaviourTest warnings
+  unrelated to this change.
+
+
+7. GO-AHEAD FOR PHASE 2
+------------------------
+Phase 2 may proceed. It must:
+  - Implement pfb_build_dot_block_rule() in pfblockerng.inc so all 10 golden tests pass.
+  - Register the builder via pfb_fwobj_register() (ADR-35 seam in pfblockerng_fwobj.inc).
+  - Wire create/reconcile/remove into sync_package_pfblockerng() when dnsbl_dot_block == 'on'.
+  - Add reconcile tests: idempotent sync, disable removes all pfB_DoT_Block_* rules,
+    stale-interface prune, user-rule survival.
+
+  Phase 2 handoff prompt: .ADRs/ADR_37_DoT_DoQ_Block/02_Builder_And_Sync.txt
+  Prior handoff:          .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/01_Results.txt (this file)

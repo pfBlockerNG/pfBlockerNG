@@ -1,0 +1,74 @@
+================================================================================
+PHASE 6 PROMPT — Docs + Definition of Done + Status
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §7 Definition of done + POST-MERGE,
+     §2 whole Decision table FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 6 of ADR-18 — docs + close
+out. Document the nightly channel for users (README) and developers (CLAUDE.md), finalise §7,
+and set Status. Work in this ADR's worktree, one commit. The README/CLAUDE.md halves are
+doc-only (CI-skip); the ADR.md Status edit is a doc push direct to `devel`.
+
+WHY THIS PHASE EXISTS
+The channel is built + pinned (Phases 1-5). Users need the install one-liner + the
+bleeding-edge/conflict/switch-back contract; developers need the build/publish/gate/retention
+model recorded next to ADR-17's. Then Status moves off Proposed on the evidence.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_18_Nightly_Channel/RESULTS/05_Results.txt — the §7 checklist status + run ids.
+  Also RESULTS/01-04 for the verdict + the exact invocations/paths. If 05 is missing, STOP.
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§2 Decision table, §7 DoD + POST-MERGE + reject
+  criteria).
+- README.md — the ADR-17 "Self-hosted pkg repository" install section to extend with the
+  nightly channel.
+- CLAUDE.md — the "Self-hosted pkg repository (ADR-17)" section to extend (the nightly
+  channel, the unified deploy, the devel-changed gate, the last-14 pre-release retention).
+- .ADRs/ADR_17_Pkg_Repository/ADR.md §7 — the Status-wording precedent
+  (Proposed → Implemented (pending post-merge) → Accepted).
+
+ACTION PLAN (ordered)
+1. README: a nightly install one-liner (`add-repo.sh nightly` → `pkg install
+   pfSense-pkg-pfBlockerNG-NIGHTLY`); how it works (separate name + conflict, derived over
+   dated pre-releases, `${ABI}`, last-14 retention, `pkg upgrade` tracks the newest date);
+   the caveat (current `devel` tip, unreviewed; conflicts with the stable/`-devel` packages;
+   switch back via the release channel). Match neighbouring length/style; markdownlint clean.
+2. CLAUDE.md: extend the "Self-hosted pkg repository (ADR-17)" section with the nightly
+   channel — the `--channel nightly` builder path + `conflicts`/`commit` annotation, the
+   gated nightly build+stage workflow, the dated-pre-release durable store + prune-to-14, and
+   the unified single Pages deploy emitting both catalogs. Keep it terse + accurate.
+3. Finalise ADR §7: tick the affected-flow checklist boxes that are green (cite run ids from
+   RESULTS/05), leave the post-merge live-URL leg unticked with its POST-MERGE step intact;
+   keep the reject/degrade criteria.
+4. Set Status: **Proposed → Implemented (pending the post-merge live Pages `nightly` deploy +
+   the gated live-URL verification)** if the hermetic affected-flow smoke is green on the VM;
+   record the date. (Accepted comes after the maintainer runs the POST-MERGE dispatch — do
+   NOT claim Accepted from a PR run.)
+
+CONSTRAINTS
+- Markdown only here (no code/test/CI changes) — keep it a doc commit so the CI-skip applies;
+  do NOT touch src/, scripts/, tests/, or CI in this phase.
+- Do NOT overclaim: Status reflects what is actually proven (hermetic VM green ≠ live Pages
+  deploy). Mirror ADR-17's honest Proposed→Implemented→Accepted ladder.
+
+VERIFICATION (must all pass before the phase is done)
+- markdownlint-cli2 → clean on README.md + CLAUDE.md + ADR.md; scripts/check_url_encoding.py
+  → clean (md fences). python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+README + CLAUDE.md document the nightly channel; ADR §7 is finalised with run-id evidence; the
+ADR is implemented end-to-end with Status reflecting the live-VM evidence (Accepted pending the
+maintainer's post-merge deploy).
+
+COMMIT (single)
+    docs: document the nightly channel + finalise ADR-18 DoD/Status (ADR-18 P6)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. README/CLAUDE.md = doc-only (CI-skip) but still lands via the same
+flow; ADR.md Status edit pushes direct to `devel` per the carve-out. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/06_Results.txt` (plain .txt)
+State: what landed in README + CLAUDE.md; the final Status + date; the §7 checklist state
+(green boxes + the post-merge leg outstanding); the exact POST-MERGE dispatch the maintainer
+must run to flip Implemented → Accepted; any follow-up (e.g. a GUI channel picker ADR).

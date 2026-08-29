@@ -1,0 +1,46 @@
+================================================================================
+ADR-63 PHASE 5 — ORCHESTRATOR GATE RECORD
+Docs, release-notes delta, DoD smoke rows (final phase)
+Gate run: 2026-07-12 | Verdict: PASS | commits 0266a13c (arch-notes) + this (status/handoff)
+================================================================================
+
+ROUTE
+Docs phase — handled directly by the orchestrator (higher model) per CLAUDE.md
+("always handles docs/config/settings/skills directly"); no phase-step delegation.
+Behaviour-preserving: no production src/ change (Phases 1-4 landed the behaviour).
+
+COMMANDS + RESULTS
+- npx markdownlint-cli2 docs/misc/architecture-notes.md -> 0 errors
+- python3 -m pytest (full suite) -> 2666 passed, 5 skipped (no regression)
+- CE+Plus fan-out (run 29170634245, scope=full, -k "reorder or sort_mode"):
+  completed/success; build-pkg CE + Plus success; browser ce-2.8 43 passed /
+  browser plus-26.03 43 passed, 0 failed each. Verified via gh run view (job
+  conclusions + pasted pass-count lines).
+
+PER-ITEM VERDICTS
+- Architecture-notes: PASS — section names both pages, the two persistence shapes
+  (ids[]-at-Save vs positional-names-via-renumber) + why (§1.3), roworderdragging
+  read-only reuse, the paint-layer fix, and the retired symbols ($Lmove/$Xmove/
+  $pre/$disable_move/move_anchor) as a grep landing pad; #1152 + #1201 flagged
+  out-of-scope. Re-read the section; claims match the landed code.
+- §7 rows 1-6: PASS — each maps to an existing automated test (P1/P3/P4); the full
+  set selected by one -k filter and green on BOTH editions. No retrofit, no double
+  duty. Row 6's roworderdragging fixture restores prior value in a loud teardown.
+- Status flip: PASS — Accepted cites run 29170634245 with both-edition pass counts,
+  ADR-62 citation format. Acceptance rests on green automated CE+Plus coverage.
+- Release-notes: PASS (deviation recorded) — no partial committed file (would suppress
+  other changes' Models-generated notes under committed-file precedence); delta rides
+  commit messages + ADR + architecture-notes.
+
+DEFINITION OF DONE (§7) — MET
+- All phases landed (RESULTS/01-05 + Gate records); full PHPUnit (3027) + pytest (2666)
+  green; PHPCS/PHPStan clean; Phase-1 golden oracles green at the final phase
+  (CategoryEditAutoSortTest byte-identity for sort=='sort'; the category_edit Lmove-path
+  oracles were deleted with their mechanism in P4 per §1.5).
+- Automated live-VM CE+Plus fan-out (rows 1-6) green — the acceptance condition. No item
+  is genuinely out-of-CI. ADR-63 -> Accepted.
+
+DEVIATIONS: docs handled directly (endorsed); release-notes via commits not a partial file
+(rationale above). None blocking.
+
+SKIPPED: none.

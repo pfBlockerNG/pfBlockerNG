@@ -1,0 +1,91 @@
+================================================================================
+PHASE 5 PROMPT — End-to-end live journey (repo smoke) + docs + Definition of Done
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_19_Update_Channel_Panel/ADR.md
+     (read §4 acceptance, §7 DoD + manual smoke + reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/19-update-channel-panel` branch performing Phase 5 of ADR-19 — the
+final phase. Prove the whole journey on the ADR-04 live VM (publish a newer build ->
+de-duped channel-correct notice + cache update -> same-channel Update pulls it), update
+docs, and fill the DoD. Work in this ADR's worktree, one commit, push directly
+(rebase-only PR — touches tests/ + docs).
+
+WHY THIS PHASE EXISTS
+Phases 2-3 unit-tested the decision core with doubled IO; Phase 4 proved the page
+renders. Only the live VM can prove the REAL pkg read + file_notice + upgrade chain end
+to end against ADR-17's repo model. This is the ADR-01-style kill-gate for the shipped
+behaviour and the evidence the maintainer accepts on.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_19_Update_Channel_Panel/RESULTS/04_Results.txt — the page marker + button
+  handlers + cache wiring. If missing, STOP and report.
+- Also re-read RESULTS/01_Results.txt (proven pkg/notice invocations) and
+  03_Results.txt (cache shape, orchestrator name, config field).
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md (§4 acceptance, §7 DoD/manual smoke/reject).
+- tests/smoke/test_repo_install.py — the `repo`-marked hermetic-catalog flow + helpers
+  (`build_repo_via_portable`, the `file://` conf, egress-open path, `pkg` assertions).
+- tests/smoke/helpers.py + conftest.py — `smoke_vm`, on-box exec, `get_notices` access
+  (or drive it via php-cli), `unique_domain()`, the timeout marker.
+- README.md / docs/misc/architecture-notes.md — where to document the Software panel +
+  the channel/notify model (consumer side of ADR-17/18).
+- CLAUDE.md — "Smoke tests (ADR-04)", "Test coverage (mandatory)", "Updating
+  documentation".
+
+ACTION PLAN (ordered — transition asserts, befores AND afters, by value)
+1. E2E journey as a `repo`-marked case (extend test_repo_install.py or the Phase-1
+   sibling), egress OPEN, hermetic catalogs:
+   - GIVEN our build (version N) installed from a hermetic catalog on a chosen channel,
+     repo conf present. Run `pfb_software_update_check(true)`. ASSERT BEFORE: cache
+     shows installed==latest==N, "up to date", and NO matching notice in get_notices.
+   - WHEN the catalog is rebuilt to N+1 and the check runs again. THEN the cache shows
+     latest==N+1 + update-available, AND exactly ONE matching `file_notice` row appears
+     (de-dupe: run the check a 2nd time at N+1 -> still ONE row, not two).
+   - WHEN "Update now" path runs `pkg upgrade -y <ourpkg>`. THEN `pkg query '%v'`
+     advances N -> N+1 and `pkg query '%R'` shows OUR repo; the cache reflects
+     installed==latest; re-check raises NO new notice. Assert each before/after.
+2. Channel-default coverage (the OFF-vs-ON branch, live):
+   - On a DEVEL-named install with knob=default: a newer build -> NO notice (OFF).
+   - On a NIGHTLY-named install with knob=default: a newer build -> a notice (ON).
+     (If ADR-18's nightly repo is not yet live, simulate the nightly PACKAGE NAME via a
+     hermetic catalog so the channel-default branch is still proven end to end; note the
+     simulation in the handoff.)
+   Pair them so green proves the channel drives the default, not an always-path.
+3. Cleanup: CLOSE every notice raised; leave the VM clean (finally/CaseContext);
+   long cases get an explicit `@pytest.mark.timeout(...)`.
+4. Docs: document the Software panel + channel/notify model in README (user-facing:
+   how to see updates, the OFF/nightly-ON default, the knob) and the consumer note in
+   docs/misc/architecture-notes.md (ties to ADR-17/18). Fill ADR §7 DoD with the run id.
+
+CONSTRAINTS
+- Python 3.11+, 4-space, type hints, no bare except. Reuse `smoke_vm` + helpers — no 2nd
+  VM boot path. Marker `repo` (NOT `smoke`); deselected from `-m smoke`.
+- Egress OPEN for the repo flow (like ADR-17); do NOT block egress.
+- Compare versions BY VALUE; assert effective state (`pkg query`/`get_notices`/cache),
+  never exit code alone. Read smoke-diagnostics logs first on any failure.
+- Do NOT implement cross-channel SWITCH (still deferred) — this proves DISPLAY + NOTICE
+  + SAME-channel UPDATE only.
+
+VERIFICATION (must all pass before the phase is done)
+- The new `repo`-marked cases GREEN on the live VM
+  (`gh workflow run smoke.yml -f pytest_marker=repo`); capture the run id.
+- ui_render gate still GREEN (Phase 4 page) ; python -m pytest UNCHANGED.
+- ruff/markdownlint/shellcheck as relevant ; phpstan/phpunit unaffected.
+- Docs lint clean (markdownlint-cli2).
+
+EXPECTED RESULT
+A green end-to-end live journey proving newer-build -> de-duped channel-correct notice
++ cache + same-channel update from our repo; user + architecture docs updated; §7 DoD
+satisfied -> the ADR is ready to move from Proposed toward Accepted (pending the
+maintainer manual smoke in §7).
+
+COMMIT (single)
+    tests: ADR-19 P5 e2e software-update journey + docs (ADR-19 P5)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_19_Update_Channel_Panel/RESULTS/05_Results.txt` (plain .txt)
+Record: the run id; the proven journey (the exact before/after values); the de-dupe
+proof; the channel-default proof (and any nightly simulation noted); doc locations; the
+remaining maintainer manual-smoke items from §7; and the final GO for moving Status.

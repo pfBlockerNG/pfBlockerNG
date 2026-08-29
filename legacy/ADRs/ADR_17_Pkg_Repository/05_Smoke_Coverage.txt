@@ -1,0 +1,77 @@
+================================================================================
+PHASE 5 PROMPT — Full live-VM smoke: install + precedence + upgrade (falsify-first, expand)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §4 Requirements, §7 affected-flow smoke +
+     reject/degrade criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 5 of ADR-17. Grow the Phase-1 spike into
+the full affected-flow smoke that GATES Accept: install-from-our-repo, cross-repo
+precedence (both branches), and `pkg upgrade` to our newer build — all on the ADR-04
+live VM, via `add-repo.sh` + the published catalog. Work in this ADR's `adr/17`
+worktree, one commit.
+
+WHY THIS PHASE EXISTS
+Phase 1 proved the core premise minimally. Accept rides on the full, branch-covered,
+transition-asserted suite using the REAL bootstrap (`add-repo.sh`, Phase 4) and the REAL
+generator (`build-repo.sh`, Phase 2), not the throwaway spike — so the shipped path is
+what is pinned.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_17_Pkg_Repository/RESULTS/04_Results.txt — the `add-repo.sh` interface + the
+  conf it writes; and RESULTS/03_Results.txt for the published URL. If missing, STOP and
+  report.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§4, §7, the contract, the cross-version premise).
+- tests/smoke/test_smoke_repo.py (Phase 1) — extend it; do not duplicate.
+- tests/smoke/conftest.py + helpers.py — `smoke_vm`, the mock HTTP server, SSH exec,
+  readiness polling; scripts/build-repo.sh + scripts/add-repo.sh.
+- CLAUDE.md — Smoke section (probe ON-BOX, assert effective state) + the Test-coverage
+  rule (BDD Scenario/Given-When-Then for the multi-step flows; assert the BEFORE state;
+  branch coverage).
+
+ACTION PLAN (ordered — each a transition test, BEFORE state asserted first)
+1. INSTALL via the shipped path: serve a `build-repo.sh`-generated catalog over the mock
+   (hermetic default), run `add-repo.sh`, `pkg install pfSense-pkg-pfBlockerNG-devel`
+   (no `-f`). Assert: absent → installed FROM OUR REPO (`pkg query '%R'`), deps resolved,
+   POST-INSTALL ran, pfBlockerNG answers a DNS probe.
+2. PRECEDENCE (both branches, explicit): ours-higher ⇒ ours wins; ours-lower vs a decoy
+   ⇒ decoy wins. Assert the selected version/origin each way.
+3. UPGRADE (transition): install a LOWER version first (assert it), publish/serve a newer
+   build, `pkg upgrade`, assert it moved to OUR newer build (before/after versions).
+4. DISPATCH-ONLY real-URL leg: a `pytest.mark`/env-gated case that adds the conf pointing
+   at the real `github.io` URL and installs — kept OUT of the hermetic gated default
+   (the mock is the gate); document how to run it.
+5. CROSS-VERSION/OS-MAJOR: if reachable on the single image, assert precedence survives a
+   `pkg upgrade`; if a true OS-major jump can't be made to favor our build here, DO NOT
+   fail — record the limitation and the CLI `pkg upgrade` degrade in the handoff (§7).
+6. Leave the VM clean every case (`finally` / `CaseContext`): remove the conf, deinstall.
+
+CONSTRAINTS
+- Smoke tree only; marker `smoke`; OFF default `pytest`.
+- Python 4-space, 3.11+, type hints, no bare except; reuse `smoke_vm` + helpers — NO new
+  VM boot path / second server. Intent-named tests; BDD spec next to the multi-step ones.
+- Assert EFFECTIVE state (`pkg query`/`pkg info`/version/origin), never exit code/HTTP alone.
+- Use the SHIPPED `add-repo.sh` + `build-repo.sh`, not the Phase-1 throwaway helper.
+
+VERIFICATION (must all pass before the phase is done)
+- The full `test_smoke_repo.py` is GREEN on a dispatched smoke VM (install, both
+  precedence branches, upgrade). Capture versions/origins in the handoff.
+- python -m pytest (default) → unchanged; ruff clean.
+
+EXPECTED RESULT
+The shipped install/upgrade path is pinned on a real pfSense VM with branch-covered,
+transition-asserted cases — the oracle that gates Accept.
+
+COMMIT (single)
+    tests/smoke: full pkg-repo install/precedence/upgrade coverage (ADR-17 P5)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push `adr/17`. Touches tests/ → lands on `devel` via a rebase-only PR (smoke/
+`ui-tests` label). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/05_Results.txt` (plain .txt)
+State: each case + its asserted before/after; the precedence-branch evidence; the upgrade
+version transition; the dispatch-only real-URL result if run; the OS-major-upgrade verdict
+(survives, or degraded-to-CLI with the reason); reliability/flake notes; the go-ahead for
+Phase 6.

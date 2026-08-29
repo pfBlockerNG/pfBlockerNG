@@ -1,0 +1,88 @@
+================================================================================
+PHASE 4 PROMPT — Reload-watcher thread + background swap (zero-downtime active)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md   (read §2 "Publish protocol",
+     "Trigger / watch", "Background rebuild", "Concurrency", FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/10` branch performing Phase 4 of ADR-10. This is the core change:
+add a daemon watcher thread that, on a sentinel flip, runs `rebuild_and_swap()` OFF
+the query threads — so a DNSBL update applies with NO Unbound restart. The Phase-2
+single-ref swap + Phase-3 fail-closed make it safe. Work inline on `adr/10`, one
+commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+Phases 2-3 made the swap atomic + fail-closed but still synchronous at init. This
+phase makes it happen at RUNTIME without a restart: a watcher wakes on the sentinel
+the PHP side will flip (Phase 5), rebuilds in the background while query threads keep
+serving the OLD snapshot (zero downtime, briefly stale by design), then atomically
+swaps. The module already runs daemon workers (pfb_db_worker, pfb_async_worker) — this
+adds one more of the same kind.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/03_Results.txt — confirm rebuild_and_swap()
+  is fail-closed + atomic + resets the cache. If missing, STOP and report.
+- Also RESULTS/01_Results.txt — the visibility GO + the watch-mechanism notes.
+- .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (§2 publish/trigger/background/concurrency).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the worker-thread start block
+  (:728-746), pfb_db_worker (:1052) + pfb_async_worker (:165) as the daemon-thread
+  pattern, deinit/join handling (:1603-1637), _db_lock (:917), pfb["mod_threading"],
+  the manifest path (pfb["pfb_py_sources"] :333), rebuild_and_swap (Phase 3).
+- tests/test_adr10_*.py.
+- CLAUDE.md (stdlib only; no live Unbound in CI — the watcher logic must be unit-
+  testable with a stubbed build + a temp sentinel).
+
+ACTION PLAN (ordered)
+1. SENTINEL + GENERATION. Define the sentinel file + a monotonically-advancing
+   generation id (the PHP side writes it in Phase 5; here, define the contract +
+   reader). The watcher acts on a generation ADVANCE, not on bare mtime, so a missed/
+   coalesced event only delays — never corrupts (correctness rides on Phase-5's atomic
+   publish, not on notify latency).
+2. WATCHER THREAD. Add a daemon thread started in init_standard next to the existing
+   workers (gated on pfb["mod_threading"]): wait on the sentinel via select.kqueue
+   EVFILT_VNODE on the sentinel's DIRECTORY where available (FreeBSD; inotify is
+   Linux-only — do NOT use it), with a low-frequency mtime-poll FALLBACK. On a
+   generation advance -> call rebuild_and_swap().
+3. SINGLE-FLIGHT. Guard against overlapping rebuilds (a rebuild-in-progress flag /
+   lock): a trigger during a build is coalesced; after the build, re-check the
+   generation and rebuild once more if it advanced. Never run two builds at once
+   (protects the ~2x-RAM ceiling from Phase 1).
+4. LIFECYCLE. Clean start/stop: join the watcher on deinit (mirror :1603-1637); the
+   build runs off the query threads; the swap is the only writer of the snapshot ref.
+5. TESTS (no live Unbound): drive the watcher with a stubbed rebuild + a temp sentinel
+   dir — detects a generation advance, coalesces concurrent triggers, keeps the old
+   snapshot when the stubbed build fails, and joins cleanly. Cover the mtime-poll
+   fallback path (kqueue may be unavailable on the test host).
+
+CONSTRAINTS
+- Stdlib only (select.kqueue / os / threading); 4-space, typed, no bare except. Any
+  new injected Unbound symbol -> stubs/python/unboundmodule.py.
+- NO PHP / shell change this phase (Phase 5 writes the sentinel). For local testing,
+  the test harness writes the sentinel itself.
+- Do not block a query thread on the watcher; the per-query hot path stays lock-free
+  (the captured-snapshot read from Phase 2). Keep the ADR-06+07 oracles green.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green incl. retained oracles + the new watcher tests.
+- ruff check . / ruff format . → clean.
+- diff-read: the watcher is a daemon thread, single-flight, kqueue-with-poll-fallback,
+  generation-driven, and calls only rebuild_and_swap(); deinit joins it.
+
+EXPECTED RESULT
+A running module that, on a sentinel generation advance, rebuilds the DNSBL in the
+background and atomically swaps it in with zero dropped queries and no restart —
+unit-proven with a stubbed build; live proof deferred to Phase 6 smoke.
+
+COMMIT (single)
+    pfblockerng: ADR-10 P4 — reload-watcher thread + background atomic swap (ADR-10 P4)
+Push directly to `adr/10`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/04_Results.txt` (plain .txt)
+State: the sentinel + generation contract (exact path, format, advance semantics) that
+Phase 5's PHP MUST honour; the watch mechanism (kqueue + poll fallback) + how single-
+flight works; the deinit/join behaviour; the watcher test coverage; the go-ahead for
+Phase 5 (PHP must atomically publish + flip the sentinel + stop restarting for data
+updates).

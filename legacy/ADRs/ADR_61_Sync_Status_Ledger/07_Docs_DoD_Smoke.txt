@@ -1,0 +1,93 @@
+================================================================================
+PHASE 7 PROMPT — Docs, ADR status, manual smoke checklist
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS7 in full first)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 6). One commit, pushed
+directly (docs-only changes to src/tests still land on the ADR branch, not devel
+directly, per CLAUDE.md -- this is code-adjacent documentation for a not-yet-merged ADR,
+not the "dev-only class" carve-out). Read/Edit/Write/Bash only -- never spawn sub-agents.
+
+WHY THIS PHASE EXISTS
+All 6 prior phases are code; this phase writes the durable record (architecture-notes
+entry, ADR status update) and the manual/live-VM checklist that PHPUnit/pytest can't
+cover (real pfctl failures, real Unbound restarts, real reboots) -- the CLAUDE.md "ADR
+acceptance" gate that flips this ADR from Proposed to Implemented/Accepted.
+
+REQUIRED READING
+- FIRST, read RESULTS/06_Results.txt. If missing, Phase 6 is not complete; STOP and
+  report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS7 Definition of Done in full -- this phase's
+  checklist IS that section, verbatim, turned into an executable/runnable form where
+  possible).
+- docs/misc/architecture-notes.md -- find the ADR-43 due-ledger writeup (search
+  "Scheduling, trigger API") as the style/length template for this ADR's new entry;
+  also the ADR-42 change-detection entry for the sidecar-file writeup convention.
+- All six RESULTS/*.txt handoffs from this ADR -- synthesize their actual (not
+  originally-planned) file:line locations into the docs entry; do not re-describe the
+  ADR's draft plan, describe what actually landed.
+
+REALITY OVERRIDE (standing rule)
+The prior RESULTS files and the live tree override this prompt on any conflict — line
+numbers and code-state claims in this prompt (and in the ADR document itself) were written
+before earlier phases ran. Write the docs entry from the LIVE STATE, not from the ADR's
+original draft language.
+
+TEST MODE: behaviour-preserving (docs + one optional dispatch-only smoke module; no
+src/ change in this phase).
+
+ACTION PLAN (ordered)
+1. Add a new "## Sync-status ledger (ADR-61)" section to docs/misc/architecture-notes.md,
+   modeled on the ADR-43 due-ledger entry's style: what the ledger is, its file location,
+   the facility/item/stage shape, the symmetric-ownership rule, which stages get tick
+   retry (apply only) and which don't (download/parse), the two-file PHP/Python boundary
+   and why. Cite real file:line from the RESULTS handoffs, not draft numbers.
+2. Update this ADR's own Status line: if all six RESULTS show DONE (no unresolved
+   BLOCKED/DONE-WITH-DEVIATION items), set Status to "Implemented (pending live-VM
+   smoke)" with today's date, and note any DONE-WITH-DEVIATION items from Phase 4's
+   possible chroot fallback (SS7 reject-criteria) explicitly if one was invoked.
+3. Write the manual smoke checklist as a runnable procedure (numbered steps, each with
+   an expected observable) -- turn ADR SS7's bullet points into concrete commands where
+   the live-VM harness (tests/smoke/) can express them, and clearly mark any step that
+   genuinely requires a human/live box (per CLAUDE.md "no live Unbound in CI" and the
+   pfctl-failure-triggering difficulty noted in the ADR).
+4. If tests/smoke/ has an appropriate place for a NEW dispatch-only live-VM smoke module
+   covering the download-fail-then-clear round trip (the most mechanically triggerable
+   of the SS7 scenarios -- point a feed at an unreachable URL, no pfctl trickery needed),
+   add it; if genuinely infeasible in this phase's scope, document why in the handoff and
+   leave it as an explicit maintainer-manual item in SS7 rather than silently dropping it.
+
+CONSTRAINTS
+- Markdown: blank line around every heading/list/fence, a language on every fence,
+  single trailing newline (npx markdownlint-cli2 --fix, then verify clean).
+- Do NOT alter any src/ or existing tests/ file in this phase (docs + ADR.md status +
+  possibly one new smoke module only).
+- Do NOT mark the ADR "Accepted" -- that requires the actual green CE+Plus live-VM
+  fan-out (a human/CI action outside this phase's scope), per CLAUDE.md "ADR acceptance."
+
+VERIFICATION (all must pass before the phase is done)
+- npx markdownlint-cli2 on every touched .md file -- clean.
+- If a new smoke module was added: it is syntactically valid and collected by pytest
+  (pytest --collect-only tests/smoke/<new_module> succeeds) -- it does not need to PASS
+  in this offline phase (no live VM here), but it must be well-formed and dispatch-only
+  marked correctly per the ADR-04 conventions in tests/smoke/.
+- Full canonical gates for whatever else this phase touches.
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- Read the new architecture-notes.md section against ALL SIX RESULTS files -- every
+  factual claim (file path, function name, stage list) traces to something a prior phase
+  actually built, not to the ADR's original draft that a phase may have deviated from.
+- Confirm the ADR Status line change matches reality: if ANY RESULTS file reports
+  DONE-WITH-DEVIATION or BLOCKED, the Status text says so explicitly, not a bare
+  "Implemented."
+- The manual smoke checklist's each step has a genuinely falsifiable "expected
+  observable" (not "should work") -- CLAUDE.md's evidence-rules bar applies to this
+  checklist's wording too.
+
+HANDOFF (RESULTS/07_Results.txt, committed)
+State: the architecture-notes.md section added; the final ADR Status; the manual smoke
+checklist (verbatim or by reference); whether a new smoke module was added and its path,
+or the explicit reason it wasn't; confirmation this is the LAST phase and the ADR is
+ready for the orchestrator's final gate + landing decision (PR vs. further phases).

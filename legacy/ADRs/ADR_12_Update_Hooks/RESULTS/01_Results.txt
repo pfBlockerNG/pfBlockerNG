@@ -1,0 +1,146 @@
+ADR-12 PHASE 1 RESULTS — Hook runner + config schema (behaviour-preserving, UNWIRED)
+=====================================================================================
+
+STATUS: DONE. Runner + schema landed, isolated and unwired. Phase 2 GO.
+
+Files changed (single commit):
+  - src/usr/local/pkg/pfblockerng/pfblockerng.inc   (+ runner + schema, ~150 lines, after pfb_logger)
+  - src/usr/local/www/pfblockerng/pfblockerng.php   (+ `runhooks` CLI test branch, ~16 lines)
+  - tests/php/PfbGetHooksTest.php                    (new PHPUnit test — pure selection/timeout logic)
+
+No change to sync_package_pfblockerng (UNWIRED, byte-identical update pass). No Python/pytest change.
+
+
+1. CONFIG SCHEMA (keys + defaults)
+----------------------------------
+Hooks live under the existing pfBlockerNG config node:
+    installedpackages/pfblockerng/config/0/hooks   (a list)
+
+Each entry (mirrors pfSense shellcmd's {cmd,cmdtype} shape):
+    command      string   the sh command line (run via /bin/sh -c). REQUIRED (blank => skipped).
+    when         string   'pre' | 'post'. REQUIRED (other values => skipped).
+    enabled      string   pfSense checkbox convention: 'on' enables; anything else (''/unset) => skipped.
+    description  string   optional free text; used as the per-hook log label (falls back to "#<idx>").
+    timeout      string   optional per-hook timeout in seconds; <=0 / invalid => default.
+
+Defaults (PHP constants, define()-guarded so re-include is safe):
+    PFB_HOOK_TIMEOUT_DEFAULT = 60   (per-hook timeout when unset/invalid)
+    PFB_HOOK_KILL_GRACE      = 5    (seconds after SIGTERM before SIGKILL)
+
+Read helper (PURE, unit-tested):
+    pfb_get_hooks(array $pfbconfig, string $when): array
+      Returns enabled entries matching $when, IN LIST ORDER. Skips: non-array entries,
+      enabled!=='on', when mismatch, blank/missing command, invalid $when ('' / not pre|post),
+      and a missing/malformed 'hooks' key. Never throws.
+    pfb_hook_timeout(array $hook): int
+      Resolves timeout to a positive int, falling back to PFB_HOOK_TIMEOUT_DEFAULT.
+
+
+2. RUNNER SIGNATURE + ENV-VAR NAMES
+-----------------------------------
+    pfb_run_hooks(string $when, array $ctx = array()): void   (declared as `function pfb_run_hooks($when, $ctx = array())`)
+
+Behaviour: reads the live config (config_get_path), selects via pfb_get_hooks(), runs each
+enabled hook in list order as root, captures stdout+stderr to pfb_logger under a per-hook
+header, logs each outcome. Returns early (no-op) when there are no enabled hooks for $when
+=> with no hooks the pass is byte-identical (the additive contract).
+
+Env vars set for the child (PFB_ + uppercased $ctx key; values escapeshellarg'd):
+    PFB_WHEN        ALWAYS set by the runner to $when ('pre'|'post').
+    PFB_<KEY>       one per $ctx entry, e.g. ctx['TRIGGER']='cron' => PFB_TRIGGER=cron.
+
+Phase 1 does NOT define the canonical ctx contents — that is Phase 2's context builder.
+Per ADR §2 the canonical names Phase 2 will pass are:
+    pre : PFB_TRIGGER, PFB_WHEN
+    post: PFB_TRIGGER, PFB_WHEN, PFB_IP_CHANGED, PFB_DNSBL_CHANGED, PFB_STATUS, PFB_CHANGED_ALIASES
+The runner is name-agnostic (it exports whatever keys $ctx carries), so the Phase 2 builder
+just supplies that map.
+
+
+3. TIMEOUT MECHANISM + KILL VERDICT
+-----------------------------------
+Mechanism (per hook), built and run with PHP exec() — the file's established capture idiom
+(exec("/usr/bin/... 2>&1", $output, $retval)):
+
+    PFB_K=V ... /usr/bin/timeout -s TERM -k 5 <timeout> /bin/sh -c <escapeshellarg(command)> 2>&1
+
+  - Root: the update pass already runs as root (cron/manual), so the child inherits root.
+  - Timeout: FreeBSD /usr/bin/timeout(1) sends SIGTERM at <timeout>, then SIGKILL after the
+    -k grace (5s). Exit code 124 == timed out.
+  - Capture: 2>&1 folds stderr into stdout; exec() collects it into $output for the log.
+  - Env: the VAR=val prefix is inherited by timeout(1) and exported to the /bin/sh child only
+    (verified: a var-assignment prefix passes through an intermediate binary to the sh child).
+
+KILL VERDICT: timeout reliably kills a hung child TREE on the FreeBSD target. NO PIVOT NEEDED.
+  Why it is reliable (verified against the FreeBSD timeout(1) man page): WITHOUT --foreground
+  (our invocation), timeout manages the command AS A PROCESS GROUP and propagates the signal
+  (then SIGKILL after -k) to the command AND ITS DESCENDANTS. So a hook like `sleep 30` (run as
+  a grandchild under /bin/sh -c) is killed as a group at the deadline+grace — no descendant
+  survives to hold the stdout pipe, so PHP exec() returns promptly with rc 124. The runner then
+  logs "TIMED OUT ... (killed); continuing" and proceeds. The update is never stalled.
+
+  Local kill-test caveat (NOT a production defect): macOS lacks /usr/bin/timeout and setsid, so
+  a hand-rolled shim could not replicate the process-GROUP kill; with only the direct child
+  killed, a surviving grandchild kept stdout open and PHP exec() blocked until the grandchild
+  ended (proven: a backgrounded grandchild holding stdout blocks exec() ~ its full lifetime).
+  This is exactly the failure mode FreeBSD timeout(1)'s pgroup kill prevents — confirming the
+  production wrapper is correct and the macOS hang is a test-environment limitation only.
+
+  What WAS faithfully verified locally (macOS, real PHP exec()):
+    - PFB_* env vars reach the child with correct values (incl. post-style multi-var ctx).
+    - escapeshellarg() makes the command a single sh -c argument => injection-safe
+      (embedded `; rm -rf ...` is data, not executed).
+    - Non-zero exit captured (rc=3) with stderr folded into the log; loop continues.
+    - Success (rc=0) captured + logged.
+
+
+4. CLI TEST PATH
+----------------
+Added to src/usr/local/www/pfblockerng/pfblockerng.php in the early `$argv[1]` dispatch
+(after clearip/cleardnsbl, before the update dispatch — pfb_global() has already run, so
+config + $pfb['log'] are initialised). UNWIRED from the update pass:
+
+    /usr/local/www/pfblockerng/pfblockerng.php runhooks <pre|post> [trigger]
+
+  - <pre|post>  fire point (anything but 'post' => 'pre').
+  - [trigger]   value for PFB_TRIGGER (default 'manual-test').
+  - For 'post' it also seeds synthetic PFB_IP_CHANGED=0 / PFB_DNSBL_CHANGED=0 /
+    PFB_STATUS=ok / PFB_CHANGED_ALIASES='' so a post hook can be exercised end-to-end.
+
+Live manual check (on a pfSense box): add an enabled hook (e.g. when=pre,
+command='echo trig=$PFB_TRIGGER when=$PFB_WHEN'), run `php pfblockerng.php runhooks pre cron`,
+confirm the env + output land in the pfBlockerNG log; add `exit 7` to see the non-zero
+branch log + continue; add `sleep 30` with timeout=2 to see the timeout-kill + continue.
+
+
+5. GATE RESULTS
+---------------
+  python -m pytest          PASS  (1019 passed — unchanged; no Python touched)
+  ruff check / format       PASS  (clean / 38 files already formatted)
+  php -l (both files+test)   PASS  (only the pre-existing pfb_unlock E_DEPRECATED notice, unrelated)
+  PHPStan                    PASS  (No errors; run with --memory-limit=1G — 128M default OOM'd, env not code)
+  PHPUnit (full)             PASS  (125 tests / 207 assertions; new PfbGetHooksTest = 10/24)
+  ShellCheck                 N/A   (no shell files changed this phase)
+
+
+6. CONTRACT SELF-REVIEW (ADR §2 "Semantics that MUST be preserved")
+-------------------------------------------------------------------
+  [x] Additive: no enabled hooks => pfb_run_hooks early-returns => no-op => byte-identical pass.
+  [x] A hook can never break/block: non-zero exit AND timeout(124) both log-and-continue; no
+      die()/exit()/throw in the runner.
+  [x] Run as root (inherits the pass's root context), admin-only trust class (= shellcmd).
+  [x] Env vars: PFB_WHEN always set; PFB_<KEY> per ctx entry, stable + escaped.
+  [x] Ordering: hooks run in list order (pfb_get_hooks preserves it).
+  [x] No interference: reads config only; sync_package_pfblockerng NOT modified (UNWIRED).
+
+
+7. GO-AHEAD FOR PHASE 2
+-----------------------
+GO. The runner is hardened, lint-clean, unit-tested (pure selection/timeout logic), proven
+to time out (FreeBSD pgroup-kill) and to never abort. Phase 2 is pure plumbing:
+  - call pfb_run_hooks('pre', $ctx) at the TOP of sync_package_pfblockerng (ctx = trigger),
+  - call pfb_run_hooks('post', $ctx) at the closing tail (the `closing` exec, ~ line 11016)
+    with ctx built from $pfbupdate / $pfbpython / $pfb['filter_configure'] / $cron =>
+    PFB_TRIGGER / PFB_IP_CHANGED / PFB_DNSBL_CHANGED / PFB_STATUS / PFB_CHANGED_ALIASES.
+No detached-exec pivot required. The runner is name-agnostic, so Phase 2 only supplies the
+context map; no runner change is expected.

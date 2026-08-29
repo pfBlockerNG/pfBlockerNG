@@ -1,0 +1,262 @@
+# Title: hostsVN
+# Last modified: 03 Jul 2026 16:18 UTC+7
+# Version: 2607031618
+# Blocked: 18.108 domains
+# Please report any ads or problems on GitHub
+# Homepage: https://bigdargon.github.io/hostsVN/
+# GitHub: https://github.com/bigdargon/hostsVN
+# Report issues: https://github.com/bigdargon/hostsVN/issues
+# Download: https://github.com/bigdargon/hostsVN/raw/master/hosts
+#
+# =====================================================
+#
+# --- Group block ---
+#[apple.com]
+0.0.0.0 api-adservices.apple.com
+0.0.0.0 books-analytics-events.apple.com
+0.0.0.0 notes-analytics-events.apple.com
+0.0.0.0 proxy-skadnetwork.apple.com
+0.0.0.0 securemetrics.apple.com
+0.0.0.0 stocks-analytics-events.apple.com
+0.0.0.0 supportmetrics.apple.com
+0.0.0.0 weather-analytics-events.apple.com
+#[iadsdk.apple.com]
+0.0.0.0 iadsdk.apple.com
+0.0.0.0 ca.iadsdk.apple.com
+0.0.0.0 cf.iadsdk.apple.com
+0.0.0.0 cs.iadsdk.apple.com
+0.0.0.0 news.iadsdk.apple.com
+0.0.0.0 su.iadsdk.apple.com
+0.0.0.0 tr.iadsdk.apple.com
+0.0.0.0 ut.iadsdk.apple.com
+#[mzstatic.com]
+0.0.0.0 metrics.mzstatic.com
+#[icloud.com]
+0.0.0.0 metrics-config.icloud.com
+0.0.0.0 metrics.icloud.com
+#[doubleclick.net]
+0.0.0.0 doubleclick.net
+0.0.0.0 accounts.doubleclick.net
+0.0.0.0 ad.au.doubleclick.net
+0.0.0.0 ad.bg.doubleclick.net
+0.0.0.0 ad.br.doubleclick.net
+0.0.0.0 ad.cl.doubleclick.net
+0.0.0.0 ad.cn.doubleclick.net
+0.0.0.0 ad.doubleclick.net
+0.0.0.0 ad.eg.doubleclick.net
+0.0.0.0 ad.es.doubleclick.net
+0.0.0.0 ad.fr.doubleclick.net
+0.0.0.0 ad.il.doubleclick.net
+0.0.0.0 ad.mo.doubleclick.net
+0.0.0.0 ad.nl.doubleclick.net
+0.0.0.0 ad.pl.doubleclick.net
+0.0.0.0 ad.sg.doubleclick.net
+0.0.0.0 ad.uk.doubleclick.net
+0.0.0.0 ad2.doubleclick.net
+0.0.0.0 ad-apac.doubleclick.net
+0.0.0.0 adclick.g.doubleclick.net
+0.0.0.0 ad-emea.doubleclick.net
+0.0.0.0 ad-g.doubleclick.net
+0.0.0.0 ads-bid.l.doubleclick.net
+0.0.0.0 adx.g.doubleclick.net
+0.0.0.0 apac.doubleclick.net
+0.0.0.0 bid.g.doubleclick.net
+0.0.0.0 cm.g.doubleclick.net
+0.0.0.0 dart.l.doubleclick.net
+0.0.0.0 dart-apac.l.doubleclick.net
+0.0.0.0 dfp.doubleclick.net
+0.0.0.0 dmp.doubleclick.net
+0.0.0.0 dp.g.doubleclick.net
+0.0.0.0 dsengine.doubleclick.net
+0.0.0.0 emea.doubleclick.net
+0.0.0.0 feedads.g.doubleclick.net
+0.0.0.0 fls.uk.doubleclick.net
+0.0.0.0 g.doubleclick.net
+0.0.0.0 gan.doubleclick.net
+0.0.0.0 googleads.g.doubleclick.net
+0.0.0.0 googleads2.g.doubleclick.net
+0.0.0.0 googleads4.g.doubleclick.net
+0.0.0.0 ir.doubleclick.net
+0.0.0.0 iv.doubleclick.net
+0.0.0.0 l.doubleclick.net
+0.0.0.0 m.doubleclick.net
+0.0.0.0 mediavisor.doubleclick.net
+0.0.0.0 mobile-displayads.l.doubleclick.net
+0.0.0.0 n4052ad.doubleclick.net
+0.0.0.0 n4403ad.doubleclick.net
+0.0.0.0 pagead.l.doubleclick.net
+0.0.0.0 pagead46.l.doubleclick.net
+0.0.0.0 partnerad.l.doubleclick.net
+0.0.0.0 paypalssl.doubleclick.net
+0.0.0.0 pubads.g.doubleclick.net
+0.0.0.0 publisherportal.doubleclick.net
+0.0.0.0 reportcentral.doubleclick.net
+0.0.0.0 s0.doubleclick.net
+0.0.0.0 s1.doubleclick.net
+0.0.0.0 secureframe.doubleclick.net
+0.0.0.0 securepubads.g.doubleclick.net
+0.0.0.0 static.doubleclick.net
+0.0.0.0 stats.g.doubleclick.net
+0.0.0.0 stats.l.doubleclick.net
+0.0.0.0 survey.g.doubleclick.net
+0.0.0.0 www.doubleclick.net
+0.0.0.0 www3.doubleclick.net
+0.0.0.0 fls.doubleclick.net
+0.0.0.0 undefined.fls.doubleclick.net
+#[adservice.google.*]
+0.0.0.0 adservice.google.ca
+0.0.0.0 adservice.google.co.jp
+0.0.0.0 adservice.google.com
+0.0.0.0 adservice.google.com.hk
+0.0.0.0 adservice.google.com.sg
+0.0.0.0 adservice.google.com.tr
+0.0.0.0 adservice.google.com.vn
+0.0.0.0 adservice.google.de
+#[googlesyndication.com]
+0.0.0.0 googlesyndication.com
+0.0.0.0 ade.googlesyndication.com
+0.0.0.0 afs.googlesyndication.com
+0.0.0.0 buttons.googlesyndication.com
+0.0.0.0 pagead2.googlesyndication.com
+0.0.0.0 pagead46.googlesyndication.com
+0.0.0.0 tpc.googlesyndication.com
+0.0.0.0 tpcnc.googlesyndication.com
+0.0.0.0 video-ad-stats.googlesyndication.com
+#[googletagmanager.com]
+0.0.0.0 googletagmanager.com
+0.0.0.0 www.googletagmanager.com
+#[googletagservices.com]
+0.0.0.0 googletagservices.com
+0.0.0.0 www.googletagservices.com
+#[googleadservices.com]
+0.0.0.0 10.afs.googleadservices.com
+0.0.0.0 18.afs.googleadservices.com
+0.0.0.0 2.afs.googleadservices.com
+0.0.0.0 4.afs.googleadservices.com
+0.0.0.0 googleadservices.com
+0.0.0.0 pagead2.googleadservices.com
+0.0.0.0 partner.googleadservices.com
+0.0.0.0 partnerssl.googleadservices.com
+0.0.0.0 www.googleadservices.com
+#[analytics.google.com]
+0.0.0.0 analytics.google.com
+0.0.0.0 region1.analytics.google.com
+#[google-analytics.com]
+0.0.0.0 click.google-analytics.com
+0.0.0.0 google-analytics.com
+0.0.0.0 region1.google-analytics.com
+0.0.0.0 sandbox.google-analytics.com
+0.0.0.0 ssl.google-analytics.com
+0.0.0.0 www-alv.google-analytics.com
+0.0.0.0 www.google-analytics.com
+#[googleanalytics.com]
+0.0.0.0 alt2.googleanalytics.com
+0.0.0.0 alt4.googleanalytics.com
+0.0.0.0 click.googleanalytics.com
+0.0.0.0 googleanalytics.com
+0.0.0.0 sandbox.googleanalytics.com
+0.0.0.0 ssl.googleanalytics.com
+0.0.0.0 www.googleanalytics.com
+#[optimize.google.com]
+0.0.0.0 optimize.google.com
+0.0.0.0 googleoptimize.com
+0.0.0.0 www.googleoptimize.com
+#[googleapis.com]
+0.0.0.0 ad-creatives-public.commondatastorage.googleapis.com
+0.0.0.0 androidtvchannels-pa.googleapis.com
+0.0.0.0 androidtvwatsonfe-pa.googleapis.com
+0.0.0.0 clientmetrics-pa.googleapis.com
+0.0.0.0 clouderrorreporting.googleapis.com
+0.0.0.0 crashlyticsreports-pa.googleapis.com
+0.0.0.0 federatedcompute-pa.googleapis.com
+0.0.0.0 firebaselogging-pa.googleapis.com
+0.0.0.0 firebaselogging.googleapis.com
+0.0.0.0 ogads-pa.clients6.google.com
+0.0.0.0 ogads-pa.googleapis.com
+#[l.google.com]
+0.0.0.0 pagead-googlehosted.l.google.com
+0.0.0.0 pagead-tpc.l.google.com
+0.0.0.0 pagead.l.google.com
+0.0.0.0 partnerad.l.google.com
+0.0.0.0 ssl-google-analytics.l.google.com
+0.0.0.0 static-doubleclick-net.l.google.com
+0.0.0.0 www-google-analytics.l.google.com
+0.0.0.0 www-googletagmanager.l.google.com
+#[ads.gmodules.com]
+0.0.0.0 ads.gmodules.com
+#[ads.youtube.com]
+0.0.0.0 ads.youtube.com
+#[google.com]
+0.0.0.0 ads.google.com
+0.0.0.0 analytics-alv.google.com
+0.0.0.0 mail-ads.google.com
+#[google-cn]
+0.0.0.0 2mdn-cn.net
+0.0.0.0 admob-cn.com
+0.0.0.0 doubleclick-cn.net
+0.0.0.0 google-analytics-cn.com
+0.0.0.0 googleads-cn.com
+0.0.0.0 googleadservices-cn.com
+0.0.0.0 googleadsserving.cn
+0.0.0.0 googleoptimize-cn.com
+0.0.0.0 googletagmanager-cn.com
+0.0.0.0 googletagservices-cn.com
+0.0.0.0 googlevads-cn.com
+#[app-measurement.com]
+0.0.0.0 app-measurement.com
+0.0.0.0 region1.app-measurement.com
+#[gvt2.com]
+0.0.0.0 beacons-handoff.gcp.gvt2.com
+0.0.0.0 beacons.gcp.gvt2.com
+0.0.0.0 beacons.gvt2.com
+0.0.0.0 beacons2.gvt2.com
+0.0.0.0 beacons3.gvt2.com
+0.0.0.0 beacons4.gvt2.com
+0.0.0.0 beacons5.gvt2.com
+0.0.0.0 beacons6.gvt2.com
+#[beacons*.gvt3.com]
+0.0.0.0 beacons5.gvt3.com
+0.0.0.0 beacons6.gvt3.com
+#[adtrafficquality.google]
+0.0.0.0 adtrafficquality.google
+0.0.0.0 ep1.adtrafficquality.google
+0.0.0.0 ep2.adtrafficquality.google
+0.0.0.0 ep3.adtrafficquality.google
+#[google]
+0.0.0.0 syndicatedsearch.goog
+0.0.0.0 adsensecustomsearchads.com
+0.0.0.0 www.adsensecustomsearchads.com
+#[app-ads-services.com]
+0.0.0.0 app-ads-services.com
+0.0.0.0 odm.app-ads-services.com
+0.0.0.0 www.app-ads-services.com
+#[microsoft.com]
+0.0.0.0 target.microsoft.com
+#[telemetry.microsoft.com]
+0.0.0.0 oca.telemetry.microsoft.com
+0.0.0.0 reports.wes.df.telemetry.microsoft.com
+0.0.0.0 responses.df.telemetry.microsoft.com
+0.0.0.0 services.wes.df.telemetry.microsoft.com
+0.0.0.0 sqm.df.telemetry.microsoft.com
+0.0.0.0 sqm.telemetry.microsoft.com
+0.0.0.0 telecommand.telemetry.microsoft.com
+0.0.0.0 watson.telemetry.microsoft.com
+0.0.0.0 wes.df.telemetry.microsoft.com
+#[bingads.microsoft.com]
+0.0.0.0 ads.bingads.microsoft.com
+0.0.0.0 advertise.bingads.microsoft.com
+0.0.0.0 api.bingads.microsoft.com
+0.0.0.0 bingads.microsoft.com
+0.0.0.0 m.bingads.microsoft.com
+#[advertising.microsoft.com]
+0.0.0.0 advertising.microsoft.com
+0.0.0.0 fp.advertising.microsoft.com
+#[live.com]
+0.0.0.0 analytics.live.com
+0.0.0.0 rad.live.com
+#[windows.net]
+0.0.0.0 insitez.blob.core.windows.net
+0.0.0.0 tenmaxsgads.blob.core.windows.net
+#[atdmt.com]
+0.0.0.0 ad.atdmt.com
+0.0.0.0 adecn-w.atdmt.

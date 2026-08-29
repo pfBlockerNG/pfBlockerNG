@@ -1,0 +1,363 @@
+ADR-66 PHASE 3 RESULTS -- rename Feature B ("Wildcard Blocking (TLD)") to the tld_wildcard stem
+
+VERDICT: DONE
+
+WHAT CHANGED (pure rename, zero logic-line changes, zero stored-config/POST keys touched)
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py -- classify() -> tld_wildcard_classify();
+  _dnsbl_load_tld_master() -> _dnsbl_load_tld_wildcard_master() (+ its params
+  tld_blacklist/tld_exclusion -> tld_wildcard_blacklist/tld_wildcard_exclusion);
+  _dnsbl_tld_search() -> _dnsbl_tld_wildcard_search(); build()'s config blob keys
+  "tld_master"/"tld_blacklist"/"tld_exclusion" -> "tld_wildcard_master"/
+  "tld_wildcard_blacklist"/"tld_wildcard_exclusion" (+ matching locals);
+  _dnsbl_config_from_manifest()'s return-dict keys renamed the same way (+ local
+  tld_master_lines -> tld_wildcard_master_lines); every call site + docstring/
+  comment possessive mention ("classify's...") reconciled. _dnsbl_config_from_manifest
+  itself is NOT renamed (pinned by the bridges C4 docstring). tld_analysis()/
+  tld_search() (PHP names in mirrored-from comments) and the RETIRED manifest
+  key config.tld_master (a stale pre-#1255 shape) stay verbatim throughout.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['dnsbl_tld'] ->
+  $pfb['dnsbl_tld_wildcard'] at all 12 sites (RHS $pfb['dnsblconfig']['pfb_tld']
+  stored-key read UNCHANGED); manifest-writer locals $tld_blacklist/$tld_exclusion
+  -> $tld_wildcard_blacklist/$tld_wildcard_exclusion + manifest keys
+  'tld_blacklist'/'tld_exclusion' -> 'tld_wildcard_blacklist'/'tld_wildcard_exclusion';
+  the live "add DNSBL_TLD to enabled lists" block's local $tld_blacklist ->
+  $tld_wildcard_blacklist; adjacent comments reconciled. tld_analysis()'s OWN
+  internal $tld_blacklist/$tld_exclusion locals, tld_search(), and
+  pfb_dnsbl_py_swap()'s $dnsbl_tld param (all doomed per ADR SS1.2) stay
+  byte-identical; the /tmp/dnsbl_tld* glob (a file path) stays.
+- tests/test_adr66_tld_bridges.py -- SEAM only: MANIFEST_TLD_KEYS ->
+  ("tld_wildcard_blacklist","tld_wildcard_exclusion"); the two seam aliases'
+  RHS repointed to pfb_unbound.tld_wildcard_classify /
+  pfb_unbound._dnsbl_load_tld_wildcard_master. G1-G4 and the C4 docstring
+  (names the retired manifest key) left byte-untouched.
+- tests/test_manifest_path_confinement.py, tests/test_pfb_unbound.py,
+  tests/test_branch_coverage_gaps.py, tests/test_adr06_build_module.py,
+  tests/test_adr06_golden_oracle.py, tests/test_adr06_init_from_raw.py,
+  tests/test_adr06_php_boundary.py, tests/test_adr07_emit_wire.py,
+  tests/test_adr07_php_boundary.py, tests/test_adr10_concurrency.py,
+  tests/test_adr10_snapshot_equivalence.py, tests/test_adr21_abp_per_line.py,
+  tests/test_adr31_permit_build.py, tests/test_adr31_precedence_oracle.py,
+  tests/test_adr62_byte_identity_corpus.py, tests/test_adr62_parity_oracle.py,
+  tests/test_issue1083_dnsbl_interchange_semantic_oracle.py,
+  tests/test_issue1303_hsts_loader_skips.py -- config-blob key literals
+  ("tld_master"/"tld_blacklist"/"tld_exclusion" -> new), classify()/
+  _dnsbl_load_tld_master() call sites + prose, imports (ruff-sorted) renamed
+  per the brief's C3/C4/C5/C6/C7/C9/C10 rows; test-local var/param names
+  (e.g. `tld_master` in a helper signature) and test METHOD/CLASS names left
+  as-is (not Sec2.2 identifiers); RETIRED-key mentions (config.tld_master
+  prose) and file-name literals (tld_master.txt) stay verbatim.
+- tests/fixtures/adr06_golden/config.json -- keys "tld_blacklist"/
+  "tld_exclusion" -> "tld_wildcard_blacklist"/"tld_wildcard_exclusion" + their
+  "_..._doc" sibling keys, PAIRED with the getters in test_adr06_golden_oracle.py
+  / test_adr06_build_module.py / test_adr06_init_from_raw.py / test_adr06_php_boundary.py
+  (all of which now read the SAME renamed keys) so the golden corpus's
+  non-empty .zip whole-TLD row stays exercised, not silently emptied.
+- tests/fixtures/dnsbl_corpus/feeds.json -- one prose "row" annotation naming
+  classify() reconciled to tld_wildcard_classify() (NOT individually
+  enumerated by the brief -- caught by a post-edit tree sweep for stray
+  bare-classify( sites; see Deviations #1).
+- tests/php/TldBridgeEmitTest.php, tests/php/UnboundPythonSourcesTest.php,
+  tests/php/PythonTldWildcardIniEmitTest.php, tests/php/DnsblLoadedFingerprintTest.php
+  -- 'dnsbl_tld' fixture keys/setters -> 'dnsbl_tld_wildcard'; manifest-key
+  assertions 'tld_blacklist'/'tld_exclusion' -> new; the structural ini-derivation
+  regex + its failure message repointed; docblocks reconciled. 'dnsbl_tld_data'
+  (Feature-A-adjacent, unrelated) and assertArrayNotHasKey('tld_master', ...)
+  (pins the retired key never reappearing) left VERBATIM per the brief.
+- scripts/bench_dnsbl_line_parsing.py -- its synthetic manifest's config blob
+  keys renamed to match the reader (no test consumes this script; verified
+  git grep -rln bench_dnsbl_line_parsing -- tests/ = empty, per brief E1).
+- scripts/misc/update_public_suffix_list.py -- two docstring mentions of
+  _dnsbl_load_tld_master() -> _dnsbl_load_tld_wildcard_master() (tld_analysis()
+  mention, the PHP twin, stays).
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/03_Results.txt -- this handoff.
+
+Commit hash: self-referential (this file is part of the commit that creates
+  it) -- same disclosed chicken-and-egg P1/P2 hit; obtain via
+  `git log -1 --format=%H` on branch adr/66-tld-naming-disambiguation-1783983455.
+Push: adr/66-tld-naming-disambiguation-1783983455
+
+BASE: rebased onto origin/devel cleanly (8 commits replayed, zero conflicts) --
+  the 5 pending origin/devel commits at brief time (rtk token-proxy wiring:
+  .claude/hooks/*, scripts/mcp-token-savior.sh, scripts/ts-hook.sh,
+  tests/shell/mcp_token_savior_spec.sh) touch NONE of this phase's files, per
+  brief. base_sha (pre-first-edit HEAD, post-rebase) =
+  3d2404d4af169d7020bdb010f7692359abda45d0.
+
+PRE-EDIT VERIFICATION (all brief factual claims CONFIRMED before any edit)
+$ git hash-object tests/test_adr66_tld_naming_oracle.py
+  4ae3ad286a18d60ea496d40e649eb9b11e3c672c  [matches brief]
+$ grep -n "\$pfb\['dnsbl_tld'\]" src/usr/local/pkg/pfblockerng/pfblockerng.inc | wc -l
+  12  [matches brief's A1/A2 enumeration exactly, same 12 line numbers]
+$ grep -n "^def classify\|^def _dnsbl_load_tld_master\|^def _dnsbl_tld_search\|^def _dnsbl_config_from_manifest" src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  4282/4305/4314/5306  [matches brief exactly]
+
+ENVIRONMENT NOTE (non-brief, disclosed): this session's `rtk` PreToolUse hook
+  (landed by the rebased-in origin/devel commits, unrelated to this phase)
+  auto-rewrites `python3 -m pytest ...` -> `rtk pytest ...`, and `rtk`'s
+  `pytest` subcommand fails with "Failed to spawn process: No such file or
+  directory" because this machine has no standalone `pytest` console script
+  on PATH (only the `pytest` Python module). Worked around by invoking
+  `python3 -c "import pytest,sys; sys.exit(pytest.main(sys.argv[1:]))" <args>`
+  (not matched by rtk's rewrite pattern) for every pytest run below; verified
+  functionally identical (2876 passed / 4 skipped matches the P1/P2 baseline
+  exactly). Similarly `ruff check .`/`ruff format --check .` get rewritten to
+  a JSON-compact rtk form; ran the real `/opt/homebrew/bin/ruff` binary
+  directly instead to get native output text matching the brief's V4
+  expectations verbatim. `python3 -m mypy tests/` IS rewritten to `rtk mypy
+  tests/` but that subcommand works correctly (rtk shells out to the module
+  internally); its compact "mypy: No issues found" is functionally identical
+  to the brief's expected "Success: no issues found" (exit 0, zero errors).
+  php -l/vendor/bin/phpunit/composer phpstan/composer phpcs are NOT rewritten
+  by rtk -- ran unmodified. This is a pre-existing dev-tooling gap unrelated
+  to Feature-B naming, out of this phase's src/tests scope; not fixed here.
+
+MASTER RENAME + BEHAVIOUR-PRESERVING EXCEPTION (CLAUDE.md Test coverage #1)
+This phase is a pure identifier rename (Semantics 2/4/5/6 of ADR.md SS2.3) --
+no observable behaviour changes. Per the behaviour-PRESERVING exception,
+red->green test-first is N/A; the proof is the pre-pinned frozen oracle
+(tests/test_adr66_tld_naming_oracle.py, hash-locked, ZERO edits) staying
+byte-identical GREEN across the rename, plus the manifest-bridge round-trip
+(C3/C4) now exercising the NEW key names end-to-end through the real
+production reader (_dnsbl_config_from_manifest) -- proving the .inc writer
+and .py reader were renamed ATOMICALLY in this one commit (Semantic 4).
+
+GATES (all executed, pasted tails)
+
+$ git hash-object tests/test_adr66_tld_naming_oracle.py   [POST-edit]
+  4ae3ad286a18d60ea496d40e649eb9b11e3c672c  -- UNCHANGED, matches pre-edit.
+
+$ python3 -c "import pytest,sys; sys.exit(pytest.main(sys.argv[1:]))" \
+    tests/test_adr66_tld_naming_oracle.py tests/test_adr66_tld_bridges.py -v
+  ... (all Oracle A1-A10/A5c, Oracle B1-B14, TestIniBridgeRoundTrip,
+  TestManifestBridgeRoundTrip C3/C4, G1-G4 listed PASSED)
+  ============================== 37 passed in 0.20s ==============================
+  (oracle-unchanged-green proof + manifest-bridge round-trip proof under the
+  NEW key names -- this IS the atomic-rename evidence per the brief.)
+
+$ python3 -c "import pytest,sys; sys.exit(pytest.main(sys.argv[1:]))" -q
+  ======================= 2876 passed, 4 skipped in 55.83s =======================
+  (identical to the P1/P2 baseline: 2876 passed, 4 skipped.)
+
+$ /opt/homebrew/bin/ruff check .
+  All checks passed!
+
+$ /opt/homebrew/bin/ruff format --check .
+  238 files already formatted
+
+$ python3 -m mypy tests/
+  mypy: No issues found   [rtk-compact form; exit 0, functionally
+  "Success: no issues found" per the environment note above]
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  No syntax errors detected in .../pfblockerng.inc
+  (5 pre-existing PHP8.3 "optional-before-required-param" deprecation LINES
+  across 4 distinct pre-existing functions -- pfb_parsed_fail, pfb_download,
+  pfb_dnsbl_parse, pfb_unlock [x2, two param pairs] -- unrelated to this diff,
+  none of which this phase touched; the brief's "4 notices" undercounts by
+  one LINE since pfb_unlock trips it twice, but names the same 4 functions.)
+
+$ php -l tests/php/TldBridgeEmitTest.php tests/php/UnboundPythonSourcesTest.php
+    tests/php/PythonTldWildcardIniEmitTest.php tests/php/DnsblLoadedFingerprintTest.php
+  No syntax errors detected  (all four)
+
+$ vendor/bin/phpunit
+  Tests: 3338, Assertions: 21009, Deprecations: 1, Notices: 1, Skipped: 4.
+  OK, but there were issues!  [Skipped: 4 = the documented root
+  permission-guard baseline; matches P1/P2's baseline of 3338 tests/Skipped 4.]
+
+$ composer phpstan
+  [OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+  exit 0, zero output (clean pass)
+
+$ python3 scripts/check_comment_narration.py --staged
+  exit 0, zero output (clean; no ADR-phase-number/RESULTS-ref/review-
+  archaeology on added src/scripts lines)
+
+$ python3 scripts/check_version_literals.py --staged
+  exit 0 (clean)
+
+$ python3 scripts/check_retired_tokens.py --staged
+  exit 0 (advisory-listed, non-blocking per .githooks/pre-commit -- issue
+  #1059 rollout is warn-only). Reported survivors, ALL legitimate STAYS-class
+  per the brief's explicit matrix: 'dnsbl_tld' straggler list = A5 doomed-fn
+  param + A6 file glob + pfblockerng.sh file-name sites (x4) + www element-
+  id/help-path/log-viewer sites (x4); 'tld_blacklist' 10 sites = tld_analysis()'s
+  OWN internal locals (A5, 8 occurrences) + the www help-text local
+  $tld_blacklist_text (2, an unrelated POST-field-adjacent name); 'tld_exclusion'
+  6 sites = tld_analysis() internal locals (4) + www help-text local (2);
+  'tld_master' 3 sites = the two KEEP-tagged retired-key docstring mentions
+  (pfb_unbound.py:5266/:5315) + the KEEP-tagged manifest-writer comment
+  parenthetical (pfblockerng.inc:8211). No action taken -- every survivor is
+  on the brief's explicit DO-NOT-TOUCH list (rows A5/A6/B5-KEEP/F1/F2).
+
+SURVIVOR-COUNT VERIFICATION (stays rows, before == after)
+$ git grep -c python_tld_wildcard -- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  5  [brief predicted 5 -- MATCH]
+$ git grep -c python_tld_wildcard -- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  4  [brief predicted 4 -- MATCH]
+$ git grep -c tldblacklist -- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+  3 + 1 + 6 = 10  [brief predicted .inc:3 + extra.inc:1 + dnsbl.php:6 -- MATCH]
+$ git grep -c tldexclusion -- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+    src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+  2 + 1 + 16 + 6 = 25  [brief predicted .inc:2 + extra.inc:1 + alerts.php:16
+  + dnsbl.php:6 -- MATCH]
+$ git grep -c "'pfb_tld'" -- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+    src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+  1 + 1 + 4 = 6  [brief predicted .inc:1 + extra.inc:1 + dnsbl.php:4 -- MATCH]
+
+DoD GREP (production+tests) -- MUST be zero-hit for the RENAME MAP
+$ git grep -n "\$pfb\['dnsbl_tld'\]" -- src/ tests/
+  (no output, exit 1) -- CONFIRMED zero survivors.
+$ git grep -nE "(^|[^a-zA-Z0-9_.])classify\(" -- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  (no output, exit 1) -- CONFIRMED zero bare classify( sites.
+$ git grep -nE "_dnsbl_load_tld_master|_dnsbl_tld_search" -- src/ tests/ scripts/
+  (no output, exit 1) -- CONFIRMED zero old-fn-name survivors.
+
+DoD GREP (stale-key survivors) -- brief predicted EXACTLY 4
+$ git grep -nE "['\"]tld_(master|blacklist|exclusion)['\"]" -- src/ scripts/ tests/ ':(exclude)tests/smoke'
+  test_manifest_path_confinement.py:141 fixture 'tld_master'
+  UnboundPythonSourcesTest.php:220/:240/:253 assertArrayNotHasKey('tld_master')
+  4 total -- MATCH, exactly as predicted.
+
+DoD GREP (dnsbl_tld-prefixed survivors) -- brief predicted 11 (.inc x3 +
+  pfblockerng.sh x4 + www x4); ACTUAL 11 + 1 extra legitimate survivor:
+$ git grep -nE "dnsbl_tld([^a-z_]|\$)" -- src/
+  .inc:2006/:2007 ($dnsbl_tld param, doomed fn) + .inc:9330 (/tmp/dnsbl_tld*
+  glob) + pfblockerng.sh x4 (file name) + www x4 (element id, help path,
+  log.php x2) = 11, as predicted, PLUS .inc:125
+  ($pfb['dnsbl_tld_data'] = '.../dnsbl_tld';) -- the G1-protected key
+  'dnsbl_tld_data' whose STRING VALUE is the shipped file name 'dnsbl_tld'
+  (quote-terminated, so this narrow regex matches it); a legitimate stays
+  site the brief's V8 enumeration for THIS specific regex did not list but
+  is unambiguously correct per A6/F2 (file-name literal) -- not a missed
+  rename. See Deviations #2.
+
+git show --stat (self-check before handoff)
+  29 files changed, 207 insertions(+), 201 deletions(-).
+  Per-file numstat for src/: pfblockerng.inc 25/25 (perfectly symmetric);
+  pfb_unbound.py 42/39 (net +3 lines -- see Deviations #3, all rewrap, zero
+  logic change). Full diff read hunk-by-hunk for BOTH src/ files: every hunk
+  is exactly the mapped identifier substitution (+ the unavoidable line-wrap
+  a longer identifier forces under the 120-col ruff-format limit), nothing
+  else -- no branch/condition/call-order changes anywhere.
+
+COVERAGE MATRIX (every brief section-3/4 row, ticked)
+- A1-A6 (pfblockerng.inc, 12 $pfb['dnsbl_tld'] sites + doomed cluster +
+  file glob): DONE -- all 12 renamed, doomed cluster (tld_analysis/tld_search/
+  pfb_dnsbl_py_swap internals) + glob verified byte-identical via targeted
+  sed/grep re-reads above.
+- B1-B6 (pfb_unbound.py, classify/_dnsbl_load_tld_master/_dnsbl_tld_search/
+  blob keys/docstring dispositions/python_tld_wildcard survivor): DONE --
+  every RENAME-tagged site renamed, every KEEP-tagged site verified
+  unchanged (grep sweep above), survivor counts MATCH.
+- C1-C11 (tests/, 18 pytest files + 2 fixtures): DONE -- C1 seam updated;
+  C2 oracle zero-edit (hash confirmed); C3 manifest-confinement RENAME/KEEP
+  split applied (judgment call on docstring :10, see Deviations #4); C4
+  imports+calls+prose renamed, test names/verb prose kept; C5 same +
+  blob key :455 + KEEP rows verified; C6 nine blob-key-only files renamed;
+  C7 blob keys+calls+section header renamed, filename+pipeline-verb prose
+  kept; C8/C9 golden config.json + its 3 getter files PAIRED (verified via
+  the full pytest run exercising the golden-oracle parity tests, which
+  PASSED -- proving the pairing didn't silently empty the corpus); C10
+  three prose files renamed; C11 confirmed untouched (test_update_tld_lists.py,
+  test_update_public_suffix_list.py, conftest.py -- zero diff each).
+- D1-D5 (tests/php/, 4 files): DONE -- all four renamed per-row; D5's five
+  KEEP files confirmed untouched (git diff --name-only tests/php/ shows
+  exactly D1-D4, nothing else).
+- E1-E3 (scripts/): DONE -- E1/E2 renamed, E3 confirmed zero diff.
+- F1-F7 (untouched-by-design): DONE -- www/, pfblockerng.sh,
+  tests/smoke/**, tests/shell/pfblockerng_dnsbl_cache_spec.sh, the
+  stored-key/registry family (pfb_tld/tldblacklist/tldexclusion),
+  Feature-A identifiers, and docs/misc + ADR_65_* all confirmed ZERO diff
+  via targeted `git diff --cached --stat` re-reads above.
+- Hostile-input rows H1-H10 (section 4): all covered by the existing
+  frozen-oracle + bridges + golden/manifest-confinement tests exercising
+  exactly those survival/round-trip/absent-key/stale-manifest/decision-
+  corpus/unrelated-classify conditions -- no new test needed (pure rename
+  of already-tested surfaces). H10's golden-corpus pairing trap specifically
+  verified by the full pytest run's golden-oracle parity suite passing.
+
+DEVIATIONS / JUDGMENT CALLS
+1. tests/fixtures/dnsbl_corpus/feeds.json's one classify()-naming prose
+   annotation (not individually enumerated in the brief's coverage matrix,
+   since the brief's grep scope covered .py test files, not JSON fixtures)
+   was renamed to tld_wildcard_classify() after a post-edit tree sweep
+   (`git grep -nE "classify\("` over tests/, excluding known-unrelated
+   classifiers) surfaced it as a stale reference to the just-renamed
+   symbol. Low-risk (pure descriptive string value, no functional
+   consequence) and consistent with the CLAUDE.md gate's "comments/docs
+   mentioning touched symbols reconciled" requirement.
+2. pfblockerng.inc:125 ($pfb['dnsbl_tld_data'] = '.../dnsbl_tld';) is an
+   additional legitimate stays-survivor the brief's V8 grep-5 enumeration
+   didn't list (see DoD GREP section above) -- left untouched as correct
+   per G1 (dnsbl_tld_data stays) + F2 (file-name literal stays), not a
+   missed rename.
+3. src/usr/local/pkg/pfblockerng/pfb_unbound.py's per-file numstat is 42/39
+   (net +3 lines) rather than R-B's strict symmetric target -- caused by
+   the longer tld_wildcard_* identifiers forcing a handful of docstring/
+   comment lines past the 120-col ruff-format limit, requiring a rewrap
+   into one extra line each (3 sites: the reconcile() docstring's
+   "classify's registrable-parent rule" possessive, its :4606 twin comment,
+   and the _dnsbl_config_from_manifest() docstring). Verified via
+   `ruff format --check .` passing unchanged (238 files) and a hunk-by-hunk
+   diff read confirming every hunk is a pure substitution + unavoidable
+   wrap, zero logic/branch changes. pfblockerng.inc stayed perfectly
+   symmetric (25/25).
+4. tests/test_manifest_path_confinement.py:10's module-docstring sentence
+   ("_dnsbl_config_from_manifest no longer reads tld_master from the
+   manifest at all") was judged KEEP rather than the brief's literal
+   ":10/:96-97 rename the blob-key mention" instruction, because close
+   reading shows :10 is semantically identical to the KEEP-tagged :100
+   ("A manifest config.tld_master key ... is ignored") -- both describe
+   the RETIRED manifest-resident key, not the live build()-consumed blob
+   key (which :96-97 DOES rename, correctly). Renaming :10 while leaving
+   :100 as-is would have produced two docstring sentences describing the
+   SAME retired-key fact with DIFFERENT identifiers, an internal
+   inconsistency. Applied :96-97 (function name + blob key) and :116/126/
+   135/145 (assertions) per brief; left :10/:100/:138/:141 (retired-key
+   prose + stale fixture) untouched as a consistent set. Flagging for the
+   gate/planner to confirm this reading.
+5. `bash scripts/agent/run-gates.sh --diff origin/devel` requires a diff
+   against a COMMITTED HEAD -- cannot be run, and its output cannot be
+   embedded in this file, before the commit that contains this very file
+   exists. Same disclosed P1/P2 chicken-and-egg limitation. Ran immediately
+   after committing; result reported in the delegation handoff
+   (StructuredOutput) to the planner rather than pasted here.
+
+CARRY-FORWARD FOR PHASE 4
+- Frozen oracle hash UNCHANGED: 4ae3ad286a18d60ea496d40e649eb9b11e3c672c.
+- Smoke/docs prose sweep (out of this phase's src/tests scope, per F3):
+  tests/smoke/helpers.py:323/:1786/:1789-1790/:2954 (prose "tld_enabled"/
+  "$pfb['dnsbl_tld']" mentions), tests/smoke/test_smoke_tld_wildcard.py:4-8,
+  tests/smoke/ui/test_alerts.py:370. All currently reference the OLD
+  Feature-B identifiers in prose/comments only (no functional dependency --
+  the smoke suite drives the box via HTTP/SSH, not by importing these
+  symbols) but should be reconciled to tld_wildcard_* naming for
+  consistency before/during Phase 4.
+- ADR.md SS2.2's "config.tld_wildcard" / "manifest config.tld_master ->
+  tld_wildcard_master" row(s) are VACUOUS against the live tree: no such
+  manifest key exists post-#1255 (the public-suffix oracle rides a SHIPPED
+  file gated by the python_tld_wildcard ini flag, not a manifest key) --
+  same carry-forward flag P1 raised for P2/P3, now confirmed still true
+  after this phase's own manifest-writer/reader work (the manifest DOES
+  carry tld_wildcard_blacklist/tld_wildcard_exclusion, renamed this phase,
+  but never a tld_wildcard_master manifest key). Phase 4 (or the ADR owner
+  before Phase 4 starts) should amend ADR.md SS2.2 per "ADR amendments
+  after merge" to reflect this.
+- www/pfblockerng/pfblockerng_dnsbl.php's help-text locals
+  $tld_blacklist_text/$tld_exclusion_text (naming the STORED POST fields
+  tldblacklist/tldexclusion, unchanged by this ADR) were confirmed
+  out-of-scope per F1/F5 and left untouched -- no Phase-4 action implied,
+  flagging only because their names now look adjacent-but-different from
+  the just-renamed $tld_wildcard_blacklist/$tld_wildcard_exclusion locals
+  elsewhere in pfblockerng.inc; this is intentional (POST-field-name
+  stability is a separate, permanent contract) not a naming gap.
+- Deviations #1/#2/#3/#4 above are informational for the gate; none require
+  Phase-4 follow-up work of their own.

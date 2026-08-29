@@ -1,0 +1,83 @@
+================================================================================
+PHASE 1 PROMPT — Pure key=value event formatters (PHP + Python), dormant
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md   (read §1.1, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+You implement Phase 1 of ADR-38 on the ADR's implementation branch (the canonical
+adr/38-system-log-integration when the push policy allows it, else the pinned
+managed-remote claude/* session branch — see ADR §6 branch note). This phase is
+BEHAVIOUR-PRESERVING: the formatters are pure and uncalled this phase. One commit,
+pushed on the branch (PR opened by the orchestrator when the ADR completes).
+
+WHY THIS PHASE EXISTS
+The syslog message body must be a stable, SIEM-parseable key=value string derived
+from the SAME source fields the existing CSV lines are built from, so the CSV and
+the syslog view can never drift (ADR §2.2.3). Extracting + pinning the mapping as
+pure functions FIRST de-risks the later wiring: emission becomes a one-line call to
+a tested formatter, and a regression in the field mapping fails a unit test, not a
+SIEM.
+
+REQUIRED READING
+- .ADRs/ADR_38_System_Log_Integration/ADR.md  (§1.1 event sources; §2.1 the
+  key=value examples + tag; §2.2 contract; §2.3 scope).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the filterlog daemon write site
+  (~:9289-9324): how $log / $details / $dup_entry and the $d[] / $f[] fields,
+  $dir, $geoip, $pfb_alias, $pfb_query[], $resolved_host, $hostname, $asn, $int,
+  $l_type are composed for IPv4 vs IPv6 and for Block/Permit/Match.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the DNSBL CSV write site
+  (search for the "DNSBL-python" csv_line build): the 11 fields
+  (q_name, q_ip, p_type, b_type, group, b_eval, feed, dupEntry, q_type, timestamp).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — where pure helpers live;
+  the existing logger() (~:1424) for tone/style.
+- tests/php/README.md + an existing tests/php/*Test.php for shape; tests/ for a
+  pytest example. CLAUDE.md (PHP/Python code standards, test-coverage mandate).
+
+ACTION PLAN (ordered — write the tests alongside the pure functions)
+1. PHP: add `pfb_syslog_format_ip(array $fields): string` to pfblockerng_extra.inc.
+   Input = an associative array of the already-computed event fields (act, dir, if,
+   proto, src, dst, sport, dport, ipver, geoip, alias, feed, host, asn — the same
+   values the CSV uses). Output = space-separated `k=v`, stable key order, omitting
+   empty values OR emitting a sentinel consistently (decide + document in the
+   docblock). Quote/escape any value containing space, `=`, or quote; strip newlines.
+   Pure — no globals, no I/O, no config reads.
+2. Python: add `syslog_format_dnsbl(...) -> str` to pfb_unbound.py (module-level,
+   type-hinted, stdlib only) producing the DNSBL key=value body (act=dnsbl qname=…
+   qip=… qtype=… group=… feed=… btype=… eval=…) with the same escaping rules.
+3. PHPUnit tests/php/SyslogFormatTest.php: Block + Permit + Match, IPv4 + IPv6,
+   present vs empty optional fields (asn/geoip/host), and a value needing escaping.
+   Assert the EXACT formatted string (intent: the mapping is pinned).
+4. pytest tests/test_syslog_format.py: DNSBL VIP (b_type VIP) and NULL, a CNAME
+   q_type, an empty group/feed, and an escaping case. Assert exact strings.
+
+CONSTRAINTS
+- PHP: tabs, PHP 8.3, uppercase TRUE/FALSE, no die()/exit(), no config reads here.
+- Python: 4-space, 3.11+, `from __future__ import annotations`, stdlib only, no bare
+  except. Keep the function pure and side-effect free.
+- Do NOT touch the CSV write sites, emission, config, or the UI this phase.
+- Keys must be a fixed, documented vocabulary — agree the exact key names here; later
+  phases reuse them verbatim.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            → green (new SyslogFormatTest)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   → clean
+- vendor/bin/phpstan            → clean
+- python -m pytest              → green (new test_syslog_format)
+- ruff check . && ruff format . → clean
+- diff-read: confirm no call site references the new functions yet (dormant).
+
+EXPECTED RESULT
+Two pure, fully-unit-tested formatters exist and agree with hand-written golden
+strings; nothing calls them; all suites green; behaviour unchanged.
+
+COMMIT (single)
+    pfblockerng: add key=value syslog event formatters (ADR-38 P1)
+Push on the branch; the orchestrator opens the PR when the ADR completes.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/01_Results.txt`
+Record: the EXACT key vocabulary + order chosen for IP and DNSBL bodies; the
+empty-value convention; the escaping rule; the function signatures; test file paths
+and counts; verification numbers. If managed-remote pinned: add the
+`ADR-RESUME: branch=<actual-branch> next-phase=2` sentinel + the override note.
+Give the go-ahead for Phase 2.

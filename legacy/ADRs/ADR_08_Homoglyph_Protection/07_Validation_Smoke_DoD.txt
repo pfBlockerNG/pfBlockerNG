@@ -1,0 +1,67 @@
+================================================================================
+PHASE 7 PROMPT — Validation, FP/TP on-branch, manual smoke, Definition of Done
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §4 Requirements + §7 DoD/smoke/reject)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 7 (final) of ADR-08. Close it out: full golden + no-
+regression, re-run the Phase-1 FP/TP on-branch, finalise help text + docs, and write the manual-
+smoke checklist. Work inline on `adr/08`, one commit, push directly. STATUS STAYS "Implemented —
+pending live smoke"; only the maintainer flips it to Accepted after the live smoke.
+
+WHY THIS PHASE EXISTS
+The feature's whole risk is false positives on legitimate IDNs. This phase assembles the
+evidence (FP ~0 on the legit corpus, esp. CJK; high TP on homographs; Off/All unchanged), the
+docs (incl. the Unicode-data version + the documented limitation), and the live checks CI can't do.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/06_Results.txt — the final UI/config. If missing, STOP.
+- All prior RESULTS/0N_Results.txt — esp. RESULTS/01 (the FP/TP threshold + corpus).
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§4 Requirements; §7 DoD + reject + smoke).
+- README.md + CLAUDE.md (update for the new setting + the Unicode-data version/update step).
+- CLAUDE.md.
+
+ACTION PLAN
+1. FULL GOLDEN: tests/test_adr08_* assert PRODUCTION (wired matcher + config) decision-correct
+   vs the Phase-2 oracle across the corpus (malicious block, suspicious alert, CJK + single-script
+   + Latin+CJK resolve, sub-toggle combos, malformed no-crash); Off/All-IDN baseline UNCHANGED-green.
+   Record the pass count.
+2. FP/TP ON-BRANCH: re-run the Phase-1 measurement on adr/08 (FP on the legit set — CJK must be 0;
+   TP on the homograph set) and record vs the agreed kill-threshold. Confirm GO (or document the
+   narrowing taken).
+3. DOCS: finalise the help text (scope + the whole-script/ASCII limitation), and update README.md
+   / CLAUDE.md for the new "IDN mode" setting and the **Unicode-data version + how to regenerate**
+   (scripts/update-unicode-data.py).
+4. FILL the ADR §7 with a "Build evidence" block (mirror ADR-06/07): the FP/TP numbers + the
+   pinned Unicode version + the equivalence summary. Set Status to "Implemented — pending live smoke".
+5. MANUAL SMOKE CHECKLIST (owner: maintainer): finalise the §7 boxes as a runnable live-box list:
+   Latin+Cyrillic AND Cyrillic+Greek homographs block; legit Japanese/Korean/Chinese + single-script
+   Cyrillic/Greek RESOLVE; a legit ASCII SLD under an IDN ccTLD (example.рф / site.中国) RESOLVES
+   (per-label, not flagged); suspicious alerts-not-blocks by default (and blocks when opt-in on);
+   All-IDN still blocks all xn--; Off resolves; backward-compat ('on'->All-IDN); malformed xn-- no
+   crash; whitelist still wins; alerts show decoded form + offending char.
+
+CONSTRAINTS
+- Do NOT flip Status to Accepted — maintainer's call after the live smoke.
+- No new shipped Python dependency (stdlib + the shipped Scripts data only).
+- markdownlint-clean docs (npx markdownlint-cli2); ruff / php -l / ShellCheck / PHPStan clean.
+
+VERIFICATION
+- python -m pytest → green (full ADR-08 + retained Off/All baseline); ruff / php -l / ShellCheck /
+  markdownlint clean. §7 evidence block filled with real FP/TP numbers + the pinned Unicode version.
+
+EXPECTED RESULT
+ADR-08 implemented end-to-end with the FP/TP evidence recorded (FP ~0 on legit incl. CJK, high TP),
+docs + setting + Unicode-data version finalised, Status "Implemented — pending live smoke", and a
+maintainer-runnable manual-smoke checklist. Accept is the maintainer's call.
+
+COMMIT (single)
+    pfblockerng: ADR-08 P7 — homoglyph validation, FP/TP evidence, smoke checklist + DoD
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/07_Results.txt`
+Final wrap-up: the full pass count; the on-branch FP/TP vs threshold (GO); the pinned Unicode
+version + regen step; what docs/setting changed; Status "Implemented — pending live smoke"; and the
+manual-smoke checklist location for the maintainer.

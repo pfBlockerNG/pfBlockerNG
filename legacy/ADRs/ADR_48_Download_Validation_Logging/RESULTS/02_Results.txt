@@ -1,0 +1,221 @@
+================================================================================
+PHASE 2 RESULTS — Wire the existing reject sites through pfb_validate_log()
+ADR-48, Phase 2 of 4
+================================================================================
+
+FINAL pfb_filter() SIGNATURE
+
+  function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE, &$reject_detail=NULL)
+
+$reject_detail is an optional by-ref out-param, active ONLY in the
+PFB_FILTER_FILE_MIME / PFB_FILTER_FILE_MIME_COMPRESSED reject paths (§2 fork,
+option (a)). A caller that pre-sets it to array() opts in: on rejection
+pfb_filter() fills it with array('mime_raw' => ..., 'mime' => ..., 'retval' =>
+...) and SUPPRESSES its own legacy pfb_logger() call. A caller that leaves it
+NULL (the default — every call elsewhere in the codebase) gets the exact
+legacy in-filter message, byte-identical to pre-Phase-2 behaviour.
+
+OPTED-IN CALLER MAP (all 5 live pfb_download() FILE_MIME* call sites)
+
+  site (pfblockerng.inc)                          | stage | reason
+  -------------------------------------------------|-------|----------------------------
+  outer MIME gate (post-download)                  | mime  | mime_not_allowed
+  gzip `file -bZ` compressed peek                  | inner | compressed_mime_not_allowed
+  bzip2 `file -bZ` compressed peek                 | inner | compressed_mime_not_allowed
+  ZIP post-extraction PFB_FILTER_FILE_MIME re-run  | inner | inner_mime_not_allowed
+  7z `file -bZ` compressed peek                    | inner | compressed_mime_not_allowed
+
+Detail string at every site: "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}"
+(raw file(1)/`-bZ` output + exit code, unescaped — pfb_validate_log_line()
+escapes once, internally).
+
+Plus 4 ADR-45 structural-probe swaps (stage=structural, reason=probe_failed,
+detail = "{$file_type} " . basename($file_download)) at the gzip/bzip2/zip/7z
+corrupt-archive checks in pfb_download() — same level (2), same
+unlink_if_exists()+return FALSE logic, message only.
+
+LEFT UNTOUCHED (per §2 fork resolution / ACTION PLAN step 5):
+  - 7z missing-tool reject (pfb_archive_missing_tool() branch) — stays its
+    ad-hoc "install 7-Zip" message; a tooling failure, not a content verdict.
+  - The commented-out (dead) ZIP inner-content PFB_FILTER_FILE_MIME_COMPRESSED
+    block inside pfb_download()'s ZIP branch — still 5-arg, still dead code,
+    not executed.
+
+STEP 2 — ENUMERATION OF ALL PFB_FILTER_FILE_MIME[_COMPRESSED] CALLERS
+  $ grep -rn 'PFB_FILTER_FILE_MIME\b\|PFB_FILTER_FILE_MIME_COMPRESSED\b' src/
+  Every call site is inside src/usr/local/pkg/pfblockerng/pfblockerng.inc; no
+  other file (pfblockerng.php, list_scripts/, www/) references either
+  constant. Within pfblockerng.inc, the only call sites are the 5 live
+  pfb_download() sites above (all opted in) + the 1 dead commented-out block
+  (left as-is). NO non-opted FILE_MIME/FILE_MIME_COMPRESSED caller exists
+  anywhere in the tree — nothing to record as a follow-up candidate.
+
+RENDERED CANONICAL LINES (for Phase 3's smoke greps — match these EXACTLY,
+including the escaped form; a raw '/' is NOT escaped by htmlspecialchars(),
+but '&', '<', '>', '"', '\'' are)
+
+  Outer MIME gate (e.g. mime_raw="application/x-msdownload", retval=0):
+    \npfb_validate: REJECT feed=<feed> stage=mime reason=mime_not_allowed detected=application/x-msdownload rc=0
+
+  ZIP post-extraction re-run (e.g. mime_raw="application/x-executable"):
+    \npfb_validate: REJECT feed=<feed> stage=inner reason=inner_mime_not_allowed detected=application/x-executable rc=0
+
+  Compressed peeks — gz/bz2/7z (e.g. mime_raw="application/x-dosexec"):
+    \npfb_validate: REJECT feed=<feed> stage=inner reason=compressed_mime_not_allowed detected=application/x-dosexec rc=0
+
+  Structural probes — gz/bz2/zip/7z (e.g. file_type="application/gzip",
+  file_download basename="pfB_Feed1.gz"):
+    \npfb_validate: REJECT feed=<feed> stage=structural reason=probe_failed detected=application/gzip pfB_Feed1.gz
+
+  If any mime_raw/file_type/basename value carries '&'/'<'/'>'/'"'/'\'' (rare,
+  attacker-influenced file(1) output), it renders once-escaped
+  (&amp;/&lt;/&gt;/&quot;/&#039;) per pfb_validate_log_line()'s contract —
+  never double-escaped (pinned by testStructuralStageCallSiteShapeIsSinglyEscapedInSink
+  below). A raw '/' in a mime string or path is NOT touched by
+  htmlspecialchars() — matches Phase 1's escaping-order note.
+
+TEST COVERAGE
+
+New tests/php/PfbFilterRejectDetailTest.php (7 methods total across both
+files — 4 here + 1 added to PfbValidateLogTest.php below — see RED->GREEN):
+  - testNonOptedCallerKeepsLegacyMessage (FILE_MIME) — back-compat pin: the
+    plain 4-5-arg call still rejects AND still writes the exact legacy
+    message.
+  - testOptedInCallerSuppressesLegacyMessageAndFillsDetail (FILE_MIME) —
+    pre-set $reject_detail=array(); rejects, fills mime_raw/mime/retval,
+    legacy message ABSENT from the sink.
+  - testCompressedNonOptedCallerKeepsLegacyMessage /
+    testCompressedOptedInCallerSuppressesLegacyMessageAndFillsDetail — same
+    pair for FILE_MIME_COMPRESSED (`file -bZ`); each guarded by
+    skipIfHostLacksDashZSemantics() (markTestSkipped if the host's -bZ output
+    for the PDF fixture ever differs — mirrors the wiring-test template).
+
+Fixture: a real on-disk PDF ("%PDF-1.4\n"), which file(1) reliably reports as
+application/pdf on this host (empirically verified — a bare PNG/EXE magic
+alone reads as application/octet-stream here, which would instead exercise
+the octet-stream structural-probe RECOVERY branch, not the plain allow-list
+reject this test targets). The tests' allow-list contains only text/plain, so
+application/pdf always fails the gate deterministically, without hitting the
+hostname exceptions (text/x-asm, ipinfo.io octet-stream).
+
+Extended tests/php/PfbValidateLogTest.php with
+testStructuralStageCallSiteShapeIsSinglyEscapedInSink: pfb_download() itself
+is not off-appliance unit-testable (curl/exec), so this test calls
+pfb_validate_log() directly with the EXACT detail-construction expression the
+four structural call sites use — "{$file_type} " . basename($file_download) —
+fed a raw (unescaped) '&', and asserts the sink shows '&amp;' exactly once
+(never '&amp;amp;'). Proves the call sites pass raw values straight through
+and pfb_validate_log_line() is the sole escaper. Phase 3 smoke covers the
+true end-to-end four lines on the live VM (as instructed — not faked here).
+
+RED -> GREEN EVIDENCE (out-param contract)
+
+Red (pre-Phase-2 code — `git stash push -- src/.../pfblockerng.inc`, both new
+test additions present; the 5-arg pfb_filter() signature silently ignores a
+6th call-site argument, so the opted-in calls still run but $reject_detail is
+never bound/filled):
+
+  $ vendor/bin/phpunit --filter 'PfbFilterRejectDetailTest|PfbValidateLogTest::testStructuralStageCallSiteShapeIsSinglyEscapedInSink'
+  .F.F.                                                               5 / 5 (100%)
+  1) PfbFilterRejectDetailTest::testOptedInCallerSuppressesLegacyMessageAndFillsDetail
+  mime_raw must carry the raw file(1) output
+  Failed asserting that null is identical to 'application/pdf'.
+  2) PfbFilterRejectDetailTest::testCompressedOptedInCallerSuppressesLegacyMessageAndFillsDetail
+  mime_raw must carry the raw file(1) -bZ output
+  Failed asserting that null is identical to 'application/pdf'.
+  FAILURES!
+  Tests: 5, Assertions: 22, Failures: 2.
+
+  (The 2 non-opted back-compat tests + the structural sink test correctly
+  PASS red — they pin pre-existing/Phase-1 behaviour, not this phase's
+  change; only the 2 opted-in tests are red for the exact reason Phase 2
+  fixes: the out-param contract does not exist yet.)
+
+Green (post-Phase-2 code — `git stash pop`):
+
+  $ vendor/bin/phpunit --filter 'PfbFilterRejectDetailTest|PfbValidateLogTest'
+  .......                                                             7 / 7 (100%)
+  OK (7 tests, 44 assertions)
+
+GATE SUMMARY
+
+- vendor/bin/phpunit (full suite)              -> OK, 2054 tests, 16150 assertions,
+                                                   4 pre-existing skips (same
+                                                   environment-dependent VFS-mtime
+                                                   skip as Phase 1; +5 tests vs
+                                                   Phase 1's 2049).
+- php -l pfblockerng.inc                       -> "No syntax errors detected"
+                                                   (same 4 pre-existing
+                                                   E_DEPRECATED notices as
+                                                   Phase 1, untouched by this
+                                                   phase).
+- vendor/bin/phpstan analyse --memory-limit=1G -> "[OK] No errors".
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean (no output); PFBL-01
+                                                   (RequirePfbFilter) unaffected
+                                                   — no new exec/json_encode/
+                                                   path-build sites added.
+
+SCOPE — git diff --stat:
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc | 63 ++++++++++++++++++++++-----
+  tests/php/PfbValidateLogTest.php              | 40 +++++++++++++++++
+  2 files changed, 91 insertions(+), 12 deletions(-)
+  (+ 1 new untracked test file: tests/php/PfbFilterRejectDetailTest.php)
+No sink, level, or reject DECISION changed anywhere — every site still
+returns FALSE / unlinks exactly as before; only message construction moved.
+
+SELF-REVIEW (done before this handoff, against the phase prompt's checklist)
+- Out-param fills BOTH mime branches (FILE_MIME + FILE_MIME_COMPRESSED),
+  same array shape (mime_raw/mime/retval) in each.
+- Legacy messages suppressed ONLY when is_array($reject_detail) — i.e. only
+  for opted-in callers; verified both ways by the paired non-opted/opted-in
+  tests (before-state assertion built in, not just the final state).
+- All 5 pfb_download() FILE_MIME* call sites opted in with the correct stage
+  token: mime (outer gate) vs inner (ZIP re-run + 3 compressed peeks) — no
+  site uses the wrong token.
+- Four structural swaps done (gzip/bzip2/zip/7z), all stage=structural,
+  reason=probe_failed, same level (2), same unlink+return logic.
+- 7z missing-tool reject and the dead commented-out ZIP inner block are
+  byte-identical to Phase 1 (confirmed via diff — neither appears in the
+  changeset).
+- No double-escaping: every pfb_validate_log() call at every site passes RAW
+  values (mime_raw, file_type, basename) with no caller-side
+  htmlspecialchars() — pinned by testStructuralStageCallSiteShapeIsSinglyEscapedInSink
+  (asserts a single '&amp;', never '&amp;amp;').
+- Non-opted back-compat pinned for both FILE_MIME and FILE_MIME_COMPRESSED —
+  the plain call shape used by every un-migrated caller (there are none left
+  to migrate; see the step-2 enumeration above) is byte-identical to
+  pre-Phase-2 behaviour.
+- Scope clean: only pfblockerng.inc + tests touched; no exec/sink/level
+  changes; git diff --stat matches the EXPECTED RESULT.
+
+COMMIT
+  f25ccc58 is the pre-existing tip (Phase 1, hash after rebase onto
+  origin/devel). This phase lands as the single following commit on
+  adr/48-download-validation-logging: "pfblockerng: wire
+  download-validation rejects through pfb_validate_log() (ADR-48 P2)"
+  (see `git log -1` on the pushed branch tip for the exact hash — this
+  handoff is part of that same commit's tree, so embedding its own final
+  hash here is self-referential).
+
+PUSH
+  Pushed directly to adr/48-download-validation-logging (Phase 2 of 4; the PR
+  opens once all implementation phases land, per the worktree + rebase-only-PR
+  flow).
+
+WATCH-OUT FOR PHASE 3
+- Smoke MUST grep the ESCAPED rendering, not the raw pre-escape value: a
+  detected= value with '/' is unescaped (mime strings, filenames render
+  as-is), but '&' → '&amp;', '<' → '&lt;', '>' → '&gt;', '"' → '&quot;',
+  '\'' → '&#039;' per pfb_validate_log_line()'s htmlspecialchars() step (this
+  is unlikely to fire in practice for the wired sites — mime types and
+  basenames rarely carry these bytes — but a forced fixture designed to
+  probe it must grep the escaped form).
+- The five rendered-line templates above (mime/inner ×3/structural) are the
+  exact grep targets; `reason=` is now a fixed vocabulary
+  (mime_not_allowed / compressed_mime_not_allowed / inner_mime_not_allowed /
+  probe_failed) — match on `reason=` too, not just `stage=`, to disambiguate
+  the three `stage=inner` sites from each other if needed.
+- `rc=<retval>` rides inside `detected=` (not a separate key) — a smoke grep
+  matching only up to the mime string must account for the trailing
+  " rc=<N>" suffix on the mime/inner lines (absent on the structural lines,
+  which instead carry a trailing basename).

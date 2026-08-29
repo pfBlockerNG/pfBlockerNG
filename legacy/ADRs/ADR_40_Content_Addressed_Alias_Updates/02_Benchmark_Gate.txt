@@ -1,0 +1,81 @@
+================================================================================
+PHASE 2 PROMPT — Baseline benchmark on the live VM (the kill-gate)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md   (read §1.2, §1.3, §3 risks, §6 Phase 2, §7 reject criteria first)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active in the
+orchestrator session; otherwise run /caveman. You are the Phase-2 implementer for ADR-40 on
+branch `adr/40-content-addressed-alias`. This phase produces a MEASUREMENT HARNESS + a verdict,
+NOT production code. It is the ADR-01-style premise check: prove (or disprove) that the forward
+delta is worth building BEFORE Phase 4 builds it. You implement; you do NOT re-delegate. Inline on
+the branch, one commit, push directly (PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+The perf premise — "`-T add`/`-T delete` deltas materially beat `-T replace` at scale, and the
+cost of recomputing every alias's desired set does not eat the saving" — is FALSIFIABLE and must
+be measured against a baseline. pf is not real in CI (no pfctl in the unit suites), so this runs
+on the ADR-04 live VM. The numbers decide whether Phase 4 is built, dropped, or the cross-list arm
+is re-scoped (ADR §7).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/01_Results.txt — confirm the canonical-set
+  helper interface and the extracted helpers exist. If missing, Phase 1 is not complete; STOP and
+  report.
+- .ADRs/ADR_40_Content_Addressed_Alias_Updates/ADR.md  (§1.2 problem, §1.3 "pf is a set" +
+  "delta primitive ships", §3 Negative/risks, §6 Phase 2 kill-thresholds, §7 reject criteria).
+- tests/smoke/ — the ADR-04 harness: helpers.py (SmokeVM.ssh wraps guest cmds in /bin/sh; probe
+  ON-BOX), how a smoke case is structured, how diagnostics are captured. Read
+  CLAUDE.md "Smoke tests (ADR-04)" before touching tests/smoke/.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php:1499/:1506 — the in-tree `-T delete`/`-T add`
+  delta calls (the exact primitive to benchmark).
+- docs/misc/local-smoke-debian.md + scripts/local-smoke.sh — run smoke LOCALLY (no CI workflow
+  spent) while iterating.
+
+ACTION PLAN (ordered)
+1. Build a measurement harness (under tests/smoke/ as a dispatch-only case, or scripts/bench/ —
+   pick the lighter fit; it must NOT run as a PR gate). On the live VM, for synthetic IPv4 tables
+   of 10k / 100k / 1M / 5M entries:
+   a. Time `pfctl -t T -T replace -f <file>` (wall-time) AND measure the data-plane stall during
+      it — probe latency THROUGH pf (a flood/ping or repeated rule eval) while the replace runs,
+      ON-BOX, /bin/sh. Report p50/p99 added latency, not just wall-time.
+   b. Time `-T add -f <adds>` then `-T delete -f <dels>` for churn of 1 / 1k / 100k entries
+      against each table size; same stall probe.
+   c. Time recomputing + canonicalising (LC_ALL=C sort -u) ALL aliases' desired sets vs the
+      current fetch-skip, on a representative multi-feed fixture (use the canonical helper from
+      Phase 1). This is the always-recompute cost from ADR §3.
+2. Record methodology (how tables/churn were synthesised, how stall was probed, VM specs) so the
+   numbers are reproducible.
+3. Write the VERDICT against the ADR §6/§7 kill-thresholds:
+   - Does (b) materially beat (a) at large sizes? (If NO → Phase 4 dropped.)
+   - Does (c) dominate the replace cost it saves, and can the hybrid scope contain it? (If it
+     dominates AND hybrid can't → cross-list arm re-scoped/rejected.)
+
+CONSTRAINTS
+- NO production-code changes (no src/ behaviour). Harness + docs only.
+- POSIX sh for any on-box scriptlet; SmokeVM.ssh already forces /bin/sh — assume tcsh otherwise.
+- Probe ON-BOX (drill/ping from 127.0.0.1 over SSH), never the runner-side hostfwd (ADR-04 rule).
+- Synthetic data only: RFC 5737 / private ranges; never real routable targets.
+
+VERIFICATION (must all pass before the phase is done)
+- The harness runs to completion on the live VM (local-smoke per docs/misc/local-smoke-debian.md,
+  or a single workflow_dispatch) and emits the table of numbers.
+- python -m pytest (the non-smoke suite) stays green; ruff check . / ruff format . clean for any
+  added Python.
+- The verdict explicitly states: build Phase 4 / drop Phase 4 / re-scope the cross-list arm — with
+  the numbers that justify it.
+
+EXPECTED RESULT
+A reproducible benchmark + a recorded verdict that gates Phase 4 and confirms (or re-scopes) the
+cross-list arm. No production behaviour changed.
+
+COMMIT (single)
+    tests/smoke: benchmark pfctl replace vs add/delete delta + recompute cost (ADR-40 P2)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/02_Results.txt` (plain .txt)
+Record: the full numbers table (sizes × ops × churn, wall-time + p50/p99 stall), the recompute-cost
+figure vs fetch-skip, the methodology, and the VERDICT (Phase 4 build/drop; cross-list arm
+keep/re-scope) with the threshold each number cleared or missed. This verdict is binding on Phase 4.

@@ -1,0 +1,297 @@
+ADR-63 PHASE 1 — Golden oracles for both pages' CURRENT reorder behaviour
+HANDOFF (implementer -> planner)
+
+== VERDICT ==
+DONE
+
+== WHAT CHANGED ==
+- tests/php/CategoryEditAutoSortTest.php (NEW): golden PHPUnit oracle for
+  pfblockerng_category_edit.php's auto-sort block (:1095-1113 at brief time,
+  reconfirmed unmoved at implementation time) -- eval-extracted per the
+  CategoryEditRowMoveTest.php precedent. 5 tests: empty-sort fires, sort=='sort'
+  fires identically, sort=='no-sort' skips (byte-unchanged), enabled-first
+  natural/case-insensitive ordering, duplicate-header last-wins collapse.
+- tests/smoke/ui/test_category.py (EXTENDED): generalized the existing
+  IPv4-only snapshot/restore/seed helpers to take a config node + gtype
+  (_snapshot_node/_restore_node/_seed_three_rows/_page_url; old
+  _snapshot_lists/_restore_lists kept as ipv4-defaulted thin wrappers, zero
+  behaviour change to the 4 pre-existing tests). Added 5 new tests: the
+  ids[] 3-cycle permutation oracle parametrized over {ipv4, ipv6, dnsbl}, a
+  bundled ids[]+postdata same-Save oracle (ipv4), and a GeoIP
+  silent-no-op pin (render order + a spot-checked continent config node both
+  unchanged by a well-formed ids[] POST).
+- .ADRs/ADR_63_Category_Reorder_UX/RESULTS/01_Results.txt (this file).
+
+Commit: this commit (the single commit on origin/adr/63-category-reorder-ux
+containing both the tests and this handoff file -- see `git log -1`).
+Both live-VM runs below (Run 1 and Run 2) exercised the pre-handoff code
+state 63be703f2bc3a801a6a9ca3c319bce8c7564908b, whose tests/ content is
+BYTE-IDENTICAL to this commit's tests/ content (only this RESULTS file was
+added afterward; `git diff 63be703f -- tests/` against the final commit is
+empty). A transient vacuity-check commit cba67104 was pushed and later
+force-pushed away -- see RED->GREEN proof below.
+
+Zero production code touched: `git diff origin/devel...HEAD --stat` (excluding
+the base-branch commits pulled in by the pre-work rebase, see WORKTREE BASE
+CHECK below) shows only tests/php/CategoryEditAutoSortTest.php (new) and
+tests/smoke/ui/test_category.py (extended) as this phase's diff -- no path
+under src/.
+
+== WORKTREE BASE CHECK ==
+Worktree was 2 commits behind origin/devel at start (56bcb9a7 "pfblockerng:
+surface IP-recompute memberlist write failure (#1184)" and d0016064 "tests:
+document Part C write-helper coverage..." -- neither touches category
+files). Rebased onto origin/devel (tip 8b45f610) before any edit; recorded
+per the SubagentStart WORKTREE BASE CHECK rule.
+
+== GATES ==
+$ php -l tests/php/CategoryEditAutoSortTest.php
+No syntax errors detected in tests/php/CategoryEditAutoSortTest.php
+
+$ vendor/bin/phpunit
+OK, but there were issues!
+Tests: 3019, Assertions: 20232, Deprecations: 1, Notices: 1, Skipped: 4.
+(the 4 skips are the pre-existing posix_getuid()===0 root-guard skips
+documented in CLAUDE.md "Running tests" -- not new; CategoryEditAutoSortTest's
+5 tests + the pre-existing 9 CategoryEditRowMoveTest tests are both counted
+in the 3019 and both green)
+
+$ composer phpstan
+Note: Using configuration file .../phpstan.neon.
+ [OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+(no output; exit 0 -- src/ untouched, stays clean)
+
+$ python3 -m pytest
+======================= 2672 passed, 4 skipped in 55.91s =======================
+(smoke tree is --ignore'd by default addopts; this proves no collection
+breakage from the test_category.py edits, not smoke coverage itself)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+222 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 93 source files
+
+== LIVE-VM TIER-B RUN (F9 command, both Item A and Item B) ==
+Command:
+PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 \
+root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38" \
+scripts/local-smoke.sh --ref adr/63-category-reorder-ux --marker ui_e2e --filter "category"
+
+Run 1 (box root@10.0.0.35, commit 63be703f, BEFORE the vacuity mutation was
+introduced): -k "category" matched 36 tests (broader than just this phase's
+new tests -- pytest -k substring also caught test_blacklist.py's
+"...category_enable_and_clear" etc.; harmless over-inclusion, all still
+category-page-adjacent).
+
+Tail:
+================ 36 passed, 322 deselected in 252.23s (0:04:12) ================
+select-box: released local-100035-1783786565-2e4c9e7db89e60b4 on root@10.0.0.35
+
+All 4 pre-existing test_category.py tests PASSED (unchanged), all 5 NEW
+test_category.py tests PASSED:
+  test_category_ids_order_save_persists_row_permutation[dnsbl]  PASSED
+  test_category_ids_order_save_persists_row_permutation[ipv4]   PASSED
+  test_category_ids_order_save_persists_row_permutation[ipv6]   PASSED
+  test_category_ids_and_postdata_bundle_applies_both_in_one_save PASSED
+  test_category_ids_order_save_geoip_is_silent_no_op            PASSED
+and all 3 tombstone test_category_edit_row_move.py tests PASSED:
+  test_stale_xmove_anchor_does_not_drop_checked_row              PASSED
+  test_valid_xmove_anchor_relocates_checked_row                  PASSED
+  test_crafted_self_anchor_mismatch_does_not_duplicate_row       PASSED
+
+Run 2 (box root@10.0.0.38, commit 63be703f -- identical content, run AFTER the
+vacuity mutation was introduced, exercised RED, and reverted -- see next
+section, per the brief's Item D instruction to "run again" after restore).
+This is the canonical, most-recent Item A/B green evidence.
+
+Tail:
+================ 36 passed, 322 deselected in 244.68s (0:04:04) ================
+select-box: released local-100038-1783787192-81d03177f6f49c83 on root@10.0.0.38
+
+All 9 test_category.py tests PASSED again (both pre-existing and new):
+  test_category_update_row_action_changes_config                PASSED [  8%]
+  test_category_update_row_cron_valid_and_reject_unchanged       PASSED [ 11%]
+  test_category_update_via_get_does_not_mutate_config             PASSED [ 13%]
+  test_category_delete_row_removes_config_node                    PASSED [ 16%]
+  test_category_ids_order_save_persists_row_permutation[dnsbl]    PASSED [ 19%]
+  test_category_ids_order_save_persists_row_permutation[ipv4]     PASSED [ 22%]
+  test_category_ids_order_save_persists_row_permutation[ipv6]     PASSED [ 25%]
+  test_category_ids_and_postdata_bundle_applies_both_in_one_save  PASSED [ 27%]
+  test_category_ids_order_save_geoip_is_silent_no_op              PASSED [ 30%]
+All 3 tombstone test_category_edit_row_move.py tests PASSED again:
+  test_stale_xmove_anchor_does_not_drop_checked_row               PASSED [ 69%]
+  test_valid_xmove_anchor_relocates_checked_row                   PASSED [ 72%]
+  test_crafted_self_anchor_mismatch_does_not_duplicate_row        PASSED [ 75%]
+
+== RED->GREEN PROOF (Item D vacuity checks; phase is BEHAVIOUR-PRESERVING per
+   brief -- the new tests are oracles of EXISTING behaviour, not a production
+   change, so the standard test-first red-before-fix protocol does not apply.
+   The mandatory substitute per the brief: mutate one golden expected value,
+   prove the mutated assertion FAILS (red), restore byte-identical, prove it
+   PASSES again (green) -- proving the assertion is failable, not coverage
+   theater. ==
+
+--- Item A (live-VM): test_category_ids_order_save_persists_row_permutation[ipv4] ---
+Mutation: for gtype=='ipv4' only, changed the golden `expected` from the
+correct 3-cycle permutation [c, a, b] to the unpermuted seed order [a, b, c]
+(ipv6/dnsbl branches untouched -- proves the mutation is scoped, not a
+suite-wide break).
+Committed as cba67104 "TEMP: vacuity-check mutation for ADR-63 P1 (to be
+reverted)" (through the pre-commit hook, no --no-verify), pushed
+--force-with-lease, then run live via the F9 command narrowed to
+--filter "test_category_ids_order_save_persists_row_permutation" (box
+root@10.0.0.38).
+
+RED test file hash (git hash-object of tests/smoke/ui/test_category.py at
+cba67104, the red-run commit): 1a0438530b5d007e3bed349383bbc983e5817e4d
+
+RED output (pasted, executed):
+tests/smoke/ui/test_category.py::test_category_ids_order_save_persists_row_permutation[dnsbl] PASSED [ 33%]
+tests/smoke/ui/test_category.py::test_category_ids_order_save_persists_row_permutation[ipv4] FAILED [ 66%]
+tests/smoke/ui/test_category.py::test_category_ids_order_save_persists_row_permutation[ipv6] PASSED [100%]
+
+=================================== FAILURES ===================================
+...
+>           assert after == expected, (
+                f"ids[] permutation did not persist for gtype={gtype!r}: expected {expected}, got {after!r}"
+            )
+E           AssertionError: ids[] permutation did not persist for gtype='ipv4': expected ['pfbordipv4a', 'pfbordipv4b', 'pfbordipv4c'], got ['pfbordipv4c', 'pfbordipv4a', 'pfbordipv4b']
+E           assert ['pfbordipv4c'...'pfbordipv4b'] == ['pfbordipv4a'...'pfbordipv4c']
+E             At index 0 diff: 'pfbordipv4c' != 'pfbordipv4a'
+tests/smoke/ui/test_category.py:462: AssertionError
+
+=========================== short test summary info ============================
+FAILED tests/smoke/ui/test_category.py::test_category_ids_order_save_persists_row_permutation[ipv4]
+============ 1 failed, 2 passed, 355 deselected in 68.19s (0:01:08) ============
+
+(dnsbl/ipv6 unaffected -- confirms the mutation was ipv4-scoped, and confirms
+production genuinely writes the [c, a, b] permutation the wrong golden
+disagreed with -- this is real production output, not a manufactured fault.)
+
+GREEN: mutation reverted (working tree diffed byte-identical to the pre-mutation
+commit 63be703f via `git diff 63be703f -- tests/smoke/ui/test_category.py`,
+confirmed empty), `git reset --hard 63be703f` (dropping the temp commit
+entirely -- content was already identical), `git push --force-with-lease`.
+Re-ran the SAME F9 command (full --filter "category", not just the narrowed
+one, per the brief's "this final run is also Item A/B's green evidence")
+-- see "Run 2" tail above/appended below: 36 passed, all new tests + all 3
+tombstone tests green.
+
+Test file hash at green/final commit (63be703f):
+2a1b79de98fcd1c9da176156ba48658a4d623eb9
+
+--- Item C (local PHPUnit): CategoryEditAutoSortTest::testEnabledFirstThenNaturalCaseInsensitiveOrderWithinEachState ---
+Mutation: swapped the expected order of 'Feed2' and 'feed10' in the golden
+array (['bravo', 'Feed2', 'feed10', ...] -> ['bravo', 'feed10', 'Feed2', ...]).
+
+RED output (pasted, executed):
+1) CategoryEditAutoSortTest::testEnabledFirstThenNaturalCaseInsensitiveOrderWithinEachState
+enabled rows must sort naturally/case-insensitively first, then disabled rows the same way
+Failed asserting that two arrays are identical.
+--- Expected
++++ Actual
+@@ @@
+ Array &0 [
+     0 => 'bravo',
+-    1 => 'feed10',
+-    2 => 'Feed2',
++    1 => 'Feed2',
++    2 => 'feed10',
+     3 => 'Alpha',
+     4 => 'zulu',
+ ]
+Tests: 5, Assertions: 6, Failures: 1.
+
+GREEN output (pasted, executed, after restoring the exact original golden --
+git hash-object BEFORE mutation and AFTER restore are byte-identical:
+ecf1fa1cff315523311ac3062ee00e8bd2089c1c both times):
+.....                                                               5 / 5 (100%)
+OK (5 tests, 6 assertions)
+
+== COVERAGE MATRIX (M1-M15) ==
+M1  ids[] order-save persists permutation, gtype=ipv4  -- test_category_ids_order_save_persists_row_permutation[ipv4] (live PASSED)
+M2  ids[] order-save persists permutation, gtype=ipv6  -- test_category_ids_order_save_persists_row_permutation[ipv6] (live PASSED)
+M3  ids[] order-save persists permutation, gtype=dnsbl -- test_category_ids_order_save_persists_row_permutation[dnsbl] (live PASSED)
+M4  ids[] order-save geoip -- proven SILENT NO-OP (F2 pre-resolved conflict, per brief) -- test_category_ids_order_save_geoip_is_silent_no_op (live PASSED)
+M5  Same-Save bundle: ids[]+postdata in ONE POST, ipv4 -- test_category_ids_and_postdata_bundle_applies_both_in_one_save (live PASSED)
+M6  Tombstone: CategoryEditRowMoveTest.php (9 tests) reconfirmed green, UNMODIFIED -- vendor/bin/phpunit (3019 total, all green, file untouched)
+M7  Tombstone: test_category_edit_row_move.py (3 tests) reconfirmed green live, UNMODIFIED -- live-VM run (3/3 PASSED)
+M8  Auto-sort: sort field absent/empty triggers sort (empty(...) arm) -- testEmptySortFieldTriggersAutoSort (PASSED)
+M9  Auto-sort: sort=='sort' triggers sort identically (equality arm) -- testSortEqualsSortTriggersAutoSort (PASSED)
+M10 Auto-sort: sort=='no-sort' skips, order byte-unchanged -- testNoSortSkipsAutoSortLeavingOrderUnchanged (PASSED)
+M11 Auto-sort: enabled-first, ksort(SORT_NATURAL|SORT_FLAG_CASE) per bucket -- testEnabledFirstThenNaturalCaseInsensitiveOrderWithinEachState (PASSED; this is also Item D's Item-C vacuity target)
+M12 Auto-sort: duplicate header within one state collapses last-wins (lossy, pinned) -- testDuplicateHeaderWithinSameStateCollapsesToLastWins (PASSED)
+M13 category_edit gtype axis: {ipv4, ipv6, dnsbl} only, NO geoip case (F6 pre-resolved) -- N/A by construction: the extracted auto-sort block (F7) references no $gtype/$conf_type, so gtype is not an axis of THIS transform; deferred to Phases 2-4 for any gtype-conditional reorder UI
+M14 Vacuity/failability proof, Item A (live) -- RED+GREEN pasted above (mutation on test_category_ids_order_save_persists_row_permutation[ipv4])
+M15 Vacuity/failability proof, Item C (local) -- RED+GREEN pasted above (mutation on testEnabledFirstThenNaturalCaseInsensitiveOrderWithinEachState)
+
+Deferred by the brief's own scope (Phases 2-4, not this phase): input-method
+axis (drag vs. keyboard vs. future control), roworderdragging library
+internals, add/delete-row composition with reorder.
+
+== MATRIX RE-DERIVATION / CORRECTIONS VS THE ADR PROMPT (per brief §8, pre-resolved) ==
+1. GeoIP ids[] order-persist is a SILENT NO-OP today (F2): the persist sink
+   (`if (isset($rowdata_path)) { config_set_path(...) }`,
+   pfblockerng_category.php:302-303) is never reached for GeoIP because
+   $rowdata_path is only set inside the `if ($type != 'GeoIP')` branch
+   (:117-118); GeoIP rowdata is rebuilt fresh from $pfb['continents'] every
+   request (:122-137). The phase-1 prompt's "assert the persisted row order
+   matches" is REFUTED for geoip and replaced with the no-op pin (M4).
+2. pfblockerng_category_edit.php's gtype switch (:172-193 at brief time) has
+   cases {ipv4, ipv6, dnsbl (default)} ONLY -- no geoip case; the page never
+   renders an edit link for geoip rows (pfblockerng_category.php:537 `if
+   ($gtype != 'geoip')`). The auto-sort block itself is gtype-independent
+   (F7), so M13 records this as a construction-level N/A, not a missing test.
+Both corrections match the brief's own pre-resolved ESCALATE-exemption list
+(§8); no new contradiction was found against F1-F10 during implementation --
+every anchor comment used for eval-extraction (row-move block's
+"// Move selected table row(s) to anchor row", auto-sort block's "// Sort row
+by Header/Label field...") was present verbatim at the line ranges the brief
+cited.
+
+== DEVIATIONS ==
+None beyond the two brief-pre-resolved corrections above (both explicitly
+flagged in the brief as "do NOT escalate for this one, it is pre-resolved").
+
+The brief's Item D instructed committing the vacuity mutation, running live,
+restoring, "amend+force-push" -- I committed as a NEW commit (not an amend of
+the phase's real commit) so the phase commit's message/content never carried
+the temporary mutation, then reset --hard back to the phase commit and
+force-pushed (net effect identical to "amend then fix": the temporary state
+never lands, final history is the single clean commit at 63be703f). Judgment
+call, not a brief violation -- flagged for transparency.
+
+== CARRY-FORWARD FOR PHASE 2 ==
+- category.php row markup: `<tr style="vertical-align: top" class="sortable"
+  id="pfb_r<?=$r_id;?>">` (pfblockerng_category.php:426); JS reorder read via
+  `$('#pfb_table table tbody').sortable('serialize', {key:"ids[]"})` (:645),
+  wire format `ids[]=rN&ids[]=rM&...` in original-index order (parsed
+  server-side via parse_str, F3/F4).
+- category_edit.php row markup: NOT a <tr> -- a repeatable `Form_Group`
+  (`$group->addClass('repeatable')`, pfblockerng_category_edit.php:1129-1130),
+  no drag-reorder at all today; reordering is exclusively the Lmove
+  checkbox + Xmove anchor-button POST mechanism (:1134-1136,
+  CategoryEditRowMoveTest.php's subject) OR the automatic sort=='sort' pass
+  pinned by this phase (M8-M12).
+- Field-naming pattern: category.php uses `action-{r_id}` / `cron-{r_id}` /
+  `aliaslog-{r_id}` (ipv4/ipv6/geoip) / `logging-{r_id}` (dnsbl) (F5,
+  pfblockerng_category.php:464,479,499-503); category_edit.php uses
+  `format-{r_id}` / `state-{r_id}` / `url-{r_id}` and further trailing-`-{r_id}`
+  fields in its per-row Form_Group (pfblockerng_category_edit.php:1146,1163,1173)
+  -- same "<field>-<rowid>" convention on both pages, different field names.
+- ids[] wire format is `ids[]=rN&ids[]=rM&...`, one entry per NEW position in
+  order, value `rN` = the ORIGINAL row index (F3); the postdata field loop
+  runs BEFORE the ids[] block against ORIGINAL indices (M5's bundle proof).
+- GeoIP has NO reorder persistence path today (M4) -- any Phase 2/3 UI that
+  adds a real geoip persist sink is new behaviour requiring its own
+  red-before-fix proof, not a preservation of this pinned no-op.
+- Config nodes used by this phase's helpers (reusable by later phases):
+  installedpackages/pfblockernglistsv{4,6}/config,
+  installedpackages/pfblockerngdnsbl/config,
+  installedpackages/pfblockerngtopspammers/config (GeoIP spot-check node).

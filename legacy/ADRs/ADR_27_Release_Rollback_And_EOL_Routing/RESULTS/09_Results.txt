@@ -1,0 +1,177 @@
+================================================================================
+PHASE 9 RESULTS — Landing "EOL pfSense versions" section (CE + Plus tables)
+Branch: adr/27-release-rollback-and-eol-rou
+================================================================================
+
+STATUS: Complete. All verification gates green. Ready for Phase 10.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=10
+
+────────────────────────────────────────────────────────────────────────────────
+1. EOL IDENTIFICATION — role == "route-only"
+────────────────────────────────────────────────────────────────────────────────
+
+EOL status is read from the matrix `role` field:
+
+  role == "route-only"  →  EOL (show in EOL section)
+  anything else (absent / "build")  →  live build (shown in Published packages)
+
+This is the same discriminant used in build-repo-portable.py (Phase 7). The
+matrix entry also carries `pfsense_version`, `variant` (CE/Plus), `abi`,
+`php_version`, and `py_flavor` — used to enrich each EOL table row.
+
+────────────────────────────────────────────────────────────────────────────────
+2. LAST-SERVED .PKG SELECTION
+────────────────────────────────────────────────────────────────────────────────
+
+For each route-only matrix entry:
+
+  1. Compute varver = f"{variant.lower()}-{major}.{minor}" (mirrors Phase 7's
+     catalog_name_from_version, e.g. "ce-2.7", "plus-25.03").
+
+  2. Find all pkgs whose rel path starts with "release/{varver}/" — this is the
+     same path where build-repo-portable.py emits the frozen .pkg catalog for
+     that EOL version. Matched by `parts[0] == "release" and parts[1] == varver`.
+
+  3. Among those pkgs, filter by abi == entry["abi"], then take
+     max(..., key=lambda p: ver_key(p["version"])) — the newest by numeric sort.
+     This is the "last/highest served .pkg" for that (EOL pfSense version, ABI).
+
+  4. Enrich the row with pfsense_version, php (from php_version), py (from
+     py_flavor via _dotted_ver) from the matrix entry.
+
+A (varver, abi) dedup guard prevents double-emitting when multiple matrix entries
+share the same (pfsense_version, variant, abi) — for example, when two arch rows
+in different matrix file entries happen to share the same ABI string.
+
+If no .pkg is served for a (varver, abi) combination, the entry is silently
+skipped (no pkg = nothing to show; the build-side raises an error for this case).
+
+────────────────────────────────────────────────────────────────────────────────
+3. NEW FUNCTIONS IN scripts/gen_landing.py
+────────────────────────────────────────────────────────────────────────────────
+
+_eol_varver(pfsense_version, variant) -> str
+  Compute the varver dir name for a route-only entry (mirrors
+  build-repo-portable.py's catalog_name_from_version, major.minor only).
+
+eol_versions(pkgs, matrix) -> list[tuple[str, str, dict]]
+  Returns (edition_key, pfsense_version, row) triples — one per EOL (pfSense
+  version, ABI) — newest-served .pkg, matrix-enriched. Sorted by edition order
+  (CE < Plus), then pfSense version, then ABI — deterministic, mtime-pinned.
+  PUBLIC function (no leading underscore) so tests can call it directly.
+
+_eol_table_html(rows) -> str
+  One EOL edition table: pfSense | Version | ABI | PHP | Python | Published |
+  Commit | Size. No Channel column (irrelevant for EOL). Reuses _or_dash,
+  commit_cell, human_size — no duplicated row HTML.
+
+_eol_versions_html(pkgs, matrix) -> str
+  The full EOL block: h2 "EOL pfSense versions" + per-edition h3 + table.
+  Returns "" when no route-only matrix entries exist — the section is entirely
+  absent (no empty heading emitted).
+
+────────────────────────────────────────────────────────────────────────────────
+4. WHERE THE SECTION RENDERS
+────────────────────────────────────────────────────────────────────────────────
+
+In render_page(), the EOL block is inserted between "Published packages" and
+"Repository files":
+
+  <h2>Published packages</h2>{_packages_html(pkgs, matrix)}
+  {_eol_versions_html(pkgs, matrix)}        ← NEW (empty string when no EOL)
+  <h2>Repository files</h2>...
+
+This placement is deterministic and additive: existing deployments with no
+route-only matrix entries produce an identical page (the function returns "").
+
+────────────────────────────────────────────────────────────────────────────────
+5. TESTS ADDED (tests/test_gen_landing.py — 5 new tests)
+────────────────────────────────────────────────────────────────────────────────
+
+Helper fixtures added at module scope:
+
+  _mx_eol(abi, ver, variant, php, py)  — a route-only matrix entry (role="route-only")
+  _eol_pkg(version, abi, varver)        — a pkg row at release/<varver>/<arch>/name.pkg
+
+Tests:
+
+test_eol_versions_empty_when_no_route_only_entries
+  BEFORE (no route-only in matrix):
+    eol_versions([pkg], matrix) == []
+    _eol_versions_html([pkg], matrix) == ""
+  AFTER (route-only entry added):
+    eol_versions returns 1 triple
+    _eol_versions_html contains "EOL pfSense versions"
+  Proves the transition is real — the empty-case section does not appear spuriously.
+
+test_eol_versions_lists_newest_served_pkg_per_eol_version
+  GIVEN live CE 2.8 build + EOL CE 2.7 with two .pkg versions (3.1.0_4 older,
+    3.1.0_5 newer) under release/ce-2.7/
+  WHEN eol_versions called
+  THEN exactly one triple: CE/2.7/row with version=="3.1.0_5" (newest, not 3.1.0_4)
+  AND  live build version "3.2.16" is ABSENT from the EOL result.
+  Confirms newest-wins and live-build exclusion.
+
+test_eol_versions_ce_and_plus_split_into_separate_tables
+  GIVEN CE 2.7 route-only + Plus 25.03 route-only + live CE 2.8 build
+  WHEN _eol_versions_html called
+  THEN CE section: ">2.7<" present, "25.03" absent
+  AND  Plus section: ">25.03<" present, ">2.7<" absent
+  AND  CE section before Plus section in HTML
+  AND  live build "3.2.16" absent from the entire EOL block
+  CE/Plus split + no cross-edition leakage + no live-build leakage.
+
+test_eol_versions_section_absent_from_rendered_page_when_no_route_only
+  GIVEN matrix with no route-only entries
+  THEN "EOL pfSense versions" is NOT in render_page output
+  Before-state for the rendered page.
+
+test_eol_versions_section_present_in_rendered_page_with_route_only
+  GIVEN CE 2.8 live + EOL CE 2.7 + EOL Plus 25.03
+  THEN "EOL pfSense versions" present in page
+  AND  after "Published packages", before "Repository files"
+  AND  CE + Plus sub-tables in the EOL block with correct versions
+  AND  live build "3.2.16" absent from the EOL block
+  End-to-end render verification.
+
+────────────────────────────────────────────────────────────────────────────────
+6. VERIFICATION RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+python -m pytest:          1772 passed (was 1767; +5 new tests, 0 regressions)
+ruff check .:              All checks passed
+ruff format --check .:     112 files already formatted
+mypy tests/:               Success: no issues found in 46 source files
+markdownlint-cli2:         0 error(s)
+
+Local render (synthetic site + matrix): CE and Plus EOL tables confirmed —
+  3.1.0_5 present (newest CE 2.7 build), 3.1.0_4 absent (older suppressed),
+  3.0.9_1 present (Plus 25.03), 3.2.16 absent from EOL section, CE before Plus.
+
+────────────────────────────────────────────────────────────────────────────────
+7. DIFF SUMMARY
+────────────────────────────────────────────────────────────────────────────────
+
+Files changed (two):
+  scripts/gen_landing.py    (+139 lines — 4 new functions + render_page wire-up)
+  tests/test_gen_landing.py (+208 lines — 2 helper fixtures + 5 new test cases)
+
+Files NOT changed:
+  scripts/build-repo-portable.py  (Phase 7's route-only logic unchanged)
+  scripts/worker/src/index.js     (Phase 8's confirmed-no-change invariant)
+  Any src/ file (scripts/ + tests/ only, per phase scope)
+
+────────────────────────────────────────────────────────────────────────────────
+8. GO-AHEAD FOR PHASE 10
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 9 complete. The landing page now surfaces EOL (route-only) pfSense versions
+in a dedicated "EOL pfSense versions" section — one table per edition (CE, Plus),
+one row per EOL pfSense version showing the last/highest .pkg still served for it.
+
+The section is additive: absent when no route-only matrix entries exist, so
+existing deployments are unaffected until the first route-only entry is added.
+
+Phase 10 may proceed.
+================================================================================

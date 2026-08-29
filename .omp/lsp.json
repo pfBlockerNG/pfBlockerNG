@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "intelephense": {
+      "fileTypes": [".php", ".phtml", ".inc"],
+      "languageId": "php",
+      "settings": {
+        "intelephense": {
+          "environment": { "phpVersion": "8.3" },
+          "files": { "associations": ["*.php", "*.phtml", "*.inc"] }
+        }
+      }
+    }
+  }
+}

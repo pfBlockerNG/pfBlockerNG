@@ -1,0 +1,65 @@
+ADR-02 Phase 4 Results — Shell: remove native DNSBL builders from pfblockerng.sh
+================================================================================
+
+File changed: src/usr/local/pkg/pfblockerng/pfblockerng.sh (only this file; -198 lines)
+
+STATE AFTER THIS PHASE
+-----------------------
+pfblockerng.sh now builds ONLY the Python DNSBL data files. The native
+Unbound builders are gone:
+- domaintld()      (native local-zone/local-data builder) — REMOVED.
+- dnsbl_livesync() (native live-update-without-reload)    — REMOVED.
+- domaintldpy()    (Python data/zone builder)             — KEPT, untouched.
+The `case "${1}"` dispatch keeps the `domaintldpy)` arm (and all other
+commands: dnsbl_scrub, cidr_aggregate, whoisconvert, iptoasn, asn_table,
+suppress, dmax, pmax, et, xlsx, remove, aliastables, closing, _* …); the
+`domaintld)` and `dnsbl_livesync)` arms were removed. No PHP code invokes the
+removed functions (Phase 3 dropped those execs).
+
+WHAT CHANGED
+-------------
+- Removed function domaintld() and its `domaintld)` dispatch arm.
+- Removed function dnsbl_livesync() and its `dnsbl_livesync)` dispatch arm.
+- Removed 6 top-of-file temp vars used ONLY by dnsbl_livesync:
+    dnsbl_add, dnsbl_add_zone, dnsbl_add_data,
+    dnsbl_remove, dnsbl_remove_zone, dnsbl_remove_data.
+- Removed 3 vars that became orphaned once domaintld/dnsbl_livesync were gone
+  (each was used ONLY by those functions; verified by word-boundary grep, and
+  the original committed file had no SC2034 for them):
+    DEBUG (=0), dnsbl_file (=/var/unbound/pfb_dnsbl), dnsbl_tmp (=/tmp/DNSBL_TMP/).
+- Removed a dead `dnsbl_files="${cc}";` assignment (+ its "# List of Feeds"
+  comment) at the top of domaintldpy(): it was set but never read (the global
+  was only consumed by the removed domaintld()); confirmed unused by grep.
+  domaintldpy()'s actual logic is unchanged.
+
+VERIFICATION RESULTS
+--------------------
+- `sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh` -> parses, no errors.
+- `shellcheck -s sh src/usr/local/pkg/pfblockerng/pfblockerng.sh` -> CLEAN
+  (zero findings after the .shellcheckrc-sanctioned SC1091/SC2154; the 3 SC2034
+  warnings introduced by the function removal were resolved by deleting the now-
+  orphaned vars above).
+- grep: no `domaintld`/`dnsbl_livesync` definition or dispatch remains;
+  `domaintldpy` definition + `domaintldpy)` arm present.
+- `python -m pytest` -> 163 passed (sanity; no python changed).
+
+WATCH-OUTS / DEVIATIONS
+------------------------
+- Removing DEBUG/dnsbl_file/dnsbl_tmp/dnsbl_files goes slightly beyond "delete
+  the two functions": they were dead solely because those functions were
+  removed, and leaving them broke the ShellCheck-clean requirement. All four
+  were proven unused (word-boundary grep returned only the definition line).
+- pfblockerng.inc still defines $pfb['dnsbl_sync'] (config read) which is now
+  unused (Live Sync gone); harmless. The Resolver Live Sync UI field
+  (pfb_dnsbl_sync) is still present but hidden (per P2). These can be dropped in
+  a later cleanup.
+
+GO-AHEAD FOR PHASE 5
+---------------------
+Shell is Python-only. Only the final phase remains: collapse the mode branches
+in pfblockerng_alerts.php and pfblockerng.widget.php, then REMOVE the now-unused
+definitions in pfblockerng.inc — $pfb['dnsbl_py_blacklist'] = TRUE (L862) and the
+P1 keystone $pfb['dnsbl_mode'] = 'dnsbl_python' — and the $pfb['dnsbl_py_block']
+read, once no file reads them. Keep emitting `python_blocking = on`. Final
+package-wide grep must show zero dnsbl_unbound / pfb_py_block / dnsbl_py_blacklist
+(except the install.inc migration) and no behavioral dnsbl_mode guards.

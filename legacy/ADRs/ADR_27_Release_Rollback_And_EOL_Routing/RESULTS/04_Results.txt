@@ -1,0 +1,168 @@
+ADR-27 Phase 4 Results — Rollback smoke (live VM, -m repo)
+===========================================================
+
+Status: COMPLETE — test written, off-box gates green, AND the live -m repo dispatch is
+        now GREEN (run 27802532591, CE leg) after the corrections below. Premise proven.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=5
+
+------------------------------------------------------------------------
+What was built
+------------------------------------------------------------------------
+
+New test function added to tests/smoke/test_repo_install.py:
+
+  test_release_rollback_to_retained_older_version(repo_vm, tmp_path)
+
+New helper added (just above the test):
+
+  pkg_install_pinned(vm, version, *, timeout=600.0)
+    Executes: pkg install -y <PKG_NAME>-<version>
+    This IS the documented rollback command (per README + scripts/README.md).
+    Raises on non-zero exit, capturing full stdout+stderr.
+
+------------------------------------------------------------------------
+The rollback command (ADR §2.1, documented UX)
+------------------------------------------------------------------------
+
+  pkg install -y pfSense-pkg-pfBlockerNG-devel-<version>
+
+  e.g. pkg install -y pfSense-pkg-pfBlockerNG-devel-0.5.5_4_lo
+
+  Where <version> is any version string present in the multi-version
+  release/ catalog.  The catalog-based dep resolution runs normally —
+  unlike `pkg add <raw-url>` which bypasses it.
+
+------------------------------------------------------------------------
+Test lifecycle (BDD — Given/When/Then, true before/after)
+------------------------------------------------------------------------
+
+Setup:
+  - Two builds forged from the branch .pkg using the existing reversion_pkg
+    helper: <V>_lo (older) and <V>_hi (newer).
+  - Multi-version catalog built on the RUNNER by build_repo_via_portable
+    with [lo_pkg, hi_pkg] — two NDJSON entries in packagesite.yaml,
+    exactly as build_repo_matrix(release_keep_devel=2) produces in
+    production.  Shipped to the guest under PORTABLE_REPO_ROOT/<ABI>/.
+  - NONE-signed file:// repo conf at pfsense_prio+100 (above Netgate).
+
+Given the package ABSENT; multi-version catalog carrying BOTH <V>_lo and
+  <V>_hi enabled above the pfSense repo:
+
+When pkg install -y pfSense-pkg-pfBlockerNG-devel (NO version pin):
+Then NEWEST-WINS: <V>_hi is active (pkg_installed_version == hi_version),
+  origin == "pfblockerng", no "Missing dependency" — the BEFORE-STATE.
+  (Proves the catalog serves the highest version by default; the upcoming
+  rollback is a real regression from a confirmed state, not a vacuous check.)
+
+When pkg install -y pfSense-pkg-pfBlockerNG-devel-<V>_lo (PINNED):
+Then ROLLBACK: <V>_lo is active, origin still "pfblockerng",
+  no "Missing dependency" — PREMISE HOLDS if this passes.
+  (ADR §7 REJECT gate: failure here means Part 1 must downgrade to docs-only.)
+
+When pkg update -f; pkg upgrade -y pfSense-pkg-pfBlockerNG-devel:
+Then RE-UPGRADE: <V>_hi is active again, origin "pfblockerng",
+  no "Missing dependency" — lifecycle closed.
+
+------------------------------------------------------------------------
+Variant contract
+------------------------------------------------------------------------
+
+- ABI/variant derived from the .pkg manifest and the version matrix
+  (SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR from smoke.yml);
+  NEVER hardcoded (FreeBSD:15/php83 are CE-specific and must not appear
+  in the test body).
+- build_repo_via_portable derives the ABI bucket from the .pkg's own
+  +COMPACT_MANIFEST abi field — the branch .pkg is always the box's
+  exact ABI, so CE and Plus legs each build the correct catalog.
+
+------------------------------------------------------------------------
+Catalog mechanics
+------------------------------------------------------------------------
+
+- build_repo_via_portable([lo_pkg, hi_pkg], ...) builds the catalog with
+  BOTH versions.  The helper calls build-repo-portable.py with --in pointing
+  at a tmp dir holding both .pkg files; the generator writes two NDJSON
+  objects to packagesite.yaml (one per (name, version)) — the same multi-
+  version path the Phase 1/2 retain_by_channel helper enables in production.
+- build_repo_via_portable drives build-repo-portable.py with --catalog-name release
+  (nesting the catalog under <out>/release/<ABI>/), then flattens that to the <ABI>/
+  layout the repo conf serves — the same helper used by test_portable_catalog_is_accepted
+  and test_portable_catalog_dedups_*, consistent with the existing portable fidelity cases.
+
+------------------------------------------------------------------------
+Off-box gate outputs
+------------------------------------------------------------------------
+
+python -m pytest tests/smoke/test_repo_install.py --collect-only --override-ini="addopts=":
+  collected 14 items  (was 13; new test is the 14th)
+  <Function test_release_rollback_to_retained_older_version>
+
+python -m pytest -q:
+  1750 passed in 16.76s  (unchanged; off-box collection clean)
+
+ruff check .:
+  All checks passed!
+
+ruff format --check .:
+  112 files already formatted
+
+------------------------------------------------------------------------
+Dispatch + pass criteria (live VM)
+------------------------------------------------------------------------
+
+Dispatch command (run from the branch, once CI is available):
+
+  gh workflow run smoke.yml -f pytest_marker=repo
+
+This dispatches smoke.yml against the branch .pkg (-m repo selects only
+the repo-marked tests).  The rollback case is the 14th test collected.
+
+PASS criteria:
+  - All 14 repo-marked tests PASS (green) on the CE leg.
+  - If Plus is in the matrix, also PASS on the Plus leg.
+  - The new test's steps show: hi_version installed → lo_version after
+    pinned rollback → hi_version after re-upgrade.
+  - "Missing dependency" does NOT appear in the rollback or upgrade steps.
+
+REJECT triggers (ADR §7):
+  - pkg install <name>-<lo_version> returns non-zero (rollback not supported
+    via catalog install) — Part 1 degrades to docs-only.
+  - "Missing dependency" in the rollback step output — dep resolution did
+    not work from the multi-version catalog (same downgrade).
+  - "Missing dependency" in re-upgrade — regression in existing behavior.
+
+On any failure: read the smoke-diagnostics artifact (full /var/log, pkg
+state, config.xml snapshot) before diagnosing.
+
+------------------------------------------------------------------------
+What is NOT done (Phase 5 scope)
+------------------------------------------------------------------------
+
+Phase 5 adds the landing-page "Older releases" disclosure (gen_landing.py)
+and the README/docs CLI rollback procedure update.  No gen_landing.py or
+README changes in this phase.
+
+------------------------------------------------------------------------
+CORRECTION (post-live-dispatch) — rollback command needs `-f`
+------------------------------------------------------------------------
+
+The first live `-m repo` dispatch proved the documented rollback command was
+incomplete. Two empirical findings from the CE leg:
+
+1. Forged-version ordering: `pkg` sorts a non-numeric PORTREVISION suffix
+   ALPHABETICALLY, so the original `_lo`/`_hi` labels inverted (`lo` > `hi`).
+   Fixed to numeric `_1` (lower) / `_9` (higher), matching the existing
+   `_1`->`_9` upgrade cases in the same file.
+
+2. Downgrade needs force: `pkg install -y <name>-<older>` is a NO-OP when a
+   NEWER build is already installed (pkg never downgrades by default; rc=0,
+   version unchanged). The live VM showed the box stayed at `_9` after the
+   pinned `_1` install. The correct FreeBSD downgrade idiom is
+   `pkg install -f <name>-<version>`. Dep resolution still runs from the
+   catalog (the §7 premise HOLDS — this is NOT a reject; only the documented
+   command was missing `-f`).
+
+Applied: `pkg_install_pinned` now runs `pkg install -fy <name>-<version>`;
+ADR §2.1 rollback UX, §6 Phase 4/5, §7, README.md, and scripts/README.md all
+document `pkg install -f`. Re-dispatched `-m repo` to confirm green.

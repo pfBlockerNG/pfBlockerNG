@@ -1,0 +1,88 @@
+================================================================================
+PHASE 4 PROMPT — DNSBL/python leg over the chroot log socket (flips DNSBL on)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md  (read §1.2.2, §2.1, §2.2.4 first)
+================================================================================
+
+ROLE
+Phase 4 of ADR-38 on the implementation branch. This phase FLIPS THE DNSBL LEG ON
+(still default-off). It is the RISKIEST phase — chrooted, stdlib-only, hot-path.
+One commit, pushed on the branch.
+
+WHY THIS PHASE EXISTS
+DNSBL block events are written by the chrooted Unbound python module, which (a) cannot
+use UDP (syslogd -s, secure mode), and (b) sees /var/run/log as the in-chroot
+/var/unbound/var/run/log socket that Phase 3 registered via <logging><logsocket>.
+This phase wires the python emitter to that socket, gated by config, and MUST degrade
+silently — a syslog failure can never raise into Unbound or block resolution
+(ADR §2.2.4).
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt — confirm the <logging> block + chroot socket
+  exist and the PHP IP leg emits correctly. If missing, STOP and report.
+- ADR §1.2.2 (chroot socket; only the <logging><logsocket> installs it), §2.1
+  (Python emit row), §2.2.4 (silent-degrade contract), §2.3 (scope), §7 reject path
+  (IP-only fallback if the socket is unreachable).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the DNSBL CSV write site;
+  syslog_format_dnsbl() from P1; how the module reads py_unbound.ini
+  (ConfigParser / config.getboolean) and the existing logging.handlers import.
+- The PHP side that GENERATES py_unbound.ini (search where the ini is written —
+  likely pfblockerng.inc / pfb_unbound_include.inc): add the new keys there, reading
+  the registered settings via PfbConfig and the token→constant map (P2). DO NOT guess
+  the ini-writer location — find it.
+- CLAUDE.md → Python rules (stdlib only, no bare except, type hints, injected Unbound
+  symbols in stubs/python/), the chroot investigation notes, and the
+  "config.xml frozen / ini contract" note (ADR-28 §2.4 — ini is out of the freeze but
+  keep the contract stable).
+- tests/conftest.py (how Unbound globals are faked); an existing tests/test_*.py that
+  exercises a pfb_unbound.py path.
+
+ACTION PLAN
+1. PHP: at ini-build time, write three keys into py_unbound.ini (e.g.
+   `syslog_enable`, `syslog_facility` as the numeric facility, `syslog_priority` as
+   the numeric level) derived from the registered settings via PfbConfig + the P2 map.
+   Preserve a safe default when absent (disabled).
+2. Python: read those keys at the module's config-load boundary (mirror the existing
+   ini reads; type-hint). When enabled, lazily create ONE module-level
+   `logging.handlers.SysLogHandler(address='/var/run/log',
+   facility=<n>)` wrapped so its level maps to the configured priority; guard the
+   constructor + every emit in try/except Exception → silently disable (set a flag so
+   we do not retry-storm). Emit syslog_format_dnsbl(...) once at the DNSBL CSV write
+   site, alongside (not replacing) the existing file write.
+3. Ensure ident/tag is `pfblockerng` (so the Phase-3 !pfblockerng routing catches it).
+   If SysLogHandler needs an explicit ident in the message, prepend it consistently.
+4. Confirm there is no per-query overhead when disabled (the common case): the gate is
+   a cheap boolean checked before formatting/emitting.
+
+CONSTRAINTS
+- Python 4-space, 3.11+, `from __future__ import annotations`, STDLIB ONLY, no bare
+  except (except Exception minimum). The emitter MUST NOT raise into Unbound and MUST
+  NOT block the resolve path. Persistent socket — do not reconnect per event.
+- Do NOT change the DNSBL decision logic, the CSV format, or the manifest. Add a new
+  injected-symbol stub only if you reference one not already in stubs/python/.
+
+VERIFICATION (all must pass)
+- python -m pytest  → green, incl. new tests: (a) emitter fires with the formatted
+  body iff syslog_enable is true (assert the before-state false ⇒ no emit, then true ⇒
+  emit — real branch); (b) with the socket absent/raising, the code is a NO-OP and the
+  DNSBL write + resolution path still complete (no exception propagates).
+- ruff check . && ruff format .  → clean ; mypy tests/ green
+- php -l on the ini-writer file ; vendor/bin/phpcs/phpstan still clean
+- diff-read: the ini keys are written PHP-side and read Python-side; the emit is gated,
+  single, and exception-guarded.
+
+EXPECTED RESULT
+With the toggle ON, DNSBL block events emit one pfblockerng key=value syslog record
+each via the chroot socket; with it OFF (or the socket unavailable), the DNSBL path
+behaves exactly as before. Both legs (IP + DNSBL) now honour the single master toggle.
+
+COMMIT (single)
+    pfblockerng: emit DNSBL block events to syslog from the unbound module (ADR-38 P4)
+Push on the branch.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/04_Results.txt`
+Record: the ini-writer file + the exact key names/types; the SysLogHandler address +
+the silent-degrade flag mechanism; how the ident is set; the new test names + the
+branch-coverage proof; verification numbers; any chroot-socket caveat discovered (and
+whether the §7 IP-only fallback was needed). Carry the ADR-RESUME sentinel
+(next-phase=5) if pinned. Go-ahead for Phase 5.

@@ -1,0 +1,199 @@
+================================================================================
+ADR-06 — PHASE 3 RESULTS / HANDOFF FOR PHASE 4
+Pure pfb_unbound DNSBL build layer (parse -> normalise -> classify -> build)
+Branch: adr/06   Commit: pfb_unbound: ADR-06 P3 — pure DNSBL build layer (parse/dedup/classify/build)
+================================================================================
+
+VERDICT: GO. The pure, stdlib-only, Unbound-symbol-free build layer is committed and
+green (234 passed, +40 new). It reproduces the Phase-2 golden DECISIONS over the
+fixtures (both TOP1M scenarios + noAAAA + no-IP-leak). Phase 4 may now wire init().
+
+This phase is ADDITIVE. The build layer is NOT called by init() yet; tld_analysis,
+the shell finalize and the UI are untouched; nothing was deleted (the only removed
+production line is the `from collections.abc import ...` import, extended to add
+`Iterable`). `python -m pytest` = 234 passed (was 194). `ruff check .` clean.
+`ruff format` clean. No PHP/shell touched (no php -l / ShellCheck needed).
+
+--------------------------------------------------------------------------------
+0. WHAT / WHERE
+--------------------------------------------------------------------------------
+Build layer (NEW section in the plugin, between inform_super() and
+iter_domain_suffixes()):
+    src/usr/local/pkg/pfblockerng/pfb_unbound.py   (~lines 1607-1907)
+Unit tests (drive every fn + build() end-to-end vs the Phase-2 oracle):
+    tests/test_adr06_build_module.py   (40 tests)
+The tests REUSE the Phase-2 oracle's fixtures, golden tables and decision driver
+(import from tests/test_adr06_golden_oracle.py) so the two layers cannot diverge:
+    GOLDEN_TOP1M_DISABLED, GOLDEN_TOP1M_ENABLED_OVERRIDES, GOLDEN_EXTRACTED_IPS,
+    _build_cfg, _decision_label, _load_json, _read_lines.
+Fixtures unchanged: tests/fixtures/adr06_golden/ (manifest.json, config.json,
+tld_master.txt, feed_*.txt).
+
+Run:
+    python -m pytest tests/test_adr06_build_module.py -v   # just the build layer
+    python -m pytest                                       # full suite (234)
+
+--------------------------------------------------------------------------------
+1. PUBLIC API (function names / signatures) — what Phase 4 calls
+--------------------------------------------------------------------------------
+All in pfb_unbound.py, pure, stdlib-only (csv), NO Unbound symbol referenced.
+
+  parse(format_hint: str, line: str) -> ParsedEntry | None
+      Per-format dispatch (format_hint = "hosts" | "plain" | "abp" | "csv:pon";
+      hosts/plain share a handler). Reproduces today's parse incl. which lines are
+      IGNORED. Returns a kind-tagged ParsedEntry or None to skip. Bare-IP lines and
+      the csv:pon col-0 IP are NOT returned (IP extraction is PHP/firewall, Phase 5).
+      kind is ALWAYS DNSBL_KIND_BLOCK this phase.
+
+  normalise(value: str) -> str | None
+      Lower-case + PFB_FILTER_DOMAIN domain-shape gate (inc:7995-8016). Returns the
+      validated lower-cased domain or None. NOTE: an all-numeric dotted string passes
+      normalise() (digits are valid label chars — mirrors the Phase-2
+      ReferencePipeline._validate_domain); the bare-IP guard lives in parse() via
+      _dnsbl_is_ipv4, exactly as the current pipeline (is_ipaddrv4 before validation).
+
+  classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str])
+            -> tuple[str, str]
+      Returns (DNSBL_CLASS_ZONE, registrable-parent) or (DNSBL_CLASS_DATA, domain).
+      Mirrors tld_analysis/tld_search (inc:2832-2874): registrable parent -> wildcard
+      ZONE; deeper sub-domain whose parent is not a known public suffix -> exact DATA;
+      whole-domain TLD exclusion -> forced exact DATA. dcnt>5 -> DATA (no TLD search).
+
+  build(manifest: dict[str, Any],
+        config: dict[str, Any],
+        *,
+        line_reader: Callable[[str], Iterable[str]],
+        top1m_enabled: bool = False) -> BuildResult
+      The pure, reentrant end-to-end build (see SS2 for I/O). line_reader is INJECTED
+      (maps a feed_row["raw"] reference -> its raw lines) so the build stays pure and
+      filesystem-decoupled; the test passes _read_lines (fixture reader). Phase 4
+      supplies a file-backed reader (e.g. lambda path: open(path)...).
+
+Module-level helpers (used by the tests; available to Phase 4 if useful):
+  _dnsbl_load_tld_master(suffix_lines, tld_blacklist, tld_exclusion)
+        -> tlds[tld][full-suffix] public-suffix oracle, minus blacklisted/excluded.
+  _dnsbl_normalise_whitelist(user_whitelist, top1m_list, top1m_enabled)
+        -> whiteDB dict (www-strip; leading-dot -> wildcard True else False;
+           TOP1M loaded ONLY when enabled). build() calls this internally.
+  _dnsbl_is_ipv4, _dnsbl_parse_abp_line, _dnsbl_strip_hosts_prefix, _dnsbl_tld_search.
+
+Constants / dataclasses (the ABP-ready seam + entry model):
+  DNSBL_KIND_BLOCK="block", DNSBL_KIND_ALLOW="allow", DNSBL_KIND_REGEX="regex"
+  DNSBL_CLASS_DATA="data", DNSBL_CLASS_ZONE="zone"
+  @dataclass ParsedEntry(kind, value, feed, group, log)   # parse() output
+  @dataclass DnsblEntry(kind, cls, key, feed, group, log)  # shaped for ABP; not yet
+        emitted as a stream — build() inlines normalise+classify+assign. Available if
+        Phase 4/ABP wants an explicit entry stream.
+  @dataclass BuildResult(...)  # see SS2.
+
+--------------------------------------------------------------------------------
+2. build() I/O — the structure-set it RETURNS (Phase 4 loads these)
+--------------------------------------------------------------------------------
+INPUTS:
+  manifest = {"version": 1, "feeds": [ {raw, feed, group, format_hint, log_flag}, ...]}
+      (the per-feed boundary, RESULTS/01 SS1i). One row per raw feed file. build()
+      iterates feeds in manifest order (same order today concatenates them).
+  config  = {
+      "tld_master":    list[str],   # public-suffix oracle LINES (not a path) —
+                                     # build() takes the lines directly (pure; the
+                                     # test expands the fixture file to lines).
+      "tld_blacklist": list[str],   # whole-TLD ZONE block (-> DNSBL_TLD entries)
+      "tld_exclusion": list[str],   # force exact DATA
+      "user_whitelist":list[str],   # query-time whiteDB (normalised here)
+      "top1m_list":    list[str],   # query-time whiteDB ONLY when top1m_enabled
+  }
+  line_reader: Callable[[str], Iterable[str]]   # feed_row["raw"] -> raw lines
+  top1m_enabled: bool
+
+RETURNS BuildResult (a @dataclass), all dicts FRESH (no module global touched):
+  .data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>}   # exact match
+  .zone_db[registrable]     = {"log": <flag>,        "index": <int>}   # wildcard
+  .feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
+  .white_db[domain]         = <bool wildcard>
+  .counts                   = len(data_db) + len(zone_db)   # the LOADED total
+
+These shapes are IDENTICAL to what pfb_unbound init() loads today (RESULTS/01 SS1f):
+init() builds zoneDB[row[1]]={"log":row[3],"index":...}, dataDB likewise,
+feedGroupIndexDB[idx]={"feed":row[4],"group":row[5]}, whiteDB[row[0]]=wildcard-bool.
+=> Phase 4 wiring = call build(), then assign the four dicts into the module globals
+   (dataDB/zoneDB/feedGroupIndexDB/whiteDB) and write .counts to pfb_py_count. The
+   matcher decision fns (evaluate_domain) consume them unchanged.
+
+--------------------------------------------------------------------------------
+3. WHERE COUNTS / FEED-GROUP COME FROM
+--------------------------------------------------------------------------------
+COUNTS: BuildResult.counts = len(data_db)+len(zone_db) — the LOADED entry total, the
+RESULTS/01 SS1e recommendation. It legitimately RISES vs today (no dedup/collapse/
+whitelist/TOP1M pruning). Phase 4 must:
+  * write .counts to pfb_py_count (/var/unbound/pfb_py_count) in the format the UI
+    reads (inc:3149), AND
+  * fix the inc:3149-3156 sync-check (it currently means "entries removed by
+    collapse"; with collapse gone, redefine it against the LOADED total — see
+    RESULTS/01 SS1e). Flag the exact UI expectation to the maintainer.
+
+FEED/GROUP: build() folds each feed_row's (feed, group) into an integer index via an
+internal feed_group_db (cleared implicitly — it is a local), populating
+feed_group_index_db[idx] = {"feed", "group"} — mirroring init() lines 546-553/579-586
+exactly. The TLD-blacklist synthetic entries use feed=group="DNSBL_TLD" (inc:2740).
+LAST-WINS on a duplicate domain key (dict assignment) — the documented cross-feed
+attribution change (ADR.md SS2; tested: tracker.org in hosts+plain -> PlainFeed/Malware).
+
+LOG FLAG: per-feed manifest log_flag carried into every entry's payload {"log": ...}
+("0"/"1" log, "2" = block-but-skip-log). Tested (silentblock.com -> log "2").
+
+--------------------------------------------------------------------------------
+4. HOW THE ABP SEAM IS LEFT OPEN (and what is NOT done)
+--------------------------------------------------------------------------------
+  * Entries are kind-tagged (DNSBL_KIND_BLOCK | _ALLOW | _REGEX). This phase produces
+    ONLY block. parse() always sets kind=BLOCK; build() has an explicit guard
+    `if entry.kind != DNSBL_KIND_BLOCK: continue` so allow/regex kinds, once a future
+    ABP parser emits them, are routed separately rather than silently blocked.
+  * @@ exceptions, ## / #@# element-hiding, $options, '*', '/', standalone regex are
+    IGNORED exactly as today (parse() returns None for them). Tested explicitly
+    (TestParse.test_abp_ignored_lines covers all 8 line types).
+  * The DnsblEntry dataclass (kind, cls, key, feed, group, log) is shaped for a future
+    explicit entry stream / allow+regex application, but build() currently inlines the
+    normalise+classify+assign path; ABP ADR can switch to emitting DnsblEntry objects.
+  * NO build-time dedup, NO subdomain collapse, NO build-time whitelist/TOP1M removal
+    were implemented — verified by tests (last-wins, whitelisted domains stay in lists,
+    deep subdomain stays in data_db). The dict load dedups keys for free.
+
+--------------------------------------------------------------------------------
+5. PURE / REENTRANT — CONFIRMED
+--------------------------------------------------------------------------------
+build() returns a NEW structure-set and mutates no module global. Verified by tests
+(TestBuildPurity):
+  * test_two_calls_yield_equal_structures   — two calls -> equal data/zone/white/index/counts.
+  * test_returns_fresh_structures_not_aliased — the dicts are distinct objects each call.
+  * test_does_not_mutate_module_globals      — dataDB/zoneDB/whiteDB/feedGroupIndexDB
+    unchanged after a build, and the returned dicts are NOT the module globals.
+Also smoke-checked standalone (outside pytest) that the build layer imports and runs
+with no init()/operate() and no Unbound runtime. This is the seam a future
+zero-downtime reload swaps in (the swap itself is NOT built here).
+
+--------------------------------------------------------------------------------
+6. GO-AHEAD FOR PHASE 4 (wire init)
+--------------------------------------------------------------------------------
+GO. Wire pfb_unbound init() to consume the manifest + raw feeds via build():
+  * Read the manifest JSON + config; supply a file-backed line_reader over each
+    feed_row["raw"]; pass top1m_enabled from the dnsbl_alexa/filter_alexa config.
+  * Assign BuildResult.data_db/zone_db/feed_group_index_db/white_db into the module
+    globals dataDB/zoneDB/feedGroupIndexDB/whiteDB (replacing the current CSV load
+    path lines 535-628 for the DNSBL dicts — keep hsts/safesearch/noaaaa/gp loads).
+  * Write BuildResult.counts to pfb_py_count and fix the inc:3149-3156 sync-check.
+  * Python IGNORES stray IP lines (parse() skips them) and NEVER touches the
+    firewall/IP path (Phase 5 keeps that in PHP).
+  * Decision-equivalence is the gate: re-run the Phase-2 oracle (and these P3 tests)
+    against the wired init — same labels in GOLDEN_TOP1M_DISABLED/_ENABLED_OVERRIDES.
+
+Carry-over reminders (still binding):
+  * The manifest is PER-FEED-FILE (RESULTS/01 SS1i), not the concatenated master raw.
+  * pfb_py_count redefined to the LOADED total; fix the sync-check (RESULTS/01 SS1e).
+  * DNSBL-IP firewall pass stays in PHP (Phase 5); Python skips IPs (0 leak, tested).
+  * Streaming the line_reader (yield lines lazily) keeps peak RAM at the dict floor —
+    line_reader already returns an Iterable, so a generator-backed reader works.
+
+GATES (this phase): python -m pytest = 234 passed; ruff check . clean; ruff format
+clean. Build layer is additive, pure, Unbound-symbol-free; init NOT wired; no
+PHP/shell/UI touched; nothing deleted.
+================================================================================

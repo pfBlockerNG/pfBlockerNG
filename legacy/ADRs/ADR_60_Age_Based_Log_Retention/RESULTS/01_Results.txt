@@ -1,0 +1,245 @@
+ADR-60 Phase 1 — Baseline Oracles — RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 678421dd9e2ec94b6d0273ebfd4a80368bd12748
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- tests/php/LogTimestampBaselineTest.php (NEW, 340 lines)
+  11 PHPUnit oracle tests pinning today's inconsistent timestamp behaviour for
+  every §1.3 row that touches PHP.
+
+- tests/test_pfb_unbound_log_timestamp_baseline.py (NEW, 49 lines)
+  3 pytest oracle tests pinning make_timestamp()'s current no-year format and
+  its "" fallback after two TypeErrors, plus a trivial check for the new
+  iso_timestamp() helper.
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  Added pfb_log_iso_timestamp(): string (near pfb_logger(), before it) —
+  `return date('Y-m-d H:i:s', time());`. NOT called from anywhere yet
+  (verified: grep for the symbol shows only the definition + its own test).
+
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  Added iso_timestamp() -> str beside make_timestamp() — identical shape
+  (two-try loop over TypeError, "" fallback) with "%Y-%m-%d %H:%M:%S". NOT
+  called from anywhere yet.
+
+No existing production code path's OUTPUT changed. Both new helpers are pure,
+unwired additions.
+
+--------------------------------------------------------------------------------
+GATES RUN (on the final rebased tree, HEAD = 678421dd)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(the printed "Deprecated: pfb_unlock() ..." notice is pre-existing, unrelated
+to this change — a genuine optional-before-required parameter warning the
+bootstrap already silences during test runs; see tests/php/bootstrap.php's own
+comment about this exact class of warning.)
+
+$ vendor/bin/phpunit
+............................................................. 2440 / 2449 ( 99%)
+.........                                                     2449 / 2449 (100%)
+Time: 00:09.689, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2449, Assertions: 19093, PHPUnit Deprecations: 2, Skipped: 4.
+(The 2 "PHPUnit Deprecations" are pre-existing PHPUnit-runner doc-comment
+metadata notices from Top1mPreserveOnEmptyFeedTest, unrelated to this change —
+confirmed by running with --display-phpunit-deprecations, which named that
+file, not any file touched here. The 4 skips are the pre-existing
+posix_getuid()===0 permission-test guards documented in CLAUDE.md. Exit code 0.)
+
+$ python3 -m pytest
+======================= 2437 passed, 4 skipped in 46.38s =======================
+(same pre-existing skips as above; unrelated to Python.)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+198 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 — clean)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+Targeted run showing the new oracle assertions passing against CURRENT
+(pre-Phase-2/3/4) production code:
+
+$ vendor/bin/phpunit --filter LogTimestampBaselineTest --testdox
+Log Timestamp Baseline
+ ✔ Log without now token writes no timestamp
+ ✔ Extras log without now token writes no timestamp
+ ✔ Log with now token substitutes iso timestamp when pnow cleared
+ ✔ Log now token stripped to nothing when pnow already set same second
+ ✔ Pnow dedup contaminates across log and extras log
+ ✔ Errlog always stamped even when main log dedup strips timestamp
+ ✔ Errlog bypass write has no timestamp
+ ✔ Filterlog bsd branch raw passthrough has no year
+ ✔ Filterlog syslog branch lossy reformat drops year
+ ✔ Parsed fail pins ambiguous two digit year format
+ ✔ Pfb log iso timestamp matches iso 8601 format
+Tests: 11, Assertions: 44.
+
+$ python3 -m pytest tests/test_pfb_unbound_log_timestamp_baseline.py -v
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_matches_no_year_format PASSED
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_returns_empty_string_after_two_type_errors PASSED
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_iso_timestamp_matches_iso8601_format PASSED
+3 passed in 0.02s
+
+This is a behaviour-PRESERVING phase — no red→green proof required (nothing
+changes); the pasted runs above are the required evidence that every new
+oracle assertion passes against the CURRENT, unmodified production code.
+
+--------------------------------------------------------------------------------
+§1.3 ROW → ORACLE TEST NAME
+--------------------------------------------------------------------------------
+log (opt-in NOW token + same-second dedup):
+  - LogTimestampBaselineTest::testLogWithoutNowTokenWritesNoTimestamp
+  - LogTimestampBaselineTest::testLogWithNowTokenSubstitutesIsoTimestampWhenPnowCleared
+  - LogTimestampBaselineTest::testLogNowTokenStrippedToNothingWhenPnowAlreadySetSameSecond
+    (reproduces the §1.4 dedup bug on purpose)
+
+extraslog (same opt-in NOW + dedup mechanics as log):
+  - LogTimestampBaselineTest::testExtrasLogWithoutNowTokenWritesNoTimestamp
+  - LogTimestampBaselineTest::testPnowDedupContaminatesAcrossLogAndExtrasLog
+    (proves §1.4's "single process-global shared across every call regardless
+    of logtype" — a logtype-1 call's pnow poisons a LATER logtype-3 call)
+
+errlog (always stamped via $elog; pfb_open_sqlite() bypass has none):
+  - LogTimestampBaselineTest::testErrlogAlwaysStampedEvenWhenMainLogDedupStripsTimestamp
+  - LogTimestampBaselineTest::testErrlogBypassWriteHasNoTimestamp
+
+ip_blocklog/ip_permitlog/ip_matchlog (BSD raw passthrough / syslog lossy reformat):
+  - LogTimestampBaselineTest::testFilterlogBsdBranchRawPassthroughHasNoYear
+  - LogTimestampBaselineTest::testFilterlogSyslogBranchLossyReformatDropsYear
+
+dnsbl_parse_err (ambiguous m/j/y 2-digit year):
+  - LogTimestampBaselineTest::testParsedFailPinsAmbiguousTwoDigitYearFormat
+
+dnslog/dnsreplylog (make_timestamp(), no year, "" fallback):
+  - test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_matches_no_year_format
+  - test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_returns_empty_string_after_two_type_errors
+
+unilog (mixed-format passthrough of whichever source row it came from):
+  Covered IMPLICITLY, not by a dedicated test — verified (pfblockerng.inc:12867)
+  that unilog's write is `pfb_unified_format_ip(['log' => $log, ...])`, i.e. a
+  straight copy of the SAME $log value the ip_block/permit/matchlog tests above
+  already pin (BSD raw / syslog reformat). No independent format logic exists
+  for unilog, so pinning its two upstream sources covers it; the phase-1
+  prompt's own ACTION PLAN enumerates only 4 explicit test bullets (log/
+  extraslog, errlog, ip_*, dnsbl_parse_err) plus the Python make_timestamp()
+  bullet — unilog is not separately listed there either.
+
+New unwired helpers:
+  - LogTimestampBaselineTest::testPfbLogIsoTimestampMatchesIso8601Format (PHP)
+  - test_pfb_unbound_log_timestamp_baseline.py::test_iso_timestamp_matches_iso8601_format (Python)
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. pfb_daemon_filterlog()'s 'BSD'/'syslog' timestamp branch (the ip_blocklog/
+   ip_permitlog/ip_matchlog row) is NOT directly unit-callable: the function
+   opens php://stdin and loops `while (!feof($s_handle))` reading lines from
+   a live/piped filter.log tail — there is no extracted pure helper for this
+   branch (unlike pfb_filterlog_port()/pfb_filterlog_skip_count(), which WERE
+   extracted in a past issue specifically for testability — confirmed via
+   FilterlogPortTest.php/FilterlogSkipCountTest.php). The brief's CONSTRAINTS
+   authorize exactly two new helpers (pfb_log_iso_timestamp/iso_timestamp)
+   and explicitly says not to change any existing log's OUTPUT; extracting a
+   third helper for this branch was judged out of this phase's authorized
+   scope (ADR.md's own Phase 3 description keeps the rewrite "in one output
+   path" inside pfb_daemon_filterlog() without mentioning an extraction
+   either — Phase 3 will need to build whatever testable seam its own
+   red-before/green-after proof requires).
+
+   Given that, these two rows are pinned via (a) a grep TRIPWIRE asserting the
+   exact current source line is still present verbatim (so this oracle goes
+   RED the instant Phase 3 changes that line — verified: the three tripwired
+   substrings were confirmed present in the live source via a byte-exact
+   Python `in` check before writing the tests, not assumed) plus (b) a
+   reproduction of that exact formula against synthetic BSD/RFC-5424
+   fixtures. This is weaker evidence than driving the real function, but the
+   tripwire half gives it genuine discriminating power for Phase 3's
+   red-before proof (it WILL fail once pfb_daemon_filterlog()'s formula
+   changes), which a pure formula-reproduction alone would not.
+   CARRY-FORWARD for whoever plans Phase 3: decide whether to (i) rewrite
+   these two tests to call a newly-extracted formatter function once Phase 3
+   creates one (mirroring how Phase 2 is told to rewrite
+   PfbLoggerIsoTimestampTest.php's dedup assertions), or (ii) keep the
+   tripwire+reproduction shape and just flip the expected format. Either is
+   valid; flagged here so it isn't missed.
+
+2. The same-second dedup tests (testLogNowTokenStrippedToNothingWhenPnow...,
+   testPnowDedupContaminatesAcrossLogAndExtrasLog,
+   testErrlogAlwaysStampedEvenWhenMainLogDedupStripsTimestamp) have an
+   inherent race: pfb_logger() computes `date('Y-m-d H:i:s', time())`
+   internally with no injectable clock, so the test can only PRESET
+   $pfb['pnow'] to a timestamp computed just before the call and hope the
+   wall-clock second does not roll over in between. Mitigated with a bounded
+   (5-attempt) retry helper (runWithinSameSecond()) that re-verifies
+   before/after equality and asserts loudly if every retry crossed a
+   boundary, rather than silently passing on a false premise. This is a
+   test-infrastructure judgment call, not a production-code compromise.
+
+3. date_default_timezone is saved/set to 'UTC' and restored in
+   setUp()/tearDown() of LogTimestampBaselineTest, so the syslog-branch
+   reproduction test (which reformats a fixed instant with an explicit
+   timezone offset) is not flaky under a CI runner with a non-UTC system
+   timezone. Verified the bootstrap does not already pin this (grepped
+   tests/php/bootstrap.php — no date_default_timezone_set call there).
+
+None of the above weakens any CLAUDE.md MUST rule; both are documented
+test-infrastructure choices for otherwise-untestable/racy production code.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 2 (02_Php_Freetext_Logs.txt)
+--------------------------------------------------------------------------------
+Phase 2 rewrites pfb_logger() to unconditionally prefix every log/extraslog/
+errlog write with pfb_log_iso_timestamp() and delete $pfb['pnow'] + the NOW-
+token branch entirely, routing the 6 pfb_open_sqlite() bypass writes through
+the same helper. Oracle tests that MUST flip from "pins the bug" (red once
+Phase 2's code lands, proving the old assertion really pinned the old
+behaviour) to "pins the fix" (rewritten to assert the NEW always-stamped
+behaviour):
+
+  - testLogWithoutNowTokenWritesNoTimestamp        -> must become "always stamped"
+  - testExtrasLogWithoutNowTokenWritesNoTimestamp  -> must become "always stamped"
+  - testLogNowTokenStrippedToNothingWhenPnowAlreadySetSameSecond
+        -> the dedup bug is gone; this test's PREMISE (pnow exists) is gone,
+           replace with "no dedup regardless of repeated same-second calls"
+  - testPnowDedupContaminatesAcrossLogAndExtrasLog
+        -> $pfb['pnow'] is deleted; replace with a test proving log and
+           extraslog calls are now INDEPENDENT (no cross-contamination
+           possible because there is nothing left to contaminate with)
+  - testErrlogAlwaysStampedEvenWhenMainLogDedupStripsTimestamp
+        -> the "even when main log dedup strips" framing no longer applies
+           (main log is also always stamped now); simplify to "both stamped,
+           same format"
+  - testErrlogBypassWriteHasNoTimestamp
+        -> must flip: the 6 pfb_open_sqlite() bypass sites are rerouted
+           through pfb_log_iso_timestamp() and become ALWAYS stamped
+
+Tests that should stay UNCHANGED through Phase 2 (out of its scope):
+  - testFilterlogBsdBranchRawPassthroughHasNoYear / ...SyslogBranch...
+    (Phase 3's row)
+  - testParsedFailPinsAmbiguousTwoDigitYearFormat (Phase 3's row)
+  - the Python make_timestamp()/iso_timestamp() tests (Phase 4's row)
+  - testPfbLogIsoTimestampMatchesIso8601Format (the helper itself doesn't
+    change, only its call sites do)
+
+Also per ADR.md §2.3 (line 380): "Rewrite PfbLoggerIsoTimestampTest.php's
+dedup-specific assertions (the 'pnow' mechanic it exercises is gone)" —
+tests/php/PfbLoggerIsoTimestampTest.php is a SEPARATE pre-existing file this
+phase deliberately left untouched (per the brief: "EXTENDING, not replacing
+yet"); Phase 2 must update it too, not just this new file.

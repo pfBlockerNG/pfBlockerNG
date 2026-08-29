@@ -1,0 +1,87 @@
+================================================================================
+PHASE 7 PROMPT — Regex safety: opt-in long-regex cap + runtime timing/eviction + setting
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 Regex-safety row + §1 facts 2/3)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 7 of ADR-07. Add the best-effort regex safeguard the
+maintainer chose: NO subprocess, NO vetting — an opt-in static cap + an always-on runtime
+warn/evict, fully in-process. Applies to feed AND user regex. Work inline on `adr/07`, one
+commit, push directly.
+
+WHY THIS PHASE EXISTS / THE ACCEPTED DESIGN (read carefully)
+`re` does not release the GIL and Python threads cannot be killed (fact 2), so a query-time
+timeout CANNOT interrupt a catastrophic match — a subprocess/re2 would be the only airtight
+fix and the maintainer has declined to pay for them. The ACCEPTED design is a bounded
+residual risk: a pathological pattern's FIRST match may block one query, but it is then
+evicted so it cannot hang again. This phase implements that, plus an opt-in static pre-filter.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/06_Results.txt — where regexDB/allowRegexDB are
+  scanned (the snapshot-iterate hook) + how regex is loaded. If missing, STOP and report.
+- RESULTS/01_Results.txt — the proposed warn/evict ceilings + the static-cap heuristic.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 Regex-safety row; §1 facts 2/3; §7 smoke regex box).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: the regex scan in evaluate_domain ~2312
+  (snapshot-iterate per Phase 6); regexDB compile/load; the user-regex load path.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: user-regex feature (dnsbl_regex/
+  dnsbl_regex_list ~848-849, regex template ~2608-2635) — the load side the cap also covers;
+  the dnsblconfig settings the new toggle joins.
+- src/usr/local/www/pfblockerng/ — the DNSBL/settings page hosting the new setting.
+- CLAUDE.md (stdlib only; PHP tabs; no die/exit in lib; ShellCheck).
+
+ACTION PLAN
+1. OPT-IN STATIC CAP (load time, in-process, no execution): a pure function that rejects a
+   pattern when "Limit long/complex regex" is enabled and it exceeds the length ceiling or
+   matches the nested/overlapping-unbounded-quantifier heuristic (RESULTS/01). Dropped
+   patterns are logged. Apply at the point regex is compiled/loaded — to FEED regex AND the
+   user pfb_regex_list. (When the setting is OFF, nothing is dropped at load.)
+2. ALWAYS-ON RUNTIME TIMING + EVICTION (query path): wrap each regex match with a per-thread
+   CPU measurement — time.thread_time (NOT wall clock: it must not false-evict a good pattern
+   when the thread was merely descheduled under load). If time.thread_time is unavailable on
+   the target, fall back to time.perf_counter with a 2-strike guard. Defaults: WARN_CEILING
+   10 ms, EVICT_CEILING 100 ms thread-CPU, both configurable (advanced). On a match:
+   - if elapsed > WARN_CEILING -> log a warning (pattern + feed, RATE-LIMITED per pattern).
+   - if elapsed > EVICT_CEILING -> log an error and EVICT the pattern from the live DB
+     (immediately, on the first crossing — the point is it can't hang twice).
+   EVICTION must be thread-safe: the scan iterates a SNAPSHOT (Phase 6) and eviction does
+   regexDB.pop(k, None) / allowRegexDB.pop(k, None) AFTER the loop (dict.pop is atomic under
+   the GIL; never mutate mid-iteration). Eviction applies to feed AND user regex alike.
+   Ceilings come from config (Phase-1 defaults), not hardcoded magic.
+3. SETTING: add the "Limit long/complex regex" opt-in to the DNSBL settings page +
+   dnsblconfig (PHP/www), plumb it into the manifest config / plugin cfg so build()/load read
+   it. Keep PHP lint/stub-clean; no die()/exit in lib.
+4. UNIT-TEST (tests/test_adr07_regex_safety.py, pure, no live Unbound):
+   - cap ON drops an over-length / nested-quantifier pattern at load; cap OFF keeps it.
+   - a synthetic SLOW pattern (feed a small but >WARN/>EVICT input via a stub clock or a real
+     (a+)+ against a crafted string with a tiny ceiling) triggers warn then evict; the evicted
+     key is gone and the scan does NOT raise "dict changed size during iteration".
+   - eviction works identically for a user-provenance regex.
+   - the no-regex / no-slow common path is unchanged (no perf regression in the fast path).
+
+CONSTRAINTS
+- NO subprocess, NO ProcessPoolExecutor, NO thread/asyncio "timeout" (it cannot interrupt a
+  match — fact 2). In-process timing + eviction only.
+- Eviction NEVER mutates a dict mid-iteration; snapshot-iterate + evict-after-loop.
+- stdlib only, no Unbound symbols in the testable core, 4-space, type hints, no bare except.
+- ADR-06 oracle + ADR-07 spec stay green (the guard must not change correct decisions; it only
+  drops/evicts pathological patterns).
+
+VERIFICATION
+- python -m pytest → green incl. the new safety tests; ADR-06 + ADR-07 oracles still green.
+- ruff check . / ruff format . clean; php -l + ShellCheck clean for the touched PHP/www.
+
+EXPECTED RESULT
+Feed + user regex are guarded best-effort: an opt-in cap drops over-long patterns at load, and
+any pattern that exceeds the runtime ceiling is warned-then-evicted so it can't hang twice —
+no subprocess, all stdlib.
+
+COMMIT (single)
+    pfblockerng: ADR-07 P7 — regex safety (opt-in cap + runtime warn/evict, feed + user)
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/07_Results.txt`
+For Phase 8. Include: the cap heuristic + ceilings as implemented; the eviction mechanism +
+its thread-safety argument; the new setting (config key, where read); the test entry points;
+confirmation both oracles stay green; and the go-ahead to slim the PHP boundary.

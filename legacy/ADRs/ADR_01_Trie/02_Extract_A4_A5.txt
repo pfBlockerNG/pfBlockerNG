@@ -1,0 +1,138 @@
+================================================================================
+PHASE 2 PROMPT — Split decision from side-effects (evaluate_domain / evaluate_noaaaa)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_01_Trie/ADR.md  (read it first)
+Prereq: Phase 1 (01_Extract_A1_A3_and_B.txt) committed and green.
+================================================================================
+
+ROLE
+You are on `devel` in the pfBlockerNG repo, performing Phase 2 of the trie
+migration. Like Phase 1, this is STRICTLY BEHAVIOR-PRESERVING. You are
+separating the PURE matching DECISION from the SIDE EFFECTS so the decision can
+later be reimplemented on a trie without touching qstate/I/O code.
+
+WHY THIS PHASE EXISTS
+After Phase 1 the individual matchers are pure, but the orchestration that
+chains them (data → zone → tld → idn → regex → whitelist, then hsts, then build
+the block decision) is still inline in operate(), interleaved with
+`dnsblDB[...] =`, `excludeDB.append(...)`, `write_sqlite(...)`, and DNSMessage
+construction. To swap the data structure safely we need a single pure entry
+point whose output can be compared old-vs-new by tests. This phase introduces
+that entry point and a parallel one for the noAAAA path.
+
+REQUIRED READING
+- .ADRs/ADR_01_Trie/ADR.md  — Section 2 semantics contract; Section 4 Phase 2.
+- .ADRs/ADR_01_Trie/RESULTS/01_Results.txt — Phase 1 handoff: functions added,
+  call sites updated in operate(), and the signature convention for Phase 2.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    * operate() DNSBL block — the per-`q_name` loop (`for val_counter, q_name in
+      enumerate(validate, start=1)`), specifically:
+        - the `isDomainInDNSBL = dnsblDB.get(q_name)` memo short-circuit,
+        - data lookup branch (sets isFound, log_type, b_type='DNSBL', b_eval),
+        - zone lookup branch via find_zone_match (b_type='TLD', b_eval=matched parent),
+        - tld-allow / idn / regex branches (set feed/group, log_type='1'),
+        - whitelist check via whitelist_check_domain over names
+          [q_name] (+ [q_name_original] when isCNAME),
+        - excludeDB.append on (not isFound or isInWhitelist),
+        - hsts_check_domain call (from Phase 1) and nullBlocking decision,
+        - the CNAME b_type suffixing and q_name = q_name_original reassignment,
+        - dnsblDB[q_name] = {...} (and the isCNAME q_name_original variant),
+        - write_sqlite(3, ...) cache write,
+        - the final DNSMessage build / get_details_dnsbl / qstate state set.
+    * operate() noAAAA block — the `if qstate_valid and q_type == RR_TYPE_AAAA
+      and pfb['noAAAADB'] ...` section: exact get, find_noaaaa_wildcard_parent,
+      the `noAAAADB[q_name_original] = True` memo write, excludeAAAADB.append,
+      and the DNSMessage(AAAA->A) build.
+    * get_tld(), is_idn_domain(), pfb_regex_match(), resolve_feed_group() (Phase 1),
+      hsts_check_domain() (Phase 1).
+- tests/test_pfb_unbound.py — TestOperateDnsbl, TestOperateNoAAAA. These assert
+  on qstate.ext_state, return_rcode, dnsblDB entries, excludeDB membership, and
+  DNSMessage answers. They must stay green.
+
+ACTION PLAN (ordered)
+
+1. Define a result type for the decision. Prefer a typed, immutable container:
+       from dataclasses import dataclass
+       @dataclass
+       class DnsblDecision:
+           is_found: bool
+           in_whitelist: bool
+           in_hsts: bool
+           null_blocking: bool
+           log_type: Any
+           b_type: str
+           p_type: str
+           feed: Any
+           group: Any
+           b_eval: str
+   (Match the exact fields the inline code computes; these mirror the dnsblDB
+   entry dict plus the control flags operate() needs.)
+
+2. A4 — `evaluate_domain`. Add a PURE function:
+       def evaluate_domain(q_name: str, q_name_original: str, tld: str,
+                           is_cname: bool, cfg, containers) -> DnsblDecision | None
+   - Move ONLY the decision logic (data/zone/tld/idn/regex → whitelist → hsts →
+     nullBlocking → CNAME b_type suffixing) into it.
+   - It must NOT: read pfb[...] directly (pass the needed flags/values via `cfg`,
+     e.g. python_blocking, dataDB/zoneDB/whiteDB/regexDB enable bits,
+     python_tld, python_tlds, python_idn, dnsbl_ipv4, dnsbl_ipv6, tld_seg,
+     hsts enable, hsts_tlds), NOT touch qstate, NOT write dnsblDB/excludeDB,
+     NOT call write_sqlite, NOT build DNSMessage, NOT emit logs.
+   - It RETURNS the decision; the caller (operate) performs every side effect
+     exactly as before, in the same order, using the returned fields. Returning
+     None means "no decision computed here" (e.g. python_blocking off path) —
+     mirror current control flow precisely.
+   - Pass containers (dataDB, zoneDB, whiteDB, regexDB, feedGroupIndexDB) as
+     arguments; do not reach for module globals inside the function.
+
+3. Re-wire operate()'s DNSBL block to: compute tld, call evaluate_domain, then
+   apply side effects from the returned DnsblDecision in the SAME ORDER as today
+   (excludeDB.append, dnsblDB[q_name]=..., the isCNAME q_name_original dnsblDB
+   write, write_sqlite(3,...), DNSMessage build, get_details_dnsbl, qstate set).
+   The dnsblDB memo short-circuit (isDomainInDNSBL) and the "use previously
+   blocked details" else-branch stay in operate().
+
+4. A5 — `evaluate_noaaaa`. Add a PURE function:
+       def evaluate_noaaaa(q_name: str, noaaaa_db) -> bool
+   returning whether the AAAA query is a noAAAA hit (exact OR wildcard-parent).
+   Decide where the memo write (`noAAAADB[q_name] = True`) lives: keep it in
+   operate() right after a wildcard-parent hit to preserve current behavior, OR
+   return enough info for operate() to perform it. Do NOT make the wildcard
+   branch self-matching (parent-only is the contract). Re-wire the operate()
+   noAAAA block to call evaluate_noaaaa, then build the AAAA->A DNSMessage and
+   append to excludeAAAADB exactly as before.
+
+5. Run suite + linters (VERIFICATION).
+
+CONSTRAINTS
+- Behavior-preserving: identical blocking outcomes, identical dnsblDB/excludeDB
+  contents, identical DNSMessage answers, identical qstate state transitions and
+  ordering of side effects.
+- evaluate_domain / evaluate_noaaaa are PURE: no qstate, no Unbound globals, no
+  pfb[...] reads, no I/O. All inputs passed as arguments.
+- stdlib only (dataclasses is stdlib); 4-space indent; type hints; no die/exit.
+
+VERIFICATION
+- `python -m pytest` → all existing tests green WITHOUT modifying them.
+  (TestOperateDnsbl data/zone/whitelist/regex/excludedb/group-policy cases and
+  TestOperateNoAAAA exact/wildcard/excluded/non-aaaa/no-match cases must pass.)
+- `ruff check .` and `ruff format .` → clean.
+- Diff-read operate(): side-effect order unchanged; decision now sourced from
+  evaluate_domain / evaluate_noaaaa.
+
+EXPECTED RESULT / OBSERVATIONS
+- Two pure orchestration functions exist; operate()'s matching body is now a
+  thin "call evaluate_* then apply side effects" shell.
+- The matcher boundary is now a stable, pure signature ready for oracle tests
+  (Phase 3) and a trie swap (Phase 6) with no further operate() surgery.
+
+COMMIT
+    pfb_unbound: split DNSBL/noAAAA matching decision from side effects
+Push policy as in Phase 1 (direct to devel; PR only if rejected).
+
+HANDOFF
+Report the DnsblDecision shape, evaluate_domain/evaluate_noaaaa signatures, the
+cfg/containers you threaded through, and where the noAAAA memo write now lives.
+Phase 3 will write golden tests against exactly these signatures.
+
+Now document these results in `.ADRs/ADR_01_Trie/RESULTS/02_Results.txt`.

@@ -1,0 +1,86 @@
+================================================================================
+PHASE 3 PROMPT — Uniform timestamp for the IP-side CSV logs
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_60_Age_Based_Log_Retention/ADR.md   (read §1.3 filterlog row, §2.1, §6 Phase 3)
+================================================================================
+
+ROLE
+Inline on branch `adr/60-age-based-log-retention`. Phase 3 of 8. Behaviour-CHANGING. One commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+`ip_blocklog`/`ip_permitlog`/`ip_matchlog` (and `unilog`'s IP-row passthrough) get their timestamp
+from `pfb_daemon_filterlog()`'s `'BSD'`/`'syslog'` branch split. The `'syslog'` (RFC-5424) branch
+already parses a full year-bearing ISO timestamp via `strtotime($f[1])` and then THROWS THE YEAR AWAY
+reformatting it to `date('M j H:i:s', ...)`. The `'BSD'` branch copies pf's raw classic-syslog fields
+verbatim — genuinely no year in the source. `dnsbl_parse_err` uses an ambiguous 2-digit-year
+`m/j/y H:i:s` format. This phase unifies all of these to `Y-m-d H:i:s`.
+
+REQUIRED READING
+- FIRST, read `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/02_Results.txt` — confirm Phase 2 landed
+  and `pfb_log_iso_timestamp()` is live. If missing, STOP and report.
+- ADR.md §1.3 (the filterlog/dnsbl_parse_err rows), §2.1, §2.6 (year-inference boundary is a
+  hostile-input-style edge case for this phase too).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: `pfb_daemon_filterlog()` (~:12293), specifically the
+  `$log_type` detection (~:12480-:12485: `'BSD'` vs `'syslog'` by whether the raw line starts with
+  `<`) and the timestamp branch (~:12780-:12785); `pfb_parsed_fail()` (~:4448).
+- tests/php/UnifiedFormatTest.php — has fixtures using the OLD format; you are updating them.
+
+ACTION PLAN
+1. In `pfb_daemon_filterlog()`'s timestamp branch (~:12780-:12785):
+   - `'syslog'` branch: keep `$ts = strtotime($f[1]);` (RFC-5424's `$f[1]` is already a full
+     ISO-8601 timestamp with year — `strtotime()` parses it correctly today, the bug is only in the
+     OUTPUT format). Change the output to `date('Y-m-d H:i:s', $ts)`.
+   - `'BSD'` branch: it has no year in the source. Build a year-inferred `$ts`: parse `"{$f[0]}
+     {$f[1]} {$f[2]}"` (the same fields the raw-copy used) via `strtotime()` ASSUMING the current
+     year; if the resulting timestamp is in the future relative to `time()` (allow a small skew
+     tolerance, e.g. a few hours, to avoid misfiring near midnight/DST edges), subtract one year —
+     the standard BSD-syslog year-inference fix. Output `date('Y-m-d H:i:s', $ts)`. If `strtotime()`
+     fails entirely (returns FALSE), fall back to `pfb_log_iso_timestamp()` (i.e., "now" — document
+     this fallback with a one-line comment per "Comments — constraint, not narration", not a
+     narration of what you're doing).
+   - Both branches now produce the SAME output format; the `if ($log_type == 'BSD') { ... } else {
+     ... }` split can collapse to just "how do we GET `$ts`", not "what do we EMIT".
+2. `pfb_parsed_fail()` (~:4448): change `date('m/j/y H:i:s', time())` to
+   `pfb_log_iso_timestamp()`.
+3. Update `UnifiedFormatTest.php`'s fixtures/assertions to the new format for the IP-row cases.
+
+CONSTRAINTS
+- Do not touch `dnslog`/`dnsreplylog`/`unilog`'s python-sourced rows — Phase 4.
+- Do not touch `log`/`extraslog`/`errlog` — Phase 2, already done.
+- PHP: tabs, uppercase `TRUE`/`FALSE`.
+- Line numbers and code-state claims in this prompt were written before earlier phases ran; the
+  prior RESULTS files and the live tree override this prompt on any conflict — verify each claim
+  before acting on it, and flag contradictions loudly in the handoff.
+
+VERIFICATION
+- `vendor/bin/phpunit` + `phpcs` + `phpstan` green.
+- Red→green proof: Phase 1's baseline oracles for `ip_blocklog`/`ip_permitlog`/`ip_matchlog`/
+  `dnsbl_parse_err` (pinning the OLD no-year/ambiguous formats) now FAIL against the new code in the
+  expected direction (paste); new assertions (year present, `Y-m-d H:i:s` format) pass (paste).
+- Hostile-input rows (execute all, paste results):
+  - `'syslog'` branch with a real RFC-5424 timestamp spanning a year boundary (e.g. Dec 31 →
+    confirm the parsed year is exactly what was in `$f[1]`, not inferred).
+  - `'BSD'` branch, a line timestamped for "today" (year-infer should pick the current year).
+  - `'BSD'` branch, a line whose month/day would be in the future if read as the current year (e.g.
+    running the test in January against a "December" BSD line) — confirm it rolls back one year.
+  - `'BSD'` branch with an unparseable `$f[0]/$f[1]/$f[2]` (garbage/missing fields) — confirm the
+    `pfb_log_iso_timestamp()` fallback engages, never a PHP warning/fatal.
+  - `dnsbl_parse_err` — confirm the new format and that its `,` field separator still parses cleanly
+    (no comma introduced by the new date format that would shift CSV columns).
+- Diff-read: confirm the `'BSD'`/`'syslog'` split still correctly determines `$ts` per branch, and
+  that only the OUTPUT format collapsed to one shape, not the input-parsing logic.
+
+EXPECTED RESULT
+`ip_blocklog`/`ip_permitlog`/`ip_matchlog`/`dnsbl_parse_err` all emit `Y-m-d H:i:s` as their leading
+CSV field, with a real (parsed-verbatim for `'syslog'`, inferred for `'BSD'`) year.
+
+COMMIT (single)
+    pfblockerng: unify ip-log and dnsbl_parse_err timestamps to Y-m-d H:i:s (ADR-60 P3)
+Push directly to `adr/60-age-based-log-retention`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_60_Age_Based_Log_Retention/RESULTS/03_Results.txt` with: verdict; what
+changed + commit; gates + pasted output; red→green proof; all 5 hostile-input row results pasted;
+coverage-matrix ticks; deviations (or "none"); carry-forward for Phase 4 (confirm `unilog`'s IP-row
+passthrough needs no separate change since it's a straight field copy — verify this claim, don't
+assume it).

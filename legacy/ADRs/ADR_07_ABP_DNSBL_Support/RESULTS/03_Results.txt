@@ -1,0 +1,215 @@
+================================================================================
+ADR-07 — PHASE 3 RESULTS / HANDOFF FOR PHASE 4
+PREP (behaviour-preserving): matcher -> strata/6-band + payload widening
+Branch: adr/07   Commit: pfb_unbound: ADR-07 P3 — matcher strata refactor + payload widening (behaviour-preserving)
+================================================================================
+
+VERDICT (headline): DONE. evaluate_domain is now in the strata/6-band SHAPE with
+widened payloads (dataDB/zoneDB gain `important`; whiteDB -> {wildcard, important};
+allowRegexDB container + pfb["allowRegexDB"]/pfb["important_rules"] flags, both
+False today). The refactor is STRICTLY behaviour-preserving for all non-ABP input:
+the important_rules==False fast path is byte-for-byte the pre-P3 matcher, proven by
+the RETAINED ADR-06 golden oracle (unchanged-green) and the existing evaluate_domain
+golden tests. The numeric 6-band branch is UNREACHABLE in production this phase (no
+$important rule is loaded) and is exercised only by new synthetic-payload unit tests
+that pin it to the Phase-2 band table. GO-AHEAD to Phase 4 (Rule model + parser).
+
+NO ABP rule is parsed/reconciled/wired. No PHP/shell touched. parse() / build() emit
+unchanged decisions (build() now stamps `important: False` on every payload).
+
+--------------------------------------------------------------------------------
+GATES (this phase)
+--------------------------------------------------------------------------------
+  python -m pytest   -> 451 passed (was 421 after P2; this phase adds 30 strata
+                        tests; the 4 ADR-06 whiteDB-shape unit assertions were
+                        updated to the new value shape -- see SS5). The ADR-06
+                        golden oracle (decision equivalence) is UNCHANGED-green.
+  ruff check .       -> All checks passed!
+  ruff format .      -> clean (reformatted pfb_unbound.py signature wrapping only;
+                        re-ran ruff check clean, pytest 451 green).
+  php -l / ShellCheck-> N/A (Python-only phase; no .php/.inc/.sh changed).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py   (matcher refactor + widening)
+  M tests/test_adr06_build_module.py               (whiteDB-shape assertions only)
+  M tests/test_adr06_init_from_raw.py              (whiteDB-shape assertion only)
+  A tests/test_adr07_matcher_strata.py             (30 new tests; the P3 entry pts)
+
+================================================================================
+1. NEW PAYLOAD / CONTAINER SHAPES  (what Phases 4-6 POPULATE)
+================================================================================
+All shapes are widened but inert (every `important` is False today). The matcher
+reads them tolerantly via `.get(..., False)` / isinstance checks, so a payload
+MISSING the new key still decides as today (existing seeds / the ADR-06 oracle do
+not set it).
+
+--- dataDB[d] / zoneDB[z]  (BLOCK payloads) -----------------------------------
+  OLD: {"log": <"0"|"1"|"2">, "index": <int>}
+  NEW: {"log": <flag>, "index": <int>, "important": bool}     # important=False today
+  Producers updated: build() per-feed payload + the synthetic TLD-blacklist zone
+  entry (pfb_unbound.py); the legacy CSV init loaders (data/zone). BuildResult
+  docstring + type hints updated.
+  Phase 5/6: set `important=True` when the BLOCK Rule carries $important.
+
+--- whiteDB[d]  (ALLOW domain payloads) ---------------------------------------
+  OLD: <bool wildcard>                          (bare bool)
+  NEW: {"wildcard": bool, "important": bool}
+  Producers updated: _dnsbl_normalise_whitelist (user whitelist + TOP1M ->
+  important=True, fact 7 sovereignty) and the legacy whitelist CSV init loader
+  (user whitelist -> important=True). BuildResult.white_db type is now
+  dict[str, dict[str, bool]].
+  TOLERANCE: the matcher STILL accepts a bare-bool whiteDB value (the ADR-06
+  oracle + the add_white test helper still seed bools). _white_entry_wildcard /
+  _white_entry_important normalise both shapes; a bare-bool legacy entry is
+  treated as NOT important.
+  Phase 6: a feed @@||domain^ that reduces to a whiteDB wildcard should set
+  important from the Rule (feed allow -> important=False unless $important).
+
+--- allowRegexDB  (NEW container; @@/re/ allow-regex) -------------------------
+  Declared as a module global (defaultdict(str) at init, like regexDB). pfb flag
+  pfb["allowRegexDB"] = False today. Value shape (the matcher accepts BOTH):
+     bare compiled pattern              (mirrors today's regexDB)
+     {"re": <compiled>, "important": bool}   (a later ABP phase)
+  EMPTY today. Phase 6 compiles irreducible @@/re/ allow-regex into it.
+
+--- regexDB  (BLOCK regex) ----------------------------------------------------
+  Unchanged in production (still keyed by name -> bare compiled pattern). The
+  matcher's per-query scan now reads BOTH shapes (bare pattern OR {"re",
+  "important"}); the bare-pattern path is byte-identical to today. Phase 6 may
+  widen feed block-regex values to {"re","important"}.
+
+--- pfb flags (init defaults; pfb_unbound.py ~301-308) ------------------------
+  pfb["allowRegexDB"]   = False   # set True when allowRegexDB is non-empty
+  pfb["important_rules"]= False   # THE FAST-PATH GATE (see SS2)
+  Phase 6/build() must EMIT important_rules=True iff any $important/$badfilter/
+  feed-@@/feed-regex rule is loaded (ADR.md SS2 "Query-time matcher").
+
+================================================================================
+2. THE important_rules FAST PATH — how it gates old vs numeric resolution
+================================================================================
+evaluate_domain discovery (data -> zone -> tld-allow -> idn -> block-regex) is
+UNCHANGED in order/semantics; it now also records the matched block's `important`
+into a local `block_important` (False on the fast path). The RESOLUTION stratum
+then branches:
+
+  if is_found:
+      if not cfg.get("important_rules", False):     # FAST PATH (today)
+          if cfg["whiteDB"]:
+              in_whitelist = any(whitelist_check_domain(n, ...) for n in names)
+      else:                                          # NUMERIC 6-BAND (unreachable)
+          in_whitelist = _resolve_numeric_allow(...)
+
+* FAST PATH is byte-for-byte the pre-P3 matcher: `if is_found: if not flag: if
+  cfg["whiteDB"]:` == old `if is_found and cfg["whiteDB"]:`. allowRegexDB is NOT
+  consulted; the `important` fields are NOT read for the decision. THIS is the
+  no-regression guarantee — confirmed by the ADR-06 oracle and
+  TestFastPathPreserved (incl. flag-key-absent and important-block-ignored cases).
+* NUMERIC branch (_resolve_numeric_allow): computes block_prio vs allow_prio and
+  returns True (== "in_whitelist", i.e. an ALLOW overrides -> name resolves) iff
+  allow_prio >= block_prio (no ties, so equivalent to NOT(block_prio>allow_prio)
+  = the ADR rule "block wins iff block_prio > allow_prio"). Maps the allow-wins
+  result onto in_whitelist so the downstream hsts/null-blocking/CNAME logic is
+  SHARED with the fast path (DnsblDecision external shape unchanged).
+
+cfg keys consumed: cfg["important_rules"], cfg["allowRegexDB"], cfg["whiteDB"]
+(all via fast/numeric branch). Phase 6 must thread these into the operate()-built
+cfg (the build emits the flags; init copies into pfb[...] -> cfg).
+
+================================================================================
+3. THE 6-BAND SCALE — as encoded (module constants + helpers)
+================================================================================
+Public constants in pfb_unbound.py (importable; ADR.md SS2 / RESULTS-P2 SS2):
+  PRIO_FEED_BLOCK=1  PRIO_FEED_ALLOW=2  PRIO_FEED_BLOCK_IMPORTANT=3
+  PRIO_FEED_ALLOW_IMPORTANT=4  PRIO_USER_BLOCK=5  PRIO_USER_ALLOW=6
+Helpers:
+  _block_priority(important, *, user=False) -> int
+  _allow_priority(important, *, user=False) -> int
+  _resolve_numeric_allow(q_name, q_name_original, is_cname, cfg, white_db,
+                         allow_regex_db, block_important) -> bool
+  whitelist_lookup_domain(name, white_db, tld_seg) -> (matched, important)
+  whitelist_check_domain(name, white_db, tld_seg) -> bool   (now a shim over the
+      above; SAME bool result as pre-P3 — existing tests still pass)
+  _white_entry_wildcard(entry) / _white_entry_important(entry)
+  _scan_allow_regex(q_name, allow_regex_db) -> (matched, important) | None
+
+PROVENANCE CAVEAT (read before Phase 4/5): loaded entries are NOT provenance-
+tagged yet (the phase prompt: "treat all loaded entries as today; the refactor is
+structural"). So the numeric branch currently reaches only:
+  * BLOCK bands 1 (feed) / 3 (feed+important)  -- from a block payload's `important`.
+    Band 5 (USER block) is RESERVED: _block_priority has a `user=` arg but nothing
+    sets it yet. Phase 5 (band assignment) / Phase 6 (provenance on dataDB/zoneDB
+    payloads or a separate user-block stratum) must wire user-block -> band 5.
+  * ALLOW bands 2/4 (feed @@/allow-regex) and 6 (USER allow). A whiteDB entry maps
+    to band 6 when its `important` flag is True (settings whitelist / TOP1M load
+    important=True), else band 2; allowRegexDB maps to 2 (or 4 with important).
+  => Phase 4-6 ACTION: add real provenance so a USER BLOCK reaches band 5 and a
+     FEED allow that is NOT a user whitelist is not mis-banded as 6. Today this is
+     moot (fast path only); it MATTERS once important_rules can be True.
+
+================================================================================
+4. SYNTHETIC-PAYLOAD TEST ENTRY POINTS  (Phase 4-6 diff against these)
+================================================================================
+tests/test_adr07_matcher_strata.py:
+  * _cfg(**overrides) / _containers(**overrides) / _data(important=…) — local
+    builders for evaluate_domain (no Unbound env). Reuse them in Phase 6 to drive
+    production through the live matcher.
+  * TestPriorityBands               — the band scale (odd=block, even=allow, no ties).
+  * TestWhiteEntryShape             — bare-bool vs dict whiteDB tolerance; the
+                                      suffix-walk only honours WILDCARD entries.
+  * TestFastPathPreserved           — important_rules False == today (flag absent;
+                                      important-block ignored; allowRegexDB ignored).
+  * TestNumericBandResolution       — the 6-band table, case by case:
+      b1 no-allow -> block; b2 feed-allow > b1; b6 user-allow > b1;
+      b3 important-block > b2; b4 important-feed-allow > b3; b6 > b3 (sovereignty);
+      b3 > b2 non-important whitelist; b2 non-important whitelist > b1; max-allow
+      wins; non-matching allow-regex leaves the block.
+  * TestWidenedPayloadCompat        — payload missing `important` still decides;
+                                      zone payload carries the flag.
+  * TestNumericBranchUnreachableInProduction — defaults stay False (fast path).
+
+The canonical TARGET oracle remains tests/test_adr07_decision_spec.py (Phase 2):
+decide(rules, query) -> {block, resolve, pass}. Phase 6 must reduce the production
+DnsblDecision to that label (mapping in RESULTS/02_Results.txt SS1 NOTE) and diff.
+
+================================================================================
+5. ADR-06 ORACLE STATUS + the 4 updated shape-assertions
+================================================================================
+* The ADR-06 GOLDEN DECISION ORACLE (tests/test_adr06_golden_oracle.py) is
+  UNCHANGED and GREEN — net DNS decisions for non-ABP input are byte-identical.
+  It builds its own bool-valued whiteDB and {"log","index"} payloads and feeds the
+  PRODUCTION evaluate_domain; the matcher's tolerance keeps it green untouched.
+* 4 SHAPE-ASSERTION unit tests of the FUNCTIONS I widened were updated (NOT the
+  decision oracle): test_adr06_build_module.py TestWhitelistNormalisation (x3) and
+  test_adr06_init_from_raw.py::test_top1m_enabled_flows_from_manifest_config —
+  they asserted the OLD bare-bool whiteDB value (`is False`); now assert the new
+  {"wildcard","important"} value (TOP1M/user -> important=True). These verify the
+  producer's shape, not net DNS decisions; the decision equivalence is pinned
+  separately and stays green. No other ADR-06 test changed.
+
+================================================================================
+6. GO-AHEAD + WHAT PHASE 4 SHOULD DO
+================================================================================
+GO-AHEAD: build the Rule model + parser. No reject-criterion (ADR.md SS7) tripped;
+sovereignty/precedence are reproducible (TestNumericBandResolution proves the band
+ordering, user-allow > important-block sovereignty, and feed-important inversion).
+
+Phase 4 (04_Rule_Model_Parser.txt) — PURE, ADDITIVE, NOT wired:
+  * Define the production Rule (kind/target/key-or-pattern/important/badfilter/
+    provenance/feed/group/log/signature) — RESULTS-P1 SS1c shape; reuse
+    DNSBL_KIND_BLOCK and add allow/regex kind constants.
+  * Implement full DNS-only parse('abp', line) -> Rule|None: ||domain^(+DNS-opts),
+    @@||domain^, plain domain, hosts IP domain, /re/, @@/re/; keep DNS-relevant +
+    domain/regex-target options, skip page-context/element/path/URL; SKIP IP-valued
+    anchors (return None — firewall path). Check EXHAUSTIVELY against
+    tests/test_adr07_decision_spec.py (parse_abp_line) AND the spike scope
+    (benchmarks/spike_adr07_regex.py categorise()).
+  * Do NOT wire into build()/init; build() still emits only BLOCK with
+    important=False (this phase left that seam intact).
+  * When Phase 5/6 populates the widened structures, set the payload `important`
+    fields + emit pfb["important_rules"] / pfb["allowRegexDB"] so the numeric
+    branch (already proven here) goes live. Wire USER-BLOCK provenance -> band 5
+    (SS3 caveat).
+
+GATES TO KEEP GREEN: python -m pytest (ADR-06 oracle + ADR-07 spec + these strata
+tests), ruff check/format, php -l + ShellCheck on any PHP/shell touched.
+================================================================================

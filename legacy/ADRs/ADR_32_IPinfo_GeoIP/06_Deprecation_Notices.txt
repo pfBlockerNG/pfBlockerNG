@@ -1,0 +1,66 @@
+================================================================================
+PHASE 6 PROMPT — Deprecated-field detection + notices (no config mutation)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS2.3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 6 detects config that
+references GeoIP features the active provider cannot supply and NOTIFIES -- it never mutates
+config.xml. One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+Issue #291 asks to "clean up" config for removed/deprecated GeoIP features. config.xml is
+hard-frozen (ADR-28, no migration), so the resolution is a NOTICE, not a rewrite: detect +
+inform, preserve the stored value for roll-forward/rollback.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- the in-tree country/continent truth. It is a
+  BLOCKING PREREQUISITE for this ADR and OWNS everything about country/continent identity: which
+  countries exist, their names and locales, the ISO->continent mapping, the frozen structural
+  bindings, the unknown-country buckets. This ADR's provider seam supplies ONE thing: network -> ISO.
+  Do not re-derive or re-decide any of it here -- if this prompt and ADR-64 disagree, ADR-64 wins.
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/05_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md (SS2.2 frozen-store contract, SS2.3).
+- The Phase-2 capability flags; pfblockerng.inc build path + file_notice usage; firewall-rule
+  / continent references to GeoIP features.
+- CLAUDE.md — config freeze (ADR-28), PfbConfig (ADR-29), Test coverage.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. At build, scan config / firewall rules for references to GeoIP features the active provider
+   cannot supply (e.g. a deprecated flag, a continent/option absent for IPinfo). Use a pure,
+   testable detector function.
+2. Emit a file_notice naming the affected setting/rule + the reason ("the selected GeoIP
+   provider does not provide X; this option is inert"). Do NOT change config.xml.
+3. Tests: PHPUnit -- given a config with a deprecated reference under each provider, the
+   correct notice(s) are produced AND the config store is byte-identical before/after (assert
+   no mutation). Also assert: no deprecated reference -> no notice.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- ABSOLUTELY no config_set_path / write_config in this phase's detection path -- notices only.
+- Detector is pure (config in -> notice list out); side-effect (file_notice) at the edge.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (detector branch coverage + no-mutation assertion); php -l;
+  PHPStan + phpcs.
+- python -m pytest -> green.
+- diff-read: detection + notice only; zero config writes.
+
+EXPECTED RESULT
+Inert/deprecated GeoIP settings under the active provider are surfaced via notices; config.xml
+is never mutated.
+
+COMMIT (single)
+    pfblockerng: notify on inert GeoIP settings under active provider (ADR-32 P6)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/06_Results.txt (plain .txt)
+Record: the detector name/signature; the notice texts; the no-mutation proof; verification
+numbers; go-ahead for Phase 7.

@@ -1,0 +1,86 @@
+ADR-01 Phase 2 Results — Split decision from side-effects
+=========================================================
+
+DnsblDecision shape (dataclass):
+    is_found: bool
+    in_whitelist: bool
+    in_hsts: bool
+    null_blocking: bool
+    log_type: Any        # False | "1" | log value from data/zone entry
+    b_type: str          # "Python" | "DNSBL" | "TLD" | any of the above + "_CNAME"
+    p_type: str          # "Python" | "HSTS" | "HSTS_TLD"
+    feed: Any            # "Unknown" | feed name string
+    group: Any           # "Unknown" | group name string
+    b_eval: str          # "" | q_name | matched zone parent
+
+evaluate_domain signature:
+    evaluate_domain(q_name, q_name_original, tld, is_cname, cfg, containers) -> DnsblDecision
+
+CFG KEYS THREADED FROM pfb
+--------------------------
+    python_blocking <- pfb["python_blocking"]
+    dataDB          <- pfb["dataDB"]  (enable bit)
+    zoneDB          <- pfb["zoneDB"]  (enable bit)
+    python_tld      <- pfb["python_tld"]
+    python_tlds     <- pfb["python_tlds"]
+    dnsbl_ipv4      <- pfb["dnsbl_ipv4"]
+    dnsbl_ipv6      <- pfb["dnsbl_ipv6"]
+    python_idn      <- pfb["python_idn"]
+    regexDB         <- pfb["regexDB"]  (enable bit)
+    whiteDB         <- pfb["whiteDB"]  (enable bit)
+    python_tld_seg  <- pfb["python_tld_seg"]
+    hstsDB          <- pfb["hstsDB"]  (enable bit)
+    hsts_tlds       <- pfb["hsts_tlds"]
+
+CONTAINERS KEYS THREADED AS MODULE GLOBALS
+------------------------------------------
+    dataDB, zoneDB, whiteDB, regexDB, feedGroupIndexDB, hstsDB
+    (each maps to the like-named module global)
+
+evaluate_domain internals:
+- resolve_feed_group was updated (post-Phase-2 correction) to accept
+  feed_group_index_db as a second parameter rather than reading the module global.
+  Called for both the data and zone hit branches. Final signature:
+  resolve_feed_group(index, feed_group_index_db) -> tuple[Any, Any]  (pure; no global reads).
+- regexDB matching is performed inline (for k, r in regex_db.items()) rather than
+  calling pfb_regex_match(), which still reads the module global and is therefore
+  not callable from a pure function.
+
+resolve_feed_group signature (updated in Phase 2):
+    resolve_feed_group(index, feed_group_index_db: dict[int, Any]) -> tuple[Any, Any]
+    Pure. Returns (feed, group) on hit, ("Unknown", "Unknown") on miss.
+    Called by evaluate_domain for data and zone hits.
+
+PURE VS GLOBAL-READING HELPERS (FOR PHASE 3 TEST AUTHORING)
+-----------------------------------------------------------
+    iter_domain_suffixes         pure
+    find_zone_match              pure  (takes zone_db arg)
+    find_noaaaa_wildcard_parent  pure  (takes noaaaa_db arg)
+    whitelist_check_domain       pure  (takes white_db, tld_seg args)
+    hsts_check_domain            pure  (takes hsts_db, hsts_tlds, tld args)
+    resolve_feed_group           pure  (takes feed_group_index_db arg)
+    evaluate_domain              pure  (all inputs via cfg / containers)
+    evaluate_noaaaa              pure  (takes noaaaa_db arg)
+    pfb_regex_match              NOT pure  (reads global regexDB)
+Phase 3 oracle tests for pure helpers can pass containers directly without setting
+up module globals. Tests for pfb_regex_match must assign pfb_unbound.regexDB (as
+the existing tests already do).
+
+evaluate_noaaaa signature:
+    evaluate_noaaaa(q_name: str, noaaaa_db: dict[str, Any]) -> bool
+    Returns True on exact hit OR wildcard-parent hit; False otherwise.
+
+noAAAA memo write location:
+Memo write (noAAAADB[q_name] = True) stays in operate(). After evaluate_noaaaa
+returns True, operate() checks whether an exact entry already exists
+(noAAAADB.get(q_name_original) is None). If no exact entry exists, the hit was a
+wildcard-parent hit and the memo is written — preserving the original behaviour
+exactly.
+
+VERIFICATION
+------------
+- python -m pytest: 97/97 passed
+- ruff check .: clean
+- ruff format . --check: clean
+- operate() side-effect order unchanged; decision now sourced from
+  evaluate_domain / evaluate_noaaaa.

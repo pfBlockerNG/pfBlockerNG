@@ -1,0 +1,944 @@
+<?php
+/*
+ * pfblockerng_feeds.php
+ *
+ * part of pfSense (https://www.pfsense.org)
+ * Copyright (c) 2016-2026 Rubicon Communications, LLC (Netgate)
+ * Copyright (c) 2015-2024 BBcan177@gmail.com
+ * All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+require_once('guiconfig.inc');
+require_once('globals.inc');
+require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
+
+global $pfb;
+pfb_global();
+
+$fconfig	= PfbConfig::readSection('installedpackages/pfblockerngglobal');
+
+// Load/convert Feeds (w/alternative aliasname(s), if user-configured)
+$feed_info	= convert_feeds_json();
+
+$feed_count	= $feed_info['count'];
+unset($feed_info['count']);
+
+// Active sub-tab type (?type=ipv4|ipv6|dnsbl, default ipv4). The page is split into
+// IPv4/IPv6/DNSBL sub-tabs (mirroring pfblockerng_category.php): only the active type
+// renders, and the save is scoped to it. A bare URL (no ?type) defaults to ipv4, so the
+// other pages' plain "Feeds" links keep working.
+$gtype = 'ipv4';
+if (isset($_REQUEST['type']) && !empty($_REQUEST['type'])) {
+	$temp_value = pfb_filter($_REQUEST['type'], PFB_FILTER_HTML, 'feeds');
+	if (in_array($temp_value, array('ipv4', 'ipv6', 'dnsbl'))) {
+		$gtype = $temp_value;
+	}
+}
+
+// 'active' GUI sub-tab map (the second [IPv4 | IPv6 | DNSBL] row).
+$active = array('ipv4' => FALSE, 'ipv6' => FALSE, 'dnsbl' => FALSE);
+$active[$gtype] = TRUE;
+
+$pconfig = $feeds_list = array();
+$feeds_list['ipv4'] = $feeds_list['ipv6'] = $feeds_list['dnsbl'] = array();
+
+// $pfb['feeds_list'] created by load_feeds_json() function. Collect only the active
+// type's aliasnames/overrides (the body and the save are type-scoped); the 'dnsbl' key
+// is left present-but-empty for the non-DNSBL tabs so the length guard below behaves.
+if (is_array($pfb['feeds_list']) && isset($pfb['feeds_list'][$gtype]) && is_array($pfb['feeds_list'][$gtype])) {
+	foreach ($pfb['feeds_list'][$gtype] as $o_aliasname => $aliasname) {
+		$l_aliasname = strtolower($o_aliasname);
+
+		// Collect any user-defined alternate aliasname(s)
+		$pconfig['feed_' . $l_aliasname] = $fconfig['feed_' . $l_aliasname] ?: '';
+
+		// Collect list of original aliasnames for the active type
+		$feeds_list[$gtype][] = $o_aliasname;
+	}
+}
+
+// Collect all 'selected' Alternative URL selections.
+$feed_alt_selected = array();
+if (is_array($fconfig)) {
+	foreach ($fconfig as $key => $line) {
+		if (str_starts_with($key, 'feed_alt_')) {
+			$feed_alt_selected[] = str_replace('alt_', '', $line);
+		}
+	}
+}
+
+// $input_errors is read unconditionally in the render section below, so it must be
+// defined on every request path. Initialise it once.
+$input_errors = array();
+
+if ($_POST) {
+	if (isset($_POST['save'])) {
+
+		$config_mod = FALSE;
+
+		// Type-scoped save: only the active type's feed_<alias> nodes are ever
+		// written. The hidden 'type' form field carries the active sub-tab, validated
+		// into $gtype above (via $_REQUEST, which includes $_POST). Looping only
+		// $pfb['feeds_list'][$gtype] means a per-type tab never touches another type's
+		// feed_*/feed_alt_* nodes (the cross-type non-clobber guarantee).
+		$type_data = (is_array($pfb['feeds_list']) && isset($pfb['feeds_list'][$gtype])
+			&& is_array($pfb['feeds_list'][$gtype])) ? $pfb['feeds_list'][$gtype] : array();
+
+		foreach ($type_data as $o_aliasname => $aliasname) {
+			$l_aliasname = strtolower($o_aliasname);
+
+			if (preg_match("/\W/", $_POST['feed_' . $l_aliasname])) {
+				$input_errors[] = "Feed Settings: [ {$aliasname} ]"
+						. 'Alias/Group name cannot contain spaces, special or international characters.';
+
+				$pconfig['feed_' . $l_aliasname] = htmlspecialchars($_POST['feed_' . $l_aliasname]) ?: '';
+			}
+			else {
+				$fconfig['feed_' . $l_aliasname] = $_POST['feed_' . $l_aliasname] ?: '';
+				// foreign key: pfblockerngglobal/feed_* are dynamic alias-name keys, not in registry
+				config_set_path("installedpackages/pfblockerngglobal/feed_{$l_aliasname}", $fconfig['feed_' . $l_aliasname]);
+				$config_mod = TRUE;
+
+				// IPv4/6 Aliasnames cannot exceed 31 characters in PF. ( pfB_ + aliasname + _v? )
+				// $feeds_list['dnsbl'] is only populated on the DNSBL tab, so this length
+				// guard correctly applies on IPv4/IPv6 tabs and is skipped on the DNSBL tab.
+				if (!in_array(str_replace('feed_', '', $fconfig['feed_' . $l_aliasname]), $feeds_list['dnsbl'])) {
+					$len_post = strlen($fconfig['feed_' . $l_aliasname]);
+					if ($len_post > 24) {
+						$input_errors[] = "Alternate Aliasname : [ {$o_aliasname} -> {$aliasname} ]"
+								. " Field cannot exceed 24 characters. [ {$len_post} characters submitted. ]";
+					}
+				}
+			}
+		}
+
+		// Save all 'selected' Alternate URL feeds.
+		if (isset($_POST['alt_selected'])) {
+
+			$selected = explode(',', $_POST['alt_selected']);
+			foreach ($selected as $value) {
+
+				if (!empty($value)) {
+					// issue #1076: the token becomes a config_set_path() KEY below -- vet
+					// it like the alt_ value, or a crafted request splices path separators
+					// into the config tree (feed_alt_a/b writes a nested node).
+					$value = pfb_filter($value, PFB_FILTER_WORD, 'feeds');
+					if (empty($value)) {
+						$input_errors[] = 'Invalid Alternative Alias Name';
+						continue;
+					}
+					// Save Alternative Aliasnames to pfblockerngglobal in config.xml
+					$post = pfb_filter($_POST['alt_' . $value] ?? '', PFB_FILTER_WORD, 'feeds');
+					if (!empty($post)) {
+						$value					= strtolower($value);		// config XML tag needs to be lowercase
+						${"feed_alt_$value"}			= $post;
+						$fconfig['feed_alt_' . $value]		= ${"feed_alt_$value"};
+						// foreign key: pfblockerngglobal/feed_alt_* are dynamic alternate-URL keys, not in registry
+						config_set_path("installedpackages/pfblockerngglobal/feed_alt_{$value}", $fconfig['feed_alt_' . $value]);
+					}
+					else {
+						$input_errors[] = 'Invalid Alternative Alias Name';
+					}
+				}
+			}
+			$config_mod = TRUE;
+		}
+
+		if ($config_mod) {
+			if (!$input_errors) {
+				write_config('[pfBlockerNG] save Feed settings');
+				pfb_mark_pending_changes();	// applies on the next Update, not on save
+				header("Location: /pfblockerng/pfblockerng_feeds.php?type={$gtype}");
+				exit;
+			}
+		}
+	}
+}
+
+// Render the Feed Settings alias-name override inputs for a single $type
+// ('ipv4'|'ipv6'|'dnsbl'). Emits that type's StaticText label + its 'feed_<alias>'
+// Form_Input set into $section. The page calls it once, for the active (?type=)
+// tab only (ADR-16 type-scoped UI).
+function pfb_feeds_render_aliasname_inputs($section, $type, $feeds_list, $pconfig) {
+
+	$labels = array(
+		'ipv4'	=> array(
+			'IPv4 Alias name(s):',
+			'To change the default IPv4 Alias name(s), enter new Alias name(s) as desired.'),
+		'ipv6'	=> array(
+			'IPv6 Alias name(s):',
+			'To change the default IPv6 Alias name(s), enter new Alias name(s) as desired.'),
+		'dnsbl'	=> array(
+			'DNSBL Alias name(s):',
+			'To change the default DNSBL Group name(s), enter new Group name(s) as desired.'),
+	);
+
+	if (!isset($labels[$type])) {
+		return;
+	}
+
+	$section->addInput(new Form_StaticText($labels[$type][0], $labels[$type][1]));
+
+	foreach ($feeds_list[$type] as $aliasname) {
+		$l_aliasname = strtolower($aliasname);
+		$section->addInput(new Form_Input(
+			'feed_' . $l_aliasname,
+			$aliasname,
+			'text',
+			$pconfig['feed_' . $l_aliasname]
+		))->setWidth(3);
+	}
+}
+
+// Returns the matched-feed icon markup for the ($alternate = FALSE) primary-URL
+// comparison (issue #1330); the caller assigns it to $icon only when non-empty, same
+// as this function's former direct `global $icon` mutation. Empty string means "no
+// match, leave $icon as the caller already has it" -- never a request to clear it.
+function url_compare($ftype, $key, $rowid, $aliasname, $row_aliasname, $row_url, $feed_url, $row_state,
+	    $feed_header, $a_key, $alternate=FALSE, $alt_header='', $alt_info='', $alt_register='') {
+
+	global $ex_feeds, $alt_feeds;
+	$x_icon = '';
+
+	// Convert user defined URLs with '_API_KEY' to baseline URL format
+	if (strpos($feed_url, '_API_KEY_') !== FALSE) {
+		$ex = explode('_API_KEY_', preg_quote($feed_url, '/'));
+		if (preg_match('/' . $ex[0] . '(.*)' . $ex[1] . '/', $row_url, $pm)) {
+			$row_url = str_replace($pm[1], '_API_KEY_', $row_url);
+		}
+	}
+
+	// Check for http/https Feed mismatch
+	$x_url_mismatch = '';
+	if (strpos($feed_url, 'https:') !== FALSE && strpos($row_url, 'http:') !== FALSE) {
+		$x_url_mismatch = str_replace('http:', 'https:', $row_url);
+	}
+	elseif (strpos($feed_url, 'http:') !== FALSE && strpos($row_url, 'https:') !== FALSE) {
+		$x_url_mismatch = str_replace('https:', 'http:', $row_url);
+	}
+
+	if ($feed_url == $row_url || $feed_url == $x_url_mismatch) {
+
+		// Set found flag
+		$ex_feeds[$ftype][$key]['found'] = TRUE;
+
+		$fa_type = 'fa-solid fa-check';
+		if ($aliasname != $row_aliasname) {
+			$fa_type = 'fa-regular fa-circle-check';
+		}
+
+		if ($row_state == 'Disabled') {
+			$x_icon .= "&emsp;"
+				. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+				. "&rowid={$rowid}\""
+				. "<span class=\"text-danger\""
+				. "title=\"Feed exists in [ {$row_aliasname} ] but is Disabled.\">"
+				. "<i class=\"{$fa_type}\"></i>"
+				. "</span>"
+				. "</a>";
+		} else {
+			$x_icon .= "&emsp;"
+				. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+				. "&rowid={$rowid}\""
+				. "title=\"Feed exists in [ {$row_aliasname} ]\">"
+				. "<i class=\"{$fa_type}\"></i>"
+				. "</a>";
+		}
+
+		// Add http/https protocol mismatch indicator
+		if ($feed_url != $row_url) {
+			$x_icon .= "&emsp;"
+				. "<span class=\"text-danger\">"
+				. "<i title=\"http/https protocol mismatch\" class=\"fa-solid fa-key\"></i>"
+				. "</span>";
+		}
+	}
+
+	if (!empty($x_icon)) {
+		if ($alternate) {
+			if (!isset($alt_feeds[$ftype][$aliasname][$alt_header])) {
+				$alt_feeds[$ftype][$aliasname][$feed_header][$a_key] = array(	'icon' => $x_icon, 'url' => $feed_url, 'header' => $alt_header,
+												'info' => $alt_info, 'register' => !empty($alt_register) ? TRUE : FALSE);
+				$alt_feeds[$ftype][$aliasname][$alt_header] = TRUE;
+			} else {
+				if (isset($alt_feeds[$ftype][$aliasname][$feed_header])) {
+					$a_icon = $alt_feeds[$ftype][$aliasname][$feed_header][$a_key]['icon'];
+					$alt_feeds[$ftype][$aliasname][$feed_header][$a_key]['icon'] = $a_icon . $x_icon;
+				}
+			}
+		}
+	}
+	else {
+		if ($alternate && isset($alt_feeds[$ftype]) && isset($alt_feeds[$ftype][$aliasname]) && empty($alt_feeds[$ftype][$aliasname][$alt_header])) {
+			$alt_feeds[$ftype][$aliasname][$feed_header][$a_key] = array(	'icon' => $x_icon, 'url' => $feed_url, 'header' => $alt_header,
+											'info' => $alt_info, 'register' => !empty($alt_register) ? TRUE : FALSE );
+		}
+	}
+
+	return $x_icon;
+}
+
+// Render the predefined-feeds table rows for a single $type ('ipv4'|'ipv6'|'dnsbl'),
+// given $info = $feed_info[$type]. Emits that type's <tr> rows (incl. the alt-URL radio
+// group + the hidden alt_<header> input + the per-row icons), identical to the inline
+// per-type block it replaces. The cross-type accumulators ($alt_selected CSV,
+// $feed_info_row separator counter, $aliasname_found) and the state shared with
+// url_compare() ($ex_feeds, $alt_feeds) live at page (global) scope and are bound via
+// `global`; $icon is assigned here from url_compare()'s return value (issue #1330 --
+// no longer a cross-function global mutation). The page calls it once, for the active
+// (?type=) tab only (ADR-16 type-scoped UI).
+function pfb_feeds_render_predefined_type($ftype, $info) {
+
+	global $ex_feeds, $alt_feeds, $icon, $fconfig, $feed_alt_selected;
+	global $alt_selected, $feed_info_row, $aliasname_found;
+
+	if (empty($info)) {
+		print ("<td class=\"bg-danger\"><br /><strong>No feeds definitions found!</strong><br /><br /></td>");
+		return;
+	}
+
+	$p_type = '';
+	foreach ($info as $aliasname => $data):
+		$p_aliasname = '';
+		// issue #1497: read at 396 on the first alt-URL row; only ever assigned at
+		// the loop tail (606, previous-row tracking) -- a malformed-data edge on
+		// the very first iteration otherwise leaves it undefined.
+		$p_tr_style = '';
+		if (!isset($data['feeds'])) {
+			continue;
+		}
+
+		foreach ($data['feeds'] as $feed):
+			$status = $icon = '';
+
+			if (!empty($ex_feeds[$ftype])) {
+				foreach ($ex_feeds[$ftype] as $key => $row) {
+
+					if (empty($row)) {
+						continue;
+					}
+
+					if (isset($row['aliasname']) && $aliasname == $row['aliasname'] && !isset($aliasname_found[$aliasname])) {
+						$aliasname_found[$aliasname] = $aliasname;
+
+						if ($row['action'] == 'Disabled') {
+							$status = "&emsp;"
+								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+								. "&rowid={$row['rowid']}\"<span class=\"text-danger\""
+								. "title=\"Alias/Group exists but is currently Disabled\">"
+								. "<i class=\"fa-solid fa-check\"></i></span>"
+								. "</a>";
+						} else {
+							$status = "&emsp;"
+								. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+								. "&rowid={$row['rowid']}\""
+								. "title=\"Alias/Group exists\">"
+								. "<i class=\"fa-solid fa-check\"></i>"
+								. "</a>";
+						}
+					}
+
+					// Determine all Aliases that reference the Feed URL
+					$row_icon = url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'], $feed['url'],
+							$row['state'], $feed['header'], 0, FALSE, '', '', '');
+					if (!empty($row_icon)) {
+						$icon = $row_icon;
+					}
+
+					// Determine all Aliases that reference the 'Alternate' Feed URLs
+					if (isset($feed['alternate'])) {
+						foreach ($feed['alternate'] as $a_key => $alt) {
+							url_compare($ftype, $key, $row['rowid'], $aliasname, $row['aliasname'], $row['url'],
+								$alt['url'], $row['state'], $feed['header'], $a_key, TRUE, $alt['header'],
+								isset($alt['info']) ? $alt['info'] : '', isset($alt['register']) ? 'register' : '');
+						}
+					}
+				}
+
+				if (!isset($aliasname_found[$aliasname])) {
+					$aliasname_found[$aliasname] = $aliasname;
+					$status = "&emsp;"
+						. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+						. "&act=addgroup&atype={$aliasname}\""
+						. "title=\"Add Alias/Group: {$aliasname}\">"
+						. "<i class=\"fa-solid fa-plus-circle\"></i>"
+						. "</a>";
+				}
+			}
+
+			if (isset($feed['feed'])):
+
+				// Print table/row of Feeds and consecutive rows for all 'Alternate' URLs available.
+				$counter = 0;
+				$alt_feed_rows = array();
+				if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
+					$alt_feed_rows = $alt_feeds[$ftype][$aliasname][$feed['header']];
+					ksort($alt_feed_rows, SORT_NUMERIC);
+					$alt_feed_rows = array_values($alt_feed_rows);
+					$counter = count($alt_feed_rows);
+				}
+
+				for ($i=0; $i <= $counter; $i++):
+
+					// Print blank seperator line between Categories (skip first row)
+					if ($feed_info_row > 0 && $ftype != $p_type) {
+						print ("<tr><td><br /></td><td></td><td></td><td></td><td></td><td></td></tr>");
+					}
+
+					// Print applicable alternating background color
+					if ($data['action'] == 'permit') {
+						if ($aliasname == $p_aliasname) {
+							$tr_style = 'background-color: #F5FBF6;';		// Light green 1
+							if ($tr_style == $p_tr_style) {
+								$tr_style = 'background-color: #EEF7EE;';	// Light green 2
+							}
+						} else {
+							// Dark green (New Alias/Group)
+							$tr_style = 'background-color: #A0B8A0;';	// #C8E6C9;';
+						}
+					}
+					else {
+						$tr_style = '';
+						if ($aliasname != $p_aliasname) {
+							// Grey - (New Alias/Group)
+							$tr_style = 'background-color: #B8B8B8;';	//#D8D8D8;';
+						}
+					}
+				?>
+
+		<tr style="<?=$tr_style;?>">
+			<td>
+					<?php
+						// $ftype is always one of ipv4/ipv6/dnsbl here; the default keeps
+						// $type defined for the static analyser (no behaviour change).
+						$type = '';
+						switch ($ftype) {
+							case 'ipv4':
+								$type = 'IPv4';
+								break;
+							case 'ipv6':
+								$type = 'IPv6';
+								break;
+							case 'dnsbl':
+								$type = 'DNSBL';
+								break;
+						}
+						if ($ftype != $p_type) {
+							print ("<strong>{$type} Category</strong>");
+						} else {
+							print ("<p style=\"font-size: 75%\">{$type}<p>");
+						}
+					?>
+			</td>
+
+			<td>
+					<?php
+						if ($aliasname != $p_aliasname) {
+							// Add Line break (bullet)
+							$data['info'] = str_replace('-LB-', "\n&emsp;&#9679;&emsp;", $data['info']);
+							print ("<i title=\"{$data['info']}\" class=\"fa-solid fa-info-circle\"></i>{$status}");
+						}
+
+						if ($i == 0) {
+
+							// If alternative URLs are available, print radio checkbox options. Default to first radio.
+							if (isset($alt_feeds[$ftype][$aliasname][$feed['header']])) {
+
+								// Add first radio option as default if not previously saved
+								if (!isset($fconfig['feed_alt_' . strtolower($feed['header']) ])) {
+									$feed_alt_selected[] = $feed['header'];
+								}
+
+								// Collect all 'Alternative' Feed Header names. (POST/save)
+								$alt_selected .= $feed['header'] . ',';
+
+								if (in_array($feed['header'], $feed_alt_selected) && empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+								elseif (empty($icon)) {
+									$pfb_found = FALSE;
+									foreach ($alt_feeds[$ftype][$aliasname][$feed['header']] as $a_header) {
+										if (!empty($a_header['icon']) ||
+										    in_array($a_header['header'], $feed_alt_selected)) {
+											$pfb_found = TRUE;
+											break;
+										}
+									}
+
+									if (!$pfb_found) {
+										$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+									}
+								}
+
+								$feed_alternate	= '';
+								$feed_header	= $feed['header'];
+								$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
+										. " value=\"alt_{$feed['header']}\" checked=\"checked\" />&emsp;";
+
+								print ("<input type=\"hidden\" name=\"alt_" . "{$feed['header']}" . "\" id=\"alt_"
+									. "{$feed['header']}" . "\" value=\"\" />");
+							}
+							else {
+								if (empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$feed['header']}\""
+										. "title=\"Add feed: [ {$feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+
+								$feed_alternate	= '';
+								$feed_header	= $feed['header'];
+								$feed_radio	= '';
+							}
+						}
+
+						// Extract 'Alternate Feed' details from alt_feed array.
+						else {
+							$status = '';
+							$alt_feed	= $alt_feed_rows[$i -1];
+							$icon 		= $alt_feed['icon'];
+
+							if (in_array($alt_feed['header'], $feed_alt_selected)) {
+								$checked = 'checked=\"checked\"';
+								if (empty($icon)) {
+									$icon = "&emsp;"
+										. "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$ftype}"
+										. "&act=add&atype={$alt_feed['header']}\""
+										. "title=\"Add feed: [ {$alt_feed['header']} ]\">"
+										. "<i class=\"fa-solid fa-plus-circle\"></i>"
+										. "</a>";
+								}
+							}
+							else {
+								$checked = '';
+							}
+
+							$feed['url']	= $alt_feed['url'];
+							$feed_alternate = "&emsp;<i class=\"fa-solid fa-angle-right\" style=\"cursor: default\""
+									. " title=\"Alternate Feed option\"></i>&emsp;";
+							$feed_header	= $alt_feed['header'];
+							$feed_radio	= "&emsp;<input type=\"radio\" name=\"alt_{$feed['header']}\""
+									. " value=\"alt_{$alt_feed['header']}\" {$checked} />&emsp;";
+						}
+					?>
+			</td>
+
+			<td>
+					<?php
+						if ($aliasname != $p_aliasname) {
+							print ("{$aliasname}");
+						} else {
+							print ("<p style=\"font-size: 75%\">{$aliasname}<p>");
+						}
+					?>
+			</td>
+
+			<td>
+				<?=$feed_alternate;?>
+				<a target="_blank" rel="noopener noreferrer" href="<?=$feed['website'];?>"><?=$feed['feed'];?></a>
+					<?php
+						// Add any Alternate Feed icons
+						if (!empty($feed_alternate)) {
+							if (isset($alt_feed['status'])) {
+								$feed['status']		= $alt_feed['status'];
+							}
+							if (isset($alt_feed['info'])) {
+								$feed['info']		= $alt_feed['info'];
+							}
+							if (isset($alt_feed['register'])) {
+								$feed['register']	= $alt_feed['register'];
+							}
+						}
+
+						// Print info about Feed if available
+						if (isset($feed['info']) && !empty($feed['info'])) {
+							print ("&emsp;<i class=\"fa-solid fa-info-circle\" title=\"{$feed['info']}\"></i>");
+						}
+
+						// Print Feed offline status
+						if (isset($feed['status'])) {
+							print ("&emsp;<i class=\"fa-solid fa-bug text-danger\" title=\"Feed temporarily unavailable\"></i>");
+						}
+
+						// Add link to Donate/support link
+						if (isset($feed['donate'])) {
+							print ("&emsp;<a target=\"_blank\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
+							<i class=\"fa-solid fa-cart-plus\"></i></a>");
+						}
+
+						// Add link to Feed registration
+						if ($feed['register']) {
+							print ("&emsp;<a target=\"_blank\" href=\"{$feed['register']}\" title=\"Click to register\">
+								<i class=\"fa-solid fa-right-to-bracket\"></i></a>");
+						}
+					?>
+			</td>
+
+			<td>
+				<?=$feed_radio;?>
+				<a target="_blank" rel="noopener noreferrer" href="<?=$feed['url'];?>"
+					onclick="return confirm('Download feed [ <?=$feed['url'];?> ] ?')"><?=$feed_header;?>
+				</a>
+			</td>
+
+			<td><?=$icon;?></td>
+		</tr>
+					<?php
+						// Collect previous values
+						$p_type		= $ftype;
+						$p_aliasname	= $aliasname;
+						$p_tr_style	= $tr_style;
+						$feed_info_row++;
+					endfor;
+				endif;
+			endforeach;
+		endforeach;
+}
+
+// Breadcrumb label for the active sub-tab type.
+$type_label = array('ipv4' => 'IPv4', 'ipv6' => 'IPv6', 'dnsbl' => 'DNSBL');
+
+$pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), gettext($type_label[$gtype]));
+$pglinks = array('', '/pfblockerng/pfblockerng_general.php', "/pfblockerng/pfblockerng_feeds.php?type={$gtype}", '@self');
+$shortcut_section = 'pfblockerng';
+include_once('head.inc');
+
+if ($input_errors) {
+	print_input_errors($input_errors);
+}
+
+// Define default Alerts Tab href link (Top row)
+$get_req = pfb_alerts_default_page();
+
+$tab_array	= array();
+$tab_array[]	= array(gettext('General'),	FALSE,	'/pfblockerng/pfblockerng_general.php');
+$tab_array[]	= array(gettext('IP'),		FALSE,	'/pfblockerng/pfblockerng_ip.php');
+$tab_array[]	= array(gettext('DNSBL'),	FALSE,	'/pfblockerng/pfblockerng_dnsbl.php');
+$tab_array[]	= array(gettext('Update'),	FALSE,	'/pfblockerng/pfblockerng_update.php');
+$tab_array[]	= array(gettext('Reports'),	FALSE,	"/pfblockerng/pfblockerng_alerts.php{$get_req}");
+$tab_array[]	= array(gettext('Feeds'),	TRUE,	'/pfblockerng/pfblockerng_feeds.php');
+$tab_array[]	= array(gettext('Logs'),	FALSE,	'/pfblockerng/pfblockerng_log.php');
+$tab_array[]	= array(gettext('Sync'),	FALSE,	'/pfblockerng/pfblockerng_sync.php');
+pfb_software_add_tab($tab_array);
+display_top_tabs($tab_array, TRUE);
+
+// Second sub-tab row: [IPv4 | IPv6 | DNSBL] -> pfblockerng_feeds.php?type=...
+$tab_array	= array();
+$tab_array[]	= array(gettext('IPv4'),	$active['ipv4'],	'/pfblockerng/pfblockerng_feeds.php?type=ipv4');
+$tab_array[]	= array(gettext('IPv6'),	$active['ipv6'],	'/pfblockerng/pfblockerng_feeds.php?type=ipv6');
+$tab_array[]	= array(gettext('DNSBL'),	$active['dnsbl'],	'/pfblockerng/pfblockerng_feeds.php?type=dnsbl');
+display_top_tabs($tab_array, TRUE);
+pfb_print_pending_changes_box();
+
+?>
+<form action="/pfblockerng/pfblockerng_feeds.php?type=<?=$gtype?>" method="post" name="iform" id="iform" class="form-horizontal">
+<input type="hidden" name="type" id="type" value="<?=$gtype?>" />
+<?php
+
+$section = new Form_Section('Feed Settings', 'feedsettings', COLLAPSIBLE|SEC_CLOSED);
+$section->addInput(new Form_StaticText(
+	'Note:',
+	'The <strong>Feed Settings</strong> can be used to rename the pre-defined Alias/Group names, and/or<br />'
+	. ' combine multiple Alias/Groups together by using a duplicate Alias/Group name.'
+));
+
+// Render only the active type's alias-name override inputs (type-scoped UI).
+pfb_feeds_render_aliasname_inputs($section, $gtype, $feeds_list, $pconfig);
+
+$btn_save = new Form_Button(
+	'save',
+	'Save Settings',
+	NULL,
+	'fa-solid fa-save'
+);
+
+$btn_save->removeClass('btn-primary')->addClass('btn-primary btn-sm');
+$section->addInput(new Form_StaticText(
+	NULL,
+	$btn_save
+));
+print ($section);
+
+?>
+<div class="panel panel-default">
+	<div class="panel-heading">
+		<h2 class="panel-title"><?=gettext("Pre-defined Alias/Group/Feeds")?></h2>
+	</div>
+
+	&emsp;Links:&emsp;<small><a href="/firewall_aliases.php" target="_blank" rel="noopener noreferrer">Firewall Aliases</a>&emsp;
+	<a href="/firewall_rules.php" target="_blank" rel="noopener noreferrer">Firewall Rules</a>&emsp;
+	<a href="/status_logs_filter.php" target="_blank" rel="noopener noreferrer">Firewall Logs</a></small><br /><br />
+
+	<div class="panel-body bg-info">
+		<div style="margin: 10px 10px 10px 30px;">
+			<p>
+				The <strong>Feeds Management</strong> page is a collection of pre-defined Feeds arranged into Aliasnames/Groups.<br />
+				Review the <strong>infoblock icons</strong> beside each Alias/Group name for details about each Group.<br /><br />
+
+				<?php
+				if (is_array($feed_count)) {
+					print ("&emsp;<strong><u>Number of Feeds per Category Type:</strong></u><dl class=\"dl-horizontal\">");
+					foreach ($feed_count as $type => $count) {
+						print ("<dt>" . strtoupper(htmlspecialchars($type)) . ":</dt><dd>" . htmlspecialchars($count) . "</dd>");
+					}
+					print ("</dl>");
+				}
+				?>
+
+				&#8226; Feeds are listed by Category (IPv4/IPv6/DNSBL). Links are provided for each Feed website and Feed URL.<br />
+				&#8226; Clicking the "+" icon(s) in the Category column will import all Feeds in the Alias/Group at once, while clicking the
+				"+" icon(s) on the right will only import the individual feed.<br />
+
+				&#8226; Feeds with 'Alternative' URL(s) can be configured via the Radio button options.<br />
+				&#8226; Custom Feeds (user-defined Feeds not in the pre-defined list) are listed in a table below pre-defined Feeds<br />
+				&#8226; Permit Type feeds are listed with a green background.<br />
+			</p>
+
+			<!-- Show Icon Legend -->
+			Click here for Legend&emsp;-->
+			<div class="infoblock" style="text-align:left">
+				<dl class="dl-horizontal responsive">
+					<dt><?=gettext('Icon')?></dt>
+						<dd><?=gettext('Legend')?></dd>
+					<dt><i class="fa-solid fa-info-circle"></i></dt>
+						<dd><?=gettext('Alias/Group/Feed Description/Information');?></dd>
+					<dt><i class="fa-solid fa-check"></i></dt>
+						<dd><?=gettext('Item exists in pre-defined Alias/Group');?></dd>
+					<dt><span class="text-danger"><i class="fa-solid fa-check"></i></span></dt>
+						<dd><?=gettext('Item exists but is Disabled in pre-defined Alias/Group');?></dd>
+					<dt><i class="fa-regular fa-circle-check"></i></dt>
+						<dd><?=gettext('Item exists but in a different Alias/Group');?></dd>
+					<dt><i class="fa-solid fa-plus-circle"></i></dt>
+						<dd><?=gettext('Add Item');?></dd>
+					<dt><span class="text-danger"><i class="fa-solid fa-key"></i></span></dt>
+						<dd><?=gettext('Feed URL - http/https protocol mismatch');?></dd>
+					<dt><i class="fa-solid fa-angle-right"></i></dt>
+						<dd><?=gettext('Alternate Feed URL options');?></dd>
+					<dt><span class="text-danger"><i class="fa-solid fa-bug"></i></span></dt>
+						<dd><?=gettext('Feed temporarily unavailable');?></dd>
+					<dt><i class="fa-solid fa-right-to-bracket"></i></dt>
+						<dd><?=gettext('Subscription required to access Feed');?></dd>
+				</dl>
+			</div>
+			<br /><strong><u>Disclaimer</u>: Use of the Feed(s) below are at your own risk!</strong>
+			<span class="text-danger">&emsp;Note: Do not enable all Feeds at once.</span>
+		</div>
+	</div>
+	<br />
+
+	<div id="pfb_table" class="panel-body">
+		<div class="table-responsive">
+		<table id="pfb_table" class="table table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>
+			<thead>
+				<tr id="pfb_header">
+					<th><?=gettext('Category');?></th>
+					<th><!----- Buttons -----></th>
+					<th><?=gettext('Alias/Group');?></th>
+					<th><?=gettext('Feed/Website');?></th>
+					<th><?=gettext('Header/URL');?></th>
+					<th><!----- Buttons -----></th>
+				</tr>
+			</thead>
+			<tbody>
+
+			<?php
+			// Build $ex_feeds for the active type only (the body is type-scoped).
+			$list_type = array( 'ipv4' => 'pfblockernglistsv4', 'ipv6' => 'pfblockernglistsv6', 'dnsbl' => 'pfblockerngdnsbl');
+			$conf_type = $list_type[$gtype];
+			$feedtype  = $gtype;
+
+			// foreign structure: pfblockernglistsv4/v6/dnsbl list sections are not in registry
+			foreach (config_get_path("installedpackages/{$conf_type}/config", []) as $rowid => $list) {
+				if (isset($list['row'])) {
+					foreach ($list['row'] as $row) {
+						if (!empty($row['url']) && !empty($row['header'])) {
+
+							$ex_feeds[$feedtype][] = array(	'aliasname'	=>	$list['aliasname'],
+											'action'	=>	$list['action'],
+											'state'		=>	$row['state'],
+											'url'		=>	$row['url'],
+											'header'	=>	$row['header'],
+											'rowid'		=>	$rowid
+											);
+						}
+					}
+				}
+			}
+
+			if (!isset($ex_feeds[$feedtype])) {
+				$ex_feeds[$feedtype][] = array();
+			}
+
+			$alt_selected = '';		// CSV list of all Feeds which have 'Alternate URLs' (Used in POST/save)
+			$feed_info_row = 0;
+			$aliasname_found = array();
+
+			// Render only the active type's predefined feeds.
+			if (isset($feed_info[$gtype])) {
+				pfb_feeds_render_predefined_type($gtype, $feed_info[$gtype]);
+			}
+			?>
+
+			</tbody>
+		</table>
+		</div>
+	</div>
+</div>
+
+<?php $alt_selected = rtrim($alt_selected, ',');?>
+<input type="hidden" name="alt_selected" id="alt_selected" value="<?=$alt_selected;?>">
+</form>
+
+<!-- Print table of Custom Feeds (user-defined, not in the predefined catalog) -->
+<div class="panel panel-default">
+	<div class="panel-heading">
+		<h2 class="panel-title"><?=gettext("Custom Feeds")?></h2>
+	</div>
+	<div id="pfb_table2" class="panel-body">
+		<div class="table-responsive">
+			<table id="pfb_table2" class="table table-striped table-hover table-compact sortable-theme-bootstrap" data-sortable>
+			<thead>
+				<tr id="pfb_header2">
+					<th><?=gettext('Category');?></th>
+					<th><?=gettext('Alias/Group');?></th>
+					<th><?=gettext('URL');?></th>
+					<th><?=gettext('Header');?></th>
+				</tr>
+			</thead>
+			<tbody>
+
+				<?php
+				// issue #1496: read at 848 on the first row of every render; only ever
+				// assigned at the tail of the loop below (previous-row tracking).
+				$p_type = '';
+				$p_aliasname = '';
+				// Only the active type's custom (unmatched user-defined) feeds (type-scoped body).
+				if (!empty($ex_feeds)):
+					foreach (array($gtype => $type_label[$gtype]) as $feedtype => $type):
+
+						if (!empty($ex_feeds[$feedtype])):
+							foreach ($ex_feeds[$feedtype] as $row):
+
+								if (empty($row) || (isset($row['found']) && $row['found'])) {
+									continue;
+								}
+
+								$tr_style = '';
+								if ($row['aliasname'] != $p_aliasname) {
+									$tr_style = 'background-color: #B8B8B8;';   // #D8D8D8;';
+								}
+				?>
+
+			<tr style="<?=$tr_style;?>">
+				<td>
+					<?php
+								if ($type != $p_type) {
+									print ("{$type}");
+								} else {
+									print ("<p style=\"font-size:75%\">{$type}<p>");
+								}
+					?>
+				</td>
+
+				<td>
+					<?php
+								$title = '';
+								$aliasname_raw = $row['aliasname'];
+								$row['aliasname'] = htmlspecialchars($aliasname_raw);
+								if (mb_strlen($aliasname_raw, 'UTF-8') > 15) {
+									$title 			= $row['aliasname'];
+									$row['aliasname']	= htmlspecialchars(mb_substr($aliasname_raw, 0, 15, 'UTF-8')) . '...';
+								}
+
+								if ($row['aliasname'] != $p_aliasname) {
+									$aliasname = "<a href=\"/pfblockerng/pfblockerng_category_edit.php?type={$feedtype}"
+											. "&rowid={$row['rowid']}\""
+											. "title=\"{$title}\">"
+											. "{$row['aliasname']}</a>";
+									print ($aliasname);
+								}
+								else {
+									print ("<p style=\"font-size:75%\">{$row['aliasname']}<p>");
+								}
+					?>
+				</td>
+
+				<td>
+					<?php
+								// issue #1069: HTML-encode the feed URL before it enters
+								// markup -- pfb_hsc() is not in scope for this file. Only an
+								// http(s):// scheme becomes a clickable <a href> -- htmlspecialchars
+								// does not neutralise a `javascript:` scheme, so a bare strpos('http')
+								// would render `javascript:...http...` as an executable link.
+								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+								if (str_starts_with($row['url'], 'http://') || str_starts_with($row['url'], 'https://')) {
+									print ("<a target=\"_blank\" href=\"{$url_hsc}\">{$url_hsc}</a>");
+								} else {
+									print ("{$url_hsc}");
+								}
+					?>
+				</td>
+
+				<td>
+					<?php
+								// issue #1069: the header is another raw feed-derived sink in
+								// this same table row -- HTML-encode it before it enters markup.
+								print (htmlspecialchars($row['header'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+					?>
+				</td>
+			</tr>
+
+				<?php
+							// Collect previous values
+							$p_type  	= $type;
+							$p_aliasname	= $row['aliasname'];
+				
+							endforeach;
+						endif;
+					endforeach;
+				endif;
+				?>
+
+			<tbody>
+			</table>
+		</div>
+	</div>
+</div>
+<?php include('foot.inc');?>
+
+<script type="text/javascript">
+//<![CDATA[
+
+events.push(function() {
+
+	$('input:radio[name^=alt_]').click(function() {
+		$('#save').trigger('click');
+	});
+});
+
+//]]>
+</script>

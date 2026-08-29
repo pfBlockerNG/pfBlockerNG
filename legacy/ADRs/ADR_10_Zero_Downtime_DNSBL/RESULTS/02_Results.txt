@@ -1,0 +1,190 @@
+================================================================================
+ADR-10 — PHASE 2 RESULTS — PREP (behaviour-preserving): bundle the matcher strata
+  into ONE immutable Snapshot behind a single module reference
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Files: src/usr/local/pkg/pfblockerng/pfb_unbound.py
+       tests/test_adr10_snapshot_equivalence.py (new)
+       tests/conftest.py (snapshot-aware reset)
+================================================================================
+
+OVERALL: ** DONE — GO for Phase 3. **
+  Pure, behaviour-preserving refactor. NO DNS decision changed. The matcher strata
+  are now held as one frozen Snapshot behind a single module ref; operate() captures
+  that ONE ref per query and reads every matcher field off it. The retained ADR-06 +
+  ADR-07 oracles pass UNCHANGED; a new field-for-field equivalence suite pins parity.
+  No background thread, no swap mechanism, no PHP/shell change (those are Phases 3-5).
+
+--------------------------------------------------------------------------------
+1. THE SNAPSHOT TYPE + EXACT FIELDS
+--------------------------------------------------------------------------------
+
+@dataclass(frozen=True) class Snapshot   (pfb_unbound.py, defined next to BuildResult)
+
+Fields (all stdlib, typed):
+  data_db:             dict[str, Any]    -> legacy global dataDB
+  zone_db:             dict[str, Any]    -> legacy global zoneDB
+  white_db:            dict[str, Any]    -> legacy global whiteDB
+  regex_db:            dict[str, Any]    -> legacy global regexDB (user REGEX-ini + feed block-regex)
+  allow_regex_db:      dict[str, Any]    -> legacy global allowRegexDB (feed @@/re/ allow)
+  feed_group_index_db: dict[int, Any]    -> legacy global feedGroupIndexDB
+  hsts_db:             dict[str, Any]    -> legacy global hstsDB
+  important_rules:     bool = False      -> the ABP fast-path gate (was pfb["important_rules"])
+  counts:              int  = 0          -> len(dataDB)+len(zoneDB) (UI pfb_py_count)
+  regex_count:         int  = 0          -> len(regexDB)+len(allowRegexDB) (UI DNSBL_Regex alias)
+
+Method:
+  Snapshot.containers() -> dict          -> rebuilds the EXACT legacy per-query
+       ``containers`` mapping (keys dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/
+       feedGroupIndexDB/hstsDB) that evaluate_domain reads, returning the SAME dict
+       objects the snapshot holds (identity preserved — required: ADR-07's regex
+       eviction mutates regex_db in place; a copy would lose the eviction).
+
+WHICH STRUCTURES ARE IN THE SNAPSHOT, AND WHY  (the deliberate completeness call)
+  INCLUDED — exactly the 7 strata the pre-refactor per-query ``containers`` assembly
+  fed evaluate_domain (the OLD :4140-4148 block), PLUS the important_rules fast-path
+  flag and the two UI counts:
+    dataDB, zoneDB, whiteDB, regexDB, allowRegexDB, feedGroupIndexDB, hstsDB,
+    important_rules, counts, regex_count.
+  This is verified against the actual code: evaluate_domain reads every matcher
+  structure via ``containers[...]`` (data/zone/white/regex/allow_regex/feed_group_
+  index/hsts) and via cfg["important_rules"]; _scan_block_band / _resolve_numeric_allow
+  receive data_db/zone_db/regex_db/white_db/allow_regex_db explicitly from those same
+  containers. So bundling these 7 + the flag covers EVERYTHING a query reads to make a
+  block/allow decision — nothing the matcher consumes is left as a separate mutable
+  global a future swap could tear.
+
+  hstsDB is INCLUDED deliberately even though build()/dnsbl_build_from_manifest do NOT
+  produce it (it is loaded from the static pfb_py_hsts.txt file): the completeness rule
+  is "every per-query container stratum", and hstsDB IS in the per-query containers and
+  IS read by evaluate_domain (hsts_check_domain). Leaving it out would leave a torn-read
+  hole. The future swap simply rebuilds it from the file alongside the manifest build.
+
+  EXCLUDED (with reason) — the operate()-level axes noAAAADB / safeSearchDB / gpListDB:
+    * They are NOT read by evaluate_domain and are NOT in the ``containers`` dict — they
+      are consumed directly in operate() on separate code paths (AAAA suppression,
+      SafeSearch redirect, group-policy bypass), not in the DNSBL block decision.
+    * They are NOT produced by build()/dnsbl_build_from_manifest (loaded from static
+      files), so they are not part of the matcher rebuild the swap installs.
+    * gpListDB is MUTATED IN PLACE per query (a group-policy bypass cache; operate()
+      pop/insert at runtime) — it is explicitly NOT an immutable swap target.
+    rcodeDB and maxmindReader are also out: they shape the REPLY (rcode map, GeoIP
+    logging), not the block decision. All of these stay as today's separate globals;
+    the ADR scope is the DNSBL matcher strata that build() produces and the swap
+    installs. Documented in the Snapshot docstring.
+
+--------------------------------------------------------------------------------
+2. WHERE THE SINGLE REF LIVES + HOW init/operate USE IT
+--------------------------------------------------------------------------------
+
+Single ref: module-level ``_snapshot: Snapshot`` (declared PEP-526 next to the other
+  matcher globals; the runtime object is created in init_standard).
+
+init_standard (the build+assign site): UNCHANGED build/load logic. init still populates
+  the scratch globals (dataDB/zoneDB/whiteDB/regexDB/allowRegexDB/feedGroupIndexDB/
+  hstsDB) exactly as before — from the manifest build() OR the legacy CSV fallback, plus
+  the user REGEX-ini load and the HSTS file load — then, just before pfb_setup_logging(),
+  BUNDLES them into one ``Snapshot(...)`` and assigns the single ``_snapshot`` ref. This
+  runs on BOTH the python_enable path and the else (empty-defaultdicts) path, so a
+  snapshot is always present. It is the future zero-downtime swap point (one GIL-atomic
+  rebind). The per-global assignment from build_result (dataDB = build_result.data_db,
+  …) is retained as init's scratch — the Snapshot wraps the same dict objects, so the
+  refactor is byte-identical (no copy, no shape change).
+
+operate(): captures the ONE ref ONCE per query — ``snap = _snapshot`` — at the start of
+  the DNSBL validation block (before the validate[] list, OUTSIDE the per-name CNAME
+  loop), so the original name AND every CNAME-chain target are evaluated against the
+  SAME immutable snapshot (a swap mid-query cannot tear a decision across names). Inside
+  the per-name loop the old per-global ``containers = {...}`` re-assembly is replaced by
+  ``containers = snap.containers()``. cfg (the boolean flags incl. important_rules) is
+  unchanged — those are config booleans, not strata.
+
+evaluate_domain SIGNATURE + BODY: UNCHANGED. It still takes (q_name, q_name_original,
+  tld, is_cname, cfg, containers) and reads containers["dataDB"] etc. This is WHY the
+  retained ADR-06/07 oracles (which call evaluate_domain with a literal containers dict)
+  stay green with zero edits — the refactor swapped the operate()-side plumbing only.
+
+Diff-read CONFIRMED: ``snap = _snapshot`` appears once (outside the loop);
+  ``containers = snap.containers()`` is the ONLY containers build in operate(); there is
+  no residual per-query re-assembly of containers from the separate globals.
+
+--------------------------------------------------------------------------------
+3. EQUIVALENCE PROOF + GATES
+--------------------------------------------------------------------------------
+
+New: tests/test_adr10_snapshot_equivalence.py (9 tests). It proves FIELD-FOR-FIELD
+  parity, not just "existing tests pass":
+   * For each query it asserts the LEGACY-global decision FIRST (the pre-state the
+     ADR-06/07 oracles trust), THEN asserts the Snapshot decision equals it via
+     dataclasses.astuple(before) == dataclasses.astuple(after) — every DnsblDecision
+     field (is_found, in_whitelist, in_hsts, null_blocking, log_type, b_type, p_type,
+     feed, group, b_eval). A green proves the Snapshot CAUSED no change.
+   * Completeness: asserts set(Snapshot.containers()) == the 7 legacy container keys
+     and that each value IS the same object (identity) the legacy assembly used.
+   * Frozen: asserts the Snapshot is immutable (FrozenInstanceError on field rebind).
+   * Branch coverage: ABP-OFF corpus (important_rules MUST be False — fast path) AND
+     ABP-ON corpus (important_rules MUST be True — numeric 6-band path: @@ allow,
+     $important block, irreducible regex), each WITHOUT and WITH a user whitelist
+     (exercising both the fast-path whitelist override and the numeric allow band).
+   * Single-ref: asserts init's single ``_snapshot`` ref is what operate() reads.
+
+Gates (all green):
+  .venv/bin/python -m pytest -q   -> 1028 passed   (1019 prior + 9 new)
+        - retained ADR-06 oracles: tests/test_adr06_*  PASS, UNCHANGED
+        - retained ADR-07 oracles: tests/test_adr07_*  PASS, UNCHANGED
+        - new equivalence:         tests/test_adr10_snapshot_equivalence.py  9 PASS
+  .venv/bin/ruff check .          -> All checks passed!
+  .venv/bin/ruff format --check . -> 40 files already formatted
+  .venv/bin/mypy tests/           -> Success: no issues found in 16 source files
+
+conftest.py: reset_pfb_globals now also builds ``_snapshot`` from the SAME default dict
+  objects it assigns to the bare globals. Test helpers (add_data/add_zone/…) mutate the
+  global dicts IN PLACE (never reassign), so those mutations are visible through the
+  snapshot by identity — mirroring how the shared dict objects behave at runtime. No
+  oracle test was modified; this is harness-only plumbing for the operate() integration
+  tests in test_pfb_unbound.py.
+
+--------------------------------------------------------------------------------
+4. SWAP WATCH-OUTS FOR PHASE 3/4
+--------------------------------------------------------------------------------
+
+(a) IN-PLACE REGEX EVICTION mutates the live snapshot's regex_db. ADR-07's runtime
+    perf-eviction (_regex_evict_names, invoked inside evaluate_domain) removes a slow
+    pattern from the live regex_db dict IN PLACE. The Snapshot is a frozen TUPLE of
+    fields, but the contained dicts are ordinary mutable dicts — so eviction still
+    mutates the snapshot's regex_db (correct: the matcher needs that). Reconciliation
+    for the swap (already foreseen in ADR.md SS2 / Consequences): a swap replaces the
+    WHOLE snapshot with a freshly-compiled regex set, so any evicted-pattern state is
+    rebuilt from the manifest + the static cap. Documented in the Snapshot docstring;
+    Phase 4 must rebuild regex_db in the new snapshot (it does, via build()).
+
+(b) hstsDB is loaded from a static file (pfb_py_hsts.txt), NOT from the manifest build.
+    The Phase-3 rebuild_and_swap() / Phase-4 watcher must (re)load hstsDB from that file
+    when constructing the new snapshot (init does this today at the file-load site) —
+    otherwise a swapped snapshot would carry an empty hsts_db and silently change the
+    HSTS-NULL-vs-VIP behaviour. Not a decision change in THIS phase (init loads it as
+    before); flagged so Phase 3's snapshot builder includes it.
+
+(c) The Snapshot's frozen-ness protects against a TORN field-by-field swap (you cannot
+    rebind one field), but it does NOT make the contained dicts read-only. The Phase-3/4
+    contract is: BUILD a brand-new Snapshot off-thread (build() is pure — mutates no
+    global), then rebind ``_snapshot`` in ONE GIL-atomic STORE. Never mutate the live
+    snapshot's dicts as a swap mechanism (eviction is the one sanctioned in-place
+    mutation, and it is per-pattern, not a swap).
+
+(d) counts / regex_count are carried on the Snapshot now (informational; the matcher
+    never reads them). Phase 4 should re-emit pfb_py_count / DNSBL_Regex from the NEW
+    snapshot after a swap (ADR.md "Counts" row) so the UI reflects the live lists
+    without a restart — the values are already on the snapshot to read.
+
+--------------------------------------------------------------------------------
+5. GO-AHEAD FOR PHASE 3
+--------------------------------------------------------------------------------
+GO. The matcher strata are one immutable Snapshot behind a single module ref; the swap
+seam is in place and consistent-by-construction; decisions are byte-identical (oracles
+green, equivalence test green). Phase 3 can now extract rebuild_and_swap() that builds a
+NEW Snapshot via the pure build()/dnsbl_build_from_manifest(), and ONLY on success
+rebinds ``_snapshot`` atomically + clears decisionDB + resets the Reports sqlite +
+re-emits counts (fail-closed: a None/raising build leaves the old _snapshot + caches
+intact). The Phase-3 snapshot builder must include the hstsDB file load (watch-out b)
+and rebuild regex_db (watch-out a).
+================================================================================

@@ -1,0 +1,125 @@
+# Context byte budgets + routing headers (map #1383, #1437) — a standalone
+# workflow, NOT a test.yml job: test.yml's global `paths-ignore` ('**/*.md')
+# would skip that entire workflow for an md-only change — the exact change
+# class this gate polices (the budgets gate re-accretion of the hot context,
+# and policy/docs edits land md-only, often pushed straight to devel). The
+# `paths` lists mirror scripts/check_context_budget.py's trigger surfaces and
+# are pinned by
+# tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
+name: Context budget
+
+on:
+  push:
+    branches: [main, devel]
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'GROK.md'
+      - '.github/copilot-instructions.md'
+      - '.claude/settings.json'
+      - 'scripts/check_context_budget.py'
+      - '.agents/policy/**'
+      - '.agents/context/**'
+      - 'docs/misc/**'
+      - '.claude/rules/**'
+      - '.grok/rules/**'
+      - '.claude/hooks/**'
+      - 'scripts/**'
+      - '**/AGENTS.md'
+      - '**/CLAUDE.md'
+      - '**/GROK.md'
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'GROK.md'
+      - '.github/copilot-instructions.md'
+      - '.claude/settings.json'
+      - 'scripts/check_context_budget.py'
+      - '.agents/policy/**'
+      - '.agents/context/**'
+      - 'docs/misc/**'
+      - '.claude/rules/**'
+      - '.grok/rules/**'
+      - '.claude/hooks/**'
+      - 'scripts/**'
+      - '**/AGENTS.md'
+      - '**/CLAUDE.md'
+      - '**/GROK.md'
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  context-budget:
+    name: Context byte budgets + routing headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Enforce context byte budgets + routing headers
+        # ubuntu-latest ships python3. --all: the workflow's own path filter
+        # already scopes when this runs; the check itself is sub-second.
+        run: python3 scripts/check_context_budget.py --all
+
+      - name: Red canary — the gate still rejects what it exists to reject
+        # This gate only ever runs green, so a disarmed checker (a budget check
+        # that stops firing, a rule wired out of run_checks) reads exactly like a
+        # clean tree, and today its failure mode surfaces only at commit time
+        # (#2829). Break the tree on purpose, twice, and require the matching
+        # violation each time. Every fixture is undone on the way out — including
+        # the failure paths, and restoring the ledger's exact bytes rather than
+        # its committed ones — so the block is also a safe local probe.
+        run: |
+          set -eu
+          canary='.agents/policy/zz-budget-canary.md'
+          ledger='.agents/policy/coderabbit-misses.md'
+          ledger_before="$(mktemp)"
+          cp -- "$ledger" "$ledger_before"
+          trap 'git rm -q --cached -- "$canary" 2>/dev/null || true
+                rm -f -- "$canary" canary.log
+                cp -- "$ledger_before" "$ledger" && rm -f -- "$ledger_before" \
+                  || echo "WARNING: $ledger not restored; its original bytes are at $ledger_before"' EXIT
+
+          expect_violation() {  # expect_violation <expected violation substring>
+            if python3 scripts/check_context_budget.py --all > canary.log 2>&1; then
+              echo "CANARY DID NOT FIRE — the gate passed a tree it must reject: $1"
+              cat canary.log
+              exit 1
+            fi
+            grep -qF "$1" canary.log || {
+              echo "CANARY fired for the wrong reason — wanted: $1"
+              cat canary.log
+              exit 1
+            }
+            echo "canary OK: $1"
+          }
+
+          # 1. An over-budget policy file (the 12,288-byte POLICY_BUDGET).
+          python3 -c "import sys; open(sys.argv[1], 'w').write('x' * 12289)" "$canary"
+          git add -- "$canary"
+          expect_violation "$canary: 12289 bytes > budget 12288"
+          git rm -q --cached -- "$canary"
+          rm -f -- "$canary"
+
+          # 2. A missed-review ledger entry back in narrative shape (#2829):
+          #    39 bytes of documented entry plus a 1,900-byte review story.
+          python3 - "$ledger" <<'PY'
+          import sys
+
+          with open(sys.argv[1], "a", encoding="utf-8") as fh:
+              fh.write("- `deadbeef`  a canary entry  (#1) — " + "y" * 1900 + "\n")
+          PY
+          expect_violation "entry is 1939 bytes > cap 200"
+          cp -- "$ledger_before" "$ledger"
+
+          rm -f canary.log
+          python3 scripts/check_context_budget.py --all

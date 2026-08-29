@@ -1,0 +1,124 @@
+================================================================================
+PHASE 2 PROMPT — Implement pfb_mime_normalise() and wire into constant 17
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_44_MIME_Normalization/ADR.md   (read §2 Decision and §6 Phase 2 first)
+================================================================================
+
+ROLE
+Branch: adr/44-mime-normalisation (off devel)
+Phase 2 of 4 — core behaviour-changing phase.
+Inline on adr/44-mime-normalisation, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phase 1 pinned the current (buggy) behaviour: valid ZIPs packaged by non-canonical
+tools produce MIME strings like `application/x-zip-compressed` that are rejected
+by pfb_filter() because only `application/zip` is in the allow-list. This phase
+introduces the normalisation pass that rewrites those variant strings to their
+canonical forms BEFORE the allow-list lookup — fixing the rejections without
+modifying the allow-list itself.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_44_MIME_Normalization/RESULTS/01_Results.txt
+  Confirm it records the red-baseline for application/x-zip-compressed and
+  application/x-zip, and that pfb_mime_in_allowlist() was extracted. If this file
+  is missing, the previous phase is not complete; STOP and report.
+- .ADRs/ADR_44_MIME_Normalization/ADR.md  (§2 Decision — normalisation map, rules, logging)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    pfb_filter(), pfb_mime_in_allowlist() (from Phase 1), $pfb['mime_types'],
+    PFB_FILTER_FILE_MIME (17), existing debug-log helpers.
+- CLAUDE.md  (commit style, test coverage non-negotiables — red→green evidence required)
+
+ACTION PLAN (ordered)
+
+1. Add the pure helper function to pfblockerng.inc:
+
+       function pfb_mime_normalise(string $raw): string
+
+   Normalisation map (exact match first, then substring):
+     'application/x-zip-compressed'  → 'application/zip'
+     'application/x-zip'             → 'application/zip'
+     any string where stripos($raw, 'zip') !== false → 'application/zip'
+     'application/x-gzip'            → 'application/gzip'
+   Any string NOT matching a rule is returned unchanged.
+
+   The function is pure (no I/O, no globals).
+
+2. Wire pfb_mime_normalise() into the PFB_FILTER_FILE_MIME (17) branch of
+   pfb_filter(), immediately after the raw `file` output is obtained and BEFORE
+   the pfb_mime_in_allowlist() call:
+
+       $mime_raw = <existing file exec result>;
+       $mime     = pfb_mime_normalise($mime_raw);
+       if ($mime !== $mime_raw) {
+           pfb_logger("MIME normalised: raw=\"{$mime_raw}\" -> canonical=\"{$mime}\"", <debug_level>);
+       }
+       // then pfb_mime_in_allowlist($mime, $pfb['mime_types']) as before
+
+   Use the existing pfb_logger() / pfb_log() debug helper — match the log-level
+   constant used elsewhere in pfb_filter() for debug output.
+
+3. Do NOT change PFB_FILTER_FILE_MIME_COMPRESSED (18) or PFB_FILTER_FILE_MIME_COMPARE (16).
+   Do NOT modify $pfb['mime_types'].
+   Do NOT modify hostname exception paths.
+
+4. Write PHPUnit tests. These MUST fail on the Phase 1 code (before this commit)
+   and pass after. Prove and record the red→green evidence in the handoff.
+
+   Unit tests for pfb_mime_normalise():
+     test_normalise_x_zip_compressed_to_zip()
+     test_normalise_x_zip_to_zip()
+     test_normalise_zip_substring_case_insensitive()   — e.g. 'Application/X-ZIP'
+     test_normalise_x_gzip_to_gzip()
+     test_normalise_octet_stream_unchanged()
+     test_normalise_text_plain_unchanged()
+     test_normalise_empty_string_unchanged()
+     test_normalise_canonical_zip_unchanged()           — 'application/zip' → 'application/zip'
+
+   Integration test (uses pfb_filter() or pfb_mime_in_allowlist() + normalise together):
+     test_pfb_filter_mime_accepts_x_zip_compressed_after_normalise()
+       — simulate: raw='application/x-zip-compressed'; after normalise → 'application/zip';
+         pfb_mime_in_allowlist('application/zip', $pfb['mime_types']) → true.
+
+5. Re-run the full oracle suite from Phase 1. All must still pass (the previously-
+   red assertFalse pins for x-zip-compressed and x-zip should now be re-examined:
+   those tests pin the allow-list lookup in isolation — they should still be false
+   for the raw strings because pfb_mime_in_allowlist() itself hasn't changed; the
+   integration test above demonstrates the end-to-end fix).
+
+CONSTRAINTS
+- pfb_mime_normalise() is a pure function — no exec(), no file I/O, no globals.
+- Only constant 17 (PFB_FILTER_FILE_MIME) is modified; 16 and 18 are untouched.
+- No changes to $pfb['mime_types'] array.
+- No new Composer production dependencies.
+- PHP 8.3 compatible.
+
+VERIFICATION (must all pass before this phase is done)
+- vendor/bin/phpunit                → green (all Phase 1 oracle + all Phase 2 tests)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc  → no syntax errors
+- git diff --stat                   → only pfblockerng.inc and test file(s)
+- Review your own git diff: confirm pfb_mime_normalise() is wired BEFORE the
+  allow-list lookup in constant-17 branch; confirm 16 and 18 are untouched.
+
+EXPECTED RESULT
+- pfb_mime_normalise() exists, is pure, maps variant strings correctly.
+- It is called in constant-17 branch before pfb_mime_in_allowlist().
+- Debug-level log fires when normalisation changes the string.
+- All Phase 2 unit and integration tests are green.
+- All Phase 1 oracle tests remain green.
+- Handoff records red→green evidence (run tests against Phase 1 commit first to
+  capture the red; then against this commit to capture the green).
+
+COMMIT (single)
+    pfb_filter: add pfb_mime_normalise() + wire into MIME gate (ADR-42 P2)
+Push directly to adr/42-mime-normalisation.
+Open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_MIME_Normalization/RESULTS/02_Results.txt
+Include:
+- Confirmation pfb_mime_normalise() was added and wired into constant-17.
+- Red→green evidence: test names + result before (red) and after (green) this commit.
+- PHPUnit summary line (all tests, assertions, 0 failures).
+- Confirmation that constants 16 and 18 were NOT modified (cite git diff line count).
+- Commit hash and push confirmation.
+- Any watch-out for Phase 3 (TODO comment location in ZIP branch, line reference).

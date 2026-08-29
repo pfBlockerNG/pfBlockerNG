@@ -1,0 +1,772 @@
+"""ADR-65 live-VM smoke rows: the read-only query channel, fail-loud + self-heal,
+and webserver-hit widget attribution (SS7 checklist rows (a)-(c)).
+
+ADR-65 makes the DNSBL manifest the single source of truth for Python-mode DNSBL
+and retires the interchange-file (``pfb_py_data.txt``/``pfb_py_zone.txt``) grep
+that used to attribute a block. These rows automate SS7's manual-smoke checklist
+for the three accepted deltas a real box can prove and an off-appliance harness
+cannot (the query channel only answers on a live matcher):
+
+* **D4 + Semantic 3** (``test_query_channel_verdict_matches_block_with_no_side_effects``):
+  ``pfb_dnsbl_query()`` mirrors a real block's group/feed exactly, and the query
+  itself adds NO dnsbl.log line and NO counter bump -- proven
+  by a second, independent real block (an ordering barrier) whose own effects are
+  the only ones that land after the query.
+* **D3** (``test_manifest_absent_fails_loud_and_force_reload_self_heals``): an
+  absent manifest yields NO stale block, a widget-visible open ledger entry, and
+  a GUI notice -- then a Force Reload self-heals (block resumes, ledger closes).
+* **D4** (``test_vip_hit_increments_widget_counter_with_query_group``): a real
+  sinkhole (VIP block-page) hit attributes via the SAME query channel the DNS
+  path uses, and its widget counter increments by exactly the observed event count.
+
+Plus one teardown-contract row (``test_notice_teardown_closes_every_row_of_its_id``,
+issue #2478): the module's notice teardown drains EVERY row carrying its id, so the
+next case's before-state is genuinely clean.
+
+DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``).
+Run via the smoke workflow or locally::
+
+    python -m pytest tests/smoke -m smoke --override-ini="addopts="
+
+Requires the booted ``smoke_vm`` fixture, the branch ``.pkg`` (``SMOKE_PKG``), and
+the smoke deps; without them these tests skip cleanly.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+
+from . import helpers as h
+from .conftest import SmokeVM
+
+pytestmark = pytest.mark.smoke
+
+_MANIFEST_PATH = "/var/unbound/pfb_py_sources.json"
+_DNSBL_SQLITE = "/var/unbound/pfb_py_dnsbl.sqlite"
+_UNBOUND_PY_DATA = "/var/unbound/pfb_py_data.txt"
+_UNBOUND_PY_ZONE = "/var/unbound/pfb_py_zone.txt"
+_LEGACY_REPORT_CACHE_FAMILY = (
+    "/var/unbound/pfb_py_cache.sqlite",
+    "/var/unbound/pfb_py_cache.sqlite-wal",
+    "/var/unbound/pfb_py_cache.sqlite-shm",
+)
+_MANIFEST_NOTICE_ID = "pfBlockerNG DNSBL"
+
+
+@pytest.fixture(scope="module")
+def adr65_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
+    """Deploy the branch .pkg once for this module + inject the DNSBL sinkhole VIP.
+
+    Mirrors ``test_smoke_adr40.py``'s ``adr40_vm``: egress stays OPEN throughout
+    (each ``CaseContext`` manages its own per-case block); ``inject()`` writes a
+    SINGLE-element DNSBL list config (replacing, not appending), so no other feed
+    ever competes for egress during a reload here.
+    """
+    if not os.environ.get("SMOKE_PKG"):
+        pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
+    h.deploy(smoke_vm)
+    h.ensure_dnsbl_vip(smoke_vm)
+    try:
+        yield smoke_vm
+    finally:
+        h.unblock_egress()
+        h.collect_host_diagnostics(smoke_vm)
+
+
+# --------------------------------------------------------------------------- #
+# dnsbl.log helpers. ONE path only: pfb_unbound_include.inc nullfs-mounts
+# /var/log/pfblockerng rw at {chroot}/var/log/pfblockerng, so the chroot path is
+# the SAME file -- grepping both counts every line twice, which an exact-count
+# assertion (this module pins "the query adds NO line") cannot tolerate.
+# --------------------------------------------------------------------------- #
+
+_DNSBL_LOG_PATHS = ("/var/log/pfblockerng/dnsbl.log",)
+_DNSBL_LOG_EVENT_APPLIED = "/var/log/pfblockerng/dnsbl.log.applied"
+
+
+def _dnsbl_log_hits(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> int:
+    """Count dnsbl.log lines containing ``needle`` (single path: chroot nullfs-aliases host)."""
+    res = vm.ssh("grep", "-hcF", "--", needle, *_DNSBL_LOG_PATHS, timeout=timeout)
+    return sum(int(tok) for tok in res.stdout.split() if tok.isdigit())
+
+
+def _dnsbl_log_line(vm: SmokeVM, needle: str, *, timeout: float = 30.0) -> str:
+    """First dnsbl.log line containing ``needle`` (single path); raises loudly if none."""
+    res = vm.ssh("grep", "-hF", "--", needle, *_DNSBL_LOG_PATHS, timeout=timeout)
+    lines = [ln for ln in res.stdout.splitlines() if ln]
+    if not lines:
+        raise RuntimeError(
+            f"no dnsbl.log line found for {needle!r}: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+    return lines[0]
+
+
+def _wait_dnsbl_log_event_applied(vm: SmokeVM, domain: str, *, timeout: float = 30.0, poll: float = 2.0) -> None:
+    """Poll the exact post-``pfb_log_event`` marker for ``domain`` or fail loudly."""
+    expected = f"DNSBL-Full,{domain}"
+    deadline = time.monotonic() + timeout
+    result = None
+    while True:
+        result = vm.ssh("cat", _DNSBL_LOG_EVENT_APPLIED, timeout=15.0)
+        if result.stdout.splitlines() == [expected]:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: "
+                f"_wait_dnsbl_log_event_applied awaited exact single-line marker {expected!r} "
+                f"at {_DNSBL_LOG_EVENT_APPLIED}; observed cat rc={result.returncode} "
+                f"stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        time.sleep(min(poll, remaining))
+
+
+# --------------------------------------------------------------------------- #
+# Per-group dnsbl SQLite counter -- mirrors test_smoke_upstream_block's
+# _read_upstream_counter (busyTimeout, absent-vs-error distinction), parametrized
+# on the group instead of the fixed 'Upstream' row.
+# --------------------------------------------------------------------------- #
+
+_CTR_OPEN, _CTR_CLOSE = "<<<ADR65CTR>>>", "<<<ADR65CTREND>>>"
+
+
+def _parse_counter_output(out: str) -> tuple[int, str]:
+    start, end = out.find(_CTR_OPEN), out.find(_CTR_CLOSE)
+    if start == -1 or end == -1:
+        return -2, f"no delimited counter in pfSsh.php output: {out[-500:]!r}"
+    payload = out[start + len(_CTR_OPEN) : end]
+    if "|" not in payload:
+        return -2, f"unparsable counter payload (no '|' separator): {payload!r}"
+    value_str, _, message = payload.partition("|")
+    try:
+        return int(value_str), message
+    except ValueError:
+        return -2, f"non-integer counter value {value_str!r} in payload {payload!r}"
+
+
+def _read_group_counter(vm: SmokeVM, group: str, *, timeout: float = 60.0) -> tuple[int, str]:
+    """Read the on-box dnsbl SQLite 'counter' for ``groupname = group``.
+
+    Returns ``(-1, "")`` absent, ``(-2, detail)`` errored, else ``(counter, "")``.
+    """
+    snippet = (
+        "$__c = -1; $__m = '';\n"
+        "try {\n"
+        f"    $__db = new SQLite3({h._php_str(_DNSBL_SQLITE)});\n"
+        "    $__db->enableExceptions(TRUE);\n"
+        "    $__db->busyTimeout(15000);\n"
+        f"    $__g = $__db->escapeString({h._php_str(group)});\n"
+        "    $__r = $__db->querySingle(\"SELECT counter FROM dnsbl WHERE groupname = '{$__g}'\");\n"
+        "    if ($__r === NULL) { $__c = -1; }\n"
+        "    elseif ($__r === FALSE) { $__c = -2; $__m = 'querySingle returned FALSE'; }\n"
+        "    else { $__c = (int) $__r; }\n"
+        "    try { $__db->close(); } catch (Throwable $__ignored) {}\n"
+        "} catch (Throwable $__e) { $__c = -2; $__m = $__e->getMessage(); }\n"
+        f"echo '{_CTR_OPEN}' . $__c . '|' . $__m . '{_CTR_CLOSE}';\n"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    if res.returncode != 0:
+        return -2, f"php_eval failed (rc={res.returncode}): stderr={res.stderr[-500:]!r}"
+    return _parse_counter_output(res.stdout or "")
+
+
+def _query_domain(vm: SmokeVM, domain: str, *, timeout: float = 60.0) -> dict[str, Any]:
+    """Call the ADR-65 read-only query channel (pfb_dnsbl_query) for ``domain``."""
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        f"$v = pfb_dnsbl_query({h._php_str(domain)});\n"
+        "echo '<<<Q>>>' . json_encode($v) . '<<<QE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<Q>>>"), out.find("<<<QE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"pfb_dnsbl_query({domain!r}) php_eval failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    verdict = json.loads(out[start + len("<<<Q>>>") : end])
+    assert isinstance(verdict, dict), f"expected a JSON object from pfb_dnsbl_query, got {verdict!r}"
+    return verdict
+
+
+# --------------------------------------------------------------------------- #
+# Row (a): the query channel is decision-equal and side-effect-free
+# (ADR-65 D4 + Semantic 3; folds in the D1 no-interchange-files assert).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(300)  # two real blocks and their async counter/log flushes exceed the default tier
+def test_query_channel_verdict_matches_block_with_no_side_effects(adr65_vm: SmokeVM) -> None:
+    """ADR-65 D4 + Semantic 3: pfb_dnsbl_query mirrors a real block, with ZERO query side effects.
+
+    Given: two unique domains share one feed; domain1 is the query subject,
+    domain2 is a later real block used as an ORDERING BARRIER -- its own log
+    line / counter bump bound how far any query side effect (if
+    one existed) could have propagated by the time it settles.
+
+    When: domain1 is drilled on-box (the real block -- writes exactly one
+    dnsbl.log line and bumps its group's counter), then ``pfb_dnsbl_query``
+    asks the same question over the read-only channel.
+
+    Then: the query verdict's group/feed equal the log line's own group/feed
+    byte-for-byte, AND after domain2's real block settles, domain1's own
+    log-hit count / counter are UNCHANGED from their
+    real-block values -- the query added nothing.
+    """
+    domain1 = h.unique_domain("adr65q1")
+    domain2 = h.unique_domain("adr65q2")
+    feed = h.write_local_feed(adr65_vm, "adr65_query.txt", f"{domain1}\n{domain2}\n")
+    spec = h.DnsblCase(aliasname="adr65query", feed_url=feed, header="adr65queryhdr", mode=h.DnsblMode.VIP)
+
+    with h.CaseContext(adr65_vm, spec):
+        # BEFORE: neither domain has ever been logged.
+        assert _dnsbl_log_hits(adr65_vm, domain1) == 0, f"{domain1} already in dnsbl.log before listing"
+        assert _dnsbl_log_hits(adr65_vm, domain2) == 0, f"{domain2} already in dnsbl.log before listing"
+
+        # Real block #1 (the query subject): domain1.
+        answer1 = h.dns_probe(adr65_vm, domain1)
+        assert h.is_vip(answer1), f"expected VIP block for {domain1!r}, got {answer1!r}"
+
+        deadline = time.monotonic() + 30.0
+        hits1 = 0
+        while True:
+            hits1 = _dnsbl_log_hits(adr65_vm, domain1)
+            if hits1 >= 1:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: "
+                    f"query-channel domain1 awaited dnsbl.log marker containing {domain1!r}; "
+                    f"observed hits={hits1}"
+                )
+            time.sleep(min(1.0, remaining))
+        assert hits1 == 1, f"expected exactly one dnsbl.log line for {domain1}, got {hits1}"
+
+        line1 = _dnsbl_log_line(adr65_vm, domain1)
+        fields1 = line1.split(",")
+        assert len(fields1) > 8, f"unexpected dnsbl.log line shape for {domain1}: {line1!r}"
+        group1, feed1 = fields1[6], fields1[8]
+        assert group1, f"empty group parsed from dnsbl.log line: {line1!r}"
+
+        c1, detail1 = _read_group_counter(adr65_vm, group1)
+        assert c1 >= 0, f"could not read the {group1!r} counter after {domain1}'s block: {detail1}"
+
+        # THE QUERY: same domain, read-only channel.
+        verdict = _query_domain(adr65_vm, domain1)
+        assert verdict["blocked"] is True, f"expected blocked=true for {domain1!r}, got {verdict!r}"
+        assert verdict["group"] == group1, (
+            f"query group {verdict['group']!r} != dnsbl.log group {group1!r} for {domain1!r} (line: {line1!r})"
+        )
+        assert verdict["feed"] == feed1, (
+            f"query feed {verdict['feed']!r} != dnsbl.log feed {feed1!r} for {domain1!r} (line: {line1!r})"
+        )
+
+        # BARRIER: a real block for domain2 (SAME group -- one feed, one list) --
+        # its own log line + counter bump bound how far the query's side effects (if
+        # any) could have reached by the time it settles.
+        answer2 = h.dns_probe(adr65_vm, domain2)
+        assert h.is_vip(answer2), f"expected VIP block for {domain2!r}, got {answer2!r}"
+
+        deadline = time.monotonic() + 30.0
+        hits2 = 0
+        c2 = c1
+        detail2 = ""
+        while True:
+            hits2 = _dnsbl_log_hits(adr65_vm, domain2)
+            c2, detail2 = _read_group_counter(adr65_vm, group1)
+            if hits2 >= 1 and c2 >= c1 + 1:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "salvage cap expired / stuck or environment: "
+                    f"query-channel domain2 awaited dnsbl.log marker containing {domain2!r} "
+                    f"and group={group1!r} counter >= target={c1 + 1}; observed hits={hits2} "
+                    f"current={c2} detail={detail2!r}"
+                )
+            time.sleep(min(1.0, remaining))
+        assert hits2 == 1, f"expected exactly one dnsbl.log line for {domain2}, got {hits2}"
+        assert c2 == c1 + 1, (
+            f"expected group {group1!r} counter to be EXACTLY {c1 + 1} after {domain2}'s block "
+            f"(baseline {c1} included domain1's own increment) -- got {c2}: the query between them "
+            "must not have added its own increment"
+        )
+        # ZERO-SIDE-EFFECT (Semantic 3): domain1's own hit count is UNCHANGED by the
+        # query that ran between its block and domain2's block. The counter + log-line
+        # axes above are the observable side-effect proof.
+        hits1_after = _dnsbl_log_hits(adr65_vm, domain1)
+        assert hits1_after == 1, (
+            f"expected {domain1}'s dnsbl.log hit count to stay 1 after the query, got {hits1_after} "
+            "-- pfb_dnsbl_query must add no log line (ADR-65 Semantic 3)"
+        )
+        # D1 fold-in (RESULTS/06 carry-forward): the retired interchange files are
+        # never (re)written by this update pass.
+        for retired in (_UNBOUND_PY_DATA, _UNBOUND_PY_ZONE):
+            check = adr65_vm.ssh(f"test -f {retired} && echo PRESENT || echo ABSENT")
+            assert "ABSENT" in check.stdout, (
+                f"ADR-65 D1: {retired} unexpectedly present after an update pass -- the retired "
+                f"interchange file must never be (re)written: {check.stdout!r}"
+            )
+        # Issue #1349: the retired reports DB and both exact SQLite sidecars stay
+        # absent after a real update and live block traffic.
+        for retired in _LEGACY_REPORT_CACHE_FAMILY:
+            check = adr65_vm.ssh(f"test -e {retired} && echo PRESENT || echo ABSENT")
+            assert "ABSENT" in check.stdout, f"retired cache artifact survived: {retired}: {check.stdout!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Row (b): manifest-absent fails loud + self-heals on Force Reload (ADR-65 D3).
+# --------------------------------------------------------------------------- #
+
+
+def _unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """Current Unbound PID ('' when it is not running)."""
+    res = vm.ssh("pgrep -x unbound || true", timeout=timeout)
+    return res.stdout.strip().split("\n")[0].strip()
+
+
+def _restart_unbound(vm: SmokeVM, *, timeout: float = 120.0) -> None:
+    """Restart Unbound through pfSense's own service path and wait for the NEW process to
+    serve DNS -- RAISE loudly on timeout.
+
+    ``services_unbound_configure()`` restarts asynchronously. Waiting for "unbound-control
+    answers" or even "some answer comes back" is NOT enough: the OUTGOING process keeps
+    serving during the gap, satisfies the check, and then dies under the next query (that
+    is precisely how the CI legs failed with "could not send or receive"). So pin the
+    handover: the PID must CHANGE, and the new process must answer a throwaway name --
+    never the name under test, whose first post-restart answer must stay authoritative.
+    """
+    before = _unbound_pid(vm)
+    res = h.php_eval(vm, "services_unbound_configure();\necho 'OK';", timeout=timeout)
+    if res.returncode != 0 or "OK" not in res.stdout:
+        raise RuntimeError(
+            f"_restart_unbound: services_unbound_configure failed: rc={res.returncode} "
+            f"stdout={res.stdout!r} stderr={res.stderr!r}"
+        )
+    h.wait_unbound_ready(vm)
+
+    ready_name = h.unique_domain("adr65ready")
+    deadline = time.monotonic() + timeout
+    last = ""
+    while time.monotonic() < deadline:
+        now = _unbound_pid(vm)
+        if now and now != before:
+            try:
+                h.dns_probe(vm, ready_name)
+                return
+            except RuntimeError as exc:
+                last = str(exc)
+        else:
+            last = f"pid still {now!r} (was {before!r})"
+        time.sleep(2.0)
+    raise AssertionError(f"Unbound never handed over to a new, answering process within {timeout:.0f}s: {last}")
+
+
+def _wait_resolver_answers(vm: SmokeVM, *, deadline_s: float = 120.0) -> None:
+    """Block until the resolver answers again -- RAISE loudly on timeout.
+
+    Used after a DNSBL update pass, which can also leave the resolver briefly unreachable
+    on the CI boxes. Queries a THROWAWAY name so the name under test keeps its first
+    authoritative answer (a readiness gate, never a poll for an expected value).
+    """
+    ready_name = h.unique_domain("adr65ready")
+    deadline = time.monotonic() + deadline_s
+    last = ""
+    while time.monotonic() < deadline:
+        try:
+            h.dns_probe(vm, ready_name)
+            return
+        except RuntimeError as exc:
+            last = str(exc)
+            time.sleep(2.0)
+    raise AssertionError(f"resolver never answered again within {deadline_s:.0f}s: {last}")
+
+
+def _sync_status_list_open(
+    vm: SmokeVM, *, dnsbldir: str = "/var/unbound", timeout: float = 60.0
+) -> list[dict[str, Any]]:
+    """The widget's own ledger reader: pfb_py_sync_status_list_open($pfb['dnsbldir'])."""
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        f"echo '<<<L>>>' . json_encode(pfb_py_sync_status_list_open({h._php_str(dnsbldir)})) . '<<<LE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<L>>>"), out.find("<<<LE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"pfb_py_sync_status_list_open failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    data = json.loads(out[start + len("<<<L>>>") : end])
+    assert isinstance(data, list), f"expected a JSON list from pfb_py_sync_status_list_open, got {data!r}"
+    return data
+
+
+def _manifest_failure_notice_fired(vm: SmokeVM, *, timeout: float = 60.0) -> bool:
+    """Call the production epilogue function that raises the GUI notice for an open
+    manifest parse-stage ledger entry (pfblockerng.inc:8954)."""
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
+        "$fired = pfb_dnsbl_manifest_failure_notice();\n"
+        "echo '<<<N>>>' . ($fired ? '1' : '0') . '<<<NE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<N>>>"), out.find("<<<NE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"pfb_dnsbl_manifest_failure_notice() call failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    return out[start + len("<<<N>>>") : end] == "1"
+
+
+def _count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0) -> int:
+    """How many get_notices() rows carry ``needle`` -- mirrors test_software_update's
+    count_matching_notices (module-local copy; this module imports no other test module)."""
+    snippet = (
+        "$n = 0;\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
+        f"  if (strpos((string)($row['notice'] ?? ''), {h._php_str(needle)}) !== FALSE) {{ $n++; }}\n"
+        "}\n"
+        "echo '<<<NC>>>' . $n . '<<<NCE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<NC>>>"), out.find("<<<NCE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"count_matching_notices({needle!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    return int(out[start + len("<<<NC>>>") : end])
+
+
+def _close_all_notices(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) -> None:
+    """Close EVERY notice carrying ``notice_id`` -- teardown, leaves the VM clean.
+
+    ``close_notice($id)`` removes ONE row per call -- the first row in queue order carrying
+    that id -- and ``file_notice`` appends a timestamp-keyed row per call without replacing
+    an earlier row of the same id, so a single call leaves every later row standing (issue
+    #2478, the ``pfBlockerNG`` sibling of #2465). Close by timestamp key, one call per
+    matching row, then re-count: the teardown is its own oracle and raises if any row of
+    ``notice_id`` survives.
+    """
+    snippet = (
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {h._php_str(notice_id)}) {{ close_notice($key); }}\n"
+        "}\n"
+        "$left = 0;\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {h._php_str(notice_id)}) {{ $left++; }}\n"
+        "}\n"
+        "echo '<<<NL>>>' . $left . '<<<NLE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<NL>>>"), out.find("<<<NLE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"_close_all_notices({notice_id!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    left = int(out[start + len("<<<NL>>>") : end])
+    if left != 0:
+        raise RuntimeError(f"_close_all_notices left {left} notice(s) with id {notice_id!r} standing")
+
+
+def _file_two_notice_rows(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 60.0) -> None:
+    """File TWO queue rows carrying ``notice_id`` and ``notice``.
+
+    ``file_notice`` keys each row by timestamp and bumps the key while one is taken, so
+    two calls in the same second still yield two rows; the caller's ``== 2`` precondition
+    fails loudly if that ever stops holding.
+    """
+    snippet = (
+        f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
+        f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
+        "echo '<<<NF>>>OK<<<NFE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    if res.returncode != 0 or "<<<NF>>>OK<<<NFE>>>" not in out:
+        raise RuntimeError(
+            f"file_notice({notice_id!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+
+
+@pytest.mark.timeout(300)  # six pfSsh.php round-trips exceed the smoke tier's 30s default
+def test_notice_teardown_closes_every_row_of_its_id(smoke_vm: SmokeVM) -> None:
+    """The teardown drains EVERY row carrying our id, not just the oldest (issue #2478).
+
+    pfSense's ``close_notice($id)`` removes ONE row per call -- the first row in queue
+    order carrying that id -- and ``file_notice`` appends a timestamp-keyed row per call
+    without de-duplicating by id, so a two-row queue survives a single close. Five
+    production sites file the ``pfBlockerNG DNSBL`` id (the ``pfblockerng.inc`` VIP
+    notice, manifest-not-loaded x3, raw-generation publish failure), so this module's
+    teardown routinely faces more than one row.
+    """
+    needle = f"adr65 teardown probe {h.unique_domain('adr65notice')}"
+    assert _count_matching_notices(smoke_vm, needle) == 0, f"probe needle {needle!r} was already in the queue"
+
+    try:
+        _file_two_notice_rows(smoke_vm, _MANIFEST_NOTICE_ID, needle)
+        filed = _count_matching_notices(smoke_vm, needle)
+        assert filed == 2, f"expected both filed probe rows to be queued, got {filed}"
+
+        _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
+        left = _count_matching_notices(smoke_vm, needle)
+        assert left == 0, f"the teardown left {left} probe row(s) standing"
+    finally:
+        _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
+
+
+@pytest.mark.timeout(300)  # a full DNSBL update pass + the swap-applied wait exceeds the smoke tier's 30s default
+def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeVM) -> None:
+    """ADR-65 D3: an absent DNSBL manifest yields NO stale block, a widget-visible
+    open ledger entry, and a GUI notice -- then a Force Reload self-heals.
+
+    Given: a unique domain VIP-blocks while the manifest is healthy (before-state).
+    When: the manifest file is deleted and Unbound is raw-bounced (``init()`` re-runs
+      ``dnsbl_build_from_manifest`` against the now-absent file -- opens a 'parse'
+      ledger entry, D3's fail-loud arm); the domain no longer answers the VIP or
+      NULL block shape (no stale serve); the widget's own status reader shows the
+      open ledger entry; and the production ``pfb_dnsbl_manifest_failure_notice()``
+      fires a GUI notice naming it.
+    Then: unblocking egress + a Force Reload rebuilds the manifest -- the domain
+      VIP-blocks again AND the ledger entry is gone (closed on success, ADR §2.3).
+    """
+    domain = h.unique_domain("adr65heal")
+    feed = h.write_local_feed(adr65_vm, "adr65_heal.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="adr65heal", feed_url=feed, header="adr65healhdr", mode=h.DnsblMode.VIP)
+
+    try:
+        with h.CaseContext(adr65_vm, spec):
+            # BEFORE: the domain blocks while the manifest is healthy.
+            answer = h.dns_probe(adr65_vm, domain)
+            assert h.is_vip(answer), f"expected VIP block for {domain!r} before breaking the manifest, got {answer!r}"
+
+            # BREAK: delete the manifest, then raw-bounce Unbound so init() re-runs
+            # dnsbl_build_from_manifest against the now-absent file.
+            rm = adr65_vm.ssh(f"rm -f {_MANIFEST_PATH}")
+            assert rm.returncode == 0, f"failed to remove {_MANIFEST_PATH}: rc={rm.returncode} stderr={rm.stderr!r}"
+            _restart_unbound(adr65_vm)
+
+            # NO STALE BLOCK: with the manifest absent, DNSBL is empty -- egress is
+            # blocked inside CaseContext, so the honest expectation for a domain that
+            # is no longer matched is a non-block-shaped answer (SERVFAIL/NXDOMAIN
+            # both satisfy it -- there is no upstream to resolve it either way).
+            broken = h.dns_probe(adr65_vm, domain)
+            assert not h.is_vip(broken) and not h.is_null_ip(broken), (
+                f"expected a non-block answer for {domain!r} with the manifest absent "
+                f"(no stale serve, ADR-65 D3), got {broken!r}"
+            )
+
+            # WIDGET OUT-OF-SYNC: the manifest's own status reader shows the open
+            # parse-stage ledger entry for pfb_py_sources.json.
+            entries = _sync_status_list_open(adr65_vm)
+            parse_entries = [
+                e
+                for e in entries
+                if e.get("stage") == "parse" and os.path.basename(str(e.get("item", ""))) == "pfb_py_sources.json"
+            ]
+            assert parse_entries, f"expected an open parse-stage ledger entry for pfb_py_sources.json: {entries!r}"
+
+            # FILE_NOTICE: the production epilogue function fires the GUI notice.
+            fired = _manifest_failure_notice_fired(adr65_vm)
+            assert fired, "pfb_dnsbl_manifest_failure_notice() did not report firing a notice"
+            matching = _count_matching_notices(adr65_vm, "DNSBL manifest not loaded")
+            assert matching >= 1, f"expected a get_notices() row containing 'DNSBL manifest not loaded', got {matching}"
+
+            # SELF-HEAL: unblock egress (the update pass needs it) and Force Reload --
+            # this regenerates the manifest via pfb_unbound_python_sources.
+            h.unblock_egress()
+            # data_path=True waits on the zero-downtime swap-applied signal (and RAISES if
+            # it never appears). The default only polls `unbound-control status`, which the
+            # restart already satisfied -- the probe would race the module's rebuild.
+            h.reload(adr65_vm, "updatednsbl", data_path=True)
+            # The no-stale-block probe above provoked an NXDOMAIN for this exact name, which
+            # Unbound negative-caches; a feed allow->block is TTL-bounded by design, so clear
+            # that one cached answer to observe the swapped block inside the test window.
+            h.flush_unbound_name(adr65_vm, domain)
+            # The update pass can leave the resolver briefly unreachable on the CI boxes too
+            # (same async-restart gap as above) -- gate on a real answer before the probe
+            # whose value we assert.
+            _wait_resolver_answers(adr65_vm)
+
+            healed = h.dns_probe(adr65_vm, domain)
+            assert h.is_vip(healed), f"expected VIP block for {domain!r} again after the self-heal, got {healed!r}"
+
+            entries_after = _sync_status_list_open(adr65_vm)
+            parse_after = [
+                e
+                for e in entries_after
+                if e.get("stage") == "parse" and os.path.basename(str(e.get("item", ""))) == "pfb_py_sources.json"
+            ]
+            assert not parse_after, (
+                f"expected the parse-stage ledger entry for pfb_py_sources.json to be CLOSED "
+                f"after the self-heal, still open: {parse_after!r}"
+            )
+    finally:
+        _close_all_notices(adr65_vm, _MANIFEST_NOTICE_ID)
+
+
+# --------------------------------------------------------------------------- #
+# Row (c): a real sinkhole hit attributes via the query channel; the widget
+# counter increments by exactly the observed event count (ADR-65 D4).
+# --------------------------------------------------------------------------- #
+
+
+_DNSBL_SETTINGS_PATH = "installedpackages/pfblockerngdnsblsettings/config/0"
+_NOLOG_OPEN, _NOLOG_CLOSE = "<<<ADR65NOLOG>>>", "<<<ADR65NOLOGEND>>>"
+
+
+def _set_py_nolog(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> str:
+    """Set DNSBL's ``pfb_py_nolog`` ("log events via the DNSBL Webserver, not python").
+
+    The webserver-hit path this row pins EXISTS only under this setting: it is what makes
+    pfb_create_lighttpd() emit the accesslog pipe that feeds pfb_log_event(). Returns the
+    previous value so the caller can restore it.
+    """
+    snippet = (
+        f"$__c = config_get_path({h._php_str(_DNSBL_SETTINGS_PATH)}, array());\n"
+        "$__prev = isset($__c['pfb_py_nolog']) ? (string) $__c['pfb_py_nolog'] : '';\n"
+        f"$__c['pfb_py_nolog'] = {h._php_str(value)};\n"
+        f"config_set_path({h._php_str(_DNSBL_SETTINGS_PATH)}, $__c);\n"
+        "write_config('pfBlockerNG smoke: ADR-65 webserver-hit logging');\n"
+        f"echo '{_NOLOG_OPEN}' . $__prev . '{_NOLOG_CLOSE}';\n"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find(_NOLOG_OPEN), out.find(_NOLOG_CLOSE)
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(f"_set_py_nolog({value!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}")
+    return out[start + len(_NOLOG_OPEN) : end]
+
+
+@pytest.mark.timeout(300)  # sinkhole bind poll + block-page hit + log/counter settle exceed the 30s default
+def test_vip_hit_increments_widget_counter_with_query_group(adr65_vm: SmokeVM) -> None:
+    """ADR-65 D4: a real sinkhole (VIP block-page) hit attributes via the query
+    channel, and its widget counter increments by exactly the observed event count.
+
+    Given: a unique domain VIP-blocks (writes the Python-side dnsbl.log line).
+    When: ``pfb_dnsbl_query`` records the expected group/feed BEFORE any HTTP hit
+      (independent of the hit itself), then a real on-box curl to the sinkhole
+      VIP with ``Host: domain`` triggers the PHP-side lighttpd-log daemon
+      (``pfb_log_event``), which re-attributes via the SAME query channel.
+    Then: the webserver-hit (host) dnsbl.log gains >=1 "DNSBL-Full," line for the
+      domain whose group/feed equal the query's expected values (neither
+      'Unknown' -- NULL/blocked=false both rewrite to 'Unknown', so a correct
+      group is real evidence the query answered), AND the widget counter for
+      that group increases by EXACTLY the observed line count (pfb_log_event
+      increments once per event line, dup or not).
+    """
+    domain = h.unique_domain("adr65vip")
+    feed = h.write_local_feed(adr65_vm, "adr65_vip.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="adr65vip", feed_url=feed, header="adr65viphdr", mode=h.DnsblMode.VIP)
+
+    # The webserver-hit event exists ONLY under pfb_py_nolog: it is what makes the sinkhole's
+    # lighttpd emit the accesslog pipe that feeds pfb_log_event(). Set it BEFORE the update
+    # pass below, which regenerates the lighttpd conf; restore it afterwards.
+    prev_nolog = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
+    try:
+        # scope="update" (not the default "updatednsbl"): only a FULL update pass
+        # provisions the sinkhole NAT/lighttpd-conf/restart -- test_dnsbl_block_page.py
+        # documents the same split.
+        with h.CaseContext(adr65_vm, spec, scope="update"):
+            # pfb_py_nolog MUST be set INSIDE the case: inject() REPLACES the DNSBL
+            # settings node (keeping only the VIP/port infra keys) so a case cannot
+            # inherit a prior one's toggles -- a value set before CaseContext is wiped.
+            # The extra update pass then regenerates the sinkhole conf WITH the accesslog
+            # pipe, and that pipe IS the webserver-hit event path this row pins.
+            _set_py_nolog(adr65_vm, "on")
+            h.reload(adr65_vm, "update")
+
+            still_on = h.config_get(adr65_vm, f"{_DNSBL_SETTINGS_PATH}/pfb_py_nolog")
+            assert still_on == "on", f"pfb_py_nolog did not survive the update pass: reads {still_on!r}"
+            conf = adr65_vm.ssh("cat", "/var/unbound/pfb_dnsbl_lighty.conf", timeout=15.0)
+            assert "accesslog.filename" in conf.stdout, (
+                "the regenerated sinkhole conf carries no accesslog pipe, so no webserver-hit "
+                f"event can ever be logged (pfb_py_nolog reads {still_on!r}); conf:\n{conf.stdout}"
+            )
+            answer = h.dns_probe(adr65_vm, domain)
+            assert h.is_vip(answer), f"expected VIP block for {domain!r}, got {answer!r}"
+
+            verdict = _query_domain(adr65_vm, domain)
+            assert verdict["blocked"] is True, f"expected blocked=true for {domain!r}, got {verdict!r}"
+            expected_group, expected_feed = verdict["group"], verdict["feed"]
+            assert expected_group and expected_group != "Unknown", (
+                f"expected a real (non-Unknown) group from pfb_dnsbl_query({domain!r}), got {verdict!r}"
+            )
+
+            c0, detail0 = _read_group_counter(adr65_vm, expected_group)
+            assert c0 >= 0, f"could not read the baseline counter for group {expected_group!r}: {detail0}"
+
+            curl_argv = (
+                h.GUEST_CURL,
+                "-sS",
+                "--connect-timeout",
+                "3",
+                "--max-time",
+                "8",
+                "-H",
+                f"Host: {domain}",
+                f"http://{h.DEFAULT_DNSBL_VIP4}/",
+            )
+            attempts, delay = 10, 1.5  # lighttpd's post-fork bind is normally sub-second; generous headroom
+            result: subprocess.CompletedProcess[str] | None = None
+            for attempt in range(attempts):
+                result = adr65_vm.ssh(*curl_argv, timeout=15.0)
+                if result.returncode == 0 and "Site blocked via DNSBL" in result.stdout:
+                    break
+                if attempt < attempts - 1:
+                    time.sleep(delay)
+            assert result is not None  # attempts >= 1, loop always assigns
+
+            if result.returncode != 0 or "Site blocked via DNSBL" not in result.stdout:
+                diag = adr65_vm.ssh(
+                    "ps auxww | grep -i '[l]ighttpd_pfb'; "
+                    "/usr/bin/sockstat -4 -l 2>/dev/null | grep -E ':80([[:space:]]|$)' || echo NO_LISTENER",
+                    timeout=15.0,
+                )
+                pytest.fail(
+                    f"sinkhole curl never succeeded after {attempts} attempts: "
+                    f"rc={result.returncode} stderr={result.stderr!r}\n"
+                    f"lighttpd_pfb/:80 snapshot (rc={diag.returncode}):\n{diag.stdout}{diag.stderr}"
+                )
+
+            _wait_dnsbl_log_event_applied(adr65_vm, domain)
+            res_lines = adr65_vm.ssh("grep", "-hF", "--", "DNSBL-Full,", _DNSBL_LOG_PATHS[0], timeout=15.0)
+            matching = [ln for ln in res_lines.stdout.splitlines() if ln and domain in ln]
+            n = len(matching)
+            first_line = matching[0] if matching else ""
+            assert n >= 1, f"expected >=1 'DNSBL-Full,' host dnsbl.log line for {domain}, found {n}"
+
+            fields = first_line.split(",")
+            assert len(fields) > 8, f"unexpected webserver-hit dnsbl.log line shape: {first_line!r}"
+            group_seen, feed_seen = fields[6], fields[8]
+            assert group_seen == expected_group and group_seen != "Unknown", (
+                f"webserver-hit log group {group_seen!r} != query group {expected_group!r} for {domain!r} "
+                f"(line: {first_line!r})"
+            )
+            assert feed_seen == expected_feed and feed_seen != "Unknown", (
+                f"webserver-hit log feed {feed_seen!r} != query feed {expected_feed!r} for {domain!r} "
+                f"(line: {first_line!r})"
+            )
+
+            c_after, detail_after = _read_group_counter(adr65_vm, expected_group)
+            assert c_after == c0 + n, (
+                f"expected group {expected_group!r} counter to be EXACTLY {c0 + n} (baseline {c0} + "
+                f"{n} observed 'DNSBL-Full,' line(s)), got {c_after} ({detail_after})"
+            )
+
+    finally:
+        _set_py_nolog(adr65_vm, prev_nolog)

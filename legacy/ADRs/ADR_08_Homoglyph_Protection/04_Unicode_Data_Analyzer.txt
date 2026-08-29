@@ -1,0 +1,75 @@
+================================================================================
+PHASE 4 PROMPT — Ship Scripts/Script_Extensions data + generator + pure analyzer (not wired)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §1 facts 1-2 + §2 detection rows)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 4 of ADR-08. ADDITIVE + pure: ship the Unicode Scripts
+data + its generator, and build the pure punycode-decode + script analyzer, unit-tested vs the
+Phase-2 oracle. Do NOT wire it into the matcher (Phase 5). Work inline on `adr/08`, one commit,
+push directly.
+
+WHY THIS PHASE EXISTS
+The malicious/suspicious decision needs each codepoint's script, and `unicodedata` (stdlib)
+exposes neither Script nor Script_Extensions. So we ship compact TR39 Scripts data + a
+generator, and a pure analyzer (decode -> script set -> restriction level -> severity) that the
+matcher will call in Phase 5. Built + proven in isolation first.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_08_Homoglyph_Protection/RESULTS/03_Results.txt — the extracted IDN unit + where the
+  Confusable branch hooks. If missing, STOP and report.
+- RESULTS/01_Results.txt (the finalised confusable-set rule incl. Cyrillic+Greek; the
+  Script-vs-Script_Extensions decision; punycode-decode edge handling) and RESULTS/02_Results.txt
+  (the oracle API).
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§1 facts 1-2, §2 detection/data rows; §5 constraints).
+- scripts/update-pfsense-stubs.py (the generator PATTERN: download pinned source -> emit data).
+- CLAUDE.md (stdlib only; shipped data lives under src/ in the release archive; Python rules).
+
+ACTION PLAN (oracle-driven)
+1. GENERATOR: scripts/update-unicode-data.py downloads a PINNED Unicode version's Scripts.txt
+   (+ ScriptExtensions.txt if RESULTS/01 chose scx fidelity) from unicode.org and emits a
+   COMPACT, binary-searchable range table as a shipped Python/data module under
+   src/usr/local/pkg/pfblockerng/ (e.g. pfb_unicode_scripts.py / .dat). Pin + record the
+   Unicode version. Keep the emitted file small (ranges, not per-codepoint).
+2. ANALYZER (pure, Unbound-symbol-free), e.g. in pfb_unbound.py or a sibling pure module:
+   - decode_idn_label(label) -> str | None : strip xn--, raw 'punycode' codec decode; catch
+     errors -> None (flagged), NEVER raise. (NOT the 'idna' codec.)
+   - script_of(codepoint) -> script (range-table lookup; Script_Extensions per RESULTS/01).
+   - resolved_script_set(text) -> set : Common/Inherited transparent (do not count).
+   - classify_idn(q_name) -> severity (MALICIOUS | SUSPICIOUS | OK) + the offending
+     script(s)/char(s): iterate PER LABEL — decode each xn-- label, compute ITS resolved set,
+     apply the rule (>=2 confusable scripts {Latin,Cyrillic,Greek,...} co-occur in that label
+     -> MALICIOUS incl. Cyrillic+Greek; fails Highly Restrictive but not the pair -> SUSPICIOUS;
+     single-script / Latin+CJK / Common-mix -> OK; undecodable -> flagged). Flag if ANY single
+     label is malicious; NEVER union scripts across the dot (else example.рф / site.中国 FP).
+3. UNIT-TEST (tests/test_adr08_analyzer.py) every function + classify_idn end-to-end against the
+   Phase-2 oracle over the Phase-1 corpus: CJK legit = OK (0 FP), Latin+Cyrillic/Greek and
+   Cyrillic+Greek = MALICIOUS, whole-script look-alike = OK (documented miss), malformed = flagged.
+
+CONSTRAINTS
+- ADDITIVE ONLY: do NOT wire classify_idn into evaluate_domain; do NOT touch the matcher
+  decision, PHP, or UI; delete nothing.
+- stdlib only, no Unbound symbols in the analyzer, 4-space, type hints, no bare except,
+  `from __future__ import annotations`. The generator is a dev tool (stdlib only).
+- Shipped data must be reproducible from the generator + the pinned version; keep it compact.
+
+VERIFICATION
+- python -m pytest → green incl. the analyzer tests vs the oracle/corpus; ADR-08 mode golden
+  (P3) still green. ruff check . / ruff format . clean.
+- Re-running the generator reproduces the committed data file byte-for-byte (or documents why not).
+
+EXPECTED RESULT
+Shipped, reproducible TR39 Scripts data + a pure, oracle-correct punycode-decode + script
+analyzer (severity classifier), not yet wired into the matcher.
+
+COMMIT (single)
+    pfblockerng: ADR-08 P4 — ship Unicode Scripts data + generator + pure IDN script analyzer
+Push directly to `adr/08`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/04_Results.txt`
+For Phase 5. Include: the analyzer's public API (classify_idn signature + severity enum +
+offending-char return); the shipped data file location + the pinned Unicode version + how to
+regenerate; confirmation it is pure/Unbound-symbol-free + oracle-green over the corpus; and the
+go-ahead to wire the Confusable branch.

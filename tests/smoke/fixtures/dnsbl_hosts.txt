@@ -1,0 +1,13 @@
+# DNSBL feed fixture - hosts format (DnsblCase, default DNSBL build).
+# pfb_unbound.py _dnsbl_strip_hosts_prefix (~:2830-2842) + parse hosts path: a
+# '<sink-ip> <domain>' line keeps the DOMAIN token (the leading 0.0.0.0/127.0.0.1
+# sink IP is stripped); the resulting domain blocks (wildcard) name + subdomains.
+# A full-line '#' comment and blank lines are dropped.
+# uuid-style '.com' names ONLY (smoke-domain rule, see dnsbl_plain.txt).
+#
+# Served by mock_feeds at http://192.168.89.2:<port>/dnsbl_hosts.txt
+#
+# Phase 5 asserts (dns_probe block-shape on the box):
+#   MEMBER (must BLOCK - VIP/NULL per list logging):  uuid-947e69114606.com
+#   NON-MEMBER (must RESOLVE, not block):             uuid-55ca85f92f34.com
+0.0.0.0 uuid-947e69114606.com

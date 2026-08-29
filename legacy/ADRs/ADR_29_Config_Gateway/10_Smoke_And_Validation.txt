@@ -1,0 +1,60 @@
+================================================================================
+PHASE 10 PROMPT — Smoke/UI validation + upgrade & rollback contract + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §7 first)
+================================================================================
+
+ROLE
+You implement Phase 10 of ADR-29 on branch `adr/29-config-gateway` — the ACCEPTANCE GATE. Confirm the
+upgrade + rollback contract green on the live-VM fan-out, dispatch the UI tiers, and certify the DoD.
+Work inline, one commit (validation records + any final doc), push directly.
+
+WHY THIS PHASE EXISTS
+The gateway's value is correctness across upgrade AND downgrade. ADR-29 is accepted only when the
+machine proves it (CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off").
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/09_Results.txt — it must
+  confirm the enforcement sniff is green. If missing, STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§7 Definition of Done + reject criteria).
+- tests/smoke/test_upgrade_config_stability.py — the upgrade case + the Phase-3 downgrade leg.
+- CLAUDE.md — "Smoke tests (ADR-04)", "ADR acceptance", "Updating documentation" (smoke-fanout.yml,
+  ui-tests.yml dispatch).
+
+ACTION PLAN
+1. Run the full off-box suite (phpunit, phpstan, phpcs, pytest, ruff) — all green.
+2. Dispatch the live-VM validation: `smoke-fanout.yml` (ADR-04 suite, CE + Plus, AND-gated) with the
+   repo/upgrade marker so the upgrade + downgrade config-stability cases run; dispatch the UI tiers
+   (ui_render is the PR gate; also ui_e2e/ui_browser). Record the green run links in the handoff +
+   the validation record.
+3. Verify the §7 DoD line by line: round-trip identity per field; default parity at the seam;
+   migration registry reproduces the four legacy migrations; upgrade AND rollback smoke green; sniff
+   active; fan-out + UI green. Note the residual manual visual check (owner: maintainer, out-of-CI).
+4. If any reject criterion (§7) triggers (a field can't round-trip/downgrade; a subsystem regressed
+   uncontainably; net-negative on maintainability) — STOP, record it, and propose the narrowed scope
+   (infra + seam, Phases 1-4) rather than forcing the sweep.
+
+CONSTRAINTS
+- Do not flip the ADR Status to Accepted in code — acceptance is the maintainer's call on the
+  evidence; this phase ASSEMBLES the evidence and records it.
+- Validation-records/doc commit only (no behavioural change).
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit / phpstan / phpcs   -> green
+- python -m pytest              -> green
+- ruff check . / ruff format --check .   -> clean
+- smoke-fanout.yml (CE + Plus) AND-gate -> green (links recorded)
+- ui_render (PR gate) + ui_e2e/ui_browser dispatched -> green (links recorded)
+
+EXPECTED RESULT
+A complete, recorded evidence package: upgrade + rollback config stability proven on the live-VM
+fan-out, UI tiers green, the enforcement sniff active — the DoD satisfied and ready for the
+maintainer's Accept.
+
+COMMIT (single)
+    pfblockerng: record ADR-29 validation evidence and Definition of Done (ADR-29 P10)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/10_Results.txt
+Record: every §7 DoD item with its evidence (test names/counts, the smoke-fanout + UI run links), any
+reject-criterion outcome, the residual manual check, and the final go/no-go recommendation for Accept.

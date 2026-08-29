@@ -1,0 +1,80 @@
+================================================================================
+PHASE 6 PROMPT — Live-VM smoke + docs + acceptance
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_38_System_Log_Integration/ADR.md   (read §2.2, §4, §7 first)
+================================================================================
+
+ROLE
+Phase 6 of ADR-38 on the implementation branch — the proving phase. Adds the live-VM
+smoke that pins the contract end-to-end and the user-facing docs, then flips Status →
+Accepted on green. One commit, pushed on the branch.
+
+WHY THIS PHASE EXISTS
+Off-box suites prove the formatters, config, and emit gating; only a real pfSense VM
+proves the full path: PHP openlog + chrooted python SysLogHandler → the registered
+facility → the dedicated log (and, via "Everything", a remote server). The smoke is
+what lets ADR-38 reach Accepted without a manual gate (CLAUDE.md ADR-acceptance rule)
+for the CI-coverable parts.
+
+REQUIRED READING
+- FIRST, read RESULTS/05_Results.txt — confirm the UI controls + all wiring landed and
+  the suites are green. If missing, STOP and report.
+- ADR §2.2 (the 5 contract invariants — each needs a smoke assertion), §4 (acceptance),
+  §7 (manual checklist + reject path).
+- CLAUDE.md → "Smoke tests (ADR-04)" — READ fully: probe ON-BOX over SSH, use
+  helpers.unique_domain() (never RFC-6761 / HSTS names), the DNSBL enable chain
+  (enable_cb + pfb_dnsbl + unbound_state) and ensure_dnsbl_vip fixture, block shapes,
+  the chroot reality, and that smoke uploads a full guest snapshot on failure.
+- tests/smoke/helpers.py + an existing tests/smoke/test_*.py (e.g. the ADR-30
+  test_log_rotate.py) for fixture + on-box-read patterns; how to read /var/log files
+  and config over SSH.
+
+ACTION PLAN
+1. tests/smoke/test_syslog_export.py (pytest.mark.smoke), Given/When/Then:
+   - Background: install branch .pkg, ensure DNSBL VIP + a feed that blocks a
+     unique_domain(); ensure an IP alias that blocks a test address.
+   - ON ⇒ IP event exported: enable log_syslog (facility local6); trigger an IP
+     Block; assert exactly one `pfblockerng` key=value record appears in
+     /var/log/pfblockerng_syslog.log with the expected act/src/dst/feed keys.
+   - ON ⇒ DNSBL event exported: probe the blocked domain on-box; assert one
+     `pfblockerng` `act=dnsbl …` record with the expected qname/btype keys.
+   - OFF ⇒ neither exported (assert the record count is 0 after disabling — the
+     before/after branch proof; first assert ON produced records, then OFF adds none).
+   - CSV unchanged: assert the corresponding ip_*.log / dnsbl.log lines are still
+     written in BOTH states (export is additive).
+   - Optional: assert the records are EXCLUDED from system.log (the de-dup), and that
+     the inode of the dedicated log is stable across a pfb_log_mgmt() pass.
+2. Docs: update the relevant user-facing help/doc (the Log Settings help + any
+   docs/misc note) describing the feature, the default facility, the key=value shape,
+   and the pfSense "Everything" remote step. Markdown lint clean.
+3. Flip ADR.md Status → **Accepted** (date) ONLY after the smoke is green in the
+   fan-out; otherwise leave Implemented-pending-smoke and say so.
+
+CONSTRAINTS
+- Smoke must assert real behaviour + guard regression (no coverage theater): every
+  §2.2 invariant gets an assertion; branch coverage = ON and OFF; before-and-after.
+- Probe on-box; first DNS response after reload is authoritative. Use unique_domain().
+- Do NOT weaken any earlier gate to make smoke pass; if a real defect surfaces, fix it
+  (and note it) rather than masking.
+
+VERIFICATION (all must pass)
+- python -m pytest  → green (off-box suites unaffected)
+- The smoke case green on the live VM: dispatch smoke.yml (or the fan-out) and confirm
+  the new test passes on CE; record the run. (Plus leg via smoke-fanout.yml.)
+- ruff/markdownlint clean on touched files.
+- diff-read: the smoke asserts ON and OFF and CSV-unchanged; docs updated.
+
+EXPECTED RESULT
+A live-VM smoke proves both legs export under the toggle and stay silent when off, with
+CSV logging intact; docs describe the feature + remote path; ADR-38 is Accepted on the
+green CE+Plus fan-out.
+
+COMMIT (single)
+    pfblockerng: live-VM smoke + docs for syslog export (ADR-38 P6)
+Push on the branch.
+
+HANDOFF — write `.ADRs/ADR_38_System_Log_Integration/RESULTS/06_Results.txt`
+Record: the smoke case names + which §2.2 invariant each pins; the live-VM run id +
+result (or the SKIP/why if the VM was unavailable); docs touched; the final Status and
+date set; and the maintainer acceptance steps remaining (smoke-fanout dispatch + the §7
+manual SIEM checklist). Mark the ADR complete for the orchestrator's PR step.

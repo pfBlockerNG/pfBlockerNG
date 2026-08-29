@@ -1,0 +1,67 @@
+================================================================================
+PHASE 6 PROMPT — Smoke + Definition of Done + docs
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_33_Auto_Feed_Management/ADR.md   (read SS7 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/33-auto-feed-management. Phase 6 proves the
+reconciler end-to-end on a live VM, closes the DoD, and updates docs. One commit, push directly.
+MODE: behaviour change — new smoke/UI tests prove the feature red->green against pre-ADR code where dispatchable; any out-of-CI item is documented, not skipped silently.
+
+WHY THIS PHASE EXISTS
+The feature mutates user feed config in auto mode; a live-VM run with a seeded moved feed + a
+discontinued feed is the strongest proof that notify reports without writing and auto applies
+conservatively.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_33_Auto_Feed_Management/RESULTS/05_Results.txt AND 04_/02_/01_. If
+  missing, STOP and report.
+- .ADRs/ADR_33_Auto_Feed_Management/ADR.md (SS7 DoD + reject criteria).
+- tests/smoke/ — conftest.py (smoke_vm), helpers.py (config injection); a journey test pattern.
+- docs/misc/architecture-notes.md — the feeds/pipeline section to extend.
+- CLAUDE.md — Smoke tests, Updating documentation.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Live-VM smoke: inject a config with (a) a stored feed whose catalog url moved (stored url in
+   the catalog past_urls) and (b) a stored feed whose catalog status is discontinued.
+   - mode=notify: run Recheck -> assert config byte-identical AND both changes are reported.
+   - mode=auto: run Recheck -> assert the moved feed's url is rewritten AND the discontinued
+     feed is disabled (state), the row still present (not deleted); re-run -> no further change
+     (idempotent). Assert the BEFORE state then the AFTER state for each.
+   - mode=off: run Recheck -> nothing happens.
+   Use inert catalog/fixtures; never RFC 6761 TLDs / HSTS-preload names for any domain data.
+2. Maintainer MANUAL checklist (RESULTS + ADR SS7) for anything CI can't cover (a real package
+   upgrade carrying such a config).
+3. Docs: extend docs/misc/architecture-notes.md with the reconciler (index, plan, modes,
+   triggers, never-delete); update README if workflow changed; add stubs for new pfSense fns.
+4. Re-confirm DoD + reject criteria: if header-keyed matching mis-fires on real configs or auto
+   cannot be made idempotent/non-destructive, record cases and recommend reduce-to-notify or
+   reject.
+
+CONSTRAINTS
+- Smoke probes ON-BOX; assert before-then-after for every transition.
+- stdlib python; markdown lint clean; tests validate correctness (no theater).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (non-smoke); vendor/bin/phpunit -> green.
+- The smoke case(s) pass on a live VM OR are clearly gated/SKIPped with the manual checklist
+  covering the gap; diagnostics reviewed on any failure.
+- ruff / mypy tests/ / markdownlint -> clean; php -l / phpcs as relevant.
+
+EXPECTED RESULT
+notify vs auto vs off proven on a live VM (or via the documented manual smoke); docs updated;
+DoD + reject criteria resolved.
+
+COMMIT (single)
+    pfblockerng: add auto-feed-management smoke + docs; close ADR-33 DoD (ADR-33 P6)
+Push directly to adr/33-auto-feed-management; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_33_Auto_Feed_Management/RESULTS/06_Results.txt (plain .txt)
+Record: which DoD items are CI-covered vs manual; the multi-mode smoke result; doc/stub
+updates; the final accept/reduce/reject recommendation for the ADR.

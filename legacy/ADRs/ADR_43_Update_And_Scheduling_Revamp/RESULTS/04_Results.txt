@@ -1,0 +1,127 @@
+ADR-43 Phase 4 — Single trigger-tick cron collapse
+====================================================
+
+Status: COMPLETE
+Branch: adr/43-update-and-scheduling-revamp
+
+## What was done
+
+Four cron install_cron_job blocks (cron/dcc/ss_refresh/bl) collapsed into
+a single */pfb_tick_interval tick cron job. A new `pfblockerng.php tick` verb
+reads the due-ledger, dispatches each due job as a background exec(), then
+calls pfblockerng_ss_refresh() unconditionally. Migration teardown removes the
+old fleet jobs from pre-ADR-43 installs on every sync_package_pfblockerng().
+
+### Files changed
+
+src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  - Registered `pfb_tick_interval` field in pfb_cfg_registry() (section=$gen,
+    default='15', plain, since='4.0.0').
+  - Added pfb_tick_seed(): returns php_uname('n'), fallback 'pfblockerng'.
+  - Added pfb_tick_due_jobs(int $now, string $seed, string $dbdir,
+    int $cron_interval, int $bl_interval): array<string,bool>
+    — thin wrapper over pfb_due_ledger_is_due() for cron (jitter_max=0),
+    dcc (daily, jitter_max=82800), bl (daily/weekly, jitter_max=82800).
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_aliastables('update'): added due-ledger file to the backup set
+    so cron schedules survive a MFS /var reboot (closes the #468 gap).
+  - sync_package_pfblockerng() cron generator (was ~120 lines, 4 blocks):
+    collapsed to one block:
+      $pfb_tick_cmd = "...pfblockerng.php tick >> ...";
+      $pfb_tick_min = '*/' . PfbConfig::read('pfb_tick_interval');
+      if enabled: install tick cron if not already matching
+      else:        remove tick cron
+      + unconditional migration teardown for old fleet verbs.
+
+src/usr/local/www/pfblockerng/pfblockerng.php
+  - Added 'tick' to verb allowlist (line ~231).
+  - Added early-exit elseif for $argv[1]=='tick'.
+  - Added pfblockerng_tick(): reads pfb_interval raw (bypasses pfb_global()'s
+    'Disabled'→'1' normalization), checks due jobs, dispatches via exec() &,
+    calls pfblockerng_ss_refresh() unconditionally.
+  - Feed cron dispatched as: pfb_trigger scope=both force=false trigger=cron
+    (bypasses pfblockerng_sync_cron()'s per-list hour gate — superseded by
+    the ledger's own due check).
+
+tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php
+  - Added 'installedpackages/pfblockerng/config/0/pfb_tick_interval' to
+    $registeredPaths.
+
+tests/php/CfgGatewayTest.php
+  - testPfbTickIntervalAbsentKeyReturnsDefault(): absent → '15'.
+  - testPfbTickIntervalRoundTrip(): '30' round-trips.
+  - Added 'pfb_tick_interval' to inventory array.
+
+tests/php/TickCronTest.php  [NEW]
+  - 8 tests (23 assertions), all PHPUnit-green.
+  - testTickSeedIsNonEmpty, testTickSeedIsStable.
+  - testAllDueWhenLedgerAbsent (fail-safe: absent ledger → all due).
+  - testNoneDueWhenAllFuture (no jobs due when next_due in future).
+  - testOnlyCronDueWhenOnlyCronPast (catch-up branch).
+  - testDccMarkRanWritesNonZeroJitter (jitter=78279 for seed='test-seed').
+  - testBlMarkRanWritesNonZeroJitterDifferentFromDcc (jitter=51070, ≠ dcc).
+  - testCronMarkRanWritesZeroJitter (cron jitter=0).
+  Red→green: these tests all failed with "Call to undefined function" before
+  pfb_tick_seed()/pfb_tick_due_jobs() were added.
+
+tests/smoke/test_smoke_tick.py  [NEW — authored, not dispatched]
+  - test_tick_dispatches_due_feed: forces cron past → asserts dispatch line
+    + next_due updated.
+  - test_tick_skips_non_due_feed: future next_due → asserts no dispatch.
+  - test_tick_wiped_ledger_jittered: wiped ledger → dcc next_due ≠ last+86400.
+  - test_tick_reboot_persists_ledger: reboot → ledger cron entry survives.
+  Dispatch in Phase 7: gh workflow run smoke.yml -f pytest_k="smoke_tick"
+
+## Verification gates (all clean)
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc         → No syntax errors
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc   → No syntax errors
+  php -l src/usr/local/www/pfblockerng/pfblockerng.php         → No syntax errors
+  vendor/bin/phpunit          → OK (1467 tests, 5514 assertions, 3 skipped)
+  vendor/bin/phpstan          → [OK] No errors
+  vendor/bin/phpcs            → (clean, no output)
+  python -m pytest -q         → 1882 passed, 4 skipped
+  ruff check . && ruff format --check . → All checks passed, 143 files formatted
+
+## Key design decisions
+
+- pfb_interval 'Disabled' check: reads PfbConfig::read('pfb_interval') directly
+  (not $pfb['interval']) because pfb_global() normalizes 'Disabled' to '1' at
+  line 1650 — the dead-code guard in the old cron block never fired.
+- Feed cron dispatch via pfb_trigger (not 'cron' verb) to bypass
+  pfblockerng_sync_cron()'s per-list hour gate, which is now superseded.
+- bl dispatch builds bl_string inline and execs pfblockerng.php bl as subprocess
+  (extras[5+] are only populated at argv file level, not in tick context).
+- ss_refresh called unconditionally every tick — it exits early when the
+  SafeSearch file is absent, making it effectively free.
+- jitter_max=82800 (23*3600) mirrors the old rand(0,23)*3600 spread;
+  seeded so the same install always picks the same offset.
+
+## Smoke-test post-gate fixes (orchestrator review)
+
+Three defects found by the orchestrator gate and fixed in the same Phase 4 commit:
+
+1. Dead fixture parameter — `helpers` param removed from all 4 test signatures; replaced
+   with module-level `from . import helpers as h` (house pattern, test_dot_doq_block.py:52).
+
+2. Fixed-time waits (banned, issue #456) — two `time.sleep(2)` calls replaced with
+   `h.wait_until(predicate, timeout=30, interval=2)` with loud-assert diagnostics per CLAUDE.md.
+   `import time` removed (now unused).
+
+3. Clock mix + unregistered marker:
+   (a) `int(time.time())` runner-clock comparison replaced with `int(vm.ssh("date +%s")[0].strip())`
+       so both sides use the VM clock.
+   (b) `pytest.mark.tick` registered in pyproject.toml markers list.
+   (c) Module docstring dispatch hint updated to `-f pytest_marker="tick"`.
+
+Post-fix verification:
+  pytest tests/smoke/test_smoke_tick.py --collect-only -q  → 4 collected, no warnings
+  ruff check .                                              → All checks passed
+  python -m pytest -q                                       → 1882 passed, 4 skipped
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=5
+
+POST-MERGE AMENDMENT — 2026-08-11 (issue #2090)
+The configurable pfb_tick_interval implementation recorded above was retired. cron-tick now uses a
+fixed */15 cadence; the registry key and clamp are removed, and stale raw config.xml values are inert.

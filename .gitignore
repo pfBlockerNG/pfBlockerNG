@@ -1,0 +1,104 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv
+venv
+.mypy_cache/
+.benchmarks/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor temporaries ────────────────────────────────────────────────────────
+*.swp
+*.swo
+*~
+
+# ── PHP ───────────────────────────────────────────────────────────────────────
+vendor
+.phpunit.cache/
+.phpunit.result.cache
+# Committed vendored web assets (issue #1669) are static content, not a Composer
+# vendor/ dir -- unignore this one path despite the bare `vendor` rule above.
+!src/usr/local/www/pfblockerng/vendor/
+!src/usr/local/www/pfblockerng/vendor/**
+
+# ── Python coverage (pytest-cov / coverage.py; issue #38) ─────────────────────
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
+
+# ── Shell tests (shellspec / kcov) ────────────────────────────────────────────
+coverage/
+.shellspec-quick.log
+report/
+
+# ── Node / Cloudflare Worker (scripts/worker/) ────────────────────────────────
+node_modules/
+.wrangler/
+
+# ── Build / release artefacts ─────────────────────────────────────────────────
+*.tar.gz
+*.tar.bz2
+*.zip
+# Committed smoke archive fixtures (ADR-45) are inert test data, not build output —
+# keep them tracked despite the *.zip / *.gz / *.bz2 rules above.
+!tests/smoke/fixtures/archive_*.zip
+!tests/smoke/fixtures/archive_*.gz
+!tests/smoke/fixtures/archive_*.bz2
+
+# ── ADR-14 Tier-B browser screenshots (build output, human-review artifacts) ──
+test-results/
+
+# ── AI-agent worktrees (per-task, never committed) ───────────────────────────
+.claude/worktrees/
+.grok/worktrees/
+.codex/local-notes.md
+.ua/
+*.graphify-bak
+graphify-out/*
+!graphify-out/graph.json
+# Records accumulate across tickets, so they outlive the worktree that wrote them. The
+# re-include names the DIRECTORY on purpose — contract pinned by test_cross_agent_tooling.
+!graphify-out/memory/
+
+# Per-machine Claude Code / Grok overrides — never committed
+.claude/settings.local.json
+
+# ── Secrets / credentials (never commit) ──────────────────────────────────────
+# Repository-local secret material.
+.env
+.env.*
+!.env.example
+id_rsa
+id_ed25519
+id_ed25519.pub
+*.pem
+.gh-token
+
+# ── Patch / rebase leftovers ──────────────────────────────────────────────────
+*.orig
+*.rej
+
+# ── Local package / VM / smoke artefacts ──────────────────────────────────────
+# No tracked .pkg or .qcow2 fixtures exist; these are builder / smoke output.
+*.pkg
+*.qcow2
+/out/
+/deppkgs/
+/pkg/
+smoke-diag/
+pfb-runs/
+smoke_key
+
+# -- Jetbrains -- #
+.idea/

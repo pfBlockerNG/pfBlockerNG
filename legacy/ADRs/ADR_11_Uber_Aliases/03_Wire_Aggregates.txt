@@ -1,0 +1,105 @@
+================================================================================
+PHASE 3 PROMPT — Wire the per-type aggregates into the pass + register urltable aliases (opt-in multi-select)
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_11_Uber_Aliases/ADR.md   (read §2 table + the contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/11-uber-aliases` branch performing Phase 3 of ADR-11 — the core
+wiring: an opt-in MULTI-SELECT picks which action types to aggregate; for each selected
+type the update pass builds its union and registers it as a Native `urltable` alias.
+ADDITIVE: existing aliases/tables/rules unchanged; nothing selected = byte-identical to
+today. Work inline on the branch, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+Phase 2 produced the type-agnostic union action + the per-type member helper in
+isolation. This phase runs them in lockstep with the feed update and exposes each
+selected type's result as a real pfSense alias (referenceable by name — incl. by HAProxy
+in ADR-12), with no firewall rule (Native). The four types share ONE generic loop over
+the type→dir map; do NOT fork per type.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_11_Uber_Aliases/RESULTS/02_Results.txt — the `aggregate` action interface +
+  the per-type member-helper + the chosen names. If missing, STOP and report.
+- Also RESULTS/01_Results.txt — the build strategy (full rebuild, mtime-gated).
+- .ADRs/ADR_11_Uber_Aliases/ADR.md (§2 table, contract, §4).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — sync_package_pfblockerng (:7821, the
+  whole pass) for the hook point: members materialise earlier in the pass; the IP-side
+  tables reconcile via pfb_aliastables('update') (:11398/:11447) then filter_configure()
+  (:11520); the ADR-12 **post-update hook fires at the closing tail, pfb_run_hooks('post',
+  …) :11764** (the CHANGED_IP_ALIASES merge is just above it, :11761-11762). The urltable
+  registration block to MIRROR (:9512-9520); pfb_firewall_rule (:4139) — SKIPPED for
+  Native; empty-alias prune (:9495-9498); the settings read (config_get_path) for the new
+  multi-select.
+- The settings schema (pfblockerng.xml / the general settings page) for adding a field.
+- CLAUDE.md (follow-the-pattern naming; pfSense config LISTS need a row listtag — see
+  the project memory; a multi-value select must persist correctly).
+
+ACTION PLAN (ordered)
+1. SETTING: add an opt-in MULTI-SELECT "Create aggregated alias(es) for action type(s)"
+   (or a set of per-type checkboxes) listing Deny / Permit / Match / Native, **default
+   NONE selected**. None selected must remain the default on upgrade. Choose the config
+   representation that persists correctly (a multi-value select/list needs the right
+   listtag — verify it round-trips, do not emit invalid <0> XML). Name the key per the
+   pfb_* pattern (from the Phase-2 handoff).
+2. WIRE (one generic loop): in sync_package_pfblockerng(), after members materialise,
+   for each SELECTED type in {Deny,Permit,Match,Native} and each family {v4,v6}:
+   call the member-helper (Phase 2) -> write a memberlist -> run `pfblockerng.sh
+   aggregate <family> <memberlist>` -> write {aliasdir}/pfB_<Type>_Aggregated_{v4,v6}.txt
+   + the never-empty consumer file -> register pfB_<Type>_Aggregated_{v4,v6} as a
+   `urltable` Native alias (mirror :9512-9520; descr/detail "DO NOT EDIT"; updatefreq
+   like siblings) -> ensure it loads via pfb_aliastables. **Do NOT call
+   pfb_firewall_rule** (Native = no rule). Honour the mtime-gate (skip a type whose dir
+   is unchanged).
+3. ORDER vs THE ADR-12 POST-HOOK (REQUIRED): the build → register → **table load** for
+   every selected aggregate MUST complete **before** the post-update hook fires
+   (pfb_run_hooks('post', …) at :11764, the closing tail). Place the whole block in the
+   alias-reconcile region so the aggregate urltable is loaded by the existing
+   pfb_aliastables('update')/filter_configure() path (≤:11520) — i.e. the aggregate
+   table is LIVE before any post-hook runs, so a hook consumer (HAProxy graceful reload,
+   ADR-12) always sees the FRESH aggregate, never a stale one. Do NOT move the post-hook;
+   insert the build ahead of it. ALSO: when an aggregate is (re)built this pass, merge its
+   pfB_<Type>_Aggregated_* alias name into $pfb['changed_ip_aliases'] (the var the
+   post-hook emits as PFB_CHANGED_IP_ALIASES, merged at :11761-11762) so a recipe can gate
+   its reload on the aggregate having actually changed. Keep this additive (an unchanged/
+   unselected type adds nothing).
+4. TEARDOWN: when a type is DESELECTED (or pfBlockerNG disabled), remove THAT
+   pfB_<Type>_Aggregated_* alias/table/files cleanly (no orphans), leaving other selected
+   aggregates intact — symmetric with how pfB removes its other aliases.
+5. ADDITIVE GUARANTEE: confirm member aliases, their tables, and all existing rules are
+   untouched; only the selected Native aggregate alias(es)/table(s) are added.
+
+CONSTRAINTS
+- ADDITIVE only. Nothing selected ⇒ no new alias/file/table; behaviour identical to today.
+- Native ⇒ NO firewall rule for any aggregate, ever.
+- ONE generic code path over the type→dir map — do not copy-paste per type.
+- PHP tabs/8.3, no die()/exit() in library code; new pfSense fns -> stubs/pfsense/.
+  POSIX sh for any shell. Do NOT touch Python/tests. Do NOT edit other ADRs.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan + ShellCheck → clean.
+- diff-read: the registration mirrors :9512-9520, calls NO pfb_firewall_rule, runs inside
+  the pass (lockstep) over the selected types, is gated on the multi-select; teardown
+  path present and per-type; the multi-select config round-trips (no invalid <0> XML);
+  the build+load sits BEFORE the post-hook at :11764 (≤:11520 reconcile region) and a
+  rebuilt aggregate's name is merged into $pfb['changed_ip_aliases'].
+
+EXPECTED RESULT
+With types selected, pfB_<Type>_Aggregated_{v4,v6} appear as Native urltable aliases
+holding the deduped+aggregated set for each selected action class, rebuilt in-pass
+(mtime-gated), no firewall rule; nothing selected = today.
+
+COMMIT (single)
+    pfblockerng: ADR-11 P3 wire per-type aggregate aliases (opt-in, Native) (ADR-11 P3)
+Push directly to `adr/11-uber-aliases`; open a PR only if the direct push is rejected.
+PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_11_Uber_Aliases/RESULTS/03_Results.txt` (plain .txt)
+State: the multi-select key name + default (none) + its config/listtag shape; the exact
+insertion point in sync_package_pfblockerng + that the build+load precedes the post-hook
+at :11764 (and how — which reconcile path loads the table) + that a rebuilt aggregate's
+name is merged into PFB_CHANGED_IP_ALIASES; the generic loop + the alias registration
+shape + the never-rule guarantee; the per-type teardown behaviour; the go-ahead for
+Phase 4 (effective-set + all-combinations + post-hook-ordering correctness).

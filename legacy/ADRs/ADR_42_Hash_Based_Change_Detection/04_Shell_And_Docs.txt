@@ -1,0 +1,74 @@
+================================================================================
+PHASE 4 PROMPT — Shell convention application + documentation (+ Python policy)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md   (read §2 four scenarios + §5)
+================================================================================
+
+ROLE
+You implement Phase 4 of ADR-42 on branch `adr/42-hash-based-change-detection`. Mostly
+DOCUMENTATION + a behaviour-preserving shell application of the convention. Work inline on the
+branch, one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The convention must be written down as policy of record (like ADR-28) and applied on the shell side
+where pfBlockerNG does file change detection — so the codebase has ONE self-describing, per-side
+hashing primitive. Python is recorded as md5 (policy); its code lands with its consumer in the
+follow-up DNSBL-reuse ADR (no speculative unused helper here).
+
+REQUIRED READING
+- FIRST, read the prior handoff: .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/03_Results.txt. If
+  missing, STOP and report.
+- .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md (§2 four scenarios + algos + tagged extensions; §5)
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — the existing `cmp -s` at :621 (file-vs-file already
+  done right) and `pfb_file_mtime`-style gates; decide per site whether content hashing (`xxh128sum`)
+  or `cmp -s` is the right primitive, keeping behaviour identical.
+- docs/misc/architecture-notes.md (where the feed-update + locale conventions live) ; CLAUDE.md
+  (the feed-update mechanics + the per-language code-standard table) — both get the new convention.
+- CLAUDE.md Shell standards (POSIX sh; path* var for add-on binaries vs bare for base utils;
+  LC_ALL=C inline). Determine `xxh128sum` provenance on the box: `pkg which $(command -v xxh128sum)`
+  — if package-owned (e.g. /usr/local/bin), give it a `pathxxh128` var AND note the dependency to
+  declare in the FreeBSD-ports RUN_DEPENDS (so its presence is contractual, not incidental); if base
+  (/usr/bin), a bare call is fine.
+
+ACTION PLAN
+1. Apply the convention in pfblockerng.sh: keep `cmp -s` (:621); where a persisted/portable digest is
+   wanted, use `xxh128sum` writing the `.xxhash128` extension (and reading legacy `.md5`); add a
+   `pathxxh128` var iff the binary is package-owned. Behaviour-preserving — pin any touched site with
+   shellspec where one exists, else a focused new spec.
+2. Document the convention as policy of record:
+   - docs/misc/architecture-notes.md: a "Change detection / content hashing" section — the four
+     scenarios (cmp-s / streamed compare / hash-file / hash-memory), per-side algos (xxh128 PHP/shell,
+     md5 Python), the tagged-extension format (.xxhash128 / legacy .md5; bare->md5; length-can't-
+     disambiguate rationale), the read-md5/write-xxh128 migration + downgrade-safety, and the
+     conditional-GET-first pre-download rule.
+   - CLAUDE.md: a short entry in the feed-update mechanics + a row/note in the per-language standards
+     pointing to the architecture-notes section; record Python=md5 (code deferred to the DNSBL-reuse
+     ADR) and cross-reference ADR-40 (sibling, set-membership) + the follow-up ADR.
+3. Re-confirm cross-tool agreement as a guard: a known-answer check that `xxh128sum <bytes>` ==
+   PHP `hash('xxh128', <bytes>)` (pin the exact hex), so a future divergence is caught.
+
+CONSTRAINTS
+- POSIX sh; quote expansions; LC_ALL=C inline on any sort/set op. Markdown per CLAUDE.md (blank lines
+  around headings/lists/fences; language on every fence; markdownlint clean). Do NOT add Python code.
+  Do NOT change PHP detection behaviour (Phases 2-3 own it).
+
+VERIFICATION (all must pass)
+- shellcheck on touched scripts ; sh -n ; shellspec (if specs touched)   → clean/green
+- npx markdownlint-cli2 (on the touched docs)                            → 0 errors
+- the xxh128sum<->hash('xxh128') known-answer check                      → equal
+- python -m pytest (unaffected)                                          → green
+- diff-read: docs state the convention completely + accurately; shell behaviour preserved.
+
+EXPECTED RESULT
+The convention is policy of record in architecture-notes + CLAUDE.md; shell uses the convention
+(cmp -s + xxh128sum/.xxhash128) with provenance settled; Python=md5 recorded; ADR-40 + follow-up
+cross-referenced.
+
+COMMIT (single)
+    docs+pfblockerng.sh: record the hashing convention; apply xxh128/cmp on the shell side (ADR-42 P4)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/04_Results.txt
+Record: the shell sites changed + why each primitive; `xxh128sum` provenance + whether a RUN_DEPENDS
+must be declared; the doc locations; the pinned known-answer hex; what remains for Phase 5 smoke; the
+go-ahead.

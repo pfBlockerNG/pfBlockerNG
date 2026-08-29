@@ -1,0 +1,141 @@
+ADR-47 Phase 4 — Local/CI smoke parity + shared SMOKE launcher
+RESULTS — handoff to Phase 5 (if any) or final acceptance gate
+================================================================
+
+ADR-RESUME: branch=adr/47-local-ci-execution-parity next-phase=5
+
+Date: 2026-06-27
+Implementer: Claude Sonnet (sub-agent under ADR-47 Phase 4 plan)
+
+---
+
+## What was delivered
+
+All seven file deliverables + two test deliverables + doc + handoff in a single commit.
+
+### New files
+
+1. **`scripts/run-smoke.sh`** — the ONE canonical pytest argv used by all three call sites.
+   - Parses `--paths`, `-m/--marker`, `--timeout`, `-k` as structured flags (before passthrough).
+   - Guards: `-m` in passthrough → don't inject default; positional in passthrough → replace `--paths`.
+   - PYTHON resolution: PYTHON env > `.venv/bin/python` (local dev) > `python3` (CI/box).
+   - Emits: `$PYTHON -m pytest $PATHS -m $MARKER --override-ini="addopts=" --override-ini="timeout_func_only=true" --timeout=$T --timeout-method=signal -v [-k $K] [passthrough...]`
+   - POSIX sh; shellcheck clean.
+
+2. **`scripts/smoke-on-box.sh`** — on-box entrypoint for local runs.
+   - Re-exec sentinel (`PFB_ONBOX_REEXEC=1`) for ref-stable checkout.
+   - Steps: ref-fetch+checkout → re-exec; sparse-clone FreeBSD-ports; oras digest-compare → pull
+     pfSense + civm images; sysctl + pkill; build-leg.sh → SMOKE_PKG; run-smoke.sh.
+   - POSIX sh; shellcheck clean.
+
+3. **`tests/shell/run_smoke_spec.sh`** — shellspec tests for run-smoke.sh (8 examples, 0 failures).
+   - Red→green: before run-smoke.sh, fake python never invoked → assertions fail.
+   - Covers: local default, UI call, CI repo marker, -k single arg, -m passthrough guard,
+     bare-path REPLACE, PYTHON resolution (explicit + fallback to python3).
+
+4. **`tests/test_adr47_conftest_lane.py`** — pytest unit tests for conftest.py changes
+   (12 tests, 0 failures).
+   - Red→green on all three changes: old ceiling message fails; missing DEFAULT_LAN_SOCKET_PORT
+     raises AttributeError; old DIAG_DIR returns Path("") on empty env.
+
+5. **`.ADRs/ADR_47_Local_CI_Execution_Parity/RESULTS/04_Results.txt`** — this file.
+
+### Modified files
+
+6. **`scripts/local-smoke.sh`** — rewired to lease a box via `select-box.sh -- <bootstrap>`;
+   all host prep/build/pytest moved ON the box. Requires `PFB_BOXES` env.
+
+7. **`tests/smoke/conftest.py`** — four targeted changes:
+   - `DIAG_DIR = Path(os.environ.get("PFB_DIAG_DIR") or "smoke-diag")` (empty-safe guard).
+   - `_validate_lane`: ceiling updated 5745 → 5319 (12340-based, LAN socket is now highest base).
+   - `DEFAULT_LAN_SOCKET_PORT = _lane_port(int(os.environ.get("SMOKE_LAN_SOCKET_HOSTPORT", "12340")), _LANE)`.
+   - `os.environ["SMOKE_LAN_SOCKET_PORT"] = str(DEFAULT_LAN_SOCKET_PORT)` added to import-time writebacks.
+   - `_alloc_free_tcp_port()` deleted.
+   - `lan_socket_port` fixture: yields `DEFAULT_LAN_SOCKET_PORT` (no allocator, no teardown).
+   - INVARIANT comment updated: "five" ports, added LAN socket = 12340.
+
+8. **`.github/workflows/smoke-single.yml`** — "Run the live-VM matrix" step rewired:
+   ```sh
+   RUN_ID="$(sh scripts/select-box.sh --print-id)"; export RUN_ID
+   set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
+   [ -n "${PYTEST_K:-}" ] && set -- "$@" --filter "${PYTEST_K}"
+   sh scripts/run-smoke.sh "$@"
+   ```
+
+9. **`.github/workflows/ui-tests.yml`** — "Run the UI tier" step rewired (same pattern,
+   `--paths tests/smoke/ui`, `--timeout 300`).
+
+10. **`docs/misc/local-smoke-debian.md`** — rewrote to describe the new lease/on-box model:
+    prerequisites (orchestrator + box), `scripts/local-smoke.sh` usage, internal flow, manual
+    on-box invocation, two-VM topology, building .pkg reference.
+
+---
+
+## Test gate results
+
+| Gate                              | Result         |
+| --------------------------------- | -------------- |
+| `shellcheck` (all 3 scripts)      | 0 errors       |
+| `shellspec` (full suite)          | 157/157, 4 skip|
+| `shellspec run_smoke_spec.sh`     | 8/8 green      |
+| `pytest test_adr47_conftest_lane` | 12/12 green    |
+| `pytest tests/ --ignore=smoke`    | 1901 passed    |
+| `ruff check/format`               | clean          |
+| `markdownlint-cli2`               | 0 errors       |
+| `actionlint` (2 workflows)        | 0 errors       |
+| `parity_guard_spec.sh`            | 7/7 green      |
+
+---
+
+## Design decisions
+
+### `select-box.sh -- "$_bootstrap"` (one-string arg)
+
+`select-box.sh` uses `_SB_CMD="$*"` (P2-frozen), which space-joins all args after `--`. Passing
+a PRE-ENCODED single-quoted bootstrap string as ONE arg preserves the shell structure on the box.
+Single-quote encoding via `_sq()` (sed `s/'/'\''/'g`) is in local-smoke.sh for REF/ABI/MARKER
+values that may contain shell metacharacters.
+
+### run-smoke.sh uses `set --` (not numbered-var trick for passthrough)
+
+The passthrough is SAVED to numbered vars (_pt_N) before `set --` rebuilds the canonical prefix,
+then replayed. This avoids bash-isms (no arrays) while preserving arg quoting for -k expressions
+like "a and not b".
+
+### DIAG_DIR empty guard: `or "smoke-diag"` not `or Path("smoke-diag")`
+
+Python's `Path("")` is NOT `Path("smoke-diag")` — it resolves to cwd, which escapes the CI
+upload globs (`smoke-diag/**`). The `or` treats both `None` and `""` as absent. Pinned by the
+`test_empty_env_uses_default` test.
+
+### LAN socket port determinism (TOCTOU fix)
+
+Old: `_alloc_free_tcp_port()` bind(:0) — port released before QEMU opens LISTENER → race window.
+New: `DEFAULT_LAN_SOCKET_PORT = _lane_port(12340, _LANE)` — port is KNOWN before boot starts.
+The lease + pkill contract on the box frees any prior holder before the smoke boots.
+
+### Ceiling: 5319 not 5745
+
+12340 is now the highest base port (LAN socket). `12340 + 5319*10 = 65530 ≤ 65535`;
+`12340 + 5320*10 = 65540 > 65535`. Old ceiling (5745) was based on 8080 (web).
+
+---
+
+## Live validation
+
+All shellspec and pytest gates passed locally. Live LXC validation (2-box concurrent run via
+`PFB_BOXES="root@10.0.0.23 root@10.0.0.24" scripts/local-smoke.sh`) is the remaining gate
+before marking P4 complete — this requires the boxes to have the new `smoke-on-box.sh` and the
+smoke images pre-pulled (or `SMOKE_GHCR_TOKEN` set for the oras pull on first run).
+
+---
+
+## What is NOT in P4 (deferred or out of scope)
+
+- The full live-VM 2-box concurrent run validation (requires LXC boxes; dispatch after merge).
+- Multi-lane SMOKE_LANE >0 concurrent runs (the port-striding mechanism is in place; the
+  `select-box.sh` lease already emits `SMOKE_LANE=0` for single-box runs; multi-lane
+  dispatching is a separate concern).
+- `SMOKE_GHCR_TOKEN` propagation from CI secrets to the box (the `select-box.sh -- <cmd>`
+  bootstrap can pass it as an env var if `select-box.sh` emits it; left to the box
+  pre-provisioning for now).

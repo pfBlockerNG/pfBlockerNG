@@ -1,0 +1,66 @@
+================================================================================
+PHASE 1 PROMPT — Pure schedule deciders + tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md   (read §1, §2.1, §2.2 first)
+================================================================================
+
+ROLE
+Branch adr/30-scheduled-log-reset (off devel). Phase 1 of 5. BEHAVIOUR-PRESERVING:
+you add two pure, dormant (uncalled) functions + their tests; nothing else changes.
+Work in the worktree, one commit, push to the branch.
+
+WHY THIS PHASE EXISTS
+The scheduled-reset feature pivots on one decision: "has the calendar period rolled
+over since the last reset?" Isolating that as PURE functions (no I/O) lets us pin
+every branch off-box before any risky log truncation or cron wiring exists. The cron
+cadence is operator-defined, so the logic MUST be boundary-gated (period-changed),
+not tick-counting (ADR §1.2).
+
+REQUIRED READING
+- .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md (§2.1 decider row, §2.2 contract)
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — where the ADR-28/29 helpers
+  live; add the new functions here, matching the file's style.
+- tests/php/README.md + an existing pure-helper test (e.g. tests/php/CfgGatewayTest.php
+  or AlertsDnsblFeedGroupCellGroupingTest.php) for the off-box load pattern.
+- CLAUDE.md (PHP rules; test-coverage mandate).
+
+ACTION PLAN (tests FIRST)
+1. Write tests/php/LogRotateScheduleTest.php that pins the intended behaviour:
+   - pfb_log_rotate_period($schedule, $ts) returns:
+       'off'/'' -> ''   ; 'daily' -> 'YYYY-MM-DD' ; 'weekly' -> ISO 'YYYY-Www'
+       (use date('o-\WW', $ts) so the ISO week-year is correct) ; 'monthly' -> 'YYYY-MM'.
+     Assert concrete values for fixed timestamps, INCLUDING the ISO-week year-boundary
+     case (e.g. 2027-01-01 falls in ISO week 2026-W53 — assert it).
+   - pfb_log_should_reset($schedule, $last_key, $now_ts):
+       off/'' -> FALSE (every time) ;
+       schedule set AND period(now) === $last_key -> FALSE (same period, no reset) ;
+       schedule set AND period(now) !== $last_key -> TRUE ;
+       schedule set AND $last_key === '' (never reset) -> TRUE.
+     Branch coverage: assert BOTH sides of each boundary (before-and-after), not one.
+2. Implement the two functions in pfblockerng_extra.inc (pure; type-hinted; no I/O,
+   no globals, no config reads). Default an unrecognised $schedule to off-behaviour.
+
+CONSTRAINTS
+- PHP 8.3, tabs, uppercase TRUE/FALSE, no die()/exit().
+- PURE: no file/config/clock access inside the functions — the caller passes $ts.
+- Do NOT touch pfb_log_mgmt(), the cron path, the UI, or config registry this phase.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit --filter LogRotateSchedule  -> green (assert it FAILS first if the
+  functions are stubbed wrong, then passes)
+- vendor/bin/phpunit                              -> full suite green
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+- vendor/bin/phpstan analyse src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+- php -l on the edited file
+
+EXPECTED RESULT
+Two pure functions exist + are fully unit-tested; they are not yet called anywhere.
+
+COMMIT (single)
+    pfblockerng: add pure schedule-period deciders for log reset (ADR-30 P1)
+Push to adr/30-scheduled-log-reset.
+
+HANDOFF — write .ADRs/ADR_30_Scheduled_Log_Reset/RESULTS/01_Results.txt
+State: the exact function signatures + return formats chosen; the period-key strings
+(daily/weekly/monthly) and the ISO-week decision; test file + count; any edge you
+hardened. Confirm full suite + phpcs + phpstan green. Go-ahead for Phase 2.

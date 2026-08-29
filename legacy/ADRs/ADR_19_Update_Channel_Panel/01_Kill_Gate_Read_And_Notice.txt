@@ -1,0 +1,103 @@
+================================================================================
+PHASE 1 PROMPT — KILL-GATE: read-our-repo-latest + idempotent file_notice on the VM
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_19_Update_Channel_Panel/ADR.md
+     (read §1 "Premise to falsify cheaply", §1.2/1.3/1.4, §7 reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/19-update-channel-panel` branch performing Phase 1 of ADR-19 —
+the KILL-GATE. Before ANY src/ GUI or cron code, cheaply prove on the ADR-04 live
+pfSense VM that the three pkg/API mechanics the whole ADR rests on actually hold.
+Work in this ADR's `adr/19-update-channel-panel` worktree, one commit, push directly
+(rebase-only PR because it touches tests/).
+
+WHY THIS PHASE EXISTS
+ADR-19 has no perf claim, but it has three pkg/API-mechanics premises (§1). If a real
+box cannot read OUR repo's latest version without falling back to `-r pfSense`
+(`pkg-utils.inc:407` re-locks discovery to Netgate), or `file_notice` cannot be made
+idempotent per version from the cron context, or a same-channel `pkg upgrade` does not
+pull our build, the design is wrong and must be reshaped BEFORE the page/cron exist
+(the ADR-01 guard: falsify the premise first). ADR-17 already proved install/upgrade
+PRECEDENCE from our repo; this phase settles the READ + NOTICE mechanics that are new.
+
+REQUIRED READING
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md (§1 premises + §1.2/1.3/1.4, §2 "Read
+  latest"/"Notice"/"Update now", §7 reject/degrade criteria).
+- .ADRs/ADR_17_Pkg_Repository/ADR.md §7 + RESULTS/01_Results.txt and 05_Results.txt —
+  the proven `repo`-marked install/precedence/upgrade model + the hermetic catalog.
+- tests/smoke/test_repo_install.py — the `repo`-marked flow: the
+  `build_repo_via_portable(...)` helper, how a hermetic `file://` repo conf is written,
+  how egress is forced OPEN for this flow, the `pkg query`/`pkg info` assertions.
+- tests/smoke/helpers.py + tests/smoke/conftest.py — `smoke_vm`, on-box exec, the
+  `@pytest.mark.timeout(...)` cap, `unique_domain()`.
+- Upstream pfSense (read at a DATED ref per CLAUDE.md "Resolving pfSense-provided PHP
+  functions"): src/etc/inc/notices.inc `file_notice()` (:110), `get_notices()` (:164),
+  `close_notice()` (:196); src/etc/inc/pkg-utils.inc `get_pkg_info` repo-lock (:407).
+- CLAUDE.md — "Smoke tests (ADR-04)", "Investigating the live system", "Test coverage".
+
+ACTION PLAN (ordered — transition asserts, befores AND afters, by value)
+1. READ-OUR-LATEST without `-r pfSense`:
+   - GIVEN our build installed from a hermetic `file://` catalog (reuse the ADR-17
+     helper), with a SECOND hermetic catalog carrying a HIGHER version of the same
+     package name. Write our repo conf (priority above any decoy), `pkg update -r
+     <ourrepo>`.
+   - WHEN `pkg rquery -r <ourrepo> '%v' <pkgname>` and `pkg query '%v' <pkgname>`.
+     THEN rquery returns the catalog's higher version, query returns the installed —
+     and prove the read did NOT touch the `pfSense` repo: assert no `pfSense-repo-setup`
+     side effect / the `pfSense` repo conf is unchanged, and that `-r <ourrepo>` alone
+     answers (a `pkg rquery` WITHOUT `-r` is not required and must not be relied on).
+   - This is the §7 premise-1 gate.
+2. IDEMPOTENT file_notice from a cron-like context:
+   - WHEN `file_notice('pfBlockerNG', "pfBlockerNG <ver> available (devel)",
+     'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1)` is invoked once (drive
+     it via `pfSsh.php`/php-cli on the box). THEN exactly one matching row appears in
+     `get_notices()` (assert before: absent; after: present once).
+   - Prove DE-DUPE is a CALLER concern: invoking again for the SAME version must be
+     suppressible by caller-side last-notified state (demonstrate the pattern: store
+     last-notified version in a file, only call file_notice when latest != last). Show
+     two ticks at the same version => one notice; a higher version => a second notice.
+   - This is the §7 premise-2 gate.
+3. SAME-CHANNEL upgrade from our repo (confirm ADR-17 still holds for this pkg name):
+   - GIVEN installed version N from our hermetic catalog; rebuild the catalog to N+1.
+   - WHEN `pkg upgrade -y <ourpkg>`. THEN `pkg query '%v'` advances N -> N+1 and
+     `pkg query '%R' <ourpkg>` shows OUR repo. Assert before and after.
+   - This is the §7 premise-3 gate (degrade-not-reject if it fails).
+4. Land minimal `repo`-marked cases (in tests/smoke/test_repo_install.py or a sibling
+   tests/smoke/test_software_update.py) — deselected from `-m smoke`. Use
+   `unique_domain()` for any DNS; leave the VM CLEAN (`finally`/CaseContext); give long
+   cases an explicit `@pytest.mark.timeout(...)`; CLOSE any notice you raised.
+5. Record the VERDICT in RESULTS/01_Results.txt: GO only if (1) reads our latest via
+   `-r <ourrepo>` without `pfSense` involvement AND (2) the notice is idempotent per
+   version; (3) is GO-or-DEGRADE. Else REJECT/REDESIGN citing the failing premise + the
+   `pkg`/notice output, per §7.
+
+CONSTRAINTS
+- Python 3.11+, 4-space, type hints, no bare `except`. Reuse the `smoke_vm` fixture +
+  helpers — do NOT add a second VM boot path. Marker `repo` only (NOT `smoke`).
+- This flow runs with egress OPEN (the repo flow), like ADR-17 — do NOT block egress.
+- NO src/ change, NO CI change, NO add-repo nightly work this phase. Hand-build / reuse
+  hermetic catalogs in-test only.
+- Compare versions BY VALUE; assert effective state (`pkg query`/`pkg rquery`/
+  `get_notices`), never the exit code alone. Read the live system's own logs first on
+  any failure (smoke-diagnostics).
+
+VERIFICATION (must all pass before the phase is done)
+- The new `repo`-marked cases are GREEN on the live VM (dispatch
+  `gh workflow run smoke.yml -f pytest_marker=repo`); capture the run id.
+- python -m pytest (default) → UNCHANGED (smoke tree is `--ignore`d).
+- ruff check . / ruff format . → clean.
+
+EXPECTED RESULT
+Documented GO (or REJECT/REDESIGN/DEGRADE) on the three mechanics, with live `pkg`
+and `get_notices` evidence, so Phases 2-5 build on proven ground.
+
+COMMIT (single)
+    tests: ADR-19 P1 kill-gate — read-our-repo-latest + idempotent file_notice (ADR-19 P1)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_19_Update_Channel_Panel/RESULTS/01_Results.txt` (plain .txt)
+Record: the exact `pkg rquery -r <repo>`/`pkg query`/`pkg upgrade` invocations that
+worked; proof the read avoided `pfSense`; the de-dupe pattern proven (last-notified
+file); the notice id/category used; the run id; per-premise GO/REJECT/DEGRADE verdict;
+and the go-ahead for Phase 2.

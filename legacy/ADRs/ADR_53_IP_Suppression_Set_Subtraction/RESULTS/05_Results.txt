@@ -1,0 +1,240 @@
+ADR-53 Phase 5 -- v6 set-diff engine (pure PHP, TDD)
+=====================================================
+
+STATUS: Done. New, pure IPv6 CIDR set-subtraction engine landed in
+pfblockerng_extra.inc, unit-tested off-appliance. No caller wired yet (that is
+Phase 6's job) -- pfblockerng.inc, pfblockerng_ip.php and every other src/ file
+are untouched this phase. Only 3 files touched: pfblockerng_extra.inc (new
+engine), tests/php/pfsense_doubles.php (new faithful double for
+ip_range_to_subnet_array + its two PEAR-dependent callees), and the new
+tests/php/V6CidrSubtractTest.php.
+
+Function signatures + error-reporting shape
+--------------------------------------------
+    pfb_cidr_subtract_v6(array $cidrs, array $holes, ?array &$errors = null): array
+    pfb_suppress_file_v6(string $file, string $suppfile): bool
+
+Chosen error shape: a simple by-ref `&$errors` out-param (default NULL,
+overwritten with `[]` on every call), collecting the raw malformed token
+strings skipped from EITHER array (both sides pooled, order preserved:
+$cidrs' malformed tokens first, then $holes'). A blank line or a '#'-led
+comment is a silent no-op (mirrors pfb_validate_suppression_line's existing
+tolerance for the persisted suppression file) and is NEVER added to $errors.
+Nothing throws -- a malformed token anywhere never aborts the rest of the
+file, per the phase spec.
+
+Internal helpers (pfblockerng_extra.inc, all PURE, no I/O):
+    pfb_v6_cidr_to_range(string $token, ?bool &$is_blank = null): ?array
+        Parses one 'addr/bits' token to a [start_bin, end_bin] pair of
+        fixed-width 128-char '0'/'1' strings (inet_pton() + per-byte
+        sprintf('%08b', ...) -- no GMP, per the phase spec).
+    pfb_v6_bin_inc / pfb_v6_bin_dec(string $bin): ?string
+        +/-1 on a 128-bit binary string via the same find-the-flip-bit
+        technique pfSense's own ip_range_to_subnet_array() uses internally
+        (NULL on overflow/underflow at the top/bottom of the address space).
+    pfb_v6_bin_to_addr(string $bin): string
+        Binary string -> textual address (pack + inet_ntop()).
+    pfb_v6_emit_covering_cidrs(string $start_bin, string $end_bin): array
+        bin_to_addr() both ends, then calls the REAL pfSense
+        ip_range_to_subnet_array() (never redefined in production code).
+
+Correctness-critical design note: EVERY comparison between two 128-char
+binary strings goes through strcmp(), never the bare <, >, <=, >=, min(),
+max() operators. A 128-digit string of only '0'/'1' characters is a PHP
+"numeric string", and PHP's own comparison operators can silently coerce two
+numeric strings through a lossy float/overflow path for a string this long
+-- strcmp() is the only byte-exact comparison here. (Verified empirically
+that PHP 8's `<`/`>` on adversarial 128-char digit strings behaved
+correctly in a couple of hand-built cases, but this is undocumented,
+version-sensitive behaviour I am not willing to depend on for NEW
+production code -- vendored upstream code that already relies on it, in the
+double, is left untouched since it is a faithful copy, not something I
+wrote.)
+
+Algorithm shape (matches the phase's own action-plan wording): parse both
+arrays to ranges -> sort holes once, up front -> for each entry
+independently, clip every intersecting hole to the entry's bounds -> walk
+the (pre-sorted) intersecting holes left-to-right, emitting the covering
+CIDRs for the gap before each hole via pfb_v6_bin_dec()/pfb_v6_bin_inc(),
+then a final trailing gap after the last hole -> an entry with zero
+intersecting holes re-emits unchanged (still routed through
+ip_range_to_subnet_array() so notation stays consistent, ADR-53 §2.3 fork 4).
+
+pfb_suppress_file_v6() contract (§2.2 fail-safe): EITHER $file or $suppfile
+missing/unreadable -> FALSE, $file left byte-identical (both inputs treated
+symmetrically as required -- this differs from the v4 shell suppress(),
+where "no suppression file" is the caller-level opt-out gate; Phase 6's
+caller is expected to gate on "is v6suppression configured" the same way
+v4's caller gates, exactly as today, so this engine function itself just
+needs both its named inputs present). A legitimate full suppression
+publishes an EMPTY file and returns TRUE (never FALSE -- the §2.2
+empty-is-legit contract). Non-CIDR lines are dropped and logged via
+pfb_logger(..., 2) (pfBlockerNG log + error log, matching the logtype used
+by comparable validation-warning call sites elsewhere in pfblockerng.inc).
+Publish is same-directory tmp+rename (atomic POSIX rename), mirroring the
+pfb_due_ledger_write_entry() pattern already in this file.
+
+Upstream verification (dated-ref protocol, CLAUDE.md)
+-------------------------------------------------------
+Fetched src/etc/inc/util.inc from the public pfsense/pfsense GitHub mirror at
+three refs and diffed ip6_to_bin(), bin_to_ip6(), ip_range_to_subnet_array(),
+ip_range_to_address_array() and ip_range_size_v4() byte-for-byte:
+
+  - CE 2.8.0 (min supported)  -- ed6c2eb84595aab998c3b3efaf16d226bd62c38d
+    (youngest master commit at/before the 2025-05-28 release date, confirmed
+    via the Netgate blog post + docs.netgate.com release-notes "last updated"
+    stamp; resolved via the GitHub commits API with `until=`, per CLAUDE.md's
+    "the public mirror lacks RELENG tags, use dated commits").
+  - CE 2.8.1 (latest released) -- 97f9eb5c819fd7f0c5f232d2581e5080be1cb18a
+    (youngest master commit at/before the 2025-09-04 release date, confirmed
+    via the Netgate blog post's dateline). Went one release beyond the
+    "min-CE + master" floor the orchestrator set, since it was one more free
+    API call and is the currently-shipping CE.
+  - master tip -- 9363ac5b8651a1c7a333180425ce7719070f95f9 (committer date
+    2026-03-31; the mirror's `pushed_at` matches, so this is genuinely current
+    tip, not a stale cache).
+
+All five functions were BYTE-IDENTICAL across all three refs (diffed via a
+brace-depth-counting Python extractor, not eyeballing). This is 10 months of
+pfSense history with zero change to this code -- consistent with the phase
+prompt's expectation ("ancient pfSense code -- expect identical bodies").
+
+DEVIATION flagged: did NOT individually check each pfSense Plus release
+(25.07/.1, 25.11/.1, 26.03/.1) -- the orchestrator's brief explicitly narrowed
+verification to "min-CE 2.8.0 and current master at minimum", which I
+followed, adding CE 2.8.1 as a bonus rather than the full Plus fan-out. Given
+the function's demonstrated 10-month zero-change history and that master tip
+(2026-03-31) postdates every listed Plus release, the risk of an undetected
+Plus-only divergence is low, but this is a real, disclosed scope reduction
+relative to CLAUDE.md's full per-release protocol, not an oversight -- flagged
+for the orchestrator's judgement call, not silently assumed away.
+
+Faithful double + vendoring (tests/php/pfsense_doubles.php)
+--------------------------------------------------------------
+ip_range_to_subnet_array() is vendored VERBATIM (byte-diffed against the
+fetched 2.8.0 source after re-indentation for its function_exists() wrapper
+-- confirmed identical except for that one added indent level). Its two
+callees are NOT vendored verbatim because upstream implements them via PEAR's
+Net_IPv6 (Uncompress()/compress()), which does not exist off-appliance (the
+same constraint the file's header already documents for is_ipaddrv6()):
+ip6_to_bin() and bin_to_compressed_ip6() are faithful REIMPLEMENTATIONS using
+PHP's builtin inet_pton()/inet_ntop() (pack/unpack + per-byte bit expansion;
+inet_ntop() already implements RFC 5952 canonical compression, so the output
+is byte-identical to Net_IPv6::compress() for any address inet_pton() itself
+accepts). No new stub was needed in stubs/pfsense/util.php -- ip6_to_bin,
+bin_to_ip6, bin_to_compressed_ip6 and ip_range_to_subnet_array were already
+declared there (pre-existing, empty-bodied PHPStan stubs).
+
+Double vector pins (V6CidrSubtractTest::testDoubleVectorV4Aligned/
+V4NonAlignedEdgeCase/V6Aligned/V6NonAlignedEdgeCase) assert hand-derivable
+outputs so a stale/wrong double fails loudly:
+  - v4 aligned:      ip_range_to_subnet_array('10.0.0.0','10.0.0.3')
+                        == ['10.0.0.0/30']
+  - v4 non-aligned:  ip_range_to_subnet_array('10.0.0.1','10.0.0.2')
+                        == ['10.0.0.1/32','10.0.0.2/32']
+  - v6 aligned:      ip_range_to_subnet_array('2001:db8::','2001:db8::3')
+                        == ['2001:db8::/126']
+  - v6 non-aligned:  ip_range_to_subnet_array('2001:db8::1','2001:db8::2')
+                        == ['2001:db8::1/128','2001:db8::2/128']
+
+Red -> green evidence
+-----------------------
+Wrote the full test file first (tests/php/V6CidrSubtractTest.php, 25 tests),
+then `git stash push` on JUST the two production files (pfblockerng_extra.inc
++ pfsense_doubles.php), leaving the new test file in place, and ran:
+
+    vendor/bin/phpunit --filter V6CidrSubtractTest
+    -> ERRORS! Tests: 25, Assertions: 36, Errors: 25.
+       Every failure: "Error: Call to undefined function pfb_cidr_subtract_v6()"
+       or "...pfb_suppress_file_v6()" or "...ip_range_to_subnet_array()" --
+       the exact documented reason (the engine/double do not exist yet).
+
+`git stash pop` restored the implementation; re-ran the same filter:
+
+    -> OK (25 tests, 254 assertions).
+
+Bug found DURING the perf measurement (not by a unit test) -- fixed
+-------------------------------------------------------------------
+The first draft accumulated output via `$out = array_merge($out, ...)` inside
+the per-entry loop. On the 100k-line synthetic benchmark (see below) this
+measured 22.4s -- a classic O(n^2) blowup (array_merge recopies the whole
+accumulated array on every call). Root-caused via the measurement itself,
+fixed by replacing all three call sites with `array_push($out, ...$chunk)`
+(amortised O(k) append for k new elements), and re-verified: same 25/25 green
+PLUS the 100k-line case dropped from 22.4s to ~1.24s (18x). Left an inline
+comment at the fix site naming the anti-pattern and the before/after numbers
+so it isn't silently reintroduced.
+
+Performance measurement (ADR-53 §7 bound: 100k lines / <5s)
+--------------------------------------------------------------
+One-off harness (not committed -- informational per the phase spec's "a small
+harness note" option), run via `tests/php/bootstrap.php` + a synthetic
+100,000-line v6 member file (one /128 host per line, spread across 100,000
+distinct /64 prefixes -- mimicking a realistic DNSBL-derived IPv6 host feed)
+and a 100-line suppression file (holes scattered across a subset of the same
+prefixes so real carve work happens, not just pass-through):
+
+    ok=true elapsed=1.2398s input_lines=100000 supp_lines=100 output_lines=99900
+    (re-run 3x for stability: 1.2383s / 1.2388s / 1.2390s -- consistent)
+
+Machine: Apple M1 Pro (macOS 26.5.1), PHP 8.5.7 CLI (dev box; appliance-class
+hardware is presumably slower, but 1.24s leaves ~4x headroom under the 5s
+bound even accounting for a slower CPU). Well within the §7 reject bound --
+no LOUD flag needed; the engine is ready to wire in Phase 6 as-is.
+
+Test counts / gate results
+-----------------------------
+- vendor/bin/phpunit -> 1898 tests, 15748 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). Test count is P4's
+  1873 + 25 new V6CidrSubtractTest cases = 1898, confirming no other test
+  file changed.
+- php -l on all 3 touched/new files -> clean.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output (the two
+  test files are outside phpcs.xml.dist's scanned paths, as expected).
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files).
+- .venv/bin/python -m pytest -q -> 2052 passed, 4 skipped. NOTE: P4's handoff
+  recorded "2042 passed, 4 skipped" as the untouched baseline; this run (and
+  a repeat) both show 2052 -- a +10 drift with the SAME skip count and ZERO
+  failures, on a branch/worktree where no Python file was touched this phase
+  (git diff confirms only the 2 PHP files + 1 new PHP test file changed).
+  Recorded honestly rather than silently matching P4's number: this is
+  environment/collection drift unrelated to this phase's change, not a
+  regression -- flagging for the orchestrator rather than assuming it away.
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "159 files already formatted" (also +1 vs P4's 158, consistent with the
+  same untouched-Python-tree drift noted above).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to P3/P4's baseline (no shell touched this phase).
+- Diff-read: confirmed pfb_cidr_subtract_v6() and all its pfb_v6_* helpers
+  are 100% pure (no $pfb/$g access, no file/network I/O, no logging). The
+  ONLY side effect anywhere in this phase's code is pfb_suppress_file_v6()'s
+  target-file write (tmp+rename) plus its companion pfb_logger() calls for
+  dropped tokens -- exactly the one sanctioned I/O boundary the phase spec
+  calls for.
+
+Scope confirmation
+-------------------
+`git diff --stat`: exactly 2 files modified + 1 new --
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc  (+295, new engine)
+  tests/php/pfsense_doubles.php                        (+191, new double)
+  tests/php/V6CidrSubtractTest.php                     (new, 25 tests)
+No pfblockerng.inc, pfblockerng_ip.php, or any other caller touched -- v6
+suppression is NOT wired to anything yet (Phase 6's job). No shell touched.
+No new stub needed in stubs/pfsense/ (the four util.inc functions this phase
+depends on were already stubbed there).
+
+Go-ahead for Phase 6
+----------------------
+Phase 5 is complete and green (PHPUnit, PHPCS, PHPStan, pytest, ruff,
+shellspec). The engine (pfb_cidr_subtract_v6 + pfb_suppress_file_v6) is pure,
+fail-safe, measured fast enough, and ready to wire. Phase 6 (v6 config + UI +
+update-flow wiring) can proceed: register `v6suppression` (plain blob +
+sniff path + round-trip test), add the v6 textarea to pfblockerng_ip.php
+(validator family=v6, masks /32-/128), flip pfb_validate_suppression_line()'s
+`family === 'ipv6'` branch (currently an unconditional "not yet supported"
+stub per P4 -- SuppressionValidatorTest::testIpv6NotYetSupported() is the
+explicitly-pinned tripwire P4 left for this), have
+pfb_create_suppression_file() write pfbsuppression_v6.txt, and call
+pfb_suppress_file_v6() from the alias-build loop for `_v6` member files under
+the v4-equivalent gates (suppression enabled + feed-changed).

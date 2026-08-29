@@ -1,0 +1,165 @@
+================================================================================
+ADR-10 — PHASE 6 RESULTS — Validation, benchmark, update/reload contract, DoD
+  (closing phase: re-run the kill-gate on adr/10, prove idle decision-identity,
+   document data=swap / config=restart, finalise §7 reject + live-box smoke)
+Branch: adr/10   Date: 2026-06-04   Model: Claude Opus 4.8
+Files: README.md (new "Zero-downtime DNSBL updates (ADR-10)" subsection)
+       CLAUDE.md (new ADR-10 data-vs-config paragraph in "Running tests")
+       .ADRs/ADR_10_Zero_Downtime_DNSBL/ADR.md (Status; §7 reject + smoke finalised)
+       .ADRs/ADR_10_Zero_Downtime_DNSBL/RESULTS/06_Results.txt (this file)
+  NO src/, tests/, benchmarks/, or CI change — validation + docs only.
+================================================================================
+
+OVERALL: ** DONE — ADR-10 IMPLEMENTATION-COMPLETE; Status = "Implemented
+  (pending live-box smoke)". ** The automated guards are green on adr/10, the
+  branch RAM kill-gate re-measured (RAM-GATED, exactly as Phase 1), the
+  update/reload contract documented in README + CLAUDE.md, and §7 reject +
+  live-box smoke reconciled with what was actually built (RAM-gated fallback in
+  BOTH Python + PHP; sentinel/generation contract; decisionDB clear;
+  allow->block delta-flush vs TTL-fallback; block->allow immediate; #51 instant
+  lock/unlock). The ONLY thing between here and Accepted is the maintainer's
+  live-box smoke (CI cannot reach Unbound's Python loader or the C-cache).
+
+--------------------------------------------------------------------------------
+1. BENCHMARK — branch peak-RAM (build-while-old-live + swap) vs the kill-threshold
+--------------------------------------------------------------------------------
+  Harness: benchmarks/spike_adr10_swap.py (UNCHANGED), .venv/bin/python (CPython
+  3.14, darwin), default SPIKE_SIZES=2000000 / SPIKE_N=3, pympler 1.1 present
+  (genuine both-resident sizing, not the 2x-tracemalloc fallback).
+
+  RESULT (all 3 runs identical):
+    raw corpus: 2,040,000 lines -> 1,493,123 unique domains (data=1,311,583
+                zone=181,540, 24 feedgroups)
+    new-set build peak (tracemalloc, one set):    388.4 MiB
+    steady-state footprint (one set, pympler):     392.9 MiB  (276.0 B/entry vs
+                                                   274 B/entry ADR-05 baseline)
+    BOTH-RESIDENT (old + new live, pympler):       785.9 MiB   <== the ~2x number
+    process peak RSS (ru_maxrss, whole interp):  2,623.1 MiB
+
+  KILL-THRESHOLD (unchanged from Phase 1): 35% of a 1 GB min-spec box = 358 MiB.
+    gate input 785.9 MiB [both-resident, pympler] -> OVER-BUDGET
+    RAM VERDICT: RAM-GATED (mitigation required).
+
+  This re-confirms Phase 1 to the byte (785.9 MiB then and now): the ~2x transient
+  busts the 1 GB-box budget at ABP scale, so the swap is NOT default-on for a
+  constrained box. The MANDATED mitigation is BUILT and is the fail-safe:
+    - PHP RAM gate (PRIMARY) — pfb_unbound_py_swap_fits_ram() (Phase 5):
+        projected = 2 * loaded_entries * 276 (RELOAD_BYTES_PER_ENTRY);
+        fits iff hw.usermem >= projected + 64 MiB (RELOAD_RAM_HEADROOM_BYTES);
+        unknown pfb_py_count / unreadable hw.usermem -> FALSE (fail-closed -> restart).
+    - Python watcher free-page probe (SECONDARY net) — declines fail-closed on a
+        constrained box, keeping the old snapshot (Phase 4).
+    Either declining -> fall back to today's RESTART, which never doubles RAM (the
+    old set dies before the rebuild). The 276 B/entry + 64 MiB headroom are one
+    contract shared by both ends.
+
+  Bonus-2 micro-bench (Reports-sqlite write, informational, unchanged from P1):
+    (a) per-row INSERT+commit  9.21 us/row (worst case, not shipped);
+    (b) batched executemany    0.69 us/row (what pfb_db_worker does off-thread);
+    (c) queue.put_nowait       1.122 us/row (the only DNS-thread-path cost) ~1.12x
+        the ~1 us matcher. Async log path retained + reset-on-swap (Phase 3), per
+        the Phase-1/3 decision.
+
+--------------------------------------------------------------------------------
+2. EQUIVALENCE / GUARD SET — full idle decision-identity, green
+--------------------------------------------------------------------------------
+  .venv/bin/python -m pytest -q                         -> 1059 passed (2.02s)
+    No skips, no xfails. Off the swap path, every DNS decision is unchanged.
+
+  ADR guard subset (.venv/bin/python -m pytest tests/test_adr06_* test_adr07_*
+  test_adr10_*) -> 815 passed. Breakdown of the ADR-10 suite:
+    tests/test_adr10_snapshot_equivalence.py   9 passed  (single-Snapshot field-
+                                                          for-field parity, P2)
+    tests/test_adr10_swap.py                  10 passed  (fail-closed
+                                                          rebuild_and_swap, P3)
+    tests/test_adr10_watcher.py               21 passed  (sentinel/generation,
+                                                          coalescing, RAM-gate,
+                                                          clean join, P4)
+  The retained tests/test_adr06_* + tests/test_adr07_* oracles (idle decision-
+  identity) pass UNCHANGED -> the swap changed WHEN structures change, never WHAT
+  decision a snapshot yields.
+
+--------------------------------------------------------------------------------
+3. DOCS — the update/reload contract (README.md + CLAUDE.md)
+--------------------------------------------------------------------------------
+  README.md — NEW subsection "Zero-downtime DNSBL updates (ADR-10)" (after the
+  ADR-07 block, before "DNSBL sinkhole VIP"). States:
+    - DATA update = zero-downtime background swap, NO restart: Snapshot + single
+      GIL-atomic ref rebind on the watcher thread; PHP atomic publish (stage ->
+      fsync -> rename) + sentinel flip (/var/unbound/pfb_py_reload); fail-closed.
+    - DATA covers feed/cron AND the #51 user custom-list edits (alerts Lock/Unlock
+      + "add to whitelist" + customlist add/delete) — all on the no-restart path;
+      Unbound pid unchanged.
+    - CONFIG (unbound.conf / Resolver / mode) still RESTARTS.
+    - FALLBACK to restart (fail-safe): RAM-constrained box (PHP RAM gate primary,
+      Python free-page probe secondary), feature/python off, Unbound down, staged
+      config change, prior swap/sentinel error.
+    - Cache: Reports reset; decisionDB cleared; block->allow IMMEDIATE (blocks not
+      C-cached, #43); allow->block flushes the prior resolved answer — targeted
+      delta flush for the #51 single-domain case, TTL-bounded for feed/cron (not a
+      regression — the restart is TTL-stale there too).
+
+  CLAUDE.md — NEW paragraph in "Running tests" (after the ADR-07 paragraph): the
+  same data=swap / config=restart contract, the sentinel + watcher mechanism, the
+  RAM-gated fallback (both ends), the cache behaviour, fail-closed, and the
+  tests/test_adr10_* / benchmarks/spike_adr10_swap.py pointers.
+
+  Edits are focused; no README/CLAUDE.md restructure. markdownlint-cli2 -> 0 errors.
+
+--------------------------------------------------------------------------------
+4. ADR.md §7 — DoD + REJECT + live-box SMOKE finalised
+--------------------------------------------------------------------------------
+  STATUS set to "Implemented (pending live-box smoke)" (header + the DoD Status
+  line) — NOT Accepted. Flips to Accepted ONLY after the maintainer passes the §7
+  smoke on a live pfSense CE box.
+
+  REJECT CRITERIA reconciled with what was settled:
+    - Threading premise — HELD (Phase 1, CI/source-provable: one process-wide
+      CPython interpreter + one shared __main__ dict + GIL -> a single _snapshot
+      rebind is visible to every worker). Live num-threads>1 confirm = smoke item 1.
+    - RAM premise — RAM-GATED (settled Phase 1, re-confirmed Phase 6 at 785.9 MiB
+      both-resident vs 358 MiB budget). Mitigation BUILT (PHP gate primary, Python
+      probe secondary; restart fallback). NOT default-on for a constrained box.
+    - Swap can't beat the restart — NOT yet decided; this is the headline live-smoke
+      gate (zero dropped queries under load).
+
+  LIVE-BOX SMOKE CHECKLIST (complete + actionable; reconciled with the built path):
+    [ ] Shared-global visibility (num-threads>1: one swap flips on every worker).
+    [ ] Atomic publish + sentinel flip (temp+rename, no .pfbpub_* leftover, next
+        integer into /var/unbound/pfb_py_reload, raws exist before the manifest).
+    [ ] Zero dropped queries under load + pid unchanged (the reject gate).
+    [ ] Flip correctness + caches (allow->block needs decisionDB clear + C-cache
+        handling [feed/cron TTL-bounded]; block->allow needs only decisionDB clear,
+        immediate; Reports + counts reflect the new lists).
+    [ ] #51 instant: Lock (allow->block) = decisionDB clear + TARGETED delta flush
+        (name + www. sibling), no restart; Unlock/whitelist (block->allow) =
+        decisionDB clear, immediate; pid unchanged.
+    [ ] Fail-closed (broken/partial manifest -> no swap, old lists keep serving).
+    [ ] Fork: data = no-restart (pid unchanged); config = restart (pid changes);
+        gate-declined / off / error -> restart so the new lists still load.
+    [ ] No control collision (allow->block flush coordinates via the .sync marker).
+    [ ] RAM gate on the smallest box: fits OR the PHP gate declines -> restart (NOT
+        OOM); covers pfb_py_count-absent / hw.usermem-unreadable; the gate MUST fire
+        on a 1 GB appliance (785.9 MiB > 358 MiB budget).
+  Each item names the built mechanism + the pid-unchanged / log signal to watch.
+
+--------------------------------------------------------------------------------
+5. GATES (this phase)
+--------------------------------------------------------------------------------
+  .venv/bin/python -m pytest -q                  -> 1059 passed (full ADR-06/07/10).
+  .venv/bin/ruff check .                          -> All checks passed!
+  zsh -lc 'npx markdownlint-cli2'                 -> 0 error(s).
+  php -l / ShellCheck                             -> N/A (no PHP/shell touched).
+  benchmarks/spike_adr10_swap.py (adr/10)         -> 785.9 MiB both-resident vs
+                                                     358 MiB -> RAM-GATED (as P1).
+
+--------------------------------------------------------------------------------
+6. READY TO FLIP Proposed -> Accepted?
+--------------------------------------------------------------------------------
+  ADR-10 is IMPLEMENTATION-COMPLETE on adr/10 (Phases 1-6): automated guards green,
+  branch RAM kill-gate re-measured, contract documented, §7 reject + smoke
+  finalised. Status = "Implemented (pending live-box smoke)". It flips to ACCEPTED
+  ONLY after the maintainer runs the §7 live-box smoke on a real pfSense CE box —
+  CI cannot prove the headline guarantee (zero dropped queries, shared-global
+  visibility, C-cache correctness) because it has no live Unbound Python loader.
+================================================================================

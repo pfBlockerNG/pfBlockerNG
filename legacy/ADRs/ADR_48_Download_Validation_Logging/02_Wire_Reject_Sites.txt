@@ -1,0 +1,182 @@
+================================================================================
+PHASE 2 PROMPT — Wire the existing reject sites through pfb_validate_log()
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_48_Download_Validation_Logging/ADR.md   (read §2 items 1-3 + the
+     RESOLVED fork, §3 risks, §6 Phase 2, §7 first)
+================================================================================
+
+Run /ponytail:ponytail full
+
+ROLE
+Branch: adr/48-download-validation-logging (off devel)
+Phase 2 of 4 — behaviour-CHANGING for log MESSAGES only (same sinks, same
+levels, same reject decisions; the §2 fork resolution adds an optional
+out-param to pfb_filter()).
+Work ENTIRELY inside the worktree (`git -C <worktree> ...`). One commit, push.
+
+WHY THIS PHASE EXISTS
+Phase 1 landed the canonical formatter (unused). This phase replaces the
+ad-hoc reject strings at every LANDED download-validation reject site with
+pfb_validate_log(), implementing the resolved §2 fork: pfb_filter() exposes
+the raw detail via an optional by-ref out-param and the pfb_download() call
+sites emit the canonical line, where the feed $header and the true stage are
+in scope.
+
+REQUIRED READING
+- FIRST the prior handoff: .ADRs/ADR_48_Download_Validation_Logging/RESULTS/01_Results.txt
+  Confirm pfb_validate_log_line()/pfb_validate_log() signatures + canonical
+  shape. If missing -> STOP.
+- ADR.md §2 — the fork RESOLUTION (option (a)) is binding: opted-in caller
+  pre-sets the out-param to an array; pfb_filter() fills it and SUPPRESSES its
+  own legacy level-2 message; non-opted callers keep the legacy message
+  unchanged. The 7z missing-tool reject stays ad-hoc (resolved OUT). The
+  commented-out ZIP inner-content block is dead code — do NOT wire it.
+- CLAUDE.md — Test coverage non-negotiables; PHP standards.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc anchors (verify each before
+  editing — devel moves):
+    * pfb_filter() signature ............................... L865
+      function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE)
+    * PFB_FILTER_FILE_MIME case ............................ L1226-1282
+        exec file -b --mime-type ........................... L1242
+        $mime_raw = $output[0]; ............................ L1244
+        ADR-44 normalise + allowlist gate .................. L1245, L1251
+        legacy ad-hoc reject message (level 2) ............. L1275
+        return FALSE (raw mime discarded today) ............ L1277
+    * PFB_FILTER_FILE_MIME_COMPRESSED case (file -bZ) ...... exec ~L1298,
+        legacy reject message .............................. L1300
+    * pfb_download() signature ($header = feed name) ....... L8828
+    * outer MIME gate call + bare return FALSE ............. L9235-9238
+    * ZIP post-extraction FILE_MIME re-run + return ........ L9390-9392
+    * compressed peeks: gzip L9319, bzip2 L9332, 7z L9410 (each: bare
+      return FALSE; the only reject text today comes from pfb_filter L1300)
+    * ADR-45 structural reject logs: gzip L9263, bzip2 L9328, zip L9340,
+      7z L9406 — message "\n[pfb_download] Corrupt or unreadable {$file_type}
+      archive (structural probe failed): [...]" at level 2
+    * 7z missing-tool reject (LEAVE UNTOUCHED) ............. L9399-9404
+    * dead ZIP inner-content block (LEAVE UNTOUCHED) ....... L9362-9371
+- tests/php/PfbFileMimeSinkEscapeTest.php + PfbFileMimeNormaliseWiringTest.php
+  — sink-capture + live-tool wiring-test techniques to copy.
+
+ACTION PLAN (ordered)
+
+1. pfb_filter() out-param (fork option (a)):
+   - Extend the signature with a trailing optional by-ref param:
+       function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FALSE, &$reject_detail=NULL)
+   - In the FILE_MIME reject path (around L1251-1277): when
+     is_array($reject_detail) (caller opted in), fill
+       $reject_detail = array('mime_raw' => $mime_raw, 'mime' => $output[0], 'retval' => $retval);
+     and SKIP the legacy pfb_logger() call at L1275 (the caller emits the
+     canonical line). When the caller did not opt in ($reject_detail === NULL),
+     emit the legacy message exactly as today. Capture $mime_raw BEFORE it is
+     lost (it exists at L1244; make sure the reject path still has it).
+   - Same treatment in the FILE_MIME_COMPRESSED reject path (~L1298-1300):
+     fill mime_raw with the raw `file -bZ` output + retval; suppress the
+     legacy L1300 message only for opted-in callers.
+   - No other pfb_filter case changes.
+
+2. Enumerate ALL callers first (do not assume the list):
+       grep -n 'PFB_FILTER_FILE_MIME' src/ -r
+   Expected pfb_download() sites: L9235 (outer gate), L9390 (ZIP re-run),
+   L9319/L9332/L9410 (compressed peeks). If OTHER callers exist (e.g.
+   pfblockerng.php extra-download files / Top1M), leave them NOT opted in
+   (legacy message preserved — no rejection loses its log entry) and record
+   them in the handoff as follow-up candidates.
+
+3. Wire the pfb_download() FILE_MIME sites (feed $header in scope):
+   - Outer gate L9235-9238: pre-set $reject_detail = array(); pass it; on
+     FALSE emit
+       pfb_validate_log($header, 'mime', 'mime_not_allowed', "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}");
+     then return FALSE as before.
+   - ZIP post-extraction re-run L9390-9392: same pattern, stage 'inner',
+     reason 'inner_mime_not_allowed'; keep the existing unlink_if_exists().
+   - Compressed peeks L9319/L9332/L9410: same pattern, stage 'inner',
+     reason 'compressed_mime_not_allowed', detail = raw -bZ output + rc.
+   NOTE pfb_validate_log_line() escapes internally — pass RAW values, do NOT
+   pre-htmlspecialchars (double-escaping is a bug the sink test must catch).
+
+4. Swap the four ADR-45 structural reject messages (L9263/L9328/L9340/L9406):
+   replace the pfb_logger("...Corrupt or unreadable...", 2) call with
+       pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
+   Keep the surrounding unlink_if_exists() + return FALSE logic untouched.
+   Same level (default 2).
+
+5. LEAVE UNTOUCHED: the 7z missing-tool reject (L9399-9404, fork resolved
+   OUT), the dead ZIP inner block (L9362-9371), every sink/level, every
+   reject DECISION.
+
+TEST COVERAGE (five non-negotiables)
+
+pfb_download() itself is not off-appliance unit-testable (shell/curl — the
+end-to-end canonical-line-in-the-live-log proof is Phase 3's smoke). The
+off-appliance evidence for THIS phase pins the pfb_filter() contract change,
+red->green:
+
+New tests/php/PfbFilterRejectDetailTest.php (sink-capture technique; a real
+temp file whose file(1) mime is outside the allowlist — copy the fixture
+approach from PfbFileMimeSinkEscapeTest):
+- OPTED-IN: $d = array(); pfb_filter([...], PFB_FILTER_FILE_MIME, 'x', '', FALSE, $d)
+  returns FALSE, $d carries mime_raw + retval, and the LEGACY message is
+  ABSENT from the sink (assert before-state: same call WITHOUT opting in DOES
+  write the legacy message — the branch is real, not an always-suppressed
+  path).
+- NON-OPTED (back-compat): 5-arg call behaves byte-identically to today —
+  returns FALSE, legacy message present. This is the regression pin for every
+  un-migrated caller.
+- FILE_MIME_COMPRESSED: same pair of assertions (skip-guard with
+  markTestSkipped if the host file(1) lacks -Z semantics; see the wiring-test
+  template).
+- Red->green: opted-in cases FAIL on pre-change code (out-param never filled,
+  legacy line present). Record the red run in the handoff.
+
+Structural-message swap: extend/add a sink-capture case proving
+pfb_validate_log() output shape lands in the pfB log sink when called with
+stage=structural (formatter already oracle-pinned in P1; here assert the
+call-site swap didn't double-escape — detail with '&' appears once-escaped).
+If no off-appliance path reaches the pfb_download() structural sites, say so
+in the handoff and rely on Phase 3 smoke for those four lines (do NOT fake a
+test that merely re-tests the formatter).
+
+CONSTRAINTS
+- No new exec calls; PFBL-01 sniff (RequirePfbFilter) runs on pfblockerng.inc
+  — run phpcs and keep it clean.
+- Reject DECISIONS unchanged: every site still returns FALSE / unlinks
+  exactly as before; only the message construction moves.
+- No rejection may lose its log entry (ADR §7): opted-in sites log via the
+  canonical line; non-opted callers keep the legacy message.
+- PHP 8.3; tabs; uppercase TRUE/FALSE.
+
+VERIFICATION
+- vendor/bin/phpunit -> green (existing + new)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> clean
+- vendor/bin/phpstan analyse -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean
+- git diff --stat -> pfblockerng.inc + new/changed tests only
+
+SELF-REVIEW BEFORE THE HANDOFF
+Read your own `git diff`. Confirm: out-param fills BOTH mime branches; legacy
+messages suppressed ONLY for opted-in callers; all five pfb_download FILE_MIME*
+call sites opted in with the right stage token (mime vs inner); four
+structural swaps done; 7z missing-tool + dead block untouched; no
+double-escaping; non-opted back-compat pinned. Fix and re-verify if off.
+
+EXPECTED RESULT
+- One grep target exists for every landed reject: canonical lines at the
+  MIME gate (stage=mime, detected=raw file output), ZIP re-run + compressed
+  peeks (stage=inner), structural probes (stage=structural).
+- Un-migrated pfb_filter() callers behave byte-identically.
+
+COMMIT (single)
+    pfblockerng: wire download-validation rejects through pfb_validate_log() (ADR-48 P2)
+Push directly to adr/48-download-validation-logging.
+
+HANDOFF — write RESULTS/02_Results.txt
+Include:
+- The final pfb_filter() signature + the opted-in caller list (site: stage,
+  reason) and any NON-opted FILE_MIME callers found in step 2 (with paths).
+- Red->green evidence for the out-param contract.
+- Exact canonical lines now emitted per site (rendered examples) — Phase 3's
+  smoke greps must match these.
+- PHPUnit/phpstan/phpcs summaries; commit hash + push confirmation.
+- Watch-out for Phase 3: the smoke must grep the ESCAPED rendering (e.g. a
+  detected= value with '/' is unescaped, but '&' renders '&amp;'); block
+  shapes and fixture rules per CLAUDE.md smoke section.

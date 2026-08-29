@@ -1,0 +1,260 @@
+ADR-29 Phase 10 — Validation Evidence and Definition of Done
+============================================================
+Status: IMPLEMENTATION COMPLETE (pending live-VM smoke fan-out and UI tiers)
+Date:   2026-06-19
+
+This record assembles the full §7 Definition of Done evidence for ADR-29.
+All off-box gates ran green in this environment. The live-VM fan-out
+(smoke-fanout.yml, CE + Plus, AND-gated) and the UI tiers (ui_render/ui_e2e/
+ui_browser) are the remaining acceptance gates; they run in CI at PR dispatch
+or manually via gh workflow run. The ADR Status stays Proposed until the
+maintainer dispatches the fan-out and confirms it green.
+
+---
+
+## Off-box gate results (all green)
+
+Run from repo root on branch adr/29-config-gateway, commit 7bfd8e1 (Phase 9)
+plus the Phase 10 validation record commit.
+
+| Tool | Command | Result |
+| ---- | ------- | ------ |
+| PHPUnit | vendor/bin/phpunit | OK — 772 tests, 2780 assertions |
+| PHPStan | vendor/bin/phpstan analyse | No errors |
+| PHPCS | vendor/bin/phpcs --standard=phpcs.xml.dist src/ | exit 0, no output (0 violations) |
+| pytest | python -m pytest | 1733 passed |
+| ruff lint | ruff check . | All checks passed |
+| ruff format | ruff format --check . | 112 files already formatted |
+
+Smoke collect check (both cases present; skip off-VM):
+
+    python -m pytest tests/smoke/test_upgrade_config_stability.py \
+        --collect-only -q --override-ini="addopts="
+
+    Collected: 2 tests
+      tests/smoke/test_upgrade_config_stability.py::test_pkg_upgrade_preserves_config_values
+      tests/smoke/test_upgrade_config_stability.py::test_pkg_downgrade_preserves_config_values
+
+---
+
+## §7 Definition of Done — line by line
+
+### 1. Every §4 requirement met; full suite green at every phase
+
+DONE (off-box). Each phase (1–9) landed with a green suite:
+
+- Phase 1 (gateway + field registry): PHPUnit 638/2171 → suite green.
+- Phase 2 (migration registry + driver): PHPUnit 684/2321 → suite green.
+- Phase 3 (rollback contract + smoke downgrade leg): PHPUnit 705/2598 → suite green.
+- Phase 4 (pfb_global() + wipe seam): suite green.
+- Phase 5 (install-time writes): suite green.
+- Phase 6 (www/ group A): suite green.
+- Phase 7 (www/ group B): suite green.
+- Phase 8 (www/ group C): suite green.
+- Phase 9 (enforcement sniff + CLAUDE.md): PHPUnit 772/2780 → suite green.
+- Phase 10 (this phase): PHPUnit 772/2780, PHPStan No errors, PHPCS 0 violations,
+  pytest 1733 passed, ruff/format clean.
+
+PENDING (live-VM): smoke-fanout.yml (CE + Plus, AND-gated) + ui_render (PR gate).
+
+### 2. Round-trip identity proven for every registered field
+
+DONE (off-box). Evidence from tests/php/CfgGatewayTest.php (29 tests) and
+tests/php/RollbackContractTest.php (21 tests):
+
+- CfgGatewayTest::testToggleFieldsRoundTripOn — PfbToggle::On round-trips on→On→on.
+- CfgGatewayTest::testToggleFieldsRoundTripOff — PfbToggle::Off round-trips ''→Off→''.
+- CfgGatewayTest::testLenientFieldRoundTripOn/Off/Empty — PfbLenient round-trips all tokens.
+- RollbackContractTest::testAllToggleFieldsForwardAndBackwardForEveryVocabToken —
+  covers all ~76 toggle-adapted fields over {'on', ''}.
+- RollbackContractTest::testLenientFieldForwardAndBackwardForEveryVocabToken —
+  covers dnsbl_lenient over {'on', 'off', ''}.
+- CfgGatewayTest::testIdnFieldExcludedFromAdapterReturnsRawStringOn/All —
+  pfb_idn excluded field: null/null adapters; all stored tokens pass unchanged.
+- CfgGatewayTest::testInventoryCompletenessAllKnownKeysAccountedFor — every
+  installedpackages/pfblockerng* key in src/ has a registry entry or documented exclusion.
+
+Excluded field: pfb_idn — null/null adapters (identity). The 'on'→'all' normalisation
+happens at pfb_global() outside PfbConfig. All stored tokens ('on', 'all', 'confusable',
+'off', '') round-trip unchanged through the gateway. Documented in CLAUDE.md and the ADR.
+
+### 3. Default parity proven per key at the pfb_global() seam
+
+DONE (off-box). Evidence from tests/php/CfgGatewayTest.php:
+
+- testReadReturnsRegisteredDefaultForToggleAbsentKey
+- testReadReturnsRegisteredDefaultForPfbKeepAbsentKey
+- testReadReturnsRegisteredDefaultForLenientAbsentKey
+- testReadReturnsRegisteredDefaultForPlainStringAbsentKey
+- testReadReturnsRegisteredDefaultForAlexaTypeAbsentKey
+- testReadReturnsRegisteredDefaultForDnsblInterfaceAbsentKey
+- testReadReturnsRegisteredDefaultForSafeSearchAbsentKey
+- testReadReturnsRegisteredDefaultForIdnBlockMaliciousAbsentKey
+
+Each asserts: for absent key, PfbConfig::read() returns the same value the previous
+read site would have produced. The pfb_keep default ('on') is the ADR-29 / issue-#281
+repair — the only deliberate divergence from the prior per-site default (the GUI default
+was 'on' but pfb_global() read raw / null, causing the wipe bug). Called out in Phase 4
+results and pinned by testReadReturnsRegisteredDefaultForPfbKeepAbsentKey.
+
+### 4. Migration registry reproduces the four legacy migrations
+
+DONE (off-box). Evidence from tests/php/MigrationRegistryTest.php (17 tests):
+
+- testRegistryHasFourEntriesInOrder — exactly 4 entries in the defined order.
+- testRegistryEntriesSectionsAreCorrect — section paths match original blocks.
+- testDriverMigratesDnsblModeOnExistingInstall — ADR-02 migration fires correctly.
+- testDriverSeedsControlLegacyOnExistingInstallWithControlOn — PFBL-03 seed fires.
+- testDriverMigratesLenientOnExistingInstall — ADR-22 lenient migration fires.
+- testDriverSeedsPfbKeepOnExistingInstall — issue-#281 pfb_keep_migrate fires.
+- testDriverIsNoOpOnAlreadyMigratedConfig — idempotent: second run changes nothing.
+- testDriverSecondRunAfterFullMigrationIsIdentical — run-once discipline holds.
+- testOrderingAdr02BeforePfbl03WithinOneRun — ADR-02 runs before PFBL-03.
+- testOrderingDnsblMigrationsBeforeGeneralMigration — DNSBL section before general.
+- testWriteConfigMessagesMatchOriginalInstallIncMessages — write_config() strings
+  are byte-identical to the original install.inc messages.
+
+### 5. Upgrade and rollback smoke
+
+IMPLEMENTATION DONE (off-box — test collects and skips cleanly without VM).
+PENDING live-VM execution (CI / maintainer dispatch).
+
+The two cases in tests/smoke/test_upgrade_config_stability.py carry the 'repo'
+marker (deselected from -m smoke; run via pytest -m repo or manual dispatch):
+
+a) test_pkg_upgrade_preserves_config_values (upgrade contract — issue #281 fix)
+   GIVEN:  lower forged build (<V>_1) installed; representative config written
+           (dnsbl_lenient='on', dnsbl_vip_auto='on', pfb_dnsbl='on', pfb_idn='all';
+           pfb_keep intentionally absent — migration seeds it 'on');
+           BEFORE DNS probe -> NOERROR + VIP.
+   WHEN:   pkg upgrade to higher forged build (<V>_9).
+   THEN:   config.xml fields byte-identical (5-field snapshot); DNSBL probe still
+           NOERROR + VIP.
+
+b) test_pkg_downgrade_preserves_config_values (downgrade / rollback — ADR-29 P3)
+   GIVEN:  higher forged build (<V>_9) installed; same representative config;
+           pfb_keep seeded 'on' by migration; BEFORE DNS probe -> NOERROR + VIP.
+   WHEN:   pkg delete + reinstall lower build (<V>_1) (user rollback flow).
+   THEN:   config.xml fields byte-identical (5-field snapshot); DNSBL probe still
+           NOERROR + VIP (lower build reads gateway-written values as sane runtime values).
+
+Both cases skip cleanly when SMOKE_PKG / repo_vm is absent (off-VM skip, no fail).
+
+To execute:
+    gh workflow run smoke.yml -f pytest_marker=repo
+  or:
+    python -m pytest tests/smoke -m repo --override-ini="addopts="  # on a live VM
+
+### 6. Smoke fan-out (CE + Plus) and UI tiers
+
+PENDING (CI dispatch required — not runnable off-box).
+
+a) smoke-fanout.yml (ADR-04 suite, CE + Plus, AND-gated):
+   Dispatch: gh workflow run smoke-fanout.yml
+   Runs the full ADR-04 live-VM suite against all ci:true entries in the version
+   matrix, in parallel, fail-fast:false. The all-smoke-passed AND-gate fails if
+   any leg fails. Includes the upgrade config-stability case when the repo marker
+   is included.
+
+b) ui_render (Tier A — PR gate, auto-runs on the PR):
+   GET each www/ page -> 200, no Fatal/Parse/Warning/Notice, page marker present,
+   no new php_error.log line. Runs automatically on the open PR via ui-tests.yml.
+
+c) ui_e2e / ui_browser (Tiers B/C — schedule/dispatch-only, non-PR-blocking):
+   Dispatch: gh workflow run ui-tests.yml -f tier=ui_e2e
+             gh workflow run ui-tests.yml -f tier=ui_browser
+
+### 7. Enforcement sniff active and green
+
+DONE (off-box). Evidence from Phase 9:
+
+- Sniff: PfBlockerNG.Config.RequireConfigGateway (RequireConfigGatewaySniff.php)
+  Scope: all src/ PHP except pfblockerng_extra.inc and pfblockerng_migrate.inc.
+  Flags: config_get_path / config_set_path / config_del_path whose first argument
+  is a static string literal resolving to a registered installedpackages/pfblockerng* key.
+  Does NOT flag: dynamic paths, foreign/unregistered keys, section-level reads,
+  the gateway file itself.
+
+- PHPCS violation count on src/: 0 (vendor/bin/phpcs --standard=phpcs.xml.dist src/
+  exits 0 with no output).
+
+- Fixture tests (tests/php/RequireConfigGatewaySniffTest.php — 3 tests):
+    testFlagsRawRegisteredKeyAccess: 3 violations on lines [19, 22, 25] of
+      tests/phpcs/fixtures/gateway_violation.php — exactly the expected findings.
+    testCompliantCasesAreClean: 0 findings on gateway_compliant.php (foreign keys,
+      dynamic paths, section-level reads, pfSense-core sections).
+    testDoesNotInterfereWithOtherFixtures: 0 RequireConfigGateway findings on the
+      existing PFBL-01/ADR-28 fixtures (out_of_scope.php, bool_compliant.php).
+
+- 4 straggling raw accesses found and routed to PfbConfig in Phase 9 (all
+  behaviour-preserving; parity confirmed by existing tests):
+    pfblockerng.inc:2272  config_get_path('...pfb_software_check')    → PfbConfig::read
+    pfblockerng.inc:6273  config_get_path('...pfb_feed_internal_allowlist') → PfbConfig::read
+    pfblockerng.inc:6438  config_get_path('...pfb_feed_internal_filter')    → PfbConfig::read
+    pfblockerng_update.php:454 config_set_path('...pfb_reuse', 'on')   → PfbConfig::write
+
+### 8. Residual manual check (documented out-of-CI limitation)
+
+Owner: maintainer. Not a blocker per CLAUDE.md "ADR acceptance".
+
+True visual GUI correctness — a spot-check that the settings pages render unchanged
+(layout, field labels, help text). ui_render (Tier A) proves HTTP 200 + no PHP errors +
+page marker present; it does not assert visual layout. A manual spot-check of the General,
+DNSBL, SafeSearch, and IP tabs is the one item that cannot be expressed as a CI assertion.
+
+---
+
+## Reject-criterion outcomes
+
+Per §7 reject criteria:
+
+1. "A field's stored value cannot round-trip or downgrade losslessly and cannot be
+   excluded without losing the gateway's value."
+   VERDICT: NOT TRIGGERED. Every field round-trips cleanly. The one non-round-trippable
+   field (pfb_idn / 'on'→'all' normalisation) is excluded by construction (null/null adapters
+   at PfbConfig; normalisation only at pfb_global()). The gateway's value is not lost —
+   the exclusion is the correct design per ADR-28 §2.2.
+
+2. "Routing a subsystem through the gateway introduces behavioural regressions the tests
+   cannot contain."
+   VERDICT: NOT TRIGGERED. All 9 migration phases landed with full suite green. PHPUnit
+   772 tests / 2780 assertions cover all routed paths. No regressions observed.
+
+3. "The gateway measurably complicates rather than simplifies the call sites (net-negative
+   on the maintainability premise)."
+   VERDICT: NOT TRIGGERED. The gateway simplified every migrated call site:
+   - pfb_global(): raw per-key reads collapsed into a single PfbConfig::read() per key
+     (with registered defaults, no per-site defaulting).
+   - pfb_remove_config_settings(): 22 config_del_path calls → PfbConfig::deleteSection
+     per section.
+   - All www/ $pconfig load/save paths: section round-trips use readSection/writeSection;
+     individual field reads use PfbConfig::read().
+   - The enforcement sniff now makes the rule mechanical, removing the convention-only risk.
+
+---
+
+## Files added or changed — Phase 10
+
+- .ADRs/ADR_29_Config_Gateway/RESULTS/10_Results.txt  [THIS FILE — NEW]
+
+No behavioural change in Phase 10. Validation record only.
+
+---
+
+## Go / no-go recommendation
+
+OFF-BOX EVIDENCE: all required off-box gates are green. The DoD items that can be
+verified without a live VM are fully satisfied (round-trip identity, default parity,
+migration registry, rollback contract tests, enforcement sniff, PHPCS 0 violations).
+
+PENDING (not a no-go, but required for Accept):
+- Live-VM fan-out: smoke-fanout.yml (CE + Plus, AND-gated) — the upgrade config-stability
+  and the full ADR-04 suite on real pfSense images.
+- UI tiers: ui_render runs automatically on the PR; ui_e2e / ui_browser via dispatch.
+- The upgrade and downgrade smoke legs (test_pkg_upgrade_preserves_config_values and
+  test_pkg_downgrade_preserves_config_values) run in the repo marker dispatch or can be
+  included in the fan-out.
+
+RECOMMENDATION: Merge the PR after ui_render and smoke-fanout.yml both green.
+Flip ADR Status to Accepted once the maintainer confirms the fan-out is green.
+ADR-29 is structurally complete; the live-VM dispatch is the final gate.

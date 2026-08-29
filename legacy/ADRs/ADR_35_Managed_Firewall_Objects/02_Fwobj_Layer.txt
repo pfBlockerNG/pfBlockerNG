@@ -1,0 +1,183 @@
+================================================================================
+PHASE 2 PROMPT — Extract the ownership/marker layer (pfblockerng_fwobj.inc)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md   (read §1, §2, §2.1, §2.2, §4, §6 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/35-managed-firewall-objects (off devel). Phase 2
+creates the new ownership/marker layer as a pure include; it does NOT yet retrofit the existing
+call sites (that is Phase 3). One commit, push directly (open a PR only if the direct push is
+rejected).
+
+WHY THIS PHASE EXISTS
+The layer must exist and be independently unit-tested before the Phase 3 retrofit touches any
+live call site. Extracting and pinning the pure helpers first means Phase 3 can wire them in
+and immediately verify correctness by re-running both this phase's tests and the Phase 1 golden
+suite.
+
+REQUIRED READING
+FIRST, read the prior phase's handoff:
+.ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01_Results.txt — it must confirm: the oracle
+test suite is green, the fixture shapes for virtualip/vip[] and nat/rule[], the pfSense doubles
+added, and the go-ahead for Phase 2. If it is missing, the previous phase is not complete;
+STOP and report.
+
+Then read:
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — §2.1 (per-area decision table), §2.2
+  (semantics contract), §4 (requirements: the exact function signatures required).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    - PFB_AUTO_VIP_DESCR_V4 = 'pfB_AUTO_VIP_v4'  (line ~315)
+    - PFB_AUTO_VIP_DESCR_V6 = 'pfB_AUTO_VIP_v6'  (line ~315)
+    - pfb_find_marked_vip()  (line ~1121) — to understand the find pattern being generalised
+    - pfb_create_dnsbl() NAT detection strpos($descr, 'pfB DNSBL') !== FALSE  (line ~3798)
+    - pfb_firewall_rule() pfB_ prefix separation  (line ~13709)
+- tests/php/FwobjCurrentBehaviourTest.php (written in Phase 1) — the fixture shapes
+- tests/php/ existing tests — style reference
+- CLAUDE.md — PHP standards (tabs, PHP 8.3, uppercase TRUE/FALSE, no die()/exit()), ADR-28
+  (enums/bools, storage freeze), ADR-29 (foreign sections use direct config_*_path — do NOT
+  use PfbConfig for virtualip/vip, nat/rule, filter/rule; do NOT register new fields)
+
+ACTION PLAN
+1. Create src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc (new file).
+   The file contains ONLY pure functions and the recognised-marker constants (no shell, no
+   write_config, no require_once of pfSense runtime files — the caller flushes):
+
+   a. Recognised-marker constants (in addition to the existing PFB_AUTO_VIP_DESCR_* already in
+      pfblockerng.inc — do NOT redefine those; reference them or define complementary ones):
+        PFB_FWOBJ_NAT_DESCR      = 'pfB DNSBL - DO NOT EDIT'
+        PFB_FWOBJ_NAT_LEGACY_PFX = 'pfB DNSBL'   // the strpos prefix for legacy detection
+        PFB_FWOBJ_FILTER_PFX     = 'pfB_'         // the filter-rule prefix already in use
+
+   b. pfb_fwobj_is_owned(string $descr): bool
+      Returns TRUE iff $descr indicates pfBlockerNG ownership. Recognises the UNION of:
+        - New prefix: str_starts_with($descr, 'pfB_')
+        - Legacy VIP markers: $descr === 'pfB_AUTO_VIP_v4' OR $descr === 'pfB_AUTO_VIP_v6'
+        - Legacy NAT markers: str_contains($descr, 'pfB DNSBL')  (covers both the ' - DO NOT
+          EDIT' form and the bare 'pfB DNSBL' legacy form in one strpos-equivalent call)
+      NOTE: 'pfB_AUTO_VIP_v4' already starts with 'pfB_', so the new prefix subsumes the VIP
+      markers — but list them explicitly in a comment for clarity. A descr that is empty or
+      belongs to a user object ('My rule', 'WAN', etc.) returns FALSE.
+
+   c. pfb_fwobj_find(string $section, string $marker, ?callable $guard = NULL): array|false
+      Reads config_get_path($section, []) — an array of rows — and returns the FIRST row whose
+      $row['descr'] satisfies pfb_fwobj_is_owned() AND whose descr matches $marker specifically
+      (exact string equality for legacy markers; or str_starts_with for a pfB_ prefix marker).
+      If $guard is provided, also calls $guard($row) — returns TRUE to accept, FALSE to skip.
+      Returns the matching row array, or FALSE if not found.
+      $section is the config path string, e.g. 'virtualip/vip', 'nat/rule', 'filter/rule'.
+
+   d. pfb_fwobj_remove(string $section, string $marker, ?callable $guard = NULL): bool
+      Reads config_get_path($section, []), filters OUT every row where descr matches $marker
+      (via pfb_fwobj_is_owned() + marker match) AND the optional $guard passes, then writes the
+      filtered array back via config_set_path($section, $filtered). Returns TRUE if at least one
+      row was removed, FALSE if nothing matched (no write, no spurious write_config call —
+      caller decides when to flush).
+      IMPORTANT: a row that pfb_fwobj_is_owned() returns FALSE for is NEVER removed regardless
+      of $marker — this is the user-safety invariant.
+
+   e. pfb_fwobj_sweep(array $sections): bool
+      Iterates each section in $sections (array of config path strings). For each, reads all
+      rows; removes any row where pfb_fwobj_is_owned($row['descr']) is TRUE. Returns TRUE if
+      anything was removed. Idempotent: if no owned rows remain, no write_config is called and
+      FALSE is returned. This is the deinstall/disable primitive that closes the orphan gap.
+
+   f. pfb_fwobj_register(array $spec): void
+      Registers a firewall-object spec into the internal $registry (a static variable).
+      $spec shape: ['type' => 'vip'|'nat'|'filter', 'section' => string, 'marker' => string,
+      'builder' => callable, 'guard' => callable|NULL].
+      Stores in $registry keyed by $spec['marker']. Does NOT immediately create anything.
+
+   g. pfb_fwobj_reconcile(string $marker): void
+      Finds the registration for $marker, calls pfb_fwobj_find() with it; if not found, calls
+      $spec['builder']() to create the object and config_set_path to insert it. Idempotent.
+
+2. Wire the include: add require_once for pfblockerng_fwobj.inc in pfblockerng.inc near the
+   top where other sibling includes are already required (check the existing pattern — likely
+   near pfblockerng_extra.inc). Do NOT add it in a way that changes test bootstrap ordering.
+
+3. Add tests/php/FwobjLayerTest.php (new file; class FwobjLayerTest). Tests ONLY the new
+   pfblockerng_fwobj.inc pure functions — do NOT call pfb_manage_dnsbl_vip or pfb_create_dnsbl
+   here (those are in Phase 1's oracle). Cover all branches:
+
+   is_owned truth table (one assertion per input class):
+   a. testIsOwnedNewPfbPrefix — 'pfB_MyRule' -> TRUE
+   b. testIsOwnedVipV4Marker — 'pfB_AUTO_VIP_v4' -> TRUE (already pfB_ prefix; also VIP marker)
+   c. testIsOwnedVipV6Marker — 'pfB_AUTO_VIP_v6' -> TRUE
+   d. testIsOwnedNatFullDescr — 'pfB DNSBL - DO NOT EDIT' -> TRUE
+   e. testIsOwnedNatLegacyPrefix — 'pfB DNSBL' -> TRUE
+   f. testIsOwnedNatLegacyVariant — 'pfB DNSBL Redirect' -> TRUE (contains 'pfB DNSBL')
+   g. testIsOwnedReturnsFalseForUserDescr — 'My custom rule' -> FALSE
+   h. testIsOwnedReturnsFalseForEmpty — '' -> FALSE
+   i. testIsOwnedReturnsFalseForPartialMatch — 'pfB' -> FALSE (not 'pfB_' or 'pfB DNSBL')
+
+   find/remove with and without guard:
+   j. testFindReturnsMatchedRow — fixture: two rows, one with marker descr, one user row;
+      find returns the marked row. Assert before: two rows present.
+   k. testFindReturnsFalseWhenAbsent — no owned row; find returns FALSE.
+   l. testFindWithGuardSkipsNonMatchingGuard — two rows with same marker but different subnet;
+      guard accepts only one subnet; find returns correct row.
+   m. testRemoveDeletesOwnedRow — fixture: one owned row + one user row; remove deletes owned,
+      user survives. Assert before: both present. Assert after: only user row remains.
+   n. testRemoveReturnsFalseWhenNothingMatches — no owned row; remove returns FALSE, no
+      write_config called.
+   o. testRemoveNeverTouchesUserRow — fixture: user row only (no pfBlockerNG marker); remove
+      returns FALSE, user row untouched.
+   p. testRemoveWithGuard — two owned rows with same marker, different subnet guard; remove with
+      guard removes only the matching subnet row.
+
+   sweep:
+   q. testSweepRemovesAllOwnedRows — fixture: two different sections each with owned rows +
+      user rows; sweep removes all owned across both sections, user rows survive.
+   r. testSweepIsNoopOnCleanConfig — empty config; sweep returns FALSE, no write called.
+   s. testSweepIsIdempotent — sweep twice; second call returns FALSE.
+
+   register/reconcile:
+   t. testRegisterAndReconcileCreatesWhenAbsent — register a spec with a builder; reconcile
+      calls the builder since the object is absent; assert object created in config.
+   u. testReconcileIsIdempotentWhenPresent — object already in config; reconcile does NOT call
+      builder again.
+
+4. Run vendor/bin/phpunit — Phase 1 suite AND new FwobjLayerTest both green.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; uppercase TRUE/FALSE (ADR-28).
+- pfblockerng_fwobj.inc: NO die()/exit(), NO shell/exec, NO write_config inside helpers —
+  write_config is always the caller's responsibility (mirrors PfbConfig contract).
+- The sections handled (virtualip/vip, nat/rule, filter/rule) are pfSense-core foreign sections
+  (ADR-29 exclusion list) — direct config_get_path/config_set_path is correct here; the
+  RequireConfigGateway sniff does NOT flag pfSense-core sections.
+- Do NOT add pfblockerng_fwobj.inc to pfblockerng.xml's pkg-plist yet — Phase 4 handles wiring.
+  DO add it to src/usr/local/pkg/pfblockerng/ so it ships with the package.
+- Do NOT retrofit pfb_manage_dnsbl_vip or pfb_create_dnsbl yet — Phase 3.
+- Phase 1 oracle tests must still pass green (behaviour untouched).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green (Phase 1 FwobjCurrentBehaviourTest AND new FwobjLayerTest)
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc -> no syntax errors
+- php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> no syntax errors (require_once added)
+- PHPStan (vendor/bin/phpstan analyse) -> no new errors
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (PFBL-01 + ADR-28 + ADR-29 sniffs)
+- python -m pytest -> green
+- Diff-read: new pfblockerng_fwobj.inc; one require_once line added to pfblockerng.inc;
+  new tests/php/FwobjLayerTest.php; no other production file changed
+
+EXPECTED RESULT
+A standalone, pure pfblockerng_fwobj.inc with all five functions fully tested (is_owned truth
+table, find/remove/sweep with and without guard, register/reconcile). Phase 1 oracle still
+green. No behaviour change to existing code paths.
+
+COMMIT (single)
+    pfblockerng: add pfblockerng_fwobj.inc ownership/marker layer (ADR-35 P2)
+Push directly to adr/35-managed-firewall-objects; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/02_Results.txt (plain .txt)
+Record:
+- The exact function signatures in pfblockerng_fwobj.inc (name, params, return types).
+- The constant definitions (PFB_FWOBJ_NAT_DESCR, PFB_FWOBJ_NAT_LEGACY_PFX, PFB_FWOBJ_FILTER_PFX).
+- The require_once line added to pfblockerng.inc (file + surrounding context).
+- Test method names in FwobjLayerTest and what each covers.
+- Verification output: phpunit pass counts (Phase1 + Phase2), phpstan clean, phpcs clean.
+- Any design decisions made during implementation (e.g. how $marker matching works for
+  prefix vs exact strings, how $registry is stored).
+- Go-ahead for Phase 3.

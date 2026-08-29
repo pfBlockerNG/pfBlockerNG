@@ -1,0 +1,90 @@
+================================================================================
+PHASE 2 PROMPT — Config-gateway prep: register v4suppression (behaviour-preserving)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_53_IP_Suppression_Set_Subtraction/ADR.md   (read §1.2 config facts, §2.3 fork 2)
+================================================================================
+
+ROLE
+Run /ponytail:ponytail full before anything else.
+You are the Phase 2 implementer for ADR-53, inline on branch
+`adr/53-ip-suppression-set-subtraction`, one commit, pushed directly.
+BEHAVIOUR-PRESERVING: registering an existing key and migrating its call sites
+must not change any stored byte or any read value. You implement with
+Read/Edit/Write/Bash; you do NOT spawn further agents.
+
+WHY THIS PHASE EXISTS
+Phase 6 registers the new v6suppression key. Its sibling v4suppression is today
+an UNREGISTERED base64 blob accessed via raw config_*_path
+(pfblockerng_alerts.php:254-255,847). Registering both (user-confirmed fork,
+ADR §2.3.2) puts the PHPCS RequireConfigGateway sniff on guard for every future
+call site and keeps the two keys on one access pattern.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/01_Results.txt — confirms
+  the oracle spec is in place and green. If it is missing, the previous phase is
+  not complete; STOP and report.
+- docs/misc/config-gateway.md — the FULL procedure for adding a registered
+  field: registry entry + `since` convention + round-trip test + inventory +
+  the sniff's $registeredPaths. Follow it to the letter.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc:890-905 — the registered
+  DNSBL 'suppression' blob (plain entry, no adapters, default '') — the exact
+  precedent v4suppression mirrors.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php:250-260, 845-850 — the
+  raw config_get_path/config_set_path('installedpackages/pfblockerngipsettings/
+  config/0/v4suppression') call sites to migrate.
+- tests/phpcs/PfBlockerNG/ + tests/php/RequireConfigGatewaySniffTest.php (or the
+  sniff's own test — locate it) — how $registeredPaths is pinned.
+- tests/php/CfgAdaptersTest.php — the round-trip test conventions.
+- CLAUDE.md — "Config gateway — PfbConfig (ADR-29)" rules (read via
+  PfbConfig::read, write via ::write, no write_config inside the gateway).
+
+ACTION PLAN
+1. Registry entry for 'v4suppression' in pfb_cfg_registry() mirroring the DNSBL
+   'suppression' shape: section = the ipsettings section var, default '', no
+   adapters, correct `since` (per the config-gateway.md convention — the next
+   release version, check the doc's rule).
+2. Add the full path to the sniff's $registeredPaths.
+3. Run PHPCS — it must now FLAG the alerts call sites (this is the mechanical
+   proof the sniff guards the key). Migrate every flagged site to
+   PfbConfig::read('v4suppression') / ::write(...). Preserve exact semantics:
+   the `?: ''` fallbacks, base64 handling, and write_config timing stay at the
+   call sites.
+4. Grep the whole tree for any other literal v4suppression config path
+   (`grep -rn "v4suppression" src/`) — migrate direct config_*_path uses; leave
+   section-level reads ($pfb['ipconfig']['v4suppression'] from readSection)
+   untouched — they are the allowed section granularity.
+5. Tests:
+   - Round-trip + default-on-absent for v4suppression in the CfgAdaptersTest
+     style (write(read(v)) == v for a base64 blob; absent key reads '').
+   - The sniff test gains the v4suppression path fixture (flagged when raw,
+     clean via PfbConfig) per the existing sniff-test pattern.
+6. Full gates: vendor/bin/phpunit, vendor/bin/phpcs, PHPStan, php -l on every
+   touched file, python -m pytest, shellspec — all green.
+
+CONSTRAINTS
+- Do NOT change what is stored or when write_config fires — byte-identical
+  config behaviour.
+- Do NOT register v6suppression here (Phase 6 owns it).
+- PHP 8.3, tabs, uppercase TRUE/FALSE.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit               -> green (incl. the new round-trip test)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean (no residual raw sites)
+- PHPStan                          -> no new findings
+- python -m pytest ; shellspec     -> green
+- diff-read: alerts flow reads/writes exactly the same values as before.
+
+EXPECTED RESULT
+v4suppression is a registered plain blob; every call site goes through
+PfbConfig; the sniff guards it mechanically; zero behaviour change.
+
+COMMIT (single)
+    pfblockerng: register v4suppression in the config gateway (ADR-53 P2)
+Push directly to adr/53-ip-suppression-set-subtraction; open a PR only if the
+direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_53_IP_Suppression_Set_Subtraction/RESULTS/02_Results.txt
+State: the registry entry (exact `since` used), the migrated call-site list,
+sniff fixture added, test counts, and the go-ahead for Phase 3 (which touches
+only pfblockerng.sh + the P1 spec).

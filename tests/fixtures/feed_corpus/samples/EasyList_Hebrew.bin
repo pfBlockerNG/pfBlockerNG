@@ -1,0 +1,180 @@
+[Adblock Plus 2.0]
+! Checksum: daOozxRZQtdy7rvcddZGUw
+! Title: EasyList Hebrew
+! Last modified: 03 Jul 2026 14:31 UTC
+! Expires: 1 days (update frequency)
+! Homepage: https://github.com/easylist/EasyListHebrew
+! Licence: https://easylist.to/pages/licence.html
+!
+! This filter list is provided "as-is," without any express or implied warranty.
+! In no event shall the authors be held liable for any damages arising from the use of this filter list.
+!
+! Please report any unblocked adverts or problems
+! in the forum: https://github.com/easylist/EasyListHebrew/issues
+! or via email: easylisthebrew@gmail.com
+!
+!-----------------------------------------------------------------------------!
+!
+!           EasyList Hebrew works best on uBlock Origin.
+! --==  https://github.com/gorhill/uBlock/blob/master/README.md  ==--
+!              Free, open-source ad content blocker.
+!                  Easy on CPU and memory.
+!             Available for Firefox, Edge, and Opera.
+!
+!      If you're using Chrome, you can use uBlock Origin Lite.
+!     Choose OPTIMAL or COMPLETE as the default filtering mode.
+!
+!      Android users can use uBlock Origin on Firefox or Edge.
+!
+!     NewPipe - The lightweight YouTube experience for Android.
+!           Ad-free, privacy friendly and open source.
+!      --==   https://github.com/TeamNewPipe/NewPipe    ==--
+!
+!       Increase your privacy and security by enabling
+!        DNS over HTTPS (DoH) in your browser settings.
+!        https://en.wikipedia.org/wiki/DNS_over_HTTPS
+!   https://en.wikipedia.org/wiki/Public_recursive_name_server
+!
+!-----------------------------------------------------------------------------!
+!
+!--------------------------3rd party blocking rules---------------------------!
+!
+! *** Adservers *** !
+!
+||213.8.137.51^
+||activated.co.il^$third-party
+||adland.co.il^$third-party
+||browsiprod.com^$third-party
+||buballmighty.com^$third-party
+||clickon.co.il^$third-party
+||erate.co.il^$third-party
+||gitam.1host.co.il^$third-party
+||kway.co.il^$third-party
+||linicom.co.il^$third-party
+||mitbahon.co.il^$third-party
+||sekindo.com^$third-party
+||talkahead.com^$third-party
+||trustmedia.co.il^$third-party
+||ultra.clicka1.co.il^$third-party
+||upapi.net^$third-party
+||valuad.cloud^$third-party
+||webid.co.il/b144/$third-party
+||wee.co.il^$third-party,domain=~askoli.co.il
+||wesell.co.il^$third-party
+||ws.walla.co.il^$third-party
+!
+! *** Popup Adservers *** !
+!
+||campaign.*.co.il^$popup,third-party
+||campaigns.*.co.il^$popup,third-party
+||dcampaigns.*.co.il^$popup,third-party
+!
+||213.8.137.51^$popup,third-party
+||3dots.co.il^$third-party,domain=~maple-team.com
+||activated.digital^$popup,third-party
+||adland.co.il^$popup,third-party
+||adson.biz^$popup,third-party
+||adventuredigital.co.il^$popup,third-party
+||afaktrio.com^$popup,third-party
+||anetkin.biz^$popup,third-party
+||anetkin.co.il^$popup,third-party
+||anetkin.org^$popup,third-party
+||asakimerp.co.il^$popup,third-party
+||azadv.co.il^$popup,third-party
+||best-offers.co.il^$popup,third-party
+||blanco-adv.co.il^$popup,third-party
+||clickon.co.il^$popup,third-party
+||gim.co.il^$popup,third-party
+||gin.co.il^$popup,third-party
+||gitam.co.il^$popup,third-party
+||gnsdigital.co.il^$popup,third-party
+||landing-page.mobi^$popup,third-party
+||layer.co.il^$popup,third-party
+||like-it.co.il^$popup,third-party
+||mashrokit.info^$popup,third-party
+||mini-sites.net^$popup,third-party
+||mitbahon.co.il^$popup,third-party
+||namesakeoscilloscopemarquis.com^$popup,third-party
+||oceanmedia.co.il^$popup,third-party
+||offers-land.com^$popup,third-party
+||ok-server.co.il^$popup,third-party
+||online-offer.co.il^$popup,third-party
+||osef.co.il^$popup,third-party
+||padv.co.il^$popup,third-party
+||pigment-adv.co.il^$popup,third-party
+||pisrael.com^$popup,third-party
+||sekindo.com^$popup,third-party
+||tld.walla.co.il^$popup,third-party
+||trustmedia.co.il^$popup,third-party
+||unbouncepages.com^$popup,third-party
+||webteam.co.il^$popup,third-party
+||wee.co.il^$popup,third-party
+||wesell.co.il^$popup,third-party
+!
+! *** 3rd party ads *** !
+!
+||boostquery.com^$third-party
+||bostonparadise.com^$third-party
+||bostonwall.com^$third-party
+||depresis.com^$third-party
+||loopmaze.com^$third-party
+||maskoter.com^$third-party
+||nothering.com^$third-party
+||regi.tech^$third-party
+||sprawley.com^$third-party
+||srvjar.com^$third-party
+||wodoka.com^$third-party
+!
+! *** Popup sites *** !
+!
+||1kdailyprofit.co^$popup,third-party
+||3dfuckdoll.com^$popup,third-party
+||adsturn.com^$popup,third-party
+||ashleymadison.com^$popup,third-party
+||ashleyrnadison.com^$popup,third-party
+||big-shot.co.il^$popup,third-party
+||bogdot.co.il^$popup,third-party
+||browsergames2018.com^$popup,third-party
+||cglms.com^$popup,third-party
+||clmbtrk.com^$popup,third-party
+||com-cloud.co^$popup,third-party
+||date-il.com^$popup,third-party
+||dateszone.net^$popup,third-party
+||eb.anastasiadate.com^$popup,third-party
+||etrader.co.il^$popup,third-party
+||fbookisrael.com^$popup,third-party
+||fcukgirls.net^$popup,third-party
+||findyourlovemate.com^$popup,third-party
+||freehookup.link^$popup,third-party
+||gilorly.leadpages.co^$popup,third-party
+||hadartal.com/slim/*?ref=$popup,third-party
+||hekeroyot.com^$popup,third-party
+||hookupsonline.com^$popup,third-party
+||hotdate.co.il^$popup,third-party
+||ihct.mx^$popup,third-party
+||imitrk.com^$popup,third-party
+||ineed2fuck.com^$popup,third-party
+||lastpage.pw^$popup,third-party
+||losittooday.info^$popup,third-party
+||makelove.co.il^$popup,third-party
+||medical-rights.co.il^$popup,third-party
+||meet-nowhere12.com^$popup,third-party
+||onlineproxyfree.com^$popup,third-party
+||only2date.com^$popup,third-party
+||perfectpro.co.il^$popup,third-party
+||premium-offers.space^$popup,third-party
+||quick-date.xyz^$popup,third-party
+||rateonclick.com^$popup,third-party
+||reimageplus.com^$popup,third-party
+||sex-party.co.il^$popup,third-party
+||sexdating123.com^$popup,third-party
+||streamin.to^$popup,third-party
+||tracknotify.com^$popup,third-party
+||winnerspinz.com^$popup,third-party
+||yazizim.com^$popup,third-party
+||zbeng.co.il/landing$popup,third-party
+!
+!-----------------------Site specific ad blocking rules-----------------------!
+!
+! * Walla! * !
+/^(?![a-zA-Z0-9\-]+\:\/+(([^\/\:\.]+\.)*(il|com|net|org|gov|mil|edu|int|(ac|edu|gov|govt|mil)\.[a-zA-Z][a-zA-Z]|([a-zA-Z][a-zA-Z]|fed|isa|nsn|dni)\.us|(bl|nhs|parliament|police|mod|ukaea|rct|royal)\.uk|europa\.eu|canada\.ca|(google|amazon|microsoft|apple|yahoo|yandex|youtube)|(google|blogspot|youtube|paypal|amazon|ebay|bing|msn|yandex|nintendo|disney|tripadvisor|ticketmaster|surveymonkey|virtualspirits)\.(com?\.)?[a-zA-Z][a-zA-Z])|(google|youtube)\.cat|([0-9]+\.)+[0-9]+|([^\/\:\.]+\.)*(omny\.fm|anchor\.fm|simplecast\.fm|captivate\.fm|megaphone\.fm|transistor\.fm|fireside\.fm|podhome\.fm|pod\.space|chrt\.fm|pdst\.fm|pscrb\.fm|pdcn\.co|op3\.dev|acast\.cloud|ausha\.co|stand\.fm|podcloud\.fr|audiomeans\.fr|graffitiradio\.fr|samply\.app|castbox\.fm|podigee\.io|podbite\.link|podverse\.fm|fusebox\.fm|pca\.st|odesli\.co|hearthis\.at|futuretape\.xyz|spinamp\.xyz|audius\.co|flat\.io|github\.io|gitlab\.io|gitcdn\.xyz|gitcdn\.link|statically\.io|socket\.io|codepen\.io|codesandbox\.io|coda\.io|snipit\.io|jam\.dev|calliope\.cc|tech\.io|plnkr\.co|expo\.io|crumb\.sh|grid\.is|vizdom\.dev|dbdiagram\.io|answergarden\.ch|interacty\.me|wizer\.me|ludus\.one|slidr\.io|overflow\.io|exploratory\.io|kumu\.io|formless\.ai|balsamiq\.cloud|time\.graphics|time\.is|raindrop\.io|polyfill\.io|polyfill-fastly\.io|plyr\.io|embed\.ly|iframe\.ly|infogr\.am|jifo\.co|plot\.ly|ember\.ly|t\.me|fly\.dev|lucid\.app|flourish\.studio|flourish\.rocks|iconify\.design|uri\.sh|forkaweso\.me|po\.st|pippa\.io|scdn\.co|powr\.io|umbraco\.io|heyday\.io|prcdn\.co|redcdn\.pl|piano\.io|firebasedatabase\.app|openassistantgpt\.io|gpteng\.co|lovable\.dev|lovable\.app|webflow\.services|ipapi\.co|ipinfo\.io|ipwhois\.app|es\.io|wpdns\.site|brixies\.co|kinsta\.cloud|gfx\.ms|contentstack\.io|microcms-assets\.io|appdomain\.cloud|marker\.io|sided\.co|picsum\.photos|telegram\.space|telesco\.pe|tg\.dev|google\.dev|amazon\.dev|twitch\.tv|medal\.tv|meride\.tv|imgix\.video|last\.fm|adobe\.io|ves\.io|viafoura\.co|bsky\.app|mastodon\.social|ma

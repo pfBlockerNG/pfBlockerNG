@@ -1,0 +1,42 @@
+# Pre-existing pfBlockerNG PHP diagnostics in the GATED classes, grandfathered so the
+# Tier-A sweep can fail on NEW ones (issue #1218). Format: <origin file>|<level>|<message>
+# -- no line numbers, so an edit above a known site does not resurrect it.
+#
+# Scope: the gate covers the classes that still smell like a defect -- Undefined variable,
+# a null reaching a string parameter (a PHP 9 TypeError in waiting), array-offset-on-null,
+# optional-parameter order -- plus every fatal/parse level. The endemic
+# `Undefined array key` class (469 sites measured) is REPORTED at the end of a full sweep, not
+# gated, and is not listed here; #1712 burns it down and then it gates like the rest.
+#
+# THIS LIST MAY ONLY SHRINK. A new diagnostic is a regression: fix the site, never append
+# to this file. Burning the backlog below down to empty is tracked in #1712.
+/usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|base64_decode(): Passing null to parameter #1 ($string) of type string is deprecated
+/usr/local/pkg/pfblockerng/pfblockerng.inc|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Africa.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Africa.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Antarctica.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Antarctica.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Asia.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Europe.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Europe.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_North_America.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_North_America.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Oceania.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Oceania.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Proxy_and_Satellite.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Proxy_and_Satellite.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_South_America.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_South_America.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_Top_Spammers.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_Top_Spammers.php|Warning|Undefined variable $input_errors
+/usr/local/www/pfblockerng/pfblockerng_alerts.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_blacklist.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_category_edit.php|Deprecated|str_replace(): Passing null to parameter #3 ($subject) of type array|string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_dnsbl.php|Deprecated|base64_decode(): Passing null to parameter #1 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_dnsbl.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_ip.php|Deprecated|base64_decode(): Passing null to parameter #1 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_ip.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/pfblockerng/pfblockerng_reputation.php|Deprecated|explode(): Passing null to parameter #2 ($string) of type string is deprecated
+/usr/local/www/widgets/widgets/pfblockerng.widget.php|Deprecated|htmlspecialchars(): Passing null to parameter #1 ($string) of type string is deprecated
+/usr/local/www/widgets/widgets/pfblockerng.widget.php|Warning|Undefined variable $widgetname

@@ -1,0 +1,111 @@
+================================================================================
+PHASE 3 PROMPT — pytest smoke scaffolding: VM fixture + marker + mock feeds
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §2 "Test driver / isolation",
+     "Mock feeds", "Hermetic DNS" rows, and §5 constraints FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/04` branch (off `devel`) performing Phase 3 of ADR-04. Stand up
+the pytest scaffolding that the matrix (Phase 5) will run on: a session-scoped fixture
+that pulls + boots + tears down the VM, the `smoke` marker (DESELECTED from the default
+run), and a stdlib mock HTTP feed server. No matrix assertions yet — prove the
+scaffolding with one trivial smoke test. Work inline on `adr/04`, one commit, push
+directly.
+
+WHY THIS PHASE EXISTS
+The harness needs a clean separation: the normal `python -m pytest` (everyone's unit
+suite) MUST stay exactly as today — no VM, no new deps, no failures — while a separate
+`pytest -m smoke` (only in the smoke workflow, which has KVM + the GHCR image) runs the
+VM tests. This phase builds that boundary and the VM lifecycle so Phases 4-5 only write
+test bodies, not infrastructure.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt — the GHCR ref + oras pull, what
+  is baked into the image (SSH key/user, local-data control names + answers,
+  DNS/SSH listen). If missing/incomplete, the image isn't ready; STOP and report.
+- Also read RESULTS/01_Results.txt for the working qemu/hostfwd invocation.
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md  (§2 Test driver/Mock feeds/Hermetic rows;
+  §4 req 4-5; §5).
+- pyproject.toml  (current pytest config: testpaths, addopts -v, markers — you EXTEND
+  this; do not break the existing default run).
+- tests/conftest.py, tests/test_pfb_unbound.py  (house fixture/style; the smoke tests
+  live in tests/smoke/ and must NOT perturb these).
+- CLAUDE.md  (Python: 3.11+, 4-space, type hints, no bare except).
+
+ACTION PLAN (ordered)
+1. MARKER + DESELECTION (pyproject.toml): register marker `smoke`; ensure the DEFAULT
+   `python -m pytest` does NOT collect/run `smoke` (e.g. addopts `-m "not smoke"`, or
+   keep tests/smoke out of default testpaths). Verify: `python -m pytest` collects the
+   SAME tests as before this phase (no VM, no new deps imported at collection time).
+2. DEPS: `tests/smoke/requirements.txt` pinning `dnspython`, `paramiko`, `oras`
+   (whatever the helpers need). These are dev-only; never shipped. Guard imports so a
+   default run without them installed still collects cleanly (skip/condition the smoke
+   module, don't hard-import at top level of a default-collected file).
+3. VM FIXTURE (`tests/smoke/conftest.py`, session-scoped): `oras pull` the GHCR image
+   BY DIGEST (ref from 02_Results.txt) → boot via the Phase-1 qemu/hostfwd invocation ON AN
+   EPHEMERAL COPY-ON-WRITE OVERLAY so the base qcow2 is NEVER mutated (either
+   `-drive …,snapshot=on` = auto-discarded on qemu exit, or `qemu-img create -b base -F
+   qcow2 run.qcow2` kept on failure for post-mortem) → WAIT on readiness (SSH answers + DNS
+   answers; bounded backoff + hard timeout; NO fixed sleeps) → yield an object exposing {ssh
+   target, ssh key, dns host+port, feed base url 10.0.2.2:<port>} → teardown (kill qemu,
+   discard the overlay/temp). CONCURRENCY: the base is read-only so N instances share it
+   safely; the SAME hardcoded MAC is fine (each user-net VM is its own isolated SLIRP NAT,
+   no shared L2); the ONLY contention is `hostfwd` host ports — fixed is OK across GH jobs
+   (each job = its own runner), but allocate per-instance ports if several VMs run on one
+   runner. Decide and DOCUMENT the per-case isolation strategy: fresh boot per case is
+   simplest but slow; prefer a snapshot-revert or a `clearip`/`cleardnsbl`+reload reset
+   (Phase 4 provides the reset). State the choice in the handoff.
+4. MOCK FEED SERVER FIXTURE (stdlib `http.server`, no third-party): serves fixture
+   files (IP lists, DNSBL lists) from a tests/smoke/fixtures dir on a port reachable
+   by the guest at http://10.0.2.2:<port>/<name>. Function/module scoped as needed.
+   HERMETIC GUARD (egress block): the workflow blocks the runner's outbound *after* the
+   GHCR pull — the 10.0.2.2 feed path is SLIRP-internal (loopback on the runner) so it
+   survives, while real internet + the SLIRP DNS upstream 10.0.2.3 go dark. Sequence is
+   pull -> block -> boot/deploy/run (Phase 6 wires the actual block; here just don't
+   assume real egress).
+5. TRIVIAL SMOKE TEST (`tests/smoke/test_smoke_boot.py`, `@pytest.mark.smoke`): boot
+   fixture up → SSH `pfctl -sr` returns rules → `dig` a baked local-data name returns
+   its known answer → assert. Proves the scaffolding end-to-end.
+
+CONSTRAINTS
+- The DEFAULT `python -m pytest` MUST be byte-for-byte unaffected: same collected
+  tests, no new imports, no VM. This is non-negotiable (ADR §4 req 5).
+- Readiness = polled signal, never a fixed `sleep` (flake control, ADR §3).
+- Python: 3.11+, 4-space, type hints on new fns, no bare except.
+- Do NOT touch `src/`. Mock server is stdlib-only (it's simple; keep deps for the
+  driver/asserts, not the server).
+- No matrix / config-injection here (Phase 4-5).
+- FORWARD-COMPAT (ADR-09): the GHCR image ref/digest is a PARAMETER (env/fixture input),
+  never a hardcoded literal — ADR-09 supplies N tags to fan out. Shape the boot+probe
+  assertions (SSH up, pfctl loads, dig a control name) so they can double as a reusable
+  HEALTH/SANITY gate ADR-09's image-refresh reuses; don't bury them where only the pytest
+  run can call them.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` (default) → green AND collects the same test set as before P3
+  (show it ignores tests/smoke).
+- In the smoke context (KVM + image; may be the spike workflow or a new job):
+  `pip install -r tests/smoke/requirements.txt && pytest -m smoke` → the trivial boot
+  test passes.
+- `ruff check .`/`ruff format .` → clean.
+
+EXPECTED RESULT
+A `tests/smoke/` package: marker deselected by default, a working VM boot/teardown
+fixture from GHCR, a stdlib mock feed server, and one passing trivial smoke test —
+infrastructure only, ready for config-injection and the matrix.
+
+COMMIT (single)
+    test: add pytest smoke scaffolding (VM fixture, smoke marker, mock feeds) (ADR-04 P3)
+Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/03_Results.txt` (plain .txt)
+For Phase 4 (config-injection/deploy/reload). Include: the fixture API (what the VM
+fixture yields — ssh target/key, dns host+port, feed base URL); the chosen per-case
+isolation strategy (fresh boot vs snapshot vs clear+reload) and why; the run-level
+immutability mechanism (CoW overlay / `snapshot=on`, base pulled by digest) + how concurrent
+instances are isolated (per-instance hostfwd ports; same MAC safe under user-net); the mock-feed
+server API (how a test registers fixture lists + the guest-facing URL); how the
+default run is kept clean (the exact deselection mechanism); pytest/ruff results; and
+the go-ahead.

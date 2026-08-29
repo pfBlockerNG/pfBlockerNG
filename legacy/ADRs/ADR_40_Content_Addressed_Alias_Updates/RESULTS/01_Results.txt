@@ -1,0 +1,144 @@
+ADR-40 Phase 1 Results — Extract + oracle-pin alias reload-scope and final-set helpers
+========================================================================================
+
+Branch: adr/40-content-addressed-alias
+Phase:  1 (behaviour-preserving extraction)
+Date:   2026-06-25
+
+ADR-RESUME: branch=adr/40-content-addressed-alias next-phase=2
+
+## Helpers added (src/usr/local/pkg/pfblockerng/pfblockerng.inc)
+
+Three functions added at file:3544 (between pfb_build_aggregate_aliases and pfblockerng_cron_exists):
+
+### 1. pfb_select_reload_aliases() — reload-scope decision
+   Signature:
+     function pfb_select_reload_aliases(
+         bool   $rep_enabled,
+         array  $alias_lists,
+         array  $alias_lists_all,
+         ?array $active_aliases = null
+     ): array
+
+   Inputs:
+     $rep_enabled    — TRUE when the reputation branch applies; caller derives:
+                       - file-write path (inc:14411):  (drep=='on' || prep=='on')
+                       - pfctl paths (inc:15052/15101): (repcheck && (drep=='on' || prep=='on'))
+     $alias_lists     — $pfb_alias_lists (changed feeds this pass)
+     $alias_lists_all — $pfb_alias_lists_all (all active aliases)
+     $active_aliases  — null → no intersect (file-write + no-rule-change paths)
+                        array → intersect applied (rule-change path only)
+
+   Output: unique array of alias names to reload. Empty = nothing to reload.
+
+   Call sites updated:
+     inc:14411–14420 → now: pfb_select_reload_aliases(drep||prep, ...)         // file-write
+     inc:15050–15060 → now: pfb_select_reload_aliases(repcheck&&..., ..., $active_aliases)
+     inc:15099–15109 → now: pfb_select_reload_aliases(repcheck&&..., ...)       // no-rule-change
+
+   Behaviour delta: NONE — identical array contents at every call site.
+
+### 2. pfb_concat_member_files() — final-file construction
+   Signature:
+     function pfb_concat_member_files(array $member_paths): string
+
+   Input:  ordered array of absolute paths to per-feed .txt files
+   Output: raw concatenated content (order-preserving, NOT deduped — matches current .= loop)
+
+   NOT yet called from the live path (Phase 3 will wire it in place of the inline .= loops
+   at inc:14460 and inc:14481). Added here so the oracle test pins the current semantics.
+
+### 3. pfb_canonical_alias_set() — DEAD CODE in Phase 1
+   Signature:
+     function pfb_canonical_alias_set(string $member_content): array
+
+   Input:  raw concatenated member content (from pfb_concat_member_files or equivalent)
+   Output: sorted (strcmp / LC_ALL=C order), unique, non-empty, non-comment lines as array
+
+   WIRING: NOT called from any live path this phase. Phase 3 will wire it as the input
+   to the content-addressed gate: desired_set = pfb_canonical_alias_set(pfb_concat_member_files($paths))
+
+## Tests added (tests/php/AliasReloadScopeTest.php)
+
+18 tests, 28 assertions — all oracle (behaviour-preserving, stay green before and after extraction).
+
+Fixtures / what each test pins:
+
+pfb_select_reload_aliases:
+  testReputationOffUsesAliasList
+    — rep=FALSE, lists=[A,B], all=[A,B,C] → [A,B]
+    — pins: rep-off selects $alias_lists; all-list ignored
+  testReputationOnUsesAliasListAll
+    — rep=TRUE, lists=[A], all=[A,B,C] → [A,B,C]
+    — pins: rep-on selects $alias_lists_all; changed-only list ignored
+  testActiveAliasesIntersectApplied
+    — rep=TRUE, all=[A,B,C], active=[A,B] → [A,B] (C excluded)
+    — pins: rule-change intersect; inactive aliases excluded
+  testNullActiveAliasesSkipsIntersect
+    — rep=TRUE, all=[A,B,C], active=null → [A,B,C]
+    — pins: null active_aliases = no intersect (file-write + no-rule-change)
+  testDuplicatesInInputsAreCollapsed
+    — both lists have duplicates → array_unique applied
+  testEmptyAliasListsWithRepOffYieldsEmpty
+    — rep=FALSE, lists=[], all=[A] → [] (no-change pass)
+  testEmptyAliasListsAllWithRepOnYieldsEmpty
+    — rep=TRUE, lists=[A], all=[] → []
+  testRepOffWithActiveAliasesIntersectsChangedList
+    — rep=FALSE, lists=[A,B], active=[A] → [A] (B changed but not active; C active but not changed)
+
+pfb_concat_member_files:
+  testMultipleMemberFilesAreConcatenatedInOrder
+    — [feedA, feedB] where A and B both contain 192.0.2.1 → concat preserves dup
+    — pins: current aliasdir file is raw concat, NOT deduped
+  testMissingMemberFileIsSilentlySkipped
+    — [A, missing, C] → A+C content; missing skipped
+  testSingleMemberFileReturnsItsContent
+    — [solo] → solo's content verbatim
+  testEmptyPathListReturnsEmptyString
+    — [] → ''
+
+pfb_canonical_alias_set (Phase 1 dead-code contract):
+  testCanonicalSetIsDeterministicForSameInput
+    — same input × 2 → identical arrays (idempotence)
+  testCanonicalSetIsOrderIndependent
+    — permuted inputs → same output
+  testCanonicalSetCollapsesDuplicates
+    — IP appearing twice in content → once in output
+  testCanonicalSetIsCLocaleSorted
+    — [9.0.0.1, 192.0.2.1, 10.0.0.1] → ['10.0.0.1', '192.0.2.1', '9.0.0.1'] (strcmp order)
+  testCanonicalSetStripsBlankLinesAndComments
+    — # lines and blank lines removed; real IPs kept
+  testCanonicalSetEmptyInputYieldsEmptyArray
+    — '' → []
+
+## pfSense doubles added: NONE
+   No new pfSense-provided function was reached by the helpers; no addition to pfsense_doubles.php.
+
+## Verification commands + output
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    → "No syntax errors detected" (pre-existing E_DEPRECATED warnings unrelated to this change)
+
+  vendor/bin/phpunit
+    → OK, but some tests were skipped!
+       Tests: 1337, Assertions: 5141, Skipped: 3.
+       (3 skipped = pre-existing drill-not-found stubs, unrelated to this change)
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    → (clean, no output)
+
+  vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+    → [OK] No errors
+
+  git diff origin/devel...HEAD --stat
+    → (output after commit will show only pfblockerng.inc + AliasReloadScopeTest.php + this file)
+
+## Go-ahead for Phase 2
+
+All gates green. Behaviour-preserving extraction confirmed:
+  - pfb_select_reload_aliases() produces identical reload sets at all three call sites.
+  - pfb_concat_member_files() and pfb_canonical_alias_set() are present and tested.
+  - pfb_canonical_alias_set() is NOT wired into the live path.
+  - No pfctl loops, pfblockerng.sh, DNSBL path, or config.xml touched.
+
+Phase 2 can proceed: baseline benchmark on the live VM (ADR-40 §6 Phase 2).

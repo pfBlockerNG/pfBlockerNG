@@ -1,0 +1,14 @@
+# IP feed fixture - IPv6 (format 'auto', IpCase family='v6').
+# pfblockerng.inc IP 'auto' v6 parser (~:10520-10534): a line containing ':' is
+# validated with validate_ipv6() (single address or CIDR) into the pfB_<alias>_v6
+# table; an inline '#' truncates the line, and a full-line '#'/blank is skipped.
+# RFC 3849 documentation prefix (2001:db8::/32) ONLY; never a real host.
+#
+# Served by mock_feeds at http://192.168.89.2:<port>/ip_ipv6.txt
+#
+# Phase 5 asserts (pfctl_table_members(pfB_<alias>_v6), compare by value, ::==::0):
+#   MEMBER (single host):              2001:db8::1
+#   MEMBER (covered by the /48):       2001:db8:1::/48  (e.g. 2001:db8:1::99)
+#   NON-MEMBER (must NOT be present):  2001:db8:dead::1
+2001:db8::1
+2001:db8:1::/48

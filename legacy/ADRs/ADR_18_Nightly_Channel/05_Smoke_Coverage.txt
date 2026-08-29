@@ -1,0 +1,82 @@
+================================================================================
+PHASE 5 PROMPT — Full live-VM smoke: install + conflict + date-upgrade from the nightly catalog
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_18_Nightly_Channel/ADR.md   (read §4 Requirements 2-4, §7 "Affected-flow
+     smoke", §5 "Test coverage rule" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/18-nightly-channel` branch performing Phase 5 of ADR-18. Promote the
+Phase-1 kill-gate into permanent `repo`-marked coverage over a REAL builder-produced
+(Phase 2) nightly package served from a hermetic nightly catalog (Phase 3/4 layout). Work
+in this ADR's worktree, one commit (touches tests/ → rebase-only PR).
+
+WHY THIS PHASE EXISTS
+Phase 1 proved the `pkg` mechanics with hand-repacked manifests. Now the same guarantees
+must hold for the package the BUILDER emits and the catalog the PIPELINE publishes — and
+stay green as a regression gate. This pins §4 Requirements 2-4 and the §7 affected-flow
+checklist on the ADR-04 VM.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_18_Nightly_Channel/RESULTS/04_Results.txt — it must record the nightly catalog
+  subtree layout + the build invocation. Also RESULTS/01_Results.txt (the kill-gate asserts
+  to promote) and RESULTS/02_Results.txt (the `--channel nightly` CLI). If 04 is missing,
+  STOP and report.
+- .ADRs/ADR_18_Nightly_Channel/ADR.md (§4, §7 checklist, §5 coverage rule).
+- tests/smoke/test_repo_install.py — the `repo`-marked patterns: `build_repo_via_portable`,
+  the hermetic `file://` conf, the egress-OPEN repo flow, `pkg query '%R'/'%v'/'%n'`,
+  `pkg info -A`, the shipped-`add-repo.sh` bootstrap case, and the gated
+  `SMOKE_REPO_LIVE_URL` live-URL leg to mirror for `/nightly`.
+- tests/smoke/helpers.py + conftest.py — `smoke_vm`, the timeout cap, `unique_domain()`.
+- scripts/build-pkg-portable.py `--channel nightly` (Phase 2) + scripts/build-repo-portable.py
+  — to produce the nightly pkg + the `nightly/<ABI>/` catalog on the runner.
+- CLAUDE.md — "Smoke tests (ADR-04)" + "Test coverage (mandatory)".
+
+ACTION PLAN (ordered — transitions, both branches; build the pkg via the real builder)
+1. Helper: produce a builder-made nightly pkg (`--channel nightly --pkgversion <date>
+   --annotate commit=<sha>`) and a hermetic `nightly/<ABI>/` catalog via
+   `build-repo-portable.py`; ship the subtree to the VM (reuse `build_repo_via_portable`).
+2. INSTALL the nightly (no `-f`): absent → `pkg install pfSense-pkg-pfBlockerNG-NIGHTLY`
+   installs from the nightly repo (`%R == pfblockerng-nightly`), deps resolve, every
+   registered file lands, `pkg info -A` shows `commit=<sha>`, pfBlockerNG runs. Before/after.
+3. CONFLICT-AND-REPLACE (both directions): `-devel` installed → installing `-NIGHTLY` is a
+   NAMED conflict that replaces it (`%n` `-devel` → `-NIGHTLY`); reverse install replaces
+   back. Assert both befores + afters; registry consistent (`pkg check -s`).
+4. DATE `pkg upgrade` (≥ 3 versions): nightly catalog with only `<date1>` → `%v == <date1>`;
+   rebuild `<date2>` → upgrade moves it; rebuild `<date2>.HHMMSS` → upgrade moves it again.
+   Three real before ≠ after transitions; monotonic.
+5. SHIPPED bootstrap: exercise `add-repo.sh nightly` end-to-end against the hermetic catalog
+   (writes the conf, `pkg update`, installs). Add the gated dispatch-only real-URL leg
+   `test_install_from_live_nightly_url` (mirrors ADR-17's `SMOKE_REPO_LIVE_URL`, pointing at
+   `…/pfBlockerNG/nightly`) — skips unless the env is set.
+6. Branch coverage + intent-named BDD specs for the non-trivial cases (Given/When/Then). VM
+   left CLEAN (`finally`/CaseContext). Long cases get an explicit `@pytest.mark.timeout(...)`.
+
+CONSTRAINTS
+- Python 3.11+, 4-space, type hints, no bare `except`. Marker `repo` only (NOT `smoke`);
+  egress stays OPEN for this flow. Reuse the existing fixtures/helpers — no second VM path.
+- `unique_domain()` for any DNS; compare versions/IPs BY VALUE; assert effective state.
+- Do NOT modify the builder/CI (Phases 2/4) or src/. If a kill-gate assertion can't be
+  reproduced against the real builder output, STOP and report (it's a real defect).
+
+VERIFICATION (must all pass before the phase is done)
+- The `repo`-marked nightly cases are GREEN on the live VM (`gh workflow run smoke.yml
+  -f pytest_marker=repo`); capture the run id. The gated live-URL case SKIPS cleanly without
+  the env set.
+- python -m pytest (default) → unchanged. ruff/mypy(tests) → clean.
+
+EXPECTED RESULT
+Permanent `repo`-marked coverage proving the builder-made nightly installs, conflicts-and-
+replaces both ways, and date-upgrades monotonically — the §7 affected-flow checklist green on
+the VM (minus the post-merge live-URL leg).
+
+COMMIT (single)
+    tests: full live-VM nightly smoke — install/conflict/date-upgrade (ADR-18 P5)
+In this ADR's `adr/18-nightly-channel` worktree: `git fetch` + rebase onto the latest
+`origin/devel`, then push. Touches tests/ → rebase-only PR. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_18_Nightly_Channel/RESULTS/05_Results.txt` (plain .txt)
+State: each case + its run id + the load-bearing `pkg` output; the `%R`/`%v`/`%n`/`commit`
+asserted; what the gated live-URL leg needs (env var + expected `%R`); the §7 checklist
+status (which boxes are green, which await the post-merge deploy); the go-ahead for Phase 6.

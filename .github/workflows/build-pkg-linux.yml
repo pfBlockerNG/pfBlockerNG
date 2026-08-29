@@ -1,0 +1,316 @@
+name: build-pkg (Linux, portable)
+
+# Build the pfBlockerNG FreeBSD .pkg for the branch under test on a PLAIN Linux
+# runner — NO FreeBSD VM, NO KVM, NO image cache. pfBlockerNG is a NO_BUILD port
+# (nothing compiles), so `scripts/build-pkg-portable.py` reproduces `make
+# package` byte-for-byte from the port's own Makefile + pkg-plist: it lays the
+# production files at their install paths, runs the port's textual
+# substitutions, and emits a real libpkg (zstd-tar) archive with the correct
+# manifest. The output was diffed field-by-field against a FreeBSD `make
+# package` build for the same commit and matches it (only file mtime and a few
+# dependency *versions* differ — manifest fidelity only; `pkg add` checks a
+# dependency is PRESENT, not its version, so installability is identical). See
+# docs/build-pkg-portable.md.
+#
+# This is the FAST build path the ADR-04 smoke workflow consumes (drop-in
+# replacement for the retired FreeBSD build-pkg.yml: same `pfBlockerNG-pkg`
+# artifact, same out/*.pkg layout, same `channel` input). The FreeBSD
+# `make package` workflow was retired in 68992f4c after the portable output was
+# validated by hand (field-by-field diff against a real `make package` build of
+# the same commit); that validation is repeated manually on min-CE bumps and
+# ports-framework moves — see the "Re-diff the portable .pkg" step in
+# docs/misc/version-bump-runbook.md.
+#
+# TARGET facts (ABI, py-flavor, PHP) are INPUTS, never read from this fork's tree:
+# they describe the pfSense the .pkg installs onto, and every value is derived from
+# the ci-metadata version matrix (supported-versions.json) — no FreeBSD/PHP/Python
+# version is fixed per edition. The bare-dispatch defaults below mirror the current
+# min-CE matrix entry.
+#
+# workflow_dispatch (iterate on the build) + workflow_call (smoke consumes it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "pfBlockerNG channel/port — one of stable, testing, edge, nightly (the builder rejects anything else)"
+        required: false
+        default: "edge"
+      abi:
+        description: "Target ABI — FreeBSD:<freebsd_major>:<arch> for the target pfSense base, per the ci-metadata version matrix"
+        required: false
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      py_flavor:
+        description: "Python flavor for dep names (the matrix entry's py_flavor)"
+        required: false
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      php_version:
+        description: "PHP version for dep names (the matrix entry's php_version)"
+        required: false
+        default: "8.3"
+      ports_repo:
+        description: "FreeBSD-ports repo carrying the port + Mk framework"
+        required: false
+        default: "pfBlockerNG/FreeBSD-ports"
+      ports_ref:
+        description: "FreeBSD-ports branch"
+        required: false
+        default: "pfblockerng/use-github"
+      artifact_name:
+        description: "Name of the uploaded .pkg artifact. Override to keep per-leg builds distinct in one run — one name per matrix row (the fan-outs build CE 2.8/2.9 + Plus .pkgs in the same workflow run; image_name alone is not unique, issue #2453)."
+        required: false
+        default: "pfBlockerNG-pkg"
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins (the matrix row's extra_pkgs) pfSense's own repo doesn't carry, e.g. [\"textproc/py-charset-normalizer\"]. Each is built as a dep .pkg from the SAME ports checkout and uploaded as pfBlockerNG-deppkgs-fbsd<freebsd_major> (skipped when empty)."
+        required: false
+        default: "[]"
+      dep_artifact_name:
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>-<pfsense_version>; image_name alone is NOT unique — CE 2.8 and CE 2.9 share it, issue #2453) or two same-major rows collide on upload."
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      channel:
+        required: false
+        type: string
+        default: "edge"
+      abi:
+        required: false
+        type: string
+        default: "FreeBSD:15:amd64"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      py_flavor:
+        required: false
+        type: string
+        default: "py311"  # version-literal-ok: dispatch/caller fallback default; the fan-out passes the matrix value
+      php_version:
+        required: false
+        type: string
+        default: "8.3"
+      ports_repo:
+        required: false
+        type: string
+        default: "pfBlockerNG/FreeBSD-ports"
+      ports_ref:
+        required: false
+        type: string
+        default: "pfblockerng/use-github"
+      artifact_name:
+        required: false
+        type: string
+        default: "pfBlockerNG-pkg"
+      extra_pkgs:
+        description: "JSON array of FreeBSD port origins (the matrix row's extra_pkgs) pfSense's own repo doesn't carry, e.g. [\"textproc/py-charset-normalizer\"]. Each is built as a dep .pkg from the SAME ports checkout and uploaded as pfBlockerNG-deppkgs-fbsd<freebsd_major> (skipped when empty)."
+        required: false
+        type: string
+        default: "[]"
+      dep_artifact_name:
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>-<pfsense_version>; image_name alone is NOT unique — CE 2.8 and CE 2.9 share it, issue #2453) or two same-major rows collide on upload."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      artifact:
+        description: "Name of the uploaded package artifact"
+        value: ${{ inputs.artifact_name }}
+
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.artifact_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build pfBlockerNG .pkg (portable, Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout the branch under test
+        # This checkout IS --local-src: the builder packages this exact tree
+        # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and the pinned Python
+        # build-leg.sh shells out to `python3`; .python-version pins the same minor
+        # the appliance carries, and uv provisions + activates it.
+        uses: astral-sh/setup-uv@v7 # v7.6.0
+        with:
+          version: "0.12.6"
+          activate-environment: true
+
+      - name: Sync the locked dependency-package toolchain
+        run: uv sync --locked --only-group dep-pkg-build
+
+      - name: Require a zstd encoder
+        # ubuntu-24.04 ships zstd, and its version cannot change a .pkg's contents,
+        # so installing over it bought nothing. Assert instead: a runner image that
+        # drops it must fail this job loudly rather than fall back to a slower codec.
+        run: |
+          command -v zstd >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: zstd'; exit 1; }
+          zstd --version
+
+      - name: Install shellspec
+        # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
+        # the executable then runs from that tree. An uploaded release asset is immutable,
+        # unlike the tag-generated source archive a re-tag upstream could swap (#2194).
+        # Extracted outside the checkout so the repo tree stays clean.
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
+        run: |
+          curl -fsSLo shellspec-dist.tar.gz \
+            "https://github.com/shellspec/shellspec/releases/download/${SHELLSPEC_VERSION}/shellspec-dist.tar.gz"
+          echo "${SHELLSPEC_SHA256}  shellspec-dist.tar.gz" | sha256sum -c -
+          tar -xzf shellspec-dist.tar.gz -C "$HOME"
+          rm -f shellspec-dist.tar.gz
+          echo "$HOME/shellspec" >> "$GITHUB_PATH"
+          installed="$("$HOME/shellspec/shellspec" --version)"
+          [ "$installed" = "$SHELLSPEC_VERSION" ] || {
+            echo "shellspec is $installed, expected $SHELLSPEC_VERSION"; exit 1; }
+
+      - name: Build .pkg via build-leg.sh
+        # build-leg.sh is the shared path for all build sites (CI, release, smoke).
+        # Prints the resolved .pkg path on stdout; all other output (including the
+        # ports-prep step) goes to stderr — so PKG captures exactly one line.
+        id: build
+        env:
+          PORTS_REPO:   ${{ inputs.ports_repo }}
+          PORTS_REF:    ${{ inputs.ports_ref }}
+          CHANNEL:      ${{ inputs.channel }}
+          ABI:          ${{ inputs.abi }}
+          PY_FLAVOR:    ${{ inputs.py_flavor }}
+          PHP_VERSION:  ${{ inputs.php_version }}
+          EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
+          DEP_ARTIFACT_NAME: ${{ inputs.dep_artifact_name }}
+        run: |
+          set -eu
+          # Run-body export, not an env: map value (issue #2231).
+          export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"
+          # issue #1806: the ABI's cpu segment (e.g. "amd64") is INERT for a
+          # NO_ARCH port — build-pkg-portable.py wildcards the stamp regardless
+          # of what's given, so callers that only care about the FreeBSD major
+          # (e.g. release.yml's deduped-by-major fan-out) can pass any concrete
+          # placeholder here; it never affects the produced .pkg's real ABI.
+          # AMENDMENT 7: slug ABI into a path-safe LEG token (FreeBSD:15:amd64 →
+          # freebsd-15-amd64) so the RUN_ID never carries raw colon path components.
+          LEG="$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+          PKG="$(sh scripts/build-leg.sh \
+            --ports-repo "$PORTS_REPO" \
+            --ports-ref  "$PORTS_REF" \
+            --channel    "$CHANNEL" \
+            --abi        "$ABI" \
+            --py-flavor  "$PY_FLAVOR" \
+            --php        "$PHP_VERSION")"
+          {
+            echo "ports_dir=${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            # build-leg.sh defaults the recipe variant to CE; expose that resolved
+            # value to the parity examples instead of repeating target facts there.
+            echo "variant=CE"
+            echo "pkg_dir=$(dirname "$PKG")"
+          } >> "$GITHUB_OUTPUT"
+          ls -l "$(dirname "$PKG")"
+
+          FREEBSD_MAJOR="$(printf '%s' "$ABI" | cut -d: -f2)"
+          echo "freebsd_major=${FREEBSD_MAJOR}" >> "$GITHUB_OUTPUT"
+
+          # issue #1806 D1: build the row's extra_pkgs (RUN_DEPENDS ports pfSense's
+          # own repo doesn't carry, e.g. textproc/py-charset-normalizer) from the
+          # SAME ports checkout build-leg.sh just prepared above — never a second
+          # clone. build-leg.sh's own DEST formula (no --ports-dir/PFB_PORTS_DIR/
+          # PFB_RUN_DIR override in scope here) is
+          # ${PFB_RUN_ROOT:-/var/tmp/pfb-runs}/${RUN_ID}/ports; PFB_RUN_ROOT is set
+          # above, so it resolves the same way here.
+          DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
+          HAS_DEP_PKGS=0
+          # CodeRabbit: guard an empty/unset EXTRA_PKGS env (jq errors parsing "" as
+          # JSON) rather than trusting the caller always supplies "[]".
+          ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            PORTS_SHA="$(git -C "$PORTS_DIR" rev-parse HEAD)"
+            SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+            mkdir -p "$DEP_PKG_DIR"
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              # sparse-clone-ports.sh's checkout only includes the pfBlockerNG
+              # port's OWN RUN_DEPENDS -- extra_pkgs is a matrix-level concept
+              # it doesn't know about, so this origin's dir was never
+              # materialized. Add it explicitly (idempotent; cone mode already
+              # set by sparse-clone-ports.sh).
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+              python3 scripts/build-dep-pkg-portable.py \
+                --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY_FLAVOR" \
+                --freebsd-major "$FREEBSD_MAJOR" \
+                --source-date-epoch "$SOURCE_DATE_EPOCH" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            HAS_DEP_PKGS=1
+          fi
+          {
+            echo "dep_pkg_dir=${DEP_PKG_DIR}"
+            echo "has_dep_pkgs=${HAS_DEP_PKGS}"
+          } >> "$GITHUB_OUTPUT"
+          # W1: a caller whose fan-out is per-version (smoke.yml/ui-tests.yml) must
+          # override --dep-artifact-name so two same-major rows don't collide on
+          # upload; blank (the default, safe for a per-major-deduped caller like
+          # release.yml or a single-invocation caller) falls back to the plain
+          # per-major name.
+          echo "dep_artifact_name=${DEP_ARTIFACT_NAME:-pfBlockerNG-deppkgs-fbsd${FREEBSD_MAJOR}}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify direct portable-builder parity
+        # The selected file is deliberately outside the default *_spec.sh glob;
+        # --fail-no-examples makes a typo in either path or tag fail this build.
+        env:
+          REAL_PORTS_DIR: ${{ steps.build.outputs.ports_dir }}
+          PARITY_CHANNEL: ${{ inputs.channel }}
+          PARITY_VARIANT: ${{ steps.build.outputs.variant }}
+          PARITY_ABI: ${{ inputs.abi }}
+          PARITY_PY_FLAVOR: ${{ inputs.py_flavor }}
+          PARITY_PHP: ${{ inputs.php_version }}
+        run: |
+          set -eu
+          python3 scripts/check_skip_allowlist.py --suite ports-parity --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
+          DASH="$(command -v dash 2>/dev/null || true)"
+          [ -n "$DASH" ] || { echo 'dash is required for Ports parity' >&2; exit 1; }
+          rm -rf /tmp/ports-parity-junit
+          shellspec --shell "$DASH" -o junit --reportdir /tmp/ports-parity-junit \
+            --pattern 'tests/shell/build_leg_ports_parity_env.sh' \
+            --tag env:ports --fail-no-examples
+          python3 scripts/check_skip_allowlist.py --suite ports-parity --allowlist tests/skip-allowlist.txt /tmp/ports-parity-junit/results_junit.xml
+
+      - name: Upload package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ steps.build.outputs.pkg_dir }}/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload dep packages
+        # Never uploaded when extra_pkgs is empty (no empty artifacts) — a SEPARATE
+        # artifact from the branch .pkg above, keyed by freebsd_major by default
+        # (dep .pkgs are wildcard-ABI, shared across every edition/version on this
+        # major) — or by the caller-supplied dep_artifact_name (W1) when the
+        # caller's own fan-out is per-version and needs a per-row-unique name.
+        if: steps.build.outputs.has_dep_pkgs == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.build.outputs.dep_artifact_name }}
+          path: ${{ steps.build.outputs.dep_pkg_dir }}/*.pkg
+          if-no-files-found: error
+          retention-days: 7

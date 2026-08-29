@@ -1,0 +1,181 @@
+name: HSTS preload refresh (pfb_py_hsts)
+
+# Weekly refresh of the DNSBL HSTS-bypass exclusion oracle from Chromium's HSTS
+# preload list (force-https entries only, issue #1303).
+# scripts/misc/update_hsts_preload_list.py rewrites
+# src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt in place. When the upstream list
+# drifts, this workflow opens/updates a PR against devel — it NEVER pushes to
+# devel directly.
+#
+# GitHub suppresses push/pull_request-triggered workflow runs for events
+# created by GITHUB_TOKEN, so test.yml's own pull_request gate never fires on
+# this PR — and a workflow_dispatch run's checks do NOT attach to a PR's
+# Checks tab either (only pull_request-triggered runs do; verified on #911).
+# So this workflow dispatches the real gate (test.yml's unit suite) onto the
+# branch head after opening/updating the PR, then posts a PR comment linking
+# the run. Like the sibling psl-refresh.yml, this diff touches only a data
+# file (no www/), so it dispatches test.yml ONLY -- no Tier-A ui_render gate.
+# NOTE: the dry_run self-test validates the HSTS diff only; the push / PR /
+# dispatch / comment path is exercised only by a real (non-dry) run. See
+# issue #1303 and docs/misc/hsts-preload-list.md.
+
+on:
+  # Weekly, Monday 07:00 UTC -- offset from tld-refresh.yml (06:00) and
+  # psl-refresh.yml (06:30) so the three refreshes never contend for the
+  # same runners/branch-race window.
+  schedule:
+    - cron: "0 7 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log the drift that WOULD be proposed but open no PR and
+          push nothing. Self-tests the HSTS diff only — the push/PR/CI-dispatch
+          path runs only on a real (non-dry) run.
+        required: false
+        default: "false"
+
+# Least-privilege default; the refresh job elevates to write the automation
+# branch and open the PR. It never writes devel/main.
+permissions:
+  packages: read
+  contents: read
+
+# One refresh at a time — a slow scheduled run must not race a manual dispatch.
+concurrency:
+  group: hsts-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh pfb_py_hsts.txt and open PR on change
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: read
+      contents: write        # push the automation branch (NOT devel)
+      pull-requests: write    # open/label the PR
+      actions: write          # dispatch the CI gate onto the branch head
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: hsts-refresh/auto
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: true   # need to push the automation branch via git push --force
+          ref: devel
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
+      # Automated commits must hit the same local gates as a human commit.
+      - name: Activate git hooks
+        run: sh scripts/setup-hooks.sh
+
+      - name: Refresh pfb_py_hsts.txt from the Chromium HSTS preload list
+        id: refresh
+        run: |
+          set -eu
+          # Plain run only: --check's exit 1 can't distinguish "drift" from a
+          # refusal (implausible count / missing entries) -- both raise
+          # SystemExit(str), which Python maps to exit 1 either way. A plain
+          # run's own exit code IS unambiguous (0 only on success; a refusal
+          # or network error is nonzero), and its churn guard already no-ops
+          # on a header-only SYNCED-date bump, so gate on the file diff.
+          python3 scripts/misc/update_hsts_preload_list.py
+          if git diff --quiet -- src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pfb_py_hsts.txt already matches the Chromium HSTS preload list — nothing to propose."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "HSTS preload drift detected:"
+            git diff --stat -- src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt
+          fi
+
+      - name: Open or update the refresh PR
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # No pipeline: a missing header must fail loudly under set -e, not
+          # yield an empty date in the commit message.
+          SYNCED_LINE=$(grep -m1 '^# SYNCED:' src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt)
+          SYNCED_DATE="${SYNCED_LINE#\# SYNCED: }"
+          SYNC_MSG="pfb_py_hsts: sync with the Chromium HSTS preload list ($SYNCED_DATE)"
+
+          # Rebuild the bot-owned automation branch from the current change and
+          # force-push it (no human works on it, so a reset+force is safe).
+          git checkout -B "$BRANCH"
+          git add src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt
+          git commit -m "$SYNC_MSG"
+          git push --force origin "$BRANCH"
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          # PR first, CI dispatch after: the PR is the primary side effect — a
+          # transient dispatch failure must not leave a pushed branch with no
+          # PR until next Monday. One open PR at a time: the force-push above
+          # already updated any existing one.
+          PR_NUMBER=$(gh pr list --head "$BRANCH" --base devel --state open --json number --jq '.[0].number // empty')
+          if [ -n "$PR_NUMBER" ]; then
+            echo "An open PR from $BRANCH already exists (#$PR_NUMBER) — the force-push updated it."
+          else
+            # gh pr create has no --json; its stdout is the PR URL — derive the
+            # number from it rather than re-querying (list can lag the create).
+            PR_URL=$(gh pr create \
+              --base devel \
+              --head "$BRANCH" \
+              --title "$SYNC_MSG" \
+              --label "enhancement" \
+              --body "Automated weekly refresh of the DNSBL HSTS-bypass exclusion oracle (\`pfb_py_hsts.txt\`) from the [Chromium HSTS preload list](https://chromium.googlesource.com/chromium/src/+/main/net/http/transport_security_state_static.json) (force-https entries only), via \`scripts/misc/update_hsts_preload_list.py\`. Source data is BSD-style licensed, The Chromium Authors — see the [LICENSE](https://chromium.googlesource.com/chromium/src/+/main/LICENSE). Review the data diff. GitHub runs no automatic CI on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab — the workflow dispatches the unit suite (\`test.yml\`) onto this branch's head and links the run in a comment below (also visible in the repo's Actions tab). This diff touches only a data file, so the Tier-A \`ui_render\` gate is not required. Merge once the linked run is green. Part of #1303 — see docs/misc/hsts-preload-list.md.")
+            PR_NUMBER="${PR_URL##*/}"
+          fi
+
+          # GITHUB_TOKEN-created pushes/PRs trigger no workflow runs, so the
+          # branch head gets no automatic CI. workflow_dispatch is the
+          # documented exception — dispatch the real gate onto the branch.
+          # --ref only accepts a branch/tag (a bare SHA is rejected with HTTP
+          # 422 "No ref found"), so dispatch by branch and pin the run to
+          # HEAD_SHA when resolving it below. Data-file-only diff -- no www/
+          # touch, so no Tier-A ui_render dispatch (unlike tld-refresh.yml).
+          # Loud on failure: no `|| true`, `set -eu` is active (issue #902).
+          gh workflow run test.yml --ref "$BRANCH"
+
+          # A workflow_dispatch run's checks never attach to the PR's Checks
+          # tab (only pull_request-triggered runs do), so without this comment
+          # the PR looks unchecked. Resolve the dispatched run's URL — runs
+          # take a few seconds to appear — and link it on the PR.
+          find_run_url() {
+            # $1 = workflow file; poll for the dispatched run at OUR head SHA.
+            _i=0
+            while [ "$_i" -lt 6 ]; do
+              _url=$(gh run list --workflow "$1" --branch "$BRANCH" \
+                       --event workflow_dispatch --limit 5 --json url,headSha \
+                       --jq ".[] | select(.headSha == \"$HEAD_SHA\") | .url" | head -n 1)
+              if [ -n "$_url" ]; then
+                printf '%s\n' "$_url"
+                return 0
+              fi
+              _i=$((_i + 1))
+              sleep 5
+            done
+            return 1
+          }
+          UNIT_URL=$(find_run_url test.yml) || {
+            echo "::warning::could not resolve the dispatched test.yml run for $HEAD_SHA — find it in the Actions tab."
+            UNIT_URL="not resolved — see the repo's Actions tab (workflow: Tests, branch: $BRANCH)"
+          }
+          gh pr comment "$PR_NUMBER" --body "CI for head \`$HEAD_SHA\` was dispatched by the refresh workflow (GitHub runs no automatic checks on a GITHUB_TOKEN-created PR, and dispatched runs do not appear in this PR's Checks tab): unit CI: $UNIT_URL. Merge once the run is green."
+
+      - name: Dry-run summary
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN == 'true'
+        run: |
+          set -eu
+          echo "=== DRY-RUN: drift detected, but no branch pushed and no PR opened ==="
+          git diff -- src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt | head -60

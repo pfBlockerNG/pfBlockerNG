@@ -1,0 +1,51 @@
+{
+  "env": {
+    "SHELL": "bash"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gh pr merge:*)"
+    ],
+    "deny": [
+      "Bash(git stash)",
+      "Bash(git stash:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/claude-bash-guard.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v zstd >/dev/null 2>&1 || python3 -c 'import zstandard' 2>/dev/null || pip3 install -q zstandard >/dev/null 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-branch-sync.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"DISCIPLINE (bootstrap invariants, verbatim from AGENTS.md; every turn): Never assume — read source of truth, investigate live state, confirm genuine fork before build. · claim without run artifact = ASSUMED · environmental claims written into artifacts probed in-session first · debugging list ≥2 hypotheses + discriminating probe before any fix edit · no self-exemption from MUST rule without quoting authorizing user message · Behaviour change need test-first red→green proof: reproduction test executed RED before any production edit, frozen byte-identical, re-run GREEN unchanged — executed runs, never reasoned through. · Every change ship WITH its tests; no coverage theater (every test carry assertion that fail on regression) · substantial coding work planned/gated by top tier, implemented by small-tier sub-agents, every step gated by independent small-tier verifier via brief → handoff → gate contract · Read whole GitHub issue (title, body, every comment) before working it.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

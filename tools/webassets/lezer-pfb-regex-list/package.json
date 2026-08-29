@@ -1,0 +1,11 @@
+{
+  "name": "@pfblockerng/lezer-pfb-regex-list",
+  "private": true,
+  "type": "module",
+  "description": "Lezer grammar for the pfBlockerNG regex-list textarea format -- pattern + '#' description per line (issue #1669 slice B). Resolves the PARENT tools/webassets/ node_modules -- carries no dependencies of its own.",
+  "scripts": {
+    "generate": "lezer-generator src/pfb-regex-list.grammar -o src/parser.js",
+    "pretest": "npm run generate",
+    "test": "node --test test/parse.test.js"
+  }
+}

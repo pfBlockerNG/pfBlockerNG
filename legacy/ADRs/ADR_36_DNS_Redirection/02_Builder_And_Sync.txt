@@ -1,0 +1,127 @@
+================================================================================
+PHASE 2 PROMPT — Rule builder + ADR-35 registration + sync wiring
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_36_DNS_Redirection/ADR.md   (read §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/36-dns-redirection. Phase 2 completes the rule
+builder, registers it via ADR-35, and wires create/reconcile/remove into the sync flow.
+One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The oracle (Phase 1 golden tests) is in place. Now fill in the builder so the tests go green,
+then connect it to the lifecycle (sync + disable + sweep) via the ADR-35 seam so the feature
+has full managed-object ownership from day one.
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_36_DNS_Redirection/RESULTS/01_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_36_DNS_Redirection/ADR.md — §2.2 (exact rule shape), §2.1 (lifecycle decision
+  row), §5 (ADR-35 constraint).
+- .ADRs/ADR_35_Managed_Firewall_Objects/ADR.md — §2.1 (pfb_fwobj_register spec), §2.2
+  (ownership contract: marker is the sole signal, user objects inviolable), §2.3 (what is
+  out of scope for this ADR). Understand the registration seam BEFORE touching it.
+- src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc — pfb_fwobj_register(), pfb_fwobj_find(),
+  pfb_fwobj_remove(), pfb_fwobj_sweep() signatures and semantics. Read the actual code; do not
+  guess the API.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — sync_package_pfblockerng() call site; how
+  the existing DNSBL NAT create/strip is wired; pfb_global() read pattern for config keys;
+  pfb_build_if_list() for interface validation.
+- CLAUDE.md — ADR-35 constraint, PFBL-01, PHP standards, test mandate.
+
+ACTION PLAN (ordered)
+
+1. Complete pfb_build_dns_redirect_rules($iface, $ipprotocol, $exception) so it passes all
+   Phase-1 golden tests. The function must:
+   - Build the NAT rdr rule array with all §2.2 fields present:
+     ipprotocol, protocol, target (127.0.0.1 or ::1 per family), local-port 53,
+     destination (network '(self)' + not + port 53), source (negated alias when $exception
+     is non-empty, else <any>), interface $iface, descr marker, natreflection 'disable'.
+   - Build the associated filter PASS rule array with a corresponding descr marker.
+   - Return both as a two-element array [nat_rule, filter_rule].
+   - Be pure (no config reads, no shell calls, no write_config inside the function).
+   Confirm ALL Phase-1 golden tests pass after implementation.
+
+2. Register the DNS redirect builder via pfb_fwobj_register(). Read pfblockerng_fwobj.inc
+   for the exact $spec structure accepted by pfb_fwobj_register() before writing the call.
+   The registration must:
+   - Cover the NAT rule entries (type 'nat').
+   - Also cover the associated filter rule entries (type 'filter') — either as a second
+     registration or as part of the same spec if the ADR-35 API supports compound entries.
+     Check the API; do not assume.
+   - Use the pfB_DNS_Redirect_ marker prefix so pfb_fwobj_is_owned() recognises both.
+   Call pfb_fwobj_register() at include-load time (same pattern as the existing VIP + DNSBL
+   NAT registrations, if any — check the file).
+
+3. Wire into sync_package_pfblockerng():
+   - Read dns_redirect_enable via PfbConfig::read().
+   - If enabled: read dns_redirect_iface (comma-split to an array of interface names) and
+     dns_redirect_exception.
+   - For each selected interface, call pfb_build_dns_redirect_rules() for both 'inet' and
+     'inet6' and write the resulting rules into nat/rule and filter/rule via config_*_path.
+   - Stale-interface prune: after writing the rules for the current interface set, scan all
+     existing nat/rule and filter/rule entries for pfB_DNS_Redirect_ markers belonging to
+     interfaces NOT in the current selected set and remove them via pfb_fwobj_remove().
+   - If disabled or no interfaces selected: remove all pfB_DNS_Redirect_* entries via the
+     ADR-35 marker sweep (pfb_fwobj_sweep() or pfb_fwobj_remove() — use whichever the ADR-35
+     API provides for a full-marker removal, reading the code to confirm).
+   - Do NOT call write_config() inside the builder or the registration logic; the sync flow
+     decides when to flush.
+
+4. Tests (PHPUnit). Required branches — all mandatory:
+
+   a. Reconcile is idempotent: call the sync logic twice with identical settings; assert the
+      config.xml nat/rule + filter/rule sections contain the same entries (no duplicates).
+      Assert before-state (no redirect rules) then after-first-sync, then after-second-sync.
+
+   b. Disable removes all marked rules; user NAT rule survives:
+      Seed a user nat/rule entry (no pfBlockerNG marker) in the fixture config. Enable the
+      redirect, sync (rules appear). Disable, sync again. Assert all pfB_DNS_Redirect_* rules
+      are gone. Assert the user nat/rule entry is still present and unchanged.
+
+   c. Stale-interface prune: enable on two interfaces (e.g. 'lan' and 'opt1'), sync (4 NAT +
+      4 filter entries — 2 families × 2 interfaces). Reduce selection to 'lan' only, sync
+      again. Assert the 'opt1' rules (all 4) are gone. Assert the 'lan' rules (all 4) remain.
+
+   d. Exception alias branch: enable with a non-empty exception alias, sync. Assert the
+      nat/rule entries have the negated-alias source structure. Change to empty alias, sync.
+      Assert source is <any>. (Before/after both asserted.)
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- ADR-28: uppercase TRUE/FALSE in all new PHP.
+- ADR-35 contract: ownership = marker only; user objects inviolable; do NOT re-invent sweep or
+  teardown logic outside pfb_fwobj_*; no new marker string beyond pfB_DNS_Redirect_<iface>_v4
+  and pfB_DNS_Redirect_<iface>_v6. Storage freeze: markers are immutable once written.
+- ADR-29: read registered fields only via PfbConfig::read(); write only via PfbConfig::write().
+  nat/rule and filter/rule are pfSense-core (foreign) — direct config_*_path only.
+- PFBL-01: pfb_build_dns_redirect_rules() is called from an in-scope sync function — confirm
+  it is in (or called from) a function on the PHPCS scopeFunctions allow-list. Interface names
+  read from config must be validated before use; they come from PfbConfig::read(), which
+  returns the stored comma-joined string. Validate each interface name against the result of
+  pfb_build_if_list() before composing a rule. Add any new in-scope function to scopeFunctions.
+- Do NOT add UI yet (Phase 3).
+
+VERIFICATION (must all pass before phase is done)
+- vendor/bin/phpunit -> green (all Phase-1 golden tests + all Phase-2 lifecycle tests).
+- php -l on all touched files.
+- PHPStan + phpcs clean (PFBL-01 + ADR-28 + ADR-29 sniffs).
+- python -m pytest -> green.
+- diff-read: no spurious changes to unrelated code; nat/rule and filter/rule are accessed by
+  direct config_*_path (not PfbConfig) — sniff must be satisfied.
+
+EXPECTED RESULT
+pfb_build_dns_redirect_rules() passes all golden tests; ADR-35 registration in place; full
+lifecycle (create/reconcile/stale-prune/disable/sweep) wired and unit-tested with branch
+coverage.
+
+COMMIT (single)
+    pfblockerng: implement DNS redirect rule builder + ADR-35 lifecycle wiring (ADR-36 P2)
+Push directly to adr/36-dns-redirection; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_36_DNS_Redirection/RESULTS/02_Results.txt (plain .txt)
+Record: pfb_build_dns_redirect_rules() final signature; the ADR-35 registration spec used
+(type, marker strings, API shape chosen); how stale-interface prune is implemented (scan
+method + remove API); any deviation from the plan with rationale; scopeFunctions additions;
+verification numbers; go-ahead for Phase 3.

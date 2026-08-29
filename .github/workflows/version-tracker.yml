@@ -1,0 +1,674 @@
+name: Version Tracker
+
+# Scheduled version-tracker: reads the curated supported-version matrix
+# (ci-metadata orphan branch) and REACTS automatically to every entry —
+# triggering the release artifact build AND the CI image-refresh + smoke
+# fan-out (ADR-04 Accepted, so these are LIVE, not gated).
+#
+# DETECT = THE BOX, APPLY = HUMAN-MERGED (issue #1823): the best-effort
+# `reconcile` job boots the newest published smoke image(s) per channel daily,
+# reads the truth from the box (`/etc/version`, `pfSense-repoc -p`,
+# `pfSense-upgrade -c`), and reconciles the matrix + published images against
+# it: matrix changes become tracker/* PRs a human merges; image moves become
+# image-refresh.yml direct legs.  No page scraping, no tracking issues, no
+# upgrade.available curation.  It NEVER pushes to ci-metadata itself.
+#
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ INVARIANT: this workflow NEVER commits to or force-pushes           │
+# │ main, devel, or any channel branch.  The matrix lives on            │
+# │ ci-metadata (an orphan ref, branch-protected) and is changed ONLY   │
+# │ via tracker/* PRs a human merges.  The REACT step triggers OTHER    │
+# │ workflows — it does not write to the repo.                          │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# Phase 5 (image-refresh.yml) and Phase 6 (smoke.yml) are wired
+# here by name.  They do not exist yet on this branch; the trigger is
+# live and will activate as soon as each phase lands.  See HANDOFF at:
+#   legacy/ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt
+
+on:
+  # Run daily at 06:00 UTC.  Adjust the cron expression if needed.
+  schedule:
+    - cron: "0 6 * * *"
+
+  # Manual trigger: supports dry-run mode and an optional target version filter.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >
+          If 'true', log the reactions that WOULD be triggered but do not
+          actually dispatch any downstream workflows.  Use this for self-testing.
+        required: false
+        default: "false"
+      target_version:
+        description: >
+          Restrict reactions to a specific pfsense_version (e.g. 2.8).
+          Leave empty to react to all matrix entries.
+        required: false
+        default: ""
+      skip_probe:
+        description: >
+          If 'true', skip the daily reconcile job entirely (the react job
+          still runs).
+        required: false
+        default: "false"
+
+# Least-privilege default.  The react job elevates to 'actions: write' to
+# dispatch downstream workflows; the reconcile job's permissions are declared
+# on the job itself.
+permissions:
+  packages: read
+  contents: read
+
+concurrency:
+  group: version-tracker
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Read the curated matrix ───────────────────────────────────────────────
+  read-matrix:
+    name: Read supported-version matrix
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.read.outputs.build_matrix }}
+      ci_matrix: ${{ steps.read.outputs.ci_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0   # need history to reach the ci-metadata orphan ref
+
+      - name: Read matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Log matrix contents
+        run: |
+          echo "=== BUILD matrix ==="
+          printf '%s\n' '${{ steps.read.outputs.build_matrix }}' | jq .
+          echo "=== CI matrix (ci:true CE entries only) ==="
+          printf '%s\n' '${{ steps.read.outputs.ci_matrix }}' | jq .
+
+  # ── 2. React: trigger release build + CI refresh + smoke fan-out ─────────────
+  #
+  # For each matrix entry the tracker:
+  #   a) Triggers the release artifact build (build-pkg-linux.yml — the portable
+  #      Linux builder, same as the default path in release.yml). This builds a
+  #      .pkg for the entry's (freebsd_version, php_version) pair WITHOUT creating
+  #      a GitHub Release — it is a build-round-trip check, NOT a tag push.
+  #      On a real release, the build is triggered by the tag push; this job
+  #      exercises the build path independently (e.g. to verify a newly-added
+  #      matrix entry builds cleanly before the next release).
+  #
+  #   b) (retired — image refreshes are planned and dispatched by the
+  #      reconcile job as image-refresh.yml direct legs, issue #1823.)
+  #
+  #   c) Triggers the smoke fan-out workflow (smoke.yml, Phase 6).
+  #      Runs the live-VM smoke suite across every ci:true CE image in parallel.
+  #      This workflow is not yet on this branch; the dispatch is wired now and
+  #      becomes live when Phase 6 lands.
+  #
+  # DRY RUN: if the `dry_run` input is 'true', all trigger steps are skipped and
+  # replaced with a log of what WOULD be triggered — useful for self-testing and
+  # as an audit of the reaction plan before committing to a dispatch.
+  #
+  # INVARIANT ASSERTION: the react job never writes to main, devel, or any
+  # channel branch.  Every step below either reads the matrix, dispatches a
+  # DIFFERENT workflow (which runs in its own job under its own permissions),
+  # or logs.  No `git push`, no `git commit`, no `gh pr merge` on channel
+  # branches appears in this job.
+  react:
+    name: React to matrix entries
+    runs-on: ubuntu-latest
+    needs: read-matrix
+    # 'actions: write' is required to dispatch downstream workflows via
+    # `gh workflow run`.  It is NOT used to push or commit to any branch.
+    permissions:
+      packages: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Plan reactions (dry-run log or live dispatch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # react builds one .pkg per ABI — the freebsd_major-deduped view is
+          # the correct source here (unlike the reconcile job, issue #1839).
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          CI_MATRIX: ${{ needs.read-matrix.outputs.ci_matrix }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TARGET_VERSION: ${{ github.event.inputs.target_version || '' }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+
+          echo "=== Version-tracker REACT ==="
+          echo "DRY_RUN=${DRY_RUN}  TARGET_VERSION='${TARGET_VERSION}'"
+          echo ""
+
+          # ── Iterate over all BUILD matrix entries ──────────────────────────
+          # For each entry: trigger the portable .pkg build (build-pkg-linux.yml).
+          # This validates that the entry's (freebsd_version, php_version) pair
+          # still builds a clean .pkg independently of a release tag push.
+          echo "--- Step A: release artifact build (.pkg) ---"
+          printf '%s\n' "$BUILD_MATRIX" | jq -c '.[]' | while IFS= read -r ENTRY; do
+            PFSENSE=$(printf '%s\n' "$ENTRY" | jq -r '.pfsense_version')
+            CHANNEL=$(printf '%s\n' "$ENTRY" | jq -r '.channel')
+            MAJOR=$(printf '%s\n' "$ENTRY" | jq -r '.freebsd_major')
+            PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
+            PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
+
+            # Filter to target version if specified. issue #1806: BUILD_MATRIX is
+            # now deduped to one row per freebsd_major, so PFSENSE/CHANNEL are
+            # whichever merged version last wrote that major's row — a
+            # target_version naming the OTHER version sharing that major won't
+            # match (no live collision today; both would build byte-identically
+            # anyway, since the reader hard-errors on a php/py mismatch).
+            if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
+              echo "  [skip] ${PFSENSE} (${CHANNEL}) — does not match target '${TARGET_VERSION}'"
+              continue
+            fi
+
+            # issue #1806: NO_ARCH packages are arch-less; the matrix no longer
+            # carries `arch` at all. "amd64" here is an INERT cpu placeholder —
+            # build-pkg-portable.py wildcards the stamp for any NO_ARCH port
+            # regardless of what's given, so every arch of this FreeBSD major
+            # is served by the one build this triggers.
+            ABI="FreeBSD:${MAJOR}:amd64"
+            # Channel maps to pkg channel: the devel branch's prerelease line -> edge,
+            # main -> stable. For standalone tracker runs we use 'edge' by default.
+            # A real release tag push always uses release.yml; this is a build smoke-check.
+            PKG_CHANNEL="edge"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY-RUN] WOULD dispatch build-pkg-linux.yml:"
+              echo "    pfsense_version=${PFSENSE} (${CHANNEL})  freebsd_major=${MAJOR}"
+              echo "    abi=${ABI}  php=${PHP}  py_flavor=${PY}  pkg_channel=${PKG_CHANNEL}"
+            else
+              echo "  [TRIGGER] build-pkg-linux.yml for ${PFSENSE} (${CHANNEL}) FreeBSD ${MAJOR}"
+              # Dispatch the portable Linux builder for this matrix entry.
+              # build-pkg-linux.yml expects: channel, abi, php_version, py_flavor.
+              # INVARIANT: we dispatch a build-only workflow — no commits, no pushes.
+              gh workflow run build-pkg-linux.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                --field "channel=${PKG_CHANNEL}" \
+                --field "abi=${ABI}" \
+                --field "php_version=${PHP}" \
+                --field "py_flavor=${PY}" \
+                || echo "  ::warning::Dispatch of build-pkg-linux.yml for ${PFSENSE} failed (non-fatal)"
+            fi
+          done
+
+          # ── CI smoke fan-out ───────────────────────────────────────────────
+          # (Image refreshes are no longer dispatched here: the reconcile job
+          #  plans and dispatches direct image-refresh legs itself — issue #1823.)
+          echo ""
+          echo "--- Step C: CI smoke fan-out (smoke.yml, Phase 6) ---"
+          CI_COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          if [ "$CI_COUNT" -eq 0 ]; then
+            echo "  [skip] No ci:true CE entries — smoke fan-out not triggered."
+          else
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  [DRY-RUN] WOULD dispatch smoke.yml with ci_matrix:"
+              printf '%s\n' "$CI_MATRIX" | jq .
+            else
+              echo "  [TRIGGER] smoke.yml (scope=full — all ci:true entries)"
+              # Phase 6 contract: smoke.yml reads the ci_matrix from the
+              # version-matrix reader itself and expands it into parallel legs.
+              # A bare dispatch now defaults to scope=impacted (min CE + only the
+              # tests changed vs origin/devel); a post-version-bump validation
+              # wants the WHOLE fan-out, so pass scope=full explicitly.
+              # See RESULTS/04_Results.txt for the input contract.
+              gh workflow run smoke.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                -f scope=full \
+                || echo "  ::warning::Dispatch of smoke.yml failed — Phase 6 may not yet be landed"
+            fi
+          fi
+
+          echo ""
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "=== DRY-RUN COMPLETE — no workflows were dispatched ==="
+          else
+            echo "=== REACT COMPLETE — downstream workflows dispatched ==="
+          fi
+          echo "Invariant confirmed: this job made no commits or pushes to main/devel."
+
+  # ── 3. Daily image reconcile (issue #1823) ───────────────────────────────────
+  #
+  # The box is the source of truth; the matrix is the desired state. Per channel:
+  # boot the newest published image(s) as throwaway overlays, gather facts
+  # (/etc/version, `pfSense-repoc -p`, `pfSense-upgrade -c`), plan actions with
+  # scripts/reconcile-plan.py, then execute them:
+  #   - matrix_pr_add / matrix_pr_ga_flip → tracker/* PRs against ci-metadata
+  #     (the ONLY human gate; the reconcile NEVER pushes ci-metadata itself)
+  #   - republish / publish_new → image-refresh.yml direct legs
+  # No Netgate page scraping, no tracking issues, no upgrade.available curation.
+  # Best-effort: any failure degrades to fewer facts → fewer actions; react is
+  # never blocked.
+  #
+  # DISABLING: set skip_probe='true' on workflow_dispatch, or add the repo label
+  # 'tracker-probe-disabled', or remove this job entirely.
+  reconcile:
+    name: Daily image reconcile (box as source of truth)
+    runs-on: ubuntu-latest
+    # No `needs:` — the job resolves its own matrix (issue #1839), so an
+    # unrelated read-matrix failure must not skip the reconcile.
+    if: github.event.inputs.skip_probe != 'true'
+    # A wedged guest must not hold a runner for the 360-minute default (review F2);
+    # the whole loop (2-3 boots + facts + PRs) fits comfortably in 90.
+    timeout-minutes: 90
+    permissions:
+      contents: write        # push tracker/* matrix-PR branches (NEVER ci-metadata itself)
+      pull-requests: write   # open the matrix PRs
+      actions: write         # dispatch image-refresh.yml direct legs
+      packages: read         # oras pull/manifest-fetch of the smoke images
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: true   # push the tracker/* matrix-PR branches
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
+      # The reconcile needs EVERY family, one row per version: build_matrix is
+      # deduped to one row per freebsd_major (issue #1806), which hides a
+      # same-major family (26.03 vs 26.07) and blinds the boot source + the
+      # branch lookup (issue #1839). The route matrix is the never-deduped view.
+      - name: Resolve the route matrix (never deduped)
+        id: matrix
+        continue-on-error: true   # best-effort, like every data step in this job
+        run: |
+          set -eu
+          # The reader pretty-prints; compact it — a multi-line step output
+          # silently truncates at the first newline.
+          ROUTE="$(sh scripts/read-version-matrix.sh --ref origin/ci-metadata --print-route | jq -c '.')"
+          printf 'route=%s\n' "$ROUTE" >> "$GITHUB_OUTPUT"
+          printf '%s' "$ROUTE" | jq -r '.[] | "  \(.channel) \(.pfsense_version) (status \(.status // "active"))"'
+
+      - name: Check if the reconcile is disabled via repo label
+        id: probe_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh label list --repo "$REPO" --limit 100 \
+              | grep -q 'tracker-probe-disabled'; then
+            echo "probe_disabled=true" >> "$GITHUB_OUTPUT"
+            echo "Reconcile disabled via repo label 'tracker-probe-disabled'."
+          else
+            echo "probe_disabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        if: steps.probe_gate.outputs.probe_disabled != 'true'
+        continue-on-error: true
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
+      - name: Gather box facts (boot newest images)
+        id: facts
+        if: steps.probe_gate.outputs.probe_disabled != 'true'
+        continue-on-error: true
+        env:
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
+          SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
+          SMOKE_SSH_PRIV_KEY: ${{ secrets.SMOKE_SSH_PRIV_KEY }}
+          SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
+          SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
+          SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
+          SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SMOKE_SSH_PRIV_KEY:-}" ]; then
+            echo "::warning::SMOKE_SSH_PRIV_KEY absent — no box facts today"
+            exit 0
+          fi
+
+          # VM dependencies (daily by design — issue #1823). GH-hosted ubuntu-latest
+          # ships /dev/kvm but the unprivileged `runner` user is not in the `kvm`
+          # group, so qemu -enable-kvm gets EPERM; the udev rule makes it world-RW in
+          # the same login session. Same fix as the other KVM jobs.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 qemu-utils openssh-client
+          install -m 600 /dev/null smoke_key
+          printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
+          printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \
+            --username "$SMOKE_GHCR_USER" --password-stdin
+
+          REPO_NS="${SMOKE_IMAGE_REPO:-ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')}"
+          mkdir -p facts
+
+          CHANNELS=$(printf '%s\n' "$ROUTE_MATRIX" | jq -r '[.[].channel] | unique[]')
+          for CHANNEL in $CHANNELS; do
+            VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
+            mkdir -p "facts/${CHANNEL}"
+
+            # Published map: does the family's floating tag exist on GHCR?
+            printf '{}' > "facts/${CHANNEL}-published.json"
+            ENTRIES=$(printf '%s\n' "$ROUTE_MATRIX" | jq -c --arg ch "$CHANNEL" '
+              [ .[] | select(.channel == $ch)
+                    | select((.role // "build") != "route-only")
+                    | select((.arch // "amd64") == "amd64") ]')
+            N=$(printf '%s\n' "$ENTRIES" | jq 'length')
+            i=0
+            while [ "$i" -lt "$N" ]; do
+              E=$(printf '%s\n' "$ENTRIES" | jq -c ".[$i]")
+              i=$((i + 1))
+              FAMILY=$(printf '%s\n' "$E" | jq -r '.pfsense_version')
+              IMAGE_NAME=$(printf '%s\n' "$E" | jq -r '.image_name // ("pfsense-" + (.channel | ascii_downcase))')
+              if oras manifest fetch "${REPO_NS%/}/${IMAGE_NAME}:${FAMILY}" >/dev/null 2>&1; then
+                PUB=true
+              else
+                PUB=false
+              fi
+              jq --arg f "$FAMILY" --argjson p "$PUB" '.[$f] = $p' \
+                "facts/${CHANNEL}-published.json" > "facts/${CHANNEL}-published.json.tmp" \
+                && mv "facts/${CHANNEL}-published.json.tmp" "facts/${CHANNEL}-published.json"
+            done
+
+            # Boot set: newest PUBLISHED non-beta + published beta entries.
+            # (Review F1: a freshly-merged newer stable entry has no image yet —
+            # booting only its nonexistent tag would blind the whole channel.)
+            BOOTS=$(printf '%s\n' "$ENTRIES" | jq -c --slurpfile pub "facts/${CHANNEL}-published.json" '
+              ([ .[] | select((.status // "active") != "beta")
+                     | select($pub[0][.pfsense_version] == true) ]
+               | max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber))) as $stable
+              | ([ $stable // empty ]
+                 + [ .[] | select((.status // "active") == "beta")
+                         | select($pub[0][.pfsense_version] == true) ])')
+            BN=$(printf '%s\n' "$BOOTS" | jq 'length')
+            i=0
+            while [ "$i" -lt "$BN" ]; do
+              B=$(printf '%s\n' "$BOOTS" | jq -c ".[$i]")
+              i=$((i + 1))
+              FAMILY=$(printf '%s\n' "$B" | jq -r '.pfsense_version')
+              IMAGE_NAME=$(printf '%s\n' "$B" | jq -r '.image_name // ("pfsense-" + (.channel | ascii_downcase))')
+              IMG_REF="${REPO_NS%/}/${IMAGE_NAME}"
+              echo "==> facts for ${CHANNEL} ${FAMILY} (${IMG_REF}:${FAMILY})"
+              if [ "$VARIANT" = "plus" ]; then
+                SMOKE_VM_MAC="${SMOKE_PLUS_MAC:-}" SMOKE_VM_SMBIOS_UUID="${SMOKE_PLUS_SMBIOS_UUID:-}" \
+                  sh scripts/box-facts.sh \
+                    --variant "$VARIANT" --image "$IMG_REF" --tag "$FAMILY" \
+                    --ssh-key "$PWD/smoke_key" --out-dir "facts/${CHANNEL}/${FAMILY}"
+              else
+                sh scripts/box-facts.sh \
+                  --variant "$VARIANT" --image "$IMG_REF" --tag "$FAMILY" \
+                  --ssh-key "$PWD/smoke_key" --out-dir "facts/${CHANNEL}/${FAMILY}"
+              fi
+            done
+          done
+          echo "Gathered:"
+          find facts -name status -exec sh -c 'printf "  %s: %s\n" "$1" "$(cat "$1")"' _ {} \;
+
+      # ── Plan: pure decision from facts + matrix ─────────────────────────────
+      - name: Plan reconciliation
+        id: plan
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.facts.outcome == 'success'
+        continue-on-error: true
+        env:
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
+        run: |
+          set -euo pipefail
+          [ -d facts ] || { echo "No facts gathered — nothing to plan."; exit 0; }
+          CHANNELS=$(printf '%s\n' "$ROUTE_MATRIX" | jq -r '[.[].channel] | unique[]')
+          for CHANNEL in $CHANNELS; do
+            [ -f "facts/${CHANNEL}-published.json" ] || continue
+            set -- --channel "$CHANNEL" \
+              --matrix-json "$ROUTE_MATRIX" \
+              --published-json "$(cat "facts/${CHANNEL}-published.json")"
+            for D in "facts/${CHANNEL}"/*/; do
+              [ -f "${D}status" ] || continue
+              [ "$(cat "${D}status")" = "ok" ] || continue
+              FAMILY=$(basename "$D")
+              set -- "$@" --boot "${FAMILY}:${D%/}"
+            done
+            python3 scripts/reconcile-plan.py "$@" > "facts/plan-${CHANNEL}.json"
+            echo "=== ${CHANNEL} plan ==="
+            jq . "facts/plan-${CHANNEL}.json"
+          done
+
+      # ── Act 1: dispatch image-refresh direct legs ───────────────────────────
+      - name: Dispatch planned image legs
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.plan.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          ROUTE_MATRIX: ${{ steps.matrix.outputs.route }}
+        run: |
+          set -euo pipefail
+          for PLAN in facts/plan-*.json; do
+            [ -f "$PLAN" ] || continue
+            CHANNEL=$(basename "$PLAN" .json)
+            CHANNEL=${CHANNEL#plan-}
+            LEGS=$(jq -c --argjson bm "$ROUTE_MATRIX" --arg ch "$CHANNEL" '
+              [ .actions[]
+                | select(.type == "republish" or .type == "publish_new") as $a
+                | (first($bm[] | select(.channel == $ch)
+                               | select((.arch // "amd64") == "amd64")
+                               | select(.pfsense_version == $a.family)) // null) as $e
+                | select($e != null)
+                | { variant: ($ch | ascii_downcase),
+                    label: $ch,
+                    pfsense_version: $a.family,
+                    freebsd_version: ($e.freebsd_version // ""),
+                    image_name: ($e.image_name // ("pfsense-" + ($ch | ascii_downcase))),
+                    branch: ($a.branch // ""),
+                    target: $a.family,
+                    from: (if ($a.from // "") != "" then $a.from else $a.family end),
+                    force_flag: (if (if ($a.from // "") != "" then $a.from else $a.family end) == $a.family then "--force" else "" end) }
+              ]' "$PLAN")
+            # Annotations first — the zero-legs continue below must not swallow
+            # them. error = mislabeled image (issue #1857): loud, and the planner
+            # already quarantined that boot's facts.
+            jq -r '.actions[] | select(.type == "warn") | "::warning::\(.family): \(.message)"' "$PLAN"
+            jq -r '.actions[] | select(.type == "error") | "::error::\(.family): \(.message)"' "$PLAN"
+            N=$(printf '%s\n' "$LEGS" | jq 'length')
+            [ "$N" -eq 0 ] && { echo "  ${CHANNEL}: no image legs planned."; continue; }
+            i=0
+            while [ "$i" -lt "$N" ]; do
+              LEG=$(printf '%s\n' "$LEGS" | jq -c ".[$i]")
+              i=$((i + 1))
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  [DRY-RUN] WOULD dispatch image-refresh.yml direct leg:"
+                printf '%s\n' "$LEG" | jq .
+                continue
+              fi
+              echo "  [TRIGGER] image-refresh.yml direct leg: $(printf '%s\n' "$LEG" | jq -r '"\(.label) \(.from) -> \(.target) branch=\(.branch)"')"
+              gh workflow run image-refresh.yml \
+                --repo "$REPO" \
+                --ref "$REF" \
+                -f "direct_leg=${LEG}" \
+                || echo "  ::warning::Dispatch of image-refresh.yml direct leg failed"
+            done
+          done
+
+      # Facts outlive the runner: an intermittent boot failure is otherwise
+      # undiagnosable from the log alone (issue #1848).
+      - name: Upload the gathered facts
+        if: always() && steps.probe_gate.outputs.probe_disabled != 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: reconcile-facts
+          path: facts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # ── Act 2: matrix auto-PRs (a human merges; NEVER a ci-metadata push) ───
+      # matrix_pr_add: new family seen on the box → entry with the action's
+      # status, ci: false, fields jq-carried from the newest same-channel amd64
+      # sibling (schema changes flow through). FreeBSD fields are flagged in the
+      # PR body — a new family often tracks a NEWER FreeBSD than its sibling.
+      # matrix_pr_ga_flip: beta entry whose final build was seen → status flip.
+      # Contract pinned by tests/test_version_tracker_reconcile_contract.py.
+      - name: Open matrix PRs for planned actions
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.plan.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          ANY=$(jq -s '[ .[].actions[] | select(.type == "matrix_pr_add" or .type == "matrix_pr_ga_flip") ] | length' facts/plan-*.json 2>/dev/null || echo 0)
+          if [ "${ANY:-0}" -eq 0 ]; then
+            echo "No matrix changes to propose."
+            exit 0
+          fi
+
+          git fetch origin ci-metadata -q || true
+          git show origin/ci-metadata:supported-versions.json > matrix_current.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # open_matrix_pr BRANCH TITLE BODY_FILE NEW_MATRIX_FILE — (re)build the
+          # bot-owned tracker/* branch from ci-metadata + the new matrix file,
+          # force-push, and open (or reuse) the PR against ci-metadata.
+          open_matrix_pr() {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[DRY-RUN] WOULD open PR '$2' from branch $1"
+              return 0
+            fi
+            git checkout -B "$1" origin/ci-metadata
+            cp "$4" supported-versions.json
+            git add supported-versions.json
+            git commit -m "$2"
+            git push --force origin "$1"
+            PR=$(gh pr list --repo "$REPO" --head "$1" --base ci-metadata --state open \
+              --json number --jq '.[0].number // empty' || true)
+            if [ -z "$PR" ]; then
+              gh pr create --repo "$REPO" --base ci-metadata --head "$1" \
+                --title "$2" --body-file "$3" \
+                || { echo "::warning::Could not open matrix PR from $1"; return 0; }
+            else
+              echo "  open PR #${PR} from $1 already exists — the force-push updated it"
+            fi
+          }
+
+          for PLAN in facts/plan-*.json; do
+            [ -f "$PLAN" ] || continue
+            CHANNEL=$(basename "$PLAN" .json)
+            CHANNEL=${CHANNEL#plan-}
+            VARIANT=$(printf '%s' "$CHANNEL" | tr '[:upper:]' '[:lower:]')
+
+            ADDS=$(jq -c '[ .actions[] | select(.type == "matrix_pr_add") ]' "$PLAN")
+            AN=$(printf '%s\n' "$ADDS" | jq 'length')
+            i=0
+            while [ "$i" -lt "$AN" ]; do
+              A=$(printf '%s\n' "$ADDS" | jq -c ".[$i]")
+              i=$((i + 1))
+              FAMILY=$(printf '%s\n' "$A" | jq -r '.family')
+              REPO_BRANCH=$(printf '%s\n' "$A" | jq -r '.branch')
+              STATUS=$(printf '%s\n' "$A" | jq -r '.status')
+
+              if jq -e --arg v "$FAMILY" --arg c "$CHANNEL" \
+                   '.versions[] | select(.pfsense_version == $v and .channel == $c)' \
+                   matrix_current.json >/dev/null; then
+                echo "  [skip] ${CHANNEL} ${FAMILY} already in the matrix"
+                continue
+              fi
+              SIB=$(jq -c --arg c "$CHANNEL" '
+                [ .versions[] | select(.channel == $c) | select((.arch // "amd64") == "amd64") ]
+                | max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)) // empty' matrix_current.json)
+              if [ -z "$SIB" ] || [ "$SIB" = "null" ]; then
+                echo "::warning::no ${CHANNEL} sibling entry to derive ${FAMILY} from — skipping"
+                continue
+              fi
+
+              NEWM=$(mktemp)
+              jq --argjson sib "$SIB" --arg fam "$FAMILY" --arg status "$STATUS" '
+                .versions += [
+                  $sib + { pfsense_version: $fam, status: $status, ci: false }
+                ]' matrix_current.json > "$NEWM"
+
+              BODY_FILE=$(mktemp)
+              # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
+              {
+                printf '## Add pfSense %s %s (seen on the update servers)\n\n' "$CHANNEL" "$FAMILY"
+                printf 'The daily reconcile booted the current %s smoke image and found the\n' "$CHANNEL"
+                printf 'repo branch `%s` serving `%s` (`pfSense-repoc -p`).\n\n' "$REPO_BRANCH" "$FAMILY"
+                printf 'This PR adds the matrix entry with `status: %s` and `ci: false` (no\n' "$STATUS"
+                printf 'image exists yet). Merging it makes the next reconcile run build and\n'
+                printf 'publish the image from that branch; flip `ci` to `true` once it exists.\n\n'
+                printf '**Verify `freebsd_version` / `freebsd_major` before merging** — they\n'
+                printf 'are seeded from the sibling entry and a new family often tracks a\n'
+                printf 'newer FreeBSD.\n\n'
+                printf '_Opened automatically by the daily image reconcile (issue #1823). It\n'
+                printf 'never pushes to `ci-metadata` — merging is a human decision._\n'
+              } > "$BODY_FILE"
+
+              open_matrix_pr "tracker/matrix-${VARIANT}-${FAMILY}" \
+                "ci-metadata: add ${CHANNEL} ${FAMILY} (seen on the update servers)" \
+                "$BODY_FILE" "$NEWM"
+              rm -f "$BODY_FILE" "$NEWM"
+            done
+
+            FLIPS=$(jq -c '[ .actions[] | select(.type == "matrix_pr_ga_flip") ]' "$PLAN")
+            FN=$(printf '%s\n' "$FLIPS" | jq 'length')
+            i=0
+            while [ "$i" -lt "$FN" ]; do
+              F=$(printf '%s\n' "$FLIPS" | jq -c ".[$i]")
+              i=$((i + 1))
+              FAMILY=$(printf '%s\n' "$F" | jq -r '.family')
+
+              if ! jq -e --arg v "$FAMILY" --arg c "$CHANNEL" \
+                   '.versions[] | select(.pfsense_version == $v and .channel == $c and .status == "beta")' \
+                   matrix_current.json >/dev/null; then
+                echo "  [skip] ${CHANNEL} ${FAMILY} is not a beta entry (anymore)"
+                continue
+              fi
+              NEWM=$(mktemp)
+              jq --arg v "$FAMILY" --arg c "$CHANNEL" '
+                (.versions[] | select(.pfsense_version == $v and .channel == $c) | .status) = "active"
+              ' matrix_current.json > "$NEWM"
+
+              BODY_FILE=$(mktemp)
+              # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
+              {
+                printf '## Mark pfSense %s %s GA\n\n' "$CHANNEL" "$FAMILY"
+                printf 'The daily reconcile saw a final (non-prerelease) build for the %s %s\n' "$CHANNEL" "$FAMILY"
+                printf 'family while its matrix entry still says `status: beta`. This PR flips\n'
+                printf 'it to `active`; the image itself is refreshed by the reconcile legs.\n\n'
+                printf '_Opened automatically by the daily image reconcile (issue #1823)._\n'
+              } > "$BODY_FILE"
+
+              open_matrix_pr "tracker/matrix-${VARIANT}-${FAMILY}-ga" \
+                "ci-metadata: mark ${CHANNEL} ${FAMILY} GA" \
+                "$BODY_FILE" "$NEWM"
+              rm -f "$BODY_FILE" "$NEWM"
+            done
+          done
+
+          echo "Invariant confirmed: matrix changes proposed as PRs only — no ci-metadata push."

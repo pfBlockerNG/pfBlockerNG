@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/php/bootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         colors="true"
+         failOnRisky="true"
+         displayDetailsOnTestsThatTriggerWarnings="true"
+         displayDetailsOnTestsThatTriggerErrors="true">
+    <testsuites>
+        <testsuite name="pfBlockerNG PHP unit suite">
+            <directory>tests/php</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <ini name="memory_limit" value="1G"/>
+    </php>
+    <source>
+        <include>
+            <!-- Every file defining a #[CoversFunction]/#[CoversClass] target must be
+                 listed: php-code-coverage >= 12 rejects targets outside <source> (a
+                 warning per test, and warnings fail the run). Coverage itself stays
+                 informational for now (no enforced floor — see issue #39 / #38). -->
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc</file>
+            <file>src/usr/local/pkg/pfblockerng/pfblockerng_hook_edit.inc</file>
+            <file>src/usr/local/www/pfblockerng/pfblockerng_alerts.php</file>
+            <file>src/usr/local/www/pfblockerng/pfblockerng_log.php</file>
+            <file>src/usr/local/www/widgets/include/widget-pfblockerng.inc</file>
+            <file>src/usr/local/www/widgets/widgets/pfblockerng.widget.php</file>
+            <file>src/usr/local/www/wizards/pfblockerng_wizard.inc</file>
+        </include>
+    </source>
+</phpunit>

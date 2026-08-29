@@ -1,0 +1,1 @@
+{"kind":"domain","domain":"www.biz.co.zzsuffix","log":"1","feed":"tld_plain_feed","group":"tld_plain_feed"}

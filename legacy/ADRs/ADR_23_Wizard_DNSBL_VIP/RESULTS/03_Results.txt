@@ -1,0 +1,58 @@
+# ADR-23 Phase 3 Results — Docs + Definition of Done (final phase)
+
+## Delivered (three doc edits, doc-only — no src/ or tests/ change)
+
+1. CLAUDE.md — smoke "ADR-04" bullet list, the `pfb_dnsvip_auto`/`ensure_dnsbl_vip`
+   sentence (line ~308). Appended ONE sentence: the setup wizard (ADR-23) also exposes
+   the `pfb_dnsvip_auto` toggle, but `ensure_dnsbl_vip` remains the harness fixture since
+   the smoke harness does not run the wizard flow. Terse, matches surrounding style; no
+   other churn in that paragraph.
+
+2. ADR.md — Status flipped `Proposed` -> `Implemented (pending smoke test)`.
+   Deliberately NOT "PR #NNN, merged": no PR exists yet (created after this phase) and the
+   §7 manual on-box smoke checks need a live box (not in CI), so status stays
+   "pending smoke test" until the maintainer runs them. Issue #178 link in header is the
+   cross-reference.
+
+3. ADR.md — added `## 8  Notes` recording the two decision-relevant deviations from the
+   §4.3 sketch: (a) test approach went indirect-over-helper (Phase 1 inlined the boolean;
+   Phase 2 drove real step3_submitphpaction() observing pfb_validate_vips(); bootstrap
+   wizard-loader strips require_once + evals from first `function`; is_port() double added);
+   (b) Part B step4 persistence deferred (header()+exit, feeds-DB fixture, undoubled
+   services -> needs pure-helper extraction = src/ follow-up, out of scope).
+
+## Gate results (this phase, local)
+
+- npx markdownlint-cli2 (CLAUDE.md + ADR.md, plus full repo sweep) : 0 error(s). GREEN
+- vendor/bin/phpunit : OK, 299 tests, 584 assertions, 1 skipped. Unchanged from Phase 2 —
+  no regression. (The skip is WizardVipAutoTest's documented Part-B fallback.)
+- python -m pytest -q : 1480 passed. Unchanged — no regression. GREEN
+- php -l src/usr/local/www/wizards/pfblockerng_wizard.inc : No syntax errors detected.
+- php -l ...pfblockerng_wizard.xml : No syntax errors (non-PHP file, trivially clean).
+- vendor/bin/phpstan analyse --no-progress : [OK] No errors. GREEN
+- git diff : minimal — 2 files, +28/-2; CLAUDE.md exactly one added sentence; ADR.md
+  status line + §8. No unrelated churn.
+
+## Definition of Done checklist (ADR §7 + phase prompt) — per-item status
+
+Automated (CI):
+- [x] php -l both wizard files — no parse errors. AUTOMATED-GREEN (local + CI)
+- [x] PHPStan clean (no new un-stubbed calls). AUTOMATED-GREEN (local + CI)
+- [x] vendor/bin/phpunit all pass incl. WizardVipAutoTest (present, green; 1 documented
+      Part-B skip). AUTOMATED-GREEN (local + CI)
+- [ ] ADR-14 Tier A (ui_render): GET wizard page 200, pfb_dnsvip_auto checkbox present, no
+      new php_error.log line. CI-PENDING — requires live pfSense VM (SMOKE_ADMIN_PASSWORD);
+      not runnable in this environment. Maintainer/CI follow-up.
+
+Manual smoke (maintainer, on-box):
+- [ ] Wizard auto=ON: Finish -> config.xml pfb_dnsvip_auto='on'; after reload
+      pfB_AUTO_VIP_v4 at 10.10.X.53; pfb_dnsvip4 repointed. MAINTAINER-SMOKE-PENDING
+- [ ] Wizard auto=OFF + manual lo0 VIP: validation rejects missing/wrong-interface VIP;
+      accepts valid; pfb_dnsvip4 stored. MAINTAINER-SMOKE-PENDING
+- [ ] Back navigation from step 4 preserves checkbox state. MAINTAINER-SMOKE-PENDING
+- [ ] HA/CARP disclaimer visible in rendered wizard step 4. MAINTAINER-SMOKE-PENDING
+
+## Notes for next step
+ADR-23 implementation complete across Phases 1-3 (doc-only this phase). A PR is created
+AFTER this phase per the orchestrator flow. Status remains "pending smoke test" until the
+maintainer runs the §7 on-box checks on a live box.

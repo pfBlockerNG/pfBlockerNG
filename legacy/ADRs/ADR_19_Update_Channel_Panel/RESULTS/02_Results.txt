@@ -1,0 +1,135 @@
+================================================================================
+ADR-19 — PHASE 2 RESULTS: pure channel/provenance/version/notify decision core
+Branch: adr/19-update-channel-panel   Phase: 2   Status: GREEN (off-box gates)
+================================================================================
+
+SCOPE
+-----
+Phase 2 is the PURE decision core ONLY — strings in, decisions out. NO GUI, NO
+cron, NO `pkg` shellout/IO, NO `file_notice`, NO config wiring (those are Phases
+3-4). All six helpers are pure and side-effect-free.
+
+Predicate: Phase 1 kill-gate verdict was GO (per the orchestrator's live run on
+the ADR-04 VM; 01_Results.txt §GO-AHEAD). Phase 2 proceeded on that GO.
+
+
+HELPERS ADDED (src/usr/local/pkg/pfblockerng/pfblockerng.inc, lines ~1924-2044)
+------------------------------------------------------------------------------
+All under one docblock "ADR-19 software-update decision core (pure)".
+
+1. pfb_channel_from_pkgname(?string $name): ?string
+   Installed package NAME -> channel. Case-insensitive suffix match on the
+   'pfsense-pkg-pfblockerng' prefix:
+     ''        -> 'stable'
+     '-devel'  -> 'devel'
+     '-nightly'-> 'nightly'  (ADR-18 NIGHTLY build)
+   Non-pfBlockerNG name / foreign suffix / empty / null -> null (unknown).
+
+2. pfb_pkg_repo_name_for_channel(?string $channel): ?string
+   channel -> the OUR-repo to read latest from (2026-06-14 + 2026-06-15
+   amendments): stable AND devel both -> 'pfblockerng' (one shared repo; the
+   channel selects the PACKAGE, not the repo); 'nightly' -> 'pfblockerng-nightly'
+   (the sole separately-channelled build); unknown/null -> null.
+
+3. pfb_software_is_our_build(?string $installed_repo): bool
+   THE PROVENANCE GATE (2026-06-15 amendment). The repo is read from
+   `pkg query '%R' <pkgname>`. TRUE only for 'pfblockerng' or
+   'pfblockerng-nightly'; 'pfSense' (Netgate), '', 'unknown', null, or any other
+   -> FALSE. Later phases gate the tab append, the page top-of-file guard, the
+   priv match[] line, AND the cron notice on this single predicate.
+
+4. pfb_update_available(?string $installed, ?string $latest): bool
+   TRUE iff $latest is strictly newer than $installed, via pfSense
+   pkg_version_compare() === '<' (never a string compare). Empty/null installed
+   OR latest -> FALSE (a missing version is never "an update is available").
+   Nightly's dated YYYYMMDD versions compare nightly-to-nightly.
+
+5. pfb_notify_default_for_channel(?string $channel): bool
+   Channel-aware default for the notify knob when unset/'default':
+   nightly -> TRUE (trackers opted into the tip); stable/devel/other/null ->
+   FALSE (quiet for release users). (Implemented as $channel === 'nightly'.)
+
+6. pfb_should_notify(?string $installed, ?string $latest, ?string $last_notified,
+                     ?string $knob, ?string $channel): bool
+   The notify state machine. effective-notify = ($knob==='on') ? true :
+   ($knob==='off') ? false : pfb_notify_default_for_channel($channel). Returns
+   TRUE only when effective AND pfb_update_available($installed,$latest) AND
+   $latest !== $last_notified (the per-version de-dupe: a daily cron at the same
+   latest does NOT renotify; a newer latest does).
+
+   NOTE the signature follows the PHASE-2 PROMPT order
+   ($installed,$latest,$last_notified,$knob,$channel), NOT the ADR §2 "Helper
+   seam" sketch ($cur,$last_notified,$available,$knob,$channel) which predates
+   the prompt. The prompt's explicit-version form is implemented (it computes
+   availability internally via pfb_update_available rather than taking a
+   pre-computed $available bool). Phase 3 callers must use the prompt order.
+
+
+STUB / DOUBLE ADDED
+-------------------
+- Stubs: NONE needed — pkg_version_compare (stubs/pfsense/services.php:181) and
+  file_notice (stubs/pfsense/logging.php:34) already exist. PHPStan clean with no
+  baseline suppression.
+- Double: ADDED a FAITHFUL pkg_version_compare() to tests/php/pfsense_doubles.php
+  (function_exists-guarded). It maps PHP version_compare() to the FreeBSD pkg(8)
+  symbol '<' | '=' | '>' — the real function shells to `pkg version -t`, which is
+  unavailable off-appliance. version_compare orders every version class the
+  decision core sees (semver, the '_N' port-revision upgrade legs the catalog
+  uses, and nightly's dated YYYYMMDD), verified against the test matrix.
+
+
+TESTS (tests/php/SoftwareUpdateDecisionTest.php) — 47 cases, all green
+---------------------------------------------------------------------
+Every branch, both sides, before-state asserted on transitions; the de-dupe
+machine gets a BDD Given/When/Then lifecycle.
+
+- testChannelFromPkgname (DataProvider): stable / devel / nightly (+ case-
+  insensitive devel & nightly) / other-pkg / foreign-suffix / empty / null.
+- testRepoNameForChannel (DataProvider, the channel->repo mapping):
+    stable -> 'pfblockerng', devel -> 'pfblockerng',
+    nightly -> 'pfblockerng-nightly', unknown -> null, null -> null.
+- testSoftwareIsOurBuild (DataProvider, the provenance gate, BOTH sides pinned):
+    'pfblockerng' -> true, 'pfblockerng-nightly' -> true,
+    'pfSense' -> false, '' -> false, 'unknown' -> false, null -> false,
+    'netgate-decoy' -> false.
+- testUpdateAvailable (DataProvider): newer/newer-minor -> true; equal/older ->
+  false; nightly newer/same/older date; empty/null installed; empty/null latest.
+- testNotifyDefaultForChannel (DataProvider): nightly -> true (ON);
+  stable/devel/unknown/null -> false (OFF) — paired so the branch is real.
+- testShouldNotifyMatrix (DataProvider): knob on overrides OFF default (stable);
+  knob off overrides ON default (nightly); default OFF on stable AND devel
+  PAIRED WITH default ON on nightly; never-notify when not available; unset knob
+  resolves to the channel default both ways.
+- testShouldNotifyDeDupeLifecycle (BDD): GIVEN never-notified + newer 1.1 ->
+  notify; WHEN 1.1 recorded, same tick -> NO renotify; WHEN newer 1.2 (1.1 still
+  recorded) -> notify again (re-asserts the 1.1 tick still suppressed first, so
+  the flip is caused by the newer version); WHEN 1.2 recorded, repeat -> NO
+  renotify. Before-state asserted at every step.
+
+The provenance test ids:    SoftwareUpdateDecisionTest::testSoftwareIsOurBuild
+The channel-mapping test ids: SoftwareUpdateDecisionTest::testRepoNameForChannel
+
+
+OFF-BOX GATE RESULTS (this agent, in the worktree)
+--------------------------------------------------
+  php -l (pfblockerng.inc, pfsense_doubles.php) -> No syntax errors
+  vendor/bin/phpunit (filter)  -> OK (47 tests, 51 assertions)
+  vendor/bin/phpunit (full)    -> OK (477 tests, 878 assertions)
+  vendor/bin/phpstan analyse --no-progress -> [OK] No errors
+  ruff check .                 -> All checks passed!
+  python -m pytest -q          -> 1575 passed (UNCHANGED; no Python touched)
+
+
+GO-AHEAD FOR PHASE 3
+--------------------
+The pure core is pinned. Phase 3 wires it to real IO:
+  - Add the thin pfb_pkg_*() shellout wrapper (pkg update -r <repo> /
+    pkg rquery -r <repo> %v / pkg query %v %R), pkg-lock- and DNS-guarded.
+  - pfb_software_update_check(): read installed + our-repo latest, write the
+    cache under /var/db/pfblockerng/, gate on pfb_software_is_our_build(), call
+    pfb_should_notify() -> file_notice (de-duped), persist last-notified.
+  - Wire into the pfblockerng.php cron path; register the pfb_software_notify
+    config field default.
+  Phase-3 callers MUST use the prompt-order pfb_should_notify signature
+  ($installed,$latest,$last_notified,$knob,$channel).
+================================================================================

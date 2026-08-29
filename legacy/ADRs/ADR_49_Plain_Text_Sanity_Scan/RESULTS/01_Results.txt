@@ -1,0 +1,170 @@
+================================================================================
+PHASE 1 RESULTS — Pure pfb_text_sanity() scanner + oracle tests
+================================================================================
+
+FUNCTION
+--------
+src/usr/local/pkg/pfblockerng/pfblockerng.inc:1006
+    function pfb_text_sanity(string $sample): ?string
+
+Pure: string in, ?string out. No I/O, no globals. BYTE-LEVEL matching only —
+no `/u` modifier anywhere in the function.
+
+Verdict order (first hit wins):
+    1. 'nul_bytes'          — any \x00 byte anywhere in the sample.
+    2. 'html_error_page'    — opens (case-insensitive, after left-trim) with
+                              "<!doctype html" or "<html" AND none of the
+                              first 20 lines is blocklist-shaped (IPv4/IPv6/
+                              CIDR, or a bare/ABP-wrapped domain.tld token —
+                              a hosts-style "IP<ws>domain" line is already
+                              covered by the IP branch).
+    3. 'below_min_content'  — zero non-blank, non-comment lines (floor = 1,
+                              a LINE-count floor, never a byte-size floor).
+    4. otherwise NULL.
+
+No call-site changes, no config field, no www/ change — the function is
+added, unused, exactly per the phase scope.
+
+RED -> GREEN EVIDENCE
+---------------------
+tests/php/PfbTextSanityTest.php was written FIRST, against the pre-change
+code (pfb_text_sanity() did not yet exist):
+
+    $ vendor/bin/phpunit --filter PfbTextSanityTest
+    PHPUnit 11.5.55 by Sebastian Bergmann and contributors.
+    ...
+    EEEEEEEEEEEEEEEEEEEEE                                             21 / 21 (100%)
+    Time: 00:00.050, Memory: 30.00 MB
+    There were 21 errors:
+    1) PfbTextSanityTest::test_plain_ipv4_cidr_list_is_sane
+    Error: Call to undefined function pfb_text_sanity()
+    ...
+    ERRORS!
+    Tests: 21, Assertions: 0, Errors: 21.
+
+All 21 tests errored for the exact reason the change addresses (undefined
+function). After adding pfb_text_sanity() to pfblockerng.inc:
+
+    $ vendor/bin/phpunit --filter PfbTextSanityTest
+    .....................                                             21 / 21 (100%)
+    Time: 00:00.052, Memory: 30.00 MB
+    OK (21 tests, 21 assertions)
+
+Branch coverage in PfbTextSanityTest.php (21 tests): real blocklist samples
+(IPv4/CIDR, hosts-style, ABP-wrapped, single-line, tiny few-byte feed,
+comment-header-then-data) -> NULL; nul_bytes (bare + "wins over otherwise-
+valid text" + "wins over HTML" order proofs); html_error_page (no-blocklist-
+line + lower/upper/mixed-case + leading-whitespace tolerance) with its guard
+(HTML body containing a blocklist line -> NULL); below_min_content (empty,
+whitespace-only, comment-only); and the byte-level truncation cases (an
+8 KiB sample cut mid-token, and a dangling partial multibyte UTF-8 tail —
+neither changes an otherwise-valid NULL verdict).
+
+FEEDCORPUSSURVEYTEST RESULT — FAILED (5 flagged feeds; NOT a scanner bug)
+--------------------------------------------------------------------------
+Per the phase prompt: the survey activated automatically the moment
+pfb_text_sanity() became defined (function_exists() flips TRUE). It did
+NOT pass — 5 of ~150+ text samples in the committed corpus
+(tests/fixtures/feed_corpus/) were flagged:
+
+    MPatrol          (lists.malwarepatrol.net/cgi/getfile?...)  -> below_min_content
+    Abuse_SSLBL      (sslbl.abuse.ch/blacklist/sslipblacklist.txt)          -> below_min_content
+    Abuse_SSLBL_Agr  (sslbl.abuse.ch/blacklist/sslipblacklist_aggressive.txt) -> below_min_content
+    Darklist         (www.darklist.de/raw.php)                  -> below_min_content
+    MaxMind_BD_Proxy (www.maxmind.com/en/high-risk-ip-sample-list) -> html_error_page
+
+Per the phase-1 brief, the scanner was NOT loosened to force this green —
+each sample was inspected byte-for-byte instead (od -c) to judge whether the
+flag is a genuine scanner false positive or the corpus/catalogue itself is
+stale/broken:
+
+  - MPatrol (147 bytes): the ENTIRE sample is
+    "# Your access was denied.\n# You may have supplied a wrong password,
+    your subscription may have expired or you may not have access to this
+    resource." — this feed requires an API key; the corpus fetch used an
+    unresolved `receipt=_API_KEY_` placeholder and got an auth-denied
+    message back, not real data. All lines are '#'-comments -> zero data
+    lines is CORRECT for this input; not a scanner defect.
+
+  - Abuse_SSLBL / Abuse_SSLBL_Agr (527 / 533 bytes): the entire sample is
+    the feed's header block ending in "# ATTENTION: This list has been
+    deprecated on 2025-01-03\n#\n" — abuse.ch discontinued this list before
+    the corpus was captured. Every line is a '#'-comment -> genuinely zero
+    data lines today; correct catch, not a false positive.
+
+  - Darklist (68 bytes): the entire sample is
+    "# darklist.de - blacklisted raw IPs\n# generated on 04.07.2026 12:22\n"
+    — the live fetch returned only the header with no IP rows at all at
+    capture time. Same shape as above: zero data lines is what was
+    actually served.
+
+  - MaxMind_BD_Proxy (8192 bytes, full cap): a genuine, fully-rendered
+    marketing HTML page (`<!DOCTYPE html>...<title>Sample list of high
+    risk IP addresses | MaxMind</title>...`) — the catalogue URL
+    (maxmind.com/en/high-risk-ip-sample-list) points at MaxMind's webpage
+    ABOUT the sample list, not a raw data endpoint. No blocklist-shaped
+    line appears in the first 20 lines of real HTML/JS boilerplate, so
+    html_error_page fires correctly — this URL is not a raw feed at all.
+
+None of the 5 is a plain, healthy blocklist body misclassified by the
+heuristic; each reflects a stale corpus snapshot (deprecated/gated/wrong-
+URL feed) captured by PR #827's one-time fetch. STOPPING here per the
+brief — the acceptance decision (refresh the corpus, exclude these 5 known-
+stale/misconfigured catalogue entries, or something else) is Phase 3's /
+the maintainer's call, not this phase's. The scanner logic is unchanged
+from the spec and must stay that way pending that decision.
+
+PHPUNIT / PHPSTAN / PHPCS SUMMARIES
+------------------------------------
+$ vendor/bin/phpunit
+    Tests: 2150, Assertions: 17789, Failures: 1 (FeedCorpusSurveyTest, see
+    above), Skipped: 4 (pre-existing, unrelated — e.g. FileMtimeTest's
+    macOS VFS-staleness skip; the FeedCorpusSurveyTest skip that existed
+    before this phase is GONE, replaced by the failure above, confirming
+    the survey activated as expected).
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    No syntax errors detected (pre-existing PHP-8.5-vs-8.3 deprecation
+    notices for unrelated legacy functions unchanged by this diff).
+
+$ vendor/bin/phpstan analyse --memory-limit=1G
+    [OK] No errors.
+    (Note: the bare `vendor/bin/phpstan analyse` invocation hit PHP's
+    default 128M child-process memory limit against this large .inc file
+    on this box — a local-environment ceiling, not a code issue — so
+    --memory-limit=1G was used to get a real answer. Zero new errors.)
+
+$ vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    Clean (no output).
+
+DIFF SCOPE
+----------
+$ git diff --stat
+    src/usr/local/pkg/pfblockerng/pfblockerng.inc | 72 +++++++++++++++++++++
+    1 file changed, 72 insertions(+)
+plus the new tests/php/PfbTextSanityTest.php (untracked -> staged in the
+commit). Exactly the two files the phase scoped: pfblockerng.inc +
+tests/php/PfbTextSanityTest.php. No call-site, config, or www/ changes.
+
+COMMIT / PUSH
+-------------
+Commit: pfblockerng: add pure plain-text feed sanity scanner (ADR-49 P1)
+(hash recorded by the calling orchestrator / see `git log -1`)
+Pushed directly to adr/49-plain-text-sanity-scan.
+
+WATCH-OUT FOR PHASE 2
+----------------------
+Wire point: pfb_download(), right after the FILE_MIME accept
+(pfblockerng.inc ~L9399-9403 on this branch — the
+`$file_type = pfb_filter(..., PFB_FILTER_FILE_MIME, ...)` block). Scan ONLY
+on text branches (text/plain | text/html | text/csv) — exclude
+application/json, application/x-ndjson (structured, line-count heuristics
+meaningless), and inode/x-empty (its own signal, out of this ADR's scope).
+Gate on the new `pfb_feed_sanity` PfbConfig field (PfbToggle, default OFF —
+zero behaviour change when off, asserted by test). On a non-NULL verdict,
+reject via `pfb_validate_log($header, 'plaintext', $reason, ...)` (ADR-48
+stage=plaintext), mirroring the existing `mime`/`entries` stage call
+sites already in pfb_download(). Also carry forward the 5 flagged corpus
+feeds above into Phase 3's survey-acceptance discussion — they are the
+concrete list Phase 3 (or the maintainer) needs to decide on before any
+default-on change and before the ADR can flip to Accepted.

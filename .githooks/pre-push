@@ -1,0 +1,150 @@
+#!/bin/sh
+# Enforces the release tag scheme before any push reaches the remote, and — for
+# agent pushes — force-with-lease semantics by EFFECT (issue #1307).
+# Single source of truth for the tag scheme: scripts/release-version.sh.
+#
+# Rules:
+#   - every versioned tag is annotated and carries exactly one explicit channel trailer
+#   - its commit must be reachable from the exact release/X.Y line derived by the parser
+#   - malformed metadata, an unknown channel, or an unreachable release line -> rejected
+#   - agent (Claude, Codex, Copilot, Grok, or OMP marker set) branch push
+#     rewriting remote history -> allowed only when the advertised remote oid
+#     equals the local
+#     remote-tracking ref, i.e. the history being overwritten was fetched
+#     (--force-with-lease's check, applied to the push's effect regardless of
+#     how it was spelled)
+#
+# Enable: git config core.hooksPath .githooks
+
+z40="0000000000000000000000000000000000000000"
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="."
+CLASSIFY="${ROOT}/scripts/release-version.sh"
+[ -f "$CLASSIFY" ] || [ -z "${PFB_ROOT:-}" ] || CLASSIFY="${PFB_ROOT}/scripts/release-version.sh"
+
+# Both loops below consume the per-ref update list, so capture stdin once.
+updates=$(cat)
+
+while IFS=' ' read -r local_ref local_sha remote_ref _remote_sha; do
+    # Only inspect tag pushes
+    case "$remote_ref" in refs/tags/*) ;; *) continue ;; esac
+
+    # Skip tag deletions
+    [ "$local_sha" = "$z40" ] && continue
+
+    tag="${remote_ref#refs/tags/}"
+
+    # Only enforce versioned tags (vX.Y.Z and vX.Y.Z.<suffix>)
+    case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) continue ;; esac
+
+    if [ ! -f "$CLASSIFY" ]; then
+        echo "error: ${CLASSIFY} not found — cannot validate the tag scheme" >&2
+        exit 1
+    fi
+
+    tag_ref="refs/tags/${tag}"
+    if [ "$local_ref" != "$tag_ref" ]; then
+        echo "error: versioned tag '$tag' must be pushed from source ref '$tag_ref'" >&2
+        exit 1
+    fi
+    ref_sha=$(git rev-parse --verify "$tag_ref" 2>/dev/null || true)
+    if [ "$ref_sha" != "$local_sha" ]; then
+        echo "error: tag '$tag' update does not match its local tag object" >&2
+        exit 1
+    fi
+    type=$(git cat-file -t "$local_sha" 2>/dev/null || true)
+    if [ "$type" != "tag" ]; then
+        if [ -z "$type" ]; then
+            echo "error: '$tag' does not point to a commit reachable from an exact release/X.Y line" >&2
+            exit 1
+        fi
+        echo "error: tag '$tag' must be an annotated tag" >&2
+        exit 1
+    fi
+
+    trailers=$(git for-each-ref --format='%(contents)' "$tag_ref" | git interpret-trailers --parse)
+    channel_count=$(printf '%s\n' "$trailers" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
+    if [ "$channel_count" -ne 1 ]; then
+        echo "error: tag '$tag' must carry exactly one release-channel trailer" >&2
+        exit 1
+    fi
+    channel_line=$(printf '%s\n' "$trailers" | grep -F 'pfBlockerNG-Release-Channel:' || true)
+    case "$channel_line" in
+        'pfBlockerNG-Release-Channel: stable') channel=stable ;;
+        'pfBlockerNG-Release-Channel: testing') channel=testing ;;
+        'pfBlockerNG-Release-Channel: edge') channel=edge ;;
+        *) channel= ;;
+    esac
+    if [ -z "$channel" ]; then
+        echo "error: tag '$tag' has an unknown release-channel trailer" >&2
+        exit 1
+    fi
+
+    # Classify from the explicit trailer, never from a suffix or branch name.
+    if ! err=$(sh "$CLASSIFY" "$tag" "$channel" 2>&1 >/dev/null); then
+        echo "error: tag '$tag' is not valid for channel '$channel':" >&2
+        printf '%s\n' "$err" | sed 's/^/       /' >&2
+        exit 1
+    fi
+
+    release_line=$(sh "$CLASSIFY" "$tag" "$channel" | sed -n 's/^release_line=//p')
+    commit=$(git rev-parse --verify "${local_sha}^{commit}" 2>/dev/null) || {
+        echo "error: tag '$tag' does not resolve to a commit" >&2
+        exit 1
+    }
+    if ! git merge-base --is-ancestor "$commit" "origin/$release_line" 2>/dev/null; then
+        echo "error: '$tag' does not point to a commit reachable from 'origin/$release_line'" >&2
+        echo "       Push the commit to the exact release line and wait for CI to pass before tagging." >&2
+        exit 1
+    fi
+done <<PFB_TAG_UPDATES
+$updates
+PFB_TAG_UPDATES
+
+# Agent lease-by-effect guard (issue #1307): deny an agent branch rewrite over
+# remote history it never fetched (advertised remote oid != remote-tracking ref).
+# Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
+# 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
+# agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
+# GROK_SESSION_ID (probed on 1.0.4, 2026-08-15: inherited by nested sh/bash).
+# OMP reads OMP_CLI=1 from its user .env and mirrors it to PI_CLI=1. The same
+# inherited-variable contract applies; no process tree is inspected.
+copilot_session() {
+	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
+}
+
+grok_session() {
+	[ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_AGENT:-}" ]
+}
+
+omp_session() {
+	[ -n "${OMP_CLI:-}" ] || [ -n "${PI_CLI:-}" ]
+}
+
+agent_runtime=0
+[ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
+[ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! grok_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! omp_session || agent_runtime=1
+if [ "$agent_runtime" = "1" ]; then
+    remote_name="${1:-origin}"
+    while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do
+        case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
+        [ "$local_sha" = "$z40" ] && continue   # branch deletion
+        [ "$remote_sha" = "$z40" ] && continue  # branch creation
+        git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null && continue
+        branch="${remote_ref#refs/heads/}"
+        tracking=$(git rev-parse --verify "refs/remotes/${remote_name}/${branch}" 2>/dev/null) || tracking=""
+        if [ "$remote_sha" != "$tracking" ]; then
+            echo "error: agent push would rewrite unfetched history of '${branch}' (issue #1307)." >&2
+            echo "       The remote moved past your remote-tracking ref: run 'git fetch ${remote_name}'," >&2
+            echo "       rebase onto the new tip, then push with --force-with-lease." >&2
+            exit 1
+        fi
+    done <<PFB_LEASE_UPDATES
+$updates
+PFB_LEASE_UPDATES
+fi
+unset agent_runtime
+
+exit 0

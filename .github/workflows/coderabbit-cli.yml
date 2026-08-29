@@ -1,0 +1,65 @@
+# Prototype: CodeRabbit CLI review on a named PR.
+# Dispatch only — not on push — so a per-push job cannot walk the PR Fair Usage
+# 7-day band until a burst test says the columns are independent (#2436).
+# Needs repository secret CODERABBIT_API_KEY (Agentic key, assigned seat).
+name: CodeRabbit CLI review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review with the CLI
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  cli-review:
+    name: CLI review of one PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Agentic API key
+        env:
+          CODERABBIT_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
+        run: |
+          if [ -z "${CODERABBIT_API_KEY}" ]; then
+            echo '::error::Set repository secret CODERABBIT_API_KEY (Agentic key on an assigned seat).'
+            exit 1
+          fi
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr checkout "${{ inputs.pr }}"
+      - name: Install CodeRabbit CLI
+        run: |
+          curl -fsSL https://cli.coderabbit.ai/install.sh | sh
+          echo "$HOME/.local/bin" >> "${GITHUB_PATH}"
+      - name: Run CLI review
+        env:
+          CODERABBIT_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
+        run: |
+          set -eu
+          BASE=$(gh pr view "${{ inputs.pr }}" --json baseRefName --jq .baseRefName)
+          git fetch origin "${BASE}"
+          coderabbit review --agent --api-key "${CODERABBIT_API_KEY}" \
+            --base "origin/${BASE}" > "${RUNNER_TEMP}/cr-cli.jsonl"
+      - name: Post file-level findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/agent/coderabbit_cli_report.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pr "${{ inputs.pr }}" \
+            "${RUNNER_TEMP}/cr-cli.jsonl"

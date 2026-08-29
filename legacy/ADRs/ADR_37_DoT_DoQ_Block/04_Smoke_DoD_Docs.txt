@@ -1,0 +1,154 @@
+================================================================================
+PHASE 4 PROMPT — Live-VM smoke + DoD verification + architecture-notes docs
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_37_DoT_DoQ_Block/ADR.md   (read §6 Phase 4, §7 DoD, full §2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/37-dot-doq-block. Phase 4 writes the ADR-04 live-VM
+smoke test, adds the architecture-notes blurb, and performs a final DoD verification pass.
+One commit, push directly.
+
+REQUIRED READING (FIRST — read before writing a single line of code)
+FIRST, read the prior phase's handoff:
+    .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/03_Results.txt
+If that file is missing, STOP and report.
+
+Then read:
+- .ADRs/ADR_37_DoT_DoQ_Block/ADR.md — §6 Phase 4 (required cases), §7 (DoD checklist).
+- CLAUDE.md §"Smoke tests (ADR-04)" — all bullet points; non-obvious truths that apply here:
+  probe ON-BOX, test domains must be helpers.unique_domain() (N/A for a firewall rule test,
+  but the general harness discipline applies), every run uploads diagnostics on failure.
+- tests/smoke/ — existing smoke test files for style and fixture pattern; the helpers module;
+  the conftest + smoke_vm fixture. Read tests/smoke/test_dns_redirect.py if it exists (ADR-36
+  sibling) — mirror its structure for the DoT/DoQ block test.
+- docs/misc/architecture-notes.md — the existing document; find the right section to append
+  the DoT/DoQ blurb (likely near the ADR-36 redirect blurb if present, or in the firewall
+  rules section).
+
+ACTION PLAN
+
+1. WRITE tests/smoke/test_dot_doq_block.py with marker `smoke` (or append to an existing
+   smoke test file — check if one already covers the DNSBL firewall rules; mirror the ADR-36
+   test file structure if it exists). Required test cases (each as an independent test
+   function with a descriptive name and BDD-style Given/When/Then comments):
+
+   a. test_dot_doq_block_rule_appears_on_enable
+      Given: DoT/DoQ block disabled (baseline).
+      When: enable dnsbl_dot_block on the LAN interface and trigger sync.
+      Then: config.xml filter/rule contains an entry with descr='pfB_DoT_Block_lan',
+            type='block', ipprotocol='inet46', protocol='tcp/udp',
+            destination port='853' with (self) not-negated present,
+            statetype='keep state'.
+            pfctl -sr output contains a block rule for port 853 (parse pfctl output; assert
+            the rule is present).
+      Assert the before-state: config.xml has no pfB_DoT_Block_* entry before enable.
+
+   b. test_dot_doq_block_rule_removed_on_disable
+      Given: DoT/DoQ block enabled on LAN (use the enable helper or the result of case (a)).
+      When: disable dnsbl_dot_block and trigger sync.
+      Then: config.xml has no pfB_DoT_Block_* entries; pfctl -sr shows no pfBlockerNG
+            port-853 block rules.
+      Assert the before-state (rule present before disable).
+
+   c. test_user_filter_rule_survives_disable_and_uninstall
+      Given: a user filter rule with no pfB_ marker seeded in config.xml before enable.
+      When: enable DoT/DoQ block, then disable, then uninstall pfBlockerNG.
+      Then: the user filter rule is still present in config.xml; no pfB_DoT_Block_* remains;
+            installedpackages/pfblockerng* is gone.
+      Assert at each stage: user rule present after enable; user rule present after disable;
+      user rule present after uninstall.
+
+   d. test_stale_interface_rule_pruned_on_reconcile
+      Given: DoT/DoQ block enabled on LAN and OPT1.
+      When: reduce the interface selection to LAN only and trigger sync.
+      Then: config.xml has pfB_DoT_Block_lan present and pfB_DoT_Block_opt1 absent.
+      Assert before-state: both rules present before the reduction.
+
+   e. test_exception_alias_source_in_config_xml_when_set
+      Given: DoT/DoQ block enabled with dnsbl_dot_block_exclude = 'DoT_Exceptions'.
+      Then: config.xml source element has address containing 'DoT_Exceptions' and <not/>
+            present. (Config.xml assertion — not a live-client test.)
+      When: change to empty alias and re-sync.
+      Then: source element is <any>. (Both branches — before/after.)
+
+   f. test_uninstall_sweep_removes_all_dot_block_rules
+      Given: DoT/DoQ block enabled on LAN (rule present with marker).
+      When: uninstall pfBlockerNG (use the ADR-35 sweep test pattern from the sibling ADR).
+      Then: no pfB_DoT_Block_* filter/rule entries remain; no pfBlockerNG-owned filter rules
+            remain; installedpackages/pfblockerng* gone.
+      Assert before-state: rule present before uninstall.
+
+   g. test_self_exempt_guard_in_pfctl_output
+      Given: DoT/DoQ block enabled on LAN.
+      Then: pfctl -sr output contains the block rule for port 853; parse the output to confirm
+            the rule includes the self-exclusion guard (pfSense renders the `!<self>` guard or
+            equivalent in pfctl -sr — read the actual pfctl output on the live VM and assert
+            the relevant token). This is the CI-feasible gate.
+      NOTE: full client-to-:853 block behaviour (a second host attempting a TCP connection to
+      an external :853 server and being dropped) requires a second host and is a documented
+      maintainer manual-smoke item (§7) — not a CI assertion.
+
+   Use the smoke_vm fixture + SSH helpers from the existing smoke harness. Use
+   helpers.unique_domain() only for DNS-level tests (N/A here, but keep the import clean).
+   Mark all tests with @pytest.mark.smoke.
+
+2. UPDATE docs/misc/architecture-notes.md with a short blurb in the appropriate section
+   (near the ADR-36 redirect blurb if present, otherwise in the Firewall Rules or DNSBL
+   section). The blurb covers:
+   - DoT/DoQ block feature: one inet46 BLOCK rule per selected interface on port 853 (TCP +
+     UDP), managed via ADR-35.
+   - The inet46 single-rule design (simpler than per-family split; valid for a block rule
+     with no family-specific target).
+   - Firewall self-exempt via negated (self) destination — always on.
+   - Complementary relationship: ADR-36 closes port-53 plaintext bypass; ADR-37 closes
+     port-853 DoT/DoQ bypass; the DoH-IP feed + DNSBL domain blocking address port-443 DoH.
+   - Limitation: non-standard port DoT/DoQ and DoH over 443 are not covered by this rule.
+   Markdown lint: blank lines around headings/lists/fences; language on all fences; no
+   unescaped pipes in table cells; single trailing newline.
+
+3. PERFORM DoD verification pass — for each item in ADR.md §7:
+   - Run vendor/bin/phpunit; assert all tests green.
+   - Run PHPStan; assert no new errors.
+   - Run vendor/bin/phpcs --standard=phpcs.xml.dist src/; assert green.
+   - Run php -l src/; assert no syntax errors.
+   - Run python -m pytest; assert green.
+   - Confirm the ui_render test is green (or skip if SMOKE_ADMIN_PASSWORD absent — document).
+   - Confirm the smoke tests pass (requires smoke_vm; document any skip conditions).
+   Record all counts in the handoff.
+
+CONSTRAINTS
+- PHP tabs in PHP files; Python 4-space indent in smoke tests.
+- Smoke tests must use the existing smoke_vm fixture and SSH helpers — do not re-implement the
+  connection layer.
+- Before-state assertions are mandatory on every transition test (CLAUDE.md test-coverage
+  mandate).
+- Do NOT modify Phase 1, 2, or 3 tests.
+- Do NOT change any source file beyond the smoke test and the docs blurb. If you discover a
+  bug in the builder or sync code, document it in the handoff and the ADR §7 notes — do not
+  silently fix it in this phase (a Phase 5 / follow-up PR is the right path).
+- Markdown lint: npx markdownlint-cli2 must pass on docs/misc/architecture-notes.md after
+  the blurb is added.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> ALL tests green.
+- PHPStan -> no new errors.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green.
+- php -l src/ -> no syntax errors.
+- python -m pytest -> green (unit suite; smoke tests SKIP cleanly when smoke_vm absent).
+- npx markdownlint-cli2 docs/misc/architecture-notes.md -> 0 error(s).
+
+EXPECTED RESULT
+Six smoke test cases covering the full DoT/DoQ block lifecycle; architecture-notes blurb
+committed; full DoD gate green; ADR ready to flip to Accepted on passing CI + live-VM fan-out.
+
+COMMIT (single)
+    pfblockerng: add DoT/DoQ block smoke tests and architecture notes (ADR-37 P4)
+Push directly to adr/37-dot-doq-block.
+
+HANDOFF — write .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/04_Results.txt (plain .txt)
+Record: smoke test file path + list of test function names; architecture-notes section updated
+(file:line range of the blurb); DoD checklist — tick each §7 item as DONE or note the
+blocking condition; gate counts (PHPUnit pass/fail, PHPStan errors, PHPCS errors, pytest
+pass/fail, markdownlint errors); any open issues discovered in this phase; recommended next
+step (PR open, manual smoke, or a follow-up).

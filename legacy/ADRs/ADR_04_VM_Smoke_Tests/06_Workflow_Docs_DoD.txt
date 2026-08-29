@@ -1,0 +1,95 @@
+================================================================================
+PHASE 6 PROMPT — Per-PR workflow wiring + docs + Definition of Done
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_04_VM_Smoke_Tests/ADR.md   (read §5 docs note, §6 Phase 6, §7
+     Definition of done + reject criteria + manual checklist FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/04` branch (off `devel`) performing Phase 6 (FINAL) of ADR-04.
+Wire the smoke matrix into a real workflow, document run/rebuild/extend, fold in the
+spike, and finalise the Definition of Done. After this, ADR-04 is code-complete and
+acceptance is the maintainer's smoke confirmation. Work inline on `adr/04`, one
+commit, push directly.
+
+WHY THIS PHASE EXISTS
+The matrix (P5) runs green when invoked by hand; this phase makes it a CI gate with a
+sensible trigger (informed by the measured wall-time), removes the throwaway spike, and
+writes down how to keep the image current on a CE bump and how to grow the matrix — so
+the harness survives past this ADR.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_04_VM_Smoke_Tests/RESULTS/05_Results.txt — cases covered, the add-a-case
+  recipe, and the observed `pytest -m smoke` wall-time (drives the trigger decision).
+  If missing, the matrix isn't ready; STOP and report.
+- Also read RESULTS/01_Results.txt (boot timing / go-no-go) and RESULTS/02_Results.txt
+  (GHCR pull + rebuild-on-bump).
+- .ADRs/ADR_04_VM_Smoke_Tests/ADR.md  (§3 "CI cost/time" — gating fallback; §5 docs;
+  §7 DoD + reject criteria + manual checklist).
+- .github/workflows/test.yml + the spike workflow (smoke-spike.yml) + build-image.yml
+  — the house style + what to fold in / keep separate.
+- README.md  (where dev tooling/workflow is documented; CLAUDE.md version-bump rules).
+
+ACTION PLAN (ordered)
+1. SMOKE WORKFLOW (`.github/workflows/smoke.yml`): on the chosen trigger — pick from
+   the P5 wall-time: every-PR if it fits the budget (ADR §7 ~<=20 min), else a gated
+   trigger (PR label, `workflow_dispatch`, and/or nightly `schedule`). Steps: ensure
+   /dev/kvm; checkout; `oras pull` the GHCR image (tag from 02_Results.txt); install
+   `tests/smoke/requirements.txt`; boot is handled by the fixture; run
+   `pytest -m smoke`. Use the SSH-key/image secrets. Keep the DEFAULT unit `test.yml`
+   untouched and separate.
+2. RETIRE THE SPIKE: remove/replace `smoke-spike.yml` now that smoke.yml + build-image
+   .yml supersede it (keep any reusable boot helper).
+3. README: a "Smoke tests" section — how to run `pytest -m smoke` locally (KVM + image
+   prereqs, `oras pull`, deps); the IMAGE VERSION-BUMP strategy (from 02_Results.txt):
+   default = boot prior image + `pfSense-upgrade` + re-snapshot via build-image.yml;
+   RE-BASELINE with a fresh manual SEED install on a MAJOR jump; CE only, no Plus; seed
+   + every snapshot retained in GHCR (never overwrite). And how to ADD a matrix case
+   (recipe from 05_Results.txt). Note the GHCR package is private.
+4. VERSION-BUMP CHECKLIST: add to the existing CLAUDE.md/README "minimum supported CE
+   version changes" checklist (next to update-pfsense-stubs.py): "rebuild + republish
+   the pfSense CE smoke image — upgrade-in-place for patch/minor, fresh seed on major".
+5. FINALISE ADR §7: confirm the automated DoD items are met; leave the manual
+   maintainer checklist as the gate to flip Status -> Accepted (do NOT flip it
+   yourself — acceptance needs the live-box confirmation). If any §7 reject criterion
+   was hit anywhere in P1-P5, record the outcome honestly instead.
+
+CONSTRAINTS
+- Do NOT modify the default unit-test workflow (test.yml) or the default
+  `python -m pytest` behaviour.
+- Do NOT flip ADR Status to Accepted — that is the maintainer's call after the live
+  smoke. Update wording/DoD only.
+- Do NOT touch `src/`. Secrets via Actions secrets; GHCR package stays private.
+- YAML lint-clean; any shell POSIX sh + ShellCheck-clean; commit-style scope `ci:`/
+  `docs:` as appropriate.
+- FORWARD-COMPAT (ADR-09): make the smoke workflow `workflow_call`-able and take the image
+  tag/digest as an INPUT (default to the single supported version) — ADR-09's
+  version-tracker invokes it per CE version. Do NOT hardcode a single tag, and do NOT build
+  version-selection / scheduling / the matrix here — that is ADR-09 (this workflow validates
+  ONE version; ADR-09 fans it out).
+
+VERIFICATION (must all pass before the phase is done)
+- `smoke.yml` runs on its trigger and `pytest -m smoke` is green in CI (pulls GHCR
+  image, boots, asserts the P5 slice).
+- `python -m pytest` (default) → green/unchanged; `test.yml` untouched.
+- README documents run + rebuild + extend; the CE-bump checklist includes the image
+  rebuild.
+- `ruff`/ShellCheck/YAML → clean.
+
+EXPECTED RESULT
+A CI smoke workflow gating (or nightly-guarding) the thin-slice matrix against a real
+pfSense VM, documented for run/rebuild/extend, with the spike retired and §7 finalised
+— ADR-04 code-complete, pending the maintainer's live smoke to reach Accepted.
+
+COMMIT (single)
+    ci: wire pfSense VM smoke workflow + document run/rebuild/extend (ADR-04 P6)
+Push directly to `adr/04`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/06_Results.txt` (plain .txt)
+FINAL handoff — recipient: the MAINTAINER. Include: the smoke workflow trigger chosen
+and why (the wall-time number); how to run/rebuild/extend (pointers into README); the
+automated DoD status (which §7 items are green in CI); the OUTSTANDING manual smoke
+checklist (ADR §7) to run on a live box before flipping Status to Accepted; any
+reject-criterion outcomes; and any candidate pfBlockerNG bugs surfaced by P5 that need
+their own PRs. No next-phase agent.

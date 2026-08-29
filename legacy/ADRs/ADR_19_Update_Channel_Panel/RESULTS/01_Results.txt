@@ -1,0 +1,162 @@
+================================================================================
+ADR-19 — PHASE 1 RESULTS (KILL-GATE): read-our-repo-latest + idempotent
+file_notice + same-channel upgrade + provenance probe
+Branch: adr/19-update-channel-panel   Phase: 1   Status: OFF-BOX GREEN; live run PENDING
+================================================================================
+
+VERDICT (pending the live `repo`-marked CI run)
+-----------------------------------------------
+Off-box gates are GREEN and the four kill-gate cases COLLECT under `-m repo`. The
+GO / REJECT / DEGRADE verdict per ADR §1 premise is decided by the LIVE run on the
+ADR-04 VM (the orchestrator dispatches it — this agent cannot boot the VM). The
+cases are written so each premise's pass is unambiguous (see the GO/REJECT map
+below). No `src/` code was written this phase, per the ADR-01 guard.
+
+
+WHAT WAS ADDED
+--------------
+ONE new test file, NOTHING else changed (no src/, no CI, no other tests):
+
+  tests/smoke/test_software_update.py   (marker `repo`, deselected from `-m smoke`)
+
+It REUSES `tests/smoke/test_repo_install.py` wholesale — the `repo_vm` fixture, the
+hermetic `file://` catalog builder (`build_guest_repo`), the `.pkg` re-versioner
+(`reversion_pkg` / `read_compact_version`), the `netgate-decoy` repo, and the
+`pkg_*` / `write_repo_conf` / `repo_priority` helpers — so there is NO second VM
+boot path and NO duplicated catalog machinery (the prompt's constraint). It adds
+only the ADR-19-specific mechanics on top:
+
+  * pkg-read via `-r <ourrepo>` ONLY:
+      pkg_update_our_repo()  -> `pkg update -f -r pfblockerng`
+      pkg_rquery_latest()    -> `pkg rquery -r pfblockerng %v pfSense-pkg-pfBlockerNG-devel`
+      file_sha256()          -> digest of /usr/local/etc/pkg/repos/pfSense.conf
+                                (the "pfSense repo untouched" oracle)
+  * notices via pfSsh.php (the fully-bootstrapped, cron-equivalent env):
+      raise_notice()         -> file_notice('pfBlockerNG', "<msg>", 'pfBlockerNG',
+                                '/pfblockerng/pfblockerng_software.php', 1)
+      count_matching_notices()-> counts get_notices() rows whose `notice` text
+                                carries a per-version substring (the oracle)
+      close_notice('pfBlockerNG') for teardown (VM left clean)
+  * the caller-side de-dupe pattern proven (ADR §2 "persist last-notified"):
+      LAST_NOTIFIED_FILE = /var/db/pfblockerng/pfb_software_last_notified
+      cron_tick(latest, msg): raise+record ONLY when latest != last-notified;
+                              returns True iff a notice fired this tick.
+
+Every case asserts EFFECTIVE state by value (pkg query / pkg rquery / get_notices),
+befores AND afters, never an exit code alone, and cleans up in `finally`.
+
+
+THE FOUR CASES — EXACT LIVE TEST IDS TO DISPATCH + GO/REJECT MAPPING
+--------------------------------------------------------------------
+Dispatch (orchestrator):  gh workflow run smoke.yml -f pytest_marker=repo
+(runs the whole `repo` marker — this file + test_repo_install.py). Capture the run
+id and paste it under "LIVE RUN" below.
+
+The four ADR-19 ids that MUST be green for this kill-gate:
+
+(a) tests/smoke/test_software_update.py::test_read_our_repo_latest_without_pfsense_repo
+    Premise: ADR §1 premise 1 (read our latest WITHOUT `-r pfSense`).
+    Proves: with `<V>_1` installed from ours and `<V>_9` published to ours,
+      `pkg rquery -r pfblockerng %v` == `<V>_9` (our latest) while
+      `pkg query %v` == `<V>_1` (installed) — latest != installed by value — AND
+      the `pfSense.conf` sha256 is byte-identical before vs after the read
+      (pfSense-repo-setup did NOT run).
+    GO  : assertions hold (rquery answers from ours alone; pfSense conf unchanged).
+    REJECT/REDESIGN: rquery cannot answer without `-r pfSense`, OR the pfSense conf
+      digest changes across the read (the §7 premise-1 reject criterion).
+
+(b) tests/smoke/test_software_update.py::test_file_notice_is_idempotent_per_version
+    Premise: ADR §1 premise 2 (file_notice fires from cron + de-dupes per version).
+    Proves: tick1 at version A -> exactly ONE notice for A (before: 0); tick2 at the
+      SAME A -> still exactly ONE (no re-notify); tick3 at higher B -> a notice for B
+      appears. last-notified advances A then B. Before-state asserted at each step.
+    GO  : one-per-new-version, none-per-repeat-version holds.
+    REJECT/REDESIGN: file_notice does not appear in get_notices from the cron-context
+      env, OR the notice cannot be made idempotent per version (the §7 premise-2
+      reject criterion).
+
+(c) tests/smoke/test_software_update.py::test_same_channel_upgrade_advances_from_our_repo
+    Premise: ADR §1 premise 3 (same-channel `pkg upgrade` pulls our build).
+    Proves: `<V>_1` installed from ours (before), then `pkg upgrade -y` after
+      publishing `<V>_9` -> `%v` == `<V>_9`, `%R` == pfblockerng, deps resolved.
+    GO  : the version moves N->N+1 from our repo.
+    DEGRADE (NOT reject): if the in-repo upgrade is unreliable, "Update now" degrades
+      to a documented CLI `pkg upgrade` step (ADR §7) — display + notice still ship.
+
+(d) tests/smoke/test_software_update.py::test_provenance_repo_origin_distinguishes_our_build_from_decoy
+    Premise: the 2026-06-15 provenance amendment (the gate keys on `pkg query %R`).
+    Proves: install with ours higher-priority -> `%R` == `pfblockerng` (gate would
+      SHOW the feature); reinstall with the decoy higher-priority -> `%R` ==
+      `netgate-decoy` (gate would HIDE it). Both directions, `%R` provably changes —
+      so `pfb_software_is_our_build()` can tell our build from a stock/Netgate build.
+    GO  : `%R` discriminates (ours -> show; non-ours -> hide).
+    REJECT/REDESIGN of the provenance approach: `%R` cannot distinguish the install
+      source (e.g. both read identically) — the gate would have no signal to key on.
+
+
+OFF-BOX GATE RESULTS (this agent, in the worktree)
+--------------------------------------------------
+  ruff check .                        -> All checks passed!
+  ruff format --check .               -> 99 files already formatted (incl. the new file)
+  python -m pytest -q  (default)      -> 1575 passed (UNCHANGED; smoke tree --ignore'd)
+  setup-plan (new file):              -> all 4 cases resolve, one shared `SETUP M repo_vm`,
+                                         NO "fixture not found"
+    python -m pytest tests/smoke/test_software_update.py --setup-plan \
+      --override-ini="addopts="
+  mypy: tests/smoke is excluded from the type gate (pyproject `exclude =
+    ['^tests/smoke/']`), as is the whole sibling smoke suite — out of scope here.
+
+  Fixture re-export (post-CI fix): pytest resolves fixtures PER-MODULE, so importing the
+    helper functions from test_repo_install.py did NOT register its `repo_vm` fixture in
+    this module — the first live `repo` run errored at SETUP with `fixture 'repo_vm' not
+    found` (4 errors). Fix: re-export `repo_vm` into this module's namespace (the standard
+    pytest idiom) — `from .test_repo_install import (..., repo_vm, ...)  # noqa: F401`,
+    with `F811` suppressed for this file in pyproject (each case param "redefines" the
+    imported name from ruff's view). `--collect-only` does NOT resolve the fixture graph
+    and so MISSED this — `--setup-plan` is the gate that catches it (used above).
+
+  Note: the `PytestUnknownMarkWarning: ... timeout` lines are pre-existing and shared
+  with test_repo_install.py — `pytest-timeout` is installed in the smoke CI env (the
+  smoke requirements), not in the lint env; harmless, not introduced by this phase.
+
+
+DEPENDENCIES / RUNTIME NEEDS FOR THE LIVE RUN
+---------------------------------------------
+  * SMOKE_PKG  = the branch `.pkg` (the harness already provides it for `-m repo`).
+  * `zstd` on the runner — the re-versioner (reversion_pkg, reused from
+    test_repo_install.py) needs it to forge `<V>_1` / `<V>_9`. Already a dependency
+    of the existing `repo` upgrade test, so the CI runner already has it.
+  * Egress OPEN — inherited from the `repo_vm` fixture (`_ensure_egress_open`); these
+    cases never enter a CaseContext, so they do not block egress.
+  * pfSsh.php on the guest (base pfSense) — used for file_notice/get_notices.
+
+
+DEVIATIONS / NOTES
+------------------
+  * The prompt offered "test_repo_install.py OR a sibling test_software_update.py" —
+    chose the sibling so the ADR-19 mechanics stay separable from the ADR-17 flow,
+    while importing (not copying) all catalog machinery from test_repo_install.py.
+  * count_matching_notices keys on the per-version message SUBSTRING, not the notice
+    id: file_notice is id-keyed (a repeat id REPLACES its row), so counting by id
+    could not distinguish "raised once" from "raised again at a new version". The
+    de-dupe being proven is the CALLER not re-raising (the ADR §2 last-notified
+    pattern), which a version-string count measures correctly.
+  * The nightly channel mapping (stable/devel -> `pfblockerng`, nightly ->
+    `pfblockerng-nightly`) is pure-helper logic; Phase 1 exercises only the shared
+    `pfblockerng` repo (the one the `repo_vm` fixture builds). The nightly repo is
+    pure-helper / Phase-2 territory (ADR §6) and ADR-18-coupled — not part of this
+    kill-gate. OURS_REPO_NAME_DEVEL is an alias of the fixture's `pfblockerng`.
+
+
+LIVE RUN (fill in after dispatch)
+---------------------------------
+  run id: __________   result: __________
+  (a) ____  (b) ____  (c) ____  (d) ____
+
+
+GO-AHEAD FOR PHASE 2
+--------------------
+Phase 2 (pure decision core + PHPUnit oracle) is unblocked once the live run shows
+(a) + (b) GREEN (the hard GO gates) and (c) GREEN-or-noted-DEGRADE. If (a) or (b)
+REJECTs, STOP and reshape the read/notice design per ADR §7 before Phase 2.
+================================================================================

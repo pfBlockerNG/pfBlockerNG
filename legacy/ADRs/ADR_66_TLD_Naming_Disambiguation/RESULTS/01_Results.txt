@@ -1,0 +1,446 @@
+ADR-66 PHASE 1 RESULTS -- Oracle: pin both TLD features + the bridges
+
+VERDICT: DONE-WITH-DEVIATION (see Deviations below -- no production behaviour
+or scope change; the deviation is process/documentation only).
+
+WHAT CHANGED
+- tests/test_adr66_tld_bridges.py (NEW at 8ef9d145; AMENDED by the
+  gate-repair fix commit below) -- the ADR-66 rename seam
+  (TLD_ALLOW_ENABLE_KEY/TLD_ALLOW_LIST_KEY/TLD_WILDCARD_INI_KEY/
+  MANIFEST_TLD_KEYS/tld_wildcard_classify/load_tld_wildcard_master), the ini
+  bridge round-trip (C1 PHP-side is TldBridgeEmitTest.php; C2 here), the
+  manifest bridge round-trip (C3 PHP-side is TldBridgeEmitTest.php; C4 here),
+  and the Semantic-6 substring-over-reach guard (G1-G4). EDITABLE by Phases
+  2/3.
+  CORRECTION (gate findings F2/F4): at 8ef9d145, C2's `_read_main_tld_keys()`
+  RE-IMPLEMENTED init_standard()'s MAIN-section read slice in test code
+  instead of executing the production reader -- a Phase 2 that renamed the
+  writer+seam+PHP literals but forgot the production reads at
+  pfb_unbound.py:1475-1478 would have stayed GREEN. Also,
+  `test_a_half_renamed_bridge_would_fail_loudly` was VACUOUS (exercised only
+  stdlib ConfigParser.has_option, no production code) and hardcoded the
+  future post-Phase-2 key "tld_allow" as a literal -- a guaranteed red
+  landmine once Phase 2 actually renames to that key. Fixed in the
+  gate-repair commit: `_read_main_tld_keys()` and the vacuous test are
+  DELETED; `TestIniBridgeRoundTrip` now drives the REAL
+  `pfb_unbound.init_standard()` (via a real ini file + `monkeypatch.chdir` +
+  `unboundmodule.module_env()`) and asserts the seam-keyed values landed in
+  `pfb_unbound.pfb`, tearing down via `pfb_unbound.deinit(0)` in a
+  `finally`. This makes C2 a true production-reader round-trip: a forgotten
+  P2 read now goes RED here instead of staying silently green.
+- tests/test_adr66_tld_naming_oracle.py (NEW at 8ef9d145; AMENDED by the
+  gate-repair fix commit below) -- the FROZEN decision oracle: Oracle A
+  (Feature A / TLD Allow, evaluate_domain) rows A1-A10 + A5c, Oracle B
+  (Feature B / TLD Wildcard, via the seam aliases) rows B1-B14. Imports the
+  seam from test_adr66_tld_bridges.py.
+  CORRECTION (gate finding F1): the claim below -- "contains no identifier
+  from ADR SS2.1/SS2.2" -- was FALSE at 8ef9d145: the file's prose spelled
+  4 banned rename-map identifiers verbatim (``classify()`` /
+  ``_dnsbl_load_tld_master`` in two section headers, ``python_tld_seg`` in
+  the ``_tld_allow_cfg`` docstring). Fixed in the gate-repair commit
+  (reworded to feature-language prose using only the seam names); the claim
+  is TRUE as of that commit, verified zero-hit:
+    $ grep -nE '(^|[^_a-zA-Z0-9])classify|python_tld|pytld|dnsbl_tld([^_]|$)|tld_master|_dnsbl_tld_search|parse_python_tlds|(^|[^_a-zA-Z0-9])tld_exclusion|(^|[^_a-zA-Z0-9])tld_blacklist' tests/test_adr66_tld_naming_oracle.py
+    (no output, exit 1)
+  FROZEN from the gate-repair commit on -- the freeze RESTARTS there (the
+  8ef9d145 freeze is void per the F1 violation); see FROZEN-FILE HASH below.
+- tests/php/TldBridgeEmitTest.php (NEW) -- PHP-side halves of both bridges:
+  C1 (pfb_unbound_python() ini-writer structural pin, mirrors
+  PythonTldWildcardIniEmitTest.php) and C3 (pfb_unbound_python_sources()
+  live-call manifest-writer pin, mirrors UnboundPythonSourcesTest.php).
+- .ADRs/ADR_66_TLD_Naming_Disambiguation/RESULTS/01_Results.txt (NEW at
+  8ef9d145; AMENDED by the gate-repair fix commit below) -- this handoff.
+
+Commit hash: 8ef9d145 (original phase-1 commit; independent gate FAILED
+  with 4 findings F1-F4, see "GATE-REPAIR FIX COMMIT" section near the
+  bottom of this file). The fix commit resolving F1-F4 is the tip of branch
+  adr/66-tld-naming-disambiguation-1783983455 as pushed by this fix pass
+  (`git log -1 --format=%H` on that branch) -- self-referentially
+  unrecordable as a literal value inside the very commit that creates it
+  (same chicken-and-egg this field already hit once, below); this is a
+  continuation of that same disclosed limitation, not a new one.
+Push: adr/66-tld-naming-disambiguation-1783983455
+
+No production file touched (src/** diff is empty for both the original and
+the gate-repair commit -- verified below; the gate-repair commit touches
+ONLY the two test files + this RESULTS file).
+
+GATES (run on the worktree HEAD, i.e. against the committed diff)
+$ git diff origin/devel --stat -- src/
+  (empty output -- confirmed no production change)
+
+$ python3 -m pytest -q
+  ... 2859 passed, 4 skipped in 55.88s [pre-commit baseline run at 8ef9d145;
+  superseded by the 2868 pre-fix baseline measured in the fix-pass session --
+  see the reconciliation note near the end of this file]
+
+$ ruff check .
+  All checks passed!
+
+$ ruff format --check .
+  238 files already formatted
+
+$ python3 -m mypy tests/
+  Success: no issues found in 102 source files
+
+$ php -l tests/php/TldBridgeEmitTest.php
+  No syntax errors detected in tests/php/TldBridgeEmitTest.php
+
+$ vendor/bin/phpunit
+  OK, but there were issues!
+  Tests: 3338, Assertions: 21009, Deprecations: 1, Notices: 1, Skipped: 4.
+  (0 failures/errors; deprecations/notices/skips are pre-existing baseline,
+  not introduced by this change -- Skipped: 4 matches the documented
+  posix_getuid()===0 permission-guard skip under root.)
+
+$ composer phpstan
+  Note: Using configuration file phpstan.neon.
+  [OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+  (empty output, exit 0 -- clean; src/ untouched so this proves nothing new
+  broke phpcs)
+
+$ vendor/bin/phpunit --filter TldBridgeEmitTest
+  PHPUnit 11.5.55 by Sebastian Bergmann and contributors.
+  .....                                                               5 / 5 (100%)
+  OK (5 tests, 23 assertions)
+
+$ bash scripts/agent/run-gates.sh --diff origin/devel   (run AFTER the commit
+  below, so the diff-detection sees the new files: run-gates.sh computes
+  touched files via `git diff --name-only <base>...HEAD`, which is empty for
+  untracked/uncommitted files -- an important gotcha for any verifier
+  re-running this command pre-commit)
+  GATES: PASS
+
+ORACLE-GREEN PROOF (test mode: behaviour-preserving ORACLE -- no red run this
+phase; every test below is GREEN on the untouched tree, per CLAUDE.md's
+behaviour-preserving exception, stated explicitly per the brief)
+
+$ python3 -m pytest tests/test_adr66_tld_naming_oracle.py tests/test_adr66_tld_bridges.py -v
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowFastPath::test_a1_disabled_is_a_noop PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowFastPath::test_a2_enabled_tld_on_list_resolves PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowFastPath::test_a3_enabled_tld_off_list_blocks_with_full_log_field_snapshot PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowFastPath::test_a4_enabled_empty_list_is_a_noop PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowNumericBand::test_a5_disallowed_tld_block_stands_with_no_allow_match PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowNumericBand::test_a5_feed_allow_at_band_two_overrides_the_band_one_block PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowBranchesBothWays::test_a6_both_sides_of_a_populated_list PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleATldAllowCnameComposition::test_a7_is_cname_true_suffixes_b_type PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBTwoLabelToggle::test_b2_empty_oracle_is_data PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBTwoLabelToggle::test_b1_populated_oracle_is_zone PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBMultiLabelSuffix::test_b3_registrable_domain_over_public_suffix_is_zone PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBDeeperSubdomain::test_b4_deeper_sub_over_public_suffix_is_data PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBDeeperSubdomain::test_b5_deeper_sub_over_simple_tld_is_data PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBExclusionOptOut::test_b7_non_member_stays_zone PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBExclusionOptOut::test_b6_exclusion_member_forces_data PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBOverFiveLabels::test_b8_over_five_labels_is_data PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBLoadTimeBlacklistAndExclusion::test_b9_blacklisted_tld_drops_out_of_the_oracle PASSED
+tests/test_adr66_tld_naming_oracle.py::TestOracleBLoadTimeBlacklistAndExclusion::test_b10_excluded_tld_drops_out_of_the_oracle PASSED
+tests/test_adr66_tld_naming_oracle.py::test_priority_band_constants_stay_distinct PASSED
+tests/test_adr66_tld_naming_oracle.py::test_module_uses_only_seam_and_stable_symbols PASSED
+tests/test_adr66_tld_bridges.py::TestIniBridgeRoundTrip::test_values_survive_the_writer_to_reader_hop PASSED
+tests/test_adr66_tld_bridges.py::TestIniBridgeRoundTrip::test_a_half_renamed_bridge_would_fail_loudly PASSED
+tests/test_adr66_tld_bridges.py::TestIniBridgeRoundTrip::test_values_flow_into_a_real_block_decision PASSED
+tests/test_adr66_tld_bridges.py::TestManifestBridgeRoundTrip::test_configured_values_pass_through PASSED
+tests/test_adr66_tld_bridges.py::TestManifestBridgeRoundTrip::test_absent_keys_default_empty PASSED
+tests/test_adr66_tld_bridges.py::TestSemantic6SubstringGuard::test_g1_dnsbl_tld_data_and_remove_survive_verbatim_in_inc PASSED
+tests/test_adr66_tld_bridges.py::TestSemantic6SubstringGuard::test_g2_classify_siblings_survive_verbatim_in_py PASSED
+tests/test_adr66_tld_bridges.py::TestSemantic6SubstringGuard::test_g3_python_tld_wildcard_survives_verbatim_in_inc PASSED
+tests/test_adr66_tld_bridges.py::TestSemantic6SubstringGuard::test_g4_python_tld_wildcard_survives_verbatim_in_py PASSED
+======================= 29 passed in 0.06s ========================
+
+RED -> GREEN: N/A. This is a behaviour-preserving oracle phase (CLAUDE.md
+Test coverage #1's refactor/ADR-prep exception, restated explicitly by the
+brief's Constraints section): no production code changed, so there is no
+"before" behaviour to fail against. The proof of correctness is the ORACLE-
+GREEN run above on the untouched tree, plus the discovery-driven correction
+below (test_a3 initially asserted b_eval=="" / log_type is False from a
+static source read; the FIRST live pytest run falsified that -- the
+post-discovery `if is_found: b_eval = q_name; log_type = "1"` default in
+evaluate_domain fills both for every stratum that doesn't override them,
+TLD-Allow included. Corrected to assert b_eval==q_name / log_type=="1" /
+null_blocking is False, confirmed by a second live run -- exactly the kind
+of static-claim-vs-live-probe discrepancy the oracle exists to catch, caught
+against pre-existing code with zero identifier renamed).
+
+COVERAGE MATRIX
+
+Oracle A (Feature A / TLD Allow -- evaluate_domain, tests/test_adr66_tld_naming_oracle.py)
+  A1 disabled -> no-op                         test_a1_disabled_is_a_noop
+  A2 enabled + tld on list -> resolves         test_a2_enabled_tld_on_list_resolves
+  A3 enabled + tld off list -> full log-field  test_a3_enabled_tld_off_list_blocks_with_full_log_field_snapshot
+      snapshot block (feed/group/b_type/p_type/b_eval/log_type/null_blocking/in_hsts/in_whitelist/nxdomain)
+  A4 enabled + empty list -> no-op (#713)      test_a4_enabled_empty_list_is_a_noop
+  A5 numeric-path block band == PRIO_FEED_BLOCK  test_a5_disallowed_tld_block_stands_with_no_allow_match
+      (no override) / overridden by a band-2 allow  test_a5_feed_allow_at_band_two_overrides_the_band_one_block
+  A6 both sides of a populated list             test_a6_both_sides_of_a_populated_list
+  A7 CNAME b_type composition on a TLD-Allow block  test_a7_is_cname_true_suffixes_b_type
+  A5c numeric-path band NOT over-promoted by a   test_a5c_populated_non_matching_allow_regex_leaves_block_standing
+      populated-but-non-matching allowRegexDB row  [gate-repair: F3/F4]
+  A8a DNSBL-VIP v4 q_name exemption (control-first)  test_a8a_v4_vip_query_is_exempt  [gate-repair: F3]
+  A8b DNSBL-VIP v6 q_name exemption (control-first)  test_a8b_v6_vip_query_is_exempt  [gate-repair: F3]
+  A9 tld=="" conjunct -> no-op                   test_a9_empty_tld_is_a_noop  [gate-repair: F3]
+  A10 "if not is_found" precedence: an upstream  test_a10_datadb_hit_wins_over_tld_allow  [gate-repair: F3]
+      dataDB hit wins outright over TLD-Allow (before/after)
+
+Oracle B (Feature B / TLD Wildcard -- the wildcard classifier / oracle loader via seam, tests/test_adr66_tld_naming_oracle.py)
+  B1 2-label, populated oracle -> ZONE          test_b1_populated_oracle_is_zone
+  B2 2-label, empty oracle -> DATA (#1255)      test_b2_empty_oracle_is_data
+  B3 multi-label public suffix -> ZONE          test_b3_registrable_domain_over_public_suffix_is_zone
+  B4 deeper sub over public suffix -> DATA      test_b4_deeper_sub_over_public_suffix_is_data
+  B5 deeper sub over simple tld -> DATA         test_b5_deeper_sub_over_simple_tld_is_data
+  B6 exclusion member forces DATA               test_b6_exclusion_member_forces_data
+  B7 exclusion non-member stays ZONE (before)   test_b7_non_member_stays_zone
+  B8 >5 labels -> DATA regardless of oracle     test_b8_over_five_labels_is_data
+  B9 load-time blacklist drops a TLD (before/after)  test_b9_blacklisted_tld_drops_out_of_the_oracle
+  B10 load-time exclusion drops a TLD (before/after) test_b10_excluded_tld_drops_out_of_the_oracle
+  B11 dcnt==5 branch, both sides (ZONE + DATA)   test_b11_five_label_zone_and_data  [gate-repair: F3]
+  B12 dcnt==4 branch's ZONE side (DATA is B4)    test_b12_four_label_zone  [gate-repair: F3]
+  B13 dcnt==1 fallthrough -> DATA                test_b13_single_label_is_data  [gate-repair: F3]
+  B14 loader line-skip guards (blank/whitespace/  test_b14_skip_guards_leave_exactly_one_real_entry  [gate-repair: F3]
+      comment/trailing-dot-empty-tld), exactly one real entry survives
+
+Bridges
+  C1 ini writer emits python_tld/python_tlds from dnsbl_pytld+4 config fields (PHP, structural)
+      -> tests/php/TldBridgeEmitTest.php::testIniWriterDerivesTldAllowFromDnsblPytld
+         + testIniWriterReadsAllFourPytldsConfigFields + testIniHeredocEmitsTldAllowKeys
+  C2 ini reader round-trip: values land (via a REAL init_standard() drive,
+      not a re-implemented reader -- gate-repair F2) + flow into a real
+      block  (Python)
+      -> tests/test_adr66_tld_bridges.py::TestIniBridgeRoundTrip
+         (test_values_survive_the_writer_to_reader_hop,
+          test_values_flow_into_a_real_block_decision)
+         [gate-repair F2/F4: test_a_half_renamed_bridge_would_fail_loudly
+          DELETED -- vacuous, exercised stdlib ConfigParser only]
+  C3 manifest writer emits config.tld_blacklist/tld_exclusion, gated by dnsbl_tld (PHP, live call)
+      -> tests/php/TldBridgeEmitTest.php::testManifestTldKeysEmptyWhenDnsblTldOff
+         + testManifestTldKeysPopulatedWhenDnsblTldOn
+  C4 manifest reader round-trip: configured values pass through / absent default empty (Python)
+      -> tests/test_adr66_tld_bridges.py::TestManifestBridgeRoundTrip
+         (test_configured_values_pass_through, test_absent_keys_default_empty)
+  C4-b stale manifest config.tld_master key is ignored regardless of flag
+      -> DEFERRED to the pre-existing tests/test_manifest_path_confinement.py:98-130
+         (TestTldWildcardOracleGating::test_manifest_tld_master_key_is_ignored_regardless_of_flag)
+         -- not duplicated, per brief instruction.
+
+Semantic-6 guard (structural, tests/test_adr66_tld_bridges.py::TestSemantic6SubstringGuard)
+  G1 $pfb['dnsbl_tld_data'] + $pfb['dnsbl_tld_remove'] survive verbatim in .inc
+      -> test_g1_dnsbl_tld_data_and_remove_survive_verbatim_in_inc
+  G2 classify_idn/classify_label/classify_upstream_block survive verbatim in .py
+      -> test_g2_classify_siblings_survive_verbatim_in_py
+  G3 python_tld_wildcard survives verbatim in .inc (planner addition: prefix hazard)
+      -> test_g3_python_tld_wildcard_survives_verbatim_in_inc
+  G4 python_tld_wildcard survives verbatim in .py (planner addition: prefix hazard)
+      -> test_g4_python_tld_wildcard_survives_verbatim_in_py
+
+FROZEN-FILE HASH (byte-identity anchor for Phases 2/3)
+SUPERSEDED at 8ef9d145: a7675a85877d736b735e23d4338f01143564b021 -- VOID, the
+freeze it anchored covered a file that violated gate finding F1 (purity).
+The freeze RESTARTS at the gate-repair fix commit with the corrected file:
+$ git hash-object tests/test_adr66_tld_naming_oracle.py
+4ae3ad286a18d60ea496d40e649eb9b11e3c672c
+THIS is the hash Phases 2/3 must reproduce byte-identically.
+
+(non-frozen, for reference: test_adr66_tld_bridges.py, superseded at
+8ef9d145 (b24cd5bbce1a3e0d77d30079c38da3eab6c5495d) -> now
+74eea0bfa70c7bfa4dc8b27940a86b662d9bf957 (gate-repair F2/F4 rework);
+tests/php/TldBridgeEmitTest.php = e69b85a5b5cd074c4894acd7342d1ada752753ff,
+UNCHANGED by the gate-repair commit -- both remain EDITABLE by Phases 2/3.)
+
+DEVIATIONS / JUDGMENT CALLS
+1. Brief section 4 ("HOSTILE-INPUT ROWS") referenced a structured
+   `hostile_rows` field that did not render into the plain-text brief (the
+   section header appeared with no rows under it). This is not a factual
+   contradiction to ESCALATE on -- section 3's explicit deliverable
+   description (Oracle A/B row semantics, C2/C4, G) and the ADR's own SS2.3
+   Semantics already fully specified the needed corpus, so I built Oracle
+   A (A1-A7) and Oracle B (B1-B10) directly from those + the read source
+   (evaluate_domain / classify / _dnsbl_load_tld_master), rather than
+   stopping the phase over an empty section. No hostile/adversarial-input
+   class applies here (classify()/evaluate_domain take internal cfg/tld
+   strings, not untrusted wire input) -- the closest analogue, a
+   half-renamed bridge, is covered by
+   TestIniBridgeRoundTrip::test_a_half_renamed_bridge_would_fail_loudly.
+2. A3's expected DnsblDecision log-field snapshot (b_eval, log_type,
+   null_blocking) as originally drafted from a STATIC source read was wrong
+   -- corrected against the first live pytest run (see RED->GREEN above).
+   Not a brief contradiction (the brief only said "snapshot verdict + log
+   fields", not their values); recorded here as the discovery, not an
+   escalation.
+3. C1/C2/C3/C4 letter mapping: the brief's prose names only "C2" (ini
+   reader round-trip) and "C4" (manifest reader round-trip) explicitly. I
+   inferred C1/C3 as the PHP-side writer halves (deliverable (3)'s two
+   TldBridgeEmitTest.php pieces) to keep a clean 4-row bridge matrix -- a
+   labeling choice only, not a scope change; every deliverable the brief
+   named is covered either way.
+4. origin/devel advanced twice during this phase (fd01620c -> 16ebba08,
+   docs/tooling-only commits unrelated to TLD code); rebased both times
+   before committing (fast-forward only, no conflicts, no working-tree
+   changes needed). base_sha below reflects the final rebase point.
+
+GATE-REPAIR FIX COMMIT (F1-F4 resolution, on top of 2112d62d)
+
+The independent gate FAILED 8ef9d145 with 4 blocking findings; this section
+records the fix pass that resolves them. Verdict for THIS fix pass: DONE
+(no undisclosed deviation from the fix-pass brief; the one process-level
+judgment call is item 5 below, continuing item pattern from this file's
+original "Commit hash" placeholder).
+
+5. Commit-hash self-reference (process, not scope): the fix-pass brief asked
+   this file to record its own commit's hash. A commit's hash is a function
+   of its own tree (which includes this file's bytes), so no single commit
+   can contain its own hash as a literal value without a fixed-point search
+   -- the same chicken-and-egg the ORIGINAL "Commit hash: (see below after
+   commit)" placeholder already hit (never resolved at 8ef9d145). Per
+   CLAUDE.md's git protocol (new commits only, never amend without explicit
+   user authorization -- none was given here), resolved the same way:
+   "Commit hash" above points to `git log -1 --format=%H` on
+   adr/66-tld-naming-disambiguation-1783983455 rather than a literal SHA.
+   This is a continuation of a pre-existing, already-disclosed limitation,
+   not a new scope deviation.
+6. F1 (purity), F2 (C2 re-implemented reader), F3 (under-coverage: A8a/A8b/
+   A9/A10/A5c, B11-B14), and F4 (vacuous test + stale docstring) are all
+   fixed exactly as the fix-pass brief specified -- no invented mechanism,
+   no unnamed fixture/layer. See the WHAT CHANGED corrections above and the
+   fresh gate outputs immediately below for the evidence.
+
+Fresh gate outputs (run in-session against the gate-repair diff; the
+canonical `python3 -m pytest` / `ruff check .` / `ruff format --check .` /
+`python3 -m mypy tests/` gates apply -- the diff touches Python test files
++ this .txt handoff only, so the PHP/shell/markdown gate rows are SKIPPED
+as not-touched, same "touched" logic `run-gates.sh` itself applies):
+
+$ grep -nE '(^|[^_a-zA-Z0-9])classify|python_tld|pytld|dnsbl_tld([^_]|$)|tld_master|_dnsbl_tld_search|parse_python_tlds|(^|[^_a-zA-Z0-9])tld_exclusion|(^|[^_a-zA-Z0-9])tld_blacklist' tests/test_adr66_tld_naming_oracle.py
+  (no output, exit 1 -- F1 purity CLEAN)
+
+$ python3 -m pytest tests/test_adr66_tld_naming_oracle.py tests/test_adr66_tld_bridges.py -v
+  ... 37 passed in 0.46s (29 in the oracle file: the original 20 + A5c/A8a/
+  A8b/A9/A10 + B11/B12/B13/B14; 8 in the bridges file: the original 9 minus
+  the deleted vacuous test) -- full per-test PASSED list captured in-session,
+  omitted here for length; every new test name appears in the COVERAGE
+  MATRIX above with its result.
+
+$ python3 -m pytest -q
+  AFTER this fix pass's edits (working tree): 2876 passed, 4 skipped in
+  51.31s. BEFORE (freshly measured on HEAD=2112d62d with the untouched
+  original oracle+bridges files restored, same session): 2868 passed, 4
+  skipped -- a clean +8 net, matching this fix pass's -1 bridges/+9 oracle
+  test-count delta exactly. NOTE: 2868 supersedes the "2859 passed" figure
+  recorded at 8ef9d145 above, which does not reproduce in this session on
+  the byte-identical pre-fix-pass tree -- environment/measurement drift
+  between sessions, not a test-count regression; the reconciled +8 delta
+  (not either absolute number) is the load-bearing fact.
+
+$ ruff check .
+  All checks passed!
+
+$ ruff format --check .
+  238 files already formatted
+
+$ python3 -m mypy tests/
+  Success: no issues found in 102 source files
+
+$ bash scripts/agent/run-gates.sh --diff origin/devel   (run AFTER the
+  gate-repair commit; --diff origin/devel walks the WHOLE branch diff since
+  origin/devel, i.e. also 8ef9d145's + 2112d62d's files, not just this
+  commit's 3)
+  GATE PASS: python3 -m pytest
+  GATE PASS: ruff check .
+  GATE PASS: ruff format --check .
+  GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+  GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+  GATE PASS: vendor/bin/phpunit
+  GATE PASS: composer phpstan
+  GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+  GATE PASS: npx markdownlint-cli2
+  GATES: FAIL (script default: any SKIP fails the run)
+  Environment gotcha, not a real defect: this worktree has mypy installed
+  as a pip package with no bare `mypy` executable on PATH (only
+  `python3 -m mypy` resolves -- confirmed: `command -v mypy` -> exit 1,
+  `python3 -m mypy --version` -> "mypy 2.1.0"), and the script's mypy gate
+  command is the bare `mypy tests/`. Pre-existing, not introduced by this
+  fix pass -- the pre-commit hook hit the identical gap on THIS commit
+  ("[pre-commit] skipped (tool not found): mypy"), and it is diff-independent
+  (an environment fact, would reproduce identically against 8ef9d145 or
+  2112d62d). The actual check already ran and passed manually above
+  (`python3 -m mypy tests/` -> "Success: no issues found in 102 source
+  files"). Re-running with the script's documented escape hatch:
+$ bash scripts/agent/run-gates.sh --diff origin/devel --allow-missing
+  GATE PASS: python3 -m pytest
+  GATE PASS: ruff check .
+  GATE PASS: ruff format --check .
+  GATE SKIP: mypy tests/ (TOOL-MISSING: mypy)
+  GATE PASS: php -l tests/php/TldBridgeEmitTest.php
+  GATE PASS: vendor/bin/phpunit
+  GATE PASS: composer phpstan
+  GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+  GATE PASS: npx markdownlint-cli2
+  GATES: PASS
+
+BEHAVIOUR-PRESERVING ORACLE, NO RED RUN (fix pass): same CLAUDE.md Test
+coverage #1 exception as the original phase -- no production code changed
+by this fix pass either (src/** diff empty, verified above); every new test
+is GREEN on the untouched tree, which IS the proof for a behaviour-pinning
+oracle addition.
+
+CARRY-FORWARD
+
+For Phase 2 (rename Feature A / tld_allow):
+  - Frozen oracle: tests/test_adr66_tld_naming_oracle.py, hash
+    4ae3ad286a18d60ea496d40e649eb9b11e3c672c (the RESTARTED freeze, gate-repair
+    fix commit on) -- must stay byte-identical. The prior
+    a7675a85877d736b735e23d4338f01143564b021 anchor is VOID (F1 violation).
+  - Seam location: tests/test_adr66_tld_bridges.py, top-of-file constants.
+    Phase 2 updates TLD_ALLOW_ENABLE_KEY (currently "python_tld" ->
+    "tld_allow") and TLD_ALLOW_LIST_KEY (currently "python_tlds" ->
+    "tld_allow_list") to the new cfg/ini/pfb key names.
+  - Bridge-test literals Phase 2 must also update, alongside the .inc
+    writer (pfblockerng.inc ~8446-8511, the python_tld/python_tlds heredoc
+    keys + $pfb['dnsbl_pytld']-derived locals) and the .py reader
+    (pfb_unbound.py ~1475-1478, the has_option/getboolean/parse_python_tlds
+    read slice -- note parse_python_tlds() itself is ALSO an R-A rename
+    target, "parse_tld_allow()"):
+      * gate-repair CHANGE: TestIniBridgeRoundTrip no longer re-implements
+        the .py reader in test code (that "_read_main_tld_keys() slice
+        mirrors the .py reader verbatim" bullet from the original phase-1
+        handoff is GONE). C2 now drives the REAL pfb_unbound.init_standard()
+        end-to-end and reads the results back off pfb_unbound.pfb under the
+        seam-keyed names -- so the ONLY literals Phase 2 must touch in
+        tests/test_adr66_tld_bridges.py are the seam constants themselves
+        (TLD_ALLOW_ENABLE_KEY / TLD_ALLOW_LIST_KEY) and the two ini_body
+        f-strings that already reference them by name. A Phase 2 that
+        renames the writer + seam + PHP literals but FORGETS the production
+        reads at pfb_unbound.py:1475-1478 now goes RED in C2 (KeyError on
+        pfb_unbound.pfb[TLD_ALLOW_ENABLE_KEY], since the un-updated reader
+        never populates that key) instead of staying silently green.
+      * tests/php/TldBridgeEmitTest.php's C1 tests (regex literals
+        "python_tld"/"python_tlds"/"dnsbl_pytld" and the four
+        pfb_pytlds_{gtld,cctld,itld,bgtld} field names stay verbatim --
+        those are stored-config/POST fields, NOT renamed, per ADR SS2.1
+        "stays" row)
+  - Guard expectation: python_tld_wildcard (G3/G4) must survive Phase 2
+    verbatim -- it is a "stays" identifier despite sharing the python_tld
+    prefix Phase 2 renames.
+
+For Phase 3 (rename Feature B / tld_wildcard):
+  - Seam aliases tld_wildcard_classify / load_tld_wildcard_master and
+    MANIFEST_TLD_KEYS (currently ("tld_blacklist", "tld_exclusion")) are
+    Phase 3's literals to update in tests/test_adr66_tld_bridges.py, along
+    with TestSemantic6SubstringGuard's G1/G2 token strings if classify_idn/
+    classify_label/classify_upstream_block or dnsbl_tld_data/dnsbl_tld_remove
+    ever move (they should NOT -- they are the "stays" rows Semantic 6
+    guards).
+  - LIVE manifest shape (verified this session, pfb_unbound.py:5306-5345 +
+    pfblockerng.inc:8211-8227): the public-suffix oracle rides NO manifest
+    key at all (a SHIPPED file gated by the python_tld_wildcard ini flag,
+    HSTS parity, #1255) -- ADR SS2.2's rows "manifest config.tld_master +
+    py tld_master var -> tld_wildcard_master" describe a shape that no
+    longer exists in the manifest bridge. Only config.tld_blacklist /
+    config.tld_exclusion are real manifest keys today (writer
+    pfblockerng.inc:8216-8227(ish); reader
+    _dnsbl_config_from_manifest py:5306-5345). Phase 3 (or the caller,
+    before Phase 3 starts) should amend ADR.md SS2.2's tld_master row to
+    match this reality per CLAUDE.md "ADR amendments after merge" /
+    "Post-merge amendments" discipline -- renaming a manifest key that does
+    not exist is a no-op that would silently pass while leaving the ADR
+    text wrong.

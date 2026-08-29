@@ -1,0 +1,97 @@
+================================================================================
+PHASE 4 PROMPT — Manifest emission: CGs, bindings, divergent mask, schedules (PHP)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS2.2 (a'), SS6 Phase 4)
+================================================================================
+
+RE-SCOPED 2026-07-04: the config schema + migration this phase originally owned moved to
+ADR-54 (feeds/feed groups) and ADR-55 (Client Groups/bindings) — the entities already exist
+in config.xml when this phase runs. This phase EMITS them to the chroot: the manifest
+additions the Phase-5 python decision layer consumes.
+
+ROLE
+Implementer in the per-ADR worktree on branch adr/25-group-policy-dnsbl (off latest devel).
+PRE-FLIGHT: verify ADR-54 AND ADR-55 are landed on devel (their sections exist in the
+codebase) and read RESULTS/01_Results.txt (spike verdict) + RESULTS/03_Results.txt (bit
+assignment). Any missing => STOP and report. One commit. No sub-agents.
+
+WHY THIS PHASE EXISTS
+The python module is chrooted and stdlib-only: everything the decision layer needs must ride
+the manifest, resolved and validated on the PHP side — client sets as LITERAL IPs/CIDRs,
+bindings with schedule ranges serialised TZ-explicitly, and the (a') divergent mask computed
+at build time.
+
+REQUIRED READING
+- ADR SS2.1 (the ladder + what each rung consumes), SS2.2 (a') (divergent-mask definition
+  incl. the CG-domain-rule axis), SS2.4 (chroot-TZ trap).
+- pfblockerng.inc: pfb_unbound_python_sources() + the manifest top-level config block
+  (search "tld_blacklist" for the shape); the ADR-31 'mode' precedent for additive-optional
+  keys (absent => legacy default) — FOLLOW IT: every new manifest key must be optional so an
+  older python module ignores it safely; pfb_unbound_py_atomic_write (atomic publish).
+- ADR-55 schema + Phase-1 helpers: installedpackages/pfblockerngclientgroups (fields,
+  base64 textareas via pfbng_text_area_decode(), binding rows); ADR-54's
+  pfblockerngfeedgroups for the dnsbl group list + the policy_only token.
+- pfSense <schedules>/<schedule>/<timerange> config shape +
+  filter_get_time_based_rule_status() — resolve from pfSense source per CLAUDE.md "Resolve
+  pfSense-provided PHP functions" (the time-range fields you must serialise).
+- PfbConfig rules: pfb_gp/pfb_gp_bypass_list are REGISTERED (PfbConfig::read only; the
+  RequireConfigGateway sniff blocks direct access); the ADR-54/55 sections are structural
+  foreign keys (section helpers).
+- tests/php/ bootstrap + an existing manifest test for style.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. MANIFEST ADDITIONS (all additive-optional; absent => today's behaviour):
+   - 'gp_groups': dnsbl Feed-Group name -> bit index. MIRROR Phase 3's assignment — one
+     source of truth: emit the map the build derived, never recompute independently.
+   - 'gp_divergent_mask': int per SS2.2 (a') — union of bits of (i) groups referenced by any
+     binding with an override, (ii) policy_only groups, (iii) groups referenced by any
+     SCHEDULED binding.
+   - 'gp_clients': per enabled CG {name, cidrs: [literal v4/v6 addresses/CIDRs]} — alias
+     refs resolved via the pfSense aliases table at build time; nested aliases resolved
+     recursively with a depth guard; FQDN members EXCLUDED with one notice line.
+   - 'gp_domain_rules': per CG {allow: [...], deny: [...]} (decoded textareas, validated).
+   - 'gp_bindings': per CG, list of {group_bit, override: 'block'|'warn'|'bypass'|'',
+     sched_ranges: [...]} — ranges TZ-EXPLICIT (emit the resolved timezone identifier + the
+     raw ranges, or pre-resolved absolute windows; pick ONE strategy, justify it against the
+     chroot-TZ trap in the handoff — the Phase-1 spike notes may already dictate one).
+   - Dangling schedule ref => empty ranges = always in force (fail-open) + notice; dangling
+     Feed-Group ref => binding skipped + notice; disabled CG/binding => omitted entirely.
+2. PFBL-01: every emission input validated (pfb_filter / sanitize_ipaddr) BEFORE it enters
+   the manifest; the emission function joins the sniff's scopeFunctions if new.
+3. TESTS (PHPUnit; red->green mandatory for each addition):
+   - ZERO CGs => manifest BYTE-IDENTICAL to the pre-phase golden (load-bearing oracle);
+   - each new key's shape on a populated fixture;
+   - divergent-mask composition: override-only, policy_only-only, schedule-only, mixed;
+   - alias resolution: nested alias, FQDN exclusion (+notice), depth guard;
+   - schedule serialisation: ranges, dangling ref => always-on, TZ-explicitness;
+   - disabled CG/binding omission.
+4. pytest: pin that a manifest WITHOUT the new keys still loads unchanged in the python
+   loader (additive-optional proof), if not already pinned.
+5. Gates: vendor/bin/phpunit, php -l, PHPStan, phpcs (PFBL-01), python -m pytest, linters.
+
+VERIFICATION (must all pass before the phase is done)
+- The canonical gates for every language the diff touches (CLAUDE.md "Canonical gates"),
+  including cross-language consumers of any artifact this phase changes.
+- The phase's tests per its MODE: an oracle that stays green across the change, or a
+  red->green cycle with both runs executed and their output pasted into the handoff.
+- The KILL-GATES below are the orchestrator's adversarial re-checks — make each one easy
+  to re-run (name the command; don't bury it in prose).
+
+KILL-GATES (the orchestrator verifies adversarially)
+- Zero-CG manifest byte-identity (goldens).
+- Every new key absent-safe for an older python module (test-pinned).
+- No schedule EVALUATION in PHP beyond serialisation (evaluation is Phase 5, in-chroot).
+- pfb_gp keys read via PfbConfig only; no direct config_*_path on registered keys.
+
+COMMIT (single)
+    pfblockerng: emit group-policy manifest (CGs, bindings, divergent mask) (ADR-25 P4)
+Push directly to adr/25-group-policy-dnsbl.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/04_Results.txt (plain .txt)
+Record: the manifest key inventory + exact shapes Phase 5 must read; the TZ strategy chosen
++ why; the notice inventory; validators used; test names; gate outputs; go-ahead for Phase 5.

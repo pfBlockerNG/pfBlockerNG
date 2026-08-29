@@ -1,0 +1,6 @@
+{"kind":"domain","domain":"mixedhost.example","log":"1","feed":"mixed_plain","group":"grp_mixed"}
+{"kind":"abp","raw":"||anchor.mixed.example^"}
+{"kind":"abp","raw":"falsepositive.example##.ad"}
+{"kind":"abp","raw":"/^regexplain\\.mixed\\.example$/"}
+{"kind":"abp","raw":"/^importantregex\\.mixed\\.example$/$important"}
+{"kind":"abp","raw":"@@/^allowregex\\.mixed\\.example$/"}

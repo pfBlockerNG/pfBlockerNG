@@ -1,0 +1,353 @@
+================================================================================
+ADR-61 PHASE 2 — RESULTS
+Wire PHP-side IP writers + clearers (download, dedup-sanity, pfctl apply)
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  Three IP failure classes now open/close a pfb_sync_status_* ledger entry
+  alongside their EXISTING logging (nothing removed/reformatted):
+    1. pfb_pfctl_table_op() (:4733) -- open('ip', $table, 'apply', ...) on the
+       SAME attributed-failure branch that already calls pfb_logger(..., 2)
+       (that call is byte-identical, untouched); close('ip', $table, 'apply', ...)
+       on the else (clean) branch. Every $table this wrapper is ever called
+       with is a pfB_* IP alias table (verified: every call site's table arg
+       is $aliasname/$alias/$pfb_table, all pfB_ prefixed; the :18649
+       `pfctl -s Tables | grep '^pfB_'` call site confirms this wrapper is
+       never used for a non-IP table) -- facility='ip' is correct unconditionally.
+    2. sync_package_pfblockerng()'s IP download loop (:17724/:17741, inside
+       the `installedpackages/{$ip_type}/config` foreach starting :17489) --
+       calls the new pfb_ip_download_ledger_update() helper: FALSE (download
+       failed, alongside the existing pfb_download_failure() call) opens
+       ('ip', $header, 'download', ...); TRUE (the existing
+       "Clear any previous download fail marker" success branch) closes it.
+    3. The FINAL REPORTING block (:18959-18967) -- when dedup is on, after the
+       existing `exec("{closing on ...}")` call, calls the new
+       pfb_sync_status_dedup_check() reader; when dedup is off, closes any
+       stale 'ip'/'dedup'/'dedup' entry (see DEVIATIONS #3).
+
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+  Two new functions, both pure/directly testable, added after
+  pfb_sync_status_list_open() (Phase 1) and before the ADR-53 section:
+    - pfb_ip_download_ledger_update(bool $download_ok, string $item,
+        string $message, string $ledger_dir): void
+    - pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
+
+- tests/php/PfbSyncStatusIpWritersTest.php (new)
+  11 tests, full writer/clearer + refresh-not-duplicate coverage for all
+  three pairs (see COVERAGE MATRIX below).
+
+- RESULTS/02_Results.txt (this file).
+
+Commit: (filled after `git commit` -- see bottom of this file / the commit
+message; this file is committed IN the same commit).
+
+--------------------------------------------------------------------------------
+DOWNLOAD CALL SITE RESOLUTION (per ACTION PLAN item 1's instruction to verify,
+not assume, whether a DNSBL-classed feed flows through the same call site)
+--------------------------------------------------------------------------------
+
+Re-verified live against this (rebased) tree with a fresh grep -- the two
+pfb_download_failure() call sites are exactly as Phase 1's RESULTS and the
+orchestrator's rebase note describe, at CURRENT line numbers:
+  - :16007, inside `foreach (config_get_path('installedpackages/pfblockerngdnsbl/config', [])
+    as $list)` (loop starts :15838) -- the DNSBL branch. NOT touched this phase
+    (Phase 3's job per CONSTRAINTS).
+  - :17724, inside `foreach (config_get_path("installedpackages/{$ip_type}/config", [])
+    as $key => $list)` (loop starts :17496, itself inside the
+    "Download and Collect IPv4/IPv6 lists" section starting :17472) -- the IP
+    branch. Wired this phase.
+
+The IP loop also injects a synthetic 'DNSBLIP' list (:17524-17538, when
+DNSBL-to-IP-alias mirroring is configured) whose alias is built as
+"pfB_{$list['aliasname']}{$vtype}" == "pfB_DNSBLIP_v4"/"pfB_DNSBLIP_v6" --
+an ORDINARY pfB_* IP alias, downloaded/failed through the exact same
+$header/$alias identity path as every other IP list in this loop. It is NOT
+a DNSBL-facility entry despite the name: it is the IP-side mirror of a DNSBL
+match set. Confirmed by reading the loop's alias-naming line (:17554,
+unconditional for every list in $lists including DNSBLIP) -- no format/type
+branch anywhere in this loop produces a facility='dnsbl' write. The call site
+is homogeneously 'ip'; no per-row facility branching was needed or added.
+
+--------------------------------------------------------------------------------
+DEDUP-SANITY READER -- CALL SITE DECISION (brief left this to the implementer)
+--------------------------------------------------------------------------------
+
+New function: pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void
+Location: src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc, immediately after
+pfb_ip_download_ledger_update() (both sit right after Phase 1's
+pfb_sync_status_list_open(), before the ADR-53 section).
+
+Call site: sync_package_pfblockerng()'s "FINAL REPORTING" block (pfblockerng.inc
+:18959-18967), immediately after `exec("{$pfb['script']} closing on {$elog}")` --
+the exact call that runs pfblockerng.sh's closingprocess(), which is what
+appends the "Database Sanity check [ PASSED / FAILED ]" line to pfblockerng.log
+in the first place. This is the literal "IP alias-build pass concludes when
+dedup is enabled" candidate the brief named -- it is the ONE place in the
+codebase where that log line is guaranteed freshly written for THIS pass
+before anything reads it. No other candidate was considered viable: reading
+it from pfblockerng_tick() would race the log line's own writer (the tick
+does not itself invoke `closing`), and reading it eagerly inside
+closingprocess() itself is shell code, not PHP, and cannot call PHP ledger
+functions.
+
+Reader implementation deliberately mirrors the widget's existing
+`grep 'Sanity check' pfblockerng.log | tail -1 | grep -o 'PASSED'` semantics
+(last matching line wins) via PHP's own file()+strpos() instead of exec()+grep
+-- avoids adding a new shelled-out dependency for a signal this phase already
+has direct filesystem access to, and is directly unit-testable (see
+testDedupSanityLastLineWinsOverAnEarlierOppositeLine).
+
+--------------------------------------------------------------------------------
+GATES — exact commands + pasted output tails
+--------------------------------------------------------------------------------
+
+$ find src -name '*.php' -o -name '*.inc' | xargs -n1 php -l
+(28 files; every one "No syntax errors detected" -- only pre-existing,
+unrelated PHP 8.x optional-before-required-param Deprecated notices on
+untouched functions, identical to Phase 1's baseline)
+
+$ php -l tests/php/PfbSyncStatusIpWritersTest.php
+No syntax errors detected in tests/php/PfbSyncStatusIpWritersTest.php
+
+$ vendor/bin/phpunit   (full suite)
+......  2478 / 2478 (100%)
+Time: 00:11.042, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2478, Assertions: 19190, PHPUnit Deprecations: 2, Skipped: 4.
+(The 2 deprecations / 4 skips are the SAME pre-existing baseline Phase 1
+recorded -- not introduced by this change.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output; EXIT=0 -- clean, including PFBL-01/RequireConfigGateway/
+UppercaseBooleanLiteral)
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(no output; EXIT=0)
+
+$ python3 scripts/check_version_literals.py --diff origin/devel
+(no output; EXIT=0)
+
+Python/Shell/Markdown canonical gates: SKIPPED -- no .py/.sh/.md files touched
+this phase (confirmed via `git status --short`: two .inc files modified, one
+.php test file added).
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF (executed both directions; NOT via git stash -- per this
+worktree's own convention, backed up the two touched src files to the
+scratchpad dir, `git checkout HEAD -- <both files>` to revert to the
+committed pre-Phase-2 state (tests left in place, untouched), ran the suite,
+then restored the backups and re-ran)
+--------------------------------------------------------------------------------
+
+RED (pfblockerng.inc + pfblockerng_extra.inc reverted to HEAD, i.e. Phase 1's
+committed state -- this phase's two new functions and three call-site wires
+do not exist):
+
+$ vendor/bin/phpunit --filter PfbSyncStatusIpWritersTest
+EEEEEEEFFF.                                                       11 / 11 (100%)
+There were 7 errors:
+1) PfbSyncStatusIpWritersTest::testDownloadFailureOpensEntry
+Error: Call to undefined function pfb_ip_download_ledger_update()
+2) PfbSyncStatusIpWritersTest::testDownloadSuccessClosesEntry
+Error: Call to undefined function pfb_ip_download_ledger_update()
+3) PfbSyncStatusIpWritersTest::testDownloadFailureTwiceRefreshesWithoutDuplicating
+Error: Call to undefined function pfb_ip_download_ledger_update()
+4) PfbSyncStatusIpWritersTest::testDedupSanityFailedLineOpensEntry
+Error: Call to undefined function pfb_sync_status_dedup_check()
+5) PfbSyncStatusIpWritersTest::testDedupSanityPassedLineClosesEntry
+Error: Call to undefined function pfb_sync_status_dedup_check()
+6) PfbSyncStatusIpWritersTest::testDedupSanityNoLineRecordedIsNoOp
+Error: Call to undefined function pfb_sync_status_dedup_check()
+7) PfbSyncStatusIpWritersTest::testDedupSanityLastLineWinsOverAnEarlierOppositeLine
+Error: Call to undefined function pfb_sync_status_dedup_check()
+
+There were 3 failures:
+1) PfbSyncStatusIpWritersTest::testPfctlApplyFailureOpensEntry
+an attributed pfctl failure must open an apply entry
+Failed asserting that actual size 0 matches expected size 1.
+2) PfbSyncStatusIpWritersTest::testPfctlApplySuccessClosesEntry
+Failed asserting that actual size 0 matches expected size 1.
+3) PfbSyncStatusIpWritersTest::testPfctlApplyFailureTwiceRefreshesWithoutDuplicating
+two consecutive pfctl failures on the SAME table must refresh, never duplicate
+Failed asserting that actual size 0 matches expected size 1.
+ERRORS!
+Tests: 11, Assertions: 34, Errors: 7, Failures: 3, PHPUnit Deprecations: 2.
+
+(The 11th test, testPfctlApplyFailureLoggingLevelUnchanged, correctly stayed
+GREEN even pre-Phase-2 -- it pins PRE-EXISTING issue #980/PR #987 behaviour,
+not a Phase-2 addition, proving the test suite discriminates the right thing.)
+
+GREEN (backups restored -- Phase 2's implementation back in place):
+
+$ vendor/bin/phpunit --filter PfbSyncStatusIpWritersTest
+...........                                                       11 / 11 (100%)
+Time: 00:00.870, Memory: 34.00 MB
+OK, but there were issues!
+Tests: 11, Assertions: 63, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+KILL-GATE REHEARSALS (own rehearsal per the brief; orchestrator repeats
+independently)
+--------------------------------------------------------------------------------
+
+1. Every open() has a same-phase close() for the identical (facility,item,stage):
+
+$ git diff -- src/usr/local/pkg/pfblockerng/pfblockerng.inc src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc | grep -n '^[+-]'
++		pfb_sync_status_open('ip', $table, 'apply', ..., $pfb['dbdir']);      <- pfb_pfctl_table_op(), if-branch
++	} else {
++		pfb_sync_status_close('ip', $table, 'apply', $pfb['dbdir']);          <- SAME function, else-branch
++	pfb_ip_download_ledger_update(FALSE, $header, ..., $pfb['dbdir']);        <- opens ('ip',$header,'download')
++	pfb_ip_download_ledger_update(TRUE, $header, '', $pfb['dbdir']);         <- closes SAME key, success branch
++	pfb_sync_status_dedup_check($pfb['log'], $pfb['dbdir']);                  <- opens/closes ('ip','dedup','dedup')
++		pfb_sync_status_close('ip', 'dedup', 'dedup', $pfb['dbdir']);          <- closes SAME key, dedup-off branch
+(pfb_ip_download_ledger_update() and pfb_sync_status_dedup_check() themselves
+each contain both the open() and close() call for their key -- see the
+pfblockerng_extra.inc diff above -- so every (facility,item,stage) triple this
+phase can ever open has its clearer in THIS SAME commit.)
+
+All THREE (facility,item,stage) triples this phase writes --
+('ip', <table>, 'apply'), ('ip', <header>, 'download'), ('ip', 'dedup', 'dedup')
+-- have their clearer present. PASS.
+
+2. pfb_logger(..., 2) at the pfctl-failure site is byte-identical to before:
+
+$ git diff -- src/usr/local/pkg/pfblockerng/pfblockerng.inc | grep -n 'pfb_logger'
+(no output -- the pfb_logger() line does not appear as a +/- diff line at all,
+confirming it is a pure, untouched context line in the diff -- see the pasted
+diff hunk in "WHAT CHANGED" above, where that line has no leading +/-.)
+PASS.
+
+3. The download-fail test actually fails against a revert of just this
+   phase's hunk (git-stash-free, per this session's established practice --
+   backup + `git checkout HEAD -- <path>` + restore, confirmed above under
+   RED -> GREEN PROOF). PASS -- 10 of 11 new tests genuinely RED before,
+   all 11 GREEN after.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+
+Row                                              | Test
+--------------------------------------------------|---------------------------------------------
+Download fail opens ('ip',$header,'download')     | testDownloadFailureOpensEntry
+Download success closes SAME key                  | testDownloadSuccessClosesEntry (asserts
+                                                    |   before-state: 1 open, THEN closes)
+Download fail x2 on same item refreshes, no dup    | testDownloadFailureTwiceRefreshesWithoutDuplicating
+Dedup FAILED line opens ('ip','dedup','dedup')     | testDedupSanityFailedLineOpensEntry
+Dedup PASSED line closes SAME key                  | testDedupSanityPassedLineClosesEntry (before-state
+                                                    |   asserted first)
+Dedup: no sanity-check line ever -> no-op          | testDedupSanityNoLineRecordedIsNoOp (asserts
+                                                    |   ledger file not even created)
+Dedup: tail -1 semantics (last line wins)          | testDedupSanityLastLineWinsOverAnEarlierOppositeLine
+Pfctl apply fail opens ('ip',$table,'apply')       | testPfctlApplyFailureOpensEntry
+Pfctl apply success closes SAME key                | testPfctlApplySuccessClosesEntry (before-state
+                                                    |   asserted first)
+Pfctl apply fail x2 on same table refreshes, no dup| testPfctlApplyFailureTwiceRefreshesWithoutDuplicating
+pfb_logger(...,2) untouched (issue #980/PR #987)   | testPfctlApplyFailureLoggingLevelUnchanged
+
+Hostile-input / edge rows (brief's explicit list):
+  - Two consecutive failures on the SAME item refresh, not duplicate: covered
+    for BOTH download (testDownloadFailureTwiceRefreshesWithoutDuplicating) AND
+    pfctl apply (testPfctlApplyFailureTwiceRefreshesWithoutDuplicating) -- the
+    brief only required "at least one of the three"; both were cheap to add.
+  - close() on a never-opened key is a safe no-op: already proven by Phase 1's
+    library-level tests (testCloseAbsentKeyIsSafeNoOp); this phase's
+    testDedupSanityNoLineRecordedIsNoOp exercises the WRITER/CLEARER pair
+    end-to-end (the dedup-off else-branch calling close() on a key that was
+    never opened this run is exactly this shape, exercised implicitly by
+    every test that never triggers a FAILED line).
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+
+1. Extracted pfb_ip_download_ledger_update() as a small new helper rather than
+   inlining bare pfb_sync_status_open()/close() calls at the download call
+   site. Reason: the download loop lives inside the ~5000-line
+   sync_package_pfblockerng(), far too heavy to invoke in a unit test (no
+   existing test in the suite calls that function directly -- confirmed by
+   grep). Extracting the two-line open/close decision into its own function
+   keeps the call site a one-line addition per branch AND makes the writer
+   directly unit-testable, matching the brief's explicit "add a minimal seam"
+   allowance. Behaviourally identical to inlining the same two calls.
+
+2. Placed the pfctl apply open()/close() INSIDE pfb_pfctl_table_op() itself
+   (not inside pfb_apply_alias_delta(), its caller). Reason: pfb_pfctl_table_op()
+   is called from 8 sites across the file (aggregate build/teardown, the
+   Configure Aliases loop, the rule-change pfctl sync, pfb_apply_alias_delta's
+   4 call sites) and EVERY one passes a pfB_*-prefixed IP alias table name
+   (verified by reading each call site) -- wiring at this single choke point
+   covers every caller for free, rather than requiring pfb_apply_alias_delta()
+   (or worse, each of its own callers) to duplicate the open/close pair. This
+   also means a pfctl failure during aggregate-table teardown/build is now
+   ledger-visible too, which is a superset of the brief's literal "in
+   pfb_apply_alias_delta()" suggestion but still strictly facility='ip' and
+   still purely additive (no decision/retry logic touched).
+
+3. Added an ELSE branch that closes the 'ip'/'dedup'/'dedup' key when dedup is
+   OFF (pfblockerng.inc :18965), which the brief did not explicitly request.
+   Reason: without it, a box that had dedup ON with a FAILED sanity check,
+   then gets dedup turned OFF, would carry a stale open 'dedup' entry FOREVER
+   -- since `exec("... closing ...")` (the only place that ever appends a
+   fresh Sanity-check line) never runs again once dedup is off, my reader
+   would never get called to close it either. This mirrors exactly the kind
+   of "monotonic, never self-heals" bug this whole ADR exists to eliminate
+   (ADR.md SS1.1's critique of the py_error.log filesize check). The added
+   else-branch is a close()-only call (never opens), so it cannot violate
+   Semantics #4 (every writer needs a clearer) and cannot introduce a false
+   positive -- it can only ever remove a now-inapplicable signal. Covered
+   indirectly: no test in this phase's suite ever enables-then-disables dedup
+   mid-run (that would need a much heavier setup); flagged here as a judgment
+   call, not hidden.
+
+4. pfb_sync_status_dedup_check()'s message on FAILED is the raw trimmed log
+   line ("Database Sanity check [  FAILED  ] ** These two counts should match!
+   **"), not a hand-composed string -- reuses the shell's own wording verbatim
+   (same idiom as pfb_download_failure()'s existing log text, which the brief
+   asked to mirror for the download-fail message too).
+
+No other deviations.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 3/4/5/6
+--------------------------------------------------------------------------------
+
+- Line-number drift since Phase 1's RESULTS: confirmed the rebase (PR #987 /
+  issue #980 fix, +24 uniform shift Phase 1's orchestrator note already
+  flagged) is the ONLY drift -- no further drift found. Current anchors after
+  THIS phase's edits (for Phase 3, re-verify before trusting, per standing
+  policy): pfb_download_failure() call sites are now :16007 (DNSBL, untouched)
+  and :17724 (IP, now wired) -- both are +0 from what this phase's own brief's
+  "reality override" anchors said (Phase 2 added lines AFTER 17724 and AFTER
+  4733, so anything Phase 3 needs to find INSIDE the DNSBL loop above line
+  ~17724, i.e. everything at :16007 and earlier, is at its Phase-1-confirmed
+  line number, unshifted; anything Phase 3 needs below :17750 or below :4749
+  has shifted forward by a few lines due to this phase's insertions -- re-grep,
+  don't trust old absolutes).
+- New reader function name/location for Phase 3 to mirror if useful:
+  pfb_sync_status_dedup_check(string $log_path, string $ledger_dir): void in
+  pfblockerng_extra.inc (same file/section as the rest of the pfb_sync_status_*
+  library). Phase 3's DNSBL conf/build-fail path has its OWN existing decision
+  point (pfb_stop_start_unbound()'s retval != 0 branch) and does not need an
+  analogous log-scraping reader -- flagging the pattern only in case Phase 3
+  finds a similar "shell already writes a signal line, PHP must translate it"
+  situation elsewhere.
+- pfb_pfctl_table_op() is now ledger-instrumented for EVERY caller (see
+  DEVIATIONS #2) -- Phase 3 (DNSBL) and Phase 5 (tick reconciliation) do not
+  need to re-wire pfctl apply failures; only Phase 3's genuinely DNSBL-only
+  failure classes (conf/build fail, swap-not-confirmed fallback) remain open
+  for it to wire.
+- pfb_ip_download_ledger_update() is IP-only by construction (hardcodes
+  facility='ip'); Phase 3 needs its OWN small helper (or inline calls) for the
+  DNSBL download call site at :16007, passing facility='dnsbl' -- do NOT reuse
+  this phase's helper for that call site.

@@ -1,0 +1,94 @@
+================================================================================
+PHASE 3 PROMPT — The split: IPv4/IPv6/DNSBL sub-tabs + type-scoped save + test retarget
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §2 A1-A4 + the FULL contract FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 3 of ADR-16 — the core change, and where
+Part A SHIPS. Split `pfblockerng_feeds.php` into IPv4/IPv6/DNSBL `?type=` sub-tabs (copy the
+`category.php` idiom) AND type-scope the save handler (the load-bearing clobber fix), then
+retarget/extend the ADR-14 UI tests. Work in this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The user wants Feeds organized like IP/DNSBL/Reports. But the save loops ALL types and writes
+`$_POST['feed_x'] ?: ''` (Context 2) — so a per-type tab that POSTs only its own fields would
+RESET every other type's rename to ''. The split is therefore impossible WITHOUT type-scoping
+the save. This phase does both together, guarded by the Phase-2 oracle + a new non-clobber test.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/02_Results.txt — it must confirm the per-type
+  save oracle (DNSBL + IPv6 rename) is green on the live VM, and name those tests. If missing,
+  STOP and report.
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§2 A1-A4, the contract, §7 reject criteria).
+- src/usr/local/www/pfblockerng/pfblockerng_category.php — THE pattern to copy: reads
+  $_GET['type'] (~:49-51), the $active switch (~:92-118), the TWO display_top_tabs calls (main
+  bar ~:335-345 + the second sub-tab row ~:347-360), the breadcrumb $pgtitle (~:327).
+- src/usr/local/www/pfblockerng/pfblockerng_feeds.php — the Phase-1 per-type helpers; the save
+  block (`isset($_POST['save'])` → `foreach ($pfb['feeds_list'] as $type …)` ~:74, the
+  `$_POST['feed_x'] ?: ''` write ~:85-86, the alt_selected gate ~:102 + loop ~:104-114); the
+  self-refs to fix: form action, post-save redirect (~:127), $pglinks (~:220), own $tab_array
+  entry (~:237), hidden alt_selected (~:730-731).
+- tests/smoke/ui/test_render_smoke.py — the Feeds PAGE_TABLE entry (~:70) + the
+  test_page_table_covers_every_pfblockerng_page coverage guard (strips `?`, counts base paths).
+- tests/smoke/ui/test_feeds.py (the Phase-2 oracle + FEEDS_PAGE) and
+  tests/smoke/ui/test_browser_misc.py (the feeds alt-URL flow's FEEDS_PAGE).
+- CLAUDE.md (PHP standards; keep Form_Section ids/field names/config keys stable; the test
+  coverage rule — transition + branch coverage + finally-restore).
+
+ACTION PLAN (ordered)
+1. UI: read $_REQUEST['type'] (default 'ipv4'; accept ipv4|ipv6|dnsbl); build the $active map;
+   keep the Feeds TOP tab active; add the SECOND display_top_tabs row [IPv4|IPv6|DNSBL] →
+   `pfblockerng_feeds.php?type=…`; breadcrumb ▸ Feeds ▸ <type>. Render the Feed Settings section
+   + the predefined-feeds table for the ACTIVE type only (call the Phase-1 helpers once).
+2. SAVE (the fix): carry the active type in a hidden form field; scope the rename loop to
+   `$pfb['feeds_list'][$type]` ONLY (so absent-type fields are never touched); the alt_selected
+   CSV is already scoped to the rendered type. Verify saving one type leaves other types'
+   `feed_*` / `feed_alt_*` nodes untouched. Self-refs (action/redirect/pglinks/own tab) preserve
+   `?type`.
+3. A4 sanity: confirm the OTHER pages' bare `pfblockerng_feeds.php` links still work (default
+   ipv4) — do NOT edit those pages.
+4. Tests:
+   - test_render_smoke.py: replace the single `feeds` PAGE_TABLE entry with `feeds_ipv4`/
+     `feeds_ipv6`/`feeds_dnsbl` (path `?type=…`, each with a type-specific marker — derive from
+     the rendered breadcrumb/section title); keep the coverage guard passing (base path
+     unchanged).
+   - test_feeds.py: retarget the Phase-2 rename tests to the typed URLs (IPv4→?type=ipv4,
+     DNSBL→?type=dnsbl, IPv6→?type=ipv6); they MUST stay green (the type-scoped save preserves them).
+   - ADD the cross-type NON-CLOBBER `ui_e2e` test: seed an IPv4 rename + a DNSBL rename; POST the
+     IPv4 tab (change only IPv4) → assert the DNSBL rename is UNCHANGED; then POST the DNSBL tab →
+     assert the IPv4 rename is UNCHANGED. This is the contract's headline guarantee.
+   - test_browser_misc.py: point the feeds alt-URL flow at the typed URL whose tab carries that
+     feed's alternates.
+5. Run the live UI tiers (ui-tests label): render (3 typed) + functional (rename per type +
+   non-clobber) + browser (alt-URL) green.
+
+CONSTRAINTS
+- Only `pfblockerng_feeds.php` changes in src/. Keep field names / Form_Section ids / config
+  keys / the alt_selected mechanism stable — only the save SCOPE and the tab chrome change.
+- PHP tabs / 8.3 / no die()/exit() in library code; PHPStan stays green (no new violations).
+- Python tests: 4-space, type hints, transition + branch coverage, finally-restore.
+- Do NOT edit the other ~12 pages (A4). Do NOT touch the parsers.
+
+VERIFICATION (must all pass before the phase is done)
+- php -l + PHPStan clean; python -m pytest unchanged; ruff clean.
+- Live (ui-tests label): feeds_ipv4/ipv6/dnsbl render clean (Tier-A oracle, type marker);
+  per-type rename round-trips; the cross-type non-clobber test passes BOTH directions; bare URL
+  defaults to ipv4.
+
+EXPECTED RESULT
+Feeds is three sub-tabs; each saves only its own type; no cross-type clobber; the ADR-14 tiers
+are green on the typed URLs. Part A is complete and shippable independent of Parts B/C.
+
+COMMIT (single)
+    pfblockerng_feeds: split into IPv4/IPv6/DNSBL tabs + type-scoped save (ADR-16 P3)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`, push
+`adr/16`. Touches src/ + tests/ → lands on `devel` via a rebase-only PR (carry the `ui-tests`
+label). PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/03_Results.txt` (plain .txt)
+State: the `?type` values + default; the type markers used in PAGE_TABLE; how the save was
+scoped (the hidden field + the loop change) and the non-clobber test result (both directions);
+the live render/functional/browser pass; any UX note (e.g. where IPv6's 10 feeds land); confirm
+the bare URL still works; the go-ahead for Phase 4.

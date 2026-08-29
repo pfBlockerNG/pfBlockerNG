@@ -1,0 +1,74 @@
+================================================================================
+PHASE 1 PROMPT — Extract + oracle-pin the detector; add the hash + tagged-format helpers
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md   (read §1 + §2 first)
+================================================================================
+
+ROLE
+You implement Phase 1 of ADR-42 on branch `adr/42-hash-based-change-detection`.
+This phase is BEHAVIOUR-PRESERVING — it extracts the current decision into a testable
+helper and ADDS new helpers WITHOUT wiring them into the live path. Work inline on the
+branch, one commit, push directly (open a PR only if the direct push is rejected).
+
+WHY THIS PHASE EXISTS
+ADR-42 swaps mtime-based detection for content hashing and adds conditional GET. Before
+any live swap, extract the decision and lay down the hash + tagged-format helpers with
+oracle/round-trip tests, so Phases 2-3 change a small, pinned surface (the ADR-01 lesson:
+prep is independently valuable even if a later arm is dropped).
+
+REQUIRED READING
+- .ADRs/ADR_42_Hash_Based_Change_Detection/ADR.md  (§1 Today/load-bearing facts, §2 decision
+  table + the contract, §5 constraints)
+- src/usr/local/www/pfblockerng/pfblockerng.php  — `pfb_update_check()` (~:369-:575): the local
+  mtime compare (:562), #540's md5-confirm (:572), the remote HEAD/Last-Modified read (:480/:502),
+  the whole-feed md5 fallback (:526-:531).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — `pfb_file_mtime()` (:9284); `pfb_download()`
+  (:7338+) incl. `.raw`->`.orig` rename (:7862) and the dead 304 handler (:7694); `curl_defaults`
+  (:183).
+- tests/php/bootstrap.php, tests/php/pfsense_doubles.php, tests/php/README.md  (off-appliance load
+  model — the extracted helper MUST be loadable + testable here).
+- CLAUDE.md (PHP standards: tabs, uppercase TRUE/FALSE, PFBL-01 sniff; the test-coverage mandate).
+
+ACTION PLAN (oracle tests FIRST — behaviour-preserving)
+1. Add a `pfb_content_hash($path_or_data, $is_file = TRUE)` helper in pfblockerng.inc using
+   `hash_file('xxh128', …)` / `hash('xxh128', …)`. Pure; no I/O side effects beyond reading.
+2. Add a tagged persisted-hash helper pair:
+   - read: given a base `{pforig}/{header}`, prefer `{base}.xxhash128` (compare with xxh128);
+     else legacy `{base}.md5` or a bare/untagged digest (compare with md5); return (algo, digest).
+     An unreadable/unknown tag → return a sentinel meaning "treat as changed" (downgrade-safe).
+   - write: compute xxh128, write `{base}.xxhash128` (LOCK_EX), and `unlink_if_exists({base}.md5)`.
+3. Add a `pfb_files_equal($a, $b)` file-vs-file helper — `cmp -s` via escaped exec (PFBL-01:
+   precede with the appropriate validation; escapeshellarg both paths), returning bool.
+4. Extract the local/remote change decision out of `pfb_update_check()` into a named pure-ish
+   helper (inputs: paths + the validators it has) that returns the verdict, callable off-appliance.
+   DO NOT change `pfb_update_check`'s live behaviour — call the extracted helper from it so the
+   observable result is identical this phase.
+5. Add PHPUnit tests in tests/php/ for: the extracted decision pinned on fixtures (oracle, matches
+   today); round-trip (`write→read` equal); legacy `.md5` read; bare/untagged → md5; unknown tag →
+   "changed"; and a KNOWN-ANSWER vector proving PHP `hash('xxh128', X)` equals the documented
+   `xxh128sum` hex for the same bytes (pin the exact hex so a future drift is caught).
+
+CONSTRAINTS
+- Tabs; uppercase TRUE/FALSE; no die()/exit(); keep PFBL-01 green (validate before any exec/path
+  build). Do NOT add a config field (the hash/validators are sidecar files). Do NOT wire the new
+  helpers into the live detection path yet (that is Phase 2). Do NOT touch Python or shell.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit                → green (+ the new tests)
+- php -l on the touched files        → clean
+- vendor/bin/phpstan analyse …       → clean (use --memory-limit if needed)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/  → clean
+- diff-read: pfb_update_check's behaviour is byte-identical (only refactored to call the helper).
+
+EXPECTED RESULT
+New, tested, UNWIRED helpers (content hash; tagged read/write with legacy-md5 + downgrade-safety;
+file-vs-file cmp); the decision extracted + oracle-pinned; live detection unchanged.
+
+COMMIT (single)
+    pfblockerng: extract feed-change decision + add xxh128/tagged-hash helpers (ADR-42 P1)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_42_Hash_Based_Change_Detection/RESULTS/01_Results.txt
+Record: the helper names + signatures + file:line; the tagged-file naming (`{base}.xxhash128` /
+legacy `.md5`) and the "unknown tag → changed" sentinel; the pinned known-answer xxh128 vector;
+the extracted-decision entry point Phase 2 will rewire; PHPUnit counts; and the go-ahead.

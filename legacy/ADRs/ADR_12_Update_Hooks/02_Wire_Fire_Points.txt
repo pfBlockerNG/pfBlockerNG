@@ -1,0 +1,65 @@
+================================================================================
+PHASE 2 PROMPT — Wire pre + post fire points + context builder
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_12_Update_Hooks/ADR.md   (read §2 fire-points + context rows FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/12` branch performing Phase 2 of ADR-12 — wire the runner into the
+update pass at two points (pre/post) with the context builder. ADDITIVE: no enabled
+hooks ⇒ byte-identical to today. Work inline on `adr/12`, one commit, push directly
+(PR only if rejected).
+
+WHY THIS PHASE EXISTS
+The runner (Phase 1) is inert until the pass calls it. This adds exactly two call sites
++ the context that makes post-hooks useful (so a hook can act only when IP data changed
+— the HAProxy driver).
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_12_Update_Hooks/RESULTS/01_Results.txt — the runner signature + env-var
+  names + the timeout/pivot decision. If missing, STOP and report.
+- .ADRs/ADR_12_Update_Hooks/ADR.md (§2 fire-points/context, contract, §4).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — sync_package_pfblockerng (:6556) for
+  the `pre` site (top of the pass) and the `post` site (the closing tail ~:10293, after
+  IP/DNSBL reloads + filter_configure); the change flags `$pfbupdate`/`$pfbpython`
+  (:1924/:2059/:8488), `$pfb['filter_configure']` (:6561), and `$cron` for the trigger.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. CONTEXT BUILDER: a helper that assembles the ctx for `post` from `$cron` (→
+   PFB_TRIGGER: cron|update|force-update|force-reload), `$pfbupdate`/`$pfbpython` (→
+   PFB_IP_CHANGED/PFB_DNSBL_CHANGED), an overall PFB_STATUS (ok|partial|error), and the
+   changed-alias list (→ PFB_CHANGED_ALIASES). For `pre`, ctx = PFB_TRIGGER + PFB_WHEN.
+2. PRE CALL: `pfb_run_hooks('pre', $preCtx)` at the **top** of sync_package_pfblockerng,
+   before any feed processing.
+3. POST CALL: `pfb_run_hooks('post', $postCtx)` at the **closing tail** (after reloads/
+   filter_configure), so the change flags are final.
+4. ADDITIVE GUARANTEE: with no enabled hooks the runner returns immediately → the pass is
+   byte-identical to today. Fires on cron + manual + force triggers.
+
+CONSTRAINTS
+- ADDITIVE only — change NO existing update logic; only read the change flags + call the
+  runner at the two sites. No die()/exit(). PHP tabs/8.3. Do NOT touch Python/tests.
+- Do not move/duplicate the reload or filter_configure calls; the post site sits AFTER
+  them.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan → clean.
+- diff-read: exactly two new call sites (pre at top, post at tail); the context builder
+  derives values only from existing flags; no update logic altered.
+
+EXPECTED RESULT
+pre/post hooks fire on every update trigger with correct context; with no hooks
+configured, behaviour is unchanged.
+
+COMMIT (single)
+    pfblockerng: ADR-12 P2 wire pre/post update hook fire points + context (ADR-12 P2)
+Push directly to `adr/12`; open a PR only if the direct push is rejected. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_12_Update_Hooks/RESULTS/02_Results.txt` (plain .txt)
+State: the exact pre/post call-site locations; the context-builder mapping (flag → env
+var) + the PFB_TRIGGER values; confirmation of the additive no-op; the go-ahead for
+Phase 3 (UI).

@@ -1,0 +1,142 @@
+ADR-28 Phase 4 Results — Enum adoption at the pfb_global() config seam
+=======================================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+
+1. SHIPPING BLOCKER RESOLVED — PHP ADAPTER INLINED
+----------------------------------------------------
+
+pfb_cfg_adapters.php was a NEW shipped file absent from pkg-plist, which hard-errors
+every .pkg build.  Per maintainer decision, the three backed enums (PfbToggle,
+PfbLenient, PfbIdnMode) and all six adapter helpers (pfb_cfg_toggle_read/write,
+pfb_cfg_lenient_read/write, pfb_cfg_idn_mode_read/write) were moved INTO the
+already-shipped, already-plisted file:
+
+    src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc
+
+The `declare(strict_types=1)` directive present in pfb_cfg_adapters.php was DROPPED
+when inlining.  extra.inc carries no such directive; adding one would retroactively
+apply strict typing to logger()/localize_text() and their callers — a behaviour
+change. The adapters use mixed params + explicit (string) casts + tryFrom, so they
+are functionally identical without strict_types.  PHPStan + PHPUnit confirm no
+regressions.
+
+File deleted (git rm):
+    src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.php
+
+Test bootstrap repointed:
+    tests/php/bootstrap.php line ~73: now require_once …/pfblockerng_extra.inc
+    (the host-absolute file_exists() check in pfblockerng.inc line 31 is not
+    satisfied off-appliance, so we load extra.inc explicitly by dirname path.)
+
+CLAUDE.md PHP-adapter location line updated from pfb_cfg_adapters.php to
+pfblockerng_extra.inc.  Python-adapter line (pfb_cfg_adapters.py) left unchanged.
+
+
+2. SEAM FIELDS ADOPTED VS EXCLUDED
+------------------------------------
+
+2.1  dnsbl_vip_auto — ADOPTED
+    Old seam (pfblockerng.inc :1334):
+        ($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '') == 'on' ? 'on' : ''
+    New seam:
+        pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsvip_auto'] ?? '')->value
+
+    Byte-identity proof:
+        Input 'on'   -> old 'on',  new 'on'  ✓
+        Input ''     -> old '',    new ''    ✓
+        Input null   -> old '',    new ''    ✓ (null ?? '' = '')
+        Input 'off'  -> old '',    new ''    ✓ (junk -> Off='')
+        Input 'yes'  -> old '',    new ''    ✓
+    Identical for every reachable stored value.  Pinned by
+    testSeamDnsblVipAutoAdapterMatchesOldTernary().
+
+    Note: the pfb_dnsbl_v6_vip_required() call at line 1346 uses
+        ($pfb['dnsbl_vip_auto'] === 'on')
+    which now reads the same string value produced by the adapter expression — no
+    downstream consumer type changed; $pfb['dnsbl_vip_auto'] remains a string.
+
+2.2  dnsbl_lenient — ADOPTED
+    Old seam (pfblockerng.inc :1364):
+        (($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '') === 'on') ? 'on' : 'off'
+    New seam:
+        pfb_cfg_lenient_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value
+
+    Byte-identity proof:
+        Input 'on'      -> old 'on',  new 'on'  ✓
+        Input 'off'     -> old 'off', new 'off' ✓
+        Input ''        -> old 'off', new 'off' ✓ (absent/blank pre-ADR-22)
+        Input null      -> old 'off', new 'off' ✓
+        Input 'yes'     -> old 'off', new 'off' ✓
+        Input 'enabled' -> old 'off', new 'off' ✓
+    Identical for every reachable stored value.  Pinned by
+    testSeamDnsblLenientAdapterMatchesOldTernary().
+
+2.3  dnsbl_idn — EXCLUDED
+    Old seam (pfblockerng.inc :1372-1373):
+        $pfb_idn_raw = $pfb['dnsblconfig']['pfb_idn'] ?? '';
+        $pfb['dnsbl_idn'] = ($pfb_idn_raw === 'on') ? 'all' : $pfb_idn_raw;
+
+    The old ternary is a PASS-THROUGH except for the 'on'->'all' migration.
+    Every other value (including '') is stored unchanged into $pfb['dnsbl_idn'].
+
+    The adapter pfb_cfg_idn_mode_read('')->value = 'off' (Off case).
+    The old ternary with '' input yields '' — NOT 'off'.
+
+    Difference: old '' -> '', adapter '' -> 'off'.  NOT byte-identical.
+
+    Downstream at line 4836:
+        $idn_mode = in_array($pfb['dnsbl_idn'], array('all', 'confusable'), TRUE)
+                    ? $pfb['dnsbl_idn'] : 'off';
+    Both '' and 'off' yield $idn_mode='off' here, so there is NO functional
+    difference at the ini-write boundary.  BUT the constraint is byte-identical
+    strings in $pfb[...] — the seam is excluded to preserve that invariant.
+
+    Seam kept as-is.  PfbIdnMode enum is still available and used at future
+    call sites that need the normalised canonical value.
+
+    Exclusion pinned by two tests:
+        testSeamDnsblIdnExclusionProofEmptyPassthrough()  — proves '' differs
+        testSeamDnsblIdnOldTernaryBehaviour()              — pins the old ternary
+            for all inputs so any future seam change is detected
+
+
+3. SAVE-PATH / ROUND-TRIP EVIDENCE
+------------------------------------
+
+No SAVE path touches $pfb['dnsbl_vip_auto'] or $pfb['dnsbl_lenient'] directly.
+Write-backs always use config_set_path() with the raw UI $_POST value (e.g. 'on' or
+'off' or ''). The adapter is at the READ boundary only; no write path was changed.
+config.xml stored values are therefore byte-identical before and after this phase.
+
+CfgAdaptersTest.php round-trip coverage (inherited from Phase 1):
+    PfbToggle:   write(read('on')) == 'on'  ✓   write(read('')) == ''   ✓
+    PfbLenient:  write(read('on')) == 'on'  ✓   write(read('off')) == 'off' ✓
+    PfbIdnMode:  write(read('all')) == 'all' ✓  write(read('confusable')) == 'confusable' ✓
+                 write(read('off')) == 'off' ✓
+
+
+4. PYTHON SIDE DEFERRED TO PHASE 8
+-------------------------------------
+
+src/usr/local/pkg/pfblockerng/pfb_cfg_adapters.py is intentionally still present.
+It is to be inlined into pfb_unbound.py in Phase 8.  Nothing Python was touched
+in this phase.
+
+
+5. VERIFICATION GATES
+-----------------------
+
+    vendor/bin/phpunit        589 tests, 1225 assertions, OK           ✓
+    vendor/bin/phpstan        0 errors                                  ✓
+    vendor/bin/phpcs          0 errors (PFBL-01 green)                  ✓
+    php -l (all touched)      No syntax errors                          ✓
+    python -m pytest          1691 passed                               ✓
+    ruff check .              All checks passed                         ✓
+    npx markdownlint-cli2     0 error(s)                                ✓
+    src/ no new file          pfb_cfg_adapters.php deleted, pfb_cfg_adapters.py kept ✓
+    diff review               minimal + intentional only                ✓
+
+
+Go-ahead for Phase 5.

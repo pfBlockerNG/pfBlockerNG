@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "config": {
+    "tld_wildcard_blacklist": [
+      "zip"
+    ],
+    "tld_wildcard_exclusion": [
+      "excluded.com"
+    ],
+    "user_whitelist": [
+      "www.adblock.com",
+      ".wildwhite.org",
+      "phishing.net"
+    ],
+    "user_unlock": [],
+    "top1m_enabled": true
+  },
+  "feeds": [
+    {"raw": "raw/plain_hosts.raw", "feed": "plain_hosts", "group": "grp_plain", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_pt.raw", "feed": "csv_pt", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_bbc.raw", "feed": "csv_bbc", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_h3x.raw", "feed": "csv_h3x", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_otx.raw", "feed": "csv_otx", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_pon.raw", "feed": "csv_pon", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/csv_et.raw", "feed": "csv_et", "group": "grp_csv", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/custom_list.raw", "feed": "custom_list", "group": "grp_custom", "provenance": "user", "log_flag": "1"},
+    {"raw": "raw/abp_feed.raw", "feed": "abp_feed", "group": "�", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/mixed_plain.raw", "feed": "mixed_plain", "group": "grp_mixed", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/permit_feed.raw", "feed": "permit_feed", "group": "grp_permit", "provenance": "feed", "log_flag": "1", "mode": "permit"},
+    {"raw": "raw/oversized_feed.raw", "feed": "oversized_feed", "group": "grp_edge", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/wirecap_feed.raw", "feed": "wirecap_feed", "group": "grp_edge", "provenance": "feed", "log_flag": "1"},
+    {"raw": "raw/reused_manifest_abp.raw", "feed": "reused_manifest_abp", "group": "grp_reuse", "provenance": "feed", "log_flag": "1"}
+  ]
+}

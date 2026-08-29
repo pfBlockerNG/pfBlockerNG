@@ -1,0 +1,60 @@
+HISTORICAL — EXECUTED 2026-06-17/18; DO NOT RE-RUN. Every phase below already landed on devel
+(ADR-28 is Accepted; see ADR.md Status). Line anchors are stale and the "hard-freeze /
+byte-identical storage" doctrine in this prompt was superseded by the behaviour-not-bytes rule in CLAUDE.md.
+
+================================================================================
+PHASE 8 PROMPT — Python conventions (pfb_unbound.py)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_28_Code_Quality_Conventions/ADR.md   (read §2.1, §2.3.4, §6 Phase 8 first)
+================================================================================
+
+ROLE
+Branch adr/28-code-quality-conventions (off devel). Phase 8 of 11, BEHAVIOUR-PRESERVING,
+stdlib-only. Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Apply items 1, 2, 4 to the Python side. True/False is already correct (item 5 needs nothing). The
+work is: Enum/Literal for mode values, short-circuit ordering, and str-methods over `re` in the
+per-query / per-line HOT path (pfb_unbound.py runs inside Unbound's pythonmod, per DNS query).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/07_Results.txt. If missing, STOP and report.
+- .ADRs/ADR_28_Code_Quality_Conventions/ADR.md (§2.1 table, §2.3.4 stdlib + no-latency-regression,
+  §2.4 — py_unbound.ini / manifest values stay strings)
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the mode strings, the ~12 `re` usages, the
+  per-query/per-host loops; the Phase-1 Python enums/adapter from RESULTS/01.
+- CLAUDE.md (Python standards; the pfb_unbound.py stdlib-only + Unbound-injected-globals rules).
+- tests/ (existing pfb_unbound.py coverage + conftest builtins injection).
+
+ACTION PLAN (tests FIRST)
+1. Introduce Enum/Literal for internal mode values; keep any value read from py_unbound.ini / the
+   manifest / the wire as the existing string (§2.4) — convert at the boundary only.
+2. Apply short-circuit ordering: cheap guard before expensive test in per-query paths.
+3. Replace `re` with str methods (in/startswith/endswith/split/replace) where semantically
+   equivalent, prioritising the hot path; keep true patterns as `re`. Add equivalence tests per swap.
+4. Do NOT add external deps; `enum`/`typing` are stdlib. Keep Unbound-injected globals as bare names
+   per the stub convention.
+
+CONSTRAINTS
+- Behaviour-preserving; stdlib-only; no per-query latency regression (§2.3.4).
+- 4 spaces; `from __future__ import annotations`; no bare except.
+- ADR-08 homoglyph analyzer + its UCD-name logic: do not alter its behaviour.
+
+VERIFICATION (must all pass)
+- python -m pytest -> green (+ enum/equivalence tests; ADR-08 tests still pass)
+- ruff check . / ruff format . -> clean
+- mypy tests/ -> clean (if touched)
+- diff-read: boundary values stay strings; hot-path swaps proven equivalent.
+
+EXPECTED RESULT
+pfb_unbound.py uses Enum/Literal for modes, cheap-guard-first conditionals, and str-methods over `re`
+on the hot path; boundary/wire values unchanged; behaviour + latency identical.
+
+COMMIT (single)
+    pfblockerng: enums, short-circuit, str-over-re in pfb_unbound.py (ADR-28 P8)
+Push directly to adr/28-code-quality-conventions; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_28_Code_Quality_Conventions/RESULTS/08_Results.txt
+State: enums added; boundary strings kept; `re` swaps (hot vs not) + kept patterns; tests added.
+Go-ahead for Phase 9.

@@ -1,0 +1,119 @@
+================================================================================
+PHASE 2 PROMPT — Builder implementation + ADR-35 registration + sync wiring
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_37_DoT_DoQ_Block/ADR.md   (read §2.1, §2.2, §4, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/37-dot-doq-block. Phase 2 implements the rule
+builder (passes the Phase-1 golden tests), registers it via ADR-35, and wires it into
+sync_package_pfblockerng(). One commit, push directly.
+
+REQUIRED READING (FIRST — read before writing a single line of code)
+FIRST, read the prior phase's handoff:
+    .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/01_Results.txt
+If that file is missing, STOP and report — do not proceed.
+
+Then read:
+- .ADRs/ADR_37_DoT_DoQ_Block/ADR.md — §2.1, §2.2 (ground-truth rule shape), §4, §5.
+- src/usr/local/pkg/pfblockerng/pfblockerng_fwobj.inc — the ADR-35 implementation. Read it
+  fully: pfb_fwobj_register(), pfb_fwobj_find(), pfb_fwobj_remove(), pfb_fwobj_sweep(), the
+  $spec shape, the marker contract. Do NOT guess the API — read the actual file.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the builder skeleton location (confirmed in
+  Phase-1 handoff); sync_package_pfblockerng() (grep for it; read the section that wires the
+  ADR-36 redirect, if present, for the pattern to mirror). The filter-rule rebuild at ~13709
+  (the pfB_ prefix strip-and-rebuild model).
+- tests/php/DotDoQBlockRuleTest.php — the Phase-1 golden tests; the implementation must pass
+  all of them without modifying the tests.
+- .ADRs/ADR_36_DNS_Redirection/ADR.md §6 Phase 2 — sibling sync-wiring pattern for reference.
+
+ACTION PLAN
+
+1. IMPLEMENT pfb_build_dot_block_rule($iface, $exclude_alias) — the full production
+   implementation. The function must:
+   - Return a single PHP array representing the filter/rule with all fields from §2.2:
+     type='block', interface=$iface, ipprotocol='inet46', protocol='tcp/udp',
+     source=<any> when $exclude_alias is empty / negated alias array when set,
+     destination=['network'=>'(self)', 'not'=>'', 'port'=>'853'],
+     statetype='keep state',
+     descr='pfB_DoT_Block_' . $iface (CDATA is a pfSense serialisation detail; the array
+     value is the plain string — pfSense writes it as CDATA when serialising config.xml).
+   - Pass ALL nine test methods in DotDoQBlockRuleTest.php without any modification to the
+     tests.
+   - Uppercase TRUE/FALSE where boolean literals are needed (ADR-28). PHP tabs, PHP 8.3.
+   - No die()/exit(); return the array or throw on invalid input.
+
+2. REGISTER via ADR-35. Read pfblockerng_fwobj.inc first to confirm the exact pfb_fwobj_register()
+   $spec shape, then register:
+   - type: 'filter'
+   - marker prefix: 'pfB_DoT_Block_' (matches the descr prefix the builder emits)
+   - builder: the pfb_build_dot_block_rule callable (or equivalent spec field)
+   Register this call at the same site as the ADR-35 VIP and NAT registrations, or adjacent
+   to the ADR-36 redirect registration if that exists. Read the file; do not guess the location.
+
+3. WIRE into sync_package_pfblockerng():
+   - Read dnsbl_dot_block via PfbConfig::read('dnsbl_dot_block').
+   - Read dnsbl_dot_block_int via PfbConfig::read('dnsbl_dot_block_int').
+   - Read dnsbl_dot_block_exclude via PfbConfig::read('dnsbl_dot_block_exclude').
+   - When enabled and at least one interface selected: for each comma-split interface, call
+     pfb_build_dot_block_rule($iface, $exclude_alias) and write the resulting rule into
+     filter/rule via config_set_path (pfSense-core section — direct config_*_path, NOT
+     PfbConfig — see the foreign-key exclusion list in CLAUDE.md).
+   - Reconcile: on each sync, prune rules for interfaces no longer in the selected set using
+     pfb_fwobj_find() / pfb_fwobj_remove() with the 'pfB_DoT_Block_' marker prefix.
+     A rule for 'opt1' when 'opt1' is no longer in dnsbl_dot_block_int must be removed.
+   - When disabled or no interfaces selected: remove all pfB_DoT_Block_* rules via the
+     ADR-35 marker sweep.
+   Wire at the same position as the ADR-36 wiring (or near pfb_firewall_rule() / the IP
+   filter rule build section) — mirror the sibling pattern exactly.
+
+4. WRITE additional PHPUnit tests in a new or extended test file:
+   a. test_reconcile_is_idempotent: call the sync helper twice with the same settings;
+      assert config.xml filter/rule contains exactly one pfB_DoT_Block_lan entry (no
+      duplicates). Assert before-state (zero rules) first.
+   b. test_disable_removes_all_dot_block_rules: seed a pfB_DoT_Block_lan rule in the fixture;
+      assert it is present (before-state); call the sync helper with enabled=false; assert no
+      pfB_DoT_Block_* rules remain.
+   c. test_user_rule_survives_disable: seed a user filter rule (no pfB_ marker); disable the
+      DoT block; assert the user rule is still present.
+   d. test_stale_interface_pruned_on_reconcile: seed rules for 'lan' and 'opt1'; call sync
+      with only 'lan' selected; assert the 'opt1' rule is gone and the 'lan' rule remains.
+      Assert both present before the reconcile call (before-state).
+
+   BDD-style for the stale-interface test (Given/When/Then comments in the test body).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; uppercase TRUE/FALSE (ADR-28); no die()/exit().
+- Do NOT modify the Phase-1 golden tests — the implementation must pass them as written.
+- Do NOT re-implement marker detection or sweep logic — use ADR-35 functions exclusively.
+- Use PfbConfig::read() for the three registered fields; use direct config_*_path for
+  filter/rule (pfSense-core foreign section).
+- Do NOT add UI code — that is Phase 3.
+- The RequireConfigGateway sniff must stay green: filter/rule writes use config_*_path
+  directly (correct — it is a foreign pfSense-core section), not PfbConfig.
+- PFBL-01: the sync wiring is not in an in-scope function per the allow-list, but if the
+  builder or any helper is added to pfblockerng.inc in an allow-listed scope, ensure no
+  unguarded exec/path-build appears.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> ALL tests green including Phase-1 DotDoQBlockRuleTest + new
+  reconcile/disable/survival/stale-prune tests.
+- php -l src/ -> no syntax errors.
+- PHPStan -> no new errors.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green.
+- python -m pytest -> green.
+
+EXPECTED RESULT
+pfb_build_dot_block_rule() fully implemented and passing all golden tests; ADR-35 registration
+in place; sync_package_pfblockerng() creates, reconciles, and removes DoT/DoQ block rules
+correctly; idempotency, disable, user-rule survival, and stale-interface pruning all tested.
+
+COMMIT (single)
+    pfblockerng: implement DoT/DoQ block rule builder and sync wiring (ADR-37 P2)
+Push directly to adr/37-dot-doq-block.
+
+HANDOFF — write .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/02_Results.txt (plain .txt)
+Record: builder function signature + file:line; ADR-35 registration call location + $spec
+fields used; sync_package_pfblockerng() wiring location (file:line range); list of new test
+methods + pass/fail counts; any deviation from the plan (e.g. if the ADR-35 spec shape
+differed from what was expected — note it so Phase 3 can account for it); go-ahead for Phase 3.

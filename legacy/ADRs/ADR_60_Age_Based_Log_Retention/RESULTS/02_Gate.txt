@@ -1,0 +1,61 @@
+ADR-60 Phase 2 — Gate record
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks against
+commit f41f5ef1 (code+tests) / 1b803438 (handoff):
+
+1. handoff-fields — PASS. Commit verified via git log; all required fields
+   present.
+2. gate-rerun — PASS. php -l, vendor/bin/phpunit (2449 tests, 19094 assertions,
+   2 pre-existing deprecations, 4 documented skips), phpstan, phpcs, python3 -m
+   pytest (2437 passed, 4 skipped, unaffected), check_comment_narration.py,
+   check_version_literals.py, check_appliance_python.py — all clean, all
+   matched the handoff's claimed output exactly.
+3. red-proof — PASS, TWO independent regressions both re-executed by the
+   verifier itself (not accepted from the handoff):
+   (a) Phase 1's 8 flipped oracle tests: reverted pfblockerng.inc to
+       pre-Phase-2 (tests held at HEAD) -> 8 failures; restored -> all pass.
+   (b) The planner-flagged pfb_failures() header[4] regression: removed the
+       preg_replace prefix-strip fix -> testFailuresGrepMatchesIsoLogTimestamp
+       FAILS with the exact wrong-key symptom predicted in the brief (tallied
+       under the alias instead of the feed header); restored -> passes.
+4. diff-vs-plan — PASS. Full diff read (git show, not --stat); all 10 plan
+   items ticked, including the two orchestrator-injected items (the
+   pfb_failures() fix and its regression test). 3 unenumerated downstream
+   consumers of pfb_logger()'s exact byte shape were found by the implementer
+   running the FULL suite (not just the ADR-named tests) and fixed in the same
+   commit: PfbValidateLogTest, PfbEmitEntryRejectStatsTest, LiveLogStdoutTest.
+5. test-honesty — PASS. No assertion weakened; the "must NOT emit" assertion
+   in PfbEmitEntryRejectStatsTest stays capable of failing on a real
+   regression (upgraded to a real-shape regex, not a vacuous string check).
+   testFailuresGrepMatchesIsoLogTimestamp drives the real production write
+   path end-to-end, no fault injection.
+6. conventions — PASS. No new public symbols this phase. Stale pnow/NOW-token
+   comments reconciled in touched files.
+
+Orchestrator polish after the gate (verifier flagged as non-blocking nits,
+fixed directly rather than re-spawning a step):
+- RESULTS/02_Results.txt: backfilled the "Commit: (pending)" placeholder with
+  the real commit hashes (f41f5ef1, 1b803438).
+- RESULTS/02_Results.txt: corrected the coverage-matrix row's
+  PfbEmitEntryRejectStatsTest count from "2 of 6" to "3 of 6" (matches the
+  diff's actual 3 touched test methods, and the DEVIATIONS section's own
+  count).
+- pfblockerng.inc: tightened pfb_logger()'s new 5-line comment to 3 lines,
+  keeping the load-bearing fact (leading-newline-as-separator, ADR-48) and
+  dropping the ADR-60/ADR.md-S1.4 narration recap. Re-verified php -l,
+  vendor/bin/phpunit --filter 'LogTimestampBaselineTest|PfbLoggerIsoTimestampTest'
+  (13/13 green), phpcs, and check_comment_narration.py after the edit.
+
+Skipped: none.
+
+Coverage matrix: every §1.3 log/extraslog/errlog row ticked, plus the
+pfb_failures() header[4] regression row and the 3 unenumerated downstream
+consumers (see RESULTS/02_Results.txt for full detail).
+
+Commits this phase (in order):
+- f41f5ef1 — pfblockerng: always stamp log/extraslog/errlog, retire pnow
+  same-second dedup (ADR-60 P2)
+- 1b803438 — docs: ADR-60 phase 2 handoff
+- (this gate-polish commit) — fixups found by the phase 2 gate

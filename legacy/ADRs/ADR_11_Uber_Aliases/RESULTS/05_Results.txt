@@ -1,0 +1,174 @@
+================================================================================
+ADR-11 — Phase 5 RESULTS (FINAL): Settings UI help + docs + branch benchmark + DoD
+================================================================================
+Status: DONE. ADR-11 is IMPLEMENTATION-COMPLETE; Status stays Proposed pending the
+        maintainer's live-box §7 manual smoke (A-F). No shipped behaviour added this
+        phase beyond UI help text + docs (the build logic landed P2-P4).
+Date:   2026-06-05
+Scope:  src/usr/local/www/pfblockerng/pfblockerng_general.php  (tightened pfb_agg_types help)
+        README.md                                              (new "Aggregated Aliases" §)
+        CLAUDE.md                                              (new ADR-11 contributor §)
+        .ADRs/ADR_11_Uber_Aliases/RESULTS/05_Results.txt       (this handoff)
+        NO src/ logic change. NO Unbound Python / pytest. NO other ADRs. NO stubs.
+        ADR.md UNCHANGED — §7 was already complete + actionable (P4 added A-F); verified.
+
+--------------------------------------------------------------------------------
+1. UI HELP TEXT (pfb_agg_types multi-select, general.php ~:297)
+--------------------------------------------------------------------------------
+Tightened the P3-drafted help from 7 lines to 5, matching the neighbouring help-text
+length/style (skipfeed/dailystart above it). Carries all five required points, briefly:
+  * WHAT IT CREATES: "Native pfB_<Type>_Aggregated_v4/_v6 urltable aliases = the deduped,
+    CIDR-aggregated union of that type's effective set."
+  * DENY EFFECTIVE SET: "Deny folds in DNSBLIP".
+  * GEOIP (now EXPLICIT, was implicit in P3): "GeoIP folds in by each continent's action -
+    no separate Geo alias."
+  * NATIVE / REFERENCE-ONLY: "Reference IP-sets only (e.g. an HAProxy ACL): registered
+    Native, they create no firewall rule and do not permit/match by themselves." (covers
+    the Permit/Match "does not permit/match by itself" caveat in one clause.)
+  * RAM CAVEAT: "Each loads its full union as a wired pf table (the Deny set can be millions
+    of entries) - enable only the type(s) you consume." Default: none.
+Tabs preserved; php -l clean. Field renders via Form_Select(..., TRUE) multi-select, size=4.
+
+--------------------------------------------------------------------------------
+2. DOCS (README.md + CLAUDE.md) — proportionate, markdownlint-clean
+--------------------------------------------------------------------------------
+README.md — new "### Aggregated Aliases (\"Uber\" aliases, ADR-11)" section, placed
+  immediately BEFORE "### Update Hooks (ADR-12)" (natural reading order: the ADR-12 HAProxy
+  recipe that follows consumes ADR-11's aggregates). Covers: the per-type model + the fixed
+  alias names pfB_<Type>_Aggregated_{v4,v6}; Deny=effective+DNSBLIP, GeoIP-by-continent-
+  action (no separate Geo alias); Native=no-rule reference IP-sets (Permit/Match don't
+  permit/match alone); opt-in/default-none + the wired-kernel-pf-table RAM caveat; the
+  in-pass mtime-gated lockstep build (cat -> sort -u -> iprange) + never-empty .lst; and the
+  ADR-12 HAND-OFF (Native aliases + never-empty .lst files are HAProxy's input; table loaded
+  inline BEFORE the post hook so the hook sees the fresh table + the name is in
+  PFB_CHANGED_IP_ALIASES; freshness = a pfBlockerNG-triggered GRACEFUL HAProxy RELOAD, NOT a
+  socket push). Ends with the "See [ADR-11]" link, matching the sibling feature sections.
+CLAUDE.md — one contributor paragraph after the DNSBL/ABP-pipeline pointer (ADR-11 is IP-side,
+  pfblockerng.inc + .sh, NOT the DNSBL pipeline): the pfb_agg_types multi-select (opt-in,
+  default none), the fixed alias names, Native/no-rule, the in-pass mtime-gated build via the
+  pfblockerng.sh `aggregate` action + pfb_build_aggregate_aliases() (loads the pf table inline
+  before the ADR-12 post hook), the wired-pf-table RAM note, the ADR-12 HAProxy hand-off
+  (graceful reload not socket push), and the off-box test (AggregateMemberListTest.php) + the
+  §7 live legs.
+
+NOTE (left intentionally untouched): the EXISTING ADR-12 HAProxy recipe in README still
+references the pre-rescope single-alias name `pfB_Aggregate_v4`. That recipe is ADR-12's doc
+(merged), not ADR-11's; correcting it to the per-type `pfB_<Type>_Aggregated_v4` name is an
+ADR-12 doc concern and OUT OF SCOPE for this phase (would touch another ADR's docs). My new
+ADR-11 section uses the correct per-type names. Flagging it as a tracked follow-up for ADR-12.
+
+--------------------------------------------------------------------------------
+3. BENCHMARK — RE-RUN ON THE BRANCH (REAL numbers, not invented)
+--------------------------------------------------------------------------------
+Ran scripts/misc/bench_aggregate_union.sh 2000000 500000 30 on THIS branch / dev box
+(Darwin 25.5.0 arm64). /usr/local/bin/iprange ABSENT on this dev box (`which iprange` ->
+not found; not in Homebrew), so the PORTABLE Python ipaddress.collapse_addresses STAND-IN
+ran (same as P1) — labelled. The ratios + output counts are collapse-faithful; the aggregate
+WALL/RSS is a Python proxy, NOT an iprange prediction.
+
+  STEP                       OUTPUT LINES     WALL        PEAK RSS     PRIMITIVE
+  -------------------------  ---------------  ----------  -----------  -----------
+  raw union (cat)            2,500,000        -           -
+  -> sort -u                 2,310,331         1.27 s      189.2 MiB   [portable]
+  -> aggregate               2,200,567        25.30 s *    2.1 GiB *   [Python stand-in]
+  -------------------------  ---------------  ----------  -----------
+  union total wall                            26.57 s
+
+  Ratios (collapse-faithful regardless of primitive):
+    dedup     raw   -> unique : 1.082x  ( 7.6% removed by sort -u)
+    aggregate unique -> final : 1.050x  ( 4.8% collapsed)
+    overall   raw   -> final  : 1.136x  (12.0% removed)
+
+  * Python-stand-in proxy, NOT iprange. iprange (C, mmap+radix) is far faster + leaner.
+
+CONFIRMED vs P1 (RESULTS/01_Results.txt §1b): matches within noise —
+  sort -u  : 1.27 s / 189.2 MiB  (P1: 1.32 s / 180.3 MiB)
+  aggregate: 25.30 s / 2.1 GiB   (P1: 25.52 s / 2.1 GiB)  [both Python stand-in]
+  total    : 26.57 s             (P1: 26.84 s)
+  ratios   : IDENTICAL (2,310,331 unique / 2,200,567 final; 12.0% overall).
+So P1's recorded dev-box numbers are CONFIRMED reproducible on the branch.
+
+vs SOFT BUDGET (ADR §4 / 01_Results §4): added pass time target < 30 s on a typical box at a
+few-million-CIDR union. The portable Python proxy (25 s for the collapse) is NOT the budget —
+the production C iprange is 1-2 orders faster + leaner than this proxy, and the per-alias
+cidr_aggregate (the SAME iprange) ALREADY runs on every member each pass, so the per-type
+union is the same cost class (one extra cat|sort -u|iprange), not a new one -> WELL WITHIN the
+< 30 s soft budget. The deny union is the dominant cost; permit/match/native dirs are smaller,
+so the per-type extension is bounded by the deny union.
+
+The AUTHORITATIVE live iprange wall/RSS + the pfctl -T replace load time + the loaded-table
+kernel RAM remain the 01_Results §2 maintainer RESULT SLOTS (this dev box has no iprange and
+cannot load pf tables) — to be filled during the §7 live smoke.
+
+--------------------------------------------------------------------------------
+4. DoD + §7 (ADR.md) — verified complete + actionable; Status Proposed
+--------------------------------------------------------------------------------
+Re-read ADR §7. It is COMPLETE + ACTIONABLE as P4 left it — NO edit needed this phase:
+  * Reject/pivot criteria present (cost-prohibitive -> finer set-hash incremental;
+    cannot-stay-additive -> STOP).
+  * Manual-smoke checklist (10 boxes) covers: none-selected no-op; Deny effective-set incl.
+    DNSBLIP + Deny-action GeoIP + suppressed/whitelisted ABSENT; Permit/Match/Native dir
+    unions (no rule); all-combinations additive; lockstep + mtime-gate; never-empty file;
+    HAProxy referenceable; post-hook-fires-after-ready (fresh table + PFB_CHANGED_IP_ALIASES);
+    teardown (per-type + disable-all).
+  * P4 runnable maintainer commands A-F map 1:1 to the boxes: A effective Deny CONTENT
+    (pfctl -T test suppressed-absent / DENYIP / DNSBLIP / GeoIP-continent present + no rule),
+    B additive byte-identity across the power-set (md5 + diff the non-aggregate world),
+    C empty-union never-empty .lst + no empty table, D lockstep + post-hook freshness +
+    mtime-gate, E HAProxy ipalias_*.lst emission, F teardown no-orphans.
+  * Status = Proposed (ADR.md line 3 + §7 line 162: "Status -> Accepted only after the
+    maintainer confirms the manual smoke"). NOT flipped to Accepted — the maintainer's live
+    smoke flips it.
+
+--------------------------------------------------------------------------------
+5. GATES (all green)
+--------------------------------------------------------------------------------
+  * /usr/bin/time present; iprange ABSENT (dev box) -> benchmark portable stand-in path.
+  * python -m pytest                  -> 1124 passed (green/UNCHANGED -- no Python touched).
+  * php -l pfblockerng_general.php     -> No syntax errors.
+  * PHPStan (--memory-limit=1G)        -> [OK] No errors (level 1 + baseline; 25 files).
+  * PHPUnit (real .inc off-appliance)  -> OK 164 tests / 332 assertions (UNCHANGED from P4).
+  * npx markdownlint-cli2 (all 37 .md) -> 0 error(s).
+  * shellcheck                          -> N/A (no shell change this phase; the bench script
+                                          was unchanged + was already ShellCheck-clean P1).
+
+--------------------------------------------------------------------------------
+6. SCOPE / SELF-REVIEW
+--------------------------------------------------------------------------------
+  * git diff --name-only: CLAUDE.md, README.md, src/usr/local/www/pfblockerng/pfblockerng_general.php
+    (+ this new RESULTS/05_Results.txt). NO src/ LOGIC change (only the help-text string in
+    general.php). NO Unbound Python / pytest. NO other ADRs' docs. NO stubs.
+  * Help text: brief (5 lines, matches neighbours), not over-prosed; all 5 required points.
+  * Docs: proportionate (one README § + one CLAUDE.md paragraph), markdownlint-clean.
+  * Benchmark numbers: REAL (ran the script, pasted output), labelled as the Python stand-in
+    (no iprange on this box), confirmed against P1.
+  * §7: actionable, complete; Status still Proposed (NOT Accepted).
+
+--------------------------------------------------------------------------------
+7. ADR-12 HAND-OFF (explicit)
+--------------------------------------------------------------------------------
+What ADR-12 / HAProxy consumes from ADR-11:
+  * The Native urltable aliases pfB_<Type>_Aggregated_{v4,v6} (referenceable by is_alias();
+    a `source_ip` ACL makes the HAProxy package emit ipalias_<alias>.lst).
+  * The never-empty `-f` consumer .lst files (a `#` placeholder line when empty) -> a
+    downstream `-f` reference always validates / reloads (no /../../ or dummy-IP hack).
+Freshness model (NOT a socket push):
+  * pfBlockerNG LOADS each aggregate's pf table INLINE (pfctl -T replace -f) BEFORE the ADR-12
+    `post` update hook fires -> a hook always sees the FRESH table.
+  * A rebuilt aggregate's name is merged into PFB_CHANGED_IP_ALIASES (mtime-gated: an
+    unchanged type adds nothing).
+  * HAProxy re-reads its `-f` ACL files only AT RELOAD (the runtime socket cannot inject ACL
+    data) -> freshness = a pfBlockerNG-triggered GRACEFUL HAProxy reload from a `post` hook
+    (the README HAProxy recipe), NOT a socket push.
+
+--------------------------------------------------------------------------------
+8. FINAL STATE
+--------------------------------------------------------------------------------
+ADR-11 is IMPLEMENTATION-COMPLETE across all 5 phases:
+  P1 cost de-risk (full-rebuild + mtime-gate, RAM caveat) -> P2 `aggregate` action + member
+  helper -> P3 opt-in multi-select + generic wiring (Native, table-load before post-hook) ->
+  P4 off-box membership + additive + post-hook-order correctness (AggregateMemberListTest +
+  §7 A-F) -> P5 (this) UI help + docs + branch benchmark + DoD.
+Status = Proposed. The maintainer runs the §7 (A-F) live-box smoke on a real pfSense CE box
+(CI cannot load pf tables / run HAProxy) and flips Status -> Accepted on green.
+================================================================================

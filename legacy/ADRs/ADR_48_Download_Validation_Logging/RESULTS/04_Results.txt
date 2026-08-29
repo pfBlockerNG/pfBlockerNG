@@ -1,0 +1,403 @@
+================================================================================
+PHASE 4 RESULTS — Python-side per-entry reject accounting (issue #789)
+ADR-48, Phase 4 of 4
+================================================================================
+
+SCOPE — git diff --stat (Phase 4's own changes only):
+  src/usr/local/pkg/pfblockerng/pfb_unbound.py  | 160 +++++++++++++++++++++++---
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc |  36 ++++++
+  tests/smoke/test_smoke_feeds.py               | 153 ++++++++++++++++++++++++
+  tests/test_adr06_build_module.py              | 136 ++++++++++++++++++++++
+  tests/test_adr07_reconcile.py                 |  17 ++-
+  tests/test_adr10_swap.py                      |  53 ++++++++-
+  tests/test_branch_coverage_gaps.py            |  50 ++++++++
+  7 files changed, 584 insertions(+), 21 deletions(-)
+  (+ 1 new untracked test file: tests/php/PfbEmitEntryRejectStatsTest.php)
+
+TALLY PLUMBING MAP
+
+Classified verdict (the reusable primitive both buckets come from):
+  _normalise_verdict(value) -> (domain, None) on accept; (None, 'shape') or
+  (None, 'wire_cap') on reject. Body extracted from normalise() (pfb_unbound.py
+  ~L3990-4013); normalise() is now a 2-line wrapper (`domain, _ =
+  _normalise_verdict(value); return domain`) — public contract byte-identical,
+  pinned by the untouched pre-existing TestNormalise suite.
+  Bucket split (matches the ADR-48 04-prompt's mapping of the old compound test):
+    "." not in host                         -> 'shape'
+    not _dnsbl_within_wire_caps(host)        -> 'wire_cap'
+    empty/edge-hyphen label, bad char        -> 'shape'
+
+Tally container + helper:
+  RejectTally = dict[tuple[str, str], dict[str, int]]   (keyed (feed, group))
+  _tally_reject(tally, feed, group, bucket) -> tally.setdefault((feed, group),
+  {"shape": 0, "wire_cap": 0})[bucket] += 1 — the one place that does the
+  defaulting; no class (a plain dict never grows past these two RESOLVED keys).
+
+Gate site -> bucket map:
+  build() permit path (pfb_unbound.py ~L4871, was normalise(entry.value))
+    -> _normalise_verdict + _tally_reject(rejects, feed, group, bucket) on reject.
+  build() plain path (pfb_unbound.py ~L4924, was normalise(entry.value))
+    -> same transform; proves the non-ABP path counts too, not just ABP.
+  parse_abp() — 3 domain-target reject sites, one per KEEP shape (anchor
+  ~L3816, hosts ~L3853, bare domain ~L3875) — each: `dom, bucket =
+  _normalise_verdict(...); if dom is None: if tally is not None and bucket is
+  not None: _tally_reject(tally, feed, group, bucket); return None`.
+  ``tally`` is a new optional kwonly param (default None) — a caller that
+  omits it gets the BYTE-IDENTICAL pre-Phase-4 return value (purity untouched,
+  pinned by the pre-existing TestPurity suite).
+  reconcile() — the #753 wire-cap FOLD-DROP (pfb_unbound.py ~L4322, `if not
+  _dnsbl_within_wire_caps(domain): continue`) -> always 'wire_cap' (a
+  well-shaped regex reduced to a domain-literal key that is simply too long to
+  query). New optional `tally` param (default None), same non-kwonly-but-
+  defaulted shape as the other two.
+
+  Fold-drop PROVENANCE choice (the prompt's open question): the drop sits
+  inside `for r in survivors:` — reconcile() processes ONE originating Rule
+  per iteration, and the wire-cap check runs BEFORE any same-key dict merge
+  (data_db[key]=.../zone_db[key]=... happens later, per-r, not as a batched
+  dedup pass). So there is no "folded key aggregates several feeds" case to
+  disambiguate at this line — every fold-drop already has exactly one
+  r.feed/r.group in scope, and that is what gets tallied. Documented inline
+  in reconcile()'s docstring.
+
+  build() wires all four sites: creates `rejects: RejectTally = {}` once,
+  passes `tally=rejects` into both parse_abp() call sites (whole-feed ABP +
+  the ADR-21 per-line-in-plain-feed path) and into `reconcile(abp_rules,
+  tlds, exclusion, tally=rejects)`, and counts directly at its own two
+  normalise() call sites (permit, plain). Returns `BuildResult(...,
+  rejects=rejects)`.
+
+ARTIFACT SCHEMA + BOTH-SIDE PATHS
+
+  Python (chroot-relative bare name, set in init_standard beside pfb_py_count):
+    pfb["pfb_py_reject_stats"] = "pfb_py_reject_stats.json"
+  PHP (host-absolute twin, beside unbound_py_count):
+    $pfb['unbound_py_reject_stats'] = '/var/unbound/pfb_py_reject_stats.json'
+
+  dnsbl_emit_reject_stats(stats_path, rejects) -> bool (pfb_unbound.py, sibling
+  of dnsbl_emit_count()): writes a JSON array of ONLY nonzero-total rows —
+    [{"feed": <str>, "group": <str>, "shape": <int>, "wire_cap": <int>}, ...]
+  sorted by (feed, group) for stable output. Atomic temp+os.replace, copying
+  the `_reload_write_applied` pattern (tmp -> write -> flush -> fsync ->
+  os.replace; OSError -> stderr + best-effort tmp cleanup, never raises). An
+  EMPTY tally still writes literal "[]" so PHP can tell "ran, zero rejects"
+  from "no artifact at all" (fresh boot / an old python module).
+
+  Called from BOTH dnsbl_emit_count() call sites:
+    - init (~L1410, inside `if build_result is not None:`): unconditional
+      `pfb["pfb_py_reject_stats"]` access — the key is always set a few lines
+      earlier in the SAME function, so no guard needed.
+    - rebuild_and_swap() (~L5270, the no-restart reload path, `if
+      emit_counts:` block): guarded with `pfb.get("pfb_py_reject_stats")` —
+      NOT a bare index. rebuild_and_swap() is unit-tested directly
+      (test_adr10_swap.py / test_adr10_watcher.py / test_adr10_concurrency.py)
+      against a bare, hand-built `pfb` dict that never seeds this key, so a
+      bare `pfb["pfb_py_reject_stats"]` would have KeyError'd every one of
+      those pre-existing tests. The `.get()` guard keeps them green with ZERO
+      changes (verified — see GATE SUMMARY) while still exercising the real
+      call in two NEW tests that seed the key explicitly (see TEST COVERAGE).
+    Snapshot (the reload-path bundle) gained the same `rejects` field
+    (default `{}` via field(default_factory=dict)) so rebuild_and_swap() can
+    read `new_snapshot.rejects` — populated from `build_result.rejects` in
+    `_build_swap_snapshot()`. `_init_build_snapshot()`'s Snapshot is built
+    with `emit_counts=False` (init keeps its own inline count emits, per the
+    pre-existing comment there), so its `rejects` field is never read —
+    intentionally left at the dataclass default rather than plumbed, since
+    doing so would be dead code.
+  BuildResult also gained `rejects: RejectTally = field(default_factory=dict)`.
+
+  PHP: pfb_emit_entry_reject_stats(string $path): void (pfblockerng.inc,
+  right after pfb_validate_log() — same ADR-48 feature area as Phases 1-2):
+    @file_get_contents -> FALSE/'' -> return (missing/unreadable, silent).
+    json_decode(..., TRUE) -> not is_array -> return (corrupt/non-array JSON,
+      silent — covers `[]` too: that decodes to an empty PHP array, the
+      foreach below just never iterates, same silent-no-lines outcome).
+    Per entry: skip if not array or 'feed' absent; else for each of
+      ('shape', 'wire_cap'), if (int)$entry[$bucket] > 0:
+      pfb_validate_log($feed, 'entries', $bucket, (string) $count).
+    Never `write_config()`/config-gateway related (pure log read+emit); no
+    PFBL-01/PHPCS scope hit (no exec/json_encode-write/dynamic-path-build).
+  Wired in pfb_update_unbound() right after the existing "loaded entries"
+  completion log (`$loaded_cnt = trim(...file_get_contents($pfb
+  ['unbound_py_count'])...)`), BEFORE `pfb_unbound_clear_work_files()` — the
+  exact slot the Phase-4 prompt named (its "~L7899"/"~L7904" anchors had
+  shifted to ~L7993/~L7998 on the current tree; verified by grep before
+  editing, per the phase prompt's own warning about pfblockerng.inc drift).
+
+RED -> GREEN EVIDENCE
+
+Red (pre-Phase-4 code — `git stash push -- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+src/usr/local/pkg/pfblockerng/pfblockerng.inc`; every new/changed test file left
+in place):
+
+  $ .venv/bin/python -m pytest tests/test_adr06_build_module.py \
+      -k "TestEntryRejectTally or TestSkipClassesTallyZero or TestNormaliseVerdictBucket" -q
+  ...
+  AttributeError: 'BuildResult' object has no attribute 'rejects'
+  (x3 — the two TestEntryRejectTally cases + TestSkipClassesTallyZero)
+  ... AttributeError: module 'pfb_unbound' has no attribute '_normalise_verdict'
+  (x7 — every TestNormaliseVerdictBucket case)
+  10 failed, 42 deselected
+
+  $ .venv/bin/python -m pytest tests/test_adr07_reconcile.py \
+      -k test_unqueryable_folded_key_is_dropped -q
+  TypeError: reconcile() got an unexpected keyword argument 'tally'
+  1 failed, 47 deselected
+
+  $ .venv/bin/python -m pytest tests/test_branch_coverage_gaps.py -k TestEmitRejectStats -q
+  ImportError: cannot import name 'dnsbl_emit_reject_stats' from 'pfb_unbound'
+  1 error during collection (whole module fails to import)
+
+  $ .venv/bin/python -m pytest tests/test_adr10_swap.py \
+      -k "test_emit_counts_true_also_reemits_reject_stats_when_path_set or \
+          test_emit_counts_true_skips_reject_stats_when_path_absent" -q
+  TypeError: Snapshot.__init__() got an unexpected keyword argument 'rejects'
+  2 failed, 13 deselected
+
+  $ vendor/bin/phpunit --filter PfbEmitEntryRejectStatsTest
+  Error: Call to undefined function pfb_emit_entry_reject_stats()
+  (x5 — every test method)
+  ERRORS! Tests: 5, Assertions: 28, Errors: 5.
+
+Green (post-Phase-4 code — `git stash pop`):
+
+  $ .venv/bin/python -m pytest -q
+  ======================= 2122 passed, 4 skipped in 36.09s =======================
+
+  $ vendor/bin/phpunit
+  OK, but some tests were skipped!
+  Tests: 2071, Assertions: 16206, Skipped: 4.   (same 4 pre-existing VFS-mtime skips)
+
+GATE SUMMARY
+
+- python -m pytest (full suite)                -> 2122 passed, 4 skipped
+                                                   (Phase 3 baseline 2105 + 4 +
+                                                   13 new this phase = 2122;
+                                                   the +13 unrelated to the +4
+                                                   comes from intervening devel
+                                                   commits that landed between
+                                                   Phase 3 and this phase, per
+                                                   `git fetch` — see PUSH below).
+- ruff check .                                 -> All checks passed!
+- ruff format --check .                        -> clean (2 files auto-reformatted
+                                                   during this phase — a
+                                                   too-long parse_abp() call and
+                                                   an f-string assert message —
+                                                   both re-verified clean after).
+- python -m mypy tests/                        -> Success: no issues found in
+                                                   66 source files (one fix
+                                                   needed: a `list.append(...)
+                                                   or True` spy lambda tripped
+                                                   mypy's func-returns-value
+                                                   check — replaced with a
+                                                   named function).
+- vendor/bin/phpunit (full suite)              -> OK, 2071 tests, 16206
+                                                   assertions, 4 pre-existing
+                                                   skips (same VFS-mtime skip).
+- php -l pfblockerng.inc                       -> "No syntax errors detected"
+                                                   (same pre-existing
+                                                   E_DEPRECATED notices,
+                                                   untouched by this phase).
+- vendor/bin/phpstan analyse --memory-limit=1G -> [OK] No errors.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean (no output).
+- python -m pytest tests/smoke/test_smoke_feeds.py --collect-only
+  --override-ini="addopts=" -> 40 tests collected (38 pre-existing + 2 new),
+  no import errors.
+- python -m pytest tests/smoke/test_smoke_feeds.py -k validate_log
+  --collect-only --override-ini="addopts=" -> 6/40 selected: the 4
+  Phase-3 tests + the 2 new Phase-4 tests (same filter substring covers
+  both phases — no new -k needed).
+
+PYTEST -K FILTER for the new smoke tests (orchestrator dispatch — same
+substring Phase 3's handoff already recorded, still unique and still covers
+exactly the ADR-48 tests, now 6 instead of 4):
+
+    python -m pytest tests/smoke/test_smoke_feeds.py -k validate_log -m smoke --override-ini="addopts="
+
+The two Phase-4-only tests, if narrower dispatch is wanted:
+
+    python -m pytest tests/smoke/test_smoke_feeds.py -k "entries_reject or healthy_abp_feed" -m smoke --override-ini="addopts="
+
+TEST COVERAGE — WHAT EACH NEW TEST PROVES
+
+Python (pytest):
+- tests/test_adr06_build_module.py::TestNormaliseVerdictBucket — 7 cases,
+  direct `_normalise_verdict()` bucket assertions: accept -> (domain, None);
+  no-dot / edge-hyphen / empty-label / bad-char -> 'shape'; over-label-cap /
+  over-total-cap -> 'wire_cap'. Branch coverage per CLAUDE.md (every reject
+  class from the pre-existing TestNormalise gets its bucket pinned here too).
+- tests/test_adr06_build_module.py::TestEntryRejectTally — an ABP feed with
+  EXACTLY 2 shape + 2 wire-cap rejectable lines among one healthy accepted
+  entry -> `result.rejects == {("RejFeed","RejGroup"): {"shape":2,
+  "wire_cap":2}}` (also asserts the accepted entry landed in data_db/zone_db,
+  not the tally); a plain-format feed with 1 shape reject -> proves the
+  NON-ABP path counts too, not just ABP.
+  NOTE ON A DELIBERATE DEVIATION: the phase prompt says "extend
+  test_adr06_build_module.py using its _run_build helpers" — `_run_build()`
+  there loads a FIXED golden-fixture manifest/config (tuned for the ADR-06
+  decision-oracle corpus), which gives no clean way to pin an EXACT N/M reject
+  count without either mutating that shared fixture (risking every other
+  golden-oracle test in the file) or auditing its full byte content by hand.
+  Instead this test builds its OWN small in-memory manifest + `lambda raw:
+  [...]` line_reader — the exact idiom `TestBuildBranches` in
+  test_branch_coverage_gaps.py already established for build()-level branch
+  tests. Still lands in test_adr06_build_module.py (the letter of the
+  instruction); only the "reuse _run_build" detail is deliberately not
+  followed, for the reason above.
+- tests/test_adr06_build_module.py::TestSkipClassesTallyZero — one ABP feed
+  built ENTIRELY from the deliberate-skip subset of
+  tests/test_adr07_parser.py::TestSkip's corpus (comment/control, cosmetic/
+  element-hiding, path/wildcard anchors, IP-valued anchors, plus a
+  `$badfilter` line on an unrelated domain) -> `result.rejects == {}`. The
+  corpus's OWN `test_skip_invalid_domain` cases are deliberately EXCLUDED —
+  those are genuine normalise() shape rejects, not skips, and reusing them
+  here would defeat the test's purpose. This is the direct §7
+  reject-criterion pin at the unit level.
+- tests/test_adr07_reconcile.py::TestRegexReduction
+  ::test_unqueryable_folded_key_is_dropped — extended (not a new test): the
+  existing fold-drop assertions are untouched; added a `tally: P.RejectTally
+  = {}` passed through `_reconcile(..., tally=tally)` (the shared helper
+  gained an optional `tally` param, default None, so every OTHER caller in
+  the file is unaffected) and `assert tally == {("", ""): {"shape": 0,
+  "wire_cap": 2}}` — both crafted regex lines fold to an over-cap key and
+  both tally, attributed to `("", "")` since `_production_rules()` doesn't
+  set feed/group in this file's helper (matches the existing corpus
+  convention there). Before Phase 4: no `tally` param existed at all, so this
+  drop counted NOWHERE (the exact gap #789 names).
+- tests/test_branch_coverage_gaps.py::TestEmitRejectStats — 5 cases:
+  nonzero-bucket rows -> JSON array with only the nonzero feed, exact counts;
+  empty tally -> literal `"[]"`; the atomic-write pattern leaves no stray
+  `.tmp` sibling on success; an unwritable path -> `False`, never raises; and
+  a SOURCE-grep pin (`pfb["pfb_py_reject_stats"] = "..."` in pfb_unbound.py)
+  that the assigned value has no leading `/` — the §3 chroot-relative risk.
+  init_standard() itself needs the live Unbound env and cannot run in this
+  suite (same reason every other init_standard()-touching assertion in this
+  repo is a source/behavioural proxy, never a real call), hence the grep.
+- tests/test_adr10_swap.py::TestEmitCountsToggle — 2 new cases (the existing
+  cases in this class/module are UNCHANGED): `emit_counts=True` + the pfb
+  dict carrying `pfb_py_reject_stats` -> `dnsbl_emit_reject_stats` is called
+  with the exact path + the fresh snapshot's rejects dict (monkeypatched spy);
+  contrast — the SAME toggle but the key ABSENT (asserted via `assert
+  "pfb_py_reject_stats" not in P.pfb` before acting, matching every other
+  pre-existing test in this module) -> the spy is NEVER called, no KeyError —
+  this is the direct proof the `.get()` guard exists and works, and it is why
+  every pre-existing rebuild_and_swap test in this repo (none of which seed
+  the new key) stayed green with zero edits.
+
+PHP (PHPUnit, sink-capture technique from P1/P2):
+- tests/php/PfbEmitEntryRejectStatsTest.php — 5 cases: both buckets nonzero
+  -> two distinct canonical lines in the sink; one bucket zero + one nonzero
+  -> only the nonzero bucket's line appears (proves the per-BUCKET gate, not
+  an all-or-nothing per-row decision); `[]` -> zero lines; absent file -> zero
+  lines, no error; corrupt JSON (`{not valid json`) -> zero lines, no error.
+  Red->green: `pfb_emit_entry_reject_stats` did not exist before this phase.
+
+Smoke (tests/smoke/test_smoke_feeds.py, same conventions as Phase 3 — delta-
+based, self-encapsulated, before-state asserted):
+- test_validate_log_entries_reject_line — a DnsblCase (updatednsbl reload,
+  NOT an IpCase) over an inline ABP body (`h.abp_feed(...)`, no committed
+  fixture needed — plain text, no FreeBSD-libmagic sensitivity) carrying one
+  healthy block + one no-dot host (`shape`) + one 64-char-label host
+  (`wire_cap`). Given: the healthy member resolves before listing + a
+  before-count for BOTH exact markers. When: Force Update. Then: the healthy
+  member is VIP-blocked (proves the feed genuinely loaded/parsed, not merely
+  "didn't crash") AND both
+  `pfb_validate: REJECT feed=adr48ent stage=entries reason=shape detected=1`
+  and `... reason=wire_cap detected=1` appear as NEW lines.
+- test_validate_log_healthy_abp_feed_no_entries_reject — the MUST-ACCOMPANY
+  counterpart: an ABP feed built from deliberate skip lines (comment,
+  cosmetic, path anchor, IP-valued anchor, `$badfilter` on an unrelated
+  domain) plus one healthy block. Given/When as above. Then: the healthy
+  member is VIP-blocked AND the `pfb_validate: REJECT ... stage=entries`
+  marker count for this feed's header is UNCHANGED (delta, not a bare global
+  zero) — the live-box mirror of TestSkipClassesTallyZero.
+  This is also the "extend/confirm the Phase-3 healthy-feed guard covers a
+  healthy ABP feed" requirement: the EXISTING
+  test_validate_log_healthy_feed_no_spurious_reject is an IpCase (plain-IP
+  feed) and was left untouched (it correctly proves the IP-side gates never
+  spam), so a NEW ABP-specific test was added rather than repurposing it —
+  repurposing would have either broken its existing IP-side intent or
+  silently stopped covering IP feeds.
+
+SELF-REVIEW (done before this handoff, walked against the phase prompt's
+checklist item by item)
+
+- normalise() public contract UNTOUCHED: it is a 2-line wrapper over
+  _normalise_verdict(); the entire pre-existing TestNormalise class (7 cases,
+  untouched) stays green with no edits — confirmed via the full 2122-pass run.
+- tally rides an EXPLICIT optional param everywhere (parse_abp(tally=None),
+  reconcile(tally=None)) — NO module global. tally=None reproduces the exact
+  pre-Phase-4 return value at every call site; the pre-existing TestPurity
+  class (test_adr07_parser.py) stays green untouched.
+- ONLY the two buckets exist: 'shape' and 'wire_cap' are the only keys ever
+  written by _tally_reject/_normalise_verdict/dnsbl_emit_reject_stats; grepped
+  the diff to confirm no third bucket name appears anywhere.
+- Every deliberate skip class tallies zero — ran
+  TestSkipClassesTallyZero::test_skip_only_feed_tallies_nothing standalone
+  and read its output (passed, `result.rejects == {}`), plus the live-box
+  mirror (test_validate_log_healthy_abp_feed_no_entries_reject).
+- Artifact atomic (temp+os.replace, mirrors _reload_write_applied) +
+  chroot-relative (pfb["pfb_py_reject_stats"] = "pfb_py_reject_stats.json",
+  no leading '/', pinned by a source-grep test since init_standard() can't
+  run off-appliance) + "[]"-on-empty (tested).
+- PHP emits ONE line per NONZERO bucket (not per row) and stays silent on
+  absent/corrupt/empty — all 5 branches pinned in
+  PfbEmitEntryRejectStatsTest.php, all red->green proven.
+- Smoke deltas have asserted before-states in both new tests (the healthy
+  member's pre-listing resolution AND the marker count(s) captured before
+  each case's own Force Update, inside its own CaseContext-adjacent block —
+  never a cross-test-order-dependent baseline).
+- Gate DECISIONS unchanged: no reject/accept boundary moved — every site
+  still returns exactly what it returned before (None on the same inputs,
+  the same Rule on the same inputs, the same fold-drop `continue`); only a
+  side-channel COUNT was added. ReconcileResult.pruned/reduced/
+  skipped_badfilter semantics are untouched (confirmed by diff — no line
+  inside Step 1's $badfilter-prune block was touched).
+- git diff --stat matches the EXPECTED RESULT exactly: pfb_unbound.py,
+  pfblockerng.inc, and tests only (see SCOPE above) — no fixture files added,
+  no unrelated reformatting, no debug/print/log lines left in.
+
+COMMIT
+  Single commit — "pfb_unbound: tally per-entry rejects, emit stage=entries
+  via PHP (ADR-48 P4)" (code + this handoff together; see `git log -1` on the
+  pushed branch tip for its exact hash — this handoff is part of that same
+  commit's tree, so embedding its own final hash here is self-referential,
+  same caveat Phase 2's handoff noted, restated because amending this file to
+  fix the hash would only shift it again). Parent is Phase 3's commit,
+  rebased onto the fresh origin/devel below — the rebase replayed Phases 1-3
+  too, so their hashes moved: Phase 1 499cd8c0 -> 6bc7a274, Phase 2
+  a2e140a5 -> 8c455771, Phase 3 cb38b521 -> 14233dfb (content unchanged, only
+  the parent commit differs — same pattern Phase 3's own handoff documented
+  for its own rebase).
+
+PUSH
+  Before this phase's commit, `git fetch origin` showed `origin/devel` had
+  advanced two commits past this branch's merge-base (803f951f, 94b1b5bf —
+  unrelated install-time-config-migration smoke coverage). After committing,
+  this branch was rebased onto the fresh origin/devel (clean linear replay,
+  no conflicts — the intervening commits touch unrelated files) and every
+  gate re-run green post-rebase (see GATE SUMMARY). Pushed to
+  adr/48-download-validation-logging.
+
+NOTE FOR THE ORCHESTRATOR — ADR ACCEPTANCE
+
+Phase 4 is the LAST phase (per ADR.md §6). Its own acceptance gate (ADR.md
+§7): `python -m pytest` green including the tally oracle (done, see GATE
+SUMMARY); the live-VM smoke asserting the `stage=entries` line for the
+rejectable fixture feed AND its absence for the healthy one, green on CE +
+Plus (NOT run in this phase — dispatch-only, per the ADR-04 pattern every
+prior phase followed). Suggested dispatch once this branch is pushed:
+
+    gh workflow run smoke.yml -f scope=full -f pytest_filter="validate_log"
+
+(covers both the Phase-3 stage=mime/inner/structural lines and this phase's
+stage=entries lines in one fan-out). Phases 1-3's own acceptance criterion
+(ADR.md §7's first bullet: "a forced MIME / inner rejection emits the
+canonical line... no healthy feed logs a spurious REJECT") was already noted
+by Phase 3 as satisfiable independently of Phase 4 — once BOTH fan-outs are
+green (CE + Plus), the whole ADR (all 4 phases) can flip to Accepted per the
+CLAUDE.md "ADR acceptance — automated tests, not a manual sign-off" rule; a
+PR has not yet been opened (this is Phase 4 of 4 on the same
+worktree/branch, direct push per the established multi-phase convention) —
+opening the PR and running /pr-merge-flow is the orchestrator's next step
+once smoke is green.

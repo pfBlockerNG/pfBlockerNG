@@ -1,0 +1,83 @@
+================================================================================
+PHASE 1 PROMPT — Inventory the IDN feature + build IDN corpus + measure FP/TP (de-risk)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_08_Homoglyph_Protection/ADR.md   (read §1 Context + §2 tiers + §7 reject)
+================================================================================
+
+ROLE
+You are on `adr/08` (off `next`), Phase 1 of ADR-08. INVESTIGATION + MEASUREMENT ONLY:
+write down the contract to preserve and de-risk the one real risk (false positives on
+legitimate IDNs) BEFORE any code moves. No production code change. Work inline on `adr/08`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The premise (mixing confusable scripts = malicious) is VERIFIED against ICANN v4.1 / EURid /
+UTS#39 (ADR §1). What is NOT yet proven is that our detector has ~zero false positives on
+legitimate IDNs — especially Latin+CJK (Japanese/Korean/Chinese), which UTS#39 deems
+LEGITIMATE and a naive "any mix => block" would wrongly block. This phase measures FP/TP and
+finalises the exact confusable-script rule, or records a pivot (ADR §7).
+
+REQUIRED READING
+- .ADRs/ADR_08_Homoglyph_Protection/ADR.md (§1 facts, §2 decision table + tiers, §7).
+- The UTS#39 / ICANN v4.1 / EURid references in the ADR header.
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py: is_idn_domain ~755; the IDN block branch in
+  evaluate_domain ~2307-2310; python_idn load ~417/464.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: python_idn config write ~2540-2599;
+  DNSBL_IDN alias/count ~8305-8308; idn_to_ascii uses (~1131/1136/8133).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php: pfb_idn toggle + help ~2388-2393.
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php: idn_to_utf8 display ~2234.
+- CLAUDE.md (stdlib only inside Unbound; no live Unbound in CI).
+
+ACTION PLAN
+1. INVENTORY (write RESULTS/01_Results.txt as the contract):
+   - The existing IDN feature end-to-end (toggle -> python_idn -> is_idn_domain -> block);
+     the Off/All-IDN behaviour the mode selector must preserve byte-for-byte.
+   - Where DNSBL_IDN counts/alias come from; how alerts decode via idn_to_utf8.
+   - The minimal config change to turn pfb_idn into Off | All-IDN | Confusable, incl. the
+     'on' -> All-IDN migration.
+2. CORPUS (tests/fixtures/adr08_corpus/): assemble + LABEL real IDNs:
+   - LEGIT: Latin-accented (münchen, café), single-script Cyrillic, single-script Greek,
+     **Japanese (Han+Hiragana+Katakana), Korean (Han+Hangul), Chinese (Han+Bopomofo)**,
+     Arabic, Thai, Hebrew, Devanagari, digits/hyphen mixes, AND a legit **ASCII/Latin SLD
+     under an IDN ccTLD** (example.рф, site.中国 — these MUST be OK under per-label analysis).
+   - HOMOGRAPH: Latin+Cyrillic (xn--pple-43d), Latin+Greek, **Cyrillic+Greek**, a malicious
+     **SUBDOMAIN label** (раypal.example.com), and known PoC homographs. Store as xn-- (A-label)
+     + the intended target, with the expected severity.
+3. FINALISE THE RULE: the confusable-script set {Latin, Cyrillic, Greek, + DECIDE
+   Cherokee/Armenian/Coptic} and the malicious rule = **>=2 of them co-occur in ONE label
+   (incl. Cyrillic+Greek, not only Latin-anchored)**; the **PER-LABEL granularity — analyze
+   each label independently, NEVER union scripts across the dot** (else example.рф / site.中国
+   false-positive as Latin+Cyrillic/Han); the legit allow-set = UTS#39 Highly Restrictive
+   (single script OR Latin+Jpan/Kore/Hanb); Common/Inherited transparent. DECIDE Script vs
+   Script_Extensions fidelity (note where they differ for our cases).
+4. MEASURE: run the rule over the corpus; report FP (false positives — legit IDNs wrongly
+   flagged) on the LEGIT set (target ~0; **CJK and the IDN-ccTLD cases MUST be 0**) and TP
+   (true positives — homographs caught) on the HOMOGRAPH set. Sanity-check the per-xn--query
+   analyzer cost is negligible. Confirm stdlib punycode decode (label[4:].encode('ascii').
+   decode('punycode')) on every corpus label + edge cases (invalid/empty/overlong -> caught,
+   not raised). Use the raw 'punycode' codec, NOT 'idna'.
+5. GATE: GO if malicious-tier FP ~0 on legit (esp. CJK) and TP high. Miss => narrow the
+   confusable set / move borderline scripts to the suspicious(alert) tier / or reject. Record.
+
+CONSTRAINTS
+- NO production code change (inventory + fixtures + a throwaway measurement script only).
+- stdlib only; commit a representative LABELLED corpus + the FP/TP numbers, not giant dumps.
+
+VERIFICATION
+- python -m pytest → still green (no prod code touched). ruff clean on any new .py.
+- FP/TP numbers + the finalised rule + GO/pivot are in RESULTS/01_Results.txt.
+
+EXPECTED RESULT
+The contract to preserve, a labelled legit+homograph IDN corpus, the finalised confusable-set
+rule (incl. Cyrillic+Greek) + Script-vs-Script_Extensions decision, the FP/TP measurement, and
+a recorded GO (or pivot).
+
+COMMIT (single)
+    pfblockerng: ADR-08 P1 — inventory IDN feature + IDN corpus + FP/TP measurement (de-risk)
+Push directly to `adr/08`; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_08_Homoglyph_Protection/RESULTS/01_Results.txt` (plain .txt)
+For Phase 2. Include: the contract (Off/All-IDN behaviour + migration); the corpus location +
+labels; the finalised confusable-script set + malicious rule (incl. Cyrillic+Greek) + the
+legit allow-set; Script-vs-Script_Extensions decision; the punycode-decode confirmation + edge
+handling; the FP/TP numbers + the kill-threshold + GO/pivot; and the go-ahead to write the oracle.

@@ -1,0 +1,1675 @@
+name: Release
+
+# Dispatch-only release pipeline.  Triggered via workflow_dispatch with a `tag`
+# input; it builds, verifies, tags and DRAFTS a release — and stops there.
+#
+# BUILD + VERIFY BEFORE ANYTHING IS TAGGED (issue #1855).  Runs 30419586338
+# (two consecutive prerelease runs) each pushed the tag, created
+# the draft Release and attached the .pkg assets BEFORE the verification suites ran
+# — both then failed verification and left a tag pointing at unverified code plus a
+# draft that had to be deleted unpublished.  The order is now:
+#
+#   1. prepare-release (real only): validate the tag + channel, refuse a PUBLISHED
+#      release, assert CI is green on the branch tip, PIN that tip as the release
+#      commit and mint the annotated tag on it LOCALLY.  Nothing is pushed —
+#      not the tag, not the branch.
+#
+#   2. read-matrix / resolve-stamp / build-pkgs-portable / ui-suite / smoke-suite:
+#      build every artifact FROM THE PINNED SHA as workflow artifacts, then verify
+#      them — against that same source tree (issue #1859).  Whether the live suites
+#      run at all is the `run_suites` decision (the 3.3 bridge never runs them;
+#      otherwise alpha/beta skip, rc + stable run, and `force_suites` forces them
+#      on) — one code path whose verification phase is empty when suites are skipped.
+#      Which matrix rows may VETO is the released-status predicate (scripts/resolve-legs.sh, via
+#      `release_gate: true`).
+#
+#   3. tag-release (real only): the FIRST irreversible step.  Pushes the tag on the
+#      PINNED SHA — even if the channel branch moved during verification, the tag
+#      lands on exactly the commit the artifacts were built from.  (A tag pushed via
+#      GITHUB_TOKEN does NOT re-trigger another workflow run, so no recursion.)
+#      Gated on the build AND, when they ran, both suites.
+#
+#   4. release / attach-pkgs / draft-healthcheck: create the Release as a DRAFT with
+#      a deterministic placeholder body, attach the .pkg assets, and assert the draft
+#      is complete.  Real publish only (dry_run == 'false'), each downstream of the tag.
+#
+# THE DRAFT IS THE END STATE.  This workflow never publishes.  Release notes are not
+# files in this repository — a committed changelog forces a changelog commit, which
+# forces a push to the channel branch and a re-generation whenever devel moves, and
+# the released source tree should not carry its own changelog.  A human (or Claude,
+# via /release-with-changelog) authors the notes and the final title onto the draft
+# and publishes it; that publish fires release-published.yml, which republishes the
+# self-hosted pkg repo and bumps the port on our FreeBSD-ports fork.
+#
+# A failed run therefore leaves NOTHING behind: no tag, no draft, and nothing pushed
+# to any branch.  Re-dispatch the same tag once the cause is fixed.
+#
+# dry_run=true (default): steps 1-4 of the ORDER above minus every mutation — pin,
+# build and verify off the dispatch ref, then stop.  No tag, no Release, no push.
+# dry_run=false: the real cut — prepare-release runs first, then build + verify +
+# tag + draft.
+#
+# Tag scheme (single source of truth: scripts/release-version.sh):
+#   * vX.Y.Z       -> STABLE release
+#   * vX.Y.0.aN|.bN|.rN -> EDGE release
+#   * vX.Y.Z.aN|.bN|.rN with Z != 0 -> TESTING release
+# GH_TAGNAME is `v${PORTVERSION}` in the port Makefile, so it self-resolves to the
+# matching tag and nothing here sets it.
+# Self-hosted distribution (ADR-17): no upstream pfsense/FreeBSD-ports PR.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v4.0.0.a1 (REQUIRED)."
+        required: true
+      channel:
+        description: "Release channel (must be explicit; never inferred from tag or branch)."
+        required: true
+        type: choice
+        options: [stable, testing, edge]
+      source:
+        description: "Exact source release line release/X.Y, e.g. release/4.0 (REQUIRED)."
+        required: true
+        type: string
+      dry_run:
+        description: "true (default) = validate + build, publish NOTHING. false = cut the real release."
+        required: false
+        default: true
+        type: boolean
+
+      force_suites:
+        description: "Run live smoke/UI for a supported alpha/beta. The 3.3 bridge has no live corpus and never runs them; other rc/stable releases always do."
+        required: false
+        default: false
+        type: boolean
+
+      retag:
+        description: "Re-cut an already-pushed tag on the CURRENT channel-branch tip: delete the existing tag (and an assetless draft Release for it) before pinning. For a run that crashed after pushing its tag while the branch moved on. REFUSED for a published Release (cut the next .N) and for a draft that already has assets (finish that draft instead)."
+        required: false
+        default: false
+        type: boolean
+
+# Least-privilege default; jobs that need more elevate explicitly below
+# (release: contents:write to create the draft; tag-release: contents:write to push
+# the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
+# The pkg-repo republish and the FreeBSD-ports bump are not here at all — they hang
+# off the real `release: published` event in release-published.yml.
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: release-${{ github.event.inputs.dry_run == 'true' && format('dry-run-{0}', github.run_id) || github.event.inputs.channel }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  # ── 0. Prepare release (real publish only) ───────────────────────────────
+  # PINS the release SHA and mints the annotated tag LOCALLY — it commits nothing,
+  # pushes nothing (issue #1855: the tag reaches GitHub in `tag-release`, after
+  # build + verify; release notes are authored onto the Release, never committed).
+  # Skipped entirely on dry_run=true — in that mode every downstream job falls
+  # back to the dispatch ref HEAD instead of the pinned SHA.
+  prepare-release:
+    name: Pin the release commit
+    runs-on: ubuntu-latest
+    # Only 'false' takes the real-publish path. NOT the whole guard: GitHub compares
+    # strings case-insensitively, so 'FALSE' satisfies this too and the first step below
+    # re-checks case-sensitively before anything is pushed.
+    if: ${{ github.event.inputs.dry_run == 'false' }}
+    permissions:
+      packages: read
+      # write ONLY for the opt-in `retag` deletion below — the single place this whole
+      # pipeline removes anything from GitHub. GitHub scopes permissions per JOB, not
+      # per step, so this cannot be narrowed further without splitting the job; the
+      # deletion goes through `gh` (GITHUB_TOKEN), never through the checkout's
+      # credentials, which stay unpersisted. Nothing else here writes: the tag is
+      # minted locally and pushed by tag-release.
+      contents: write  # ONLY for the retag deletion below
+      checks: read     # gh api /commits/<sha>/check-runs to assert CI green
+
+    # Only what a downstream job actually reads. source/channel/portversion are resolved
+    # in the `resolve` step and used inside this job; they are NOT re-exported, because
+    # nothing consumes them — read-matrix classifies the tag itself, and the `release` job
+    # re-derives its own. An output nobody reads states a contract that does not exist.
+    outputs:
+      tag:         ${{ steps.resolve.outputs.tag }}
+      # The PINNED release commit: the channel-branch tip at dispatch. Every downstream
+      # build/verify job checks THIS out, and tag-release pushes the tag on it.
+      sha:         ${{ steps.pin.outputs.sha }}
+
+    steps:
+      # The job-level `if:` admits any case-variant of 'false'; re-check case-sensitively
+      # before any of the release gates run, so a 'FALSE' dispatch dies here rather than
+      # part-way down the pipeline.
+      - name: Reject a dry_run that is not exactly true or false
+        env:
+          INPUT_DRY: ${{ github.event.inputs.dry_run }}
+        run: |
+          case "$INPUT_DRY" in
+            true|false) ;;
+            *) echo "::error::dry_run input must be exactly 'true' or 'false' (got: '${INPUT_DRY}')"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # full history: tag ancestry + log range
+          persist-credentials: false
+
+      - name: Check out the release helpers (TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: this job holds contents:write AND a GH_TOKEN, and it executes
+          # release-version.sh + release-ci-gate.sh AS SHELL. The next step resets the
+          # root checkout to the channel-branch tip, so from there on the root tree is
+          # the tree this run is merely RELEASING — for a stable cut dispatched from
+          # devel, that is main's tree — i.e. what the run is verifying, not something
+          # already trusted. github.workflow_sha is the trusted handle (a release
+          # dispatch is only allowed from the default branch). Do not "simplify" this to
+          # the channel branch, the release tag or the pinned SHA.
+          #
+          # The rule is mechanical, not per-call: "this one runs before the reset, so it
+          # is fine" is exactly the reasoning that rotted here.
+          #
+          # ORDER: this MUST stay after the root checkout above. That one targets the
+          # workspace ROOT, and actions/checkout deletes the contents of its destination
+          # — checking this out first would wipe it again.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
+      - name: Resolve tag + explicit channel + source line
+        id: resolve
+        # Classify the tag via the single source of truth (scripts/release-version.sh)
+        # and map the channel to its canonical branch.  Re-assert the branch<->channel
+        # pairing with a second release-version.sh call (must exit 0) before proceeding.
+        env:
+          TAG:     ${{ github.event.inputs.tag }}
+          CHANNEL: ${{ github.event.inputs.channel }}
+          SOURCE:  ${{ github.event.inputs.source }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
+          [ -n "$CHANNEL" ] || { echo "::error::channel input is required"; exit 1; }
+          [ -n "$SOURCE" ] || { echo "::error::source input is required"; exit 1; }
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          if [ "$release_line" != "$SOURCE" ]; then
+            echo "::error::tag ${TAG} does not belong to source ${SOURCE}"
+            exit 1
+          fi
+          {
+            echo "tag=${TAG}"
+            echo "source=${SOURCE}"
+            echo "channel=${release_channel}"
+            echo "portversion=${portversion}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag ${TAG}: channel=${release_channel} source=${SOURCE} portversion=${portversion}"
+
+      - name: Check out the exact source line
+        # Operate on the selected release line, not the dispatch ref.  fetch --tags so
+        # ancestry checks and the tag-exists guard below work correctly.
+        env:
+          SOURCE: ${{ steps.resolve.outputs.source }}
+        run: |
+          git fetch origin "$SOURCE" --tags
+          git checkout "$SOURCE"
+          git reset --hard "origin/$SOURCE"
+
+      - name: Delete the existing tag before pinning (retag, opt-in)
+        # THE ONE PLACE THIS PIPELINE DELETES ANYTHING FROM GITHUB. Opt-in per dispatch,
+        # because the alternative is guessing intent from state: the pin is the
+        # channel-branch tip, so if the branch moved after a run pushed its tag,
+        # re-dispatching the same tag pins a NEW commit and then rejects its own
+        # already-pushed tag as stale. `retag: true` says "start clean on the current
+        # tip" — and is obeyed only when that is provably safe:
+        #
+        #   published Release        -> REFUSE. Immutable; retagging cannot rescue it.
+        #                               Cut the next .N.
+        #   draft WITH assets        -> REFUSE. `release` attaches the source archive
+        #                               BEFORE attach-pkgs adds the .pkgs, so assets do
+        #                               NOT prove a finished cut — a crash in between
+        #                               leaves a draft with an archive and no .pkg at
+        #                               all. Since retag cannot tell those apart it
+        #                               never deletes them, and the refusal offers both
+        #                               routes: re-dispatch with retag=false to finish
+        #                               that draft, or delete it by hand to start over.
+        #   draft WITHOUT assets     -> delete the draft AND the tag. Deleting only the
+        #                               tag would orphan the draft and this run would
+        #                               then create a SECOND draft for the same tag.
+        #   no Release at all        -> delete the tag.
+        #   no tag at all            -> nothing to do.
+        #
+        # The local ref goes too: the pin step below reads refs/tags/<tag> from this
+        # same checkout, so a surviving local ref would resurrect the stale-tag refusal.
+        if: ${{ github.event.inputs.retag == 'true' }}
+        env:
+          TAG:      ${{ steps.resolve.outputs.tag }}
+          REPO:     ${{ github.repository }}
+          DRY_RUN:  ${{ github.event.inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
+            echo "retag: no ${TAG} tag exists — nothing to delete."
+            exit 0
+          fi
+
+          META=$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets 2>/dev/null || echo '')
+          if [ -z "$META" ]; then
+            STATE="none"
+          elif [ "$(printf '%s' "$META" | jq -r '.isDraft')" != "true" ]; then
+            STATE="published"
+          elif [ "$(printf '%s' "$META" | jq '.assets | length')" -gt 0 ]; then
+            STATE="draft-with-assets"
+          else
+            STATE="draft-empty"
+          fi
+
+          case "$STATE" in
+            published)
+              echo "::error::retag refused: ${TAG} already has a PUBLISHED Release. A published release is immutable, so retagging cannot rescue it — cut the next .N instead."
+              exit 1 ;;
+            draft-with-assets)
+              echo "::error::retag refused: ${TAG} has a DRAFT Release with assets already attached, and retag cannot tell a finished cut from the debris of a run that died mid-attach — so it never deletes them. To FINISH that draft, re-dispatch the same tag with retag=false (this run reuses the tag and updates the draft in place; it needs the channel branch to still be at the tagged commit). To START OVER on the current tip, delete that draft by hand first, then re-dispatch with retag=true."
+              exit 1 ;;
+          esac
+
+          # Fail SAFE on anything that is not exactly 'false': a dry run deletes nothing.
+          # UNREACHABLE today, and deliberately: the whole job is real-publish only
+          # (`if: dry_run == 'false'`), so a dry run is skipped wholesale and never
+          # reports what it "would delete" — nothing here executes at all. Kept purely as
+          # defence in depth for the day that job-level gate is relaxed; anything that is
+          # not exactly 'false' takes the no-delete path, so the worst failure mode is
+          # "refuses to delete", never "deletes anyway".
+          if [ "$DRY_RUN" != "false" ]; then
+            echo "retag (dry run): would delete tag ${TAG} (release state: ${STATE}) — deleting nothing."
+            exit 0
+          fi
+
+          if [ "$STATE" = "draft-empty" ]; then
+            gh release delete "$TAG" --repo "$REPO" --yes
+            echo "Deleted the assetless draft Release for ${TAG}."
+          fi
+          gh api -X DELETE "repos/${REPO}/git/refs/tags/${TAG}" > /dev/null
+          git tag -d "$TAG" > /dev/null
+          echo "Deleted tag ${TAG} — this run re-cuts it on the freshly pinned commit."
+
+      - name: Refuse a published release (early, before anything is built)
+        id: tag_state
+        # A PUBLISHED release is immutable + final → refuse here, before the build
+        # burns runner time (bump the version instead). A DRAFT, or no release at
+        # all, is resumable: `release` updates the draft in place.
+        #
+        # issue #1855 narrowed this step: it no longer probes whether the TAG exists.
+        # With verification ahead of tagging, a pre-existing tag can only come from a
+        # prior run that crashed AFTER tag-release — a window tag-release itself now
+        # owns (it re-checks at tag time, against the SHA this run actually verified).
+        env:
+          TAG:      ${{ steps.resolve.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          STATE=$(gh release view "$TAG" --repo "$REPO" --json isDraft \
+            --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo "none")
+          if [ "$STATE" = "published" ]; then
+            echo "::error::a PUBLISHED release for ${TAG} already exists — it is immutable; bump the version"
+            exit 1
+          fi
+          echo "Release state for ${TAG}: ${STATE} — proceeding (resume-safe)."
+
+      - name: Require CI green on the branch tip
+        # The tag will point at the current HEAD of the channel branch; assert that
+        # CI is green for the code being released. The walk-back semantics + the
+        # issue #1077 pagination/pending fixes live in scripts/release-ci-gate.sh,
+        # pinned by tests/shell/release_ci_gate_spec.sh.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO:     ${{ github.repository }}
+        run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-ci-gate.sh"
+
+      - name: Pin the release SHA + mint the tag locally
+        id: pin
+        # PIN the channel-branch tip as THE release commit, then create the annotated
+        # tag on it LOCALLY. Nothing is pushed here -- not the tag, and (release notes
+        # are no longer files in this repo) not the branch either.
+        #
+        # Minting the tag now is what makes a conflicting tag a five-second failure
+        # instead of an hour-long one: the checkout step above fetched --tags, so a tag
+        # that already exists on the remote is present here. It is only acceptable when
+        # it already points at THIS pinned SHA -- a prior run that crashed after
+        # pushing the tag. Anything else means the artifacts this run is about to build
+        # would not match the tag, so refuse before the build burns runner time.
+        #
+        # Everything downstream -- the stamp, every .pkg, both live suites' own source
+        # checkout (issue #1859), and finally the pushed tag -- is keyed to this SHA,
+        # so a commit landing on the channel branch mid-verification can never end up
+        # inside the release.
+        env:
+          TAG:     ${{ steps.resolve.outputs.tag }}
+          CHANNEL: ${{ steps.resolve.outputs.channel }}
+        run: |
+          set -eu
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          SHA=$(git rev-parse HEAD)
+          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
+            TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+            if [ "$TYPE" != "tag" ]; then
+              echo "::error::tag ${TAG} already exists but is not an annotated tag"
+              exit 1
+            fi
+            EXISTING=$(git rev-parse "refs/tags/${TAG}^{commit}")
+            if [ "$EXISTING" != "$SHA" ]; then
+              echo "::error::tag ${TAG} already exists at ${EXISTING}, but this release pins ${SHA} — delete the stale (unpublished) tag or bump the version"
+              exit 1
+            fi
+            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
+            if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
+              echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
+              exit 1
+            fi
+            echo "Tag ${TAG} already exists at ${SHA} — resuming a run that crashed after pushing it."
+          else
+            # Compatibility oracle: git tag -a "$TAG" -m "$TAG" "$SHA"
+            MESSAGE=$(mktemp)
+            printf '%s\n\n' "$TAG" | git interpret-trailers \
+              --trailer "pfBlockerNG-Release-Channel: ${CHANNEL}" > "$MESSAGE"
+            git tag -a "$TAG" -F "$MESSAGE" "$SHA"
+            rm -f "$MESSAGE"
+            echo "Minted ${TAG} locally at ${SHA} — not pushed."
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Pinned release commit: ${SHA}"
+
+  # ── 1b. UI suite (ADR-14, D1) ────────────────────────────────────────────
+  # Run the FULL tiered Web-UI suite on the live pfSense VM against the EXACT
+  # per-leg .pkg artifacts build-pkgs-portable just built (pkg_artifact_prefix:
+  # pfBlockerNG-relpkg, issue #1662) — not a fresh build of its own, so the
+  # release gates on the SAME bits that get published. `tier: all` expands the
+  # reusable workflow's matrix to one GH job per (tier × version) leg — render
+  # / functional / browser × each image — and `fail-fast: false` keeps every
+  # leg independent. Because each leg is its own job, GitHub's "Re-run failed
+  # jobs" re-runs ONLY a flaky leg; nothing downstream advances until all legs
+  # are green again, so a not-our-fault browser flake costs a single-leg
+  # re-run — and since issue #1855 it costs it BEFORE anything is tagged.
+  #
+  # This is a SEPARATE gate ALONGSIDE the CI check asserted by prepare-release
+  # (which still asserts the "All tests passed" branch-tip check, covering the
+  # Tier-A PR fold). It does not weaken that gate — tag-release `needs:` BOTH
+  # this AND smoke-suite (issue #1855: the tag itself, and therefore the draft,
+  # the assets and everything after them, wait on every leg).
+  #
+  # Whether this job runs at all is read-matrix's `run_suites` decision: an
+  # alpha/beta release skips the live suites (Part 3), so this leg is simply
+  # absent rather than replaced by a parallel pipeline.
+  #
+  # §7 browser DEMOTE/DROP — one-line switch: the browser leg is included here as
+  # a separate re-runnable leg (the cheap tiers gate firmly; browser adds the
+  # JS/screenshot coverage). Per ADR §7, if the first CI evidence misses the
+  # reliability threshold (≥ 4/5 clean at ≤ ~25 min/leg), demote it out of the
+  # release gate by dropping `browser` from DEFAULT_SCHEDULE_TIERS in ui-tests.yml
+  # AND running this with `tier: functional` instead of `tier: all` here — the
+  # render + functional legs keep gating the release, the browser leg goes
+  # dispatch-only. Tier A + B-HTTP retain full standalone value.
+  #
+  # Deliberately carries no reference to the dispatch's dry-run input (kept OUT
+  # of the mutation-jobs gate set): this runs in BOTH dry-run and real modes,
+  # same as build-pkgs-portable already builds in dry-run to validate the .pkg
+  # — dry-run parity for the live gates comes free.
+  ui-suite:
+    name: UI fan-out (all CI legs, live pfSense VM)
+    needs: [prepare-release, read-matrix, build-pkgs-portable]
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
+    uses: ./.github/workflows/ui-tests.yml
+    with:
+      tier: all
+      # Explicit (issue #906): a workflow_call callee sees the CALLER's event,
+      # so without this the scope ladder resolves `impacted` — min-CE leg only —
+      # not the full pre-release fan-out this job exists for.
+      scope: full
+      # Consume the EXACT per-leg artifacts build-pkgs-portable just built
+      # (issue #1662) instead of building its own.
+      pkg_artifact_prefix: pfBlockerNG-relpkg
+      # issue #1859: verify the SOURCE the release ships, not the branch tip. Without
+      # this the legs inherited the dispatch ref, so a commit landing during an
+      # hour-long live fan-out meant the release was verified by test code that is not
+      # in the release. Blank in dry-run (prepare-release skipped) => caller's ref.
+      checkout_ref: ${{ needs.prepare-release.outputs.sha }}
+      # issue #1855 Part 2: only a row whose ci-metadata `status` is a RELEASED
+      # pfSense version (active, or its legacy alias GA) may veto a release. Every
+      # other value — beta today, anything added later, an absent/unrecognized one —
+      # still runs and still reports, but cannot fail this call. Each demotion is
+      # announced loudly by scripts/resolve-legs.sh, naming the row and its status.
+      release_gate: true
+    secrets: inherit
+
+  # ── 1b2. Smoke suite (ADR-14 D1 sibling) ─────────────────────────────────
+  # Same live-gate contract as ui-suite, one leg per ci:true image, over the
+  # SAME per-leg .pkg artifacts (pkg_artifact_prefix: pfBlockerNG-relpkg, issue
+  # #1662). Carries no dry-run-input reference either — runs in both modes,
+  # same as ui-suite.
+  smoke-suite:
+    name: Smoke fan-out (all CI legs, live pfSense VM)
+    needs: [prepare-release, read-matrix, build-pkgs-portable]
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.read-matrix.outputs.run_suites == 'true' }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      scope: full
+      pkg_artifact_prefix: pfBlockerNG-relpkg
+      # Same pinned-source rule as ui-suite above (issue #1859).
+      checkout_ref: ${{ needs.prepare-release.outputs.sha }}
+      # Same released-status veto rule as ui-suite above (issue #1855 Part 2).
+      release_gate: true
+    secrets: inherit
+
+  # ── 1c. Read version matrix ──────────────────────────────────────────────
+  # Read the supported-versions matrix from ci-metadata. read-version-matrix.sh
+  # (issue #1806) still emits its deduped BUILD matrix for CI consumers. Release
+  # builds additionally consume the reader's normalized release_matrix: one
+  # build-role row per Variant/version, including rows sharing a FreeBSD major.
+  # Runs after prepare-release (or in parallel with its skip on dry-run);
+  # build-pkgs-portable needs both.
+  read-matrix:
+    name: Read version matrix
+    runs-on: ubuntu-latest
+    needs: [prepare-release]
+    # Run in both modes: dry-run (prepare-release skipped) AND real (prepare-release succeeded).
+    # If prepare-release failed for any reason, do NOT build or publish.
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
+    outputs:
+      release_matrix: ${{ steps.matrices.outputs.release_matrix }}
+      route_matrix: ${{ steps.pins.outputs.route_matrix }}
+      ci_metadata_sha: ${{ steps.pins.outputs.ci_metadata_sha }}
+      ports_sha: ${{ steps.pins.outputs.ports_sha }}
+      dependency_builder: ${{ steps.pins.outputs.dependency_builder }}
+      dependency_packages: ${{ steps.pins.outputs.dependency_packages }}
+      pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
+      portversion:  ${{ steps.channel.outputs.portversion }}
+      release_stage: ${{ steps.channel.outputs.release_stage }}
+      source_sha: ${{ steps.destinations.outputs.source_sha }}
+      # issue #1855 Part 3: 'true' | 'false' — whether the live smoke/UI suites run
+      # (and therefore gate) for THIS tag. Consumed by ui-suite/smoke-suite's `if:`
+      # and by tag-release's gate.
+      run_suites:   ${{ steps.channel.outputs.run_suites }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need full history to reach ci-metadata ref and tag
+          persist-credentials: false
+
+      - name: Detect pkg channel from tag
+        id: channel
+        # The channel drives which port we build (stable, testing, or edge — the ports
+        # tree carries one recipe per channel). Classified by
+        # scripts/release-version.sh: vX.Y.Z.aN|.bN|.rN -> prerelease, vX.Y.Z -> stable.
+        #
+        # It also decides, from the SAME classification, whether the live smoke/UI
+        # suites run for this release (issue #1855 Part 3):
+        #   prekind alpha|beta -> NO. The mandatory gate is prepare-release's
+        #     verify-checks (CI green on the release commit, walking past docs-only
+        #     commits). The verification phase is simply EMPTY — not a parallel
+        #     pipeline — so the ordering below is unchanged.
+        #   prekind rc, or stable -> YES, in full, gated per the released-status
+        #     predicate, and the tag/publish happen only on green.
+        # `force_suites` can only ADD verification on lines that carry a live corpus;
+        # the release/3.3 bridge has none and stays off in every stage.
+        env:
+          INPUT_TAG:     ${{ github.event.inputs.tag }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+          INPUT_SOURCE:  ${{ github.event.inputs.source }}
+          FORCE_SUITES:  ${{ github.event.inputs.force_suites }}
+        run: |
+          TAG="$INPUT_TAG"
+          CHANNEL="$INPUT_CHANNEL"
+          SOURCE="$INPUT_SOURCE"
+          OUT=$(sh scripts/release-version.sh "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
+          eval "$OUT"
+          case "$prekind" in
+            alpha|beta) RUN_SUITES="false" ;;
+            *)          RUN_SUITES="true"  ;;
+          esac
+          # An API dispatch can send any casing for a boolean input; accept them all
+          # here because forcing the suites ON is the safe direction for lines that carry them.
+          case "${FORCE_SUITES:-}" in
+            [Tt][Rr][Uu][Ee]) RUN_SUITES="true" ;;
+          esac
+          # release/3.3 is an installer-only bridge with no live smoke/UI corpus.
+          [ "$SOURCE" = "release/3.3" ] && RUN_SUITES="false"
+          case "$release_channel" in
+            stable) PKG_CHANNEL=stable ;;
+            testing|edge) PKG_CHANNEL="$release_channel" ;;
+            *) echo "::error::unknown release channel: ${release_channel}"; exit 1 ;;
+          esac
+          {
+            echo "pkg_channel=${PKG_CHANNEL}"
+            echo "portversion=${portversion}"
+            echo "release_stage=${stage}"
+            echo "run_suites=${RUN_SUITES}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}  →  release channel: ${release_channel}  source: ${SOURCE}  portversion: ${portversion}"
+          echo "Live smoke/UI suites for this release: ${RUN_SUITES} (prekind='${prekind:-stable}', force_suites='${FORCE_SUITES:-false}')"
+
+      - name: Validate immutable tag source
+        id: destinations
+        env:
+          INPUT_TAG:    ${{ github.event.inputs.tag }}
+          INPUT_SOURCE: ${{ github.event.inputs.source }}
+          PINNED_SHA:   ${{ needs.prepare-release.outputs.sha }}
+        run: |
+          set -eu
+          git fetch origin "$INPUT_SOURCE" --tags --force
+          git fetch origin '+refs/heads/release/*:refs/remotes/origin/release/*' --tags --force
+          if [ -n "${PINNED_SHA:-}" ]; then
+            SOURCE_SHA="$PINNED_SHA"
+          else
+            SOURCE_SHA=$(git rev-parse "origin/$INPUT_SOURCE")
+          fi
+          python3 - "$INPUT_TAG" "$INPUT_SOURCE" "$SOURCE_SHA" <<'PY' >/dev/null
+          import sys
+
+          from scripts.release_version import derive_destinations_from_git
+
+          list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3]))
+          PY
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out pinned dependency-builder source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || steps.destinations.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: pinned-builder
+          sparse-checkout: |
+            scripts/
+            uv.lock
+          sparse-checkout-cone-mode: false
+
+      - name: Pin ci-metadata, ROUTE, and Ports identities
+        id: pins
+        env:
+          INPUT_SOURCE: ${{ github.event.inputs.source }}
+          SOURCE_SHA: ${{ steps.destinations.outputs.source_sha }}
+        run: |
+          set -eu
+          git fetch --no-tags origin \
+            "+refs/heads/ci-metadata:refs/remotes/origin/ci-metadata"
+          CI_METADATA_SHA=$(git rev-parse "refs/remotes/origin/ci-metadata^{commit}")
+          PORTS_SHA=$(git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports \
+            refs/heads/pfblockerng/use-github | awk 'NR == 1 { print $1 }')
+          for PIN in "$CI_METADATA_SHA" "$PORTS_SHA"; do
+            case "$PIN" in
+              ''|*[!0-9a-f]*) echo "::error::resolved release identity is not a lowercase Git SHA"; exit 1 ;;
+            esac
+            case "${#PIN}" in
+              40|64) ;;
+              *) echo "::error::resolved release identity is not a 40- or 64-character Git SHA"; exit 1 ;;
+            esac
+          done
+          ROUTE_MATRIX=$(git show "${CI_METADATA_SHA}:supported-versions.json" \
+            | jq -ce '.versions | select(type == "array")')
+          if [ "$INPUT_SOURCE" = "release/3.3" ]; then
+            ROUTE_MATRIX=$(printf '%s' "$ROUTE_MATRIX" | jq -ce 'map(.extra_pkgs = [])')
+          fi
+          PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
+          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$SOURCE_SHA")"
+          DEPENDENCY_PACKAGES='{}'
+          ORIGINS=$(printf '%s' "$ROUTE_MATRIX" | jq -r '[.[].extra_pkgs[]?] | unique[]')
+          if [ -n "$ORIGINS" ]; then
+            PORTS_DIR="$RUNNER_TEMP/dependency-identity-ports"
+            git clone --filter=blob:none --no-checkout --depth 1 \
+              --branch pfblockerng/use-github \
+              https://github.com/pfBlockerNG/FreeBSD-ports "$PORTS_DIR"
+            git -C "$PORTS_DIR" sparse-checkout init --cone
+            for ORIGIN in $ORIGINS; do
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+            done
+            git -C "$PORTS_DIR" checkout --detach "$PORTS_SHA"
+            ROW_COUNT=$(printf '%s' "$ROUTE_MATRIX" | jq 'length')
+            ROW_INDEX=0
+            while [ "$ROW_INDEX" -lt "$ROW_COUNT" ]; do
+              ROW=$(printf '%s' "$ROUTE_MATRIX" | jq -ce ".[$ROW_INDEX]")
+              SUFFIX=$(printf '%s' "$ROW" | jq -r '"-" + .variant + "-" + .pfsense_version + ".pkg"')
+              PY_FLAVOR=$(printf '%s' "$ROW" | jq -r '.py_flavor')
+              FREEBSD_MAJOR=$(printf '%s' "$ROW" | jq -r '.freebsd_major')
+              ROW_ORIGINS=$(printf '%s' "$ROW" | jq -r '.extra_pkgs[]?')
+              for ORIGIN in $ROW_ORIGINS; do
+                IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
+                  --print-port-identity \
+                  --ports "$PORTS_DIR" \
+                  --ports-sha "$PORTS_SHA" \
+                  --port "$ORIGIN")
+                DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" | jq -ce \
+                  --argjson current "$DEPENDENCY_PACKAGES" \
+                  --arg suffix "$SUFFIX" \
+                  --arg origin "$ORIGIN" \
+                  --arg py_flavor "$PY_FLAVOR" \
+                  --arg freebsd_major "$FREEBSD_MAJOR" \
+                  --arg ports_sha "$PORTS_SHA" \
+                  --argjson source_date_epoch "$SOURCE_DATE_EPOCH" \
+                  --argjson toolchain "$DEPENDENCY_BUILDER" \
+                  'if .port_origin != $origin then error("dependency origin mismatch")
+                   else . as $recipe
+                   | ($py_flavor + "-" + $recipe.portname) as $package_name
+                   | ($recipe | del(.port_origin) + {
+                       package_name: $package_name,
+                       package_version: $recipe.port_version,
+                       filename: ($package_name + "-" + $recipe.port_version + $suffix),
+                       freebsd_ports_sha: $ports_sha,
+                       source_date_epoch: $source_date_epoch,
+                       toolchain: $toolchain,
+                       abi: ("FreeBSD:" + $freebsd_major + ":*"),
+                       freebsd_major: $freebsd_major,
+                       py_flavor: $py_flavor
+                     }) as $identity
+                   | $current + {
+                       ($suffix): (($current[$suffix] // {}) + {($origin): $identity})
+                     }
+                   end')
+              done
+              ROW_INDEX=$((ROW_INDEX + 1))
+            done
+          fi
+          {
+            echo "ci_metadata_sha=${CI_METADATA_SHA}"
+            echo "ports_sha=${PORTS_SHA}"
+            echo "dependency_builder=${DEPENDENCY_BUILDER}"
+            echo "dependency_packages=${DEPENDENCY_PACKAGES}"
+            echo "route_matrix=${ROUTE_MATRIX}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read matrix from ci-metadata
+        id: matrices
+        uses: ./.github/actions/read-version-matrix
+        with:
+          ref: ${{ steps.pins.outputs.ci_metadata_sha }}
+
+  # ── 1d. Resolve build stamp ──────────────────────────────────────────────
+  # Checks out the SAME ref as build-pkgs-portable so that `created` (epoch of the
+  # tagged commit) and `commit` (the tagged SHA) are stamped from the right tree.
+  # AMENDMENT 2: must NOT compute these in read-matrix (different checkout ref) or
+  # inline in build-pkgs-portable (its matrix legs share ONE checkout per job via
+  # strategy.matrix, each running build-leg.sh once -- there's no loop to hang a
+  # git command off of). One job, one checkout, two outputs.
+  resolve-stamp:
+    name: Resolve build stamp (created + commit)
+    runs-on: ubuntu-latest
+    needs: [prepare-release, read-matrix]
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
+    outputs:
+      created: ${{ steps.stamp.outputs.created }}
+      commit:  ${{ steps.stamp.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # issue #1855: the PINNED release commit (prepare-release), not the tag —
+          # nothing is tagged yet at this point. Empty on dry-run (prepare-release is
+          # skipped) → the dispatch ref, exactly as before.
+          ref: ${{ needs.prepare-release.outputs.sha || needs.read-matrix.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve stamp
+        id: stamp
+        run: |
+          echo "created=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # ── 1e. Tag the verified commit (real publish only) ──────────────────────
+  # THE FIRST IRREVERSIBLE STEP (issue #1855). Everything before this job is
+  # local to the run: artifacts in the run's own storage, suites against those
+  # artifacts. Nothing has reached GitHub yet — no commit, no tag, no Release.
+  #
+  # Creates + pushes the annotated tag on prepare-release's PINNED SHA — never on
+  # "whatever the branch tip is now" — so the tag names exactly the tree the .pkgs
+  # were built from and the suites verified, even if the channel branch moved
+  # during a 40-minute live fan-out.
+  #
+  # GATE: the build must have succeeded AND, when the live suites ran for this
+  # channel, both AND-gates must be green. For an alpha/beta (run_suites=false)
+  # the verification phase is empty and the mandatory gate is prepare-release's
+  # CI-green-on-the-release-commit check — the tolerance is a POSITIVE
+  # `run_suites == 'false'` comparison, and read-matrix must itself have
+  # succeeded, so a crashed matrix read can never read as "no suites required".
+  #
+  # `!cancelled()`, NEVER `always()` — here and in every job downstream that touches
+  # GitHub. GitHub still STARTS a queued job whose `if:` contains always() on a
+  # CANCELLED run, so an operator who dispatches the wrong tag and hits Cancel once
+  # the build is through (for an alpha/beta there are no live suites left to absorb
+  # the cancel) would get the tag pushed, the draft created and the fork bumped on an
+  # explicitly aborted run. Skip tolerance is identical: ANY status function
+  # suppresses the implicit success(). The upstream read-only jobs (read-matrix,
+  # resolve-stamp, build-pkgs-portable) keep always() — they hold no write credential
+  # and produce workflow artifacts only, so nothing of theirs outlives the run.
+  #
+  # A tag pushed via GITHUB_TOKEN does NOT re-trigger this workflow (GitHub's
+  # re-trigger rule), so this same run continues into publish — no recursion.
+  tag-release:
+    name: Create + push the release tag (verified build only)
+    runs-on: ubuntu-latest
+    needs: [prepare-release, read-matrix, build-pkgs-portable, ui-suite, smoke-suite]
+    if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.prepare-release.result == 'success' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && (needs.read-matrix.outputs.run_suites == 'false' || (needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success')) }}
+    permissions:
+      packages: read
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare-release.outputs.sha }}
+          fetch-depth: 0             # full history + tags: the resume check below
+          persist-credentials: true  # need to push the tag via GITHUB_TOKEN
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
+      - name: Create + push the tag on the verified commit
+        id: tag
+        # RESUME semantics, narrowed to the crash-after-tag window: the only
+        # legitimate reason for the tag to already exist is a prior run of THIS tag
+        # that died after tagging. Then it points at the same pinned SHA and is
+        # reused as-is. A tag on any OTHER commit means the artifacts this run
+        # verified do not match it — refuse loudly and leave it untouched rather
+        # than move a tag or publish mismatched assets.
+        env:
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          SHA: ${{ needs.prepare-release.outputs.sha }}
+          CHANNEL: ${{ github.event.inputs.channel }}
+        run: |
+          set -eu
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --tags --force origin
+          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
+            TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
+            if [ "$TYPE" != "tag" ]; then
+              echo "::error::tag ${TAG} already exists but is not an annotated tag"
+              exit 1
+            fi
+            EXISTING=$(git rev-parse "refs/tags/${TAG}^{commit}")
+            if [ "$EXISTING" != "$SHA" ]; then
+              echo "::error::tag ${TAG} already exists at ${EXISTING}, but this run built and verified ${SHA} — delete the stale (unpublished) tag or bump the version"
+              exit 1
+            fi
+            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
+            CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
+            if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
+              echo "::error::tag ${TAG} has invalid release-channel trailer metadata"
+              exit 1
+            fi
+            echo "Tag ${TAG} already at ${SHA} — reusing it (resuming a run that crashed after tagging)."
+          else
+            # Compatibility oracle: git tag -a "$TAG" -m "$TAG" "$SHA"
+            MESSAGE=$(mktemp)
+            printf '%s\n\n' "$TAG" | git interpret-trailers \
+              --trailer "pfBlockerNG-Release-Channel: ${CHANNEL}" > "$MESSAGE"
+            git tag -a "$TAG" -F "$MESSAGE" "$SHA"
+            rm -f "$MESSAGE"
+            git push origin "refs/tags/${TAG}"
+            echo "Created and pushed tag ${TAG} at ${SHA}"
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Release ───────────────────────────────────────────────────────────
+  # The DRAFT is the end state of this workflow. It carries the source archive, the
+  # .pkg assets (attach-pkgs) and a deterministic placeholder body; the real notes
+  # and the final title are authored onto it afterwards by a human or by Claude
+  # (/release-with-changelog), who then publishes it. Nothing here un-drafts.
+  release:
+    name: Create draft GitHub Release
+    runs-on: ubuntu-24.04
+    # The draft is created only AFTER the tag exists on the verified commit —
+    # softprops/action-gh-release CREATES a missing tag itself, which is exactly how a
+    # failed run used to strand one, so a skipped tag-release must never reach it.
+    # Real publish only: a dry run stops after the verification suites (steps 1-4).
+    needs: [prepare-release, read-matrix, build-pkgs-portable, tag-release]
+    if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.tag-release.result == 'success' }}
+    permissions:
+      packages: read
+      contents: write
+
+    # These outputs are the handoff consumed by draft-healthcheck and
+    # /release-with-changelog; expose only fields those downstream jobs consume.
+    outputs:
+      tag:               ${{ steps.meta.outputs.tag }}
+      source:            ${{ steps.meta.outputs.source }}
+      source_branch:    ${{ steps.meta.outputs.source_branch }}
+      dry_run:           ${{ steps.meta.outputs.dry_run }}
+      primary_kind:      ${{ steps.prev_tag.outputs.primary_kind }}
+      destination_tuple: ${{ steps.prev_tag.outputs.destination_tuple }}
+      previous_tag:      ${{ steps.prev_tag.outputs.previous_tag }}
+      base_tag:          ${{ steps.prev_tag.outputs.base_tag }}
+      base_sha:          ${{ steps.prev_tag.outputs.base_sha }}
+      commit_range:      ${{ steps.prev_tag.outputs.commit_range }}
+      source_sha:        ${{ needs.prepare-release.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The PINNED release commit — identical content to the tag tag-release just
+          # pushed onto it, without depending on the tag having propagated.
+          ref: ${{ needs.prepare-release.outputs.sha }}
+          fetch-depth: 0   # need full history to find the previous release tag
+          persist-credentials: false
+
+      - name: Check out the release helpers (TRUSTED ref, sparse)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: same rule as prepare-release. This job holds
+          # contents:write and executes release-version.sh AS SHELL (the metadata step
+          # and the prev_tag classification loop), while the checkout above is the tree
+          # being RELEASED. Anything executed as shell comes from the revision this
+          # workflow itself was dispatched from. Do not "simplify" this to the pinned
+          # SHA — that is precisely the untrusted side.
+          #
+          # ORDER: after the root checkout, which would otherwise wipe this path.
+          ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          path: pfblockerng-src
+          persist-credentials: false
+
+      - name: Gather release metadata
+        id: meta
+        # Validate + classify the tag via the single source of truth
+        # (scripts/release-version.sh). This job is real-publish only; the DRY_RUN guard
+        # below stays as the belt-and-braces boolean check protecting every output it
+        # writes (a 'FALSE'-style variant reaches this job through the case-insensitive
+        # job-level `if:`).
+        env:
+          INPUT_TAG:     ${{ github.event.inputs.tag }}
+          INPUT_CHANNEL: ${{ github.event.inputs.channel }}
+          INPUT_SOURCE:  ${{ github.event.inputs.source }}
+          INPUT_DRY:     ${{ github.event.inputs.dry_run }}
+        run: |
+          # An API dispatch can hand this an arbitrary string despite the boolean input
+          # type, so reject anything but true/false before any $GITHUB_OUTPUT is written.
+          # Empty stays the safe default.
+          DRY_RUN="${INPUT_DRY:-true}"
+          case "$DRY_RUN" in
+            true|false) ;;
+            *) echo "::error::dry_run input must be exactly 'true' or 'false' (got: '${INPUT_DRY}')"; exit 1 ;;
+          esac
+          TAG="$INPUT_TAG"
+          CHANNEL="$INPUT_CHANNEL"
+          SOURCE="$INPUT_SOURCE"
+          [ -n "$TAG" ] || { echo "::error::tag input is required"; exit 1; }
+          [ -n "$CHANNEL" ] || { echo "::error::channel input is required"; exit 1; }
+          [ -n "$SOURCE" ] || { echo "::error::source input is required"; exit 1; }
+
+          OUT=$(sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-version.sh" "$TAG" "$CHANNEL" "$SOURCE") || { echo "$OUT"; exit 1; }
+          eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          if [ "$release_line" != "$SOURCE" ]; then
+            echo "::error::tag ${TAG} does not belong to source ${SOURCE}"
+            exit 1
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${version}"
+            echo "channel=${release_channel}"
+            echo "prerelease=${prerelease}"
+            echo "portversion=${portversion}"
+            echo "source=${SOURCE}"
+            echo "source_branch=${SOURCE}"
+            echo "dry_run=${DRY_RUN}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag ${TAG}: channel=${channel} prerelease=${prerelease} portversion=${portversion} dry_run=${DRY_RUN}"
+
+      - name: Find the previous release tag (compare base)
+        id: prev_tag
+        # Base selection is family- and primary-kind-scoped. The trusted helper rejects
+        # destination copies, unrelated families, future tags, and non-ancestor tags.
+        env:
+          TAG:         ${{ steps.meta.outputs.tag }}
+          CHANNEL:     ${{ steps.meta.outputs.channel }}
+          SOURCE:      ${{ steps.meta.outputs.source }}
+          PINNED_SHA:   ${{ needs.prepare-release.outputs.sha }}
+        run: |
+          set -eu
+          # Run-body assignment, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          REPOSITORY="$GITHUB_WORKSPACE"
+          git fetch origin '+refs/heads/release/*:refs/remotes/origin/release/*' --tags --force
+          PYTHONPATH="${GITHUB_WORKSPACE}/pfblockerng-src" \
+            python3 - "$TAG" "$CHANNEL" "$SOURCE" "$PINNED_SHA" "$REPOSITORY" "$GITHUB_OUTPUT" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from scripts.release_version import (
+              ReleaseTagCandidate,
+              derive_destinations_from_git,
+              parse_release_tag,
+              primary_channel_for_tag,
+              select_previous_release_tag,
+          )
+
+          tag, channel, source, pinned_sha, repository, output_path = sys.argv[1:]
+
+          def git(*args: str, input_text: str | None = None) -> str:
+              result = subprocess.run(
+                  ["git", *args],
+                  cwd=repository,
+                  input=input_text,
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              if result.returncode:
+                  raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+              return result.stdout.strip()
+
+          def git_ok(*args: str) -> bool:
+              return subprocess.run(["git", *args], cwd=repository, check=False).returncode == 0
+
+          def exact_primary_trailer(candidate: str, primary: str) -> bool:
+              if git("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
+                  return False
+              contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
+              trailers = [
+                  line
+                  for line in git("interpret-trailers", "--parse", input_text=contents).splitlines()
+                  if line.startswith("pfBlockerNG-Release-Channel: ")
+              ]
+              return trailers == [f"pfBlockerNG-Release-Channel: {primary}"]
+
+          current = parse_release_tag(tag, channel)
+          if current.release_line != source:
+              raise ValueError(f"{tag} is not on {source}")
+          candidates: list[ReleaseTagCandidate] = []
+          for candidate_tag in git(
+              "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/"
+          ).splitlines():
+              try:
+                  primary = primary_channel_for_tag(candidate_tag)
+                  info = parse_release_tag(candidate_tag, primary)
+                  if not exact_primary_trailer(candidate_tag, primary):
+                      continue
+                  candidate_sha = git("rev-parse", f"refs/tags/{candidate_tag}^{{commit}}")
+              except (RuntimeError, ValueError):
+                  continue
+              line_ref = f"refs/remotes/origin/{info.release_line}"
+              if not git_ok("show-ref", "--verify", line_ref):
+                  line_ref = info.release_line
+              candidates.append(
+                  ReleaseTagCandidate(
+                      tag=candidate_tag,
+                      info=info,
+                      primary=primary,
+                      on_source_line=git_ok(
+                          "merge-base", "--is-ancestor", candidate_sha, line_ref
+                      ),
+                      ancestor_of_current=git_ok(
+                          "merge-base", "--is-ancestor", candidate_sha, pinned_sha
+                      ),
+                  )
+              )
+
+          previous = select_previous_release_tag(tag, channel, candidates)
+          base_sha = git("rev-parse", f"refs/tags/{previous}^{{commit}}") if previous else ""
+          destinations = derive_destinations_from_git(
+              tag, source, repository, current_commit=pinned_sha
+          )
+          values = {
+              "primary_kind": primary_channel_for_tag(tag),
+              "destination_tuple": ",".join(destinations),
+              "previous_tag": previous or "",
+              "base_tag": previous or "",
+              "base_sha": base_sha,
+              "commit_range": f"{previous}...{tag}" if previous else "",
+          }
+          # No valid family-scoped base produces an empty range; it is never fabricated.
+          with Path(output_path).open("a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          print(
+              f"Primary {values['primary_kind']}; destinations {values['destination_tuple']}; "
+              f"base {values['base_tag'] or '<none>'}; range {values['commit_range'] or '<empty>'}"
+          )
+          PY
+
+      - name: Prepare the compare link
+        id: notes_prep
+        # The draft body is a deterministic placeholder ending in this compare link.
+        # Real notes are authored onto the draft afterwards (/release-with-changelog),
+        # never generated here and never committed to the repository.
+        env:
+          REPO: ${{ github.repository }}
+          TAG:  ${{ steps.meta.outputs.tag }}
+          PREV: ${{ steps.prev_tag.outputs.previous_tag }}
+        run: |
+          set -u
+          if [ -n "$PREV" ]; then
+            CMP_URL="https://github.com/${REPO}/compare/${PREV}...${TAG}"
+            FULL_LINK="**Full changelog:** [\`${PREV}\` → \`${TAG}\`](${CMP_URL})"
+          else
+            CMP_URL="https://github.com/${REPO}/commits/${TAG}"
+            FULL_LINK="**Full changelog:** [commits in \`${TAG}\`](${CMP_URL})"
+          fi
+
+          echo "cmp_url=${CMP_URL}" >> "$GITHUB_OUTPUT"
+          {
+            echo "full_link<<__FL__"
+            printf '%s\n' "$FULL_LINK"
+            echo "__FL__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the placeholder release body
+        id: changelog
+        # Deterministic placeholder + the compare link. Release notes are NOT files in
+        # this repository: a committed changelog would force a changelog commit, which
+        # would force a push to the channel branch and a re-generation whenever devel
+        # moves, and the released source tree should not carry its own changelog. The
+        # real notes and the final title are authored onto this draft afterwards, by a
+        # human or by Claude, who then publishes it.
+        env:
+          TAG:       ${{ steps.meta.outputs.tag }}
+          VERSION:   ${{ steps.meta.outputs.version }}
+          FULL_LINK: ${{ steps.notes_prep.outputs.full_link }}
+        run: |
+          set -u
+          BODY=$(printf '_Release notes pending — see the full changelog below._\n\n%s' "$FULL_LINK")
+
+          # Release title: ISO date + version. The date prefix (UTC, yyyy-mm-dd) keeps
+          # GitHub's alphabetical release sort in chronological order. Product name is
+          # omitted — this repo only ships pfBlockerNG. The authoring step that writes
+          # the notes owns the final title.
+          NAME="$(date -u +%Y-%m-%d) - ${VERSION}"
+
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<__RELEASE_BODY__"
+            printf '%s\n' "$BODY"
+            echo "__RELEASE_BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Pin source archive Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.15"
+
+      - name: Build source archive
+        run: |
+          set -eu
+          VERSION="${{ steps.meta.outputs.version }}"
+          ARCHIVE="pfBlockerNG-${VERSION}.tar.gz"
+          SOURCE_EPOCH="$(git show -s --format=%ct HEAD)"
+
+          python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/build-source-archive.py" \
+            --source src --output "$ARCHIVE" --epoch "$SOURCE_EPOCH"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Create tagged release handoff
+        env:
+          ROUTE_MATRIX: ${{ needs.read-matrix.outputs.route_matrix }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}
+          CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}
+          PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
+          DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
+          DEPENDENCY_PACKAGES: ${{ needs.read-matrix.outputs.dependency_packages }}
+        run: |
+          set -eu
+          RELEASE_HANDOFF="$RUNNER_TEMP/pfblockerng-release-handoff.json"
+          ROUTE_MATRIX_FILE="$RUNNER_TEMP/route-matrix.json"
+          printf '%s\n' "$ROUTE_MATRIX" > "$ROUTE_MATRIX_FILE"
+          DEPENDENCY_BUILDER_FILE="$RUNNER_TEMP/dependency-builder.json"
+          printf '%s\n' "$DEPENDENCY_BUILDER" > "$DEPENDENCY_BUILDER_FILE"
+          DEPENDENCY_PACKAGES_FILE="$RUNNER_TEMP/dependency-packages.json"
+          printf '%s\n' "$DEPENDENCY_PACKAGES" > "$DEPENDENCY_PACKAGES_FILE"
+          python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/tagged_release_handoff.py" \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --ci-metadata-sha "$CI_METADATA_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")" \
+            --dependency-builder "$DEPENDENCY_BUILDER_FILE" \
+            --route-matrix "$ROUTE_MATRIX_FILE" \
+            --dependency-packages "$DEPENDENCY_PACKAGES_FILE" \
+            --output "$RELEASE_HANDOFF"
+          echo "RELEASE_HANDOFF=${RELEASE_HANDOFF}" >> "$GITHUB_ENV"
+
+      - name: Create the GitHub Release as a DRAFT
+        # This repo has IMMUTABLE RELEASES enabled: once a release is PUBLISHED its
+        # assets are frozen, so assets can only be added while it is still a draft.
+        # Create it as a draft here (with the source archive) and let attach-pkgs add
+        # the .pkg assets to the same draft. It STAYS a draft: whoever authors the notes
+        # publishes it, and immutability locks it with ALL assets present at that point.
+        # Publishing then fires release-published.yml (pkg-repo republish + ports bump).
+        if: ${{ steps.meta.outputs.dry_run == 'false' }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ steps.meta.outputs.source }}
+          name: ${{ steps.changelog.outputs.name }}
+          body: ${{ steps.changelog.outputs.body }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          draft: true
+          # Idempotent on re-run: replace both build-time identity assets.
+          overwrite_files: true
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.RELEASE_HANDOFF }}
+
+  # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
+  # Builds ONE .pkg per build-role version/variant row. The release_matrix is
+  # the reader's existing non-deduped BUILD/ROUTE row set, so each Release asset
+  # carries its exact pfSense row identity even when rows share a FreeBSD major.
+  # Runs the portable
+  # Linux builder steps inline (no FreeBSD VM, ~3 min/leg). This is the SOLE
+  # release .pkg builder: pfBlockerNG is a NO_BUILD port, so the portable
+  # builder reproduces `make package` byte-for-byte (validated against it over
+  # every smoke + Web-UI run on CE and Plus) and `pkg add` checks a dep is
+  # PRESENT, not its version — so the portable artifact installs identically.
+  #
+  # ONE JOB PER RELEASE ROW (strategy.matrix over read-matrix's release_matrix,
+  # fail-fast: false): each leg uploads its OWN artifact, named
+  # `pfBlockerNG-relpkg-<variant>-<pfsense_version>` — the exact row identity
+  # consumed by ui-tests.yml/smoke.yml below.
+  #
+  # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
+  # others going). Nothing downstream lists build-pkgs-* directly, but a
+  # leg failure blocks everything TRANSITIVELY: build-pkgs-portable fails (matrix
+  # job result is 'failure' if any leg fails) -> tag-release skips (its `if:`
+  # requires needs.build-pkgs-portable.result == 'success') -> release skips ->
+  # attach-pkgs and draft-healthcheck skip. That chain starts BEFORE the tag
+  # exists, so a failed build leaves no tag and no draft behind at all.
+  build-pkgs-portable:
+    name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
+    runs-on: ubuntu-latest
+    needs: [prepare-release, read-matrix, resolve-stamp]
+    # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
+    if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.read-matrix.outputs.release_matrix) }}
+
+    steps:
+      - name: Checkout the pinned release source
+        uses: actions/checkout@v6
+        with:
+          # issue #1855: build from prepare-release's PINNED SHA — the channel-branch
+          # tip including the committed changelog. The tag is created LATER, on this
+          # very SHA, so the published .pkg and the tag can never disagree even if
+          # the branch moves during verification. Empty on dry-run (prepare-release
+          # skipped) → the dispatch ref, exactly as before.
+          ref: ${{ needs.prepare-release.outputs.sha || needs.read-matrix.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Set up the pinned dependency-package toolchain
+        if: github.event.inputs.source != 'release/3.3'
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.6"
+          activate-environment: true
+
+      - name: Sync the locked dependency-package toolchain
+        if: github.event.inputs.source != 'release/3.3'
+        run: uv sync --locked --only-group dep-pkg-build
+
+      - name: Compute this leg's LEG/ABI
+        id: leg
+        # ABI's cpu segment ("amd64") is an INERT placeholder: the package is
+        # NO_ARCH, but each release row still gets its own immutable artifact.
+        env:
+          MAJOR: ${{ matrix.freebsd_major }}
+          VARIANT: ${{ matrix.variant }}
+          PFSENSE_VERSION: ${{ matrix.pfsense_version }}
+        run: |
+          set -eu
+          ABI="FreeBSD:${MAJOR}:amd64"
+          LEG="${VARIANT}-${PFSENSE_VERSION}"
+          {
+            echo "abi=${ABI}"
+            echo "leg=${LEG}"
+          } >> "$GITHUB_OUTPUT"
+          echo "leg ${LEG}: ABI=${ABI}"
+
+      - name: Create the immutable source tag locally
+        env:
+          TAG:    ${{ github.event.inputs.tag }}
+          COMMIT: ${{ needs.resolve-stamp.outputs.commit }}
+        run: |
+          set -eu
+          if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null 2>&1; then
+            [ "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "$COMMIT" ] || {
+              echo "::error::local tag ${TAG} does not resolve to the stamped source SHA"; exit 1;
+            }
+          else
+            git tag "${TAG}" "$COMMIT"
+          fi
+
+      - name: Resolve release-line extras
+        id: extras
+        env:
+          SOURCE: ${{ github.event.inputs.source }}
+          MATRIX_EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
+        run: |
+          set -eu
+          case "$SOURCE" in
+            release/3.3) EXTRA_PKGS='[]' ;;
+            *) EXTRA_PKGS="$MATRIX_EXTRA_PKGS" ;;
+          esac
+          EXTRA_PKGS="$(printf '%s' "$EXTRA_PKGS" | jq -c .)"
+          printf 'extra_pkgs=%s\n' "$EXTRA_PKGS" >> "$GITHUB_OUTPUT"
+
+      - name: Write the destination-bound build record
+        env:
+          TAG:           ${{ github.event.inputs.tag }}
+          CHANNEL:       ${{ github.event.inputs.channel }}
+          SOURCE:        ${{ github.event.inputs.source }}
+          PORTVERSION:   ${{ needs.read-matrix.outputs.portversion }}
+          CLASSIFICATION: ${{ needs.read-matrix.outputs.release_stage }}
+          COMMIT:        ${{ needs.resolve-stamp.outputs.commit }}
+          CREATED:       ${{ needs.resolve-stamp.outputs.created }}
+          MATRIX_ROW:    ${{ toJson(matrix) }}
+          PORTS_SHA:     ${{ needs.read-matrix.outputs.ports_sha }}
+          DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.pfb_pkg import build_input_digest
+
+          row = json.loads(os.environ["MATRIX_ROW"])
+          channel = os.environ["CHANNEL"]
+          version = os.environ["PORTVERSION"]
+          major, minor = row["pfsense_version"].split(".", 1)
+          record = {
+              "schema": 1,
+              "channel": channel,
+              "release_line": os.environ["SOURCE"],
+              "classification": os.environ["CLASSIFICATION"] if channel != "stable" else "final",
+              "source_tag": os.environ["TAG"],
+              "source_sha": os.environ["COMMIT"],
+              "canonical_package_version": version,
+              "native_recipe_identity": "pfSense-pkg-pfBlockerNG"
+              if channel == "stable"
+              else f"pfSense-pkg-pfBlockerNG-{channel}",
+              "emitted_identity": "pfSense-pkg-pfBlockerNG",
+              "matrix_row": row,
+              "freebsd_ports_sha": os.environ["PORTS_SHA"],
+              "route": f"{channel}/{row['variant'].lower()}-{major}.{minor}",
+              "source_date_epoch": int(os.environ["CREATED"]),
+              "dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"]),
+              "build_input_digest": "",
+          }
+          record["build_input_digest"] = build_input_digest(record)
+          Path(os.environ["RUNNER_TEMP"], "build-record.json").write_text(
+              json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Build the .pkg via build-leg.sh
+        # build-leg.sh is the shared build path (local/CI/release parity — ADR-47 P3).
+        # portversion pinned from read-matrix (ref-independent, tag-string-derived).
+        # created + commit from resolve-stamp (same checkout ref as this job's tree).
+        env:
+          PKG_CHANNEL:  ${{ needs.read-matrix.outputs.pkg_channel }}
+          PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
+          CREATED:      ${{ needs.resolve-stamp.outputs.created }}
+          COMMIT:       ${{ needs.resolve-stamp.outputs.commit }}
+          ABI:          ${{ steps.leg.outputs.abi }}
+          LEG:          ${{ steps.leg.outputs.leg }}
+          PHP:          ${{ matrix.php_version }}
+          PY:           ${{ matrix.py_flavor }}
+          MAJOR:        ${{ matrix.freebsd_major }}
+          VARIANT:      ${{ matrix.variant }}
+          PFSENSE_VERSION: ${{ matrix.pfsense_version }}
+          EXTRA_PKGS:   ${{ steps.extras.outputs.extra_pkgs }}
+          PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
+        run: |
+          set -eu
+          # Keep generated Ports and package trees outside the pinned source checkout.
+          # Run-body export, not an env: map value (issue #2231).
+          export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
+          export LEG
+          RUN_ID="$(sh scripts/select-box.sh --print-id)"
+          export RUN_ID
+
+          echo "--- Building .pkg for FreeBSD ${MAJOR}, PHP ${PHP}, ${PY} ---"
+
+          PKG="$(sh scripts/build-leg.sh \
+            --channel    "$PKG_CHANNEL" \
+            --variant    "$VARIANT" \
+            --ports-ref  "$PORTS_SHA" \
+            --abi        "$ABI" \
+            --py-flavor  "$PY" \
+            --php        "$PHP" \
+            --pkgversion "$PORTVERSION" \
+            --build-record "$RUNNER_TEMP/build-record.json")"
+
+          PKG_DIR="$(dirname "$PKG")"
+          echo "Built for FreeBSD ${MAJOR}:"
+          ls -l "${PKG_DIR}"
+
+          # External Release asset name carries this row's identity. The
+          # archive bytes and native package manifest stay untouched.
+          BASE="$(basename "$PKG" .pkg)"
+          RENAMED="${PKG_DIR}/${BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"
+          mv "$PKG" "$RENAMED"
+          echo "Renamed: ${BASE}.pkg -> $(basename "$RENAMED")"
+          echo "PKG_PATH=${RENAMED}" >> "$GITHUB_ENV"
+
+          # issue #1806 B1: this row's extra_pkgs (RUN_DEPENDS ports pfSense's
+          # own repo doesn't carry, e.g. textproc/py-charset-normalizer) --
+          # SAME loop as build-pkg-linux.yml, from the SAME ports checkout
+          # build-leg.sh just prepared above (never a second clone).
+          # this release row is the only one building its row-identified dep .pkgs.
+          DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
+          HAS_DEP_PKGS=0
+          ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            DEP_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python"
+            if [ ! -x "$DEP_PYTHON" ]; then
+              echo "::error::locked dependency-package Python is missing"
+              exit 1
+            fi
+            PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            mkdir -p "$DEP_PKG_DIR"
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              # sparse-clone-ports.sh's checkout only includes the pfBlockerNG
+              # port's OWN RUN_DEPENDS -- extra_pkgs is a matrix-level concept
+              # it doesn't know about, so this origin's dir was never
+              # materialized. Add it explicitly (idempotent; cone mode already
+              # set by sparse-clone-ports.sh).
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+              "$DEP_PYTHON" scripts/build-dep-pkg-portable.py \
+                --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY" \
+                --freebsd-major "$MAJOR" \
+                --source-date-epoch "$CREATED" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            HAS_DEP_PKGS=1
+          fi
+          for DEP_PKG in "${DEP_PKG_DIR}"/*.pkg; do
+            [ -f "$DEP_PKG" ] || continue
+            DEP_BASE="$(basename "$DEP_PKG" .pkg)"
+            RENAMED_DEP="${DEP_PKG_DIR}/${DEP_BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"
+            mv "$DEP_PKG" "$RENAMED_DEP"
+          done
+          echo "DEP_PKG_DIR=${DEP_PKG_DIR}" >> "$GITHUB_ENV"
+          echo "HAS_DEP_PKGS=${HAS_DEP_PKGS}" >> "$GITHUB_ENV"
+
+      - name: Upload this leg's .pkg artifact (exact-name contract, issue #1806)
+        # Name MUST equal pfBlockerNG-relpkg-<variant>-<pfsense_version> -- the
+        # exact row identity ui-tests.yml/smoke.yml compose when the release
+        # prefix is set. Upload only on success: fail-fast:
+        # false already isolates a failed leg, so it simply uploads nothing
+        # and attach-pkgs/the publish healthcheck fail closed on the missing
+        # asset.
+        uses: actions/upload-artifact@v7
+        with:
+          name: pfBlockerNG-relpkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
+          path: ${{ env.PKG_PATH }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload this leg's dep .pkg artifact (issue #1806 B1)
+        # Name MUST equal pfBlockerNG-relpkg-deppkgs-<variant>-<pfsense_version>
+        # -- the exact row identity consumers compose. Never uploaded when
+        # extra_pkgs is empty (no empty artifacts).
+        if: env.HAS_DEP_PKGS == '1'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pfBlockerNG-relpkg-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}
+          path: ${{ env.DEP_PKG_DIR }}/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── 2c. Attach .pkg artifacts to the GitHub Release ──────────────────────
+  # Downloads the .pkg from every successful build-pkgs-portable leg and
+  # appends the row-identified assets to the GitHub Release. An empty pkgs/
+  # (download miss or every leg failed) fails this job (issue #2385).
+  #
+  # DEPENDENCY EDGES: attach-pkgs needs [prepare-release, release,
+  # build-pkgs-portable, read-matrix] with if: !cancelled(), so it runs regardless of a
+  # build-pkgs-portable failure (see build-pkgs-portable's header comment above,
+  # "A leg's build failure...", for the full transitive chain).
+  #
+  # A partial build-pkgs-portable failure still attaches the legs that
+  # uploaded; a total miss fails here rather than publishing no .pkg.
+  attach-pkgs:
+    name: Attach .pkg artifacts to Release
+    runs-on: ubuntu-latest
+    needs: [prepare-release, release, build-pkgs-portable, read-matrix]
+    # Run whenever release succeeded AND it was a real publish (not a dry-run),
+    # regardless of the build outcome. Empty or failed artifact download fails
+    # this job (issue #2385).
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.dry_run == 'false' }}
+    permissions:
+      packages: read
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download .pkg artifacts from portable builder
+        # Each build-pkgs-portable leg uploads its OWN row artifact, named
+        # pfBlockerNG-relpkg-<variant>-<pfsense_version>; merge every
+        # leg's artifact into pkgs/. The pattern also sweeps
+        # up each row's built dependency artifact
+        # (issue #1806 B1) -- INTENTIONAL when effective extras exist: dep .pkgs (e.g. CE's
+        # py311-charset-normalizer) are deliberate release assets, frozen
+        # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
+        # story. The draft healthcheck counts only the effective asset matrix.
+        uses: actions/download-artifact@v7
+        with:
+          pattern: pfBlockerNG-relpkg-*
+          merge-multiple: true
+          path: pkgs/
+
+      - name: Validate tagged handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}
+        run: |
+          set -eu
+          mkdir -p provenance
+          gh release download "$TAG" \
+            --pattern pfblockerng-release-handoff.json \
+            --dir provenance
+          set -- pkgs/*.pkg
+          if [ ! -f "$1" ]; then
+            echo "::error::No .pkg artifacts to validate."
+            exit 1
+          fi
+          python3 scripts/tagged_release_handoff.py validate-packages \
+            --handoff provenance/pfblockerng-release-handoff.json \
+            --release-tag "$TAG" \
+            --source-sha "$SOURCE_SHA" \
+            "$@"
+
+      - name: Append .pkg files to the GitHub Release
+        # Upload the renamed .pkg files to the still-DRAFT release using
+        # `gh release upload` (the release is published later, by hand, once the notes
+        # are written — immutable-release repos only accept assets while it is a draft).
+        # This is idempotent: re-uploading an asset with --clobber replaces it.
+        # If pkgs/ has no .pkg files (download miss or every build failed), this
+        # step fails closed so a Release is never published with no .pkg.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ needs.release.outputs.tag }}
+        run: |
+          set -eu
+
+          PKGS=$(find pkgs -type f -name "*.pkg" 2>/dev/null | head -20)
+          if [ -z "$PKGS" ]; then
+            echo "::error::No .pkg artifacts to attach — download failed or build-pkgs-portable produced none."
+            echo "Check the download and build-pkgs-portable job logs for details."
+            exit 1
+          fi
+
+          # Recurse: each build-pkgs-portable leg uploads its own single-file
+          # artifact, and merge-multiple downloads them all flat under pkgs/ --
+          # a non-recursive pkgs/*.pkg glob would already find them, but find
+          # -type f is used here (and above) to stay robust either way.
+          find pkgs -type f -name "*.pkg" -print | while IFS= read -r f; do
+            echo "Uploading: $(basename "$f")"
+            gh release upload "$TAG" "$f" --clobber
+          done
+          echo "All .pkg artifacts attached to release ${TAG}"
+
+  # ── 2c2. Health-check the finished draft — the LAST step of this workflow ───
+  # The release is a DRAFT and stays one. Immutable-release repos freeze assets at
+  # publish time, so the source archive + every .pkg must be attached BEFORE the
+  # publish flip (`release` + `attach-pkgs` do that). Publishing itself is a separate,
+  # human/Claude step: the notes and the final title are authored onto the draft first
+  # (/release-with-changelog), and publishing then fires release-published.yml.
+  #
+  # This job's only job is that nobody is handed an incomplete draft: the source
+  # archive AND exactly one .pkg per release-matrix row must be attached, and the
+  # name/body must be non-empty. Anything missing → fail loudly, leaving the draft
+  # intact for a resume.
+  draft-healthcheck:
+    name: Health-check the drafted Release
+    runs-on: ubuntu-latest
+    needs: [prepare-release, release, attach-pkgs, read-matrix]
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false' }}
+    outputs:
+      # release-with-changelog consumes these exact run outputs:
+      # needs.draft-healthcheck.outputs.primary_kind,
+      # needs.draft-healthcheck.outputs.destination_tuple,
+      # needs.draft-healthcheck.outputs.previous_tag,
+      # needs.draft-healthcheck.outputs.base_tag,
+      # needs.draft-healthcheck.outputs.base_sha,
+      # needs.draft-healthcheck.outputs.commit_range,
+      # needs.draft-healthcheck.outputs.source_sha,
+      # needs.draft-healthcheck.outputs.source_branch,
+      # needs.draft-healthcheck.outputs.draft_url,
+      # needs.draft-healthcheck.outputs.assets.
+      primary_kind:      ${{ needs.release.outputs.primary_kind }}
+      destination_tuple: ${{ needs.release.outputs.destination_tuple }}
+      previous_tag:      ${{ needs.release.outputs.previous_tag }}
+      base_tag:          ${{ needs.release.outputs.base_tag }}
+      base_sha:          ${{ needs.release.outputs.base_sha }}
+      commit_range:      ${{ needs.release.outputs.commit_range }}
+      source_sha:        ${{ needs.release.outputs.source_sha }}
+      source_branch:    ${{ needs.release.outputs.source_branch }}
+      draft_url:         ${{ steps.verify.outputs.draft_url }}
+      assets:            ${{ steps.verify.outputs.assets }}
+    permissions:
+      packages: read
+      # write for VISIBILITY, not to mutate: this job only READS the draft, but a DRAFT
+      # Release is invisible to a `contents: read` GITHUB_TOKEN. PROBED 2026-07-29 (run
+      # 30442759084, two jobs differing only in this scope): `GET /releases/tags/<tag>`
+      # 404s on a draft under BOTH scopes, so `gh release view` falls back to LISTING
+      # releases -- and that listing returns drafts only to a token with push access.
+      # Under `contents: read` the call printed "release not found" and exited 1 (0
+      # drafts listed); under `contents: write` it returned `{"isDraft":true,...}`.
+      # Read-scoped, this job would fail every real cut before the publish handoff.
+      contents: write
+    steps:
+      - name: Health-check the draft release is complete
+        id: verify
+        # Expected assets: the source archive + exactly one .pkg per release-matrix row
+        # PLUS one built dep .pkg per effective extra_pkgs entry. The
+        # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
+        # A published release is stale for this draft handoff; never claim a
+        # complete draft or allow notes mutation against it.
+        env:
+          GH_TOKEN:     ${{ github.token }}
+          TAG:          ${{ needs.release.outputs.tag }}
+          SOURCE:       ${{ needs.release.outputs.source }}
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.release_matrix }}
+          PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
+        run: |
+          set -eu
+          REPO="${{ github.repository }}"
+
+          META=$(gh release view "$TAG" --repo "$REPO" --json isDraft,name,body,assets,url)
+          IS_DRAFT=$(printf '%s' "$META" | jq -r '.isDraft')
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::Release ${TAG} is not a draft; stale or already published — stop."
+            exit 1
+          fi
+
+          ASSET_MATRIX="$BUILD_MATRIX"
+          if [ "$SOURCE" = "release/3.3" ]; then
+            ASSET_MATRIX=$(printf '%s' "$BUILD_MATRIX" | jq 'map(.extra_pkgs = [])')
+          fi
+
+          # issue #1806 B1: the release-row count PLUS the total number of
+          # built extra_pkgs entries across the effective asset rows -- each
+          # dep .pkg is its own release asset (see attach-pkgs's comment).
+          EXPECTED_PKGS=$(printf '%s' "$ASSET_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
+          PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
+          SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
+          HANDOFF_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name == "pfblockerng-release-handoff.json")] | length')
+
+          echo "Draft assets:"
+          printf '%s' "$META" | jq -r '.assets[].name' | sort | sed 's/^/  - /'
+          echo "Expected .pkg: ${EXPECTED_PKGS} | found .pkg: ${PKG_COUNT} | source archives: ${SRC_COUNT} | handoffs: ${HANDOFF_COUNT}"
+
+          FAIL=0
+          [ "$SRC_COUNT" -ge 1 ] || { echo "::error::no source archive (.tar.gz) attached to the draft"; FAIL=1; }
+          [ "$HANDOFF_COUNT" -eq 1 ] || { echo "::error::expected exactly one pfblockerng-release-handoff.json asset"; FAIL=1; }
+          [ "$EXPECTED_PKGS" -ge 1 ] || { echo "::error::build matrix is empty"; FAIL=1; }
+          [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — the draft is incomplete"; FAIL=1; }
+
+          # Every release row has one exact main asset. Dependency assets carry
+          # the same row suffix; this catches a dropped or cross-row artifact
+          # even when the aggregate .pkg count happens to match.
+          while IFS= read -r ROW; do
+            VARIANT=$(printf '%s' "$ROW" | jq -r '.variant')
+            VERSION=$(printf '%s' "$ROW" | jq -r '.pfsense_version')
+            MAIN="pfSense-pkg-pfBlockerNG-${PORTVERSION}-${VARIANT}-${VERSION}.pkg"
+            if ! printf '%s' "$META" | jq -e --arg name "$MAIN" '[.assets[].name] | index($name) != null' >/dev/null; then
+              echo "::error::missing release-row asset ${MAIN}"
+              FAIL=1
+            fi
+            NEED_DEPS=$(printf '%s' "$ROW" | jq '(.extra_pkgs // []) | length')
+            HAVE_DEPS=$(printf '%s' "$META" | jq --arg suffix "-${VARIANT}-${VERSION}.pkg" --arg main "$MAIN" '[.assets[].name | select(endswith($suffix) and . != $main)] | length')
+            if [ "$HAVE_DEPS" -ne "$NEED_DEPS" ]; then
+              echo "::error::row ${VARIANT}-${VERSION} expected ${NEED_DEPS} dependency assets, found ${HAVE_DEPS}"
+              FAIL=1
+            fi
+          done <<EOF_ROWS
+          $(printf '%s' "$ASSET_MATRIX" | jq -c '.[]')
+          EOF_ROWS
+          printf '%s' "$META" | jq -e '(.name // "") != "" and ((.body // "") | length) > 0' >/dev/null \
+            || { echo "::error::release name or body is empty"; FAIL=1; }
+          [ "$FAIL" -eq 0 ] || exit 1
+
+          URL=$(printf '%s' "$META" | jq -r '.url')
+          ASSETS=$(printf '%s' "$META" | jq -c '[.assets[].name] | sort')
+          OUTPUT_PATH="${GITHUB_OUTPUT:-/dev/null}"
+          echo "draft_url=${URL}" >> "$OUTPUT_PATH"
+          echo "assets=${ASSETS}" >> "$OUTPUT_PATH"
+          echo "Healthcheck passed — draft ${TAG} is complete."
+          {
+            echo "## ${TAG} is DRAFTED and complete"
+            echo ""
+            echo "Next: author the release notes + title onto the draft, then publish it."
+            echo "Publishing fires \`release-published.yml\` (pkg-repo republish + FreeBSD-ports bump)."
+            echo ""
+            echo "Draft: ${URL}"
+            # `:-/dev/null` so the whole step body stays runnable outside Actions --
+            # tests/test_ui_release_gate_wiring.py lifts it verbatim and executes it.
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

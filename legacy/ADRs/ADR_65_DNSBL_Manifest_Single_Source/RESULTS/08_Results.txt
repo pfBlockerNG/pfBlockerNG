@@ -1,0 +1,292 @@
+ADR-65 PHASE 8 -- RESULTS
+================================================================================
+VERDICT: DONE
+Commit:  17cc3751bead91a31b980140fc1a0c2444d8f7c3 (tests only -- the four new
+         smoke rows this phase adds) plus this follow-up doc-only commit
+         landing the handoff file itself -- the brief asked for ONE code
+         commit; writing this RESULTS file necessarily happens after the
+         gates it reports on finish, so it could not be part of the same
+         commit as the code it describes without a self-referential
+         placeholder (the P1/P5/P6/P7 precedent, pre-authorized by this
+         phase's own brief section 6). Recorded as the deviation; both
+         commits land on this branch, in order.
+Branch:  adr/65-dnsbl-manifest-single-source
+base_sha (pre-fix baseline for the verifier): 2efabc14c75a767eba011177835cff31d01573f5
+         (post-rebase tip -- see DEVIATIONS #1 for the rebase itself).
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+tests/smoke/test_smoke_adr65.py (NEW, 618 lines)
+  - Module marker `pytest.mark.smoke`; module-scoped `adr65_vm` fixture
+    (mirrors test_smoke_adr40.py's `adr40_vm`: deploy + ensure_dnsbl_vip once,
+    egress stays open, each CaseContext manages its own per-case block).
+  - Module-local helpers (no helpers.py changes, per the brief's "new modules
+    only" constraint): `_dnsbl_log_hits`/`_dnsbl_log_line` (host+chroot dnsbl.log
+    grep, mirrors test_smoke_matrix._dnsbl_log_hits' shape), `_read_group_counter`
+    /`_wait_group_counter_at_least`/`_parse_counter_output` (per-group dnsbl
+    SQLite counter read, mirrors test_smoke_upstream_block._read_upstream_counter
+    parametrized on group instead of the fixed 'Upstream' row), `_cache_row_count`
+    (plain busyTimeout'd dnsblcache COUNT read), `_query_domain` (the
+    pfb_dnsbl_query php_eval wrapper), `_raw_bounce_unbound` (mirrors helpers.py's
+    inject_safesearch_cname_entries raw-bounce block, fed to /bin/sh on stdin),
+    `_sync_status_list_open`/`_manifest_failure_notice_fired` (the widget ledger
+    reader + the production notice-firing epilogue, both php_eval-driven),
+    `_count_matching_notices`/`_close_notice` (mirrors test_software_update.py's
+    count_matching_notices/close_all_notices, module-local copy).
+  - test_query_channel_verdict_matches_block_with_no_side_effects (row a):
+    two-domain feed; domain1's real block is drilled, its dnsbl.log line/group/
+    feed parsed, pfb_dnsbl_query(domain1) asserted decision-equal
+    (group/feed byte-match); a domain2 real-block BARRIER bounds how far any
+    query side effect could have propagated; domain1's own hit-count/cache-row
+    reasserted unchanged after the barrier (Semantic 3); D1 fold-in asserts
+    pfb_py_data.txt/pfb_py_zone.txt absent.
+  - test_manifest_absent_fails_loud_and_force_reload_self_heals (row b): before-
+    state VIP block; manifest rm + raw Unbound bounce; asserts NOT is_vip AND
+    NOT is_null_ip (no stale serve); asserts an open parse-stage ledger entry
+    for pfb_py_sources.json via pfb_py_sync_status_list_open; asserts
+    pfb_dnsbl_manifest_failure_notice() fires + a matching get_notices() row;
+    unblock_egress + Force Reload self-heals -- VIP block resumes, ledger entry
+    closes; `finally` closes the 'pfBlockerNG DNSBL' notice for VM hygiene.
+  - test_vip_hit_increments_widget_counter_with_query_group (row c): CaseContext
+    scope="update" (full pass, provisions the sinkhole -- mirrors
+    test_dnsbl_block_page.py's documented split); pfb_dnsbl_query records the
+    expected group/feed BEFORE any HTTP hit; the sinkhole curl poll (byte-for-
+    byte the test_dnsbl_block_page.py recipe: GUEST_CURL, Host header,
+    DEFAULT_DNSBL_VIP4, 10x1.5s poll, self-diagnosing pytest.fail); the HOST
+    dnsbl.log "DNSBL-Full," line count for the domain (n) asserted >=1 with its
+    group/feed matching the query's expected values (neither 'Unknown'); the
+    group counter asserted to advance by EXACTLY n.
+
+tests/smoke/ui/test_adr65_alerts_live.py (NEW, 113 lines)
+  - Module marker `pytest.mark.ui_e2e`; module-local `_dnsbl_log_hits`/
+    `_dnsbl_log_line` copies (same shape as the smoke-side ones, kept local per
+    the "new modules only" constraint).
+  - test_alerts_row_renders_logged_group_and_feed_live (row d): a real VIP
+    block via the session-scoped `deployed_vm`/`webui` fixtures (ui/conftest.py);
+    the domain's dnsbl.log line is parsed for the LOGGED group/feed (never
+    hardcoded); the Alerts page is fetched authenticated; the row is asserted
+    to contain the logged group AND feed, with no "<s>" strike-through and no
+    "Not currently listed" text (the retired re-check's markup, ADR-65 D2) --
+    the identical contract test_alerts_render_verify.py pins over SEEDED lines,
+    here pinned over a line the package's OWN logger just wrote for a genuine
+    live block.
+
+--------------------------------------------------------------------------------
+GATES (exact commands + pasted tails)
+--------------------------------------------------------------------------------
+1) Collection proof (executed BEFORE the commit, re-confirmed after):
+   $ sh -c 'python3 -m pytest tests/smoke/test_smoke_adr65.py \
+       tests/smoke/ui/test_adr65_alerts_live.py \
+       --collect-only -q --override-ini="addopts="'
+     tests/smoke/test_smoke_adr65.py::test_query_channel_verdict_matches_block_with_no_side_effects
+     tests/smoke/test_smoke_adr65.py::test_manifest_absent_fails_loud_and_force_reload_self_heals
+     tests/smoke/test_smoke_adr65.py::test_vip_hit_increments_widget_counter_with_query_group
+     tests/smoke/ui/test_adr65_alerts_live.py::test_alerts_row_renders_logged_group_and_feed_live
+     4 tests collected in 0.03s
+   EXACTLY 4 tests (3 + 1), zero errors, matching the brief's section 6 item 1.
+
+2) Local pre-commit sanity (ruff/mypy/pytest -- not the canonical gate runner,
+   run first to fail fast before invoking the full suite):
+   $ ruff check tests/smoke/test_smoke_adr65.py tests/smoke/ui/test_adr65_alerts_live.py
+     All checks passed!
+   $ ruff format --check tests/smoke/test_smoke_adr65.py tests/smoke/ui/test_adr65_alerts_live.py
+     2 files already formatted
+   $ python3 -m mypy tests/
+     mypy: No issues found
+   $ sh -c 'python3 -m pytest -q'
+     2933 passed, 2 skipped in 67.28s (0:01:07)
+
+3) Canonical gate runner (gateshim dir with a `mypy` wrapper prepended to PATH,
+   per this phase's session-quirk instructions):
+   $ PATH=<scratchpad>/gateshim:$PATH sh scripts/agent/run-gates.sh --diff origin/devel
+     GATE PASS: python3 -m pytest
+     GATE PASS: ruff check .
+     GATE PASS: ruff format --check .
+     GATE PASS: mypy tests/
+     GATE PASS: php -l (14 files, listed)
+     GATE PASS: vendor/bin/phpunit
+     GATE PASS: composer phpstan
+     GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/
+     GATE PASS: npx markdownlint-cli2
+     REMINDER: www/ touched -- Tier-A ui_render coverage is required and
+       cannot be script-checked (test mandate #4) -- this reflects the WHOLE
+       branch's cumulative diff vs origin/devel (prior phases touched www/);
+       THIS phase's own diff touches ZERO www/ files:
+       $ git diff --stat 2efabc14c75a767eba011177835cff31d01573f5..HEAD -- src/usr/local/www/
+         (empty)
+     GATES: PASS
+
+4) POST-COMMIT (these diff committed history -- a pre-commit run is vacuous):
+   $ python3 scripts/check_comment_narration.py --diff origin/devel
+     exit=0
+   $ python3 scripts/check_version_literals.py --diff origin/devel
+     exit=0
+
+5) POST-COMMIT, WARN-ONLY: python3 scripts/check_retired_tokens.py --diff origin/devel
+     exit=1 (findings, not a tool error -- expected per the tool's contract)
+     24 token-groups reported, IDENTICAL SET AND IDENTICAL COUNTS to RESULTS/07's
+     documented 24-group baseline (no drift at all this time -- this phase's
+     diff touches none of the surrounding source):
+       ' completed\n' (1), '</s><br />' (7), '<small>...</small>' (12),
+       'DNSBL' (1184), 'DNSBL_TLD' (21), 'Domain' (269), 'Failed to load:
+       {}: {}' (4), 'Feed' (228), 'Group' (1092), '[pfBlockerNG]: Failed to
+       load: {}: {}' (2), 'alerts' (205), 'domain_max_cnt' (1), 'important'
+       (155), 'index' (240), 'pfb_feed' (124), 'pfb_final' (12), 'pfb_group'
+       (19), 'pfb_mode' (12), 'python_blacklist' (15), 'redirect' (133),
+       'render' (177), 'transparent' (5), 'unified' (95), 'wildcard' (174).
+     ZERO NEW token-groups introduced by this phase's commit; ZERO count drift
+     (this phase adds test-only files, touching none of the 24 groups' sites).
+
+--------------------------------------------------------------------------------
+RED->GREEN PROOF / TEST-MODE STATEMENT (per section 5, CLAUDE.md Test coverage #1)
+--------------------------------------------------------------------------------
+This phase is DECLARED behaviour-preserving new-smoke-coverage (phase prompt
+line 10-12: "Test mode: behaviour-preserving -- brand-new smoke coverage
+OBSERVING behaviour phases 2-6 landed; authored + collection-checked
+off-appliance, EXECUTED only on the live-VM fan-out"). No off-appliance oracle
+can execute a live-VM smoke test (drill/curl/pfSsh.php against a real Unbound +
+lighttpd + SQLite state); CLAUDE.md's own carve-out for "brand-new code with no
+pre-existing behaviour to be wrong" applies -- the only possible off-appliance
+red for these four rows is a missing symbol/collection failure, itself
+coverage theater, and the executable off-appliance proof is the COLLECTION
+proof (gate 1 above) plus the full local gate suite (gate 3).
+
+NEVER CLAIMED RUN: no on-box execution of these four rows happened in this
+session. The four rows execute for the first time on the orchestrator's
+CE+Plus acceptance fan-out (deferred, section below) -- that is where their
+real red/green would be observed, and it is explicitly out of this phase's
+scope (phase prompt: "EXECUTED only on the live-VM fan-out").
+
+Every load-bearing production fact each row's assertions rest on was verified
+against the CURRENT source before writing the assertion (not from memory):
+  - pfb_dnsbl_query's exact signature/contract (pfblockerng_extra.inc:3785-3860,
+    RESULTS/03 carry-forward, re-confirmed live: array keys blocked/b_type/
+    group/b_eval/feed/p_type; NULL/blocked=false collapse to five empty strings).
+  - Python dnsbl.log CSV schema (pfb_unbound.py:2827-2841): group at index 6,
+    feed at index 8, type field[0]=="DNSBL-python" (never "DNSBL-Full").
+  - PHP pfb_log_event's schema (pfblockerng.inc:15013-15036): same field
+    positions; counter increments once per event line regardless of dup
+    (:15038-15053, outside the dup/non-dup branch).
+  - Per-group counter enqueue keyed on dnsbl.group directly
+    (pfb_unbound.py:2794 `pfb_db_enqueue(("dnsbl", dnsbl.group))`), same SQLite
+    file ($pfb['dnsbl_info'] == pfb["dnsbl_info"] == /var/unbound/pfb_py_dnsbl.sqlite,
+    pfblockerng.inc:104 vs pfb_open_sqlite table==1) the Python side writes --
+    confirmed the PHP webserver-hit counter and the Python DNS-block counter
+    share ONE row per group.
+  - dnsblcache enqueue gated "fresh block only" (pfb_unbound.py:6812-6814); the
+    query channel (dnsbl_query_answer, :6376-6402) never calls
+    pfb_db_enqueue/get_details_dnsbl -- confirmed no counter/log/cache write
+    path is reachable from the query, matching ADR §2 Semantic 3 verbatim.
+  - Manifest path/notice/ledger facts: $pfb['unbound_py_sources'] ==
+    pfb["pfb_py_sources"] == /var/unbound/pfb_py_sources.json
+    (pfblockerng.inc:138, pfb_unbound.py:1291); pfb_dnsbl_manifest_failure_notice
+    (inc:8954-8965) fires file_notice('pfBlockerNG DNSBL', ..., 'pfBlockerNG',
+    '/pfblockerng/pfblockerng_dnsbl.php', 2) off an open
+    pfb_py_sync_status_list_open entry; the raw-bounce + dnsbl_build_from_manifest
+    absent-arm opens the ledger entry via pfb_py_status_open (pfb_unbound.py:
+    5387-5392) with stage=='parse', item==manifest_path.
+  - index.php's REQUEST_URI=='/' -> type='DNSBL-Full' (www/index.php:105-113),
+    confirming the sinkhole hit's log-line type prefix row (c) greps for.
+All facts above were confirmed by reading the CURRENT (post-rebase) source in
+this session -- none taken from the brief's prose without a grep/read
+confirming it still holds. No contradiction was encountered; ESCALATE was not
+triggered.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+| Brief row (section 3) | D-delta | Test | Status |
+| ---------------------- | ------- | ---- | ------ |
+| (a) query round-trip, zero side effects | D4 + Semantic 3 (+ D1 fold-in) | test_query_channel_verdict_matches_block_with_no_side_effects | authored, collection-clean |
+| (b) manifest-absent fail-loud + self-heal | D3 | test_manifest_absent_fails_loud_and_force_reload_self_heals | authored, collection-clean |
+| (c) VIP hit increments widget counter with query group | D4 | test_vip_hit_increments_widget_counter_with_query_group | authored, collection-clean |
+| (d) alerts row renders logged feed/group, re-check gone | D2 | test_alerts_row_renders_logged_group_and_feed_live | authored, collection-clean |
+| Hostile-input rows | N/A -- no production parser/regex/guard touched (phase prompt line 13) | -- | NONE REQUIRED, per brief section 4 |
+| VIP-only / A-only scoping | rows a-c smoke-tier (VIP mode only, DNSBL python mode is the only mode on devel); row d ui_e2e-tier | -- | as specified by the brief; NULL/NXDOMAIN block-shape axes are out of this phase's scope (SS7 checklist itself is VIP-mode-only for (a)/(c)) |
+| CE+Plus live-VM execution | deferred to the orchestrator's acceptance fan-out | -- | NEVER CLAIMED RUN this session (see RED->GREEN PROOF) |
+| D1 no-interchange-files assert | D1 | folded into test_query_channel_verdict_matches_block_with_no_side_effects (brief section 3, row (a) step 7) | authored, collection-clean |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Rebase: this worktree was 1 commit behind origin/devel (655b0c6a "workflows:
+   phase-step accepts a briefModel override for the Brief stage" -- dev-only,
+   no code overlap). Rebased cleanly, no conflicts. base_sha above is the
+   POST-rebase pre-edit tip (2efabc14c75a767eba011177835cff31d01573f5).
+2. Two-commit shape (code commit + this follow-up doc-only handoff commit) --
+   pre-authorized by the brief section 6 ("The handoff lands as a follow-up
+   doc-only commit... pre-authorized here"), same P1/P5/P6/P7 precedent.
+3. No ESCALATE triggered: every factual claim in the brief (helper/fixture/
+   line refs, pfb_dnsbl_query's signature, the sinkhole exemplar's recipe, the
+   ledger/notice function names, the log-line schemas) matched the live tree
+   exactly after the rebase -- confirmed by direct read/grep for each, listed
+   in the RED->GREEN PROOF section above.
+4. No invention of a new mechanism: every helper this phase adds is a
+   module-local Python test function calling an EXISTING production PHP/Python
+   symbol (pfb_dnsbl_query, pfb_py_sync_status_list_open,
+   pfb_dnsbl_manifest_failure_notice, get_notices/close_notice, the dnsbl/
+   dnsblcache SQLite tables, the raw Unbound bounce shape already used by
+   inject_safesearch_cname_entries) -- no helpers.py change, no conftest
+   fixture, no production tweak. Plain DONE, not DONE-WITH-DEVIATION, on this
+   axis.
+5. Retired-token checker: WARN-ONLY per its contract; IDENTICAL 24-group set
+   AND identical per-group counts vs RESULTS/07's baseline (zero drift this
+   time -- this phase's diff touches none of those groups' surrounding files).
+   No new token-group introduced.
+6. Session quirks honored: bare pytest/mypy wrapped in `sh -c '...'`
+   (collection proof) and via the scratchpad `mypy` PATH shim (gate runner)
+   per this phase's brief section 5 note (1); no push was denied this phase
+   (see PUSH below), so quirk (2) did not arise; retired-token quirk (3)
+   handled per item 5 above.
+
+--------------------------------------------------------------------------------
+PUSH
+--------------------------------------------------------------------------------
+$ git -C /Users/andre/git/pfBlockerNG-adr65 push --force-with-lease origin HEAD
+  To github.com:pfBlockerNG/pfBlockerNG.git
+   + a8305314...07492cea HEAD -> adr/65-dnsbl-manifest-single-source (forced update)
+  ok adr/65-dnsbl-manifest-single-source
+Accepted (rewrote history via the rebase; lease held against the fetched
+remote tip) -- no denial to record.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD (Phase 9 -- docs, ADR-06 SS8 amendment, release note, issue prep)
+--------------------------------------------------------------------------------
+- DEFERRED, VERBATIM dispatch commands for the orchestrator's CE+Plus
+  acceptance fan-out (never run this session -- see RED->GREEN PROOF):
+    scripts/local-smoke.sh --marker smoke --filter adr65
+    scripts/local-smoke.sh --marker ui_e2e --filter adr65
+  (flag names pinned by scripts/local-smoke.sh's own usage header:
+  `[--marker M] [--filter EXPR]`.) The full ADR acceptance run additionally
+  executes the Phase-7 reconciled ui_e2e rows
+  (tests/smoke/ui/test_alerts_render_verify.py, RESULTS/07 carry-forward) and
+  Tier-A ui_render, per ADR SS6 "Acceptance execution", before ADR-65 can flip
+  to Accepted per the "ADR acceptance -- automated tests" rule (CLAUDE.md).
+- Untouched inventory carried forward from RESULTS/06/07, restated (NOT
+  actioned this phase -- this phase's diff is tests-only, no src/ touched):
+  * The Python close-only wrappers (_load_zone_and_data_dbs /
+    _load_whitelist_and_hsts_dbs) and the pfb["pfb_py_data"]/pfb["pfb_py_zone"]
+    path defs in pfb_unbound.py (:1047-1048/:1065-1066/:1279-1280) -- fully
+    orphaned, a future phase's retirement candidate.
+  * The g5 grep-helper sites (pfb_dnsbl_prefetch_grep +
+    pfb_dnsbl_parse_compute's exec-grep fallback, pfblockerng.inc
+    :14336-14337/14498/14532) -- kept untouched, needs its own retirement
+    issue/phase.
+  * $pfb['unbound_py_data']/['unbound_py_zone'] path DEFS (pfblockerng.inc
+    :130-131) -- still exist; a future retirement needs the g4 sweep entries
+    in pfb_unbound_clear_work_files() updated in lockstep.
+  * $pfb['domain_max_cnt'] -- write-only orphaned config key (setter at
+    pfblockerng.inc:16353), explicitly left alone.
+  * Retired-token FP ledger: still the 24 documented token-groups (this phase
+    re-verified the identical set AND identical counts -- see GATES item 5).
+  * docs/misc/alerts-reports-pipeline.md still describes the two-phase
+    (batched-prefetch + per-row re-check) model Phase 4/6 collapsed to one
+    streaming pass with no re-check -- a future phase rewrites it; NOT touched
+    this phase (docs are out of this tests-only phase's diff budget).
+- NEW this phase, for Phase 9 to reconcile into docs/ADR text: SS7's manual
+  smoke checklist rows (a)-(c) (ADR.md SS7 "Manual smoke checklist (owner:
+  maintainer)") are now AUTOMATED by tests/smoke/test_smoke_adr65.py and
+  tests/smoke/ui/test_adr65_alerts_live.py -- Phase 9 should update SS7's
+  prose to point at these tests (once the acceptance fan-out confirms they
+  pass) rather than describing them as a manual owner action.

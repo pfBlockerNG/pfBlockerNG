@@ -1,0 +1,127 @@
+ADR-02 Phase 5 Results — Alerts/widget collapse + finalize (FINAL PHASE)
+========================================================================
+
+Recipient: the MAINTAINER. Code work for ADR-02 is complete; acceptance is
+blocked ONLY on the manual smoke test below (no live Unbound in CI). No next
+agent phase.
+
+STATE AFTER THIS PHASE
+-----------------------
+The entire package now has a SINGLE DNSBL implementation (Unbound Python
+integration). Every dnsbl_mode / dnsbl_py_blacklist conditional is gone, and the
+defining variables have been removed. The ONLY surviving reference to the legacy
+keys is the one-time config migration in pfblockerng_install.inc (which rewrites
+dnsbl_unbound / pfb_py_block!=on -> dnsbl_python + pfb_py_block=on). `python_blocking
+= on` is still emitted in the resolver config.
+
+WHAT CHANGED (this phase)
+-------------------------
+- pfblockerng_alerts.php: collapsed ~28 sites — pure if(py) unwrapped; if(!py)
+  deleted/else-kept; the two mixed `(... && !py && ...) || py` guards reduced to
+  always-true (unwrapped); the `py ? A : B` ternaries (column titles, "DNSBL
+  Webserver/VIP" labels) taken to the python side; the `dnsbl_mode == 'dnsbl_python'`
+  standalone guards unwrapped; the `dnsbl' == 'on' && dnsbl_mode==python` conjunct
+  reduced; the dnsbl_stat `&& dnsbl_mode != 'dnsbl_python'` elseif (always false)
+  deleted.
+- pfblockerng.widget.php: 3 sites — `if(dnsbl_mode==python){py}else{unbound}`
+  unwrapped to the Python branch; two `dnsbl_mode==python && filesize` conjuncts
+  reduced.
+- ALSO collapsed (found by the package-wide sweep — not in the original P5 prompt
+  list): pfblockerng_category.php (2), pfblockerng_category_edit.php (2),
+  pfblockerng_log.php (1) — all read $pfb['dnsbl_py_blacklist'].
+- pfblockerng_install.inc: collapsed L520 `($pfb['dnsbl_mode'] == 'dnsbl_python') &&
+  is_dir(...)` -> `is_dir(...)` (the chroot-copy guard) so it no longer depends on
+  the keystone. The migration block is unchanged.
+- pfblockerng.inc: REMOVED the P1 keystone `$pfb['dnsbl_mode'] = 'dnsbl_python'`,
+  the `$pfb['dnsbl_py_block']` read, and the `$pfb['dnsbl_py_blacklist'] = TRUE`
+  definition. Simplified the leftover `$python_blocking='off'; $python_blocking='on';`
+  to a single `$python_blocking = 'on';`.
+
+VERIFICATION RESULTS (Definition of Done — ADR §7)
+--------------------------------------------------
+- `php -l` (Homebrew php 8.5): clean on all changed files — pfblockerng.inc,
+  pfblockerng_install.inc, pfblockerng_alerts.php, pfblockerng_category.php,
+  pfblockerng_category_edit.php, pfblockerng_log.php, pfblockerng.widget.php.
+- Delimiter-balance checker: BALANCED on the PHP files.
+- `grep -rn "dnsbl_unbound\|pfb_py_block\|dnsbl_py_blacklist" src/` -> ONLY the
+  install.inc migration (L111, L113). No other matches.
+- `grep -rn "dnsbl_mode" src/` -> ONLY the install.inc migration (L111, L112).
+- `python -m pytest` -> 163 passed.  `ruff check .` -> All checks passed.
+- `shellcheck -s sh pfblockerng.sh` -> 0 findings (beyond sanctioned SC1091/SC2154).
+- `python_blocking = on` confirmed still emitted (pfblockerng.inc ~L2415).
+- README.md: no DNSBL-mode / min-version / workflow references — nothing to update.
+
+Phase 5 collapses were applied with the string/heredoc-aware brace-matching tool
+(/tmp/pfcollapse.py) + literal count-asserted substring replacements; the two
+mixed-boolean guards and all dnsbl_mode/elseif cases were verified by reading and
+by full-diff review.
+
+COMMIT LAYOUT FOR ADR-02 (branch `edge`)
+----------------------------------------
+  P1  f6df43c  force Python-only DNSBL + migrate legacy mode config
+  P2  9b051d3  remove DNSBL mode selector and native-only UI
+  P3a 463af59  remove native resolver-queries daemon
+  P3b 1bc2ee6  collapse native branches in tld_analysis()
+  P3c c0c3331  remove native config from resolver/lighttpd builders
+  P3d 158f9d2  collapse remaining native branches in pfblockerng.inc
+  P4  964ab65  remove native shell builders domaintld/dnsbl_livesync
+  P5  (this commit) collapse alerts/widget/category/log + remove definitions
+
+WATCH-OUTS / KNOWN RESIDUALS (harmless; optional later cleanup)
+---------------------------------------------------------------
+- $pfb['dnsbl_sync'] (pfblockerng.inc) and the Resolver Live Sync UI field
+  (pfb_dnsbl_sync, currently hidden) are now dead (Live Sync removed in P3/P4).
+  Safe to drop in a follow-up; left in place to keep P5 scoped.
+- alerts.php: `if ($logtype == 'DNSBL Block') { continue 2; break; }` — the
+  `break;` is unreachable after the unconditional `continue 2;` (cosmetic).
+- A few orphaned comments / double-blank-lines where native blocks were removed.
+
+UPDATE (post-P5 follow-up — commit acb31a7): the residuals listed above are RESOLVED
+-------------------------------------------------------------------------------------
+The "KNOWN RESIDUALS" text above is left intact as originally written. After P5, a
+dedicated follow-up commit (acb31a7) cleaned all three items:
+- Removed the dead $pfb['dnsbl_sync'] read and the "Resolver Live Sync"
+  (pfb_dnsbl_sync) UI field — its pconfig seed, POST save, and the now-empty
+  enable_python() JS function + its call.
+- Removed the unreachable `break;` after `continue 2;` in the DNSBL Block log filter
+  (and a stray blank line).
+- Removed the orphaned "// DEBUG Live Sync" comment.
+Re-verified after acb31a7: php -l clean, delimiter-balanced, ruff clean, pytest 163;
+`grep -rn "pfb_dnsbl_sync\|dnsbl_sync" src/` -> no matches.
+
+Why this divergence existed (the residuals were known but deferred, not missed):
+Each ADR-02 phase was committed atomically and verified strictly against its own
+phase prompt's scope, to keep the history reviewable and bisectable. The P5 prompt
+scoped the phase to "collapse the dnsbl_mode / dnsbl_py_blacklist branches in
+alerts/widget, then remove the now-unread definitions." These three items were NOT
+mode branches — they were code that became DEAD as a side effect of EARLIER phases
+(the Live Sync feature was deleted in P3/P4; the `break;` only went dead once P5
+made the preceding `continue 2;` unconditional). Folding that unrelated dead-code
+removal into P5 would have widened the commit past its stated contract and mixed two
+concerns, and the Resolver Live Sync UI removal also touched a different file region
+(the DNSBL settings form) than P5's targets. So they were deliberately deferred,
+recorded here as residuals, and then cleaned in a separate single-purpose commit at
+the maintainer's request. Net effect on the package is identical; only the commit
+boundary differs.
+
+================================================================================
+OUTSTANDING — MANUAL SMOKE TEST (owner: MAINTAINER)  ** required before Accept **
+================================================================================
+No live Unbound exists in dev/CI, so these cannot be automated. Deploy with
+scripts/deploy.sh to a live pfSense box and run on BOTH a clean install AND a box
+upgraded from a `dnsbl_unbound` config. Record results here, then set ADR Status
+to **Accepted**.
+
+[ ] Upgrade migration: box previously on dnsbl_unbound -> after pkg upgrade, DNSBL
+    enabled, Python integration active (python_enable + pfb_unbound.py in the
+    resolver config), blocking works with no manual step.
+[ ] Exact block: query an exact DNSBL entry -> blocked (DNSBL VIP) and logged.
+[ ] Wildcard block: query a subdomain of a wildcard/zone entry -> blocked.
+[ ] Whitelist: a whitelisted domain (and a www. case) resolves normally.
+[ ] TLD wildcard blocking (pfb_tld on): still consolidates/blocks in Python mode.
+[ ] DNS-reply logging (pfb_py_reply) and pfb_py_nolog: both log as expected.
+[ ] SafeSearch (incl. CNAME DDG/PIX) still works in Python mode.
+[ ] Alerts UI + dashboard widget: render with no PHP notices; blocking-type
+    column + "DNSBL Webserver/VIP" labels correct; unblock/whitelist actions work.
+
+Once all pass: set ADR header Status to "Accepted" and record the date/result.

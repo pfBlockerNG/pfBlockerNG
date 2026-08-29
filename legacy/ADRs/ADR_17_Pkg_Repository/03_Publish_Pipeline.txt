@@ -1,0 +1,80 @@
+================================================================================
+PHASE 3 PROMPT — Publish pipeline: regenerate over Releases → deploy to GitHub Pages
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_17_Pkg_Repository/ADR.md   (read §2 "Repo = derived index over Releases"
+     / "Hosting", the contract "additive + isolated" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/17` branch performing Phase 3 of ADR-17. Wire the CI that
+regenerates the `pkg` repository over ALL Release `.pkg` assets and deploys it to
+GitHub Pages — additive to, and isolated from, the existing release flow. Work in this
+ADR's `adr/17` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+ADR-09's `attach-pkgs` already makes each GitHub Release the DURABLE `.pkg` store. The
+repository is a DERIVED, fully regenerated index over those assets — stateless and
+idempotent, so every published build (all versions, all ABIs) is retained without
+accumulating state and the deploy is trivially rollback-able. This phase builds that
+regeneration + Pages deploy without ever endangering `release`/`ports-pr`.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_17_Pkg_Repository/RESULTS/02_Results.txt — the `build-repo.sh` interface +
+  the libpkg-on-Linux-vs-FreeBSD verdict (which path this job must use). If missing,
+  STOP and report.
+- .ADRs/ADR_17_Pkg_Repository/ADR.md (§2 Hosting / derived-index, §3, the contract).
+- .github/workflows/release.yml (origin/devel) — the job graph: `verify-checks`,
+  `read-matrix` (outputs `build_matrix`), `release`, `build-pkgs-portable` (uploads the
+  `pfBlockerNG-release-pkgs` artifact), `attach-pkgs` (`if: always() && needs.release.
+  result == 'success'`), `ports-pr`. Mirror the isolation pattern EXACTLY.
+- .github/actions/read-version-matrix/action.yml — reuse to know the supported ABIs.
+- scripts/build-repo.sh (Phase 2) — the generator this job calls.
+- CLAUDE.md — CI rules (activate hooks before any commit step; least-privilege perms).
+
+ACTION PLAN (ordered)
+1. Add a `repo-publish` job (in `release.yml`, or a `workflow_call` reusable invoked by
+   it) that runs AFTER the artifacts exist and is FULLY ISOLATED:
+   - `needs:` only what it must; `if: always()` so it NEVER gates or fails
+     `release`/`ports-pr`/`attach-pkgs`. A repo-publish failure must leave them green.
+2. Assemble the FULL input set: enumerate ALL releases (`gh api` / `gh release list`),
+   download each release's `.pkg` assets into one dir (the durable store). Include the
+   just-built artifacts for the current tag.
+3. Run `scripts/build-repo.sh` over that dir → the per-`<ABI>/` tree (use the Phase-2
+   path decision: Linux libpkg by default, FreeBSD fallback if recorded).
+4. Deploy with `actions/upload-pages-artifact` + `actions/deploy-pages` (the site is
+   REPLACED each deploy — no gh-pages history). Enable the `github-pages` environment;
+   scope `pages: write` + `id-token: write` to THIS job only (the file's default perms
+   stay least-privilege).
+5. Make it dispatchable for validation (a `workflow_dispatch` path that publishes
+   without a tag), and prove a real VM `pkg update` against the deployed URL succeeds.
+
+CONSTRAINTS
+- ADDITIVE + ISOLATED: do not change `release`/`ports-pr`/`attach-pkgs` behaviour; copy
+  their `if: always()`/`needs` isolation. A bot must never touch channel branches.
+- Activate the git hooks in any job that commits (none should here — Pages deploy is an
+  artifact, not a commit). Least-privilege perms; elevate only the deploy job.
+- Reuse `read-version-matrix` + `build-repo.sh`; do NOT re-implement catalog gen or the
+  matrix. Do NOT touch `src/`.
+
+VERIFICATION (must all pass before the phase is done)
+- A dispatch run regenerates the catalog over the Release assets and deploys to Pages;
+  a live VM `pkg update` against the published URL succeeds (capture the run + URL).
+- Job-isolation review: a forced repo-publish failure leaves `release`/`ports-pr` green.
+- actionlint/yaml sanity; python -m pytest (default) → unchanged.
+
+EXPECTED RESULT
+A tag (or dispatch) regenerates the full `pkg` repository over all Release `.pkg` and
+publishes it to GitHub Pages, with zero risk to the existing release + ports-PR flow.
+
+COMMIT (single)
+    ci: publish pkg repository to GitHub Pages over Release assets (ADR-17 P3)
+In this ADR's `adr/17` worktree: `git fetch` + rebase onto the latest `origin/devel`,
+then push `adr/17`. Touches CI → lands on `devel` via a rebase-only PR. PR body via
+--body-file.
+
+HANDOFF — write `.ADRs/ADR_17_Pkg_Repository/RESULTS/03_Results.txt` (plain .txt)
+State: the job name + its `needs`/`if` isolation; the published Pages URL + the `${ABI}`
+base it exposes; the dispatch run that proved a VM `pkg update`; confirmation `release`/
+`ports-pr` are unaffected on a forced failure; what Phase 4's `add-repo.sh` should point
+its `url:` at; the go-ahead for Phase 4.

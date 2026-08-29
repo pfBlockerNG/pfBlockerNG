@@ -1,0 +1,196 @@
+ADR-40 — Service-Disruption Magnitude, UNCENSORED
+==================================================
+
+Supersedes 02b_Replace_Disruption_Baseline.txt (its numbers were RIGHT-CENSORED
+at ~500ms — see "Why 02b was wrong" below). Complements 02_Results.txt (delta-apply
+timing benchmark, commit 46a4e0e8) and the shipped delta defaults (commit 04666de7:
+churn threshold 5%, batch 512).
+
+This file answers the question 02b could not: HOW LONG does traffic to a blocked IP
+actually stall during pfctl -T replace vs a chunked delta — with the disruption
+magnitude no longer clipped by the probe timeout.
+
+Run date:   2026-06-26 UTC
+Box:        10.0.0.24 (6 cores, 15 GB; SMOKE_VM_SMP="3,sockets=1,cores=3" SMOKE_VM_MEM=6144 SMOKE_CLIENT_SMP="3,sockets=1,cores=3")
+Test:       tests/smoke/test_bench_pfctl.py::test_pfctl_disruption_uncensored
+Exit:       PASSED (pytest exit 0; 1 passed in 4756.93s / 1:19:16)
+Harness:    same two-VM topology as 02_Results / 02b — pfSense CE 2.8.1 guest + Debian civm,
+            floating + LAN reject rules, TCP-RST reject-loop probe.
+Method:     7 replace sizes + 4 delta cells × 20 reps each; op-aligned windows (CR#12);
+            full distribution pooled across reps.
+
+Harness fixes vs 02b (commit 29df063e):
+  1. UNCENSOR: TCP-probe timeout 0.5s → 5.0s. A stall now records its true RTT up to
+     5s; only a genuine ≥5s failure is dropped as a loss. 02b clamped every stall ≥500ms
+     to ~500ms, so it could not tell a 100ms stall from a 4s one.
+  2. STARVATION FIX: probe concurrency 64 → 400 simultaneous in-flight, and the op-aligned
+     window now slices by connection START time (start_epoch), not completion time
+     (recv_epoch). A connection that starts inside the op window but stalls 200ms-5s
+     completes OUTSIDE the window; slicing by completion silently dropped exactly the
+     stalled connections we care about. This is why 02b's 50k cell had only n=4.
+
+
+WHY 02b WAS WRONG
+-----------------
+02b reported "100% disruption at ~500ms for all sizes ≥50k" and "50k: n=4". Both were
+artefacts, not findings:
+  - The flat ~500ms was the 0.5s PROBE CEILING. Every connection that stalled at all
+    read back as ~500ms because the probe gave up at 500ms. The real stall is bimodal:
+    fast connections finish in 1-2ms; caught connections stall to ~5s (one full TCP SYN
+    retransmit interval) — invisible under a 0.5s cap.
+  - The 02b quiescent baseline showed p99 ≈ 500ms; that too was the same ceiling leaking
+    into the no-op measurement, not real idle latency. The uncensored quiescent baseline
+    below is clean: p50 ≈ 4.7ms, p99 ≈ 6-16ms, max ≈ 45ms.
+  - 50k n=4 was probe starvation (completion-time slice + 64-way concurrency). Uncensored,
+    50k is n=3122.
+
+CONFIRMATION THE FIXES WORKED:
+  - max RTT now 5002-5011ms where the stall is real (was a flat ~500ms in 02b).
+  - p99 ≈ 5001-5002ms at every cell — the genuine SYN-retransmit stall, not a ceiling.
+  - healthy n at EVERY cell, 50k included (n=3122, was n=4).
+  - quiescent baseline is clean (no 500ms contamination).
+
+
+A — REPLACE DISRUPTION vs TABLE SIZE (the TRUE curve)
+-----------------------------------------------------
+Replace-only ops; floating + LAN reject rules; op-aligned window (connections STARTED
+in [t0,t1]); 20 reps pooled. Buckets = connections whose RTT exceeded the threshold.
+
+     size   wall_ms      n      p50       p95       p99    p99.9       max     |>50ms    |>100ms    |>250ms    |>500ms      |>1s      |>2s
+------------------------------------------------------------------------------------------------------------------------------------------
+   10,000        21   2572     2.38    179.47   5001.89  5002.71   5002.90   184( 7.2%)  163( 6.3%)  112( 4.4%)  112( 4.4%)  112( 4.4%)  110( 4.3%)
+   50,000        54   3122     2.81     15.01   5001.68  5002.07   5002.74   144( 4.6%)  144( 4.6%)  144( 4.6%)  144( 4.6%)  144( 4.6%)  143( 4.6%)
+  100,000        98   4240     1.87     31.41   5001.87  5002.70   5002.91   207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)
+  200,000       198   5736     2.40     68.50   5001.84  5002.85   5003.75   601(10.5%)  277( 4.8%)  268( 4.7%)  268( 4.7%)  268( 4.7%)  266( 4.6%)
+  462,000       350   8089     1.12     66.61   5001.84  5002.93   5005.42   695( 8.6%)  385( 4.8%)  385( 4.8%)  385( 4.8%)  385( 4.8%)  380( 4.7%)
+  750,000       532  10958     1.06   5000.97   5001.88  5002.89   5003.75   964( 8.8%)  643( 5.9%)  643( 5.9%)  643( 5.9%)  643( 5.9%)  640( 5.8%)
+1,000,000       679  13238     1.05     64.23   5001.82  5002.81   5003.53   908( 6.9%)  567( 4.3%)  567( 4.3%)  567( 4.3%)  567( 4.3%)  566( 4.3%)
+
+Reading the curve:
+  - p50 ≈ 1-3ms at every size: MOST in-flight connections are NOT caught — they complete
+    between the SYN and the lock, or after it releases. The replace lock is held once.
+  - The disruption is BIMODAL. A connection caught with its SYN in-flight during the
+    lock-hold gets no RST until the lock releases; if the lock outlasts the first SYN
+    retransmit, that connection stalls a FULL retransmit interval (~5s on FreeBSD/Linux),
+    which is why p99 ≈ 5001ms and max ≈ 5002-5005ms across the board.
+  - The CAUGHT FRACTION (the >100ms..>2s buckets, which all agree to within rounding) sits
+    at ~4.3-5.9% regardless of table size. This is the real headline: a full replace stalls
+    ~4-6% of the connections that have a SYN in flight during the op, and it stalls them
+    HARD (to ~5s), not to 500ms as 02b implied.
+  - The >50ms bucket runs a few points higher (7-10%) at the larger sizes: those are
+    near-edge connections caught for a partial-lock fraction (tens of ms), not a full
+    retransmit. The longer the op-wall, the wider that partial-stall skirt.
+  - p95 is noisy (15ms..5000ms) because it sits right on the bimodal boundary: whether the
+    95th percentile lands in the fast mode or the stalled mode flips with the caught
+    fraction. The BUCKET PERCENTAGES, not p95, are the stable disruption signal.
+
+Bottom line for replace: stall DEPTH is ~5s and size-independent; what grows with size is
+the op-WALL (21ms → 679ms), i.e. the exposure WINDOW during which a new connection can be
+caught. Bigger table ⇒ longer window ⇒ proportionally more connections fall into the same
+~5s stall.
+
+
+B — DELTA vs REPLACE (batch=512, the shipped batch default)
+-----------------------------------------------------------
+Delta = -T add/-T delete only the changed entries, chunked at batch=512. Churn is the
+add+del count. Each cell paired against the same-size full replace from section A.
+
+op       size      churn  batch  wall_ms      n      p50       p95       p99       max     |>50ms    |>100ms    |>250ms    |>500ms      |>1s      |>2s
+----------------------------------------------------------------------------------------------------------------------------------------------------
+replace  100,000       —      —       98   4240     1.87     31.41   5001.87   5002.91   207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)  207( 4.9%)
+delta    100,000  1,000(1%)  512       52   3574     1.96     24.42   5001.80   5002.88   145( 4.1%)  145( 4.1%)  145( 4.1%)  145( 4.1%)  145( 4.1%)  145( 4.1%)
+delta    100,000  5,000(5%)  512      216   4678     1.49     28.77   5001.81   5002.93   209( 4.5%)  209( 4.5%)  209( 4.5%)  209( 4.5%)  209( 4.5%)  206( 4.4%)
+replace  462,000       —      —      350   8089     1.12     66.61   5001.84   5005.42   695( 8.6%)  385( 4.8%)  385( 4.8%)  385( 4.8%)  385( 4.8%)  380( 4.7%)
+delta    462,000  4,620(1%)  512      201   6639     1.10   3068.45   5001.88   5002.89   493( 7.4%)  338( 5.1%)  338( 5.1%)  338( 5.1%)  338( 5.1%)  338( 5.1%)
+delta    462,000 23,100(5%)  512      914  11977     1.01   2050.22   5001.90   5011.61   718( 6.0%)  607( 5.1%)  607( 5.1%)  607( 5.1%)  607( 5.1%)  600( 5.0%)
+
+DELTA-vs-REPLACE DISRUPTION REDUCTION
+
+The key uncensored insight: a connection CAUGHT during a lock-hold window stalls the SAME
+~5s whether the lock came from a replace sweep or a delta batch. Delta does NOT make a
+caught connection less stalled — its p99/max are ~5001/5002ms, identical to replace. So
+the disruption reduction is NOT in stall depth; it is in the EXPOSURE WINDOW (op-wall) and
+therefore in the total COUNT of connections caught.
+
+At 1% churn (the production common case — pfBlockerNG feed deltas are typically <1%/cron):
+  - 100k: delta wall 52ms vs replace 98ms = 1.9× shorter exposure window.
+           caught fraction 4.1% vs 4.9% — delta slightly LOWER (fewer, shorter windows).
+  - 462k: delta wall 201ms vs replace 350ms = 1.7× shorter exposure window.
+           caught fraction ~5.1% vs ~4.8% — essentially EQUAL.
+  → At 1% churn delta roughly HALVES the exposure window at equal-or-lower disruption
+    fraction. Disruption-reduction factor ≈ 1.7-1.9× (driven by wall-time, not depth).
+
+At 5% churn:
+  - 100k: delta wall 216ms vs replace 98ms = 2.2× LONGER. caught 4.5% vs 4.9% (≈ equal).
+  - 462k: delta wall 914ms vs replace 350ms = 2.6× LONGER. caught ~5.1% vs ~4.7% (delta
+           marginally WORSE).
+  → At 5% churn delta is 2-2.6× SLOWER and marginally MORE disruptive. The reduction
+    factor INVERTS — replace wins. A 5% delta is N/512 ≈ many lock-hold windows; their
+    cumulative exposure exceeds replace's single window, and the caught connections stall
+    the same ~5s, so delta only adds windows without lowering depth.
+
+This confirms and SHARPENS 02_Results' censored conclusion ("delta wins at small churn,
+replace wins at large churn"): the win at 1% is real and ~1.7-1.9×; the loss at 5% is real
+and the stall it adds is a full ~5s per caught connection, not the ~500ms 02b implied.
+
+
+DEFAULTS VERDICT — does the data support the shipped 5% / 512?
+-------------------------------------------------------------
+Shipped (commit 04666de7): PFB_DELTA_CHURN_THRESHOLD = 0.05 (auto mode falls back to
+-T replace when churn/size >= 5%); batch = 512.
+
+  - CHURN THRESHOLD 5% — SUPPORTED, and it is the correct SAFE edge. At exactly 5% churn,
+    forced delta is 2-2.6× slower than replace AND marginally more disruptive, so falling
+    back to replace at >=5% is right: above the threshold, delta has no remaining benefit
+    to give. The 5% delta cells here measure precisely the path 'auto' mode AVOIDS, and
+    confirm avoiding it is correct. (02_Results located the crossover between 1% and 5%
+    and suggested ~2-3%; 5% is a conservative ceiling — it never lets 'auto' pick the
+    losing strategy, at the cost of staying on delta through the 2-5% band where the two
+    are close and delta's wall-time is still competitive at the low end of that band. Both
+    are defensible; 5% is the safe-against-regression choice and the data backs it.)
+
+  - BATCH 512 — SUPPORTED. 02_Results' batch-knee sweep showed monotone wall-time gains
+    with diminishing returns past ~2048 and FLAT stall depth across batch sizes (batch
+    controls throughput, not per-batch stall). 02c adds nothing that contradicts it:
+    every delta cell here ran at 512 with healthy n and the expected ~5s caught-stall.
+    512 sits in the efficient region for sub-1M tables without oversizing per-batch work.
+
+  - The production reality reinforces both: real feed updates are <1% churn/cron, squarely
+    in the band where delta halves the exposure window — exactly what the defaults select.
+
+
+QUIESCENT BASELINE (no pfctl op, rules active) — uncensored, clean
+------------------------------------------------------------------
+     size      n      p50      p95      p99    p99.9      max
+-------------------------------------------------------------
+   10,000   1677     4.69     5.37     6.42    19.04    42.73
+   50,000   1659     4.71     5.77    16.74    37.85    42.88
+  100,000   1693     4.67     5.53     7.29    13.95    45.88
+  200,000   1678     4.51     5.23     6.34    14.13    44.68
+  462,000   1678     4.62     5.41     6.34     8.71    45.51
+  750,000   1680     4.72     5.43     6.73    14.00    43.78
+1,000,000   1660     4.69     5.45     8.57    18.42    42.56
+
+Idle p99 ≈ 6-16ms, max ≈ 45ms — no 500ms ceiling contamination (contrast 02b, where the
+baseline p99 read ~500ms purely from the probe cap). This clean baseline is what makes the
+~5s during-op stalls unambiguously real.
+
+
+SPIKE THRESHOLD (corrected)
+---------------------------
+Spike threshold = quiescent p95 × 3.0, computed per cell. With the clean uncensored
+baseline (p95 ≈ 5ms) the threshold is now ~15-90ms (e.g. 50k→48.3ms, 462k→88.6ms),
+correctly flagging real spikes — the spikes column counts during-op connections above it
+(144 at 50k, 385 at 462k delta-1%, etc.). In 02b the threshold was ~1505ms (baseline p95
+× 3 with the contaminated ~500ms baseline), so it sat ABOVE the 500ms ceiling and counted
+0 spikes everywhere — a pure artefact. The bucket percentages remain the primary, absolute
+disruption signal; the corrected spike count is now a meaningful secondary instrument.
+
+
+VERIFICATION
+------------
+02_Results.txt MD5 (must be unchanged): 099860f6afa31d71c934d9ba3b5bde5c
+02b_Replace_Disruption_Baseline.txt MD5 (must be unchanged): 1aad588c39d4b4d26d4809a050ac4d45
+Both confirmed BYTE-IDENTICAL post-run (this file is additive; it supersedes 02b's numbers
+but does not modify the 02b file).
+Harness commit: 29df063e (5s timeout, 400 concurrent, start-time slice).

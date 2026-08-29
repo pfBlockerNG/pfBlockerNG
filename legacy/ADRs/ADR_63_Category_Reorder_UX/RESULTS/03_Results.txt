@@ -1,0 +1,312 @@
+ADR-63 PHASE 3 -- Wire pfblockerng_category.php (anchor-click added, drag
+preserved), implements issue #1147
+HANDOFF (implementer -> planner)
+
+== VERDICT ==
+DONE
+
+== WHAT CHANGED ==
+- src/usr/local/www/pfblockerng/pfblockerng_category.php: calls the dormant
+  Phase-2 shared component. (1) thead gains one `<th><!----- Reorder
+  -----></th>` gated `$gtype != 'geoip'` (aligns the injected anonymous
+  trailing cell's column). (2) emits `var pfb_drag_enabled =
+  <?=config_path_enabled('system/webgui','roworderdragging')?'false':'true';?>;`
+  next to the existing `var pagetype = null;`. (3) the `.sortable({...})` init
+  block is replaced by `pfb_reorder_init('#pfb_table table tbody',
+  'tr.sortable', null, pfb_drag_enabled);`. (4) `save_new_changes()`'s
+  order-read swaps from `.sortable('serialize', {key:"ids[]"})` to
+  `pfb_reorder_read_order('#pfb_table table tbody', 'tr.sortable')` -- the
+  tbody-empty/tbody-present if/else branches are UNCHANGED. Server-side ids[]
+  handler (:277-306) is byte-identical to origin/devel (confirmed below).
+- tests/smoke/ui/test_browser_category.py: 15 new ui_browser tests (the
+  red->green delta for #1147 + the drag-preservation regression proof).
+- tests/smoke/ui/test_render_smoke.py: 1 new parametrized ui_render test
+  (3 cases: ipv4/dnsbl/geoip) proving the wiring renders + the reorder <th>'s
+  gtype != geoip branch coverage.
+- .ADRs/ADR_63_Category_Reorder_UX/RESULTS/03_Results.txt (this file).
+
+Commit: folded to ONE commit "www: add anchor-click reorder to
+pfblockerng_category.php, implements #1147 (ADR-63 P3)" on
+adr/63-category-reorder-ux, then rebased onto the latest origin/devel by the
+orchestrator gate (see 03_Gate.txt "RECOVERY CONTEXT"). During development the
+red/green proof was executed across two transient pushed commits -- 2b6490ef
+(tests only, wiring ABSENT = the live RED) then 7d4d29f0 (wiring added = the
+live GREEN) -- both since folded away; the test file is byte-identical across
+both and the folded commit (git hash-object 76dd53bd..., confirmed below), so
+the freeze holds and no committed RED state remains in linear history (bisect
+hazard removed per CLAUDE.md linear-history rule). The red/green auditability
+lives in this handoff + the artifact logs, not in tree history.
+
+== WORKTREE BASE CHECK ==
+git fetch origin at session start: worktree tip e1975373 == origin/devel HEAD?
+No -- tip e1975373 == origin/adr/63-category-reorder-ux (branch, not devel);
+`git rev-list --count HEAD..origin/devel` == 0 at session start (brief's own
+pre-verified fact) -- no rebase needed.
+
+== GATES ==
+$ php -l src/usr/local/www/pfblockerng/pfblockerng_category.php
+No syntax errors detected in src/usr/local/www/pfblockerng/pfblockerng_category.php
+
+$ composer phpstan
+Note: Using configuration file .../phpstan.neon.
+ [OK] No errors
+
+$ composer phpcs -- --standard=phpcs.xml.dist src/
+(no output; exit 0)
+
+$ vendor/bin/phpunit
+OK, but there were issues!
+Tests: 3036, Assertions: 20257, Deprecations: 1, Notices: 1, Skipped: 4.
+(matches the e1975373 baseline exactly -- 4 pre-existing root-guard skips;
+zero production PHP touched other than category.php, which no PHPUnit test
+covers directly -- confirmed no new failures/regressions)
+
+$ python3 -m pytest tests/smoke/ui/test_browser_category.py tests/smoke/ui/test_render_smoke.py --collect-only --override-ini="addopts="
+========================= 88 tests collected in 0.12s ==========================
+(zero collection errors; test_browser_category.py alone: 18 tests, incl. the
+15 new reorder scenarios; test_render_smoke.py's new
+test_category_page_renders_reorder_wiring parametrized 3x)
+
+$ python3 -m pytest
+======================= 2672 passed, 4 skipped in 57.36s =======================
+(smoke tree --ignore'd by default addopts; baseline preserved unchanged)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+223 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 93 source files
+$ python3 -m mypy tests/smoke/ui/test_browser_category.py
+Success: no issues found in 1 source file
+
+Pre-commit hook (ran on both commits): ruff check/format, mypy tests/,
+no-appliance-python, version-literals, comment-narration, retired-tokens,
+php -l, phpstan, phpcs -- all passed/advisory-clean.
+
+== TIER-A (ui_render) LIVE RUN ==
+$ PFB_BOXES="root@10.0.0.31..38" scripts/local-smoke.sh --ref adr/63-category-reorder-ux --marker ui_render --filter category
+===================== 10 passed, 385 deselected in 51.23s ======================
+Includes: test_category_page_renders_reorder_wiring[ipv4] (pfb_reorder_init(
+call + pfb_drag_enabled var + reorder <th> ALL present), [dnsbl] (same), and
+[geoip] (component call + drag-enabled var present -- unconditional -- but
+reorder <th> ABSENT, proving the $gtype!='geoip' gate's negative branch);
+plus the 7 pre-existing category-page-adjacent ui_render tests, all still
+green (category_ip, category_dnsbl PAGE_TABLE entries, category_edit_*
+entries, the states-removal-help test, etc.), and the module-level
+php_error_log_guard sweep-level check (no new php_error.log line) held clean.
+
+== TIER-B (ui_browser) LIVE RUN ==
+$ PFB_BOXES="root@10.0.0.31..38" scripts/local-smoke.sh --ref adr/63-category-reorder-ux --marker ui_browser --filter category
+================ 25 passed, 370 deselected in 186.22s (0:03:06) ================
+select-box: released local-100035-...-9cdc4073062d0488 on root@10.0.0.35
+(All 15 new reorder scenarios ran; grep of the run log for '[0-9]+ failed'
+returned ZERO; the 25 passed = 15 new reorder tests + the pre-existing
+test_browser_category.py fresh-box/save/delete tests + the pre-existing
+test_browser_category_edit.py adjacent tests, all green in one consolidated
+run. Per-scenario names confirmed present in the run's slowest-durations
+listing -- each has a setup/call/teardown line, and none appears in a FAILED
+line.)
+
+Per-scenario results (a)-(e) + geoip no-op, from the consolidated run above
+(each ran to completion inside the 25-passed / 0-failed total):
+(a) drag-only, then Save -- test_reorder_drag_only_then_save_persists_dom_order[ipv4], [ipv6], [dnsbl]: 3/3 PASSED
+(b) anchor-click single row, then Save (the red->green delta, #1147) --
+    test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4], [ipv6], [dnsbl]: 3/3 PASSED
+(b) anchor-click straddle (both sides of the anchor), then Save --
+    test_reorder_anchor_click_straddle_then_save_persists_dom_order[ipv4], [ipv6], [dnsbl]: 3/3 PASSED
+(c) mixed drag-then-anchor-click in one session, then Save --
+    test_reorder_mixed_drag_then_anchor_click_then_save_persists_dom_order[ipv4], [ipv6], [dnsbl]: 3/3 PASSED
+(d) roworderdragging SET: no .sortable() instance, anchor-click still
+    persists on reload --
+    test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists: PASSED
+(e) field-edit-only Save, zero reorder staged, still persists the field edit
+    (proves #btnsave never gated by a staged reorder) --
+    test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field: PASSED
+geoip no-op: zero .pfb-reorder-anchor / .pfb-reorder-chk injected --
+    test_reorder_geoip_page_injects_no_anchor_ui: PASSED
+Pre-existing test_browser_category.py tests (savemsg banner, save-confirm
+cancel, row-delete confirm gate) also re-ran and stayed green (part of the
+25 passed, 0 failed).
+
+== RED->GREEN PROOF (scenario (b), single-row anchor-click) ==
+Per the brief's live-red recipe (verify-red-proof.sh is architecturally
+incompatible with the origin-fetching smoke harness -- a local HEAD~1 revert
+has zero effect on what the box checks out):
+
+1. Committed the FULL test suite (all 18 tests in test_browser_category.py +
+   the 3-case ui_render test) as 2b6490ef, category.php wiring ABSENT
+   (byte-identical to origin/devel at that point -- confirmed via
+   `git diff --stat -- src/.../pfblockerng_category.php` == empty). Pushed.
+   Ran the narrowed live filter:
+   $ PFB_BOXES="root@10.0.0.31..38" scripts/local-smoke.sh --ref adr/63-category-reorder-ux --marker ui_browser --filter "test_reorder_anchor_click_single_row_then_save_persists_dom_order and ipv4"
+   RED (executed, pasted):
+     FAILED tests/smoke/ui/test_browser_category.py::test_reorder_anchor_click_single_row_then_save_persists_dom_order[ipv4]
+     E    playwright._impl._errors.TimeoutError: Locator.check: Timeout 30000ms exceeded.
+     E    Call log:
+     E      - waiting for locator("tr.sortable").nth(2).locator(".pfb-reorder-chk")
+     ================= 1 failed, 394 deselected in 90.63s (0:01:30) =================
+   Failed for the exact reason the change addresses: the seeded rows DID
+   render in the correct DOM order (before == names passed) -- the failure is
+   specifically that `.pfb-reorder-chk` does not exist anywhere in the DOM,
+   because pfb_reorder_init() was never called (no page wiring yet).
+   RED test file hash (git hash-object tests/smoke/ui/test_browser_category.py
+   at commit 2b6490ef): 76dd53bd40994b7c9004b82bf83ace53c564cf7e
+
+2. Re-applied the category.php wiring (identical diff, verified via
+   `git apply --check`), committed as 7d4d29f0, pushed. Re-ran the SAME
+   filter, test file UNCHANGED:
+   GREEN (executed, pasted):
+     ====================== 1 passed, 394 deselected in 55.51s ======================
+   Green test file hash (git hash-object tests/smoke/ui/test_browser_category.py
+   at commit 7d4d29f0): 76dd53bd40994b7c9004b82bf83ace53c564cf7e
+   IDENTICAL to the red-time hash -- freeze holds (`git diff 2b6490ef --
+   tests/smoke/ui/test_browser_category.py` is empty).
+
+== SERVER-SIDE BYTE-IDENTITY ==
+$ git diff origin/devel -- src/usr/local/www/pfblockerng/pfblockerng_category.php
+4 hunks, ALL at/after line 416 (thead <th>, the JS var, the ids-read swap,
+the sortable-init->pfb_reorder_init swap). The ids[] handler region
+(:277-306, the switch/case 'update' block reading $post_ids) is UNTOUCHED --
+confirmed by hunk headers (`@@ -416,...`, `@@ -628,...`, `@@ -642,...`,
+`@@ -683,...`, none overlapping 277-306). No new $_POST field, no server
+parsing change. The geoip per-row-field save branch (:261, `if ($gtype !=
+'geoip')`) is untouched.
+
+== COVERAGE MATRIX (brief sec3, every row) ==
+gtype axis (ipv4/ipv6/dnsbl get working drag+anchor UI; geoip gets NONE):
+  ipv4: (a) drag[ipv4] PASSED; (b)-single anchor[ipv4] PASSED (the red->green
+    target); (b)-straddle anchor[ipv4] PASSED; (c) mixed[ipv4] PASSED.
+  ipv6: (a) drag[ipv6] PASSED; (b)-single anchor[ipv6] PASSED; (b)-straddle
+    anchor[ipv6] PASSED; (c) mixed[ipv6] PASSED.
+  dnsbl: (a) drag[dnsbl] PASSED; (b)-single anchor[dnsbl] PASSED;
+    (b)-straddle anchor[dnsbl] PASSED; (c) mixed[dnsbl] PASSED.
+  geoip: NO reorder UI -- test_reorder_geoip_page_injects_no_anchor_ui
+    (0 .pfb-reorder-anchor / 0 .pfb-reorder-chk) PASSED; #1201 no-op oracle
+    (test_category.py::test_category_ids_order_save_geoip_is_silent_no_op,
+    UNMODIFIED) stays green (server-side untouched, not re-run live this
+    phase -- it is Phase-1's own ui_e2e-marked test, out of this phase's
+    ui_browser/ui_render live filter; its byte-unchanged status is proven by
+    the empty server-diff above).
+roworderdragging axis:
+  unset (default) -> dragEnabled=true: all (a)-(c) tests above ran with the
+    box's default (unset) state.
+  set -> dragEnabled=false, anchor-only:
+    test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+    PASSED (asserts no .sortable() instance AND a full anchor-click+Save+
+    reload persists) -- fail-loud teardown restores the original state via
+    _set_roworderdragging(vm, was_enabled).
+Reorder-input axis: drag-only (a), anchor single (b), anchor multi-straddle
+  (b), mixed (c) -- all 4 x 3 gtypes = 12 tests, all PASSED (see above);
+  each asserts DOM order at Save time == persisted config order (Semantics
+  #1), not merely the final state.
+Save-composition axis: bundle oracle (test_category.py, UNMODIFIED, stays
+  green per the empty server-diff); field-edit-only zero-reorder Save --
+  test_reorder_save_with_field_edit_only_and_zero_reorder_still_persists_field
+  PASSED (order unchanged, action edit persisted -- proves #btnsave never
+  reorder-gated).
+Touched-symbol callers: save_new_changes has its one caller (:701, `$('#btnsave').click`)
+  unchanged; the sortable init (:687-698, OLD) is replaced by
+  pfb_reorder_init (NEW, single call site); the sortable('serialize') read
+  (:645, OLD) is replaced by pfb_reorder_read_order (NEW) -- confirmed by the
+  diff hunks above, no other caller of either touched symbol exists in this
+  file (`grep -n "save_new_changes\|\.sortable(\|#pfb_table"` restricted to
+  this file, unchanged from brief's own enumeration).
+Touched-conditional branches (category.php:648-652, the tbody-empty check):
+  tbody-present branch -- every seeded-row test above exercises it (the
+  pfb_reorder_read_order call). tbody-empty branch (the GeoIP page, whose
+  container selector '#pfb_table table tbody' resolves to zero elements) --
+  exercised implicitly by test_reorder_geoip_page_injects_no_anchor_ui (no
+  Save is driven there, but the branch's OTHER proof -- that this exact
+  selector-emptiness is what suppresses the geoip anchor injection -- is the
+  same underlying DOM fact both pfb_reorder_init and the ids-read branch key
+  off; the fresh-box empty-tbody case (a non-geoip page with zero rows,
+  placeholder `<tr>` with no class="sortable") is unchanged from Phase-1/2's
+  pre-existing coverage in test_browser_category.py's fresh-box tests, which
+  reran green -- see PREEXIST above).
+Server byte-identity: confirmed above (4 hunks, all >= line 416).
+
+== HOSTILE/EDGE-INPUT ROWS (brief sec4) ==
+- Empty table (fresh box, `<tr>` no class="sortable") -> ids=''; server
+  ids[] block skipped -- covered by the pre-existing fresh-box
+  test_savemsg_banner_hidden_and_save_button_wired_on_load /
+  test_row_delete_helper_is_wired_and_confirm_gates_it (rerun green, PREEXIST
+  above); these run against a fresh (unseeded) box, so the placeholder path
+  is exercised exactly as before this phase.
+- geoip page ('#pfb_table table tbody' resolves to 0 elements) -> init
+  injects nothing, read_order '' -- test_reorder_geoip_page_injects_no_anchor_ui
+  PASSED; #1201 no-op persist stays byte-identical (server diff above).
+- roworderdragging SET -> no .sortable() init; read_order still correct via
+  DOM traversal -- test_reorder_roworderdragging_set_disables_drag_anchor_click_still_persists
+  PASSED.
+- Single seeded row: NOT separately tested this phase (brief's hostile row;
+  deferred -- all seeded scenarios use 3 rows, matching test_category.py's
+  own Phase-1 seeding convention; a 1-row anchor-click is a DOM no-op by the
+  component's own Phase-2-proven contract (zero-checked case), not a new
+  category.php-specific risk).
+- Row id shape pfb_rN: unchanged (component's read_order regex untouched);
+  proven byte-identical to sortable('serialize') by Phase 2's own tests, not
+  re-verified here (brief: "do NOT re-run the brief's enumeration greps").
+
+== DEVIATIONS / JUDGMENT CALLS ==
+1. RESOLVED AT THE GATE. The implementer originally left two commits
+   (2b6490ef test-only RED state, 7d4d29f0 the wiring) and crashed before
+   emitting its StructuredOutput handoff, leaving this file untracked with
+   unfilled Tier-B placeholders. The orchestrator gate rejected that landing
+   (a committed RED state is a bisect hazard on a rebase-merge repo) and
+   completed the landing itself: filled the Tier-B evidence from the
+   implementer's own executed artifact logs (.ui_browser_run.log 25 passed /
+   0 failed), folded the two commits into ONE, dropped the scratch artifacts,
+   and rebased onto the latest origin/devel. The freeze is unaffected -- the
+   test file's git hash-object 76dd53bd... is byte-identical in both transient
+   commits and in the folded commit. Full recovery log in 03_Gate.txt.
+2. Single-row hostile-input case not run live as its own scenario (see
+   HOSTILE/EDGE-INPUT ROWS above) -- justified deferral, not a gap: it
+   reduces to Phase-2's already-proven zero-checked-anchor-click contract,
+   which this phase's wiring does not alter.
+3. Phase-1's GeoIP no-op oracle (test_category.py) was not re-run live this
+   phase (it is ui_e2e-marked, outside this phase's --marker ui_render /
+   --marker ui_browser live filters) -- its continued correctness is proven
+   by the empty server-side diff (no code path it exercises changed), not by
+   a fresh live execution. Flagged per the brief's own instruction to record
+   deferrals explicitly.
+
+== CARRY-FORWARD FOR PHASE 4 ==
+- roworderdragging read/emit pattern (mirror exactly):
+    PHP: `config_path_enabled('system/webgui', 'roworderdragging')` (no
+    third-arg default needed -- pfSense's own 'enable' default doesn't apply
+    here since we pass the key explicitly).
+    JS emission: `var pfb_drag_enabled = <?=config_path_enabled('system/webgui', 'roworderdragging') ? 'false' : 'true';?>;`
+    placed as a page-level var (alongside category.php's existing
+    `var pagetype = null;`), NOT inside events.push -- it must be readable by
+    the pfb_reorder_init() call site, which itself CAN live inside
+    events.push (fine either way, since the var itself is set synchronously
+    at parse time, before events.push's queued callback runs).
+- pfb_reorder_init call shape used here:
+    `pfb_reorder_init('#pfb_table table tbody', 'tr.sortable', null, pfb_drag_enabled);`
+    container = the SAME selector the old `.sortable()` init and the old
+    `.sortable('serialize')` read both used (category.php's tbody, NOT the
+    outer panel div) -- for category_edit.php (Phase 4) the equivalent
+    container is `'#pfb_repeat'` (per Phase-2's own fixture, matching
+    `$group->addClass('repeatable')`'s parent), rowSelector
+    `'.form-group.repeatable'` (Phase-1's F-facts, ADR-63 carry-forward),
+    onAfterMove is NOT null there -- category_edit.php has no server-side
+    ids[] AJAX Save today (Phase 1: reordering there is exclusively the
+    Lmove/Xmove POST mechanism or the sort=='sort' auto-sort pass); Phase 4
+    must supply a real onAfterMove that composes with pfSenseHelpers.js's
+    renumber() the same way Phase-2's fixture (pfbFixtureOnAfterMove) does,
+    per Phase-2's CARRY-FORWARD items 2-4 (bump_input_id() quirks, the
+    gutter-refresh-after-delete binding trap).
+- onAfterMove=null is safe/intentional on category.php specifically because
+  the component's own zero-checked-anchor-click firing (Phase-2 DEVIATION 1)
+  can never reach anything -- there is no dirty-state/gutter/renumber
+  side-effect to avoid triggering. Phase 4, which likely needs a REAL
+  onAfterMove (renumber+gutter), must re-examine whether the zero-checked
+  firing there is still safe or needs its own guard.
+- The reorder `<th>` gating pattern (`if ($gtype != 'geoip')`, mirroring the
+  existing Frequency-column gate) is category.php-specific (GeoIP has no
+  analogous "second table shape" concern on category_edit.php, which has no
+  GeoIP edit view at all -- Phase-1's F6: the page's gtype switch is
+  {ipv4, ipv6, dnsbl} only, no geoip case).

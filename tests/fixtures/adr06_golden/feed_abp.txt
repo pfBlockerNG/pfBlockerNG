@@ -1,0 +1,16 @@
+[Adblock Plus 2.0]
+! Title: Test basic-ABP feed
+! Basic-ABP feed. Feed=AbpFeed Group=AbpAds  log_flag=1
+! The legacy basic-ABP pass (upgrade-compat only since ADR-62) keeps ONLY
+! "||domain^" network lines and strips the ||, ^ tokens to a bare domain.
+! Everything below that is NOT a plain "||domain^" is IGNORED by that pass:
+!   @@ exceptions, ## element-hiding, $options, *, /, regex.
+! This fixture pins that legacy (non-conformant) behaviour.
+||abpblocked.com^
+||sub.abpzone.net^
+||abpoptions.com^$third-party
+@@||abpallowed.com^
+example.com##.ad-banner
+||abpwildcard.*^
+||abppath.com/ads^
+/regex-rule[0-9]/

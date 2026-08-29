@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<ruleset name="PfBlockerNG">
+    <description>
+        PfBlockerNG custom PHP_CodeSniffer standard. Carries the PFBL-01
+        RequirePfbFilter sniff: no exec / manifest / path sink inside an in-scope
+        function without a preceding semantic-validation call. Not a general style
+        standard -- it ships only this one project-specific rule.
+    </description>
+
+    <!-- Reference the sniff by its path so PHPCS loads it without an installed_paths
+         config entry. The directory layout PfBlockerNG/Sniffs/Validation/ encodes the
+         sniff code PfBlockerNG.Validation.RequirePfbFilter. -->
+    <rule ref="./Sniffs/Validation/RequirePfbFilterSniff.php"/>
+
+    <!-- ADR-28 item 5: uppercase PHP TRUE/FALSE value literals.
+         The directory layout PfBlockerNG/Sniffs/CodeStyle/ encodes the
+         sniff code PfBlockerNG.CodeStyle.UppercaseBooleanLiteral. -->
+    <rule ref="./Sniffs/CodeStyle/UppercaseBooleanLiteralSniff.php"/>
+
+    <!-- ADR-29: enforce the config-gateway access rule.
+         The directory layout PfBlockerNG/Sniffs/Config/ encodes the
+         sniff code PfBlockerNG.Config.RequireConfigGateway. -->
+    <rule ref="./Sniffs/Config/RequireConfigGatewaySniff.php"/>
+</ruleset>

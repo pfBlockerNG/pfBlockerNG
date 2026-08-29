@@ -1,0 +1,67 @@
+================================================================================
+PHASE 3 PROMPT — IPinfo ingestion (download + parse CIDR DB -> normalized record)
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_32_IPinfo_GeoIP/ADR.md   (read SS1, SS2.1, SS2.2 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/32-ipinfo-geoip. Phase 3 adds IPinfo DB ingestion
+(download + parse) to the normalized record. NOT yet wired to consumers (Phase 4). One commit,
+push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+IPinfo now ships GeoIP in CIDR IPv4/IPv6 form with a field set that differs from MaxMind's
+MMDB. This phase converts that DB into the Phase-2 normalized record, modelling MaxMind-only
+capabilities (locale, deprecated flags) as "unavailable".
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- the in-tree country/continent truth. It is a
+  BLOCKING PREREQUISITE for this ADR and OWNS everything about country/continent identity: which
+  countries exist, their names and locales, the ISO->continent mapping, the frozen structural
+  bindings, the unknown-country buckets. This ADR's provider seam supplies ONE thing: network -> ISO.
+  Do not re-derive or re-decide any of it here -- if this prompt and ADR-64 disagree, ADR-64 wins.
+- FIRST, read .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/02_Results.txt — the normalized record shape.
+  If missing, STOP and report.
+- .ADRs/ADR_32_IPinfo_GeoIP/ADR.md
+- src/usr/local/pkg/pfblockerng/pfblockerng.sh — existing GeoIP/ASN download + convert (the
+  pattern to extend); the path* var convention for privileged binaries.
+- CLAUDE.md — Shell standards (POSIX sh, LC_ALL=C on sorts, path vars), URL-encoding gate,
+  Test coverage; PFBL-01 (validate before exec/path build).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Fetch via the EXISTING extras pipeline per ADR.md §2.0 fork 2 ($pfb[extras] -> pfb_download() — ADR-42/44/45 gates + ADR-43 dcc scheduling), NOT a fresh downloader (token-authenticated; honour the
+   URL-encoding gate). Validate inputs before any exec/path build (PFBL-01).
+2. Parse the CIDR DB into the normalized record; map IPinfo fields to the record; set
+   capability flags (supports_locale=false; deprecated MaxMind flags absent).
+3. Commit small INERT sample fixtures (RFC 5737/3849 IPs, no real tokens) under a tests
+   fixtures dir; do NOT ship them in the package.
+4. Tests: parse fixtures -> normalized record (exact field mapping); malformed/empty input
+   rejected; capability flags correct; LC_ALL=C on any sort over the DB.
+
+CONSTRAINTS
+- POSIX sh only; quote expansions; absolute paths only for privileged binaries via path*.
+- stdlib/base utilities only in shell; no bash-isms.
+- Do NOT wire IPinfo into the consumers yet (Phase 4). Do NOT change MaxMind behaviour.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest / vendor/bin/phpunit (whichever hosts the parse tests) -> green.
+- shellcheck + sh -n on changed shell; scripts/check_url_encoding.py clean.
+- diff-read: ingestion is additive; MaxMind path untouched.
+
+EXPECTED RESULT
+IPinfo's CIDR GeoIP DB downloads and parses into the normalized record, with capabilities
+correctly marked; not yet consumed.
+
+COMMIT (single)
+    pfblockerng: ingest IPinfo CIDR GeoIP DB into normalized record (ADR-32 P3)
+Push directly to adr/32-ipinfo-geoip; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_32_IPinfo_GeoIP/RESULTS/03_Results.txt (plain .txt)
+Record: the download/convert entry points; the IPinfo->normalized field mapping; the fixture
+files; capability flags; verification numbers; go-ahead for Phase 4.

@@ -1,0 +1,114 @@
+================================================================================
+PHASE 5 PROMPT — Tick-driven apply-stage reconciliation
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_61_Sync_Status_Ledger/ADR.md   (read SS2.4, SS4 items 4/5, Semantics #5 first)
+================================================================================
+
+ROLE
+IMPLEMENTER. Branch adr/61-sync-status-ledger (continue from Phase 4). One commit, pushed
+directly. Read/Edit/Write/Bash only -- never spawn sub-agents. This phase is the ADR's
+first genuinely BEHAVIOUR-CHANGING step (self-healing retry) -- everything before it was
+additive instrumentation.
+
+WHY THIS PHASE EXISTS
+Phases 2-3 make apply-stage failures VISIBLE (ledger entries) but nothing retries them --
+today's system leaves a stuck pfctl/DNSBL apply broken until the source changes or an
+operator Force-Reloads. This phase makes pfblockerng_tick() close that gap for the
+apply stage ONLY, per direct instruction: every tick, unconditionally, unbounded retry
+count, no backoff.
+
+REQUIRED READING
+- FIRST, read RESULTS/04_Results.txt. If missing, Phase 4 is not complete; STOP and
+  report.
+- .ADRs/ADR_61_Sync_Status_Ledger/ADR.md (SS2.4 in full -- re-read the "synchronous
+  inline, not backgrounded" rationale and the "unbounded, no attempt counter" instruction
+  before designing anything different).
+- pfblockerng_extra.inc:2670 (pfblockerng_tick()) -- read the WHOLE function, including
+  the $dispatched flag's role at the tail (log-maintenance race guard, TickEntrypointTest
+  Case D) -- this phase's new step must not accidentally set/consume that flag in a way
+  that changes log-maintenance timing (that's issue #573/#790 territory, not this ADR's).
+- Phase 1's pfb_sync_status_list_open(); Phase 2's IP apply writer/clearer; Phase 3's
+  pfb_dnsbl_converged() and DNSBL apply writer/clearer; Phase 4's Python-side reader.
+- pfb_apply_alias_delta() (the IP re-apply operation to invoke) and whatever DNSBL-side
+  operation Phase 3's handoff identified as "the apply step to retry" (re-publish the
+  sentinel? re-run the conf/restart sequence? -- confirm from Phase 3's RESULTS, do not
+  guess).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases ran;
+the prior RESULTS files and the live tree override this prompt on any conflict — verify
+each claim before acting on it, and flag contradictions loudly in the handoff.
+
+TEST MODE: red->green. This is the ADR's first genuinely behaviour-changing phase (active
+retry) — every VERIFICATION case is an executed fail-before/pass-after run, not a reasoned
+claim.
+
+ACTION PLAN (ordered)
+1. Add one new, unconditional step inside pfblockerng_tick() (fires every call, NOT
+   gated on $due[...] or pfb_due_ledger_is_pending(...) -- this is the whole point):
+   read pfb_sync_status_list_open($dbdir) filtered to stage='apply'. Nothing else in the
+   ledger (download/parse entries) is touched by this step (Semantics #5).
+2. For each open IP apply-stage entry: re-invoke pfb_apply_alias_delta() (or the
+   narrower operation Phase 2 identified) against the ALREADY-PERSISTED mirror/canonical
+   set for that alias -- no re-download, no re-parse, no re-dedup. On success, the
+   Phase-2 clearer already fires naturally if you're calling through the same code path;
+   if not, call pfb_sync_status_close() explicitly here. On failure, leave the entry
+   open (it retries again next tick -- no counter, no backoff, per SS2.4).
+3. For each open DNSBL apply-stage entry: call pfb_dnsbl_converged() (Phase 3). If FALSE,
+   re-attempt whatever Phase 3's RESULTS identified as the retry-safe operation (the
+   sentinel-flip/wait-applied/restart sequence, scoped to NOT re-download/re-parse
+   anything -- it is re-publishing/re-confirming already-known-good manifest state). If
+   TRUE, close the entry.
+4. Keep this step SYNCHRONOUS and cheap (SS2.4: "no network I/O, no feed re-parse") --
+   if either retry operation turns out to require something heavier than that in
+   practice, STOP and escalate in the handoff as a contradicted premise (per CLAUDE.md's
+   ESCALATE contract) rather than silently backgrounding it, which would break the
+   "closes within one tick interval" acceptance criterion (ADR SS4 item 4).
+5. Verify the $dispatched flag / log-maintenance race guard is genuinely unaffected --
+   read TickEntrypointTest's Case D and confirm this new step does not run inside any
+   region that could interact with it; add a regression assertion if a plausible
+   interaction exists.
+
+CONSTRAINTS
+- Tabs, uppercase TRUE/FALSE, PFBL-01/RequireConfigGateway/UppercaseBoolean clean.
+- Unbounded retry: literally no attempt-count field, no backoff timer, no "give up
+  after N" logic -- this is an explicit ADR decision (SS2.4), do not add throttling
+  "for safety" without flagging it as a deviation and getting it into the handoff loudly.
+- Do NOT touch the download/parse stages' retry behavior (unchanged, still cadence-only).
+- Do NOT modify the widget (Phase 6).
+
+VERIFICATION (all must pass before the phase is done)
+- Canonical PHP gates.
+- Fail-before/pass-after, executed and pasted:
+  a. Seed an open IP stage='apply' entry with no other pipeline state change (the
+     underlying condition still broken), run pfblockerng_tick() once -- assert the retry
+     was actually attempted (a spy/counter on the apply function, not just "no crash")
+     and the entry is STILL open (failure persists, as designed). FAILS on pre-Phase-5
+     code (nothing retries, but also the entry trivially "stays open" for the wrong
+     reason -- so the meaningful assertion is the spy/counter proving an attempt
+     happened, which is exactly what's absent before this phase).
+  b. Same seed, but this time the underlying condition is fixed before the tick runs
+     (e.g. the mirror/kernel-table divergence resolved out-of-band) -- run tick once,
+     assert the entry clears.
+  c. An entry with stage='download' or 'parse' is seeded alongside an apply entry -- run
+     tick, assert ONLY the apply entry was touched (Semantics #5 -- prove the download/
+     parse entry's message/last_seen is byte-identical before and after).
+- The $dispatched/log-maintenance interaction check from ACTION PLAN step 5 has an
+  explicit assertion (existing TickEntrypointTest cases still green, plus a new one if
+  you found a plausible interaction).
+
+KILL-GATES (the orchestrator verifies these adversarially)
+- Confirm via a mutation-style check that VERIFICATION(a)'s spy actually detects a
+  MISSING retry (temporarily comment out the new step, watch the spy-based assertion
+  fail, then restore) -- proves it isn't vacuously passing.
+- grep pfblockerng_tick() for any new backgrounded exec(...) -- MUST be none (the retry
+  step is synchronous per SS2.4; if you find yourself needing to background it, that's
+  the ESCALATE trigger from ACTION PLAN step 4, not a silent workaround).
+- Re-run full TickEntrypointTest suite -- all pre-existing cases (A-D) still pass
+  unchanged.
+
+HANDOFF (RESULTS/05_Results.txt, committed)
+State: the exact new step's location inside pfblockerng_tick() and what it calls for
+each facility; confirmation the retry is synchronous/inline (or the ESCALATE writeup if
+it couldn't be); the $dispatched-flag interaction finding; red-before/green-after output
+for all three VERIFICATION cases; gate output.

@@ -1,0 +1,185 @@
+================================================================================
+PHASE 6 RESULTS — Matrix `role` seam (reader + schema)
+Branch: adr/27-release-rollback-and-eol-rou
+================================================================================
+
+STATUS: Complete. All verification gates green. Ready for Phase 7.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=7
+
+────────────────────────────────────────────────────────────────────────────────
+1. CHANGES
+────────────────────────────────────────────────────────────────────────────────
+
+Files modified (four, one commit):
+
+  scripts/read-version-matrix.sh
+  scripts/README.md
+  tests/test_read_version_matrix.py
+  tests/test_smoke_matrix.py
+
+────────────────────────────────────────────────────────────────────────────────
+2. IMPLEMENTATION DETAILS
+────────────────────────────────────────────────────────────────────────────────
+
+2a. --print-route semantics (new mode)
+
+  ROUTE_MATRIX = all versions[] entries, variant-filtered + arch-normalised.
+  Emits every entry with a live catalog: build ∪ route-only ∪ absent-role.
+
+  jq for ROUTE_MATRIX (unfiltered variant case):
+    ROUTE_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c '.versions')"
+
+  With --variant filter:
+    ROUTE_MATRIX="$(printf '%s' "$RAW_JSON" | jq -c \
+      --arg vf "$_VF_LOWER" \
+      '[.versions[] | select((.variant // "" | ascii_downcase) == $vf)]')"
+
+  Arch normalisation applied once on ROUTE_MATRIX (inherited by BUILD_MATRIX):
+    ROUTE_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c '
+      [ .[] | . + { arch: (if ((.arch // "") == "") then "amd64" else .arch end) } ]')"
+
+  Output block:
+    if [ "$DO_PRINT_ROUTE" -eq 1 ]; then
+      printf '%s' "$ROUTE_MATRIX" | jq .
+    fi
+
+2b. route-only exclusion from build/ci/test
+
+  BUILD_MATRIX is derived from ROUTE_MATRIX with one additional filter:
+    BUILD_MATRIX="$(printf '%s' "$ROUTE_MATRIX" | jq -c \
+      '[.[] | select((.role // "build") != "route-only")]')"
+
+  All of --print-build, --print-ci, --print-test derive from BUILD_MATRIX
+  (CI_MATRIX = BUILD_MATRIX filtered to .ci == true; py/php versions likewise).
+  So route-only entries never appear in any of those three modes.
+
+2c. absent-role → build mapping
+
+  The jq expression `(.role // "build") != "route-only"` is the single gate:
+  - absent `role` field      → evaluates as `"build"` → included in BUILD_MATRIX
+  - explicit `role: "build"` → same
+  - explicit `role: "route-only"` → excluded from BUILD_MATRIX, included in ROUTE_MATRIX
+
+  Back-compat: with today's production matrices (no route-only entries) every
+  --print-build / --print-ci / --print-test output is byte-identical to pre-Phase-6.
+
+2d. Arch normalisation refactor
+
+  Before: arch defaulting was applied separately to BUILD_MATRIX.
+  After:  arch defaulting is applied once to ROUTE_MATRIX; BUILD_MATRIX inherits it.
+  Behaviour is identical for build entries; route-only entries also get correct arch.
+
+────────────────────────────────────────────────────────────────────────────────
+3. ci-metadata supported-versions.json SCHEMA EDIT (apply on orphan branch)
+────────────────────────────────────────────────────────────────────────────────
+
+Apply the following on the ci-metadata orphan branch (PR against ci-metadata).
+This repo's reader is already wired to handle it; the ci-metadata edit is a
+documentation/schema update that precedes any real route-only entry being added.
+
+Add "role" to the field documentation comment (if a comment block exists), and
+update the schema. Example entry to add (alongside the existing build entries):
+
+  {
+    "pfsense_version": "2.7.2",
+    "channel": "CE",
+    "freebsd_version": "14.0-RELEASE",
+    "freebsd_major": "14",
+    "php_version": "8.2",
+    "py_flavor": "py311",
+    "variant": "CE",
+    "status": "EOL",
+    "ci": false,
+    "role": "route-only"
+  }
+
+Field contract for "role":
+  - OPTIONAL string. Absent or "build" = built, smoked, served (today's behaviour).
+  - "route-only" = served from a frozen .pkg, NOT built, NOT smoked.
+  - No other values are currently defined.
+  - Back-compat: absent role is always treated as "build" by the reader.
+
+Diff-style schema note for supported-versions.json (human-readable section):
+
+  Add field:
+    "role":          OPTIONAL; "build" (default, absent ⟹ build) | "route-only"
+
+  Lifecycle:
+    build      → served + built + smoked (all CI fan-out legs)
+    route-only → served from frozen .pkg only; no build, no smoke leg
+
+────────────────────────────────────────────────────────────────────────────────
+4. TESTS ADDED
+────────────────────────────────────────────────────────────────────────────────
+
+tests/test_read_version_matrix.py — three new scenarios (i, j, k):
+
+  test_route_only_excluded_from_build_ci_test_included_in_route  [Scenario i]
+    Before/after gate. BEFORE: build-only matrix → route output == build output
+    (back-compat baseline). AFTER: add route-only entry (2.7) → build/ci/test
+    unchanged (only 2.8); route gains 2.7. Asserts:
+      build_versions == {"2.8"}
+      ci_versions    == {"2.8"}
+      py_versions    == ["3.11"]
+      php_versions   == ["8.3"]
+      route_versions == {"2.8", "2.7"}
+      route_only_entry["role"] == "route-only"
+
+  test_absent_role_treated_as_build  [Scenario j]
+    Entry with NO `role` field: appears in build (before), appears in route (after).
+    Confirms (.role // "build") back-compat is real, not a false pass.
+
+  test_no_route_only_build_equals_route  [Scenario k]
+    Regression guard: with no route-only entries, sorted pfsense_versions from
+    --print-build == --print-route (superset property holds; no accidental exclusion).
+
+tests/test_smoke_matrix.py — one new test:
+
+  test_smoke_topology_excludes_route_only_via_build_matrix_injection
+    Documents that protection is at the reader level (smoke.yml injects
+    --print-build into SMOKE_MATRIX_JSON, which never contains route-only).
+    _matrix.py itself does NOT filter by role — filtering is upstream.
+    Before: single CE 2.8 build matrix → FreeBSD:15:amd64 in topology,
+    FreeBSD:14:amd64 absent. After: add second build CE 2.9 → both appear;
+    FreeBSD:14 still absent (route-only never injected).
+
+────────────────────────────────────────────────────────────────────────────────
+5. VERIFICATION RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+python -m pytest:        1760 passed (full suite, no regressions)
+ruff check .:            All checks passed
+ruff format --check .:   112 files already formatted
+mypy tests/:             Success: no issues found in 46 source files
+sh -n read-version-matrix.sh: OK
+shellcheck:              Not installed (noted; CI is the hard gate)
+npx markdownlint-cli2:   0 error(s)
+
+Script eyeball with synthetic 3-entry matrix
+  (explicit role=build, absent role, role=route-only 2.7.2):
+  --print-build  → ["2.8.0", "2.9.0"]        (route-only excluded ✓)
+  --print-ci     → ["2.8.0", "2.9.0"]        (route-only excluded ✓)
+  --print-test   → py:["3.11"] php:["8.3"]   (no 8.2 from route-only ✓)
+  --print-route  → ["2.8.0", "2.9.0", "2.7.2"] (route-only included ✓)
+
+────────────────────────────────────────────────────────────────────────────────
+6. COMMIT
+────────────────────────────────────────────────────────────────────────────────
+
+Message: dev: add a route-only role to the version-matrix reader (ADR-27 P6)
+Author:  Andre Brait <andrebrait@gmail.com>
+
+────────────────────────────────────────────────────────────────────────────────
+7. GO-AHEAD FOR PHASE 7
+────────────────────────────────────────────────────────────────────────────────
+
+Phase 7 (RouteOnly Generator) may proceed. The `role` seam is now live in the
+reader: `--print-route` is the new source for generator input (replaces
+`--print-build` / `--print-all`). `--print-build` correctly excludes route-only
+entries. Back-compat confirmed with the full test suite.
+
+Phase 7 task: update the catalog generator (publish.yml / build-repo-portable.py
+or equivalent) to use `--print-route` as its input, so route-only .pkg files are
+served from the catalog even though they are never rebuilt.
+================================================================================

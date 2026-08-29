@@ -1,0 +1,87 @@
+================================================================================
+PHASE 4 PROMPT — Intermediate Rule model + Stage-A parse('abp') (pure, additive)
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md   (read §2 Rule model + scope rows first)
+================================================================================
+
+ROLE
+You are on `adr/07` (off `next`), Phase 4 of ADR-07. ADDITIVE + pure: introduce the typed
+intermediate Rule model and the full DNS-only ABP line parser, unit-tested against the
+Phase-2 spec. Do NOT wire it into build()/init (Phase 7) and do NOT reconcile/reduce yet
+(Phase 5). Work inline on `adr/07`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+$badfilter and $important cannot be expressed once rules are folded into domain-keyed dicts
+(the maintainer's design: parse to a typed model, reconcile in-memory, then emit). This phase
+builds Stage A — turning each raw ABP line into a typed Rule (or None) — the backbone the
+reconcile/precedence stages stand on.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/03_Results.txt — the widened shapes + band semantics.
+  If missing, STOP and report.
+- .ADRs/ADR_07_ABP_DNSBL_Support/ADR.md (§2 Rule model + "Scope — what is parsed" +
+  "Regex reduction"; §1 facts 6/7).
+- RESULTS/01_Results.txt (corpus line-type distribution + the reducible-regex grammar) and
+  RESULTS/02_Results.txt (the decision spec + ambiguous-case interpretations).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    * existing parse('abp')/_dnsbl_parse_abp_line ~1768-1853 (the LITE version to subsume),
+    * ParsedEntry/DnsblEntry/BuildResult ~1699-1750, classify ~1904, normalise ~1856,
+      _dnsbl_is_ipv4 ~1753 (skip IP-anchors).
+- The ABP/AdGuard references (ADR header) for the exact option/anchor grammar.
+- CLAUDE.md (Python 3.11+: possessive quantifiers/atomic groups available).
+
+ACTION PLAN (oracle-driven — each parse class tested vs the Phase-2 spec)
+1. Define the Rule dataclass (replaces ParsedEntry for the abp path; keep ParsedEntry for the
+   'plain'/'hosts'/'csv:pon' paths unchanged):
+     Rule(kind: block|allow, target: domain|regex, key_or_pattern: str,
+          important: bool, badfilter: bool, provenance: user|feed,
+          feed: str, group: str, log: str, signature: tuple)
+   signature = (normalised-pattern, tuple(sorted DNS-options)) MINUS $badfilter — the
+   $badfilter match key (Phase 5 uses it).
+2. Implement the FULL DNS-only parser: parse('abp', line, *, provenance, feed, group, log)
+   -> Rule | None (extend the dispatcher; the abp branch becomes the full parser, the others
+   stay as ADR-06 left them):
+   - BLOCK domain: ||domain^ (+options), hosts `IP domain` (take the domain), plain domain.
+   - ALLOW domain: @@||domain^ (+options).
+   - REGEX: /re/ (block), @@/re/ (allow) — store the raw pattern as target=regex; reduction
+     is Phase 5, compile/load is Phase 6, runtime safety is Phase 7 (DO NOT compile/execute here).
+   - $OPTIONS: parse the `$...` suffix; KEEP the rule only if every option is DNS-relevant
+     ($important/$badfilter and any agreed DNS modifiers) AND the target is a bare domain or
+     a regex; otherwise return None. SKIP page-context ($third-party/$domain=/$script/
+     $image/$csp/...). Set important/badfilter flags from the options.
+   - SKIP ALWAYS (return None): element-hiding ##/#@#/#?#/#%#/#$#, path/URL rules
+     (anchored to a path), comment/control lines (!/[), and IP-VALUED anchors (||1.2.3.4^,
+     hosts IP) — those are the firewall path (Phase 8); _dnsbl_is_ipv4 gate.
+   - Domain targets still go through normalise() (lower-case + shape gate) before becoming a
+     Rule key; an invalid domain -> None.
+3. Unit-test EVERY class exhaustively (tests/test_adr07_parser.py) against the Phase-2 spec:
+   every KEEP and every SKIP line type, $options keep/skip, important/badfilter flag-setting,
+   provenance plumbing, IP-anchor skip, and the reducible-vs-irreducible regex tag (just the
+   classification flag; reduction itself is Phase 5).
+4. Keep it import-safe and Unbound-symbol-free (pure).
+
+CONSTRAINTS
+- ADDITIVE ONLY: do NOT call the parser from build()/init; do NOT reduce/vet/compile regex;
+  do NOT touch PHP/shell/UI; delete nothing (the lite PHP pass is removed in Phase 8).
+- stdlib only, no Unbound symbols, 4-space, type hints, no bare except,
+  `from __future__ import annotations`.
+
+VERIFICATION
+- python -m pytest → green incl. the new parser tests vs the Phase-2 spec; ADR-06 oracle still
+  green (you didn't touch the non-abp paths). ruff check . / ruff format . clean.
+
+EXPECTED RESULT
+A pure, exhaustively-tested Stage-A ABP parser emitting typed Rule objects (block/allow,
+domain/regex, important/badfilter/provenance), DNS-only, skipping element/path/IP/page-option
+lines — not yet wired or reconciled.
+
+COMMIT (single)
+    pfb_unbound: ADR-07 P4 — Rule model + DNS-only ABP Stage-A parser
+Push directly to `adr/07`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/04_Results.txt`
+For Phase 5. Include: the Rule dataclass + signature definition; the parser's public
+signature; the exact KEEP/SKIP grammar implemented + any reference ambiguities resolved; how
+important/badfilter/provenance are set; the reducible-vs-irreducible regex tagging; the test
+entry points; and the go-ahead to reconcile.

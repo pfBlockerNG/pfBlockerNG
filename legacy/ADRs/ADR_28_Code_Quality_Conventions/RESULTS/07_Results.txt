@@ -1,0 +1,152 @@
+ADR-28 Phase 7 Results — regex → string functions (PHP)
+=========================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+
+1. SCOPE
+---------
+
+Inventoried every preg_* call across the full PHP surface:
+  - src/usr/local/pkg/pfblockerng/pfblockerng.inc          (~40 preg_* calls)
+  - src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc    (0 preg_* calls)
+  - src/usr/local/pkg/pfblockerng/pfblockerng_install.inc  (0 preg_* calls)
+  - src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc  (0 preg_* calls)
+  - src/usr/local/www/pfblockerng/**/*.php                  (~20 preg_* calls)
+
+Note: pfb_unbound.py is explicitly out of scope for this phase (Phase 8).
+
+
+2. SWAPS MADE
+--------------
+
+None. See section 3.
+
+
+3. REGEXES KEPT — dominant reasons
+------------------------------------
+
+Every preg_* call uses at least one feature that a PHP string function cannot
+reproduce. The following categories cover all sites:
+
+(a) Character classes — not equivalent to any str_* / strpos:
+    - preg_match('/\s/', $s) [pfblockerng.inc:4017, HOT-LOOP path in
+      pfb_dnsbl_abp_extract_ip]:
+      \s matches space, \t, \n, \r, \f, \v. str_contains() tests one literal;
+      covering all six would require str_contains($s, ' ') || str_contains($s,
+      "\t") || ... — more code, still incomplete. Keep. The comment at line 4015
+      itself notes "space OR tab" as distinct tokens the regex must handle.
+    - preg_split('/\s+/', $s) [pfblockerng.inc:4018, same HOT-LOOP]:
+      Splits on runs of mixed whitespace. explode() splits on one literal delimiter
+      and does not collapse runs. Not equivalent.
+    - preg_split('/[\s,]+/', $raw) [pfblockerng.inc:6223]:
+      Splits on whitespace OR comma, collapsing runs. No explode() equivalent.
+    - preg_match('/[a-zA-Z,;|\"\'?]/', ...) [pfblockerng.inc:12662]:
+      Multi-char class. Not equivalent to str_contains.
+    - preg_match('/\W/', ...) and preg_replace('/\W/', ...) [pfblockerng.inc:579,
+      10177, 10179, 10195, 10197; www/**:502, 536, 38, 2277, 84, 102]:
+      \W = [^a-zA-Z0-9_]. No single string function covers this.
+    - preg_match('/[\p{C}]+/', ...) [pfblockerng.inc:346, 353;
+      pfblockerng_hooks.php:131]: Unicode category class. Keep.
+    - preg_match("/^[0-9]+$/", ...) etc. [www/index.php:30, 46, 54;
+      pfblockerng.inc:640, 646, 652, ...]: digit-only / alnum character classes.
+      ctype_digit/ctype_alnum exist but do not have the same anchored-full-string
+      semantics in all contexts, and the `/i` flag on some callers would not be
+      reproduced. Keep.
+
+(b) Quantifiers / anchors used together — not expressible with str_starts_with etc.:
+    - preg_replace("/:[0-9]{1,5}$/", '', $line) [pfblockerng.inc:4042]:
+      {1,5} quantifier on digits + end-anchor. Not equivalent to string functions.
+    - preg_match('/^[A-Z0-9_]+$/', $pfbvar) [pfblockerng.inc:2507]:
+      Anchored character-class full-match.
+    - preg_match('#^[a-zA-Z][a-zA-Z0-9+.-]*://#', $ref) [pfblockerng.inc:6506]:
+      Multiple character classes + quantifiers.
+    - All pfb_filter() validation patterns [pfblockerng.inc:579, 585, 591, 601,
+      640, 646, 652, 658, 743, 749]: anchored character classes with alternation.
+
+(c) Captures (groups) whose results are used — string fn cannot extract:
+    - preg_match('/^pfB_\w+(\s.*)/', $rule['descr'], $pfb_suffix_real)
+      [pfblockerng.inc:9998]: capture group result is read as $pfb_suffix_real[1].
+    - preg_match('/^(?:...)\/(\d{1,3})$/', $_POST['ip'], $parts)
+      [pfblockerng_alerts.php:1463]: $parts[1], $parts[3] used.
+    - preg_match_all($pfb['ipv4'], $oline, $matches) [pfblockerng.inc:12563]:
+      $matches[0] used for IP extraction.
+    - preg_match_all($pfb['ipv6'], $oline, $matches) [pfblockerng.inc:12635]: same.
+
+(d) Zero-width lookahead split — semantics differ from explode():
+    - preg_split('/(?=#)/', $line) [pfblockerng.inc:1659, 1696;
+      pfblockerng_category_edit.php:659; pfblockerng_dnsbl.php:457;
+      pfblockerng_ip.php:141]: the '#' character is KEPT on the right half
+      (lookahead does not consume). explode('#', ...) would strip it. The callers
+      rely on this distinction (result[0] is the pre-# domain, result[1] is the
+      '#...' comment including the '#'). Not equivalent.
+
+(e) Dynamic / preg_quoted patterns — cannot use string functions on unknown patterns:
+    - preg_match($pfb['range'], $oline, $matches) [pfblockerng.inc:12545]:
+      $pfb['range'] is a full regex built at runtime.
+    - preg_match('/' . $ex[0] . '(.*)' . $ex[1] . '/', $row_url, $pm)
+      [pfblockerng_feeds.php:203]: preg_quote()-escaped dynamic pattern.
+    - @preg_match("/{$field_regex}/i", ...) [pfblockerng_alerts.php:1948, 1952]:
+      user-controlled regex with /i flag.
+
+(f) preg_replace with non-literal pattern:
+    - preg_replace("/File created:.* ]/", "...", ...) [pfblockerng.inc:5001]:
+      .* matches any character sequence. Not equivalent to str_replace or any
+      single string function.
+
+(g) preg_grep on arrays — no array equivalent in plain string functions:
+    - All preg_grep() calls [pfblockerng.inc:5647, 7631, 7670, 7671, 10682,
+      10806, 11928, 13860, 13862; pfblockerng_alerts.php:781, 803;
+      pfblockerng_ip.php:163; pfblockerng_update.php:81, 273]: grep an array
+      of strings. No string-function equivalent exists.
+
+
+4. HOT-LOOP ASSESSMENT
+------------------------
+
+The two hottest sites (pfb_dnsbl_abp_extract_ip called per-line during feed
+processing — pfblockerng.inc:4017 and 4018) were the priority candidates. Both
+were evaluated and kept: \s and \s+ are semantically broader than any single
+string function can replicate without losing correctness.
+
+
+5. EQUIVALENCE TESTS ADDED
+----------------------------
+
+None — no swaps were made, so no equivalence tests are required.
+The existing test suite (594 tests, 1282 assertions) confirms no regressions.
+
+
+6. SELF-REVIEW
+---------------
+
+Working tree was clean throughout (no src/ file created or modified).
+No preg_* call was changed. Every site evaluated and kept is documented above
+with the specific regex feature(s) preventing an equivalent string-function swap.
+pfb_cfg_adapters.py and pfb_unbound.py are untouched.
+Verdict: CLEAN — no swaps possible without changing behaviour.
+
+
+7. VERIFICATION GATES
+----------------------
+
+    vendor/bin/phpunit        594 tests, 1282 assertions, OK    ✓
+    vendor/bin/phpstan        0 errors                           ✓
+    vendor/bin/phpcs          0 errors (PFBL-01 green)           ✓
+    php -l pfblockerng.inc    No syntax errors                   ✓
+    python -m pytest          1691 passed                        ✓
+    ruff check .              All checks passed                  ✓
+
+
+8. SUMMARY
+-----------
+
+  Swaps made:                0
+  Regexes evaluated and kept: ~60 across pfblockerng.inc and www/**
+  Dominant reasons: character classes (8+ sites), quantifiers+anchors (10+ sites),
+      used captures (5 sites), zero-width lookahead split (5 sites),
+      dynamic patterns (3 sites), preg_replace with .* (1 site),
+      preg_grep on arrays (14 sites)
+  Equivalence tests added:   0 (none required with no swaps)
+
+Go-ahead for Phase 8.

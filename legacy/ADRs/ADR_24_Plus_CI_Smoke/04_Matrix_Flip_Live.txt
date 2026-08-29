@@ -1,0 +1,75 @@
+================================================================================
+PHASE 4 PROMPT — Flip Plus to ci:true on ci-metadata + live two-channel fan-out
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_24_Plus_CI_Smoke/ADR.md   (read §2.2, §4.5+4.7, §6 Phase 4, §7 first)
+================================================================================
+
+ROLE
+You are performing Phase 4 of ADR-24. This is the activation phase: a PR against
+the `ci-metadata` orphan branch (matrix edits NEVER land via devel), then a live
+fan-out proving both channels green. Code branches: none on devel this phase.
+
+WHY THIS PHASE EXISTS
+Phases 1–3 made the pipeline channel-capable while keeping live behaviour
+CE-only. Flipping the matrix entry is the single switch that creates the Plus
+leg — done last so a revert is a one-line matrix change.
+
+PRECONDITIONS (maintainer, manual — HARD GATE; verify each, do not assume)
+Read RESULTS/03_Results.txt FIRST (if missing: STOP). It must confirm:
+- ghcr.io/pfblockerng/pfsense-plus:26.03 published (from Proxmox VM 104 via
+  scripts/image-publish.sh) and the GHCR package is PRIVATE.
+- The package grants this repository read access (Actions pull via GITHUB_TOKEN).
+- The Plus image bakes the FreeBSD-16 RUN_DEPENDS + the smoke SSH public key
+  (CE parity — scripts/misc/install_deps_CE_2.8.sh is the model).
+- Diagnostics scrubbing covers Plus license identifiers (NDI/token) — verify the
+  scrub step in smoke.yml against a Plus config.xml sample.
+If ANY precondition is unmet: STOP and report which.
+
+ACTION PLAN (ordered)
+0. Set the GitHub Actions secrets (maintainer): SMOKE_PLUS_MAC +
+   SMOKE_PLUS_SMBIOS_UUID (optionally SMOKE_PLUS_NDI) = the Plus source-VM
+   identity. These are license/NDI-keyed and live ONLY in secrets — never the
+   public matrix.
+1. Branch off origin/ci-metadata (worktree); edit supported-versions.json:
+   the Plus 26.03 entry gets:
+       "ci": true,
+       "image_name": "pfsense-plus"
+   (the MAC/uuid are NOT in the matrix — they are the SMOKE_PLUS_* secrets).
+   Update supported-versions.schema.json: optional string field image_name
+   (lowercase OCI name pattern). Rewrite lifecycle_policy.plus: Plus runs in CI
+   from a private licensed image; the VM identity (MAC + SMBIOS uuid) is
+   license/NDI-keyed and comes from secrets; image refresh is manual.
+2. PR against ci-metadata; land it per repo flow.
+3. Dispatch smoke-fanout.yml. Required outcome: CE leg(s) green, Plus leg green,
+   all-smoke-passed green. On a Plus-leg failure: read the smoke-diagnostics
+   artifact FIRST (CLAUDE.md); a genuine product incompatibility (PHP 8.5 /
+   FreeBSD 16) is a FINDING — file an issue, do not patch tests to pass (ADR
+   §2.3 / reject criteria).
+4. Pull the Plus-leg smoke-diagnostics artifact; grep for the NDI/license token —
+   MUST be absent (§4.7). Record the check.
+5. Record run ids + artifact evidence in RESULTS.
+
+CONSTRAINTS
+- supported-versions.json/schema edited ONLY via the ci-metadata PR.
+- No workflow YAML edits in this phase (if one proves necessary, that is a
+  Phase 3 defect: fix there, re-run, then return here).
+- Never download-and-reupload the Plus qcow2 anywhere public; run ids and
+  digests are fine to record.
+
+VERIFICATION (must all pass before the phase is done)
+- Matrix PR merged on ci-metadata.
+- Fan-out run: both channels green + AND-gate green (run id recorded).
+- §4.7 diagnostics check recorded (no license identifier).
+
+EXPECTED RESULT
+CI fans out to every supported version, CE and Plus; Plus leg pulls the private
+image, boots with the secret source-VM identity (SMOKE_PLUS_MAC +
+SMOKE_PLUS_SMBIOS_UUID), passes the ADR-04 suite.
+
+COMMIT
+  (on ci-metadata, via PR)  ci-metadata: enable Plus 26.03 in CI (ADR-24 P4)
+
+HANDOFF — write `.ADRs/ADR_24_Plus_CI_Smoke/RESULTS/04_Results.txt` (plain .txt)
+Record: matrix PR number; fan-out run id; per-leg results; the diagnostics
+license-scrub evidence; any Plus-specific findings filed as issues; go-ahead for
+Phase 5.

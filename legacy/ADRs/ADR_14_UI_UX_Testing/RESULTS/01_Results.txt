@@ -1,0 +1,199 @@
+ADR-14 — Phase 1 RESULTS: authenticated WebUI session helper + recon
+=====================================================================
+
+Status: Implemented (pending smoke test). The helper + the ui_render-marked
+pin are landed and lint/type/collection-clean LOCALLY; the LIVE login round-trip
+(login -> 200+marker -> unauth shows login form) runs only inside CI on the
+ADR-04 smoke VM (this dev machine cannot boot/reach that VM). Every login-form/
+cookie/CSRF fact below is CONFIRMED from code/upstream; the live HTTP behaviour
+is CI-PENDING (the pinned test is the confirmation; it executes in CI).
+
+--------------------------------------------------------------------------------
+1) RECON — confirmed facts (source quoted)
+--------------------------------------------------------------------------------
+
+WebConfigurator protocol
+- EVIDENCE = HTTP. wait_ready.sh:102 polls `curl -fsSL --max-time 5 ... \
+  http://${HOST}:${WEB_PORT}/` and that succeeds for readiness => no forced
+  HTTPS redirect on the smoke image. boot_vm.sh:119 hostfwd maps host
+  8080/tcp -> guest :80 (plain HTTP). [CONFIRMED from harness code.]
+- SOURCE OF TRUTH = config.xml <system><webgui><protocol>. The live read is
+  done by the new `webgui_protocol` fixture via the pfSense config API over SSH:
+  `helpers.config_get(vm, "system/webgui/protocol")`. The `system/webgui/...`
+  path idiom is the one pfBlockerNG itself uses (src/.../pfblockerng_alerts.php:
+  2421 `config_get_path('system/webgui/webguicss')`). Empty/absent => default
+  "http" (pfSense's own default). [Read is CI-PENDING — runs on the live box;
+  the WebUI handles either value: http default, or https with verify=False.]
+
+Login form fields (pfsense/pfSense @ master; stable across the support matrix —
+the login form has used these names for many releases)
+- src/etc/inc/authgui.inc, display_login_form():
+    <input name="usernamefld" id="usernamefld" type="text"  ...>   => USERNAME
+    <input name="passwordfld" id="passwordfld" type="password" ...> => PASSWORD
+    <form method="post" ... class="login">  (NO action attr => posts back to the
+      SAME requested URL)
+    <p class="form-title">Sign In</p>        (login-form marker)
+  [CONFIRMED from upstream source.]
+
+CSRF token field
+- src/usr/local/www/csrf/csrf-magic.php:
+    $GLOBALS['csrf']['input-name'] = '__csrf_magic';
+  csrf_ob_handler() output-buffers the page and injects, after EVERY
+  method="post" <form>, a hidden input:
+    <input type='hidden' name='__csrf_magic' value="sid:<hash>,<timestamp>">
+  Token value prefix is `sid:` (session-id based; csrf_get_tokens() returns
+  'sid:' . csrf_hash(session_id()) . $ip when a session exists).
+  => the token is NOT literal in authgui.inc's form; it is added by the output
+  filter, so the helper must GET the rendered page and scrape __csrf_magic.
+  [CONFIRMED from upstream source.]
+
+Session cookie
+- PHPSESSID — pfSense uses PHP's default session name; the webConfigurator sets
+  PHPSESSID on a successful login. [CONFIRMED as PHP default / standard pfSense;
+  the exact set-cookie is CI-observable. The login() helper additionally asserts
+  the cookie is present after the POST, so a wrong name fails loudly in CI.]
+
+Unauthenticated behaviour (IMPORTANT — deviation from the phase wording)
+- The phase prompt says "an unauthenticated GET redirects to the login page."
+  Upstream source shows pfSense does NOT 302-redirect: authgui.inc renders the
+  login form IN PLACE with HTTP 200 —
+    if (!session_auth()) { display_login_form(); exit; }
+  So "logged out" is detected by the PRESENCE of the login form (the "Sign In"
+  title / the usernamefld+passwordfld inputs), NOT by an HTTP status. The helper
+  (`looks_like_login_page`) and the pinned unauth test assert exactly that:
+  unauth GET of a protected page returns the login form AND none of the page's
+  content markers. This is the accurate semantics; the contract is preserved
+  ("an unauthenticated GET shows login, not the page"). [CONFIRMED from source;
+  the live 200+form shape is CI-PENDING.]
+
+Creds source
+- ADR-04 baked `SMOKE_ADMIN_PASSWORD` (bcrypt in config.xml; plaintext in the
+  GH secret). Username defaults to "admin" (overridable via SMOKE_ADMIN_USER).
+- NOT YET EXPORTED TO PYTEST: smoke.yml's "Run the smoke matrix" step env: block
+  passes SMOKE_IMAGE_DIR/SMOKE_SSH_KEY/SMOKE_PKG/SMOKE_DNSBL_VIP4/SMOKE_CONTROL_*
+  etc., but NOT SMOKE_ADMIN_PASSWORD (ADR-04 used SSH-key auth + reachability-only
+  WebUI, so the password was never needed by pytest). [CONFIRMED by reading
+  smoke.yml.]
+- WIRING THIS PHASE: read from the environment in the `admin_credentials`
+  fixture (env var SMOKE_ADMIN_PASSWORD; SKIPS when unset). No workflow edited
+  this phase (Phase-1 constraint). PHASE 5 MUST add to the pytest `env:` block of
+  the UI workflow:
+      SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+      SMOKE_ADMIN_USER:     ${{ vars.SMOKE_ADMIN_USER }}   # optional; default admin
+
+--------------------------------------------------------------------------------
+2) THE HELPER — what landed, where, API
+--------------------------------------------------------------------------------
+
+New subpackage tests/smoke/ui/ (collected only under the smoke override):
+- __init__.py            — package docstring + collection note.
+- webui.py               — the reusable client (below).
+- conftest.py            — fixtures: admin_credentials, webgui_protocol, webui.
+- test_auth_session.py   — the ui_render-marked pin (3 tests).
+
+tests/smoke/ui/webui.py — public API:
+  Constants (all upstream-confirmed):
+    CSRF_FIELD     = "__csrf_magic"
+    USERNAME_FIELD = "usernamefld"
+    PASSWORD_FIELD = "passwordfld"
+    SESSION_COOKIE = "PHPSESSID"
+    LOGIN_MARKERS  = ("Sign In", 'id="usernamefld"', 'id="passwordfld"')
+  Functions:
+    extract_csrf_token(html: str) -> str
+    looks_like_login_page(html: str) -> bool
+  class WebUI:
+    __init__(host, port, username, password, *, scheme="http",
+             verify=True, timeout=30.0)
+    property base_url -> str
+    property session  -> requests.Session     # exposed cookie jar
+    url(path) -> str
+    session_cookie() -> str | None            # PHPSESSID (for Phase-4 injection)
+    login(login_path="/index.php") -> None     # GET csrf -> POST creds -> verify
+    get(path, **kwargs) -> requests.Response   # authenticated GET
+    get_unauthenticated(path, **kwargs) -> requests.Response  # fresh cookieless
+  class WebUILoginError(RuntimeError)          # raised on a failed/garbage login
+
+  - login() scrapes __csrf_magic from the rendered login page, POSTs
+    __csrf_magic+usernamefld+passwordfld back to the SAME URL, then VERIFIES the
+    result is authenticated (body is not still the login form AND PHPSESSID is
+    set). A bare 200 is never treated as success (pfSense returns the login form
+    at 200 on bad creds).
+  - `requests` is imported LAZILY (inside WebUI.__init__ / get_unauthenticated),
+    mirroring how conftest.resolve_a defers dnspython — so importing this module
+    during default collection (which --ignore's tests/smoke) needs no third-party
+    dep.
+  - verify=False is ready behind the `scheme="https"` path for a throwaway HTTPS
+    image; default is HTTP per the recon evidence.
+
+Fixtures (tests/smoke/ui/conftest.py), all session-scoped, built on smoke_vm:
+  admin_credentials -> (user, password)   # env SMOKE_ADMIN_PASSWORD; SKIP if unset
+  webgui_protocol   -> str                 # live config.xml read; defaults "http"
+  webui             -> WebUI (already logged in)  # honours protocol; https=>verify off
+
+The pinned test (tests/smoke/ui/test_auth_session.py, marker ui_render):
+  - test_login_establishes_session: PHPSESSID present after login.
+  - test_authenticated_get_returns_pfblockerng_page: GET
+    /pfblockerng/pfblockerng_general.php -> 200, body NOT the login form, and a
+    page marker ("pfBlockerNG"/"DNSBL" from $pgtitle/$tab_array) present.
+  - test_unauthenticated_get_shows_login_form: cookieless GET of the same page
+    -> the login form present AND page markers absent.
+  Both sides of the auth toggle are asserted on the SAME page (CLAUDE.md branch +
+  before-state rules): logged-out shows the login form / not the page; logged-in
+  shows the page / not the login form — so a green proves the SESSION is what
+  unlocks the page.
+
+--------------------------------------------------------------------------------
+3) DEFAULT SUITE — byte-identical (verified locally)
+--------------------------------------------------------------------------------
+- `python -m pytest` => 1019 passed (UNCHANGED vs baseline 1019).
+- Exclusion mechanism inherited verbatim from the smoke suite: pyproject.toml
+  `addopts = "-v --ignore=tests/smoke"` already excludes tests/smoke/ui/ (it is
+  under tests/smoke). Confirmed: `pytest --collect-only` matches 0 items under
+  tests/smoke/ui. Under the smoke override
+  (`pytest tests/smoke/ui -m ui_render --override-ini="addopts="`) the 3 ui_render
+  tests collect.
+- Markers registered in pyproject.toml [tool.pytest.ini_options].markers:
+  ui_render, ui_e2e, ui_browser (alongside smoke) — no unknown-marker warning,
+  and the later tiers' markers are pre-registered.
+- `requests==2.32.3` added to tests/smoke/requirements.txt (dev-only; never
+  shipped — release archive is src/ only).
+
+--------------------------------------------------------------------------------
+4) GATES (local)
+--------------------------------------------------------------------------------
+- python -m pytest          => 1019 passed (== baseline). [VERIFIED]
+- ruff check .              => All checks passed!            [VERIFIED]
+- ruff format --check .     => all files formatted.          [VERIFIED]
+- mypy tests/ (gate)        => Success (smoke/ excluded by config, as designed).
+  Targeted mypy on the 3 new files => Success (informational; type hints sound).
+- NO src/ change (git status --porcelain src/ empty).        [VERIFIED]
+
+--------------------------------------------------------------------------------
+5) GOTCHAS / NOTES for later phases
+--------------------------------------------------------------------------------
+- UNAUTH = login form at HTTP 200, NOT a 302 (see §1). Tier-A render-smoke
+  (Phase 2) must likewise detect "logged out" by the login-form marker, never by
+  status — and must guard against a false pass where a page 500s but still 200s.
+- CSRF token is added by the output filter, not authgui.inc's form, so any POST
+  flow (Phase 3 functional) MUST GET the target page first and scrape
+  __csrf_magic from THAT page (token is per-session; re-scrape per POST is safe).
+  extract_csrf_token() + the WebUI session are the reusable primitive for that.
+- Phase 4 (browser) reuses the session by injecting `webui.session_cookie()`
+  (PHPSESSID) into the Playwright context — no second login.
+- Phase 5 MUST export SMOKE_ADMIN_PASSWORD (and optional SMOKE_ADMIN_USER) to the
+  UI workflow's pytest env (§1). Until then a CI run without the secret SKIPS the
+  ui tests cleanly (admin_credentials skips), not fails.
+- LIVE-CI PENDING: the actual login round-trip, the 200+marker page fetch, the
+  unauth-form shape, and the live config.xml protocol read are confirmed only
+  when the pinned ui_render test runs on the ADR-04 VM in CI. Keep Status at
+  "Implemented (pending smoke test)" until that green lands.
+
+--------------------------------------------------------------------------------
+6) GO-AHEAD FOR PHASE 2
+--------------------------------------------------------------------------------
+Proceed. The authenticated `webui` primitive (login + get + get_unauthenticated +
+session_cookie), the login/cookie/CSRF contract, and the login-form detector
+(looks_like_login_page) are in place for the Tier-A render sweep. Enumerate every
+pfBlockerNG page, GET each authenticated, and assert 200 + body free of PHP
+error/warning + a page-specific marker + no new php_error.log line — proving the
+oracle with a deliberately-broken probe.

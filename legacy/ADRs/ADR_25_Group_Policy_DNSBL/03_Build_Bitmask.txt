@@ -1,0 +1,81 @@
+================================================================================
+PHASE 3 PROMPT — Build: group-membership bitmask (feature-flagged; OFF => identical)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md   (read SS0, SS2.1, SS2.3 first)
+================================================================================
+
+REVISED 2026-07-04 terminology note: post-ADR-54, "DNSBL alias" == dnsbl FEED GROUP (the
+manifest 'group' field = DNSBL_{feedgroup name}, unchanged in shape). Bits are assigned one
+per dnsbl Feed Group. Everywhere this prompt says "alias", read "Feed Group"; the mechanics
+below are otherwise unchanged. "Groups absent from the manifest => off" remains the gate
+(the Phase-4 manifest keys do not exist yet when this phase runs).
+
+ROLE
+Work in the per-ADR worktree on branch adr/25-group-policy-dnsbl. Phase 3 changes the BUILD
+layer but is BEHAVIOUR-PRESERVING WHEN GROUP POLICY IS OFF (the default). One commit, push
+directly to the branch.
+
+WHY THIS PHASE EXISTS
+Per-group alias subsetting needs to know, for a matched domain, WHICH DNSBL aliases it
+belongs to (a domain can be in several). Today the build collapses a domain to one
+attribution. Store an alias-membership BITMASK per domain so the Phase-5 decision layer can
+intersect it with a client's subscribed-alias mask in O(1) — while keeping the matcher
+group-agnostic so decisionDB stays domain-keyed (ADR SS2.1).
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/02_Results.txt — confirm the extracted
+  base-match fn + oracle exist. If missing, STOP and report.
+- .ADRs/ADR_25_Group_Policy_DNSBL/ADR.md (SS1.4 alias/manifest shape, SS2.1 bitmask).
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py — the build path: dnsbl_build_from_manifest()
+  / build() and BuildResult (search "data_db", "zone_db", "BuildResult"); the per-feed
+  manifest entry fields {raw, feed, group, format_hint, provenance, log_flag} (+ optional
+  mode: 'permit' for ADR-31 permit feeds — the legacy {log, format} key names are GONE).
+- pfblockerng.inc — pfb_unbound_python_sources() (~:6568) — how manifest 'feeds' rows carry
+  'group' (=DNSBL_ alias).
+- tests/ oracle from Phase 2.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Define the alias->bit assignment: enumerate distinct manifest 'group' (DNSBL_ alias)
+   values deterministically (stable order) -> bit index. Build an alias->bit map in the build
+   output (for the manifest/decision side to share).
+2. Extend the per-domain build records (data_db / zone_db) to carry an integer alias bitmask
+   = OR of the bits of every alias the domain appears in. A domain in two aliases -> both
+   bits set. Keep all EXISTING fields (log/index/important/band) intact.
+3. Gate any NEW observable behaviour behind the group-policy-enabled flag (default OFF).
+   NOTE: the flag itself is defined in Phase 4 (its config key does not exist yet when this
+   phase runs) — in THIS phase the gate is "groups absent from the manifest ⇒ off"; do not
+   invent a config key here. With
+   the flag OFF, the manifest/decision output and attribution must be byte-identical to today
+   (oracle green). The bitmask may be computed regardless (it is additive metadata) provided
+   it does not alter existing outputs.
+4. Tests: (a) a domain present in 2 aliases gets both bits; in 1 alias gets exactly its bit.
+   (b) mask intersection helper: domain_mask & client_mask truthiness. (c) OFF-state parity:
+   full build with no groups -> oracle decisions unchanged.
+
+CONSTRAINTS
+- stdlib-only; 4-space; type-hint new functions; no bare except.
+- Bitmask is a Python int (arbitrary precision) — fine for many aliases.
+- Do NOT consult client IP here (build is group-agnostic). Do NOT add the per-client cache
+  (Phase 5).
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green (new bitmask tests + Phase-2 oracle still green).
+- ruff / mypy tests/ -> clean.
+- diff-read: confirm OFF-state build output is unchanged vs base.
+
+EXPECTED RESULT
+The build emits an alias->bit map and a per-domain alias bitmask; OFF-state behaviour
+identical to today.
+
+COMMIT (single)
+    pfblockerng: add DNSBL alias-membership bitmask to build (ADR-25 P3)
+Push directly to adr/25-group-policy-dnsbl; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_25_Group_Policy_DNSBL/RESULTS/03_Results.txt (plain .txt)
+Record: the alias->bit assignment rule + where the map lives; the bitmask field name in the
+build records; the intersection helper; OFF-state parity evidence; go-ahead for Phase 4.

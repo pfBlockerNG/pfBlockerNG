@@ -1,0 +1,337 @@
+ADR-62 Phase 7 -- Docs, delta release notes, AUTOMATED smoke rows -- HANDOFF
+====================================================================
+
+VERDICT: DONE-WITH-DEVIATION
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 14 at session start
+(14 unrelated commits: repo-install varver-layout adaptation, build-repo.sh
+fallback-catalog fix, alt_selected token vetting, dnsbl_alias_update fopen
+guards, cURL-retry download-body reset, release-gate CI query fixes/ordering,
+DNSBL decision-memo generation stamping). Confirmed orthogonal via
+`git diff --stat HEAD...origin/devel -- docs/misc/architecture-notes.md
+tests/smoke/fixtures/README.md tests/smoke/test_smoke_feeds.py
+tests/smoke/test_smoke_matrix.py .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`
+(empty output -- zero overlap with any file this phase touches). NOT rebased,
+same rationale every prior phase recorded: 6 phases deep, rebasing mid-ADR for
+provably orthogonal commits is zero-benefit history churn.
+
+WHAT CHANGED -- COMMIT <see below>
+------------------------------------------------------------------------
+- .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md: Status flipped to
+  "Implemented (pending smoke fan-out)"; added an "As-built summary" block
+  (delta table D1-D5 transcribed for release notes, carried deviations from
+  P3/P5/P6, and the ONE genuine defect this phase discovered -- issue #1105,
+  NOT fixed here); surgical reconciliation notes inserted in-place at SS1.5 and
+  SS6-Phase-5 (both dated "[2026-07-10 reconciliation, Phase 7]", stating what
+  PR #1066 already fixed vs what Phase 5's commit 1 actually delivered -- per
+  the brief's explicit instruction, NOT a SS8 post-merge entry since the ADR is
+  still in-flight on this branch); SS3's perf-risk paragraph gained the Phase-6
+  closing evidence (PHP +6.12%/-0.25% RSS, Python +12.74%/-1.67% RSS, PASS).
+- docs/misc/architecture-notes.md: rewrote ADR-07's stale first paragraph (it
+  claimed a still-live "PHP header-sniffs an ABP feed, tags format_hint='abp'"
+  mechanism -- deleted by this ADR's Phase 5); added a new "ADR-62" subsection
+  documenting the retired classifier, the single PHP capture predicate
+  (pfb_dnsbl_is_abp_rule_line, mirrored in Python's per-line routing), the
+  bracketed-IPv6 carve-out (pfb_dnsbl_unbracket_ip6 runs first), the TLD-pass
+  unconditional empty-feed-column skip, and D1's final two-case shape.
+- tests/smoke/test_smoke_adr62.py (NEW): 7 tests, one per ADR SS7 row not
+  already covered by an existing case (row 1 -- plain hosts feed -- reuses
+  test_smoke_feeds.py::test_dnsbl_http_hosts_feed_loads unchanged, per the
+  brief's "reuse, don't duplicate" instruction). See COVERAGE MATRIX below for
+  the full row->test mapping and each row's falsifiable observable.
+- tests/smoke/helpers.py: added DnsblCase.tld_enabled (bool, default False,
+  wired into _dnsbl_inject_snippet as CFG_DNSBL_SETTINGS/pfb_tld) -- needed by
+  row 7b's TLD-enabled test, following the SAME field-add pattern as
+  cname_validation/hsts/idn_mode/control. Fixed 3 STALE comments claiming a
+  still-live "header-sniffed independently" mechanism (extra_rows docstring,
+  the inject-snippet row comment) -- CLAUDE.md gate item 5, comments
+  reconciled with the new reality.
+- tests/smoke/test_smoke_abp.py: fixed the module docstring's stale ABP
+  feed-delivery mechanism paragraph (claimed pfBlockerNG still header-sniffs
+  a whole-feed body and tags format_hint='abp') + one stale "header-sniffed
+  ABP independently" phrase in test_abp_cross_feed_exception's docstring.
+- tests/smoke/test_smoke_feeds.py: fixed test_dnsbl_http_abp_feed_loads's
+  docstring (same stale header-sniff/format_hint claim) and the block comment
+  ahead of the ADR-21 per-line-detection section (claimed the kill-gate case
+  above it takes a DIFFERENT, whole-feed-ABP mechanism -- both cases now use
+  the SAME per-line capture); reworded test_abp_bom_header_still_detected's
+  docstring, which claimed "whole-feed ABP detection is the ONLY path that
+  compiles a feed /regex/" -- FALSE now (ADR-62 broadened per-line capture also
+  compiles a feed regex) -- and noted this test's discriminating power for its
+  ORIGINAL concern (a BOM masking line-1's classification) has been
+  incidentally weakened by ADR-62's removal of feed-level state (line 2's
+  regex no longer depends on line 1's own classification succeeding); the
+  precise oracle for that concern is the neighbouring
+  test_dnsbl_bom_header_feed_parses_without_error, unaffected.
+- tests/smoke/test_smoke_helpers.py: fixed test_abp_feed_body_has_header_and_
+  lines's stale docstring/comment (claimed the header line is "the marker
+  pfBlockerNG header-sniffs" and a body without it "is parsed as a plain
+  feed, not ABP" -- both false post-ADR-62).
+- tests/smoke/fixtures/dnsbl_abp.txt: fixed the fixture's own in-body '!'
+  comment header (claimed "format_hint='abp'" and that the header line is
+  dropped BY parse_abp specifically for that reason -- corrected to state the
+  header line is an ordinary skipped bracket control line).
+- tests/smoke/fixtures/README.md: added a note under "Omitted formats"
+  pointing to test_smoke_adr62.py for the CSV/bracketed-IPv6/IDN/reuse/TLD
+  rows, explaining why they ride write_local_feed instead of a committed
+  fixture (per-run unique_domain() need, matching the established pattern).
+
+Commit hash: this commit (single code+handoff commit per the brief -- inserting
+its own final hash into itself is circular by construction; run
+`git log -1 --format=%H` on this branch, or see the orchestrator's structured
+handoff for the authoritative value).
+
+GENUINE DEFECT DISCOVERED WHILE BUILDING ROW 7 (NOT fixed this phase)
+--------------------------------------------------------------------------------
+While designing the "reused feed with old-dialect .txt" row (SS7 row 7), I
+traced pfb_unbound_python_sources()'s per-line handling of a feed's staging
+.txt (inc:7098-7161) against a genuinely old-dialect $easylist-verbatim body
+(a bare-domain line with NO commas, exactly what the old classifier used to
+write verbatim for a whole-feed-ABP body). The function's "not ABP-shaped ->
+extract CSV col 1" branch does `explode(',', $line, 3)` and writes `$cols[1]`
+-- for a comma-less line, `$cols[1]` is unset, so the line is SILENTLY
+DROPPED, not written verbatim.
+
+VERIFIED (EXECUTED, not reasoned from memory) via a throwaway PHP script
+against the REAL function (tests/php/bootstrap.php):
+  $ php /private/tmp/.../repro.php
+  old_abp_feed.txt: "||anchor.example^\nbare-domain.example\n"
+  --- produced .raw ---
+  '||anchor.example^
+  '
+  --- contains bare-domain.example? ---
+  bool(false)
+
+This means: on upgrade to a build carrying this ADR, an existing ABP-
+classified DNSBL feed with a bare-domain line loses that domain's block
+SILENTLY the first post-upgrade pass where the feed's remote content has not
+changed (the reuse fork, inc:16277-16308, which is the default "nothing
+changed" path every feed takes once it has succeeded once) -- until the feed
+happens to actually re-download. This contradicts ADR.md Semantics #7's
+literal claim ("a reused ... feed's .txt ... produces the same Python input"
+for "old raw-ABP" dialect) for this one sub-case; the corpus's own
+reused_manifest_abp fixture never exercised a bare-domain line (only
+'||reused.example^'), so the gap was invisible to the existing oracle.
+
+Per CLAUDE.md's ESCALATE contract, filed as a tracked issue rather than
+silently built around or silently fixed (production-code fix is out of this
+phase's docs/smoke scope and I could not verify a fix live):
+  https://github.com/pfBlockerNG/pfBlockerNG/issues/1105
+
+Recorded in ADR.md's Status "As-built summary" (Discovered-during-this-phase
+bullet). tests/smoke/test_smoke_adr62.py's row-7a reuse test deliberately
+covers ONLY the safe 6-col-dialect reuse sub-case (unaffected by this gap --
+the 6-col dialect is unchanged by ADR-62) and documents the exclusion inline
+in its own module-level comment block.
+
+GATES (exact commands + pasted output)
+--------------------------------------------------------------------
+$ python3 -m pytest tests/smoke --collect-only -q --override-ini="addopts=" -k "adr62 or test_dnsbl_http_hosts_feed_loads"
+tests/smoke/test_smoke_adr62.py::test_adr62_abp_full_shape_set_no_marker
+tests/smoke/test_smoke_adr62.py::test_adr62_mixed_plain_feed_all_block_delta_d2
+tests/smoke/test_smoke_adr62.py::test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker
+tests/smoke/test_smoke_adr62.py::test_adr62_csv_bambenek_feed_blocks
+tests/smoke/test_smoke_adr62.py::test_adr62_idn_raw_unicode_blocks_under_punycode
+tests/smoke/test_smoke_adr62.py::test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict
+tests/smoke/test_smoke_adr62.py::test_adr62_tld_enabled_run_keeps_plain_row_classification
+tests/smoke/test_smoke_feeds.py::test_dnsbl_http_hosts_feed_loads
+8/637 tests collected (629 deselected) in 0.18s
+
+$ npx markdownlint-cli2 docs/misc/architecture-notes.md .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/ADR.md tests/smoke/fixtures/README.md
+markdownlint-cli2 v0.23.0 (markdownlint v0.41.0)
+Summary: 0 error(s)
+
+$ python3 scripts/check_phase_prompts.py .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/01_Byte_Identity_Corpus.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/02_Detangle_Prep.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/03_Python_Line_Dispatcher.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/04_Broaden_Capture.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/05_Delete_Classifier.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/06_Perf_And_Cleanup.txt .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/07_Docs_Dod_Smoke.txt
+(exit 0, no output -- clean)
+
+$ python3 -m pytest -q
+2620 passed, 4 skipped in 53.54s
+(IDENTICAL to Phase 5/6's baseline -- this phase touches ZERO production Python)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+213 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 90 source files
+
+$ vendor/bin/phpunit
+Tests: 2629, Assertions: 19363, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(IDENTICAL count to Phase 5/6's baseline -- 0 failures/errors; the 1 warning is
+the SAME pre-existing $tlds-uninitialised notice prior phases flagged; this
+phase touches ZERO src/ PHP -- `git diff --stat -- src/usr/local/pkg/pfblockerng/pfblockerng.inc`
+is empty)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations)
+
+$ git add -A && python3 scripts/check_comment_narration.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_retired_tokens.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_version_literals.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_appliance_python.py ; echo exit:$?
+exit:0
+
+DEFERRED EVIDENCE (live-VM dispatch -- NOT run this phase, per the brief)
+--------------------------------------------------------------------------------
+CE+Plus fan-out dispatch (the orchestrator's job at landing):
+  $ gh workflow run smoke.yml -f pytest_filter="adr62 or test_dnsbl_http_hosts_feed_loads" -f scope=full
+
+Local equivalent (scripts/local-smoke.sh, per CLAUDE.md "Smoke tests"):
+  $ scripts/local-smoke.sh --ref adr/62-dnsbl-unified-line-parsing \
+      --filter "adr62 or test_dnsbl_http_hosts_feed_loads"
+
+ROW -> TEST MAPPING (ADR.md SS7, all 7 rows covered; none silently dropped)
+--------------------------------------------------------------------------------
+1. Plain hosts feed (block/resolve per logging)
+   -> tests/smoke/test_smoke_feeds.py::test_dnsbl_http_hosts_feed_loads
+      (REUSED, unmodified -- this row is untouched by ADR-62's changes: the
+      plain hosts pipeline is unaffected by the classifier deletion).
+2. ABP feed, full shape set (||/@@/header/[Adblock]/regex/element-hiding),
+   NO '.abp' marker present
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_abp_full_shape_set_no_marker
+      Observable: || VIP-blocks; regex VIP-blocks; element-hiding target
+      RESOLVES (no spurious block, D2/D3); `test -e {dnsdir}/{header}.abp`
+      returns nonzero (marker absent).
+3. Mixed plain feed (hosts + stray ||anchor^ + /regex/), all block (D2)
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_mixed_plain_feed_all_block_delta_d2
+      Observable: all three names VIP-block; NO ABP header present in the body.
+4. Bracketed IPv6 lands in DNSBLIP; genuine [Adblock] marker does not
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_bracketed_ipv6_dnsblip_vs_adblock_marker
+      Observable: pfB_DNSBLIP_v6 contains the unwrapped literal; no member
+      contains "Adblock" text.
+5. One CSV type extracts and blocks
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_csv_bambenek_feed_blocks
+      Observable: a 4-col Bambenek ('bbc') CSV row's col-0 domain VIP-blocks.
+6. IDN name blocks under its punycode form
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_idn_raw_unicode_blocks_under_punycode
+      Observable: a raw-Unicode feed line VIP-blocks when queried under the
+      exact punycode PHP's idn_to_ascii() produces (verified this session via
+      `php -r 'echo idn_to_ascii("café-adr62row6.com");'` ->
+      xn--caf-adr62row6-dhb.com).
+7. Reused feed, old-dialect .txt (no re-download) resolves same verdicts +
+   TLD-enabled update run keeps plain-row TLD classification
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_reused_feed_old_dialect_txt_resolves_same_verdict
+      (SAFE 6-col-dialect sub-case ONLY -- the bare-domain-in-raw-ABP-dialect
+      sub-case is the tracked gap, issue #1105, deliberately NOT asserted here
+      as a passing row; documented inline + in the ADR)
+   -> tests/smoke/test_smoke_adr62.py::test_adr62_tld_enabled_run_keeps_plain_row_classification
+      (coarse live regression guard for the #1060 defect class -- deep
+      TLD-classification correctness is the PHPUnit oracle's job,
+      tests/php/Adr62TldAnalysisCorpusTest.php)
+      Observable (both): the pre-placed/mixed-feed domains VIP-block; row 7a
+      additionally asserts the decoy (HTTP-fetchable) domain does NOT block
+      (proving reuse, not re-download) and the stale '.abp' marker is swept.
+
+ARCHITECTURE-NOTE MATCHES AS-BUILT
+--------------------------------------------------------------------------------
+Every fact stated in the new ADR-62 architecture-notes subsection was cross-
+checked against RESULTS/02-06_Results.txt (not the phase prompts' pre-
+implementation assumptions): the predicate name pfb_dnsbl_is_abp_rule_line
+(RESULTS/02, /04, /05), pfb_dnsbl_is_skippable_control_line (RESULTS/02),
+pfb_dnsbl_unbracket_ip6 running BEFORE the universal skip (RESULTS/05's
+Semantics-#2 probe), the TLD-pass unconditional empty-feed-column skip
+(RESULTS/05 commit 1 + this phase's own reconciliation), D1's final two-case
+shape (RESULTS/05 "D1 RED->GREEN -- BOTH depth cases"), and format_hint's
+collapse to 'plain' everywhere (RESULTS/05 commit 2 items 6-7). ADR-07's
+stale first paragraph (claiming a still-live header-sniff) was the ONLY
+architecture-notes.md passage describing the retired mechanism as live,
+confirmed via `grep -rln` before editing.
+
+FINAL ADR STATUS
+--------------------------------------------------------------------------------
+"Implemented (pending smoke fan-out)" -- NOT flipped to Accepted (that
+requires the CE+Plus live-VM fan-out to run green first, per CLAUDE.md "ADR
+acceptance"; no manual sign-off gate was invented).
+
+COVERAGE MATRIX (this phase's brief action-plan items, ticked)
+--------------------------------------------------------------------------------
+1. AUTOMATED smoke coverage for SS7 rows 1-7: see ROW -> TEST MAPPING above --
+   7 new tests + 1 reused existing test, none silently dropped, each with a
+   falsifiable observable (never bare HTTP 200/"no error").
+2. architecture-notes.md "DNSBL/ABP pipeline" updated: retired classifier,
+   per-line capture boundary (one predicate at 3 sites), bracketed-IPv6
+   carve-out, TLD-pass unconditional skip -- new ADR-62 subsection + ADR-07's
+   stale paragraph corrected.
+3. SS2 delta table (D1-D5) recorded in the ADR's Status section as the
+   release-notes source.
+4. ADR RECONCILIATION: SS1.5 + SS6-Phase-5 amended in-place with dated
+   "[2026-07-10 reconciliation, Phase 7]" notes (NOT a SS8 entry, per the
+   brief); SS3's perf-risk paragraph gained Phase-6's closing evidence.
+5. ADR Status set to "Implemented (pending smoke fan-out)" with the honest
+   as-built summary from RESULTS/01-06, including every carried deviation.
+6. Phase prompts lint clean: `python3 scripts/check_phase_prompts.py
+   .ADRs/ADR_62_DNSBL_Unified_Line_Parsing/[0-9]*.txt` exit 0.
+
+DEVIATIONS
+------------
+1. VERDICT is DONE-WITH-DEVIATION, not plain DONE: a genuine factual
+   contradiction of ADR.md Semantics #7 was discovered and verified (issue
+   #1105, see above) while building row 7. Per CLAUDE.md's ESCALATE contract
+   ("if any factual claim in the brief/ADR is contradicted by the code or a
+   live probe... escalate, or at minimum return DONE-WITH-DEVIATION -- never
+   plain DONE") -- filed as a tracked issue, documented in the ADR and this
+   handoff, NOT silently built around, NOT silently fixed (a production-code
+   fix is outside this phase's docs/smoke scope and unverifiable live here).
+2. tld_enabled added to DnsblCase (tests/smoke/helpers.py) -- a small,
+   test-infra-only addition (not production code) needed to build row 7b,
+   following the exact established pattern of every prior single-purpose
+   boolean field on this dataclass (cname_validation/hsts/idn_mode/control).
+3. Row 7b's live assertion is deliberately a COARSE regression guard (both
+   domains still VIP-block with pfb_tld=on), not a deep TLD-classification
+   proof: reading tld_analysis()'s fingerprint-gated build path
+   (inc:15940-15944) showed TLD mode swaps the ingestion pipeline to a
+   materially different legacy code surface (pfb_unbound.py's legacy
+   zone/data CSV loaders) from the ADR-06 manifest-based build() this ADR's
+   per-line dispatcher lives in; correctly constructing a DEEP live-VM
+   assertion of that separate pipeline's TLD-classification correctness,
+   unable to execute it myself, was judged out of this phase's proportionate
+   scope. Deep correctness is already the PHPUnit oracle's job
+   (Adr62TldAnalysisCorpusTest.php, Phase 5). Stated, not silently narrowed.
+4. Row 2/3's element-hiding and regex domains use manually-built regex
+   literals (`/^{domain}$/` with the dot escaped) rather than a committed
+   fixture -- verified by reading parse_abp()'s anchored-regex convention
+   against the existing corpus fixture (`/^regexblock\.abp\.example$/`) before
+   writing them, not guessed.
+5. Did NOT rewrite test_abp_bom_header_still_detected's ASSERTIONS (only its
+   docstring) despite finding its original discriminating power weakened by
+   ADR-62's removal of feed-level state (see WHAT CHANGED above) -- rewriting
+   test logic I cannot execute live, for an EXISTING test outside this
+   phase's own action-plan scope (new/extended smoke rows), risked shipping
+   an unverified behavioural test change; flagged honestly in the docstring
+   instead, pointing at the neighbouring test that IS still a precise oracle
+   for the original issue #946 concern.
+Per CLAUDE.md's ESCALATE contract: none of the above invented an unnamed
+mechanism or weakened a CLAUDE.md mandate.
+
+CARRY-FORWARD (for the orchestrator / landing)
+------------------------------------------------------------------------
+1. Dispatch the CE+Plus live-VM smoke fan-out (commands above) before
+   flipping ADR Status to Accepted -- the acceptance gate CLAUDE.md "ADR
+   acceptance" requires, not yet run this phase.
+2. Issue #1105 (bare-domain-in-old-ABP-dialect reuse drop) is open, untriaged
+   beyond this discovery -- needs its own fix + red->green test in a future
+   phase/PR before it can be closed; NOT a blocker for this ADR's own
+   acceptance (the ADR's own reuse row deliberately excludes that sub-case
+   and documents why).
+3. test_abp_bom_header_still_detected (tests/smoke/test_smoke_feeds.py) has
+   reduced discriminating power for its original issue #946 concern (see
+   DEVIATIONS item 5) -- a future pass could tighten it (e.g. assert the
+   parse-error-log count directly, mirroring its neighbour) but that is test-
+   quality cleanup outside any current ADR's charter.
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean
+against --staged for this commit (see GATES above).
