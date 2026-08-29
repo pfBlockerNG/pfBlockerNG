@@ -2,9 +2,9 @@
 package builder (issue #1806 step A).
 
 The fixture Makefile/distinfo/pkg-descr mirror the REAL
-textproc/py-charset-normalizer port (captured 2026-07-28 from the
-pfBlockerNG/FreeBSD-ports fork, commit 3a57c58d82c8's parent). Network (sdist
-fetch, `pip wheel`) is mocked everywhere here — see the module docstring in
+textproc/py-charset-normalizer port (captured 2026-08-29 from
+freebsd/freebsd-ports commit 0b5f0ee3679181a759e854605154dd6b512e2e9a).
+Network (sdist fetch, `pip wheel`) is mocked everywhere here — see the module docstring in
 build-dep-pkg-portable.py for the tool's real network behavior; a real build
 against an actual ports checkout (genuine sdist fetch + pip wheel) is
 validated separately, outside this hermetic suite.
@@ -59,7 +59,7 @@ _spec.loader.exec_module(bdp)
 def _port_makefile(*, use_python: str = "autoplist concurrent pep517", no_arch_line: str = "NO_ARCH=\tyes") -> str:
     return (
         "PORTNAME=\tcharset-normalizer\n"
-        "PORTVERSION=\t3.4.4\n"
+        "PORTVERSION=\t3.4.7\n"
         "CATEGORIES=\ttextproc python\n"
         "MASTER_SITES=\tPYPI \\\n"
         "\t\thttps://github.com/jawah/charset_normalizer/releases/download/${PORTVERSION}/\n"
@@ -87,9 +87,9 @@ def _port_makefile(*, use_python: str = "autoplist concurrent pep517", no_arch_l
 
 
 _REAL_DISTINFO = (
-    "TIMESTAMP = 1759774719\n"
-    "SHA256 (charset_normalizer-3.4.4.tar.gz) = 94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a\n"
-    "SIZE (charset_normalizer-3.4.4.tar.gz) = 129418\n"
+    "TIMESTAMP = 1775587602\n"
+    "SHA256 (charset_normalizer-3.4.7.tar.gz) = ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5\n"
+    "SIZE (charset_normalizer-3.4.7.tar.gz) = 144271\n"
 )
 
 _REAL_PKG_DESCR = (
@@ -226,8 +226,8 @@ def test_read_port_extracts_facts(tmp_path: Path) -> None:
     port_dir = _write_port(tmp_path)
     facts = bdp.read_port(port_dir)
     assert facts.portname == "charset-normalizer"
-    assert facts.portversion == "3.4.4"
-    assert facts.distname == "charset_normalizer-3.4.4"
+    assert facts.portversion == "3.4.7"
+    assert facts.distname == "charset_normalizer-3.4.7"
     assert facts.comment == "Real First Universal Charset Detector"
     assert facts.maintainer == "sunpoet@FreeBSD.org"
     # WWW carries the FIRST url only, even though the port lists two.
@@ -236,7 +236,7 @@ def test_read_port_extracts_facts(tmp_path: Path) -> None:
     assert facts.categories == ["textproc", "python"]
     assert facts.master_sites == [
         "PYPI",
-        "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/",
+        "https://github.com/jawah/charset_normalizer/releases/download/3.4.7/",
     ]
 
 
@@ -282,9 +282,9 @@ def test_read_port_requires_makefile(tmp_path: Path) -> None:
 
 def test_read_distinfo_parses_sha256_and_size(tmp_path: Path) -> None:
     port_dir = _write_port(tmp_path)
-    sha, size = bdp.read_distinfo(port_dir, "charset_normalizer-3.4.4.tar.gz")
-    assert sha == "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a"
-    assert size == 129418
+    sha, size = bdp.read_distinfo(port_dir, "charset_normalizer-3.4.7.tar.gz")
+    assert sha == "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5"
+    assert size == 144271
 
 
 def test_read_distinfo_missing_entry_raises(tmp_path: Path) -> None:
@@ -311,14 +311,14 @@ def test_read_descr_falls_back_to_comment_when_missing(tmp_path: Path) -> None:
 def _demo_port(**overrides: object) -> Any:
     base: dict[str, Any] = dict(
         portname="charset-normalizer",
-        portversion="3.4.4",
-        distname="charset_normalizer-3.4.4",
+        portversion="3.4.7",
+        distname="charset_normalizer-3.4.7",
         comment="x",
         maintainer="",
         www="",
         license="MIT",
         categories=["textproc", "python"],
-        master_sites=["PYPI", "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/"],
+        master_sites=["PYPI", "https://github.com/jawah/charset_normalizer/releases/download/3.4.7/"],
     )
     base.update(overrides)
     return bdp.PortFacts(**base)  # type: ignore[arg-type]
@@ -326,17 +326,17 @@ def _demo_port(**overrides: object) -> Any:
 
 def test_candidate_urls_pypi_redirector_then_literal_fallback() -> None:
     port = _demo_port()
-    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.4.tar.gz")
+    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.7.tar.gz")
     assert urls == [
-        "https://pypi.io/packages/source/c/charset_normalizer/charset_normalizer-3.4.4.tar.gz",
-        "https://github.com/jawah/charset_normalizer/releases/download/3.4.4/charset_normalizer-3.4.4.tar.gz",
+        "https://pypi.io/packages/source/c/charset_normalizer/charset_normalizer-3.4.7.tar.gz",
+        "https://github.com/jawah/charset_normalizer/releases/download/3.4.7/charset_normalizer-3.4.7.tar.gz",
     ]
 
 
 def test_candidate_urls_literal_only_site_has_no_pypi_entry() -> None:
     port = _demo_port(master_sites=["https://example.com/dist/"])
-    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.4.tar.gz")
-    assert urls == ["https://example.com/dist/charset_normalizer-3.4.4.tar.gz"]
+    urls = bdp.candidate_urls(port, "charset_normalizer-3.4.7.tar.gz")
+    assert urls == ["https://example.com/dist/charset_normalizer-3.4.7.tar.gz"]
 
 
 # --------------------------------------------------------------------------- #
@@ -409,7 +409,7 @@ def test_build_wheel_accepts_single_pure_wheel(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
-    wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
+    wheel = wheel_dir / "charset_normalizer-3.4.7-py3-none-any.whl"
     wheel.write_bytes(b"")
     got = bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
     assert got == wheel
@@ -435,7 +435,7 @@ def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
-    (wheel_dir / "charset_normalizer-3.4.4-cp311-cp311-macosx_11_0_arm64.whl").write_bytes(b"")
+    (wheel_dir / "charset_normalizer-3.4.7-cp311-cp311-macosx_11_0_arm64.whl").write_bytes(b"")
     with pytest.raises(bdp.DepPkgError, match="not a pure-Python wheel"):
         bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
 
@@ -462,7 +462,7 @@ def test_build_wheel_pins_command_and_sanitized_environment(tmp_path: Path, monk
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
-    (wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl").write_bytes(b"")
+    (wheel_dir / "charset_normalizer-3.4.7-py3-none-any.whl").write_bytes(b"")
     sdist = tmp_path / "sdist.tar.gz"
 
     bdp.build_wheel(sdist, tmp_path, source_date_epoch=1_700_000_000)
@@ -703,13 +703,13 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
     def fake_build_wheel(_sdist: Path, work_dir: Path, **_kwargs: Any) -> Path:
         wheel_dir = work_dir / "wheel"
         wheel_dir.mkdir(parents=True, exist_ok=True)
-        wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
+        wheel = wheel_dir / "charset_normalizer-3.4.7-py3-none-any.whl"
         _write_wheel(
             wheel,
             files={
-                "charset_normalizer/__init__.py": b"__version__ = '3.4.4'\n",
-                "charset_normalizer-3.4.4.dist-info/METADATA": b"Metadata-Version: 2.1\n",
-                "charset_normalizer-3.4.4.dist-info/WHEEL": (
+                "charset_normalizer/__init__.py": b"__version__ = '3.4.7'\n",
+                "charset_normalizer-3.4.7.dist-info/METADATA": b"Metadata-Version: 2.1\n",
+                "charset_normalizer-3.4.7.dist-info/WHEEL": (
                     b"Wheel-Version: 1.0\nGenerator: bdist_wheel (0.45.1)\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
                 ),
             },
@@ -793,7 +793,7 @@ def test_build_dep_pkg_consumes_the_pinned_ports_snapshot(
     snapshot_port = _write_port(snapshot_root)
     for name in ("Makefile", "distinfo"):
         path = snapshot_port / name
-        path.write_text(path.read_text().replace("3.4.4", "9.9.9"))
+        path.write_text(path.read_text().replace("3.4.7", "9.9.9"))
     _mock_network(monkeypatch, console_scripts=None)
     monkeypatch.setattr(
         bdp.bpp,
@@ -894,12 +894,12 @@ def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytes
     out_path = bdp.build_dep_pkg(_build_args(ports_root, out_dir))
 
     # Canonical <name>-<version>.pkg output filename.
-    assert out_path == out_dir / "py311-charset-normalizer-3.4.4.pkg"
+    assert out_path == out_dir / "py311-charset-normalizer-3.4.7.pkg"
     assert out_path.is_file()
 
     manifest = pfb_pkg.read_compact_manifest(out_path)
     assert manifest["name"] == "py311-charset-normalizer"
-    assert manifest["version"] == "3.4.4"
+    assert manifest["version"] == "3.4.7"
     assert manifest["origin"] == "textproc/py-charset-normalizer"
     assert manifest["abi"] == "FreeBSD:15:*"
     assert manifest["arch"] == "freebsd:15:*"
@@ -911,10 +911,10 @@ def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytes
         "schema": 1,
         "freebsd_ports_sha": "d" * 40,
         "port_origin": "textproc/py-charset-normalizer",
-        "port_version": "3.4.4",
-        "distfile": "charset_normalizer-3.4.4.tar.gz",
-        "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
-        "distfile_size": 129418,
+        "port_version": "3.4.7",
+        "distfile": "charset_normalizer-3.4.7.tar.gz",
+        "distfile_sha256": "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5",
+        "distfile_size": 144271,
         "py_flavor": "py311",
         "freebsd_major": "15",
         "abi": "FreeBSD:15:*",
@@ -954,13 +954,13 @@ def _tagged_handoff_for_real_dependency(tagged_package: Path) -> tuple[dict[str,
             "-CE-2.8.pkg": {
                 "textproc/py-charset-normalizer": {
                     "portname": "charset-normalizer",
-                    "port_version": "3.4.4",
-                    "distfile": "charset_normalizer-3.4.4.tar.gz",
-                    "distfile_sha256": ("94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a"),
-                    "distfile_size": 129_418,
+                    "port_version": "3.4.7",
+                    "distfile": "charset_normalizer-3.4.7.tar.gz",
+                    "distfile_sha256": ("ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5"),
+                    "distfile_size": 144_271,
                     "package_name": "py311-charset-normalizer",
-                    "package_version": "3.4.4",
-                    "filename": "py311-charset-normalizer-3.4.4-CE-2.8.pkg",
+                    "package_version": "3.4.7",
+                    "filename": "py311-charset-normalizer-3.4.7-CE-2.8.pkg",
                     "freebsd_ports_sha": "d" * 40,
                     "source_date_epoch": 1_700_000_000,
                     "toolchain": toolchain,
@@ -1092,7 +1092,7 @@ def test_build_dep_pkg_derives_portname_from_flavor_prefix(tmp_path: Path, monke
     args.python_dep_version = "3.10.9"
     out_path = bdp.build_dep_pkg(args)
 
-    assert out_path.name == "py310-charset-normalizer-3.4.4.pkg"
+    assert out_path.name == "py310-charset-normalizer-3.4.7.pkg"
     manifest = pfb_pkg.read_compact_manifest(out_path)
     assert manifest["name"] == "py310-charset-normalizer"
     assert manifest["deps"] == {"python310": {"origin": "lang/python310", "version": "3.10.9"}}
@@ -1125,7 +1125,7 @@ def test_main_prints_out_path_as_last_stdout_line(
     )  # fmt: skip
     assert rc == 0
     last_line = capsys.readouterr().out.strip().splitlines()[-1]
-    assert last_line == str(out_dir / "py311-charset-normalizer-3.4.4.pkg")
+    assert last_line == str(out_dir / "py311-charset-normalizer-3.4.7.pkg")
 
 
 def test_main_stdout_is_only_the_pkg_path_line(
@@ -1163,8 +1163,8 @@ def test_main_stdout_is_only_the_pkg_path_line(
             wheel_dir = Path(cmd[cmd.index("-w") + 1])
             wheel_dir.mkdir(parents=True, exist_ok=True)
             _write_wheel(
-                wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl",
-                files={"charset_normalizer/__init__.py": b"__version__ = '3.4.4'\n"},
+                wheel_dir / "charset_normalizer-3.4.7-py3-none-any.whl",
+                files={"charset_normalizer/__init__.py": b"__version__ = '3.4.7'\n"},
                 entry_points=None,
             )
             chatter = "Processing /tmp/x.tar.gz\nCreated wheel for charset-normalizer\n"
@@ -1202,7 +1202,7 @@ def test_main_stdout_is_only_the_pkg_path_line(
     assert rc == 0
 
     captured = capsys.readouterr()
-    assert captured.out == f"{out_dir / 'py311-charset-normalizer-3.4.4.pkg'}\n", (
+    assert captured.out == f"{out_dir / 'py311-charset-normalizer-3.4.7.pkg'}\n", (
         f"stdout must be ONLY the .pkg path line; got {captured.out!r}"
     )
     # The pip chatter must still be VISIBLE -- relayed to stderr, never dropped.
@@ -1236,7 +1236,7 @@ def test_main_defaults_python_dep_version_to_0_when_omitted(tmp_path: Path, monk
         ]
     )  # fmt: skip
     assert rc == 0
-    manifest = pfb_pkg.read_compact_manifest(out_dir / "py311-charset-normalizer-3.4.4.pkg")
+    manifest = pfb_pkg.read_compact_manifest(out_dir / "py311-charset-normalizer-3.4.7.pkg")
     assert manifest["deps"] == {"python311": {"origin": "lang/python311", "version": "0"}}
 
 
@@ -1390,10 +1390,10 @@ def test_print_port_identity_reads_the_pinned_recipe(
     assert json.loads(capsys.readouterr().out) == {
         "port_origin": "textproc/py-charset-normalizer",
         "portname": "charset-normalizer",
-        "port_version": "3.4.4",
-        "distfile": "charset_normalizer-3.4.4.tar.gz",
-        "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
-        "distfile_size": 129_418,
+        "port_version": "3.4.7",
+        "distfile": "charset_normalizer-3.4.7.tar.gz",
+        "distfile_sha256": "ae89db9e5f98a11a4bf50407d4363e7b09b31e55bc117b4f7d80aab97ba009e5",
+        "distfile_size": 144_271,
     }
 
 
@@ -1407,7 +1407,7 @@ def test_print_port_identity_consumes_pinned_snapshot(
     snapshot_port = _write_port(snapshot_root)
     for name in ("Makefile", "distinfo"):
         path = snapshot_port / name
-        path.write_text(path.read_text().replace("3.4.4", "9.9.9"))
+        path.write_text(path.read_text().replace("3.4.7", "9.9.9"))
     calls: list[tuple[object, ...]] = []
 
     def attest(path: Path, sha: str, label: str, *, payload_root: Path) -> None:
