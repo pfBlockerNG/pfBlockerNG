@@ -63,6 +63,9 @@
 #                   never sets either, so the check stays on.
 #   PFB_LS_REMOTE   override the `git ls-remote` binary (same argv:
 #                   --exit-code <remote> <ref>). Spec injects a fake.
+#   PFB_ONBOX_REPO_ROOT  override /root/pfBlockerNG for bootstrap fixture tests.
+#   PFB_ONBOX_PROC_ROOT  override /proc for ownership fixture tests. Production
+#                   never sets either value.
 #
 # The leased box runs scripts/smoke-on-box.sh, which:
 #   - checks out the requested ref
@@ -236,6 +239,8 @@ if [ "$_skip_ls" -eq 0 ]; then
 fi
 
 _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
+_ONBOX_REPO_ROOT_Q="$(_sq "${PFB_ONBOX_REPO_ROOT:-/root/pfBlockerNG}")"
+_ONBOX_PROC_ROOT_Q="$(_sq "${PFB_ONBOX_PROC_ROOT:-/proc}")"
 
 _REF_Q="$(_sq "$_REF")"
 _GIT_REMOTE_Q="$(_sq "$_GIT_REMOTE")"
@@ -282,7 +287,54 @@ if [ "$_NO_TWO_VM" -eq 1 ]; then
     _ob_flags="$_ob_flags --no-two-vm"
 fi
 
-_bootstrap="cd /root/pfBlockerNG \
+_bootstrap="cd '$_ONBOX_REPO_ROOT_Q' \
+ && (lock='$_ONBOX_REPO_ROOT_Q/.git/HEAD.lock'; proc='$_ONBOX_PROC_ROOT_Q'; \
+      if [ -e \"\$lock\" ] || [ -L \"\$lock\" ]; then \
+          if [ -L \"\$lock\" ] || [ ! -f \"\$lock\" ]; then \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (not a regular file); box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          if [ ! -d \"\$proc/1/fd\" ] || [ ! -r \"\$proc/1/fd\" ]; then \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (process view unavailable); box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          before=\$(stat -Lc '%d:%i' \"\$lock\" 2>/dev/null) || { \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (stat failed); box unhealthy\n' >&2; \
+              exit 75; \
+          }; \
+          owner_pid=''; ambiguous=0; \
+          for fd in \"\$proc\"/[0-9]*/fd/*; do \
+              [ -L \"\$fd\" ] || continue; \
+              if target=\$(readlink \"\$fd\" 2>/dev/null); then \
+                  if [ \"\$target\" = \"\$lock\" ]; then \
+                      pid=\${fd#\"\$proc\"/}; pid=\${pid%%/*}; owner_pid=\$pid; break; \
+                  fi; \
+              elif [ -L \"\$fd\" ]; then \
+                  ambiguous=1; break; \
+              fi; \
+          done; \
+          if [ -n \"\$owner_pid\" ]; then \
+              printf 'local-smoke: box hygiene: live owner pid=%s for .git/HEAD.lock; box unhealthy\n' \"\$owner_pid\" >&2; \
+              exit 75; \
+          fi; \
+          if [ \"\$ambiguous\" -ne 0 ]; then \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (descriptor unreadable); box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          after=\$(stat -Lc '%d:%i' \"\$lock\" 2>/dev/null) || { \
+              printf 'local-smoke: box hygiene: .git/HEAD.lock changed during inspection; box unhealthy\n' >&2; \
+              exit 75; \
+          }; \
+          if [ \"\$before\" != \"\$after\" ]; then \
+              printf 'local-smoke: box hygiene: .git/HEAD.lock changed during inspection; box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          if ! rm -f \"\$lock\" || [ -e \"\$lock\" ] || [ -L \"\$lock\" ]; then \
+              printf 'local-smoke: box hygiene: stale .git/HEAD.lock recovery failed; box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          printf 'local-smoke: box hygiene: recovered proven-stale .git/HEAD.lock\n' >&2; \
+      fi) \
  && git sparse-checkout init --cone \
  && git sparse-checkout set src scripts stubs/python tests/smoke \
  && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
