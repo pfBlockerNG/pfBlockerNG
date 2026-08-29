@@ -157,62 +157,97 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		$this->assertStringNotContainsString('<', $fallback, 'the query token must never reach the page verbatim');
 	}
 
-	/**
-	 * Scenario: each of the six checks fails in turn, alone. Expected: the token names
-	 * THAT check -- a mapping a source-substring pin cannot tell from a swapped pair.
-	 */
-	public function testEachFailingConditionYieldsItsOwnStageToken(): void
+	/** A model and a state the real publication path accepts. */
+	private function realModel(): array
 	{
-		$model = ['config_hash' => str_repeat('a', 64)];
-		$state = ['schema' => 1, 'items' => []];
-		$zone = new DateTimeZone('UTC');
-		$pass = static fn (): bool => TRUE;
-		$read = static fn (): ?array => ['_meta' => []];
+		$model = pfb_schedule_runtime_model(self::GENERAL, ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
+		$this->assertIsArray($model);
+		return $model;
+	}
 
-		$cases = [
-			'config'   => [NULL, $state, $zone, '/tmp', $pass, $read],
-			'state'    => [$model, NULL, $zone, '/tmp', $pass, $read],
-			'timezone' => [$model, $state, 'UTC', '/tmp', $pass, $read],
-			'workdir'  => [$model, $state, $zone, '', $pass, $read],
-			'refresh'  => [$model, $state, $zone, '/tmp', static fn (): bool => FALSE, $read],
-			'readback' => [$model, $state, $zone, '/tmp', $pass, static fn (): ?array => NULL],
-		];
-		foreach ($cases as $expected => $args) {
-			$this->assertSame($expected, pfb_schedule_cache_stage(...$args),
-				"the {$expected} check must report its own stage, not another's");
+	private function candidateDir(): string
+	{
+		$dir = sys_get_temp_dir() . '/pfb_stage_' . bin2hex(random_bytes(6));
+		mkdir($dir, 0700, TRUE);
+		return $dir;
+	}
+
+	private function removeDir(string $dir): void
+	{
+		foreach (glob($dir . '/*') ?: [] as $path) {
+			@unlink($path);
 		}
-		$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, '/tmp', $pass, $read),
-			'a candidate that publishes and reads back cleanly reports no failing stage');
+		@rmdir($dir);
 	}
 
 	/**
-	 * The ladder short-circuits: an earlier failure wins, and the publish/read-back work
+	 * Scenario: each of the six checks fails in turn, alone. Expected: the token names
+	 * THAT check -- a mapping a source-substring pin cannot tell from a swapped pair.
+	 * The last two stages run the real publication and read-back, so the arguments this
+	 * takes are exercised rather than merely passed on.
+	 */
+	public function testEachFailingConditionYieldsItsOwnStageToken(): void
+	{
+		$model = $this->realModel();
+		$state = ['schema' => 1, 'items' => []];
+		$zone = new DateTimeZone('UTC');
+		$dir = $this->candidateDir();
+
+		try {
+			$this->assertSame('config', pfb_schedule_cache_stage(NULL, $state, $zone, $dir));
+			$this->assertSame('state', pfb_schedule_cache_stage($model, NULL, $zone, $dir));
+			$this->assertSame('timezone', pfb_schedule_cache_stage($model, $state, 'UTC', $dir));
+			$this->assertSame('workdir', pfb_schedule_cache_stage($model, $state, $zone, ''));
+			$this->assertSame('refresh',
+				pfb_schedule_cache_stage($model, $state, $zone, $dir, NULL, ['fail_rename' => TRUE]),
+				'a candidate that cannot be published must report the publication stage');
+			$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, $dir),
+				'a candidate that publishes and reads back cleanly reports no failing stage');
+		} finally {
+			$this->removeDir($dir);
+		}
+	}
+
+	/**
+	 * The model and the state are both nullable arrays, so nothing in the type system
+	 * stops a caller transposing them. Passing them the wrong way round must not be
+	 * mistaken for success.
+	 */
+	public function testTransposedModelAndStateDoNotReportSuccess(): void
+	{
+		$model = $this->realModel();
+		$state = ['schema' => 1, 'items' => []];
+		$zone = new DateTimeZone('UTC');
+		$dir = $this->candidateDir();
+
+		try {
+			$this->assertSame('', pfb_schedule_cache_stage($model, $state, $zone, $dir),
+				'before-state: the right way round publishes cleanly');
+			$this->assertSame('config', pfb_schedule_cache_stage($state, $model, $zone, $dir),
+				'a transposed model and state must name the model check, not a later stage');
+			$this->assertSame('state', pfb_schedule_cache_stage($model, $model, $zone, $dir),
+				'a model passed where the state belongs must name the state check');
+		} finally {
+			$this->removeDir($dir);
+		}
+	}
+
+	/**
+	 * The ladder short-circuits: an earlier failure wins, and the publication behind it
 	 * is never attempted -- the property the original && chain provided for free.
 	 */
 	public function testEarlierStageWinsAndSkipsTheWorkBehindIt(): void
 	{
-		$calls = ['publish' => 0, 'read' => 0];
-		$publish = static function () use (&$calls): bool {
-			$calls['publish']++;
-			return FALSE;
-		};
-		$read = static function () use (&$calls): ?array {
-			$calls['read']++;
-			return NULL;
-		};
-
-		$this->assertSame('config',
-			pfb_schedule_cache_stage(NULL, NULL, 'not-a-zone', '', $publish, $read),
-			'with every check failing, the first one reports');
-		$this->assertSame(['publish' => 0, 'read' => 0], $calls,
-			'a stage that never runs must not do its work: ' . var_export($calls, TRUE));
-
-		$model = ['config_hash' => str_repeat('a', 64)];
-		$this->assertSame('refresh',
-			pfb_schedule_cache_stage($model, ['schema' => 1, 'items' => []], new DateTimeZone('UTC'),
-				'/tmp', $publish, $read));
-		$this->assertSame(['publish' => 1, 'read' => 0], $calls,
-			'a failed publication must not be followed by a read-back: ' . var_export($calls, TRUE));
+		$dir = $this->candidateDir();
+		try {
+			$this->assertSame('config',
+				pfb_schedule_cache_stage(NULL, NULL, 'not-a-zone', '', NULL, ['fail_rename' => TRUE]),
+				'with every check failing, the first one reports');
+			$this->assertSame([], glob($dir . '/*') ?: [],
+				'a stage that never runs must not have published anything');
+		} finally {
+			$this->removeDir($dir);
+		}
 	}
 
 	/** The save path records which stage failed, and the warning names it. */
@@ -223,8 +258,11 @@ final class ScheduleRuntimeDiagnosticsTest extends TestCase
 		$this->assertNotFalse($save);
 		$this->assertNotFalse(strpos($source, 'schstage=', $save),
 			'the save redirect must carry the stage that failed');
-		$this->assertStringContainsString('pfb_schedule_cache_stage(', $source,
-			'the save must resolve the stage through the tested helper, not an inline ladder');
+		$this->assertStringContainsString(
+			'pfb_schedule_cache_stage( $runtime_model, $runtime_state, $runtime_timezone, $candidate_dir )',
+			$source,
+			'the save must resolve the stage through the tested helper, in that argument order: '
+			. 'no off-appliance test executes this page, so the order is pinned here');
 		$this->assertStringContainsString('pfb_schedule_cache_stage_label(', $source,
 			'the warning must render the stage through the fixed label map');
 		$this->assertStringNotContainsString('This is likely a bug; please report it.', $source,

@@ -105,7 +105,9 @@ final class GeneralScheduleUiTest extends TestCase
 		$save = strpos($source, 'if (isset($_POST[\'save\'])) {');
 		$this->assertNotFalse($save);
 		$write = strpos($source, 'PfbConfig::writeSection(', $save);
-		$cache = strpos($source, 'pfb_schedule_cache_refresh(', $save);
+		// issue #2855: the refresh moved inside pfb_schedule_cache_stage(), which reports
+		// which check failed. The ordering guarantee is unchanged, so follow the call.
+		$cache = strpos($source, 'pfb_schedule_cache_stage(', $save);
 		$redirect = strpos($source, 'schcache=failed', $save);
 		$this->assertNotFalse($write);
 		$this->assertNotFalse($cache, 'save must refresh the derived schedule cache');
@@ -152,13 +154,18 @@ final class GeneralScheduleUiTest extends TestCase
 		$source = php_strip_whitespace(self::GENERAL_PAGE);
 		$save = strpos($source, 'if (isset($_POST[\'save\'])) {');
 		$this->assertNotFalse($save);
-		$cache = strpos($source, 'pfb_schedule_cache_refresh(', $save);
+		$cache = strpos($source, 'pfb_schedule_cache_stage(', $save);
 		$this->assertNotFalse($cache);
 		$window = substr($source, $save, strpos($source, '$pfb[\'save\']', $cache) - $save);
 		$this->assertStringContainsString('sys_get_temp_dir()', $window);
 		$this->assertStringContainsString('$pfb[\'schedule_state_dir\'] ?? \'/usr/local/etc\'', $window,
 			'candidate validation must use the same durable state directory as tick and apply');
-		$this->assertStringNotContainsString('pfb_schedule_cache_refresh($runtime_model, $runtime_state, time(), $runtime_timezone, $pfb', $window);
+		// The page must never hand the stage helper a $pfb-rooted directory: that is the
+		// ACTIVE cache, and a settings save only ever stages a disposable candidate.
+		$this->assertStringNotContainsString('$runtime_timezone, $pfb', $window,
+			'the save must stage into a temporary directory, never the active cache');
+		$this->assertStringNotContainsString('pfb_schedule_cache_refresh(', $window,
+			'the page must not publish directly; the stage helper owns the publication');
 		$this->assertStringContainsString('$pfb[\'save\'] = TRUE; sync_package_pfblockerng();', $source);
 		$this->assertMatchesRegularExpression('/pfblockerng_configure_tick_cron\(\s*\$pfb\[\'enable\'\]\s*===\s*PfbToggle::On,\s*\$pfb\[\'log\'\],\s*NULL,\s*FALSE\s*\)/', php_strip_whitespace(self::APPLY),
 			'settings-save sync must not regenerate or replace the active cache');
