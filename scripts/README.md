@@ -125,9 +125,10 @@ generator.
 **There is no `arch` field (issue #1806 — supersedes issue #199's ARM/aarch64 plan).** Every
 `pfSense-pkg-pfBlockerNG` port is `NO_ARCH`: one wildcard-ABI `.pkg` build serves every CPU
 arch of a FreeBSD major, so the catalog is arch-less and the BUILD matrix (`--print-build`)
-dedupes to **one row per distinct `freebsd_major`** — `php_version`/`py_flavor` must agree
-across every version sharing a major (a mismatch is a hard reader error), and `extra_pkgs`
-unions across the merged rows. The CI matrix (`--print-ci`) and ROUTE matrix (`--print-route`)
+dedupes to **one row per exact runtime tuple** `(freebsd_major, php_version, py_flavor)`
+(issue #2926) — same-major rows with a differing php/py are DISTINCT build targets and stay
+separate rows, and `extra_pkgs` unions across the merged rows. The CI matrix (`--print-ci`)
+and ROUTE matrix (`--print-route`)
 stay **one row per version** (never deduped — a smoke/UI leg needs every version's own
 identity). A stray `arch` key on an old row is tolerated-ignored, never resurrected as a
 default.

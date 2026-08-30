@@ -135,7 +135,7 @@ jobs:
       - name: Plan reactions (dry-run log or live dispatch)
         env:
           GH_TOKEN: ${{ github.token }}
-          # react builds one .pkg per ABI — the freebsd_major-deduped view is
+          # react builds one .pkg per runtime tuple (issue #2926) — the tuple-deduped view is
           # the correct source here (unlike the reconcile job, issue #1839).
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
           CI_MATRIX: ${{ needs.read-matrix.outputs.ci_matrix }}
@@ -163,7 +163,7 @@ jobs:
             PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
 
             # Filter to target version if specified. issue #1806: BUILD_MATRIX is
-            # now deduped to one row per freebsd_major, so PFSENSE/CHANNEL are
+            # now deduped to one row per runtime tuple (issue #2926), so PFSENSE/CHANNEL are
             # whichever merged version last wrote that major's row — a
             # target_version naming the OTHER version sharing that major won't
             # match (no live collision today; both would build byte-identically
@@ -282,7 +282,7 @@ jobs:
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .
 
       # The reconcile needs EVERY family, one row per version: build_matrix is
-      # deduped to one row per freebsd_major (issue #1806), which hides a
+      # deduped to one row per runtime tuple (issue #2926), which hides a
       # same-major family (26.03 vs 26.07) and blinds the boot source + the
       # branch lookup (issue #1839). The route matrix is the never-deduped view.
       - name: Resolve the route matrix (never deduped)
