@@ -2586,6 +2586,33 @@ def test_group_action_validator_is_strict_on_appliance(smoke_vm: SmokeVM, webui:
     )
 
 
+# The welcome step carries the second copy of the Support logo (issue #2863). Step 1 is
+# the first <step> in pfblockerng_wizard.xml -> stepid=0.
+_WIZARD_WELCOME_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=0"
+
+
+def test_wizard_welcome_step_renders_the_fluid_support_logo(
+    webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """Issue #2863: the wizard's Support logo renders responsively and unclipped.
+
+    The wizard carried a fixed float column and a viewBox whose y-origin cut ~45 units off
+    the top of the circle, months after the General page was fixed, because only the General
+    page was pinned. Asserts the shipped step actually renders the corrected construction --
+    the PHP pin proves the source, this proves it reaches the browser.
+    """
+    resp = webui.get(_WIZARD_WELCOME_STEP)
+    result = evaluate_render(_WIZARD_WELCOME_STEP, resp.status_code, resp.text, ("pfBlockerNG",))
+    assert result.ok, f"wizard welcome step render oracle failed: {result.detail}"
+    body = resp.text
+    assert 'viewBox="128 172 384 384"' in body, "wizard logo still uses the clipping viewBox"
+    assert "col-sm-3" in body, "wizard logo column is not the fluid Bootstrap column"
+    assert "width: 25%; height: 170px; float: right;" not in body, (
+        "wizard logo still uses the fixed float column that overflows narrow viewports"
+    )
+    assert "enable-background" not in body, "wizard logo still carries the retired enable-background"
+
+
 def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """ADR-23: the wizard DNSBL step renders the Auto VIP (pfb_dnsvip_auto) checkbox cleanly.
 
