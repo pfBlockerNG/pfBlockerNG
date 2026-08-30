@@ -313,6 +313,25 @@ def test_redact_pkg_tarball_removes_partial_temp_on_repack_failure(
     assert {path.name for path in tmp_path.iterdir()} == before
 
 
+def test_redact_pkg_tarball_removes_temp_when_fd_close_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A close failure after mkstemp cannot strand its partial archive."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/pkg/repos.conf", "clean\n")
+    before = {path.name for path in tmp_path.iterdir()}
+    original_close = helpers.os.close
+
+    def fail_close(fd: int) -> None:
+        original_close(fd)
+        raise OSError("injected os.close failure")
+
+    monkeypatch.setattr(helpers.os, "close", fail_close)
+    with pytest.raises(OSError, match="injected os.close failure"):
+        helpers.redact_pkg_tarball(str(tgz))
+
+    assert {path.name for path in tmp_path.iterdir()} == before
+
+
 def test_redact_pkg_tarball_drops_internal_link_aliases_without_rewriting_non_pkg(
     tmp_path: Path,
 ) -> None:
