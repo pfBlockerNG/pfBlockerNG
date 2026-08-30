@@ -102,28 +102,55 @@ _TUPLE_EXPLICIT=0
 if [ -n "${SMOKE_PHP_VERSION:-}" ] || [ -n "${SMOKE_PY_FLAVOR:-}" ]; then
     _TUPLE_EXPLICIT=1
 fi
-if [ -n "$BOX_MAJOR" ] && command -v jq >/dev/null 2>&1; then
-    _MATCHES="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
-        | jq -c --arg major "$BOX_MAJOR" --arg php "${SMOKE_PHP_VERSION:-}" --arg py "${SMOKE_PY_FLAVOR:-}" \
-            '[ .[] | select(.freebsd_major == $major) | select($php == "" or .php_version == $php) | select($py == "" or .py_flavor == $py) ]' \
-        2>/dev/null || true)"
-    _MATCH_COUNT="$(printf '%s' "$_MATCHES" | jq 'length' 2>/dev/null || echo 0)"
-    if [ "$_MATCH_COUNT" -eq 1 ]; then
-        PY_FLAVOR="$(printf '%s' "$_MATCHES" | jq -r '.[0].py_flavor')"
-    elif [ "$_TUPLE_EXPLICIT" -eq 1 ]; then
-        # EXPLICIT regime: the caller NAMED a tuple (image-refresh.yml / the smoke
-        # fan-out export the leg's exact row), so zero or multiple matches are both a
-        # hard error — a fall-through would install a flavor the named tuple never
-        # asked for (issue #2926 review C).
-        if [ "$_MATCH_COUNT" -eq 0 ]; then
-            echo "Error: no BUILD row matches the requested runtime tuple (freebsd_major=${BOX_MAJOR}, SMOKE_PHP_VERSION='${SMOKE_PHP_VERSION:-}', SMOKE_PY_FLAVOR='${SMOKE_PY_FLAVOR:-}', ABI ${BOX_ABI:-unknown}) — refusing to install a different tuple's deps" >&2
+
+_MATRIX_OK=0
+_MATRIX_ERROR="BUILD matrix is unavailable or invalid"
+_MATCH_COUNT=0
+case "$BOX_MAJOR" in
+    ''|*[!0-9]*)
+        _MATRIX_ERROR="ABI ${BOX_ABI:-unknown} does not contain a numeric FreeBSD major"
+        ;;
+    *)
+        if command -v jq >/dev/null 2>&1; then
+            if _MATRIX_JSON="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null)" &&
+                _MATCHES="$(printf '%s' "$_MATRIX_JSON" \
+                    | jq -c --arg major "$BOX_MAJOR" --arg php "${SMOKE_PHP_VERSION:-}" --arg py "${SMOKE_PY_FLAVOR:-}" \
+                        '[ .[] | select(.freebsd_major == $major) | select($php == "" or .php_version == $php) | select($py == "" or .py_flavor == $py) ]' \
+                        2>/dev/null)"
+            then
+                _MATCH_COUNT="$(printf '%s' "$_MATCHES" | jq -r 'length' 2>/dev/null || true)"
+                case "$_MATCH_COUNT" in
+                    ''|*[!0-9]*) _MATCH_COUNT=0 ;;
+                    *) _MATRIX_OK=1 ;;
+                esac
+            fi
         else
-            echo "Error: FreeBSD major ${BOX_MAJOR} matches more than one BUILD row for the requested runtime tuple (ABI ${BOX_ABI:-unknown}) — refusing to silently install a sibling tuple's py flavor" >&2
+            _MATRIX_ERROR="jq is unavailable"
         fi
+        ;;
+esac
+
+if [ "$_MATRIX_OK" -eq 1 ] && [ "$_MATCH_COUNT" -eq 1 ]; then
+    PY_FLAVOR="$(printf '%s' "$_MATCHES" | jq -r '.[0].py_flavor' 2>/dev/null || true)"
+    if [ -z "$PY_FLAVOR" ] || [ "$PY_FLAVOR" = null ]; then
+        _MATRIX_OK=0
+        _MATRIX_ERROR="BUILD matrix is unavailable or invalid"
+    fi
+fi
+
+if [ "$_MATRIX_OK" -ne 1 ]; then
+    if [ "$_TUPLE_EXPLICIT" -eq 1 ]; then
+        echo "Error: cannot resolve the requested runtime tuple exactly: ${_MATRIX_ERROR}" >&2
         exit 1
     fi
-    # NO-ENV with zero or multiple matches: fall through to the box's own probe below.
+elif [ "$_MATCH_COUNT" -eq 0 ] && [ "$_TUPLE_EXPLICIT" -eq 1 ]; then
+    echo "Error: no BUILD row matches the requested runtime tuple (freebsd_major=${BOX_MAJOR}, SMOKE_PHP_VERSION='${SMOKE_PHP_VERSION:-}', SMOKE_PY_FLAVOR='${SMOKE_PY_FLAVOR:-}', ABI ${BOX_ABI:-unknown}) — refusing to install a different tuple's deps" >&2
+    exit 1
+elif [ "$_MATCH_COUNT" -gt 1 ] && [ "$_TUPLE_EXPLICIT" -eq 1 ]; then
+    echo "Error: FreeBSD major ${BOX_MAJOR} matches more than one BUILD row for the requested runtime tuple (ABI ${BOX_ABI:-unknown}) — refusing to silently install a sibling tuple's py flavor" >&2
+    exit 1
 fi
+# NO-ENV with zero or multiple matches, or an unavailable matrix: probe the box.
 if [ -z "$PY_FLAVOR" ]; then
     # The box knows its own python: the py3xx that owns its py-sqlite3, if already present.
     PY_FLAVOR="$(ssh_t "pkg query %n 2>/dev/null | grep -E '^py3[0-9]+-sqlite3\$' | sed 's/-sqlite3//' | head -1" | tr -d '\r' || true)"
