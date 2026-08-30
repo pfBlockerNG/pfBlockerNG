@@ -27,24 +27,13 @@ _PHPUNIT_METHOD = re.compile(
     r"public[ \t]+(?:(?:final|abstract|static)[ \t]+)*function[ \t]+&?[ \t]*"
     r"(?P<name>[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)[ \t]*\("
 )
-_PHPUNIT_TEST_IMPORT = re.compile(
-    r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes\\Test"
-    r"(?:[ \t]+as[ \t]+(?P<alias>[A-Za-z_]\w*))?[ \t]*;",
-    re.MULTILINE,
+_PHP_USE = re.compile(r"^[ \t]*use[ \t]+(?P<body>[^;]+);", re.MULTILINE)
+_PHP_NAME_ALIAS = re.compile(
+    r"^[ \t\r\n]*(?P<name>\\?[A-Za-z_]\w*(?:\\[A-Za-z_]\w*)*)"
+    r"(?:[ \t\r\n]+as[ \t\r\n]+(?P<alias>[A-Za-z_]\w*))?[ \t\r\n]*$",
+    re.IGNORECASE,
 )
-_PHPUNIT_ATTRIBUTES_IMPORT = re.compile(
-    r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes"
-    r"(?:[ \t]+as[ \t]+(?P<alias>[A-Za-z_]\w*))?[ \t]*;",
-    re.MULTILINE,
-)
-_PHPUNIT_TEST_GROUP_IMPORT = re.compile(
-    r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes\\\{(?P<body>[^}]*)\}[ \t]*;",
-    re.MULTILINE,
-)
-_PHPUNIT_TEST_GROUP_MEMBER = re.compile(r"^[ \t\r\n]*Test(?:[ \t\r\n]+as[ \t\r\n]+(?P<alias>[A-Za-z_]\w*))?[ \t\r\n]*$")
-_PHP_ATTRIBUTE = re.compile(r"#\[(?P<body>[^\]]*)\]")
-_PHP_ATTRIBUTE_PREFIX = re.compile(r"^[ \t]*(?:#\[[^\]]*\][ \t\r\n]*)+")
-_SHELLSPEC_DECLARATION = re.compile(r"^[ \t]*It[ \t]+(?P<body>.*)$")
+_SHELLSPEC_DECLARATION = re.compile(r"^[ \t]*It[ \t]+(?P<body>.*)$", re.DOTALL)
 _PHP_HEREDOC_START = re.compile(
     r"<<<[ \t]*(?:'(?P<single>[A-Za-z_]\w*)'|\"(?P<double>[A-Za-z_]\w*)\"|(?P<bare>[A-Za-z_]\w*))"
 )
@@ -340,6 +329,95 @@ def _python_lexical_lines(path: str, text: str) -> tuple[set[int], set[int]]:
     return ignored, annotations
 
 
+def _split_balanced(text: str) -> tuple[str, ...]:
+    items: list[str] = []
+    stack: list[str] = []
+    start = 0
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for index, character in enumerate(text):
+        if character in "([{":
+            stack.append(character)
+        elif character in pairs and stack and stack[-1] == pairs[character]:
+            stack.pop()
+        elif character == "," and not stack:
+            items.append(text[start:index])
+            start = index + 1
+    items.append(text[start:])
+    return tuple(items)
+
+
+def _php_name_alias(text: str) -> tuple[str, str | None] | None:
+    match = _PHP_NAME_ALIAS.fullmatch(text)
+    if match is None:
+        return None
+    return match.group("name").lstrip("\\"), match.group("alias")
+
+
+def _phpunit_import_names(source: str) -> set[str]:
+    names: set[str] = set()
+    namespace = r"PHPUnit\Framework\Attributes"
+    for statement in _PHP_USE.finditer(source):
+        for item in _split_balanced(statement.group("body")):
+            group_at = item.find(r"\{")
+            if group_at >= 0 and item.rstrip().endswith("}"):
+                prefix = item[:group_at].strip().lstrip("\\")
+                if prefix.casefold() != namespace.casefold():
+                    continue
+                for member in _split_balanced(item[group_at + 2 : item.rfind("}")]):
+                    parsed = _php_name_alias(member)
+                    if parsed is not None and parsed[0].casefold() == "test":
+                        names.add(parsed[1] or "Test")
+                continue
+            parsed = _php_name_alias(item)
+            if parsed is None:
+                continue
+            imported, alias = parsed
+            if imported.casefold() == (namespace + r"\Test").casefold():
+                names.add(alias or "Test")
+            elif imported.casefold() == namespace.casefold():
+                names.add((alias or "Attributes") + r"\Test")
+    return names
+
+
+def _square_group_end(text: str, start: int) -> int | None:
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "[":
+            depth += 1
+        elif text[index] == "]":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _php_attribute_bodies(text: str) -> tuple[str, ...]:
+    bodies: list[str] = []
+    index = 0
+    while True:
+        start = text.find("#[", index)
+        if start < 0:
+            return tuple(bodies)
+        end = _square_group_end(text, start + 1)
+        if end is None:
+            return tuple(bodies)
+        bodies.append(text[start + 2 : end])
+        index = end + 1
+
+
+def _strip_php_attribute_prefix(text: str) -> str:
+    index = 0
+    while True:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if not text.startswith("#[", index):
+            return text[index:]
+        end = _square_group_end(text, index + 1)
+        if end is None:
+            return text[index:]
+        index = end + 1
+
+
 def _php_lexical_lines(path: str, lines: tuple[str, ...]) -> tuple[set[int], tuple[str, ...]]:
     ignored: set[int] = set()
     code_lines: list[str] = []
@@ -415,14 +493,19 @@ def _shell_heredocs(
     line_number: int,
     line: str,
     initial_quote: str | None,
-) -> tuple[list[tuple[str, bool]], str | None]:
+) -> tuple[list[tuple[str, bool]], str | None, bool]:
     heredocs: list[tuple[str, bool]] = []
     quote = initial_quote
+    continued = False
     index = 0
     while index < len(line):
         if quote is not None:
             if quote == '"' and line[index] == "\\":
-                index += 2
+                if index + 1 == len(line):
+                    continued = True
+                    index += 1
+                else:
+                    index += 2
             elif line[index] == quote:
                 quote = None
                 index += 1
@@ -430,7 +513,11 @@ def _shell_heredocs(
                 index += 1
             continue
         if line[index] == "\\":
-            index += 2
+            if index + 1 == len(line):
+                continued = True
+                index += 1
+            else:
+                index += 2
             continue
         if line[index] in {"'", '"'}:
             quote = line[index]
@@ -450,13 +537,16 @@ def _shell_heredocs(
             index = match.end()
             continue
         index += 1
-    return heredocs, quote
+    return heredocs, quote, continued
 
 
-def _shell_literal_body_lines(path: str, lines: tuple[str, ...]) -> set[int]:
+def _shell_lexical_lines(path: str, lines: tuple[str, ...]) -> tuple[set[int], tuple[str, ...]]:
     ignored: set[int] = set()
+    logical_lines = [""] * len(lines)
     pending: deque[tuple[str, bool, int]] = deque()
     quote: tuple[str, int] | None = None
+    logical_start: int | None = None
+    logical_parts: list[str] = []
     for line_number, line in enumerate(lines, 1):
         if pending:
             ignored.add(line_number)
@@ -465,9 +555,13 @@ def _shell_literal_body_lines(path: str, lines: tuple[str, ...]) -> set[int]:
             if candidate == delimiter:
                 pending.popleft()
             continue
-        if quote is not None:
+        if logical_start is None:
+            logical_start = line_number
+            logical_parts = [line]
+        else:
             ignored.add(line_number)
-        heredocs, remaining_quote = _shell_heredocs(
+            logical_parts.append(line)
+        heredocs, remaining_quote, continued = _shell_heredocs(
             path,
             line_number,
             line,
@@ -478,43 +572,41 @@ def _shell_literal_body_lines(path: str, lines: tuple[str, ...]) -> set[int]:
         elif quote is None:
             quote = (remaining_quote, line_number)
         pending.extend((delimiter, strip_tabs, line_number) for delimiter, strip_tabs in heredocs)
+        if not continued and remaining_quote is None:
+            logical_lines[logical_start - 1] = "\n".join(logical_parts)
+            logical_start = None
+            logical_parts = []
     if pending:
         delimiter, _, start = pending[0]
         raise CheckError(f"unterminated shell heredoc {delimiter!r} in {path}:{start}")
     if quote is not None:
         raise CheckError(f"unterminated shell string in {path}:{quote[1]}")
-    return ignored
+    if logical_start is not None:
+        raise CheckError(f"unterminated shell continuation in {path}:{logical_start}")
+    return ignored, tuple(logical_lines)
 
 
 def _parse_file(path: str, language: str, text: str) -> ParsedFile:
     lines = tuple(text.splitlines())
     annotation_lines: set[int] = set()
     php_code_lines = lines
+    shell_code_lines = lines
     if language == "python":
         ignored_lines, annotation_lines = _python_lexical_lines(path, text)
     elif language == "phpunit":
         ignored_lines, php_code_lines = _php_lexical_lines(path, lines)
     else:
-        ignored_lines = _shell_literal_body_lines(path, lines)
+        ignored_lines, shell_code_lines = _shell_lexical_lines(path, lines)
     declarations: list[Declaration] = []
     markers: list[Marker] = []
     phpunit_test_names: set[str] = set()
     if language == "phpunit":
-        php_source = "\n".join(php_code_lines)
-        for imported in _PHPUNIT_TEST_IMPORT.finditer(php_source):
-            phpunit_test_names.add(imported.group("alias") or "Test")
-        for imported in _PHPUNIT_ATTRIBUTES_IMPORT.finditer(php_source):
-            phpunit_test_names.add((imported.group("alias") or "Attributes") + r"\Test")
-        for group_imported in _PHPUNIT_TEST_GROUP_IMPORT.finditer(php_source):
-            for member in group_imported.group("body").split(","):
-                group_member = _PHPUNIT_TEST_GROUP_MEMBER.fullmatch(member)
-                if group_member:
-                    phpunit_test_names.add(group_member.group("alias") or "Test")
+        phpunit_test_names = _phpunit_import_names("\n".join(php_code_lines))
     phpunit_attribute_pending = False
     phpunit_attribute_lines: list[str] | None = None
     phpunit_attribute_depth = 0
     for line_number, line in enumerate(lines, 1):
-        if line_number in ignored_lines:
+        if line_number in ignored_lines and language != "phpunit":
             continue
         name: str | None = None
         if language == "python":
@@ -542,22 +634,22 @@ def _parse_file(path: str, language: str, text: str) -> ParsedFile:
                     if phpunit_attribute_depth > 0:
                         phpunit_attribute_lines = [code_line]
                         continue
-            for attribute in _PHP_ATTRIBUTE.finditer(attribute_text):
-                body = attribute.group("body")
-                candidates = phpunit_test_names | {
-                    r"\PHPUnit\Framework\Attributes\Test",
-                    r"PHPUnit\Framework\Attributes\Test",
-                }
+            candidates = phpunit_test_names | {
+                r"\PHPUnit\Framework\Attributes\Test",
+                r"PHPUnit\Framework\Attributes\Test",
+            }
+            for body in _php_attribute_bodies(attribute_text):
                 if any(
                     re.search(
                         rf"(?:^|,)[ \t\r\n]*{re.escape(candidate)}"
                         rf"(?:[ \t\r\n]*(?:,|$|\())",
                         body,
+                        re.IGNORECASE,
                     )
                     for candidate in candidates
                 ):
                     phpunit_attribute_pending = True
-            method_line = _PHP_ATTRIBUTE_PREFIX.sub("", attribute_text)
+            method_line = _strip_php_attribute_prefix(attribute_text)
             match = _PHPUNIT_METHOD.match(method_line)
             if match:
                 method_name = match.group("name")
@@ -569,11 +661,13 @@ def _parse_file(path: str, language: str, text: str) -> ParsedFile:
                 if stripped and not stripped.startswith(("#[", "//", "#", "/*", "*")):
                     phpunit_attribute_pending = False
         else:
-            match = _SHELLSPEC_DECLARATION.match(line)
+            match = _SHELLSPEC_DECLARATION.match(shell_code_lines[line_number - 1])
             if match:
                 name = _shellspec_name(path, line_number, match.group("body"))
         if name is not None:
             declarations.append(Declaration(path, language, name, line_number))
+        if line_number in ignored_lines:
+            continue
         marker_match = _SUCCESSOR.fullmatch(line)
         if marker_match:
             markers.append(Marker(path, line_number, line, marker_match.group("value")))
@@ -753,25 +847,34 @@ def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _markdown_fenced_lines(lines: Sequence[str]) -> set[int]:
-    fenced: set[int] = set()
+def _markdown_hidden_lines(lines: Sequence[str]) -> set[int]:
+    hidden: set[int] = set()
     fence: tuple[str, int] | None = None
+    html_comment = False
     for line_number, line in enumerate(lines, 1):
         if fence is not None:
-            fenced.add(line_number)
+            hidden.add(line_number)
             marker, length = fence
             if re.fullmatch(rf"[ ]{{0,3}}{re.escape(marker)}{{{length},}}[ \t]*", line):
                 fence = None
             continue
+        if html_comment:
+            hidden.add(line_number)
+            if "-->" in line:
+                html_comment = False
+            continue
         match = _MARKDOWN_FENCE.fullmatch(line)
-        if match is None:
-            continue
-        marker = match.group("fence")
-        if marker[0] == "`" and "`" in match.group("info"):
-            continue
-        fenced.add(line_number)
-        fence = (marker[0], len(marker))
-    return fenced
+        if match is not None:
+            marker = match.group("fence")
+            if marker[0] != "`" or "`" not in match.group("info"):
+                hidden.add(line_number)
+                fence = (marker[0], len(marker))
+                continue
+        comment_start = line.find("<!--")
+        if comment_start >= 0:
+            hidden.add(line_number)
+            html_comment = "-->" not in line[comment_start + 4 :]
+    return hidden
 
 
 def _added_tombstone_lines(old_text: str | None, new_text: str | None) -> tuple[list[tuple[int, str]], list[str]]:
@@ -786,11 +889,11 @@ def _added_tombstone_lines(old_text: str | None, new_text: str | None) -> tuple[
         if new_lines[: len(old_lines)] != old_lines:
             return [], [f"{HISTORY_PATH} is append-only; existing history was changed or removed"]
         start = len(old_lines)
-    fenced_lines = _markdown_fenced_lines(new_lines)
+    hidden_lines = _markdown_hidden_lines(new_lines)
     added = [
         (line_number, line)
         for line_number, line in enumerate(new_lines[start:], start + 1)
-        if line_number not in fenced_lines and _TOMBSTONE_ATTEMPT.match(line)
+        if line_number not in hidden_lines and _TOMBSTONE_ATTEMPT.match(line)
     ]
     return added, []
 

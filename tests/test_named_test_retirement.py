@@ -109,6 +109,17 @@ DECLARATIONS = (
         "<?php\nclass FormsTest {}\n",
     ),
     (
+        "phpunit-comment-close-line",
+        "tests/php/FormsTest.php",
+        "<?php\nclass FormsTest {\n"
+        "    /*\n"
+        "     * documentation\n"
+        "     */ public function testAfterCommentBoundary(): void {}\n"
+        "}\n",
+        "testAfterCommentBoundary",
+        "<?php\nclass FormsTest {}\n",
+    ),
+    (
         "shellspec-single",
         "tests/shell/forms_spec.sh",
         "Describe 'forms'\n  It 'single quoted title'\n  End\nEnd\n",
@@ -195,6 +206,22 @@ PHPUNIT_TEST_ATTRIBUTES = (
         "    #[\n"
         "        Test\n"
         "    ]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "comma-separated-import",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test, PHPUnit\\Framework\\Attributes\\DataProvider;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "nested-bracket-attribute-group",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[TestWith([1]), Test]\n"
         "    public function preservesNamedInvariant(): void {}\n"
         "}\n",
     ),
@@ -400,8 +427,8 @@ def test_phpunit_group_use_test_attribute_rename_requires_successor(tmp_path: Pa
 
 @pytest.mark.parametrize(
     ("_form", "fixture"),
-    PHPUNIT_TEST_ATTRIBUTES[-3:],
-    ids=[row[0] for row in PHPUNIT_TEST_ATTRIBUTES[-3:]],
+    PHPUNIT_TEST_ATTRIBUTES[4:],
+    ids=[row[0] for row in PHPUNIT_TEST_ATTRIBUTES[4:]],
 )
 def test_phpunit_extended_attribute_rename_requires_successor(tmp_path: Path, _form: str, fixture: str) -> None:
     path = "tests/php/ExtendedAttributeTest.php"
@@ -438,6 +465,31 @@ def test_phpunit_comment_attribute_cannot_forge_helper_successor(tmp_path: Path)
         "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
         "final class CommentAttributeTest {\n"
         "    // #[Test] documentation only\n"
+        f"    # successor: {identity}\n"
+        "    public function helperNotATest(): void {}\n"
+        "}\n"
+    )
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+
+def test_phpunit_block_comment_attribute_cannot_forge_helper_successor(tmp_path: Path) -> None:
+    path = "tests/php/BlockCommentAttributeTest.php"
+    identity = f"{path}::testOld"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class BlockCommentAttributeTest {\n"
+        "    public function testOld(): void {}\n"
+        "}\n"
+    )
+    after = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class BlockCommentAttributeTest {\n"
+        "    /* #[Test] documentation only */\n"
         f"    # successor: {identity}\n"
         "    public function helperNotATest(): void {}\n"
         "}\n"
@@ -488,12 +540,53 @@ def test_successor_marker_allows_multiline_annotations(tmp_path: Path, path: str
     _assert_rc(_diff(repo, base), 0)
 
 
-def test_fenced_markdown_tombstone_does_not_discharge_retirement(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    (("```text", "```"), ("~~~text", "~~~")),
+    ids=("backtick", "tilde"),
+)
+def test_fenced_markdown_tombstone_does_not_discharge_retirement(tmp_path: Path, opening: str, closing: str) -> None:
     path = "tests/test_fenced_tombstone.py"
     identity = f"{path}::test_fenced_old"
     repo, base = _repo(tmp_path, {path: "def test_fenced_old():\n    assert True\n"})
     _write(repo, path, "\n")
-    _write(repo, HISTORY, "# Retired tests\n\n```text\n" + _tombstone(identity) + "```\n")
+    _write(repo, HISTORY, f"# Retired tests\n\n{opening}\n" + _tombstone(identity) + f"{closing}\n")
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+
+def test_shellspec_continued_argument_does_not_neutralize_retirement(tmp_path: Path) -> None:
+    path = "tests/shell/continued_argument_spec.sh"
+    identity = f"{path}::continued old"
+    before = "Describe 'continued'\n  It 'continued old'\n    The status should be success\n  End\nEnd\n"
+    after = "Describe 'continued'\n  : \\\n    It 'continued old'\nEnd\n"
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+
+def test_shellspec_wrapped_declaration_body_edit_is_neutral(tmp_path: Path) -> None:
+    path = "tests/shell/wrapped_declaration_spec.sh"
+    before = "Describe 'wrapped'\n  It \\\n    'wrapped old'\n    The status should be success\n  End\nEnd\n"
+    after = before.replace("The status should be success", "The output should equal ok")
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_html_commented_tombstone_does_not_discharge_retirement(tmp_path: Path) -> None:
+    path = "tests/test_html_tombstone.py"
+    identity = f"{path}::test_html_tombstone_old"
+    repo, base = _repo(tmp_path, {path: "def test_html_tombstone_old():\n    assert True\n"})
+    _write(repo, path, "\n")
+    _write(repo, HISTORY, "# Retired tests\n\n<!--\n" + _tombstone(identity) + "-->\n")
     _commit(repo)
 
     output = _assert_rc(_diff(repo, base), 1)
