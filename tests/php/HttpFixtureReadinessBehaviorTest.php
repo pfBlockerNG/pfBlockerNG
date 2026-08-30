@@ -50,7 +50,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		}
 	}
 
-	/** @return array<string,array{class-string,file-string,string,string,int,bool}> */
+	/** @return array<string,array{class-string,string,string,string,int,bool}> */
 	public static function fixtureSites(): array
 	{
 		return [
