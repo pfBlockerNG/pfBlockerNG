@@ -223,7 +223,7 @@ if (typeof window !== 'undefined') {
 						$(this).dialog("close");
 					}
 				}
-			}).css('background-color','#ffd700');
+			}).css({'background-color': '#ffd700', 'color': '#000000'});
 			$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 		});
 	});
