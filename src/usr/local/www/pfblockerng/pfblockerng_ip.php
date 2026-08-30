@@ -67,7 +67,8 @@ $pconfig['enable_rdns']		= PfbConfig::read('ip/enable_rdns');
 $pconfig['ip_placeholder']	= $pfb['iconfig']['ip_placeholder']			?: '127.1.7.7';
 $pconfig['maxmind_locale']	= $pfb['iconfig']['maxmind_locale']			?: 'en';
 $pconfig['asn_reporting']	= $pfb['iconfig']['asn_reporting']			?: 'disabled';
-$pconfig['asn_token']		= $pfb['iconfig']['asn_token']				?: '';
+// issue #2922: asn_token is masked/write-only; never load the stored token into the form.
+$pconfig['asn_token']		= $_POST['asn_token'] ?? '';
 $pconfig['database_cc']		= PfbConfig::read('ip/database_cc');
 $pconfig['maxmind_account']	= $pfb['iconfig']['maxmind_account']			?: '';
 // issue #924: maxmind_key is masked/write-only -- never populate it from the stored value.
@@ -191,7 +192,8 @@ if ($_POST) {
 			$input_errors[] = 'MaxMind License key Invalid';
 		}
 
-		if (!empty($_POST['asn_token']) && empty(pfb_filter($_POST['asn_token'], PFB_FILTER_WORD, 'ip'))) {
+		$pfb_asn_token_post = (string) ($_POST['asn_token'] ?? '');
+		if ($pfb_asn_token_post !== '' && empty(pfb_filter($pfb_asn_token_post, PFB_FILTER_WORD, 'ip'))) {
 			$input_errors[] = 'IPinfo Token Invalid';
 		}
 
@@ -270,7 +272,9 @@ if ($_POST) {
 				$pfb['iconfig']['maxmind_key'] = pfb_filter($pfb_maxmind_key_post, PFB_FILTER_WORD, 'maxmind_key') ?: '';
 			}
 			$pfb['iconfig']['asn_reporting']	= $_POST['asn_reporting']					?: 'disabled';
-			$pfb['iconfig']['asn_token']		= $_POST['asn_token']					?: '';
+			if ($pfb_asn_token_post !== '') {
+				$pfb['iconfig']['asn_token'] = $pfb_asn_token_post;
+			}
 			$pfb['iconfig']['inbound_interface']	= implode(',', (array)$_POST['inbound_interface'])		?: '';
 			$pfb['iconfig']['inbound_deny_action']	= $_POST['inbound_deny_action']					?: '';
 			$pfb['iconfig']['outbound_interface']	= implode(',', (array)$_POST['outbound_interface'])		?: '';
@@ -529,14 +533,15 @@ $section->addInput(new Form_Select(
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Input(
-        'asn_token',
-        gettext('ASN IPinfo Token'),
-        'text',
-        $pconfig['asn_token'],
-        ['placeholder' => 'Enter your IPinfo Token']
+	'asn_token',
+	gettext('ASN IPinfo Token'),
+	'password',
+	$pconfig['asn_token'] ?? '',
+	['placeholder' => 'Enter your IPinfo Token -- leave blank to keep the current token']
 ))->setHelp('To utilize the free IPinfo ASN functionality, you must first register for a free IPinfo user account. Visit the following '
-        . '<a href="https://ipinfo.io/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free IPinfo user account. '
-        . '<strong>NOTE: If you use Snort/Suricata, check for IPinfo blocked events!</strong>')
+	. '<a href="https://ipinfo.io/signup" target="_blank" rel="noopener noreferrer">Link to Register</a> for a free IPinfo user account. '
+	. '<strong>NOTE: If you use Snort/Suricata, check for IPinfo blocked events!</strong>'
+	. ' The stored token is never displayed here; leaving this field blank on Save keeps the existing token unchanged.')
   ->setAttribute('autocomplete', 'off');
 
 $form->add($section);
