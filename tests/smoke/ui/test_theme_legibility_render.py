@@ -64,8 +64,9 @@ def test_no_inline_style_paints_an_unpaired_background(webui: WebUI) -> None:
     variable, correct in every branch the source scan could see.
 
     The failed-download row itself needs a .fail sidecar to render, so it is not reachable
-    from a clean box and this assertion cannot go red for it -- issue #2931 tracks seeding
-    it at the functional tier. The source-side inventory covers that one line meanwhile.
+    from a clean box and this assertion cannot go red for it. That row is graded at the
+    functional tier instead, by test_category_edit_failed_highlight.py, which seeds the
+    sidecar and reuses the patterns above so the two tiers cannot disagree.
     """
     for path, marker in _LIST_PAGES.items():
         resp = webui.get(path)
