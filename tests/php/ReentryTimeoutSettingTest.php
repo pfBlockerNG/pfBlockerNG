@@ -313,8 +313,8 @@ final class ReentryTimeoutSettingTest extends TestCase
 
 		$this->assertSame(1, preg_match('/^\tpfbreentrytimeout=(.*)$/m', $src, $m),
 			'the init block must seed pfbreentrytimeout');
-		$this->assertStringContainsString('pfb_reentry_timeout ', $m[1],
-			"the stored setting must reach the shell seam through the resolver: {$m[1]}");
+		$this->assertStringContainsString('pfb_reentry_timeout_from_reader ', $m[1],
+			"the stored setting must reach the shell seam through the newline-preserving resolver boundary: {$m[1]}");
 		$this->assertStringContainsString(
 			'installedpackages/pfblockerng/config/' . self::KEY, $m[1],
 			"the shell seam must read the ONE registered gen-section key: {$m[1]}");
