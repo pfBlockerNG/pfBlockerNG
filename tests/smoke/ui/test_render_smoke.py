@@ -2602,7 +2602,10 @@ def test_wizard_welcome_step_renders_the_fluid_support_logo(
     the PHP pin proves the source, this proves it reaches the browser.
     """
     resp = webui.get(_WIZARD_WELCOME_STEP)
-    result = evaluate_render(_WIZARD_WELCOME_STEP, resp.status_code, resp.text, ("pfBlockerNG",))
+    # The step's own <title>, not a generic marker: this PR makes the wizard logo markup
+    # identical to the General page's, so a stepid mishandling that served General
+    # instead would satisfy every other assertion here.
+    result = evaluate_render(_WIZARD_WELCOME_STEP, resp.status_code, resp.text, ("pfBlockerNG Setup",))
     assert result.ok, f"wizard welcome step render oracle failed: {result.detail}"
     body = resp.text
     assert 'viewBox="128 172 384 384"' in body, "wizard logo still uses the clipping viewBox"
