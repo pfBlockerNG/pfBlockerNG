@@ -117,7 +117,17 @@ final class ThemeSafetyUiTest extends TestCase
 			// reached by a different route, so it is pinned in both directions: a literal
 			// that genuinely does not pair, and one that genuinely does.
 			'multi-line literal'        => ["if (\$x) {\n\t\$s = \"aaaa\nbackground-color: #123456;\nbbbb\";\n\tcolor: red;\n}", FALSE],
-			'multi-line same literal'   => ['$s = "background-color: #123456;' . "\n" . ' color: red;";', TRUE],
+			'multi-line same literal'   => ['$s = "background-color: #123456;' . str_repeat(' ', 200) . "\n" . ' color: red;";', TRUE],
+			// A literal that never closes is not a literal. Without that test the scan would
+			// hand back everything from the quote to end of file, which is the desync it exists
+			// to prevent, so the pairing sits past the no-scope window to tell the two apart.
+			'literal never closes'      => ['$s = "background-color: #123456;' . str_repeat(' ', 200) . "\ncolor: red;", FALSE],
+			// A comment apostrophe desynchronises the line-scoped toggle, which then reports
+			// nothing rather than the genuine single-line literal beside it. The file-wide scan
+			// reads the comment and finds that literal, and the literal carries no foreground,
+			// so the neighbouring statement must not pair it.
+			'literal beside a comment'  => ["/* don't */ \$bg = 'background-color: #123456;'; color: red;", FALSE],
+			'that literal, paired'      => ["/* don't */ \$bg = 'background-color: #123456; color: red;';", TRUE],
 			'multi-line attribute pairs'=> ['$s = "<span style=\"color: black;' . str_repeat(' ', 200) . "\n" . ' background-color: #123456;\">x</span>";', TRUE],
 			// ...and the reason the scan was scoped to one line in the first place, which any
 			// fix has to keep: an apostrophe in prose is not a string opener, so it must not
@@ -125,7 +135,18 @@ final class ThemeSafetyUiTest extends TestCase
 			// no-scope fallback window and a second apostrophe waits below it, so a whole-file
 			// quote toggle pairs the two and launders the background.
 			'prose apostrophe above'    => ["/* don't */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* the user's guide */", FALSE],
-			'prose apostrophe, block'   => ["/* it's fine */\n.a { background-color: #123456;\n color: red; }", TRUE],
+			// Prose does not only put a quote inside a word. A possessive after a closing
+			// bracket and a quote written as itself are both prose too, and neither is preceded
+			// by a letter -- the tree carries the first shape at
+			// pfblockerng_hook_edit.inc:180. What they have in common is not the character
+			// before them, it is that they are in a comment.
+			'prose quote after bracket' => ["/* fail pfb_hook_scripts()' membership */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* it's */", FALSE],
+			'prose quote written alone' => ["/* use the ' character */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* it's */", FALSE],
+			'line comment holds one too' => ["// use the ' character\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n// it's", FALSE],
+			// Not all prose is in a comment: a .php page is inline HTML outside its tags, and
+			// an apostrophe in body text is no more a delimiter there than in a docblock. A
+			// quote is not one where a letter or digit runs straight into it.
+			'apostrophe in page text'   => ["<p>Don't do that</p>\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n<p>It's fine</p>", FALSE],
 			// A style attribute that is not this background's cannot pair it either.
 			'unrelated attribute'       => ['$s = ".a { background-color: #123456; } <span style=\"color: black;\"></span>";', FALSE],
 			'unrelated attr, no braces' => ['$s = \'background-color: #123456; <span style="color:black;"></span>\';', FALSE],
@@ -430,22 +451,33 @@ final class ThemeSafetyUiTest extends TestCase
 	 *
 	 * Scanning the whole file for quotes is what the line scoping was defending against:
 	 * an apostrophe in prose then opens a literal that swallows every line beneath it
-	 * until the next apostrophe, and desynchronises the file. So the scan runs file-wide
-	 * but only a quote in EXPRESSION POSITION opens a literal -- an apostrophe inside a
-	 * word (don't, the user's guide) is preceded by a letter or digit and is prose, not a
-	 * delimiter. The closing quote is exempt from that test, because a literal routinely
-	 * ends right after one of its own characters.
+	 * until the next apostrophe, and desynchronises the file. Prose lives in comments, so
+	 * the scan reads them and skips them rather than guessing from the character before a
+	 * quote -- a possessive after a closing bracket and a quote written as itself are both
+	 * prose and neither follows a letter, and the tree carries the first shape at
+	 * pfblockerng_hook_edit.inc:180.
 	 *
-	 * Two further conditions keep a desynchronised scan from inventing a context. The
+	 * An apostrophe inside a word (don't, the user's guide) is demoted as well, because a
+	 * quote is not a delimiter where a letter or digit runs into it. That test is the
+	 * second line rather than the first, and it is not applied to a closing quote, which
+	 * routinely follows one of the literal's own characters.
+	 *
+	 * One further condition keeps a desynchronised scan from inventing a context: the
 	 * literal must actually CLOSE at or after $offset, so an unterminated quote answers
-	 * nothing; and it must span a newline, because a literal that opens and closes on one
-	 * line is the line-scoped scan's to resolve and it has already had its turn.
+	 * nothing rather than handing back the rest of the file.
 	 */
 	private static function enclosingMultiLineString(string $source, int $offset): ?string
 	{
 		$quote = NULL;
 		$open = 0;
 		for ($i = 0; $i < $offset; $i++) {
+			if ($quote === NULL && $source[$i] === '/') {
+				$comment = self::endOfComment($source, $i);
+				if ($comment !== NULL) {
+					$i = $comment;
+					continue;
+				}
+			}
 			if ($source[$i] === '\\') {
 				$i++;
 				continue;
@@ -479,13 +511,35 @@ final class ThemeSafetyUiTest extends TestCase
 			if ($source[$i] !== $quote) {
 				continue;
 			}
-			$newline = strpos($source, "\n", $open);
-			if ($newline === FALSE || $newline > $i) {
-				return NULL;
-			}
 			return self::styleContext(substr($source, $open, $i - $open + 1), $offset - $open);
 		}
 		return NULL;
+	}
+
+	/**
+	 * The offset of a comment's last character when one opens at $at, else NULL.
+	 *
+	 * Prose is where a quote character stops being a delimiter, and prose lives in
+	 * comments. Reading them is what separates a possessive from a string opener, which no
+	 * test on the surrounding characters can do.
+	 *
+	 * Only `//` and the block form are read. A `#` comment is left alone deliberately: `#`
+	 * opens a colour in CSS far more often than a comment in this tree, and misreading one
+	 * as the other would skip real source. Over-skipping only ever loses an opener, and a
+	 * lost opener answers NULL, which is the answer this resolver gave before it existed.
+	 */
+	private static function endOfComment(string $source, int $at): ?int
+	{
+		$next = $source[$at + 1] ?? '';
+		if ($next === '/') {
+			$end = strpos($source, "\n", $at);
+			return $end === FALSE ? strlen($source) - 1 : $end;
+		}
+		if ($next !== '*') {
+			return NULL;
+		}
+		$end = strpos($source, '*/', $at + 2);
+		return $end === FALSE ? strlen($source) - 1 : $end + 1;
 	}
 
 	/**
