@@ -24,6 +24,13 @@ import pytest
 from tests.smoke import helpers
 
 
+def _add_text_member(archive: tarfile.TarFile, name: str, text: str) -> None:
+    payload = text.encode("utf-8")
+    member = tarfile.TarInfo(name)
+    member.size = len(payload)
+    archive.addfile(member, io.BytesIO(payload))
+
+
 def test_collect_host_diagnostics_captures_pkg_abi_and_uname() -> None:
     """Given collect_host_diagnostics
     When it builds the guest snapshot script
@@ -195,8 +202,148 @@ def test_collect_host_diagnostics_reports_host_redaction_failure(
     helpers.collect_host_diagnostics(cast(helpers.SmokeVM, vm), str(dest))
 
     output = capsys.readouterr().out
-    assert "[smoke] collected full guest diagnostics" not in output
-    assert "[smoke] host-side diagnostics redaction failed" in output
-    assert "archive has guest-side redaction only" in output
-    assert "ReadError" in output
+    success_prefix = "[smoke] collected and redacted full guest diagnostics ->"
+    failure_prefix = "[smoke] host-side diagnostics redaction failed;"
+    terminal_prefixes = (
+        success_prefix,
+        failure_prefix,
+        "[smoke] guest-diagnostics scp failed",
+        "[smoke] collect_host_diagnostics failed",
+    )
+    terminal_lines = [line for line in output.splitlines() if line.startswith(terminal_prefixes)]
+    assert success_prefix not in output
+    assert len(terminal_lines) == 1
+    assert terminal_lines[0].startswith(failure_prefix)
+    assert "archive has guest-side redaction only" in terminal_lines[0]
+    assert "ReadError" in terminal_lines[0]
     assert (dest / "pfb_smoke_diag.tgz").exists()
+
+
+def test_redact_pkg_tarball_missing_archive_is_failure(tmp_path: Path) -> None:
+    """A missing pulled archive cannot be reported as a completed host pass."""
+    with pytest.raises(FileNotFoundError):
+        helpers.redact_pkg_tarball(str(tmp_path / "missing.tgz"))
+
+
+def test_redact_pkg_tarball_read_failure_is_terminal_after_all_pkg_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every intended pkg file is attempted, then any read failure rejects the pass."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/pkg/a-fail.conf", "unreadable")
+        _add_text_member(
+            archive,
+            "pfb_smoke_diag/pkg/z-ok.conf",
+            "url: https://pkg.example/repo?TOKEN=SECOND_FILE_SECRET\n",
+        )
+
+    original_read_text = Path.read_text
+    attempted: list[str] = []
+
+    def injected_read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        attempted.append(path.name)
+        if path.name == "a-fail.conf":
+            raise OSError("injected regular-file read failure")
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", injected_read_text)
+    with pytest.raises(RuntimeError, match="a-fail.conf"):
+        helpers.redact_pkg_tarball(str(tgz))
+
+    assert set(attempted) == {"a-fail.conf", "z-ok.conf"}
+    with tarfile.open(tgz, "r:gz") as archive:
+        data = archive.extractfile("pfb_smoke_diag/pkg/z-ok.conf")
+        assert data is not None
+        assert "SECOND_FILE_SECRET" in data.read().decode("utf-8")
+
+
+def test_redact_pkg_tarball_preserves_preexisting_fixed_sidecar(tmp_path: Path) -> None:
+    """The old predictable .redact path is unrelated data, never scratch space."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/pkg/repos.conf", "clean\n")
+    fixed_sidecar = Path(f"{tgz}.redact")
+    fixed_sidecar.write_bytes(b"preexisting unrelated artifact")
+
+    helpers.redact_pkg_tarball(str(tgz))
+
+    assert fixed_sidecar.read_bytes() == b"preexisting unrelated artifact"
+
+
+@pytest.mark.parametrize("failure_phase", ["add", "close", "replace"])
+def test_redact_pkg_tarball_removes_partial_temp_on_repack_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_phase: str
+) -> None:
+    """Every repack failure removes its unique temporary archive."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/pkg/repos.conf", "clean\n")
+    before = {path.name for path in tmp_path.iterdir()}
+
+    if failure_phase == "add":
+
+        def fail_add(*_args: object, **_kwargs: object) -> None:
+            raise OSError("injected tar.add failure")
+
+        monkeypatch.setattr(tarfile.TarFile, "add", fail_add)
+    elif failure_phase == "close":
+        original_close = tarfile.TarFile.close
+        close_failed = False
+
+        def fail_close(archive: tarfile.TarFile) -> None:
+            nonlocal close_failed
+            fail_now = archive.mode == "w" and not close_failed
+            original_close(archive)
+            if fail_now:
+                close_failed = True
+                raise OSError("injected tar.close failure")
+
+        monkeypatch.setattr(tarfile.TarFile, "close", fail_close)
+    else:
+
+        def fail_replace(*_args: object, **_kwargs: object) -> None:
+            raise OSError("injected os.replace failure")
+
+        monkeypatch.setattr(helpers.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match=f"injected .*{failure_phase} failure"):
+        helpers.redact_pkg_tarball(str(tgz))
+
+    assert {path.name for path in tmp_path.iterdir()} == before
+
+
+def test_redact_pkg_tarball_drops_internal_link_aliases_without_rewriting_non_pkg(
+    tmp_path: Path,
+) -> None:
+    """Pkg symlink and hardlink aliases cannot rewrite a non-pkg archive member."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    non_pkg_secret = "url: https://outside.example/repo?TOKEN=NON_PKG_SECRET\n"
+    pkg_secret = "url: https://pkg.example/repo?TOKEN=PKG_SECRET\n"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/outside.conf", non_pkg_secret)
+        _add_text_member(archive, "pfb_smoke_diag/pkg/repos.conf", pkg_secret)
+        symlink = tarfile.TarInfo("pfb_smoke_diag/pkg/symlink.conf")
+        symlink.type = tarfile.SYMTYPE
+        symlink.linkname = "../outside.conf"
+        archive.addfile(symlink)
+        hardlink = tarfile.TarInfo("pfb_smoke_diag/pkg/hardlink.conf")
+        hardlink.type = tarfile.LNKTYPE
+        hardlink.linkname = "pfb_smoke_diag/outside.conf"
+        archive.addfile(hardlink)
+
+    helpers.redact_pkg_tarball(str(tgz))
+
+    with tarfile.open(tgz, "r:gz") as archive:
+        names = archive.getnames()
+        outside = archive.extractfile("pfb_smoke_diag/outside.conf")
+        pkg = archive.extractfile("pfb_smoke_diag/pkg/repos.conf")
+        assert outside is not None
+        assert pkg is not None
+        outside_text = outside.read().decode("utf-8")
+        pkg_text = pkg.read().decode("utf-8")
+    assert "pfb_smoke_diag/pkg/symlink.conf" not in names
+    assert "pfb_smoke_diag/pkg/hardlink.conf" not in names
+    assert outside_text == non_pkg_secret
+    assert "PKG_SECRET" not in pkg_text
+    assert "TOKEN=REDACTED" in pkg_text

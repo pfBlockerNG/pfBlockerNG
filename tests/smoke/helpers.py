@@ -5333,40 +5333,62 @@ def redact_pkg_urls(text: str) -> str:
 
 
 def _redact_pkg_tar_filter(member: tarfile.TarInfo, dest_path: str) -> tarfile.TarInfo | None:
-    """Keep the data filter's protections while omitting appliance absolute links."""
+    """Keep data-filter protections and drop links that could alias outside ``pkg/``."""
     try:
-        return tarfile.data_filter(member, dest_path)
+        filtered = tarfile.data_filter(member, dest_path)
     except tarfile.AbsoluteLinkError:
         return None
+    if member.islnk() or member.issym():
+        return None
+    return filtered
 
 
 def redact_pkg_tarball(tgz_path: str) -> None:
     """Host-side second pass over a pulled diag tarball's ``pkg/`` files.
 
     The guest sed has no case-insensitive flag; this IGNORECASE pass is the
-    belt. No-op when the archive is missing or has no pkg dump.
+    belt. Missing archives and incomplete pkg-file processing raise.
     """
-    if not os.path.isfile(tgz_path):
-        return
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(tgz_path, "r:gz") as tar:
             tar.extractall(tmp, filter=_redact_pkg_tar_filter)
         pkg_root = os.path.join(tmp, "pfb_smoke_diag", "pkg")
+        failures: list[str] = []
         if os.path.isdir(pkg_root):
             for dirpath, _, files in os.walk(pkg_root):
                 for name in files:
                     path = os.path.join(dirpath, name)
+                    relative = os.path.relpath(path, pkg_root)
                     try:
                         raw = Path(path).read_text(encoding="utf-8", errors="surrogateescape")
-                    except OSError:
+                    except OSError as exc:
+                        failures.append(f"{relative}: read failed: {exc!r}")
                         continue
                     new = redact_pkg_urls(raw)
                     if new != raw:
-                        Path(path).write_text(new, encoding="utf-8", errors="surrogateescape")
-        tmp_out = tgz_path + ".redact"
-        with tarfile.open(tmp_out, "w:gz") as tar:
-            tar.add(os.path.join(tmp, "pfb_smoke_diag"), arcname="pfb_smoke_diag")
-        os.replace(tmp_out, tgz_path)
+                        try:
+                            Path(path).write_text(new, encoding="utf-8", errors="surrogateescape")
+                        except OSError as exc:
+                            failures.append(f"{relative}: write failed: {exc!r}")
+        if failures:
+            raise RuntimeError("host-side pkg redaction incomplete: " + "; ".join(failures))
+
+        output_dir = os.path.dirname(os.path.abspath(tgz_path))
+        output_fd, tmp_out = tempfile.mkstemp(
+            dir=output_dir,
+            prefix=f".{os.path.basename(tgz_path)}.redact-",
+            suffix=".tmp",
+        )
+        os.close(output_fd)
+        try:
+            with tarfile.open(tmp_out, "w:gz") as tar:
+                tar.add(os.path.join(tmp, "pfb_smoke_diag"), arcname="pfb_smoke_diag")
+            os.replace(tmp_out, tgz_path)
+        finally:
+            try:
+                os.unlink(tmp_out)
+            except FileNotFoundError:
+                pass
 
 
 def redact_values(text: str, values: Iterable[str]) -> str:
