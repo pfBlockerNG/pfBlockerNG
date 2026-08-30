@@ -4,6 +4,13 @@
 # fail through processet()'s exit contract without touching a good live list.
 
 Describe 'processet() validates staged ET category output before publication (issue #2778)'
+	portable_binary_stderr() {
+		case "${portable_binary_stderr}" in
+			''|"grep: ${raw}: binary file matches") return 0 ;;
+		esac
+		return 1
+	}
+
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/etpublish.XXXXXX")"
 		orig="${work}/orig/"
@@ -75,6 +82,7 @@ RUNNER
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'ET processing failed'
+			The stderr should satisfy portable_binary_stderr
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
 		End
