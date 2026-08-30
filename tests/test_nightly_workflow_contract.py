@@ -366,22 +366,43 @@ def test_build_run_id_carries_full_runtime_tuple() -> None:
     assert expected == run_id, f"RUN_ID must match nightly-<run_id>-<major>-php<php>-<py_flavor>; got {run_id!r}"
 
 
-def test_build_upload_artifact_name_carries_full_runtime_tuple() -> None:
-    """issue #2926: the BUILD upload artifact name matches the pkg consumer's
-    leg-directory layout: nightly-result-<major>-php<php>-<py_flavor>."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert (
-        "name: nightly-result-${{ matrix.freebsd_major }}-php${{ matrix.php_version }}-${{ matrix.py_flavor }}" in text
-    ), "upload artifact name must be nightly-result-<major>-php<php>-<py_flavor>"
-    assert "name: nightly-result-${{ matrix.freebsd_major }}\n" not in text, (
-        "major-only artifact name must be gone (issue #2926)"
+def test_build_job_display_name_is_tuple_unique() -> None:
+    """issue #2926: the matrix job name carries the full runtime tuple —
+    two Plus/FreeBSD-16 legs (PHP 8.4 and 8.5) must not render the same name."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    assert workflow["jobs"]["build"]["name"] == (
+        "Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }}"
+        " php${{ matrix.php_version }} ${{ matrix.py_flavor }})"
     )
 
 
+def test_build_upload_artifact_name_carries_full_runtime_tuple() -> None:
+    """issue #2926: the BUILD upload artifact name matches the pkg consumer's
+    leg-directory layout: nightly-result-<major>-php<php>-<py_flavor>."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["build"]["steps"]
+    upload = next(step for step in steps if step.get("name") == "Upload verified build")
+    assert upload["with"]["name"] == (
+        "nightly-result-${{ matrix.freebsd_major }}-php${{ matrix.php_version }}-${{ matrix.py_flavor }}"
+    ), f"upload artifact name must be the tuple layout; got {upload['with']['name']!r}"
+
+
+def _download_steps_with_pattern(workflow: dict) -> list[tuple[str, dict]]:
+    """(job name, step) for every step whose `with.pattern` is nightly-result-*."""
+    return [
+        (job_name, step)
+        for job_name, job in workflow["jobs"].items()
+        for step in job.get("steps", [])
+        if (step.get("with") or {}).get("pattern") == "nightly-result-*"
+    ]
+
+
 def test_download_layouts_use_tuple_leg_pattern() -> None:
-    """issue #2926: both handoff and OCI jobs download every per-tuple leg
-    directory via the nightly-result-* pattern (now tuple-suffixed)."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.count("pattern: nightly-result-*") == 2, (
-        "handoff and OCI handoff jobs must both download every tuple leg"
+    """issue #2926: exactly one download step under the handoff job and one
+    under the OCI publish job pull every per-tuple leg directory."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    found = _download_steps_with_pattern(workflow)
+    assert {job for job, _ in found} == {"handoff", "publish-nightly-oci"}, (
+        f"one download step under handoff and one under the OCI publish job expected; got "
+        f"{[(job, step.get('name')) for job, step in found]!r}"
     )
