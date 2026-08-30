@@ -352,3 +352,36 @@ def test_handoff_step_has_no_durable_completion() -> None:
     assert "--pkg-version" in step
     assert "complete" not in step
     assert "state" not in step
+
+
+def test_build_run_id_carries_full_runtime_tuple() -> None:
+    """issue #2926: the per-leg RUN_ID keys on the exact runtime tuple
+    (freebsd_major, php_version, py_flavor) — never the major alone."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    run_id = next(line.strip() for line in text.splitlines() if "RUN_ID: nightly-" in line)
+    expected = (
+        "RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}"
+        "-php${{ matrix.php_version }}-${{ matrix.py_flavor }}"
+    )
+    assert expected == run_id, f"RUN_ID must match nightly-<run_id>-<major>-php<php>-<py_flavor>; got {run_id!r}"
+
+
+def test_build_upload_artifact_name_carries_full_runtime_tuple() -> None:
+    """issue #2926: the BUILD upload artifact name matches the pkg consumer's
+    leg-directory layout: nightly-result-<major>-php<php>-<py_flavor>."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "name: nightly-result-${{ matrix.freebsd_major }}-php${{ matrix.php_version }}-${{ matrix.py_flavor }}" in text
+    ), "upload artifact name must be nightly-result-<major>-php<php>-<py_flavor>"
+    assert "name: nightly-result-${{ matrix.freebsd_major }}\n" not in text, (
+        "major-only artifact name must be gone (issue #2926)"
+    )
+
+
+def test_download_layouts_use_tuple_leg_pattern() -> None:
+    """issue #2926: both handoff and OCI jobs download every per-tuple leg
+    directory via the nightly-result-* pattern (now tuple-suffixed)."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert text.count("pattern: nightly-result-*") == 2, (
+        "handoff and OCI handoff jobs must both download every tuple leg"
+    )
