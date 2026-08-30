@@ -97,7 +97,9 @@ final class ThemeSafetyUiTest extends TestCase
 			'jquery on a var'   => ["\$el.css('background-color', '#fff');", "\$el.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on this'    => ["this.css('background-color', '#fff');", "this.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery camel'      => ["\$(x).css('backgroundColor', '#fff');", "\$(x).css({'backgroundColor': '#fff', 'color': '#000'});"],
+			'jquery double-q'   => ['$(x).css("background-color", "#fff");', '$(x).css({"background-color": "#fff", "color": "#000"});'],
 			'setProperty'       => ["e.style.setProperty('background-color', '#fff');", "e.style.setProperty('background-color', '#fff'); e.style.setProperty('color', '#000');"],
+			'setProperty dbl-q' => ['e.style.setProperty("background-color", "#fff");', 'e.style.setProperty("background-color", "#fff"); e.style.setProperty("color", "#000");'],
 			'style assignment'  => ["e.style.backgroundColor = '#fff';", "e.style.backgroundColor = '#fff'; e.style.color = '#000';"],
 		];
 	}
@@ -293,8 +295,8 @@ final class ThemeSafetyUiTest extends TestCase
 		// a form scan() detects but this does not reports as a violation. The two
 		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
 		return (bool)preg_match(
-			'/(?<![A-Za-z-])color["\']?\s*:'
-			. '|(?<![A-Za-z-])color\s*='
+			'/(?<![A-Za-z0-9_-])color["\']?\s*:'
+			. '|(?<![A-Za-z0-9_-])color\s*='
 			. '|setProperty\(\s*["\']color["\']/i',
 			$ctx
 		);
