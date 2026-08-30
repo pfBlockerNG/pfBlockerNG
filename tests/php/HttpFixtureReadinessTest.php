@@ -84,14 +84,25 @@ final class HttpFixtureReadinessTest extends TestCase
 	public function testProbeUsesExactTransportTimeout(): void
 	{
 		$this->requireReadinessHelper();
-		$context = pfb_test_http_fixture_stream_context();
-		$this->assertIsResource($context);
-		$options = stream_context_get_options($context);
+		$secret = 'owned-readiness-secret';
+		$observedUrl = NULL;
+		$observedOptions = NULL;
+		$matched = pfb_test_http_fixture_event_received(
+			1,
+			$secret,
+			static function (string $url, $context) use (&$observedUrl, &$observedOptions, $secret): string {
+				$observedUrl = $url;
+				$observedOptions = stream_context_get_options($context);
+				return $secret;
+			}
+		);
 
+		$this->assertTrue($matched, 'the request seam must return through the real readiness matcher');
+		$this->assertSame('http://127.0.0.1:1/__pfb_ready', $observedUrl);
 		$this->assertSame(
-			0.05,
-			$options['http']['timeout'] ?? NULL,
-			'fixture readiness must keep the exact bounded transport timeout'
+			['timeout' => 0.05, 'ignore_errors' => TRUE],
+			$observedOptions['http'] ?? NULL,
+			'fixture readiness must consume the exact bounded HTTP options'
 		);
 	}
 
