@@ -38,8 +38,10 @@ Observed on CE **2.8.1** box; 2.8.0 shares same base toolchain.
 > build serves every CPU arch of FreeBSD major — `supported-versions.json`
 > entries carry no `arch` field at all (stray one on old row
 > tolerated-ignored, never resurrected as default). BUILD matrix
-> (`read-version-matrix.sh --print-build`) dedupes to one row per distinct
-> `freebsd_major`, gains `extra_pkgs` — see below.
+> (`read-version-matrix.sh --print-build`) dedupes to one row per exact
+> runtime tuple `(freebsd_major, php_version, py_flavor)` (issue #2926 —
+> same-major rows with a differing php/py stay separate rows), gains
+> `extra_pkgs` — see below.
 >
 > **`status` decides whether row may VETO A RELEASE (issue #1855).** Enum is
 > `beta | active | GA` (`GA` = legacy alias for `active`). Row gates release

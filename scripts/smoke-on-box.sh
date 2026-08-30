@@ -183,24 +183,38 @@ fi
 cd "$REPO_ROOT"
 
 # ── Derive build params from the ABI ─────────────────────────────────────── #
-# The FreeBSD major picks the matrix row; the row supplies php_version and py_flavor.
-# NEVER a major -> php table (issue #2464): "FreeBSD 15 means php 8.3" was the current
-# row set written down as a rule, so a new major silently built the wrong php, and the
-# same file already trusted the matrix for the dep .pkg flavor a few steps below.
-# --print-build is deduped to one row per major, which is exactly this lookup's key.
+# The exact runtime tuple (freebsd_major, php_version, py_flavor) picks the
+# matrix row; the row supplies php_version, py_flavor, and extra_pkgs. NEVER a
+# major -> php table (issue #2464): "FreeBSD 15 means php 8.3" was the current
+# row set written down as a rule, so a new major silently built the wrong php.
+# issue #2926: --print-build is deduped to one row per runtime TUPLE, so
+# major-only [0] selection would silently pick the wrong runtime when two
+# tuples share a major (e.g. FreeBSD 16 / PHP 8.4 and 8.5). This box's ABI
+# carries only the major, so when a major holds more than one tuple this
+# launcher CANNOT know which one the image needs — it refuses rather than
+# guesses; a leg targeting one of them sets SMOKE_PHP_VERSION (+ optionally
+# SMOKE_PY_FLAVOR) to name its tuple, as smoke-single.yml already exports.
 _freebsd_major="${_ABI#FreeBSD:}"
 _freebsd_major="${_freebsd_major%%:*}"
 _BUILD_ROW="$(sh scripts/read-version-matrix.sh --print-build)" \
     || { printf 'smoke-on-box: could not read the version matrix\n' >&2; exit 1; }
-_php_ver="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
-    '([.[] | select(.freebsd_major == $maj)][0].php_version) // ""')"
-_py_flavor="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
-    '([.[] | select(.freebsd_major == $maj)][0].py_flavor) // ""')"
-if [ -z "$_php_ver" ] || [ -z "$_py_flavor" ]; then
+_ROW_MATCHES="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" --arg php "${SMOKE_PHP_VERSION:-}" --arg py "${SMOKE_PY_FLAVOR:-}" '
+    [.[] | select(.freebsd_major == $maj) | select($php == "" or .php_version == $php)
+          | select($py == "" or .py_flavor == $py)]' 2>/dev/null)"
+_ROW_COUNT="$(printf '%s' "$_ROW_MATCHES" | jq 'length' 2>/dev/null || echo 0)"
+if [ -z "$_ROW_MATCHES" ] || [ "$_ROW_COUNT" -eq 0 ]; then
     printf 'smoke-on-box: no matrix row for FreeBSD major %s (ABI %s) — refusing to guess php/py\n' \
         "$_freebsd_major" "$_ABI" >&2
     exit 1
 fi
+if [ "$_ROW_COUNT" -gt 1 ]; then
+    printf 'smoke-on-box: FreeBSD major %s matches more than one BUILD row for runtime tuple selection (ABI %s) — refusing to silently pick one; set SMOKE_PHP_VERSION/SMOKE_PY_FLAVOR\n' \
+        "$_freebsd_major" "$_ABI" >&2
+    exit 1
+fi
+_SELECTED_ROW="$_ROW_MATCHES"
+_php_ver="$(printf '%s' "$_SELECTED_ROW" | jq -r '.[0].php_version')"
+_py_flavor="$(printf '%s' "$_SELECTED_ROW" | jq -r '.[0].py_flavor')"
 
 # ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
 printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \
@@ -347,17 +361,15 @@ if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; the
     printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
     exit 2
 fi
-uv sync --locked --group smoke --group dep-pkg-build
-
 # ── Step 5c: this leg's dep pkgs (issue #1806 D2) ──────────────────────────── #
-# Look up this leg's freebsd_major row in the CURRENT ref's BUILD matrix
-# (read-version-matrix.sh --print-build is deduped one row per major) for its
-# extra_pkgs (port origins pfSense's own repo doesn't carry, e.g.
-# textproc/py-charset-normalizer for CE) and build each as a dep .pkg, from the
-# SAME ports tree build-leg.sh above just prepared/reused (no second clone).
-# _BUILD_ROW was already read above (same --print-build view) — reuse it.
-_EXTRA_PKGS_JSON="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" \
-    '([.[] | select(.freebsd_major == $maj)][0].extra_pkgs) // []')"
+# Read the SELECTED row's extra_pkgs (port origins pfSense's own repo doesn't
+# carry, e.g. textproc/py-charset-normalizer for CE) from the CURRENT ref's
+# BUILD matrix and build each as a dep .pkg, from the SAME ports tree
+# build-leg.sh above just prepared/reused (no second clone). The exact-tuple
+# selection above already narrowed _BUILD_ROW to this leg's one row — reuse it
+# rather than re-matching by major (issue #2926: major-only [0] would read a
+# sibling tuple's extra_pkgs).
+_EXTRA_PKGS_JSON="$(printf '%s' "$_SELECTED_ROW" | jq -c '.[0].extra_pkgs // []')"
 _EXTRA_PKGS_COUNT="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq 'length')"
 # The dep .pkgs use the SAME row-derived flavor as the branch .pkg above.
 _dep_py_flavor="$_py_flavor"

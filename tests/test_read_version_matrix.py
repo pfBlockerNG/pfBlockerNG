@@ -417,8 +417,9 @@ def test_extra_pkgs_passes_through_verbatim_on_a_single_entry_major(tmp_path: Pa
 # arch, never deduped). Same major with a DIFFERING php_version or py_flavor
 # is VALID (issue #2926) — each runtime tuple is its own BUILD row.
 # --------------------------------------------------------------------------- #
-def test_build_matrix_dedupes_two_versions_sharing_a_freebsd_major(tmp_path: Path) -> None:
-    """Two CE entries on the same freebsd_major collapse to one BUILD row; CI keeps both."""
+def test_build_matrix_dedupes_versions_sharing_an_identical_runtime_tuple(tmp_path: Path) -> None:
+    """issue #2926: two CE entries whose runtime tuple (freebsd_major,
+    php_version, py_flavor) is IDENTICAL collapse to one BUILD row; CI keeps both."""
     repo = _make_matrix_ref(
         tmp_path,
         [
@@ -427,7 +428,7 @@ def test_build_matrix_dedupes_two_versions_sharing_a_freebsd_major(tmp_path: Pat
         ],
     )
     build = _build_matrix(repo)
-    assert len(build) == 1, f"same-major entries must collapse to one BUILD row; got {build!r}"
+    assert len(build) == 1, f"identical-tuple entries must collapse to one BUILD row; got {build!r}"
     assert build[0]["freebsd_major"] == "15"
     # CI matrix is never deduped — the ci:true entry still appears on its own.
     ci = _ci_matrix(repo)
@@ -435,7 +436,7 @@ def test_build_matrix_dedupes_two_versions_sharing_a_freebsd_major(tmp_path: Pat
 
 
 def test_build_matrix_dedup_unions_and_dedupes_extra_pkgs_across_merged_rows(tmp_path: Path) -> None:
-    """extra_pkgs from every same-major row unions (deduped + sorted) onto the merged BUILD row."""
+    """extra_pkgs from every same-tuple row unions (deduped + sorted) onto the merged BUILD row."""
     repo = _make_matrix_ref(
         tmp_path,
         [
