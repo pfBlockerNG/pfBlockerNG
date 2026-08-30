@@ -1606,6 +1606,24 @@ whoisconvert() {
 	else
 		_type=AAAA
 	fi
+	# issue #2877: bound the TOTAL elapsed time of one batch. Issue #2015 bounded
+	# each Domain lookup at 30 seconds, but the batch itself iterates every
+	# configured entry, so the two synchronous PHP launch sites could wait an
+	# unbounded 30s x Domain rows (plus the first-use ASN re-entry). The deadline
+	# is checked BEFORE each entry and the per-entry timeout is clipped to the
+	# time left, so the batch ends within the budget plus one lookup's kill
+	# grace; no Domain/AS ordering can bypass it. The nested ASN re-entry keeps
+	# pfb_reentry()'s own #2016 bound -- nothing is routed around that seam.
+	# Same degradation discipline as pfb_reentry(): start AT the default and
+	# take an override only once it is proven positive-integral, so no input can
+	# produce an empty or non-numeric duration (issue #2488's degradation class).
+	_whoisbatch_budget=1800
+	case "${whoisbatchtimeout:-}" in
+	''|*[!0-9]*) : ;;
+	*)	[ "${whoisbatchtimeout}" -gt 0 ] 2>/dev/null && _whoisbatch_budget="${whoisbatchtimeout}" ;;
+	esac
+	_whoisbatch_start="$(date +%s)"
+	_whoisbatch_expired=false
 
 	# Backup previous orig file
 	if [ -e "${pfborig}${alias}.orig" ]; then
@@ -1626,6 +1644,13 @@ whoisconvert() {
 	# ${found} flag the restore logic below reads); skip blank entries.
 	while IFS= read -r host; do
 		[ -z "${host}" ] && continue
+		# issue #2877: whole-batch deadline, checked before each entry so no
+		# Domain/AS ordering can bypass the total budget.
+		_whoisbatch_left=$(( _whoisbatch_budget - $(date +%s) + _whoisbatch_start ))
+		if [ "${_whoisbatch_left}" -le 0 ]; then
+			_whoisbatch_expired=true
+			break
+		fi
 		# Determine if host is a Domain or an AS: a domain contains a dot.
 		case "${host}" in
 		*.*)
@@ -1635,7 +1660,13 @@ whoisconvert() {
 			# then keep only the "has (IPv6) address" lines so a failure message
 			# (e.g. "Host x not found: 3(NXDOMAIN)") can never be captured as
 			# data (issue #714). Mirrors the ASN branch below.
-			hostout="$("${pathtimeout}" -s TERM -k 5 30 "${pathhost}" -t "${_type}" "${host}")"
+			# issue #2877: clip this lookup to the batch deadline (the deadline
+			# check above guarantees at least 1 second is left), else #2015's 30s.
+			_whoisbatch_tmo=30
+			if [ "${_whoisbatch_left}" -lt 30 ]; then
+				_whoisbatch_tmo="${_whoisbatch_left}"
+			fi
+			hostout="$("${pathtimeout}" -s TERM -k 5 "${_whoisbatch_tmo}" "${pathhost}" -t "${_type}" "${host}")"
 			hostrc=$?
 			if [ "${hostrc}" -eq 0 ]; then
 				hostips="$(echo "${hostout}" | grep -E 'has( IPv6)? address' | sed 's/^.* //')"
@@ -1703,6 +1734,16 @@ whoisconvert() {
 	done <<EOF
 ${custom_list}
 EOF
+
+	# issue #2877: explicit partial-state policy. Entries that resolved before
+	# the deadline are KEPT (the ${found} append semantics above); the skipped
+	# remainder is a visible failure named for the operator -- never a silent
+	# publish of a partial list or a silent erase of the collected prefix.
+	if [ "${_whoisbatch_expired}" = true ]; then
+		log="WHOIS batch [ ${alias} ] TIMED OUT after ${_whoisbatch_budget}s total; remaining Domain/AS entries skipped"
+		echo "${log}" | tee -a "${errorlog}"
+		touch "${pfborig}${alias}.fail"
+	fi
 
 	# Restore previous orig file
 	if [ "${found}" = false ]; then
