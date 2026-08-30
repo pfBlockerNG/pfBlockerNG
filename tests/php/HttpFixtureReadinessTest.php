@@ -27,10 +27,10 @@ final class HttpFixtureReadinessTest extends TestCase
 				proc_close($server);
 			}
 		}
-		foreach ((array) glob("{$this->workdir}/*") as $path) {
-			@unlink((string) $path);
-		}
 		if ($this->workdir !== '' && is_dir($this->workdir)) {
+			foreach ((array) glob("{$this->workdir}/*") as $path) {
+				@unlink((string) $path);
+			}
 			rmdir($this->workdir);
 		}
 	}
@@ -64,13 +64,13 @@ final class HttpFixtureReadinessTest extends TestCase
 				echo 'READY';
 				return;
 			}
-			$prefix = '/__pfb_ready/';
-			if (str_starts_with($uri, $prefix)) {
-				echo substr($uri, strlen($prefix));
+			$token = getenv('READY_TOKEN');
+			if ($uri === '/__pfb_ready/' . $token) {
+				echo $token;
 				return;
 			}
 			http_response_code(404);
-			PHP, 'READY');
+			PHP, 'READY', ['READY_TOKEN' => $token]);
 
 		$this->assertTrue(
 			pfb_test_http_fixture_event_received($port, $token),
@@ -88,7 +88,7 @@ final class HttpFixtureReadinessTest extends TestCase
 		require_once $helper;
 	}
 
-	private function startServer(string $routerSource, string $setupResponse): int
+	private function startServer(string $routerSource, string $setupResponse, array $environment = []): int
 	{
 		$router = "{$this->workdir}/router-" . count($this->servers) . '.php';
 		$this->assertNotFalse(file_put_contents($router, $routerSource));
@@ -103,7 +103,7 @@ final class HttpFixtureReadinessTest extends TestCase
 				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
-				['PATH' => (string) getenv('PATH')]
+				$environment + ['PATH' => (string) getenv('PATH')]
 			);
 			if (!is_resource($server)) {
 				$failures[] = "port {$port}: proc_open failed";
