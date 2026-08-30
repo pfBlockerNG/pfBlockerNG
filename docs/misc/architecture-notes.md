@@ -527,8 +527,9 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
 - **Address scheme.** A fixed ordered candidate list from `pfb_dnsbl_vip_candidates()` — v4
   `172.16.53.53`, `192.168.53.53`, `10.53.53.53` (least-used RFC1918 range first); v6 the single
   ULA `fd00:53:53:53:53:53:53:53`. The picker takes the first that overlaps no existing VIP or
-  configured subnet, and returns null on conflict for the user to resolve. This superseded the
-  earlier sweep pool (ADR-13, issue #487); `DnsblVipCandidatesTest` pins the list.
+  configured subnet, and returns null on conflict for the user to resolve. This superseded both the
+  original sweep pool and the #487 interim pool (ADR-13 Amendment #473); `DnsblVipCandidatesTest`
+  pins the list.
 - **Ownership marker.** Auto-created VIPs carry the description `pfB_AUTO_VIP_v4` /
   `pfB_AUTO_VIP_v6`; only VIPs with that exact marker are ever managed or removed — a
   manually-created VIP is never touched.
