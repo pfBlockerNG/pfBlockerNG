@@ -268,7 +268,7 @@ final class CategoryScheduleUiTest extends TestCase
 		$save = strpos($source, 'if ($_POST && isset($_POST[\'save\']))');
 		$this->assertNotFalse($save);
 		$write = strpos($source, 'write_config(', $save);
-		$candidate = strpos($source, 'pfb_schedule_cache_candidate_validate(', $save);
+		$candidate = strpos($source, 'pfb_schedule_cache_candidate_stage(', $save);
 		$pending = strpos($source, 'pfb_mark_pending_changes()', $save);
 		$this->assertNotFalse($write);
 		$this->assertNotFalse($candidate);
@@ -276,7 +276,9 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertLessThan($candidate, $write);
 		$this->assertLessThan($pending, $candidate);
 		$controller = substr($source, $candidate, strpos($source, 'exit;', $candidate) - $candidate);
-		$this->assertStringContainsString("\$failure = \$cache_ok ? '' : '&schcache=failed';", $controller);
+		$this->assertStringContainsString(
+			"\$failure = \$cache_ok ? '' : '&schcache=failed&schstage=' . \$cache_stage;", $controller,
+			'the failure redirect must carry which stage failed (issue #2888)');
 		$this->assertStringNotContainsString('config_set_path(', $controller);
 		$this->assertStringNotContainsString('config_del_path(', $controller);
 		$this->assertStringNotContainsString('pfb_schedule_cache_refresh(', $controller);
@@ -348,8 +350,10 @@ final class CategoryScheduleUiTest extends TestCase
 		}
 		$source = strtolower(php_strip_whitespace(self::PAGE));
 		$this->assertStringContainsString('settings remain saved', $source);
-		$this->assertStringContainsString('likely a package bug', $source);
+		$this->assertStringContainsString('candidate generation failed: %s', $source,
+			'the warning must name the failing stage (issue #2888)');
 		$this->assertStringContainsString('manual updates remain available', $source);
+		$this->assertStringNotContainsString('likely a package bug', $source);
 	}
 
 	public function testCandidateSuccessUsesPrivateDirectoryAndRejectsInvalidTimezoneWithoutWarning(): void
