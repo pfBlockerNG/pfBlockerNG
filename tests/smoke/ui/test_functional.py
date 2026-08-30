@@ -1950,9 +1950,15 @@ def _assert_tick_run_not_claimed(before: int | None, after: int | None, scope: s
     does exist, last_run must not move. The off-appliance
     UpdateRunNowScheduleOwnershipTest holds the stronger byte-identity version, and
     DueLedgerTest pins both branches of the deferral write.
+
+    Removal is treated as a failure because no actor in this harness turns the schedule
+    off mid-test -- each lane boots its own VM and runs one test stream, and a General
+    save never reaches the pass tail that rewrites this file. In production a concurrent
+    admin disabling the schedule would drop the row legitimately, so this is a fact about
+    the harness rather than a product invariant.
     """
     assert not (after is None and before is not None), (
-        f"{scope} Run Now removed the cron entry -- the configuration it derives from did not change"
+        f"{scope} Run Now removed the cron entry, and nothing in this test disables the schedule"
     )
     if after is None:
         return
