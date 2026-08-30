@@ -1213,8 +1213,8 @@ Full design: ADR-39.
   catalog) is **derived entirely from the version matrix** — never hardcoded CE/Plus:
   `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
   reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-ci` at job start —
-  issue #1806 W3: never `--print-build`, which dedupes by `freebsd_major` and would hide a same-major
-  second edition from this topology entirely — egress open), falls back to running that script, and
+  issue #1806 W3: never `--print-build`, which dedupes by exact runtime tuple (issue #2926)
+  and would hide a same-major sibling runtime from this topology entirely — egress open), falls back to running that script, and
   SKIPs the topology cases when neither is
   available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it (SMOKE_ABI
   stays a CONCRETE guest ABI); when it matches more than one edition sharing a `freebsd_major`
@@ -1231,8 +1231,8 @@ Full design: ADR-39.
   not install" case survives, re-framed row-locally: the forged package's target is derived from
   THIS leg's row (the next FreeBSD major, a php this row does not use), never from a sibling
   row. Adding a pfSense version needs no edit here.
-  (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, matching the
-  box's FreeBSD major.) Dispatch: `gh workflow run smoke-single.yml -f
+  (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, selecting the
+  box's exact runtime tuple (issue #2926) — refusing a sibling-tuple guess when a major holds two). Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
   `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pkg.pfblockerng.com`
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default

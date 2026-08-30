@@ -188,7 +188,7 @@ jobs:
           retention-days: 14
 
   build:
-    name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }})
+    name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }} php${{ matrix.php_version }} ${{ matrix.py_flavor }})
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
