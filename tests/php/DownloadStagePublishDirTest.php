@@ -391,7 +391,7 @@ final class DownloadStagePublishDirTest extends TestCase
 	{
 		$source = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertNotFalse($source);
-		$lock = strpos($source, "if (!pfb_feed_pass_begin('sync')) {");
+		$lock = strpos($source, "if (!pfb_feed_pass_begin('sync', \$pfb_feed_pass_contended)) {");
 		$recovery = strpos($source, 'if (!pfb_stage_publish_dir_recover($pfb[\'dbdir\'])) {');
 		$boot = strpos($source, 'if (is_platform_booting() || $g[\'pfblockerng_install\']) {');
 		$this->assertNotFalse($lock);

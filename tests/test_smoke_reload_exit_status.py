@@ -73,11 +73,12 @@ def test_lock_deferral_fails_immediately_with_precise_stderr_reason(
 
 def test_lock_deferral_does_not_wait_for_swap_or_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     counted_markers: list[str | tuple[str, ...]] = []
-    monkeypatch.setattr(
-        helpers,
-        "count_log_marker",
-        lambda _vm, _path, marker: counted_markers.append(marker) or 0,
-    )
+
+    def count_marker(_vm: object, _path: str, marker: str | tuple[str, ...]) -> int:
+        counted_markers.append(marker)
+        return 0
+
+    monkeypatch.setattr(helpers, "count_log_marker", count_marker)
     monkeypatch.setattr(
         helpers,
         "wait_zero_downtime_swap",

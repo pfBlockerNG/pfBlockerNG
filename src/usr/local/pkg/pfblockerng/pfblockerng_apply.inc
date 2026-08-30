@@ -739,6 +739,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb_dispatch_contended = FALSE;
 	if (!pfb_schedule_dispatch_begin(0.1, $pfb_dispatch_contended)) {
 		if (!$pfb_dispatch_contended) {
+			pfb_mark_pending_changes();
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			return FALSE;
 		}
 		$deferred_by = 'dispatcher-lock';
@@ -759,6 +761,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb_feed_pass_contended = FALSE;
 	if (!pfb_feed_pass_begin('sync', $pfb_feed_pass_contended)) {
 		if (!$pfb_feed_pass_contended) {
+			pfb_mark_pending_changes();
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 			if ($pfb_dispatch_owner) {
 				pfb_schedule_dispatch_release();
 			}
