@@ -263,7 +263,7 @@
 			<name>pfb_dnsvip_auto</name>
 			<displayname>Auto VIP</displayname>
 			<bindstofield>pfblockerng_wizard-&gt;step3-&gt;pfb_dnsvip_auto</bindstofield>
-			<description><![CDATA[Create VIPs automatically. When enabled, pfBlockerNG creates and manages the DNSBL sinkhole Virtual IP in the <strong>10.10.X.53</strong> range (IPv6: <strong>fd00:X::53</strong>) &#8212; the manual selections below are ignored.<br /><span class="text-danger">Note:</span> auto-created VIPs are <strong>not HA/CARP aware</strong>. On a CARP/HA cluster, configure the DNSBL Virtual IP manually instead.]]></description>
+			<description><![CDATA[Create VIPs automatically. When enabled, pfBlockerNG picks and manages the DNSBL sinkhole Virtual IP itself &#8212; the manual selections below are ignored. The address it chose is shown on the DNSBL page once the wizard finishes.<br /><span class="text-danger">Note:</span> auto-created VIPs are <strong>not HA/CARP aware</strong>. On a CARP/HA cluster, configure the DNSBL Virtual IP manually instead.]]></description>
 			<type>checkbox</type>
 			<value>on</value>
 		</field>
