@@ -5631,13 +5631,15 @@ function pfb_schedule_dispatch_begin(float $timeout_s = 0.1, ?bool &$contended =
 	$lockpath = $state_dir . '/pfb_schedule_dispatch.lock';
 	$lock = @fopen($lockpath, 'c');
 	if (!is_resource($lock)) {
-		pfb_logger("\n Scheduler dispatcher lock: open failed [ {$lockpath} ]; feed pass aborted.\n", 2);
+		logger(LOG_ERR, localize_text('Scheduler dispatcher lock open failed [ %s ]; feed pass aborted.', $lockpath),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
 		return FALSE;
 	}
 	if (!pfb_flock_bounded($lock, LOCK_EX, $timeout_s, $contended)) {
 		@fclose($lock);
 		if (!$contended) {
-			pfb_logger("\n Scheduler dispatcher lock: acquire failed [ {$lockpath} ]; feed pass aborted.\n", 2);
+			logger(LOG_ERR, localize_text('Scheduler dispatcher lock acquire failed [ %s ]; feed pass aborted.', $lockpath),
+				LOG_PREFIX_PKG_PFBLOCKERNG);
 		}
 		return FALSE;
 	}

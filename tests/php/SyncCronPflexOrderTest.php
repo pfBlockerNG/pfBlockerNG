@@ -65,8 +65,8 @@ final class SyncCronPflexOrderTest extends TestCase
 
 	public function testCronOwnsDispatcherBeforeFeedLockThroughOutcomePublication(): void
 	{
-		$dispatch = strpos(self::$functionBody, 'pfb_schedule_dispatch_begin');
-		$feed = strpos(self::$functionBody, "pfb_feed_pass_begin('cron')");
+		$dispatch = strpos(self::$functionBody, 'pfb_schedule_dispatch_begin(0.1, $pfb_dispatch_contended)');
+		$feed = strpos(self::$functionBody, "pfb_feed_pass_begin('cron', \$pfb_feed_pass_contended)");
 		$this->assertNotFalse($dispatch);
 		$this->assertNotFalse($feed);
 		$this->assertLessThan($feed, $dispatch);
