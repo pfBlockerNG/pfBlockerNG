@@ -110,8 +110,8 @@ final class DownloadRetryBodyResetTest extends TestCase
 		$routerSrc = <<<PHP
 <?php
 \$uri = \$_SERVER['REQUEST_URI'] ?? '';
-if (str_starts_with(\$uri, '/__pfb_ready/')) {
-	if (\$uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+if (\$uri === '/__pfb_ready' || str_starts_with(\$uri, '/__pfb_ready/')) {
+	if (\$uri === '/__pfb_ready') {
 		echo getenv('READY_TOKEN');
 	}
 	return;

@@ -210,8 +210,8 @@ final class Top1mDccDetectorTest extends TestCase
 		$routerSource = <<<'PHP'
 <?php
 $uri = $_SERVER['REQUEST_URI'] ?? '';
-if (str_starts_with($uri, '/__pfb_ready/')) {
-	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+if ($uri === '/__pfb_ready' || str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready') {
 		echo getenv('READY_TOKEN');
 	}
 	return;
@@ -498,8 +498,8 @@ PHP;
 		$routerSource = <<<'PHP'
 <?php
 $uri = $_SERVER['REQUEST_URI'] ?? '';
-if (str_starts_with($uri, '/__pfb_ready/')) {
-	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+if ($uri === '/__pfb_ready' || str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready') {
 		echo getenv('READY_TOKEN');
 	}
 	return;

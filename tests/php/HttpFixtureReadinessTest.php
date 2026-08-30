@@ -35,22 +35,52 @@ final class HttpFixtureReadinessTest extends TestCase
 		}
 	}
 
-	public function testProbeRejectsReachableForeignListener(): void
+	public function testProbeRejectsReflectiveForeignListener(): void
 	{
 		$this->requireReadinessHelper();
 		$port = $this->startServer(<<<'PHP'
 			<?php
-			if (($_SERVER['REQUEST_URI'] ?? '') === '/setup') {
+			$uri = $_SERVER['REQUEST_URI'] ?? '';
+			if ($uri === '/setup') {
 				echo 'FOREIGN';
 				return;
 			}
-			echo 'not-the-readiness-token';
+			$path = parse_url($uri, PHP_URL_PATH);
+			echo basename(is_string($path) ? $path : '');
 			PHP, 'FOREIGN');
 
 		$this->assertFalse(
 			pfb_test_http_fixture_event_received($port, 'expected-readiness-token'),
-			'a reachable listener that did not handle the nonce-bearing fixture event must not count as ready'
+			'a listener that reflects the disclosed request nonce must not count as the fixture owner'
 		);
+	}
+
+	public function testProbeKeepsShortResponseTimeout(): void
+	{
+		$this->requireReadinessHelper();
+		$token = bin2hex(random_bytes(12));
+		$port = $this->startServer(<<<'PHP'
+			<?php
+			$uri = $_SERVER['REQUEST_URI'] ?? '';
+			if ($uri === '/setup') {
+				echo 'READY';
+				return;
+			}
+			$token = getenv('READY_TOKEN');
+			if ($uri === '/__pfb_ready') {
+				usleep(1000000);
+				echo $token;
+				return;
+			}
+			http_response_code(404);
+			PHP, 'READY', ['READY_TOKEN' => $token]);
+
+		$started = hrtime(TRUE);
+		$matched = pfb_test_http_fixture_event_received($port, $token);
+		$elapsed = (hrtime(TRUE) - $started) / 1e9;
+
+		$this->assertFalse($matched, 'a stalled readiness response must exceed the helper transport timeout');
+		$this->assertLessThan(0.25, $elapsed, 'readiness transport timeout widened beyond the bounded probe');
 	}
 
 	public function testProbeAcceptsMatchingFixtureEvent(): void
@@ -65,7 +95,7 @@ final class HttpFixtureReadinessTest extends TestCase
 				return;
 			}
 			$token = getenv('READY_TOKEN');
-			if ($uri === '/__pfb_ready/' . $token) {
+			if ($uri === '/__pfb_ready') {
 				echo $token;
 				return;
 			}
@@ -74,7 +104,7 @@ final class HttpFixtureReadinessTest extends TestCase
 
 		$this->assertTrue(
 			pfb_test_http_fixture_event_received($port, $token),
-			'the fixture router must count as ready after it echoes the exact request nonce'
+			'the fixture router must count as ready after it returns the child-owned secret'
 		);
 	}
 
