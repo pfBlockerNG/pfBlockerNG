@@ -2644,7 +2644,10 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
         assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
     # issue #2869: the step must not name the sweep pool ADR-13 retired -- an admin who
     # reads it goes looking for an address pfb_dnsbl_vip_candidates() never returns.
-    assert "10.10." not in body, "wizard DNSBL step still advertises the retired 10.10.X.53 pool"
+    # Scoped to the retired claim, not to "10.10.": the harness provisions a manual VIP at
+    # DEFAULT_DNSBL_VIP4 (10.10.10.1) which the step's VIP dropdown legitimately lists.
+    for retired in ("10.10.X.53", "10.10.x.53", "fd00:X::53"):
+        assert retired not in body, f"wizard DNSBL step still advertises the retired {retired} pool"
 
 
 def test_general_wizard_disable_get_is_state_free(
