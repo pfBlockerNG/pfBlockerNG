@@ -6,6 +6,7 @@ is the tier that sees a loaded page.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -46,6 +47,35 @@ def test_list_textareas_do_not_force_unpaired_fafafa(webui: WebUI) -> None:
         assert resp.status_code == 200, path
         assert marker in resp.text, path
         assert "background:#fafafa" not in resp.text, path
+
+
+_INLINE_STYLE = re.compile(r'style\s*=\s*"([^"]*)"')
+_OPAQUE_BACKGROUND = re.compile(r"background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)")
+_FOREGROUND = re.compile(r"(?<![-\w])color\s*:")
+
+
+def test_no_inline_style_paints_an_unpaired_background(webui: WebUI) -> None:
+    """An opaque inline background must carry its own foreground.
+
+    ThemeSafetyUiTest holds this over the source; this holds it over what the page
+    actually emits, which is where issue #2866 lived -- a style attribute built from a
+    variable, correct in every branch the source scan could see.
+
+    The failed-download row itself needs a .fail sidecar to render, so it is not
+    reachable from a clean box; the source-side inventory covers that one.
+    """
+    for path, marker in _LIST_PAGES.items():
+        resp = webui.get(path)
+        assert resp.status_code == 200, path
+        assert marker in resp.text, path
+        for style in _INLINE_STYLE.findall(resp.text):
+            if not _OPAQUE_BACKGROUND.search(style):
+                continue
+            if "rgba(" in style or "transparent" in style:
+                continue
+            assert _FOREGROUND.search(style), (
+                f"{path}: inline style paints an opaque background with no foreground: {style}"
+            )
 
 
 def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
