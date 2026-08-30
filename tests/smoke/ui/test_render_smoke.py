@@ -704,6 +704,46 @@ def test_ip_page_never_leaks_maxmind_key(
         assert "OK" in restore.stdout, f"failed to restore maxmind_key: {restore.stdout!r}"
 
 
+_CFG_ASN_TOKEN = "installedpackages/pfblockerngipsettings/config/0/asn_token"
+
+
+@pytest.mark.ui_e2e
+def test_ip_page_never_leaks_asn_ipinfo_token(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """Stored ASN IPinfo token stays absent from HTML and its input is password-masked."""
+    seed_token = "PFBASNTESTTOKEN0001"
+    original = helpers.config_get(smoke_vm, _CFG_ASN_TOKEN)
+    seed = helpers.php_eval(
+        smoke_vm,
+        f"config_set_path({helpers._php_str(_CFG_ASN_TOKEN)}, {helpers._php_str(seed_token)});\n"
+        "write_config('#2922 smoke: seed asn_token for never-leak render check');\n"
+        "echo 'OK';",
+    )
+    assert "OK" in seed.stdout, f"failed to seed asn_token: {seed.stdout!r}"
+    assert helpers.config_get(smoke_vm, _CFG_ASN_TOKEN) == seed_token, (
+        "seed did not take before ASN token render assertions"
+    )
+    try:
+        resp = webui.get(_IP_PAGE)
+        assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
+        body = resp.text
+        assert seed_token not in body, f"asn_token leaked into the IP page body: expected {seed_token!r} to be absent"
+        tag = re.search(r'<input[^>]*\bname="asn_token"[^>]*>', body)
+        assert tag, "asn_token input not present on the IP page"
+        assert 'type="password"' in tag.group(0), (
+            f'asn_token input must be masked (type="password"): got {tag.group(0)!r}'
+        )
+    finally:
+        restore = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(_CFG_ASN_TOKEN)}, {helpers._php_str(original)});\n"
+            "write_config('#2922 smoke: restore asn_token');\n"
+            "echo 'OK';",
+        )
+        assert "OK" in restore.stdout, f"failed to restore asn_token: {restore.stdout!r}"
+
+
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
 _HOOKS_PAGE = "/pfblockerng/pfblockerng_hooks.php"
 _LOG_PAGE = "/pfblockerng/pfblockerng_log.php"
