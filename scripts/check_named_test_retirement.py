@@ -13,11 +13,22 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TypeVar
 
 HISTORY_PATH = "docs/history/retired-tests.md"
 _PYTHON_DECLARATION = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<name>[^\s(]+)[ \t]*\(")
-_PHPUNIT_DECLARATION = re.compile(r"^[ \t]*(?:[^#/\"']*\{[ \t]*)?public[ \t]+function[ \t]+(?P<name>test\w*)[ \t]*\(")
+_PHPUNIT_METHOD = re.compile(
+    r"^[ \t]*(?:[^#/\"']*\{[ \t]*)?(?:(?:final|abstract|static)[ \t]+)*"
+    r"public[ \t]+(?:(?:final|abstract|static)[ \t]+)*function[ \t]+&?[ \t]*"
+    r"(?P<name>[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)[ \t]*\("
+)
+_PHPUNIT_TEST_IMPORT = re.compile(
+    r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes\\Test"
+    r"(?:[ \t]+as[ \t]+(?P<alias>[A-Za-z_]\w*))?[ \t]*;"
+)
+_PHP_ATTRIBUTE = re.compile(r"#\[(?P<body>[^\]]*)\]")
+_PHP_ATTRIBUTE_PREFIX = re.compile(r"^[ \t]*(?:#\[[^\]]*\][ \t]*)+")
 _SHELLSPEC_DECLARATION = re.compile(r"^[ \t]*It[ \t]+(?P<body>.*)$")
 _SUCCESSOR = re.compile(r"^[ \t]*# successor: (?P<value>\S(?:.*\S)?)[ \t]*$")
 _SUCCESSOR_ATTEMPT = re.compile(r"^[ \t]*(?:#+|//)[ \t]*successor\b", re.IGNORECASE)
@@ -70,6 +81,7 @@ class DiffInput:
     changes: tuple[Change, ...]
     old_ref: str
     new_ref: str | None
+    worktree: bool = False
 
 
 Item = TypeVar("Item")
@@ -155,15 +167,25 @@ def _parse_name_status(data: bytes) -> tuple[Change, ...]:
     return tuple(changes)
 
 
-def _diff_input(staged: bool, base: str | None) -> DiffInput:
+def _diff_input(staged: bool, base: str | None, worktree_base: str | None = None) -> DiffInput:
     if staged:
         data = _git("diff", "--cached", "--name-status", "-z", "--find-renames", "HEAD", "--")
         return DiffInput(_parse_name_status(data), "HEAD", None)
-    assert base is not None
-    base_commit = _resolve_commit(base)
+    selected_base = worktree_base or base
+    assert selected_base is not None
+    base_commit = _resolve_commit(selected_base)
     merge_base = _decode_ascii(_git("merge-base", base_commit, "HEAD"), "merge base")
     if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", merge_base):
         raise CheckError("merge base is not an object ID")
+    if worktree_base is not None:
+        data = _git("diff", "--name-status", "-z", "--find-renames", merge_base, "--")
+        untracked = _git("ls-files", "-z", "--others", "--exclude-standard", "--")
+        if untracked and not untracked.endswith(b"\0"):
+            raise CheckError("Git untracked-path output is not NUL-terminated")
+        untracked_records = b"".join(
+            b"A\0" + path + b"\0" for path in (untracked.split(b"\0")[:-1] if untracked else ())
+        )
+        return DiffInput(_parse_name_status(data + untracked_records), merge_base, None, worktree=True)
     data = _git("diff", "--name-status", "-z", "--find-renames", f"{base_commit}...HEAD", "--")
     return DiffInput(_parse_name_status(data), merge_base, "HEAD")
 
@@ -187,6 +209,17 @@ def _blob(ref: str | None, path: str) -> str:
         raise CheckError(f"{path} contains invalid UTF-8") from exc
 
 
+def _worktree_blob(path: str) -> str:
+    try:
+        data = Path(path).read_bytes()
+    except OSError as exc:
+        raise CheckError(f"cannot read worktree path {path!r}: {exc}") from exc
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CheckError(f"{path} contains invalid UTF-8") from exc
+
+
 def _shellspec_name(path: str, line_number: int, body: str) -> str | None:
     if not body.startswith(("'", '"')):
         return None
@@ -203,6 +236,13 @@ def _parse_file(path: str, language: str, text: str) -> ParsedFile:
     lines = tuple(text.splitlines())
     declarations: list[Declaration] = []
     markers: list[Marker] = []
+    phpunit_test_names: set[str] = set()
+    if language == "phpunit":
+        for line in lines:
+            imported = _PHPUNIT_TEST_IMPORT.match(line)
+            if imported:
+                phpunit_test_names.add(imported.group("alias") or "Test")
+    phpunit_attribute_pending = False
     for line_number, line in enumerate(lines, 1):
         name: str | None = None
         if language == "python":
@@ -210,9 +250,31 @@ def _parse_file(path: str, language: str, text: str) -> ParsedFile:
             if match and match.group("name").startswith("test_") and match.group("name").isidentifier():
                 name = match.group("name")
         elif language == "phpunit":
-            match = _PHPUNIT_DECLARATION.match(line)
+            for attribute in _PHP_ATTRIBUTE.finditer(line):
+                body = attribute.group("body")
+                candidates = phpunit_test_names | {
+                    r"\PHPUnit\Framework\Attributes\Test",
+                    r"PHPUnit\Framework\Attributes\Test",
+                }
+                if any(
+                    re.search(
+                        rf"(?:^|,)[ \t]*{re.escape(candidate)}(?:[ \t]*(?:,|$|\())",
+                        body,
+                    )
+                    for candidate in candidates
+                ):
+                    phpunit_attribute_pending = True
+            method_line = _PHP_ATTRIBUTE_PREFIX.sub("", line)
+            match = _PHPUNIT_METHOD.match(method_line)
             if match:
-                name = match.group("name")
+                method_name = match.group("name")
+                if method_name.startswith("test") or phpunit_attribute_pending:
+                    name = method_name
+                phpunit_attribute_pending = False
+            else:
+                stripped = method_line.strip()
+                if stripped and not stripped.startswith(("#[", "//", "#", "/*", "*")):
+                    phpunit_attribute_pending = False
         else:
             match = _SHELLSPEC_DECLARATION.match(line)
             if match:
@@ -283,14 +345,6 @@ def _match_declarations(
             old_candidates,
             new_candidates,
         )
-    _consume_matches(
-        old,
-        new,
-        old_left,
-        new_left,
-        lambda item: (item.language, item.name),
-        lambda item: (item.language, item.name),
-    )
     return (
         tuple(old[index] for index in sorted(old_left)),
         tuple(new[index] for index in sorted(new_left)),
@@ -345,7 +399,7 @@ def _marker_evidence(
     added: tuple[Declaration, ...],
     old_files: dict[str, ParsedFile],
     new_files: dict[str, ParsedFile],
-) -> tuple[set[Declaration], list[str]]:
+) -> tuple[list[Declaration], list[str]]:
     new_markers = _new_markers(old_files, new_files)
     added_set = set(added)
     active: list[Marker] = []
@@ -353,30 +407,27 @@ def _marker_evidence(
     for parsed in new_files.values():
         for marker in parsed.markers:
             is_new = marker in new_markers
+            if not is_new:
+                continue
             if marker.value is None:
-                if is_new:
-                    violations.append(f"malformed successor marker at {marker.path}:{marker.line}")
+                violations.append(f"malformed successor marker at {marker.path}:{marker.line}")
                 continue
             declaration = _associated_declaration(marker, parsed)
             if declaration is None:
-                if is_new:
-                    violations.append(
-                        f"successor marker at {marker.path}:{marker.line} is not attached to a named test"
-                    )
+                violations.append(f"successor marker at {marker.path}:{marker.line} is not attached to a named test")
                 continue
             if declaration not in added_set:
-                if is_new:
-                    violations.append(
-                        f"successor marker at {marker.path}:{marker.line} is attached to "
-                        f"unchanged test {declaration.identity}"
-                    )
+                violations.append(
+                    f"successor marker at {marker.path}:{marker.line} is attached to "
+                    f"unchanged test {declaration.identity}"
+                )
                 continue
             active.append(marker)
     counts = Counter(marker.value for marker in active)
     for value, count in counts.items():
         if count > 1:
             violations.append(f"duplicate successor marker value {value!r}")
-    discharged: set[Declaration] = set()
+    discharged: list[Declaration] = []
     for marker in active:
         assert marker.value is not None
         selected = _select_retirement(marker.value, retired)
@@ -386,7 +437,7 @@ def _marker_evidence(
             identities = ", ".join(declaration.identity for declaration in selected)
             violations.append(f"successor marker {marker.value!r} is ambiguous: {identities}")
         else:
-            discharged.add(next(iter(selected)))
+            discharged.append(next(iter(selected)))
     return discharged, violations
 
 
@@ -399,26 +450,33 @@ def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _added_tombstone_lines(old_text: str | None, new_text: str | None) -> list[tuple[int, str]]:
+def _added_tombstone_lines(old_text: str | None, new_text: str | None) -> tuple[list[tuple[int, str]], list[str]]:
     if new_text is None:
-        return []
-    old_lines = Counter(old_text.splitlines() if old_text is not None else ())
-    added: list[tuple[int, str]] = []
-    for line_number, line in enumerate(new_text.splitlines(), 1):
-        if old_lines[line]:
-            old_lines[line] -= 1
-        elif _TOMBSTONE_ATTEMPT.match(line):
-            added.append((line_number, line))
-    return added
+        if old_text is not None:
+            return [], [f"{HISTORY_PATH} is append-only; existing history was removed"]
+        return [], []
+    new_lines = new_text.splitlines()
+    start = 0
+    if old_text is not None:
+        old_lines = old_text.splitlines()
+        if new_lines[: len(old_lines)] != old_lines:
+            return [], [f"{HISTORY_PATH} is append-only; existing history was changed or removed"]
+        start = len(old_lines)
+    added = [
+        (line_number, line)
+        for line_number, line in enumerate(new_lines[start:], start + 1)
+        if _TOMBSTONE_ATTEMPT.match(line)
+    ]
+    return added, []
 
 
 def _tombstone_evidence(
     retired: tuple[Declaration, ...], old_text: str | None, new_text: str | None
-) -> tuple[set[Declaration], list[str]]:
-    discharged: set[Declaration] = set()
-    violations: list[str] = []
+) -> tuple[list[Declaration], list[str]]:
+    discharged: list[Declaration] = []
+    added_lines, violations = _added_tombstone_lines(old_text, new_text)
     records: set[tuple[str, str, str]] = set()
-    for line_number, line in _added_tombstone_lines(old_text, new_text):
+    for line_number, line in added_lines:
         match = _TOMBSTONE.fullmatch(line)
         if not match:
             violations.append(f"malformed tombstone row at {HISTORY_PATH}:{line_number}")
@@ -460,7 +518,7 @@ def _tombstone_evidence(
             identities = ", ".join(declaration.identity for declaration in selected)
             violations.append(f"tombstone {identity!r} is ambiguous: {identities}")
         else:
-            discharged.add(next(iter(selected)))
+            discharged.append(next(iter(selected)))
     return discharged, violations
 
 
@@ -482,11 +540,10 @@ def _evaluate(diff: DiffInput) -> list[str]:
         if change.new_path is not None:
             language = _language(change.new_path)
             if language is not None and change.new_path not in new_files:
-                new_files[change.new_path] = _parse_file(
-                    change.new_path, language, _blob(diff.new_ref, change.new_path)
-                )
+                new_text = _worktree_blob(change.new_path) if diff.worktree else _blob(diff.new_ref, change.new_path)
+                new_files[change.new_path] = _parse_file(change.new_path, language, new_text)
             if change.new_path == HISTORY_PATH:
-                new_history = _blob(diff.new_ref, change.new_path)
+                new_history = _worktree_blob(change.new_path) if diff.worktree else _blob(diff.new_ref, change.new_path)
         if (
             change.status == "R"
             and change.old_path is not None
@@ -499,10 +556,15 @@ def _evaluate(diff: DiffInput) -> list[str]:
     marker_discharged, violations = _marker_evidence(retired, added, old_files, new_files)
     tombstone_discharged, tombstone_violations = _tombstone_evidence(retired, old_history, new_history)
     violations.extend(tombstone_violations)
-    discharged = marker_discharged | tombstone_discharged
+    evidence_counts = Counter((*marker_discharged, *tombstone_discharged))
     for declaration in retired:
-        if declaration not in discharged:
+        evidence_count = evidence_counts[declaration]
+        if evidence_count == 0:
             violations.append(f"retired named test {declaration.identity} needs a successor marker or new tombstone")
+        elif evidence_count > 1:
+            violations.append(
+                f"retired named test {declaration.identity} has {evidence_count} discharges; exactly one is required"
+            )
     return violations
 
 
@@ -511,9 +573,15 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--staged", action="store_true", help="compare HEAD with the staged index")
     mode.add_argument("--diff", metavar="BASE", help="compare BASE...HEAD")
+    mode.add_argument(
+        "--worktree",
+        metavar="BASE",
+        dest="worktree_base",
+        help="compare the BASE merge-base with the effective worktree",
+    )
     args = parser.parse_args(argv)
     try:
-        violations = _evaluate(_diff_input(args.staged, args.diff))
+        violations = _evaluate(_diff_input(args.staged, args.diff, args.worktree_base))
     except CheckError as exc:
         print(f"Named-test retirement check error: {exc}", file=sys.stderr)
         return 2

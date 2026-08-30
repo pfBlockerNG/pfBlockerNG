@@ -131,6 +131,32 @@ DECLARATIONS = (
     ),
 )
 
+PHPUNIT_TEST_ATTRIBUTES = (
+    (
+        "imported",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "aliased-final",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test as PHPUnitTest;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[PHPUnitTest]\n"
+        "    final public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "fully-qualified",
+        "<?php\nfinal class AttributeNamedTest {\n"
+        "    #[\\PHPUnit\\Framework\\Attributes\\Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+)
+
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
@@ -234,6 +260,60 @@ def test_every_named_declaration_form_retires_exact_identifier(
     assert f"{path}::{name}" in output, output
 
 
+@pytest.mark.parametrize(("_form", "before"), PHPUNIT_TEST_ATTRIBUTES, ids=[row[0] for row in PHPUNIT_TEST_ATTRIBUTES])
+def test_phpunit_test_attribute_method_without_test_prefix_retires(tmp_path: Path, _form: str, before: str) -> None:
+    path = "tests/php/AttributeNamedTest.php"
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, "<?php\nfinal class AttributeNamedTest {}\n")
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert f"{path}::preservesNamedInvariant" in output, output
+
+
+def test_phpunit_test_attribute_rename_requires_a_new_successor_marker(tmp_path: Path) -> None:
+    path = "tests/php/AttributeRenameTest.php"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nfinal class AttributeRenameTest {\n"
+        "    #[Test]\n    public function preservesOldInvariant(): void {}\n}\n"
+    )
+    renamed = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nfinal class AttributeRenameTest {\n"
+        "    #[Test]\n    public function preservesNewInvariant(): void {}\n}\n"
+    )
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, renamed)
+    _commit(repo, "rename attribute test")
+    output = _assert_rc(_diff(repo, base), 1)
+    assert f"{path}::preservesOldInvariant" in output, output
+
+    _write(
+        repo,
+        path,
+        renamed.replace(
+            "    #[Test]",
+            f"    # successor: {path}::preservesOldInvariant\n    #[Test]",
+        ),
+    )
+    _commit(repo, "name successor")
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_phpunit_test_attribute_retirement_accepts_new_tombstone(tmp_path: Path) -> None:
+    path = "tests/php/AttributeTombstoneTest.php"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nfinal class AttributeTombstoneTest {\n"
+        "    #[Test]\n    public function preservesTombstonedInvariant(): void {}\n}\n"
+    )
+    identity = f"{path}::preservesTombstonedInvariant"
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, "<?php\nfinal class AttributeTombstoneTest {}\n")
+    _write(repo, HISTORY, "# Retired tests\n\n" + _tombstone(identity))
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 0)
+
+
 @pytest.mark.parametrize("case", LANGUAGES, ids=[case["id"] for case in LANGUAGES])
 def test_deleting_named_test_blocks_for_each_language(tmp_path: Path, case: dict[str, str]) -> None:
     repo, base = _repo(tmp_path, {case["path"]: case["before"]})
@@ -325,6 +405,24 @@ def test_low_similarity_move_seen_as_delete_add_still_reports_retirement(tmp_pat
     assert status == f"A\0{new}\0D\0{old}\0".encode() or status == f"D\0{old}\0A\0{new}\0".encode(), status
     output = _assert_rc(_diff(repo, base), 1)
     assert f"{old}::test_low_similarity_old" in output, output
+
+
+def test_unrelated_delete_add_with_same_name_is_not_a_pure_rename(tmp_path: Path) -> None:
+    old = "tests/test_same_name_old.py"
+    new = "tests/test_same_name_new.py"
+    before = "def test_shared():\n    assert 'old' == 'old'\n" + "\n".join(f"# old-{n}" for n in range(80)) + "\n"
+    after = (
+        "def test_shared():\n    assert 'new' == 'new'\n" + "\n".join(f"# unrelated-new-{n}" for n in range(80)) + "\n"
+    )
+    repo, base = _repo(tmp_path, {old: before})
+    _remove(repo, old)
+    _write(repo, new, after)
+    _commit(repo)
+
+    status = _git(repo, "diff", "--name-status", "-z", "--find-renames", f"{base}...HEAD").stdout
+    assert status == f"A\0{new}\0D\0{old}\0".encode() or status == f"D\0{old}\0A\0{new}\0".encode(), status
+    output = _assert_rc(_diff(repo, base), 1)
+    assert f"{old}::test_shared" in output, output
 
 
 def test_successor_may_live_in_another_file(tmp_path: Path) -> None:
@@ -419,6 +517,52 @@ def test_duplicate_successor_marker_value_is_rejected(tmp_path: Path) -> None:
     _commit(repo)
 
     _assert_rc(_diff(repo, base), 1)
+
+
+def test_canonical_and_bare_successor_aliases_cannot_double_discharge(tmp_path: Path) -> None:
+    path = "tests/test_marker_aliases.py"
+    identity = f"{path}::test_alias_old"
+    repo, base = _repo(tmp_path, {path: "def test_alias_old():\n    assert True\n"})
+    _write(
+        repo,
+        path,
+        f"# successor: {identity}\ndef test_alias_new_one():\n    assert True\n\n"
+        "# successor: test_alias_old\ndef test_alias_new_two():\n    assert True\n",
+    )
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert "exactly one" in output, output
+
+
+def test_successor_and_tombstone_cannot_double_discharge(tmp_path: Path) -> None:
+    path = "tests/test_cross_kind_evidence.py"
+    identity = f"{path}::test_cross_kind_old"
+    repo, base = _repo(tmp_path, {path: "def test_cross_kind_old():\n    assert True\n"})
+    _write(repo, path, f"# successor: {identity}\ndef test_cross_kind_new():\n    assert True\n")
+    _write(repo, HISTORY, "# Retired tests\n\n" + _tombstone(identity))
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert "exactly one" in output, output
+
+
+def test_canonical_and_bare_tombstones_cannot_double_discharge(tmp_path: Path) -> None:
+    path = "tests/test_tombstone_aliases.py"
+    identity = f"{path}::test_tombstone_alias_old"
+    repo, base = _repo(tmp_path, {path: "def test_tombstone_alias_old():\n    assert True\n"})
+    _write(repo, path, "\n")
+    _write(
+        repo,
+        HISTORY,
+        "# Retired tests\n\n"
+        + _tombstone(identity, "canonical evidence")
+        + _tombstone("test_tombstone_alias_old", "bare evidence"),
+    )
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert "exactly one" in output, output
 
 
 @pytest.mark.parametrize(
@@ -545,6 +689,20 @@ def test_marker_must_be_immediately_associated_with_new_named_test(tmp_path: Pat
     _assert_rc(_diff(repo, base), 1)
 
 
+def test_preexisting_marker_cannot_authorize_a_later_retirement(tmp_path: Path) -> None:
+    path = "tests/test_historical_marker.py"
+    before = (
+        "# successor: test_historical_marker_old\nVALUE = 1\n\ndef test_historical_marker_old():\n    assert True\n"
+    )
+    after = "# successor: test_historical_marker_old\ndef test_historical_marker_new():\n    assert True\n"
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert f"{path}::test_historical_marker_old" in output, output
+
+
 def test_marker_attached_to_non_test_declaration_is_rejected(tmp_path: Path) -> None:
     path = "tests/test_marker_non_test.py"
     repo, base = _repo(tmp_path, {path: "def test_non_test_old():\n    assert True\n"})
@@ -637,6 +795,35 @@ def test_preexisting_tombstone_cannot_discharge_later_retirement(tmp_path: Path)
 
     output = _assert_rc(_diff(repo, base), 1)
     assert identity in output, output
+
+
+def test_retired_test_history_is_append_only_when_rewriting_a_row(tmp_path: Path) -> None:
+    path = "tests/test_history_rewrite.py"
+    identity = f"{path}::test_history_rewrite_old"
+    historical = _tombstone("tests/test_historical.py::test_historical", "historical reason")
+    repo, base = _repo(
+        tmp_path,
+        {
+            path: "def test_history_rewrite_old():\n    assert True\n",
+            HISTORY: "# Retired tests\n\n" + historical,
+        },
+    )
+    _write(repo, path, "\n")
+    _write(repo, HISTORY, "# Retired tests\n\n" + _tombstone(identity, "replacement row"))
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert "append-only" in output, output
+
+
+def test_retired_test_history_is_append_only_when_deleted(tmp_path: Path) -> None:
+    historical = _tombstone("tests/test_historical.py::test_historical", "historical reason")
+    repo, base = _repo(tmp_path, {HISTORY: "# Retired tests\n\n" + historical})
+    _remove(repo, HISTORY)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert "append-only" in output, output
 
 
 def test_tombstone_without_matching_retirement_is_rejected(tmp_path: Path) -> None:
@@ -820,7 +1007,8 @@ def test_invalid_utf8_blob_is_deterministic_tool_error(tmp_path: Path) -> None:
     _write(repo, path, b"def test_invalid_blob():\n    assert False\n# \xff\n")
     _commit(repo)
 
-    _assert_rc(_diff(repo, base), 2)
+    output = _assert_rc(_diff(repo, base), 2)
+    assert path in output and "contains invalid UTF-8" in output, output
 
 
 def test_invalid_utf8_path_is_deterministic_tool_error(tmp_path: Path) -> None:
@@ -857,7 +1045,8 @@ def test_invalid_utf8_path_is_deterministic_tool_error(tmp_path: Path) -> None:
     )
     _git(repo, "commit", "-qm", "delete invalid path")
 
-    _assert_rc(_diff(repo, base), 2)
+    output = _assert_rc(_diff(repo, base), 2)
+    assert "Git reported a path that is not valid UTF-8" in output, output
 
 
 def test_malformed_shellspec_quote_errors_only_when_changed(tmp_path: Path) -> None:
@@ -879,11 +1068,21 @@ def test_malformed_shellspec_quote_errors_only_when_changed(tmp_path: Path) -> N
     _assert_rc(_diff(repo, base), 2)
 
 
-@pytest.mark.parametrize("args", ((), ("--diff",), ("--diff", "refs/heads/does-not-exist")))
-def test_usage_and_git_failures_exit_two(tmp_path: Path, args: tuple[str, ...]) -> None:
+@pytest.mark.parametrize(
+    ("args", "diagnostic"),
+    (
+        ((), "usage: check_named_test_retirement.py"),
+        (("--diff",), "argument --diff: expected one argument"),
+        (("--diff", "refs/heads/does-not-exist"), "refs/heads/does-not-exist"),
+    ),
+)
+def test_usage_and_git_failures_exit_two(tmp_path: Path, args: tuple[str, ...], diagnostic: str) -> None:
     repo, _base = _repo(tmp_path, {"tests/test_usage.py": "def test_usage():\n    assert True\n"})
 
-    _assert_rc(_checker(repo, *args), 2)
+    output = _assert_rc(_checker(repo, *args), 2)
+    assert diagnostic in output, output
+    if len(args) == 2:
+        assert "Named-test retirement check error" in output, output
 
 
 def test_staged_retirement_blocks_and_staged_successor_passes(tmp_path: Path) -> None:
@@ -897,6 +1096,89 @@ def test_staged_retirement_blocks_and_staged_successor_passes(tmp_path: Path) ->
     _write(repo, path, "# successor: test_staged_old\ndef test_staged_new():\n    assert True\n")
     _git(repo, "add", "-A")
     _assert_rc(_staged(repo), 0)
+
+
+@pytest.mark.parametrize("staged", (False, True), ids=("unstaged", "staged"))
+def test_worktree_mode_blocks_uncommitted_retirement(tmp_path: Path, staged: bool) -> None:
+    path = "tests/test_worktree_retirement.py"
+    repo, base = _repo(tmp_path, {path: "def test_worktree_old():\n    assert True\n"})
+    _remove(repo, path)
+    if staged:
+        _git(repo, "add", "-A")
+
+    output = _assert_rc(_checker(repo, "--worktree", base), 1)
+    assert f"{path}::test_worktree_old" in output, output
+
+
+def test_worktree_mode_accepts_staged_deletion_with_untracked_successor(tmp_path: Path) -> None:
+    old = "tests/test_worktree_old.py"
+    new = "tests/test_worktree_new.py"
+    identity = f"{old}::test_worktree_old"
+    repo, base = _repo(tmp_path, {old: "def test_worktree_old():\n    assert True\n"})
+    _remove(repo, old)
+    _git(repo, "add", "-A")
+    _write(repo, new, f"# successor: {identity}\ndef test_worktree_new():\n    assert True\n")
+
+    _assert_rc(_checker(repo, "--worktree", base), 0)
+
+
+def test_canonical_runner_executes_worktree_mode_for_uncommitted_changes(tmp_path: Path) -> None:
+    path = "tests/test_runner_worktree.py"
+    identity = f"{path}::test_runner_worktree_old"
+    repo, base = _repo(tmp_path, {path: "def test_runner_worktree_old():\n    assert True\n"})
+    stubdir = tmp_path / "runner-bin"
+    stubdir.mkdir()
+    python_stub = stubdir / "python3"
+    python_stub.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "scripts/check_coverage_pairing.py) cat >/dev/null; exit 0 ;;\n"
+        f'scripts/check_named_test_retirement.py) shift; exec "{sys.executable}" "{CHECKER}" "$@" ;;\n'
+        "scripts/check_skip_allowlist.py)\n"
+        '  case "$*" in *skip-allowlist-canary.xml*) exit 1 ;; esac\n'
+        "  for report do :; done\n"
+        '  [ -f "$report" ] || exit 2\n'
+        "  exit 0 ;;\n"
+        "esac\n"
+        "exit 98\n",
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+    uv_stub = stubdir / "uv"
+    uv_stub.write_text(
+        "#!/bin/sh\n"
+        "report=\n"
+        'for arg do case "$arg" in --junitxml=*) report=${arg#*=} ;; esac; done\n'
+        '[ -z "$report" ] || printf "<testsuites/>\\n" > "$report"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    uv_stub.chmod(0o755)
+    env = {
+        **scrubbed_git_env(drop_git_vars=True),
+        "PATH": f"{stubdir}:{os.environ['PATH']}",
+        "TMPDIR": str(tmp_path),
+    }
+
+    def run() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["sh", str(ROOT / "scripts" / "agent" / "run-gates.sh"), "--worktree", str(repo), "--diff", base],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+
+    _remove(repo, path)
+    output = _assert_rc(run(), 1)
+    assert identity in output, output
+
+    _git(repo, "add", "-A")
+    output = _assert_rc(run(), 1)
+    assert identity in output, output
+
+    _write(repo, path, f"# successor: {identity}\ndef test_runner_worktree_new():\n    assert True\n")
+    _assert_rc(run(), 0)
 
 
 def _job_block(workflow: str, job: str) -> str:
@@ -933,18 +1215,58 @@ def _run_block(job: str) -> str:
     return "\n".join(body)
 
 
-def test_precommit_invokes_staged_checker_once_and_failure_is_blocking() -> None:
-    hook = (ROOT / ".githooks" / "pre-commit").read_text(encoding="utf-8")
-    command = '"$py_bin" scripts/check_named_test_retirement.py --staged'
+def test_precommit_invokes_staged_checker_once_and_failure_is_blocking(tmp_path: Path) -> None:
+    path = "tests/test_precommit_old.py"
+    exemptions = "\n".join(
+        (
+            "scripts/check_comment_narration.py",
+            "scripts/check_agent_roles.py",
+            "scripts/check_context_budget.py",
+            "scripts/check_appliance_python.py",
+            "scripts/check_version_literals.py",
+            "gate:ruff",
+        )
+    )
+    repo, _base = _repo(
+        tmp_path,
+        {
+            path: "def test_precommit_old():\n    assert True\n",
+            ".githooks/pre-commit": (ROOT / ".githooks" / "pre-commit").read_bytes(),
+            "scripts/check_named_test_retirement.py": CHECKER.read_bytes(),
+            ".githooks-exempt": exemptions + "\n",
+        },
+    )
+    _remove(repo, path)
+    _git(repo, "add", "-A")
+    failed = subprocess.run(
+        ["sh", ".githooks/pre-commit"],
+        cwd=repo,
+        env=scrubbed_git_env(drop_git_vars=True),
+        capture_output=True,
+        check=False,
+    )
+    failed_output = _assert_rc(failed, 1)
+    assert f"{path}::test_precommit_old" in failed_output, failed_output
+    assert "[pre-commit] FAILED: named-test-retirement" in failed_output, failed_output
 
-    assert hook.count("scripts/check_named_test_retirement.py") == 2, "expected exemption plus one invocation"
-    assert "if exempted scripts/check_named_test_retirement.py; then" in hook
-    assert command in hook
-    line = next(line.strip() for line in hook.splitlines() if command in line)
-    assert "|| failed 'named-test-retirement'" in line and "|| true" not in line, line
+    _write(
+        repo,
+        path,
+        f"# successor: {path}::test_precommit_old\ndef test_precommit_new():\n    assert True\n",
+    )
+    _git(repo, "add", "-A")
+    passed = subprocess.run(
+        ["sh", ".githooks/pre-commit"],
+        cwd=repo,
+        env=scrubbed_git_env(drop_git_vars=True),
+        capture_output=True,
+        check=False,
+    )
+    passed_output = _assert_rc(passed, 0)
+    assert "[pre-commit] FAILED" not in passed_output, passed_output
 
 
-def test_ci_wiring_has_same_block_red_canary_live_pipeline_and_result_fold() -> None:
+def test_ci_wiring_has_same_block_red_canary_live_pipeline_and_result_fold(tmp_path: Path) -> None:
     workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
     job = _job_block(workflow, "named-test-retirement")
     run = _run_block(job)
@@ -964,6 +1286,47 @@ def test_ci_wiring_has_same_block_red_canary_live_pipeline_and_result_fold() -> 
     assert "named-test-retirement" in needs
     assert "${{ needs.named-test-retirement.result }}" in aggregate
     assert "success|skipped" in aggregate
+
+    path = "tests/test_ci_live.py"
+    repo, base = _repo(
+        tmp_path,
+        {
+            path: "def test_ci_live_old():\n    assert True\n",
+            "scripts/check_named_test_retirement.py": CHECKER.read_bytes(),
+        },
+    )
+    _git(repo, "update-ref", "refs/remotes/origin/base", base)
+    _write(repo, path, "\n")
+    _commit(repo, "planted live offence")
+    summary = tmp_path / "live-summary"
+    env = {
+        **scrubbed_git_env(drop_git_vars=True),
+        "BASE": "base",
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }
+    failed = subprocess.run(
+        ["bash", "-o", "pipefail", "-c", checker_commands[1]],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    failed_output = _assert_rc(failed, 1)
+    assert f"{path}::test_ci_live_old" in failed_output, failed_output
+    assert f"{path}::test_ci_live_old" in summary.read_text(encoding="utf-8")
+
+    _write(repo, path, "# successor: test_ci_live_old\ndef test_ci_live_new():\n    assert True\n")
+    _commit(repo, "valid live successor")
+    _assert_rc(
+        subprocess.run(
+            ["bash", "-o", "pipefail", "-c", checker_commands[1]],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            check=False,
+        ),
+        0,
+    )
 
 
 def test_ci_red_canary_pipeline_executes_real_checker_and_discriminates(tmp_path: Path) -> None:
@@ -1000,7 +1363,7 @@ def test_canonical_runner_plan_includes_checker_exactly_once_with_exported_base(
     )
 
     assert proc.returncode == 0, proc.stderr
-    command = 'python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    command = 'python3 scripts/check_named_test_retirement.py --worktree "$PFB_GATE_BASE"'
     assert proc.stdout.splitlines().count(command) == 1, proc.stdout
     runner = (ROOT / "scripts" / "agent" / "run-gates.sh").read_text(encoding="utf-8")
     assert "PFB_GATE_BASE=$base" in runner and "export PFB_GATE_BASE" in runner
