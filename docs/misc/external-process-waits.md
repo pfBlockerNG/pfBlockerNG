@@ -42,11 +42,13 @@ can provide both: default reaper mode captures the daemon too; `--foreground` ki
 the launcher and orphans helpers.
 
 `pfb_stop_start_unbound()` therefore starts a small PHP supervisor in its own process
-group behind a release barrier. The parent verifies `PGID == launcher PID` before the
-configured command runs. A real daemon's `setsid()` moves it out of that group; ordinary
-helpers remain. Completion or the monotonic deadline sends TERM, then SIGKILL after the
-grace, to the negative PGID and explicitly reaps the supervisor. Stdio still targets
-`/dev/null` plus a regular output file, never a capture pipe.
+group behind a five-second setup barrier. The parent verifies
+`PGID == launcher PID` before release; only that event starts the configured command's
+30-second deadline, so scheduler delay while creating the supervisor cannot become a false
+command expiry. A real daemon's `setsid()` moves it out of that group; ordinary helpers
+remain. Completion or deadline sends TERM, then SIGKILL after the grace, to the negative
+PGID and explicitly reaps the supervisor. Stdio targets `/dev/null` plus a regular output
+file, never a capture pipe.
 
 ## Don't let a daemon hold the capture pipe
 

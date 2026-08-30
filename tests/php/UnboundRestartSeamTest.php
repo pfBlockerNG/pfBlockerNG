@@ -105,7 +105,7 @@ final class UnboundRestartSeamTest extends TestCase
 	 *
 	 * @return array{status: int, output: list<string>, payload: array<string, mixed>|null}
 	 */
-	private function runIsolatedStart(string $startCommand): array
+	private function runIsolatedStart(string $startCommand, int $budget = 5): array
 	{
 		$id = bin2hex(random_bytes(4));
 		$runner = "{$this->dir}/runner_{$id}.php";
@@ -116,7 +116,7 @@ final class UnboundRestartSeamTest extends TestCase
 		file_put_contents($runner, "<?php\n"
 			. "define('PFB_UNBOUND_START_CMD', " . var_export($startCommand, TRUE) . ");\n"
 			. "define('PFB_UNBOUND_STOP_WAIT', 1);\n"
-			. "define('PFB_UNBOUND_START_WAIT', 1);\n"
+			. "define('PFB_UNBOUND_START_WAIT', " . var_export($budget, TRUE) . ");\n"
 			. "define('PFB_HOOK_KILL_GRACE', 1);\n"
 			. 'require ' . var_export($bootstrap, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'timeout\'] = ' . var_export($timeout, TRUE) . ";\n"
@@ -132,8 +132,9 @@ final class UnboundRestartSeamTest extends TestCase
 
 		$output = [];
 		$status = 0;
-		$cmd = escapeshellarg($timeout) . ' -s TERM -k 2 ' . self::SALVAGE_SECONDS
-			. ' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1';
+		$cmd = 'TMPDIR=' . escapeshellarg($this->dir) . ' ' .
+			escapeshellarg($timeout) . ' -s TERM -k 2 ' . self::SALVAGE_SECONDS .
+			' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1';
 		exec($cmd, $output, $status);
 
 		$payload = NULL;
@@ -271,12 +272,17 @@ final class UnboundRestartSeamTest extends TestCase
 			. 'trap \'\' TERM' . "\n"
 			. 'exec sleep 30');
 
-		$run = $this->runIsolatedStart(escapeshellarg($script) . ' ' . escapeshellarg($pidfile));
+		$run = $this->runIsolatedStart(
+			escapeshellarg($script) . ' ' . escapeshellarg($pidfile),
+			2
+		);
 		$pid = (int) trim((string) @file_get_contents($pidfile));
 		$alive = $this->pidIsAlive($pid);
 		if ($alive) {
 			$this->terminatePid($pid);
 		}
+		$this->assertGreaterThan(0, $pid,
+			'the timeout row must observe the command-start event before evaluating cleanup');
 
 		$this->assertSame(0, $run['status'],
 			'RED issue #2882: the production start wait exceeded the 8s salvage cap; '
@@ -285,9 +291,9 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertIsArray($run['payload'], 'the bounded start must return its JSON result');
 		$this->assertSame(124, $run['payload']['final']['retval'],
 			'an expired start must surface timeout(1) status 124 so retry/recovery still runs');
-		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 1s and was killed',
+		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 2s and was killed',
 			$run['payload']['log'], 'expiry must be explicit in the main log');
-		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 1s and was killed',
+		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 2s and was killed',
 			$run['payload']['errlog'], 'expiry must be explicit in the error log');
 		$this->assertFalse($alive,
 			'the SIGKILL grace must leave no TERM-ignoring transient start process behind');
@@ -308,8 +314,10 @@ final class UnboundRestartSeamTest extends TestCase
 			. 'printf \'%s\\n\' "$helper" > "$2"' . "\n"
 			. 'wait "$helper"');
 
-		$run = $this->runIsolatedStart(escapeshellarg($script) . ' '
-			. escapeshellarg($launcherFile) . ' ' . escapeshellarg($helperFile));
+		$run = $this->runIsolatedStart(
+			escapeshellarg($script) . ' ' . escapeshellarg($launcherFile) . ' ' . escapeshellarg($helperFile),
+			2
+		);
 		$launcher = (int) trim((string) @file_get_contents($launcherFile));
 		$helper = (int) trim((string) @file_get_contents($helperFile));
 		$launcherAlive = $this->pidIsAlive($launcher);
@@ -320,6 +328,10 @@ final class UnboundRestartSeamTest extends TestCase
 		if ($helperAlive) {
 			$this->terminatePid($helper);
 		}
+		$this->assertGreaterThan(0, $launcher,
+			'the process-tree row must observe its direct launcher before evaluating cleanup');
+		$this->assertGreaterThan(0, $helper,
+			'the process-tree row must observe its helper before evaluating cleanup');
 
 		$this->assertSame(0, $run['status'],
 			'the process-tree expiry runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
@@ -383,12 +395,22 @@ final class UnboundRestartSeamTest extends TestCase
 			'the appliance must still wait up to 30 seconds for the outgoing daemon');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_WAIT', 30);"),
 			'the appliance start child must have an explicit finite 30-second budget');
+		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_SETUP_WAIT', 5);"),
+			'the process-group setup barrier must have its own finite five-second budget');
 
 		$start = strpos($src, 'function pfb_stop_start_unbound(');
 		$this->assertNotFalse($start, 'pfb_stop_start_unbound() must still exist');
 		$end = strpos($src, "\n}\n", $start);
 		$this->assertNotFalse($end, 'could not find the end of pfb_stop_start_unbound()');
 		$body = substr($src, $start, $end - $start);
+		$release = strpos($body, '@touch($release)');
+		$acknowledged = strpos($body, 'file_exists($command_started)');
+		$deadline = strpos($body, '$deadline = hrtime(TRUE) + (PFB_UNBOUND_START_WAIT');
+		$this->assertNotFalse($release, 'the parent must explicitly release the verified process group');
+		$this->assertNotFalse($acknowledged, 'the child must acknowledge command start after release');
+		$this->assertNotFalse($deadline, 'the configured command deadline must be explicit');
+		$this->assertGreaterThan($acknowledged, $deadline,
+			'the start-command deadline must begin after the child start event, not during supervisor setup');
 
 		$this->assertStringContainsString('PFB_UNBOUND_START_CMD', $body,
 			'the daemon start must run through the constant so a harness can neuter it');
