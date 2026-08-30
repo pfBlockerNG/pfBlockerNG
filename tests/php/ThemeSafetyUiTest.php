@@ -24,6 +24,15 @@ use PHPUnit\Framework\TestCase;
  */
 final class ThemeSafetyUiTest extends TestCase
 {
+	/**
+	 * Every character that opens a string literal in the languages scanTree() reads.
+	 *
+	 * The backtick is one of them: it delimits a JS template literal, and a background
+	 * inside one had no string to be scoped to (issue #2930). It is also how a PHP comment
+	 * writes a markdown code span, which is why the file-wide scan reads comments.
+	 */
+	private const DELIMITERS = "'\"`";
+
 	/** Client block page: no pfSense theme applies. */
 	private const ALLOWLIST = [
 		'src/usr/local/www/pfblockerng/www/dnsbl_default.php',
@@ -128,6 +137,38 @@ final class ThemeSafetyUiTest extends TestCase
 			// so the neighbouring statement must not pair it.
 			'literal beside a comment'  => ["/* don't */ \$bg = 'background-color: #123456;'; color: red;", FALSE],
 			'that literal, paired'      => ["/* don't */ \$bg = 'background-color: #123456; color: red;';", TRUE],
+			// Issue #2930: two body forms carry no delimiter the quote scans track, so a
+			// background inside one resolved through the brace path or the no-scope window and
+			// a colour belonging to other code paired it. Each form is pinned unpaired and
+			// paired, and every paired row puts its colour past the no-scope window so the row
+			// cannot pass on that fallback instead of on the literal.
+			'heredoc, unpaired'         => ["if (\$x) {\n\t\$s = <<<EOT\nbackground-color: #123456;\nEOT;\n\tcolor: red;\n}", FALSE],
+			'heredoc, paired'           => ["\$s = <<<EOT\ncolor: black;" . str_repeat(' ', 200) . "\nbackground-color: #123456;\nEOT;", TRUE],
+			'nowdoc, unpaired'          => ["if (\$x) {\n\t\$s = <<<'EOT'\nbackground-color: #123456;\nEOT;\n\tcolor: red;\n}", FALSE],
+			'nowdoc, paired'            => ["\$s = <<<'EOT'\ncolor: black;" . str_repeat(' ', 200) . "\nbackground-color: #123456;\nEOT;", TRUE],
+			// The marker is a line of its own, and it is the whole identifier. One that appears
+			// mid-body does not end the body, and neither does a longer word starting with it;
+			// ending a body early drops the rest of it back into the code around the heredoc.
+			'heredoc marker mid-body'   => ["\$s = <<<EOT\nthis EOT is not the end\nbackground-color: #123456;\nEOT;\ncolor: red;", FALSE],
+			'heredoc marker is a prefix'=> ["\$s = <<<EOT\nEOTHER\nbackground-color: #123456;\nEOT;\ncolor: red;", FALSE],
+			// A `<<<` with no marker below it is not a heredoc -- it ends a comment, or sits in
+			// a string, or the file is malformed. It must answer nothing rather than report a
+			// body running to end of file, which would swallow every declaration under it.
+			'heredoc opener in comment' => ["// the marker is written <<<EOT\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;", FALSE],
+			'heredoc opener in string'  => ["\$s = \"<<<END\nmore text\";\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;", FALSE],
+			// An empty heredoc's single newline has to serve as both the opener's and the
+			// marker's. Read as unterminated, it takes the NEXT heredoc's marker as its own and
+			// the two bodies merge, which pairs a background with a colour outside its body.
+			'empty heredoc body'        => ["\$e = <<<EOT\nEOT;\ncolor: red;\n\$s = <<<EOT\nbackground-color: #123456;\nEOT;", FALSE],
+			// A body is one literal, so it is the scope -- the quote scans must not answer
+			// first and hand back a quoted run inside it as if it were its own literal.
+			'heredoc outranks quotes'   => ["\$s = <<<EOT\n'background-color: #123456;' color: red;\nEOT;", TRUE],
+			'template literal, unpaired'=> ["function f() {\n\tconst a = `background-color: #123456;`;\n\tconst b = \"color: red;\";\n}", FALSE],
+			'template literal, paired'  => ["const a = `color: black;" . str_repeat(' ', 200) . "\nbackground-color: #123456;`;", TRUE],
+			// A backtick is a delimiter in JS and a markdown code span in a PHP comment, and
+			// this tree has 208 of the second kind in pfblockerng.inc alone. An unbalanced span
+			// must not open a literal that swallows the lines below it.
+			'backtick span in prose'    => ["// see `background-color\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n// and `color", FALSE],
 			'multi-line attribute pairs'=> ['$s = "<span style=\"color: black;' . str_repeat(' ', 200) . "\n" . ' background-color: #123456;\">x</span>";', TRUE],
 			// ...and the reason the scan was scoped to one line in the first place, which any
 			// fix has to keep: an apostrophe in prose is not a string opener, so it must not
@@ -401,6 +442,10 @@ final class ThemeSafetyUiTest extends TestCase
 	 */
 	private static function declarationContext(string $source, int $offset): string
 	{
+		$heredoc = self::enclosingHeredoc($source, $offset);
+		if ($heredoc !== NULL) {
+			return $heredoc;
+		}
 		$inline = self::enclosingString($source, $offset);
 		if ($inline !== NULL) {
 			return $inline;
@@ -425,7 +470,7 @@ final class ThemeSafetyUiTest extends TestCase
 				$i++;
 				continue;
 			}
-			if ($source[$i] !== "'" && $source[$i] !== '"') {
+			if (!str_contains(self::DELIMITERS, $source[$i])) {
 				continue;
 			}
 			if ($quote === NULL) {
@@ -492,7 +537,7 @@ final class ThemeSafetyUiTest extends TestCase
 				$i++;
 				continue;
 			}
-			if ($source[$i] !== "'" && $source[$i] !== '"') {
+			if (!str_contains(self::DELIMITERS, $source[$i])) {
 				continue;
 			}
 			if ($quote === $source[$i]) {
@@ -562,6 +607,46 @@ final class ThemeSafetyUiTest extends TestCase
 			return strpos("=(,[{:;.+&|?<!\r\n", $source[$i]) !== FALSE;
 		}
 		return TRUE;
+	}
+
+	/**
+	 * The heredoc or nowdoc body containing $offset, or NULL when it is in neither.
+	 *
+	 * A heredoc body carries no delimiter character at all, so every quote scan reports
+	 * that a background inside one is not in a string and the brace path answers with the
+	 * code around the heredoc instead (issue #2930). A body IS a string literal, so it is
+	 * resolved before the quote scans and given the same treatment a quoted literal gets:
+	 * an HTML fragment in a heredoc still scopes to the style attribute that owns it.
+	 *
+	 * Opener and closing marker are matched as ONE pattern, which is what makes the
+	 * resolver fail closed. A `<<<EOT` with no closing marker below it -- ending a comment,
+	 * sitting inside a string, or simply malformed -- matches nothing and answers NULL,
+	 * rather than reporting a body that runs to end of file and swallowing every
+	 * declaration under it. Matching the pair also means an opener INSIDE a body is body
+	 * text: the scan resumes after each whole match, so it is never seen.
+	 *
+	 * The marker is a line of its own -- optional indentation, the identifier, then a
+	 * non-identifier character. One that merely appears in the body does not end it. The
+	 * body's leading newline is matched by a lookahead rather than consumed, so an empty
+	 * heredoc, whose one newline has to serve as both the opener's and the marker's, is
+	 * still a body of zero characters and not an unterminated one.
+	 */
+	private static function enclosingHeredoc(string $source, int $offset): ?string
+	{
+		$bodies = preg_match_all(
+			'/<<<[ \t]*(["\']?)([A-Za-z_]\w*)\1[ \t]*(?=(\R))(.*?)\R[ \t]*\2(?![A-Za-z0-9_])/s',
+			$source,
+			$matches,
+			PREG_OFFSET_CAPTURE
+		);
+		for ($i = 0; $i < $bodies; $i++) {
+			$start = $matches[4][$i][1] + strlen($matches[3][$i][0]);
+			$end = $matches[4][$i][1] + strlen($matches[4][$i][0]);
+			if ($offset >= $start && $offset < $end) {
+				return self::styleContext(substr($source, $start, $end - $start), $offset - $start);
+			}
+		}
+		return NULL;
 	}
 
 	/**
