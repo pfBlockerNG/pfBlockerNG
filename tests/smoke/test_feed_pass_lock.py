@@ -47,12 +47,9 @@ _STOP = "/tmp/pfb_smoke_lock_stop"
 _SKIP_LINE = "Feed pass [ cron ] skipped -- another pfBlockerNG feed pass is running"
 _START_LINE = "CRON  PROCESS  START"
 
-# The CLI contract for a deferred pass (5a19a2ef, issue #2945). A deferral is not a
-# failure and not a success: pfb_feed_pass_exit_code() returns PFB_EXIT_LOCKED, which is
-# EX_TEMPFAIL, while a genuine lock ACQUISITION error stays rc=1 and a completed pass
-# stays rc=0. Asserting the exact code rather than "non-zero" is what keeps those three
-# apart here -- a test that accepted any failure would pass on the error path this
-# distinction exists to separate.
+# The CLI contract for a deferred pass (5a19a2ef, issue #2945): pfb_feed_pass_exit_code()
+# returns PFB_EXIT_LOCKED for a deferral, 0 for a completed pass and 1 for a failed one.
+# The exact code is asserted, not "non-zero", so the three stay apart.
 _EX_TEMPFAIL = 75
 _DEFERRAL_MESSAGE = "pfBlockerNG feed pass deferred: feed-pass lock is held"
 
@@ -135,8 +132,8 @@ def test_cron_verb_skips_while_feed_pass_lock_held(deployed_vm: SmokeVM) -> None
         offset = _log_size(vm)
         run = vm.ssh(f"{_PHP} {_PFB_PHP} cron", timeout=120.0)
         assert run.returncode == _EX_TEMPFAIL, (
-            f"a deferred pass must report EX_TEMPFAIL, not {run.returncode}: "
-            f"expected {_EX_TEMPFAIL}, got rc={run.returncode} stderr={run.stderr!r}"
+            f"a deferred pass must report EX_TEMPFAIL: expected {_EX_TEMPFAIL}, "
+            f"got rc={run.returncode} stderr={run.stderr!r}"
         )
         assert _DEFERRAL_MESSAGE in run.stderr, (
             f"the deferral must name its reason on stderr: expected {_DEFERRAL_MESSAGE!r}, got {run.stderr!r}"
