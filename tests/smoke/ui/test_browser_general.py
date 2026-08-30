@@ -52,6 +52,23 @@ def _open(page: Page, webui: WebUI, path: str) -> None:
     assert page.locator("#usernamefld").count() == 0, f"GET {path} showed the login form -- cookie not authenticated"
 
 
+def _expand_section(page: Page, section_id: str) -> None:
+    """Expand a COLLAPSIBLE|SEC_CLOSED Form_Section so rows inside are observable.
+
+    The body id is ``{id}_panel-body`` (pfSense Section.class.php), not ``#{id}-panel``:
+    that selector matches nothing, and a ``count() == 0`` guard turns it into a silent
+    success. Assert the body is attached so a wrong selector fails here, loudly.
+
+    Keep the two copies of this helper byte-identical -- them drifting apart is what left
+    the IP page on the broken selector after the DNSBL page was fixed.
+    """
+    body = page.locator(f"#{section_id}_panel-body")
+    expect(body).to_be_attached(timeout=JS_TIMEOUT_MS)
+    if "in" not in (body.get_attribute("class") or ""):
+        page.locator(f'a[data-toggle="collapse"][href="#{section_id}_panel-body"]').click()
+    expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+
 def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     """Write a full-page screenshot artifact ``<screenshot_dir>/<name>.png``.
 
@@ -407,7 +424,7 @@ def test_nested_pass_timeout_section_and_save_roundtrip(
         expect(field).to_have_attribute("max", "7200", timeout=JS_TIMEOUT_MS)
         expect(field).to_have_attribute("placeholder", "1800", timeout=JS_TIMEOUT_MS)
 
-        header.click()
+        _expand_section(page, "general_advanced")
         expect(field).to_be_visible(timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "general_advanced_nested_pass_timeout")
 
