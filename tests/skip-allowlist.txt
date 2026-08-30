@@ -63,5 +63,12 @@ pytest:tests.test_cross_agent_tooling::test_semgrep_scans_a_php_inc_file_only_wi
 # none render; the `ui-tests` label gates that fan-out, so the gate had not observed it.
 ui:tests.smoke.ui.test_browser_misc::test_feeds_alt_radio_submit_wiring  # no pre-defined feed exposes an Alternate-URL radio on this box
 
+# smoke -- expected default-scope outcomes recorded from the live fan-out (issue #2629).
+smoke:tests.smoke.test_smoke_714_asn_geoip::test_714_c1_asn_table_logs_not_stray_file  # licensed IPinfo token is intentionally absent from CI; dispatch-only live proof (ADR-04 §7)
+smoke:tests.smoke.test_smoke_714_asn_geoip::test_714_c8_geoip_single_ip_preserved  # licensed MaxMind credentials are intentionally absent from CI; dispatch-only live proof (ADR-04 §7)
+smoke:tests.smoke.test_smoke_boot::test_control_name_resolves  # baked control name is optional; matrix cases inject their own control records
+smoke:tests.smoke.test_smoke_helpers::test_reset_returns_to_baseline  # baked control name is optional; the reset executes before this scaffold assertion skips
+smoke:tests.smoke.test_smoke_matrix::test_false_green_guard_vm  # strict xfail is the guard's expected outcome and pytest records it as a JUnit skip
+
 # phpunit -- only on a host that carries the pkg(8) port binary (a FreeBSD/pfSense dev box).
 phpunit:SoftwareFailedCheckStateTest::testPkgLatestReportsAFailedAttemptToItsCaller  # drives the real pkg shellout; its outcome is host repository state where /usr/local/sbin/pkg exists
