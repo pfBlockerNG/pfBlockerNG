@@ -450,11 +450,12 @@ jobs:
         # the test falls back to running this script itself, which needs network the pytest
         # phase may not have. Best-effort: on failure the topology cases SKIP, never fail the
         # whole smoke job. (read-version-matrix.sh self-fetches the ci-metadata orphan ref.)
-        # W3: --print-ci (ONE ROW PER VERSION, never deduped by major), not --print-build
+        # W3: --print-ci (ONE ROW PER VERSION, never deduped), not --print-build
         # (issue #2926 dedupes BUILD to one row per runtime tuple) -- a deduped feed means
-        # _matrix.py's matrix_variants() can never see two editions sharing a major at once,
-        # so its SMOKE_IMAGE_REF disambiguator (own_entry()) can never actually fire, and a
-        # merged row's last-wins fields could misreport which edition is booted. --print-ci
+        # _matrix.py's matrix_variants() can never see the SIBLING VERSIONS of a merged
+        # same-tuple group at once (only the last-written representative row survives the
+        # merge), so a version-keyed lookup on a deduped feed can miss a sibling version.
+        # --print-ci
         # is also the honest source here: every leg this topology ever runs against IS a
         # ci:true leg (a live VM only ever boots for one), so nothing --print-ci excludes was
         # ever reachable by this topology anyway.
