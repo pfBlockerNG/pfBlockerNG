@@ -6,7 +6,7 @@ is the tier that sees a loaded page.
 
 from __future__ import annotations
 
-import re
+from html.parser import HTMLParser
 from typing import TYPE_CHECKING
 
 import pytest
@@ -115,12 +115,49 @@ def test_category_edit_failed_row_pairs_foreground_with_background(
         body = resp.text
         assert not body_has_php_error(body), "category_edit.php rendered a PHP error"
         assert _PAIRED_STYLE in body, "failed row rendered without the pinned foreground"
-        assert re.search(r"background-color: #FFFF00;(?!\s*color:)", body) is None, (
-            "an UNPAIRED yellow background leaked into the rendered page"
+        offenders = _unpaired_yellow_style_attrs(body)
+        assert offenders == [], (
+            f"an element sets an opaque yellow background without a foreground on the SAME style attribute: {offenders}"
         )
     finally:
         _del_rowid(vm, _CFG_DNSBL, rowid)
         vm.ssh(f"rm -f '{_FAIL_DIR}/{_HEADER}.fail'")
+
+
+class _StyleAttrCollector(HTMLParser):
+    """Collect every inline ``style`` attribute with its tag + id."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.styles: list[tuple[str, str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {k: v or "" for k, v in attrs}
+        style = attr_map.get("style", "")
+        if style:
+            self.styles.append((tag, attr_map.get("id", ""), style))
+
+
+def _unpaired_yellow_style_attrs(body: str) -> list[tuple[str, str, str]]:
+    """Every element whose inline style declares an OPAQUE ``#FFFF00`` background
+    WITHOUT a ``color`` declaration on the SAME style attribute.
+
+    Declaration-order-independent and element-scoped: a correctly paired
+    neighbour span (``color: black; background-color: #FFFF00;``) is never
+    flagged, and a bare background next to a paired element still fails.
+    """
+    collector = _StyleAttrCollector()
+    collector.feed(body)
+    offenders: list[tuple[str, str, str]] = []
+    for tag, elem_id, style in collector.styles:
+        decls: dict[str, str] = {}
+        for part in style.split(";"):
+            if ":" in part:
+                key, value = part.split(":", 1)
+                decls[key.strip().lower()] = value.strip().lower()
+        if decls.get("background-color") == "#ffff00" and "color" not in decls:
+            offenders.append((tag, elem_id, style))
+    return offenders
 
 
 def _free_rowid(vm: SmokeVM, cfg_root: str) -> int:
