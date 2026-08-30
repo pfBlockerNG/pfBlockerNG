@@ -716,22 +716,18 @@ function pfb_dnsbl_script_reuse_decision(bool $verbatim_reuse_ok, $script_pre, $
 }
 
 // Main pfBlockerNG function
-function sync_package_pfblockerng($cron=''): bool {
+function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool {
 	global $g, $pfb, $pfbarr;
+	$deferred_by = NULL;
 	pfb_global();
 
-	// issue #2505: mirror the cron verb's issue #2491 semantics for the ADR-43 array
-	// API. A lock deferral is benign ONLY for the unattended tick dispatch
-	// (trigger=cron force=false — what pfblockerng_tick()'s due job execs through
-	// `pfblockerng.php pfb_trigger`): the pass stands down with its durable retry
-	// state intact (pending marker / due ledger) and the next tick retries, so the
-	// pfb_trigger case in pfblockerng.php must exit 0. Every operator-initiated
-	// request — trigger=manual/force, any force=true, the GUI Save '' string path,
-	// the deprecated string verbs — keeps reporting the deferral
-	// (SyncFeedPassDeferralTest pins ''). Only the two LOCK guards below return
-	// this: stage/publish recovery failure is a genuine failure and the GeoIP-swap
-	// guard is out of #2505's scope, so both keep FALSE. Escalation signal is one
-	// syslog notice per deferred pass, no counter — matches the feed-pass guard.
+	// Preserve the internal bool contract: an unattended trigger=cron force=false
+	// deferral is benign and retains TRUE with its durable retry state intact.
+	// Operator-triggered requests retain FALSE. CLI callers independently map the
+	// by-reference lock identity to PFB_EXIT_LOCKED.
+	//
+	// Only the two lock guards below set $deferred_by. Stage/publish recovery and
+	// GeoIP-swap failures keep FALSE with a NULL reason.
 	$pfb_deferral_benign = is_array($cron)
 		&& ($cron['trigger'] ?? '') === 'cron'
 		&& empty($cron['force']);
@@ -740,7 +736,12 @@ function sync_package_pfblockerng($cron=''): bool {
 	// Nested calls made by a scheduled tick reuse its existing dispatcher hold.
 	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
-	if (!pfb_schedule_dispatch_begin()) {
+	$pfb_dispatch_contended = FALSE;
+	if (!pfb_schedule_dispatch_begin(0.1, $pfb_dispatch_contended)) {
+		if (!$pfb_dispatch_contended) {
+			return FALSE;
+		}
+		$deferred_by = 'dispatcher-lock';
 		// issue #2496: pfblockerng.php exits 1 on a FALSE from this function with no
 		// other output, so every guard must name itself or the failure is undiagnosable.
 		pfb_logger("\n sync aborted: dispatcher lock unavailable; pending changes retained.\n", 1);
@@ -755,7 +756,15 @@ function sync_package_pfblockerng($cron=''): bool {
 	// issue #1175: serialize feed passes. Capture ownership BEFORE acquiring -- only the
 	// invocation that transitions the lock releases it (a nested reentrant call no-ops).
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
-	if (!pfb_feed_pass_begin('sync')) {
+	$pfb_feed_pass_contended = FALSE;
+	if (!pfb_feed_pass_begin('sync', $pfb_feed_pass_contended)) {
+		if (!$pfb_feed_pass_contended) {
+			if ($pfb_dispatch_owner) {
+				pfb_schedule_dispatch_release();
+			}
+			return FALSE;
+		}
+		$deferred_by = 'feed-pass-lock';
 		// issue #1277: a lost race must not silently drop the GUI Save/Force --
 		// mirror pfblockerng_tick()'s 'cron' deferral so the next tick retries.
 		pfb_mark_pending_changes();

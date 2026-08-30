@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/SyncPrereqSeedTrait.php';
+require_once __DIR__ . '/support/FailingFlockStream.php';
 
 use PHPUnit\Framework\TestCase;
 
@@ -156,8 +157,10 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertSame($now + 3600, $before['next_due'], 'test setup sanity: seeded future next_due');
 
 		// Act -- a GUI Save/Force loses the feed-pass lock race.
-		$this->assertFalse(sync_package_pfblockerng(), 'lock deferral must be observable by CLI/manual callers');
-
+		$deferredBy = NULL;
+		$result = sync_package_pfblockerng('', $deferredBy);
+		$this->assertFalse($result, 'manual callers must retain their existing FALSE return on lock deferral');
+		$this->assertSame('feed-pass-lock', $deferredBy);
 		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertNotNull($after, 'cron ledger entry must still exist after the lost race');
 		$this->assertSame($now + 3600, $after['next_due'],
@@ -182,8 +185,11 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertIsString($before);
 
 		$GLOBALS['g']['pfblockerng_install'] = TRUE;
+		$deferredBy = NULL;
 		try {
-			$this->assertFalse(sync_package_pfblockerng(), 'dispatcher deferral must be observable by callers');
+			$result = sync_package_pfblockerng('', $deferredBy);
+			$this->assertFalse($result, 'manual callers must retain their existing FALSE return on lock deferral');
+			$this->assertSame('dispatcher-lock', $deferredBy);
 		} finally {
 			unset($GLOBALS['g']['pfblockerng_install']);
 		}
@@ -193,4 +199,52 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertTrue(pfb_pending_changes(),
 			'The durable request marker must preserve an update deferred before feed work starts.');
 	}
+
+	public function testDispatcherOpenErrorIsFailureNotContention(): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
+		$deferredBy = NULL;
+
+		$result = sync_package_pfblockerng('', $deferredBy);
+
+		$this->assertFalse($result, 'dispatcher open error must remain a real failure');
+		$this->assertNull($deferredBy, 'dispatcher open error must map to CLI rc=1, not lock-deferral rc=75');
+	}
+
+	public function testDispatcherFlockErrorIsFailureNotContention(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbdispatchflockerror', PfbFailingFlockStream::class));
+		try {
+			$GLOBALS['pfb']['schedule_state_dir'] = 'pfbdispatchflockerror://state';
+			$deferredBy = NULL;
+
+			$result = sync_package_pfblockerng('', $deferredBy);
+
+			$this->assertFalse($result, 'dispatcher flock error must remain a real failure');
+			$this->assertNull($deferredBy, 'dispatcher flock error must map to CLI rc=1, not lock-deferral rc=75');
+		} finally {
+			stream_wrapper_unregister('pfbdispatchflockerror');
+		}
+	}
+
+	public function testFeedPassFlockErrorIsFailureNotContention(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbfeedflockerror', PfbFailingFlockStream::class));
+		$originalVardbPath = $GLOBALS['g']['vardb_path'];
+		try {
+			$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
+			$GLOBALS['g']['vardb_path'] = 'pfbfeedflockerror://feed';
+			$GLOBALS['pfb']['dbdir'] = 'pfbfeedflockerror://feed';
+			$deferredBy = NULL;
+
+			$result = sync_package_pfblockerng('', $deferredBy);
+
+			$this->assertFalse($result, 'feed-pass flock error must remain a real failure');
+			$this->assertNull($deferredBy, 'feed-pass flock error must map to CLI rc=1, not lock-deferral rc=75');
+		} finally {
+			$GLOBALS['g']['vardb_path'] = $originalVardbPath;
+			stream_wrapper_unregister('pfbfeedflockerror');
+		}
+	}
+
 }
