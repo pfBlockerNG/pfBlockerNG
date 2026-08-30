@@ -133,6 +133,9 @@ final class ThemeSafetyUiTest extends TestCase
 			// A quoted brace desynchronises the depth count; the surviving cuts must still
 			// leave the background's own scope standing.
 			'quoted brace desync'       => ['$s = "foo({background-color: \'#123456\', n1: \'{\', n2: \'{\', sub: {color: \'red\'}})";', FALSE],
+			// An attribute inside a foreign group puts one cut inside another; removing the
+			// inner one first must not invalidate the outer one's end.
+			'attribute inside a group'  => ['$s = "foo({a: \'<div style=\"color: red; xxxxxxxxxxxxxxxxxxxxxxxx\">\'}) background-color: #123456; color: blue;";', TRUE],
 			// The two fallbacks, each pinned by a pairing further away than the window.
 			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
 			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
@@ -456,11 +459,36 @@ final class ThemeSafetyUiTest extends TestCase
 			$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
 		}
 
-		usort($cuts, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
-		foreach (array_reverse($cuts) as [$start, $end]) {
+		foreach (array_reverse(self::mergedCuts($cuts)) as [$start, $end]) {
 			$out = substr($out, 0, $start) . substr($out, $end);
 		}
 		return $out;
+	}
+
+	/**
+	 * Cuts ordered and merged, so no cut sits inside another.
+	 *
+	 * An attribute can live inside a brace group, which puts one span inside the other.
+	 * Removing the inner one first leaves the outer one's end offset pointing past where
+	 * its text now ends, and the removal eats whatever followed -- including the pairing
+	 * the background actually had.
+	 *
+	 * @param list<array{0: int, 1: int}> $cuts
+	 * @return list<array{0: int, 1: int}>
+	 */
+	private static function mergedCuts(array $cuts): array
+	{
+		usort($cuts, static fn (array $a, array $b): int => [$a[0], $b[1]] <=> [$b[0], $a[1]]);
+		$merged = [];
+		foreach ($cuts as [$start, $end]) {
+			$last = count($merged) - 1;
+			if ($last >= 0 && $start <= $merged[$last][1]) {
+				$merged[$last][1] = max($merged[$last][1], $end);
+				continue;
+			}
+			$merged[] = [$start, $end];
+		}
+		return $merged;
 	}
 
 	/**
