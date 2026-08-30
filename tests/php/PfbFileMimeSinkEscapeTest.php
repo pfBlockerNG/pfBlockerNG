@@ -22,6 +22,9 @@ final class PfbFileMimeSinkEscapeTest extends TestCase
 	private string $dir;
 	private string $cwd;
 
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_mime_' . uniqid('', true);
@@ -30,6 +33,10 @@ final class PfbFileMimeSinkEscapeTest extends TestCase
 		// not itself contain '/') and its sentinel are addressed by bare name.
 		$this->cwd = (string) getcwd();
 		chdir($this->dir);
+		$this->saved['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? [])
+			? $GLOBALS['pfb']['mime_types']
+			: FALSE;
+
 		// FILE_MIME accepts the probed type only when it is a known mime_type.
 		$GLOBALS['pfb']['mime_types'] = ['text/plain' => 1];
 	}
@@ -41,7 +48,13 @@ final class PfbFileMimeSinkEscapeTest extends TestCase
 			@unlink($f);
 		}
 		@rmdir($this->dir);
-		unset($GLOBALS['pfb']['mime_types']);
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === FALSE) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
 	}
 
 	public function testBenignPathProbesMimeUnchanged(): void
