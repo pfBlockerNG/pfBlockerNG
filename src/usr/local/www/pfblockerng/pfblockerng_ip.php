@@ -193,7 +193,7 @@ if ($_POST) {
 		}
 
 		$pfb_asn_token_post = (string) ($_POST['asn_token'] ?? '');
-		if ($pfb_asn_token_post !== '' && empty(pfb_filter($pfb_asn_token_post, PFB_FILTER_WORD, 'ip'))) {
+		if ($pfb_asn_token_post !== '' && empty(pfb_filter($pfb_asn_token_post, PFB_FILTER_WORD, 'asn_token'))) {
 			$input_errors[] = 'IPinfo Token Invalid';
 		}
 
