@@ -11545,9 +11545,10 @@ function pfb_stop_start_unbound($type) {
 			2 => array('file', $outfile, 'a'),
 		);
 		$pipes = array();
+		$php_cli = (string) ($pfb['php'] ?? (PHP_BINDIR . '/php'));
 		$setup_deadline = hrtime(TRUE) + (PFB_UNBOUND_START_SETUP_WAIT * 1000000000);
 		$proc = @proc_open(array(
-			PHP_BINARY,
+			$php_cli,
 			'-r',
 			$launcher_code,
 			'--',
