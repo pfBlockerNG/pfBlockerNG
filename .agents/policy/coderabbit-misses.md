@@ -15,6 +15,9 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `888ed710`  www/wizards: put the step-2 callouts in rows  (#2916) — never asked; the hourly slot went to #2917 and test-only PRs were skipped. Five legs, rounds 3-4 each blocking. CI green.
+- `edeb3865`  www/wizards: stop advertising a retired sinkhole VIP range  (#2912) — asked 14:53Z, rate-limited 59 min, not retried. Four legs, mutation table re-run. CI green.
+- `64623d72`  widgets: pair the jQuery-set backgrounds so the scanner sees them  (#2891) — never asked, same slot call. Four legs; helper defects split to #2866/#2892. CI green.
 - `07b4894e`  pfblockerng: name the schedule-cache failure instead of asking for a bug report  (#2887) — one quota notice (999 min), no review; 4 legs over three rounds, two blockers fixed.
 - `a12bae30`  test: repair the UI coverage the DNSBL/IP tab reorganisation broke  (#2885) — one quota notice (999 min), no review; 4 legs over two rounds, one blocker fixed; live-VM gate green.
 - `ee6c4efe`  pfblockerng: serialize Alerts mutations  (#2883) — two quota notices, no review; 4 legs + verifier PASS; live-VM gate green.
