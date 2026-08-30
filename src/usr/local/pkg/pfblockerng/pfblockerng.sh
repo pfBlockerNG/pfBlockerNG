@@ -57,11 +57,17 @@ pfb_reentry_timeout() {
 	printf '%s\n' "${_pfbrt}"
 }
 
-# Keep trailing newlines from the XML reader visible to the strict resolver: command
-# substitution strips them unless a non-newline sentinel follows the reader output.
+# read_xml_tag.sh's xmllint --xpath appends one separator newline. Keep all reader bytes
+# visible, strip that one terminator, and preserve embedded or additional newlines so the
+# strict resolver still rejects them.
 pfb_reentry_timeout_from_reader() {
 	_pfbrt_raw="$("$@"; printf x)"
-	pfb_reentry_timeout "${_pfbrt_raw%x}"
+	_pfbrt_raw="${_pfbrt_raw%x}"
+	case "${_pfbrt_raw}" in
+	*'
+')	_pfbrt_raw="${_pfbrt_raw%?}" ;;
+	esac
+	pfb_reentry_timeout "${_pfbrt_raw}"
 	unset _pfbrt_raw
 }
 
