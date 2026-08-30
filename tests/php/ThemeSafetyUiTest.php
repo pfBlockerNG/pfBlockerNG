@@ -142,7 +142,7 @@ final class ThemeSafetyUiTest extends TestCase
 			// before them, it is that they are in a comment.
 			'prose quote after bracket' => ["/* fail pfb_hook_scripts()' membership */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* it's */", FALSE],
 			'prose quote written alone' => ["/* use the ' character */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* it's */", FALSE],
-			'line comment holds one too' => ["// use the ' character\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n// it's", FALSE],
+			'line comment holds one too'=> ["// use the ' character\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n// it's", FALSE],
 			// Not all prose is in a comment: a .php page is inline HTML outside its tags, and
 			// an apostrophe in body text is no more a delimiter there than in a docblock. A
 			// quote is not one where a letter or digit runs straight into it.
