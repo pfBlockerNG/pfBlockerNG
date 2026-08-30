@@ -141,6 +141,10 @@ Authorization = property of **write**, not call site (generalises
     keeps its `pfb_filter(…, PFB_FILTER_ON_OFF, …) ?: ''` (transport normalisation of a
     POST-absent checkbox, re-normalised by `writeSection()`); what moved is the READ
     default. Regrowth blocked by `scripts/check_toggle_registry.py` (below).
+    Issue #2817 completed the runtime side: the seven IP consumers and the DNSBL
+    settings-section `auto*` branch use `PfbConfig::read()`. Identically named
+    per-feed-row and per-continent fields remain foreign; their direct reads pass
+    through `pfb_dnsbl_toggle_enabled()` so they share the registered vocabulary.
   - **Ten adapter-bearing toggles default On:** `pfb_keep`, `pfb_software_check`,
     `pfb_feed_internal_filter`, `pfb_syntax_highlight`, `pfb_cache`, `pfb_py_reply`,
     `pfb_hsts`, `pfb_idn_block_malicious`, ip-section `suppression`, and (since #2123)
@@ -489,9 +493,9 @@ registered path set). Each annotation committed in relevant source file.
 | `pfblockerngdnsblsettings/config/0/dnsbl_webpage` | Out-of-scope foreign key (ADR-29 §2.5); written directly by `pfblockerng_dnsbl.php`, read via `pfb_dnsbl_webpage()` (issue #713 removed the never-written `dnsblwebpage` registry mis-spelling) |
 | `pfblockerngdnsbl` / `pfblockernglistsv4/v6` (section-level reads) | Dynamic list sections |
 | `aliases/alias`, `filter/rule`, `system/*`, `interfaces`, `unbound/*` | pfSense core sections |
-| `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address) |
+| `pfblockernglistsv4/v6/config/{row}/auto{addrnot,ports,addr,not}_{in,out}` | Dynamic per-row keys (issue #2123: same bare names as the registered `dnsbl/auto*` scalars; `pfblockerng_category_edit.php` writes them at `installedpackages/{$conf_type}/config/{$rowid}/…`, a path no exact-path registry entry can address). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |
 | `pfblockernglistsv4/v6/config/{row}/whois_convert` + `filter_top1m` | Dynamic per-row `PFB_FILTER_ON_OFF` keys, same reason |
-| `pfblockerng{continent}/config/0/auto*` | Dynamic per-continent structure (issue #2123: `pfblockerng_geoip.inc` writes the same bare names per continent) |
+| `pfblockerng{continent}/config/0/auto*` | Dynamic per-continent structure (issue #2123: `pfblockerng_geoip.inc` writes the same bare names per continent). Runtime reads stay direct and normalize through `pfb_dnsbl_toggle_enabled()` (#2817). |
 | `pfblockerngsync/config/0/{varsynconchanges,varsynctimeout}` | Foreign siblings of the registered `sync/syncinterfaces` |
 | `pfblockerngglobal/*` except `alertrefresh` | Foreign siblings of the registered `global/alertrefresh` (display prefs, `pfbextdns`, and the dynamic `feed_*`/`widget-*` keys) |
 

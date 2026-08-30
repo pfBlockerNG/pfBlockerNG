@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -15,10 +16,10 @@ use PHPUnit\Framework\TestCase;
  * (see pfblockerng_install.inc) to preserve the historical always-resolving
  * behaviour.
  *
- * pfb_resolve_enabled() branches:
- *   - key absent     → FALSE  (new-install default OFF)
- *   - key = 'on'     → TRUE   (user has the checkbox checked)
- *   - key = ''       → FALSE  (user unchecked the checkbox)
+ * pfb_resolve_enabled() gateway states:
+ *   - key absent     → FALSE  (registered default OFF)
+ *   - key = 'on'/'On' → TRUE  (user has the checkbox checked)
+ *   - key = ''/'off'/'OFF' → FALSE  (user unchecked the checkbox)
  *
  * Scenario: pfb_rdns_seed_value() grandfather logic
  *   Background: the key 'enable_rdns' did not exist before issue #336.
@@ -45,31 +46,23 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_rdns_seed_value')]
 final class ResolveEnabledTest extends TestCase
 {
-	// -------------------------------------------------------------------------
-	// pfb_resolve_enabled()
-	// -------------------------------------------------------------------------
-
-	public function testDefaultsOffWhenKeyAbsent(): void
+	public static function resolveStates(): iterable
 	{
-		// New install: enable_rdns key does not exist yet.
-		// Must return FALSE — reverse-DNS is off by default for new installs.
-		$this->assertFalse(pfb_resolve_enabled([]));
+		yield 'mixed-case On' => ['On', TRUE];
+		yield 'mixed-case OFF' => ['OFF', FALSE];
+		yield 'legacy off' => ['off', FALSE];
+		yield 'absent' => [NULL, FALSE];
 	}
 
-	public function testExplicitOnReturnsTrue(): void
+	#[DataProvider('resolveStates')]
+	public function testReadsRegisteredGatewayVocabulary(mixed $raw, bool $expected): void
 	{
-		// Before: absent key → FALSE (new-install default).
-		$this->assertFalse(pfb_resolve_enabled([]));
-		// After: stored 'on' (checkbox checked) → TRUE.
-		$this->assertTrue(pfb_resolve_enabled(['enable_rdns' => 'on']));
-	}
+		$GLOBALS['config'] = [];
+		if ($raw !== NULL) {
+			config_set_path('installedpackages/pfblockerngipsettings/config/0/enable_rdns', $raw);
+		}
 
-	public function testExplicitOffReturnsFalse(): void
-	{
-		// Before: stored 'on' (checkbox checked) → TRUE; proves the flip is real.
-		$this->assertTrue(pfb_resolve_enabled(['enable_rdns' => 'on']));
-		// After: stored '' (unchecked save) → FALSE — reverse-DNS disabled.
-		$this->assertFalse(pfb_resolve_enabled(['enable_rdns' => '']));
+		$this->assertSame($expected, pfb_resolve_enabled());
 	}
 
 	// -------------------------------------------------------------------------
