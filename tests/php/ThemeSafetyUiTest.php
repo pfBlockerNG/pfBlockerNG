@@ -446,9 +446,8 @@ final class ThemeSafetyUiTest extends TestCase
 		// same treatment: a colour one level out is not the background's.
 		$group = self::enclosingBlock($literal, $rel);
 		if ($group !== NULL) {
-			$out = substr($literal, $group[0], $group[1] - $group[0] + 1);
-			$rel -= $group[0];
-			$cuts = array_merge(self::styleAttributeSpans($out), self::nestedGroupSpans($out));
+			$out = self::withoutNestedBlocks(substr($literal, $group[0], $group[1] - $group[0] + 1));
+			$cuts = self::styleAttributeSpans($out);
 		} else {
 			$out = $literal;
 			$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
@@ -459,35 +458,6 @@ final class ThemeSafetyUiTest extends TestCase
 			$out = substr($out, 0, $start) . substr($out, $end);
 		}
 		return $out;
-	}
-
-	/**
-	 * Spans of a block's immediate subgroups, so its own declarations are what remain.
-	 *
-	 * @return list<array{0: int, 1: int}>
-	 */
-	private static function nestedGroupSpans(string $block): array
-	{
-		$groups = [];
-		$depth = 0;
-		$start = 0;
-		$length = strlen($block);
-		for ($i = 0; $i < $length; $i++) {
-			if ($block[$i] === '{') {
-				$depth++;
-				if ($depth === 2) {
-					$start = $i;
-				}
-				continue;
-			}
-			if ($block[$i] === '}' && $depth > 0) {
-				$depth--;
-				if ($depth === 1) {
-					$groups[] = [$start, $i + 1];
-				}
-			}
-		}
-		return $groups;
 	}
 
 	/**
