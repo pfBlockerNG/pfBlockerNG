@@ -8,9 +8,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * Support logo must not overflow a narrow viewport, must not clip the circle,
  * and must keep a light color-scheme so force-dark cannot wash the fills.
- *
- * Both shipped copies are held to one contract -- issue #2863: pinning only the
- * General page let the wizard keep the float column and clipping viewBox for months.
+ * Both shipped copies are held to this one contract (issue #2863).
  */
 final class SupportLogoUiTest extends TestCase
 {
@@ -60,10 +58,7 @@ final class SupportLogoUiTest extends TestCase
 		}
 	}
 
-	/**
-	 * Every logo copy in the tree, not just the two known ones: a third copy added
-	 * elsewhere would otherwise be free to ship the clipping viewBox unnoticed.
-	 */
+	/** Every SVG viewBox under src/, not just the two known logo copies. */
 	public function testEverySvgViewBoxInTheTreeIsTheContractValue(): void
 	{
 		$root = dirname(__DIR__, 2) . '/src';
