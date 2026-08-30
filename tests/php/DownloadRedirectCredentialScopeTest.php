@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+
 /**
  * pfb_download() Basic-credential scope across manual redirect hops (issue #1919).
  *
@@ -105,7 +107,8 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 
 	/**
 	 * One shared router serves both servers (URIs are disjoint). Every request
-	 * appends [server-port, uri, PHP_AUTH_USER, PHP_AUTH_PW, HTTP_AUTHORIZATION,
+	 * appends [server-port, uri] to EVENT_LOG. Non-readiness requests append
+	 * [server-port, uri, PHP_AUTH_USER, PHP_AUTH_PW, HTTP_AUTHORIZATION,
 	 * HTTP_X_FEED_PROBE] to AUTH_LOG (the raw Authorization header covers
 	 * non-Basic credentials — the issue #1953 Bearer-token axis; X-Feed-Probe
 	 * stands in for a non-credential extra header that must ride every hop).
@@ -121,6 +124,15 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 		$router    = "{$this->workdir}/router.php";
 		$routerSrc = <<<'PHP'
 <?php
+$uri = $_SERVER['REQUEST_URI'] ?? '';
+file_put_contents(getenv('EVENT_LOG'), json_encode([
+	(int) $_SERVER['SERVER_PORT'],
+	$uri,
+]) . PHP_EOL, FILE_APPEND);
+if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+	echo getenv('READY_TOKEN');
+	return;
+}
 file_put_contents(getenv('AUTH_LOG'), json_encode([
 	(int) $_SERVER['SERVER_PORT'],
 	$_SERVER['REQUEST_URI'] ?? '',
@@ -129,7 +141,6 @@ file_put_contents(getenv('AUTH_LOG'), json_encode([
 	$_SERVER['HTTP_AUTHORIZATION'] ?? null,
 	$_SERVER['HTTP_X_FEED_PROBE'] ?? null,
 ]) . PHP_EOL, FILE_APPEND);
-$uri = $_SERVER['REQUEST_URI'] ?? '';
 // Both bases come from a ports file written AFTER both servers are up (the
 // second server's port is unknown when the first is spawned).
 $bases = json_decode((string) file_get_contents(getenv('PORTS_FILE')), true);
@@ -167,37 +178,52 @@ PHP;
 	/** Start one php -S fixture on a free port; return the port. */
 	private function startOneServer(string $router, string $label): int
 	{
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
-			$port = random_int(20000, 60000);
-			$proc = proc_open(
+			$port   = random_int(20000, 60000);
+			$nonce  = bin2hex(random_bytes(16));
+			$stderr = "{$this->workdir}/server-{$port}-{$try}.stderr";
+			$proc   = proc_open(
 				['php', '-S', "127.0.0.1:{$port}", $router],
-				$descriptors,
+				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
 				[
 					'AUTH_LOG'   => "{$this->workdir}/auth.log",
+					'EVENT_LOG'  => "{$this->workdir}/events.log",
 					'PORTS_FILE' => "{$this->workdir}/ports.json",
+					'READY_TOKEN' => $nonce,
 					'PATH'       => (string) getenv('PATH'),
 				]
 			);
 			if (!is_resource($proc)) {
+				$failures[] = "port {$port}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
-			// Poll readiness instead of a fixed wait (up to ~2s).
 			for ($i = 0; $i < 40; $i++) {
-				$sock = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.05);
-				if ($sock !== FALSE) {
-					fclose($sock);
-					$this->servers[] = $proc;
+				if (pfb_test_http_fixture_event_received($port, $nonce)) {
+					$this->servers[$port] = $proc;
 					return $port;
 				}
 				usleep(50000);
 			}
-			proc_terminate($proc);
-			proc_close($proc);
+
+			$status = proc_get_status($proc);
+			if ($status['running']) {
+				proc_terminate($proc);
+			}
+			$closeExit = proc_close($proc);
+			$stderrText = trim((string) @file_get_contents($stderr));
+			$failures[] = sprintf(
+				'port %d: process[running=%s exit=%d close=%d] stderr=%s',
+				$port,
+				$status['running'] ? 'true' : 'false',
+				$status['exitcode'],
+				$closeExit,
+				$stderrText === '' ? '(empty)' : $stderrText
+			);
 		}
-		$this->fail("could not start the {$label} php -S fixture server");
+		$this->fail("could not start the {$label} php -S fixture server; " . implode(' | ', $failures));
 	}
 
 	/** Run one credentialed change_detect probe against $path on the origin server. */
@@ -219,6 +245,49 @@ PHP;
 			password: $password,
 			extraHeaders: $extraHeaders,
 		));
+	}
+
+	private function redirectFailureMessage(PfbDownloadResult $result): string
+	{
+		$events = @file_get_contents("{$this->workdir}/events.log");
+		$events = is_string($events) ? trim($events) : '(missing)';
+		if ($events === '') {
+			$events = '(empty)';
+		}
+
+		$testLog = @file_get_contents("{$this->workdir}/pfblockerng.log");
+		$testLog = is_string($testLog) ? trim($testLog) : '(missing)';
+		if ($testLog === '') {
+			$testLog = '(empty)';
+		}
+
+		$processes = [];
+		foreach ($this->servers as $port => $server) {
+			if (!is_resource($server)) {
+				$processes[] = "port {$port} closed";
+				continue;
+			}
+			$status = proc_get_status($server);
+			$processes[] = sprintf(
+				'port %d running=%s exit=%d',
+				$port,
+				$status['running'] ? 'true' : 'false',
+				$status['exitcode']
+			);
+		}
+
+		$metadata = json_encode($result->responseMeta, JSON_UNESCAPED_SLASHES);
+		return sprintf(
+			'redirected download must succeed; response status=%s metadata=%s; events=%s; ports=origin:%d target:%d alt:%d; processes=%s; pfBlockerNG log=%s',
+			(string) ($result->responseMeta['status'] ?? '(missing)'),
+			is_string($metadata) ? $metadata : '(unavailable)',
+			$events,
+			$this->originPort,
+			$this->targetPort,
+			$this->altPort,
+			$processes === [] ? '(none)' : implode(', ', $processes),
+			$testLog
+		);
 	}
 
 	/** The Authorization header value cURL derives from the Basic credentials. */
@@ -248,7 +317,7 @@ PHP;
 	public function testCrossHostRedirectHopReceivesNoCredentials(): void
 	{
 		$result = $this->downloadFrom('/cross');
-		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertTrue($result->success, $this->redirectFailureMessage($result));
 		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 
 		$this->assertSame(
@@ -274,7 +343,7 @@ PHP;
 	public function testCrossHostRedirectHopReceivesNoAuthorizationHeader(): void
 	{
 		$result = $this->downloadFrom('/cross', '', '', ['Authorization: Bearer SECRET-TOKEN']);
-		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertTrue($result->success, $this->redirectFailureMessage($result));
 		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 
 		$this->assertSame(
@@ -303,7 +372,7 @@ PHP;
 			'Authorization: Bearer SECRET-TOKEN',
 			'X-Feed-Probe: keep',
 		]);
-		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertTrue($result->success, $this->redirectFailureMessage($result));
 		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 
 		$this->assertSame(
@@ -328,7 +397,7 @@ PHP;
 	public function testSameHostDifferentPortHopReceivesNoCredentials(): void
 	{
 		$result = $this->downloadFrom('/portjump');
-		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertTrue($result->success, $this->redirectFailureMessage($result));
 		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 
 		$this->assertSame(
@@ -350,7 +419,7 @@ PHP;
 	public function testSameHostRedirectKeepsCredentials(): void
 	{
 		$result = $this->downloadFrom('/same');
-		$this->assertTrue($result->success, 'redirected download must succeed');
+		$this->assertTrue($result->success, $this->redirectFailureMessage($result));
 		$this->assertSame('200', $result->responseMeta['status'] ?? '', 'probe metadata must carry the final 200');
 
 		$this->assertSame(
