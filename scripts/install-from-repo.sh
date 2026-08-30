@@ -83,29 +83,46 @@ fi
 # FreeBSD:15:amd64) to its matrix entry's py_flavor. issue #1806: the matrix is arch-less
 # (no `arch` field). issue #2926: the BUILD matrix dedupes to one row per exact runtime
 # TUPLE (freebsd_major, php_version, py_flavor), so matching by major alone is NOT exact —
-# when a major carries two tuples a [0] pick installs the WRONG py3xx deps. A
-# SMOKE_PY_FLAVOR/SMOKE_PHP_VERSION env pair (already exported by the CI fan-out) names
-# the tuple; with no disambiguator and an ambiguous major, REFUSE rather than guess —
-# the box's own installed py3xx flavor is probed as the fallback (a live box knows which
-# python it runs). Fallbacks keep the installer working when the matrix/jq is
-# unavailable: the box's OWN installed py3xx flavor, then py311.
+# when a major carries two tuples a [0] pick installs the WRONG py3xx deps.
+#
+# Two regimes:
+#   EXPLICIT (SMOKE_PHP_VERSION and/or SMOKE_PY_FLAVOR set — image-refresh.yml and the
+#     smoke fan-out export the leg's exact row): the tuple must resolve to EXACTLY ONE
+#     row. ZERO matches is a hard error (the caller NAMED a row the matrix does not
+#     carry — falling through to a probe would mask the mismatch), MULTIPLE likewise.
+#   NO-ENV: the matrix is consulted ONLY when it resolves UNIQUELY; an ambiguous (or
+#     unreadable) matrix falls through to probing the box's OWN installed py3xx flavor
+#     (a live box knows which python it runs), then the py311 last resort — the installer
+#     stays functional where the matrix is ambiguous or unavailable.
 # (read-version-matrix.sh self-fetches the ci-metadata ref.)
 PY_FLAVOR=""
 BOX_ABI="$(ssh_t 'pkg config ABI 2>/dev/null' | tr -d '\r')"
 BOX_MAJOR="$(printf '%s' "$BOX_ABI" | cut -d: -f2)"
+_TUPLE_EXPLICIT=0
+if [ -n "${SMOKE_PHP_VERSION:-}" ] || [ -n "${SMOKE_PY_FLAVOR:-}" ]; then
+    _TUPLE_EXPLICIT=1
+fi
 if [ -n "$BOX_MAJOR" ] && command -v jq >/dev/null 2>&1; then
     _MATCHES="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
         | jq -c --arg major "$BOX_MAJOR" --arg php "${SMOKE_PHP_VERSION:-}" --arg py "${SMOKE_PY_FLAVOR:-}" \
             '[ .[] | select(.freebsd_major == $major) | select($php == "" or .php_version == $php) | select($py == "" or .py_flavor == $py) ]' \
         2>/dev/null || true)"
     _MATCH_COUNT="$(printf '%s' "$_MATCHES" | jq 'length' 2>/dev/null || echo 0)"
-    if [ "$_MATCH_COUNT" -gt 1 ]; then
-        echo "Error: FreeBSD major ${BOX_MAJOR} matches more than one BUILD row for runtime tuple selection (ABI ${BOX_ABI:-unknown}) — refusing to silently install a sibling tuple's py flavor; set SMOKE_PHP_VERSION/SMOKE_PY_FLAVOR" >&2
-        exit 1
-    fi
     if [ "$_MATCH_COUNT" -eq 1 ]; then
         PY_FLAVOR="$(printf '%s' "$_MATCHES" | jq -r '.[0].py_flavor')"
+    elif [ "$_TUPLE_EXPLICIT" -eq 1 ]; then
+        # EXPLICIT regime: the caller NAMED a tuple (image-refresh.yml / the smoke
+        # fan-out export the leg's exact row), so zero or multiple matches are both a
+        # hard error — a fall-through would install a flavor the named tuple never
+        # asked for (issue #2926 review C).
+        if [ "$_MATCH_COUNT" -eq 0 ]; then
+            echo "Error: no BUILD row matches the requested runtime tuple (freebsd_major=${BOX_MAJOR}, SMOKE_PHP_VERSION='${SMOKE_PHP_VERSION:-}', SMOKE_PY_FLAVOR='${SMOKE_PY_FLAVOR:-}', ABI ${BOX_ABI:-unknown}) — refusing to install a different tuple's deps" >&2
+        else
+            echo "Error: FreeBSD major ${BOX_MAJOR} matches more than one BUILD row for the requested runtime tuple (ABI ${BOX_ABI:-unknown}) — refusing to silently install a sibling tuple's py flavor" >&2
+        fi
+        exit 1
     fi
+    # NO-ENV with zero or multiple matches: fall through to the box's own probe below.
 fi
 if [ -z "$PY_FLAVOR" ]; then
     # The box knows its own python: the py3xx that owns its py-sqlite3, if already present.
