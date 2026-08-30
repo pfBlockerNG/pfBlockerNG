@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `4e040033`  unbound: bound daemon startup wait  (#2925) — two quota notices, no review; four exact-head legs, canonical/CI/live PASS.
 - `c25135ab`  smoke: stop reading the due ledger while Run Now writes it  (#2921) — never asked; test-only, slot held for shipped code. Three legs, oracle driven against fake ledgers. CI green.
 - `888ed710`  www/wizards: put the step-2 callouts in rows  (#2916) — never asked; the hourly slot went to #2917 and test-only PRs were skipped. Five legs, rounds 3-4 each blocking. CI green.
 - `edeb3865`  www/wizards: stop advertising a retired sinkhole VIP range  (#2912) — asked 14:53Z, rate-limited 59 min, not retried. Four legs, mutation table re-run. CI green.
