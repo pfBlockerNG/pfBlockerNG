@@ -129,6 +129,13 @@ DECLARATIONS = (
         "tagged title",
         "Describe 'forms'\nEnd\n",
     ),
+    (
+        "shellspec-unquoted-single-word",
+        "tests/shell/forms_spec.sh",
+        "Describe 'forms'\n  It works\n  End\nEnd\n",
+        "works",
+        "Describe 'forms'\nEnd\n",
+    ),
 )
 
 PHPUNIT_TEST_ATTRIBUTES = (
@@ -160,6 +167,34 @@ PHPUNIT_TEST_ATTRIBUTES = (
         "<?php\nuse PHPUnit\\Framework\\Attributes\\{Test};\n"
         "final class AttributeNamedTest {\n"
         "    #[Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "namespace-alias",
+        "<?php\nuse PHPUnit\\Framework\\Attributes as PHPUnitAttributes;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[PHPUnitAttributes\\Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "multiline-group-use-alias",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\{\n"
+        "    Test as PHPUnitTest\n"
+        "};\n"
+        "final class AttributeNamedTest {\n"
+        "    #[PHPUnitTest]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "multiline-attribute",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class AttributeNamedTest {\n"
+        "    #[\n"
+        "        Test\n"
+        "    ]\n"
         "    public function preservesNamedInvariant(): void {}\n"
         "}\n",
     ),
@@ -361,6 +396,108 @@ def test_phpunit_group_use_test_attribute_rename_requires_successor(tmp_path: Pa
     _write(repo, path, renamed.replace("    #[Test]", f"    # successor: {identity}\n    #[Test]"))
     _commit(repo, "name group-use successor")
     _assert_rc(_diff(repo, base), 0)
+
+
+@pytest.mark.parametrize(
+    ("_form", "fixture"),
+    PHPUNIT_TEST_ATTRIBUTES[-3:],
+    ids=[row[0] for row in PHPUNIT_TEST_ATTRIBUTES[-3:]],
+)
+def test_phpunit_extended_attribute_rename_requires_successor(tmp_path: Path, _form: str, fixture: str) -> None:
+    path = "tests/php/ExtendedAttributeTest.php"
+    identity = f"{path}::preservesOldInvariant"
+    before = fixture.replace("AttributeNamedTest", "ExtendedAttributeTest").replace(
+        "preservesNamedInvariant", "preservesOldInvariant"
+    )
+    renamed = before.replace("preservesOldInvariant", "preservesNewInvariant")
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, renamed)
+    _commit(repo, "rename extended attribute test")
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+    successor = renamed.replace(
+        "final class ExtendedAttributeTest {\n",
+        f"final class ExtendedAttributeTest {{\n    # successor: {identity}\n",
+    )
+    _write(repo, path, successor)
+    _commit(repo, "name extended attribute successor")
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_phpunit_comment_attribute_cannot_forge_helper_successor(tmp_path: Path) -> None:
+    path = "tests/php/CommentAttributeTest.php"
+    identity = f"{path}::testOld"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class CommentAttributeTest {\n"
+        "    public function testOld(): void {}\n"
+        "}\n"
+    )
+    after = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\n"
+        "final class CommentAttributeTest {\n"
+        "    // #[Test] documentation only\n"
+        f"    # successor: {identity}\n"
+        "    public function helperNotATest(): void {}\n"
+        "}\n"
+    )
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+
+@pytest.mark.parametrize(
+    ("path", "before", "after"),
+    (
+        (
+            "tests/test_multiline_decorator_successor.py",
+            "def test_decorator_old():\n    assert True\n",
+            "# successor: tests/test_multiline_decorator_successor.py::test_decorator_old\n"
+            "@pytest.mark.parametrize(\n"
+            '    "value",\n'
+            "    (1,),\n"
+            ")\n"
+            "def test_decorator_new(value):\n"
+            "    assert value\n",
+        ),
+        (
+            "tests/php/MultilineAttributeSuccessorTest.php",
+            "<?php\nfinal class MultilineAttributeSuccessorTest {\n"
+            "    public function testAttributeOld(): void {}\n"
+            "}\n",
+            "<?php\nfinal class MultilineAttributeSuccessorTest {\n"
+            "    # successor: tests/php/MultilineAttributeSuccessorTest.php::testAttributeOld\n"
+            "    #[DataProvider(\n"
+            "        'rows'\n"
+            "    )]\n"
+            "    public function testAttributeNew(): void {}\n"
+            "}\n",
+        ),
+    ),
+    ids=("python-decorator", "phpunit-attribute"),
+)
+def test_successor_marker_allows_multiline_annotations(tmp_path: Path, path: str, before: str, after: str) -> None:
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_fenced_markdown_tombstone_does_not_discharge_retirement(tmp_path: Path) -> None:
+    path = "tests/test_fenced_tombstone.py"
+    identity = f"{path}::test_fenced_old"
+    repo, base = _repo(tmp_path, {path: "def test_fenced_old():\n    assert True\n"})
+    _write(repo, path, "\n")
+    _write(repo, HISTORY, "# Retired tests\n\n```text\n" + _tombstone(identity) + "```\n")
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
 
 
 @pytest.mark.parametrize("case", LANGUAGES, ids=[case["id"] for case in LANGUAGES])
