@@ -94,26 +94,40 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 
 		$todo = self::TODO_OPAQUE_WITHOUT_FOREGROUND_20260829;
-		$extra = array_diff_key($found, $todo);
-		$stale = array_diff_key($todo, $found);
-		$this->assertSame([], $extra, 'new opaque-without-foreground site — do not allowlist it, fix it or get an owner ruling');
-		$this->assertSame([], $stale, 'TODO entry is fixed; remove it from TODO_OPAQUE_WITHOUT_FOREGROUND_20260829');
 
-		foreach ($todo as $rel => $needles) {
-			$joined = implode("\n", $found[$rel]);
-			foreach ($needles as $needle) {
-				$this->assertTrue(
-					self::listContainsNeedle($found[$rel], $needle),
-					$rel . ' TODO needle missing: ' . $needle . ' (have: ' . $joined . ')'
-				);
+		// Collected, not asserted one at a time: a new hit inside a file the TODO already
+		// lists is invisible to a key-wise diff, and an early assert would abort before the
+		// per-needle loop that does see it. One verdict reports every violation at once.
+		$problems = [];
+		foreach (array_keys($found + $todo) as $rel) {
+			$have = $found[$rel] ?? [];
+			$needles = $todo[$rel] ?? [];
+			if (!array_key_exists($rel, $todo)) {
+				$problems[] = $rel . ': new opaque-without-foreground site -- do not allowlist it, '
+					. 'fix it or get an owner ruling: ' . implode(', ', $have);
+				continue;
 			}
-			foreach ($found[$rel] as $have) {
-				$this->assertTrue(
-					self::listContainsNeedle($needles, $have),
-					$rel . ' extra opaque-without-foreground hit: ' . $have
-				);
+			if ($have === []) {
+				$problems[] = $rel . ': TODO entry is fixed; remove it from '
+					. 'TODO_OPAQUE_WITHOUT_FOREGROUND_20260829';
+				continue;
+			}
+			foreach ($needles as $needle) {
+				if (!self::listContainsNeedle($have, $needle)) {
+					$problems[] = $rel . ': TODO needle missing: ' . $needle
+						. ' (have: ' . implode(' | ', $have) . ')';
+				}
+			}
+			foreach ($have as $hit) {
+				if (!self::listContainsNeedle($needles, $hit)) {
+					$problems[] = $rel . ': extra opaque-without-foreground hit: ' . $hit;
+				}
 			}
 		}
+
+		$this->assertSame([], $problems,
+			"the tree's opaque-without-foreground inventory no longer matches the dated TODO:\n  "
+			. implode("\n  ", $problems));
 	}
 
 	/**
@@ -122,17 +136,16 @@ final class ThemeSafetyUiTest extends TestCase
 	public static function scan(string $source): array
 	{
 		$hits = [];
-		// Four shapes reach a background: a CSS declaration, a JS object property with a
-		// bare key or a quoted one, and jQuery's setter -- issue #2864: only the first two
-		// were matched, so every .css('background-color', ...) call was invisible here.
-		// Named groups, because an alternation numbers its groups globally and a
-		// backreference written by hand silently points at the wrong branch.
+		// issue #2864: every shape that can set a background, not just the declaration and
+		// the bare object key. Named groups, because an alternation numbers groups globally
+		// and a hand-written backreference silently points at the wrong branch.
 		if (preg_match_all(
 			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
 			. '|backgroundColor\s*:\s*(?<jsq>["\'])(?<js>[^"\']+)\k<jsq>'
-			. '|(?<objq>["\'])background(?:-color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*)\k<objvq>'
-			. '|\.css\(\s*(?<setq>["\'])background(?:-color)?\k<setq>\s*,\s*'
-			. '(?<setvq>["\'])(?<set>[^"\']*)\k<setvq>/i',
+			. '|(?<objq>["\'])background(?:-color|Color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*)\k<objvq>'
+			. '|(?:\.css|setProperty)\(\s*(?<setq>["\'])background(?:-color|Color)?\k<setq>\s*,\s*'
+			. '(?<setvq>["\'])(?<set>[^"\']*)\k<setvq>'
+			. '|\.style\.backgroundColor\s*=\s*(?<domq>["\'])(?<dom>[^"\']*)\k<domq>/i',
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
@@ -142,12 +155,10 @@ final class ThemeSafetyUiTest extends TestCase
 				$full = $matches[0][$i][0];
 				$offset = $matches[0][$i][1];
 				$value = self::firstColorToken($matches['css'][$i][0] ?? '');
-				foreach (['js', 'obj', 'set'] as $group) {
-					if ($value !== '') {
-						break;
-					}
-					$value = trim($matches[$group][$i][0] ?? '');
-				}
+				$value = $value !== '' ? $value : trim($matches['js'][$i][0] ?? '');
+				$value = $value !== '' ? $value : trim($matches['obj'][$i][0] ?? '');
+				$value = $value !== '' ? $value : trim($matches['set'][$i][0] ?? '');
+				$value = $value !== '' ? $value : trim($matches['dom'][$i][0] ?? '');
 				if ($value === '' || self::isInterpolated($value) || self::isTranslucent($value)) {
 					continue;
 				}
