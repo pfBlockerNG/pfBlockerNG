@@ -5332,6 +5332,14 @@ def redact_pkg_urls(text: str) -> str:
     return _PKG_TOKEN_QUERY_RE.sub(r"\1REDACTED", out)
 
 
+def _redact_pkg_tar_filter(member: tarfile.TarInfo, dest_path: str) -> tarfile.TarInfo | None:
+    """Keep the data filter's protections while omitting appliance absolute links."""
+    try:
+        return tarfile.data_filter(member, dest_path)
+    except tarfile.AbsoluteLinkError:
+        return None
+
+
 def redact_pkg_tarball(tgz_path: str) -> None:
     """Host-side second pass over a pulled diag tarball's ``pkg/`` files.
 
@@ -5342,7 +5350,7 @@ def redact_pkg_tarball(tgz_path: str) -> None:
         return
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(tgz_path, "r:gz") as tar:
-            tar.extractall(tmp, filter="data")
+            tar.extractall(tmp, filter=_redact_pkg_tar_filter)
         pkg_root = os.path.join(tmp, "pfb_smoke_diag", "pkg")
         if os.path.isdir(pkg_root):
             for dirpath, _, files in os.walk(pkg_root):
@@ -5532,8 +5540,16 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         ]
         result = subprocess.run(scp_argv, capture_output=True, text=True, timeout=timeout, check=False)
         if result.returncode == 0:
-            print(f"[smoke] collected full guest diagnostics -> {dest_dir}/pfb_smoke_diag.tgz")
-            redact_pkg_tarball(os.path.join(dest_dir, "pfb_smoke_diag.tgz"))
+            tgz_path = os.path.join(dest_dir, "pfb_smoke_diag.tgz")
+            try:
+                redact_pkg_tarball(tgz_path)
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    "[smoke] host-side diagnostics redaction failed; "
+                    f"archive has guest-side redaction only -> {tgz_path}: {exc!r}"
+                )
+            else:
+                print(f"[smoke] collected and redacted full guest diagnostics -> {tgz_path}")
         else:
             print(f"[smoke] guest-diagnostics scp failed (non-fatal): {result.stderr!r}")
         # Surface the VM SERIAL CONSOLE in the uploaded artifact. boot_vm.sh runs
