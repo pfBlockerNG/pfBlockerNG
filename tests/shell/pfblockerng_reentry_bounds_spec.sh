@@ -125,8 +125,15 @@ recorded_reentry_of() {
 # The shipped init defaults for the re-entry seam. pfb_source() skips the PFB_SOURCED
 # init block, so these get a source pin; sorted so the order inside the block is free.
 init_defaults() {
-  grep -E '^[[:space:]]*(pathphp|pathpfbphp|pfbreentrytimeout)=' "${PFB_PKGDIR}/pfblockerng.sh" \
+  grep -E '^[[:space:]]*(pathphp|pathpfbphp)=' "${PFB_PKGDIR}/pfblockerng.sh" \
     | sed 's/^[[:space:]]*//' | LC_ALL=C sort | tr '\n' '|'
+}
+
+# The shipped init line that seeds the ONE global budget (issue #2851): the stored
+# General -> Advanced value, normalized through pfb_reentry_timeout() before the seam
+# can ever see it. A source pin for the same reason as init_defaults above.
+init_budget_line() {
+  grep -E '^[[:space:]]*pfbreentrytimeout=' "${PFB_PKGDIR}/pfblockerng.sh" | sed 's/^[[:space:]]*//'
 }
 
 # The top-level `dnsbl-control` case arm runs after the PFB_SOURCED guard returns, so it
@@ -301,8 +308,149 @@ Describe 'every shell re-entry call site reaches the bounded seam (issue #2016)'
     The output should not include '/usr/local/bin/php'
   End
 
-  It 'ships the re-entry interpreter, target and ceiling as init defaults'
+  It 'ships the re-entry interpreter and target as init defaults'
     When call init_defaults
-    The output should equal 'pathpfbphp=/usr/local/www/pfblockerng/pfblockerng.php|pathphp=/usr/local/bin/php|pfbreentrytimeout=1800|'
+    The output should equal 'pathpfbphp=/usr/local/www/pfblockerng/pfblockerng.php|pathphp=/usr/local/bin/php|'
+  End
+
+  It 'seeds the one global budget from the stored setting through the resolver'
+    # issue #2851: the ceiling is no longer a hardcoded init literal -- it is the ONE
+    # registered gen-section key, normalized before any seam can see it.
+    When call init_budget_line
+    The output should include 'read_xml_tag.sh'
+    The output should include 'installedpackages/pfblockerng/config/pfb_reentry_timeout'
+    The output should include 'pfb_reentry_timeout "$('
+  End
+End
+
+Describe 'pfb_reentry_timeout() accepted window (issue #2851)'
+  # The shell half of the ONE global nested-pass budget: whole seconds 60..7200
+  # inclusive are honoured, and every other stored value -- absent, empty, non-numeric,
+  # decimal, negative, zero, below-60, above-7200, overflow -- resolves to the finite
+  # 1800-second default. The PHP half runs the same matrix in
+  # tests/php/ReentryTimeoutSettingTest.php, and that file also pins the two windows
+  # against each other so they cannot drift apart.
+  BeforeAll 'pfb_source'
+
+  It 'honours the minimum'
+    When call pfb_reentry_timeout 60
+    The output should equal 60
+  End
+
+  It 'honours one second above the minimum'
+    When call pfb_reentry_timeout 61
+    The output should equal 61
+  End
+
+  It 'honours a mid-range budget'
+    When call pfb_reentry_timeout 900
+    The output should equal 900
+  End
+
+  It 'honours the default spelled out'
+    When call pfb_reentry_timeout 1800
+    The output should equal 1800
+  End
+
+  It 'honours one second below the maximum'
+    When call pfb_reentry_timeout 7199
+    The output should equal 7199
+  End
+
+  It 'honours the maximum'
+    When call pfb_reentry_timeout 7200
+    The output should equal 7200
+  End
+
+  It 'reads a leading-zero digit run as decimal, never as octal'
+    # POSIX test(1) compares decimal, so 0060 is sixty seconds here and sixty seconds in
+    # PHP -- arithmetic expansion would have made it octal forty-eight.
+    When call pfb_reentry_timeout 0060
+    The output should equal 0060
+  End
+
+  It 'falls back when no value is stored at all'
+    When call pfb_reentry_timeout
+    The output should equal 1800
+  End
+
+  It 'falls back on an empty stored value'
+    When call pfb_reentry_timeout ''
+    The output should equal 1800
+  End
+
+  It 'falls back on a non-numeric stored value'
+    When call pfb_reentry_timeout abc
+    The output should equal 1800
+  End
+
+  It 'falls back on a decimal stored value'
+    When call pfb_reentry_timeout 1.5
+    The output should equal 1800
+  End
+
+  It 'falls back on fractional seconds'
+    When call pfb_reentry_timeout 60.5
+    The output should equal 1800
+  End
+
+  It 'falls back on a negative stored value'
+    When call pfb_reentry_timeout -5
+    The output should equal 1800
+  End
+
+  It 'falls back on zero'
+    When call pfb_reentry_timeout 0
+    The output should equal 1800
+  End
+
+  It 'falls back one second below the minimum'
+    When call pfb_reentry_timeout 59
+    The output should equal 1800
+  End
+
+  It 'falls back one second above the maximum'
+    When call pfb_reentry_timeout 7201
+    The output should equal 1800
+  End
+
+  It 'falls back far above the maximum'
+    When call pfb_reentry_timeout 99999999
+    The output should equal 1800
+  End
+
+  It 'falls back on a 64-bit overflow instead of saturating into the window'
+    When call pfb_reentry_timeout 99999999999999999999
+    The output should equal 1800
+  End
+
+  It 'falls back on a leading space'
+    When call pfb_reentry_timeout ' 900'
+    The output should equal 1800
+  End
+
+  It 'falls back on a trailing space'
+    When call pfb_reentry_timeout '900 '
+    The output should equal 1800
+  End
+
+  It 'falls back on a signed value'
+    When call pfb_reentry_timeout '+900'
+    The output should equal 1800
+  End
+
+  It 'falls back on exponent notation'
+    When call pfb_reentry_timeout 1e3
+    The output should equal 1800
+  End
+
+  It 'falls back on a hexadecimal value'
+    When call pfb_reentry_timeout 0x384
+    The output should equal 1800
+  End
+
+  It 'falls back on a thousands separator'
+    When call pfb_reentry_timeout '1,800'
+    The output should equal 1800
   End
 End
