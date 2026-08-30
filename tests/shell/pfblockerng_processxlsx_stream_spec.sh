@@ -311,7 +311,16 @@ PY
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
 			The path "${orig}${alias}.orig.tmp" should not be exist
 			The output should include 'XLSX processing failed'
-			The stderr should be present
+			# No stderr assertion here, deliberately. Nothing in processxlsx()
+			# writes to stderr on this path -- the 'XLSX processing failed' line
+			# is stdout and the rest goes to errorlog -- so the only writer is
+			# tar, and whether tar says anything depends on the SIGPIPE
+			# disposition it inherits rather than on the code under test:
+			#   SIGPIPE default -> killed by the signal, silent   (0 bytes)
+			#   SIGPIPE ignored -> EPIPE from write(), complains  (82 bytes)
+			# Same GNU tar, same arguments, opposite verdicts. The sibling
+			# context above keeps its stderr assertion because there tar fails
+			# outright rather than dying of EPIPE, which is deterministic.
 			The contents of file "${errorlog}" should include 'exit 153'
 		End
 	End

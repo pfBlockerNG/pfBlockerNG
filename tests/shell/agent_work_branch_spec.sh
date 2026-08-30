@@ -378,7 +378,7 @@ INIT
       printf "go\n" > "$3/release-two"
       wait "$one"; one_rc=$?
       wait "$two"; two_rc=$?
-      sort "$3/one.out" "$3/two.out" > "$3/results"
+      LC_ALL=C sort "$3/one.out" "$3/two.out" > "$3/results"
       printf "%s %s\n" "$one_rc" "$two_rc"
       [ "$one_rc" -eq 0 ] && [ "$two_rc" -eq 0 ]
     ' _ "$fixture/session" "$script_abs" "$race_dir"
@@ -414,7 +414,7 @@ INIT
       printf "go\n" > "$3/release-two"
       wait "$one"; one_rc=$?
       wait "$two"; two_rc=$?
-      sort "$3/one.out" "$3/two.out" > "$3/results"
+      LC_ALL=C sort "$3/one.out" "$3/two.out" > "$3/results"
       printf "%s %s\n" "$one_rc" "$two_rc"
       [ "$one_rc" -eq 0 ] && [ "$two_rc" -eq 0 ]
     ' _ "$fixture/session" "$script_abs" "$race_dir"
