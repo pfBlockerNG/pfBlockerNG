@@ -2613,6 +2613,27 @@ def test_wizard_welcome_step_renders_the_fluid_support_logo(
     assert "enable-background" not in body, "wizard logo still carries the retired enable-background"
 
 
+# Step 2 ("pfBlockerNG Components") is the second <step> -> stepid=1.
+_WIZARD_COMPONENTS_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=1"
+
+
+def test_wizard_components_step_columns_sit_in_rows(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """The step-2 callouts render inside Bootstrap rows (issue #2890).
+
+    Without a row parent the columns carry uncancelled negative gutters, which is
+    visible only in the shipped markup -- the PHP pin proves the source.
+    """
+    resp = webui.get(_WIZARD_COMPONENTS_STEP)
+    result = evaluate_render(_WIZARD_COMPONENTS_STEP, resp.status_code, resp.text, ("pfBlockerNG Components",))
+    assert result.ok, f"wizard components step render oracle failed: {result.detail}"
+    body = resp.text
+    assert "CAUTION BEFORE PROCEEDING!" in body, "step 2 lost its caution callout"
+    caution = body.index("CAUTION BEFORE PROCEEDING!")
+    assert 'class="row"' in body[max(0, caution - 400) : caution], (
+        "step 2's caution callout is not inside a Bootstrap row"
+    )
+
+
 def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
     """ADR-23: the wizard DNSBL step renders the Auto VIP (pfb_dnsvip_auto) checkbox cleanly.
 
