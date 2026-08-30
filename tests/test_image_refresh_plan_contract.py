@@ -6,8 +6,8 @@ and asserts the emitted strategy matrix:
 
   - a bare dispatch plans NOTHING (the upgrade.available matrix mode is
     retired — the reconcile loop decides what runs);
-  - DIRECT_LEG passes one validated leg through verbatim (charset-constrained,
-    force_flag enum) and wins over self_refresh;
+  - DIRECT_LEG passes one validated leg through verbatim (including its exact
+    php_version/py_flavor tuple, charset-constrained) and wins over self_refresh;
   - SELF_REFRESH=true emits from==to `--force` legs for the newest amd64 entry
     per channel (manual operator re-publish);
   - route-only and aarch64 entries never produce a leg (no ARM smoke image).
@@ -135,6 +135,8 @@ class TestDirectLeg:
         "label": "Plus",
         "pfsense_version": "26.07",
         "freebsd_version": "16.0-RELEASE",
+        "php_version": "8.5",
+        "py_flavor": "py311",
         "image_name": "pfsense-plus",
         "branch": "26.07",
         "target": "26.07",
@@ -161,6 +163,17 @@ class TestDirectLeg:
         leg = {k: v for k, v in self.LEG.items() if k != "image_name"}
         matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
         assert matrix["include"] == []
+
+    def test_runtime_tuple_fields_are_required(self, tmp_path: Path) -> None:
+        for key in ("php_version", "py_flavor"):
+            leg = {k: v for k, v in self.LEG.items() if k != key}
+            matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(leg))
+            assert matrix["include"] == [], f"a direct_leg missing {key} must be rejected"
+
+    def test_runtime_tuple_fields_are_charset_constrained(self, tmp_path: Path) -> None:
+        for key, value in (("php_version", "8.5;curl-evil"), ("py_flavor", "py311;curl-evil")):
+            matrix = _run_plan(tmp_path, [_entry()], direct_leg=json.dumps(dict(self.LEG, **{key: value})))
+            assert matrix["include"] == [], f"a direct_leg with hostile {key} must be rejected"
 
     def test_metacharacter_leg_values_are_rejected(self, tmp_path: Path) -> None:
         # Review F4 hardening: leg fields reach ${{ matrix.* }} interpolation in

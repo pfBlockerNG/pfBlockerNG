@@ -1152,7 +1152,7 @@ log "upgraded: ${OLD_VER} -> ${NEW_VER}"
 # before the health gate/publish below: most notably a py_flavor flip (e.g.
 # py311 -> py312) strands every old-flavor package. Matrix-driven off the CI
 # matrix's per-pfsense_version rows (--print-ci; one row per version, unlike
-# the per-freebsd_major-deduped BUILD matrix); best-effort when the NEW
+# the exact-runtime-tuple-deduped BUILD matrix, issue #2926); best-effort when the NEW
 # version has no matrix row yet (a version not yet added) — warn + skip the
 # install/shed plan, but still verify the OLD row's own deps so a genuinely
 # broken set (e.g. a flip that already happened) is still caught. Fail-closed
