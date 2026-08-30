@@ -37,26 +37,27 @@
 #
 # Outputs:
 #   BUILD matrix     — role=build entries (absent role treated as build; back-compat),
-#     DEDUPED to one row per distinct freebsd_major (issue #1806): every
-#     pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build
-#     serves every arch AND every edition/version sharing a FreeBSD major — the
-#     BUILD matrix is the CI fan-out that actually BUILDS a .pkg, so it collapses
-#     to that one-build-per-major granularity. Each row carries: freebsd_major,
+#     DEDUPED to one row per distinct (freebsd_major, php_version, py_flavor)
+#     build tuple (issue #2926): every pfSense-pkg-pfBlockerNG port is NO_ARCH,
+#     so one wildcard-ABI .pkg build serves every arch, and every edition/version
+#     sharing the SAME runtime tuple shares one build — the BUILD matrix is the
+#     CI fan-out that actually BUILDS a .pkg, so it collapses to that
+#     one-build-per-tuple granularity. Each row carries: freebsd_major,
 #     php_version, py_flavor, extra_pkgs (deduped union across merged rows;
-#     default [] when every merged row omits it), plus pfsense_version/channel/
-#     freebsd_version/variant/status/image_name/mac/... inherited from whichever
-#     merged row is LAST in matrix order (fine for a build TARGET; a consumer
-#     needing every distinct version sharing a major reads --print-ci or
-#     --print-route instead, both one row per version, never deduped).
-#     php_version/py_flavor drive the real build and MUST agree across every row
-#     sharing a major — disagreement is a hard error (an unresolvable ambiguity,
-#     never silently picking one side). There is no `arch` OR `ci` field on a
-#     merged BUILD row, ever: both are explicitly deleted post-merge (a stray
-#     `arch`/`ci` key on any contributing row — even a non-representative one —
-#     would otherwise ride through via the last-wins `reduce`, e.g. a
-#     non-last row's `arch` never gets overwritten by a last row that lacks
-#     it). BUILD consumers never read either key; --print-ci is the leg/arch
-#     source. role=route-only entries are
+#     default [] when every merged row omits it), plus
+#     pfsense_version/channel/freebsd_version/variant/status/image_name/mac/...
+#     inherited from whichever merged row is LAST in matrix order (fine for a
+#     build TARGET; a consumer needing every distinct version sharing a major
+#     reads --print-ci or --print-route instead, both one row per version,
+#     never deduped). The exact tuple — never the major alone — is the build
+#     identity (issue #2926): a same-major row whose php_version/py_flavor
+#     differs is a DISTINCT build target and keeps its own row. There is no
+#     `arch` OR `ci` field on a merged BUILD row, ever: both are explicitly
+#     deleted post-merge (a stray `arch`/`ci` key on any contributing row — even
+#     a non-representative one — would otherwise ride through via the last-wins
+#     `reduce`, e.g. a non-last row's `arch` never gets overwritten by a last
+#     row that lacks it). BUILD consumers never read either key; --print-ci is
+#     the leg/arch source. role=route-only entries are
 #     EXCLUDED: they are served from a frozen .pkg but never built or smoked.
 #   CI matrix        — the ci:true entries (ANY channel), ONE ROW PER VERSION
 #     (never deduped by freebsd_major — a smoke/UI leg boots one VM per pfSense
@@ -182,45 +183,31 @@ fi
 _BUILD_ROLE_ENTRIES="$(printf '%s' "$ROUTE_MATRIX" | jq -c \
   '[.[] | select((.role // "build") != "route-only")]')"
 
-# ── Build matrix: _BUILD_ROLE_ENTRIES DEDUPED to one row per freebsd_major ────
-# issue #1806: every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI
-# .pkg build serves every arch AND every edition/version sharing a FreeBSD
-# major — the BUILD matrix (what actually drives a .pkg build) collapses to
-# that granularity. php_version/py_flavor drive the real build and MUST agree
-# across every row sharing a major; a disagreement is a hard error (never
-# silently picking one side) rather than a silently wrong dep set. Grouping
-# key is `.freebsd_major // ""` but the EMPTY-major group is deliberately never
-# merged/asserted (`.[0].freebsd_major // "" == ""` guards both jq calls below):
-# every REAL matrix entry always carries freebsd_major, so an empty-major row
-# only ever shows up in a synthetic fixture exercising unrelated derivations
-# (e.g. python_versions/php_versions) that never intended those rows to
-# represent the same build target.
-_BUILD_MAJOR_MISMATCH="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
-  group_by(.freebsd_major // "")
-  | map(select(
-      (.[0].freebsd_major // "") != ""
-      and ((map(.php_version) | unique | length) > 1 or (map(.py_flavor) | unique | length) > 1)
-    ))
-  | map({freebsd_major: .[0].freebsd_major,
-         php_version: (map(.php_version) | unique),
-         py_flavor: (map(.py_flavor) | unique)})')"
-if [ "$(printf '%s' "$_BUILD_MAJOR_MISMATCH" | jq 'length')" -gt 0 ]; then
-  printf '::error::BUILD matrix: freebsd_major with disagreeing php_version/py_flavor across merged rows in %s: %s\n' \
-    "$MATRIX_FILE" "$(printf '%s' "$_BUILD_MAJOR_MISMATCH" | jq -c '.')" >&2
-  exit 1
-fi
-
-# Merge each REAL freebsd_major group into ONE row: identity fields
-# (pfsense_version, channel, variant, status, image_name, mac, ci, ...) come
-# from whichever row is LAST in matrix order (jq's `+` — later keys win) —
-# fine for a build TARGET; a consumer needing every distinct version reads
+# ── Build matrix: _BUILD_ROLE_ENTRIES DEDUPED to one row per runtime tuple ────
+# issue #2926: every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one
+# wildcard-ABI .pkg build serves every arch — but the identity that actually
+# keys a build is the exact tuple (freebsd_major, php_version, py_flavor),
+# exactly what the pfBlockerNG/pkg Nightly consumer keys legs on. Rows sharing
+# a major but differing php_version/py_flavor stay SEPARATE BUILD rows; rows
+# with an identical tuple collapse to one. Grouping key is
+# [.freebsd_major // "", .php_version // "", .py_flavor // ""] but the
+# EMPTY-major group is deliberately never merged (`.[0].freebsd_major // ""
+# == ""` guards the jq below): every REAL matrix entry always carries
+# freebsd_major, so an empty-major row only ever shows up in a synthetic
+# fixture exercising unrelated derivations (e.g. python_versions/php_versions)
+# that never intended those rows to represent the same build target.
+#
+# Merge each REAL runtime-tuple group into ONE row: identity fields
+# (pfsense_version, channel, variant, status, image_name, mac, ...) come from
+# whichever row is LAST in matrix order (jq's `+` — later keys win) — fine for
+# a build TARGET; a consumer needing every distinct version reads
 # --print-ci/--print-route instead. extra_pkgs unions + dedupes + sorts across
 # every merged row (default [] when every one omits it), so e.g. CE's
-# textproc/py-charset-normalizer survives the merge even if a same-major
+# textproc/py-charset-normalizer survives the merge even if a same-tuple
 # sibling entry carries none. An empty-major row (see above) passes through
 # UNMERGED, one row per input entry — never grouped with its empty-major peers.
 BUILD_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
-  group_by(.freebsd_major // "")
+  group_by([.freebsd_major // "", .php_version // "", .py_flavor // ""])
   | map(
       if (.[0].freebsd_major // "") == "" then
         .[]

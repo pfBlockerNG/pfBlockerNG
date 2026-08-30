@@ -1002,12 +1002,13 @@ no arch subdirectory — one varver directory serves every arch of its FreeBSD m
 → `FreeBSD:<major>:<arch>`) still carries only the FreeBSD major (the arch segment was never the
 load-bearing part of the trap; see "Why" next), so the same "multiple editions can share one major"
 collision still applies, one field narrower than before. The BUILD matrix
-(`scripts/read-version-matrix.sh --print-build`) now dedupes to **one row per freebsd_major**
-(hard-erroring if two versions sharing a major disagree on `php_version`/`py_flavor`) purely as a
-**build-efficiency** optimization (one wildcard-ABI `.pkg` build serves every edition/version on
-that major) — it changes nothing about how the catalog is *keyed* or *served*: the CI matrix and
-ROUTE matrix stay one row per version, and every served catalog path is still `<channel>/<varver>/`,
-never `<channel>/<freebsd_major>/`.
+(`scripts/read-version-matrix.sh --print-build`) now dedupes to **one row per exact runtime tuple**
+`(freebsd_major, php_version, py_flavor)` (issue #2926; same-major rows with differing PHP/Python
+are distinct build targets and keep their own rows) purely as a **build-efficiency** optimization
+(one wildcard-ABI `.pkg` build serves every edition/version sharing that tuple) — it changes
+nothing about how the catalog is *keyed* or *served*: the CI matrix and ROUTE matrix stay one row
+per version, and every served catalog path is still `<channel>/<varver>/`, never
+`<channel>/<freebsd_major>/`.
 
 **Why (the trap).** A box's own `${ABI}` (`pkg config abi`) carries only the FreeBSD major (+ its
 own concrete arch, irrelevant to our NO_ARCH package). It is **NOT in 1:1 correspondence** with a
@@ -1027,10 +1028,10 @@ version-pinned conf on each upgrade (server-side) instead.
 **Do NOT conclude "the current matrix is 1:1, so `${ABI}` suffices."** That 1:1 (CE→FreeBSD15,
 Plus→FreeBSD16) is **incidental and not guaranteed** — CE and Plus have shared FreeBSD bases before,
 and the supported window can hold two versions on one major with different deps at any time. That
-fail-closed CI guard now EXISTS: `read-version-matrix.sh`'s BUILD-matrix dedup hard-errors when two
-entries share a `freebsd_major` with disagreeing `php_version`/`py_flavor` (issue #1806) — but the
-design **stays varver-keyed regardless**; the guard only rejects an *unresolvable* collision, it
-does not make `${ABI}` (or `freebsd_major`) a valid catalog key.
+fail-closed grouping now EXISTS: `read-version-matrix.sh`'s BUILD-matrix dedup (issue #2926) merges
+only entries whose `(freebsd_major, php_version, py_flavor)` tuple is identical — the same tuple
+the Nightly producer and the pkg consumer key build legs on — but the
+design **stays varver-keyed regardless**; the tuple keys the *build*, never the served catalog.
 
 **Upgrade consequence (verified — libpkg + `pfSense-upgrade`).** Because the conf is version-pinned it
 cannot auto-follow a version-crossing upgrade the way an `${ABI}` template would, and there is **no

@@ -235,24 +235,31 @@ def build_handoff(
         if ci is not None:
             normalized["ci"] = ci
         normalized_route_rows.append(normalized)
-    expected_rows = {str(row["freebsd_major"]): row for row in normalized_build_rows}
+    # issue #2926: build identity is the exact runtime tuple (freebsd_major,
+    # php_version, py_flavor) — the same key the pfBlockerNG/pkg Nightly
+    # consumer uses. Identical tuples are one build target; same-major rows
+    # with a differing php/py stay separate. Duplicate EXACT tuples reject.
+    expected_rows = {
+        (str(row["freebsd_major"]), str(row["php_version"]), str(row["py_flavor"])): row
+        for row in normalized_build_rows
+    }
     if len(expected_rows) != len(normalized_build_rows):
-        raise ProvenanceError("BUILD matrix contains duplicate FreeBSD majors")
+        raise ProvenanceError("BUILD matrix contains duplicate build tuples")
     if len(results) != len(expected_rows):
         raise ProvenanceError("BUILD result count does not match BUILD matrix")
 
     builds: list[dict[str, object]] = []
-    seen_majors: set[str] = set()
+    seen_keys: set[tuple[str, str, str]] = set()
     for result in results:
         if not isinstance(result, dict):
             raise ProvenanceError("BUILD result must be an object")
         if set(result) != {"matrix_row", "record", "artifact", "dep_artifacts"}:
             raise ProvenanceError("BUILD result has unexpected fields")
         row = validate_build_matrix_row(dict(result["matrix_row"]))
-        major = str(row["freebsd_major"])
-        if major in seen_majors or expected_rows.get(major) != row:
+        key = (str(row["freebsd_major"]), str(row["php_version"]), str(row["py_flavor"]))
+        if key in seen_keys or expected_rows.get(key) != row:
             raise ProvenanceError("BUILD result row is missing, duplicated, or changed")
-        record = validate_build_record(result["record"], abi=f"FreeBSD:{major}:amd64")
+        record = validate_build_record(result["record"], abi=f"FreeBSD:{row['freebsd_major']}:amd64")
         if record["matrix_row"] != row:
             raise ProvenanceError("build record matrix row does not match BUILD result")
         if (
@@ -268,7 +275,7 @@ def build_handoff(
             raise ProvenanceError("BUILD artifact name does not match Nightly snapshot")
         dep_artifacts = _validate_dep_artifacts(
             result["dep_artifacts"],
-            leg_abi=f"FreeBSD:{major}:*",
+            leg_abi=f"FreeBSD:{key[0]}:*",
             canonical_name=artifact["name"],
         )
         # issue #2405: empty extra_pkgs still requires dep_artifacts == []
@@ -277,9 +284,9 @@ def build_handoff(
             raise ProvenanceError(
                 f"dep_artifacts count must match extra_pkgs (got {len(dep_artifacts)}, expected {expected_deps})"
             )
-        seen_majors.add(major)
+        seen_keys.add(key)
         builds.append({"matrix_row": row, "record": record, "artifact": artifact, "dep_artifacts": dep_artifacts})
-    if seen_majors != set(expected_rows):
+    if seen_keys != set(expected_rows):
         raise ProvenanceError("BUILD results do not cover every BUILD matrix row")
 
     route_keys: set[tuple[object, object]] = set()
@@ -307,7 +314,14 @@ def build_handoff(
         "dependency_builder": normalized_dependency_builder,
         "build_matrix": normalized_build_rows,
         "route_matrix": normalized_route_rows,
-        "builds": sorted(builds, key=lambda item: str(item["matrix_row"]["freebsd_major"])),
+        "builds": sorted(
+            builds,
+            key=lambda item: (
+                str(item["matrix_row"]["freebsd_major"]),
+                str(item["matrix_row"]["php_version"]),
+                str(item["matrix_row"]["py_flavor"]),
+            ),
+        ),
     }
 
 
