@@ -5619,18 +5619,25 @@ function pfb_schedule_cache_refresh_locked(): bool
 }
 
 /** Acquire the scheduler dispatcher lock, reusing this process's existing hold. */
-function pfb_schedule_dispatch_begin(float $timeout_s = 0.1): bool
+function pfb_schedule_dispatch_begin(float $timeout_s = 0.1, ?bool &$contended = NULL): bool
 {
 	global $pfb;
+	$contended = FALSE;
 	if (isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		&& is_resource($GLOBALS['pfb_schedule_dispatch_lock'])) {
 		return TRUE;
 	}
 	$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
-	$lock = @fopen($state_dir . '/pfb_schedule_dispatch.lock', 'c');
-	if (!is_resource($lock) || !pfb_flock_bounded($lock, LOCK_EX, $timeout_s)) {
-		if (is_resource($lock)) {
-			@fclose($lock);
+	$lockpath = $state_dir . '/pfb_schedule_dispatch.lock';
+	$lock = @fopen($lockpath, 'c');
+	if (!is_resource($lock)) {
+		pfb_logger("\n Scheduler dispatcher lock: open failed [ {$lockpath} ]; feed pass aborted.\n", 2);
+		return FALSE;
+	}
+	if (!pfb_flock_bounded($lock, LOCK_EX, $timeout_s, $contended)) {
+		@fclose($lock);
+		if (!$contended) {
+			pfb_logger("\n Scheduler dispatcher lock: acquire failed [ {$lockpath} ]; feed pass aborted.\n", 2);
 		}
 		return FALSE;
 	}

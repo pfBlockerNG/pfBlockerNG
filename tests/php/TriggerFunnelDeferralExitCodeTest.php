@@ -7,30 +7,12 @@ require_once __DIR__ . '/SyncPrereqSeedTrait.php';
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #2505: the pfb_trigger funnel (ADR-43 array API into
- * sync_package_pfblockerng()) must carry the same deferral semantics issue #2491
- * gave the deprecated `cron` verb — otherwise the DEPRECATED funnel has the
- * considered exit code and the modern, documented one does not.
+ * Issue #2591: lock identity is reported separately from the established internal bool.
  *
- * The unattended dispatch is `pfblockerng.php pfb_trigger ... trigger=cron
- * force=false` (what pfblockerng_tick()'s due job execs). When such a pass loses
- * the dispatcher or feed-pass lock race it stands down with its durable retry
- * state intact (pending marker / due ledger) and the next tick retries — nothing
- * failed, so `pfblockerng.php:285` must exit 0, not 1.
- *
- * Every operator-initiated request stays observable: trigger=manual / trigger=force,
- * any force=true request, the GUI Save '' string path, and the deprecated string
- * verbs (SyncFeedPassDeferralTest pins the '' path's FALSE).
- *
- * Also pinned here (the #2504 review nitpick): a dispatcher-lock deferral was
- * quiet on syslog — one pfb_logger() line only, unlike the feed-pass guard
- * (pfb_feed_pass_begin() raises LOG_NOTICE) — so a live wedged lock holder was
- * invisible outside /var/log/pfblockerng. Both sync funnels' dispatcher guards
- * must raise a syslog notice (captured via the pfsense_doubles logger() double).
- *
- * The trigger=cron rows are RED before the fix (the guards return FALSE and no
- * syslog notice exists); the operator rows are the before-state guards that keep
- * the fix honest and pass both before and after.
+ * Unattended trigger=cron requests retain TRUE and operator-triggered requests retain
+ * FALSE so existing in-process callers keep their semantics. Both lock guards also set
+ * the optional by-reference reason; the CLI maps that reason to EX_TEMPFAIL independently
+ * of the bool. Durable pending state and dispatcher-lock syslog visibility remain covered.
  */
 final class TriggerFunnelDeferralExitCodeTest extends TestCase
 {
@@ -174,42 +156,39 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 		return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'cron'];
 	}
 
-	// -----------------------------------------------------------------------
-	// RED rows: the unattended tick dispatch must exit cleanly on deferral.
-	// -----------------------------------------------------------------------
+	// The unattended tick dispatch retains its established TRUE return on deferral.
 
-	public function testCronTriggerDispatcherDeferralExitsCleanly(): void
+	public function testCronTriggerDispatcherDeferralPreservesTrueAndNamesLock(): void
 	{
 		$this->holdDispatcherLock();
+		$deferredBy = NULL;
 
-		$result = sync_package_pfblockerng(self::cronTrigger());
+		$result = sync_package_pfblockerng(self::cronTrigger(), $deferredBy);
 
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
 		$this->assertTrue(pfb_pending_changes(),
 			'the durable retry marker must survive the benign deferral (the next tick retries)');
-		$this->assertTrue($result,
-			'a deferred trigger=cron pass retains its retry state — pfb_trigger must exit 0 (issue #2505)');
+		$this->assertTrue($result, 'trigger=cron must retain its established TRUE internal return');
+		$this->assertSame('dispatcher-lock', $deferredBy);
 	}
 
-	public function testCronTriggerFeedPassDeferralExitsCleanly(): void
+	public function testCronTriggerFeedPassDeferralPreservesTrueAndNamesLock(): void
 	{
 		$this->holdFeedPassLock();
+		$deferredBy = NULL;
 
-		$result = sync_package_pfblockerng(self::cronTrigger());
+		$result = sync_package_pfblockerng(self::cronTrigger(), $deferredBy);
 
 		$this->assertStringContainsString('Feed pass [ sync ] skipped', $this->mainLog(),
 			'before-state: the run must actually have taken the feed-pass deferral path');
 		$this->assertTrue(pfb_pending_changes(),
 			'the durable retry marker must survive the benign deferral (the next tick retries)');
-		$this->assertTrue($result,
-			'a deferred trigger=cron pass retains its retry state — pfb_trigger must exit 0 (issue #2505)');
+		$this->assertTrue($result, 'trigger=cron must retain its established TRUE internal return');
+		$this->assertSame('feed-pass-lock', $deferredBy);
 	}
 
-	// -----------------------------------------------------------------------
-	// RED rows: a dispatcher-lock deferral must raise a syslog notice
-	// (feed-pass parity — pfb_feed_pass_begin() already does).
-	// -----------------------------------------------------------------------
+	// Dispatcher-lock deferrals remain syslog-visible.
 
 	public function testSyncFunnelDispatcherDeferralRaisesSyslogNotice(): void
 	{
@@ -225,38 +204,43 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 		$this->holdDispatcherLock();
 
 		$this->assertTrue(pfblockerng_sync_cron(),
-			'before-state sanity: the cron verb already exits cleanly on this deferral (issue #2491)');
+			'the unattended cron funnel must retain its established TRUE internal return');
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
 		$this->assertDispatcherDeferralNotice();
 	}
 
-	// -----------------------------------------------------------------------
-	// Guard rows (green before AND after): operator-initiated requests keep
-	// reporting the deferral.
-	// -----------------------------------------------------------------------
+	// Operator-triggered requests retain their established FALSE internal return.
 
-	public function testManualTriggerDispatcherDeferralStaysObservable(): void
+	public function testManualTriggerDispatcherDeferralPreservesFalseAndNamesLock(): void
 	{
 		$this->holdDispatcherLock();
+		$deferredBy = NULL;
 
-		$result = sync_package_pfblockerng(['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual']);
+		$result = sync_package_pfblockerng(
+			['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'],
+			$deferredBy
+		);
 
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
-		$this->assertFalse($result,
-			'an operator-initiated request that got no pass must keep exiting 1');
+		$this->assertFalse($result, 'operator-triggered requests must retain their established FALSE internal return');
+		$this->assertSame('dispatcher-lock', $deferredBy);
 	}
 
-	public function testForcedCronTriggerFeedPassDeferralStaysObservable(): void
+	public function testForcedCronTriggerFeedPassDeferralPreservesFalseAndNamesLock(): void
 	{
 		$this->holdFeedPassLock();
+		$deferredBy = NULL;
 
-		$result = sync_package_pfblockerng(['scope' => 'both', 'force' => TRUE, 'trigger' => 'cron']);
+		$result = sync_package_pfblockerng(
+			['scope' => 'both', 'force' => TRUE, 'trigger' => 'cron'],
+			$deferredBy
+		);
 
 		$this->assertStringContainsString('Feed pass [ sync ] skipped', $this->mainLog(),
 			'before-state: the run must actually have taken the feed-pass deferral path');
-		$this->assertFalse($result,
-			'force=true means an operator asked for work NOW — a deferral must keep exiting 1');
+		$this->assertFalse($result, 'force=true must retain its established FALSE internal return');
+		$this->assertSame('feed-pass-lock', $deferredBy);
 	}
 }

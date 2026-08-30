@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__ . '/support/FailingFlockStream.php';
 
 use PHPUnit\Framework\TestCase;
 
@@ -149,9 +150,12 @@ final class FeedPassLockTest extends TestCase
 	// Row 1 -- acquire on a free lock.
 	// -----------------------------------------------------------------------
 
-	public function testAcquireOnFreeLockSucceedsAndHoldsTheLock(): void
+	public function testAcquireOnFreeLockSucceedsAndReportsNoContention(): void
 	{
-		$this->assertTrue(pfb_feed_pass_acquire(), 'acquire on a free lock must return TRUE');
+		$contended = TRUE;
+
+		$this->assertTrue(pfb_feed_pass_acquire($contended), 'acquire on a free lock must return TRUE');
+		$this->assertFalse($contended, 'an uncontended acquire must not report contention');
 		$this->assertTrue($this->rawProbeStillLocked(),
 			'a second raw-fd flock(LOCK_EX|LOCK_NB) must fail while the helper holds the lock');
 	}
@@ -160,15 +164,16 @@ final class FeedPassLockTest extends TestCase
 	// Row 2 -- acquire while another handle holds it.
 	// -----------------------------------------------------------------------
 
-	public function testAcquireWhileAnotherHandleHoldsReturnsFalseAndHolderUndisturbed(): void
+	public function testAcquireWhileAnotherHandleHoldsReportsContentionAndLeavesHolderUndisturbed(): void
 	{
 		$holder = fopen($this->lockPath(), 'c');
 		$this->rawFps[] = $holder;
 		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+		$contended = FALSE;
 
-		$this->assertFalse(pfb_feed_pass_acquire(), 'acquire must FALSE while another handle holds the lock');
-
-		// Holder undisturbed: it can still explicitly re-affirm/extend its own lock.
+		$this->assertFalse(pfb_feed_pass_acquire($contended),
+			'acquire must return FALSE while another handle holds the lock');
+		$this->assertTrue($contended, 'a held lock must be distinguished from lock I/O errors');
 		$this->assertTrue(flock($holder, LOCK_EX | LOCK_NB),
 			'the original holder must remain able to operate on its own lock afterwards');
 	}
@@ -247,31 +252,46 @@ final class FeedPassLockTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Row 8 -- fail-open on an unwritable dbdir.
+	// Row 8 -- acquisition errors fail closed without masquerading as contention.
 	// -----------------------------------------------------------------------
 
-	public function testFailOpenOnUnwritableDbdirAcquireTrueWarnsBusyFalse(): void
+
+	public function testFeedFlockErrorReportsFailureWithoutContention(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
-		}
-
-		$denydir = "{$this->dbdir}/deny";
-		mkdir($denydir, 0755, TRUE);
-		$GLOBALS['pfb']['dbdir'] = $denydir;
-		chmod($denydir, 0555);
-
+		$this->assertTrue(stream_wrapper_register('pfbfeedlockerror', PfbFailingFlockStream::class));
 		try {
-			$this->assertTrue(pfb_feed_pass_acquire(),
-				'an unwritable dbdir must fail OPEN -- acquire returns TRUE rather than blocking legitimate work');
-			$this->assertFileExists($GLOBALS['pfb']['errlog'], 'the fail-open path must log a warning');
-			$this->assertStringContainsString('lock', strtolower((string) file_get_contents($GLOBALS['pfb']['errlog'])),
-				'the warning must reference the lock failure');
+			$GLOBALS['pfb']['dbdir'] = 'pfbfeedlockerror://state';
+			$contended = TRUE;
 
-			$this->assertFalse(pfb_feed_pass_busy(),
-				'busy() must also fail OPEN (FALSE, never reports busy) on an unwritable dbdir');
+			$this->assertFalse(pfb_feed_pass_begin('sync', $contended));
+			$this->assertFalse($contended, 'a real flock error is not contention');
+			$log = is_file($GLOBALS['pfb']['log']) ? (string) file_get_contents($GLOBALS['pfb']['log']) : '';
+			$this->assertStringNotContainsString('another pfBlockerNG feed pass is running', $log);
 		} finally {
-			chmod($denydir, 0755);
+			stream_wrapper_unregister('pfbfeedlockerror');
+		}
+	}
+
+	public function testDispatcherOpenErrorReportsFailureWithoutContention(): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
+		$contended = TRUE;
+
+		$this->assertFalse(pfb_schedule_dispatch_begin(0.0, $contended));
+		$this->assertFalse($contended, 'a dispatcher open error is not contention');
+	}
+
+	public function testDispatcherFlockErrorReportsFailureWithoutContention(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbdispatchlockerror', PfbFailingFlockStream::class));
+		try {
+			$GLOBALS['pfb']['schedule_state_dir'] = 'pfbdispatchlockerror://state';
+			$contended = TRUE;
+
+			$this->assertFalse(pfb_schedule_dispatch_begin(0.0, $contended));
+			$this->assertFalse($contended, 'a dispatcher flock error is not contention');
+		} finally {
+			stream_wrapper_unregister('pfbdispatchlockerror');
 		}
 	}
 
