@@ -19,9 +19,9 @@ final class WizardGridUiTest extends TestCase
 	/**
 	 * Columns attributed to the row that actually encloses them.
 	 *
-	 * Depth-tracked rather than counted: a flat tally cannot tell an orphaned column
-	 * from one whose sibling happens to sit in a row, nor an overfull row from two
-	 * rows whose widths average out.
+	 * Parsed, not pattern-matched. A hand-rolled tag scanner reproduces every classic
+	 * failure of reading markup with regex -- a self-closing div desyncs the stack, a
+	 * comment reads as live, and attribute order decides whether a tag is seen at all.
 	 *
 	 * @return list<array{block: int, row: int|null, cols: list<string>}>
 	 */
@@ -33,35 +33,54 @@ final class WizardGridUiTest extends TestCase
 
 		$groups = [];
 		foreach ($blocks[1] as $index => $block) {
-			preg_match_all('/<div(?:\s+class="([^"]*)")?[^>]*>|<\/div>/', $block, $tags, PREG_SET_ORDER);
-			$stack = [];
+			$doc = new DOMDocument();
+			$previous = libxml_use_internal_errors(TRUE);
+			$doc->loadHTML('<?xml encoding="UTF-8"><div id="pfb-scan-root">' . $block . '</div>',
+				LIBXML_NOERROR | LIBXML_NOWARNING);
+			libxml_clear_errors();
+			libxml_use_internal_errors($previous);
+
 			$rowSeq = 0;
-			foreach ($tags as $tag) {
-				if ($tag[0] === '</div>') {
-					array_pop($stack);
+			$rowIds = new SplObjectStorage();
+			foreach ($doc->getElementsByTagName('div') as $div) {
+				if (self::hasClass($div, 'row')) {
+					$rowIds[$div] = ++$rowSeq;
+				}
+			}
+			foreach ($doc->getElementsByTagName('div') as $div) {
+				$class = $div->getAttribute('class');
+				if (!self::hasColumnClass($class)) {
 					continue;
 				}
-				$class = $tag[1] ?? '';
-				if (str_contains($class, 'row')) {
-					$stack[] = ['row', ++$rowSeq];
-					continue;
-				}
-				if (str_contains($class, 'col-sm-')) {
-					$row = NULL;
-					foreach (array_reverse($stack) as $frame) {
-						if ($frame[0] === 'row') {
-							$row = $frame[1];
-							break;
-						}
+				$row = NULL;
+				for ($node = $div->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
+					if (isset($rowIds[$node])) {
+						$row = $rowIds[$node];
+						break;
 					}
-					$key = $index . ':' . ($row ?? 'none');
-					$groups[$key] ??= ['block' => $index, 'row' => $row, 'cols' => []];
-					$groups[$key]['cols'][] = $class;
 				}
-				$stack[] = ['div', 0];
+				$key = $index . ':' . ($row ?? 'none');
+				$groups[$key] ??= ['block' => $index, 'row' => $row, 'cols' => []];
+				$groups[$key]['cols'][] = $class;
 			}
 		}
 		return array_values($groups);
+	}
+
+	/** Class membership by token, so "narrow" is not a row and "col-sm-offset" is not a width. */
+	private static function hasClass(DOMElement $element, string $wanted): bool
+	{
+		return in_array($wanted, preg_split('/\s+/', trim($element->getAttribute('class'))) ?: [], TRUE);
+	}
+
+	private static function hasColumnClass(string $class): bool
+	{
+		foreach (preg_split('/\s+/', trim($class)) ?: [] as $token) {
+			if (preg_match('/^col-sm-\d+$/', $token) === 1) {
+				return TRUE;
+			}
+		}
+		return FALSE;
 	}
 
 	public function testEveryColumnSitsInsideARow(): void
