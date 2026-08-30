@@ -141,6 +141,17 @@ def test_firewall_auto_rule_order_stays_inside_its_container(
         (control) => {
           const column = control.closest('div[class*="col-sm-"]');
           if (!column) throw new Error('pass_order has no Bootstrap control column');
+          const reference = control.cloneNode(true);
+          reference.removeAttribute('id');
+          reference.removeAttribute('name');
+          reference.setAttribute('aria-hidden', 'true');
+          reference.style.cssText +=
+            '; position: absolute !important; visibility: hidden !important;' +
+            ' pointer-events: none !important; width: auto !important; max-width: none !important';
+          column.append(reference);
+          const nativeAutoWidth = reference.getBoundingClientRect().width;
+          reference.remove();
+
           const box = control.getBoundingClientRect();
           const container = column.getBoundingClientRect();
           const root = document.documentElement;
@@ -148,6 +159,7 @@ def test_firewall_auto_rule_order_stays_inside_its_container(
             left: box.left,
             right: box.right,
             width: box.width,
+            nativeAutoWidth,
             containerLeft: container.left,
             containerRight: container.right,
             containerWidth: container.width,
@@ -172,8 +184,8 @@ def test_firewall_auto_rule_order_stays_inside_its_container(
         f"[{label} {viewport['width']}px] IP page gained horizontal document scroll: {metrics!r}"
     )
     if label == "desktop":
-        assert metrics["width"] < metrics["containerWidth"], (
-            f"desktop select must keep its intrinsic native width rather than fill the column: {metrics!r}"
+        assert abs(metrics["width"] - metrics["nativeAutoWidth"]) <= 1, (
+            f"desktop select must keep the native auto width of its identical options: {metrics!r}"
         )
 
     for value in RULE_ORDER_VALUES:
