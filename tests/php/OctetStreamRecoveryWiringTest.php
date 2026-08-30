@@ -37,6 +37,9 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 	private string $junkPrefixedZip;
 	private string $junkBlob;
 
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
 	protected function setUp(): void
 	{
 		// Both tests build the fixture ZIP via ZipArchive; without php-zip the suite
@@ -69,6 +72,10 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 		// by file(1) on both macOS and Linux; not a ZIP/gzip/bzip2 archive.
 		file_put_contents($this->junkBlob, str_repeat("\x00\x01\x02\x03", 256));
 
+		$this->saved['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? [])
+			? $GLOBALS['pfb']['mime_types']
+			: FALSE;
+
 		// Allow-list: application/zip present; application/octet-stream absent (it is
 		// never added to the allow-list — recovery is the only admittance path).
 		$GLOBALS['pfb']['mime_types'] = ['application/zip' => 1];
@@ -89,7 +96,13 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 		@unlink($this->junkPrefixedZip);
 		@unlink($this->junkBlob);
 		@rmdir($this->dir);
-		unset($GLOBALS['pfb']['mime_types']);
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === FALSE) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
 	}
 
 	/**
