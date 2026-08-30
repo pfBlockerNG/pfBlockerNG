@@ -12994,6 +12994,29 @@ function pfb_ip_render_attribution(array $fields): array {
 			);
 		}
 	}
+	$et_lock = FALSE;
+	if ($rq['folder'] === "{$pfb['etdir']}/*.txt") {
+		$et_lock = @fopen("{$pfb['etdir']}.transaction.lock", 'c');
+		$et_ready = is_resource($et_lock) && @flock($et_lock, LOCK_SH | LOCK_NB) &&
+			!file_exists("{$pfb['etdir']}.transaction");
+		if (!$et_ready) {
+			if (is_resource($et_lock)) {
+				@flock($et_lock, LOCK_UN);
+				@fclose($et_lock);
+			}
+			return array(
+				'host' => $rq['host'],
+				'hostname' => $rq['hostname'],
+				'pfb_geoip' => $rq['pfb_geoip'],
+				'field15' => $rq['field15'],
+				'mask' => '',
+				'feed_new' => 'Not listed!',
+				'eval_new' => 'Not listed!',
+				'alias_new' => '',
+				'pfb_matchtitle' => 'This IP is not currently listed!',
+			);
+		}
+	}
 	$memos = &pfb_ip_render_memos();
 	$mask = '';
 	if ($fields[4] == 4) {
@@ -13058,6 +13081,10 @@ function pfb_ip_render_attribution(array $fields): array {
 		'alias_new' => $alias_new,
 		'pfb_matchtitle' => $pfb_matchtitle,
 	);
+	if (is_resource($et_lock)) {
+		@flock($et_lock, LOCK_UN);
+		@fclose($et_lock);
+	}
 	pfb_geoip_generation_read_unlock($geoip_lock);
 	return $result;
 }
@@ -13308,20 +13335,40 @@ function pfb_ip_prefetch(array $rows): void {
 	global $pfb;
 
 	$geoip_lock = FALSE;
+	$et_lock = FALSE;
 	$has_geoip = FALSE;
+	$has_et = FALSE;
 	foreach ($rows as $row) {
-		if (!empty($row['pfb_geoip'])) {
-			$has_geoip = TRUE;
-			break;
-		}
+		$has_geoip = $has_geoip || !empty($row['pfb_geoip']);
+		$has_et = $has_et || $row['folder'] === "{$pfb['etdir']}/*.txt";
 	}
 	if ($has_geoip) {
 		$geoip_lock = pfb_geoip_generation_read_lock();
 	}
-	$rows = array_values(array_filter($rows, static function (array $row) use ($has_geoip, $geoip_lock): bool {
-		return empty($row['pfb_geoip']) || !$has_geoip || $geoip_lock !== FALSE;
-	}));
+	if ($has_et) {
+		$et_lock = @fopen("{$pfb['etdir']}.transaction.lock", 'c');
+		if (!is_resource($et_lock) || !@flock($et_lock, LOCK_SH | LOCK_NB) ||
+		    file_exists("{$pfb['etdir']}.transaction")) {
+			if (is_resource($et_lock)) {
+				@flock($et_lock, LOCK_UN);
+				@fclose($et_lock);
+			}
+			$et_lock = FALSE;
+		}
+	}
+	$rows = array_values(array_filter($rows,
+		static function (array $row) use ($has_geoip, $geoip_lock, $has_et, $et_lock, $pfb): bool {
+			$geoip_ready = empty($row['pfb_geoip']) || !$has_geoip || $geoip_lock !== FALSE;
+			$et_ready = $row['folder'] !== "{$pfb['etdir']}/*.txt" || !$has_et || $et_lock !== FALSE;
+			return $geoip_ready && $et_ready;
+		}
+	));
 	if (empty($rows)) {
+		if (is_resource($et_lock)) {
+			@flock($et_lock, LOCK_UN);
+			@fclose($et_lock);
+		}
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return;
 	}
 
@@ -13382,6 +13429,10 @@ function pfb_ip_prefetch(array $rows): void {
 
 	if (empty($miss_rows)) {
 		pfb_geoip_generation_read_unlock($geoip_lock);
+		if (is_resource($et_lock)) {
+			@flock($et_lock, LOCK_UN);
+			@fclose($et_lock);
+		}
 		return;
 	}
 
@@ -13449,6 +13500,10 @@ function pfb_ip_prefetch(array $rows): void {
 		// B3: the aliastables pattern file could not be created/written -- leave every
 		// remaining row unseeded (per-row fallback fires for all of them).
 		pfb_geoip_generation_read_unlock($geoip_lock);
+		if (is_resource($et_lock)) {
+			@flock($et_lock, LOCK_UN);
+			@fclose($et_lock);
+		}
 		return;
 	}
 
@@ -13456,6 +13511,10 @@ function pfb_ip_prefetch(array $rows): void {
 		$pfb_query    = $headers_by_host_folder[$miss_key];
 		$raw_validate = pfb_ip_prefetch_last_match($alias_lines, $eval_new) ?? '';
 		$memos['miss'][$miss_key] = array($pfb_query, $raw_validate);
+	}
+	if (is_resource($et_lock)) {
+		@flock($et_lock, LOCK_UN);
+		@fclose($et_lock);
 	}
 	pfb_geoip_generation_read_unlock($geoip_lock);
 }
@@ -14503,6 +14562,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 	$orig_download	= trim("{$file_org_esc}", "'");
 	$list_download	= trim("{$list_url_esc}", "'");
 	$head_download	= trim("{$header_esc}", "'");
+	$et_stage	= "{$orig_download}.etstage";
+	$text_download	= $is_et ? $et_stage : $orig_download;
+	$text_download_esc = escapeshellarg($text_download);
 
 	$md5_download	= trim(escapeshellarg("{$file_dwn}.md5.raw"), "'");
 
@@ -15043,6 +15105,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 		}
 
+		if ($is_et) {
+			unlink_if_exists($et_stage);
+		}
+
 		// Decompress file if required
 		if ($file_type == 'application/x-gzip' || $file_type == 'application/gzip') {
 			if (!pfb_validate_archive($file_download, $file_type)) {
@@ -15212,7 +15278,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				$retval = pfb_download_initial_retval();
 				$extract_tar = ($inner_type == 'application/x-tar');
 				$pfb_sanity = NULL;
-				if (!pfb_stage_publish($orig_download,
+				if (!pfb_stage_publish($text_download,
 				    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval, &$pfb_sanity): int {
 					if ($extract_tar) {
 						exec(pfb_extract_cmd("set -o pipefail; /usr/bin/gunzip -c {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
@@ -15254,7 +15320,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			$retval = pfb_download_initial_retval();
 			$extract_tar = ($inner_type == 'application/x-tar');
 			$pfb_sanity = NULL;
-			if (!pfb_stage_publish($orig_download,
+			if (!pfb_stage_publish($text_download,
 			    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval, &$pfb_sanity): int {
 				if ($extract_tar) {
 					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/bzip2 -dkc {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
@@ -15531,10 +15597,14 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				$reject_detail = array();
 				$inner_rejected = FALSE;
 				$pfb_sanity = NULL;
-				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, $list_download,
+				if (!pfb_stage_publish($text_download,
+				    static function (string $staged) use ($file_dwn_esc, $list_download, $is_et,
 				        &$output, &$retval, &$reject_detail, &$inner_rejected, &$pfb_sanity): int {
-					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
+					if ($is_et) {
+						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+					} else {
+						exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
+					}
 					if ($retval !== 0) {
 						return $retval;
 					}
@@ -15564,7 +15634,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// (orig_download), not the outer archive -- the outer container is
 			// already covered by ADR-44's pfb_mime_normalise().
 			$reject_detail = array();
-			if (!pfb_filter(array("{$file_org_esc}", "{$orig_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
+			if (!pfb_filter(array("{$text_download_esc}", "{$text_download}", "{$list_download}"), PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
@@ -15764,7 +15834,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 					$retval = pfb_download_initial_retval();
 					$pfb_sanity = NULL;
-					if (!pfb_stage_publish($orig_download,
+					if (!pfb_stage_publish($text_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval, &$pfb_sanity): int {
 						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 						$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
@@ -15807,6 +15877,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					unlink_if_exists($file_download);
+					unlink_if_exists($et_stage);
 					return PfbDownloadResult::failure();
 				}
 			}
@@ -15832,6 +15903,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			);
 			if ($is_et) {
 				unlink_if_exists($file_download);
+				unlink_if_exists($et_stage);
 			}
 
 			// issue #1797: normalization deliberately does NOT run here. Only the
@@ -18094,15 +18166,24 @@ function pfb_daemon_filterlog() {
 						// Report specific ET IQRisk details
 						if ($et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {
 							$ET_orig = $pfb_query;
-							$pfb_query = find_reported_header($host, "{$pfb['etdir']}/*", FALSE);
-
-							// ET IQRisk category is unknown.
-							if ($pfb_query[1] == 'Unknown') {
+							$et_lock = @fopen("{$pfb['etdir']}.transaction.lock", 'c');
+							$et_ready = is_resource($et_lock) && @flock($et_lock, LOCK_SH | LOCK_NB) &&
+								!file_exists("{$pfb['etdir']}.transaction");
+							if ($et_ready) {
+								$pfb_query = find_reported_header($host, "{$pfb['etdir']}/*", FALSE);
+								@flock($et_lock, LOCK_UN);
+								@fclose($et_lock);
+								if ($pfb_query[1] == 'Unknown') {
+									$pfb_query = $ET_orig;
+								} else {
+									$pfb_query[0] = "{$et_header}:{$pfb_query[0]}";
+								}
+							} else {
+								if (is_resource($et_lock)) {
+									@flock($et_lock, LOCK_UN);
+									@fclose($et_lock);
+								}
 								$pfb_query = $ET_orig;
-							}
-							else {
-								// Prepend ET Header name
-								$pfb_query[0] = "{$et_header}:{$pfb_query[0]}";
 							}
 						}
 

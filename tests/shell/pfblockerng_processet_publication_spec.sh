@@ -23,8 +23,10 @@ Describe 'processet() validates staged ET category output before publication (is
 		live="${orig}${alias}.orig"
 		raw="${orig}${alias}.raw"
 		prior='198.51.100.77'
+		prior_category='203.0.113.99'
 		mkdir -p "${orig}" "${match}" "${etdir}" "${scratch}"
 		printf '%s\n' "${prior}" > "${live}"
+		printf '%s\n' "${prior_category}" > "${etdir}/ET_Cnc.txt"
 
 		cat > "${runner}" <<RUNNER
 #!/bin/sh
@@ -62,6 +64,7 @@ RUNNER
 			The output should include 'ET processing failed'
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
 
@@ -73,6 +76,7 @@ RUNNER
 			The output should include 'ET processing failed'
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
 
@@ -85,6 +89,24 @@ RUNNER
 			The stderr should satisfy portable_binary_stderr
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
+		End
+	End
+
+	Context 'when a conforming grep emits matching binary bytes'
+		It 'rejects the NUL-bearing category and preserves the prior category generation'
+			mkdir "${work}/shim"
+			cat > "${work}/shim/grep" <<'SHIM'
+#!/bin/sh
+exec /usr/bin/grep -a "$@"
+SHIM
+			printf '%s\n' "${prior_category}" > "${etdir}/ET_Cnc.txt"
+			printf '192.0.2.10,1,90\000garbage\n' > "${raw}"
+			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
+			The status should be failure
+			The output should include 'ET processing failed'
+			The contents of file "${live}" should equal "${prior}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
 
@@ -96,6 +118,7 @@ RUNNER
 			The output should include 'ET processing failed'
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
 
@@ -109,6 +132,19 @@ RUNNER
 			The stderr should not equal ''
 			The contents of file "${errorlog}" should include 'exit 2'
 			The contents of file "${live}" should equal "${prior}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
+		End
+	End
+
+	Context 'when PHP staged a decompressed archive payload'
+		It 'processes the isolated CSV stage instead of the compressed raw source'
+			printf '\037\213\010\000compressed\n' > "${raw}"
+			printf '%s\n' '192.0.2.10,1,90' > "${live}.etstage"
+			When run sh "${runner}"
+			The status should be success
+			The output should include 'Final count'
+			The contents of file "${live}" should equal '192.0.2.10'
+			The contents of file "${raw}" should not equal '192.0.2.10,1,90'
 		End
 	End
 
@@ -141,6 +177,7 @@ RUNNER
 			The output should include 'ET processing failed'
 			The contents of file "${live}" should equal "${prior}"
 			The contents of file "${live}" should not include "${work}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
 End

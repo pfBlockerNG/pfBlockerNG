@@ -87,6 +87,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathtar=/usr/bin/tar
 	pathpfctl=/sbin/pfctl
 	pathphp=/usr/local/bin/php
+	pathlockf=/usr/bin/lockf
 	# issue #2016: the nested re-entry target and its budget (seconds). pfb_reentry()
 	# floors an empty/non-numeric/zero value to its own default, so a degraded value can
 	# never restore an unbounded wait.
@@ -2018,6 +2019,13 @@ pfb_et_output_valid() {
 		[ ! -s "${2}" ]
 		return
 	fi
+	LC_ALL=C od -An -v -tx1 "${1}" | grep -Eq '(^|[[:space:]])00([[:space:]]|$)'
+	etnulrc=$?
+	case "${etnulrc}" in
+		0) return 1 ;;
+		1) ;;
+		*) return "${etnulrc}" ;;
+	esac
 	LC_ALL=C awk -F. '
 		NF != 4 { exit 1 }
 		{
@@ -2036,111 +2044,316 @@ pfb_et_output_valid() {
 # issue #2683: the exit contract pfb_download() gates on. A failing status is
 # returned verbatim rather than collapsed to 1, so a child killed at issue
 # #2658's extraction ceiling reaches the caller as the 153 that names it.
-processet() {
+processet() (
+	blocklive="${pfborig}${alias}.orig"
+	matchlive="${pfbmatchgen}pfB_Match_ET_v4.txt"
 	etsource="${pfborig}${alias}.raw"
-	if [ -s "${etsource}" ]; then
-		# Remove previous ET IPRep files
-		[ -d "${etdir}" ] && [ "$(ls -A "${etdir}")" ] && rm -r "${etdir}/ET_"*
-		etgrep="${tempfile}.grep"
-		etsplit="${tempfile}.split"
-		if ! true > "${tempfile}" || ! true > "${tempfile2}" ||
-			! true > "${etgrep}" || ! true > "${etsplit}"; then
-			log="processet [ ${alias} ]: cannot create ET scratch file(s); aborting ET processing."
-			echo "${log}" | tee -a "${errorlog}"
-			return 1
-		fi
+	if [ -f "${blocklive}.etstage" ]; then
+		etsource="${blocklive}.etstage"
+	fi
+	etlock="${etdir}.transaction.lock"
+	etjournal="${etdir}.transaction"
+	etbak="${etdir}.rollback"
+	blockbak="${blocklive}.rollback"
+	matchbak="${matchlive}.rollback"
+	etstage=''
+	blockstage=''
+	matchstage=''
+	journal_tmp=''
+	etgrep="${tempfile}.grep"
+	etsplit="${tempfile}.split"
+	trap '
+		[ -n "${etstage}" ] && rm -rf "${etstage}"
+		[ -n "${blockstage}" ] && rm -f "${blockstage}"
+		[ -n "${matchstage}" ] && rm -f "${matchstage}"
+		[ -n "${journal_tmp}" ] && rm -f "${journal_tmp}"
+		rm -f "${etgrep}" "${etsplit}"
+	' 0
+	trap 'exit 1' 1 2 15
 
-		# ET CSV format (IP, Category, Score)
-		echo; echo; echo 'Compiling ET IPREP IQRisk based upon user selected categories'
+	pfb_et_restore_generation() {
+		restore_rc=0
+		case "${block_had}" in
+			1)
+				if [ -f "${blockbak}" ]; then
+					rm -f "${blocklive}" && mv -f "${blockbak}" "${blocklive}" || restore_rc=$?
+				fi
+				;;
+			0) rm -f "${blocklive}" || restore_rc=$? ;;
+		esac
+		case "${match_had}" in
+			1)
+				if [ -f "${matchbak}" ]; then
+					rm -f "${matchlive}" && mv -f "${matchbak}" "${matchlive}" || restore_rc=$?
+				fi
+				;;
+			0) rm -f "${matchlive}" || restore_rc=$? ;;
+			x) ;;
+		esac
+		case "${et_had}" in
+			1)
+				if [ -d "${etbak}" ]; then
+					rm -rf "${etdir}" && mv -f "${etbak}" "${etdir}" || restore_rc=$?
+				fi
+				;;
+			0) rm -rf "${etdir}" || restore_rc=$? ;;
+		esac
+		return "${restore_rc}"
+	}
 
-		category=1
-		etcat='ET_Cnc ET_Bot ET_Spam ET_Drop ET_Spywarecnc ET_Onlinegaming ET_Drivebysrc ET_Cat8 ET_Chatserver ET_Tornode
-			ET_Cat11 ET_Cat12 ET_Compromised ET_Cat14 ET_P2P ET_Proxy ET_Ipcheck ET_Cat18 ET_Utility ET_DDostarget
-			ET_Scanner ET_Cat22 ET_Brute ET_Fakeav ET_Dyndns ET_Undesireable ET_Abusedtld ET_Selfsignedssl ET_Blackhole ET_RAS
-			ET_P2Pcnc ET_Cat32 ET_Parking ET_VPN ET_Exesource ET_Cat36 ET_Mobilecnc ET_Mobilespyware ET_Skypenode
-			ET_Bitcoin ET_DDosattack'
-
-		for file in ${etcat}; do
-
-			case "${category}" in
-
-				8|11|12|14|18|22|32|36)
-					# Some ET categories are not in use (For future use)
-					;;
-				*)
-					# grep rc 1 is a legitimate empty category. Its hard errors must
-					# remain observable, so cut runs only after grep's status is saved.
-					grep ",${category}," "${etsource}" > "${etgrep}"
-					etrc=$?
-					case "${etrc}" in
-						0|1)
-							cut -d',' -f1 "${etgrep}" > "${etsplit}" || { etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
-							pfb_et_output_valid "${etsplit}" '' || { etrc=$?; pfb_et_abort "the ${file} split validation" "${etrc}"; return "${etrc}"; }
-							mv -f "${etsplit}" "${etdir}/${file}.txt" || { etrc=$?; pfb_et_abort "the ${file} split publish" "${etrc}"; return "${etrc}"; }
-							;;
-						*)
-							pfb_et_abort "the ${file} category scan" "${etrc}"
-							return "${etrc}"
-							;;
-					esac
-					;;
-			esac
-			category="$((category + 1))"
-		done
-
-		data="$(ls "${etdir}" | sed 's/\.txt//')"
-		printf "%-10s %-25s\n" '  Action' 'Category'
-		echo '-------------------------------------------'
-
-		for list in ${data}; do
-			# etblock/etmatch are ", "-separated token lists (see the sed transform
-			# above); pad both sides with the delimiter and anchor on it so a token
-			# only matches its OWN whole entry -- a bare "*$list*" substring glob
-			# would let e.g. a selected ET_P2Pcnc also match list=ET_P2P (issue #713
-			# bug 6). The padded 'x' sentinel (no selection) still matches nothing
-			# real, since no category is literally named 'x'.
-			case ", ${etblock}, " in
-				*", ${list}, "*)
-					printf "%-10s %-25s\n" '  Block: ' "${list}"
-					# issue #1263: awk 1 supplies a record terminator cat doesn't --
-					# a category file no longer welds onto the next one accumulated.
-					# Both accumulations stay on ONE line: pfblockerng_cat_weld_more_spec.sh
-					# extracts each statement by line number and evals it.
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile}" || { etrc=$?; pfb_et_abort "the ${list} block accumulation" "${etrc}"; return "${etrc}"; }
-					;;
-			esac
-			case ", ${etmatch}, " in
-				*", ${list}, "*)
-					printf "%-10s %-25s\n" '  Match: ' "${list}"
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}" || { etrc=$?; pfb_et_abort "the ${list} match accumulation" "${etrc}"; return "${etrc}"; }
-					;;
-			esac
-		done
-		echo '-------------------------------------------'
-
-		if [ -f "${tempfile}" ]; then
-			pfb_et_output_valid "${tempfile}" "${pfborig}${alias}.orig" || { etrc=$?; pfb_et_abort 'the block validation' "${etrc}"; return "${etrc}"; }
-		fi
-		if [ "${etmatch}" != 'x' ]; then
-			pfb_et_output_valid "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" || { etrc=$?; pfb_et_abort 'the match validation' "${etrc}"; return "${etrc}"; }
-		fi
-		if [ -f "${tempfile}" ]; then
-			mv -f "${tempfile}" "${pfborig}${alias}.orig" || { etrc=$?; pfb_et_abort 'the block publish' "${etrc}"; return "${etrc}"; }
-		fi
-		if [ "${etmatch}" != 'x' ]; then
-			mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" || { etrc=$?; pfb_et_abort 'the match publish' "${etrc}"; return "${etrc}"; }
-		fi
-		# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
-		# unterminated ET_* file no longer welds its last row onto the next file's first.
-		counto="$(awk 1 "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
-		echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
-		return 0
-	else
+	if [ ! -s "${etsource}" ] && [ ! -f "${etjournal}" ]; then
 		echo; echo 'No staged ET source file found!'
 		echo " [ ${alias} ] No staged ET source file found; aborting ET processing [ ${now} ]" >> "${errorlog}"
 		return 1
 	fi
-}
+
+	# A previous process may have died after the journal became visible. Recover
+	# it under the same lock readers take before looking at category files.
+	(
+		"${pathlockf:-true}" -s -t 60 9 || exit $?
+		if [ -f "${etjournal}" ]; then
+			IFS=' ' read -r et_had block_had match_had < "${etjournal}" || exit 1
+			case "${et_had}:${block_had}:${match_had}" in
+				[01]:[01]:[01x]) ;;
+				*) exit 1 ;;
+			esac
+			pfb_et_restore_generation || exit $?
+			rm -f "${etjournal}" || exit $?
+		else
+			rm -f "${blockbak}" "${matchbak}"
+			[ ! -d "${etbak}" ] || rm -rf "${etbak}"
+		fi
+	) 9>"${etlock}"
+	etrc=$?
+	if [ "${etrc}" -ne 0 ]; then
+		pfb_et_abort 'transaction recovery' "${etrc}"
+		return "${etrc}"
+	fi
+
+	if [ ! -s "${etsource}" ]; then
+		echo; echo 'No staged ET source file found!'
+		echo " [ ${alias} ] No staged ET source file found; aborting ET processing [ ${now} ]" >> "${errorlog}"
+		return 1
+	fi
+
+	etparent="$(dirname "${etdir}")"
+	etstage="$(mktemp -d "${etparent}/.pfbetstage.XXXXXX")" || {
+		pfb_et_abort 'the category stage creation' 1
+		return 1
+	}
+	blockstage="$(mktemp "${blocklive}.stage.XXXXXX")" || {
+		pfb_et_abort 'the block stage creation' 1
+		return 1
+	}
+	if [ "${etmatch}" != 'x' ]; then
+		matchstage="$(mktemp "${matchlive}.stage.XXXXXX")" || {
+			pfb_et_abort 'the match stage creation' 1
+			return 1
+		}
+	fi
+	if [ ! -w "${etdir}" ]; then
+		echo "processet: ET category directory is not writable" >&2
+		pfb_et_abort 'the category stage creation' 1
+		return 1
+	fi
+	if ! chmod 0755 "${etstage}" ||
+		! true > "${tempfile}" || ! true > "${tempfile2}" ||
+		! true > "${etgrep}" || ! true > "${etsplit}"; then
+		log="processet [ ${alias} ]: cannot create ET scratch file(s); aborting ET processing."
+		echo "${log}" | tee -a "${errorlog}"
+		return 1
+	fi
+
+	# ET CSV format (IP, Category, Score)
+	echo; echo; echo 'Compiling ET IPREP IQRisk based upon user selected categories'
+
+	category=1
+	etcat='ET_Cnc ET_Bot ET_Spam ET_Drop ET_Spywarecnc ET_Onlinegaming ET_Drivebysrc ET_Cat8 ET_Chatserver ET_Tornode
+		ET_Cat11 ET_Cat12 ET_Compromised ET_Cat14 ET_P2P ET_Proxy ET_Ipcheck ET_Cat18 ET_Utility ET_DDostarget
+		ET_Scanner ET_Cat22 ET_Brute ET_Fakeav ET_Dyndns ET_Undesireable ET_Abusedtld ET_Selfsignedssl ET_Blackhole ET_RAS
+		ET_P2Pcnc ET_Cat32 ET_Parking ET_VPN ET_Exesource ET_Cat36 ET_Mobilecnc ET_Mobilespyware ET_Skypenode
+		ET_Bitcoin ET_DDosattack'
+
+	for file in ${etcat}; do
+		case "${category}" in
+			8|11|12|14|18|22|32|36)
+				# Some ET categories are not in use (For future use)
+				;;
+			*)
+				grep ",${category}," "${etsource}" > "${etgrep}"
+				etrc=$?
+				case "${etrc}" in
+					0|1)
+						cut -d',' -f1 "${etgrep}" > "${etstage}/${file}.txt" || {
+							etrc=$?
+							pfb_et_abort "the ${file} split" "${etrc}"
+							return "${etrc}"
+						}
+						pfb_et_output_valid "${etstage}/${file}.txt" '' || {
+							etrc=$?
+							pfb_et_abort "the ${file} split validation" "${etrc}"
+							return "${etrc}"
+						}
+						;;
+					*)
+						pfb_et_abort "the ${file} category scan" "${etrc}"
+						return "${etrc}"
+						;;
+				esac
+				;;
+		esac
+		category="$((category + 1))"
+	done
+
+	data="$(ls "${etstage}" | sed 's/\.txt//')"
+	printf "%-10s %-25s\n" '  Action' 'Category'
+	echo '-------------------------------------------'
+
+	for list in ${data}; do
+		case ", ${etblock}, " in
+			*", ${list}, "*)
+				printf "%-10s %-25s\n" '  Block: ' "${list}"
+				awk 1 "${etstage}/${list}.txt" >> "${blockstage}" || { etrc=$?; pfb_et_abort "the ${list} block accumulation" "${etrc}"; return "${etrc}"; }
+				;;
+		esac
+		case ", ${etmatch}, " in
+			*", ${list}, "*)
+				printf "%-10s %-25s\n" '  Match: ' "${list}"
+				awk 1 "${etstage}/${list}.txt" >> "${matchstage}" || { etrc=$?; pfb_et_abort "the ${list} match accumulation" "${etrc}"; return "${etrc}"; }
+				;;
+		esac
+	done
+	echo '-------------------------------------------'
+
+	pfb_et_output_valid "${blockstage}" "${blocklive}" || {
+		etrc=$?
+		pfb_et_abort 'the block validation' "${etrc}"
+		return "${etrc}"
+	}
+	if [ "${etmatch}" != 'x' ]; then
+		pfb_et_output_valid "${matchstage}" "${matchlive}" || {
+			etrc=$?
+			pfb_et_abort 'the match validation' "${etrc}"
+			return "${etrc}"
+		}
+	fi
+	chmod 0644 "${blockstage}" "${etstage}"/*.txt || {
+		etrc=$?
+		pfb_et_abort 'the staged generation permissions' "${etrc}"
+		return "${etrc}"
+	}
+	if [ "${etmatch}" != 'x' ]; then
+		chmod 0644 "${matchstage}" || {
+			etrc=$?
+			pfb_et_abort 'the match stage permissions' "${etrc}"
+			return "${etrc}"
+		}
+	fi
+
+	# Commit categories and both aggregates while readers are excluded. Every
+	# candidate, backup, and journal sits beside its destination, so mv is rename.
+	(
+		"${pathlockf:-true}" -s -t 60 9 || exit $?
+		et_had=0
+		block_had=0
+		match_had=x
+		[ ! -d "${etdir}" ] || et_had=1
+		[ ! -e "${blocklive}" ] || block_had=1
+		if [ "${etmatch}" != 'x' ]; then
+			match_had=0
+			[ ! -e "${matchlive}" ] || match_had=1
+		fi
+		rm -f "${blockbak}" "${matchbak}"
+		[ ! -d "${etbak}" ] || rm -rf "${etbak}"
+		if [ "${block_had}" -eq 1 ]; then
+			cp -p "${blocklive}" "${blockbak}" || {
+				etrc=$?
+				pfb_et_abort 'the block backup' "${etrc}"
+				exit "${etrc}"
+			}
+		fi
+		if [ "${match_had}" = 1 ]; then
+			cp -p "${matchlive}" "${matchbak}" || {
+				etrc=$?
+				rm -f "${blockbak}"
+				pfb_et_abort 'the match backup' "${etrc}"
+				exit "${etrc}"
+			}
+		fi
+		journal_tmp="$(mktemp "${etjournal}.XXXXXX")" || {
+			etrc=$?
+			rm -f "${blockbak}" "${matchbak}"
+			pfb_et_abort 'the transaction journal creation' "${etrc}"
+			exit "${etrc}"
+		}
+		printf '%s %s %s\n' "${et_had}" "${block_had}" "${match_had}" > "${journal_tmp}" || {
+			etrc=$?
+			rm -f "${journal_tmp}" "${blockbak}" "${matchbak}"
+			pfb_et_abort 'the transaction journal write' "${etrc}"
+			exit "${etrc}"
+		}
+		mv -f "${journal_tmp}" "${etjournal}"
+		etrc=$?
+		if [ "${etrc}" -ne 0 ]; then
+			rm -f "${journal_tmp}" "${etjournal}" "${blockbak}" "${matchbak}"
+			pfb_et_abort 'the transaction journal publish' "${etrc}"
+			exit "${etrc}"
+		fi
+		journal_tmp=''
+
+		if [ "${et_had}" -eq 1 ]; then
+			mv -f "${etdir}" "${etbak}"
+			etrc=$?
+			if [ "${etrc}" -ne 0 ]; then
+				pfb_et_restore_generation && rm -f "${etjournal}"
+				pfb_et_abort 'the category backup' "${etrc}"
+				exit "${etrc}"
+			fi
+		fi
+		mv -f "${etstage}" "${etdir}"
+		etrc=$?
+		if [ "${etrc}" -ne 0 ]; then
+			pfb_et_restore_generation && rm -f "${etjournal}"
+			pfb_et_abort 'the category publish' "${etrc}"
+			exit "${etrc}"
+		fi
+		mv -f "${blockstage}" "${blocklive}"
+		etrc=$?
+		if [ "${etrc}" -ne 0 ]; then
+			pfb_et_restore_generation && rm -f "${etjournal}"
+			pfb_et_abort 'the block publish' "${etrc}"
+			exit "${etrc}"
+		fi
+		if [ "${etmatch}" != 'x' ]; then
+			mv -f "${matchstage}" "${matchlive}"
+			etrc=$?
+			if [ "${etrc}" -ne 0 ]; then
+				pfb_et_restore_generation && rm -f "${etjournal}"
+				pfb_et_abort 'the match publish' "${etrc}"
+				exit "${etrc}"
+			fi
+		fi
+		rm -f "${etjournal}"
+		etrc=$?
+		if [ "${etrc}" -ne 0 ]; then
+			pfb_et_restore_generation
+			pfb_et_abort 'the transaction journal retirement' "${etrc}"
+			exit "${etrc}"
+		fi
+		rm -f "${blockbak}" "${matchbak}"
+		[ ! -d "${etbak}" ] || rm -rf "${etbak}"
+	) 9>"${etlock}"
+	etrc=$?
+	if [ "${etrc}" -ne 0 ]; then
+		return "${etrc}"
+	fi
+
+	# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
+	# unterminated ET_* file no longer welds its last row onto the next file's first.
+	counto="$(awk 1 "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${blocklive}")"
+	echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
+	return 0
+)
 
 
 # Function to extract IP addresses from XLSX files.
