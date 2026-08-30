@@ -4,6 +4,49 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+final class HttpFixtureReadinessStreamSpy
+{
+	/** @var resource */
+	public $context;
+	public static ?string $url = NULL;
+	/** @var array<string,mixed>|null */
+	public static ?array $options = NULL;
+	private static string $response = '';
+	private int $offset = 0;
+
+	public static function reset(string $response): void
+	{
+		self::$url = NULL;
+		self::$options = NULL;
+		self::$response = $response;
+	}
+
+	public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
+	{
+		self::$url = $path;
+		self::$options = stream_context_get_options($this->context);
+		return TRUE;
+	}
+
+	public function stream_read(int $count): string
+	{
+		$chunk = substr(self::$response, $this->offset, $count);
+		$this->offset += strlen($chunk);
+		return $chunk;
+	}
+
+	public function stream_eof(): bool
+	{
+		return $this->offset >= strlen(self::$response);
+	}
+
+	/** @return array<string,mixed> */
+	public function stream_stat(): array
+	{
+		return [];
+	}
+}
+
 /** Issue #2065: HTTP fixture readiness proves which process owns the selected port. */
 final class HttpFixtureReadinessTest extends TestCase
 {
@@ -85,25 +128,26 @@ final class HttpFixtureReadinessTest extends TestCase
 	{
 		$this->requireReadinessHelper();
 		$secret = 'owned-readiness-secret';
-		$observedUrl = NULL;
-		$observedOptions = NULL;
-		$matched = pfb_test_http_fixture_event_received(
-			1,
-			$secret,
-			static function (string $url, $context) use (&$observedUrl, &$observedOptions, $secret): string {
-				$observedUrl = $url;
-				$observedOptions = stream_context_get_options($context);
-				return $secret;
+		HttpFixtureReadinessStreamSpy::reset($secret);
+		$this->assertTrue(stream_wrapper_unregister('http'));
+		try {
+			$this->assertTrue(stream_wrapper_register('http', HttpFixtureReadinessStreamSpy::class));
+			$this->assertTrue(
+				pfb_test_http_fixture_event_received(1, $secret),
+				'the default HTTP transport must return through the real readiness matcher'
+			);
+			$this->assertSame('http://127.0.0.1:1/__pfb_ready', HttpFixtureReadinessStreamSpy::$url);
+			$this->assertSame(
+				['timeout' => 0.05, 'ignore_errors' => TRUE],
+				HttpFixtureReadinessStreamSpy::$options['http'] ?? NULL,
+				'fixture readiness must consume the exact bounded HTTP options'
+			);
+		} finally {
+			if (in_array('http', stream_get_wrappers(), TRUE)) {
+				stream_wrapper_unregister('http');
 			}
-		);
-
-		$this->assertTrue($matched, 'the request seam must return through the real readiness matcher');
-		$this->assertSame('http://127.0.0.1:1/__pfb_ready', $observedUrl);
-		$this->assertSame(
-			['timeout' => 0.05, 'ignore_errors' => TRUE],
-			$observedOptions['http'] ?? NULL,
-			'fixture readiness must consume the exact bounded HTTP options'
-		);
+			$this->assertTrue(stream_wrapper_restore('http'));
+		}
 	}
 
 	public function testProbeAcceptsMatchingFixtureEvent(): void
