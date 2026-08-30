@@ -40,6 +40,10 @@ Describe 'processet() exit contract (issue #2683)'
 		# What a live match publication looks like before a failed refresh: a
 		# failure must leave exactly this behind.
 		prior_match='PRIOR-MATCH-MARKER'
+		prior_block='198.51.100.77'
+		prior_hash='old-hash'
+		prior_cnc='203.0.113.71'
+		prior_bot='203.0.113.72'
 
 		# processet() reads its inputs from the top-level init's globals, which
 		# never resolve off-appliance. Source the script as a library, point those
@@ -84,6 +88,14 @@ RUNNER
 		printf '%s\n' "${prior_match}" > "${match}pfB_Match_ET_v4.txt"
 	}
 
+	plant_prior_generation() {
+		printf '%s\n' "${prior_block}" > "${orig}${alias}.orig"
+		printf '%s\n' "${prior_hash}" > "${orig}${alias}.orig.xxhash128"
+		printf '%s\n' "${prior_match}" > "${match}pfB_Match_ET_v4.txt"
+		printf '%s\n' "${prior_cnc}" > "${etdir}/ET_Cnc.txt"
+		printf '%s\n' "${prior_bot}" > "${etdir}/ET_Bot.txt"
+	}
+
 	# A child killed the way the appliance's ceiling kills one: SIGXFSZ, which a
 	# shell reports as 128 + 25. The shim stands in for the signal: a real
 	# RLIMIT_FSIZE overrun does not report 153 everywhere (Darwin's awk exits 2),
@@ -126,7 +138,7 @@ RUNNER
 		# handed back the status of the `tee` that printed it -- 0.
 		plant_readonly_scratch() { chmod 555 "${scratch}"; }
 		Before 'plant_et_raw'
-		Before 'plant_prior_match'
+		Before 'plant_prior_generation'
 		Before 'plant_readonly_scratch'
 
 		It 'fails and keeps the live match publication byte-unchanged'
@@ -134,6 +146,10 @@ RUNNER
 			The status should be failure
 			The output should include 'cannot create ET scratch file'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
 			The stderr should be present
 		End
 	End
@@ -214,7 +230,7 @@ RUNNER
 		# rather than renames, and can fail on its own.
 		plant_readonly_origdir() { chmod 555 "${orig}"; }
 		Before 'plant_et_raw'
-		Before 'plant_prior_match'
+		Before 'plant_prior_generation'
 		Before 'plant_readonly_origdir'
 
 		It 'fails and keeps the live match publication byte-unchanged'
@@ -222,6 +238,10 @@ RUNNER
 			The status should be failure
 			The output should include 'ET processing failed'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
 			The stderr should be present
 		End
 	End
@@ -232,7 +252,7 @@ RUNNER
 		# the issue names is the one left byte-unchanged by the failure itself.
 		plant_readonly_matchdir() { chmod 555 "${match}"; }
 		Before 'plant_et_raw'
-		Before 'plant_prior_match'
+		Before 'plant_prior_generation'
 		Before 'plant_readonly_matchdir'
 
 		It 'fails and keeps the live match publication byte-unchanged'
@@ -240,7 +260,128 @@ RUNNER
 			The status should be failure
 			The output should include 'ET processing failed'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
 			The stderr should be present
+		End
+	End
+
+
+	Context 'when an early category is valid and the next category is invalid'
+		Before 'plant_prior_generation'
+
+		It 'keeps the complete prior category and aggregate generation'
+			printf '%s\n' '192.0.2.10,1,90' 'not-an-ip,2,80' > "${orig}${alias}.raw"
+			When run sh "${runner}"
+			The status should be failure
+			The output should include 'ET processing failed'
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
+		End
+	End
+
+	Context 'when a same-filesystem block rename fails after writing partial bytes'
+		Before 'plant_et_raw'
+		Before 'plant_prior_generation'
+
+		It 'restores every prior artifact and exposes same-directory staging'
+			mkdir "${work}/shim"
+			cat > "${work}/shim/mv" <<SHIM
+#!/bin/sh
+src=''
+dest=''
+for arg do
+	case "\${arg}" in
+		-*) ;;
+		*) [ -z "\${src}" ] && src="\${arg}"; dest="\${arg}" ;;
+	esac
+done
+if [ "\${dest}" = "${orig}${alias}.orig" ] && [ ! -e "${work}/block-failed" ]; then
+	printf '%s' '192.' > "\${dest}"
+	printf '%s\n%s\n' "\${src%/*}" "\${dest%/*}" > "${work}/block-paths"
+	touch "${work}/block-failed"
+	exit 73
+fi
+exec /bin/mv "\$@"
+SHIM
+			chmod +x "${work}/shim/mv"
+			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
+			The status should equal 73
+			The output should include 'ET processing failed'
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
+			The contents of file "${work}/block-paths" should equal "$(printf '%s\n%s' "${orig%/}" "${orig%/}")"
+		End
+	End
+
+	Context 'when the second aggregate rename fails after writing partial bytes'
+		Before 'plant_et_raw'
+		Before 'plant_prior_generation'
+
+		It 'rolls block, Match, and categories back as one generation'
+			mkdir "${work}/shim"
+			cat > "${work}/shim/mv" <<SHIM
+#!/bin/sh
+src=''
+dest=''
+for arg do
+	case "\${arg}" in
+		-*) ;;
+		*) [ -z "\${src}" ] && src="\${arg}"; dest="\${arg}" ;;
+	esac
+done
+if [ "\${dest}" = "${match}pfB_Match_ET_v4.txt" ] && [ ! -e "${work}/match-failed" ]; then
+	printf '%s' '203.' > "\${dest}"
+	printf '%s\n%s\n' "\${src%/*}" "\${dest%/*}" > "${work}/match-paths"
+	touch "${work}/match-failed"
+	exit 73
+fi
+exec /bin/mv "\$@"
+SHIM
+			chmod +x "${work}/shim/mv"
+			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
+			The status should equal 73
+			The output should include 'ET processing failed'
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
+			The contents of file "${work}/match-paths" should equal "$(printf '%s\n%s' "${match%/}" "${match%/}")"
+		End
+	End
+
+
+	Context 'when an interrupted transaction left its rollback journal'
+		It 'recovers the whole prior generation before processing new input'
+			printf '%s\n' "${prior_hash}" > "${orig}${alias}.orig.xxhash128"
+			printf '%s\n' 'partial-block' > "${orig}${alias}.orig"
+			printf '%s\n' "${prior_block}" > "${orig}${alias}.orig.rollback"
+			printf '%s\n' 'partial-match' > "${match}pfB_Match_ET_v4.txt"
+			printf '%s\n' "${prior_match}" > "${match}pfB_Match_ET_v4.txt.rollback"
+			printf '%s\n' 'partial-category' > "${etdir}/ET_Cnc.txt"
+			mkdir "${etdir}.rollback"
+			printf '%s\n' "${prior_cnc}" > "${etdir}.rollback/ET_Cnc.txt"
+			printf '%s\n' "${prior_bot}" > "${etdir}.rollback/ET_Bot.txt"
+			printf '%s\n' '1 1 1' > "${etdir}.transaction"
+			printf '%s\n' 'not-an-ip,1,90' > "${orig}${alias}.raw"
+			When run sh "${runner}"
+			The status should be failure
+			The output should include 'ET processing failed'
+			The contents of file "${orig}${alias}.orig" should equal "${prior_block}"
+			The contents of file "${orig}${alias}.orig.xxhash128" should equal "${prior_hash}"
+			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_cnc}"
+			The contents of file "${etdir}/ET_Bot.txt" should equal "${prior_bot}"
+			The path "${etdir}.transaction" should not be exist
 		End
 	End
 

@@ -55,6 +55,13 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
       The stdout should include 'ET processing failed'
       The contents of file "${pfborig}${alias}.orig" should equal '198.51.100.77'
     End
+
+    It 'rejects a NUL suffix before a text parser can truncate the row'
+      nul_candidate="${work}/nul-candidate"
+      printf '192.0.2.10\000garbage\n' > "${nul_candidate}"
+      When call pfb_et_output_valid "${nul_candidate}" ''
+      The status should be failure
+    End
   End
 
   # Scenario: selecting ET_P2Pcnc alone must not also pull in ET_P2P.
