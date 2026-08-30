@@ -125,16 +125,16 @@ final class DownloadRedirectCredentialScopeTest extends TestCase
 		$routerSrc = <<<'PHP'
 <?php
 $uri = $_SERVER['REQUEST_URI'] ?? '';
-file_put_contents(getenv('EVENT_LOG'), json_encode([
-	(int) $_SERVER['SERVER_PORT'],
-	$uri,
-]) . PHP_EOL, FILE_APPEND);
 if ($uri === '/__pfb_ready' || str_starts_with($uri, '/__pfb_ready/')) {
 	if ($uri === '/__pfb_ready') {
 		echo getenv('READY_TOKEN');
 	}
 	return;
 }
+file_put_contents(getenv('EVENT_LOG'), json_encode([
+	(int) $_SERVER['SERVER_PORT'],
+	$uri,
+]) . PHP_EOL, FILE_APPEND);
 file_put_contents(getenv('AUTH_LOG'), json_encode([
 	(int) $_SERVER['SERVER_PORT'],
 	$_SERVER['REQUEST_URI'] ?? '',
