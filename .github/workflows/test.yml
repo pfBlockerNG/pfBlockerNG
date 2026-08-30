@@ -724,11 +724,14 @@ jobs:
         # phpstan.neon configures paths, level, stubs, and includes the
         # baseline (phpstan-baseline.neon) so existing legacy errors are
         # suppressed; new errors introduced by future changes will fail CI.
-        # 2G, not 1G: a parallel worker analysing pfblockerng.inc peaks around
-        # 700 MiB on its own, so 1G left single-digit-percent headroom and any
-        # growth in that one file crashed a worker with "reached configured PHP
-        # memory limit" — a resource ceiling, never an analysis result. The real
-        # fix is splitting the file (issue #1122).
+        # 2G is permanent, and not because the tree needs it: bisected on this
+        # very setup-php build (issue #2671), the run passes at 448M and fails
+        # at 384M once phpstan.neon's parallel.jobSize keeps it off a single
+        # accumulating worker. The limit is a crash guard on a 16 GB runner, not
+        # a budget — the one unexplained worker crash this job ever had happened
+        # at 1G against a 576M requirement, so sitting near the requirement is
+        # the thing that cost us, and 2G costs nothing. Splitting the file
+        # (issue #1122) is worth doing for other reasons; it is not this one.
         run: vendor/bin/phpstan analyse --no-progress --memory-limit=2G
 
   php-codesniffer:

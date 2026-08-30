@@ -35,7 +35,7 @@ uv sync --locked --group smoke  # ADR-04 live-VM harness (--group bench: the ben
 composer install                # if it 403s in a managed cloud session, use
                                 # scripts/composer-cloud-install.sh (issue #950)
 vendor/bin/phpunit              # PHP suite: loads the REAL .inc off-appliance
-vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+vendor/bin/phpstan analyse --no-progress --memory-limit=2G
 vendor/bin/phpcs
 shellspec --shell dash          # POSIX gate; bash-as-sh masks ash divergence
 ```
