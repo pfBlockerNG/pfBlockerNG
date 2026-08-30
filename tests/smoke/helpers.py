@@ -5379,12 +5379,19 @@ def redact_pkg_tarball(tgz_path: str) -> None:
             prefix=f".{os.path.basename(tgz_path)}.redact-",
             suffix=".tmp",
         )
-        os.close(output_fd)
+        output_closed = False
         try:
+            os.close(output_fd)
+            output_closed = True
             with tarfile.open(tmp_out, "w:gz") as tar:
                 tar.add(os.path.join(tmp, "pfb_smoke_diag"), arcname="pfb_smoke_diag")
             os.replace(tmp_out, tgz_path)
         finally:
+            if not output_closed:
+                try:
+                    os.close(output_fd)
+                except OSError:
+                    pass
             try:
                 os.unlink(tmp_out)
             except FileNotFoundError:
