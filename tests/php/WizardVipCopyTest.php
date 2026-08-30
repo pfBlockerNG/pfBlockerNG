@@ -43,12 +43,31 @@ final class WizardVipCopyTest extends TestCase
 			. implode(', ', $invented) . ' (picker returns: ' . implode(', ', $candidates) . ')');
 	}
 
+	/**
+	 * The v6 half of the same claim. The defect had one, so the guard needs one: an
+	 * invented ULA in the wizard passed every check while only IPv4 was scanned.
+	 */
+	public function testWizardNamesNoIpv6AddressThePickerCannotProduce(): void
+	{
+		$wizard = self::read(self::WIZARD);
+		$candidates = pfb_dnsbl_vip_candidates(AF_INET6);
+		$this->assertNotSame([], $candidates, 'the picker must have v6 candidates to compare against');
+
+		preg_match_all('/\bfd[0-9a-f]{2}:[0-9a-fA-FxX:]*[0-9a-fA-FxX]\b/', $wizard, $matches);
+		$claimed = array_values(array_unique($matches[0]));
+		$invented = array_values(array_diff($claimed, $candidates));
+
+		$this->assertSame([], $invented,
+			'the wizard names IPv6 sinkhole addresses the picker never returns: '
+			. implode(', ', $invented) . ' (picker returns: ' . implode(', ', $candidates) . ')');
+	}
+
 	/** The retired sweep pool must not survive in shipped copy or in the notes. */
 	public function testRetiredSweepPoolIsGoneFromCopyAndNotes(): void
 	{
 		foreach ([self::WIZARD, self::NOTES] as $path) {
 			$body = self::read($path);
-			foreach (['10.10.X.53', '10.10.x.53', 'fd00:X::53'] as $retired) {
+			foreach (['10.10.X.53', '10.10.x.53', 'fd00:X::53', 'fd00::53', '10.10.10.53'] as $retired) {
 				$this->assertStringNotContainsString($retired, $body,
 					basename($path) . ' still describes the sweep pool ADR-13 retired: ' . $retired);
 			}
