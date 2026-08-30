@@ -185,6 +185,14 @@ final class ThemeSafetyUiTest extends TestCase
 			// this tree has 208 of the second kind in pfblockerng.inc alone. An unbalanced span
 			// must not open a literal that swallows the lines below it.
 			'backtick span in prose'    => ["// see `background-color\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n// and `color", FALSE],
+			// Issue #2934: dropping a nested group joins whatever sat either side of it, so two
+			// tokens that were never adjacent can glue into one the source does not contain --
+			// here a phantom `color:`, which pairs a background that has no foreground at all.
+			// Both resolution paths share the primitive, so both are pinned: the brace path
+			// removes the group with withoutNestedBlocks(), the literal path cuts it as a
+			// foreign group.
+			'glued token in a block'    => ['.a { background-color: #123456; c{n}olor: red; }', FALSE],
+			'glued token in a literal'  => ["\$s = 'background-color: #123456; c{n}olor: red;';", FALSE],
 			'multi-line attribute pairs'=> ['$s = "<span style=\"color: black;' . str_repeat(' ', 200) . "\n" . ' background-color: #123456;\">x</span>";', TRUE],
 			// ...and the reason the scan was scoped to one line in the first place, which any
 			// fix has to keep: an apostrophe in prose is not a string opener, so it must not
@@ -839,7 +847,9 @@ final class ThemeSafetyUiTest extends TestCase
 	 * A PHP string is routinely a whole HTML fragment. If the background sits in a style
 	 * attribute, only that attribute can pair it; otherwise the other elements' attributes
 	 * are still theirs, so their values are removed rather than read as neighbours. Spans
-	 * are excised back to front, or an earlier removal shifts the offsets of a later one.
+	 * are excised back to front, or an earlier removal shifts the offsets of a later one,
+	 * and each leaves a space behind so the cut cannot glue its two sides into a token
+	 * that was never there (issue #2934).
 	 */
 	private static function styleContext(string $literal, int $rel): string
 	{
@@ -863,7 +873,7 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 
 		foreach (array_reverse(self::mergedCuts($cuts)) as [$start, $end]) {
-			$out = substr($out, 0, $start) . substr($out, $end);
+			$out = substr($out, 0, $start) . ' ' . substr($out, $end);
 		}
 		return $out;
 	}
@@ -963,7 +973,14 @@ final class ThemeSafetyUiTest extends TestCase
 		return [$start, $length - 1];
 	}
 
-	/** The block's own declarations, with every nested block's contents dropped. */
+	/**
+	 * The block's own declarations, with every nested block's contents dropped.
+	 *
+	 * A dropped group leaves a space behind rather than closing the gap. Joining the text
+	 * either side of it makes characters adjacent that never were, and they can glue into
+	 * a token the source does not contain -- `c{n}olor: red;` becomes a `color:` that
+	 * pairs a background nothing pairs (issue #2934).
+	 */
 	private static function withoutNestedBlocks(string $block): string
 	{
 		$out = '';
@@ -974,6 +991,8 @@ final class ThemeSafetyUiTest extends TestCase
 				$depth++;
 				if ($depth === 1) {
 					$out .= $block[$i];
+				} elseif ($depth === 2) {
+					$out .= ' ';
 				}
 				continue;
 			}
