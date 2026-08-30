@@ -50,7 +50,7 @@ The `read-version-matrix.sh` reader is also exposed as a composite GH Actions ac
 (`.github/actions/read-version-matrix/`) that emits these outputs:
 
 - `build_matrix` — `role=build` entries (absent role treated as `build`) → one `.pkg` per
-  distinct FreeBSD major. Excludes `role=route-only` (served from frozen `.pkg`, not rebuilt).
+  exact `(freebsd_major, php_version, py_flavor)` runtime tuple (issue #2926). Excludes `role=route-only` (served from frozen `.pkg`, not rebuilt).
 - `ci_matrix` — every `ci: true` entry (CE **and** Plus, ADR-24) within the BUILD matrix →
   the smoke-fan-out set, each carrying its resolved `image_name` (default `pfsense-ce`) + `mac`.
   Excludes `role=route-only` (same exclusion as build; no smoke leg for a frozen version).
@@ -73,7 +73,7 @@ for the ROUTE matrix (see below).
   "pfsense_version": "2.8",          # pfSense Major.Minor family (CE: Y.Z; Plus: YY.MM)
   "channel":         "CE",           # CE | Plus
   "freebsd_version": "15.0-RELEASE", # full FreeBSD version string (build env)
-  "freebsd_major":   "15",           # FreeBSD major (BUILD-matrix dedup key)
+  "freebsd_major":   "15",           # FreeBSD-major component of the BUILD tuple
   "php_version":     "8.3",          # PHP version (pinned so USES=php dep names match)
   "py_flavor":       "py311",        # Python flavor for build-pkg-linux.yml
   "extra_pkgs":      [],             # OPTIONAL; port origins to build+fold in as deps (issue #1806, e.g. ["textproc/py-charset-normalizer"] for CE). Omit => []
@@ -465,12 +465,13 @@ CPU-wildcarded — `FreeBSD:<major>:*` (e.g. `FreeBSD:15:*`) — never a concret
   default**; `pkg add -f` forces it — functionally safe here (no binaries of ours; the
   smoke image bakes pfBlockerNG's run-deps incl. `libmaxminddb`, so `pkg add` resolves
   them locally/offline).
-- So **build one `.pkg` per distinct FreeBSD major** — `build-pkg-portable.py --abi
+- So **build one `.pkg` per exact runtime tuple** `(freebsd_major, php_version,
+  py_flavor)` (issue #2926) — `build-pkg-portable.py --abi
   FreeBSD:<major>:<cpu>` on ANY host (no FreeBSD VM needed; the portable Linux builder
   is the sole builder). The `<cpu>` segment is an INERT placeholder for a NO_ARCH port
   (the builder wildcards the stamp regardless of what's given); one build covers every
-  arch AND every pfSense edition/version on that major. Rebuild only on a
-  **FreeBSD-major jump** (rare; coincides with raising the minimum supported version).
+  arch and every pfSense edition/version sharing that tuple. Rows on the same major with
+  different PHP or Python values require distinct builds; identical tuples share one.
 - The self-hosted catalog (ADR-17) is **arch-less**: `<channel>/<varver>/` holds the
   catalog directly (no arch subdirectory) — one varver directory serves every arch of
   its FreeBSD major.
@@ -484,9 +485,9 @@ CPU-wildcarded — `FreeBSD:<major>:*` (e.g. `FreeBSD:15:*`) — never a concret
 | --- | --- | --- | --- |
 | Previous CE major (e.g. 2.7.x) | 14 | yes | yes |
 | Current CE major (e.g. 2.8.x) | 15 | yes | yes |
-| Current Plus major | 16 (today) | only if its major diverges | yes (private licensed image) |
+| Current Plus major | 16 (today) | shared only when its exact runtime tuple matches | yes (private licensed image) |
 
-Artifacts = **one per distinct FreeBSD major**; CI smoke = every `ci: true` image, CE **and** Plus.
+Artifacts = **one per exact `(freebsd_major, php_version, py_flavor)` runtime tuple**; CI smoke = every `ci: true` image, CE **and** Plus.
 The scheduled version-tracking + release-automation design is its own ADR.
 
 ## Catalog generator — release retention

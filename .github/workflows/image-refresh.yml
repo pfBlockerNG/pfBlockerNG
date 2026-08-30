@@ -71,7 +71,7 @@ on:
         default: "false"
         type: string
       direct_leg:
-        description: "One fully-specified leg as JSON ({variant,label,pfsense_version,freebsd_version,image_name,branch,target,from,force_flag}) — how the reconcile loop (issue #1823) dispatches its planned actions. Takes precedence over self_refresh."
+        description: "One fully-specified leg as JSON ({variant,label,pfsense_version,freebsd_version,php_version,py_flavor,image_name,branch,target,from,force_flag}) — how the reconcile loop (issue #1823) dispatches its planned actions. Takes precedence over self_refresh."
         required: false
         default: ""
         type: string
@@ -151,10 +151,10 @@ jobs:
             # charset-constrained and force_flag is an enum (review F4).
             INCLUDE="$(printf '%s' "$DIRECT_LEG" | jq -c '
               if type == "object"
-                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
-                       .branch, .target, .from, .force_flag] | all(type == "string"))
-                 and ([.variant, .label, .pfsense_version, .freebsd_version, .image_name,
-                       .branch, .target, .from]
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .php_version,
+                       .py_flavor, .image_name, .branch, .target, .from, .force_flag] | all(type == "string"))
+                 and ([.variant, .label, .pfsense_version, .freebsd_version, .php_version,
+                       .py_flavor, .image_name, .branch, .target, .from]
                       | all(test("[^0-9A-Za-z._@:-]") | not))
                  and (.force_flag == "" or .force_flag == "--force")
               then [.] else [] end' 2>/dev/null || printf '[]')"
