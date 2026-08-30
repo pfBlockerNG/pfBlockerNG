@@ -16,8 +16,8 @@ Dispatch:
     gh workflow run smoke.yml -f pytest_filter="feed_pass_lock"
 
 Tests:
-    test_cron_verb_skips_while_feed_pass_lock_held — second pass skips + logs
-    test_cron_verb_proceeds_when_lock_free         — normal pass unaffected
+    test_cron_verb_skips_while_feed_pass_lock_held — second pass defers (rc=75) + logs
+    test_cron_verb_proceeds_when_lock_free         — normal pass unaffected (rc=0)
 """
 
 from __future__ import annotations
@@ -46,6 +46,15 @@ _STOP = "/tmp/pfb_smoke_lock_stop"
 # and the other absent, so neither negative assertion can pass vacuously.
 _SKIP_LINE = "Feed pass [ cron ] skipped -- another pfBlockerNG feed pass is running"
 _START_LINE = "CRON  PROCESS  START"
+
+# The CLI contract for a deferred pass (5a19a2ef, issue #2945). A deferral is not a
+# failure and not a success: pfb_feed_pass_exit_code() returns PFB_EXIT_LOCKED, which is
+# EX_TEMPFAIL, while a genuine lock ACQUISITION error stays rc=1 and a completed pass
+# stays rc=0. Asserting the exact code rather than "non-zero" is what keeps those three
+# apart here -- a test that accepted any failure would pass on the error path this
+# distinction exists to separate.
+_EX_TEMPFAIL = 75
+_DEFERRAL_MESSAGE = "pfBlockerNG feed pass deferred: feed-pass lock is held"
 
 # Real on-box lock holder: acquires the SAME flock the funnels use, signals
 # readiness, then waits for the stop file. Self-terminating (120 s deadline)
@@ -111,7 +120,8 @@ def test_cron_verb_skips_while_feed_pass_lock_held(deployed_vm: SmokeVM) -> None
 
     Given another on-box process holds pfb_feed_pass.lock,
     When the cron verb is dispatched,
-    Then it logs the skip line and never starts the pass (no CRON START banner).
+    Then it defers with EX_TEMPFAIL and says so on stderr, logs the skip line, and
+    never starts the pass (no CRON START banner).
     """
     vm = deployed_vm
     h.wait_no_active_pfb_task(vm)
@@ -124,7 +134,13 @@ def test_cron_verb_skips_while_feed_pass_lock_held(deployed_vm: SmokeVM) -> None
     try:
         offset = _log_size(vm)
         run = vm.ssh(f"{_PHP} {_PFB_PHP} cron", timeout=120.0)
-        assert run.returncode == 0, f"cron verb must exit cleanly on a skip: rc={run.returncode} {run.stderr!r}"
+        assert run.returncode == _EX_TEMPFAIL, (
+            f"a deferred pass must report EX_TEMPFAIL, not {run.returncode}: "
+            f"expected {_EX_TEMPFAIL}, got rc={run.returncode} stderr={run.stderr!r}"
+        )
+        assert _DEFERRAL_MESSAGE in run.stderr, (
+            f"the deferral must name its reason on stderr: expected {_DEFERRAL_MESSAGE!r}, got {run.stderr!r}"
+        )
         delta = _log_delta(vm, offset)
         assert _SKIP_LINE in delta, f"expected skip line {_SKIP_LINE!r} in log delta, got: {delta!r}"
         assert _START_LINE not in delta, f"pass must NOT start while the lock is held, log delta: {delta!r}"
@@ -144,7 +160,11 @@ def test_cron_verb_proceeds_when_lock_free(deployed_vm: SmokeVM) -> None:
 
     offset = _log_size(vm)
     run = vm.ssh(f"{_PHP} {_PFB_PHP} cron", timeout=240.0)
-    assert run.returncode == 0, f"cron verb failed: rc={run.returncode} {run.stderr!r}"
+    assert run.returncode == 0, (
+        f"a completed pass must report success, not a deferral or a failure: "
+        f"expected 0, got rc={run.returncode} stderr={run.stderr!r}"
+    )
+    assert _DEFERRAL_MESSAGE not in run.stderr, f"a free lock must not report a deferral, stderr: {run.stderr!r}"
     delta = _log_delta(vm, offset)
     assert _START_LINE in delta, f"expected {_START_LINE!r} in log delta, got: {delta!r}"
     assert _SKIP_LINE not in delta, f"a free lock must not produce a skip, log delta: {delta!r}"
