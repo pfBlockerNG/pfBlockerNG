@@ -257,7 +257,14 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			fclose($pipes[1]);
 			fclose($pipes[2]);
 			$status = proc_close($process);
-			$this->assertSame(0, $status, "{$stdout}\n{$stderr}");
+			$this->assertSame(0, $status, sprintf(
+				"nested source-execution suite FAILED inside this wrapper's comment-reworded copy of "
+				. "the tree (%s, removed on teardown). Every test name and message below belongs to "
+				. "that NESTED run, not to this wrapper:\n%s\n%s",
+				$temp,
+				$stdout,
+				$stderr
+			));
 		} finally {
 			$this->removeTree($temp);
 		}
