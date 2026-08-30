@@ -114,6 +114,16 @@ final class ThemeSafetyUiTest extends TestCase
 			'unrelated attribute'       => ['$s = ".a { background-color: #123456; } <span style=\"color: black;\"></span>";', FALSE],
 			'unrelated attr, no braces' => ['$s = \'background-color: #123456; <span style="color:black;"></span>\';', FALSE],
 			'own attribute pairs it'    => ['$s = "<input style=\"color: black; background-color: #123456;\">";', TRUE],
+			// Only a real style attribute opens a span: data-style and chart_style do not.
+			'decoy carries a colour'    => ['$s = "<div data-style=\"color: red\"></div> background-color: #123456;";', FALSE],
+			'decoy attribute name'      => ['$s = "<div data-style=\"dark\">x</div> background-color: #123456; foo({color: \'red\'})";', FALSE],
+			'real attribute still pairs'=> ['$s = "<div data-style=\"dark\" style=\"color: red; background-color: #123456;\">";', TRUE],
+			// A background flanked by two attributes: both values go, and the later span's
+			// offsets must still be valid when the earlier one is removed.
+			'flanked by two attributes' => ['$s = "<a style=\"color:red\"></a> background-color: #123456; <b style=\"color:blue\"></b>";', FALSE],
+			// A brace group before an attribute: the cuts interleave, so they must be
+			// ordered before they are applied back to front.
+			'group then attribute'      => ['$s = "foo({color:\'red\'}) background-color: #123456; <b style=\"color:blue\"></b>";', FALSE],
 			// The two fallbacks, each pinned by a pairing further away than the window.
 			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
 			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
@@ -372,8 +382,7 @@ final class ThemeSafetyUiTest extends TestCase
 			}
 			if ($source[$i] === $quote) {
 				$literal = substr($source, $open, $i - $open + 1);
-				return self::styleAttribute($literal, $offset - $open)
-					?? self::withoutOtherAttributes($literal);
+				return self::styleContext($literal, $offset - $open);
 			}
 		}
 		// The quote never closed on this line, so it was an apostrophe in prose, not a
@@ -389,11 +398,14 @@ final class ThemeSafetyUiTest extends TestCase
 	 * literal that is \", so the backslash terminates rather than escapes. Skipping it as
 	 * an escape runs the span past the element it belongs to.
 	 *
+	 * data-style and chart_style count too: whatever the attribute is named, its value
+	 * belongs to its own element and cannot pair a background somewhere else.
+	 *
 	 * @return list<array{0: int, 1: int}>
 	 */
 	private static function styleAttributeSpans(string $literal): array
 	{
-		if (preg_match_all('/style\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
+		if (preg_match_all('/[-\w]*style\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
 			return [];
 		}
 		$spans = [];
@@ -406,32 +418,63 @@ final class ThemeSafetyUiTest extends TestCase
 		return $spans;
 	}
 
-	/** The style attribute containing $rel, when the background sits inside one. */
-	private static function styleAttribute(string $literal, int $rel): ?string
+	/**
+	 * The declarations that share an element with a background inside a literal.
+	 *
+	 * A PHP string is routinely a whole HTML fragment. If the background sits in a style
+	 * attribute, only that attribute can pair it; otherwise the other elements' attributes
+	 * are still theirs, so their values are removed rather than read as neighbours. Spans
+	 * are excised back to front, or an earlier removal shifts the offsets of a later one.
+	 */
+	private static function styleContext(string $literal, int $rel): string
 	{
-		foreach (self::styleAttributeSpans($literal) as [$start, $end]) {
+		$spans = self::styleAttributeSpans($literal);
+		foreach ($spans as [$start, $end]) {
 			if ($rel >= $start && $rel < $end) {
 				return substr($literal, $start, $end - $start);
 			}
 		}
-		return NULL;
-	}
-
-	/**
-	 * The literal with every style attribute's value blanked.
-	 *
-	 * A PHP string is routinely a whole HTML fragment. When the background is not itself
-	 * inside an attribute, the other elements' attributes are still theirs -- handing back
-	 * the whole literal lets a neighbouring span's colour pair it, which is the defect this
-	 * guard exists to catch, one scope further out again.
-	 */
-	private static function withoutOtherAttributes(string $literal): string
-	{
 		$out = $literal;
-		foreach (array_reverse(self::styleAttributeSpans($literal)) as [$start, $end]) {
+		$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
+		usort($cuts, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+		foreach (array_reverse($cuts) as [$start, $end]) {
 			$out = substr($out, 0, $start) . substr($out, $end);
 		}
 		return $out;
+	}
+
+	/**
+	 * Spans of the brace groups inside a literal that do not contain $rel.
+	 *
+	 * The same rule blocks already follow: a colour one scope in never pairs a background
+	 * one scope out. A literal can carry both -- an object argument beside a declaration --
+	 * so the groups the background is not in are dropped with the other elements'
+	 * attributes.
+	 *
+	 * @return list<array{0: int, 1: int}>
+	 */
+	private static function foreignBraceGroups(string $text, int $rel): array
+	{
+		$groups = [];
+		$depth = 0;
+		$start = 0;
+		$length = strlen($text);
+		for ($i = 0; $i < $length; $i++) {
+			if ($text[$i] === '{') {
+				if ($depth === 0) {
+					$start = $i;
+				}
+				$depth++;
+				continue;
+			}
+			if ($text[$i] === '}' && $depth > 0) {
+				$depth--;
+				if ($depth === 0 && ($rel < $start || $rel > $i)) {
+					$groups[] = [$start, $i + 1];
+				}
+			}
+		}
+		return $groups;
 	}
 
 	/**
