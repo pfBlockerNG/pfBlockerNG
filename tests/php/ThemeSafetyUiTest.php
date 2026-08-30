@@ -492,7 +492,7 @@ final class ThemeSafetyUiTest extends TestCase
 			if ($quote !== NULL) {
 				continue;
 			}
-			if ($i > 0 && preg_match('/[A-Za-z0-9]/', $source[$i - 1]) === 1) {
+			if ($i > 0 && preg_match('/[A-Za-z0-9]/', $source[$i - 1])) {
 				continue;
 			}
 			$quote = $source[$i];
