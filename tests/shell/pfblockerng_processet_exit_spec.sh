@@ -225,9 +225,6 @@ RUNNER
 	End
 
 	Context 'when the block publication cannot be moved into place'
-		# The publish is a `mv` off the private temp directory, which is a separate
-		# filesystem from /var on a default use_mfs_tmpvar install -- so it copies
-		# rather than renames, and can fail on its own.
 		plant_readonly_origdir() { chmod 555 "${orig}"; }
 		Before 'plant_et_raw'
 		Before 'plant_prior_generation'
