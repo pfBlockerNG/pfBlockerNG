@@ -17,7 +17,7 @@ Describe 'smoke-on-box.sh (issue #2223)'
 
   setup() {
     scrub_git_env
-    unset ORAS_DESCRIPTOR_DIGEST SMOKE_PFSENSE_REF SMOKE_PFSENSE_VERSION
+    unset ORAS_DESCRIPTOR_DIGEST SMOKE_PFSENSE_REF SMOKE_PFSENSE_VERSION SMOKE_PHP_VERSION SMOKE_PY_FLAVOR
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/smokeonbox.XXXXXX")"
     FAKE_ROOT="${WORK}/repo"
     mkdir -p "${FAKE_ROOT}/scripts/lib"
@@ -212,10 +212,9 @@ STUBEOF
     The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
-  It 'refuses to build when the matrix has no row for this ABI major'
-    # issue #2464: the php/py a leg builds with come from ITS OWN matrix row. There is no
-    # major -> php table to fall back on, so an unknown major must stop the run rather than
-    # silently build a package with the wrong php.
+  It 'reports active runtime selectors when no matrix row matches'
+    # issue #2926: a zero match may be caused by php/py selectors, not the ABI major.
+    # The refusal must name the active tuple so the mismatched axis is diagnosable.
     printf '0\n' > "${WORK}/port-floor"
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
@@ -225,11 +224,15 @@ STUBEOF
     SPARSE_CHANNEL_FILE="${WORK}/sparse-channel-unused"
     SPARSE_EXIT=42
     export SPARSE_CHANNEL_FILE SPARSE_EXIT
+    SMOKE_PHP_VERSION=8.5
+    SMOKE_PY_FLAVOR=py312
+    export SMOKE_PHP_VERSION SMOKE_PY_FLAVOR
 
-    When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:99:amd64
+    When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:15:amd64
     The status should not equal 0
     The status should not equal 42
-    The stderr should include 'no matrix row for FreeBSD major 99'
+    The stderr should include 'no matrix row for FreeBSD major 15'
+    The stderr should include 'php=8.5 py=py312'
     The path "$SPARSE_CHANNEL_FILE" should not be exist
   End
 
@@ -713,7 +716,7 @@ STUBEOF
     The contents of file "$BUILD_LEG_ARGV_LOG" should include '--py-flavor py311'
   End
 
-  It 'selects the exact runtime tuple for a same-major py312 leg'
+  It 'refuses a same-major py-flavor ambiguity when no SMOKE_PY_FLAVOR names the tuple'
     printf '0\n' > "${WORK}/port-floor"
     BUILD_LEG_ARGV_LOG="${WORK}/build-leg-argv"
     export BUILD_LEG_ARGV_LOG

@@ -209,13 +209,15 @@ def test_handoff_accepts_freebsd_16_php_84_and_85_tuples() -> None:
         build_rows=[row84, row85],
         route_rows=[row84, row85],
     )
+    builds = handoff["builds"]
+    assert isinstance(builds, list)
     keys = sorted(
         (
             str(b["matrix_row"]["freebsd_major"]),
             str(b["matrix_row"]["php_version"]),
             str(b["matrix_row"]["py_flavor"]),
         )
-        for b in handoff["builds"]
+        for b in builds
     )
     assert keys == [("16", "8.4", "py311"), ("16", "8.5", "py311")], f"both runtime tuples expected; got {keys!r}"
 
@@ -254,13 +256,15 @@ def test_handoff_accepts_same_major_same_php_different_py_flavor() -> None:
         build_rows=[row_a, row_b],
         route_rows=[row_a],
     )
+    builds = handoff["builds"]
+    assert isinstance(builds, list)
     keys = sorted(
         (
             str(b["matrix_row"]["freebsd_major"]),
             str(b["matrix_row"]["php_version"]),
             str(b["matrix_row"]["py_flavor"]),
         )
-        for b in handoff["builds"]
+        for b in builds
     )
     assert keys == [("15", "8.3", "py311"), ("15", "8.3", "py312")], f"both py-flavor tuples expected; got {keys!r}"
 
