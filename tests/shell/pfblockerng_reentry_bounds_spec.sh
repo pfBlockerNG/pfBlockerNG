@@ -319,7 +319,41 @@ Describe 'every shell re-entry call site reaches the bounded seam (issue #2016)'
     When call init_budget_line
     The output should include 'read_xml_tag.sh'
     The output should include 'installedpackages/pfblockerng/config/pfb_reentry_timeout'
-    The output should include 'pfb_reentry_timeout "$('
+    The output should include 'pfb_reentry_timeout_from_reader'
+  End
+End
+
+Describe 'pfb_reentry_timeout() stored-value ingress (issue #2851)'
+  BeforeAll 'pfb_source'
+
+  setup() {
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbrtread.XXXXXX")"
+    reader="${work}/read_xml_tag.sh"
+  }
+  cleanup() { rm -rf "${work}"; }
+  Before 'setup'
+  After 'cleanup'
+
+  It 'preserves a trailing newline so the resolver rejects it'
+    cat > "${reader}" <<'EOF'
+#!/bin/sh
+printf '900\n'
+EOF
+    chmod +x "${reader}"
+
+    When call pfb_reentry_timeout_from_reader "${reader}" string installedpackages/pfblockerng/config/pfb_reentry_timeout
+    The output should equal 1800
+  End
+
+  It 'still accepts an unpadded stored digit run'
+    cat > "${reader}" <<'EOF'
+#!/bin/sh
+printf '900'
+EOF
+    chmod +x "${reader}"
+
+    When call pfb_reentry_timeout_from_reader "${reader}" string installedpackages/pfblockerng/config/pfb_reentry_timeout
+    The output should equal 900
   End
 End
 
