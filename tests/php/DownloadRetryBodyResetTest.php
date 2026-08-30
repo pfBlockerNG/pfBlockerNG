@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+
 /**
  * pfb_download() retry-attempt body reset (issue #1072).
  *
@@ -107,6 +109,13 @@ final class DownloadRetryBodyResetTest extends TestCase
 		$this->assertSame(64, strlen($body));
 		$routerSrc = <<<PHP
 <?php
+\$uri = \$_SERVER['REQUEST_URI'] ?? '';
+if (str_starts_with(\$uri, '/__pfb_ready/')) {
+	if (\$uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+		echo getenv('READY_TOKEN');
+	}
+	return;
+}
 \$authLog = getenv('AUTH_LOG');
 if (str_starts_with(\$_SERVER['REQUEST_URI'] ?? '', '/auth')) {
 	file_put_contents(\$authLog, json_encode([
@@ -129,38 +138,52 @@ echo '{$body}';
 PHP;
 		$this->assertNotFalse(file_put_contents($router, $routerSrc));
 
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
-			$port = random_int(20000, 60000);
-			$proc = proc_open(
+			$port   = random_int(20000, 60000);
+			$nonce  = bin2hex(random_bytes(16));
+			$stderr = "{$this->workdir}/server-{$port}-{$try}.stderr";
+			$proc   = proc_open(
 				['php', '-S', "127.0.0.1:{$port}", $router],
-				$descriptors,
+				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
 				[
-					'AUTH_LOG' => "{$this->workdir}/auth.log",
+					'AUTH_LOG'    => "{$this->workdir}/auth.log",
 					'FLAKY_STATE' => "{$this->workdir}/state.flag",
-					'PATH' => (string) getenv('PATH'),
+					'READY_TOKEN' => $nonce,
+					'PATH'        => (string) getenv('PATH'),
 				]
 			);
 			if (!is_resource($proc)) {
+				$failures[] = "port {$port}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
-			// Poll readiness instead of a fixed wait (up to ~2s).
 			for ($i = 0; $i < 40; $i++) {
-				$sock = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.05);
-				if ($sock !== FALSE) {
-					fclose($sock);
+				if (pfb_test_http_fixture_event_received($port, $nonce)) {
 					$this->server = $proc;
 					$this->port = $port;
 					return;
 				}
 				usleep(50000);
 			}
-			proc_terminate($proc);
-			proc_close($proc);
+
+			$status = proc_get_status($proc);
+			if ($status['running']) {
+				proc_terminate($proc);
+			}
+			$closeExit = proc_close($proc);
+			$stderrText = trim((string) @file_get_contents($stderr));
+			$failures[] = sprintf(
+				'port %d: process[running=%s exit=%d close=%d] stderr=%s',
+				$port,
+				$status['running'] ? 'true' : 'false',
+				$status['exitcode'],
+				$closeExit,
+				$stderrText === '' ? '(empty)' : $stderrText
+			);
 		}
-		$this->fail('could not start the flaky php -S fixture server');
+		$this->fail('could not start the flaky php -S fixture server; ' . implode(' | ', $failures));
 	}
 
 	public function testRetryAfterPartialBodyYieldsExactFinalBody(): void
