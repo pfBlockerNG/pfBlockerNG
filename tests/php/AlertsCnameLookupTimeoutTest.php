@@ -122,11 +122,14 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$timeout_flag = "{$this->tmp}/timeout fired";
 		$result = "{$this->tmp}/lookup result.json";
 		$child_log = "{$this->tmp}/child output.log";
-		// Two signals carry the events this harness used to poll a clock for: the drill
-		// announcing its partial output, and the worker reaching end of run.
+		// The events this harness used to poll a clock for. The end-of-run signal is
+		// always needed; the partial-output one exists only in stall mode, which is the
+		// only mode that consumes it, so the wiring shows where the event is read.
 		$partial_signal = "{$this->tmp}/partial signal";
 		$done_signal = "{$this->tmp}/done signal";
-		$this->assertTrue(posix_mkfifo($partial_signal, 0600), 'could not create the partial-output signal');
+		if ($stall) {
+			$this->assertTrue(posix_mkfifo($partial_signal, 0600), 'could not create the partial-output signal');
+		}
 		$this->assertTrue(posix_mkfifo($done_signal, 0600), 'could not create the end-of-run signal');
 
 		$drill = $this->fixture('drill fixture.sh',
@@ -134,8 +137,8 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			. "printf '%b\\n' 'partial.example.com.\\t300\\tIN\\tCNAME\\talias.example.com.'\n"
 			. "printf '%s\\n' --PARTIAL-WRITTEN-- >> " . escapeshellarg($marker) . "\n"
 			// '1<>' opens read-write, so announcing partial output can never block the
-			// drill on a reader, in the runs where nobody is listening for it.
-			. "printf 'partial\\n' 1<> " . escapeshellarg($partial_signal) . "\n"
+			// drill on the shim that reads it.
+			. ($stall ? "printf 'partial\\n' 1<> " . escapeshellarg($partial_signal) . "\n" : '')
 			. ($drillFails ? "exit 7\n" : '')
 			. ($stall ? "while true; do sleep 1; done\n" : '')
 		);

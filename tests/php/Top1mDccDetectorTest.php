@@ -653,22 +653,23 @@ final class Top1mDccDetectorTest extends TestCase
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE, FALSE));
-			// Scheduled mode returns before the seam's exec(), so no child exists and
-			// nothing can create the log after this point -- there is no event to wait
-			// for, and the wall-clock spin this replaced only slowed the suite down.
+			// Scheduled mode returns before the seam's exec(), so there is no child and no
+			// event to wait for -- the wall-clock spin this replaced only slowed the suite.
 			$this->assertFileDoesNotExist($dispatch_log);
 
-			// Vacuity guard: the SAME fixture does record a dispatch when it is run, so
-			// the absence above is the seam's decision and not an inert fixture.
+			// The probe below runs the SAME fixture synchronously, which makes it both the
+			// vacuity guard (the absence above is the seam's decision, not an inert fixture)
+			// and a barrier: anything the seam had dispatched would already be in the log
+			// beside it, so the exact line count is what pins "scheduled mode does not
+			// dispatch" -- with more margin than the deleted spin ever had.
 			$probe_output = [];
 			$probe_status = -1;
 			exec(escapeshellarg($fake_php) . ' scheduled-vacuity-probe', $probe_output, $probe_status);
 			$this->assertSame(0, $probe_status, 'the dispatch fixture must be runnable: ' . implode("\n", $probe_output));
-			$this->assertStringContainsString(
-				'scheduled-vacuity-probe',
-				(string) file_get_contents($dispatch_log),
-				'the fixture must be able to create the log this test asserts absent'
-			);
+			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
+			$this->assertIsArray($lines, 'the fixture must be able to create the log this test asserts absent');
+			$this->assertCount(1, $lines, 'scheduled mode must not have dispatched: ' . implode(' | ', $lines ?: []));
+			$this->assertStringContainsString('scheduled-vacuity-probe', $lines[0]);
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
 			$GLOBALS['pfb'] = $saved;
