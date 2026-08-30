@@ -50,6 +50,12 @@ def repo(tmp_path: Path) -> Path:
     That is the smallest thing that behaves like a real suite for this script's purposes:
     the verdict depends on the tree, so a patch can genuinely change it and the revert can
     genuinely be observed to have taken.
+
+    The report is deliberately NOT gitignored. A real suite writes its JUnit inside the tree
+    it grades -- PHPUnit's ``--log-junit`` resolves against its own cwd -- so the report is
+    itself tree dirt, and a run that produced one is indistinguishable from a run that left
+    a mutation applied unless the script excludes it. Ignoring it here would hide that from
+    every test in this file, which is how the defect reached a first real run.
     """
     root = tmp_path / "repo"
     root.mkdir()
@@ -62,7 +68,6 @@ def repo(tmp_path: Path) -> Path:
     (root / "suite.sh").chmod(0o755)
     (root / "pass.xml").write_text(JUNIT_PASS, encoding="utf-8")
     (root / "fail.xml").write_text(JUNIT_ONE_FAILED, encoding="utf-8")
-    (root / ".gitignore").write_text("report.xml\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "base")
     return root
@@ -203,16 +208,44 @@ def test_a_mutation_that_kills_nothing_is_reported_as_a_finding(repo: Path) -> N
 
 
 def test_the_tree_is_clean_again_afterwards(repo: Path, killing_patch: Path) -> None:
-    """A mutation left applied would silently measure every later row under it."""
+    """A mutation left applied would silently measure every later row under it.
+
+    The suite's own report is the one thing allowed to remain: it is output, not residue.
+    Asserting that it is the ONLY entry pins both halves at once -- the revert took, and the
+    report is not being counted as a mutation someone forgot to undo.
+    """
     assert _run(repo, killing_patch).returncode == 0
     status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True)
-    assert status.stdout.strip() == "", status.stdout
+    assert status.stdout.split() == ["??", "report.xml"], status.stdout
     assert (repo / "guard.txt").read_text(encoding="utf-8") == "GUARD\n"
 
 
 # --------------------------------------------------------------------------- #
 # Refusals -- a table that is wrong is worse than no table
 # --------------------------------------------------------------------------- #
+
+
+def test_the_report_the_suite_writes_is_not_mistaken_for_dirt(repo: Path, killing_patch: Path) -> None:
+    """Scenario: the suite writes its JUnit inside the tree it grades, which is the norm.
+
+    Given a repo where the report is untracked and not ignored,
+
+    When two patches are measured in turn,
+
+    Then the SECOND one still runs -- before the report was excluded from the cleanliness
+      check, the first row's report was read as residue from an unreverted mutation and the
+      script aborted, reporting a revert failure that had not happened.
+
+    Found by pointing the script at its first real subject, not by a test, because this
+    file's fixture used to gitignore the report and so could never see it.
+    """
+    second = repo.parent / "second.patch"
+    second.write_text("--- a/guard.txt\n+++ b/guard.txt\n@@ -1 +1 @@\n-GUARD\n+OTHER\n", encoding="utf-8")
+    result = _run(repo, killing_patch, second)
+    assert result.returncode == 0, result.stdout + result.stderr
+    rows = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
+    assert len(rows) == 2, f"the second row never ran:\n{result.stdout}\n{result.stderr}"
+    assert "`+MUTATED`" in rows[0] and "`+OTHER`" in rows[1], rows
 
 
 def test_a_dirty_tree_is_refused(repo: Path, killing_patch: Path) -> None:
