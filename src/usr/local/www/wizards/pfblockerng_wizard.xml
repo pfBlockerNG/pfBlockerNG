@@ -145,7 +145,10 @@
 	<title>pfBlockerNG Components</title>
 	<description>
 		<![CDATA[
+		<div class="row">
 		<div class="col-sm-4 alert alert-warning clearfix" role="alert">CAUTION BEFORE PROCEEDING!</div>
+		</div>
+		<div class="row">
 		<div class="col-sm-11 alert-info" style="border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
 			<ul>
 				<li>The pfBlockerNG wizard will configure a default setup for pfBlockerNG.</li>
@@ -164,6 +167,7 @@
 			<ul>
 				<li>A VIP on the Localhost interface can be configured manually at <a target="_blank" rel="noopener noreferrer" href="/firewall_virtual_ip.php">Firewall &gt; Virtual IPs</a>, or pfBlockerNG can create one automatically in the DNSBL step.</li>
 			</ul>
+		</div>
 		</div>
 		]]>
 	</description>
