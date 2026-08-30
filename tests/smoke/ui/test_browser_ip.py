@@ -33,13 +33,16 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 expect = sync_api.expect
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import Locator, Page, ViewportSize
 
     from .webui import WebUI
 
 pytestmark = pytest.mark.ui_browser
 
 IP_PAGE = "/pfblockerng/pfblockerng_ip.php"
+RULE_ORDER_VALUES = tuple(f"order_{index}" for index in range(5))
+PHONE: ViewportSize = {"width": 414, "height": 896}
+DESKTOP: ViewportSize = {"width": 1440, "height": 900}
 # The ADR-11 multi-select's four option VALUES (the action-type labels the GUI action
 # dropdown / Logs page already use). Order is the canonical type order. Each names the
 # destination folder/class an aggregate unions (its Alias variant folds in).
@@ -108,6 +111,74 @@ def _shot_field(locator: Locator, screenshot_dir: Path, name: str) -> None:
 def _selected_values(select: Locator) -> list[str]:
     """The currently-selected option values of the multi-select, in DOM order."""
     return select.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)")
+
+
+@pytest.mark.parametrize(("label", "viewport"), [("desktop", DESKTOP), ("phone", PHONE)])
+def test_firewall_auto_rule_order_stays_inside_its_container(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+    label: str,
+    viewport: ViewportSize,
+) -> None:
+    """All five native choices remain usable without overflowing either viewport."""
+    page = browser_page
+    page.set_viewport_size(viewport)
+    _open(page, webui, IP_PAGE)
+
+    select = page.locator("#pass_order")
+    expect(select).to_be_visible(timeout=JS_TIMEOUT_MS)
+    rendered_options = select.locator("option").evaluate_all(
+        "(options) => options.map((option) => ({value: option.value, label: option.textContent.trim()}))"
+    )
+    assert [option["value"] for option in rendered_options] == list(RULE_ORDER_VALUES)
+    assert len({option["label"] for option in rendered_options}) == len(RULE_ORDER_VALUES), (
+        f"the five Firewall Auto Rule Order labels must remain distinguishable: {rendered_options!r}"
+    )
+
+    metrics = select.evaluate(
+        """
+        (control) => {
+          const column = control.closest('div[class*="col-sm-"]');
+          if (!column) throw new Error('pass_order has no Bootstrap control column');
+          const box = control.getBoundingClientRect();
+          const container = column.getBoundingClientRect();
+          const root = document.documentElement;
+          return {
+            left: box.left,
+            right: box.right,
+            width: box.width,
+            containerLeft: container.left,
+            containerRight: container.right,
+            containerWidth: container.width,
+            viewportWidth: root.clientWidth,
+            documentOverflow: root.scrollWidth - root.clientWidth,
+          };
+        }
+        """
+    )
+    _shot(page, screenshot_dir, f"ip_rule_order_{label}")
+
+    assert metrics["left"] >= metrics["containerLeft"] - 1, (
+        f"[{label} {viewport['width']}px] select starts outside its container: {metrics!r}"
+    )
+    assert metrics["right"] <= metrics["containerRight"] + 1, (
+        f"[{label} {viewport['width']}px] select exceeds its container: {metrics!r}"
+    )
+    assert metrics["right"] <= metrics["viewportWidth"] + 1, (
+        f"[{label} {viewport['width']}px] select exceeds the viewport: {metrics!r}"
+    )
+    assert metrics["documentOverflow"] == 0, (
+        f"[{label} {viewport['width']}px] IP page gained horizontal document scroll: {metrics!r}"
+    )
+    if label == "desktop":
+        assert metrics["width"] < metrics["containerWidth"], (
+            f"desktop select must keep its intrinsic native width rather than fill the column: {metrics!r}"
+        )
+
+    for value in RULE_ORDER_VALUES:
+        select.select_option(value)
+        assert select.input_value() == value, f"native selection did not accept {value}"
 
 
 def test_ip_aggregate_types_multiselect(
