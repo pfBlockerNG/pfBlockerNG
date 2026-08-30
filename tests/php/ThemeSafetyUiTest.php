@@ -110,6 +110,10 @@ final class ThemeSafetyUiTest extends TestCase
 			// An apostrophe in prose is not a string opener.
 			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
 			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
+			// A style attribute that is not this background's cannot pair it either.
+			'unrelated attribute'       => ['$s = ".a { background-color: #123456; } <span style=\"color: black;\"></span>";', FALSE],
+			'unrelated attr, no braces' => ['$s = \'background-color: #123456; <span style="color:black;"></span>\';', FALSE],
+			'own attribute pairs it'    => ['$s = "<input style=\"color: black; background-color: #123456;\">";', TRUE],
 			// The two fallbacks, each pinned by a pairing further away than the window.
 			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
 			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
@@ -367,8 +371,9 @@ final class ThemeSafetyUiTest extends TestCase
 				continue;
 			}
 			if ($source[$i] === $quote) {
-				return self::styleAttribute($source, $open, $i, $offset)
-					?? substr($source, $open, $i - $open + 1);
+				$literal = substr($source, $open, $i - $open + 1);
+				return self::styleAttribute($literal, $offset - $open)
+					?? self::withoutOtherAttributes($literal);
 			}
 		}
 		// The quote never closed on this line, so it was an apostrophe in prose, not a
@@ -378,33 +383,55 @@ final class ThemeSafetyUiTest extends TestCase
 	}
 
 	/**
-	 * The innermost style="..." attribute inside a literal, when the background is in one.
+	 * Spans of every style attribute's value inside a literal.
 	 *
-	 * A PHP string is routinely a whole HTML fragment, not one attribute -- several sites
-	 * build a <span> and an <input> in the same literal. Resolving to the literal lets one
-	 * element's colour pair another's background, which is the #2866 defect one scope out.
+	 * The closing delimiter is written exactly as the opener was: in a PHP double-quoted
+	 * literal that is \", so the backslash terminates rather than escapes. Skipping it as
+	 * an escape runs the span past the element it belongs to.
+	 *
+	 * @return list<array{0: int, 1: int}>
 	 */
-	private static function styleAttribute(string $source, int $open, int $close, int $offset): ?string
+	private static function styleAttributeSpans(string $literal): array
 	{
-		$literal = substr($source, $open, $close - $open + 1);
-		$rel = $offset - $open;
 		if (preg_match_all('/style\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
-			return NULL;
+			return [];
 		}
+		$spans = [];
 		$count = count($matches[0]);
 		for ($i = 0; $i < $count; $i++) {
 			$start = $matches[0][$i][1] + strlen($matches[0][$i][0]);
-			// The attribute's closing delimiter is written exactly as its opener was: in a
-			// PHP double-quoted literal that is \", so the backslash terminates rather
-			// than escapes. Skipping it as an escape runs the context past the element.
-			$terminator = $matches[1][$i][0] . $matches[2][$i][0];
-			$end = strpos($literal, $terminator, $start);
-			$end = $end === FALSE ? strlen($literal) : $end;
+			$end = strpos($literal, $matches[1][$i][0] . $matches[2][$i][0], $start);
+			$spans[] = [$start, $end === FALSE ? strlen($literal) : $end];
+		}
+		return $spans;
+	}
+
+	/** The style attribute containing $rel, when the background sits inside one. */
+	private static function styleAttribute(string $literal, int $rel): ?string
+	{
+		foreach (self::styleAttributeSpans($literal) as [$start, $end]) {
 			if ($rel >= $start && $rel < $end) {
 				return substr($literal, $start, $end - $start);
 			}
 		}
 		return NULL;
+	}
+
+	/**
+	 * The literal with every style attribute's value blanked.
+	 *
+	 * A PHP string is routinely a whole HTML fragment. When the background is not itself
+	 * inside an attribute, the other elements' attributes are still theirs -- handing back
+	 * the whole literal lets a neighbouring span's colour pair it, which is the defect this
+	 * guard exists to catch, one scope further out again.
+	 */
+	private static function withoutOtherAttributes(string $literal): string
+	{
+		$out = $literal;
+		foreach (array_reverse(self::styleAttributeSpans($literal)) as [$start, $end]) {
+			$out = substr($out, 0, $start) . substr($out, $end);
+		}
+		return $out;
 	}
 
 	/**
