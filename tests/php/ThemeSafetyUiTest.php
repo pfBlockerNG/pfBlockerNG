@@ -110,6 +110,22 @@ final class ThemeSafetyUiTest extends TestCase
 			// An apostrophe in prose is not a string opener.
 			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
 			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
+			// Issue #2928: a multi-line literal opens its quote on an EARLIER line. A scan
+			// that starts at the offset's own line finds no quote there, concludes the
+			// background is not in a string at all, and hands the question to the block
+			// resolver -- where a sibling statement pairs it. That is the #2866 shape
+			// reached by a different route, so it is pinned in both directions: a literal
+			// that genuinely does not pair, and one that genuinely does.
+			'multi-line literal'        => ["if (\$x) {\n\t\$s = \"aaaa\nbackground-color: #123456;\nbbbb\";\n\tcolor: red;\n}", FALSE],
+			'multi-line same literal'   => ['$s = "background-color: #123456;' . "\n" . ' color: red;";', TRUE],
+			'multi-line attribute pairs'=> ['$s = "<span style=\"color: black;' . str_repeat(' ', 200) . "\n" . ' background-color: #123456;\">x</span>";', TRUE],
+			// ...and the reason the scan was scoped to one line in the first place, which any
+			// fix has to keep: an apostrophe in prose is not a string opener, so it must not
+			// open a literal that swallows the lines beneath it. The pairing sits past the
+			// no-scope fallback window and a second apostrophe waits below it, so a whole-file
+			// quote toggle pairs the two and launders the background.
+			'prose apostrophe above'    => ["/* don't */\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n/* the user's guide */", FALSE],
+			'prose apostrophe, block'   => ["/* it's fine */\n.a { background-color: #123456;\n color: red; }", TRUE],
 			// A style attribute that is not this background's cannot pair it either.
 			'unrelated attribute'       => ['$s = ".a { background-color: #123456; } <span style=\"color: black;\"></span>";', FALSE],
 			'unrelated attr, no braces' => ['$s = \'background-color: #123456; <span style="color:black;"></span>\';', FALSE],
@@ -382,7 +398,7 @@ final class ThemeSafetyUiTest extends TestCase
 			}
 		}
 		if ($quote === NULL) {
-			return NULL;
+			return self::enclosingMultiLineString($source, $offset);
 		}
 
 		$lineEnd = strpos($source, "\n", $offset);
@@ -397,9 +413,78 @@ final class ThemeSafetyUiTest extends TestCase
 				return self::styleContext($literal, $offset - $open);
 			}
 		}
-		// The quote never closed on this line, so it was an apostrophe in prose, not a
-		// string opener. Truncating a context at end-of-line hides a pairing on the next
-		// one; let the block resolver answer instead.
+		// The quote never closed on this line: either it was an apostrophe in prose, or it
+		// opened a literal that runs on past end-of-line. Only the multi-line resolver can
+		// tell those apart, and truncating a context at end-of-line would hide a pairing on
+		// the next line, so this scan never answers from its own line alone.
+		return self::enclosingMultiLineString($source, $offset);
+	}
+
+	/**
+	 * The literal containing $offset when that literal spans more than one line.
+	 *
+	 * The line-scoped scan above structurally cannot see one: a multi-line literal opens
+	 * its quote on a line that scan never reads, so the background reads as loose code and
+	 * the block resolver lets a sibling statement pair it -- the issue #2866 shape reached
+	 * by a different route (issue #2928).
+	 *
+	 * Scanning the whole file for quotes is what the line scoping was defending against:
+	 * an apostrophe in prose then opens a literal that swallows every line beneath it
+	 * until the next apostrophe, and desynchronises the file. So the scan runs file-wide
+	 * but only a quote in EXPRESSION POSITION opens a literal -- an apostrophe inside a
+	 * word (don't, the user's guide) is preceded by a letter or digit and is prose, not a
+	 * delimiter. The closing quote is exempt from that test, because a literal routinely
+	 * ends right after one of its own characters.
+	 *
+	 * Two further conditions keep a desynchronised scan from inventing a context. The
+	 * literal must actually CLOSE at or after $offset, so an unterminated quote answers
+	 * nothing; and it must span a newline, because a literal that opens and closes on one
+	 * line is the line-scoped scan's to resolve and it has already had its turn.
+	 */
+	private static function enclosingMultiLineString(string $source, int $offset): ?string
+	{
+		$quote = NULL;
+		$open = 0;
+		for ($i = 0; $i < $offset; $i++) {
+			if ($source[$i] === '\\') {
+				$i++;
+				continue;
+			}
+			if ($source[$i] !== "'" && $source[$i] !== '"') {
+				continue;
+			}
+			if ($quote === $source[$i]) {
+				$quote = NULL;
+				continue;
+			}
+			if ($quote !== NULL) {
+				continue;
+			}
+			if ($i > 0 && preg_match('/[A-Za-z0-9]/', $source[$i - 1]) === 1) {
+				continue;
+			}
+			$quote = $source[$i];
+			$open = $i;
+		}
+		if ($quote === NULL) {
+			return NULL;
+		}
+
+		$length = strlen($source);
+		for ($i = $offset; $i < $length; $i++) {
+			if ($source[$i] === '\\') {
+				$i++;
+				continue;
+			}
+			if ($source[$i] !== $quote) {
+				continue;
+			}
+			$newline = strpos($source, "\n", $open);
+			if ($newline === FALSE || $newline > $i) {
+				return NULL;
+			}
+			return self::styleContext(substr($source, $open, $i - $open + 1), $offset - $open);
+		}
 		return NULL;
 	}
 
