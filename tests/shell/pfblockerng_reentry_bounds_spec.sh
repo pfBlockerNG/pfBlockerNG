@@ -334,7 +334,7 @@ Describe 'pfb_reentry_timeout() stored-value ingress (issue #2851)'
   Before 'setup'
   After 'cleanup'
 
-  It 'preserves a trailing newline so the resolver rejects it'
+  It 'strips the XML reader separator newline before validation'
     cat > "${reader}" <<'EOF'
 #!/bin/sh
 printf '900\n'
@@ -342,8 +342,19 @@ EOF
     chmod +x "${reader}"
 
     When call pfb_reentry_timeout_from_reader "${reader}" string installedpackages/pfblockerng/config/pfb_reentry_timeout
+    The output should equal 900
+  End
+  It 'preserves an additional stored newline so the resolver rejects it'
+    cat > "${reader}" <<'EOF'
+#!/bin/sh
+printf '900\n\n'
+EOF
+    chmod +x "${reader}"
+
+    When call pfb_reentry_timeout_from_reader "${reader}" string installedpackages/pfblockerng/config/pfb_reentry_timeout
     The output should equal 1800
   End
+
 
   It 'still accepts an unpadded stored digit run'
     cat > "${reader}" <<'EOF'
