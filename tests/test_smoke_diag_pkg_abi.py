@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -153,7 +154,7 @@ def test_redact_pkg_tarball_drops_absolute_symlink_and_strips_residual_token(tmp
     assert outside.read_text(encoding="utf-8") == outside_text
 
 
-def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch) -> None:
+def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A traversal member remains fatal and cannot write outside extraction."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     tgz = tmp_path / "pfb_smoke_diag.tgz"
@@ -170,11 +171,15 @@ def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch) -> No
     assert not escaped.exists()
 
 
-def test_collect_host_diagnostics_reports_host_redaction_failure(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_collect_host_diagnostics_reports_host_redaction_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A pulled archive is not reported as fully collected when host redaction fails."""
     dest = tmp_path / "diag"
 
-    def fake_scp(argv, **_kwargs):
+    def fake_scp(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         Path(argv[-1]).write_bytes(b"not a tar archive")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -187,7 +192,7 @@ def test_collect_host_diagnostics_reports_host_redaction_failure(tmp_path: Path,
         log_path=None,
     )
 
-    helpers.collect_host_diagnostics(vm, str(dest))
+    helpers.collect_host_diagnostics(cast(helpers.SmokeVM, vm), str(dest))
 
     output = capsys.readouterr().out
     assert "[smoke] collected full guest diagnostics" not in output
