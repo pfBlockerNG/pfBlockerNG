@@ -294,25 +294,43 @@ _bootstrap="cd '$_ONBOX_REPO_ROOT_Q' \
               printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (not a regular file); box unhealthy\n' >&2; \
               exit 75; \
           fi; \
-          if [ ! -d \"\$proc/1/fd\" ] || [ ! -r \"\$proc/1/fd\" ]; then \
+          if [ ! -d \"\$proc/1/fd\" ] || [ ! -r \"\$proc/1/fd\" ] || [ ! -x \"\$proc/1/fd\" ]; then \
               printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (process view unavailable); box unhealthy\n' >&2; \
               exit 75; \
           fi; \
-          before=\$(stat -Lc '%d:%i' \"\$lock\" 2>/dev/null) || { \
+          before=\$(stat -c '%d:%i' \"\$lock\" 2>/dev/null) || { \
               printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (stat failed); box unhealthy\n' >&2; \
               exit 75; \
           }; \
           owner_pid=''; ambiguous=0; \
-          for fd in \"\$proc\"/[0-9]*/fd/*; do \
-              [ -L \"\$fd\" ] || continue; \
-              if target=\$(readlink \"\$fd\" 2>/dev/null); then \
-                  if [ \"\$target\" = \"\$lock\" ]; then \
-                      pid=\${fd#\"\$proc\"/}; pid=\${pid%%/*}; owner_pid=\$pid; break; \
+          for pid_dir in \"\$proc\"/[0-9]*; do \
+              [ -d \"\$pid_dir\" ] || continue; \
+              pid=\${pid_dir#\"\$proc\"/}; \
+              case \"\$pid\" in *[!0-9]*) continue ;; esac; \
+              fd_dir=\"\$pid_dir/fd\"; \
+              if [ ! -d \"\$fd_dir\" ] || [ ! -r \"\$fd_dir\" ] || [ ! -x \"\$fd_dir\" ]; then \
+                  if [ -d \"\$pid_dir\" ]; then ambiguous=2; break; fi; \
+                  continue; \
+              fi; \
+              for fd in \"\$fd_dir\"/*; do \
+                  [ -L \"\$fd\" ] || continue; \
+                  if target=\$(readlink \"\$fd\" 2>/dev/null); then \
+                      if [ \"\$target\" = \"\$lock\" ]; then \
+                          owner_pid=\$pid; break; \
+                      fi; \
+                  elif [ -L \"\$fd\" ]; then \
+                      ambiguous=1; break; \
                   fi; \
-              elif [ -L \"\$fd\" ]; then \
-                  ambiguous=1; break; \
+              done; \
+              if [ -n \"\$owner_pid\" ] || [ \"\$ambiguous\" -ne 0 ]; then break; fi; \
+              if [ ! -d \"\$fd_dir\" ] || [ ! -r \"\$fd_dir\" ] || [ ! -x \"\$fd_dir\" ]; then \
+                  if [ -d \"\$pid_dir\" ]; then ambiguous=2; break; fi; \
               fi; \
           done; \
+          if [ \"\$ambiguous\" -eq 2 ]; then \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (process descriptor view unavailable); box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
           if [ -n \"\$owner_pid\" ]; then \
               printf 'local-smoke: box hygiene: live owner pid=%s for .git/HEAD.lock; box unhealthy\n' \"\$owner_pid\" >&2; \
               exit 75; \
@@ -321,7 +339,11 @@ _bootstrap="cd '$_ONBOX_REPO_ROOT_Q' \
               printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (descriptor unreadable); box unhealthy\n' >&2; \
               exit 75; \
           fi; \
-          after=\$(stat -Lc '%d:%i' \"\$lock\" 2>/dev/null) || { \
+          if [ -L \"\$lock\" ] || [ ! -f \"\$lock\" ]; then \
+              printf 'local-smoke: box hygiene: ownership ambiguous for .git/HEAD.lock (changed during inspection; not a regular file); box unhealthy\n' >&2; \
+              exit 75; \
+          fi; \
+          after=\$(stat -c '%d:%i' \"\$lock\" 2>/dev/null) || { \
               printf 'local-smoke: box hygiene: .git/HEAD.lock changed during inspection; box unhealthy\n' >&2; \
               exit 75; \
           }; \
