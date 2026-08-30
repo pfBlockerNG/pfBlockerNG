@@ -104,6 +104,7 @@ _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 # came up as a memory filesystem (MFS wipes /var on every boot); if it survived, use_mfs_tmpvar
 # never engaged and the whole scenario would be a false positive.
 _VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_TICK_WIPE_SENTINEL"
+_REBOOT_LEDGER_PROBE = "reboot_persistence_probe"
 
 # issue #2506: the model id pin_cron_due()/pfb_schedule_runtime_config() derive for the
 # module's IpCase feed group ("ipv4:<header>_v4" — helpers._ip_inject_snippet's config
@@ -702,40 +703,34 @@ def mfs_var(deployed_vm: SmokeVM, request: pytest.FixtureRequest) -> Iterator[Sm
 # same as boot_reload's fixture reboots — so the body still contains exactly ONE reboot.
 @pytest.mark.timeout(300)
 def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
-    """A clean reboot with MFS /var keeps the due-ledger (restored via #468 earlyshellcmd).
+    """MFS /var restores the ledger file while a later tick may rebuild its derived rows.
 
     Scenario:
-        Background: pfBlockerNG installed with MFS /var engaged (the ``mfs_var`` fixture;
-            issue #762 — previously only claimed in this docstring, never arranged, so the
-            test silently rode whatever /var state a sibling module happened to leave behind).
-            Given the ledger has a future cron next_due, and the aliastables archive has been
-            refreshed to include it (the archiver is called directly: ``pfb_aliastables('update')``
-            is reached only on the rule-change or alias-content-change paths, and this module's
-            one static smoketick feed (#2506) never changes between passes, so a quiescent
-            update pass would never archive the ledger).
+        Background: pfBlockerNG installed with MFS /var engaged (the ``mfs_var`` fixture).
+            Given the ledger contains a unique persistence probe and a deliberately stale
+            ``cron`` row, and the aliastables archive has been refreshed to include them.
         When the VM reboots cleanly.
         Then the /var sentinel is gone (MFS actually engaged this reboot),
-        And  the ledger is restored,
-        And  the cron next_due is still the value written before the reboot (no spurious dispatch).
+        And  the persistence probe is restored from the archive.
+        When a real post-reboot tick refreshes the derived cache.
+        Then the persistence probe remains and ``cron`` becomes a current derived schedule.
     """
     vm = mfs_var
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
-    future = now_ts + 7200  # 2 hours out
+    stale_next_due = now_ts + (10 * 366 * 86400)
+    persistence_probe = {"last_run": now_ts, "next_due": stale_next_due, "jitter": 0}
 
-    _write_ledger_entry(vm, "cron", now_ts, future)
+    _write_ledger_entry(vm, _REBOOT_LEDGER_PROBE, **persistence_probe)
+    _write_ledger_entry(vm, "cron", now_ts, stale_next_due)
 
-    # Wipe any stale archive a sibling module left behind (boot_reload's ramdisk legs write
-    # the same unscoped file), so archive_exists() below can only be true if THIS refresh
-    # wrote it — the archiver's exec() discards its output, so a silently-failed refresh
-    # would otherwise pass the precondition against the leftover.
+    # Wipe any stale archive a sibling module left behind, so archive_exists() below can
+    # only be true if this refresh wrote it.
     vm.ssh("rm", "-f", f"{h.ALIASARCHIVE}.zst", f"{h.ALIASARCHIVE}.bz2")
     assert not h.archive_exists(vm, h.ALIASARCHIVE), (
         f"precondition: stale {h.ALIASARCHIVE}.{{zst,bz2}} survived the wipe"
     )
 
-    # Refresh the archive directly (see docstring: 'update' mode is change-gated and the
-    # module's static smoketick feed trips neither gate on a quiescent pass).
     snippet = f"require_once('{_PFB_INC}');pfb_global();pfb_aliastables('update');echo 'OK';"
     result = h.php_eval(vm, snippet)
     if result.returncode != 0 or "OK" not in result.stdout:
@@ -744,27 +739,24 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
             f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
         )
 
-    # --- Given (before reboot): archive refreshed, ledger holds the just-written entry ---
     assert h.archive_exists(vm, h.ALIASARCHIVE), (
         f"precondition: {h.ALIASARCHIVE}.{{zst,bz2}} must exist after the archive refresh"
     )
     before = _read_ledger(vm)
-    assert before.get("cron", {}).get("next_due") == future, (
-        f"precondition: cron next_due should be {future} before reboot; ledger={before}"
+    assert before.get(_REBOOT_LEDGER_PROBE) == persistence_probe, (
+        f"precondition: persistence probe was not written; ledger={before}"
+    )
+    assert before.get("cron", {}).get("next_due") == stale_next_due, (
+        f"precondition: stale cron next_due should be {stale_next_due}; ledger={before}"
     )
 
-    # Drop a /var sentinel so the post-reboot check can PROVE /var came up as a memory
-    # filesystem this reboot (the sentinel is wiped), not merely re-use a prior MFS mount.
     vm.ssh("/usr/bin/touch", _VAR_WIPE_SENTINEL)
     assert vm.ssh("test", "-e", _VAR_WIPE_SENTINEL).returncode == 0, (
         f"precondition: {_VAR_WIPE_SENTINEL} must exist before reboot"
     )
 
-    # When: reboot.
     h.reboot_vm(vm)
 
-    # Then: the sentinel is gone -- print the /var mount line so a not-engaged MFS is
-    # diagnosable rather than a bare boolean (the test-coverage mandate's expected-vs-actual rule).
     var_mount = next(
         (ln for ln in vm.ssh("/sbin/mount").stdout.splitlines() if " on /var " in ln),
         "",
@@ -773,8 +765,29 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
         f"/var sentinel survived the reboot -- MFS did not engage; /var mount line: {var_mount!r}"
     )
 
+    restored = _read_ledger(vm)
+    assert restored.get(_REBOOT_LEDGER_PROBE) == persistence_probe, (
+        f"ledger persistence probe missing after reboot; expected={persistence_probe} ledger={restored}"
+    )
+
+    tick_result = _run_tick(vm)
+    assert tick_result.returncode == 0, (
+        f"post-reboot tick failed: rc={tick_result.returncode} stderr={tick_result.stderr!r}"
+    )
+
+    after_now = int(vm.ssh("date +%s").stdout.strip())
     after = _read_ledger(vm)
-    assert "cron" in after, f"cron ledger entry missing after reboot; ledger={after}"
-    assert after["cron"]["next_due"] == future, (
-        f"cron next_due changed across reboot; expected={future} actual={after['cron']['next_due']}; ledger={after}"
+    assert after.get(_REBOOT_LEDGER_PROBE) == persistence_probe, (
+        f"persistence probe changed during derived-cache regeneration; expected={persistence_probe} ledger={after}"
+    )
+    cron = after.get("cron")
+    assert isinstance(cron, dict), f"derived cron row missing after post-reboot tick; ledger={after}"
+    assert cron.get("next_due") != stale_next_due, (
+        f"derived cron row was not regenerated; stale_next_due={stale_next_due} cron={cron}"
+    )
+    assert isinstance(cron.get("next_due"), int) and after_now < cron["next_due"] <= after_now + 90000, (
+        f"regenerated cron next_due must be within the daily cadence; now={after_now} cron={cron}"
+    )
+    assert isinstance(cron.get("last_run"), int) and cron.get("jitter") == 0, (
+        f"regenerated cron row has an invalid shape; cron={cron}"
     )
