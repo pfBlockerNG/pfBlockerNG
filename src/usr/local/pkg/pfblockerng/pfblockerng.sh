@@ -57,6 +57,14 @@ pfb_reentry_timeout() {
 	printf '%s\n' "${_pfbrt}"
 }
 
+# Keep trailing newlines from the XML reader visible to the strict resolver: command
+# substitution strips them unless a non-newline sentinel follows the reader output.
+pfb_reentry_timeout_from_reader() {
+	_pfbrt_raw="$("$@"; printf x)"
+	pfb_reentry_timeout "${_pfbrt_raw%x}"
+	unset _pfbrt_raw
+}
+
 # Top-level initialisation. Guarded so the script can be sourced for unit tests
 # (PFB_SOURCED=1) to exercise the functions below in isolation without running
 # any of this; the executable path runs it because PFB_SOURCED is unset. The
@@ -80,7 +88,7 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# issue #2851: the operator's budget (General -> Advanced, 'Nested pass timeout'),
 	# normalized to the accepted window here -- the boundary where the stored value enters
 	# this process -- exactly as pfb_reentry_budget() normalizes it in PHP.
-	pfbreentrytimeout="$(pfb_reentry_timeout "$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerng/config/pfb_reentry_timeout)")"
+	pfbreentrytimeout="$(pfb_reentry_timeout_from_reader /usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerng/config/pfb_reentry_timeout)"
 
 	# Script Arguments
 	alias="${2}"

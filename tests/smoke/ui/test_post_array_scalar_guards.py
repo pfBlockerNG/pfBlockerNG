@@ -89,6 +89,10 @@ def _post_with_array_field(
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
     general_before = _general_config_token(smoke_vm) if array_field in _GENERAL_ARRAY_ERRORS else None
+    timeout_path = f"{_GENERAL_CONFIG}/pfb_reentry_timeout"
+    timeout_original = (
+        helpers.config_get_state(smoke_vm, timeout_path) if array_field == "pfb_reentry_timeout" else None
+    )
 
     got = webui.get(page)
     assert got.status_code == 200, f"GET {page} -> HTTP {got.status_code}"
@@ -101,7 +105,15 @@ def _post_with_array_field(
         payload.update(extra_fields)
     payload["save"] = "Save"
 
-    resp = webui.session.post(webui.url(page), data=payload, verify=webui._verify, timeout=_POST_TIMEOUT)
+    timeout_stored = None
+    timeout_restored = None
+    try:
+        resp = webui.session.post(webui.url(page), data=payload, verify=webui._verify, timeout=_POST_TIMEOUT)
+    finally:
+        if timeout_original is not None:
+            timeout_stored = helpers.config_get(smoke_vm, timeout_path)
+            helpers.config_restore_state(smoke_vm, timeout_path, timeout_original)
+            timeout_restored = helpers.config_get_state(smoke_vm, timeout_path)
 
     assert resp.status_code == 200, (
         f"POST {page} with {array_field}[]=crafted -> HTTP {resp.status_code} "
@@ -116,6 +128,13 @@ def _post_with_array_field(
         general_after = _general_config_token(smoke_vm)
         assert general_after == general_before, (
             f"POST {page} with {array_field}[]=crafted changed the General config section"
+        )
+    if timeout_original is not None:
+        assert timeout_stored == "1800", (
+            f"POST {page} with {array_field}[]=crafted stored {timeout_stored!r}, expected finite default '1800'"
+        )
+        assert timeout_restored == timeout_original, (
+            f"pfb_reentry_timeout restore changed exact state: expected {timeout_original!r}, got {timeout_restored!r}"
         )
     guard.assert_no_growth()
 
