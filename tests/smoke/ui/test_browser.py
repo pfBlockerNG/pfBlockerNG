@@ -243,6 +243,14 @@ def test_state_select_greyed_when_disabled(
 
     expect(state).to_have_css("background-color", "rgb(211, 211, 211)", timeout=JS_TIMEOUT_MS)
     assert "grey" in bg().lower() or bg() == "lightgrey", f"expected lightgrey inline bg, got {bg()!r}"
+
+    # issue #2864: the grey must arrive with a foreground. Unpaired, the text kept the
+    # page colour, which is near-white on the dark themes -- unreadable on lightgrey.
+    def fg() -> str:
+        return page.evaluate("document.getElementById('state-0').style.color")
+
+    assert fg() != "", "greyed select has no inline color: its text inherits the page colour"
+    expect(state).to_have_css("color", "rgb(33, 33, 33)", timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "state_disabled_grey")
 
     # AFTER: switch to Enabled and fire the bound click handler -> grey cleared.
@@ -250,6 +258,9 @@ def test_state_select_greyed_when_disabled(
     state.dispatch_event("click")
     expect(state).not_to_have_css("background-color", "rgb(211, 211, 211)", timeout=JS_TIMEOUT_MS)
     assert bg() in ("", "rgba(0, 0, 0, 0)"), f"expected cleared inline bg after Enabled, got {bg()!r}"
+    # The foreground clears with it: a pinned colour that outlived its background would
+    # fight whatever theme the row reverts to.
+    assert fg() == "", f"expected cleared inline color after Enabled, got {fg()!r}"
 
 
 def test_dashboard_widget_renders(

@@ -5482,7 +5482,7 @@ function add_description(mode) {
 				$(this).dialog('close');
 			}
 		}
-	}).css('background-color','#ffd700');
+	}).css({'background-color': '#ffd700', 'color': '#000000'});
 	$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 }
 
@@ -5527,7 +5527,7 @@ function select_whitelist(mode, permit_list) {
 		position: { my: 'top', at: 'top' },
 		width: 750,
 		buttons: buttons
-	}).css('background-color','#ffd700');
+	}).css({'background-color': '#ffd700', 'color': '#000000'});
 	$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 }
 
@@ -5753,7 +5753,7 @@ events.push(function() {
 				title: 'Domain ' + button_text + 'ing:',
 				position: { my: 'top', at: 'top' },
 				buttons: buttons
-			}).css('background-color','#ffd700');
+			}).css({'background-color': '#ffd700', 'color': '#000000'});
 			$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 		}
 	});
@@ -5791,7 +5791,7 @@ events.push(function() {
 							$(this).dialog('close');
 						}
 					}
-				}).css('background-color','#ffd700');
+				}).css({'background-color': '#ffd700', 'color': '#000000'});
 				$("div[role=dialog]").find('button').addClass('btn-info btn-xs');
 			}
 			else {
