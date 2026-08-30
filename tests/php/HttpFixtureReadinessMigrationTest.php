@@ -37,10 +37,11 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 		}
 	}
 
-	/** @return array<string,array{class-string,file-string,string}> */
+	/** @return array<string,array{class-string,file-string,string,3?:string}> */
 	public static function rawReadinessSites(): array
 	{
 		return [
+			'redirect credential servers' => [DownloadRedirectCredentialScopeTest::class, __DIR__ . '/DownloadRedirectCredentialScopeTest.php', 'startOneServer', 'startServers'],
 			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive'],
 			'rejected validator origin' => [DownloadRejectValidatorClearTest::class, __DIR__ . '/DownloadRejectValidatorClearTest.php', 'startOrigin'],
 			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer'],
@@ -57,7 +58,8 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 	public function testFixtureSiteRequiresOwnedNonceEventAndBindDiagnostics(
 		string $class,
 		string $file,
-		string $method
+		string $method,
+		?string $routerMethod = NULL
 	): void {
 		require_once $file;
 		$reflection = new ReflectionMethod($class, $method);
@@ -68,6 +70,14 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 			$reflection->getStartLine() - 1,
 			$reflection->getEndLine() - $reflection->getStartLine() + 1
 		));
+		if ($routerMethod !== NULL) {
+			$routerReflection = new ReflectionMethod($class, $routerMethod);
+			$source .= implode('', array_slice(
+				$lines,
+				$routerReflection->getStartLine() - 1,
+				$routerReflection->getEndLine() - $routerReflection->getStartLine() + 1
+			));
+		}
 
 		$this->assertStringNotContainsString(
 			'fsockopen(',
