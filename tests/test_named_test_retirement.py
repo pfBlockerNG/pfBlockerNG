@@ -343,7 +343,7 @@ def test_successor_may_live_in_another_file(tmp_path: Path) -> None:
 
 
 def test_multiple_independent_retirements_each_need_a_discharge(tmp_path: Path) -> None:
-    files = {case["path"]: case["before"] for case in LANGUAGES}
+    files: dict[str | bytes, str | bytes] = {case["path"]: case["before"] for case in LANGUAGES}
     repo, base = _repo(tmp_path, files)
     for case in LANGUAGES:
         _write(repo, case["path"], "\n")

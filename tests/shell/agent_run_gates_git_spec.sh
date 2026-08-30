@@ -32,7 +32,8 @@ Describe 'run-gates.sh over a C-quoted path'
         '  for report do :; done' \
         '  [ -f "$report" ] || exit 2' \
         '  exit 0' \
-        'fi'
+        'fi' \
+        'if [ "$1" = scripts/check_named_test_retirement.py ]; then exit 0; fi'
       printf 'cat > "%s"\nexit 0\n' "$pairing_raw"
     } > "$stubdir/python3"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/npx"

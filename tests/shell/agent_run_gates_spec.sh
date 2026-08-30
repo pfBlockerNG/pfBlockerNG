@@ -371,7 +371,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
         '  for report do :; done' \
         '  [ -f "$report" ] || exit 2' \
         '  exit 0' \
-        'fi'
+        'fi' \
+        'if [ "$1" = scripts/check_named_test_retirement.py ]; then exit 0; fi'
       printf 'cat > "%s"\ntr "\\0" "\\n" < "%s" > "%s"\nif [ -e "%s" ]; then grep -q "^tests/" "%s"; fi\n' \
         "$pairing_raw" "$pairing_raw" "$pairing_lines" "$require_pair" "$pairing_lines"
     } > "$stubdir/python3"
@@ -388,7 +389,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     # issue #2016: a .sh diff now plans the re-entry-bounds gate, which runs through uv.
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/uv"
     chmod +x "$stubdir/python3" "$stubdir/shellspec" "$stubdir/shellcheck" "$stubdir/uv"
-    PATH="$stubdir:$PATH"
+    PATH="$stubdir:$(getconf PATH)"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
   Before 'make_repo'
@@ -403,9 +404,19 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The line 2 of output should equal 'GATE PASS: uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
-    The line 6 of output should equal 'GATES: PASS'
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
     Assert [ ! -e "$stubdir"/pfb-run-gates-skip-reports.* ]
+  End
+
+  It 'fails closed instead of running the host ShellSpec when its fixture stub is missing'
+    rm "$stubdir/shellspec"
+    When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
+    The status should equal 1
+    The output should include 'GATE SKIP: shellspec --shell $(command -v dash || command -v sh) (TOOL-MISSING: shellspec)'
+    The output should include 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The output should include 'GATES: FAIL'
   End
 
   It 'preserves a selected suite failure and cleans its report directory'
@@ -516,7 +527,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'should not appear'
     The stderr should equal ''
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
   End
 
   It 'does not let a failing gate own OVERALL=0 output corrupt the final verdict'
@@ -590,8 +602,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   It 'plans gates for a STAGED (git add, not committed) edit identically'
@@ -602,8 +615,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   It 'lists a file touched by both a commit and a further uncommitted edit exactly once'
@@ -612,8 +626,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # See run-gates.sh's staged/unstaged split comment for why: a lone `diff HEAD`
@@ -629,8 +644,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # CodeRabbit review of #1293's fix: neither `diff --cached` nor bare `diff`
@@ -642,8 +658,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # Delta re-review of the untracked-files fix: --exclude-standard must respect
@@ -659,8 +676,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
     The output should not include 'ignored.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 6 of output should equal 'GATE PASS: python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 End
 
