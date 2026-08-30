@@ -29,20 +29,21 @@
     "ZZ_v4.txt": "454debca5afcd37addd0dcca05094625dcde6402510f8fc664cd567893ec7096"
   },
   "continent_pages": {
-    "pfblockerng_Africa.php": "c3b683701a22175d2f52396c0a301336b58d462b5dacef657d022c53c8ec790e",
-    "pfblockerng_Antarctica.php": "7bede466a14735a5bf1de676d1834d83ecb026c4004187ccbc927fbfd7061103",
-    "pfblockerng_Asia.php": "f3d8553bb7ce000b69a71933731f48482c70a46b49350507e2403d9b23c79fc4",
-    "pfblockerng_Europe.php": "3f21044142d30512e90112a63fbb6c30a71b9325fe6d830fe7778195347e304e",
-    "pfblockerng_North_America.php": "65bdadba245570b39f7e319ca49c04288335ef19a7bf90c385a0b426d75f64b4",
-    "pfblockerng_Oceania.php": "6ec66b171da5006b790f30dd8bf5631d59b7d5b424bdb96c4f827eda946e9187",
-    "pfblockerng_South_America.php": "2de9a89d5d60ed303e8aed18f1d746d80b5d7235bf0533911e7b3f4997a59df1",
-    "pfblockerng_Proxy_and_Satellite.php": "bb79ace7c7d4325f54a30448ed96f4ff77aa56be1b253c128743e94090c78716",
-    "pfblockerng_Top_Spammers.php": "7e37603b035a82771b50aef8a07b3d689231ff6122a0cbe66f5657bedfcd2fcb"
+    "pfblockerng_Africa.php": "b15c8d777f2bb50a03e7ae14e0ffe47d8174824d353113bb05f9d5d96241e354",
+    "pfblockerng_Antarctica.php": "34a159e8d6df3cb763e1ec3eca544a7572fad6611d60bbb33b39123d9742ccea",
+    "pfblockerng_Asia.php": "3b167df2ea49435f9a9e41ea47a23cf5ac4f647df49c76ea5e0e9cc88ff66889",
+    "pfblockerng_Europe.php": "1b05fdfa9a82cdfc620141d79d6ca10e47633664a78eddb34cc82f7d19bb8594",
+    "pfblockerng_North_America.php": "7b7567a5f2f505c19001c5097170c2a000b28e0de05faa661a6e955ae70a849f",
+    "pfblockerng_Oceania.php": "0977c120be91c347e198241e5fa065f0be0c4f2a3efc68b764cdc2e0eb8146f8",
+    "pfblockerng_South_America.php": "765fc226e398169bd4f78e410e6e4781431e6eb0e5910ababfa1b2cd547fe3f2",
+    "pfblockerng_Proxy_and_Satellite.php": "6c76826113a514602e9d93f2dbf8312cba2807602170837da5839e105d3f2e57",
+    "pfblockerng_Top_Spammers.php": "1781c867e7acdf6f0f7f749286293f62a9c74acf6ddd5fb1a8d975234bb5b657"
   },
-  "reputation_empty": "59a4fa81040c5691ddb1b13574dfe3669052530c0947535a74b30bb3af459b4e",
-  "reputation_populated": "dcfe541ef16a5c9c74e8692354351bd9a78b52a17f3f50ea9b1efde42b240568",
+  "reputation_empty": "db362e398b52d23dfdc8221b4dc0fb3f972d992ef7d37582c6c97ab0290b2f97",
+  "reputation_populated": "ebca5913c83c5644f1bc95c07de3e8c1c0f63736dfe16c487865e63c4327b660",
   "continent_pages_amended": "issue #1845: the generated pages now carry the pfBlockerNG.js cache-buster; the pre-move template is otherwise unchanged",
   "reputation_hashes_amended": "issue #1896: the Reputation section's config_get_path/config_set_path calls now route through PfbConfig::readSection()/writeSection(); the pre-move template is otherwise unchanged",
   "continent_behavior_amended": "issue #2103: generated pages route anchor layout and MaxMind documentation rendering through behavior-tested helpers",
-  "continent_copy_amended": "GUI reorg: generated country pages now name 'Force Global IP Logging' on the IP tab and point MaxMind credentials at the IP tab; the pre-move template is otherwise unchanged"
+  "continent_copy_amended": "GUI reorg: generated country pages now name 'Force Global IP Logging' on the IP tab and point MaxMind credentials at the IP tab; the pre-move template is otherwise unchanged",
+  "reputation_markup_amended": "issue #2897: the embedded List-Action help and Reputation help in the generated pages now wrap bare-text <ul> indent wrappers in <li> children and declare overflow-wrap: anywhere on long-token fragments; the pre-move template is otherwise unchanged"
 }
