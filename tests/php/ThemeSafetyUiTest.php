@@ -124,6 +124,12 @@ final class ThemeSafetyUiTest extends TestCase
 			// A brace group before an attribute: the cuts interleave, so they must be
 			// ordered before they are applied back to front.
 			'group then attribute'      => ['$s = "foo({color:\'red\'}) background-color: #123456; <b style=\"color:blue\"></b>";', FALSE],
+			// A literal nests exactly as a rule does, so it is scoped the same way.
+			'nested inside a literal'   => ['$s = "foo({outer: {background-color: \'#123456\'}, color: \'red\'})";', FALSE],
+			'nested three deep'         => ['$s = "foo({a: {b: {background-color: \'#123456\'}}, color: \'red\'})";', FALSE],
+			'same level in that group'  => ['$s = "foo({background-color: \'#123456\', color: \'red\'})";', TRUE],
+			'subgroup of that group'    => ['$s = "foo({background-color: \'#123456\', sub: {color: \'red\'}})";', FALSE],
+			'stylesheet is an attribute'=> ['$s = "<div stylesheet=\"color: red;\"></div> background-color: #123456;";', FALSE],
 			// The two fallbacks, each pinned by a pairing further away than the window.
 			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
 			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
@@ -405,7 +411,7 @@ final class ThemeSafetyUiTest extends TestCase
 	 */
 	private static function styleAttributeSpans(string $literal): array
 	{
-		if (preg_match_all('/[-\w]*style\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
+		if (preg_match_all('/[-\w]*style[-\w]*\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
 			return [];
 		}
 		$spans = [];
@@ -434,13 +440,54 @@ final class ThemeSafetyUiTest extends TestCase
 				return substr($literal, $start, $end - $start);
 			}
 		}
-		$out = $literal;
-		$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
+
+		// Scope to the group the background is actually in, then drop that group's own
+		// nested groups. A literal carries the same nesting a rule does, so it gets the
+		// same treatment: a colour one level out is not the background's.
+		$group = self::enclosingBlock($literal, $rel);
+		if ($group !== NULL) {
+			$out = substr($literal, $group[0], $group[1] - $group[0] + 1);
+			$rel -= $group[0];
+			$cuts = array_merge(self::styleAttributeSpans($out), self::nestedGroupSpans($out));
+		} else {
+			$out = $literal;
+			$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
+		}
+
 		usort($cuts, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
 		foreach (array_reverse($cuts) as [$start, $end]) {
 			$out = substr($out, 0, $start) . substr($out, $end);
 		}
 		return $out;
+	}
+
+	/**
+	 * Spans of a block's immediate subgroups, so its own declarations are what remain.
+	 *
+	 * @return list<array{0: int, 1: int}>
+	 */
+	private static function nestedGroupSpans(string $block): array
+	{
+		$groups = [];
+		$depth = 0;
+		$start = 0;
+		$length = strlen($block);
+		for ($i = 0; $i < $length; $i++) {
+			if ($block[$i] === '{') {
+				$depth++;
+				if ($depth === 2) {
+					$start = $i;
+				}
+				continue;
+			}
+			if ($block[$i] === '}' && $depth > 0) {
+				$depth--;
+				if ($depth === 1) {
+					$groups[] = [$start, $i + 1];
+				}
+			}
+		}
+		return $groups;
 	}
 
 	/**
