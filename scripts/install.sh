@@ -543,7 +543,9 @@ pfb_channel_install() {
     # probe fetch a truncated/foreign URL, and a commented or extra url line could
     # satisfy a grep-anywhere check while the real value points elsewhere.
     _url_keys="$(grep -c '^[[:space:]]*url[[:space:]]*:' "${_candidate}" 2>/dev/null || true)"
+    case "${_url_keys}" in '' | *[!0-9]*) _url_keys=0 ;; esac
     _url_wellformed="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\([^"]*\)",[[:space:]]*$/\1/p' "${_candidate}" 2>/dev/null | grep -c . || true)"
+    case "${_url_wellformed}" in '' | *[!0-9]*) _url_wellformed=0 ;; esac
     _catalog_url="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\([^"]*\)",[[:space:]]*$/\1/p' "${_candidate}" 2>/dev/null | head -n 1)"
     [ "${_url_keys}" -eq 1 ] && [ "${_url_wellformed}" -eq 1 ] || {
         die 4 "$(printf 'the candidate conf does not carry exactly one canonical quoted url key (found %s url key line(s), %s well-formed) — refusing to probe or activate; inspect: sh %s onestart' \
@@ -605,6 +607,8 @@ pfb_channel_install() {
         die 1 "${CONF_PATH} exists and is not a regular file — refusing to activate over it"
     fi
     [ -f "${CONF_PATH}" ] || CONF_CREATED=1
+    chmod 644 "${_candidate}" ||
+        die 1 "could not set the mode on the validated candidate conf"
     mv "${_candidate}" "${CONF_PATH}" ||
         die 1 "could not activate ${CONF_PATH} from the validated candidate"
     # _candidate stays armed for the EXIT trap until the destination is VERIFIED as
