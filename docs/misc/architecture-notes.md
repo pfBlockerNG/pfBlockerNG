@@ -539,7 +539,7 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
   disabled+unchecked with a warning while `pfb_dnsvip_auto` stays `on` until the next save; the
   lifecycle manager no-ops safely (logs, leaves config untouched).
 - **IPv6.** When the resolver listens on IPv6, AAAA blocks should sink to a v6 VIP. Auto mode
-  provisions `fd00::53`; manual mode is recommended-but-not-required — with no v6 VIP,
+  provisions the ULA candidate `fd00:53:53:53:53:53:53:53`; manual mode is recommended-but-not-required — with no v6 VIP,
   pfBlockerNG logs a non-blocking warning and keeps running on IPv4 (AAAA simply not sinkholed),
   never force-disabling DNSBL.
 - **HA/CARP.** `pfb_dnsvip_auto` and the address live in `config.xml` and replicate; each node
