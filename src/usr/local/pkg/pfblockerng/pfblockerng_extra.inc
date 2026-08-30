@@ -5548,13 +5548,14 @@ function pfb_schedule_cache_candidate_stage(
 	?int $now = NULL,
 	array $io = []
 ): string {
-	if (!($timezone instanceof DateTimeZone) && !is_string($timezone)) {
-		return 'timezone';
-	}
-	try {
-		$timezone = $timezone instanceof DateTimeZone ? $timezone : new DateTimeZone($timezone);
-	} catch (Throwable) {
-		return 'timezone';
+	// A bad timezone is passed through rather than reported here, so the shared helper
+	// decides the order and both pages name the same stage for the same input.
+	if (is_string($timezone)) {
+		try {
+			$timezone = new DateTimeZone($timezone);
+		} catch (Throwable) {
+			$timezone = NULL;
+		}
 	}
 	$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
 	$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
@@ -5569,7 +5570,6 @@ function pfb_schedule_cache_candidate_stage(
 	if ($active_dir !== '' && $candidate_dir === $active_dir) {
 		$candidate_dir = '';
 	}
-	$stage = 'workdir';
 	try {
 		$stage = pfb_schedule_cache_stage($model, $state, $timezone, $candidate_dir, $now, $io);
 	} catch (Throwable) {
