@@ -81,19 +81,31 @@ fi
 # The Python flavor for the py3xx-* RUN_DEPENDS is DERIVED FROM THE VERSION MATRIX (no
 # hardcoded py311): match the box's FreeBSD major (parsed from its concrete ABI, e.g.
 # FreeBSD:15:amd64) to its matrix entry's py_flavor. issue #1806: the matrix is arch-less
-# (no `arch` field) and the BUILD matrix dedupes to one row per freebsd_major with
-# php_version/py_flavor asserted identical across any merged versions, so matching by major
-# alone is exact — not just a fallback. Fallbacks keep the installer working when the
-# matrix/jq is unavailable: the box's OWN installed py3xx flavor, then py311.
+# (no `arch` field). issue #2926: the BUILD matrix dedupes to one row per exact runtime
+# TUPLE (freebsd_major, php_version, py_flavor), so matching by major alone is NOT exact —
+# when a major carries two tuples a [0] pick installs the WRONG py3xx deps. A
+# SMOKE_PY_FLAVOR/SMOKE_PHP_VERSION env pair (already exported by the CI fan-out) names
+# the tuple; with no disambiguator and an ambiguous major, REFUSE rather than guess —
+# the box's own installed py3xx flavor is probed as the fallback (a live box knows which
+# python it runs). Fallbacks keep the installer working when the matrix/jq is
+# unavailable: the box's OWN installed py3xx flavor, then py311.
 # (read-version-matrix.sh self-fetches the ci-metadata ref.)
 PY_FLAVOR=""
 BOX_ABI="$(ssh_t 'pkg config ABI 2>/dev/null' | tr -d '\r')"
 BOX_MAJOR="$(printf '%s' "$BOX_ABI" | cut -d: -f2)"
 if [ -n "$BOX_MAJOR" ] && command -v jq >/dev/null 2>&1; then
-    PY_FLAVOR="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
-        | jq -r --arg major "$BOX_MAJOR" \
-            '[ .[] | select(.freebsd_major == $major) ][0].py_flavor // empty' \
+    _MATCHES="$(sh "${REPO_ROOT}/scripts/read-version-matrix.sh" --print-build 2>/dev/null \
+        | jq -c --arg major "$BOX_MAJOR" --arg php "${SMOKE_PHP_VERSION:-}" --arg py "${SMOKE_PY_FLAVOR:-}" \
+            '[ .[] | select(.freebsd_major == $major) | select($php == "" or .php_version == $php) | select($py == "" or .py_flavor == $py) ]' \
         2>/dev/null || true)"
+    _MATCH_COUNT="$(printf '%s' "$_MATCHES" | jq 'length' 2>/dev/null || echo 0)"
+    if [ "$_MATCH_COUNT" -gt 1 ]; then
+        echo "Error: FreeBSD major ${BOX_MAJOR} matches more than one BUILD row for runtime tuple selection (ABI ${BOX_ABI:-unknown}) — refusing to silently install a sibling tuple's py flavor; set SMOKE_PHP_VERSION/SMOKE_PY_FLAVOR" >&2
+        exit 1
+    fi
+    if [ "$_MATCH_COUNT" -eq 1 ]; then
+        PY_FLAVOR="$(printf '%s' "$_MATCHES" | jq -r '.[0].py_flavor')"
+    fi
 fi
 if [ -z "$PY_FLAVOR" ]; then
     # The box knows its own python: the py3xx that owns its py-sqlite3, if already present.

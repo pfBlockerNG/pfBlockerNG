@@ -210,9 +210,14 @@ def test_handoff_accepts_freebsd_16_php_84_and_85_tuples() -> None:
         route_rows=[row84, row85],
     )
     keys = sorted(
-        (str(b["matrix_row"]["freebsd_major"]), str(b["matrix_row"]["php_version"])) for b in handoff["builds"]
+        (
+            str(b["matrix_row"]["freebsd_major"]),
+            str(b["matrix_row"]["php_version"]),
+            str(b["matrix_row"]["py_flavor"]),
+        )
+        for b in handoff["builds"]
     )
-    assert keys == [("16", "8.4"), ("16", "8.5")], f"both runtime tuples expected; got {keys!r}"
+    assert keys == [("16", "8.4", "py311"), ("16", "8.5", "py311")], f"both runtime tuples expected; got {keys!r}"
 
 
 def test_handoff_rejects_duplicate_exact_tuple_matrix_rows() -> None:
@@ -229,6 +234,43 @@ def test_handoff_rejects_duplicate_exact_tuple_results() -> None:
     row_a = _row()
     row_b = _row()
     row_b.update(php_version="8.4")
+    with pytest.raises(np.ProvenanceError, match="duplicated"):
+        _call_handoff(
+            [_result(row_a), _result(row_a)],
+            build_rows=[row_a, row_b],
+            route_rows=[row_a],
+        )
+
+
+def test_handoff_accepts_same_major_same_php_different_py_flavor() -> None:
+    """issue #2926: the Python flavor participates in the build key — two rows
+    differing ONLY in py_flavor are two builds, not one (a (major, php)-only
+    implementation would reject these as duplicates)."""
+    row_a = _row()
+    row_b = _row()
+    row_b.update(py_flavor="py312")
+    handoff = _call_handoff(
+        [_result(row_a), _result(row_b)],
+        build_rows=[row_a, row_b],
+        route_rows=[row_a],
+    )
+    keys = sorted(
+        (
+            str(b["matrix_row"]["freebsd_major"]),
+            str(b["matrix_row"]["php_version"]),
+            str(b["matrix_row"]["py_flavor"]),
+        )
+        for b in handoff["builds"]
+    )
+    assert keys == [("15", "8.3", "py311"), ("15", "8.3", "py312")], f"both py-flavor tuples expected; got {keys!r}"
+
+
+def test_handoff_rejects_duplicate_py_flavor_tuple_results() -> None:
+    """issue #2926: same-major/same-PHP rows differing ONLY in py_flavor are
+    distinct tuples; two results carrying the SAME py-flavor tuple reject."""
+    row_a = _row()
+    row_b = _row()
+    row_b.update(py_flavor="py312")
     with pytest.raises(np.ProvenanceError, match="duplicated"):
         _call_handoff(
             [_result(row_a), _result(row_a)],

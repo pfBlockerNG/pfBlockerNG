@@ -663,4 +663,93 @@ STUBEOF
     The status should equal 1
     The stderr should include 'pfsense_ref=ghcr.io/pfblockerng/pfsense-ce:2.8'
   End
+
+  # ── runtime-tuple row selection (issue #2926) ────────────────────────────── #
+  # The BUILD matrix now dedupes to one row per (freebsd_major, php_version,
+  # py_flavor) — a same-major leg MUST select its own exact tuple, never
+  # fall back to major-only [0] selection.
+
+  It 'selects the exact runtime tuple for a same-major php 8.5 leg'
+    printf '0\n' > "${WORK}/port-floor"
+    BUILD_LEG_ARGV_LOG="${WORK}/build-leg-argv"
+    export BUILD_LEG_ARGV_LOG
+    true > "$BUILD_LEG_ARGV_LOG"
+    # Two rows share freebsd_major=16 with DIFFERENT php_version: the tuple,
+    # never the major alone, must pick the row (issue #2926).
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.5"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$BUILD_LEG_ARGV_LOG"
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "${FAKE_ROOT}/.venv/bin/python"
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    SMOKE_GHCR_TOKEN=test-token
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce@sha256:manifest
+    SMOKE_PHP_VERSION=8.5
+    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN SMOKE_PFSENSE_REF SMOKE_PHP_VERSION
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:16:amd64 --no-two-vm
+    The status should equal 0
+    The stderr should include 'php=8.5 py311'
+    The contents of file "$BUILD_LEG_ARGV_LOG" should include '--php 8.5'
+    The contents of file "$BUILD_LEG_ARGV_LOG" should include '--py-flavor py311'
+  End
+
+  It 'selects the exact runtime tuple for a same-major py312 leg'
+    printf '0\n' > "${WORK}/port-floor"
+    BUILD_LEG_ARGV_LOG="${WORK}/build-leg-argv"
+    export BUILD_LEG_ARGV_LOG
+    true > "$BUILD_LEG_ARGV_LOG"
+    # Same major AND same php, differing ONLY in py_flavor: still two rows
+    # (issue #2926) — the flavor axis must participate in the selection.
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.5"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py312","php_version":"8.5"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$BUILD_LEG_ARGV_LOG"
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/run-smoke.sh"
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    printf '#!/bin/sh\nexit 0\n' > "${FAKE_ROOT}/.venv/bin/python"
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    SMOKE_GHCR_TOKEN=test-token
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce@sha256:manifest
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:16:amd64 --no-two-vm
+    The status should equal 1
+    The stderr should include 'matches more than one BUILD row for runtime tuple selection'
+  End
 End

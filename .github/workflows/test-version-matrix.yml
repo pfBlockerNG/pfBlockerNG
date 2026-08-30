@@ -61,7 +61,7 @@ jobs:
           # asserted anywhere: the matrix is a matrix, and two rows may legitimately share a
           # build target (CE 2.9 and Plus 26.03 are both FreeBSD 16 / php 8.5) or an edition
           # and a major (Plus 26.03 and Plus 26.07). `--print-build` also drops `.ci` and
-          # dedupes to one row per freebsd_major, so no edition-keyed count is meaningful here.
+          # dedupes to one row per runtime tuple (issue #2926), so no edition-keyed count is meaningful here.
           printf '%s' "$BUILD_MATRIX" | jq -e '
             length > 0 and all(.[]; . as $row |
               ($row.pfsense_version | test("^[0-9]+[.][0-9]+")) and

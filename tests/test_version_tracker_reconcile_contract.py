@@ -437,7 +437,7 @@ class TestMatrixPrStep:
 
 class TestReconcileMatrixSource:
     """Scenario (issue #1839): the reconcile must see EVERY version, one row per
-    family. `build_matrix` is deduped to one row per freebsd_major (issue #1806),
+    family. `build_matrix` is deduped to one row per runtime tuple (issue #2926),
     which hid Plus 26.03 the moment 26.07 (same major 16) joined the matrix —
     the boot source vanished and the planner could not resolve the new family's
     branch. The route matrix is the never-deduped view."""
