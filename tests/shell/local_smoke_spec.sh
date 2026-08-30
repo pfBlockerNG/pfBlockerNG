@@ -458,3 +458,108 @@ FAKEEOF
     End
   End
 End
+
+Describe 'local-smoke.sh incomplete PID descriptor view (issue #2038)'
+  SCRIPT="${PFB_ROOT}/scripts/local-smoke.sh"
+
+  setup_pid_fd() {
+    scrub_git_env
+    PIDFD_WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/localsmokepidfd.XXXXXX")"
+    PIDFD_REPO="${PIDFD_WORK}/box repo"
+    PIDFD_PROC="${PIDFD_WORK}/proc"
+    PIDFD_BIN="${PIDFD_WORK}/bin"
+    PIDFD_EVENTS="${PIDFD_WORK}/events"
+    mkdir -p "${PIDFD_REPO}/.git" "${PIDFD_REPO}/scripts" \
+      "${PIDFD_PROC}/1/fd" "${PIDFD_PROC}/4242" "$PIDFD_BIN" "$PIDFD_EVENTS"
+    printf 'leftover\n' > "${PIDFD_REPO}/.git/HEAD.lock"
+
+    cat > "${PIDFD_REPO}/scripts/smoke-on-box.sh" <<'SMOKE'
+#!/bin/sh
+printf 'reached\n' > "$PIDFD_EVENTS/handoff"
+SMOKE
+    cat > "${PIDFD_BIN}/git" <<'GIT'
+#!/bin/sh
+printf 'git\n' >> "$PIDFD_EVENTS/git"
+exit 0
+GIT
+    cat > "${PIDFD_BIN}/stat" <<'STAT'
+#!/bin/sh
+printf 'unchanged\n'
+STAT
+    cat > "${PIDFD_BIN}/rm" <<'RM'
+#!/bin/sh
+printf 'rm\n' >> "$PIDFD_EVENTS/mutations"
+exec "$REAL_RM" "$@"
+RM
+    cat > "${PIDFD_BIN}/sysctl" <<'SYSCTL'
+#!/bin/sh
+exit 0
+SYSCTL
+    chmod +x "${PIDFD_REPO}/scripts/smoke-on-box.sh" \
+      "${PIDFD_BIN}/git" "${PIDFD_BIN}/stat" "${PIDFD_BIN}/rm" \
+      "${PIDFD_BIN}/sysctl"
+
+    PIDFD_SELECT_BOX="${PIDFD_WORK}/fake-select-box.sh"
+    cat > "$PIDFD_SELECT_BOX" <<'SELECT'
+#!/bin/sh
+[ "${1:-}" = -- ] && shift
+PATH="${PIDFD_BIN}:$PATH" sh -c "$*"
+SELECT
+    chmod +x "$PIDFD_SELECT_BOX"
+
+    REAL_RM="$(command -v rm)"
+    PFB_SELECT_BOX="$PIDFD_SELECT_BOX"
+    PFB_BOXES="dummy@dummy"
+    PFB_REF_PREFLIGHT=0
+    PFB_ONBOX_REPO_ROOT="$PIDFD_REPO"
+    PFB_ONBOX_PROC_ROOT="$PIDFD_PROC"
+    export PIDFD_REPO PIDFD_PROC PIDFD_BIN PIDFD_EVENTS REAL_RM
+    export PFB_SELECT_BOX PFB_BOXES PFB_REF_PREFLIGHT
+    export PFB_ONBOX_REPO_ROOT PFB_ONBOX_PROC_ROOT
+  }
+
+  teardown_pid_fd() {
+    rm -rf "$PIDFD_WORK"
+  }
+
+  BeforeEach 'setup_pid_fd'
+  AfterEach 'teardown_pid_fd'
+
+  run_pid_fd_diag() {
+    _out="$(sh "$SCRIPT" --ref dummy 2>&1)"
+    _rc=$?
+    _git_calls=0
+    _mutations=0
+    [ ! -f "$PIDFD_EVENTS/git" ] ||
+      _git_calls="$(wc -l < "$PIDFD_EVENTS/git" | tr -d ' ')"
+    [ ! -f "$PIDFD_EVENTS/mutations" ] ||
+      _mutations="$(wc -l < "$PIDFD_EVENTS/mutations" | tr -d ' ')"
+    printf 'status=%s\n' "$_rc"
+    if [ -e "${PIDFD_REPO}/.git/HEAD.lock" ]; then
+      printf 'lock=present\n'
+    else
+      printf 'lock=absent\n'
+    fi
+    printf 'git_calls=%s\n' "$_git_calls"
+    printf 'mutations=%s\n' "$_mutations"
+    if [ -f "$PIDFD_EVENTS/handoff" ]; then
+      printf 'handoff=reached\n'
+    else
+      printf 'handoff=blocked\n'
+    fi
+    printf '%s\n' "$_out"
+    return 0
+  }
+
+  It 'fails closed when a live PID descriptor tree cannot be inspected'
+    When call run_pid_fd_diag
+    The line 1 of output should equal 'status=75'
+    The line 2 of output should equal 'lock=present'
+    The line 3 of output should equal 'git_calls=0'
+    The line 4 of output should equal 'mutations=0'
+    The line 5 of output should equal 'handoff=blocked'
+    The output should include 'ownership ambiguous'
+    The output should include 'process descriptor view unavailable'
+    The output should include 'box unhealthy'
+  End
+End
