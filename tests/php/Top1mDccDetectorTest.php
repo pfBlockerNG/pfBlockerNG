@@ -22,6 +22,12 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_validator_write')]
 final class Top1mDccDetectorTest extends TestCase
 {
+	/**
+	 * Salvage cap for the dispatch signal below. It exists only to reap a stuck
+	 * run; the dispatch verdict is the fixture's own poke, never this number.
+	 */
+	private const DISPATCH_SALVAGE_SECONDS = 30;
+
 	private string $dir;
 
 	/** @var resource|null */
@@ -33,6 +39,9 @@ final class Top1mDccDetectorTest extends TestCase
 	private array $saved_pfb = [];
 	/** @var array<string,bool> */
 	private array $saved_pfb_exists = [];
+
+	/** @var list<resource> */
+	private array $signals = [];
 
 	protected function setUp(): void
 	{
@@ -54,6 +63,12 @@ final class Top1mDccDetectorTest extends TestCase
 	protected function tearDown(): void
 	{
 		$this->stopServer();
+		foreach ($this->signals as $signal) {
+			if (is_resource($signal)) {
+				fclose($signal);
+			}
+		}
+		$this->signals = [];
 		foreach ($this->saved_pfb as $key => $value) {
 			if (!$this->saved_pfb_exists[$key]) {
 				unset($GLOBALS['pfb'][$key]);
@@ -512,10 +527,9 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testExtractedDispatchSeamRunsExistingCronCommand(): void
 	{
 		$dispatch_log = "{$this->dir}/dispatch.log";
-		$fake_php = "{$this->dir}/fake-php";
-		$script = "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n";
-		$this->assertNotFalse(file_put_contents($fake_php, $script));
-		$this->assertTrue(chmod($fake_php, 0755));
+		$dispatch_fifo = "{$this->dir}/dispatch.fifo";
+		$signal = $this->openDispatchSignal($dispatch_fifo);
+		$fake_php = $this->dispatchFixture('fake-php', $dispatch_log, $dispatch_fifo);
 
 		$saved_argv = $GLOBALS['argv'];
 		$had_php = array_key_exists('php', $GLOBALS['pfb']);
@@ -534,9 +548,7 @@ final class Top1mDccDetectorTest extends TestCase
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE));
-			$this->assertEventually(static function () use ($dispatch_log): bool {
-				return is_file($dispatch_log);
-			}, 'TOP1M dispatch command did not run');
+			$this->awaitDispatch($signal);
 			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
 			$this->assertIsArray($lines);
 			$this->assertCount(1, $lines);
@@ -569,10 +581,9 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testDispatchSuppressesFailedAndUnchangedButRunsChangedOnce(): void
 	{
 		$dispatch_log = "{$this->dir}/dispatch-matrix.log";
-		$fake_php = "{$this->dir}/fake-php-matrix";
-		$script = "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n";
-		$this->assertNotFalse(file_put_contents($fake_php, $script));
-		$this->assertTrue(chmod($fake_php, 0755));
+		$dispatch_fifo = "{$this->dir}/dispatch-matrix.fifo";
+		$signal = $this->openDispatchSignal($dispatch_fifo);
+		$fake_php = $this->dispatchFixture('fake-php-matrix', $dispatch_log, $dispatch_fifo);
 
 		$saved_argv = $GLOBALS['argv'];
 		$had_php = array_key_exists('php', $GLOBALS['pfb']);
@@ -597,9 +608,7 @@ final class Top1mDccDetectorTest extends TestCase
 			$GLOBALS['pfb']['top1m_changed'] = TRUE;
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(FALSE), 'TOP1M change must dispatch despite unrelated extras failure');
 			$this->assertFalse(pfb_top1m_dispatch_if_changed(FALSE), 'the same TOP1M change must not dispatch twice');
-			$this->assertEventually(static function () use ($dispatch_log): bool {
-				return is_file($dispatch_log);
-			}, 'TOP1M dispatch command did not run');
+			$this->awaitDispatch($signal);
 			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
 			$this->assertIsArray($lines);
 			$this->assertCount(1, $lines, 'changed TOP1M must dispatch exactly once');
@@ -631,12 +640,9 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testScheduledDccReportsChangeWithoutBackgroundDispatch(): void
 	{
 		$dispatch_log = "{$this->dir}/scheduled-dispatch.log";
-		$fake_php = "{$this->dir}/fake-php-scheduled";
-		$this->assertNotFalse(file_put_contents(
-			$fake_php,
-			"#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n"
-		));
-		$this->assertTrue(chmod($fake_php, 0755));
+		$dispatch_fifo = "{$this->dir}/scheduled-dispatch.fifo";
+		$this->openDispatchSignal($dispatch_fifo);
+		$fake_php = $this->dispatchFixture('fake-php-scheduled', $dispatch_log, $dispatch_fifo);
 		$saved_argv = $GLOBALS['argv'];
 		$saved = $GLOBALS['pfb'];
 		try {
@@ -647,11 +653,22 @@ final class Top1mDccDetectorTest extends TestCase
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE, FALSE));
-			$deadline = microtime(TRUE) + 2.0;
-			while (!is_file($dispatch_log) && microtime(TRUE) < $deadline) {
-				usleep(10_000);
-			}
+			// Scheduled mode returns before the seam's exec(), so no child exists and
+			// nothing can create the log after this point -- there is no event to wait
+			// for, and the wall-clock spin this replaced only slowed the suite down.
 			$this->assertFileDoesNotExist($dispatch_log);
+
+			// Vacuity guard: the SAME fixture does record a dispatch when it is run, so
+			// the absence above is the seam's decision and not an inert fixture.
+			$probe_output = [];
+			$probe_status = -1;
+			exec(escapeshellarg($fake_php) . ' scheduled-vacuity-probe', $probe_output, $probe_status);
+			$this->assertSame(0, $probe_status, 'the dispatch fixture must be runnable: ' . implode("\n", $probe_output));
+			$this->assertStringContainsString(
+				'scheduled-vacuity-probe',
+				(string) file_get_contents($dispatch_log),
+				'the fixture must be able to create the log this test asserts absent'
+			);
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
 			$GLOBALS['pfb'] = $saved;
@@ -706,15 +723,63 @@ final class Top1mDccDetectorTest extends TestCase
 		eval("\n" . substr($source, $start + 1, $end - $start - 1));
 	}
 
-	private static function assertEventually(callable $condition, string $message): void
+	/**
+	 * Create the dispatch signal and hold its read end. Called BEFORE the seam runs,
+	 * so a fixture that dispatches instantly cannot poke into a pipe nobody holds.
+	 *
+	 * The FIFO is opened 'r+' because a plain 'r' open blocks until a writer arrives,
+	 * which would be the very wall-clock race this signal exists to remove.
+	 *
+	 * @return resource
+	 */
+	private function openDispatchSignal(string $fifo)
 	{
-		$deadline = microtime(TRUE) + 2.0;
-		do {
-			if ($condition()) {
-				return;
-			}
-			usleep(10000);
-		} while (microtime(TRUE) < $deadline);
-		self::fail($message);
+		$this->assertTrue(posix_mkfifo($fifo, 0600), "could not create dispatch signal {$fifo}");
+		$handle = fopen($fifo, 'r+');
+		$this->assertIsResource($handle, "could not open dispatch signal {$fifo}");
+		$this->signals[] = $handle;
+		return $handle;
+	}
+
+	/**
+	 * The fake $pfb['php'] the dispatch seam execs: it records the argv it was handed,
+	 * then pokes the signal so the caller can consume the dispatch as an event.
+	 *
+	 * The poke redirects with '1<>' (open read-write), so it never blocks waiting for a
+	 * reader and can never strand the backgrounded child the seam orphans.
+	 */
+	private function dispatchFixture(string $name, string $log, string $fifo): string
+	{
+		$path = "{$this->dir}/{$name}";
+		$this->assertNotFalse(file_put_contents(
+			$path,
+			"#!/bin/sh\n"
+			. "printf '%s\\n' \"\$*\" >> " . escapeshellarg($log) . "\n"
+			. "printf 'dispatched\\n' 1<> " . escapeshellarg($fifo) . "\n"
+		));
+		$this->assertTrue(chmod($path, 0755));
+		return $path;
+	}
+
+	/**
+	 * Consume the dispatch event itself. The seam backgrounds its child, so the only
+	 * honest wait is one that blocks on the child reporting in; the salvage cap below
+	 * exists solely to reap a stuck run and says so, and never decides whether the
+	 * seam dispatched.
+	 *
+	 * @param resource $signal
+	 */
+	private function awaitDispatch($signal): void
+	{
+		$read = [$signal];
+		$write = NULL;
+		$except = NULL;
+		$ready = stream_select($read, $write, $except, self::DISPATCH_SALVAGE_SECONDS);
+		$this->assertSame(1, $ready, sprintf(
+			'STUCK/ENVIRONMENT: the dispatched fixture never reported in within %ds, so this '
+			. 'run is stuck or its host starved the child -- not a TOP1M dispatch verdict',
+			self::DISPATCH_SALVAGE_SECONDS
+		));
+		$this->assertSame("dispatched\n", fgets($signal), 'the dispatch signal must carry the fixture poke');
 	}
 }
