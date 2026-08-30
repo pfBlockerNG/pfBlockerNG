@@ -770,6 +770,7 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
         f"ledger persistence probe missing after reboot; expected={persistence_probe} ledger={restored}"
     )
 
+    before_tick = int(vm.ssh("date +%s").stdout.strip())
     tick_result = _run_tick(vm)
     assert tick_result.returncode == 0, (
         f"post-reboot tick failed: rc={tick_result.returncode} stderr={tick_result.stderr!r}"
@@ -785,8 +786,9 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
     assert cron.get("next_due") != stale_next_due, (
         f"derived cron row was not regenerated; stale_next_due={stale_next_due} cron={cron}"
     )
-    assert isinstance(cron.get("next_due"), int) and after_now < cron["next_due"] <= after_now + 90000, (
-        f"regenerated cron next_due must be within the daily cadence; now={after_now} cron={cron}"
+    assert isinstance(cron.get("next_due"), int) and before_tick <= cron["next_due"] <= after_now + 90000, (
+        f"regenerated cron next_due must be due now or within the daily cadence; "
+        f"before_tick={before_tick} after_now={after_now} cron={cron}"
     )
     assert isinstance(cron.get("last_run"), int) and cron.get("jitter") == 0, (
         f"regenerated cron row has an invalid shape; cron={cron}"
