@@ -34,6 +34,20 @@ In-tree, exactly that split:
 - **ADR-12 update hooks** (`pfb_run_hooks()` in `pfblockerng.inc`) run under `timeout --foreground` — documented HAProxy recipe restarts daemon *meant* to survive.
 - **`list_scripts` feed pre/post scripts** stay **default** — transform pipelines, hung `curl | jq` must die as whole tree on overrun, not orphaned. Feed script that starts a service is misuse: use **post-update hook** instead, where daemon case handled right.
 
+### Mixed survivor + transient tree: supervise a process group
+
+Unbound startup needs both properties: the resolver that daemonizes successfully must
+survive, but a stuck launcher and its ordinary helpers must all die. Neither timeout mode
+can provide both: default reaper mode captures the daemon too; `--foreground` kills only
+the launcher and orphans helpers.
+
+`pfb_stop_start_unbound()` therefore starts a small PHP supervisor in its own process
+group behind a release barrier. The parent verifies `PGID == launcher PID` before the
+configured command runs. A real daemon's `setsid()` moves it out of that group; ordinary
+helpers remain. Completion or the monotonic deadline sends TERM, then SIGKILL after the
+grace, to the negative PGID and explicitly reaps the supervisor. Stdio still targets
+`/dev/null` plus a regular output file, never a capture pipe.
+
 ## Don't let a daemon hold the capture pipe
 
 PHP `exec()` / `$(command substitution)` read command stdout **to EOF**. Daemon the command spawned inherits command stdout/stderr, and while it lives pipe never reaches EOF — capture **blocks** even though command itself exited. (`timeout` reaper-wait above is *second*, independent way same hook hangs.)
