@@ -102,6 +102,8 @@ if ($pfb_test_timeout_rc !== 0 || !is_executable($pfb_test_timeout)) {
 	throw new RuntimeException('PHPUnit requires a real timeout(1) on PATH for bounded process tests.');
 }
 $GLOBALS['pfb']['timeout'] = $pfb_test_timeout;
+// Unit tests run under CLI; never inherit the appliance-only /usr/local path on a developer host.
+$GLOBALS['pfb']['php'] = PHP_BINARY;
 unset($pfb_test_timeout_out, $pfb_test_timeout_rc, $pfb_test_timeout);
 
 // Snapshot the SHIPPED $pfb['mime_types'] allow-list exactly as the just-loaded
