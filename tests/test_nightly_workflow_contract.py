@@ -398,11 +398,17 @@ def _download_steps_with_pattern(workflow: dict) -> list[tuple[str, dict]]:
 
 
 def test_download_layouts_use_tuple_leg_pattern() -> None:
-    """issue #2926: exactly one download step under the handoff job and one
-    under the OCI publish job pull every per-tuple leg directory."""
+    """issue #2926: EXACTLY ONE download step under the handoff job and EXACTLY
+    ONE under the OCI publish job pull every per-tuple leg directory."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     found = _download_steps_with_pattern(workflow)
-    assert {job for job, _ in found} == {"handoff", "publish-nightly-oci"}, (
-        f"one download step under handoff and one under the OCI publish job expected; got "
-        f"{[(job, step.get('name')) for job, step in found]!r}"
+    per_job = {job: [step for jname, step in found if jname == job] for job in {j for j, _ in found}}
+    for job in ("handoff", "publish-nightly-oci"):
+        count = len(per_job.get(job, []))
+        assert count == 1, (
+            f"job {job!r} must carry EXACTLY ONE nightly-result-* download step; "
+            f"got {count} ({[step.get('name') for step in per_job.get(job, [])]!r})"
+        )
+    assert set(per_job) == {"handoff", "publish-nightly-oci"}, (
+        f"no other job may download the nightly-result legs; got {sorted(per_job)!r}"
     )

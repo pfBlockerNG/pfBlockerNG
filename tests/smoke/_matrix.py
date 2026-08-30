@@ -3,9 +3,10 @@
 Every ABI / PHP / Python / catalog fact comes from the ci-metadata version matrix, never a
 literal. The whole CI matrix (ONE ROW PER VERSION, never deduped by freebsd_major) is read from
 ``SMOKE_MATRIX_JSON`` (injected by smoke-single.yml from ``read-version-matrix.sh --print-ci`` —
-issue #2926 W3: --print-build dedupes to one row per runtime tuple, which would hide a second edition
-sharing a major from matrix_variants() entirely and make the SMOKE_IMAGE_REF disambiguation below
-unreachable); a local run falls back to running that script itself; when neither is available the
+issue #2926 W3: --print-build dedupes to one row per runtime tuple, which would hide the SIBLING
+VERSIONS of a merged same-tuple group (only the last-written representative row survives) from
+matrix_variants() and make version-keyed lookups miss them); a local run falls back to running that
+script itself; when neither is available the
 variant-topology cases SKIP. Per-leg selection still honours ``SMOKE_ABI`` / ``SMOKE_PHP_VERSION``
 / ``SMOKE_PY_FLAVOR`` (the fan-out exports them per matrix entry) plus ``SMOKE_IMAGE_REF``
 (issue #1806: disambiguates two editions sharing a freebsd_major, now that the matrix carries no
@@ -71,8 +72,8 @@ def build_matrix() -> tuple[dict, ...] | None:
     unavailable.
 
     Prefers ``SMOKE_MATRIX_JSON`` (smoke-single.yml injects ``read-version-matrix.sh --print-ci``
-    — issue #2926 W3, never ``--print-build``: that dedupes by runtime tuple, which would hide a
-    same-major second edition from this topology entirely); falls back to running that script on
+    — issue #2926 W3, never ``--print-build``: that dedupes by runtime tuple, which would hide the
+    sibling versions of a merged same-tuple group from this topology); falls back to running that script on
     the runner; None when neither yields a non-empty JSON array (the caller then SKIPs the
     topology cases)."""
     raw = os.environ.get("SMOKE_MATRIX_JSON", "").strip()
