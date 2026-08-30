@@ -591,10 +591,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * pfb_download() keeps the downloaded ET IQRisk body at its raw staging path
-	 * until processet() has derived and validated the selected categories. A
-	 * refusal must remove only that staged input: the live publication and its
-	 * validators still describe the last accepted category output.
+	 * pfb_download_fetch() keeps the downloaded ET IQRisk body at its raw staging
+	 * path until processet() accepts the selected categories. A refusal removes
+	 * only that stage here: the live publication and its source-hash baseline
+	 * remain last-good, while pfb_download() owns the #2820 HTTP-validator clear.
 	 */
 	public function testEtBodyStagesUntilTheHelperAcceptsIt(): void
 	{
@@ -626,12 +626,37 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			'a refused staged body must be discarded');
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal);
 		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}', $refusal,
-			'a refusal must not remove the last accepted publication or its validators');
+			'the ET branch must not bypass the wrapper by clearing live artifacts directly');
 
 		$finalize = strpos(self::$source, 'pfb_download_finalize_text(', $scopeEnd);
 		$this->assertNotFalse($finalize);
 		$this->assertLessThan($finalize, $scopeEnd,
 			'the accepted raw body hash and text finalization must happen after processet succeeds');
+	}
+
+	public function testEtRefusalLeavesHttpValidatorClearingToTheDownloadWrapper(): void
+	{
+		$wrapper = strpos(self::$source, 'function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {');
+		$fetch = strpos(self::$source, 'function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {');
+		$this->assertNotFalse($wrapper);
+		$this->assertNotFalse($fetch);
+		$wrapperScope = substr(self::$source, $wrapper, $fetch - $wrapper);
+		$this->assertStringContainsString("if (!\$result->success && \$request->type === '')", $wrapperScope,
+			'standard-list failures must enter the one #2820 validator-clear boundary');
+		$this->assertStringContainsString('unlink_if_exists("{$request->downloadPath}.orig.etag");', $wrapperScope);
+		$this->assertStringContainsString('unlink_if_exists("{$request->downloadPath}.orig.lastmod");', $wrapperScope);
+		$this->assertStringNotContainsString('.orig.xxhash128', $wrapperScope,
+			'the last-good source hash is publication state, not an HTTP validator');
+
+		$et = strpos(self::$source, 'if ($is_et) {', $fetch);
+		$this->assertNotFalse($et);
+		$etBrace = strpos(self::$source, '{', $et);
+		$this->assertNotFalse($etBrace);
+		$etScope = substr(self::$source, $et, self::closingBraceExclusive(self::$source, $etBrace) - $et);
+		$this->assertStringNotContainsString('.orig.etag', $etScope,
+			'the ET branch must leave HTTP-validator clearing to the wrapper');
+		$this->assertStringNotContainsString('.orig.lastmod', $etScope,
+			'the ET branch must leave HTTP-validator clearing to the wrapper');
 	}
 
 	/** Exclusive end index of the brace block whose `{` is at `$openBrace`. */
