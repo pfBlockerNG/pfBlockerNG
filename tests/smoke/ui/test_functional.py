@@ -1912,7 +1912,7 @@ _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 _LEDGER_PATH = f"{helpers.PFB_DBDIR}/pfb_due_ledger.json"
 
 
-def _cron_last_run(vm: helpers.SmokeVM) -> int:
+def _cron_last_run(vm: helpers.SmokeVM) -> int | None:
     """The one ledger field a Run Now must never advance.
 
     Not byte-identity, and not the whole document. Every pass ends in
@@ -1935,10 +1935,36 @@ def _cron_last_run(vm: helpers.SmokeVM) -> int:
     except json.JSONDecodeError as exc:
         raise AssertionError(f"{_LEDGER_PATH} is not valid JSON: {exc}") from exc
     cron = document.get("cron")
-    assert isinstance(cron, dict), (
-        f"{_LEDGER_PATH} has no cron entry, so an unchanged last_run would prove nothing: {document!r}"
-    )
+    if not isinstance(cron, dict):
+        # No cron row: the box has no schedule configured, so the tick has never recorded a
+        # run. That is a state to hold, not an error -- a Run Now must not create one.
+        return None
     return int(cron.get("last_run", 0))
+
+
+def _assert_tick_run_not_claimed(before: int | None, after: int | None, scope: str) -> None:
+    """A Run Now must not record the tick's run, whether or not one exists yet.
+
+    On a box with no schedule configured the ledger carries no cron row at all, so the
+    strongest available statement is that a manual pass does not invent one. Where a row
+    does exist, last_run must not move. The off-appliance
+    UpdateRunNowScheduleOwnershipTest holds the stronger byte-identity version, and
+    DueLedgerTest pins both branches of the deferral write.
+    """
+    assert not (after is None and before is not None), (
+        f"{scope} Run Now removed the cron entry -- the configuration it derives from did not change"
+    )
+    if after is None:
+        return
+    if before is None:
+        assert after == 0, (
+            f"{scope} Run Now created a cron entry claiming last_run={after} -- "
+            "the next locked tick owns recording its own run"
+        )
+        return
+    assert after <= before, (
+        f"{scope} Run Now advanced cron.last_run from {before} to {after} -- the next locked tick owns that"
+    )
 
 
 def _settle_runnow(vm: helpers.SmokeVM, timeout: float = 25.0) -> None:
@@ -2005,9 +2031,7 @@ def test_update_runnow_does_not_publish_schedule_cache(
         )
         assert not looks_like_login_page(resp.text), "scope=ip POST returned the login form (session lost)"
 
-        assert _cron_last_run(vm) <= before_ip, (
-            "scope=ip Run Now advanced cron.last_run -- a partial scope must not claim the tick's run"
-        )
+        _assert_tick_run_not_claimed(before_ip, _cron_last_run(vm), "scope=ip")
         _settle_runnow(vm)
 
         # ACT 2: a full pass must leave the same ownership boundary intact. The settle
@@ -2022,9 +2046,7 @@ def test_update_runnow_does_not_publish_schedule_cache(
         )
         assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
 
-        assert _cron_last_run(vm) <= before_both, (
-            "scope=both Run Now advanced cron.last_run -- the next locked tick owns that"
-        )
+        _assert_tick_run_not_claimed(before_both, _cron_last_run(vm), "scope=both")
         _settle_runnow(vm)
 
         # Re-render the Update page and confirm the Schedule section is present.
