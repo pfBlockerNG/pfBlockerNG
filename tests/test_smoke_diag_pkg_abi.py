@@ -11,6 +11,14 @@ query parameters at capture time.
 from __future__ import annotations
 
 import inspect
+import io
+import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from tests.smoke import helpers
 
@@ -117,28 +125,73 @@ def test_collect_host_diagnostics_redacts_pkg_urls_at_capture() -> None:
     assert "redact_pkg_tarball(" in src
 
 
-def test_redact_pkg_tarball_strips_uppercase_token() -> None:
-    """Given a pulled diag tarball whose pkg dump still has ?TOKEN=
-    When the host second pass runs
-    Then the secret is gone from the retarred bundle.
-    """
-    import tarfile
-    import tempfile
-    from pathlib import Path
+def test_redact_pkg_tarball_drops_absolute_symlink_and_strips_residual_token(tmp_path: Path) -> None:
+    """The host pass skips appliance absolute links without losing pkg redaction."""
+    outside = tmp_path / "outside.conf"
+    outside_text = "url: https://outside.example/repo?TOKEN=OUTSIDE_SECRET\n"
+    outside.write_text(outside_text, encoding="utf-8")
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    secret = b"url: https://pkg.example.com/repo?ToKeN=HOST_PASS_SECRET\n"
+    with tarfile.open(tgz, "w:gz") as tar:
+        member = tarfile.TarInfo("pfb_smoke_diag/pkg/pkg_vv.txt")
+        member.size = len(secret)
+        tar.addfile(member, io.BytesIO(secret))
+        absolute_link = tarfile.TarInfo("pfb_smoke_diag/pkg/repos/pfSense.conf")
+        absolute_link.type = tarfile.SYMTYPE
+        absolute_link.linkname = str(outside)
+        tar.addfile(absolute_link)
 
-    secret = "url: https://pkg.example.com/repo?TOKEN=SEKRIT\n"
-    with tempfile.TemporaryDirectory() as tmp:
-        inner = Path(tmp) / "pkg"
-        inner.mkdir()
-        (inner / "repos.conf").write_text(secret, encoding="utf-8")
-        tgz = Path(tmp) / "pfb_smoke_diag.tgz"
-        with tarfile.open(tgz, "w:gz") as tar:
-            tar.add(inner, arcname="pfb_smoke_diag/pkg")
+    helpers.redact_pkg_tarball(str(tgz))
+
+    with tarfile.open(tgz, "r:gz") as tar:
+        assert "pfb_smoke_diag/pkg/repos/pfSense.conf" not in tar.getnames()
+        data = tar.extractfile("pfb_smoke_diag/pkg/pkg_vv.txt")
+        assert data is not None
+        out = data.read().decode("utf-8")
+    assert "HOST_PASS_SECRET" not in out
+    assert "ToKeN=REDACTED" in out
+    assert outside.read_text(encoding="utf-8") == outside_text
+
+
+def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch) -> None:
+    """A traversal member remains fatal and cannot write outside extraction."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    escaped = tmp_path / "escaped.txt"
+    payload = b"must not escape"
+    with tarfile.open(tgz, "w:gz") as tar:
+        member = tarfile.TarInfo("../escaped.txt")
+        member.size = len(payload)
+        tar.addfile(member, io.BytesIO(payload))
+
+    with pytest.raises(tarfile.OutsideDestinationError):
         helpers.redact_pkg_tarball(str(tgz))
-        with tarfile.open(tgz, "r:gz") as tar:
-            member = tar.getmember("pfb_smoke_diag/pkg/repos.conf")
-            data = tar.extractfile(member)
-            assert data is not None
-            out = data.read().decode("utf-8")
-        assert "SEKRIT" not in out
-        assert "TOKEN=REDACTED" in out
+
+    assert not escaped.exists()
+
+
+def test_collect_host_diagnostics_reports_host_redaction_failure(tmp_path: Path, monkeypatch, capsys) -> None:
+    """A pulled archive is not reported as fully collected when host redaction fails."""
+    dest = tmp_path / "diag"
+
+    def fake_scp(argv, **_kwargs):
+        Path(argv[-1]).write_bytes(b"not a tar archive")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(helpers.subprocess, "run", fake_scp)
+    vm = SimpleNamespace(
+        ssh=lambda *_args, **_kwargs: None,
+        ssh_key_path="unused",
+        ssh_port=22,
+        ssh_target="root@unused",
+        log_path=None,
+    )
+
+    helpers.collect_host_diagnostics(vm, str(dest))
+
+    output = capsys.readouterr().out
+    assert "[smoke] collected full guest diagnostics" not in output
+    assert "[smoke] host-side diagnostics redaction failed" in output
+    assert "archive has guest-side redaction only" in output
+    assert "ReadError" in output
+    assert (dest / "pfb_smoke_diag.tgz").exists()
