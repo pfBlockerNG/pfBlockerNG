@@ -126,14 +126,14 @@ function pfb_greyout(sel) {
 
 	$(sel).click(function() {
 		if ($(this).val() == 'Disabled') {
-			$(this).css('background-color', 'lightgrey');
+			$(this).css({'background-color': 'lightgrey', 'color': '#212121'});
 		} else {
-			$(this).css('background-color', '');
+			$(this).css({'background-color': '', 'color': ''});
 		}
 	});
 	$(sel).each(function() {
 		if ($(this).val() == 'Disabled') {
-			$(this).css('background-color', 'lightgrey');
+			$(this).css({'background-color': 'lightgrey', 'color': '#212121'});
 		}
 	});
 }
