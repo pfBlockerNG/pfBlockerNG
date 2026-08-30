@@ -10036,15 +10036,7 @@
     "pfb_resolve_enabled": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": [
-            {
-                "name": "ipconfig",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
+        "params": []
     },
     "pfb_resolve_list_script": {
         "returnsRef": false,
