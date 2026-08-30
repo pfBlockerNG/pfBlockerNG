@@ -2642,6 +2642,9 @@ def test_wizard_dnsbl_step_renders_auto_vip(webui: WebUI, php_error_log_guard: P
         "manual mode only",  # the pfb_dnsvip4/6 selectors' new mode-dependency note
     ):
         assert needle in body, f"wizard DNSBL step is missing the Auto VIP marker {needle!r}"
+    # issue #2869: the step must not name the sweep pool ADR-13 retired -- an admin who
+    # reads it goes looking for an address pfb_dnsbl_vip_candidates() never returns.
+    assert "10.10." not in body, "wizard DNSBL step still advertises the retired 10.10.X.53 pool"
 
 
 def test_general_wizard_disable_get_is_state_free(
