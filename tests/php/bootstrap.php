@@ -61,17 +61,29 @@ $GLOBALS['argv'] = ['pfblockerng.inc'];
 $GLOBALS['argc'] = 1;
 
 // 4b. Keep the resolver start dormant too, the sibling of step 4: no unit test may
-//     start Unbound (issue #2613) or pay its 30-poll stop-wait. The double exits 127
-//     because an absent binary returns exactly that off-appliance, which is what keeps
-//     the caller's retval != 0 retry branch exercised. Guarded: a re-load stays silent.
+//     start Unbound (issue #2613) or pay either appliance wait. The executable double
+//     exits 127 because an absent binary returns exactly that off-appliance, which keeps
+//     the caller's retval != 0 retry branch exercised without a shell compound escaping
+//     the timeout wrapper. Guarded: a re-load stays silent.
 $GLOBALS['pfb_test_unbound_start_log'] = "{$pfb_test_tmp}/unbound_start.log";
+$pfb_test_unbound_start_cmd = "{$pfb_test_tmp}/unbound-start-double";
+file_put_contents($pfb_test_unbound_start_cmd, <<<'SH'
+	#!/bin/sh
+	printf '%s\n' 'unit-test double: Unbound start suppressed' | tee -a "$1"
+	exit 127
+	SH);
+chmod($pfb_test_unbound_start_cmd, 0755);
 if (!defined('PFB_UNBOUND_START_CMD')) {
-	define('PFB_UNBOUND_START_CMD', 'echo "unit-test double: Unbound start suppressed" | tee -a '
-		. escapeshellarg($GLOBALS['pfb_test_unbound_start_log']) . ' 2>&1; exit 127');
+	define('PFB_UNBOUND_START_CMD', escapeshellarg($pfb_test_unbound_start_cmd) . ' '
+		. escapeshellarg($GLOBALS['pfb_test_unbound_start_log']));
 }
 if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 	define('PFB_UNBOUND_STOP_WAIT', 2);
 }
+if (!defined('PFB_UNBOUND_START_WAIT')) {
+	define('PFB_UNBOUND_START_WAIT', 2);
+}
+unset($pfb_test_unbound_start_cmd);
 
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
@@ -82,6 +94,15 @@ $pfb_prev_er = error_reporting();
 error_reporting($pfb_prev_er & ~E_DEPRECATED & ~E_WARNING);
 require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
 error_reporting($pfb_prev_er);
+$pfb_test_timeout_out = [];
+$pfb_test_timeout_rc = 0;
+exec('command -v timeout 2>/dev/null', $pfb_test_timeout_out, $pfb_test_timeout_rc);
+$pfb_test_timeout = trim((string) ($pfb_test_timeout_out[0] ?? ''));
+if ($pfb_test_timeout_rc !== 0 || !is_executable($pfb_test_timeout)) {
+	throw new RuntimeException('PHPUnit requires a real timeout(1) on PATH for bounded process tests.');
+}
+$GLOBALS['pfb']['timeout'] = $pfb_test_timeout;
+unset($pfb_test_timeout_out, $pfb_test_timeout_rc, $pfb_test_timeout);
 
 // Snapshot the SHIPPED $pfb['mime_types'] allow-list exactly as the just-loaded
 // production source defines it, before any test mutates/unsets $GLOBALS['pfb']

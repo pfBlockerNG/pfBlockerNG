@@ -11394,14 +11394,17 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 	dnsbl_save_stats();
 }
 
-// The daemon-start command and the stop-wait budget are named so a harness can
-// override them before this file loads (issue #2613: the unit suite would otherwise
-// start a real resolver on any box carrying Unbound at the shipped path).
+// The daemon-start command and stop/start budgets are named so a harness can override
+// them before this file loads (issue #2613: the unit suite would otherwise start a real
+// resolver or pay the appliance waits).
 if (!defined('PFB_UNBOUND_START_CMD')) {
 	define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');
 }
 if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 	define('PFB_UNBOUND_STOP_WAIT', 30);
+}
+if (!defined('PFB_UNBOUND_START_WAIT')) {
+	define('PFB_UNBOUND_START_WAIT', 30);
 }
 
 // Function to Start Unbound
@@ -11439,7 +11442,45 @@ function pfb_stop_start_unbound($type) {
 	}
 
 	pfb_logger("\nStarting Unbound Resolver", 1);
-	exec(PFB_UNBOUND_START_CMD, $final['result'], $final['retval']);
+	$outfile = @tempnam(sys_get_temp_dir(), 'pfbus');
+	if ($outfile === FALSE) {
+		$final['result'] = array('could not stage Unbound start output');
+		$final['retval'] = -1;
+		pfb_logger("\nUnbound Resolver start could not stage output; not run", 2);
+		return $final;
+	}
+
+	// FreeBSD timeout(1) foreground mode lets a successfully daemonized resolver
+	// survive. File output prevents that survivor from holding exec()'s capture pipe.
+	$timeout = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+	$cmd = "{$timeout} --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
+		PFB_UNBOUND_START_WAIT . ' ' . PFB_UNBOUND_START_CMD . ' > ' .
+		escapeshellarg($outfile) . ' 2>&1 < /dev/null';
+	$discard = array();
+	$retval = 0;
+	$started = hrtime(TRUE);
+	if (exec($cmd, $discard, $retval) === FALSE && $retval === 0) {
+		$retval = -1;
+	}
+	// GNU timeout reports 128+SIGKILL when its kill-after grace fires; FreeBSD
+	// reports 124. Only normalize a 137 that actually consumed the wall budget,
+	// preserving an unrelated immediate SIGKILL as its original status.
+	if ($retval === 137 && hrtime(TRUE) - $started >= PFB_UNBOUND_START_WAIT * 1000000000) {
+		$retval = 124;
+	}
+
+	$raw = (string) @file_get_contents($outfile);
+	$final['result'] = ($raw === '') ? array() : explode("\n", $raw);
+	if (end($final['result']) === '') {
+		array_pop($final['result']);
+	}
+	$final['retval'] = $retval;
+	@unlink($outfile);
+
+	if ($retval === 124) {
+		pfb_logger("\nUnbound Resolver start TIMED OUT after " . PFB_UNBOUND_START_WAIT .
+			"s and was killed", 2);
+	}
 	return $final;
 }
 
