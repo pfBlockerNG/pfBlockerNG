@@ -65,7 +65,7 @@ _LEGEND = "Failed download(s) highlighted in yellow."
 
 
 def _style_of(tag: str) -> str:
-    """The tag's ``style`` value, '' when it has none.
+    r"""The tag's ``style`` value, '' when it has none.
 
     ``_INLINE_STYLE`` rather than a local pattern: a bare ``\bstyle=`` also fires on the
     ``-``-to-``s`` transition inside ``data-style=``, so a decoy attribute would be read as
