@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
+import tokenize
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
@@ -27,9 +31,17 @@ _PHPUNIT_TEST_IMPORT = re.compile(
     r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes\\Test"
     r"(?:[ \t]+as[ \t]+(?P<alias>[A-Za-z_]\w*))?[ \t]*;"
 )
+_PHPUNIT_TEST_GROUP_IMPORT = re.compile(
+    r"^[ \t]*use[ \t]+\\?PHPUnit\\Framework\\Attributes\\\{(?P<body>[^}]*)\}[ \t]*;"
+)
+_PHPUNIT_TEST_GROUP_MEMBER = re.compile(r"^[ \t]*Test(?:[ \t]+as[ \t]+(?P<alias>[A-Za-z_]\w*))?[ \t]*$")
 _PHP_ATTRIBUTE = re.compile(r"#\[(?P<body>[^\]]*)\]")
 _PHP_ATTRIBUTE_PREFIX = re.compile(r"^[ \t]*(?:#\[[^\]]*\][ \t]*)+")
 _SHELLSPEC_DECLARATION = re.compile(r"^[ \t]*It[ \t]+(?P<body>.*)$")
+_PHP_HEREDOC_START = re.compile(
+    r"<<<[ \t]*(?:'(?P<single>[A-Za-z_]\w*)'|\"(?P<double>[A-Za-z_]\w*)\"|(?P<bare>[A-Za-z_]\w*))"
+)
+_SHELL_HEREDOC_START = re.compile(r"(?<!<)<<(?P<strip>-)?[ \t]*(?P<word>'[^']+'|\"[^\"]+\"|\\?[A-Za-z_]\w*)")
 _SUCCESSOR = re.compile(r"^[ \t]*# successor: (?P<value>\S(?:.*\S)?)[ \t]*$")
 _SUCCESSOR_ATTEMPT = re.compile(r"^[ \t]*(?:#+|//)[ \t]*successor\b", re.IGNORECASE)
 _TOMBSTONE_ATTEMPT = re.compile(r"^[ \t]*-[ \t]*\{")
@@ -185,7 +197,12 @@ def _diff_input(staged: bool, base: str | None, worktree_base: str | None = None
         untracked_records = b"".join(
             b"A\0" + path + b"\0" for path in (untracked.split(b"\0")[:-1] if untracked else ())
         )
-        return DiffInput(_parse_name_status(data + untracked_records), merge_base, None, worktree=True)
+        changes = _synthesize_worktree_renames(
+            _parse_name_status(data),
+            _parse_name_status(untracked_records),
+            merge_base,
+        )
+        return DiffInput(changes, merge_base, None, worktree=True)
     data = _git("diff", "--name-status", "-z", "--find-renames", f"{base_commit}...HEAD", "--")
     return DiffInput(_parse_name_status(data), merge_base, "HEAD")
 
@@ -200,24 +217,79 @@ def _language(path: str) -> str | None:
     return None
 
 
-def _blob(ref: str | None, path: str) -> str:
-    spec = f":{path}" if ref is None else f"{ref}:{path}"
-    data = _git("show", spec)
+def _decode_blob(data: bytes, path: str) -> str:
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise CheckError(f"{path} contains invalid UTF-8") from exc
+
+
+def _blob_bytes(ref: str | None, path: str) -> bytes:
+    spec = f":{path}" if ref is None else f"{ref}:{path}"
+    return _git("show", spec)
+
+
+def _blob(ref: str | None, path: str) -> str:
+    return _decode_blob(_blob_bytes(ref, path), path)
+
+
+def _worktree_blob_bytes(path: str) -> bytes:
+    worktree_path = Path(path)
+    try:
+        mode = worktree_path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            return os.readlink(os.fsencode(path))
+        return worktree_path.read_bytes()
+    except OSError as exc:
+        raise CheckError(f"cannot read worktree path {path!r}: {exc}") from exc
 
 
 def _worktree_blob(path: str) -> str:
-    try:
-        data = Path(path).read_bytes()
-    except OSError as exc:
-        raise CheckError(f"cannot read worktree path {path!r}: {exc}") from exc
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise CheckError(f"{path} contains invalid UTF-8") from exc
+    return _decode_blob(_worktree_blob_bytes(path), path)
+
+
+def _synthesize_worktree_renames(
+    tracked: tuple[Change, ...],
+    untracked: tuple[Change, ...],
+    old_ref: str,
+) -> tuple[Change, ...]:
+    deleted_by_language: dict[str, list[int]] = defaultdict(list)
+    for index, change in enumerate(tracked):
+        if change.status == "D" and change.old_path is not None:
+            language = _language(change.old_path)
+            if language is not None:
+                deleted_by_language[language].append(index)
+
+    old_by_blob: dict[tuple[str, bytes], deque[int]] = defaultdict(deque)
+    for language, indices in deleted_by_language.items():
+        if not any(change.new_path is not None and _language(change.new_path) == language for change in untracked):
+            continue
+        for index in indices:
+            old_path = tracked[index].old_path
+            assert old_path is not None
+            old_by_blob[(language, _blob_bytes(old_ref, old_path))].append(index)
+
+    replacements: dict[int, Change] = {}
+    paired_additions: set[int] = set()
+    for index, change in enumerate(untracked):
+        if change.new_path is None:
+            continue
+        language = _language(change.new_path)
+        if language is None or language not in deleted_by_language:
+            continue
+        old_candidates = old_by_blob.get((language, _worktree_blob_bytes(change.new_path)))
+        if not old_candidates:
+            continue
+        old_index = old_candidates.popleft()
+        old_path = tracked[old_index].old_path
+        assert old_path is not None
+        replacements[old_index] = Change("R", old_path, change.new_path)
+        paired_additions.add(index)
+
+    return (
+        *(replacements.get(index, change) for index, change in enumerate(tracked)),
+        *(change for index, change in enumerate(untracked) if index not in paired_additions),
+    )
 
 
 def _shellspec_name(path: str, line_number: int, body: str) -> str | None:
@@ -232,18 +304,191 @@ def _shellspec_name(path: str, line_number: int, body: str) -> str | None:
     return words[1]
 
 
+def _python_literal_body_lines(path: str, text: str) -> set[int]:
+    ignored: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+        for token_info in tokens:
+            if token_info.type == tokenize.STRING and token_info.start[0] < token_info.end[0]:
+                ignored.update(range(token_info.start[0] + 1, token_info.end[0] + 1))
+    except (IndentationError, SyntaxError, tokenize.TokenError) as exc:
+        raise CheckError(f"cannot tokenize Python test {path!r}: {exc}") from exc
+    return ignored
+
+
+def _php_literal_body_lines(path: str, lines: tuple[str, ...]) -> set[int]:
+    ignored: set[int] = set()
+    heredoc: tuple[str, int] | None = None
+    quote: tuple[str, int] | None = None
+    block_comment: int | None = None
+    for line_number, line in enumerate(lines, 1):
+        if heredoc is not None:
+            ignored.add(line_number)
+            label = heredoc[0]
+            if re.fullmatch(
+                rf"[ \t]*{re.escape(label)}[ \t]*[;,)\]]*[ \t]*(?://.*|#.*)?",
+                line,
+            ):
+                heredoc = None
+            continue
+
+        index = 0
+        if quote is not None or block_comment is not None:
+            ignored.add(line_number)
+        while index < len(line):
+            if quote is not None:
+                delimiter = quote[0]
+                if line[index] == "\\":
+                    index += 2
+                elif line[index] == delimiter:
+                    quote = None
+                    index += 1
+                else:
+                    index += 1
+                continue
+            if block_comment is not None:
+                end = line.find("*/", index)
+                if end < 0:
+                    break
+                block_comment = None
+                index = end + 2
+                continue
+            if line.startswith(("//", "#"), index):
+                break
+            if line.startswith("/*", index):
+                block_comment = line_number
+                index += 2
+                continue
+            if line[index] in {"'", '"'}:
+                quote = (line[index], line_number)
+                index += 1
+                continue
+            heredoc_match = _PHP_HEREDOC_START.match(line, index)
+            if heredoc_match:
+                label = next(value for value in heredoc_match.groupdict().values() if value is not None)
+                heredoc = (label, line_number)
+                break
+            index += 1
+
+    if heredoc is not None:
+        label, start = heredoc
+        raise CheckError(f"unterminated PHP heredoc {label!r} in {path}:{start}")
+    if quote is not None:
+        start = quote[1]
+        raise CheckError(f"unterminated PHP string in {path}:{start}")
+    if block_comment is not None:
+        raise CheckError(f"unterminated PHP block comment in {path}:{block_comment}")
+    return ignored
+
+
+def _shell_heredocs(
+    path: str,
+    line_number: int,
+    line: str,
+    initial_quote: str | None,
+) -> tuple[list[tuple[str, bool]], str | None]:
+    heredocs: list[tuple[str, bool]] = []
+    quote = initial_quote
+    index = 0
+    while index < len(line):
+        if quote is not None:
+            if quote == '"' and line[index] == "\\":
+                index += 2
+            elif line[index] == quote:
+                quote = None
+                index += 1
+            else:
+                index += 1
+            continue
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] in {"'", '"'}:
+            quote = line[index]
+            index += 1
+            continue
+        if line[index] == "#" and (index == 0 or line[index - 1].isspace()):
+            break
+        match = _SHELL_HEREDOC_START.match(line, index)
+        if match:
+            try:
+                words = shlex.split(match.group("word"), comments=False, posix=True)
+            except ValueError as exc:
+                raise CheckError(f"cannot parse shell heredoc in {path}:{line_number}: {exc}") from exc
+            if len(words) != 1 or not words[0]:
+                raise CheckError(f"cannot parse shell heredoc in {path}:{line_number}")
+            heredocs.append((words[0], match.group("strip") is not None))
+            index = match.end()
+            continue
+        index += 1
+    return heredocs, quote
+
+
+def _shell_literal_body_lines(path: str, lines: tuple[str, ...]) -> set[int]:
+    ignored: set[int] = set()
+    pending: deque[tuple[str, bool, int]] = deque()
+    quote: tuple[str, int] | None = None
+    for line_number, line in enumerate(lines, 1):
+        if pending:
+            ignored.add(line_number)
+            delimiter, strip_tabs, _ = pending[0]
+            candidate = line.lstrip("\t") if strip_tabs else line
+            if candidate == delimiter:
+                pending.popleft()
+            continue
+        if quote is not None:
+            ignored.add(line_number)
+        heredocs, remaining_quote = _shell_heredocs(
+            path,
+            line_number,
+            line,
+            quote[0] if quote is not None else None,
+        )
+        if remaining_quote is None:
+            quote = None
+        elif quote is None:
+            quote = (remaining_quote, line_number)
+        pending.extend((delimiter, strip_tabs, line_number) for delimiter, strip_tabs in heredocs)
+    if pending:
+        delimiter, _, start = pending[0]
+        raise CheckError(f"unterminated shell heredoc {delimiter!r} in {path}:{start}")
+    if quote is not None:
+        raise CheckError(f"unterminated shell string in {path}:{quote[1]}")
+    return ignored
+
+
+def _literal_body_lines(path: str, language: str, text: str, lines: tuple[str, ...]) -> set[int]:
+    if language == "python":
+        return _python_literal_body_lines(path, text)
+    if language == "phpunit":
+        return _php_literal_body_lines(path, lines)
+    return _shell_literal_body_lines(path, lines)
+
+
 def _parse_file(path: str, language: str, text: str) -> ParsedFile:
     lines = tuple(text.splitlines())
+    ignored_lines = _literal_body_lines(path, language, text, lines)
     declarations: list[Declaration] = []
     markers: list[Marker] = []
     phpunit_test_names: set[str] = set()
     if language == "phpunit":
-        for line in lines:
+        for line_number, line in enumerate(lines, 1):
+            if line_number in ignored_lines:
+                continue
             imported = _PHPUNIT_TEST_IMPORT.match(line)
             if imported:
                 phpunit_test_names.add(imported.group("alias") or "Test")
+                continue
+            group_imported = _PHPUNIT_TEST_GROUP_IMPORT.match(line)
+            if group_imported:
+                for member in group_imported.group("body").split(","):
+                    group_member = _PHPUNIT_TEST_GROUP_MEMBER.fullmatch(member)
+                    if group_member:
+                        phpunit_test_names.add(group_member.group("alias") or "Test")
     phpunit_attribute_pending = False
     for line_number, line in enumerate(lines, 1):
+        if line_number in ignored_lines:
+            continue
         name: str | None = None
         if language == "python":
             match = _PYTHON_DECLARATION.match(line)
@@ -351,6 +596,12 @@ def _match_declarations(
     )
 
 
+def _marker_identity(marker: Marker) -> tuple[str, str]:
+    if marker.value is not None:
+        return ("successor", marker.value)
+    return ("malformed", marker.raw.strip())
+
+
 def _new_markers(old_files: dict[str, ParsedFile], new_files: dict[str, ParsedFile]) -> set[Marker]:
     old = [marker for parsed in old_files.values() for marker in parsed.markers]
     new = [marker for parsed in new_files.values() for marker in parsed.markers]
@@ -361,10 +612,17 @@ def _new_markers(old_files: dict[str, ParsedFile], new_files: dict[str, ParsedFi
         new,
         old_left,
         new_left,
-        lambda item: (item.path, item.raw),
-        lambda item: (item.path, item.raw),
+        lambda item: (item.path, _marker_identity(item)),
+        lambda item: (item.path, _marker_identity(item)),
     )
-    _consume_matches(old, new, old_left, new_left, lambda item: item.raw, lambda item: item.raw)
+    _consume_matches(
+        old,
+        new,
+        old_left,
+        new_left,
+        _marker_identity,
+        _marker_identity,
+    )
     return {new[index] for index in new_left}
 
 
@@ -373,6 +631,9 @@ def _associated_declaration(marker: Marker, parsed: ParsedFile) -> Declaration |
     exact_marker_lines = {candidate.line for candidate in parsed.markers if candidate.value is not None}
     line_number = marker.line + 1
     while line_number <= len(parsed.lines):
+        declaration = declarations.get(line_number)
+        if declaration is not None:
+            return declaration
         stripped = parsed.lines[line_number - 1].strip()
         if not stripped or line_number in exact_marker_lines:
             line_number += 1
@@ -383,7 +644,7 @@ def _associated_declaration(marker: Marker, parsed: ParsedFile) -> Declaration |
         if parsed.language == "phpunit" and stripped.startswith("#["):
             line_number += 1
             continue
-        return declarations.get(line_number)
+        return None
     return None
 
 

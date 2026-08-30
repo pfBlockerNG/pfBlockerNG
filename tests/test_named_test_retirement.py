@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -152,6 +152,14 @@ PHPUNIT_TEST_ATTRIBUTES = (
         "fully-qualified",
         "<?php\nfinal class AttributeNamedTest {\n"
         "    #[\\PHPUnit\\Framework\\Attributes\\Test]\n"
+        "    public function preservesNamedInvariant(): void {}\n"
+        "}\n",
+    ),
+    (
+        "group-use",
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\{Test};\n"
+        "final class AttributeNamedTest {\n"
+        "    #[Test]\n"
         "    public function preservesNamedInvariant(): void {}\n"
         "}\n",
     ),
@@ -311,6 +319,47 @@ def test_phpunit_test_attribute_retirement_accepts_new_tombstone(tmp_path: Path)
     _write(repo, HISTORY, "# Retired tests\n\n" + _tombstone(identity))
     _commit(repo)
 
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_phpunit_same_line_test_attribute_accepts_successor_marker(tmp_path: Path) -> None:
+    path = "tests/php/InlineAttributeTest.php"
+    identity = f"{path}::preservesOldInvariant"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nfinal class InlineAttributeTest {\n"
+        "    #[Test] public function preservesOldInvariant(): void {}\n}\n"
+    )
+    after = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\Test;\nfinal class InlineAttributeTest {\n"
+        f"    # successor: {identity}\n"
+        "    #[Test] public function preservesNewInvariant(): void {}\n}\n"
+    )
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 0)
+
+
+def test_phpunit_group_use_test_attribute_rename_requires_successor(tmp_path: Path) -> None:
+    path = "tests/php/GroupUseAttributeTest.php"
+    identity = f"{path}::preservesOldInvariant"
+    before = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\{Test};\nfinal class GroupUseAttributeTest {\n"
+        "    #[Test]\n    public function preservesOldInvariant(): void {}\n}\n"
+    )
+    renamed = (
+        "<?php\nuse PHPUnit\\Framework\\Attributes\\{Test};\nfinal class GroupUseAttributeTest {\n"
+        "    #[Test]\n    public function preservesNewInvariant(): void {}\n}\n"
+    )
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, renamed)
+    _commit(repo, "rename group-use attribute test")
+    output = _assert_rc(_diff(repo, base), 1)
+    assert identity in output, output
+
+    _write(repo, path, renamed.replace("    #[Test]", f"    # successor: {identity}\n    #[Test]"))
+    _commit(repo, "name group-use successor")
     _assert_rc(_diff(repo, base), 0)
 
 
@@ -610,6 +659,69 @@ def test_marker_forged_in_each_language_quote_syntax_is_not_accepted(
     _assert_rc(_diff(repo, base), 1)
 
 
+@pytest.mark.parametrize(
+    ("path", "before", "forgery"),
+    (
+        (
+            "tests/test_multiline_forgery.py",
+            "def test_multiline_old():\n    assert True\n",
+            'PAYLOAD = """\n# successor: test_multiline_old\ndef test_multiline_fake():\n    assert False\n"""\n',
+        ),
+        (
+            "tests/php/MultilineForgeryTest.php",
+            "<?php\nclass MultilineForgeryTest { public function testMultilineOld(): void {} }\n",
+            "<?php\n$payload = <<<'TEXT'\n# successor: testMultilineOld\n"
+            "public function testMultilineFake(): void {}\nTEXT;\n",
+        ),
+        (
+            "tests/shell/multiline_forgery_spec.sh",
+            "Describe 'multiline'\n  It 'multiline old'\n  End\nEnd\n",
+            "payload=$(cat <<'TEXT'\n# successor: multiline old\nIt 'multiline fake'\nTEXT\n)\n",
+        ),
+    ),
+    ids=("python-triple-quote", "phpunit-nowdoc", "shellspec-heredoc"),
+)
+def test_multiline_literal_cannot_forge_successor_and_declaration(
+    tmp_path: Path, path: str, before: str, forgery: str
+) -> None:
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, forgery)
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 1)
+
+
+@pytest.mark.parametrize(
+    ("path", "before", "forgery"),
+    (
+        (
+            "tests/test_multiline_declaration.py",
+            "def test_literal_old():\n    assert True\n",
+            'PAYLOAD = """\ndef test_literal_old():\n    assert False\n"""\n',
+        ),
+        (
+            "tests/php/MultilineDeclarationTest.php",
+            "<?php\nclass MultilineDeclarationTest { public function testLiteralOld(): void {} }\n",
+            "<?php\n$payload = <<<'TEXT'\npublic function testLiteralOld(): void {}\nTEXT;\n",
+        ),
+        (
+            "tests/shell/multiline_declaration_spec.sh",
+            "Describe 'multiline'\n  It 'literal old'\n  End\nEnd\n",
+            "payload=$(cat <<'TEXT'\nIt 'literal old'\nTEXT\n)\n",
+        ),
+    ),
+    ids=("python-triple-quote", "phpunit-nowdoc", "shellspec-heredoc"),
+)
+def test_multiline_literal_declaration_cannot_neutralize_retirement(
+    tmp_path: Path, path: str, before: str, forgery: str
+) -> None:
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, forgery)
+    _commit(repo)
+
+    _assert_rc(_diff(repo, base), 1)
+
+
 def test_marker_attached_to_unchanged_test_is_rejected(tmp_path: Path) -> None:
     old = "tests/test_retired_elsewhere.py"
     unchanged = "tests/test_unchanged_target.py"
@@ -701,6 +813,23 @@ def test_preexisting_marker_cannot_authorize_a_later_retirement(tmp_path: Path) 
 
     output = _assert_rc(_diff(repo, base), 1)
     assert f"{path}::test_historical_marker_old" in output, output
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ("# successor: test_whitespace_old   ", "  # successor: test_whitespace_old"),
+    ids=("trailing-space", "indent-only"),
+)
+def test_whitespace_only_change_does_not_refresh_historical_marker(tmp_path: Path, marker: str) -> None:
+    path = "tests/test_whitespace_marker.py"
+    before = "# successor: test_whitespace_old\nVALUE = 1\n\ndef test_whitespace_old():\n    assert True\n"
+    after = f"{marker}\ndef test_whitespace_new():\n    assert True\n"
+    repo, base = _repo(tmp_path, {path: before})
+    _write(repo, path, after)
+    _commit(repo)
+
+    output = _assert_rc(_diff(repo, base), 1)
+    assert f"{path}::test_whitespace_old" in output, output
 
 
 def test_marker_attached_to_non_test_declaration_is_rejected(tmp_path: Path) -> None:
@@ -1122,10 +1251,7 @@ def test_worktree_mode_accepts_staged_deletion_with_untracked_successor(tmp_path
     _assert_rc(_checker(repo, "--worktree", base), 0)
 
 
-def test_canonical_runner_executes_worktree_mode_for_uncommitted_changes(tmp_path: Path) -> None:
-    path = "tests/test_runner_worktree.py"
-    identity = f"{path}::test_runner_worktree_old"
-    repo, base = _repo(tmp_path, {path: "def test_runner_worktree_old():\n    assert True\n"})
+def _canonical_runner(tmp_path: Path, repo: Path, base: str) -> Callable[[], subprocess.CompletedProcess[bytes]]:
     stubdir = tmp_path / "runner-bin"
     stubdir.mkdir()
     python_stub = stubdir / "python3"
@@ -1169,6 +1295,15 @@ def test_canonical_runner_executes_worktree_mode_for_uncommitted_changes(tmp_pat
             check=False,
         )
 
+    return run
+
+
+def test_canonical_runner_executes_worktree_mode_for_uncommitted_changes(tmp_path: Path) -> None:
+    path = "tests/test_runner_worktree.py"
+    identity = f"{path}::test_runner_worktree_old"
+    repo, base = _repo(tmp_path, {path: "def test_runner_worktree_old():\n    assert True\n"})
+    run = _canonical_runner(tmp_path, repo, base)
+
     _remove(repo, path)
     output = _assert_rc(run(), 1)
     assert identity in output, output
@@ -1179,6 +1314,37 @@ def test_canonical_runner_executes_worktree_mode_for_uncommitted_changes(tmp_pat
 
     _write(repo, path, f"# successor: {identity}\ndef test_runner_worktree_new():\n    assert True\n")
     _assert_rc(run(), 0)
+
+
+def test_canonical_runner_accepts_only_identical_unstaged_pure_rename(tmp_path: Path) -> None:
+    old = "tests/test_runner_rename_old.py"
+    new = "tests/test_runner_rename_new.py"
+    identity = f"{old}::test_preserved"
+    source = "def test_preserved():\n    assert True\n"
+    repo, base = _repo(tmp_path, {old: source})
+    run = _canonical_runner(tmp_path, repo, base)
+    _rename(repo, old, new)
+
+    _assert_rc(run(), 0)
+
+    _write(repo, new, "def test_preserved():\n    assert False\n")
+    output = _assert_rc(run(), 1)
+    assert identity in output, output
+
+
+def test_canonical_runner_grades_unstaged_symlink_as_git_blob(tmp_path: Path) -> None:
+    path = "tests/test_runner_symlink.py"
+    identity = f"{path}::test_symlink_old"
+    source = "def test_symlink_old():\n    assert True\n"
+    repo, base = _repo(tmp_path, {path: source})
+    payload = tmp_path / "symlink-payload.py"
+    payload.write_text(source, encoding="utf-8")
+    _remove(repo, path)
+    (repo / path).symlink_to(payload)
+    run = _canonical_runner(tmp_path, repo, base)
+
+    output = _assert_rc(run(), 1)
+    assert identity in output, output
 
 
 def _job_block(workflow: str, job: str) -> str:
