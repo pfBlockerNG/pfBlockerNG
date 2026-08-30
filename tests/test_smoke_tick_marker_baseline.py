@@ -93,7 +93,7 @@ def _reboot_ledger_fixture(
             if args == (tick._PHP, tick._PFB_PHP, "tick"):
                 state["tick_calls"] += 1
                 if regenerate_cron:
-                    state["ledger"]["cron"] = {"last_run": 100, "next_due": 200, "jitter": 0}
+                    state["ledger"]["cron"] = {"last_run": 100, "next_due": 100, "jitter": 0}
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(args)
 
