@@ -46,13 +46,19 @@ EXIT STATUS
 * ``1`` -- a mutation killed nothing. That is the finding the table exists to surface
   (an unexercised branch), so it is reported in the table AND in the status.
 * ``2`` -- the table could not be produced: dirty tree, red or empty baseline, a patch
-  that does not apply, a missing or malformed report, or a revert that did not take. A
-  table that is wrong is worse than no table, so none of these fall through to 0.
+  that does not apply, a missing or malformed report, a suite that will not run, a run that
+  outlasts ``--timeout``, or a revert that did not take. A table that is wrong is worse than
+  no table, so none of these fall through to 0, and none of them is allowed to land on 1 --
+  a caller reading the contract would take that for "the table is fine, one branch is
+  unexercised" and act on a table that does not exist.
 """
 
 from __future__ import annotations
 
 import argparse
+import html
+import re
+import shlex
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -65,6 +71,23 @@ from pathlib import Path
 MAX_PATCH_LINES = 12
 
 
+class Unproducible(Exception):
+    """The table cannot be produced. Always exit 2, never 1."""
+
+
+def cell(text: str) -> str:
+    """$text as one markdown table cell, safe for arbitrary patch and test-id bytes.
+
+    A cell is split on every unescaped ``|``, INCLUDING inside a code span, so a mutation of
+    `if ($a || $b) {` -- ordinary PHP, and PHP is this tool's first subject -- silently shifts
+    the killed count into a different column. A backtick opens a code span, which lets patch
+    content inject arbitrary markdown into a PR body. HTML-escaping into a ``<code>`` element,
+    with both metacharacters replaced by entities, removes both: nothing that reaches the
+    renderer can be read as syntax.
+    """
+    return "<code>" + html.escape(text, quote=False).replace("|", "&#124;").replace("`", "&#96;") + "</code>"
+
+
 @dataclass(frozen=True)
 class Row:
     """One mutation and what it killed, as one value so they cannot drift apart."""
@@ -74,8 +97,14 @@ class Row:
     failures: list[str]
 
 
-def _run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+def _run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    """Run $argv in $cwd. A missing binary or a run past $timeout is Unproducible, not a row."""
+    try:
+        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise Unproducible(f"cannot run {argv[0]!r}: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise Unproducible(f"{argv[0]!r} outlasted --timeout={timeout}s") from exc
 
 
 def dirt(root: Path, report: Path) -> str:
@@ -89,13 +118,35 @@ def dirt(root: Path, report: Path) -> str:
     """
     status = _run(["git", "status", "--porcelain"], root)
     if status.returncode != 0:
-        raise ValueError(f"git status failed: {status.stderr.strip()}")
+        raise Unproducible(f"git status failed: {status.stderr.strip()}")
     try:
         ignore = str(report.resolve().relative_to(root))
     except ValueError:
         ignore = ""
     kept = [ln for ln in status.stdout.splitlines() if ln.strip() and ln[3:].strip('"') != ignore]
     return "\n".join(kept)
+
+
+def _require_untracked_report(root: Path, report: Path) -> None:
+    """Refuse a report path git tracks.
+
+    dirt() filters that path out of every cleanliness check and measure() unlinks it before
+    each run, so a TRACKED report would be deleted and its disappearance hidden -- the tool
+    would quietly destroy a file and still exit 0.
+    """
+    try:
+        rel = str(report.resolve().relative_to(root))
+    except ValueError:
+        return
+    tracked = _run(["git", "ls-files", "--error-unmatch", "--", rel], root)
+    if tracked.returncode == 0:
+        raise Unproducible(
+            f"{rel} is tracked by git; this script deletes the report before every run and "
+            "excludes it from every cleanliness check, so it must not be a tracked file"
+        )
+
+
+_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
 def render_patch(text: str) -> str:
@@ -105,27 +156,54 @@ def render_patch(text: str) -> str:
     the same for every mutation of one file and would bury the one or two lines that
     actually distinguish this row from its neighbours. The touched paths are kept, so a
     row still says WHERE as well as WHAT.
+
+    A ``---``/``+++`` line is a file header only OUTSIDE a hunk. Inside one it is content:
+    ``-- a comment`` is ordinary SQL, Lua and Haskell, and ``++i`` is ordinary C. Reading
+    those as headers dropped a real changed line from the label and invented a path out of
+    another -- a row that quietly described a different patch than the one applied, which is
+    the exact defect this script exists to make impossible. So the hunk headers ARE parsed,
+    for their line counts, even though they are not rendered.
     """
     paths: list[str] = []
     changes: list[str] = []
+    old_left = new_left = 0
     for line in text.splitlines():
-        if line.startswith("+++ ") and not line.startswith("+++ /dev/null"):
-            path = line[4:].strip()
-            path = path[2:] if path.startswith("b/") else path
-            if path not in paths:
-                paths.append(path)
+        if old_left <= 0 and new_left <= 0:
+            hunk = _HUNK.match(line)
+            if hunk is not None:
+                old_left = int(hunk.group(1)) if hunk.group(1) is not None else 1
+                new_left = int(hunk.group(2)) if hunk.group(2) is not None else 1
+                continue
+            if line.startswith(("--- ", "+++ ")):
+                path = line[4:].split("\t")[0].strip()
+                if path != "/dev/null":
+                    path = path[2:] if path[:2] in ("a/", "b/") else path
+                    # The new side wins when both are named; a deletion keeps the old one,
+                    # which is the only place its path appears at all.
+                    if line.startswith("+++ ") and path in paths:
+                        paths.remove(path)
+                    if path not in paths:
+                        paths.append(path)
+                continue
             continue
-        if line.startswith("--- ") or line.startswith("+++ "):
+        if line.startswith("\\"):
             continue
-        if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
-            changes.append(line.rstrip())
+        if line.startswith("-"):
+            old_left -= 1
+        elif line.startswith("+"):
+            new_left -= 1
+        else:
+            old_left -= 1
+            new_left -= 1
+            continue
+        changes.append(line.rstrip())
     if not changes:
-        raise ValueError("patch changes no lines")
+        raise Unproducible("patch changes no lines")
     if len(changes) > MAX_PATCH_LINES:
         kept = changes[:MAX_PATCH_LINES]
         kept.append(f"... and {len(changes) - MAX_PATCH_LINES} more changed lines")
         changes = kept
-    return "<br>".join(f"`{line}`" for line in [*paths, *changes])
+    return "<br>".join(cell(line) for line in [*paths, *changes])
 
 
 def parse_failures(report: Path) -> list[str]:
@@ -136,14 +214,14 @@ def parse_failures(report: Path) -> list[str]:
     that lies with a plausible number.
     """
     if not report.is_file():
-        raise ValueError(f"no JUnit report at {report}")
+        raise Unproducible(f"no JUnit report at {report}")
     raw = report.read_bytes()
     if not raw.strip():
-        raise ValueError(f"empty JUnit report at {report}")
+        raise Unproducible(f"empty JUnit report at {report}")
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as exc:
-        raise ValueError(f"malformed JUnit report at {report}: {exc}") from exc
+        raise Unproducible(f"malformed JUnit report at {report}: {exc}") from exc
     failures: list[str] = []
     for case in root.iter("testcase"):
         if case.find("failure") is None and case.find("error") is None:
@@ -157,7 +235,7 @@ def parse_failures(report: Path) -> list[str]:
 def _require_clean(root: Path, report: Path) -> None:
     residue = dirt(root, report)
     if residue:
-        raise ValueError(
+        raise Unproducible(
             "the working tree is dirty, so a table measured here would describe a state no commit contains:\n" + residue
         )
 
@@ -165,32 +243,49 @@ def _require_clean(root: Path, report: Path) -> None:
 def _head(root: Path) -> str:
     rev = _run(["git", "rev-parse", "--short", "HEAD"], root)
     if rev.returncode != 0:
-        raise ValueError(f"git rev-parse failed: {rev.stderr.strip()}")
+        raise Unproducible(f"git rev-parse failed: {rev.stderr.strip()}")
     return rev.stdout.strip()
 
 
-def measure(root: Path, suite: list[str], report: Path, patch: Path | None) -> list[str]:
+def measure(root: Path, suite: list[str], report: Path, patch: Path | None, timeout: float | None) -> list[str]:
     """Run the suite once, optionally under a patch, and return the ids that failed.
 
     The patch is reverted in a ``finally`` and the revert is VERIFIED, because a mutation
     left applied would silently label every later row with the wrong tree.
+
+    The verification RAISES rather than exiting, and only when nothing is already propagating.
+    ``sys.exit`` here exited 1 -- the status reserved for "a mutation killed nothing" -- so a
+    caller reading the documented contract would have taken a tree left dirty for a finished
+    table. Worse, raising SystemExit from a ``finally`` replaces whatever failure was already
+    on its way out, so the malformed report or the KeyboardInterrupt that caused the mess was
+    the one thing the operator never saw.
     """
     if patch is not None:
         applied = _run(["git", "apply", str(patch.resolve())], root)
         if applied.returncode != 0:
-            raise ValueError(f"{patch} does not apply: {applied.stderr.strip()}")
+            raise Unproducible(f"{patch} does not apply: {applied.stderr.strip()}")
+    failed = False
     try:
         report.unlink(missing_ok=True)
-        _run(suite, root)
+        run = _run(suite, root, timeout)
+        if not report.is_file():
+            raise Unproducible(
+                f"the suite wrote no report at {report} (exit {run.returncode}): "
+                f"{(run.stderr or run.stdout).strip()[-400:]}"
+            )
         return parse_failures(report)
+    except BaseException:
+        failed = True
+        raise
     finally:
         if patch is not None:
-            _run(["git", "apply", "-R", str(patch.resolve())], root)
+            reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
             residue = dirt(root, report)
-            if residue:
-                sys.exit(
-                    f"mutation_table.py: reverting {patch} left the tree dirty; every later "
-                    f"row would be measured under it:\n{residue}"
+            if not failed and (reverted.returncode != 0 or residue):
+                raise Unproducible(
+                    f"reverting {patch} did not take, so every later row would be measured "
+                    f"under it. git apply -R exit {reverted.returncode}: "
+                    f"{reverted.stderr.strip()}\nremaining:\n{residue or '(none)'}"
                 )
 
 
@@ -205,7 +300,7 @@ def render(head: str, suite: list[str], baseline: int, rows: list[Row]) -> str:
     ]
     for row in rows:
         killed = str(len(row.failures)) if row.failures else "**0 — nothing**"
-        tests = "<br>".join(f"`{f}`" for f in row.failures) or "_no test failed_"
+        tests = "<br>".join(cell(f) for f in row.failures) or "_no test failed_"
         out.append(f"| {row.label} | {killed} | {tests} |")
     return "\n".join(out)
 
@@ -215,30 +310,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suite", required=True, help="suite command, run from --root")
     parser.add_argument("--report", required=True, type=Path, help="JUnit path the suite writes")
     parser.add_argument("--root", default=Path.cwd(), type=Path, help="worktree to mutate")
+    parser.add_argument("--timeout", type=float, default=1800.0, help="hard cap per suite run, seconds")
     parser.add_argument("patches", nargs="+", type=Path, help="unified diffs, one per row")
     args = parser.parse_args(argv)
 
     root: Path = args.root.resolve()
     report: Path = args.report if args.report.is_absolute() else root / args.report
-    suite = args.suite.split()
+    # shlex, not split(): a suite command routinely carries a quoted argument -- PHPUnit
+    # --filter patterns do -- and a naive split turns one into several, after which the
+    # failure the operator sees is "no JUnit report" rather than "your quoting was dropped".
+    suite = shlex.split(args.suite)
 
     try:
+        if not suite:
+            raise Unproducible("--suite is empty")
+        _require_untracked_report(root, report)
         _require_clean(root, report)
         head = _head(root)
-        baseline_failures = measure(root, suite, report, None)
+        baseline_failures = measure(root, suite, report, None, args.timeout)
         if baseline_failures:
-            raise ValueError(
+            raise Unproducible(
                 "the baseline is not green, so no row could tell a killed test from an "
                 "already-dead one:\n  " + "\n  ".join(baseline_failures)
             )
         baseline_count = len(list(ET.fromstring(report.read_bytes()).iter("testcase")))
         if baseline_count == 0:
-            raise ValueError("the baseline ran no tests; the suite command selects nothing")
-        rows = [
-            Row(patch, render_patch(patch.read_text(encoding="utf-8")), measure(root, suite, report, patch))
-            for patch in args.patches
-        ]
-    except ValueError as exc:
+            raise Unproducible("the baseline ran no tests; the suite command selects nothing")
+        rows = []
+        for patch in args.patches:
+            try:
+                text = patch.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise Unproducible(f"cannot read {patch}: {exc}") from exc
+            rows.append(Row(patch, render_patch(text), measure(root, suite, report, patch, args.timeout)))
+    except Unproducible as exc:
         print(f"mutation_table.py: {exc}", file=sys.stderr)
         return 2
 
