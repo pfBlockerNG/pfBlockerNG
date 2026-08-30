@@ -224,7 +224,7 @@ exit 0
 
 
 # The fake fetch(1): one line per call in fetch-invocations.log —
-# ``pkg-log-bytes=<size of the pkg log at call time> <last non-flag argument>`` — so a
+# ``pkg-log-bytes=<size of the pkg log at call time> <URL argument>`` — so a
 # test can assert the EXACT probed URL and prove the probe ran before the first pkg
 # call (size 0). Succeeds unless ``PFB_STUB_FETCH_FAIL=1``.
 _FETCH_STUB = r"""#!/bin/sh
@@ -239,8 +239,7 @@ fi
 _url=""
 for _arg in "$@"; do
     case "${_arg}" in
-        -*) ;;
-        *) _url="${_arg}" ;;
+        *://*) _url="${_arg}" ;;
     esac
 done
 printf '%s\n' "$*" >> "${ARGV_LOG}"
@@ -881,6 +880,7 @@ def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
             "PFBLOCKERNG_ROOT": root,
             "PKG_BIN": pkg_bin,
             "FETCH_BIN": _write_fetch_stub(root),
+            "TIMEOUT_BIN": _write_timeout_stub(root),
             "PFB_BASE_URL": _BASE_URL,
             "PFB_TEST_ROOT": root,
             "PFB_STUB_INFO_MANIFEST": manifest,
@@ -1315,6 +1315,7 @@ def test_piped_invocation_leaves_pkg_stdin_empty_and_installs_a_real_hook() -> N
             "PFBLOCKERNG_ROOT": root,
             "PKG_BIN": pkg_bin,
             "FETCH_BIN": _write_fetch_stub(root),
+            "TIMEOUT_BIN": _write_timeout_stub(root),
             "PFB_BASE_URL": _BASE_URL,
             "PFB_TEST_ROOT": root,
             "PFB_STUB_INFO_MANIFEST": manifest,
@@ -2083,6 +2084,27 @@ def test_probe_requests_the_exact_generated_catalog_url_before_any_pkg_call() ->
         assert stat.S_IMODE(_conf_path(root, "stable").stat().st_mode) == 0o644, (
             "the activated repository conf must remain world-readable"
         )
+
+
+def test_activated_conf_mode_is_stable_under_restrictive_umask() -> None:
+    """Candidate activation sets the repository conf mode independently of caller umask."""
+    with tempfile.TemporaryDirectory() as root:
+        argv, env = _prepare_install(root, "stable")
+
+        def restrictive_umask() -> None:
+            os.umask(0o077)
+
+        proc = subprocess.run(
+            argv,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            preexec_fn=restrictive_umask,
+        )
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert stat.S_IMODE(_conf_path(root, "stable").stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize(
