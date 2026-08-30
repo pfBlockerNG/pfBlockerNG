@@ -28,7 +28,8 @@
 	<title>pfBlockerNG Setup</title>
 	<description>
 		<![CDATA[
-		<div style="width: 75%; height: 170px; float: left;">
+		<div class="row">
+		<div class="col-sm-9">
 			<p><h4>Welcome to pfBlockerNG!</h4></p>
 			<p>This wizard will configure an entry level configuration of pfBlockerNG for IP and DNSBL.</p>
 			<p><strong>pfBlockerNG</strong> is created by
@@ -55,9 +56,9 @@
 					<span style="color: #8B181B;" class="fa-solid fa-globe"></span> Vikash.nl - Advanced Python mode tutorial</a></li>
 			</ul>
 		</div>
-		<div style="width: 25%; height: 170px; float: right;">
+		<div class="col-sm-3" style="color-scheme: only light; text-align: center">
 			<a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">
-		<svg width="180.0pt" height="180.0pt" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="120 225 560 470" style="enable-background:new 120 225 560 470;" xml:space="preserve">
+		<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="128 172 384 384" style="display:block;margin-left:auto;margin-right:auto;width:100%;height:auto;max-width:140pt;" xml:space="preserve">
 		<style type="text/css">
 			.st0{fill:#8B181B;}
 			.st1{fill:#660818;}
@@ -114,6 +115,7 @@
 		</g>
 		<line id="XMLID_7_" class="st4" x1="260.4" y1="425.6" x2="390.9" y2="425.6"/>
 		</g></g></svg></a>
+		</div>
 		</div>
 		]]>
 	</description>
