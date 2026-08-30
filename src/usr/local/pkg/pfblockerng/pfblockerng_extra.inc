@@ -1728,8 +1728,9 @@ function pfb_cfg_registry(): array
 		// per-feed-row and per-continent keys of the same bare name (those live under
 		// dynamic config paths and stay on the foreign-key exclusion list). All eight
 		// were off-by-default in pfblockerng_dnsbl.php's own `?: ''`, so the registered
-		// '' reproduces the page exactly. pfb_determine_list_detail() reads them off the
-		// section blob through a dynamic path, which registration leaves untouched.
+		// '' reproduces the page exactly. The registered settings singleton reads through
+		// PfbConfig; only per-feed-row and per-continent namesakes remain foreign, with
+		// pfb_dnsbl_toggle_enabled() providing the shared runtime vocabulary (#2817).
 		'dnsbl/autoaddrnot_in' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
