@@ -1059,8 +1059,8 @@ strictly simpler than diffing and patching one in place, and never wrong. Key pr
   otherwise the base is read back out of the conf's own `url:`, whose canonical shape is
   `<base>/<channel>/<varver>`. Only the `<varver>` moves, so a fork site, a staging prefix
   and a smoke guest's `file://` catalogue survive a boot with no environment instead of
-  being redirected to the primary Pages site. A conf with no `url:` line at all (an
-  `install.sh` stub pending first generation) falls back to the built-in default; a `url:`
+  being redirected to the primary Pages site. A legacy or manually staged conf with no
+  `url:` line falls back to the built-in default; a `url:`
   the hook could not have written — unparseable, foreign channel segment, a varver segment
   carrying a query string, a base that is a bare scheme — leaves the conf byte-unchanged
   with a warning.
