@@ -101,11 +101,11 @@ $pconfig['log_syslog']			= PfbConfig::read('gen/log_syslog')->value;
 // the registered default ('0') applies when the key is absent (new install / upgrade).
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('gen/pfb_log_trim_margin_pct');
 
-// issue #2851: the one global nested-pass timeout (seconds). Rendered as the EFFECTIVE
-// budget -- read through the gateway (so the registered '1800' applies when absent), then
-// through the same resolver both language seams use, so a hand-edited out-of-range value
-// never renders as a number the seams would not actually run.
-$pconfig['pfb_reentry_timeout']		= (string) pfb_reentry_timeout(PfbConfig::read('gen/pfb_reentry_timeout'));
+// issue #2851: the one global nested-pass timeout (seconds). Render the EFFECTIVE
+// budget from PfbConfig::readSection()'s raw gen-section mirror, then through the same
+// mixed-safe resolver both language seams use. A field-level read has no adapter and
+// would cast hostile arrays/floats before validation.
+$pconfig['pfb_reentry_timeout']		= (string) pfb_reentry_timeout($pfb['gconfig']['pfb_reentry_timeout'] ?? NULL);
 
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight is a

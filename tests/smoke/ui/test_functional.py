@@ -897,22 +897,19 @@ NESTED_TIMEOUT_CFG = "installedpackages/pfblockerng/config/0/pfb_reentry_timeout
 
 
 @pytest.fixture
-def nested_timeout_original(webui: WebUI, smoke_vm: helpers.SmokeVM) -> Iterator[str]:
-    """Yield ``pfb_reentry_timeout``'s pre-test value, then restore it and PROVE it took.
-
-    Same order-dependency trap as ``margin_pct_original``: a silently failed restore would
-    leak a 60-second nested-pass budget into whatever runs next, where it surfaces as an
-    unrelated download timing out. The post-yield re-read fails HERE instead, naming both
-    values.
-    """
-    original = helpers.config_get(smoke_vm, NESTED_TIMEOUT_CFG) or "1800"
-    yield original
-    webui.post(GENERAL_PAGE, {"pfb_reentry_timeout": original}, timeout=SAVE_TIMEOUT)
-    restored = helpers.config_get(smoke_vm, NESTED_TIMEOUT_CFG) or "1800"
-    assert restored == original, (
-        f"pfb_reentry_timeout restore did not take: expected {original!r}, got {restored!r} "
-        f"-- a sibling test would inherit the stale budget"
-    )
+def nested_timeout_original(smoke_vm: helpers.SmokeVM) -> Iterator[str]:
+    """Yield the effective pre-test timeout, then restore exact presence and raw value."""
+    original_state = helpers.config_get_state(smoke_vm, NESTED_TIMEOUT_CFG)
+    original = original_state[1] if original_state[0] and original_state[1] else "1800"
+    try:
+        yield original
+    finally:
+        helpers.config_restore_state(smoke_vm, NESTED_TIMEOUT_CFG, original_state)
+        restored = helpers.config_get_state(smoke_vm, NESTED_TIMEOUT_CFG)
+        assert restored == original_state, (
+            f"pfb_reentry_timeout restore did not take: expected {original_state!r}, got {restored!r} "
+            f"-- a sibling test would inherit the stale budget"
+        )
 
 
 def test_general_nested_pass_timeout_accepted_bounds_persist(
