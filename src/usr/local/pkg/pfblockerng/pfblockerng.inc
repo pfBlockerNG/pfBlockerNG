@@ -11450,34 +11450,198 @@ function pfb_stop_start_unbound($type) {
 		return $final;
 	}
 
-	// FreeBSD timeout(1) foreground mode lets a successfully daemonized resolver
-	// survive. File output prevents that survivor from holding exec()'s capture pipe.
-	$timeout = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
-	$cmd = "{$timeout} --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
-		PFB_UNBOUND_START_WAIT . ' ' . PFB_UNBOUND_START_CMD . ' > ' .
-		escapeshellarg($outfile) . ' 2>&1 < /dev/null';
-	$discard = array();
-	$retval = 0;
-	$started = hrtime(TRUE);
-	if (exec($cmd, $discard, $retval) === FALSE && $retval === 0) {
+	$ready = "{$outfile}.ready";
+	$release = "{$outfile}.release";
+	$done = "{$outfile}.done";
+	$proc = NULL;
+	$pid = 0;
+	$group_ready = FALSE;
+	$retval = NULL;
+	$failure = '';
+	$expired = FALSE;
+
+	// A successful Unbound daemon creates its own session and leaves this group.
+	// Any ordinary helper stays with the launcher, so expiry can reap the whole tree.
+	$stop_group = static function (&$proc, int $pid, bool $group_ready): void {
+		if (!is_resource($proc) || $pid <= 0) {
+			return;
+		}
+		if ($group_ready) {
+			@posix_kill(-$pid, 15);
+		} else {
+			@proc_terminate($proc, 15);
+		}
+
+		$grace_deadline = hrtime(TRUE) + (PFB_HOOK_KILL_GRACE * 1000000000);
+		while (is_resource($proc) && hrtime(TRUE) < $grace_deadline) {
+			$status = @proc_get_status($proc);
+			if (!is_array($status) || !$status['running']) {
+				@proc_close($proc);
+				$proc = NULL;
+				break;
+			}
+			usleep(10000);
+		}
+		if (is_resource($proc)) {
+			if ($group_ready) {
+				@posix_kill(-$pid, 9);
+			}
+			@proc_terminate($proc, 9);
+			@proc_close($proc);
+			$proc = NULL;
+			return;
+		}
+
+		// Once the group leader is reaped, a still-live group is made solely of
+		// descendants; wait out their TERM grace, then kill any that ignored it.
+		if (!$group_ready || !@posix_kill(-$pid, 0)) {
+			return;
+		}
+		while (hrtime(TRUE) < $grace_deadline) {
+			if (!@posix_kill(-$pid, 0)) {
+				return;
+			}
+			usleep(10000);
+		}
+		@posix_kill(-$pid, 9);
+	};
+
+	try {
+		foreach (array('proc_open', 'proc_get_status', 'posix_setpgid', 'posix_getpgid', 'posix_kill') as $required) {
+			if (!function_exists($required)) {
+				throw new RuntimeException("{$required}() unavailable; Unbound start not run");
+			}
+		}
+
+		// The child establishes its own process group, publishes readiness, then waits
+		// for the parent to verify that group before executing the configured command.
+		$launcher_code =
+			'if (!posix_setpgid(0, 0)) { exit(126); } ' .
+			'$pid = getmypid(); putenv("PFB_UNBOUND_START_PGID={$pid}"); ' .
+			'$ready_tmp = $argv[1] . ".new"; ' .
+			'if (@file_put_contents($ready_tmp, (string) $pid) === FALSE || ' .
+			'!@rename($ready_tmp, $argv[1])) { exit(126); } ' .
+			'$barrier_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
+			'while (!file_exists($argv[2])) { ' .
+			'if (hrtime(TRUE) >= $barrier_deadline) { exit(125); } usleep(1000); } ' .
+			'passthru($argv[3], $status); ' .
+			'$done_tmp = $argv[5] . ".new"; ' .
+			'if (@file_put_contents($done_tmp, (string) $status) === FALSE || ' .
+			'!@rename($done_tmp, $argv[5])) { exit(126); } ' .
+			'$linger_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
+			'while (hrtime(TRUE) < $linger_deadline) { usleep(10000); } exit($status);';
+		$descriptors = array(
+			0 => array('file', '/dev/null', 'r'),
+			1 => array('file', $outfile, 'a'),
+			2 => array('file', $outfile, 'a'),
+		);
+		$pipes = array();
+		$started = hrtime(TRUE);
+		$deadline = $started + (PFB_UNBOUND_START_WAIT * 1000000000);
+		$proc = @proc_open(array(
+			PHP_BINARY,
+			'-r',
+			$launcher_code,
+			'--',
+			$ready,
+			$release,
+			PFB_UNBOUND_START_CMD,
+			(string) PFB_UNBOUND_START_WAIT,
+			$done,
+		), $descriptors, $pipes);
+		if (!is_resource($proc)) {
+			throw new RuntimeException('could not launch supervised Unbound start');
+		}
+
+		$status = proc_get_status($proc);
+		$pid = (int) $status['pid'];
+		while (!file_exists($ready)) {
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $deadline) {
+				$expired = TRUE;
+				break;
+			}
+			usleep(1000);
+		}
+
+		if ($retval === NULL && !$expired && file_exists($ready)) {
+			$published_pid = (int) trim((string) @file_get_contents($ready));
+			$group_ready = @posix_getpgid($pid) === $pid;
+			if ($published_pid !== $pid || !$group_ready) {
+				$failure = 'Unbound start process-group barrier verification failed';
+			} elseif (!@touch($release)) {
+				$failure = 'Unbound start process-group barrier release failed';
+			}
+		}
+
+		while ($retval === NULL && !$expired && $failure === '' && !file_exists($done)) {
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $deadline) {
+				$expired = TRUE;
+				break;
+			}
+			usleep(10000);
+		}
+		if ($retval === NULL && !$expired && $failure === '' && file_exists($done)) {
+			$done_status = trim((string) @file_get_contents($done));
+			if (preg_match('/^[0-9]+$/D', $done_status) !== 1) {
+				$failure = 'Unbound start completion status invalid';
+			} else {
+				$retval = (int) $done_status;
+			}
+		}
+
+		if ($expired) {
+			$group_ready = $group_ready || @posix_getpgid($pid) === $pid;
+			$stop_group($proc, $pid, $group_ready);
+			$retval = 124;
+		} elseif ($failure !== '') {
+			$group_ready = $group_ready || @posix_getpgid($pid) === $pid;
+			$stop_group($proc, $pid, $group_ready);
+			$retval = -1;
+		} elseif ($group_ready) {
+			// Reap the supervisor and any completed command's non-daemon helpers.
+			$stop_group($proc, $pid, TRUE);
+		} elseif (is_resource($proc)) {
+			@proc_close($proc);
+			$proc = NULL;
+		}
+	} catch (Throwable $error) {
+		$failure = $error->getMessage();
 		$retval = -1;
-	}
-	// GNU timeout reports 128+SIGKILL when its kill-after grace fires; FreeBSD
-	// reports 124. Only normalize a 137 that actually consumed the wall budget,
-	// preserving an unrelated immediate SIGKILL as its original status.
-	if ($retval === 137 && hrtime(TRUE) - $started >= PFB_UNBOUND_START_WAIT * 1000000000) {
-		$retval = 124;
+	} finally {
+		if (is_resource($proc)) {
+			$group_ready = $group_ready || ($pid > 0 && @posix_getpgid($pid) === $pid);
+			$stop_group($proc, $pid, $group_ready);
+		}
+		$raw = (string) @file_get_contents($outfile);
+		@unlink("{$done}.new");
+		@unlink($done);
+		@unlink($release);
+		@unlink("{$ready}.new");
+		@unlink($ready);
+		@unlink($outfile);
 	}
 
-	$raw = (string) @file_get_contents($outfile);
+	if ($failure !== '') {
+		$raw .= ($raw !== '' && !str_ends_with($raw, "\n") ? "\n" : '') . "{$failure}\n";
+		pfb_logger("\n{$failure}", 2);
+	}
 	$final['result'] = ($raw === '') ? array() : explode("\n", $raw);
 	if (end($final['result']) === '') {
 		array_pop($final['result']);
 	}
-	$final['retval'] = $retval;
-	@unlink($outfile);
+	$final['retval'] = (int) ($retval ?? -1);
 
-	if ($retval === 124) {
+	if ($final['retval'] === 124) {
 		pfb_logger("\nUnbound Resolver start TIMED OUT after " . PFB_UNBOUND_START_WAIT .
 			"s and was killed", 2);
 	}

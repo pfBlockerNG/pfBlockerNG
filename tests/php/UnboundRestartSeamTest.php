@@ -212,12 +212,16 @@ final class UnboundRestartSeamTest extends TestCase
 	public function testDaemonizedStartSurvivesTheBoundedWrapper(): void
 	{
 		$pidfile = "{$this->dir}/daemon.pid";
+		$daemonCode = '$sid = posix_setsid(); if ($sid === -1) { exit(126); } '
+			. 'file_put_contents($argv[1], (string) getmypid()); sleep(30);';
 		$script = $this->makeStartScript('daemonize.sh',
-			'sleep 30 </dev/null >/dev/null 2>&1 &' . "\n"
-			. 'printf \'%s\\n\' "$!" > "$1"' . "\n"
+			'"$2" -r ' . escapeshellarg($daemonCode) . ' "$1" </dev/null >/dev/null 2>&1 &' . "\n"
+			. 'i=0; while [ ! -s "$1" ] && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.01; done' . "\n"
+			. '[ -s "$1" ] || exit 126' . "\n"
 			. 'exit 0');
 
-		$run = $this->runIsolatedStart(escapeshellarg($script) . ' ' . escapeshellarg($pidfile));
+		$run = $this->runIsolatedStart(escapeshellarg($script) . ' ' .
+			escapeshellarg($pidfile) . ' ' . escapeshellarg(PHP_BINARY));
 		$pid = (int) trim((string) @file_get_contents($pidfile));
 		try {
 			$this->assertSame(0, $run['status'],
@@ -227,12 +231,36 @@ final class UnboundRestartSeamTest extends TestCase
 			$this->assertSame(0, $run['payload']['final']['retval'],
 				'a successfully daemonized start must remain a successful start');
 			$this->assertTrue($this->pidIsAlive($pid),
-				'--foreground must let the successfully daemonized resolver survive its launcher');
+				'a successfully daemonized resolver must escape the supervised launcher group and survive');
 		} finally {
 			$this->terminatePid($pid);
 		}
 		$this->assertFalse($this->pidIsAlive($pid),
 			'the daemon-survival row must reap its controlled survivor before returning');
+	}
+
+	public function testStartCommandRunsOnlyAfterItsProcessGroupExists(): void
+	{
+		$expectedFile = "{$this->dir}/expected.pgid";
+		$actualFile = "{$this->dir}/actual.pgid";
+		$script = $this->makeStartScript('record-pgid.sh',
+			'printf \'%s\\n\' "$PFB_UNBOUND_START_PGID" > "$1"' . "\n"
+			. 'ps -o pgid= -p "$$" | tr -d \' \' > "$2"' . "\n"
+			. 'exit 0');
+
+		$run = $this->runIsolatedStart(escapeshellarg($script) . ' '
+			. escapeshellarg($expectedFile) . ' ' . escapeshellarg($actualFile));
+		$expected = trim((string) @file_get_contents($expectedFile));
+		$actual = trim((string) @file_get_contents($actualFile));
+
+		$this->assertSame(0, $run['status'],
+			'the process-group runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(0, $run['payload']['final']['retval']);
+		$this->assertMatchesRegularExpression('/^[1-9][0-9]*$/', $expected,
+			'RED issue #2882: the launcher must publish its group only after setpgid succeeds');
+		$this->assertSame($expected, $actual,
+			'the start command must not execute until it is inside the launcher process group');
 	}
 
 	public function testTermIgnoringStartExpiresObservablyAndLeavesNoProcess(): void
@@ -263,6 +291,45 @@ final class UnboundRestartSeamTest extends TestCase
 			$run['payload']['errlog'], 'expiry must be explicit in the error log');
 		$this->assertFalse($alive,
 			'the SIGKILL grace must leave no TERM-ignoring transient start process behind');
+	}
+
+	public function testExpiryReapsTermIgnoringLauncherAndDescendant(): void
+	{
+		$launcherFile = "{$this->dir}/launcher.pid";
+		$helperFile = "{$this->dir}/helper.pid";
+		$script = $this->makeStartScript('term-ignoring-tree.sh',
+			'trap \'\' TERM' . "\n"
+			. 'printf \'%s\\n\' "$$" > "$1"' . "\n"
+			. '(' . "\n"
+			. "\ttrap '' TERM\n"
+			. "\texec sleep 30\n"
+			. ') &' . "\n"
+			. 'helper=$!' . "\n"
+			. 'printf \'%s\\n\' "$helper" > "$2"' . "\n"
+			. 'wait "$helper"');
+
+		$run = $this->runIsolatedStart(escapeshellarg($script) . ' '
+			. escapeshellarg($launcherFile) . ' ' . escapeshellarg($helperFile));
+		$launcher = (int) trim((string) @file_get_contents($launcherFile));
+		$helper = (int) trim((string) @file_get_contents($helperFile));
+		$launcherAlive = $this->pidIsAlive($launcher);
+		$helperAlive = $this->pidIsAlive($helper);
+		if ($launcherAlive) {
+			$this->terminatePid($launcher);
+		}
+		if ($helperAlive) {
+			$this->terminatePid($helper);
+		}
+
+		$this->assertSame(0, $run['status'],
+			'the process-tree expiry runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(124, $run['payload']['final']['retval'],
+			'the process-tree expiry must preserve the retry-triggering timeout status');
+		$this->assertFalse($launcherAlive,
+			'the direct TERM-ignoring launcher must be absent after kill grace');
+		$this->assertFalse($helperAlive,
+			'RED issue #2882: expiry must kill the launcher process group, not orphan its TERM-ignoring helper');
 	}
 
 	public function testImmediateNonZeroStartPreservesStatusAndOutput(): void
@@ -329,11 +396,15 @@ final class UnboundRestartSeamTest extends TestCase
 			'no branch may reach the daemon binary except through PFB_UNBOUND_START_CMD');
 		$this->assertStringContainsString('$i <= PFB_UNBOUND_STOP_WAIT;', $body,
 			'the stop-wait budget must come from the constant, not a literal');
-		$this->assertStringContainsString('--foreground -s TERM -k ', $body,
-			'the start wait must let a daemonized resolver survive and still kill a stuck launcher');
+		$this->assertStringContainsString('posix_setpgid(0, 0)', $body,
+			'the start command must enter its own process group before the release barrier opens');
+		$this->assertStringContainsString('posix_kill(-$pid', $body,
+			'expiry must signal the whole launcher group, not only its direct process');
 		$this->assertStringContainsString('PFB_UNBOUND_START_WAIT', $body,
 			'the start wait must consume its configured finite budget');
-		$this->assertStringContainsString(' 2>&1 < /dev/null', $body,
-			'a daemon must inherit a regular output file, never exec() capture pipes');
+		$this->assertStringContainsString("0 => array('file', '/dev/null', 'r')", $body,
+			'the supervised launcher must read from /dev/null');
+		$this->assertStringContainsString("1 => array('file', \$outfile, 'a')", $body,
+			'a daemon must inherit a regular output file, never proc_open() pipes');
 	}
 }
