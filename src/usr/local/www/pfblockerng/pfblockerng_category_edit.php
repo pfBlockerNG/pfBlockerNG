@@ -948,9 +948,11 @@ if ($_POST && isset($_POST['save'])) {
 		$runtime_model = pfb_schedule_runtime_config();
 		$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
 		$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
-		$cache_ok = pfb_schedule_cache_candidate_validate($runtime_model, $runtime_state, $runtime_timezone);
+		// issue #2888: name which check failed, as the General page does; the helper logs it.
+		$cache_stage = pfb_schedule_cache_candidate_stage($runtime_model, $runtime_state, $runtime_timezone);
+		$cache_ok = $cache_stage === '';
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		$failure = $cache_ok ? '' : '&schcache=failed';
+		$failure = $cache_ok ? '' : '&schcache=failed&schstage=' . $cache_stage;
 		header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
 		exit;
 	}
@@ -1095,7 +1097,10 @@ if (isset($_REQUEST['savemsg']) && is_string($_REQUEST['savemsg'])) {
 }
 
 if (($_GET['schcache'] ?? '') === 'failed') {
-	print_info_box('Settings remain saved, but schedule-cache candidate generation failed. This is likely a package bug; manual updates remain available as a temporary workaround.', 'warning');
+	print_info_box(sprintf(gettext('Settings remain saved, but schedule-cache candidate generation failed: %s. '
+		. 'The system log records the detail under pfBlockerNG. Manual updates remain available.'),
+		pfb_schedule_cache_stage_label(is_string($_GET['schstage'] ?? NULL) ? $_GET['schstage'] : '')),
+		'warning');
 }
 
 $form = new Form("Save {$type} Settings");

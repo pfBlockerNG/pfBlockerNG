@@ -5536,24 +5536,25 @@ function pfb_general_schedule_save_redirect(
 	return $cache_ok ? '/pfblockerng/pfblockerng_general.php' : $failure_redirect;
 }
 
-/** Validate a disposable schedule-cache candidate without touching the active cache. */
-function pfb_schedule_cache_candidate_validate(
+/**
+ * Name the stage that failed while validating a disposable candidate, or '' when it
+ * published cleanly. Owns the temporary directory; the checks themselves belong to
+ * pfb_schedule_cache_stage(), so both pages report the same vocabulary.
+ */
+function pfb_schedule_cache_candidate_stage(
 	?array $model,
 	?array $state,
 	mixed $timezone,
 	?int $now = NULL,
 	array $io = []
-): bool {
-	if (!$model || !$state) {
-		return FALSE;
-	}
+): string {
 	if (!($timezone instanceof DateTimeZone) && !is_string($timezone)) {
-		return FALSE;
+		return 'timezone';
 	}
 	try {
 		$timezone = $timezone instanceof DateTimeZone ? $timezone : new DateTimeZone($timezone);
 	} catch (Throwable) {
-		return FALSE;
+		return 'timezone';
 	}
 	$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
 	$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
@@ -5563,14 +5564,16 @@ function pfb_schedule_cache_candidate_validate(
 			$candidate_dir = '';
 		}
 	}
-	$ok = FALSE;
+	// Never stage into the active cache: a collision would publish over it.
+	$active_dir = is_string($io['active_dir'] ?? NULL) ? rtrim($io['active_dir'], '/') : '';
+	if ($active_dir !== '' && $candidate_dir === $active_dir) {
+		$candidate_dir = '';
+	}
+	$stage = 'workdir';
 	try {
-		$active_dir = is_string($io['active_dir'] ?? NULL) ? rtrim($io['active_dir'], '/') : '';
-		$ok = $candidate_dir !== '' && ($active_dir === '' || $candidate_dir !== $active_dir)
-			&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir, $io)
-			&& pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) !== NULL;
+		$stage = pfb_schedule_cache_stage($model, $state, $timezone, $candidate_dir, $now, $io);
 	} catch (Throwable) {
-		$ok = FALSE;
+		$stage = 'refresh';
 	} finally {
 		if ($candidate_dir !== '') {
 			foreach (scandir($candidate_dir) ?: [] as $artifact) {
@@ -5581,7 +5584,22 @@ function pfb_schedule_cache_candidate_validate(
 			@rmdir($candidate_dir);
 		}
 	}
-	return $ok;
+	if ($stage !== '') {
+		logger(LOG_NOTICE, localize_text('Schedule: candidate cache generation failed - %s',
+			pfb_schedule_cache_stage_label($stage)), LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+	return $stage;
+}
+
+/** Validate a disposable schedule-cache candidate without touching the active cache. */
+function pfb_schedule_cache_candidate_validate(
+	?array $model,
+	?array $state,
+	mixed $timezone,
+	?int $now = NULL,
+	array $io = []
+): bool {
+	return pfb_schedule_cache_candidate_stage($model, $state, $timezone, $now, $io) === '';
 }
 
 /** Regenerate the disposable schedule cache without starting update work. */
