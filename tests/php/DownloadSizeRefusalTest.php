@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+
 /**
  * Issue #2658 — an over-large feed body is refused at download, once.
  *
@@ -134,10 +136,17 @@ final class DownloadSizeRefusalTest extends TestCase
 		$router = "{$this->workdir}/router.php";
 		$routerSrc = <<<'PHP'
 <?php
-file_put_contents(getenv('REQ_LOG'), ($_SERVER['REQUEST_URI'] ?? '') . PHP_EOL, FILE_APPEND);
+$uri = $_SERVER['REQUEST_URI'] ?? '';
+if (str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+		echo getenv('READY_TOKEN');
+	}
+	return;
+}
+file_put_contents(getenv('REQ_LOG'), $uri . PHP_EOL, FILE_APPEND);
 $chunk = str_repeat('A', 1024);
 header('Content-Type: text/plain');
-if (str_starts_with($_SERVER['REQUEST_URI'] ?? '', '/declared')) {
+if (str_starts_with($uri, '/declared')) {
 	header('Content-Length: ' . (string) (4 * 1024));
 }
 for ($i = 0; $i < 4; $i++) {
@@ -147,33 +156,50 @@ for ($i = 0; $i < 4; $i++) {
 PHP;
 		$this->assertNotFalse(file_put_contents($router, $routerSrc));
 
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
 			$port = random_int(20000, 60000);
+			$nonce = bin2hex(random_bytes(16));
+			$stderr = "{$this->workdir}/server-{$port}-{$try}.stderr";
 			$proc = proc_open(
 				['php', '-S', "127.0.0.1:{$port}", $router],
-				$descriptors,
+				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
-				['REQ_LOG' => "{$this->workdir}/requests.log", 'PATH' => (string) getenv('PATH')]
+				[
+					'REQ_LOG' => "{$this->workdir}/requests.log",
+					'READY_TOKEN' => $nonce,
+					'PATH' => (string) getenv('PATH'),
+				]
 			);
 			if (!is_resource($proc)) {
+				$failures[] = "port {$port}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
 			for ($i = 0; $i < 40; $i++) {
-				$sock = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.05);
-				if ($sock !== FALSE) {
-					fclose($sock);
+				if (pfb_test_http_fixture_event_received($port, $nonce)) {
 					$this->server = $proc;
 					$this->port = $port;
 					return;
 				}
 				usleep(50000);
 			}
-			proc_terminate($proc);
-			proc_close($proc);
+			$status = proc_get_status($proc);
+			if ($status['running']) {
+				proc_terminate($proc);
+			}
+			$closeExit = proc_close($proc);
+			$stderrText = trim((string) @file_get_contents($stderr));
+			$failures[] = sprintf(
+				'port %d: process[running=%s exit=%d close=%d] stderr=%s',
+				$port,
+				$status['running'] ? 'true' : 'false',
+				$status['exitcode'],
+				$closeExit,
+				$stderrText === '' ? '(empty)' : $stderrText
+			);
 		}
-		$this->fail('could not start the php -S fixture server');
+		$this->fail('could not start the php -S fixture server; ' . implode(' | ', $failures));
 	}
 
 	/** @return int the number of requests the fixture server saw */

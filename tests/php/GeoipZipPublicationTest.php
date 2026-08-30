@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+
 /**
  * GeoIP ZIP downloads publish every safe archive member to the directory
  * target and never create TOP1M detector artifacts.
@@ -110,25 +112,40 @@ final class GeoipZipPublicationTest extends TestCase
 	private function downloadGeoip(string $source, string $base, string $target): PfbDownloadResult
 	{
 		$router = "{$this->dir}/router.php";
-		$this->assertNotFalse(file_put_contents($router, "<?php\nreadfile(" . var_export($source, TRUE) . ");\n"));
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$routerSrc = <<<'PHP'
+<?php
+$uri = $_SERVER['REQUEST_URI'] ?? '';
+if (str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+		echo getenv('READY_TOKEN');
+	}
+	return;
+}
+readfile(%s);
+PHP;
+		$this->assertNotFalse(file_put_contents($router, sprintf($routerSrc, var_export($source, TRUE))));
+		$failures = [];
 		$port = 0;
 		for ($try = 0; $try < 10 && $port === 0; $try++) {
 			$candidate = random_int(20000, 60000);
+			$nonce = bin2hex(random_bytes(16));
+			$stderr = "{$this->dir}/server-{$candidate}-{$try}.stderr";
 			$proc = proc_open(
 				['php', '-S', "127.0.0.1:{$candidate}", $router],
-				$descriptors,
+				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->dir,
-				['PATH' => (string) getenv('PATH')]
+				[
+					'READY_TOKEN' => $nonce,
+					'PATH' => (string) getenv('PATH'),
+				]
 			);
 			if (!is_resource($proc)) {
+				$failures[] = "port {$candidate}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
 			for ($poll = 0; $poll < 40; $poll++) {
-				$sock = @fsockopen('127.0.0.1', $candidate, $errno, $errstr, 0.05);
-				if ($sock !== FALSE) {
-					fclose($sock);
+				if (pfb_test_http_fixture_event_received($candidate, $nonce)) {
 					$this->server = $proc;
 					$port = $candidate;
 					break;
@@ -136,12 +153,26 @@ final class GeoipZipPublicationTest extends TestCase
 				usleep(50000);
 			}
 			if ($port === 0) {
-				proc_terminate($proc);
-				proc_close($proc);
+				$status = proc_get_status($proc);
+				if ($status['running']) {
+					proc_terminate($proc);
+				}
+				$closeExit = proc_close($proc);
+				$stderrText = trim((string) @file_get_contents($stderr));
+				$failures[] = sprintf(
+					'port %d: process[running=%s exit=%d close=%d] stderr=%s',
+					$candidate,
+					$status['running'] ? 'true' : 'false',
+					$status['exitcode'],
+					$closeExit,
+					$stderrText === '' ? '(empty)' : $stderrText
+				);
 			}
 		}
 		if ($port === 0) {
-			$this->markTestSkipped('loopback HTTP fixture unavailable');
+			$this->markTestSkipped(
+				'loopback HTTP fixture unavailable; ' . implode(' | ', $failures)
+			);
 		}
 		return pfb_download(new PfbDownloadRequest(
 			"http://127.0.0.1:{$port}/feed",
