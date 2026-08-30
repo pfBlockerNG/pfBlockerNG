@@ -2586,20 +2586,17 @@ def test_group_action_validator_is_strict_on_appliance(smoke_vm: SmokeVM, webui:
     )
 
 
-# The welcome step carries the second copy of the Support logo (issue #2863). Step 1 is
-# the first <step> in pfblockerng_wizard.xml -> stepid=0.
+# The welcome step carries the second copy of the Support logo (issue #2863); it is the
+# first <step> in pfblockerng_wizard.xml, so stepid=0.
 _WIZARD_WELCOME_STEP = "/wizard.php?xml=pfblockerng_wizard.xml&stepid=0"
 
 
 def test_wizard_welcome_step_renders_the_fluid_support_logo(
     webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """Issue #2863: the wizard's Support logo renders responsively and unclipped.
+    """The wizard's Support logo renders responsively and unclipped (issue #2863).
 
-    The wizard carried a fixed float column and a viewBox whose y-origin cut ~45 units off
-    the top of the circle, months after the General page was fixed, because only the General
-    page was pinned. Asserts the shipped step actually renders the corrected construction --
-    the PHP pin proves the source, this proves it reaches the browser.
+    The viewBox must contain the circle and the column must be fluid, as shipped.
     """
     resp = webui.get(_WIZARD_WELCOME_STEP)
     # The step's own <title>, not a generic marker: this PR makes the wizard logo markup
