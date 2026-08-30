@@ -130,6 +130,9 @@ final class ThemeSafetyUiTest extends TestCase
 			'same level in that group'  => ['$s = "foo({background-color: \'#123456\', color: \'red\'})";', TRUE],
 			'subgroup of that group'    => ['$s = "foo({background-color: \'#123456\', sub: {color: \'red\'}})";', FALSE],
 			'stylesheet is an attribute'=> ['$s = "<div stylesheet=\"color: red;\"></div> background-color: #123456;";', FALSE],
+			// A quoted brace desynchronises the depth count; the surviving cuts must still
+			// leave the background's own scope standing.
+			'quoted brace desync'       => ['$s = "foo({background-color: \'#123456\', n1: \'{\', n2: \'{\', sub: {color: \'red\'}})";', FALSE],
 			// The two fallbacks, each pinned by a pairing further away than the window.
 			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
 			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
