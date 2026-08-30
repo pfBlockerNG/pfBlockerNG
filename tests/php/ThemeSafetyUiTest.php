@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -79,6 +80,42 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 	}
 
+	/**
+	 * Every syntax scan() detects, in its unpaired and paired form.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function backgroundSyntaxes(): array
+	{
+		return [
+			'css declaration'   => ['a { background-color: #fff; }', 'a { background-color: #fff; color: #000; }'],
+			'css shorthand'     => ['a { background: #fff; }', 'a { background: #fff; color: #000; }'],
+			'js bare key'       => ['{ backgroundColor: "#fff" }', '{ backgroundColor: "#fff", color: "#000" }'],
+			'js quoted key'     => ['{ "background-color": "#fff" }', '{ "background-color": "#fff", "color": "#000" }'],
+			'js quoted camel'   => ['{ "backgroundColor": "#fff" }', '{ "backgroundColor": "#fff", "color": "#000" }'],
+			'jquery setter'     => ["\$(x).css('background-color', '#fff');", "\$(x).css({'background-color': '#fff', 'color': '#000'});"],
+			'jquery camel'      => ["\$(x).css('backgroundColor', '#fff');", "\$(x).css({'backgroundColor': '#fff', 'color': '#000'});"],
+			'setProperty'       => ["e.style.setProperty('background-color', '#fff');", "e.style.setProperty('background-color', '#fff'); e.style.setProperty('color', '#000');"],
+			'style assignment'  => ["e.style.backgroundColor = '#fff';", "e.style.backgroundColor = '#fff'; e.style.color = '#000';"],
+		];
+	}
+
+	/**
+	 * scan()'s background vocabulary and contextHasForeground()'s foreground vocabulary are
+	 * separate patterns that must agree. They have drifted apart twice (issue #2864): once
+	 * leaving a form undetected, once rejecting a form that was correctly paired. Every
+	 * detected syntax is exercised BOTH ways here, so a future addition to one pattern that
+	 * is not mirrored in the other fails instead of shipping.
+	 */
+	#[DataProvider('backgroundSyntaxes')]
+	public function testEveryDetectedFormIsAlsoRecognisedWhenPaired(string $unpaired, string $paired): void
+	{
+		$this->assertNotSame([], self::scan($unpaired),
+			'scan() must detect this background syntax: ' . $unpaired);
+		$this->assertSame([], self::scan($paired),
+			'contextHasForeground() must accept the pairing idiom native to this syntax: ' . $paired);
+	}
+
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
 	{
 		$root = dirname(__DIR__, 2);
@@ -142,10 +179,10 @@ final class ThemeSafetyUiTest extends TestCase
 		if (preg_match_all(
 			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
 			. '|backgroundColor\s*:\s*(?<jsq>["\'])(?<js>[^"\']+)\k<jsq>'
-			. '|(?<objq>["\'])background(?:-color|Color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*)\k<objvq>'
-			. '|(?:\.css|setProperty)\(\s*(?<setq>["\'])background(?:-color|Color)?\k<setq>\s*,\s*'
-			. '(?<setvq>["\'])(?<set>[^"\']*)\k<setvq>'
-			. '|\.style\.backgroundColor\s*=\s*(?<domq>["\'])(?<dom>[^"\']*)\k<domq>/i',
+			. '|(?<objq>["\'])background(?:-color|Color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*+)\k<objvq>'
+			. '|(?<![A-Za-z0-9_])(?:\.css|setProperty)\(\s*(?<setq>["\'])background(?:-color|Color)?\k<setq>\s*,\s*'
+			. '(?<setvq>["\'])(?<set>[^"\']*+)\k<setvq>'
+			. '|\.style\.backgroundColor\s*=\s*(?<domq>["\'])(?<dom>[^"\']*+)\k<domq>/i',
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
@@ -250,9 +287,15 @@ final class ThemeSafetyUiTest extends TestCase
 
 	private static function contextHasForeground(string $ctx): bool
 	{
-		// The optional quote matches an object property ("color": "white") as well as a
-		// declaration; the lookbehind still excludes background-color in either form.
-		return (bool)preg_match('/(?<![A-Za-z-])color["\']?\s*:/i', $ctx);
+		// Every way a foreground can be set must be recognised here, or code paired through
+		// a form scan() detects but this does not reports as a violation. The two
+		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
+		return (bool)preg_match(
+			'/(?<![A-Za-z-])color["\']?\s*:'
+			. '|(?<![A-Za-z-])color\s*='
+			. '|setProperty\(\s*["\']color["\']/i',
+			$ctx
+		);
 	}
 
 	private static function themeRootPinsForeground(string $source, int $offset): bool
