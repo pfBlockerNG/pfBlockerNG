@@ -228,7 +228,7 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
-          RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
+          RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}-php${{ matrix.php_version }}-${{ matrix.py_flavor }}
           PORTS_REPO: ${{ env.PORTS_REPO }}
         run: |
           set -eu
@@ -344,7 +344,7 @@ jobs:
       - name: Upload verified build
         uses: actions/upload-artifact@v7
         with:
-          name: nightly-result-${{ matrix.freebsd_major }}
+          name: nightly-result-${{ matrix.freebsd_major }}-php${{ matrix.php_version }}-${{ matrix.py_flavor }}
           path: result
           if-no-files-found: error
           retention-days: 14
