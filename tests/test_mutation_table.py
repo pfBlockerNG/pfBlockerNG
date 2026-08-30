@@ -210,12 +210,41 @@ def test_parse_failures_survives_shellspecs_illegal_control_byte(tmp_path: Path)
 
     check_skip_allowlist.py scrubs it, and this file claims that file's convention. Refusing
     a report the sibling reads fine would make the claim wider than the parser.
+
+    It must SUBSTITUTE, not delete, for the same reason the sibling does: deleting collapses
+    `a\x01b` and `ab` into one id, and two genuinely different failing tests then arrive in
+    the table indistinguishable from each other.
     """
     report = tmp_path / "r.xml"
     report.write_bytes(
-        b'<testsuites><testsuite><testcase classname="C" name="wi\x01th"><failure/></testcase></testsuite></testsuites>'
+        b"<testsuites><testsuite>"
+        b'<testcase classname="C" name="wi\x01th"><failure/></testcase>'
+        b'<testcase classname="C" name="with"><failure/></testcase>'
+        b"</testsuite></testsuites>"
     )
-    assert mt.parse_failures(report) == ["C::with"]
+    found = mt.parse_failures(report)
+    assert found == ["C::wi?th", "C::with"], found
+    assert len(set(found)) == 2, f"the scrub collapsed two distinct ids: {found}"
+
+
+def test_a_newline_in_a_test_id_cannot_end_the_row(tmp_path: Path) -> None:
+    """A JUnit writer keeps an intentional newline in an attribute as `&#10;`.
+
+    A raw newline in an attribute is whitespace-normalised away, so `&#10;` is how a
+    compliant writer preserves one -- and the parser hands it back as a real newline, which
+    ends the markdown row outright. Same threat as the pipe and the backtick, different
+    character.
+    """
+    report = tmp_path / "r.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="C" name="a&#10;b"><failure/></testcase></testsuite></testsuites>',
+        encoding="utf-8",
+    )
+    (found,) = mt.parse_failures(report)
+    assert "\n" in found, found
+    rendered = mt.cell(found)
+    assert "\n" not in rendered and "\r" not in rendered, repr(rendered)
+    assert "&#10;" in rendered, rendered
 
 
 @pytest.mark.parametrize(
@@ -368,6 +397,54 @@ def test_a_suite_that_cannot_run_is_refused_rather_than_reported_as_a_kill(repo:
     result = _run(repo, killing_patch, suite="no-such-suite-binary-xyz")
     assert result.returncode == 2, f"rc={result.returncode}\n{result.stderr}"
     assert "cannot run" in result.stderr, result.stderr
+
+
+def test_a_quoted_suite_argument_survives_parsing(repo: Path, killing_patch: Path) -> None:
+    """A suite command routinely carries a quoted argument -- PHPUnit `--filter` patterns do.
+
+    The suite here refuses to run unless it received EXACTLY ONE argument, so a naive
+    `.split()` -- which turns `'one arg with spaces'` into four -- makes the baseline red and
+    the run exit 2. Under `shlex` it is one argument, the baseline is green, and the mutation
+    is measured normally.
+    """
+    (repo / "suite.sh").write_text(
+        "#!/bin/sh\n"
+        '[ "$#" -eq 1 ] || { cat fail.xml > report.xml; exit 0; }\n'
+        "if grep -q GUARD guard.txt; then cat pass.xml > report.xml;\n"
+        "else cat fail.xml > report.xml; fi\n",
+        encoding="utf-8",
+    )
+    _git(repo, "commit", "-qam", "a suite that requires exactly one argument")
+    result = _run(repo, killing_patch, suite="sh suite.sh 'one arg with spaces'")
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "<code>+MUTATED</code>" in result.stdout, result.stdout
+
+
+def test_a_suite_that_outlasts_the_timeout_is_refused(repo: Path, killing_patch: Path) -> None:
+    """No orphaned waits: a hanging suite must not hang the tool with a mutation applied."""
+    (repo / "suite.sh").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "a suite that hangs")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--suite",
+            "sh suite.sh",
+            "--report",
+            "report.xml",
+            "--root",
+            str(repo),
+            "--timeout",
+            "1",
+            str(killing_patch),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 2, f"rc={result.returncode}\n{result.stderr}"
+    assert "outlasted --timeout" in result.stderr, result.stderr
 
 
 def test_a_tracked_report_is_refused(repo: Path, killing_patch: Path) -> None:

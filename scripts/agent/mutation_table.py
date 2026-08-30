@@ -78,7 +78,9 @@ MAX_PATCH_LINES = 12
 # design). Such a byte has no legal XML representation, so a strict parse of shellspec's
 # REAL report always raises. Same scrub, same reason, as scripts/check_skip_allowlist.py --
 # claiming that file's convention while refusing a report it accepts would be a narrower
-# parser wearing a wider claim.
+# parser wearing a wider claim. It SUBSTITUTES rather than deletes, for the same reason the
+# sibling does: deleting collapses `a\x01b` and `ab` into one id, so two genuinely different
+# failing tests become indistinguishable in the table.
 _XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
@@ -92,11 +94,16 @@ def cell(text: str) -> str:
     A cell is split on every unescaped ``|``, INCLUDING inside a code span, so a mutation of
     `if ($a || $b) {` -- ordinary PHP, and PHP is this tool's first subject -- silently shifts
     the killed count into a different column. A backtick opens a code span, which lets patch
-    content inject arbitrary markdown into a PR body. HTML-escaping into a ``<code>`` element,
-    with both metacharacters replaced by entities, removes both: nothing that reaches the
-    renderer can be read as syntax.
+    content inject arbitrary markdown into a PR body. And a NEWLINE ends the row outright: a
+    JUnit writer preserves an intentional newline in an attribute as ``&#10;``, because a raw
+    one is whitespace-normalised away, and the parser hands it back as a real newline. All
+    four become entities inside an HTML-escaped ``<code>`` element, so nothing that reaches
+    the renderer can be read as syntax or as structure.
     """
-    return "<code>" + html.escape(text, quote=False).replace("|", "&#124;").replace("`", "&#96;") + "</code>"
+    escaped = html.escape(text, quote=False)
+    for raw, entity in (("|", "&#124;"), ("`", "&#96;"), ("\r", "&#13;"), ("\n", "&#10;")):
+        escaped = escaped.replace(raw, entity)
+    return "<code>" + escaped + "</code>"
 
 
 @dataclass(frozen=True)
@@ -231,7 +238,7 @@ def parse_failures(report: Path) -> list[str]:
     if not raw.strip():
         raise Unproducible(f"empty JUnit report at {report}")
     try:
-        root = ET.fromstring(_XML_ILLEGAL_CONTROL.sub(b"", raw))
+        root = ET.fromstring(_XML_ILLEGAL_CONTROL.sub(b"?", raw))
     except ET.ParseError as exc:
         raise Unproducible(f"malformed JUnit report at {report}: {exc}") from exc
     failures: list[str] = []
@@ -288,6 +295,15 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
     finally:
         if patch is not None:
             reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
+            if reverted.returncode != 0:
+                # Cannot raise here without replacing the exception on its way out, and
+                # cannot stay silent either: the tree is left mutated and every later row
+                # would be measured under it. Say so on stderr, let the original through.
+                print(
+                    f"mutation_table.py: WARNING: {patch} did not revert (git apply -R exit "
+                    f"{reverted.returncode}): {reverted.stderr.strip()}",
+                    file=sys.stderr,
+                )
     # Reached only when nothing was propagating, which is the point: verifying inside the
     # `finally` meant a failure HERE replaced whatever failure was already on its way out,
     # so the malformed report that caused the mess was the one thing never reported.
