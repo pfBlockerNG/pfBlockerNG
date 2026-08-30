@@ -640,36 +640,40 @@ final class Top1mDccDetectorTest extends TestCase
 	public function testScheduledDccReportsChangeWithoutBackgroundDispatch(): void
 	{
 		$dispatch_log = "{$this->dir}/scheduled-dispatch.log";
+		$dispatch_started = "{$this->dir}/scheduled-dispatch.started";
 		$dispatch_fifo = "{$this->dir}/scheduled-dispatch.fifo";
 		$this->openDispatchSignal($dispatch_fifo);
 		$fake_php = $this->dispatchFixture('fake-php-scheduled', $dispatch_log, $dispatch_fifo);
+		// The foreground marker closes the negative race: the command shell must write
+		// it before starting the background fixture, and exec() waits for that shell.
+		$dispatch_command = "printf 'dispatch-started\\n' >> " . escapeshellarg($dispatch_started)
+			. ' || exit $?; ' . escapeshellarg($fake_php);
 		$saved_argv = $GLOBALS['argv'];
 		$saved = $GLOBALS['pfb'];
 		try {
 			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc', 'scheduled'];
-			$GLOBALS['pfb']['php'] = $fake_php;
+			$GLOBALS['pfb']['php'] = $dispatch_command;
 			$GLOBALS['pfb']['runlog'] = '/dev/null';
 			$GLOBALS['pfb']['top1m_changed'] = TRUE;
 			unset($GLOBALS['pfb']['top1m_dispatch_done']);
 
 			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE, FALSE));
-			// Scheduled mode returns before the seam's exec(), so there is no child and no
-			// event to wait for -- the wall-clock spin this replaced only slowed the suite.
-			$this->assertFileDoesNotExist($dispatch_log);
+			$this->assertFileDoesNotExist(
+				$dispatch_started,
+				'scheduled mode must not enter the background dispatch command'
+			);
 
-			// The probe below runs the SAME fixture synchronously, which makes it both the
-			// vacuity guard (the absence above is the seam's decision, not an inert fixture)
-			// and a barrier: anything the seam had dispatched would already be in the log
-			// beside it, so the exact line count is what pins "scheduled mode does not
-			// dispatch" -- with more margin than the deleted spin ever had.
+			// Run the same command synchronously as a vacuity check for both observables.
 			$probe_output = [];
 			$probe_status = -1;
-			exec(escapeshellarg($fake_php) . ' scheduled-vacuity-probe', $probe_output, $probe_status);
+			exec($dispatch_command . ' scheduled-vacuity-probe', $probe_output, $probe_status);
 			$this->assertSame(0, $probe_status, 'the dispatch fixture must be runnable: ' . implode("\n", $probe_output));
+			$started = file($dispatch_started, FILE_IGNORE_NEW_LINES);
+			$this->assertIsArray($started, 'the command marker must be writable');
+			$this->assertSame(['dispatch-started'], $started, 'the vacuity probe must be the only command launch');
 			$lines = file($dispatch_log, FILE_IGNORE_NEW_LINES);
-			$this->assertIsArray($lines, 'the fixture must be able to create the log this test asserts absent');
-			$this->assertCount(1, $lines, 'scheduled mode must not have dispatched: ' . implode(' | ', $lines ?: []));
-			$this->assertStringContainsString('scheduled-vacuity-probe', $lines[0]);
+			$this->assertIsArray($lines, 'the fixture must be able to create its behavior log');
+			$this->assertSame(['scheduled-vacuity-probe'], $lines, 'scheduled mode must not have dispatched');
 		} finally {
 			$GLOBALS['argv'] = $saved_argv;
 			$GLOBALS['pfb'] = $saved;
@@ -777,8 +781,8 @@ final class Top1mDccDetectorTest extends TestCase
 		$except = NULL;
 		$ready = stream_select($read, $write, $except, self::DISPATCH_SALVAGE_SECONDS);
 		$this->assertSame(1, $ready, sprintf(
-			'STUCK/ENVIRONMENT: the dispatched fixture never reported in within %ds, so this '
-			. 'run is stuck or its host starved the child -- not a TOP1M dispatch verdict',
+			'STUCK/ENVIRONMENT: the dispatch fixture never reported in within %ds; this run '
+			. 'is stuck, its host starved the child, or the seam never launched its dispatch',
 			self::DISPATCH_SALVAGE_SECONDS
 		));
 		$this->assertSame("dispatched\n", fgets($signal), 'the dispatch signal must carry the fixture poke');
