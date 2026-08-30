@@ -1232,8 +1232,11 @@ Full design: ADR-39.
   not install" case survives, re-framed row-locally: the forged package's target is derived from
   THIS leg's row (the next FreeBSD major, a php this row does not use), never from a sibling
   row. Adding a pfSense version needs no edit here.
-  (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, selecting the
-  box's exact runtime tuple (issue #2926) — refusing a sibling-tuple guess when a major holds two). Dispatch: `gh workflow run smoke-single.yml -f
+  (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix.
+  With explicit `SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR`, exactly one runtime-tuple row must
+  match; zero or multiple matches are hard errors. With no tuple environment, zero or
+  multiple matches probe the box's installed `py3xx` flavor, then use `py311` only as the
+  last resort (issue #2926). Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
   `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pkg.pfblockerng.com`
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
