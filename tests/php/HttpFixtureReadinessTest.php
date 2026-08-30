@@ -75,12 +75,24 @@ final class HttpFixtureReadinessTest extends TestCase
 			http_response_code(404);
 			PHP, 'READY', ['READY_TOKEN' => $token]);
 
-		$started = hrtime(TRUE);
-		$matched = pfb_test_http_fixture_event_received($port, $token);
-		$elapsed = (hrtime(TRUE) - $started) / 1e9;
+		$this->assertFalse(
+			pfb_test_http_fixture_event_received($port, $token),
+			'a stalled readiness response must exceed the helper transport timeout'
+		);
+	}
 
-		$this->assertFalse($matched, 'a stalled readiness response must exceed the helper transport timeout');
-		$this->assertLessThan(0.25, $elapsed, 'readiness transport timeout widened beyond the bounded probe');
+	public function testProbeUsesExactTransportTimeout(): void
+	{
+		$this->requireReadinessHelper();
+		$context = pfb_test_http_fixture_stream_context();
+		$this->assertIsResource($context);
+		$options = stream_context_get_options($context);
+
+		$this->assertSame(
+			0.05,
+			$options['http']['timeout'] ?? NULL,
+			'fixture readiness must keep the exact bounded transport timeout'
+		);
 	}
 
 	public function testProbeAcceptsMatchingFixtureEvent(): void

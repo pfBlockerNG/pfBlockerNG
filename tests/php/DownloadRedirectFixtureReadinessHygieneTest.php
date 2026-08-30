@@ -10,23 +10,27 @@ require_once __DIR__ . '/HttpFixtureReadinessTest.php';
 /** Issue #2065: fixture diagnostics and readiness traffic stay distinct from credential hops. */
 final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 {
-	public function testForeignReadinessNonceDoesNotPolluteCredentialLog(): void
+	public function testForeignReadinessSecretDoesNotPolluteFixtureLogs(): void
 	{
 		$this->withFixture(function (DownloadRedirectCredentialScopeTest $suite, ReflectionClass $ref): void {
-			$port = $ref->getProperty('originPort');
-			$workdir = $ref->getProperty('workdir');
+			$port = (int) $ref->getProperty('originPort')->getValue($suite);
+			$workdir = (string) $ref->getProperty('workdir')->getValue($suite);
+			$eventLog = "{$workdir}/events.log";
+			$eventsBefore = @file($eventLog, FILE_IGNORE_NEW_LINES) ?: [];
+
 			$this->assertFalse(
-				pfb_test_http_fixture_event_received((int) $port->getValue($suite), bin2hex(random_bytes(16))),
-				'a nonce for another fixture must not satisfy this router readiness event'
+				pfb_test_http_fixture_event_received($port, bin2hex(random_bytes(16))),
+				'a secret for another fixture must not satisfy this router readiness event'
 			);
-			$authLines = @file(
-				(string) $workdir->getValue($suite) . '/auth.log',
-				FILE_IGNORE_NEW_LINES
+			$this->assertSame(
+				$eventsBefore,
+				@file($eventLog, FILE_IGNORE_NEW_LINES) ?: [],
+				'a foreign readiness secret must not appear as a normal redirect event'
 			);
 			$this->assertSame(
 				[],
-				$authLines ?: [],
-				'a foreign readiness nonce must not appear as a credential-bearing redirect hop'
+				@file("{$workdir}/auth.log", FILE_IGNORE_NEW_LINES) ?: [],
+				'a foreign readiness secret must not appear as a credential-bearing redirect hop'
 			);
 		});
 	}
@@ -36,6 +40,8 @@ final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 		$this->withFixture(function (DownloadRedirectCredentialScopeTest $suite, ReflectionClass $ref): void {
 			$port = (int) $ref->getProperty('originPort')->getValue($suite);
 			$workdir = (string) $ref->getProperty('workdir')->getValue($suite);
+			$eventLog = "{$workdir}/events.log";
+			$eventsBefore = @file($eventLog, FILE_IGNORE_NEW_LINES) ?: [];
 			$context = stream_context_create(['http' => ['timeout' => 0.05, 'ignore_errors' => TRUE]]);
 			$body = @file_get_contents(
 				"http://127.0.0.1:{$port}/__pfb_ready/legacy-probe",
@@ -44,12 +50,37 @@ final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 			);
 
 			$this->assertSame('', $body, 'legacy readiness subpaths must be reserved without a response');
-			$authLines = @file("{$workdir}/auth.log", FILE_IGNORE_NEW_LINES);
+			$this->assertSame(
+				$eventsBefore,
+				@file($eventLog, FILE_IGNORE_NEW_LINES) ?: [],
+				'legacy readiness subpaths must not appear as normal redirect events'
+			);
 			$this->assertSame(
 				[],
-				$authLines ?: [],
+				@file("{$workdir}/auth.log", FILE_IGNORE_NEW_LINES) ?: [],
 				'legacy readiness subpaths must not reach credential-bearing router effects'
 			);
+		});
+	}
+
+	public function testNormalRequestStillReachesEventLog(): void
+	{
+		$this->withFixture(function (DownloadRedirectCredentialScopeTest $suite, ReflectionClass $ref): void {
+			$port = (int) $ref->getProperty('originPort')->getValue($suite);
+			$workdir = (string) $ref->getProperty('workdir')->getValue($suite);
+			$eventLog = "{$workdir}/events.log";
+			$eventsBefore = @file($eventLog, FILE_IGNORE_NEW_LINES) ?: [];
+			$context = stream_context_create(['http' => ['timeout' => 0.05, 'ignore_errors' => TRUE]]);
+
+			$this->assertSame(
+				'BODY',
+				@file_get_contents("http://127.0.0.1:{$port}/final", FALSE, $context)
+			);
+			$eventsAfter = @file($eventLog, FILE_IGNORE_NEW_LINES) ?: [];
+			$this->assertCount(count($eventsBefore) + 1, $eventsAfter);
+			$event = json_decode((string) end($eventsAfter), TRUE);
+			$this->assertIsArray($event);
+			$this->assertSame('/final', $event[1] ?? NULL);
 		});
 	}
 
@@ -66,7 +97,7 @@ final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 
 			$this->assertStringContainsString('response status=599', $message);
 			$this->assertStringContainsString('events=', $message);
-			$this->assertStringContainsString('__pfb_ready', $message);
+			$this->assertStringNotContainsString('__pfb_ready', $message);
 			$this->assertStringContainsString(
 				"ports=origin:{$origin} target:{$target} alt:{$alt}",
 				$message
