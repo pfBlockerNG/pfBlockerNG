@@ -256,40 +256,43 @@ function pfblockerng_sync_cron(
 	bool $force_all = FALSE,
 	$scope = 'both',
 	bool $pending_change = FALSE,
-	bool $clear_hashes = FALSE
+	bool $clear_hashes = FALSE,
+	?string &$deferred_by = NULL
 ): bool {
 	global $pfb, $pfbarr;
+	$deferred_by = NULL;
 
 	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
-	if (!pfb_schedule_dispatch_begin()) {
+	$pfb_dispatch_contended = FALSE;
+	if (!pfb_schedule_dispatch_begin(0.1, $pfb_dispatch_contended)) {
+		if (!$pfb_dispatch_contended) {
+			return FALSE;
+		}
+		$deferred_by = 'dispatcher-lock';
 		pfb_logger("\n Scheduled feed pass deferred: dispatcher lock unavailable; durable pending occurrences retained.\n", 1);
 		// issue #2505: feed-pass parity (pfb_feed_pass_begin() raises LOG_NOTICE) --
 		// a live wedged lock holder must be visible outside /var/log/pfblockerng.
 		logger(LOG_NOTICE, localize_text('Feed pass [ %s ] deferred - the scheduler dispatcher lock is unavailable.',
 			$force_all ? 'forcecheck' : 'cron'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		// issue #2491: a deferral is benign for the UNATTENDED cron verb and a real
-		// non-event for Force Check. Both reach here; only $force_all separates them
-		// (pfblockerng.php:255 passes nothing, :304 passes TRUE).
-		//
-		// Unattended cron verb: another pass holds the lock, this run stood down with its
-		// durable pending occurrence intact, and the next tick retries. Nothing failed, so
-		// a hand-run `pfblockerng.php cron` or a third-party wrapper must not be told one
-		// did -- and rc=0 is what tests/smoke/test_feed_pass_lock.py has asserted for this
-		// path since ee8af959. No SCHEDULED job reaches this: the installed entry is
-		// `cron-tick` (pfblockerng.inc pfblockerng_configure_tick_cron()), which returns
-		// void and exits 0, and any legacy bare `pfblockerng.php cron` entry is removed
-		// there on every sync pass.
-		//
-		// Force Check: the operator asked for an update NOW and did not get one. That
-		// must stay observable (SyncCronFeedPassDeferralTest pins it).
+		// Preserve the internal result: scheduled cron deferrals retain TRUE and
+		// Force Check deferrals retain FALSE. The CLI maps $deferred_by to rc=75
+		// independently of that bool.
 		return !$force_all;
 	}
 
 	// issue #1175: serialize feed passes -- same ownership discipline as
 	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
-	if (!pfb_feed_pass_begin('cron')) {
+	$pfb_feed_pass_contended = FALSE;
+	if (!pfb_feed_pass_begin('cron', $pfb_feed_pass_contended)) {
+		if (!$pfb_feed_pass_contended) {
+			if ($pfb_dispatch_owner) {
+				pfb_schedule_dispatch_release();
+			}
+			return FALSE;
+		}
+		$deferred_by = 'feed-pass-lock';
 		pfb_logger("\n Scheduled feed pass deferred: feed lock unavailable; durable pending occurrences retained.\n", 1);
 		if ($pfb_dispatch_owner) {
 			pfb_schedule_dispatch_release();

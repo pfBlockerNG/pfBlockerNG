@@ -18743,13 +18743,26 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 }
 
 
+// CLI result for a pass deferred before work starts because a feed lock is held.
+define('PFB_EXIT_LOCKED', 75);
+
+function pfb_feed_pass_exit_code(bool $completed, ?string $deferred_by): int {
+	return $deferred_by !== NULL ? PFB_EXIT_LOCKED : ($completed ? 0 : 1);
+}
+
+function pfb_feed_pass_deferral_message(string $deferred_by): string {
+	$lock = $deferred_by === 'dispatcher-lock' ? 'dispatcher lock' : 'feed-pass lock';
+	return "pfBlockerNG feed pass deferred: {$lock} is held\n";
+}
+
 // issue #1175: cross-process, non-blocking mutual exclusion for a feed pass --
 // pfb_feed_task_running()/pfb_update_pass_running() above are ps-scan guards
 // (advisory-by-process-list); this flock-based sibling actually serializes two
 // overlapping passes so they cannot corrupt shared recompute staging. Reentrant
 // within a process: a second acquire by the same process is a no-op success.
-function pfb_feed_pass_acquire(): bool {
+function pfb_feed_pass_acquire(?bool &$contended = NULL): bool {
 	global $pfb;
+	$contended = FALSE;
 
 	if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
 		return TRUE;
@@ -18758,12 +18771,16 @@ function pfb_feed_pass_acquire(): bool {
 	$lockpath = "{$pfb['dbdir']}/pfb_feed_pass.lock";
 	$lock = @fopen($lockpath, 'c');	// 'c': create if absent, no truncate
 	if ($lock === FALSE) {
-		// An unwritable dbdir must never block legitimate work -- fail open.
 		pfb_logger("\nFeed pass lock: open failed [ {$lockpath} ], proceeding unlocked", 2);
 		return TRUE;
 	}
-	if (!@flock($lock, LOCK_EX | LOCK_NB)) {
+	$would_block = 0;
+	if (!@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
 		@fclose($lock);
+		$contended = $would_block === 1;
+		if (!$contended) {
+			pfb_logger("\n Feed pass lock: acquire failed [ {$lockpath} ]; feed pass aborted.\n", 2);
+		}
 		return FALSE;
 	}
 
@@ -18816,9 +18833,12 @@ function pfb_feed_pass_busy(): bool {
 
 // issue #1175: acquire-or-log-skip choke point both sync funnels call, so a
 // busy pass is skipped with the SAME logged message regardless of dispatcher.
-function pfb_feed_pass_begin(string $label): bool {
-	if (pfb_feed_pass_acquire()) {
+function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
+	if (pfb_feed_pass_acquire($contended)) {
 		return TRUE;
+	}
+	if (!$contended) {
+		return FALSE;
 	}
 	pfb_logger("\nFeed pass [ {$label} ] skipped -- another pfBlockerNG feed pass is running.\n", 1);
 	logger(LOG_NOTICE, localize_text('Feed pass [ %s ] skipped - another pfBlockerNG feed pass is running.', $label),

@@ -5,43 +5,14 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc';
+require_once __DIR__ . '/support/FailingFlockStream.php';
 
 /**
- * Issue #2491: a DEFERRED scheduled feed pass is a benign skip, not a failure.
+ * Issue #2591: pfblockerng_sync_cron() keeps its established bool while exposing
+ * lock identity through an optional by-reference result.
  *
- * `pfblockerng.php:255` is `exit(pfblockerng_sync_cron() ? 0 : 1)`, and the tick
- * consumer (`pfblockerng_extra.inc:5988`) discards the return value entirely, so this
- * boolean's only meaning is the cron process's exit code.
- *
- * Three paths return FALSE today, and they are not the same kind of event:
- *
- *   cron.inc:266  dispatcher lock unavailable  -> deferred, occurrences retained
- *   cron.inc:277  feed lock unavailable        -> deferred, occurrences retained
- *   cron.inc:306  runtime model/state missing  -> genuine failure (logged as logtype 2)
- *                   (inside `if (\$scheduled_runtime)`, so cron-path only —
- *                    unreachable under Force Check)
- *
- * The first two mean another pass is already doing the work and the run stood down with
- * its durable pending occurrence intact — the next tick retries. The code's own wording
- * says as much: "deferred ... durable pending occurrences retained".
- *
- * SCOPE, precisely: the installed crontab entry is `pfblockerng.php cron-tick`
- * (pfblockerng.inc:7665), which always exits 0 and whose feed dispatch discards this
- * boolean — and pfblockerng.inc:7685 actively REMOVES any legacy `pfblockerng.php cron`
- * entry on every sync pass. So no scheduled job has surfaced this exit code. What
- * changes is the `cron` verb run by hand at the CLI or by a third-party wrapper: it no
- * longer reports failure for a benign deferral, which also makes production agree with
- * tests/smoke/test_feed_pass_lock.py:127 for the first time.
- *
- * The third is a real failure and must keep exiting non-zero, otherwise this change
- * would trade false alarms for silent breakage.
- *
- * The benign reading applies ONLY to the unattended cron verb. Force Check
- * (`pfblockerng.php:304`, `$force_all = TRUE`) means an operator asked for an update NOW
- * and did not get one — that stays observable, as `SyncCronFeedPassDeferralTest` pins.
- *
- * Rows 1-2 are RED before the fix (they return FALSE); row 3 is the before-state guard
- * that keeps the fix honest and passes both before and after.
+ * Scheduled deferrals retain TRUE, Force Check deferrals retain FALSE, and genuine
+ * failures leave the reason NULL. The CLI maps either lock reason to EX_TEMPFAIL.
  */
 final class CronDeferralExitCodeTest extends TestCase
 {
@@ -120,85 +91,123 @@ final class CronDeferralExitCodeTest extends TestCase
 		return is_file($log) ? (string) file_get_contents($log) : '';
 	}
 
-	public function testDispatcherLockHeldExitsCleanly(): void
+	public function testDispatcherLockPreservesScheduledTrueAndNamesLock(): void
 	{
 		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
 		$this->assertIsResource($this->dispatchLockFp, 'test setup: could not open the dispatcher lock');
 		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
+		$deferredBy = NULL;
 
-		$result = pfblockerng_sync_cron();
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
 
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
-		$this->assertTrue($result,
-			'a deferred pass retains its occurrences and retries next tick — cron must exit 0 (issue #2491)');
+		$this->assertTrue($result, 'scheduled deferral must retain the established TRUE internal return');
+		$this->assertSame('dispatcher-lock', $deferredBy);
 	}
 
-	public function testFeedPassLockHeldExitsCleanly(): void
+	public function testFeedPassLockPreservesScheduledTrueAndNamesLock(): void
 	{
 		$this->feedLockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
 		$this->assertIsResource($this->feedLockFp, 'test setup: could not open the feed-pass lock');
 		$this->assertTrue(flock($this->feedLockFp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
+		$deferredBy = NULL;
 
-		$result = pfblockerng_sync_cron();
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
 
 		$this->assertStringContainsString('feed lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the feed-pass deferral path');
-		$this->assertTrue($result,
-			'a deferred pass retains its occurrences and retries next tick — cron must exit 0 (issue #2491)');
+		$this->assertTrue($result, 'scheduled deferral must retain the established TRUE internal return');
+		$this->assertSame('feed-pass-lock', $deferredBy);
 	}
 
-	public function testForceCheckDeferralStaysObservable(): void
+	public function testForceCheckFeedPassDeferralPreservesFalseAndNamesLock(): void
 	{
 		$this->feedLockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
 		$this->assertIsResource($this->feedLockFp, 'test setup: could not open the feed-pass lock');
 		$this->assertTrue(flock($this->feedLockFp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
+		$deferredBy = NULL;
 
-		// $force_all = TRUE is the Force Check caller (pfblockerng.php:304).
-		$result = pfblockerng_sync_cron(TRUE);
+		$result = pfblockerng_sync_cron(TRUE, 'both', FALSE, FALSE, $deferredBy);
 
 		$this->assertStringContainsString('feed lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the feed-pass deferral path');
-		$this->assertFalse($result,
-			'an operator-initiated Force Check that was deferred must still report failure — '
-			. 'the benign reading is for the unattended cron verb only (issue #2491)');
+		$this->assertFalse($result, 'Force Check must retain the established FALSE internal return');
+		$this->assertSame('feed-pass-lock', $deferredBy);
 	}
 
-	public function testForceCheckDispatcherDeferralStaysObservable(): void
+	public function testForceCheckDispatcherDeferralPreservesFalseAndNamesLock(): void
 	{
-		// Without this row, reverting the dispatcher guard to a bare `return TRUE`
-		// fails nothing: the feed-lock row below covers only that one guard.
 		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
 		$this->assertIsResource($this->dispatchLockFp, 'test setup: could not open the dispatcher lock');
 		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
+		$deferredBy = NULL;
 
-		$result = pfblockerng_sync_cron(TRUE);
+		$result = pfblockerng_sync_cron(TRUE, 'both', FALSE, FALSE, $deferredBy);
 
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
-		$this->assertFalse($result,
-			'Force Check deferred at the dispatcher lock must still report failure (issue #2491)');
+		$this->assertFalse($result, 'Force Check must retain the established FALSE internal return');
+		$this->assertSame('dispatcher-lock', $deferredBy);
 	}
 
-	public function testRuntimeUnavailableStillFails(): void
+	public function testDispatcherOpenErrorFailsWithoutDeferralReason(): void
 	{
-		// Reach the genuine-failure guard with BOTH LOCKS HEALTHY. Do not do this by
-		// pointing schedule_state_dir at a missing directory: the dispatcher lock file
-		// lives there too, so the run would take the DEFERRAL path instead and this row
-		// would pass for the wrong reason (it did, before this was corrected).
-		// An unparseable state file makes pfb_schedule_state_read() return NULL
-		// (pfblockerng_extra.inc) while both locks acquire normally.
+		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
+		$deferredBy = NULL;
+
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
+
+		$this->assertFalse($result, 'dispatcher open error must remain a real failure');
+		$this->assertNull($deferredBy, 'dispatcher open error must map to CLI rc=1, not lock-deferral rc=75');
+	}
+
+	public function testDispatcherFlockErrorFailsWithoutDeferralReason(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbcrondispatcherror', PfbFailingFlockStream::class));
+		try {
+			$GLOBALS['pfb']['schedule_state_dir'] = 'pfbcrondispatcherror://state';
+			$deferredBy = NULL;
+
+			$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
+
+			$this->assertFalse($result, 'dispatcher flock error must remain a real failure');
+			$this->assertNull($deferredBy, 'dispatcher flock error must map to CLI rc=1, not lock-deferral rc=75');
+		} finally {
+			stream_wrapper_unregister('pfbcrondispatcherror');
+		}
+	}
+
+	public function testFeedPassFlockErrorFailsWithoutDeferralReason(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbcronfeederror', PfbFailingFlockStream::class));
+		try {
+			$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
+			$GLOBALS['pfb']['dbdir'] = 'pfbcronfeederror://state';
+			$deferredBy = NULL;
+
+			$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
+
+			$this->assertFalse($result, 'feed-pass flock error must remain a real failure');
+			$this->assertNull($deferredBy, 'feed-pass flock error must map to CLI rc=1, not lock-deferral rc=75');
+		} finally {
+			stream_wrapper_unregister('pfbcronfeederror');
+		}
+	}
+
+	public function testRuntimeUnavailableStillFailsWithoutDeferralReason(): void
+	{
 		file_put_contents("{$this->dbdir}/pfb_schedule_state.json", 'not json at all');
+		$deferredBy = NULL;
 
-		$result = pfblockerng_sync_cron();
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
 
 		$log = $this->mainLog();
 		$this->assertStringContainsString('runtime unavailable', $log,
 			'before-state: the run must actually have reached the genuine-failure guard');
 		$this->assertStringNotContainsString('lock unavailable', $log,
 			'this row must not be taking a deferral path — that would pass for the wrong reason');
-		$this->assertFalse($result,
-			'a genuine runtime failure must KEEP exiting non-zero — this fix must not trade '
-			. 'false alarms for silent breakage (issue #2491)');
+		$this->assertFalse($result, 'a genuine runtime failure must retain its FALSE internal return');
+		$this->assertNull($deferredBy, 'a real failure must map to rc=1, not lock-deferral rc=75');
 	}
 }

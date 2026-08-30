@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -23,11 +24,8 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		mkdir($this->dbdir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
 		$GLOBALS['pfb']['log'] = "{$this->dbdir}/pfblockerng.log";
-
-		$this->lockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
-		$this->assertNotFalse($this->lockFp, 'test setup: failed to open feed-pass lock');
-		$this->assertTrue(flock($this->lockFp, LOCK_EX), 'test setup: failed to hold feed-pass lock');
 	}
+
 
 	protected function tearDown(): void
 	{
@@ -49,11 +47,28 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		rmdir($this->dbdir);
 	}
 
-	public function testLockLossLeavesScheduleStateAndCacheUntouched(): void
+	public static function lockProvider(): array
 	{
+		return [
+			'dispatcher lock' => ['dispatcher', 'dispatcher-lock'],
+			'feed-pass lock' => ['feed-pass', 'feed-pass-lock'],
+		];
+	}
+
+	#[DataProvider('lockProvider')]
+	public function testLockLossLeavesScheduleStateAndCacheUntouched(
+		string $lock,
+		string $expectedReason
+	): void {
 		$stateDir = "{$this->dbdir}/state";
 		mkdir($stateDir, 0755, TRUE);
 		$GLOBALS['pfb']['schedule_state_dir'] = $stateDir;
+		$lockPath = $lock === 'dispatcher'
+			? "{$stateDir}/pfb_schedule_dispatch.lock"
+			: "{$this->dbdir}/pfb_feed_pass.lock";
+		$this->lockFp = fopen($lockPath, 'c');
+		$this->assertNotFalse($this->lockFp, "test setup: failed to open {$lock} lock");
+		$this->assertTrue(flock($this->lockFp, LOCK_EX), "test setup: failed to hold {$lock} lock");
 		$state = [
 			'schema' => 1,
 			'items' => ['ipv4:feed_v4' => ['pending_occurrence' => 123]],
@@ -70,27 +85,19 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		$beforeLedger = file_get_contents("{$this->dbdir}/pfb_due_ledger.json");
 		$beforeState = file_get_contents("{$stateDir}/pfb_schedule_state.json");
 
-		// issue #2491: this row's no-args call is the ORIGINAL deliberate intent (#1315:
-		// the tick's advisory busy probe, i.e. the $force_all = FALSE path); the
-		// "Force Check" wording was a later addition and is the half that was wrong.
-		// The cron path now reports a deferral as success, so the expectation flips —
-		// but the call stays on the cron path, because the state/cache assertions below
-		// are this file's reason to exist and they must keep covering it.
-		// Force Check's own return contract is pinned in CronDeferralExitCodeTest.
-		$this->assertTrue(pfblockerng_sync_cron(),
-			'a deferred scheduled pass reports success, and must still preserve state');
+		$deferredBy = NULL;
+		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
+		$this->assertTrue($result, 'scheduled deferral must retain the established TRUE internal return');
+		$this->assertSame($expectedReason, $deferredBy);
 
 		$this->assertSame($beforeLedger, file_get_contents("{$this->dbdir}/pfb_due_ledger.json"),
-			'lost feed-pass lock must not mutate the runtime cache');
+			"lost {$lock} must not mutate the runtime cache");
 		$this->assertSame($beforeState, file_get_contents("{$stateDir}/pfb_schedule_state.json"),
-			'lost feed-pass lock must leave the durable occurrence reserved for the next tick');
+			"lost {$lock} must leave the durable occurrence reserved for the next tick");
 	}
 
 	public function testPendingTop1mChangeDoesNotApplyOutsideWindowOnNoUpdatePass(): void
 	{
-		flock($this->lockFp, LOCK_UN);
-		fclose($this->lockFp);
-		$this->lockFp = NULL;
 		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
 		$GLOBALS['pfb']['continents'] = [];
 		$GLOBALS['config'] = [];

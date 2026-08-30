@@ -3324,20 +3324,11 @@ def reload(
     ruleset is authoritative on the next read. The ``data_path=True`` path ignores this flag:
     it must wait on the zero-downtime swap signal regardless.
 
-    Every scope but ``tick`` also asserts the pass ACTUALLY STARTED (issue #2591): a lock
-    deferral exits 0 for the unattended ``trigger=cron force=false`` shape this helper
-    dispatches (PR #2589) and for the ``cron`` verb (PR #2504), so ``rc == 0`` alone cannot
-    tell a completed pass from one that stood down. A NEW banner from
-    :data:`PASS_START_MARKERS` is required, and its absence raises HERE — at the reload call
-    site — instead of surfacing later as an unrelated assertion far from the cause.
+    Feed-pass lock deferrals return 75 and fail immediately with the precise stderr
+    reason, before either readiness wait.
     """
     if scope not in _SCOPE_TO_PFBTRIGGER and scope not in ("cron", "tick"):
         raise ValueError(f"reload scope must be update/updateip/updatednsbl/cron/tick, got {scope!r}")
-    # Every verb but the tick runs a feed pass to completion before the CLI exits; an IDLE
-    # scheduled tick dispatches no pass at all, so it is the one scope with no banner to wait for.
-    assert_started = scope != "tick"
-    start_before = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS) if assert_started else 0
-    deferred_before = count_log_marker(vm, PFB_LOG, PASS_DEFERRED_MARKERS) if assert_started else 0
     swap_before = count_log_marker(vm, PFB_LOG, SWAP_LOG_MARKER) if data_path else 0
     deadline = time.monotonic() + timeout
     if scope in ("cron", "tick"):
@@ -3345,6 +3336,8 @@ def reload(
     else:
         s, f, t = _SCOPE_TO_PFBTRIGGER[scope]
         result = vm.ssh(PHP_BIN, PFB_CLI, "pfb_trigger", f"scope={s}", f"force={f}", f"trigger={t}", timeout=timeout)
+    if result.returncode == 75:
+        raise RuntimeError(f"reload({scope}) deferred (rc=75): {result.stderr.strip()}")
     if result.returncode != 0:
         # Report STDOUT too, not just stderr: pfBlockerNG writes a PHP fatal (e.g. an uncaught
         # TypeError that aborts the verb) to stdout, while stderr may only carry incidental noise
@@ -3353,31 +3346,6 @@ def reload(
         raise RuntimeError(
             f"reload({scope}) failed: rc={result.returncode} stdout={result.stdout[-2000:]!r} stderr={result.stderr!r}"
         )
-    if assert_started:
-        deferred_after = count_log_marker(vm, PFB_LOG, PASS_DEFERRED_MARKERS)
-        start_after = count_log_marker(vm, PFB_LOG, PASS_START_MARKERS)
-        evidence = (
-            f"in {PFB_LOG}: pass-start banners {list(PASS_START_MARKERS)} "
-            f"before={start_before} after={start_after}; "
-            f"deferral lines {list(PASS_DEFERRED_MARKERS)} "
-            f"before={deferred_before} after={deferred_after}"
-        )
-        # The deferral line is the signal this dispatch OWNS. The banner count is global to the
-        # log, so a CONCURRENT pass's banner can satisfy the rise below on a dispatch that was
-        # itself stood down — check the attributable signal first.
-        if deferred_after > deferred_before:
-            raise RuntimeError(
-                f"reload({scope}) exited 0 but the feed pass did not start: it was deferred — the pass "
-                f"lost the dispatcher or feed-pass lock race and stood down, and this request shape "
-                f"STILL exits 0 (issue #2591), so nothing was reloaded. Evidence {evidence}. The "
-                f"pfBlockerNG log tail in the smoke diagnostics names which lock."
-            )
-        if start_after <= start_before:
-            raise RuntimeError(
-                f"reload({scope}) exited 0 but the feed pass did not start: no new pass-start banner "
-                f"was written, and no deferral line either, so the verb returned without ever reaching "
-                f"its pass. Evidence {evidence}. See the pfBlockerNG log tail in the smoke diagnostics."
-            )
     if data_path:
         # Forward the caller's remaining budget so a slow box honours `timeout` instead
         # of wait_zero_downtime_swap's shorter default.
@@ -4271,30 +4239,6 @@ PY_ERROR_LOG = f"{PFB_LOGDIR}/py_error.log"
 # bare phrase "the zero-downtime swap", so matching the unbracketed substring would
 # false-positive on a fallback (restart) as if the swap had been taken.
 SWAP_LOG_MARKER = "[ zero-downtime swap ]"
-# issue #2591: the banners a feed pass writes to PFB_LOG ONCE it holds both the dispatcher
-# and the feed-pass lock — a NEW one is positive proof the pass actually started. Three,
-# because the pass logs a different banner per state and reload() reaches all three:
-#   " UPDATE PROCESS START [ <ver> ]"  sync_package_pfblockerng, master ON, not save-only
-#   "**Saving configuration**"         sync_package_pfblockerng, master OFF or save-only
-#   " CRON  PROCESS  START [ <ver> ]"  pfblockerng_sync_cron (the `cron` verb's own funnel)
-# A lock deferral returns from those guards BEFORE any banner and — for the unattended
-# `trigger=cron force=false` shape (PR #2589) — exits 0, which is why rc alone cannot see it.
-PASS_START_MARKERS = ("UPDATE PROCESS START", "**Saving configuration**", "CRON  PROCESS  START")
-# The mirror image: the lines a funnel writes INSTEAD of a banner when it stands the pass
-# down. A pass writes exactly one of these or one of PASS_START_MARKERS, so a NEW deferral
-# line is attributable to OUR dispatch — the banner count is global to the log, and a
-# concurrent pass's banner would otherwise satisfy the count rise on a reload that was
-# itself deferred (CodeRabbit, PR #2875). Three cover all four sites, because
-# pfb_feed_pass_begin() is the shared choke point for both funnels' feed-pass guards and
-# both of pfblockerng_sync_cron()'s guards share a prefix:
-#   "sync aborted: dispatcher lock unavailable"          pfblockerng_apply.inc:746
-#   "skipped -- another pfBlockerNG feed pass is running" pfblockerng.inc:18784 (sync + cron)
-#   "Scheduled feed pass deferred:"                       pfblockerng_cron.inc:266 and :293
-PASS_DEFERRED_MARKERS = (
-    "sync aborted: dispatcher lock unavailable",
-    "skipped -- another pfBlockerNG feed pass is running",
-    "Scheduled feed pass deferred:",
-)
 # The DNSBL per-line parse-error log: pfb_parse_fail_log() appends one CSV record
 # ({date},{header},{line},{oline},{lineno}) here for every rejected line — including
 # an ADR-22 strict-mode scheme/path skip. Mirrors $pfb['dnsbl_parse_err'] (inc:91,
@@ -4325,10 +4269,8 @@ def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
         raise RuntimeError(f"unbound_pid: {UNBOUND_PID_FILE} not an integer: {text!r}") from exc
 
 
-def count_log_marker(vm: SmokeVM, path: str, marker: str | Sequence[str], *, timeout: float = 30.0) -> int:
-    """Count occurrences in the file ``path`` on the guest of ``marker`` — one fixed string,
-    or a sequence of them counted together in ONE grep (their total, e.g. a set of
-    mutually-exclusive banners of which a pass writes exactly one).
+def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30.0) -> int:
+    """Count occurrences in the file ``path`` of one fixed string ``marker``.
 
     Capture this BEFORE a no-restart data update and pass the value as ``since`` to
     :func:`wait_zero_downtime_swap`: a NEW matching line (count strictly greater than
@@ -4341,10 +4283,9 @@ def count_log_marker(vm: SmokeVM, path: str, marker: str | Sequence[str], *, tim
     # so two failures can share a physical line — `grep -c` (line count) would under-count
     # them. `grep -Fo` prints one line per match; `wc -l` counts those. Run as ONE shell
     # string (the guest login shell handles the pipe); a missing file / no match -> 0.
-    markers = [marker] if isinstance(marker, str) else list(marker)
-    patterns = " ".join(f"-e {shlex.quote(m)}" for m in markers)
+    quoted_marker = shlex.quote(marker)
     quoted_path = shlex.quote(path)
-    cmd = f"/usr/bin/grep -Fo {patterns} {quoted_path} 2>/dev/null | /usr/bin/wc -l"
+    cmd = f"/usr/bin/grep -Fo {quoted_marker} {quoted_path} 2>/dev/null | /usr/bin/wc -l"
     result = vm.ssh(cmd, timeout=timeout)
     text = result.stdout.strip()
     try:
