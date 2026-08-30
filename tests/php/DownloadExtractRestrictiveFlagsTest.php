@@ -170,6 +170,8 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 	 *        for metadata to be restored onto, and the shell redirect that
 	 *        captures them already owns the mode of the file it creates.
 	 *
+	 * The eight are gzip-inner-tar, bzip2-inner-tar, GeoIP ZIP stdout,
+	 * ET ZIP CSV, ordinary ZIP transform, ASN tar, TOP1M tar, and generic tar.
 	 * Without this, moving the flags onto a -xO call would look like a fix.
 	 */
 	public function test_the_stdout_extractions_stay_unflagged(): void
@@ -183,8 +185,14 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 			$this->assertStringNotContainsString('PFB_TAR_EXTRACT_FLAGS', $statement,
 				"stdout extraction carrying disk-extraction flags in {$file}: {$statement}");
 		}
-		$this->assertSame(7, $seen,
-			'the seven stdout extractions are the whole class; the sweep must not silently match none');
+		$this->assertMatchesRegularExpression(
+			'/if \(\$is_et\) \{\s*exec\(pfb_extract_cmd\("\/usr\/bin\/tar -xOf '
+			. '\{\$file_dwn_esc\} > " \. escapeshellarg\(\$staged\)\), \$output, \$retval\);\s*\}/',
+			implode(' ', self::$sources),
+			'the eighth site must be the ET ZIP CSV extraction into its isolated stage'
+		);
+		$this->assertSame(8, $seen,
+			'the eight enumerated stdout extractions are the whole class; a ninth must be added deliberately');
 	}
 
 	/**
