@@ -137,6 +137,9 @@ _ARRAY_FIELD_CASES: list[tuple[str, str, dict[str, str] | None]] = [
     ("/pfblockerng/pfblockerng_ip.php", "pfb_alias_delta_batch", None),
     ("/pfblockerng/pfblockerng_general.php", "enable_cb", None),  # pfb_filter ON_OFF
     ("/pfblockerng/pfblockerng_general.php", "pfb_log_trim_margin_pct", None),  # is_array/ctype_digit
+    # issue #2851: the nested-pass budget reaches an untyped resolver, so an array must
+    # resolve to the finite default rather than a TypeError.
+    ("/pfblockerng/pfblockerng_general.php", "pfb_reentry_timeout", None),
     ("/pfblockerng/pfblockerng_general.php", "pfb_scheduled_feed_updates", None),
     ("/pfblockerng/pfblockerng_general.php", "pfb_schedule_weekday", None),
     ("/pfblockerng/pfblockerng_general.php", "pfb_schedule_hour", None),

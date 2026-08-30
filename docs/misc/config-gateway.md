@@ -174,6 +174,19 @@ Authorization = property of **write**, not call site (generalises
     `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) = batch-size companion
     field; stored value is decimal integer string, clamped to `[64, 4096]` at read time by
     `pfb_alias_delta_batch_clamp()`.
+  - **`pfb_reentry_timeout`** (issue #2851, plain string — `NULL`/`NULL` adapters): the ONE
+    global budget (whole seconds) for every nested `pfblockerng.php` re-entry an update pass
+    launches — GeoIP, blacklist, TOP1M, ASN alike, no per-subsystem override. Default
+    `'1800'` = the budget issue #2016 hardcoded, so an absent key preserves an upgrader's
+    wait exactly (hence `no_grandfather`). Normalized at read time by
+    `pfb_reentry_timeout()` (`pfblockerng.inc`): whole seconds in `[60, 7200]` pass
+    through, everything else — absent, `''`, non-integral, signed, padded, zero, negative,
+    out-of-range, 64-bit-overflowing, non-scalar — resolves to `1800`, never to no timeout.
+    `pfblockerng_general.php` canonicalizes the POST through the same function, so the
+    stored value is always the effective one. `pfblockerng.sh`'s own
+    `pfb_reentry_timeout()` mirrors the window and default for the shell seam (it reads the
+    key via `read_xml_tag.sh` — shell has no gateway); `ReentryTimeoutSettingTest` pins the
+    two windows against each other.
   - **`pfb_idn` → `PfbIdnMode`** (registry adapters `pfb_cfg_idn_mode_read/write`): live
     cases `'on'` (= All), `'confusable'`, Off. `All` **reuses original `'on'`** block-all
     token, so current code reading pre-4.0.0 configuration preserves block-all with no

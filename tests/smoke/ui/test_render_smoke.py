@@ -983,6 +983,45 @@ def test_general_page_renders_log_trim_margin_field(webui: WebUI, php_error_log_
         assert needle in body, f"Log Settings intro wording {needle!r} regressed by the #1109 edit"
 
 
+def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
+    """issue #2851: the General page gains an Advanced Settings section carrying the one
+    global ``pfb_reentry_timeout`` ("Nested pass timeout") control.
+
+    Given the General page,
+    When GET,
+    Then the field renders as a number input carrying the accepted 60..7200 window and the
+    1800-second placeholder, its label is the visible Form_Group ``control-label``, and the
+    help copy documents whole-process-tree termination plus the retry path after an expiry.
+
+    Fail-before / pass-after: none of these markers exist in the pre-#2851 markup, where the
+    budget was a hardcoded constant with no operator surface at all.
+    """
+    resp = webui.get(_GENERAL_PAGE)
+    body = resp.text
+    result = evaluate_render(_GENERAL_PAGE, resp.status_code, body, ("General Settings",))
+    assert result.ok, f"General page render oracle failed: {result.detail}"
+
+    assert 'name="pfb_reentry_timeout"' in body, "General page is missing the pfb_reentry_timeout field"
+    assert "Advanced Settings" in body, "General page is missing the Advanced Settings section"
+
+    # The browser-side bounds ARE the runtime window -- a drifted attribute would let the
+    # form submit a value the backend then silently replaces with the default.
+    field_re = re.compile(r'<input[^>]*name="pfb_reentry_timeout"[^>]*>')
+    field = field_re.search(body)
+    assert field, "pfb_reentry_timeout did not render as an <input>"
+    for attr in ('type="number"', 'min="60"', 'max="7200"', 'placeholder="1800"'):
+        assert attr in field.group(0), f"pfb_reentry_timeout input is missing {attr}: {field.group(0)}"
+
+    label_re = re.compile(r'<label class="col-sm-2 control-label">\s*<span>Nested pass timeout</span>\s*</label>')
+    assert label_re.search(body), (
+        "the Nested pass timeout row label is not the expected visible control-label -- "
+        "check it is not hidden by the desktop label.form-label media query"
+    )
+
+    assert "whole process tree" in body, "the help copy must say the whole process tree is terminated on expiry"
+    assert "Force Update" in body, "the help copy must give the retry guidance after an expiry"
+
+
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The hooks page lists the PFB_POST_INSTALL / PFB_PRE_UNINSTALL env vars (#684 doc gap, #687).
 

@@ -1023,6 +1023,82 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('50', PfbConfig::read('gen/pfb_log_trim_margin_pct'), 'and the gateway must read it back');
 	}
 
+	// -----------------------------------------------------------------------
+	// issue #2851 — pfb_reentry_timeout (the one global nested-pass budget)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * pfb_reentry_timeout absent key returns the registered default '1800' — the
+	 * budget issue #2016 hardcoded, so an upgrade with no stored value keeps running
+	 * exactly the wait it ran before.
+	 *
+	 * Scenario:
+	 *   Background: pfb_reentry_timeout is a plain-string field; default = '1800'.
+	 *     Given no stored value.
+	 *     When PfbConfig::read('gen/pfb_reentry_timeout').
+	 *     Then '1800' is returned.
+	 */
+	public function testPfbReentryTimeoutAbsentKeyReturnsDefault1800(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_reentry_timeout';
+
+		// Before: absent.
+		$this->assertNull(config_get_path($path), 'before: pfb_reentry_timeout must be absent');
+
+		// When/Then: absent -> the pre-#2851 hardcoded budget.
+		$result = PfbConfig::read('gen/pfb_reentry_timeout');
+		$this->assertSame('1800', $result, 'pfb_reentry_timeout absent -> default 1800');
+	}
+
+	/**
+	 * Both accepted bounds round-trip losslessly (write(read(v)) == v).
+	 *
+	 * Scenario:
+	 *   Background: pfb_reentry_timeout is a plain-string field (no adapter); the owner
+	 *     ruling accepts whole seconds 60 through 7200 inclusive.
+	 *     Given stored = '60' / '7200'.
+	 *     When read then write back.
+	 *     Then the stored string is unchanged.
+	 */
+	public function testPfbReentryTimeoutBoundsRoundTrip(): void
+	{
+		$path = 'installedpackages/pfblockerng/config/0/pfb_reentry_timeout';
+
+		foreach (['60', '7200'] as $stored) {
+			$this->seedConfig($path, $stored);
+			$this->assertSame($stored, config_get_path($path), "before: pfb_reentry_timeout seed is '{$stored}'");
+
+			$val = PfbConfig::read('gen/pfb_reentry_timeout');
+			$this->assertSame($stored, $val, "read: pfb_reentry_timeout '{$stored}' -> '{$stored}'");
+
+			PfbConfig::write('gen/pfb_reentry_timeout', $val);
+			$this->assertSame($stored, config_get_path($path),
+				"write(read('{$stored}'))=='{$stored}' for pfb_reentry_timeout");
+		}
+	}
+
+	public function testPfbReentryTimeoutSurvivesSectionWrite(): void
+	{
+		// The General page saves the whole section (writeSection), never a per-field
+		// write, so the per-field round-trip above cannot catch a key dropped on the
+		// section path -- and a dropped key silently reverts the operator's budget.
+		$path = 'installedpackages/pfblockerng/config/0/pfb_reentry_timeout';
+
+		$this->seedConfig($path, '1800');
+		$this->assertSame('1800', config_get_path($path), "before: pfb_reentry_timeout seed is '1800'");
+
+		// The exact readSection/writeSection shape pfblockerng_general.php saves with.
+		$gen = 'installedpackages/pfblockerng/config/0';
+		$section = PfbConfig::readSection($gen);
+		$section['pfb_reentry_timeout'] = '7200';
+		PfbConfig::writeSection($gen, $section);
+
+		$this->assertSame('7200', config_get_path($path),
+			'the section write must carry pfb_reentry_timeout -- a key dropped here saves nothing from the UI'
+		);
+		$this->assertSame('7200', PfbConfig::read('gen/pfb_reentry_timeout'), 'and the gateway must read it back');
+	}
+
 	// ADR-38 — log_syslog (toggle; Amendment 1: facility/priority removed)
 	// -----------------------------------------------------------------------
 
@@ -1278,6 +1354,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_quiet_hours',
 			// issue #1109: log-retention trim hysteresis margin percent
 			'pfb_log_trim_margin_pct',
+			// issue #2851: the one global nested-pass timeout (General -> Advanced)
+			'pfb_reentry_timeout',
 			// ADR-38: syslog export toggle
 			'log_syslog',
 			// issue #1669 slice C: CodeMirror 6 live syntax-highlight toggle (default on)
