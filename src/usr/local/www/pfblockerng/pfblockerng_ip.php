@@ -502,7 +502,7 @@ $section->addInput(new Form_Select(
 		. 'Select the \'<strong>Order</strong>\' of the Rules<br /><br />'
 		. '&emsp;Selecting \'original format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
 		. '&emsp;Selecting any other \'Order\' will re-order <strong>all the rules to the format indicated!</strong></div>')
-  ->setAttribute('style', 'width: auto');
+  ->setAttribute('style', 'width: auto; max-width: 100%');
 
 $section->addInput(new Form_Select(
 	'autorule_suffix',
