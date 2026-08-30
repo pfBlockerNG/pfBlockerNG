@@ -270,6 +270,8 @@ _NIGHTLY_EXPECTED_SOURCE_SHA_Q="$(_sq "${SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA:-}")"
 _NIGHTLY_EXPECTED_VERSION_Q="$(_sq "${SMOKE_NIGHTLY_EXPECTED_VERSION:-}")"
 _PFSENSE_REF_Q="$(_sq "${SMOKE_PFSENSE_REF:-}")"
 _CIVM_REF_Q="$(_sq "${CIVM_REF:-}")"
+_PHP_VERSION_Q="$(_sq "${SMOKE_PHP_VERSION:-}")"
+_PY_FLAVOR_Q="$(_sq "${SMOKE_PY_FLAVOR:-}")"
 
 _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MARKER_Q'"
 # Nightly identity: smoke-on-box.sh derives from the just-checked-out HEAD
@@ -370,6 +372,7 @@ _bootstrap="cd '$_ONBOX_REPO_ROOT_Q' \
       SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
       SMOKE_REPO_EXPECTED_CHANNEL='$_REPO_EXPECTED_CHANNEL_Q' \
       SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \
+      SMOKE_PHP_VERSION='$_PHP_VERSION_Q' SMOKE_PY_FLAVOR='$_PY_FLAVOR_Q' \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
