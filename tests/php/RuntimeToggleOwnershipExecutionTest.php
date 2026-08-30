@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace PfbRuntimeToggleOwnershipSpy;
 
-use PHPUnit\Framework\Attributes\Depends;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -57,16 +57,11 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 		'autonot_in', 'autoaddrnot_in', 'autoports_in', 'autoaddr_in',
 	];
 	/** @var array<string,array{bool,mixed}> */
-	private static array $originalGlobals = [];
-	/** @var array<string,array{bool,mixed}> */
 	private array $savedGlobals = [];
 
 
 	public static function setUpBeforeClass(): void
 	{
-		foreach (['pfb', 'pfbarr'] as $name) {
-			self::$originalGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
-		}
 
 		$reflection = new \ReflectionFunction('pfb_determine_list_detail');
 		$lines = file($reflection->getFileName());
@@ -95,46 +90,45 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 			} else {
 				unset($GLOBALS[$name]);
 			}
-		}
-	}
-
-
-	public function testStaticAndDynamicHomesInvokeOnlyTheirOwner(): void
-	{
-		$homes = [
-			'static settings singleton' => ['pfblockerngdnsblsettings', '0', TRUE],
-			'dynamic feed row' => ['pfblockernglistsv4', '3', FALSE],
-			'dynamic continent' => ['pfblockerngafrica', '0', FALSE],
-		];
-		foreach ($homes as $label => [$section, $key, $registered]) {
-			$this->seed($section, $key);
-
-			$result = pfb_determine_list_detail('Deny_Both', 'ownership-spy', $section, $key);
-
-			$this->assertSame('/native', $result['folder'], "{$label}: enabled invert must force Native");
-			$this->assertSame('on', $result['aaddrnot_in'], "{$label}: enabled invert verdict");
-			if ($registered) {
-				$this->assertSame(
-					array_map(static fn (string $field): string => "dnsbl/{$field}", self::EXPECTED_FIELDS),
-					SpyState::$gatewayKeys,
-					"{$label}: exact registered gateway keys"
-				);
-				$this->assertSame([], SpyState::$dynamicKeys, "{$label}: foreign-key adapter must not run");
-			} else {
-				$this->assertSame([], SpyState::$gatewayKeys, "{$label}: singleton gateway must not run");
-				$this->assertSame(self::EXPECTED_FIELDS, SpyState::$dynamicKeys,
-					"{$label}: exact dynamic foreign-key adapter fields");
-			}
-		}
-	}
-	#[Depends('testStaticAndDynamicHomesInvokeOnlyTheirOwner')]
-	public function testGlobalStateIsRestoredForDependentTests(): void
-	{
-		foreach (self::$originalGlobals as $name => [$existed, $value]) {
 			$this->assertSame($existed, array_key_exists($name, $GLOBALS), "{$name}: existence must be restored");
 			if ($existed) {
 				$this->assertSame($value, $GLOBALS[$name], "{$name}: value must be restored");
 			}
+		}
+	}
+
+
+	public static function homes(): iterable
+	{
+		yield 'static settings singleton' => ['static settings singleton', 'pfblockerngdnsblsettings', '0', TRUE];
+		yield 'dynamic feed row' => ['dynamic feed row', 'pfblockernglistsv4', '3', FALSE];
+		yield 'dynamic continent' => ['dynamic continent', 'pfblockerngafrica', '0', FALSE];
+	}
+
+	#[DataProvider('homes')]
+	public function testStaticAndDynamicHomesInvokeOnlyTheirOwner(
+		string $label,
+		string $section,
+		string $key,
+		bool $registered
+	): void {
+		$this->seed($section, $key);
+
+		$result = pfb_determine_list_detail('Deny_Both', 'ownership-spy', $section, $key);
+
+		$this->assertSame('/native', $result['folder'], "{$label}: enabled invert must force Native");
+		$this->assertSame('on', $result['aaddrnot_in'], "{$label}: enabled invert verdict");
+		if ($registered) {
+			$this->assertSame(
+				array_map(static fn (string $field): string => "dnsbl/{$field}", self::EXPECTED_FIELDS),
+				SpyState::$gatewayKeys,
+				"{$label}: exact registered gateway keys"
+			);
+			$this->assertSame([], SpyState::$dynamicKeys, "{$label}: foreign-key adapter must not run");
+		} else {
+			$this->assertSame([], SpyState::$gatewayKeys, "{$label}: singleton gateway must not run");
+			$this->assertSame(self::EXPECTED_FIELDS, SpyState::$dynamicKeys,
+				"{$label}: exact dynamic foreign-key adapter fields");
 		}
 	}
 
