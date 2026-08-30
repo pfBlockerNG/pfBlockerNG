@@ -101,12 +101,6 @@ $pconfig['log_syslog']			= PfbConfig::read('gen/log_syslog')->value;
 // the registered default ('0') applies when the key is absent (new install / upgrade).
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('gen/pfb_log_trim_margin_pct');
 
-// issue #2851: the one global nested-pass timeout (seconds). Render the EFFECTIVE
-// budget from PfbConfig::readSection()'s raw gen-section mirror, then through the same
-// mixed-safe resolver both language seams use. A field-level read has no adapter and
-// would cast hostile arrays/floats before validation.
-$pconfig['pfb_reentry_timeout']		= (string) pfb_reentry_timeout($pfb['gconfig']['pfb_reentry_timeout'] ?? NULL);
-
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight is a
 // default-on toggle field (merged PfbToggle, issue #1887; mirrors pfb_keep) --
@@ -198,12 +192,6 @@ if ($_POST) {
 		// out-of-range '999999999' would render a number the runtime clamp never uses.
 		$_POST['pfb_log_trim_margin_pct'] = (string) pfb_log_trim_margin_pct($_POST['pfb_log_trim_margin_pct'] ?? '0');
 
-		// issue #2851: canonicalize the nested-pass timeout through the same resolver the
-		// PHP and shell seams read it with, so the STORED value IS the effective one --
-		// storing an out-of-range '9999' would claim a budget neither seam ever uses. An
-		// array (crafted POST) reaches the untyped resolver and lands on the default.
-		$_POST['pfb_reentry_timeout'] = (string) pfb_reentry_timeout($_POST['pfb_reentry_timeout'] ?? NULL);
-
 		if (!$input_errors) {
 
 			$pfb['gconfig']['enable_cb']			= pfb_filter($_POST['enable_cb'], PFB_FILTER_ON_OFF, 'general', '');
@@ -242,11 +230,6 @@ if ($_POST) {
 			// '0'). Written into $pfb['gconfig'] so writeSection() below includes it -- a bare
 			// PfbConfig::write() would be overwritten by writeSection.
 			$pfb['gconfig']['pfb_log_trim_margin_pct']	= $_POST['pfb_log_trim_margin_pct']	?: '0';
-
-			// issue #2851: persist the nested-pass timeout (canonicalized above). Written
-			// into $pfb['gconfig'] so writeSection() below includes it -- a bare
-			// PfbConfig::write() would be overwritten by the section-level write.
-			$pfb['gconfig']['pfb_reentry_timeout']		= $_POST['pfb_reentry_timeout'];
 
 			// ADR-38: persist syslog export toggle. Written into $pfb['gconfig'] so the
 			// writeSection() call below includes it; a bare PfbConfig::write() before
@@ -571,31 +554,6 @@ $section->addInput(new Form_Checkbox(
 		. 'Remote delivery: pfSense '
 		. '<strong>Status &gt; System Logs &gt; Settings &gt; Remote Logging &rarr; Everything</strong>.'
 );
-
-$form->add($section);
-
-// issue #2851: the operator surface for issue #2016's nested-pass budget. Advanced and
-// collapsed by default, the same shape the IP tab's 'ip_advanced' panel uses.
-$section = new Form_Section('Advanced Settings', 'general_advanced', COLLAPSIBLE|SEC_CLOSED);
-$section->addInput(new Form_Input(
-	'pfb_reentry_timeout',
-	'Nested pass timeout',
-	'number',
-	$pconfig['pfb_reentry_timeout'],
-	[ 'min' => (string) PFB_REENTRY_TIMEOUT_MIN, 'max' => (string) PFB_REENTRY_TIMEOUT_MAX,
-	  'placeholder' => (string) PFB_REENTRY_TIMEOUT ]
-))->setHelp('Default: <strong>' . PFB_REENTRY_TIMEOUT . '</strong> seconds (range '
-		. PFB_REENTRY_TIMEOUT_MIN . '&ndash;' . PFB_REENTRY_TIMEOUT_MAX . ', whole seconds).<br />'
-		. 'Time budget for ONE nested update pass &mdash; the MaxMind/GeoIP, blacklist, '
-		. 'TOP1M and ASN downloads an update pass runs as child processes.<br />'
-		. 'On expiry the <strong>whole process tree</strong> is terminated, not just the '
-		. 'interpreter, so a stalled download cannot outlive it; the expiry is named in the '
-		. 'pfBlockerNG and Error logs and the pass continues to a defined state. The download '
-		. 'is retried by the next scheduled update, or immediately via '
-		. '<strong>Force Update</strong>.<br />'
-		. 'Raise it for low-powered hardware or slow links where a full download pass needs '
-		. 'longer. A blank, non-numeric or out-of-range value falls back to '
-		. PFB_REENTRY_TIMEOUT . ' seconds.');
 
 $form->add($section);
 
