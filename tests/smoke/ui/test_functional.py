@@ -717,43 +717,50 @@ def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
 
 
 ASN_TOKEN_CFG = "installedpackages/pfblockerngipsettings/config/0/asn_token"
+AUTORULE_SUFFIX_CFG = "installedpackages/pfblockerngipsettings/config/0/autorule_suffix"
 
 
-def test_ip_asn_token_blank_preserves_and_new_value_replaces(
+def test_ip_asn_token_blank_preserves_new_value_replaces_and_bogus_rejects(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """ASN IPinfo token is write-only: blank preserves it and a new value replaces it."""
+    """ASN token blank Save succeeds and preserves; valid replaces; bogus aborts."""
     seed_token = "PFBASNTESTTOKEN0001"
     new_token = "PFBASNTESTTOKEN0002"
-    original = helpers.config_get(smoke_vm, ASN_TOKEN_CFG)
+    original_token = helpers.config_get_state(smoke_vm, ASN_TOKEN_CFG)
+    original_suffix = helpers.config_get_state(smoke_vm, AUTORULE_SUFFIX_CFG)
+    sentinel_suffix = "standard" if original_suffix[1] != "standard" else "autorule"
     try:
-        seed = helpers.php_eval(
-            smoke_vm,
-            f"config_set_path({helpers._php_str(ASN_TOKEN_CFG)}, {helpers._php_str(seed_token)});\n"
-            "write_config('#2922 smoke: seed asn_token');\necho 'OK';",
-        )
-        assert "OK" in seed.stdout, f"failed to seed asn_token: {seed.stdout!r}"
+        helpers.config_set(smoke_vm, ASN_TOKEN_CFG, seed_token)
         assert helpers.config_get(smoke_vm, ASN_TOKEN_CFG) == seed_token, (
             "seed did not take before ASN token save assertions"
         )
 
-        got_after_blank = _post_and_get(webui, smoke_vm, IP_PAGE, {"asn_token": ""}, ASN_TOKEN_CFG)
-        assert got_after_blank == seed_token, (
-            f"a blank asn_token POST must preserve the existing token: expected {seed_token!r}, got {got_after_blank!r}"
+        blank = webui.post(
+            IP_PAGE,
+            {"asn_token": "", "autorule_suffix": sentinel_suffix},
+            timeout=SAVE_TIMEOUT,
+        )
+        assert not looks_like_login_page(blank.text), "blank ASN token Save lost its authenticated session"
+        assert helpers.config_get(smoke_vm, ASN_TOKEN_CFG) == seed_token, (
+            "a blank asn_token POST must preserve the existing token"
+        )
+        assert helpers.config_get(smoke_vm, AUTORULE_SUFFIX_CFG) == sentinel_suffix, (
+            "blank asn_token must not abort the rest of the IP settings Save"
         )
 
         got_after_new = _post_and_get(webui, smoke_vm, IP_PAGE, {"asn_token": new_token}, ASN_TOKEN_CFG)
         assert got_after_new == new_token, (
             f"asn_token should persist a new posted value: expected {new_token!r}, got {got_after_new!r}"
         )
-    finally:
-        restore = helpers.php_eval(
-            smoke_vm,
-            f"config_set_path({helpers._php_str(ASN_TOKEN_CFG)}, {helpers._php_str(original)});\n"
-            "write_config('#2922 smoke: restore asn_token');\necho 'OK';",
+
+        got_after_bogus = _post_and_get(webui, smoke_vm, IP_PAGE, {"asn_token": "bad/token"}, ASN_TOKEN_CFG)
+        assert got_after_bogus == new_token, (
+            f"a non-word asn_token must abort the save: expected {new_token!r}, got {got_after_bogus!r}"
         )
-        assert "OK" in restore.stdout, f"failed to restore asn_token: {restore.stdout!r}"
+    finally:
+        helpers.config_restore_state(smoke_vm, AUTORULE_SUFFIX_CFG, original_suffix)
+        helpers.config_restore_state(smoke_vm, ASN_TOKEN_CFG, original_token)
 
 
 # --------------------------------------------------------------------------- #
@@ -1042,13 +1049,10 @@ def _post_and_confirm_general(
 # multiselects are unvalidated (implode comma-join). No test overrides
 # maxmind_locale, so the ugc conversion never fires -- every flow is hermetic.
 #
-# maxmind_key (issue #924) is a HARD-ABORT validator too (a non-word bogus value
-# still aborts the whole save), but it is NOT in the parametrized WORD-filter flow
-# below alongside maxmind_account/asn_token: it is now masked/write-only, so an
-# EMPTY POST means "keep the stored key" rather than "overwrite with empty" --
-# incompatible with that flow's shared "restore via a blank/original POST" idiom.
-# Its own valid/blank-keeps/reject coverage lives in
-# test_ip_maxmind_key_masked_field_persists_and_is_never_echoed above.
+# maxmind_key and asn_token are masked/write-only HARD-ABORT fields: blank means
+# "keep the stored credential", while a non-word value aborts the whole save.
+# Their dedicated tests above cover valid replacement, blank preservation, and
+# rejection. maxmind_account retains the ordinary blank-clears word-field contract.
 # --------------------------------------------------------------------------- #
 
 IP_PLACEHOLDER_CFG = "installedpackages/pfblockerngipsettings/config/0/ip_placeholder"
@@ -1089,46 +1093,21 @@ def test_ip_placeholder_valid_isolated_ipv4_and_reject_unchanged(
         webui.post(IP_PAGE, {"ip_placeholder": original or "127.1.7.7"}, timeout=SAVE_TIMEOUT)
 
 
-@pytest.mark.parametrize(
-    ("field", "valid", "bogus"),
-    [
-        ("maxmind_account", "Test_123", "bad-chars!"),
-        ("asn_token", "Tok_789", "tok@en"),
-    ],
-    ids=["maxmind_account", "asn_token"],
-)
-def test_ip_word_filter_field_valid_and_reject_unchanged(
-    field: str,
-    valid: str,
-    bogus: str,
+def test_ip_maxmind_account_valid_and_reject_unchanged(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """A ``PFB_FILTER_WORD`` field stores a clean word; a non-word value aborts the save.
-
-    ``PFB_FILTER_WORD`` = no non-word char (``/\\W/``): only ``[A-Za-z0-9_]`` passes.
-    Save guard: ``!empty($_POST[field]) && empty(pfb_filter($_POST[field],
-    PFB_FILTER_WORD, 'ip'))`` -> a field-specific input error -> the WHOLE save
-    aborts -> config UNCHANGED. A valid word ('Test_123' / 'Tok_789') passes and is
-    stored verbatim; a value with a non-word char ('bad-chars!', 'tok@en') is
-    REJECTED -> config unchanged (NOT the bogus value, NOT empty). Empty input is
-    allowed (the ``!empty`` guard) and stores ''. Pure regex validation, NO egress
-    (these tokens only drive update/reload lookups, not this save). Same mechanism
-    for both fields -> parametrized. (``maxmind_key`` shares the same
-    ``PFB_FILTER_WORD`` reject branch but NOT this "blank stores empty" contract --
-    see the masked-field test above.)
-    """
-    vm = smoke_vm
+    """MaxMind account stores a clean word; a non-word value aborts the save."""
+    field = "maxmind_account"
+    valid = "Test_123"
+    bogus = "bad-chars!"
     cfg = f"installedpackages/pfblockerngipsettings/config/0/{field}"
-    original = helpers.config_get(vm, cfg)
+    original = helpers.config_get(smoke_vm, cfg)
     try:
         assert original != valid, f"{field} already {valid!r} before the valid POST"
-        # VALID clean word -> stored verbatim.
-        assert _post_and_get(webui, vm, IP_PAGE, {field: valid}, cfg) == valid
-        # Restore the original (typically '' -- empty is allowed and stores '').
-        assert _post_and_get(webui, vm, IP_PAGE, {field: original}, cfg) == original
-        # REJECT: a non-word char aborts the save -> config UNCHANGED.
-        got = _post_and_get(webui, vm, IP_PAGE, {field: bogus}, cfg)
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {field: valid}, cfg) == valid
+        assert _post_and_get(webui, smoke_vm, IP_PAGE, {field: original}, cfg) == original
+        got = _post_and_get(webui, smoke_vm, IP_PAGE, {field: bogus}, cfg)
         assert got == original, f"bogus {field} must leave config unchanged at {original!r}, got {got!r}"
     finally:
         webui.post(IP_PAGE, {field: original}, timeout=SAVE_TIMEOUT)
