@@ -91,26 +91,11 @@ _MIN_REGISTRY_KEYS = 100
 
 # (page basename, bare key) -> reason. Every entry is a deliberate, recorded decision.
 #
-# RULE 2's pre-existing backlog, tracked by issue #2812. Every key here was registered
-# BEFORE issue #2123 and is therefore outside its key set, and every one was checked on
-# #2123's branch to be behaviour-equivalent today: six declare the same token twice, and
-# `pfb_dnsbl_lenient` declares `''` in the page against `'off'` in the registry, which
-# the #2120 toggle contract resolves to the same Off. Recorded as a documented set with
-# a tracking issue, so this gate stays BLOCKING for anything new instead of being
-# downgraded to advisory. An entry whose site is gone is dead weight -- delete it.
-EXEMPT: dict[tuple[str, str], str] = {
-    ("pfblockerng_dnsbl.php", "pfb_dnsbl"): "#2812 pre-registered toggle, page and registry defaults agree",
-    ("pfblockerng_dnsbl.php", "pfb_dnsvip_auto"): "#2812 pre-registered toggle, page and registry defaults agree",
-    ("pfblockerng_dnsbl.php", "pfb_dnsbl_nonat"): "#2812 pre-registered toggle, page and registry defaults agree",
-    ("pfblockerng_dnsbl.php", "pfb_idn_escalate_suspicious"): (
-        "#2812 pre-registered toggle, page and registry defaults agree"
-    ),
-    ("pfblockerng_dnsbl.php", "pfb_regex_cap"): "#2812 pre-registered toggle, page and registry defaults agree",
-    ("pfblockerng_dnsbl.php", "pfb_dnsbl_lenient"): (
-        "#2812 pre-registered toggle, page '' vs registry 'off' -- both read Off under #2120"
-    ),
-    ("pfblockerng_general.php", "enable_cb"): "#2812 pre-registered toggle, page and registry defaults agree",
-}
+# Empty since issue #2812: the last seven pre-#2123 toggle sites it recorded were routed
+# through PfbConfig::read() and their rows deleted. The table stays as the shape for a
+# DELIBERATE exemption -- a future row must name the decision that makes the duplication
+# acceptable, and a row whose site is gone is dead weight -- delete it.
+EXEMPT: dict[tuple[str, str], str] = {}
 
 
 class Violation(NamedTuple):
