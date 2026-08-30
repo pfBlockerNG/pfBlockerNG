@@ -6,14 +6,20 @@ is the tier that sees a loaded page.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
+from ..conftest import SmokeVM
+from .render_oracle import body_has_php_error
+from .webui import extract_csrf_token, looks_like_login_page
+
 if TYPE_CHECKING:
     from .webui import WebUI
 
-pytestmark = pytest.mark.ui_render
+pytestmark = [pytest.mark.ui_render, pytest.mark.ui_e2e]
 
 # Path -> a marker the page emits only when it actually rendered.
 _LIST_PAGES: dict[str, str] = {
@@ -75,14 +81,104 @@ def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
     assert "#336279" in resp.text
 
 
-CATEGORY_EDIT = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
-_RENDER_MARKER = "Update Frequency"
+CATEGORY_EDIT = "/pfblockerng/pfblockerng_category_edit.php"
 _PAIRED_STYLE = "background-color: #FFFF00; color: black;"
+_UNPAIRED_STYLE = "background-color: #FFFF00;"
+_CFG_DNSBL = "installedpackages/pfblockerngdnsbl/config"
+_FAIL_DIR = "/var/db/pfblockerng/dnsbl"
+_HEADER = "smokefailedrow"
+_SAVE_TIMEOUT = 120.0
 
 
-def test_category_edit_failed_row_pairs_foreground_with_background(webui: WebUI) -> None:
-    """$failed_bg must pin its foreground: black-on-yellow on every theme."""
-    resp = webui.get(CATEGORY_EDIT)
-    assert resp.status_code == 200, CATEGORY_EDIT
-    assert _RENDER_MARKER in resp.text, CATEGORY_EDIT
-    assert _PAIRED_STYLE in resp.text, CATEGORY_EDIT
+def test_category_edit_failed_row_pairs_foreground_with_background(
+    webui: WebUI,
+    smoke_vm: SmokeVM,
+) -> None:
+    """A rendered failed-download row ships background AND pinned foreground.
+
+    The pairing is conditional markup: the yellow row only renders when a
+    source row's header owns a ``.fail`` file. Seed exactly that state through
+    the package's own save handler, assert the rendered body carries the
+    PAIRED style (never the bare background), and restore in ``finally``.
+    Dual-marked ``ui_e2e``: the seed writes config, so the isolation probe
+    rides along.
+    """
+    vm = smoke_vm
+    rowid = _free_rowid(vm, _CFG_DNSBL)
+    try:
+        _post_form(webui, _dnsbl_payload(rowid, "smokefailedrow", _HEADER))
+        touch = vm.ssh(f"touch '{_FAIL_DIR}/{_HEADER}.fail'")
+        assert touch.returncode == 0, f"seeding .fail failed: {touch.stderr!r}"
+
+        resp = webui.get(CATEGORY_EDIT, params={"type": "dnsbl", "rowid": str(rowid)})
+        assert resp.status_code == 200, CATEGORY_EDIT
+        body = resp.text
+        assert not body_has_php_error(body), "category_edit.php rendered a PHP error"
+        assert _PAIRED_STYLE in body, "failed row rendered without the pinned foreground"
+        assert re.search(r"background-color: #FFFF00;(?!\s*color:)", body) is None, (
+            "an UNPAIRED yellow background leaked into the rendered page"
+        )
+    finally:
+        _del_rowid(vm, _CFG_DNSBL, rowid)
+        vm.ssh(f"rm -f '{_FAIL_DIR}/{_HEADER}.fail'")
+
+
+def _free_rowid(vm: SmokeVM, cfg_root: str) -> int:
+    """Return max(numeric keys under cfg_root) + 1 -- a fresh slot this test owns."""
+    pre = (
+        f"$c = config_get_path({helpers._php_str(cfg_root)}, array());\n"
+        "$max = -1;\n"
+        "foreach (array_keys($c) as $k) { if (is_numeric($k) && (int)$k > $max) { $max = (int)$k; } }\n"
+        "$free = $max + 1;\n"
+    )
+    return int(helpers._php_read_scalar(vm, pre, "$free", timeout=_SAVE_TIMEOUT))
+
+
+def _del_rowid(vm: SmokeVM, cfg_root: str, rowid: int) -> None:
+    """Delete ``{cfg_root}/{rowid}`` (cleanup of an alias slot this test created)."""
+    snippet = (
+        f"config_del_path({helpers._php_str(f'{cfg_root}/{rowid}')});\n"
+        "write_config('pfBlockerNG smoke: drop test alias');\n"
+        "echo 'OK';"
+    )
+    result = helpers.php_eval(vm, snippet, timeout=_SAVE_TIMEOUT)
+    assert result.returncode == 0 and "OK" in result.stdout, "failed to drop the test alias slot"
+
+
+def _post_form(webui: WebUI, payload: dict[str, str]) -> None:
+    """POST a fully-enumerated category-edit payload with a fresh CSRF token."""
+    get = webui.get(CATEGORY_EDIT, params={"type": "dnsbl"})
+    assert not looks_like_login_page(get.text), "category GET returned the login form (session lost)"
+    data = dict(payload)
+    data["__csrf_magic"] = extract_csrf_token(get.text)
+    data["save"] = "save"
+    resp = webui.session.post(webui.url(CATEGORY_EDIT), data=data, verify=webui._verify, timeout=_SAVE_TIMEOUT)
+    assert not looks_like_login_page(resp.text), "category POST returned the login form (session lost)"
+
+
+def _dnsbl_payload(rowid: int, aliasname: str, header: str) -> dict[str, str]:
+    """A valid DNSBL alias payload: action=unbound, one Enabled source row."""
+    return {
+        "type": "dnsbl",
+        "rowid": str(rowid),
+        "aliasname": aliasname,
+        "description": "smoke #2866 failed row (render)",
+        "action": "unbound",
+        "cron": "Never",
+        "schedule_override": "",
+        "schedule_weekday": "7",
+        "schedule_hour": "0",
+        "schedule_minute": "0",
+        "sort": "sort",
+        "order": "default",
+        "logging": "enabled",
+        "filter_top1m": "",
+        "srcint": "",
+        "script_pre": "",
+        "script_post": "",
+        "custom": "",
+        "format-0": "auto",
+        "state-0": "Enabled",
+        "url-0": f"http://127.0.0.1/{aliasname}.txt",
+        "header-0": header,
+    }
