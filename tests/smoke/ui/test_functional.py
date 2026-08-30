@@ -716,6 +716,46 @@ def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
         assert "OK" in restore.stdout, f"failed to restore maxmind_key: {restore.stdout!r}"
 
 
+ASN_TOKEN_CFG = "installedpackages/pfblockerngipsettings/config/0/asn_token"
+
+
+def test_ip_asn_token_blank_preserves_and_new_value_replaces(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """ASN IPinfo token is write-only: blank preserves it and a new value replaces it."""
+    seed_token = "PFBASNTESTTOKEN0001"
+    new_token = "PFBASNTESTTOKEN0002"
+    original = helpers.config_get(smoke_vm, ASN_TOKEN_CFG)
+    try:
+        seed = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(ASN_TOKEN_CFG)}, {helpers._php_str(seed_token)});\n"
+            "write_config('#2922 smoke: seed asn_token');\necho 'OK';",
+        )
+        assert "OK" in seed.stdout, f"failed to seed asn_token: {seed.stdout!r}"
+        assert helpers.config_get(smoke_vm, ASN_TOKEN_CFG) == seed_token, (
+            "seed did not take before ASN token save assertions"
+        )
+
+        got_after_blank = _post_and_get(webui, smoke_vm, IP_PAGE, {"asn_token": ""}, ASN_TOKEN_CFG)
+        assert got_after_blank == seed_token, (
+            f"a blank asn_token POST must preserve the existing token: expected {seed_token!r}, got {got_after_blank!r}"
+        )
+
+        got_after_new = _post_and_get(webui, smoke_vm, IP_PAGE, {"asn_token": new_token}, ASN_TOKEN_CFG)
+        assert got_after_new == new_token, (
+            f"asn_token should persist a new posted value: expected {new_token!r}, got {got_after_new!r}"
+        )
+    finally:
+        restore = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(ASN_TOKEN_CFG)}, {helpers._php_str(original)});\n"
+            "write_config('#2922 smoke: restore asn_token');\necho 'OK';",
+        )
+        assert "OK" in restore.stdout, f"failed to restore asn_token: {restore.stdout!r}"
+
+
 # --------------------------------------------------------------------------- #
 # General settings (installedpackages/pfblockerng/config/0)
 # --------------------------------------------------------------------------- #
