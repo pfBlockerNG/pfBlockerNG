@@ -1,13 +1,7 @@
 """Tier-B: the Support block reflows from side-by-side to stacked.
 
-The General page replaced a float pair (75%/25%) with Bootstrap
-``col-sm-9`` / ``col-sm-3``. That stacking is only observable as rendered
-geometry (testing.md principle 4), so it lives here rather than in the
-Tier-A string markers.
-
-Issue #2863 gave the setup wizard the same construction; both copies are
-exercised here, because the wizard drifted for months while only the General
-page was pinned.
+``col-sm-9`` / ``col-sm-3`` stacking is observable only as rendered geometry.
+Both the General page and the setup wizard carry the block (issue #2863).
 """
 
 from __future__ import annotations
@@ -113,7 +107,7 @@ def test_wizard_support_block_sits_side_by_side_at_desktop(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """Issue #2863: the wizard's logo column sits beside the text at desktop width."""
+    """The wizard's logo column sits beside the text at desktop width (issue #2863)."""
     page = browser_page
     page.set_viewport_size(DESKTOP)
     _open(page, webui, WIZARD_WELCOME)
@@ -133,12 +127,7 @@ def test_wizard_support_block_stacks_at_narrow_viewport(
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """Issue #2863: the wizard logo stacks instead of overflowing a phone viewport.
-
-    This is the defect the issue reported. A fixed 25% float column holding a 180pt
-    SVG cannot stack, so it spilled past its column at any narrow width -- observable
-    only as geometry, which is why a Tier-A string marker could not have caught it.
-    """
+    """The wizard logo stacks and stays inside a phone viewport (issue #2863)."""
     page = browser_page
     page.set_viewport_size(PHONE)
     _open(page, webui, WIZARD_WELCOME)
