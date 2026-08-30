@@ -12,10 +12,10 @@
 # #2658's extraction ceiling reaches the caller as the status that names it), and a
 # failed pass leaves the live pfB_Match_ET_v4.txt publication byte-unchanged.
 #
-# Fixture shape: the feed's ".orig" is the raw ET IQRisk CSV ("IP,category,
+# Fixture shape: the feed's ".raw" is the staged ET IQRisk CSV ("IP,category,
 # score"). processet() splits it into one file per category, accumulates the
-# selected Block categories onto the ".orig" and the selected Match categories
-# onto pfB_Match_ET_v4.txt.
+# selected Block categories onto the live ".orig" and the selected Match
+# categories onto pfB_Match_ET_v4.txt.
 
 Describe 'processet() exit contract (issue #2683)'
 	setup() {
@@ -75,8 +75,8 @@ RUNNER
 	Before 'setup'
 	After 'cleanup'
 
-	plant_et_orig() {
-		printf '%s\n' "${et_csv}" > "${orig}${alias}.orig"
+	plant_et_raw() {
+		printf '%s\n' "${et_csv}" > "${orig}${alias}.raw"
 	}
 
 	# A live match publication left by a previous, successful pass.
@@ -95,7 +95,7 @@ RUNNER
 	}
 
 	Context 'on a healthy ET feed'
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 
 		It 'publishes both artifacts and reports success'
@@ -107,11 +107,25 @@ RUNNER
 		End
 	End
 
+	Context 'when a selected Match category derives an empty replacement'
+		Before 'plant_prior_match'
+
+		It 'validates both candidates before publishing either one'
+			printf '%s\n' '192.0.2.10,1,90' > "${orig}${alias}.raw"
+			printf '%s\n' '198.51.100.77' > "${orig}${alias}.orig"
+			When run sh "${runner}" ET_Cnc ET_Spam
+			The status should be failure
+			The output should include 'ET processing failed'
+			The contents of file "${orig}${alias}.orig" should equal '198.51.100.77'
+			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+		End
+	End
+
 	Context 'when the ET scratch files cannot be created'
 		# The abort issue #2683 names by hand. It printed its message and then
 		# handed back the status of the `tee` that printed it -- 0.
 		plant_readonly_scratch() { chmod 555 "${scratch}"; }
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_readonly_scratch'
 
@@ -124,7 +138,7 @@ RUNNER
 		End
 	End
 
-	Context 'when no ET .orig file is present'
+	Context 'when no staged ET source is present'
 		# The other abort: the function fell off the end of its `else` branch, so
 		# its status was the closing `echo`'s.
 		Before 'plant_prior_match'
@@ -132,9 +146,9 @@ RUNNER
 		It 'fails instead of reporting a pass that processed nothing'
 			When run sh "${runner}"
 			The status should be failure
-			The output should include 'No ET .orig File Found!'
+			The output should include 'No staged ET source file found!'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
-			The contents of file "${errorlog}" should include 'No ET .orig file'
+			The contents of file "${errorlog}" should include 'No staged ET source file'
 		End
 	End
 
@@ -143,7 +157,7 @@ RUNNER
 		# category with no rows makes grep exit 1 and is entirely normal, while a
 		# failed WRITE has to abort rather than publish a truncated block list.
 		plant_readonly_etdir() { chmod 555 "${etdir}"; }
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_readonly_etdir'
 
@@ -152,9 +166,9 @@ RUNNER
 			The status should be failure
 			The output should include 'ET processing failed'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
-			# processet() rewrites the ".orig" in place, so this is the raw CSV the
-			# download left -- the state pfb_download()'s refusal then has to drop.
-			The contents of file "${orig}${alias}.orig" should equal "${et_csv}"
+			# The staged input stays available for pfb_download() to discard after
+			# it observes this failure.
+			The contents of file "${orig}${alias}.raw" should equal "${et_csv}"
 			The stderr should be present
 		End
 	End
@@ -167,7 +181,7 @@ RUNNER
 		# The shim breaks every `awk` in the pass, so the two accumulations get one
 		# example each with only their own categories selected -- otherwise whichever
 		# runs first covers for the other and neither check is isolated.
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_killed_awk'
 
@@ -181,7 +195,7 @@ RUNNER
 	End
 
 	Context 'when the match accumulation is killed'
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_killed_awk'
 
@@ -199,7 +213,7 @@ RUNNER
 		# filesystem from /var on a default use_mfs_tmpvar install -- so it copies
 		# rather than renames, and can fail on its own.
 		plant_readonly_origdir() { chmod 555 "${orig}"; }
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_readonly_origdir'
 
@@ -217,7 +231,7 @@ RUNNER
 		# the block publish -- so this is where the pfB_Match_ET_v4.txt artifact
 		# the issue names is the one left byte-unchanged by the failure itself.
 		plant_readonly_matchdir() { chmod 555 "${match}"; }
-		Before 'plant_et_orig'
+		Before 'plant_et_raw'
 		Before 'plant_prior_match'
 		Before 'plant_readonly_matchdir'
 
@@ -238,11 +252,11 @@ RUNNER
 		# is guaranteed to be killed. The fixture carries Match rows too, so a pass
 		# that got through would REPLACE the prior match publication -- the prior
 		# surviving is therefore evidence of the refusal, not of an empty feed.
-		plant_large_et_orig() {
+		plant_large_et_raw() {
 			awk 'BEGIN { for (i = 1; i < 4000; i++) printf "192.0.2.%d,1,90\n203.0.113.%d,3,40\n", i % 254 + 1, i % 254 + 1 }' \
-				> "${orig}${alias}.orig"
+				> "${orig}${alias}.raw"
 		}
-		Before 'plant_large_et_orig'
+		Before 'plant_large_et_raw'
 		Before 'plant_prior_match'
 
 		It 'refuses the feed instead of publishing the truncated remains of one'
@@ -259,14 +273,14 @@ Describe 'pfblockerng.sh et dispatch arm (issue #2683)'
 	# one -- the same wiring bug the `recompute` arm fixed in issue #1084. Runs
 	# the REAL entrypoint, because the propagation lives in the dispatch rather
 	# than in the function.
-	It 'exits non-zero when the feed has no ET .orig file'
+	It 'exits non-zero when the feed has no staged ET source'
 		# Off-appliance /var/db/pfblockerng/original/ holds nothing, so the
-		# no-.orig abort is the one reached, before any appliance-only tool is
+		# no-source abort is the one reached before any appliance-only tool is
 		# needed. Argument order mirrors pfb_download()'s exec():
 		# et <header> x x x x x <etblock> <etmatch> <elog>.
 		When run sh "${PFB_PKGDIR}/pfblockerng.sh" et NoSuchEtFeed x x x x x ET_Cnc x
 		The status should be failure
-		The stdout should include 'No ET .orig File Found!'
+		The stdout should include 'No staged ET source file found!'
 		# The top-level init spews unrelated noise off-appliance (missing
 		# read_xml_tag.sh, /cf/conf/config.xml, unwritable /var/db) -- real but
 		# incidental here, so only asserted as present.

@@ -2010,16 +2010,41 @@ pfb_et_abort() {
 }
 
 
+# A candidate may be empty only when it is not replacing a non-empty live list.
+# Every non-empty row must be one IPv4 literal; this also rejects binary
+# diagnostics, BOMs, NUL-bearing rows, ranges, and CIDRs.
+pfb_et_output_valid() {
+	if [ ! -s "${1}" ]; then
+		[ ! -s "${2}" ]
+		return
+	fi
+	LC_ALL=C awk -F. '
+		NF != 4 { exit 1 }
+		{
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i > 255) {
+					exit 1
+				}
+			}
+		}
+	' "${1}"
+}
+
+
 # Function to split ET Pro IPREP into category files and compile selected blocked categories into outfile.
 #
 # issue #2683: the exit contract pfb_download() gates on. A failing status is
 # returned verbatim rather than collapsed to 1, so a child killed at issue
 # #2658's extraction ceiling reaches the caller as the 153 that names it.
 processet() {
-	if [ -s "${pfborig}${alias}.orig" ]; then
+	etsource="${pfborig}${alias}.raw"
+	if [ -s "${etsource}" ]; then
 		# Remove previous ET IPRep files
 		[ -d "${etdir}" ] && [ "$(ls -A "${etdir}")" ] && rm -r "${etdir}/ET_"*
-		if ! true > "${tempfile}" || ! true > "${tempfile2}"; then
+		etgrep="${tempfile}.grep"
+		etsplit="${tempfile}.split"
+		if ! true > "${tempfile}" || ! true > "${tempfile2}" ||
+			! true > "${etgrep}" || ! true > "${etsplit}"; then
 			log="processet [ ${alias} ]: cannot create ET scratch file(s); aborting ET processing."
 			echo "${log}" | tee -a "${errorlog}"
 			return 1
@@ -2043,10 +2068,21 @@ processet() {
 					# Some ET categories are not in use (For future use)
 					;;
 				*)
-					# The pipeline's status is `cut`'s, never grep's: a category with
-					# no rows makes grep exit 1 and is entirely normal, while a failed
-					# WRITE must abort instead of publishing a truncated split.
-					grep ",${category}," "${pfborig}${alias}.orig" | cut -d',' -f1 > "${etdir}/${file}.txt" || { etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
+					# grep rc 1 is a legitimate empty category. Its hard errors must
+					# remain observable, so cut runs only after grep's status is saved.
+					grep ",${category}," "${etsource}" > "${etgrep}"
+					etrc=$?
+					case "${etrc}" in
+						0|1)
+							cut -d',' -f1 "${etgrep}" > "${etsplit}" || { etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
+							pfb_et_output_valid "${etsplit}" '' || { etrc=$?; pfb_et_abort "the ${file} split validation" "${etrc}"; return "${etrc}"; }
+							mv -f "${etsplit}" "${etdir}/${file}.txt" || { etrc=$?; pfb_et_abort "the ${file} split publish" "${etrc}"; return "${etrc}"; }
+							;;
+						*)
+							pfb_et_abort "the ${file} category scan" "${etrc}"
+							return "${etrc}"
+							;;
+					esac
 					;;
 			esac
 			category="$((category + 1))"
@@ -2083,6 +2119,12 @@ processet() {
 		echo '-------------------------------------------'
 
 		if [ -f "${tempfile}" ]; then
+			pfb_et_output_valid "${tempfile}" "${pfborig}${alias}.orig" || { etrc=$?; pfb_et_abort 'the block validation' "${etrc}"; return "${etrc}"; }
+		fi
+		if [ "${etmatch}" != 'x' ]; then
+			pfb_et_output_valid "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" || { etrc=$?; pfb_et_abort 'the match validation' "${etrc}"; return "${etrc}"; }
+		fi
+		if [ -f "${tempfile}" ]; then
 			mv -f "${tempfile}" "${pfborig}${alias}.orig" || { etrc=$?; pfb_et_abort 'the block publish' "${etrc}"; return "${etrc}"; }
 		fi
 		if [ "${etmatch}" != 'x' ]; then
@@ -2094,8 +2136,8 @@ processet() {
 		echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
 		return 0
 	else
-		echo; echo 'No ET .orig File Found!'
-		echo " [ ${alias} ] No ET .orig file found; aborting ET processing [ ${now} ]" >> "${errorlog}"
+		echo; echo 'No staged ET source file found!'
+		echo " [ ${alias} ] No staged ET source file found; aborting ET processing [ ${now} ]" >> "${errorlog}"
 		return 1
 	fi
 }

@@ -19,27 +19,52 @@ Describe 'processet() ET category selection (issue #713 bug 6)'
     pfbmatchgen="${work}/match/generated/"
     mkdir -p "$pfborig" "$etdir" "$pfbmatch" "$pfbmatchgen"
     tempfile="${work}/t1"; tempfile2="${work}/t2"
+    errorlog="${work}/error.log"
     alias='MYLIST'
     ip_placeholder='240.0.0.0'
     ip_placeholder2="$(echo "${ip_placeholder}" | sed 's/\./\\\./g')"
     # ET_P2P is category 15, ET_P2Pcnc is category 31 in processet()'s etcat
     # position table (1-based index into the etcat word list) -- both are
     # "in use" categories (neither sits in the 8|11|12|14|18|22|32|36 skip set).
-    printf '10.0.0.15,15,50\n10.0.0.31,31,60\n' > "${pfborig}${alias}.orig"
+    printf '10.0.0.15,15,50\n10.0.0.31,31,60\n' > "${pfborig}${alias}.raw"
   }
   cleanup() { rm -rf "$work"; }
   BeforeAll 'pfb_source'
   Before 'setup'
   After 'cleanup'
 
+  Describe 'derived category rows must be IPv4 literals (issue #2778)'
+    It 'rejects a nonnumeric address and keeps the live publication'
+      printf '%s\n' 'not-an-ip,1,90' > "${pfborig}${alias}.raw"
+      printf '%s\n' '198.51.100.77' > "${pfborig}${alias}.orig"
+      etblock='ET_Cnc'
+      etmatch='x'
+      When call processet
+      The status should be failure
+      The stdout should include 'ET processing failed'
+      The contents of file "${pfborig}${alias}.orig" should equal '198.51.100.77'
+    End
+
+    It 'rejects an out-of-range octet and keeps the live publication'
+      printf '%s\n' '999.0.0.1,1,90' > "${pfborig}${alias}.raw"
+      printf '%s\n' '198.51.100.77' > "${pfborig}${alias}.orig"
+      etblock='ET_Cnc'
+      etmatch='x'
+      When call processet
+      The status should be failure
+      The stdout should include 'ET processing failed'
+      The contents of file "${pfborig}${alias}.orig" should equal '198.51.100.77'
+    End
+  End
+
   # Scenario: selecting ET_P2Pcnc alone must not also pull in ET_P2P.
-  #   Given .orig rows for BOTH ET_P2P (category 15) and ET_P2Pcnc (category 31),
+  #   Given .raw rows for BOTH ET_P2P (category 15) and ET_P2Pcnc (category 31),
   #   When  processet runs with etblock='ET_P2Pcnc' (etmatch='x' = none selected),
-  #   Then  only ET_P2Pcnc's IP survives into the rewritten .orig -- ET_P2P's IP,
-  #         which a bare substring match would have pulled in too, does not.
+  #   Then  only ET_P2Pcnc's IP reaches the live .orig -- ET_P2P's IP, which a
+  #         bare substring match would have pulled in too, does not.
   Describe 'etblock selects one category whose name is a substring of another'
-    It 'starts with both categories present in the unprocessed .orig'
-      When call cat "${pfborig}${alias}.orig"
+    It 'starts with both categories present in the staged .raw'
+      When call cat "${pfborig}${alias}.raw"
       The output should include '10.0.0.15,15,'
       The output should include '10.0.0.31,31,'
     End

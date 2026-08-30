@@ -591,41 +591,47 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * pfb_download() hands the ET IQRisk feed to the shell helper, which splits it
-	 * into per-category files and republishes the feed from the selected ones;
-	 * issue #2683 gave that helper an exit contract, so this branch is pinned like
-	 * its siblings — captured exec, nonzero-exit gate, and the ceiling wrap that
-	 * only an exit gate makes safe. Without the gate an aborted pass reached
-	 * PfbDownloadResult::success() with the unfiltered CSV still published.
-	 *
-	 * The refusal also has to DROP that publication: processet() rewrites the
-	 * '.orig' in place, so what it published is the raw ET CSV the apply loop's
-	 * fail-marker fallback parses — and a surviving ETag would 304 the next pass,
-	 * so both sidecar families go with it.
+	 * pfb_download() keeps the downloaded ET IQRisk body at its raw staging path
+	 * until processet() has derived and validated the selected categories. A
+	 * refusal must remove only that staged input: the live publication and its
+	 * validators still describe the last accepted category output.
 	 */
-	public function testEtBodyCapturesAndChecksHelperExit(): void
+	public function testEtBodyStagesUntilTheHelperAcceptsIt(): void
 	{
-		$start = strpos(self::$source, "if (strpos(\$list_url, 'iprepdata.txt') !== FALSE) {");
-		$this->assertNotFalse($start, 'the ET branch must still be in pfb_download()');
+		$isEt = strpos(self::$source, "\$is_et = strpos(\$list_url, 'iprepdata.txt') !== FALSE;");
+		$this->assertNotFalse($isEt, 'the ET URL decision must be normalized once');
+		$guard = strpos(self::$source, 'if (!$is_et) {', $isEt);
+		$this->assertNotFalse($guard, 'the plain-body rename must be gated away from ET input');
+		$guardBrace = strpos(self::$source, '{', $guard);
+		$this->assertNotFalse($guardBrace);
+		$guardEnd = self::closingBraceExclusive(self::$source, $guardBrace);
+		$rename = strpos(self::$source, '@rename("{$file_download}", "{$orig_download}")', $guard);
+		$this->assertNotFalse($rename, 'non-ET plain bodies must retain their existing rename');
+		$this->assertLessThan($guardEnd, $rename,
+			'the raw-to-live rename must remain inside the non-ET guard');
+
+		$start = strpos(self::$source, 'if ($is_et) {', $guardEnd);
+		$this->assertNotFalse($start, 'the ET helper branch must still be in pfb_download()');
 		$brace = strpos(self::$source, '{', $start);
 		$this->assertNotFalse($brace);
-		$scope = substr(self::$source, $start, self::closingBraceExclusive(self::$source, $brace) - $start);
+		$scopeEnd = self::closingBraceExclusive(self::$source, $brace);
+		$scope = substr(self::$source, $start, $scopeEnd - $start);
 		$this->assertStringContainsString(
 			'exec(pfb_extract_cmd("{$pfb[\'script\']} et {$header_esc} x x x x x '
 			. '{$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}"), $output, $retval);', $scope);
-		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
 		$fail = strpos($scope, 'if (!pfb_download_extraction_succeeded($retval)) {');
 		$this->assertNotFalse($fail, 'the ET branch must gate on the helper exit status');
 		$refusal = substr($scope, $fail);
-		$this->assertStringContainsString('unlink_if_exists("{$orig_download}', $refusal);
-		// The whole suffix SET, not four of five: the empty member is what drops the
-		// raw publication the fail-marker fallback would parse. Parsed and compared
-		// canonically so a behaviour-neutral reordering of the literal cannot fail it.
-		preg_match('/foreach \(array\((.*?)\) as \$et_sfx\)/', $refusal, $m);
-		$this->assertEqualsCanonicalizing(array('', '.xxhash128', '.md5', '.etag', '.lastmod'),
-			array_map(static fn (string $s): string => trim(trim($s), "'"), explode(',', $m[1] ?? '')),
-			"the refusal must drop the '.orig' itself and BOTH sidecar families");
-		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal);
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal,
+			'a refused staged body must be discarded');
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal);
+		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}', $refusal,
+			'a refusal must not remove the last accepted publication or its validators');
+
+		$finalize = strpos(self::$source, 'pfb_download_finalize_text(', $scopeEnd);
+		$this->assertNotFalse($finalize);
+		$this->assertLessThan($finalize, $scopeEnd,
+			'the accepted raw body hash and text finalization must happen after processet succeeds');
 	}
 
 	/** Exclusive end index of the brace block whose `{` is at `$openBrace`. */

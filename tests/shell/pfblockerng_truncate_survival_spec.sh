@@ -350,8 +350,10 @@ STUB
       errorlog="${work}/err.log"
       etblock='ET_Cnc'
       etmatch='ET_Bot'
-      expected_orig="$(printf '%s\n' '192.0.2.10,1,90' '198.51.100.20,2,80')"
-      printf '%s\n' "${expected_orig}" > "${pfborig}${alias}.orig"
+      et_csv="$(printf '%s\n' '192.0.2.10,1,90' '198.51.100.20,2,80')"
+      prior_orig='203.0.113.77'
+      printf '%s\n' "${et_csv}" > "${pfborig}${alias}.raw"
+      printf '%s\n' "${prior_orig}" > "${pfborig}${alias}.orig"
       # Crash-leftover DIRECTORY at the tempfile2 (match-category scratch) truncate target.
       mkdir "${tempfile2}"
     }
@@ -359,12 +361,12 @@ STUB
     Before 'setup'
     After 'cleanup'
 
-    It 'aborts ET processing, leaving the .orig file unchanged and never creating pfB_Match_ET_v4.txt'
+    It 'aborts ET processing, leaving the live .orig unchanged and never creating pfB_Match_ET_v4.txt'
       When run _truncF_run
       The status should be success
       The output should include 'SURVIVED_F'
       The contents of file "${errorlog}" should include 'cannot create'
-      The contents of file "${pfborig}${alias}.orig" should equal "${expected_orig}"
+      The contents of file "${pfborig}${alias}.orig" should equal "${prior_orig}"
       The path "${pfbmatchgen}/pfB_Match_ET_v4.txt" should not be exist
     End
   End
