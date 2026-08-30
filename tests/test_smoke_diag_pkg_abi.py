@@ -10,6 +10,7 @@ query parameters at capture time.
 
 from __future__ import annotations
 
+import errno
 import inspect
 import io
 import subprocess
@@ -219,6 +220,53 @@ def test_collect_host_diagnostics_reports_host_redaction_failure(
     assert (dest / "pfb_smoke_diag.tgz").exists()
 
 
+def test_collect_host_diagnostics_reports_one_success_after_real_redaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A valid archive emits one success terminal only after its secret is scrubbed."""
+    dest = tmp_path / "diag"
+
+    def fake_scp(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        tgz = Path(argv[-1])
+        with tarfile.open(tgz, "w:gz") as archive:
+            _add_text_member(
+                archive,
+                "pfb_smoke_diag/pkg/repos.conf",
+                "url: https://pkg.example/repo?ToKeN=SUCCESS_SECRET\n",
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(helpers.subprocess, "run", fake_scp)
+    vm = SimpleNamespace(
+        ssh=lambda *_args, **_kwargs: None,
+        ssh_key_path="unused",
+        ssh_port=22,
+        ssh_target="root@unused",
+        log_path=None,
+    )
+
+    helpers.collect_host_diagnostics(cast(helpers.SmokeVM, vm), str(dest))
+
+    output = capsys.readouterr().out
+    success_prefix = "[smoke] collected and redacted full guest diagnostics ->"
+    terminal_prefixes = (
+        success_prefix,
+        "[smoke] host-side diagnostics redaction failed;",
+        "[smoke] guest-diagnostics scp failed",
+        "[smoke] collect_host_diagnostics failed",
+    )
+    terminal_lines = [line for line in output.splitlines() if line.startswith(terminal_prefixes)]
+    assert terminal_lines == [f"{success_prefix} {dest / 'pfb_smoke_diag.tgz'}"]
+    with tarfile.open(dest / "pfb_smoke_diag.tgz", "r:gz") as archive:
+        data = archive.extractfile("pfb_smoke_diag/pkg/repos.conf")
+        assert data is not None
+        redacted = data.read().decode("utf-8")
+    assert "SUCCESS_SECRET" not in redacted
+    assert "ToKeN=REDACTED" in redacted
+
+
 def test_redact_pkg_tarball_missing_archive_is_failure(tmp_path: Path) -> None:
     """A missing pulled archive cannot be reported as a completed host pass."""
     with pytest.raises(FileNotFoundError):
@@ -330,6 +378,38 @@ def test_redact_pkg_tarball_removes_temp_when_fd_close_fails(tmp_path: Path, mon
         helpers.redact_pkg_tarball(str(tgz))
 
     assert {path.name for path in tmp_path.iterdir()} == before
+
+
+def test_redact_pkg_tarball_closes_fd_when_initial_close_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-close failure still closes the mkstemp descriptor during cleanup."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(archive, "pfb_smoke_diag/pkg/repos.conf", "clean\n")
+    before = {path.name for path in tmp_path.iterdir()}
+    original_close = helpers.os.close
+    close_calls: list[int] = []
+
+    def fail_first_close(fd: int) -> None:
+        close_calls.append(fd)
+        if len(close_calls) == 1:
+            raise OSError("injected pre-close failure")
+        original_close(fd)
+
+    monkeypatch.setattr(helpers.os, "close", fail_first_close)
+    with pytest.raises(OSError, match="injected pre-close failure"):
+        helpers.redact_pkg_tarball(str(tgz))
+
+    assert {path.name for path in tmp_path.iterdir()} == before
+    assert close_calls[:2] == [close_calls[0], close_calls[0]]
+    try:
+        with pytest.raises(OSError) as closed:
+            helpers.os.fstat(close_calls[0])
+        assert closed.value.errno == errno.EBADF
+    finally:
+        try:
+            original_close(close_calls[0])
+        except OSError:
+            pass
 
 
 def test_redact_pkg_tarball_drops_internal_link_aliases_without_rewriting_non_pkg(
