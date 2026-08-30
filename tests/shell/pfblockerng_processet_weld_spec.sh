@@ -2,8 +2,8 @@
 # issue #1263, site 2: processet()'s `counto="$(cat "${etdir}"/ET_* | grep -cv ...)"`
 # welds an unterminated ET_*.txt onto its neighbour, same as the other 8
 # `cat`-of-a-multi-file-glob sites. processet() itself REGENERATES etdir/ET_*.txt
-# from '.orig' via grep+cut at every call, so a fixture can't durably plant an
-# unterminated derived file through the public processet() entry point.
+# from staged '.raw' input via separate grep/cut steps at every call, so a fixture
+# can't durably plant an unterminated derived file through the public entry point.
 # Extracting the counto assignment's literal, currently-committed text (never a
 # hand-retyped copy -- avoids testing a stale/wrong shape) and eval'ing it
 # against a directly-crafted etdir proves the exact shipped pipeline, order-

@@ -14465,6 +14465,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 
 	// Remove any leading/trailing whitespace
 	$list_url = trim($list_url);
+	$is_et = strpos($list_url, 'iprepdata.txt') !== FALSE;
 
 	// Re-evaluate URL
 	if ($format == 'whois') {
@@ -15778,11 +15779,14 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 						return PfbDownloadResult::failure();
 					}
 				} else {
-					// Rename file to 'orig' format
-					$renamed = @rename("{$file_download}", "{$orig_download}");
-					if (!$renamed) {
-						pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
-						return PfbDownloadResult::failure();
+					// ET keeps the fetched body at .raw until processet() validates
+					// and atomically replaces the live derived publication.
+					if (!$is_et) {
+						$renamed = @rename("{$file_download}", "{$orig_download}");
+						if (!$renamed) {
+							pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
+							return PfbDownloadResult::failure();
+						}
 					}
 					$retval = 0;
 				}
@@ -15790,9 +15794,21 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 		}
 
 		if (pfb_download_retval_success($retval)) {
-			// Set downloaded file timestamp to remote timestamp
+			// Set downloaded file timestamp to remote timestamp. ET's accepted
+			// publication is derived later, so touching the stage cannot mutate live data.
 			if (isset($remote_stamp) && $remote_stamp != -1) {
-				@touch("{$orig_download}", $remote_stamp);
+				@touch($is_et ? $file_download : $orig_download, $remote_stamp);
+			}
+
+			if ($is_et) {
+				// issue #2683: gated on processet()'s exit status -- which is what lets
+				// issue #2658's ceiling ride along here.
+				exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $output, $retval);
+				if (!pfb_download_extraction_succeeded($retval)) {
+					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
 			}
 
 			// ADR-42 / issue #713 bug 5: refresh the content-hash sidecar at every
@@ -15803,17 +15819,20 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// here must cover those same raw bytes too -- not the decompressed '.orig' --
 			// or a compressed feed (gz/bz2/zip) never matches and re-ingests every cron.
 			// pfb_source_hash_target() resolves to $file_download (the raw '.raw' download,
-			// still on disk for every compressed format) or falls back to $orig_download for
-			// an uncompressed feed, where $file_download was already renamed away (above)
-			// into $orig_download -- byte-identical to what was fetched, so the fallback is
-			// exact, not an approximation.  This covers both local and remote standard feeds
-			// (any path that finalises a plain .orig here).  The geoip/asn/top1m/blacklist
-			// archive early-returns above do not reach this block, so they correctly never get a sidecar.
+			// still on disk for every compressed format and staged ET body) or falls back
+			// to $orig_download for an uncompressed non-ET feed, where $file_download was
+			// already renamed away -- byte-identical to what was fetched, so the fallback
+			// is exact, not an approximation. This covers local and remote standard feeds.
+			// The geoip/asn/top1m/blacklist archive early-returns above do not reach this
+			// block, so they correctly never get a sidecar.
 			pfb_download_finalize_text(
 				"{$orig_download}",
 				"{$orig_download}",
 				pfb_source_hash_target($file_download, $orig_download)
 			);
+			if ($is_et) {
+				unlink_if_exists($file_download);
+			}
 
 			// issue #1797: normalization deliberately does NOT run here. Only the
 			// parse-loop consumers normalize: the helper's changed-verdict means
@@ -15822,25 +15841,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// wrongly reuse stale staging (caught live by
 			// test_cron_detects_changed_local_feed). The geoip/asn/top1m/blacklist
 			// archive paths return above (issue #2735) and never reach the text pipeline.
-
-			// Process Emerging Threats IQRisk if required
-			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
-				// issue #2683: gated on processet()'s exit status -- which is what lets
-				// issue #2658's ceiling ride along here.
-				exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $output, $retval);
-				if (!pfb_download_extraction_succeeded($retval)) {
-					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
-					// The '.orig' this pass published is the raw ET CSV (processet() rewrites it
-					// in place), which the apply loop's fail-marker fallback would parse. Both sidecar
-					// families go (pfb_force_clear_validators()' set) or a surviving ETag 304s the next pass.
-					foreach (array('', '.xxhash128', '.md5', '.etag', '.lastmod') as $et_sfx) {
-						unlink_if_exists("{$orig_download}{$et_sfx}");
-					}
-					unlink_if_exists($file_download);
-					return PfbDownloadResult::failure();
-				}
-			}
-				return PfbDownloadResult::success();
+			return PfbDownloadResult::success();
 		}
 		else {
 			$log = "   Decompression Failed\n";
