@@ -235,11 +235,13 @@ FAKEEOF
         SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
         SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'
         SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'
+        SMOKE_PHP_VERSION='8.5'
+        SMOKE_PY_FLAVOR='py312'
         CIVM_REF='ghcr.io/example/civm:v2'
         export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL
         export SMOKE_REPO_EXPECTED_SOURCE_SHA SMOKE_REPO_EXPECTED_VERSION SMOKE_REPO_EXPECTED_CHANNEL
         export SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA SMOKE_NIGHTLY_EXPECTED_VERSION
-        export SMOKE_PFSENSE_REF CIVM_REF
+        export SMOKE_PFSENSE_REF CIVM_REF SMOKE_PHP_VERSION SMOKE_PY_FLAVOR
       }
       BeforeCall 'smoke_values'
       When call run_and_diag --ref dummy
@@ -254,6 +256,8 @@ FAKEEOF
       The output should include "SMOKE_REPO_EXPECTED_CHANNEL='edge'"
       The output should include "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
       The output should include "SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'"
+      The output should include "SMOKE_PHP_VERSION='8.5'"
+      The output should include "SMOKE_PY_FLAVOR='py312'"
     End
   End
 

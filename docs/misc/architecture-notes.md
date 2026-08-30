@@ -1214,7 +1214,8 @@ Full design: ADR-39.
   `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
   reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-ci` at job start —
   issue #1806 W3: never `--print-build`, which dedupes by exact runtime tuple (issue #2926)
-  and would hide a same-major sibling runtime from this topology entirely — egress open), falls back to running that script, and
+  and would hide the SIBLING VERSIONS of a merged same-tuple group (only the last-written
+  representative row survives the merge) from this topology — egress open), falls back to running that script, and
   SKIPs the topology cases when neither is
   available. Per-leg `SMOKE_ABI`/`SMOKE_PHP_VERSION`/`SMOKE_PY_FLAVOR` select within it (SMOKE_ABI
   stays a CONCRETE guest ABI); when it matches more than one edition sharing a `freebsd_major`

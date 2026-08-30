@@ -180,6 +180,8 @@ jobs:
                   label:            .channel,
                   pfsense_version:  .pfsense_version,
                   freebsd_version:  .freebsd_version,
+                  php_version:      (.php_version // ""),
+                  py_flavor:        (.py_flavor // ""),
                   image_name:       (.image_name // ("pfsense-" + (.channel | ascii_downcase))),
                   branch:           "",
                   target:           .pfsense_version,
@@ -545,6 +547,8 @@ jobs:
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
           SMOKE_PLUS_SMBIOS_UUID: ${{ secrets.SMOKE_PLUS_SMBIOS_UUID }}
           VARIANT: ${{ matrix.variant }}
+          SMOKE_PHP_VERSION: ${{ matrix.php_version }}
+          SMOKE_PY_FLAVOR: ${{ matrix.py_flavor }}
         run: |
           set -eu
           # Run-body export, not an env: map value (issue #2231).
