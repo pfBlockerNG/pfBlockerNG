@@ -1,18 +1,11 @@
-"""#2671: PHPStan's job scheduling, not the corpus, sets this repo's memory ceiling.
+"""Issue #2671: PHPStan's job scheduling, not the corpus, sets this repo's memory ceiling.
 
-Measured on the CI's own `shivammathur/setup-php` builds, PHP 8.3 and 8.5 alike
-(runs 33267974147, 33270937200 and 33287046695): analysing `src` inside a single
-process needs 576M, analysing `pfblockerng.inc` on its own needs 448M, and every
-configuration that spreads the tree across two or more processes lands on that
-448M floor. PHPStan cuts jobs from the file list and derives the worker count
-from the job count, so its default `parallel.jobSize` of 20 turns this repo's 34
-analysed files into 2 jobs and 2 jobs into ONE worker — the whole tree
-accumulates in one allocator, on every machine, whatever the core count.
-
-The 1G crash that opened the issue happened 1.78x above a 576M requirement.
-Nothing else moved that requirement: not the PHP version, not Xdebug, not the
-trees that crashed (they replay 20/20 clean at 1G today, ceiling 576M). Keeping
-the analysis off its single-worker worst case is the lever that exists.
+PHPStan cuts jobs from the analysed-file list and derives its worker count from the job
+count, so the default `parallel.jobSize` of 20 turns 34 files into 2 jobs and 2 jobs into
+ONE worker — the whole tree accumulates in one allocator, whatever the core count. On the
+CI PHP builds that one worker needs 576M; two or more need 448M, the floor
+`pfblockerng.inc` sets alone. The crash that opened the issue hit a 1G limit 1.78x above
+a 576M requirement, and no other factor moved that requirement.
 """
 
 import json
@@ -32,8 +25,11 @@ PHPSTAN_MAX_PROCESSES = 8
 # four; asserting against two keeps the verdict true on the leanest of them.
 LEANEST_RUNNER_CORES = 2
 
-# A literal ceiling, not `--memory-limit="$2"` — a runner sweeping the limit is
-# measuring it, not documenting it.
+# `--memory-limit` is PHPStan's flag and nothing else's (PHPCS spells it
+# `-d memory_limit=`), so the flag alone identifies the invocation — no need to find the
+# word `phpstan` on the same line, which a `\`-continued command would not carry. Only a
+# literal ceiling counts: a probe sweeping `--memory-limit="$2"` is measuring, not
+# documenting.
 _MEMORY_LIMIT = re.compile(r"--memory-limit=(-1|\d+[KMG])\b")
 
 
@@ -81,12 +77,11 @@ def _worker_processes(file_count: int, job_size: int, cpu_cores: int) -> int:
 
 
 def test_phpstan_spreads_the_tree_over_more_than_one_worker() -> None:
-    """One worker holding all 34 files is the 576M case; two or more is the 448M case.
+    """One worker holds the whole tree and needs 576M; two or more need 448M.
 
-    A single job-sized worker is also the whole of the parallelism: `--debug`, which
-    drops the worker entirely and analyses in the main process, measured the same 576M.
-    So this is not a speed knob dressed as a memory fix — the ceiling and the wall
-    clock move together because they have one cause.
+    `--debug`, which drops the worker and analyses in the main process, measures the same
+    576M — so the cost is accumulation in one process, and the ceiling and the wall clock
+    move together because they have one cause.
     """
     file_count = _analysed_file_count()
     job_size = _neon_job_size(_neon())
@@ -105,9 +100,9 @@ def test_phpstan_spreads_the_tree_over_more_than_one_worker() -> None:
 
 
 def test_the_scheduling_model_reproduces_phpstans_single_worker_default() -> None:
-    """Vacuity guard. The assertion above is only worth something if this model can
-    report the failure it is checking for — so reproduce the state the issue found:
-    34 files at PHPStan's default jobSize is one worker, four idle cores or not."""
+    """Vacuity guard: the assertion above is only worth something if this model can report
+    the failure it checks for. 34 files at PHPStan's default jobSize is one worker, four
+    idle cores or not."""
     assert _worker_processes(34, PHPSTAN_DEFAULT_JOB_SIZE, 4) == 1
     assert _worker_processes(34, 10, 4) == 2
     assert _worker_processes(34, 3, 4) == 4
@@ -131,21 +126,36 @@ def _sources_quoting_a_phpstan_limit() -> list[tuple[str, str]]:
     ]
 
 
+def _limits_disagreeing_with(expected: str, where: str, text: str) -> list[str]:
+    """`where:line says X` for every literal PHPStan ceiling in `text` that is not `expected`."""
+    return [
+        f"{where}:{line_no} says {found.group(1)}"
+        for line_no, line in enumerate(text.splitlines(), 1)
+        if (found := _MEMORY_LIMIT.search(line + " "))
+        if found.group(1) != expected
+    ]
+
+
 def test_every_phpstan_instruction_quotes_the_limit_composer_actually_carries() -> None:
-    """composer.json is the invocation; a doc that quotes a different limit sends a
-    contributor at a ceiling CI does not use. Both policy files still said 1G after
-    the bump to 2G, which is how an unexplained stopgap becomes folklore (#2671)."""
+    """composer.json is the invocation; a doc quoting a different limit sends a contributor
+    at a ceiling CI does not use."""
     composer = json.loads((ROOT / "composer.json").read_text(encoding="utf-8"))
     canonical = _MEMORY_LIMIT.search(composer["scripts"]["phpstan"] + " ")
     assert canonical is not None, "composer.json's phpstan script carries no --memory-limit"
     expected = canonical.group(1)
 
     disagreeing = [
-        f"{where}:{line_no} says {found.group(1)}"
+        entry
         for where, text in _sources_quoting_a_phpstan_limit()
-        for line_no, line in enumerate(text.splitlines(), 1)
-        if "phpstan" in line.lower() and (found := _MEMORY_LIMIT.search(line + " "))
-        if found.group(1) != expected
+        for entry in _limits_disagreeing_with(expected, where, text)
     ]
 
     assert not disagreeing, f"composer phpstan runs at {expected}; these disagree: " + "; ".join(disagreeing)
+
+
+def test_the_limit_scan_catches_a_backslash_continued_command() -> None:
+    """The fixture a same-line scan misses: a continued invocation puts `phpstan` and its
+    ceiling on different lines, and only the ceiling line carries the flag."""
+    split = "vendor/bin/phpstan analyse --no-progress \\\n  --memory-limit=1G\n"
+    assert _limits_disagreeing_with("2G", "doc.md", split) == ["doc.md:2 says 1G"]
+    assert _limits_disagreeing_with("1G", "doc.md", split) == []
