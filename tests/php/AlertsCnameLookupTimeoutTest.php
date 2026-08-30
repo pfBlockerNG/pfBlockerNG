@@ -9,6 +9,12 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 {
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
 
+	/**
+	 * Salvage cap for the worker's end-of-run signal. It exists only to reap a stuck
+	 * run; whether the lookup completed is decided by the worker's own result file.
+	 */
+	private const LOOKUP_SALVAGE_SECONDS = 60;
+
 	private string $tmp;
 
 	protected function setUp(): void
@@ -24,7 +30,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 
 	public function testSuccessfulCnameOutputIsReadFromFile(): void
 	{
-		$run = $this->runLookup(FALSE, FALSE);
+		$run = $this->runLookup(stall: FALSE);
 
 		$this->assertTrue($run['completed'], 'lookup worker must complete; child output: ' . $run['child_log']);
 		$this->assertSame(['alias.example.com'], $run['cname_list'], 'completed CNAME output must be read from the regular file');
@@ -35,7 +41,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 
 	public function testTimeoutDiscardsPartialOutputAndLogsExpiry(): void
 	{
-		$run = $this->runLookup(TRUE, TRUE);
+		$run = $this->runLookup(stall: TRUE);
 
 		$this->assertTrue($run['completed'], 'bounded lookup must return after the fixture stalls; child output: ' . $run['child_log']);
 		$this->assertTrue($run['partial_seen'], 'drill must emit partial output before the timeout fires');
@@ -58,7 +64,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 
 	public function testDrillFailureDiscardsPartialOutput(): void
 	{
-		$run = $this->runLookup(FALSE, FALSE, TRUE, FALSE, TRUE);
+		$run = $this->runLookup(stall: FALSE, drillFails: TRUE);
 
 		$this->assertTrue($run['completed'], 'failed drill must not abort the request; child output: ' . $run['child_log']);
 		$this->assertTrue($run['partial_seen'], 'drill must emit partial output before failing');
@@ -70,7 +76,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 
 	public function testCaptureFailureIsLoggedWithoutReadingMissingFile(): void
 	{
-		$run = $this->runLookup(FALSE, FALSE, FALSE);
+		$run = $this->runLookup(stall: FALSE, captureAvailable: FALSE);
 
 		$this->assertTrue($run['completed'], 'capture failure must not abort the request; child output: ' . $run['child_log']);
 		$this->assertSame([], $run['cname_list'], 'capture failure must not produce CNAME data');
@@ -81,7 +87,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 
 	public function testMissingCaptureAfterSuccessfulLookupIsLogged(): void
 	{
-		$run = $this->runLookup(FALSE, FALSE, TRUE, TRUE);
+		$run = $this->runLookup(stall: FALSE, removeCapture: TRUE);
 
 		$this->assertTrue($run['completed'], 'missing capture must not abort the request; child output: ' . $run['child_log']);
 		$this->assertSame([], $run['cname_list'], 'missing capture must not produce CNAME data');
@@ -109,18 +115,27 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 	/**
 	 * @return array{completed:bool,cname_list:list<string>,timeout_calls:list<list<string>>,log:string,capture_files:list<string>,child_log:string,drill_path:string,partial_seen:bool}
 	 */
-	private function runLookup(bool $stall, bool $expectTimeout, bool $captureAvailable = TRUE, bool $removeCapture = FALSE, bool $drillFails = FALSE): array
+	private function runLookup(bool $stall, bool $captureAvailable = TRUE, bool $removeCapture = FALSE, bool $drillFails = FALSE): array
 	{
 		$marker = "{$this->tmp}/stall marker.log";
 		$timeout_log = "{$this->tmp}/timeout args.log";
 		$timeout_flag = "{$this->tmp}/timeout fired";
 		$result = "{$this->tmp}/lookup result.json";
 		$child_log = "{$this->tmp}/child output.log";
+		// Two signals carry the events this harness used to poll a clock for: the drill
+		// announcing its partial output, and the worker reaching end of run.
+		$partial_signal = "{$this->tmp}/partial signal";
+		$done_signal = "{$this->tmp}/done signal";
+		$this->assertTrue(posix_mkfifo($partial_signal, 0600), 'could not create the partial-output signal');
+		$this->assertTrue(posix_mkfifo($done_signal, 0600), 'could not create the end-of-run signal');
 
 		$drill = $this->fixture('drill fixture.sh',
 			"printf '%s\\n' --START-- \"\$\$\" >> " . escapeshellarg($marker) . "\n"
 			. "printf '%b\\n' 'partial.example.com.\\t300\\tIN\\tCNAME\\talias.example.com.'\n"
 			. "printf '%s\\n' --PARTIAL-WRITTEN-- >> " . escapeshellarg($marker) . "\n"
+			// '1<>' opens read-write, so announcing partial output can never block the
+			// drill on a reader, in the runs where nobody is listening for it.
+			. "printf 'partial\\n' 1<> " . escapeshellarg($partial_signal) . "\n"
 			. ($drillFails ? "exit 7\n" : '')
 			. ($stall ? "while true; do sleep 1; done\n" : '')
 		);
@@ -128,11 +143,15 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			"printf '%s\\n' --CALL-- >> " . escapeshellarg($timeout_log) . "\n"
 			. "printf '%s\\n' \"\$@\" >> " . escapeshellarg($timeout_log) . "\n"
 			. "shift 5\n"
+			// Hold the signal open BEFORE the drill starts, so its announcement cannot be
+			// written into a pipe this shim has not attached to yet.
+			. ($stall ? "exec 9<> " . escapeshellarg($partial_signal) . "\n" : '')
 			. "\"\$@\" & child=\$!\n"
 			. ($stall
-				? "tries=0\nwhile ! grep -q -- --PARTIAL-WRITTEN-- " . escapeshellarg($marker) . "; do\n"
-					. "tries=\$((tries + 1)); [ \"\$tries\" -ge 200 ] && { kill -TERM \$child 2>/dev/null; wait \$child 2>/dev/null; exit 125; }; sleep 0.01\n"
-					. "done\ntouch " . escapeshellarg($timeout_flag) . "; kill -TERM \$child 2>/dev/null\n"
+				// Block on the drill's announcement instead of budgeting poll attempts:
+				// a starved drill now delays this shim rather than being declared silent.
+				? "read -r _ <&9\n"
+					. "touch " . escapeshellarg($timeout_flag) . "; kill -TERM \$child 2>/dev/null\n"
 				: '')
 			. "wait \$child; rc=\$?\n"
 			. ($removeCapture ? "rm -f " . escapeshellarg($this->tmp) . "/pfb_alerts_cname_*\n" : '')
@@ -148,6 +167,11 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$worker_code = "<?php\n"
 			. 'require_once ' . var_export($bootstrap, TRUE) . ";\n"
 			. "if (function_exists('posix_setsid')) { posix_setsid(); }\n"
+			// Announce end of run from a shutdown handler, so a worker that dies before
+			// writing its result still reports in and is graded as a failed lookup rather
+			// than as a stuck host.
+			. 'register_shutdown_function(static function (): void { $signal = fopen('
+				. var_export($done_signal, TRUE) . ", 'r+'); fwrite(\$signal, \"done\\n\"); fclose(\$signal); });\n"
 			. 'eval(' . var_export($function, TRUE) . ");\n"
 			. '$GLOBALS[\'pfb\'][\'extdns\'] = \'127.0.0.1\';' . "\n"
 			. '$GLOBALS[\'pfb\'][\'drill\'] = ' . var_export($drill, TRUE) . ";\n"
@@ -166,6 +190,10 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			1 => ['file', $child_log, 'ab'],
 			2 => ['file', $child_log, 'ab'],
 		];
+		// Hold the signal open BEFORE the worker starts: a worker that finishes at once
+		// must not be able to report into a pipe this side has not attached to yet.
+		$done = fopen($done_signal, 'r+');
+		$this->assertIsResource($done, 'could not open the end-of-run signal');
 		$process = proc_open([PHP_BINARY, $worker], $descriptors, $pipes);
 		if (!is_resource($process)) {
 			throw new RuntimeException('could not start lookup worker');
@@ -173,41 +201,41 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$worker_status = proc_get_status($process);
 		$worker_pid = (int) ($worker_status['pid'] ?? 0);
 
-		$completed = FALSE;
-		$marker_seen = FALSE;
-		$failure = NULL;
+		$reported = FALSE;
 		try {
-			$deadline = microtime(TRUE) + 8.0;
-			while (microtime(TRUE) < $deadline) {
-				if (is_file($marker)) {
-					$marker_seen = TRUE;
-				}
-				if (is_file($result)) {
-					break;
-				}
-				usleep(10_000);
-			}
-
-			$completed = is_file($result);
-			$failure = !$completed && $expectTimeout
-				? 'STUCK/ENVIRONMENT: bounded lookup did not return; marker=' . ($marker_seen ? 'seen' : 'missing')
-				: NULL;
+			// Consume the worker's own end-of-run event. The cap is a salvage bound whose
+			// only job is reaping a stuck run -- it never decides whether the lookup
+			// completed, which is what the result file below says.
+			$read = [$done];
+			$write = NULL;
+			$except = NULL;
+			$reported = stream_select($read, $write, $except, self::LOOKUP_SALVAGE_SECONDS) === 1
+				&& fgets($done) === "done\n";
 		} finally {
-			if (!$completed) {
+			if (!$reported) {
 				$group_killed = $worker_pid > 0 && function_exists('posix_kill') && @posix_kill(-$worker_pid, 9);
 				if (!$group_killed) {
 					proc_terminate($process, 9);
 				}
 			}
 			proc_close($process);
+			fclose($done);
 		}
 		$drill_pid = $this->fixturePid($marker);
 		if ($drill_pid !== NULL && function_exists('posix_kill')) {
 			@posix_kill($drill_pid, 9);
 		}
-		if ($failure !== NULL) {
-			$this->fail($failure);
+		if (!$reported) {
+			$this->fail(sprintf(
+				'STUCK/ENVIRONMENT: the lookup worker never reached its end-of-run signal within %ds, '
+				. 'so this run is stuck or its host starved the worker -- not a CNAME lookup verdict '
+				. '(drill marker %s, child output: %s)',
+				self::LOOKUP_SALVAGE_SECONDS,
+				is_file($marker) ? 'seen' : 'missing',
+				is_file($child_log) ? (string) file_get_contents($child_log) : '(none)'
+			));
 		}
+		$completed = is_file($result);
 
 		$payload = is_file($result) ? json_decode((string) file_get_contents($result), TRUE) : [];
 		$timeout_calls = $this->timeoutCalls($timeout_log);
