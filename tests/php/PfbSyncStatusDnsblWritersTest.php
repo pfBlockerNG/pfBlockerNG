@@ -45,7 +45,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		mkdir($this->dir, 0777, TRUE);
 
 		foreach (['dnsbldir', 'dbdir', 'dnsbl_file', 'unbound_py_count', 'chroot_cmd',
-			  'dnsbl_python_unmount', 'log', 'errlog'] as $k) {
+			  'dnsbl_python_unmount', 'log', 'errlog', 'php'] as $k) {
 			$this->savedPfb[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
 		}
 		foreach (['varrun_path'] as $k) {
@@ -56,6 +56,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$GLOBALS['pfb']['dbdir']    = $this->dir;
 		$GLOBALS['pfb']['log']      = "{$this->dir}/pfblockerng.log";
 		$GLOBALS['pfb']['errlog']   = "{$this->dir}/error.log";
+		$GLOBALS['pfb']['php']      = PHP_BINARY;
 		$GLOBALS['pfb_test_process_running'] = ['unbound' => TRUE];
 	}
 
