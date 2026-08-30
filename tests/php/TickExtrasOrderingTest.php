@@ -10,11 +10,15 @@ final class TickExtrasOrderingTest extends TestCase
 	private string $dir = '';
 	private mixed $pfb = NULL;
 	private mixed $config = NULL;
+	private bool $hadG = FALSE;
+	private mixed $originalG = NULL;
 
 	protected function setUp(): void
 	{
 		$this->pfb = $GLOBALS['pfb'];
 		$this->config = $GLOBALS['config'] ?? NULL;
+		$this->hadG = array_key_exists('g', $GLOBALS);
+		$this->originalG = $GLOBALS['g'] ?? NULL;
 		$this->dir = sys_get_temp_dir() . '/pfb_tick_extras_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir . '/state', 0777, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
@@ -66,7 +70,11 @@ final class TickExtrasOrderingTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		unset($GLOBALS['g']['pfblockerng_install']);
+		if ($this->hadG) {
+			$GLOBALS['g'] = $this->originalG;
+		} else {
+			unset($GLOBALS['g']);
+		}
 		$GLOBALS['pfb'] = $this->pfb;
 		$GLOBALS['config'] = $this->config;
 		$this->remove($this->dir);
