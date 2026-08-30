@@ -10321,6 +10321,47 @@
             }
         ]
     },
+    "pfb_schedule_cache_candidate_stage": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
+        ]
+    },
     "pfb_schedule_cache_candidate_validate": {
         "returnsRef": false,
         "returnType": "bool",
