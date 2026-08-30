@@ -21,8 +21,6 @@
  */
 
 require('guiconfig.inc');
-$shortcut_section = 'pfblockerng';
-include('head.inc');
 
 $title = $host = $domain = $port = '';
 if (isset($_REQUEST)) {
@@ -67,6 +65,8 @@ if (empty($host) && empty($domain) && empty($port)) {
 
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Alerts'), gettext("Threat {$title} Lookup"));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '/pfblockerng/pfblockerng_alerts.php', '@self');
+$shortcut_section = 'pfblockerng';
+include('head.inc');
 ?>
 
 <div class="panel panel-default">
