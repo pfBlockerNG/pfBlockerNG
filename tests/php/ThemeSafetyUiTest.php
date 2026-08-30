@@ -81,6 +81,37 @@ final class ThemeSafetyUiTest extends TestCase
 	}
 
 	/**
+	 * Backgrounds a neighbouring colour used to launder, and the pairings that are real.
+	 *
+	 * The window that decides "is this background paired" is the whole guard. Both defects
+	 * it had were a colour belonging to a different element landing inside that window:
+	 * a nested object's (issue #2892) and an adjacent statement's (issue #2866). Each row
+	 * states the shape and whether it is genuinely paired.
+	 *
+	 * @return array<string, array{0: string, 1: bool}>
+	 */
+	public static function pairingWindows(): array
+	{
+		return [
+			'nested object colour'     => ['$(x).css({"background-color": "#123456", extra: {color: "nope"}});', FALSE],
+			'nested rule colour'       => ['.a { background-color: #123456; nested: { color: red; } }', FALSE],
+			'sibling statement colour' => ["\$bg = 'background-color: #FFFF00;';\n\$s = 'color: black;';", FALSE],
+			'inline style, unpaired'   => ['$bg = \'background-color: #FFFF00;\';', FALSE],
+			'inline style, paired'     => ['$bg = \'background-color: #FFFF00; color: black;\';', TRUE],
+			'same object colour'       => ['$(x).css({"background-color": "#123456", color: "red"});', TRUE],
+			'same rule colour'         => ['.a { background-color: #123456; color: red; }', TRUE],
+			'outer rule pairs nested'  => ['.a { color: red; background-color: #123456; nested: { top: 0; } }', TRUE],
+		];
+	}
+
+	#[DataProvider('pairingWindows')]
+	public function testOnlyAColourOnTheSameElementPairsABackground(string $source, bool $paired): void
+	{
+		$this->assertSame($paired, self::scan($source) === [],
+			($paired ? 'wrongly reported unpaired: ' : 'a neighbouring colour laundered: ') . $source);
+	}
+
+	/**
 	 * Every syntax scan() detects, in its unpaired and paired form.
 	 *
 	 * @return array<string, array{0: string, 1: string}>
@@ -264,29 +295,130 @@ final class ThemeSafetyUiTest extends TestCase
 		return $found;
 	}
 
+	/**
+	 * The declarations that actually share an element with the background at $offset.
+	 *
+	 * Three shapes, most specific first. A background written inside a string literal is an
+	 * inline style attribute, so only that string can pair it -- the enclosing PHP or JS
+	 * block is code, not a rule, and its neighbours belong to other elements (issue #2866).
+	 * A background in a real block is paired only by that block's own declarations, so
+	 * nested blocks are removed rather than read as siblings (issue #2892).
+	 */
 	private static function declarationContext(string $source, int $offset): string
 	{
-		$before = substr($source, 0, $offset);
-		$brace = strrpos($before, '{');
-		if ($brace !== FALSE) {
-			$end = strpos($source, '}', $brace);
-			if ($end !== FALSE && $end >= $offset) {
-				return substr($source, $brace, $end - $brace + 1);
+		$inline = self::enclosingString($source, $offset);
+		if ($inline !== NULL) {
+			return $inline;
+		}
+		$block = self::enclosingBlock($source, $offset);
+		if ($block !== NULL) {
+			return self::withoutNestedBlocks(substr($source, $block[0], $block[1] - $block[0] + 1));
+		}
+		return substr($source, max(0, $offset - 80), 160);
+	}
+
+	/** The string literal containing $offset, or NULL when it is not inside one. */
+	private static function enclosingString(string $source, int $offset): ?string
+	{
+		$lineStart = strrpos(substr($source, 0, $offset), "\n");
+		$lineStart = $lineStart === FALSE ? 0 : $lineStart + 1;
+
+		$quote = NULL;
+		$open = 0;
+		for ($i = $lineStart; $i < $offset; $i++) {
+			if ($source[$i] === '\\') {
+				$i++;
+				continue;
+			}
+			if ($source[$i] !== "'" && $source[$i] !== '"') {
+				continue;
+			}
+			if ($quote === NULL) {
+				$quote = $source[$i];
+				$open = $i;
+			} elseif ($quote === $source[$i]) {
+				$quote = NULL;
 			}
 		}
-		$sq = strrpos($before, "'");
-		$dq = strrpos($before, '"');
-		if ($sq !== FALSE && ($dq === FALSE || $sq > $dq)) {
-			$start = $sq;
-			$quote = "'";
-		} elseif ($dq !== FALSE) {
-			$start = $dq;
-			$quote = '"';
-		} else {
-			return substr($source, max(0, $offset - 80), 160);
+		if ($quote === NULL) {
+			return NULL;
 		}
-		$end = strpos($source, $quote, $start + 1);
-		return $end === FALSE ? substr($source, $start) : substr($source, $start, $end - $start + 1);
+
+		$lineEnd = strpos($source, "\n", $offset);
+		$lineEnd = $lineEnd === FALSE ? strlen($source) : $lineEnd;
+		for ($i = $offset; $i < $lineEnd; $i++) {
+			if ($source[$i] === '\\') {
+				$i++;
+				continue;
+			}
+			if ($source[$i] === $quote) {
+				return substr($source, $open, $i - $open + 1);
+			}
+		}
+		return substr($source, $open, $lineEnd - $open);
+	}
+
+	/**
+	 * Offsets of the innermost brace block containing $offset, or NULL at top level.
+	 *
+	 * @return array{0: int, 1: int}|null
+	 */
+	private static function enclosingBlock(string $source, int $offset): ?array
+	{
+		$stack = [];
+		for ($i = 0; $i < $offset; $i++) {
+			if ($source[$i] === '{') {
+				$stack[] = $i;
+			} elseif ($source[$i] === '}') {
+				array_pop($stack);
+			}
+		}
+		if ($stack === []) {
+			return NULL;
+		}
+
+		$start = (int)end($stack);
+		$depth = 0;
+		$length = strlen($source);
+		for ($i = $start; $i < $length; $i++) {
+			if ($source[$i] === '{') {
+				$depth++;
+			} elseif ($source[$i] === '}') {
+				$depth--;
+				if ($depth === 0) {
+					return [$start, $i];
+				}
+			}
+		}
+		return [$start, $length - 1];
+	}
+
+	/** The block's own declarations, with every nested block's contents dropped. */
+	private static function withoutNestedBlocks(string $block): string
+	{
+		$out = '';
+		$depth = 0;
+		$length = strlen($block);
+		for ($i = 0; $i < $length; $i++) {
+			if ($block[$i] === '{') {
+				$depth++;
+				if ($depth === 1) {
+					$out .= $block[$i];
+				}
+				continue;
+			}
+			if ($block[$i] === '}') {
+				$depth--;
+				if ($depth === 0) {
+					$out .= $block[$i];
+				}
+				continue;
+			}
+			if ($depth <= 1) {
+				$out .= $block[$i];
+			}
+		}
+		return $out;
 	}
 
 	private static function contextHasForeground(string $ctx): bool
