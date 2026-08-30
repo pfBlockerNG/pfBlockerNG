@@ -49,7 +49,9 @@ def test_list_textareas_do_not_force_unpaired_fafafa(webui: WebUI) -> None:
         assert "background:#fafafa" not in resp.text, path
 
 
-_INLINE_STYLE = re.compile(r'style\s*=\s*"([^"]*)"')
+# A boundary before "style", or data-style="…" is read as a style attribute and its
+# value judged as one. Both quote delimiters, or a single-quoted style slips the check.
+_INLINE_STYLE = re.compile(r"""(?<![-\w])style\s*=\s*(?P<q>["'])(?P<value>[^"']*)(?P=q)""", re.IGNORECASE)
 _OPAQUE_BACKGROUND = re.compile(r"background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)")
 _FOREGROUND = re.compile(r"(?<![-\w])color\s*:")
 
@@ -69,7 +71,8 @@ def test_no_inline_style_paints_an_unpaired_background(webui: WebUI) -> None:
         resp = webui.get(path)
         assert resp.status_code == 200, path
         assert marker in resp.text, path
-        for style in _INLINE_STYLE.findall(resp.text):
+        for match in _INLINE_STYLE.finditer(resp.text):
+            style = match.group("value")
             if not _OPAQUE_BACKGROUND.search(style):
                 continue
             if "rgba(" in style or "transparent" in style:
