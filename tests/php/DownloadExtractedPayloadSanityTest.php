@@ -6,6 +6,8 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/HttpFixtureReadiness.php';
+
 /**
  * Issue #2660 — the content-sanity verdicts must also cover an archive feed's
  * EXTRACTED payload, not only a body libmagic already calls text.
@@ -341,25 +343,40 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 		$this->assertSame($flag, PfbConfig::read('gen/pfb_feed_sanity'), 'the scan flag must be set for this row');
 
 		$router = "{$this->dir}/router.php";
-		$this->assertNotFalse(file_put_contents($router, "<?php\nreadfile(" . var_export($source, TRUE) . ");\n"));
-		$descriptors = [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']];
+		$routerSrc = <<<'PHP'
+<?php
+$uri = $_SERVER['REQUEST_URI'] ?? '';
+if (str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+		echo getenv('READY_TOKEN');
+	}
+	return;
+}
+readfile(%s);
+PHP;
+		$this->assertNotFalse(file_put_contents($router, sprintf($routerSrc, var_export($source, TRUE))));
+		$failures = [];
 		$port = 0;
 		for ($try = 0; $try < 10 && $port === 0; $try++) {
 			$candidate = random_int(20000, 60000);
+			$nonce = bin2hex(random_bytes(16));
+			$stderr = "{$this->dir}/server-{$candidate}-{$try}.stderr";
 			$proc = proc_open(
 				['php', '-S', "127.0.0.1:{$candidate}", $router],
-				$descriptors,
+				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->dir,
-				['PATH' => (string) getenv('PATH')]
+				[
+					'READY_TOKEN' => $nonce,
+					'PATH' => (string) getenv('PATH'),
+				]
 			);
 			if (!is_resource($proc)) {
+				$failures[] = "port {$candidate}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
 			for ($poll = 0; $poll < 40; $poll++) {
-				$sock = @fsockopen('127.0.0.1', $candidate, $errno, $errstr, 0.05);
-				if ($sock !== FALSE) {
-					fclose($sock);
+				if (pfb_test_http_fixture_event_received($candidate, $nonce)) {
 					$this->server = $proc;
 					$port = $candidate;
 					break;
@@ -367,11 +384,27 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 				usleep(50000);
 			}
 			if ($port === 0) {
-				proc_terminate($proc);
-				proc_close($proc);
+				$status = proc_get_status($proc);
+				if ($status['running']) {
+					proc_terminate($proc);
+				}
+				$closeExit = proc_close($proc);
+				$stderrText = trim((string) @file_get_contents($stderr));
+				$failures[] = sprintf(
+					'port %d: process[running=%s exit=%d close=%d] stderr=%s',
+					$candidate,
+					$status['running'] ? 'true' : 'false',
+					$status['exitcode'],
+					$closeExit,
+					$stderrText === '' ? '(empty)' : $stderrText
+				);
 			}
 		}
-		$this->assertGreaterThan(0, $port, 'loopback HTTP fixture unavailable');
+		$this->assertGreaterThan(
+			0,
+			$port,
+			'loopback HTTP fixture unavailable; ' . implode(' | ', $failures)
+		);
 
 		return pfb_download(new PfbDownloadRequest(
 			listUrl: "http://127.0.0.1:{$port}/feed",
