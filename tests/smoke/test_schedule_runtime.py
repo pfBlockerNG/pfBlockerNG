@@ -117,7 +117,7 @@ echo '<<<SCHEDULE>>>' . json_encode($out) . '<<<END>>>';
 
 
 def test_persisted_schedule_runs_once_in_locked_runtime_order(deployed_vm: SmokeVM) -> None:
-    """Persist migration/runtime inputs, run the real tick, and prove once-only ordering."""
+    """Seed a fresh install, persist migration/runtime inputs, run the real tick, prove once-only ordering."""
     snippet = r"""
 require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 pfb_global();
@@ -137,6 +137,15 @@ $state_before = is_file($state_path) ? file_get_contents($state_path) : NULL;
 $cache_before = is_file($cache_path) ? file_get_contents($cache_path) : NULL;
 $out = array();
 try {
+    // Cause the virgin-install image instead of inheriting it (issue #2900): the
+    // cross-module baseline (conftest.py::_pfb_module_baseline) unsets these very
+    // keys, and pfb_schedule_migrate() reads General's operator view for freshness.
+    config_set_path($paths[0], array());
+    config_set_path($paths[1], array());
+    config_set_path($paths[2], array());
+    config_set_path($paths[3], array());
+    write_config('pfBlockerNG smoke #2308: fresh-install scheduler image');
+    pfb_run_migrations();
     $fresh = config_get_path($paths[0], array());
     $out['fresh'] = array(
         'master' => $fresh['pfb_scheduled_feed_updates'] ?? NULL,
