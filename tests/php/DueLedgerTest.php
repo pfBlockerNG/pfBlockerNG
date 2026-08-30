@@ -832,6 +832,45 @@ final class DueLedgerTest extends TestCase
 	}
 
 	/**
+	 * set_pending records a deferral without touching anything the tick owns.
+	 *
+	 * The live smoke test (test_update_runnow_does_not_publish_schedule_cache) compares
+	 * the ledger across a Run Now and tolerates exactly this one key, because a deferred
+	 * pass legitimately writes it. That tolerance is only safe if set_pending really does
+	 * leave the cache identity and every schedule field alone.
+	 *
+	 * Scenario:
+	 *   Given a published cache with a _meta identity and a cron entry with a schedule.
+	 *   When  set_pending marks the job deferred.
+	 *   Then  only pending_apply appears -- _meta, last_run, next_due and jitter are
+	 *         byte-for-byte what they were, and no job is added or removed.
+	 */
+	public function testSetPendingLeavesTheCacheIdentityAndScheduleUntouched(): void
+	{
+		$hash    = str_repeat('a', 64);
+		$entries = [
+			'cron'      => ['last_run' => 1000, 'next_due' => 2000, 'jitter' => 7],
+			'extra:dcc' => ['last_run' => 3000, 'next_due' => 4000, 'jitter' => 11],
+		];
+		$this->assertTrue(pfb_due_ledger_write_cache($entries, $hash, $this->dir),
+			'the fixture cache must publish');
+		$before = json_decode((string)file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
+
+		$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir),
+			'set_pending must publish its marker');
+		$after = json_decode((string)file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
+
+		$this->assertTrue($after['cron']['pending_apply'], 'the deferral marker must be recorded');
+		$this->assertSame(array_keys($before), array_keys($after),
+			'set_pending must not add or remove a job');
+		$this->assertSame($before['_meta'], $after['_meta'],
+			'set_pending must not republish the cache identity the tick owns');
+		unset($after['cron']['pending_apply']);
+		$this->assertSame($before, $after,
+			'set_pending must change nothing but the deferral marker');
+	}
+
+	/**
 	 * A set_pending placeholder (next_due=0, no real prior schedule) has nothing
 	 * meaningful to anchor to — behaves exactly like plain mark_ran (base = now).
 	 *
