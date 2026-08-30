@@ -2299,11 +2299,10 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 	if (!empty($input) && empty($result) &&
 	    !in_array($type, array(PFB_FILTER_URL, PFB_FILTER_FILE_MIME_COMPARE, PFB_FILTER_FILE_MIME, PFB_FILTER_FILE_MIME_COMPRESSED, PFB_FILTER_ON_OFF, PFB_FILTER_NUM))) {
 
-		// Exceptions -- callers whose rejected input must never be logged, even at
-		// debug level: 'DNSBL_Download' (parsed feed lines -- volume); 'top1m_token'
-		// (ADR-59 -- the secret itself, not merely its download URL); 'maxmind_key'
-		// (issue #924 -- same masked/write-only treatment for the MaxMind license key).
-		if (in_array($reference, array('DNSBL_Download', 'top1m_token', 'maxmind_key'))) {
+		// Exceptions: parsed feed-line volume, plus write-only credentials whose rejected
+		// values must never be logged: top1m_token (ADR-59), maxmind_key (#924),
+		// and asn_token (#2922).
+		if (in_array($reference, array('DNSBL_Download', 'top1m_token', 'maxmind_key', 'asn_token'))) {
 			//
 		} else {
 			pfb_logger("{$header} Failed validation [ " . htmlspecialchars($input) . " ]", 6);
