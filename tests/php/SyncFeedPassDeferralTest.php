@@ -123,6 +123,28 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertTrue(flock($this->lockFp, LOCK_EX), 'test setup: failed to flock the lock file');
 	}
 
+	private function seedCronRetryState(bool $pending): void
+	{
+		$now = time();
+		$this->assertTrue(pfb_due_ledger_write_entry('cron', [
+			'last_run' => $now - 3600,
+			'next_due' => $now + 3600,
+			'jitter' => 0,
+		], $this->dbdir));
+		if ($pending) {
+			pfb_due_ledger_set_pending('cron', $this->dbdir);
+			pfb_mark_pending_changes();
+		}
+	}
+
+	private function assertDurableRetryState(): void
+	{
+		$this->assertTrue(pfb_pending_changes(), 'the durable pending marker must preserve the skipped request');
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dbdir),
+			'the cron due-ledger entry must remain pending so the next tick retries');
+	}
+
+
 	// -----------------------------------------------------------------------
 	// The RED->GREEN pinning test.
 	// -----------------------------------------------------------------------
@@ -202,6 +224,7 @@ final class SyncFeedPassDeferralTest extends TestCase
 
 	public function testDispatcherOpenErrorIsFailureNotContention(): void
 	{
+		$this->seedCronRetryState(FALSE);
 		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
 		$deferredBy = NULL;
 
@@ -209,10 +232,12 @@ final class SyncFeedPassDeferralTest extends TestCase
 
 		$this->assertFalse($result, 'dispatcher open error must remain a real failure');
 		$this->assertNull($deferredBy, 'dispatcher open error must map to CLI rc=1, not lock-deferral rc=75');
+		$this->assertDurableRetryState();
 	}
 
 	public function testDispatcherFlockErrorIsFailureNotContention(): void
 	{
+		$this->seedCronRetryState(FALSE);
 		$this->assertTrue(stream_wrapper_register('pfbdispatchflockerror', PfbFailingFlockStream::class));
 		try {
 			$GLOBALS['pfb']['schedule_state_dir'] = 'pfbdispatchflockerror://state';
@@ -225,12 +250,15 @@ final class SyncFeedPassDeferralTest extends TestCase
 		} finally {
 			stream_wrapper_unregister('pfbdispatchflockerror');
 		}
+		$this->assertDurableRetryState();
 	}
 
 	public function testFeedPassFlockErrorIsFailureNotContention(): void
 	{
+		$GLOBALS['pfb']['pending_marker'] = "{$this->dbdir}/pfb_pending_changes";
 		$this->assertTrue(stream_wrapper_register('pfbfeedflockerror', PfbFailingFlockStream::class));
 		$originalVardbPath = $GLOBALS['g']['vardb_path'];
+		$originalDbdir = $GLOBALS['pfb']['dbdir'];
 		try {
 			$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
 			$GLOBALS['g']['vardb_path'] = 'pfbfeedflockerror://feed';
@@ -243,8 +271,11 @@ final class SyncFeedPassDeferralTest extends TestCase
 			$this->assertNull($deferredBy, 'feed-pass flock error must map to CLI rc=1, not lock-deferral rc=75');
 		} finally {
 			$GLOBALS['g']['vardb_path'] = $originalVardbPath;
+			$GLOBALS['pfb']['dbdir'] = $originalDbdir;
 			stream_wrapper_unregister('pfbfeedflockerror');
 		}
+		$this->assertTrue(pfb_pending_changes(),
+			'the real durable pending marker must preserve the request when the feed-lock filesystem fails');
 	}
 
 }
