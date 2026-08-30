@@ -9,9 +9,8 @@ use PHPUnit\Framework\TestCase;
  * Oracle tests for pfb_mime_in_allowlist() — extracted pure helper that
  * encapsulates the $pfb['mime_types'] membership lookup.
  *
- * These tests pin the shipped allow-list behaviour. setUp() repopulates
- * $pfb['mime_types'] from the canonical list on every run so sibling-test
- * tearDown() calls that unset the global do not affect these oracles.
+ * These tests pin the shipped allow-list behaviour. setUp() installs the
+ * canonical fixture for each run; tearDown() restores the prior global state.
  *
  * Entries (b) and (c) pin defensive baseline strings — types NOT emitted by
  * stock FreeBSD libmagic for real ZIPs, but canonicalised by pfb_mime_normalise()
@@ -24,11 +23,17 @@ final class PfbMimeAllowlistTest extends TestCase
 {
 	private array $allowlist;
 
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
 	protected function setUp(): void
 	{
-		// Always repopulate from the canonical shipped list (pfblockerng.inc:274-289)
-		// so sibling-test tearDown() calls that unset $pfb['mime_types'] cannot
-		// affect these oracles. If the shipped list changes, update this mirror.
+		$this->saved['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? [])
+			? $GLOBALS['pfb']['mime_types']
+			: FALSE;
+
+		// Use the canonical shipped-list mirror for these allow-list oracles.
+		// If the shipped list changes, update this mirror.
 		$GLOBALS['pfb']['mime_types'] = array_flip([
 			'inode/x-empty', 'text/x-file',
 			'text/plain', 'text/html', 'text/xml', 'text/csv',
@@ -42,7 +47,13 @@ final class PfbMimeAllowlistTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		unset($GLOBALS['pfb']['mime_types']);
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === FALSE) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
 	}
 
 	public function test_pfb_mime_allowlist_accepts_canonical_zip(): void

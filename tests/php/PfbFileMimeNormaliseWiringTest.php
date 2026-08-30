@@ -43,6 +43,9 @@ final class PfbFileMimeNormaliseWiringTest extends TestCase
 	private string $cwd;
 	private string $epubPath;
 
+	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
+	private array $saved = [];
+
 	protected function setUp(): void
 	{
 		$this->dir      = sys_get_temp_dir() . '/pfb_mime_wiring_' . uniqid('', TRUE);
@@ -51,6 +54,10 @@ final class PfbFileMimeNormaliseWiringTest extends TestCase
 		$this->epubPath = $this->dir . '/book.epub';
 
 		file_put_contents($this->epubPath, base64_decode(self::EPUB_B64, TRUE));
+
+		$this->saved['mime_types'] = array_key_exists('mime_types', $GLOBALS['pfb'] ?? [])
+			? $GLOBALS['pfb']['mime_types']
+			: FALSE;
 
 		// Only the wiring test's allow-list: application/zip is present,
 		// application/epub+zip is deliberately absent.
@@ -62,7 +69,13 @@ final class PfbFileMimeNormaliseWiringTest extends TestCase
 		chdir($this->cwd);
 		@unlink($this->epubPath);
 		@rmdir($this->dir);
-		unset($GLOBALS['pfb']['mime_types']);
+		foreach ($this->saved as $k => $prev) {
+			if ($prev === FALSE) {
+				unset($GLOBALS['pfb'][$k]);
+			} else {
+				$GLOBALS['pfb'][$k] = $prev;
+			}
+		}
 	}
 
 	/**
