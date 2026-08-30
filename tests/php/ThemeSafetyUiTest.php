@@ -93,14 +93,29 @@ final class ThemeSafetyUiTest extends TestCase
 	public static function pairingWindows(): array
 	{
 		return [
-			'nested object colour'     => ['$(x).css({"background-color": "#123456", extra: {color: "nope"}});', FALSE],
-			'nested rule colour'       => ['.a { background-color: #123456; nested: { color: red; } }', FALSE],
-			'sibling statement colour' => ["\$bg = 'background-color: #FFFF00;';\n\$s = 'color: black;';", FALSE],
-			'inline style, unpaired'   => ['$bg = \'background-color: #FFFF00;\';', FALSE],
-			'inline style, paired'     => ['$bg = \'background-color: #FFFF00; color: black;\';', TRUE],
-			'same object colour'       => ['$(x).css({"background-color": "#123456", color: "red"});', TRUE],
-			'same rule colour'         => ['.a { background-color: #123456; color: red; }', TRUE],
-			'outer rule pairs nested'  => ['.a { color: red; background-color: #123456; nested: { top: 0; } }', TRUE],
+			// Nested scopes: a colour one level in never pairs a background one level out.
+			'nested object colour'      => ['$(x).css({"background-color": "#123456", extra: {color: "nope"}});', FALSE],
+			'nested rule colour'        => ['.a { background-color: #123456; nested: { color: red; } }', FALSE],
+			'nested block before it'    => ['.a { nested: { color: red; } background-color: #123456; }', FALSE],
+			'pairing after that block'  => ['.a { background-color: #123456; nested: { top: 0; } color: red; }', TRUE],
+			'outer rule pairs nested'   => ['.a { color: red; background-color: #123456; nested: { top: 0; } }', TRUE],
+			// Issue #2866: a code block is not a rule, so a sibling statement cannot pair.
+			'sibling statement colour'  => ["if (\$x) {\n\t\$bg = 'background-color: #FFFF00;';\n\t\$f = \"<span style=\\\"color: black; background-color: #FFFF00;\\\">x</span>\";\n}", FALSE],
+			'inline style, unpaired'    => ['$bg = \'background-color: #FFFF00;\';', FALSE],
+			'inline style, paired'      => ['$bg = \'background-color: #FFFF00; color: black;\';', TRUE],
+			// A literal is often a whole fragment: one element must not pair another's.
+			'sibling element colour'    => ['$s = "<span style=\"color: black;\"></span><input style=\"background-color: #123456;\">";', FALSE],
+			'same element colour'       => ['$s = "<span style=\"color: black; background-color: #FFFF00;\">x</span>";', TRUE],
+			'single-quoted attribute'   => ['$s = \'<input style="background-color: #123456;">\';', FALSE],
+			// An apostrophe in prose is not a string opener.
+			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
+			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
+			// The two fallbacks, each pinned by a pairing further away than the window.
+			'no scope at all'           => ['background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', FALSE],
+			'unclosed block pairs'      => ['.a { background-color: #123456;' . str_repeat(' ', 200) . 'color: red;', TRUE],
+			// Same-scope pairings that must keep working.
+			'same object colour'        => ['$(x).css({"background-color": "#123456", color: "red"});', TRUE],
+			'same rule colour'          => ['.a { background-color: #123456; color: red; }', TRUE],
 		];
 	}
 
@@ -352,10 +367,44 @@ final class ThemeSafetyUiTest extends TestCase
 				continue;
 			}
 			if ($source[$i] === $quote) {
-				return substr($source, $open, $i - $open + 1);
+				return self::styleAttribute($source, $open, $i, $offset)
+					?? substr($source, $open, $i - $open + 1);
 			}
 		}
-		return substr($source, $open, $lineEnd - $open);
+		// The quote never closed on this line, so it was an apostrophe in prose, not a
+		// string opener. Truncating a context at end-of-line hides a pairing on the next
+		// one; let the block resolver answer instead.
+		return NULL;
+	}
+
+	/**
+	 * The innermost style="..." attribute inside a literal, when the background is in one.
+	 *
+	 * A PHP string is routinely a whole HTML fragment, not one attribute -- several sites
+	 * build a <span> and an <input> in the same literal. Resolving to the literal lets one
+	 * element's colour pair another's background, which is the #2866 defect one scope out.
+	 */
+	private static function styleAttribute(string $source, int $open, int $close, int $offset): ?string
+	{
+		$literal = substr($source, $open, $close - $open + 1);
+		$rel = $offset - $open;
+		if (preg_match_all('/style\s*=\s*(\\\\?)(["\'])/i', $literal, $matches, PREG_OFFSET_CAPTURE) < 1) {
+			return NULL;
+		}
+		$count = count($matches[0]);
+		for ($i = 0; $i < $count; $i++) {
+			$start = $matches[0][$i][1] + strlen($matches[0][$i][0]);
+			// The attribute's closing delimiter is written exactly as its opener was: in a
+			// PHP double-quoted literal that is \", so the backslash terminates rather
+			// than escapes. Skipping it as an escape runs the context past the element.
+			$terminator = $matches[1][$i][0] . $matches[2][$i][0];
+			$end = strpos($literal, $terminator, $start);
+			$end = $end === FALSE ? strlen($literal) : $end;
+			if ($rel >= $start && $rel < $end) {
+				return substr($literal, $start, $end - $start);
+			}
+		}
+		return NULL;
 	}
 
 	/**
