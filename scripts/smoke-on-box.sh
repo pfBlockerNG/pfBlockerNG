@@ -361,6 +361,8 @@ if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; the
     printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
     exit 2
 fi
+uv sync --locked --group smoke --group dep-pkg-build
+
 # ── Step 5c: this leg's dep pkgs (issue #1806 D2) ──────────────────────────── #
 # Read the SELECTED row's extra_pkgs (port origins pfSense's own repo doesn't
 # carry, e.g. textproc/py-charset-normalizer for CE) from the CURRENT ref's

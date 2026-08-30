@@ -162,12 +162,12 @@ jobs:
             PHP=$(printf '%s\n' "$ENTRY" | jq -r '.php_version')
             PY=$(printf '%s\n' "$ENTRY" | jq -r '.py_flavor')
 
-            # Filter to target version if specified. issue #1806: BUILD_MATRIX is
-            # now deduped to one row per runtime tuple (issue #2926), so PFSENSE/CHANNEL are
-            # whichever merged version last wrote that major's row — a
-            # target_version naming the OTHER version sharing that major won't
-            # match (no live collision today; both would build byte-identically
-            # anyway, since the reader hard-errors on a php/py mismatch).
+            # Filter to target version if specified. issue #2926: BUILD_MATRIX is
+            # now deduped to one row per runtime tuple, so PFSENSE/CHANNEL are
+            # whichever merged version last wrote that TUPLE's row — a
+            # target_version naming a SIBLING version of the SAME tuple won't
+            # match (no live collision today; sibling versions of one tuple
+            # build byte-identically anyway).
             if [ -n "$TARGET_VERSION" ] && [ "$PFSENSE" != "$TARGET_VERSION" ]; then
               echo "  [skip] ${PFSENSE} (${CHANNEL}) — does not match target '${TARGET_VERSION}'"
               continue
@@ -282,8 +282,9 @@ jobs:
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .
 
       # The reconcile needs EVERY family, one row per version: build_matrix is
-      # deduped to one row per runtime tuple (issue #2926), which hides a
-      # same-major family (26.03 vs 26.07) and blinds the boot source + the
+      # deduped to one row per runtime tuple (issue #2926), which hides the
+      # SIBLING VERSIONS of a merged same-tuple group (26.03 vs 26.07 share a
+      # tuple) and blinds the boot source + the
       # branch lookup (issue #1839). The route matrix is the never-deduped view.
       - name: Resolve the route matrix (never deduped)
         id: matrix

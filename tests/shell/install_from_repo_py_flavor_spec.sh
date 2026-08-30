@@ -91,10 +91,28 @@ STUBEOF
   End
 
 
-  It 'refuses a py_flavor when SMOKE_PY_FLAVOR is absent and a major holds two tuples'
+  It 'hard-fails an EXPLICIT tuple that matches ZERO matrix rows'
+    # issue #2926 review C: when the caller NAMES a tuple (image-refresh.yml
+    # exports the leg's exact row), zero matches must REJECT — a fall-through
+    # to the box probe would install a flavor the named tuple never asked for.
+    SMOKE_PHP_VERSION=9.9
+    SMOKE_PY_FLAVOR=py313
+    export SMOKE_PHP_VERSION SMOKE_PY_FLAVOR
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'no BUILD row matches the requested runtime tuple'
+    The stderr should include "SMOKE_PHP_VERSION='9.9'"
+    The stdout should include 'Installing pfBlockerNG'
+  End
+
+  It 'falls through to the BOX probe when no env is given and the matrix is ambiguous'
+    # The no-env regime stays functional: the matrix cannot decide, so the
+    # box's own installed py3xx (IPY_PROBE=py312 here) decides instead.
+    IPY_PROBE=py312
+    export IPY_PROBE
     When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
     The status should not equal 0
-    The stderr should include 'matches more than one BUILD row'
-    The stdout should include 'Installing pfBlockerNG'
+    The stderr should include 'unhandled remote command'
+    The stdout should include 'Python dep flavor for FreeBSD:16:amd64: py312'
   End
 End
