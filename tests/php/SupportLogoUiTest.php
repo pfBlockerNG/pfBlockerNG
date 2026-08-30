@@ -9,9 +9,8 @@ use PHPUnit\Framework\TestCase;
  * Support logo must not overflow a narrow viewport, must not clip the circle,
  * and must keep a light color-scheme so force-dark cannot wash the fills.
  *
- * Both shipped copies are held to one contract. They drifted before: issue #2863
- * found the wizard still carrying the fixed float column and the clipping viewBox
- * months after the General page was fixed, because only the General page was pinned.
+ * Both shipped copies are held to one contract -- issue #2863: pinning only the
+ * General page let the wizard keep the float column and clipping viewBox for months.
  */
 final class SupportLogoUiTest extends TestCase
 {
@@ -30,6 +29,8 @@ final class SupportLogoUiTest extends TestCase
 		$source = file_get_contents(dirname(__DIR__, 2) . '/' . $page);
 		$this->assertNotFalse($source, "{$page} must be readable");
 
+		$this->assertStringContainsString('class="row"', $source,
+			"{$page}: col-sm-* needs a row parent, or it carries Bootstrap's negative gutters uncancelled");
 		$this->assertStringContainsString('class="col-sm-9"', $source, "{$page}: fluid text column");
 		$this->assertStringContainsString('class="col-sm-3"', $source, "{$page}: fluid logo column");
 		$this->assertStringContainsString('viewBox="128 172 384 384"', $source,
@@ -37,6 +38,12 @@ final class SupportLogoUiTest extends TestCase
 		$this->assertStringContainsString('color-scheme: only light', $source, "{$page}: force-dark guard");
 		$this->assertStringContainsString('max-width:140pt', $source, "{$page}: bounded intrinsic width");
 		$this->assertStringContainsString('margin-left:auto;margin-right:auto', $source, "{$page}: centred");
+
+		// The Support block drifts as a whole, not just its logo: the reorganisation that
+		// centred the logo also reworded these two links, and only one copy was updated.
+		foreach (['Follow on X formerly Twitter', 'Contact Us'] as $label) {
+			$this->assertStringContainsString($label, $source, "{$page}: Support link copy drifted: {$label}");
+		}
 
 		foreach ([
 			'enable-background',
@@ -51,5 +58,40 @@ final class SupportLogoUiTest extends TestCase
 			$this->assertStringNotContainsString($retired, $source,
 				"{$page}: retired construction is back: {$retired}");
 		}
+	}
+
+	/**
+	 * Every logo copy in the tree, not just the two known ones: a third copy added
+	 * elsewhere would otherwise be free to ship the clipping viewBox unnoticed.
+	 */
+	public function testEverySvgViewBoxInTheTreeIsTheContractValue(): void
+	{
+		$root = dirname(__DIR__, 2) . '/src';
+		$found = [];
+		$files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
+		foreach ($files as $file) {
+			if (!$file->isFile() || str_contains($file->getPathname(), '/vendor/')) {
+				continue;
+			}
+			$body = file_get_contents($file->getPathname());
+			if ($body === FALSE) {
+				continue;
+			}
+			foreach (['/viewBox="([^"]*)"/'] as $pattern) {
+				if (preg_match_all($pattern, $body, $matches) > 0) {
+					foreach ($matches[1] as $box) {
+						$found[] = substr($file->getPathname(), strlen($root) + 1) . ': ' . $box;
+					}
+				}
+			}
+		}
+		sort($found);
+		$offenders = array_values(array_filter($found,
+			static fn (string $hit): bool => !str_ends_with($hit, ': 128 172 384 384')));
+
+		$this->assertNotSame([], $found, 'the scan found no viewBox at all -- it is not looking where it should');
+		$this->assertSame([], $offenders,
+			'every shipped SVG viewBox must be the contract value that contains the circle; found: '
+			. implode(' | ', $offenders));
 	}
 }
