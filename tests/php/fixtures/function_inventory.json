@@ -4518,7 +4518,15 @@
     "pfb_feed_pass_acquire": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "contended",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_feed_pass_begin": {
         "returnsRef": false,
@@ -4530,6 +4538,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "contended",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -4537,6 +4552,39 @@
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_feed_pass_deferral_message": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "deferred_by",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_feed_pass_exit_code": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "completed",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "deferred_by",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
     },
     "pfb_feed_pass_release": {
         "returnsRef": false,
@@ -10552,6 +10600,13 @@
                 "variadic": false,
                 "type": "float",
                 "default": "0.1"
+            },
+            {
+                "name": "contended",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -14351,6 +14406,13 @@
                 "variadic": false,
                 "type": "bool",
                 "default": "false"
+            },
+            {
+                "name": "deferred_by",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },
@@ -14505,6 +14567,13 @@
                 "variadic": false,
                 "type": null,
                 "default": "''"
+            },
+            {
+                "name": "deferred_by",
+                "byRef": true,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
             }
         ]
     },

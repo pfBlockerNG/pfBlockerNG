@@ -135,8 +135,9 @@ final class UpdateRunNowScheduleOwnershipTest extends TestCase
 	public function testDetachedCliVerbsPropagateLockedProcessFailure(): void
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
-		$this->assertStringContainsString('exit(sync_package_pfblockerng(array(', $source);
-		$this->assertStringContainsString('exit(pfblockerng_sync_cron(TRUE, $pfb_fcscope, FALSE, $pfb_fchashes) ? 0 : 1);', $source);
+		$this->assertStringContainsString('$pfb_completed = sync_package_pfblockerng(', $source);
+		$this->assertStringContainsString('$pfb_completed = pfblockerng_sync_cron(', $source);
+		$this->assertStringContainsString('pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);', $source);
 	}
 
 	public function testForceValidatorsAreClearedOnlyInsideTheLockedChild(): void
@@ -145,7 +146,7 @@ final class UpdateRunNowScheduleOwnershipTest extends TestCase
 		$cron = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc');
 		$this->assertStringNotContainsString('pfb_force_clear_validators($dirs,', $page);
 		$this->assertStringContainsString('hashes={$hashes_val}', $page);
-		$lock = strpos($cron, "pfb_feed_pass_begin('cron')");
+		$lock = strpos($cron, "pfb_feed_pass_begin('cron', \$pfb_feed_pass_contended)");
 		$clear = strpos($cron, 'pfb_force_clear_validators(', $lock);
 		$this->assertNotFalse($lock);
 		$this->assertNotFalse($clear);
