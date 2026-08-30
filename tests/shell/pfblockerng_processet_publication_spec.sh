@@ -100,8 +100,9 @@ RUNNER
 #!/bin/sh
 exec /usr/bin/grep -a "$@"
 SHIM
+			chmod +x "${work}/shim/grep"
 			printf '%s\n' "${prior_category}" > "${etdir}/ET_Cnc.txt"
-			printf '192.0.2.10,1,90\000garbage\n' > "${raw}"
+			printf '192.0.2.10\000garbage,1,90\n' > "${raw}"
 			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
 			The status should be failure
 			The output should include 'ET processing failed'
