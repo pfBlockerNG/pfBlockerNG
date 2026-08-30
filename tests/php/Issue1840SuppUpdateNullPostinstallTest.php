@@ -52,6 +52,8 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 	private array $originalPfb = [];
 	private bool $hadConfig = FALSE;
 	private mixed $originalConfig = NULL;
+	private bool $hadG = FALSE;
+	private mixed $originalG = NULL;
 
 	protected function setUp(): void
 	{
@@ -59,6 +61,8 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$this->hadConfig      = array_key_exists('config', $GLOBALS);
 		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$this->hadG = array_key_exists('g', $GLOBALS);
+		$this->originalG = $GLOBALS['g'] ?? NULL;
 
 		$this->dbdir = sys_get_temp_dir() . '/pfb_issue1840_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
@@ -150,9 +154,8 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 		config_set_path("{$dnsbl}/tld_wildcard",    '');
 		config_set_path("{$dnsbl}/pfb_control",     '');
 
-		if (!isset($GLOBALS['g']['unbound_chroot_path'])) {
-			$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
-		}
+		$GLOBALS['g']['pfblockerng_install'] = FALSE;
+		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 
 		// Plain runtime flags pfb_global()/the (skipped, save=TRUE) DNSBL block would
 		// otherwise leave unset -- unrelated to issue #1840, seeded only to keep this
@@ -219,6 +222,11 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 			$GLOBALS['config'] = $this->originalConfig;
 		} else {
 			unset($GLOBALS['config']);
+		}
+		if ($this->hadG) {
+			$GLOBALS['g'] = $this->originalG;
+		} else {
+			unset($GLOBALS['g']);
 		}
 		$this->rrmdir($this->dbdir);
 	}
