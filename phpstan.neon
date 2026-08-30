@@ -30,17 +30,14 @@ parameters:
     # PHPStan knows the symbols exist without analysing the stubs themselves.
     scanDirectories:
         - stubs/pfsense
-    # PHPStan derives its worker count from its JOB count, never from the core
-    # count: jobs = ceil(files / jobSize), workers = min(floor(jobs / 2), cores, 8).
-    # At the default jobSize of 20 this tree's 34 analysed files make 2 jobs and
-    # therefore ONE worker, which then accumulates every file in a single
-    # allocator — on a 4-core runner and a 10-core laptop alike. Measured on the
-    # CI PHP builds (issue #2671, identical on 8.3 and 8.5): that one worker
-    # needs 576M, two workers need 448M — the floor pfblockerng.inc sets on its
-    # own — and the job finishes in about half the wall time.
-    # A warm result cache schedules only the files needing reanalysis, so a
-    # repeat local run reports fewer jobs and can drop back to one worker. CI
-    # starts cold every time; the cold run is the one this value is set for.
+    # Issue #2671: workers follow the JOB count, never the core count --
+    # jobs = ceil(files / jobSize), workers = min(floor(jobs / 2), cores, 8). The
+    # default jobSize of 20 makes 2 jobs out of 34 files and ONE worker out of 2
+    # jobs, so the whole tree accumulates in a single allocator and the run needs
+    # 576M; two or more workers need 448M, the floor pfblockerng.inc sets alone.
+    # A warm result cache schedules only the files needing reanalysis, so a repeat
+    # local run reports fewer jobs and may show one worker again. CI starts cold,
+    # and the cold run is what this value is set for.
     parallel:
         jobSize: 10
     reportUnmatchedIgnoredErrors: false
