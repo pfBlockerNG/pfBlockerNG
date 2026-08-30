@@ -388,12 +388,13 @@ def test_build_upload_artifact_name_carries_full_runtime_tuple() -> None:
 
 
 def _download_steps_with_pattern(workflow: dict) -> list[tuple[str, dict]]:
-    """(job name, step) for every step whose `with.pattern` is nightly-result-*."""
+    """Artifact-download steps whose pattern consumes every Nightly result tuple."""
     return [
         (job_name, step)
         for job_name, job in workflow["jobs"].items()
         for step in job.get("steps", [])
-        if (step.get("with") or {}).get("pattern") == "nightly-result-*"
+        if step.get("uses") == "actions/download-artifact@v7"
+        and (step.get("with") or {}).get("pattern") == "nightly-result-*"
     ]
 
 

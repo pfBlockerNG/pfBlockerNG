@@ -211,8 +211,7 @@ class TestSelfRefreshLegs:
         assert leg["branch"] == ""
         assert leg["force_flag"] == "--force"
         assert leg["image_name"] == "pfsense-plus"
-        # issue #2926: the leg carries the row's exact runtime tuple so the
-        # non-blocking smoke step can hand it to install-from-repo.sh.
+        # Self-refresh preserves the selected row's exact runtime tuple.
         assert leg["php_version"] == "8.3"
         assert leg["py_flavor"] == "py311"
 
