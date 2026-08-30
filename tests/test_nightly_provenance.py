@@ -135,3 +135,103 @@ def test_validate_dep_artifacts_rejects_hostile_names(name: str) -> None:
 def test_validate_dep_artifacts_rejects_malformed_sha256(digest: str) -> None:
     with pytest.raises(np.ProvenanceError, match="sha256"):
         np._validate_dep_artifacts([_dep(digest=digest)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+def _record(row: dict[str, object]) -> dict[str, object]:
+    return np.make_build_record(
+        pkg_version=VERSION,
+        source_sha=SOURCE_SHA,
+        ports_sha=PORTS_SHA,
+        matrix_row=row,
+        source_date_epoch=1_800_000_000,
+        dependency_builder=DEPENDENCY_BUILDER,
+    )
+
+
+def _result(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "matrix_row": row,
+        "record": _record(row),
+        "artifact": {
+            "abi": f"FreeBSD:{row['freebsd_major']}:*",
+            "name": f"pfSense-pkg-pfBlockerNG-{VERSION}.pkg",
+            "sha256": sha256(f"pkg{row['freebsd_major']}{row['php_version']}".encode()).hexdigest(),
+        },
+        "dep_artifacts": [],
+    }
+
+
+def _call_handoff(
+    results: list[dict[str, object]],
+    *,
+    build_rows: list[dict[str, object]],
+    route_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    return np.build_handoff(
+        pkg_version=VERSION,
+        build_rows=build_rows,
+        route_rows=route_rows,
+        results=results,
+        source_sha=SOURCE_SHA,
+        ports_sha=PORTS_SHA,
+        tools_sha="e" * 40,
+        matrix_sha="d" * 40,
+        matrix_digest="c" * 64,
+        dependency_builder=DEPENDENCY_BUILDER,
+        source_date_epoch=1_800_000_000,
+        run_id="123",
+    )
+
+
+def test_handoff_accepts_freebsd_16_php_84_and_85_tuples() -> None:
+    """issue #2926: FreeBSD 16 with PHP 8.4 and 8.5 are two DISTINCT build
+    tuples — handoff accepts one result per tuple and keeps both builds."""
+    row84 = _row()
+    row84.update(
+        freebsd_major="16",
+        php_version="8.4",
+        freebsd_version="16.0-RELEASE",
+        pfsense_version="26.03",
+        variant="Plus",
+        channel="Plus",
+    )
+    row85 = _row()
+    row85.update(
+        freebsd_major="16",
+        php_version="8.5",
+        freebsd_version="16.0-RELEASE",
+        pfsense_version="26.05",
+        variant="Plus",
+        channel="Plus",
+    )
+    handoff = _call_handoff(
+        [_result(row84), _result(row85)],
+        build_rows=[row84, row85],
+        route_rows=[row84, row85],
+    )
+    keys = sorted(
+        (str(b["matrix_row"]["freebsd_major"]), str(b["matrix_row"]["php_version"])) for b in handoff["builds"]
+    )
+    assert keys == [("16", "8.4"), ("16", "8.5")], f"both runtime tuples expected; got {keys!r}"
+
+
+def test_handoff_rejects_duplicate_exact_tuple_matrix_rows() -> None:
+    """issue #2926: an identical (major, php, py) tuple twice in the BUILD
+    matrix rejects — one build per exact tuple."""
+    row = _row()
+    with pytest.raises(np.ProvenanceError, match="duplicate build tuple"):
+        _call_handoff([_result(row)], build_rows=[row, row], route_rows=[row])
+
+
+def test_handoff_rejects_duplicate_exact_tuple_results() -> None:
+    """issue #2926: two results carrying the SAME exact tuple reject — the
+    matrix declares one row per tuple, so a second result is a duplicate."""
+    row_a = _row()
+    row_b = _row()
+    row_b.update(php_version="8.4")
+    with pytest.raises(np.ProvenanceError, match="duplicated"):
+        _call_handoff(
+            [_result(row_a), _result(row_a)],
+            build_rows=[row_a, row_b],
+            route_rows=[row_a],
+        )

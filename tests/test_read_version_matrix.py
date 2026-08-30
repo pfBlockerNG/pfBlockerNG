@@ -411,9 +411,11 @@ def test_extra_pkgs_passes_through_verbatim_on_a_single_entry_major(tmp_path: Pa
 
 
 # --------------------------------------------------------------------------- #
-# BUILD-matrix dedup by freebsd_major (issue #1806): two build-role entries
-# sharing a freebsd_major collapse to ONE BUILD-matrix row (CI matrix stays
-# one row per version — no arch, never deduped).
+# BUILD-matrix dedup by exact runtime tuple (issue #2926): two build-role
+# entries sharing the SAME (freebsd_major, php_version, py_flavor) tuple
+# collapse to ONE BUILD-matrix row (CI matrix stays one row per version — no
+# arch, never deduped). Same major with a DIFFERING php_version or py_flavor
+# is VALID (issue #2926) — each runtime tuple is its own BUILD row.
 # --------------------------------------------------------------------------- #
 def test_build_matrix_dedupes_two_versions_sharing_a_freebsd_major(tmp_path: Path) -> None:
     """Two CE entries on the same freebsd_major collapse to one BUILD row; CI keeps both."""
@@ -446,8 +448,10 @@ def test_build_matrix_dedup_unions_and_dedupes_extra_pkgs_across_merged_rows(tmp
     assert build[0]["extra_pkgs"] == ["net/py-foo", "textproc/py-charset-normalizer"]
 
 
-def test_build_matrix_dedup_hard_errors_on_php_version_mismatch(tmp_path: Path) -> None:
-    """Two same-major entries with DIFFERENT php_version abort the reader (never silently pick one)."""
+def test_build_matrix_builds_a_row_for_each_same_major_runtime_tuple_php(tmp_path: Path) -> None:
+    """issue #2926: two same-major entries with DIFFERENT php_version are valid —
+    each exact build tuple (freebsd_major, php_version, py_flavor) stays its own
+    BUILD row instead of aborting the reader."""
     repo = _make_matrix_ref(
         tmp_path,
         [
@@ -455,19 +459,16 @@ def test_build_matrix_dedup_hard_errors_on_php_version_mismatch(tmp_path: Path) 
             _ce_entry(pfsense_version="2.9", ci=False, php_version="8.4"),
         ],
     )
-    proc = subprocess.run(
-        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--print-build"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        env=_clean_git_env(),
+    build = _build_matrix(repo)
+    keys = sorted((e["freebsd_major"], e["php_version"], e["py_flavor"]) for e in build)
+    assert keys == [("15", "8.3", "py311"), ("15", "8.4", "py311")], (
+        f"one exact BUILD row per runtime tuple expected; got {keys!r}"
     )
-    assert proc.returncode != 0, f"a php_version mismatch across merged rows must abort; stdout:\n{proc.stdout}"
-    assert "disagreeing php_version" in proc.stderr, proc.stderr
 
 
-def test_build_matrix_dedup_hard_errors_on_py_flavor_mismatch(tmp_path: Path) -> None:
-    """Two same-major entries with DIFFERENT py_flavor abort the reader too."""
+def test_build_matrix_builds_a_row_for_each_same_major_runtime_py_flavor(tmp_path: Path) -> None:
+    """issue #2926: two same-major entries with DIFFERENT py_flavor stay separate
+    BUILD rows too — the tuple, never the major alone, is the build identity."""
     repo = _make_matrix_ref(
         tmp_path,
         [
@@ -475,19 +476,11 @@ def test_build_matrix_dedup_hard_errors_on_py_flavor_mismatch(tmp_path: Path) ->
             _ce_entry(pfsense_version="2.9", ci=False, py_flavor="py312"),
         ],
     )
-    proc = subprocess.run(
-        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--print-build"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        env=_clean_git_env(),
+    build = _build_matrix(repo)
+    keys = sorted((e["freebsd_major"], e["php_version"], e["py_flavor"]) for e in build)
+    assert keys == [("15", "8.3", "py311"), ("15", "8.3", "py312")], (
+        f"one exact BUILD row per runtime tuple expected; got {keys!r}"
     )
-    assert proc.returncode != 0, f"a py_flavor mismatch across merged rows must abort; stdout:\n{proc.stdout}"
-    # CR-8: this test is about py_flavor, not php_version — assert ITS OWN field
-    # token (production emits one combined "disagreeing php_version/py_flavor"
-    # message for either mismatch; the sibling php_version test above asserts
-    # "disagreeing php_version" for the same reason, on its own field).
-    assert "disagreeing" in proc.stderr and "py_flavor" in proc.stderr, proc.stderr
 
 
 def test_build_matrix_no_dedup_when_majors_differ(tmp_path: Path) -> None:

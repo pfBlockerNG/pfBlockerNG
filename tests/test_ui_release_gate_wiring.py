@@ -1064,8 +1064,8 @@ def _cross_contract_rows() -> list[dict[str, str]] | None:
     """Real per-version CI rows, read via read-version-matrix.sh --print-ci
     (reads the already-fetched origin/ci-metadata ref, no network
     needed once it's present). Returns None when the ref is unreachable in this
-    environment (mirrors tests/test_matrix_collision_guard.py's _load_build_matrix
-    skip contract) -- callers must skip, never fabricate rows."""
+    environment (a graceful skip contract) -- callers must skip, never fabricate
+    rows."""
     try:
         proc = subprocess.run(  # noqa: S603
             ["sh", "scripts/read-version-matrix.sh", "--print-ci"],
