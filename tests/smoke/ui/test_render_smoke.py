@@ -642,106 +642,54 @@ def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     )
 
 
-_CFG_MAXMIND_KEY = "installedpackages/pfblockerngipsettings/config/0/maxmind_key"
+_IP_WRITE_ONLY_CREDENTIALS = (
+    pytest.param(
+        "maxmind_key",
+        "installedpackages/pfblockerngipsettings/config/0/maxmind_key",
+        "PFBTESTKEY000001",
+        id="maxmind-key",
+    ),
+    pytest.param(
+        "asn_token",
+        "installedpackages/pfblockerngipsettings/config/0/asn_token",
+        "PFBASNTESTTOKEN0001",
+        id="asn-token",
+    ),
+)
 
 
-# Dual-marked ui_e2e (issue #810): this test MUTATES config.xml (seeds maxmind_key) as
-# setup, so it must ride the per-test isolation probe (_ui_pfb_isolation gates on the
-# ui_e2e/ui_browser markers); the module-level ui_render marker keeps it in the Tier-A gate.
+# Dual-marked ui_e2e because this test mutates config.xml; the module-level
+# ui_render marker keeps both parameter rows in the Tier-A render gate.
 @pytest.mark.ui_e2e
-def test_ip_page_never_leaks_maxmind_key(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+@pytest.mark.parametrize(("field", "config_path", "seed_token"), _IP_WRITE_ONLY_CREDENTIALS)
+def test_ip_page_never_leaks_write_only_credential(
+    field: str,
+    config_path: str,
+    seed_token: str,
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    php_error_log_guard: PhpErrorLogGuard,
 ) -> None:  # noqa: ARG001
-    """The masked ``maxmind_key`` field (issue #924) never echoes the stored MaxMind
-    license key back into the rendered HTML, and is masked (``type="password"``).
-
-    Before this fix the field was a plain ``text`` input pre-filled with the stored
-    key verbatim (``$pconfig['maxmind_key'] = $pfb['iconfig']['maxmind_key']``), so a
-    GET leaked the secret straight into the page source and into any screen-share /
-    browser autofill. Seed an inert key directly (independent of the save path Tier
-    B covers), GET the page, and assert (1) the exact stored key string is ABSENT
-    from the body -- this is the never-leak assertion PRE-change would FAIL on, since
-    the old code echoed it verbatim into the ``value`` attribute -- and (2) the
-    ``maxmind_key`` input renders ``type="password"`` (masked), not ``type="text"``.
-    """
-    seed_token = "PFBTESTKEY000001"
-    original = helpers.config_get(smoke_vm, _CFG_MAXMIND_KEY)
-    seed = helpers.php_eval(
-        smoke_vm,
-        f"config_set_path({helpers._php_str(_CFG_MAXMIND_KEY)}, {helpers._php_str(seed_token)});\n"
-        "write_config('#924 smoke: seed maxmind_key for the never-leak render check');\n"
-        "echo 'OK';",
-    )
-    assert "OK" in seed.stdout, f"failed to seed maxmind_key: {seed.stdout!r}"
-    # Confirm the seed actually persisted BEFORE the never-leak GET -- else "OK" (which
-    # prints even if config_set_path silently no-opped) would let the `not in body`
-    # assertion pass vacuously, with the leakable fixture it must fail on absent.
-    seeded = helpers.config_get(smoke_vm, _CFG_MAXMIND_KEY)
-    assert seeded == seed_token, f"seed did not take: expected {seed_token!r}, got {seeded!r}"
+    """Stored IP-page credentials stay absent; inputs render blank and password-masked."""
+    original = helpers.config_get_state(smoke_vm, config_path)
     try:
+        helpers.config_set(smoke_vm, config_path, seed_token)
+        assert helpers.config_get(smoke_vm, config_path) == seed_token, (
+            f"{field} seed did not take before render assertions"
+        )
+
         resp = webui.get(_IP_PAGE)
         assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
         body = resp.text
-        assert seed_token not in body, (
-            f"maxmind_key leaked into the IP page body: expected {seed_token!r} to be ABSENT, "
-            f"but it was found in the response (write-only masked field must never echo the stored key)"
-        )
-        # Bind type="password" to the maxmind_key input tag ITSELF -- a bare page-level
-        # 'type="password"' substring could be satisfied by any other element, so match the
-        # maxmind_key <input> tag and assert the mask attribute lives inside it.
-        tag = re.search(r'<input[^>]*\bname="maxmind_key"[^>]*>', body)
-        assert tag, "maxmind_key input not present on the IP page"
+        assert seed_token not in body, f"{field} leaked into the IP page body: expected {seed_token!r} to be absent"
+        tag = re.search(rf'<input[^>]*\bname="{re.escape(field)}"[^>]*>', body)
+        assert tag, f"{field} input not present on the IP page"
         assert 'type="password"' in tag.group(0), (
-            f'maxmind_key input must be masked (type="password"), not a plain text field: got {tag.group(0)!r}'
+            f'{field} input must be masked (type="password"): got {tag.group(0)!r}'
         )
+        assert scrape_form_fields(body).get(field) == "", f"{field} input must render blank"
     finally:
-        restore = helpers.php_eval(
-            smoke_vm,
-            f"config_set_path({helpers._php_str(_CFG_MAXMIND_KEY)}, {helpers._php_str(original)});\n"
-            "write_config('#924 smoke: restore maxmind_key');\n"
-            "echo 'OK';",
-        )
-        assert "OK" in restore.stdout, f"failed to restore maxmind_key: {restore.stdout!r}"
-
-
-_CFG_ASN_TOKEN = "installedpackages/pfblockerngipsettings/config/0/asn_token"
-
-
-@pytest.mark.ui_e2e
-def test_ip_page_never_leaks_asn_ipinfo_token(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:  # noqa: ARG001
-    """Stored ASN IPinfo token stays absent from HTML and its input is password-masked."""
-    seed_token = "PFBASNTESTTOKEN0001"
-    original = helpers.config_get(smoke_vm, _CFG_ASN_TOKEN)
-    seed = helpers.php_eval(
-        smoke_vm,
-        f"config_set_path({helpers._php_str(_CFG_ASN_TOKEN)}, {helpers._php_str(seed_token)});\n"
-        "write_config('#2922 smoke: seed asn_token for never-leak render check');\n"
-        "echo 'OK';",
-    )
-    assert "OK" in seed.stdout, f"failed to seed asn_token: {seed.stdout!r}"
-    assert helpers.config_get(smoke_vm, _CFG_ASN_TOKEN) == seed_token, (
-        "seed did not take before ASN token render assertions"
-    )
-    try:
-        resp = webui.get(_IP_PAGE)
-        assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
-        body = resp.text
-        assert seed_token not in body, f"asn_token leaked into the IP page body: expected {seed_token!r} to be absent"
-        tag = re.search(r'<input[^>]*\bname="asn_token"[^>]*>', body)
-        assert tag, "asn_token input not present on the IP page"
-        assert 'type="password"' in tag.group(0), (
-            f'asn_token input must be masked (type="password"): got {tag.group(0)!r}'
-        )
-    finally:
-        restore = helpers.php_eval(
-            smoke_vm,
-            f"config_set_path({helpers._php_str(_CFG_ASN_TOKEN)}, {helpers._php_str(original)});\n"
-            "write_config('#2922 smoke: restore asn_token');\n"
-            "echo 'OK';",
-        )
-        assert "OK" in restore.stdout, f"failed to restore asn_token: {restore.stdout!r}"
+        helpers.config_restore_state(smoke_vm, config_path, original)
 
 
 _UPDATE_PAGE = "/pfblockerng/pfblockerng_update.php"
