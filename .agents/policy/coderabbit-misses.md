@@ -17,6 +17,7 @@ and their order are pinned by `tests/test_context_budget.py`.
 
 - `07b4894e`  pfblockerng: name the schedule-cache failure instead of asking for a bug report  (#2887) — one quota notice (999 min), no review; 4 legs over three rounds, two blockers fixed.
 - `a12bae30`  test: repair the UI coverage the DNSBL/IP tab reorganisation broke  (#2885) — one quota notice (999 min), no review; 4 legs over two rounds, one blocker fixed; live-VM gate green.
+- `ee6c4efe`  pfblockerng: serialize Alerts mutations  (#2883) — two quota notices, no review; 4 legs + verifier PASS; live-VM gate green.
 - `e3cc14df`  pfblockerng: close the script stage when an alias is removed  (#2847) — two quota notices, no review.
 - `e7d66d89`  tests: stop the lint endpoint shim leaking a PID-keyed temp dir  (#2835) — two quota notices (10 min, then 59 min), no review; 8 leg passes over two rounds.
 - `d41cabc1`  extras: name the lost dispatcher lock in the Extras guard  (#2826) — two quota notices, no review; 6 leg rounds + verifier PASS.
