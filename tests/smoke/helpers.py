@@ -5336,7 +5336,7 @@ def _redact_pkg_tar_filter(member: tarfile.TarInfo, dest_path: str) -> tarfile.T
     """Keep data-filter protections and drop links that could alias outside ``pkg/``."""
     try:
         filtered = tarfile.data_filter(member, dest_path)
-    except tarfile.AbsoluteLinkError:
+    except (tarfile.AbsoluteLinkError, tarfile.LinkOutsideDestinationError):
         return None
     if member.islnk() or member.issym():
         return None
@@ -5354,22 +5354,23 @@ def redact_pkg_tarball(tgz_path: str) -> None:
             tar.extractall(tmp, filter=_redact_pkg_tar_filter)
         pkg_root = os.path.join(tmp, "pfb_smoke_diag", "pkg")
         failures: list[str] = []
-        if os.path.isdir(pkg_root):
-            for dirpath, _, files in os.walk(pkg_root):
-                for name in files:
-                    path = os.path.join(dirpath, name)
-                    relative = os.path.relpath(path, pkg_root)
+        if not os.path.isdir(pkg_root):
+            raise RuntimeError("host-side pkg redaction incomplete: missing pfb_smoke_diag/pkg")
+        for dirpath, _, files in os.walk(pkg_root):
+            for name in files:
+                path = os.path.join(dirpath, name)
+                relative = os.path.relpath(path, pkg_root)
+                try:
+                    raw = Path(path).read_text(encoding="utf-8", errors="surrogateescape")
+                except OSError as exc:
+                    failures.append(f"{relative}: read failed: {exc!r}")
+                    continue
+                new = redact_pkg_urls(raw)
+                if new != raw:
                     try:
-                        raw = Path(path).read_text(encoding="utf-8", errors="surrogateescape")
+                        Path(path).write_text(new, encoding="utf-8", errors="surrogateescape")
                     except OSError as exc:
-                        failures.append(f"{relative}: read failed: {exc!r}")
-                        continue
-                    new = redact_pkg_urls(raw)
-                    if new != raw:
-                        try:
-                            Path(path).write_text(new, encoding="utf-8", errors="surrogateescape")
-                        except OSError as exc:
-                            failures.append(f"{relative}: write failed: {exc!r}")
+                        failures.append(f"{relative}: write failed: {exc!r}")
         if failures:
             raise RuntimeError("host-side pkg redaction incomplete: " + "; ".join(failures))
 
