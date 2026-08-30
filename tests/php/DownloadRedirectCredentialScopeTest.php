@@ -129,8 +129,10 @@ file_put_contents(getenv('EVENT_LOG'), json_encode([
 	(int) $_SERVER['SERVER_PORT'],
 	$uri,
 ]) . PHP_EOL, FILE_APPEND);
-if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
-	echo getenv('READY_TOKEN');
+if (str_starts_with($uri, '/__pfb_ready/')) {
+	if ($uri === '/__pfb_ready/' . getenv('READY_TOKEN')) {
+		echo getenv('READY_TOKEN');
+	}
 	return;
 }
 file_put_contents(getenv('AUTH_LOG'), json_encode([
