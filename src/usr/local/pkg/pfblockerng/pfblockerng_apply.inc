@@ -974,13 +974,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['deny_action_inbound']  = $pfb['ipconfig']['inbound_deny_action']	?: 'block';
 	$pfb['deny_action_outbound'] = $pfb['ipconfig']['outbound_deny_action']	?: 'reject';
 
-	$pfb['float']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_float']);				// Enable/Disable floating autorules
-	$pfb['dup']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_dup']);				// Enable remove of duplicate IPs utilizing grepcidr
-	$pfb['agg']		= pfb_cfg_toggle_read($pfb['ipconfig']['enable_agg']);				// Enable aggregation of CIDRs
+	$pfb['float']		= PfbConfig::read('ip/enable_float');				// Enable/Disable floating autorules
+	$pfb['dup']		= PfbConfig::read('ip/enable_dup');				// Enable remove of duplicate IPs utilizing grepcidr
+	$pfb['agg']		= PfbConfig::read('ip/enable_agg');				// Enable aggregation of CIDRs
 	$pfb['order']		= $pfb['ipconfig']['pass_order'] ?: 'order_0';			// Order of the autorules (default order_0, matching the IP-settings UI; an empty value drops user pass-rules on a managed interface — issue #532)
-	$pfb['global_log']	= pfb_cfg_toggle_read($pfb['ipconfig']['enable_log']);				// Enable Global IP logging
+	$pfb['global_log']	= PfbConfig::read('ip/enable_log');				// Enable Global IP logging
 	$pfb['suffix']		= $pfb['ipconfig']['autorule_suffix'];				// Suffix used for autorules
-	$pfb['kstates'] 	= $pfb['ipconfig']['killstates'];				// Firewall states removal
+	$pfb['kstates'] 	= PfbConfig::read('ip/killstates');				// Firewall states removal
 
 	$pfb['ip_ph']		= pfb_filter($pfb['ipconfig']['ip_placeholder'], PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
 
@@ -1210,8 +1210,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 							// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 							// This will bypass Deduplication and Reputation features.
-							if ($continent_config['autoaddrnot_in'] == 'on' ||
-							    $continent_config['autoaddrnot_out'] == 'on') {
+							if (pfb_dnsbl_toggle_enabled($continent_config['autoaddrnot_in'] ?? '') ||
+							    pfb_dnsbl_toggle_enabled($continent_config['autoaddrnot_out'] ?? '')) {
 								$pfb['existing']['native'][]		= "{$pfb_alias}{$vtype}";
 							}
 							else {
@@ -1293,8 +1293,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 						// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 						// This will bypass Deduplication and Reputation features.
-						if ($list['action'] != 'unbound' && ($list['autoaddrnot_in'] == 'on' ||
-						    $list['autoaddrnot_out'] == 'on')) {
+						if ($list['action'] != 'unbound' && (pfb_dnsbl_toggle_enabled($list['autoaddrnot_in'] ?? '') ||
+						    pfb_dnsbl_toggle_enabled($list['autoaddrnot_out'] ?? ''))) {
 							$list['action'] = 'Alias_Native';
 						}
 
@@ -4979,7 +4979,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#	KILL STATES		#
 	#################################
 
-	if (!$pfb['save'] && $pfb['kstates'] && !$pfb['filter_configure']) {
+	if (!$pfb['save'] && $pfb['kstates'] === PfbToggle::On && !$pfb['filter_configure']) {
 		pfb_remove_states();
 	}
 
