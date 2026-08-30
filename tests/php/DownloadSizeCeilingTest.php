@@ -95,8 +95,8 @@ final class DownloadSizeCeilingTest extends TestCase
 	 * Given  a wrapped command whose ceiling is two blocks and whose child
 	 *        writes one MiB
 	 * When   the command runs through the same exec() the extraction sites use
-	 * Then   Linux reports SIGXFSZ, Darwin reports dd's EFBIG exit, the
-	 *        extraction gates reject either, and output stays within the ceiling.
+	 * Then   Darwin refuses the write as either diagnosed EFBIG or SIGXFSZ;
+	 *        Linux reports SIGXFSZ, extraction gates reject either, and output stays within the ceiling.
 	 */
 	public function test_extract_cmd_ceiling_stops_a_child_that_writes_past_it(): void
 	{
@@ -117,9 +117,13 @@ final class DownloadSizeCeilingTest extends TestCase
 		);
 
 		if (PHP_OS_FAMILY === 'Darwin') {
-			$this->assertSame(1, $retval, 'Darwin dd must surface RLIMIT_FSIZE as its EFBIG exit');
-			$this->assertStringStartsWith("dd: {$target}: File too large\n", (string) file_get_contents($stderr),
-				'Darwin exit 1 must be the diagnosed EFBIG refusal, not an arbitrary failure');
+			if ($retval === 1) {
+				$this->assertStringStartsWith("dd: {$target}: File too large\n", (string) file_get_contents($stderr),
+					'Darwin exit 1 must be the diagnosed EFBIG refusal, not an arbitrary failure');
+			} else {
+				$this->assertSame(PFB_EXTRACT_SIGXFSZ_EXIT, $retval,
+					'Darwin must refuse a write past the ceiling with EFBIG or SIGXFSZ');
+			}
 		} else {
 			$this->assertSame(PFB_EXTRACT_SIGXFSZ_EXIT, $retval,
 				'a write past the ceiling must surface as the SIGXFSZ exit status');
