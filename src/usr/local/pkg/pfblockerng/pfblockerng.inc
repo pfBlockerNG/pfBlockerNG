@@ -11406,6 +11406,9 @@ if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 if (!defined('PFB_UNBOUND_START_WAIT')) {
 	define('PFB_UNBOUND_START_WAIT', 30);
 }
+if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
+	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
+}
 
 // Function to Start Unbound
 function pfb_stop_start_unbound($type) {
@@ -11452,6 +11455,7 @@ function pfb_stop_start_unbound($type) {
 
 	$ready = "{$outfile}.ready";
 	$release = "{$outfile}.release";
+	$command_started = "{$outfile}.started";
 	$done = "{$outfile}.done";
 	$proc = NULL;
 	$pid = 0;
@@ -11524,10 +11528,13 @@ function pfb_stop_start_unbound($type) {
 			'$barrier_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
 			'while (!file_exists($argv[2])) { ' .
 			'if (hrtime(TRUE) >= $barrier_deadline) { exit(125); } usleep(1000); } ' .
+			'$started_tmp = $argv[5] . ".new"; ' .
+			'if (@file_put_contents($started_tmp, "1") === FALSE || ' .
+			'!@rename($started_tmp, $argv[5])) { exit(126); } ' .
 			'passthru($argv[3], $status); ' .
-			'$done_tmp = $argv[5] . ".new"; ' .
+			'$done_tmp = $argv[6] . ".new"; ' .
 			'if (@file_put_contents($done_tmp, (string) $status) === FALSE || ' .
-			'!@rename($done_tmp, $argv[5])) { exit(126); } ' .
+			'!@rename($done_tmp, $argv[6])) { exit(126); } ' .
 			'$linger_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
 			'while (hrtime(TRUE) < $linger_deadline) { usleep(10000); } exit($status);';
 		$descriptors = array(
@@ -11536,8 +11543,7 @@ function pfb_stop_start_unbound($type) {
 			2 => array('file', $outfile, 'a'),
 		);
 		$pipes = array();
-		$started = hrtime(TRUE);
-		$deadline = $started + (PFB_UNBOUND_START_WAIT * 1000000000);
+		$setup_deadline = hrtime(TRUE) + (PFB_UNBOUND_START_SETUP_WAIT * 1000000000);
 		$proc = @proc_open(array(
 			PHP_BINARY,
 			'-r',
@@ -11546,7 +11552,8 @@ function pfb_stop_start_unbound($type) {
 			$ready,
 			$release,
 			PFB_UNBOUND_START_CMD,
-			(string) PFB_UNBOUND_START_WAIT,
+			(string) (PFB_UNBOUND_START_SETUP_WAIT + PFB_HOOK_KILL_GRACE),
+			$command_started,
 			$done,
 		), $descriptors, $pipes);
 		if (!is_resource($proc)) {
@@ -11561,21 +11568,41 @@ function pfb_stop_start_unbound($type) {
 				$retval = (int) $status['exitcode'];
 				break;
 			}
-			if (hrtime(TRUE) >= $deadline) {
-				$expired = TRUE;
+			if (hrtime(TRUE) >= $setup_deadline) {
+				$failure = 'Unbound start process-group setup TIMED OUT after ' .
+					PFB_UNBOUND_START_SETUP_WAIT . 's; not run';
 				break;
 			}
 			usleep(1000);
 		}
 
-		if ($retval === NULL && !$expired && file_exists($ready)) {
+		if ($retval === NULL && $failure === '' && file_exists($ready)) {
 			$published_pid = (int) trim((string) @file_get_contents($ready));
 			$group_ready = @posix_getpgid($pid) === $pid;
 			if ($published_pid !== $pid || !$group_ready) {
 				$failure = 'Unbound start process-group barrier verification failed';
 			} elseif (!@touch($release)) {
 				$failure = 'Unbound start process-group barrier release failed';
+			} else {
+				$start_ack_deadline = hrtime(TRUE) + (PFB_UNBOUND_START_SETUP_WAIT * 1000000000);
 			}
+		}
+
+		while ($retval === NULL && $failure === '' && !file_exists($command_started)) {
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $start_ack_deadline) {
+				$failure = 'Unbound command-start acknowledgement TIMED OUT after ' .
+					PFB_UNBOUND_START_SETUP_WAIT . 's; not run';
+				break;
+			}
+			usleep(1000);
+		}
+		if ($retval === NULL && $failure === '' && file_exists($command_started)) {
+			$deadline = hrtime(TRUE) + (PFB_UNBOUND_START_WAIT * 1000000000);
 		}
 
 		while ($retval === NULL && !$expired && $failure === '' && !file_exists($done)) {
@@ -11626,6 +11653,8 @@ function pfb_stop_start_unbound($type) {
 		@unlink("{$done}.new");
 		@unlink($done);
 		@unlink($release);
+		@unlink("{$command_started}.new");
+		@unlink($command_started);
 		@unlink("{$ready}.new");
 		@unlink($ready);
 		@unlink($outfile);
