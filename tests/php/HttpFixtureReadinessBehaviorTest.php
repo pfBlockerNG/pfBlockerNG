@@ -54,6 +54,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 	public static function fixtureSites(): array
 	{
 		return [
+			'redirect credential servers' => [DownloadRedirectCredentialScopeTest::class, __DIR__ . '/DownloadRedirectCredentialScopeTest.php', 'startOneServer', 'setup', 10, FALSE],
 			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive', 'extracted', 10, FALSE],
 			'rejected validator origin' => [DownloadRejectValidatorClearTest::class, __DIR__ . '/DownloadRejectValidatorClearTest.php', 'startOrigin', 'setup', 20, FALSE],
 			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer', 'setup', 10, FALSE],

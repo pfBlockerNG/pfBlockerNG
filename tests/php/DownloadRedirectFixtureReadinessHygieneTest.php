@@ -31,6 +31,28 @@ final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 		});
 	}
 
+	public function testLegacyReadinessSubpathDoesNotReachCredentialEffects(): void
+	{
+		$this->withFixture(function (DownloadRedirectCredentialScopeTest $suite, ReflectionClass $ref): void {
+			$port = (int) $ref->getProperty('originPort')->getValue($suite);
+			$workdir = (string) $ref->getProperty('workdir')->getValue($suite);
+			$context = stream_context_create(['http' => ['timeout' => 0.05, 'ignore_errors' => TRUE]]);
+			$body = @file_get_contents(
+				"http://127.0.0.1:{$port}/__pfb_ready/legacy-probe",
+				FALSE,
+				$context
+			);
+
+			$this->assertSame('', $body, 'legacy readiness subpaths must be reserved without a response');
+			$authLines = @file("{$workdir}/auth.log", FILE_IGNORE_NEW_LINES);
+			$this->assertSame(
+				[],
+				$authLines ?: [],
+				'legacy readiness subpaths must not reach credential-bearing router effects'
+			);
+		});
+	}
+
 	public function testFailureDiagnosticsNameResponseHopsPortsAndProcesses(): void
 	{
 		$this->withFixture(function (DownloadRedirectCredentialScopeTest $suite, ReflectionClass $ref): void {
@@ -62,7 +84,7 @@ final class DownloadRedirectFixtureReadinessHygieneTest extends TestCase
 		$sentinel = "{$root}/match/sentinel";
 		$this->assertNotFalse(file_put_contents($sentinel, 'keep'));
 
-		$suite = new HttpFixtureReadinessTest('testProbeRejectsReachableForeignListener');
+		$suite = new HttpFixtureReadinessTest('testProbeRejectsReflectiveForeignListener');
 		$ref = new ReflectionClass($suite);
 		$ref->getProperty('workdir')->setValue($suite, "{$root}/*");
 
