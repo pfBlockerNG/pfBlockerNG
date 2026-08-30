@@ -49,14 +49,14 @@ if (strpos(config_get_path('system/domain'), '.') !== FALSE) {
 $default_tlds = array('arpa',$local_tld,'com','net','org','edu','ca','co','io');
 
 $pconfig = array();
-$pconfig['pfb_dnsbl']		= $pfb['dconfig']['pfb_dnsbl']				?: '';
+$pconfig['pfb_dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');
 $pconfig['tld_wildcard']		= $pfb['dconfig']['tld_wildcard']				?: '';
 $pconfig['pfb_control']		= $pfb['dconfig']['pfb_control']			?: '';
 $pconfig['pfb_control_legacy']	= $pfb['dconfig']['pfb_control_legacy']			?: '';
 $pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
 $pconfig['pfb_dnsvip6'] = $pfb['dconfig']['pfb_dnsvip6'] ?: 'none';
-$pconfig['pfb_dnsvip_auto']	= $pfb['dconfig']['pfb_dnsvip_auto']			?: '';
-$pconfig['pfb_dnsbl_nonat']	= $pfb['dconfig']['pfb_dnsbl_nonat']			?: '';
+$pconfig['pfb_dnsvip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');
+$pconfig['pfb_dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');
 $pconfig['pfb_dnsport']		= $pfb['dconfig']['pfb_dnsport']			?: '8081';
 $pconfig['pfb_dnsport_ssl']	= $pfb['dconfig']['pfb_dnsport_ssl']			?: '8443';
 $pconfig['dnsbl_interface']	= $pfb['dconfig']['dnsbl_interface']			?: 'lo0';
@@ -86,13 +86,13 @@ $pconfig['pfb_idn']		= PfbConfig::read('dnsbl/pfb_idn')->value;
 // escalate suspicious mixed-script (else alert only) is opt-in (default off).
 // Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 $pconfig['pfb_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');
-$pconfig['pfb_idn_escalate_suspicious']	= $pfb['dconfig']['pfb_idn_escalate_suspicious']		?: '';
+$pconfig['pfb_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');
 $pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
-$pconfig['pfb_regex_cap']	= $pfb['dconfig']['pfb_regex_cap']			?: '';
+$pconfig['pfb_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');
 $pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
 // ADR-22: lenient scheme parsing. Absent = unchecked (strict) for new installs; existing
 // installs are grandfathered to 'on' by the registry pass at install/upgrade (issue #1921).
-$pconfig['pfb_dnsbl_lenient']	= $pfb['dconfig']['pfb_dnsbl_lenient']			?: '';
+$pconfig['pfb_dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
 $pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
 $pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
 $pconfig['tld_allow']		= $pfb['dconfig']['tld_allow']				?: '';

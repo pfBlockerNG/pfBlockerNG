@@ -312,4 +312,140 @@ final class CfgToggleRegistryPageParityTest extends TestCase
 				"{$path_key}: registered default must reproduce the deleted page default");
 		}
 	}
+
+	/**
+	 * issue #2812 — the seven registered toggles whose page still restated the
+	 * default the registry already owned, exempted from RULE 2 until swept.
+	 *
+	 * The same PARITY claim as the #2123 matrix above, re-evaluated against the
+	 * pre-#2812 page expression: all seven pages carried the FALSY_EMPTY shape
+	 * (`$pfb['<mirror>']['<key>'] ?: ''`), so absent and every falsy token must
+	 * collapse to Off through the gateway too.
+	 *
+	 * `pfb_dnsbl_lenient` is the one recorded divergence: the page declared `''`
+	 * while the registry declares `'off'` — two spellings of the same Off under
+	 * the #2120 toggle contract, which the matrix pins state by state. Its
+	 * `grandfather => [PFB_GF_ABSENT => 'on']` arm is an install/upgrade-time
+	 * write (pfblockerng.inc's registry pass), never a read-time resolution, so
+	 * a genuinely absent key resolves through the registered default here.
+	 *
+	 * @var array<string,array{0:string,1:string,2:string}>
+	 */
+	private const FIELDS_2812 = [
+		'dnsbl/pfb_dnsbl' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:52',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'dnsbl/pfb_dnsvip_auto' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:58',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'dnsbl/pfb_dnsbl_nonat' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:59',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'dnsbl/pfb_idn_escalate_suspicious' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:89',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'dnsbl/pfb_regex_cap' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:91',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'dnsbl/pfb_dnsbl_lenient' => [
+			'installedpackages/pfblockerngdnsblsettings/config/0',
+			'pfblockerng_dnsbl.php:95',
+			self::SHAPE_FALSY_EMPTY,
+		],
+		'gen/enable_cb' => [
+			'installedpackages/pfblockerng/config/0',
+			'pfblockerng_general.php:51',
+			self::SHAPE_FALSY_EMPTY,
+		],
+	];
+
+	/** @return iterable<string,array{0:string,1:string,2:string,3:string,4:mixed}> */
+	public static function fieldRawMatrix2812(): iterable
+	{
+		foreach (self::FIELDS_2812 as $path_key => [$section, $site, $shape]) {
+			foreach (self::RAW_STATES as $state => $raw) {
+				yield "{$path_key} [{$state}]" => [$path_key, $section, $shape, $site, $raw];
+			}
+		}
+	}
+
+	/**
+	 * Scenario:
+	 *   Background: a configuration written before #2812 swept the seven sites.
+	 *   Given one of the seven keys holds raw stored value v (or is absent).
+	 *   When PfbConfig::read('<alias>/<key>') resolves it.
+	 *   Then the result equals what the page's pre-sweep `?: ''` expression
+	 *        produced for the same v — the page default is deleted without the
+	 *        behaviour moving.
+	 */
+	#[DataProvider('fieldRawMatrix2812')]
+	public function testGatewayReadReproducesThePre2812PageValue(
+		string $path_key,
+		string $section,
+		string $shape,
+		string $site,
+		mixed $raw
+	): void {
+		$bare = substr($path_key, strpos($path_key, '/') + 1);
+		if ($raw !== NULL) {
+			config_set_path("{$section}/{$bare}", $raw);
+		}
+
+		// Before: the raw state is exactly what a pre-#2812 config presents.
+		$this->assertSame($raw, config_get_path("{$section}/{$bare}"),
+			"before: {$path_key} raw stored state");
+
+		$expected = self::preRegistrationPageValue($shape, $raw);
+
+		// When/Then.
+		$this->assertSame($expected, PfbConfig::read($path_key), sprintf(
+			'%s: gateway read must equal the pre-#2812 %s expression (%s) for raw %s',
+			$path_key, $shape, $site, var_export($raw, TRUE)
+		));
+	}
+
+	/**
+	 * Every one of the seven is registered, adapter-bearing, and its registered
+	 * default is spelled out as a literal. For six, the default is the page's
+	 * own `''`; for `pfb_dnsbl_lenient` it is the registry's canonical `'off'`
+	 * — the recorded page/registry spelling divergence, both reading Off.
+	 */
+	public function testAll2812SitesAreRegisteredClassifiedToggles(): void
+	{
+		$expected_defaults = [
+			'dnsbl/pfb_dnsbl'                   => '',
+			'dnsbl/pfb_dnsvip_auto'             => '',
+			'dnsbl/pfb_dnsbl_nonat'             => '',
+			'dnsbl/pfb_idn_escalate_suspicious' => '',
+			'dnsbl/pfb_regex_cap'               => '',
+			'dnsbl/pfb_dnsbl_lenient'           => 'off',
+			'gen/enable_cb'                     => '',
+		];
+
+		$this->assertSame(array_keys(self::FIELDS_2812), array_keys($expected_defaults),
+			'the default table must cover exactly the seven #2812 fields under test');
+
+		$registry = pfb_cfg_registry();
+		foreach (self::FIELDS_2812 as $path_key => [, $site,]) {
+			$this->assertArrayHasKey($path_key, $registry,
+				"{$path_key} must be registered (issue #2812 premise)");
+			$entry = $registry[$path_key];
+			$this->assertSame('pfb_cfg_toggle_read', $entry['read_adapter'],
+				"{$path_key} must carry the toggle read adapter");
+			$this->assertSame('pfb_cfg_toggle_write', $entry['write_adapter'],
+				"{$path_key} must carry the toggle write adapter");
+			$this->assertSame($expected_defaults[$path_key], $entry['default'] ?? NULL,
+				"{$path_key} ({$site}): registered default flipped from the recorded value");
+		}
+	}
 }
