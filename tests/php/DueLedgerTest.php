@@ -832,20 +832,22 @@ final class DueLedgerTest extends TestCase
 	}
 
 	/**
-	 * set_pending records a deferral without touching anything the tick owns.
+	 * Neither branch of set_pending advances last_run.
 	 *
-	 * The live smoke test (test_update_runnow_does_not_publish_schedule_cache) compares
-	 * the ledger across a Run Now and tolerates exactly this one key, because a deferred
-	 * pass legitimately writes it. That tolerance is only safe if set_pending really does
-	 * leave the cache identity and every schedule field alone.
+	 * The live smoke test (test_update_runnow_does_not_publish_schedule_cache) holds one
+	 * fact across a Run Now: cron.last_run never advances. Everything else in the ledger
+	 * is rewritten by the pass tail's own pfb_schedule_cache_refresh_locked(), so it is
+	 * not the tick's to own. set_pending is on the deferral path a Run Now can reach, and
+	 * it has two branches -- marking an existing entry, and creating a placeholder when
+	 * the job has none. Both must leave last_run where it was.
 	 *
 	 * Scenario:
-	 *   Given a published cache with a _meta identity and a cron entry with a schedule.
+	 *   Given a published cache with a cron entry, and separately one without.
 	 *   When  set_pending marks the job deferred.
-	 *   Then  only pending_apply appears -- _meta, last_run, next_due and jitter are
-	 *         byte-for-byte what they were, and no job is added or removed.
+	 *   Then  last_run is unchanged in the first case and 0 in the second, the cache
+	 *         identity is untouched, and only the deferral marker was added.
 	 */
-	public function testSetPendingLeavesTheCacheIdentityAndScheduleUntouched(): void
+	public function testSetPendingNeverAdvancesLastRun(): void
 	{
 		$hash    = str_repeat('a', 64);
 		$entries = [
@@ -861,13 +863,31 @@ final class DueLedgerTest extends TestCase
 		$after = json_decode((string)file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 
 		$this->assertTrue($after['cron']['pending_apply'], 'the deferral marker must be recorded');
-		$this->assertSame(array_keys($before), array_keys($after),
-			'set_pending must not add or remove a job');
+		$this->assertSame($before['cron']['last_run'], $after['cron']['last_run'],
+			'set_pending must not advance the last_run the tick owns');
 		$this->assertSame($before['_meta'], $after['_meta'],
-			'set_pending must not republish the cache identity the tick owns');
+			'set_pending must not republish the cache identity');
 		unset($after['cron']['pending_apply']);
-		$this->assertSame($before, $after,
-			'set_pending must change nothing but the deferral marker');
+		$this->assertSame($before, $after, 'set_pending must change nothing but the marker');
+	}
+
+	/**
+	 * The placeholder branch starts last_run at 0, so it cannot advance one either.
+	 *
+	 * set_pending creates {last_run: 0, next_due: 0, jitter: 0} when the job has no entry.
+	 * A ledger with no cron row is reachable on a box that has never completed a pass, and
+	 * the smoke oracle must not read that placeholder as the tick having run.
+	 */
+	public function testSetPendingPlaceholderStartsLastRunAtZero(): void
+	{
+		$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir),
+			'set_pending must publish a placeholder when the job has no entry');
+
+		$entry = pfb_due_ledger_read_entry('cron', $this->dir);
+		$this->assertNotNull($entry, 'the placeholder entry must exist');
+		$this->assertSame(0, $entry['last_run'],
+			'a placeholder must not invent a last_run the tick never recorded');
+		$this->assertTrue($entry['pending_apply'], 'the deferral marker must be recorded');
 	}
 
 	/**

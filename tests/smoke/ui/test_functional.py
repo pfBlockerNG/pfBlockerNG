@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -1911,27 +1912,61 @@ _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 _LEDGER_PATH = f"{helpers.PFB_DBDIR}/pfb_due_ledger.json"
 
 
-def _ledger_ownership(vm: helpers.SmokeVM) -> tuple[int, object]:
-    """The whole ledger minus the one marker a Run Now is allowed to write.
+def _cron_last_run(vm: helpers.SmokeVM) -> int:
+    """The one ledger field a Run Now must never advance.
 
-    Byte-identity is the wrong oracle on a live box. The page process never writes this
-    file -- that is pinned off-appliance by UpdateRunNowScheduleOwnershipTest, where the
-    dispatch is stubbed -- but the detached run does: a deferred pass records
-    ``pending_apply`` on its entry, which advances no schedule and republishes no cache.
-    Everything else, including ``_meta``, every job's timestamps and the set of jobs
-    present, must survive the run untouched.
+    Not byte-identity, and not the whole document. Every pass ends in
+    pfb_schedule_cache_refresh_locked() (pfblockerng_apply.inc), which rewrites
+    pfb_due_ledger.json in full -- _meta, the cron row, every extra row -- and sets
+    next_due to wall-clock time whenever the plan is due. That republication is the
+    pass's own, so comparing it is comparing something Run Now is entitled to change.
+
+    last_run is different: it moves only through pfb_schedule_state_record_outcome(),
+    whose two call sites are both gated on scheduled_runtime_cron, which a manual Run
+    Now never sets. That is the ownership boundary this test exists to hold.
     """
     result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
-    if result.returncode != 0:
-        return (result.returncode, None)
+    assert result.returncode == 0, (
+        f"{_LEDGER_PATH} is missing, so this test would assert nothing -- "
+        "pfBlockerNG must be enabled and have published a ledger before Run Now is exercised"
+    )
     try:
         document = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:  # a corrupt ledger is a failure, not a comparison
+    except json.JSONDecodeError as exc:
         raise AssertionError(f"{_LEDGER_PATH} is not valid JSON: {exc}") from exc
-    for entry in document.values():
-        if isinstance(entry, dict):
-            entry.pop("pending_apply", None)
-    return (result.returncode, document)
+    cron = document.get("cron")
+    assert isinstance(cron, dict), (
+        f"{_LEDGER_PATH} has no cron entry, so an unchanged last_run would prove nothing: {document!r}"
+    )
+    return int(cron.get("last_run", 0))
+
+
+def _settle_runnow(vm: helpers.SmokeVM, timeout: float = 25.0) -> None:
+    """Best-effort wait for a dispatched Run Now to finish.
+
+    pfb_runnow() unlinks the pidfile and calls mwexec_bg, and daemon(8) writes the
+    pidfile only once it has started -- so "no live pid" is true before the run exists
+    as well as after it ends. Waiting for the up edge first distinguishes them; a run
+    that finishes before it is ever observed up is not an error, so neither poll is
+    allowed to fail the test. This gates the next dispatch, which
+    pfb_active_task_running() would otherwise refuse; the assertions do not depend on
+    it, because last_run is unchanged at every instant of the run.
+    """
+
+    def _up() -> bool:
+        probe = vm.ssh(
+            "/bin/sh",
+            "-c",
+            "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
+            'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo up; else echo down; fi',
+        )
+        return probe.stdout.strip() == "up"
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not _up():
+        time.sleep(0.5)
+    while time.monotonic() < deadline and _up():
+        time.sleep(0.5)
 
 
 def test_update_runnow_does_not_publish_schedule_cache(
@@ -1945,8 +1980,7 @@ def test_update_runnow_does_not_publish_schedule_cache(
 
     Given pfBlockerNG is enabled,
     When Run Now is submitted for partial and full scopes,
-    Then the tick-owned facts in ``pfb_due_ledger.json`` -- the derived cache
-    identity and the cron job's own schedule -- are unchanged once each run settles.
+    Then ``cron.last_run`` in ``pfb_due_ledger.json`` never advances.
 
     The next locked tick owns cache regeneration from config and durable state.
     """
@@ -1957,22 +1991,12 @@ def test_update_runnow_does_not_publish_schedule_cache(
         helpers.set_package_enabled(vm, True)
 
     try:
+        before_ip = _cron_last_run(vm)
 
-        def _runnow_idle() -> bool:
-            probe = vm.ssh(
-                "/bin/sh",
-                "-c",
-                "p=$(cat /var/run/pfb_runnow.pid 2>/dev/null); "
-                'if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo up; else echo down; fi',
-            )
-            return probe.stdout.strip() == "down"
-
-        pre_snapshot = _ledger_ownership(vm)
-
-        # ACT 1: POST scope=ip — a partial run; the cron ledger must NOT advance.
-        # pfb_runnow() dispatches a detached process and returns immediately (#671), so each
-        # act waits for that process to exit before reading. Reading mid-flight compares a
-        # settled snapshot against a run still in progress, which is what made this flaky.
+        # ACT 1: POST scope=ip — a partial run must not claim the tick's run.
+        # pfb_runnow() dispatches a detached process (#671), so the read below may land at
+        # any point of the run. That is fine for last_run, which is unchanged throughout;
+        # it was not fine for the whole document, which the pass tail rewrites.
         resp = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "ip"},
@@ -1981,17 +2005,15 @@ def test_update_runnow_does_not_publish_schedule_cache(
         )
         assert not looks_like_login_page(resp.text), "scope=ip POST returned the login form (session lost)"
 
-        assert helpers.wait_until(_runnow_idle, timeout=25.0), (
-            "scope=ip Run Now process did not exit before the ledger was read"
+        assert _cron_last_run(vm) <= before_ip, (
+            "scope=ip Run Now advanced cron.last_run -- a partial scope must not claim the tick's run"
         )
-        assert _ledger_ownership(vm) == pre_snapshot, (
-            "scope=ip Run Now republished the tick-owned cache or advanced the cron schedule"
-        )
+        _settle_runnow(vm)
 
-        # ACT 2: a full pass must leave the same ownership boundary intact. The idle wait
-        # above also gates the dispatch: pfb_active_task_running() would refuse this POST
-        # while the scope=ip process is alive.
-        before_both_snapshot = _ledger_ownership(vm)
+        # ACT 2: a full pass must leave the same ownership boundary intact. The settle
+        # above gates this dispatch, which pfb_active_task_running() would otherwise
+        # refuse while the scope=ip process is alive.
+        before_both = _cron_last_run(vm)
         resp2 = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "both"},
@@ -2000,12 +2022,10 @@ def test_update_runnow_does_not_publish_schedule_cache(
         )
         assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
 
-        assert helpers.wait_until(_runnow_idle, timeout=25.0), (
-            "scope=both Run Now process did not exit before the ledger was read"
+        assert _cron_last_run(vm) <= before_both, (
+            "scope=both Run Now advanced cron.last_run -- the next locked tick owns that"
         )
-        assert _ledger_ownership(vm) == before_both_snapshot, (
-            "scope=both Run Now republished the tick-owned cache or advanced the cron schedule"
-        )
+        _settle_runnow(vm)
 
         # Re-render the Update page and confirm the Schedule section is present.
         page_resp = webui.get(UPDATE_PAGE)
