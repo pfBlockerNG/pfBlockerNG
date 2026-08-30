@@ -122,8 +122,17 @@ final class ThemeSafetyUiTest extends TestCase
 	public static function scan(string $source): array
 	{
 		$hits = [];
+		// Four shapes reach a background: a CSS declaration, a JS object property with a
+		// bare key or a quoted one, and jQuery's setter -- issue #2864: only the first two
+		// were matched, so every .css('background-color', ...) call was invisible here.
+		// Named groups, because an alternation numbers its groups globally and a
+		// backreference written by hand silently points at the wrong branch.
 		if (preg_match_all(
-			'/background(?:-color)?\s*:\s*([^;}\n]+)|backgroundColor\s*:\s*(["\'])([^"\']+)\2/i',
+			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
+			. '|backgroundColor\s*:\s*(?<jsq>["\'])(?<js>[^"\']+)\k<jsq>'
+			. '|(?<objq>["\'])background(?:-color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*)\k<objvq>'
+			. '|\.css\(\s*(?<setq>["\'])background(?:-color)?\k<setq>\s*,\s*'
+			. '(?<setvq>["\'])(?<set>[^"\']*)\k<setvq>/i',
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
@@ -132,9 +141,13 @@ final class ThemeSafetyUiTest extends TestCase
 			for ($i = 0; $i < $count; $i++) {
 				$full = $matches[0][$i][0];
 				$offset = $matches[0][$i][1];
-				$cssVal = self::firstColorToken($matches[1][$i][0] ?? '');
-				$jsVal = trim($matches[3][$i][0] ?? '');
-				$value = $cssVal !== '' ? $cssVal : $jsVal;
+				$value = self::firstColorToken($matches['css'][$i][0] ?? '');
+				foreach (['js', 'obj', 'set'] as $group) {
+					if ($value !== '') {
+						break;
+					}
+					$value = trim($matches[$group][$i][0] ?? '');
+				}
 				if ($value === '' || self::isInterpolated($value) || self::isTranslucent($value)) {
 					continue;
 				}
@@ -226,7 +239,9 @@ final class ThemeSafetyUiTest extends TestCase
 
 	private static function contextHasForeground(string $ctx): bool
 	{
-		return (bool)preg_match('/(?<![A-Za-z-])color\s*:/i', $ctx);
+		// The optional quote matches an object property ("color": "white") as well as a
+		// declaration; the lookbehind still excludes background-color in either form.
+		return (bool)preg_match('/(?<![A-Za-z-])color["\']?\s*:/i', $ctx);
 	}
 
 	private static function themeRootPinsForeground(string $source, int $offset): bool
