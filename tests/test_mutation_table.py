@@ -66,6 +66,7 @@ def repo(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (root / "suite.sh").chmod(0o755)
+    (root / "other.txt").write_text("untouched\n", encoding="utf-8")
     (root / "pass.xml").write_text(JUNIT_PASS, encoding="utf-8")
     (root / "fail.xml").write_text(JUNIT_ONE_FAILED, encoding="utf-8")
     _git(root, "add", "-A")
@@ -117,9 +118,9 @@ def test_render_patch_keeps_the_changed_lines_and_the_path() -> None:
         "diff --git a/x.php b/x.php\nindex 1..2 100644\n--- a/x.php\n+++ b/x.php\n"
         "@@ -1,3 +1,3 @@\n unchanged\n-if ($ok) {\n+if (FALSE) {\n more\n"
     )
-    assert "<code>x.php</code>" in rendered, rendered
-    assert "<code>-if ($ok) {</code>" in rendered, rendered
-    assert "<code>+if (FALSE) {</code>" in rendered, rendered
+    assert "`x.php`" in rendered, rendered
+    assert "`-if ($ok) {`" in rendered, rendered
+    assert "`+if (FALSE) {`" in rendered, rendered
     assert "unchanged" not in rendered, f"context bloats the label: {rendered}"
     assert "@@" not in rendered, f"hunk headers bloat the label: {rendered}"
     assert "index 1..2" not in rendered, f"preamble bloats the label: {rendered}"
@@ -141,31 +142,41 @@ def test_render_patch_reads_dashes_inside_a_hunk_as_content() -> None:
     rendered = mt.render_patch(
         "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- old comment\n-SELECT 1;\n+++ i;\n+SELECT 2;\n"
     )
-    assert "<code>--- old comment</code>" in rendered, rendered
-    assert "<code>+++ i;</code>" in rendered, rendered
-    assert rendered.count("<code>q.sql</code>") == 1, rendered
-    assert "<code>i;</code>" not in rendered, f"a hunk line was mistaken for a path: {rendered}"
+    assert "`--- old comment`" in rendered, rendered
+    assert "`+++ i;`" in rendered, rendered
+    assert rendered.count("`q.sql`") == 1, rendered
+    assert "`i;`" not in rendered, f"a hunk line was mistaken for a path: {rendered}"
 
 
 def test_render_patch_keeps_the_old_path_when_a_file_is_deleted() -> None:
     """A deletion names its file only on the `---` side, so dropping that loses WHERE."""
     rendered = mt.render_patch("--- a/gone.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-bye\n")
-    assert "<code>gone.txt</code>" in rendered, rendered
+    assert "`gone.txt`" in rendered, rendered
     assert "/dev/null" not in rendered, rendered
 
 
 def test_a_cell_cannot_break_the_table_or_inject_markdown() -> None:
-    """`|` splits a table cell even inside a code span, and a backtick closes one early.
+    """A cell must be inert: no cell split, and no markdown syntax of any kind.
 
-    PHP is this tool's first subject and `||` is everywhere in it, so an unescaped label
-    would shift the killed count into a different column of the very table the tool exists
-    to make trustworthy -- and a backtick in a patch would let its content write markdown
-    into a PR body.
+    The first two attempts here were enumerations -- `|` and a backtick, then `\\r` and
+    `\\n` -- wrapped in an HTML ``<code>`` element. That element is raw HTML, not a code
+    span, so GFM kept parsing inline syntax inside it and `*x*`, `~~x~~` and `[x](url)` still
+    rendered as emphasis, strikethrough and a live link. A real code span closes the class
+    rather than the next character in it, which is why this test asserts on the CLASS.
     """
-    rendered = mt.cell("-if ($a || $b) { `ls` }")
-    assert "|" not in rendered, rendered
-    assert "`" not in rendered, rendered
-    assert "&#124;" in rendered and "<code>" in rendered, rendered
+    # The delimiter, and the two characters that end a row before any span can exist.
+    assert "\\|" in mt.cell("-if ($a || $b) {")
+    for raw in ("\r", "\n"):
+        assert raw not in mt.cell(f"a{raw}b"), repr(mt.cell(f"a{raw}b"))
+    # Inline markdown, none of which an HTML <code> element suppressed.
+    for hostile in ("*em*", "_em_", "~~strike~~", "[click](https://evil.example/)", "<b>x</b>"):
+        rendered = mt.cell(hostile)
+        assert rendered.startswith("`") and rendered.endswith("`"), rendered
+        assert hostile in rendered, rendered
+    # A backtick run needs a longer fence, and a leading/trailing one needs padding.
+    assert mt.cell("a`b") == "``a`b``"
+    assert mt.cell("``x``") == "``` ``x`` ```"
+    assert mt.cell("`x`") == "`` `x` ``"
 
 
 def test_render_patch_says_so_when_it_truncates() -> None:
@@ -244,7 +255,7 @@ def test_a_newline_in_a_test_id_cannot_end_the_row(tmp_path: Path) -> None:
     assert "\n" in found, found
     rendered = mt.cell(found)
     assert "\n" not in rendered and "\r" not in rendered, repr(rendered)
-    assert "&#10;" in rendered, rendered
+    assert "\\n" in rendered, rendered
 
 
 @pytest.mark.parametrize(
@@ -283,10 +294,10 @@ def test_the_row_carries_the_patch_and_the_tests_it_killed(repo: Path, killing_p
     # The table must name the tree it measured, or a block pasted into a PR body stops being
     # checkable the moment that tree moves on.
     assert head in result.stdout.splitlines()[0], result.stdout
-    row = [ln for ln in result.stdout.splitlines() if ln.startswith("| <code>guard.txt</code>")]
+    row = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
     assert len(row) == 1, result.stdout
-    assert "<code>-GUARD</code>" in row[0] and "<code>+MUTATED</code>" in row[0], row[0]
-    assert "<code>T::alpha</code>" in row[0], row[0]
+    assert "`-GUARD`" in row[0] and "`+MUTATED`" in row[0], row[0]
+    assert "`T::alpha`" in row[0], row[0]
     assert "| 1 |" in row[0], row[0]
 
 
@@ -336,9 +347,9 @@ def test_the_report_the_suite_writes_is_not_mistaken_for_dirt(repo: Path, killin
     second.write_text("--- a/guard.txt\n+++ b/guard.txt\n@@ -1 +1 @@\n-GUARD\n+OTHER\n", encoding="utf-8")
     result = _run(repo, killing_patch, second)
     assert result.returncode == 0, result.stdout + result.stderr
-    rows = [ln for ln in result.stdout.splitlines() if ln.startswith("| <code>guard.txt</code>")]
+    rows = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
     assert len(rows) == 2, f"the second row never ran:\n{result.stdout}\n{result.stderr}"
-    assert "<code>+MUTATED</code>" in rows[0] and "<code>+OTHER</code>" in rows[1], rows
+    assert "`+MUTATED`" in rows[0] and "`+OTHER`" in rows[1], rows
 
 
 def test_a_dirty_tree_is_refused(repo: Path, killing_patch: Path) -> None:
@@ -392,6 +403,55 @@ def test_a_revert_that_does_not_take_is_refused_and_does_not_look_like_a_finding
     assert "did not take" in result.stderr, result.stderr
 
 
+def test_a_failed_revert_is_reported_even_while_another_failure_is_propagating(repo: Path, killing_patch: Path) -> None:
+    """Scenario: the two bad things happen at once, which is when it matters most.
+
+    Given a suite that is well behaved at the baseline, but under the mutation both corrupts
+      the patched file irreversibly AND writes a malformed report,
+
+    When the row is measured,
+
+    Then the ORIGINAL failure is what the run exits on -- raising from the `finally` would
+      replace it, which is the defect that started this -- and the failed revert is still
+      reported, because the tree is left mutated and silence there means every later row is
+      measured under it.
+
+    This is the combined path. The other revert test covers a failed revert with nothing else
+    propagating, which reaches a different branch entirely.
+    """
+    (repo / "suite.sh").write_text(
+        "#!/bin/sh\n"
+        "if grep -q GUARD guard.txt; then cat pass.xml > report.xml;\n"
+        "else printf 'TRASH\\n' >> guard.txt; printf 'not xml' > report.xml; fi\n",
+        encoding="utf-8",
+    )
+    _git(repo, "commit", "-qam", "a suite that corrupts the tree and the report together")
+    result = _run(repo, killing_patch)
+    assert result.returncode == 2, f"rc={result.returncode}\n{result.stderr}"
+    assert "malformed JUnit report" in result.stderr, f"the original failure was replaced: {result.stderr}"
+    assert "did not take" in result.stderr, f"the tree is left mutated and nothing said so: {result.stderr}"
+
+
+def test_residue_is_refused_even_when_the_reverse_apply_succeeded(repo: Path, killing_patch: Path) -> None:
+    """A reverse-apply can SUCCEED and still leave the tree dirty.
+
+    The suite here dirties a file the patch never touched, so `git apply -R` reverses cleanly
+    and reports success -- and the tree is still not what the next row would be measured
+    against. Checking only the exit status misses this entirely, which is what it did.
+    """
+    (repo / "suite.sh").write_text(
+        "#!/bin/sh\nprintf 'dirtied\\n' >> other.txt\n"
+        "if grep -q GUARD guard.txt; then cat pass.xml > report.xml;\n"
+        "else cat fail.xml > report.xml; fi\n",
+        encoding="utf-8",
+    )
+    _git(repo, "commit", "-qam", "a suite that dirties a file the patch never touches")
+    result = _run(repo, killing_patch)
+    assert result.returncode == 2, f"rc={result.returncode}\n{result.stdout}\n{result.stderr}"
+    assert "did not take" in result.stderr, result.stderr
+    assert "other.txt" in result.stderr, f"the residue is not named: {result.stderr}"
+
+
 def test_a_suite_that_cannot_run_is_refused_rather_than_reported_as_a_kill(repo: Path, killing_patch: Path) -> None:
     """A missing binary used to escape as a traceback on exit 1 -- the finding's own status."""
     result = _run(repo, killing_patch, suite="no-such-suite-binary-xyz")
@@ -417,7 +477,7 @@ def test_a_quoted_suite_argument_survives_parsing(repo: Path, killing_patch: Pat
     _git(repo, "commit", "-qam", "a suite that requires exactly one argument")
     result = _run(repo, killing_patch, suite="sh suite.sh 'one arg with spaces'")
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert "<code>+MUTATED</code>" in result.stdout, result.stdout
+    assert "`+MUTATED`" in result.stdout, result.stdout
 
 
 def test_a_suite_that_outlasts_the_timeout_is_refused(repo: Path, killing_patch: Path) -> None:

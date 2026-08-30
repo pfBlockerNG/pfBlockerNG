@@ -59,7 +59,6 @@ EXIT STATUS
 from __future__ import annotations
 
 import argparse
-import html
 import re
 import shlex
 import subprocess
@@ -91,19 +90,42 @@ class Unproducible(Exception):
 def cell(text: str) -> str:
     """$text as one markdown table cell, safe for arbitrary patch and test-id bytes.
 
-    A cell is split on every unescaped ``|``, INCLUDING inside a code span, so a mutation of
-    `if ($a || $b) {` -- ordinary PHP, and PHP is this tool's first subject -- silently shifts
-    the killed count into a different column. A backtick opens a code span, which lets patch
-    content inject arbitrary markdown into a PR body. And a NEWLINE ends the row outright: a
-    JUnit writer preserves an intentional newline in an attribute as ``&#10;``, because a raw
-    one is whitespace-normalised away, and the parser hands it back as a real newline. All
-    four become entities inside an HTML-escaped ``<code>`` element, so nothing that reaches
-    the renderer can be read as syntax or as structure.
+    A REAL code span, not an HTML ``<code>`` element. That distinction is the whole finding:
+    an HTML tag pair is raw HTML, and GFM keeps running inline parsing on the text between
+    the tags, so `*x*`, `~~x~~` and `[x](url)` still rendered as emphasis, strikethrough and
+    a live link inside what the row promised was inert. Escaping ``|`` and a backtick and a
+    newline was an enumeration of four characters out of a set that also holds ``* _ ~ [ ] (
+    )`` and more. A code span closes the whole class at once, because CommonMark does not
+    parse inline syntax inside one.
+
+    The fence is one backtick longer than the longest run in the text, and a space pads each
+    end when the text itself starts or ends with a backtick -- the standard way to put an
+    arbitrary backtick run inside a span.
+
+    Two things a code span cannot handle, and they are handled here:
+
+    ``|`` still splits the cell, because GFM finds the delimiters BEFORE it recognises any
+    span. `\\|` is the escape the table spec defines for exactly this, and it works inside a
+    span.
+
+    ``\r`` and ``\n`` end the row outright, at block level, before any span exists -- no
+    wrapper can contain them. A JUnit writer preserves an intentional newline in an attribute
+    as ``&#10;``, since a raw one is whitespace-normalised away, and the parser hands back a
+    real newline. They are rendered as their two-character escapes, which is visible rather
+    than silently dropped.
+
+    Backslashes are NOT doubled. Inside a code span a backslash is literal -- CommonMark runs
+    no escape processing there -- and the table's row splitter rewrites only `\\|`. Doubling
+    would therefore render every backslash twice, and this tool's first subject is PHP, whose
+    patches are full of `\'\\\\\'`. The cost is that a source `\\|` and a source `|` render
+    alike, and a source `\\n` and a real newline render alike; both are cosmetic and both are
+    rarer than the noise the doubling would add to every row.
     """
-    escaped = html.escape(text, quote=False)
-    for raw, entity in (("|", "&#124;"), ("`", "&#96;"), ("\r", "&#13;"), ("\n", "&#10;")):
-        escaped = escaped.replace(raw, entity)
-    return "<code>" + escaped + "</code>"
+    flat = text.replace("\r", "\\r").replace("\n", "\\n").replace("|", "\\|")
+    longest = max((len(m) for m in re.findall(r"`+", flat)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    return f"{fence}{pad}{flat}{pad}{fence}"
 
 
 @dataclass(frozen=True)
@@ -282,7 +304,6 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
         applied = _run(["git", "apply", str(patch.resolve())], root)
         if applied.returncode != 0:
             raise Unproducible(f"{patch} does not apply: {applied.stderr.strip()}")
-    reverted: subprocess.CompletedProcess[str] | None = None
     try:
         report.unlink(missing_ok=True)
         run = _run(suite, root, timeout)
@@ -292,30 +313,48 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
                 f"{(run.stderr or run.stdout).strip()[-400:]}"
             )
         failures = parse_failures(report)
-    finally:
+    except BaseException:
+        # Something else is already on its way out. Undo the patch anyway, and REPORT rather
+        # than raise -- raising here replaces the failure that caused the mess, which is the
+        # defect this structure exists to prevent.
         if patch is not None:
-            reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
-            if reverted.returncode != 0:
-                # Cannot raise here without replacing the exception on its way out, and
-                # cannot stay silent either: the tree is left mutated and every later row
-                # would be measured under it. Say so on stderr, let the original through.
-                print(
-                    f"mutation_table.py: WARNING: {patch} did not revert (git apply -R exit "
-                    f"{reverted.returncode}): {reverted.stderr.strip()}",
-                    file=sys.stderr,
-                )
-    # Reached only when nothing was propagating, which is the point: verifying inside the
-    # `finally` meant a failure HERE replaced whatever failure was already on its way out,
-    # so the malformed report that caused the mess was the one thing never reported.
-    if reverted is not None:
-        residue = dirt(root, report)
-        if reverted.returncode != 0 or residue:
-            raise Unproducible(
-                f"reverting {patch} did not take, so every later row would be measured "
-                f"under it. git apply -R exit {reverted.returncode}: "
-                f"{reverted.stderr.strip()}\nremaining:\n{residue or '(none)'}"
-            )
+            problem = undo(root, report, patch)
+            if problem:
+                print(f"mutation_table.py: WARNING: {problem}", file=sys.stderr)
+        raise
+    if patch is not None:
+        problem = undo(root, report, patch)
+        if problem:
+            raise Unproducible(problem)
     return failures
+
+
+def undo(root: Path, report: Path, patch: Path) -> str:
+    """Reverse $patch; return what is still wrong afterwards, or '' when the tree is clean.
+
+    RESIDUE, not just the exit status. A reverse-apply can SUCCEED and still leave the tree
+    dirty, because the suite itself changed something -- and then the next row is measured
+    under it. Checking only the return code missed exactly that.
+
+    Returning the description rather than raising is what lets the two callers differ: on the
+    clean path a problem here is fatal, and on the exception path it can only be reported,
+    because raising would replace the exception already propagating. ``sys.exc_info()`` is not
+    how to tell those apart -- inside a ``finally`` it reports the exception being HANDLED,
+    which for one merely passing through is None, so a ``finally`` that consulted it stayed
+    silent in precisely the case it was added for.
+    """
+    reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
+    try:
+        residue = dirt(root, report)
+    except Unproducible:  # pragma: no cover - git itself is unavailable
+        residue = "(git status unavailable)"
+    if reverted.returncode == 0 and not residue:
+        return ""
+    return (
+        f"reverting {patch} did not take, so every later row would be measured under it. "
+        f"git apply -R exit {reverted.returncode}: {reverted.stderr.strip()}\n"
+        f"remaining:\n{residue or '(none)'}"
+    )
 
 
 def render(head: str, suite: list[str], baseline: int, rows: list[Row]) -> str:
