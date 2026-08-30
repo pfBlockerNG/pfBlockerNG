@@ -32,8 +32,8 @@ case "${IFR_MATRIX_MODE:-default}" in
     unique)
         printf '%s\n' '[{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"}]'
         ;;
-    duplicate)
-        printf '%s\n' '[{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"}]'
+    ambiguous_py)
+        printf '%s\n' '[{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.5"}]'
         ;;
     unreadable)
         exit 7
@@ -131,12 +131,11 @@ STUBEOF
     The stdout should include 'Installing pfBlockerNG'
   End
 
-  It 'hard-fails an EXPLICIT tuple that matches MULTIPLE matrix rows'
-    IFR_MATRIX_MODE=duplicate
-    SMOKE_PHP_VERSION=8.4
+  It 'hard-fails a partial selector that matches MULTIPLE sibling BUILD rows'
+    IFR_MATRIX_MODE=ambiguous_py
     SMOKE_PY_FLAVOR=py311
     IPY_PROBE=py312
-    export IFR_MATRIX_MODE SMOKE_PHP_VERSION SMOKE_PY_FLAVOR IPY_PROBE
+    export IFR_MATRIX_MODE SMOKE_PY_FLAVOR IPY_PROBE
     When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
     The status should equal 1
     The stderr should include 'matches more than one BUILD row'
