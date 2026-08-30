@@ -53,9 +53,10 @@ final class WizardVipCopyTest extends TestCase
 		$candidates = pfb_dnsbl_vip_candidates(AF_INET6);
 		$this->assertNotSame([], $candidates, 'the picker must have v6 candidates to compare against');
 
-		preg_match_all('/\bfd[0-9a-f]{2}:[0-9a-fA-FxX:]*[0-9a-fA-FxX]\b/', $wizard, $matches);
+		// Case-insensitive: a literal is no less wrong for being written FD00.
+		preg_match_all('/\bfd[0-9a-f]{2}:[0-9a-f:xX]*[0-9a-f]\b/i', $wizard, $matches);
 		$claimed = array_values(array_unique($matches[0]));
-		$invented = array_values(array_diff($claimed, $candidates));
+		$invented = array_values(array_udiff($claimed, $candidates, 'strcasecmp'));
 
 		$this->assertSame([], $invented,
 			'the wizard names IPv6 sinkhole addresses the picker never returns: '
