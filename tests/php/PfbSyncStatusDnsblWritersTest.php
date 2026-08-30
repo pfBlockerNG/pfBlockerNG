@@ -402,6 +402,48 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'a swap-not-confirmed restart-fallback that ultimately converges must not leave a dnsbl apply entry open');
 	}
 
+	/**
+	 * A failed bounded start is still the existing recovery event: restore the
+	 * last-known-good config, retry exactly once, then leave apply explicitly open.
+	 */
+	public function testRestartFailurePreservesRollbackRetryAndApplyLedger(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['chroot_cmd'] = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+
+		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
+		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+		$ledgerCalls = 0;
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static function () use (&$ledgerCalls): bool {
+				$ledgerCalls++;
+				return pfb_dnsbl_apply_ledger_update();
+			});
+
+		$after = count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []);
+		$this->assertSame($before + 2, $after,
+			'a non-zero start must still make the original attempt plus exactly one recovery retry');
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.conf"),
+			'the retry must run only after restoring the last-known-good resolver config');
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf.error"),
+			'the failed candidate config must remain observable for diagnosis');
+		$this->assertSame(1, $ledgerCalls,
+			'the failed retry path must still reach the shared apply-ledger tail exactly once');
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open,
+			'a resolver that is still down after retry must leave one explicit apply entry open');
+		$this->assertSame('apply', $open[0]['stage']);
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_reload_unbound() -- zero-downtime swap SUCCESS early-return (issue #1024)
 	// -----------------------------------------------------------------------
