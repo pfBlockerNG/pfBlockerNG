@@ -355,6 +355,16 @@ EOF
     The output should equal 1800
   End
 
+  It 'preserves an embedded stored newline so the resolver rejects it'
+    cat > "${reader}" <<'EOF'
+#!/bin/sh
+printf '90\n0\n'
+EOF
+    chmod +x "${reader}"
+
+    When call pfb_reentry_timeout_from_reader "${reader}" string installedpackages/pfblockerng/config/pfb_reentry_timeout
+    The output should equal 1800
+  End
 
   It 'still accepts an unpadded stored digit run'
     cat > "${reader}" <<'EOF'
