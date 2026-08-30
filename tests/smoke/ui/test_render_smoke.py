@@ -2757,8 +2757,7 @@ _THREATS_LOOKUP_TITLES = ("Threat Domain Lookup", "Threat Source IP Lookup", "Th
 def test_threats_rejects_malformed_lookup(name: str, query: str, message: str, webui: WebUI) -> None:
     """A malformed/absent threats lookup renders its info-box, NOT the lookup page.
 
-    HTTP 200 (head.inc is included before the dispatch, so the page still renders
-    its header) with the exact info-box message present and the "Threat ... Lookup"
+    HTTP 200 with the exact info-box message present and the "Threat ... Lookup"
     chrome absent -- proving the validator rejected and exit()ed rather than
     rendering the lookup view. The before-state (a valid param DOES render that
     chrome) is the positive threats_{domain,host,port} entries in PAGE_TABLE.
