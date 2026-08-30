@@ -615,10 +615,10 @@ $action_txt = "Default: <strong>Disabled</strong>
 					<li>'Alias Permit' and 'Alias Match' will be saved in the Same folder as the other Permit/Match Auto-Rules</li>
 					<li>'Alias Native' lists are kept in their Native format without any modifications.</li></ul>
 
-			<span class=\"text-danger\">Note: </span><ul>
+			<span class=\"text-danger\">Note: </span><ul><li>
 				When manually creating 'Alias' type firewall rules; <strong>Do not add</strong> (pfB_) to the
 				start of the rule description, use (pfb_) (Lowercase prefix). Manually created 'Alias' rules with 'pfB_' in the
-				description will be auto-removed by package when 'Auto' rules are defined.</ul>
+				description will be auto-removed by package when 'Auto' rules are defined.</li></ul>
 		</div>";
 
 $section->addInput(new Form_Select(
@@ -1052,8 +1052,8 @@ $section->addInput(new Form_StaticText(
 	'Why Reputation Matters',
 	'By enabling <strong>Reputation</strong>, each Blocklist will be analyzed for repeat offenders in each IP range.'
 	. '<div class="infoblock">'
-	. '<ul>Example: &emsp;x.x.x.1, x.x.x.2, x.x.x.3, x.x.x.4, x.x.x.5<br />'
-	. 'No. of <strong> repeat offending IPs </strong> [ &nbsp;<strong>5</strong>&nbsp; ], in a Blocklist within the same IP range.</ul>'
+	. '<ul><li>Example: &emsp;x.x.x.1, x.x.x.2, x.x.x.3, x.x.x.4, x.x.x.5<br />'
+	. 'No. of <strong> repeat offending IPs </strong> [ &nbsp;<strong>5</strong>&nbsp; ], in a Blocklist within the same IP range.</li></ul>'
 	. 'With <strong>Reputation</strong> enabled, these 5 IPs will be removed and a single<strong>x.x.x.0/24</strong> Block is used.<br />'
 	. 'This will completely Block/Reject this particular range from your Firewall.<br /><br />'
 	. 'Selecting Blocklists from various Threat Sources will help to highlight repeat offending IP ranges,<br />'
@@ -1089,11 +1089,11 @@ $section->addInput(new Form_StaticText(
 	'Once all Blocklists are downloaded, these two additional processes <strong>[ pMax and dMax ]</strong><br />'
 	. 'Can be used to further analyze for repeat offenders.'
 	. '<div class="infoblock">'
-	. '<ul>Analyzing all Blocklists as a whole:</ul>'
-	. '<ul><strong>[ pMax ]</strong> will analyze for repeat offenders in each IP range but will not use the Country Exclusion.<br />'
-	. 'Default is 50 IPs in any range. Having 50 repeat offenders IPs in any range will Block the entire range.<br /><br /></ul>'
-	. '<ul><strong>[ dMax ]</strong> will analyze for repeat offenders in each IP range. Country Exclusions will be applied.<br />'
-	. 'Default is 5 IPs in any range.</ul>'
+	. '<ul><li>Analyzing all Blocklists as a whole:</li></ul>'
+	. '<ul><li><strong>[ pMax ]</strong> will analyze for repeat offenders in each IP range but will not use the Country Exclusion.<br />'
+	. 'Default is 50 IPs in any range. Having 50 repeat offenders IPs in any range will Block the entire range.<br /><br /></li></ul>'
+	. '<ul><li><strong>[ dMax ]</strong> will analyze for repeat offenders in each IP range. Country Exclusions will be applied.<br />'
+	. 'Default is 5 IPs in any range.</li></ul>'
 	. 'Note: <strong>MAX</strong> performs on individual Blocklists, while <strong>pMAX / dMAX</strong>'
 	. 'perform on all Lists together.'
 	. '</div>'
@@ -1144,15 +1144,15 @@ $section->addInput(new Form_StaticText(
 	. 'Countries. The original blocklisted IPs remain intact. All other repeat offending Country ranges will be processed.'
 	. '<div class="infoblock">'
 	. 'Define repeat offending ranges [ <strong>Action</strong> ] Available settings are:<br />'
-	. '<ul><strong>Ignore</strong>: Repeat offenders that are in the <strong>ccwhite</strong> category will be <strong>Ignored</strong> (Default)</ul>'
-	. '<ul><strong>Block:</strong> Repeat offenders are set to Block the entire repeat offending range(s)</ul>'
-	. '<ul><strong>Match:</strong> Repeat offenders are added to a <strong>Match</strong> List which can be used in a Floating Match rule<br />'
-	. 'Selecting <strong>Match</strong> will consume more processing time, so only select this option if you enable rules for it.</ul>'
+	. '<ul><li><strong>Ignore</strong>: Repeat offenders that are in the <strong>ccwhite</strong> category will be <strong>Ignored</strong> (Default)</li></ul>'
+	. '<ul><li><strong>Block:</strong> Repeat offenders are set to Block the entire repeat offending range(s)</li></ul>'
+	. '<ul><li><strong>Match:</strong> Repeat offenders are added to a <strong>Match</strong> List which can be used in a Floating Match rule<br />'
+	. 'Selecting <strong>Match</strong> will consume more processing time, so only select this option if you enable rules for it.</li></ul>'
 	. '\'<strong>ccwhite</strong>\' are Countries that are selected to be excluded from the repeat offenders search.<br />'
 	. '\'<strong>ccblack</strong>\' are all other Countries that are not selected.<br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new \'Alias\''
 	. 'and select one of the <strong>Action Match</strong> Formats and<br /> enter the <strong>Localfile</strong> as:'
-	. '<ul>/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt</ul><br />'
+	. '<ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/match/generated/pfB_Match_Exempt_v4.txt</li></ul><br />'
 	. '<strong>These Country Code options are only available when the MaxMind key has been entered and MaxMind database has been downloaded and updated</strong>'
 	. '</div>'
 ));
@@ -1198,15 +1198,15 @@ $section->addInput(new Form_StaticText(
 	'<strong>Proofpoint ET IQRisk</strong> is a subscription based professional Reputation list.<br /><br />'
 	. 'The URL must include the name <strong>iprepdata.txt</strong><br />'
 	. 'ET IQRisk Blocklist URL must be entered in the IPv4 Lists Tab using the following example:'
-	. '<ul>https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</ul>'
+	. '<ul style="overflow-wrap: anywhere;"><li>https://rules.emergingthreatspro.com/XXXXXXXXXXXXXXXX/reputation/iprepdata.txt.gz</li></ul>'
 	. 'Select the <strong>Auto</strong> format. The URL should use the .gz File type.<br />'
 	. 'Enter your "ETPRO" code in URL. Further information can be found @ '
 	. '<a target="_blank" rel="noopener noreferrer" href="https://www.proofpoint.com/us/solutions/products/threat-intelligence">Proofpoint IQRisk</a><br /><br />'
 	. 'To use <strong>Match</strong> Lists, Create a new Alias and select one of the <strong>'
 	. 'Action Match</strong> Formats and <br />'
-	. 'enter the <strong>Localfile</strong> as: <ul>/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt</ul>'
+	. 'enter the <strong>Localfile</strong> as: <ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/match/generated/pfB_Match_ET_v4.txt</li></ul>'
 	. 'ET IQRisk Individual Match Lists can be found in the following folder:<br />'
-	. '<ul>/var/db/pfblockerng/ET</ul>'
+	. '<ul style="overflow-wrap: anywhere;"><li>/var/db/pfblockerng/ET</li></ul>'
 ));
 
 $section->addInput(new Form_Input(
