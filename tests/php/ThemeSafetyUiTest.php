@@ -120,6 +120,23 @@ final class ThemeSafetyUiTest extends TestCase
 			'contextHasForeground() must accept the pairing idiom native to this syntax: ' . $paired);
 	}
 
+	/**
+	 * issue #2866: a `color:` on a NEIGHBOURING element must not satisfy the pairing
+	 * check for an unrelated background. In pfblockerng_category_edit.php the unpaired
+	 * `$failed_bg` background sits in the same PHP block as a separate span that pins
+	 * `color: black`, so the block-level context window laundered the violation.
+	 */
+	public function testNeighbouringElementForegroundDoesNotPair(): void
+	{
+		$span = '$failed = "<span style=\"color: black; background-color: #FFFF00; border-style: groove;\">Failed</span>";';
+		$defect = "if (true) {\n\t\$failed_bg = 'background-color: #FFFF00;';\n\t" . $span . "\n}";
+		$this->assertNotSame([], self::scan($defect),
+			'a colour belonging to a neighbouring element must not pair an unrelated background');
+		$paired = "if (true) {\n\t\$failed_bg = 'background-color: #FFFF00; color: black;';\n\t" . $span . "\n}";
+		$this->assertSame([], self::scan($paired),
+			'a foreground in the same declaration string must still pair');
+	}
+
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
 	{
 		$root = dirname(__DIR__, 2);
@@ -203,8 +220,8 @@ final class ThemeSafetyUiTest extends TestCase
 				if ($value === '' || self::isInterpolated($value) || self::isTranslucent($value)) {
 					continue;
 				}
-				$ctx = self::declarationContext($source, $offset);
-				if (self::contextHasForeground($ctx)) {
+				[$ctx, $ctxStart] = self::declarationContext($source, $offset);
+				if (self::contextHasForeground($source, $offset, $ctx, $ctxStart)) {
 					continue;
 				}
 				if (self::themeRootPinsForeground($source, $offset)) {
@@ -264,14 +281,18 @@ final class ThemeSafetyUiTest extends TestCase
 		return $found;
 	}
 
-	private static function declarationContext(string $source, int $offset): string
+	/**
+	 * @return array{0: string, 1: int} the context window and its absolute start offset
+	 *         in $source, so callers can map matches inside the window back to $source.
+	 */
+	private static function declarationContext(string $source, int $offset): array
 	{
 		$before = substr($source, 0, $offset);
 		$brace = strrpos($before, '{');
 		if ($brace !== FALSE) {
 			$end = strpos($source, '}', $brace);
 			if ($end !== FALSE && $end >= $offset) {
-				return substr($source, $brace, $end - $brace + 1);
+				return [substr($source, $brace, $end - $brace + 1), $brace];
 			}
 		}
 		$sq = strrpos($before, "'");
@@ -283,23 +304,42 @@ final class ThemeSafetyUiTest extends TestCase
 			$start = $dq;
 			$quote = '"';
 		} else {
-			return substr($source, max(0, $offset - 80), 160);
+			return [substr($source, max(0, $offset - 80), 160), max(0, $offset - 80)];
 		}
 		$end = strpos($source, $quote, $start + 1);
-		return $end === FALSE ? substr($source, $start) : substr($source, $start, $end - $start + 1);
+		return [$end === FALSE ? substr($source, $start) : substr($source, $start, $end - $start + 1), $start];
 	}
 
-	private static function contextHasForeground(string $ctx): bool
+	private static function contextHasForeground(string $source, int $bgOffset, string $ctx, int $ctxStart): bool
 	{
 		// Every way a foreground can be set must be recognised here, or code paired through
 		// a form scan() detects but this does not reports as a violation. The two
 		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
-		return (bool)preg_match(
+		//
+		// issue #2866: the pairing foreground must belong to the SAME element as the
+		// background. In a brace context (a PHP block, not a CSS rule) a `color:` can sit
+		// in a neighbouring element's markup — e.g. the separate failed-download span that
+		// laundered category_edit's unpaired $failed_bg. A foreground with an HTML tag
+		// starting between it and the background belongs to a different element and does
+		// not satisfy the pairing check.
+		if (preg_match_all(
 			'/(?<![A-Za-z0-9_-])color["\']?\s*:'
 			. '|(?<![A-Za-z0-9_-])color\s*='
 			. '|setProperty\(\s*["\']color["\']/i',
-			$ctx
-		);
+			$ctx,
+			$m,
+			PREG_OFFSET_CAPTURE
+		) === FALSE) {
+			return FALSE;
+		}
+		foreach ($m[0] as [$text, $rel]) {
+			$colorOffset = $ctxStart + $rel;
+			$gap = substr($source, min($bgOffset, $colorOffset), abs($colorOffset - $bgOffset));
+			if (!preg_match('/<[A-Za-z\/]/', $gap)) {
+				return TRUE;
+			}
+		}
+		return FALSE;
 	}
 
 	private static function themeRootPinsForeground(string $source, int $offset): bool

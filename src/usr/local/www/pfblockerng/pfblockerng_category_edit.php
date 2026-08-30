@@ -1271,7 +1271,7 @@ foreach ($rowdata[$rowid] as $tags) {
 		// Indicate any failed downloads with yellow select field background
 		$failed_bg = '';
 		if ($folder && file_exists("{$folder}/{$row['header']}{$suffix}.fail")) {
-			$failed_bg = 'background-color: #FFFF00;';
+			$failed_bg = 'background-color: #FFFF00; color: black;';
 			$failed = "<span style=\"color: black; background-color: #FFFF00; border-style: groove;\">&emsp;Failed download(s) highlighted in yellow.&emsp;</span>";
 		}
 
