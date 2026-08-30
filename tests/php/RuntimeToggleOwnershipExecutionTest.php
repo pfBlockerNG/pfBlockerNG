@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PfbRuntimeToggleOwnershipSpy;
 
+use PHPUnit\Framework\Attributes\Depends;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -55,9 +56,18 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 		'autonot_out', 'autoaddrnot_out', 'autoports_out', 'autoaddr_out',
 		'autonot_in', 'autoaddrnot_in', 'autoports_in', 'autoaddr_in',
 	];
+	/** @var array<string,array{bool,mixed}> */
+	private static array $originalGlobals = [];
+	/** @var array<string,array{bool,mixed}> */
+	private array $savedGlobals = [];
+
 
 	public static function setUpBeforeClass(): void
 	{
+		foreach (['pfb', 'pfbarr'] as $name) {
+			self::$originalGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
+		}
+
 		$reflection = new \ReflectionFunction('pfb_determine_list_detail');
 		$lines = file($reflection->getFileName());
 		if (!is_array($lines)) {
@@ -70,6 +80,24 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 		));
 		eval('namespace ' . __NAMESPACE__ . '; ' . $source);
 	}
+	protected function setUp(): void
+	{
+		foreach (['pfb', 'pfbarr'] as $name) {
+			$this->savedGlobals[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
+		}
+	}
+
+	protected function tearDown(): void
+	{
+		foreach ($this->savedGlobals as $name => [$existed, $value]) {
+			if ($existed) {
+				$GLOBALS[$name] = $value;
+			} else {
+				unset($GLOBALS[$name]);
+			}
+		}
+	}
+
 
 	public function testStaticAndDynamicHomesInvokeOnlyTheirOwner(): void
 	{
@@ -99,6 +127,17 @@ final class RuntimeToggleOwnershipExecutionTest extends TestCase
 			}
 		}
 	}
+	#[Depends('testStaticAndDynamicHomesInvokeOnlyTheirOwner')]
+	public function testGlobalStateIsRestoredForDependentTests(): void
+	{
+		foreach (self::$originalGlobals as $name => [$existed, $value]) {
+			$this->assertSame($existed, array_key_exists($name, $GLOBALS), "{$name}: existence must be restored");
+			if ($existed) {
+				$this->assertSame($value, $GLOBALS[$name], "{$name}: value must be restored");
+			}
+		}
+	}
+
 
 	private function seed(string $section, string $key): void
 	{
