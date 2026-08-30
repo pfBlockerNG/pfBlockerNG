@@ -56,6 +56,9 @@ Describe 'processet() etblock/etmatch tempfile accumulation: multi-category conc
     etdir="${work}/ET"; mkdir -p "$etdir"
     tempfile="${work}/t1"
     tempfile2="${work}/t2"
+    etstage="${etdir}"
+    blockstage="${tempfile}"
+    matchstage="${tempfile2}"
     true > "$tempfile"
     true > "$tempfile2"
     # Two selected categories, the first unterminated -- deterministic single-line
@@ -63,8 +66,8 @@ Describe 'processet() etblock/etmatch tempfile accumulation: multi-category conc
     # identically so the same fixture drives both the block and match statements).
     printf '1.2.3.4' > "${etdir}/ET_Cnc.txt"
     printf '5.6.7.8\n' > "${etdir}/ET_Bot.txt"
-    blockstmt="$(extract_stmt "${PFB_PKGDIR}/pfblockerng.sh" '"${etdir}/${list}.txt" >> "${tempfile}"')"
-    matchstmt="$(extract_stmt "${PFB_PKGDIR}/pfblockerng.sh" '"${etdir}/${list}.txt" >> "${tempfile2}"')"
+    blockstmt="$(extract_stmt "${PFB_PKGDIR}/pfblockerng.sh" '"${etstage}/${list}.txt" >> "${blockstage}"')"
+    matchstmt="$(extract_stmt "${PFB_PKGDIR}/pfblockerng.sh" '"${etstage}/${list}.txt" >> "${matchstage}"')"
   }
   cleanup() { rm -rf "$work"; }
   Before 'setup'

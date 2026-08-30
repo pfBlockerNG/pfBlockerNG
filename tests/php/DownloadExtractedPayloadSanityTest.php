@@ -56,7 +56,7 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_extracted_sanity_' . getmypid() . '_' . uniqid();
 		$this->assertTrue(mkdir($this->dir, 0777, TRUE));
-		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types'] as $key) {
+		foreach (['log', 'errlog', 'pnow', 'dbdir', 'mime_types', 'script', 'etblock', 'etmatch'] as $key) {
 			$this->saved_pfb_exists[$key] = array_key_exists($key, $GLOBALS['pfb'] ?? []);
 			$this->saved_pfb[$key] = $GLOBALS['pfb'][$key] ?? NULL;
 		}
@@ -128,6 +128,35 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 			'zip'       => ['zip'],
 			'plain tar' => ['tar'],
 		];
+	}
+
+	/**
+	 * A compressed ET body is only input to processet(): helper refusal must leave
+	 * the accepted aggregate/hash pair untouched. The marker proves every archive
+	 * kind was extracted into the isolated ET stage, not over the live .orig.
+	 */
+	#[DataProvider('archiveKinds')]
+	public function test_et_archive_refusal_keeps_the_last_good_generation(string $kind): void
+	{
+		$payload = "192.0.2.10,1,90\n";
+		$base = $this->seedPublication();
+		$marker = "{$this->dir}/et-helper-input";
+		$this->assertNotFalse(file_put_contents("{$base}.orig.xxhash128", 'old-hash'));
+		$GLOBALS['pfb']['script'] = $this->rejectingEtHelper($base, $marker);
+		$GLOBALS['pfb']['etblock'] = 'ET_Cnc';
+		$GLOBALS['pfb']['etmatch'] = 'x';
+
+		$result = $this->downloadArchive($kind, $payload, $base, PfbToggle::Off, TRUE);
+
+		$this->assertFalse($result->success, 'the processet refusal must fail the ingest');
+		$this->assertSame($payload, file_get_contents($marker),
+			'the helper must receive the decompressed CSV from the isolated ET stage');
+		$this->assertSame(self::SERVED, file_get_contents("{$base}.orig"),
+			'refusal must preserve the accepted aggregate byte-for-byte');
+		$this->assertSame('old-hash', file_get_contents("{$base}.orig.xxhash128"),
+			'refusal must preserve the accepted raw-source hash');
+		$this->assertFileDoesNotExist("{$base}.raw");
+		$this->assertFileDoesNotExist("{$base}.orig.etstage");
 	}
 
 	/**
@@ -333,7 +362,13 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 		}
 	}
 
-	private function downloadArchive(string $kind, string $payload, string $base, PfbToggle $flag): PfbDownloadResult
+	private function downloadArchive(
+		string $kind,
+		string $payload,
+		string $base,
+		PfbToggle $flag,
+		bool $et = FALSE
+	): PfbDownloadResult
 	{
 		if ($kind === 'zip') {
 			$this->requirePipefailShell();
@@ -407,7 +442,7 @@ PHP;
 		);
 
 		return pfb_download(new PfbDownloadRequest(
-			listUrl: "http://127.0.0.1:{$port}/feed",
+			listUrl: "http://127.0.0.1:{$port}/" . ($et ? 'iprepdata.txt' : 'feed'),
 			downloadPath: $base,
 			flex: FALSE,
 			header: self::HEADER,
@@ -416,5 +451,15 @@ PHP;
 			timeout: 30,
 			type: '',
 		));
+	}
+
+	private function rejectingEtHelper(string $base, string $marker): string
+	{
+		$script = "{$this->dir}/reject-et";
+		$body = "#!/bin/sh\ncat " . escapeshellarg("{$base}.orig.etstage")
+			. ' > ' . escapeshellarg($marker) . "\nexit 1\n";
+		$this->assertNotFalse(file_put_contents($script, $body));
+		$this->assertTrue(chmod($script, 0700));
+		return $script;
 	}
 }

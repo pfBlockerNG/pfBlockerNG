@@ -85,9 +85,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * pfb_download() decompresses bzip2 feeds onto the live publication; pin this
-	 * comment-free branch and its staged-publish guard so the branch cannot revert
-	 * to a raw redirect. Comments/docblocks cannot define this scope.
+	 * pfb_download() decompresses bzip2 feeds onto the selected publication stage;
+	 * pin this comment-free branch and its staged-publish guard so the branch cannot
+	 * revert to a raw redirect. Comments/docblocks cannot define this scope.
 	 */
 	public function testBzip2BodyCapturesAndChecksExit(): void
 	{
@@ -98,14 +98,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $bzip2, $zip - $bzip2);
 		$this->assertStringContainsString(
 			'exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);', $scope);
-		$this->assertStringContainsString('if (!pfb_stage_publish($orig_download,', $scope);
+		$this->assertStringContainsString('if (!pfb_stage_publish($text_download,', $scope);
 	}
 
 	/**
 	 * Issue #2739 — a bzip2 Blacklist body must fail closed. The arm
-	 * extracts onto $orig_download for IP feeds; Blacklist has no category
-	 * extract here, so a successful empty update is a lie. Comments and
-	 * docblocks cannot define this scope.
+	 * extracts onto the standard/ET-selected text target for IP feeds; Blacklist
+	 * has no category extract here, so a successful empty update is a lie. Comments
+	 * and docblocks cannot define this scope.
 	 */
 	public function testBzip2BlacklistBodyFailsClosedWithoutExtraction(): void
 	{
@@ -115,7 +115,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($zip);
 		$scope = substr(self::$source, $bzip2, $zip - $bzip2);
 		$reject = strpos($scope, "if (\$type == 'blacklist') {");
-		$publish = strpos($scope, 'if (!pfb_stage_publish($orig_download,');
+		$publish = strpos($scope, 'if (!pfb_stage_publish($text_download,');
 		$this->assertNotFalse($reject, $scope);
 		$this->assertNotFalse($publish, $scope);
 		$this->assertLessThan($publish, $reject, 'Blacklist reject must run before the IP-feed extract');
@@ -600,6 +600,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	{
 		$isEt = strpos(self::$source, "\$is_et = strpos(\$list_url, 'iprepdata.txt') !== FALSE;");
 		$this->assertNotFalse($isEt, 'the ET URL decision must be normalized once');
+		$this->assertStringContainsString('$et_stage = "{$orig_download}.etstage";', self::$source);
+		$this->assertGreaterThanOrEqual(
+			4,
+			substr_count(self::$source, 'pfb_stage_publish($text_download,'),
+			'gzip, bzip2, zip, and tar standard-feed payloads must target the ET stage'
+		);
 		$guard = strpos(self::$source, 'if (!$is_et) {', $isEt);
 		$this->assertNotFalse($guard, 'the plain-body rename must be gated away from ET input');
 		$guardBrace = strpos(self::$source, '{', $guard);
@@ -624,6 +630,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$refusal = substr($scope, $fail);
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal,
 			'a refused staged body must be discarded');
+		$this->assertStringContainsString('unlink_if_exists($et_stage);', $refusal,
+			'a refused decompressed ET stage must be discarded');
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $refusal);
 		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}', $refusal,
 			'the ET branch must not bypass the wrapper by clearing live artifacts directly');
@@ -632,6 +640,86 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($finalize);
 		$this->assertLessThan($finalize, $scopeEnd,
 			'the accepted raw body hash and text finalization must happen after processet succeeds');
+	}
+
+
+	public function testEtAlertsReaderDefersWhileGenerationCommitOwnsTheLock(): void
+	{
+		$savedPfb = $GLOBALS['pfb'];
+		$savedContinents = $GLOBALS['continents'] ?? NULL;
+		$dir = sys_get_temp_dir() . '/pfb_et_lock_' . bin2hex(random_bytes(8));
+		$etdir = "{$dir}/ET";
+		$aliasdir = "{$dir}/alias";
+		$marker = "{$dir}/reader-invoked";
+		$this->assertTrue(mkdir($etdir, 0700, TRUE));
+		$this->assertTrue(mkdir($aliasdir, 0700, TRUE));
+		$this->assertNotFalse(file_put_contents("{$etdir}/ET_Cnc.txt", "192.0.2.10\n"));
+		$grep = "{$dir}/grep-probe";
+		$probe = "#!/bin/sh\ntouch " . escapeshellarg($marker) . "\necho "
+			. escapeshellarg("{$etdir}/ET_Cnc.txt:192.0.2.10") . "\n";
+		$this->assertNotFalse(file_put_contents($grep, $probe));
+		$this->assertTrue(chmod($grep, 0700));
+		$GLOBALS['pfb']['etdir'] = $etdir;
+		$GLOBALS['pfb']['aliasdir'] = $aliasdir;
+		$GLOBALS['pfb']['grep'] = $grep;
+		$GLOBALS['continents'] = [];
+		$fields = array_fill(0, 18, '');
+		$fields[3] = 'block';
+		$fields[4] = 4;
+		$fields[7] = '192.0.2.10';
+		$fields[11] = 'in';
+		$fields[13] = 'pfB_ET_v4';
+		$fields[14] = '192.0.2.10';
+		$fields[15] = 'IQRisk:ET_Cnc';
+		pfb_ip_render_memos_reset();
+		$lock = fopen("{$etdir}.transaction.lock", 'c');
+		$this->assertIsResource($lock);
+		$this->assertTrue(flock($lock, LOCK_EX));
+
+		try {
+			$result = pfb_ip_render_attribution($fields);
+			$this->assertSame('Not listed!', $result['feed_new']);
+			$this->assertSame(['validate' => [], 'miss' => []], pfb_ip_render_memos());
+			$this->assertFileDoesNotExist($marker);
+		} finally {
+			flock($lock, LOCK_UN);
+			fclose($lock);
+			pfb_ip_render_memos_reset();
+			$GLOBALS['pfb'] = $savedPfb;
+			if ($savedContinents === NULL) {
+				unset($GLOBALS['continents']);
+			} else {
+				$GLOBALS['continents'] = $savedContinents;
+			}
+			rmdir_recursive($dir);
+		}
+	}
+
+	public function testEveryEtAttributionReaderUsesTheGenerationCommitLock(): void
+	{
+		$render = strpos(self::$source, 'function pfb_ip_render_attribution(array $fields): array {');
+		$renderEnd = strpos(self::$source, 'function &pfb_ip_render_memos(', $render === FALSE ? 0 : $render);
+		$this->assertNotFalse($render);
+		$this->assertNotFalse($renderEnd);
+		$renderScope = substr(self::$source, $render, $renderEnd - $render);
+		$this->assertStringContainsString('"{$pfb[\'etdir\']}.transaction.lock"', $renderScope);
+		$this->assertStringContainsString('LOCK_SH | LOCK_NB', $renderScope);
+
+
+		$prefetch = strpos(self::$source, 'function pfb_ip_prefetch(array $rows): void {');
+		$prefetchEnd = strpos(self::$source, 'function pfb_ip_in_cidr(', $prefetch === FALSE ? 0 : $prefetch);
+		$this->assertNotFalse($prefetch);
+		$this->assertNotFalse($prefetchEnd);
+		$prefetchScope = substr(self::$source, $prefetch, $prefetchEnd - $prefetch);
+		$this->assertStringContainsString('"{$pfb[\'etdir\']}.transaction.lock"', $prefetchScope);
+		$this->assertStringContainsString('LOCK_SH | LOCK_NB', $prefetchScope);
+		$daemon = strpos(self::$source, 'if ($et_enabled && strpos($pfb_query[0], "{$et_header}") !== FALSE) {');
+		$daemonEnd = strpos(self::$source, 'if (!empty($pathgeoip)) {', $daemon === FALSE ? 0 : $daemon);
+		$this->assertNotFalse($daemon);
+		$this->assertNotFalse($daemonEnd);
+		$daemonScope = substr(self::$source, $daemon, $daemonEnd - $daemon);
+		$this->assertStringContainsString('"{$pfb[\'etdir\']}.transaction.lock"', $daemonScope);
+		$this->assertStringContainsString('LOCK_SH | LOCK_NB', $daemonScope);
 	}
 
 	public function testEtRefusalLeavesHttpValidatorClearingToTheDownloadWrapper(): void
