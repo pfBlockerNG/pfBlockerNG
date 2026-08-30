@@ -31,17 +31,17 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 		return $source;
 	}
 
-	public function testTheFieldRendersTheEffectiveStoredValue(): void
+	public function testTheFieldRendersTheRawSectionValueThroughTheSharedResolver(): void
 	{
 		$source = self::source();
 
 		$this->assertMatchesRegularExpression(
-			"/\\\$pconfig\['pfb_reentry_timeout'\]\s*=\s*\(string\) pfb_reentry_timeout\(PfbConfig::read\('gen\/pfb_reentry_timeout'\)\)/",
+			"/\\\$pconfig\['pfb_reentry_timeout'\]\s*=\s*\(string\) pfb_reentry_timeout\(\\\$pfb\['gconfig'\]\['pfb_reentry_timeout'\] \?\? NULL\)/",
 			$source,
-			'the page must render the EFFECTIVE budget: read through the gateway, then through the resolver'
+			'the page must resolve the raw section value before any gateway scalar cast can alter hostile stored input'
 		);
-		$this->assertStringNotContainsString("\$pfb['gconfig']['pfb_reentry_timeout'] ?:", $source,
-			'the default belongs to the registry, not to a page-side ?: literal');
+		$this->assertStringNotContainsString("PfbConfig::read('gen/pfb_reentry_timeout')", $source,
+			'an adapter-less field read would cast hostile stored arrays and floats before validation');
 	}
 
 	public function testTheSaveCanonicalizesThroughTheSharedResolverBeforePersisting(): void
@@ -49,7 +49,7 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 		$source = self::source();
 
 		$canon  = strpos($source, "\$_POST['pfb_reentry_timeout'] = (string) pfb_reentry_timeout(");
-		$persist = strpos($source, "\$pfb['gconfig']['pfb_reentry_timeout']");
+		$persist = strpos($source, "\$pfb['gconfig']['pfb_reentry_timeout']\t\t= \$_POST['pfb_reentry_timeout']");
 		$section = strpos($source, "PfbConfig::writeSection('installedpackages/pfblockerng/config/0', \$pfb['gconfig'])");
 
 		$this->assertNotFalse($canon,
@@ -94,7 +94,9 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 	{
 		$source = self::source();
 
-		$from = strpos($source, "'pfb_reentry_timeout',");
+		$field = strpos($source, "'pfb_reentry_timeout',");
+		$this->assertNotFalse($field);
+		$from = strpos($source, '))->setHelp(', $field);
 		$this->assertNotFalse($from);
 		$to = strpos($source, '$form->add($section);', $from);
 		$this->assertNotFalse($to);
