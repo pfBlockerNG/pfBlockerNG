@@ -162,6 +162,31 @@ def test_redact_pkg_tarball_drops_absolute_symlink_and_strips_residual_token(tmp
     assert outside.read_text(encoding="utf-8") == outside_text
 
 
+def test_redact_pkg_tarball_drops_relative_link_outside_destination(tmp_path: Path) -> None:
+    """A relative external link is omitted without aborting the host pass."""
+    tgz = tmp_path / "pfb_smoke_diag.tgz"
+    with tarfile.open(tgz, "w:gz") as archive:
+        _add_text_member(
+            archive,
+            "pfb_smoke_diag/pkg/repos.conf",
+            "url: https://pkg.example/repo?TOKEN=RELATIVE_LINK_SECRET\n",
+        )
+        link = tarfile.TarInfo("pfb_smoke_diag/pkg/external.conf")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../../outside.conf"
+        archive.addfile(link)
+
+    helpers.redact_pkg_tarball(str(tgz))
+
+    with tarfile.open(tgz, "r:gz") as archive:
+        assert "pfb_smoke_diag/pkg/external.conf" not in archive.getnames()
+        data = archive.extractfile("pfb_smoke_diag/pkg/repos.conf")
+        assert data is not None
+        redacted = data.read().decode("utf-8")
+    assert "RELATIVE_LINK_SECRET" not in redacted
+    assert "TOKEN=REDACTED" in redacted
+
+
 def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A traversal member remains fatal and cannot write outside extraction."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
@@ -179,16 +204,30 @@ def test_redact_pkg_tarball_rejects_traversal(tmp_path: Path, monkeypatch: pytes
     assert not escaped.exists()
 
 
+@pytest.mark.parametrize(
+    ("archive_kind", "expected_error"),
+    [
+        pytest.param("invalid", "ReadError", id="invalid-tar"),
+        pytest.param("missing-pkg", "RuntimeError", id="missing-pkg"),
+    ],
+)
 def test_collect_host_diagnostics_reports_host_redaction_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    archive_kind: str,
+    expected_error: str,
 ) -> None:
-    """A pulled archive is not reported as fully collected when host redaction fails."""
+    """An invalid or incomplete archive cannot be reported as fully redacted."""
     dest = tmp_path / "diag"
 
     def fake_scp(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        Path(argv[-1]).write_bytes(b"not a tar archive")
+        tgz = Path(argv[-1])
+        if archive_kind == "invalid":
+            tgz.write_bytes(b"not a tar archive")
+        else:
+            with tarfile.open(tgz, "w:gz") as archive:
+                _add_text_member(archive, "pfb_smoke_diag/unrelated.txt", "no package tree")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(helpers.subprocess, "run", fake_scp)
@@ -216,7 +255,7 @@ def test_collect_host_diagnostics_reports_host_redaction_failure(
     assert len(terminal_lines) == 1
     assert terminal_lines[0].startswith(failure_prefix)
     assert "archive has guest-side redaction only" in terminal_lines[0]
-    assert "ReadError" in terminal_lines[0]
+    assert expected_error in terminal_lines[0]
     assert (dest / "pfb_smoke_diag.tgz").exists()
 
 
