@@ -160,8 +160,8 @@ final class DownloadStagePublishTest extends TestCase
 		$source = file_get_contents(self::INC);
 		$this->assertNotFalse($source);
 
-		$open = strpos($source, 'if (!pfb_stage_publish($orig_download,'
-			. "\n\t\t\t\t    static function (string \$staged) use (\$file_dwn_esc, \$list_download,");
+		$open = strpos($source, 'if (!pfb_stage_publish($text_download,'
+			. "\n\t\t\t\t    static function (string \$staged) use (\$file_dwn_esc, \$list_download, \$is_et,");
 		$this->assertNotFalse($open,
 			'the piped ZIP branch no longer stages with the list URL in scope for its MIME probe');
 
