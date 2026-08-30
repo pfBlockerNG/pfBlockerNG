@@ -403,6 +403,14 @@ final class UnboundRestartSeamTest extends TestCase
 		$end = strpos($src, "\n}\n", $start);
 		$this->assertNotFalse($end, 'could not find the end of pfb_stop_start_unbound()');
 		$body = substr($src, $start, $end - $start);
+		$this->assertStringContainsString('$start_ack_deadline = NULL;', $body,
+			'the start-ack deadline must have an explicit unarmed sentinel');
+		$this->assertStringContainsString('$deadline = NULL;', $body,
+			'the command deadline must have an explicit unarmed sentinel');
+		$this->assertStringContainsString('if ($start_ack_deadline === NULL) {', $body,
+			'the start-ack loop must fail closed before reading an unarmed deadline');
+		$this->assertStringContainsString('if ($deadline === NULL) {', $body,
+			'the command loop must fail closed before reading an unarmed deadline');
 		$release = strpos($body, '@touch($release)');
 		$acknowledged = strpos($body, 'file_exists($command_started)');
 		$deadline = strpos($body, '$deadline = hrtime(TRUE) + (PFB_UNBOUND_START_WAIT');

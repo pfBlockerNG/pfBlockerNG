@@ -11463,6 +11463,8 @@ function pfb_stop_start_unbound($type) {
 	$retval = NULL;
 	$failure = '';
 	$expired = FALSE;
+	$start_ack_deadline = NULL;
+	$deadline = NULL;
 
 	// A successful Unbound daemon creates its own session and leaves this group.
 	// Any ordinary helper stays with the launcher, so expiry can reap the whole tree.
@@ -11589,6 +11591,10 @@ function pfb_stop_start_unbound($type) {
 		}
 
 		while ($retval === NULL && $failure === '' && !file_exists($command_started)) {
+			if ($start_ack_deadline === NULL) {
+				$failure = 'Unbound command-start acknowledgement deadline not armed';
+				break;
+			}
 			$status = proc_get_status($proc);
 			if (!$status['running']) {
 				$retval = (int) $status['exitcode'];
@@ -11606,6 +11612,10 @@ function pfb_stop_start_unbound($type) {
 		}
 
 		while ($retval === NULL && !$expired && $failure === '' && !file_exists($done)) {
+			if ($deadline === NULL) {
+				$failure = 'Unbound start deadline not armed';
+				break;
+			}
 			$status = proc_get_status($proc);
 			if (!$status['running']) {
 				$retval = (int) $status['exitcode'];
