@@ -1267,3 +1267,26 @@ def test_add_row_without_prior_move_gives_new_row_its_own_padded_gutter(
         )
     finally:
         _del_rowid(vm, cfg_root, rowid)
+
+
+def test_schedule_cache_warning_names_the_stage(
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """The category editor's schedule-cache warning names which check failed (issue #2888).
+
+    Mirrors the General page's coverage: the stage renders through the fixed label map,
+    and an unrecognised token degrades without reaching the reader.
+    """
+    page = browser_page
+    _open(page, webui, _CATEGORY_PAGE + "?type=ipv4&schcache=failed&schstage=config")
+    # Scoped to THIS message: the pending-changes banner is also an alert-warning.
+    warning = page.locator(".alert-warning:has-text('candidate generation failed')")
+    expect(warning).to_contain_text("the saved schedule configuration was rejected", timeout=JS_TIMEOUT_MS)
+
+    _open(page, webui, _CATEGORY_PAGE + "?type=ipv4&schcache=failed&schstage=not-a-stage")
+    warning = page.locator(".alert-warning:has-text('candidate generation failed')")
+    expect(warning).to_contain_text("the failing stage was not recorded", timeout=JS_TIMEOUT_MS)
+    # The query token must not reach the reader; the page's form action echoes REQUEST_URI,
+    # so this is asserted against the warning's own text rather than the document.
+    assert "not-a-stage" not in warning.inner_text()
