@@ -147,6 +147,20 @@ final class ThemeSafetyUiTest extends TestCase
 			// an apostrophe in body text is no more a delimiter there than in a docblock. A
 			// quote is not one where a letter or digit runs straight into it.
 			'apostrophe in page text'   => ["<p>Don't do that</p>\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n<p>It's fine</p>", FALSE],
+			// Reading comments cuts both ways: a `//` that is not a comment opener must not eat
+			// the rest of its line. In a URL it follows the scheme's colon or the opening
+			// bracket, and skipping from there loses the quote that opens the literal below.
+			'url is not a comment'      => ["url(http://x.com/a) 'background-color: #123456;\nbbb'\ncolor: red;", FALSE],
+			'scheme-relative url'       => ["url(//x.com/a) 'background-color: #123456;\nbbb'\ncolor: red;", FALSE],
+			// A `#` comment is a comment too. The tree writes banner blocks of them
+			// (pfblockerng_apply.inc:4540), and a lone quote in one desynchronises the scan
+			// exactly as it does in the other two comment forms. What `#` must NOT swallow is a
+			// colour, which is the same character and is why it went unread until now.
+			'hash comment holds a quote'=> ["# the ' character\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n# it's", FALSE],
+			'hash colour is not one'    => [".a { color: #fff; } \$s = 'background-color: #123456;\nbbb'", FALSE],
+			// The closing scan honours an escape, or a literal ends at its first \" and the
+			// pairing that follows it is read as code outside the string.
+			'escaped quote in a literal'=> ['$s = "aaa' . "\n" . 'background-color: #123456;\" color: red;' . "\n" . 'bbb";', TRUE],
 			// A style attribute that is not this background's cannot pair it either.
 			'unrelated attribute'       => ['$s = ".a { background-color: #123456; } <span style=\"color: black;\"></span>";', FALSE],
 			'unrelated attr, no braces' => ['$s = \'background-color: #123456; <span style="color:black;"></span>\';', FALSE],
@@ -471,7 +485,7 @@ final class ThemeSafetyUiTest extends TestCase
 		$quote = NULL;
 		$open = 0;
 		for ($i = 0; $i < $offset; $i++) {
-			if ($quote === NULL && $source[$i] === '/') {
+			if ($quote === NULL && ($source[$i] === '/' || $source[$i] === '#')) {
 				$comment = self::endOfComment($source, $i);
 				if ($comment !== NULL) {
 					$i = $comment;
@@ -523,23 +537,42 @@ final class ThemeSafetyUiTest extends TestCase
 	 * comments. Reading them is what separates a possessive from a string opener, which no
 	 * test on the surrounding characters can do.
 	 *
-	 * Only `//` and the block form are read. A `#` comment is left alone deliberately: `#`
-	 * opens a colour in CSS far more often than a comment in this tree, and misreading one
-	 * as the other would skip real source. Over-skipping only ever loses an opener, and a
-	 * lost opener answers NULL, which is the answer this resolver gave before it existed.
+	 * Both mistakes here launder a background, so neither direction is the safe one to
+	 * lean towards and each form gets a test that tells it from the character it collides
+	 * with. Missing a real comment lets a quote in prose open a literal that swallows the
+	 * lines beneath it. Reading a comment that is not one is worse in practice: the skip
+	 * runs to end of line and eats whatever quote was there, including the one that opened
+	 * the literal the background sits in.
+	 *
+	 * `//` collides with a URL, where it follows the scheme's colon or the bracket that
+	 * opens `url(`. `#` collides with a colour, which is a run of hex digits; a comment's
+	 * `#` is followed by anything else, and this tree writes whole banner blocks of them.
 	 */
 	private static function endOfComment(string $source, int $at): ?int
 	{
 		$next = $source[$at + 1] ?? '';
+		if ($source[$at] === '#') {
+			return ctype_xdigit($next) ? NULL : self::endOfLine($source, $at);
+		}
 		if ($next === '/') {
-			$end = strpos($source, "\n", $at);
-			return $end === FALSE ? strlen($source) - 1 : $end;
+			$previous = $at > 0 ? $source[$at - 1] : '';
+			if ($previous === ':' || $previous === '(') {
+				return NULL;
+			}
+			return self::endOfLine($source, $at);
 		}
 		if ($next !== '*') {
 			return NULL;
 		}
 		$end = strpos($source, '*/', $at + 2);
 		return $end === FALSE ? strlen($source) - 1 : $end + 1;
+	}
+
+	/** The offset of the last character on $at's line. */
+	private static function endOfLine(string $source, int $at): int
+	{
+		$end = strpos($source, "\n", $at);
+		return $end === FALSE ? strlen($source) - 1 : $end;
 	}
 
 	/**
