@@ -484,6 +484,8 @@ jobs:
                     label: $ch,
                     pfsense_version: $a.family,
                     freebsd_version: ($e.freebsd_version // ""),
+                    php_version: ($e.php_version // ""),
+                    py_flavor: ($e.py_flavor // ""),
                     image_name: ($e.image_name // ("pfsense-" + ($ch | ascii_downcase))),
                     branch: ($a.branch // ""),
                     target: $a.family,

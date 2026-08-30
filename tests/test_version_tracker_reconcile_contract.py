@@ -8,8 +8,8 @@ fake `gh`/`git`/`oras`/`box-facts.sh` binaries, pinning:
   - the plan step feeds only status=ok facts to scripts/reconcile-plan.py (the
     REAL planner runs) and writes one plan per channel;
   - the dispatch step turns republish/publish_new actions into fully-specified
-    image-refresh direct legs (force only when from == target) and honours
-    DRY_RUN;
+    image-refresh direct legs carrying the target's exact php_version/py_flavor
+    tuple (force only when from == target) and honours DRY_RUN;
   - the matrix-PR step turns matrix_pr_add/ga_flip actions into tracker/* PRs
     against ci-metadata with sibling field carry-over, dedups against existing
     entries, and honours DRY_RUN.
@@ -327,6 +327,8 @@ class TestDispatchStep:
         assert leg["branch"] == "26_03_1"
         assert leg["force_flag"] == "--force"
         assert leg["image_name"] == "pfsense-plus"
+        assert leg["php_version"] == "8.5"
+        assert leg["py_flavor"] == "py311"
 
     def test_publish_new_leg_builds_from_stable_without_force(self, tmp_path: Path) -> None:
         _, fields = self._run(
@@ -337,6 +339,8 @@ class TestDispatchStep:
         assert leg["target"] == "26.07"
         assert leg["branch"] == "26.07"
         assert leg["force_flag"] == ""
+        assert leg["php_version"] == "8.5"
+        assert leg["py_flavor"] == "py311"
 
     def test_matrix_pr_actions_dispatch_nothing(self, tmp_path: Path) -> None:
         gh_log, _ = self._run(

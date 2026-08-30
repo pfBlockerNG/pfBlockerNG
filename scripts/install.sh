@@ -368,7 +368,7 @@ re-run: a converged box performs no package changes.
 
 Exit codes:
   0  ok, including a reported no-op (already up to date)
-  1  environment: pkg/fetch binary or hook source not found
+  1  environment: required binary/hook missing, or hook/conf staging/activation failed
   2  usage: unknown argument, unknown/missing --channel
   4  target unavailable: the hook could not resolve the conf, the catalogue probe
      (meta.conf) failed, pkg update failed, the catalogue offers nothing, or pkg
@@ -461,6 +461,8 @@ pfb_channel_install() {
         die 1 "'${PKG_BIN}' not found — run this ON a pfSense box, or set PKG_BIN"
     command -v "${FETCH_BIN}" >/dev/null 2>&1 ||
         die 1 "'${FETCH_BIN}' not found — set FETCH_BIN to a fetch(1) binary"
+    command -v "${TIMEOUT_BIN}" >/dev/null 2>&1 ||
+        die 1 "'${TIMEOUT_BIN}' not found — set TIMEOUT_BIN to a timeout(1) binary"
 
     # 2. Boot-time generator hook: install/refresh only if missing or different.
     #    Try the EMBEDDED hook first; HOOK_SRC (the checkout copy under src/) is

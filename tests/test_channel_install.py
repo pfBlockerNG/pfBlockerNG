@@ -444,6 +444,7 @@ def _prepare_install(
     """
     pkg_bin = _write_pkg_stub(root)
     fetch_bin = _write_fetch_stub(root)
+    timeout_bin = _write_timeout_stub(root)
     _seed_box(root)
     _seed_catalog(root, _repo_name(channel), catalog)
 
@@ -461,6 +462,7 @@ def _prepare_install(
             "PFBLOCKERNG_ROOT": root,
             "PKG_BIN": pkg_bin,
             "FETCH_BIN": fetch_bin,
+            "TIMEOUT_BIN": timeout_bin,
             "PFB_BASE_URL": _BASE_URL,
             "PFB_TEST_ROOT": root,
             **(extra_env or {}),
@@ -2000,23 +2002,27 @@ def test_missing_fetch_binary_fails_at_step_1_with_exit_1() -> None:
     missing path in the message."""
     with tempfile.TemporaryDirectory() as root:
         channel = "stable"
-        _seed_box(root)
-        env = {
-            **os.environ,
-            "PFBLOCKERNG_ROOT": root,
-            "PKG_BIN": _write_pkg_stub(root),
-            "FETCH_BIN": "/nonexistent/fetch",
-            "PFB_BASE_URL": _BASE_URL,
-            "PFB_TEST_ROOT": root,
-        }
-        proc = subprocess.run(
-            ["sh", str(_SCRIPT), "--channel", channel], env=env, capture_output=True, text=True, check=False
-        )
+        proc = _run_install(root, channel, extra_env={"FETCH_BIN": "/nonexistent/fetch"})
 
         assert proc.returncode == 1, proc.stdout + proc.stderr
         assert "/nonexistent/fetch" in proc.stderr, proc.stderr
         assert not _hook_path(root).exists(), "AFTER: no hook file must be written"
         assert not _conf_path(root, channel).exists(), "AFTER: no conf file must be written"
+
+
+def test_missing_timeout_binary_fails_at_step_1_with_exit_1() -> None:
+    """TIMEOUT_BIN is an installer dependency like FETCH_BIN: a missing timeout
+    must be classified as an environment error before hook/conf/fetch activity."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        proc = _run_install(root, channel, extra_env={"TIMEOUT_BIN": "/nonexistent/timeout"})
+
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "/nonexistent/timeout" in proc.stderr, proc.stderr
+        assert not _hook_path(root).exists(), "AFTER: no hook file must be written"
+        assert not _conf_path(root, channel).exists(), "AFTER: no conf file must be written"
+        assert _pkg_log(root).read_text() == "", "AFTER: no pkg command must run"
+        assert not _fetch_log(root).exists(), "AFTER: no catalogue fetch must run"
 
 
 def test_fresh_install_failed_probe_exits_4_without_conf_or_pkg_call() -> None:
@@ -2030,6 +2036,7 @@ def test_fresh_install_failed_probe_exits_4_without_conf_or_pkg_call() -> None:
         proc = _run_install(root, "stable", extra_env={"PFB_STUB_FETCH_FAIL": "1"})
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert not _repair_hint_shown(proc), proc.stdout + proc.stderr
         assert not _conf_path(root, "stable").exists(), "a failed probe must not activate a conf"
         assert _pkg_log(root).read_text() == "", "a failed probe must invoke no pkg"
         assert peer.read_text() == "# peer nightly conf\n", "the peer conf must be untouched"
@@ -2052,6 +2059,7 @@ def test_failed_probe_keeps_a_pre_existing_conf_byte_identical() -> None:
         proc = _run_install(root, "stable", extra_env={"PFB_STUB_FETCH_FAIL": "1"})
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert not _repair_hint_shown(proc), proc.stdout + proc.stderr
         assert conf.read_text() == original, "a failed probe must never rewrite an existing conf — it was never touched"
         assert _pkg_log(root).read_text() == "", "a failed probe must invoke no pkg"
         leftovers = [p for p in os.listdir(_repos_dir(root)) if not p.endswith(".conf")]
@@ -2115,13 +2123,11 @@ def test_probe_argv_carries_the_no_redirect_flag_and_failed_pkg_keeps_inherited_
     never removed); the stub's argv log pins the exact flags."""
     with tempfile.TemporaryDirectory() as root:
         conf = _seed_conf_file(root, _conf_name("stable"), "# inherited stable conf\n")
-        timeout_bin = _write_timeout_stub(root)
 
         proc = _run_install(
             root,
             "stable",
             update_fails=True,
-            extra_env={"TIMEOUT_BIN": timeout_bin},
         )
 
         assert proc.returncode == 4, proc.stdout + proc.stderr

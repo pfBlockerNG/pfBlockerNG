@@ -203,8 +203,8 @@ _ROW_MATCHES="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" --
           | select($py == "" or .py_flavor == $py)]' 2>/dev/null)"
 _ROW_COUNT="$(printf '%s' "$_ROW_MATCHES" | jq 'length' 2>/dev/null || echo 0)"
 if [ -z "$_ROW_MATCHES" ] || [ "$_ROW_COUNT" -eq 0 ]; then
-    printf 'smoke-on-box: no matrix row for FreeBSD major %s (ABI %s) — refusing to guess php/py\n' \
-        "$_freebsd_major" "$_ABI" >&2
+    printf 'smoke-on-box: no matrix row for FreeBSD major %s (ABI %s; selectors php=%s py=%s) — refusing to guess php/py\n' \
+        "$_freebsd_major" "$_ABI" "${SMOKE_PHP_VERSION:-unset}" "${SMOKE_PY_FLAVOR:-unset}" >&2
     exit 1
 fi
 if [ "$_ROW_COUNT" -gt 1 ]; then
