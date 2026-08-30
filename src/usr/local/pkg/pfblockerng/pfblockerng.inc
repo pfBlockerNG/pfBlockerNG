@@ -3283,11 +3283,11 @@ function pfb_global() {
 					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
-	$pfb['cc']		= $pfb['ipconfig']['database_cc'] ?? '';		// Disable Country database CRON updates
+	$pfb['cc']		= PfbConfig::read('ip/database_cc') === PfbToggle::On;	// Disable Country database CRON updates
 	$pfb['maxmind_locale']	= $pfb['ipconfig']['maxmind_locale']	?: 'en';	// MaxMind Localized Language setting
 	$pfb['asn_reporting']	= $pfb['ipconfig']['asn_reporting']	?: 'disabled';	// ASN Reporting
 	$pfb['asn_token']	= $pfb['ipconfig']['asn_token']		?: '';		// ASN Token (IPinfo)
-	$pfb['rdns']		= pfb_resolve_enabled($pfb['ipconfig']);			// Reverse-DNS lookup for block-log entries (issue #336)
+	$pfb['rdns']		= pfb_resolve_enabled();					// Reverse-DNS lookup for block-log entries (issue #336)
 
 	$pfb['maxmind_account']	= pfb_filter($pfb['ipconfig']['maxmind_account'], PFB_FILTER_WORD, 'pfb_global')	?: '';		// Maxmind Account ID
 	$pfb['maxmind_key']	= pfb_filter($pfb['ipconfig']['maxmind_key'], PFB_FILTER_WORD, 'maxmind_key')		?: '';		// Maxmind License Key (issue #924: log-safe reference -- a rejected key is never logged on this consumer path either)
@@ -7110,20 +7110,28 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 	}
 
 	// Configure autoports/protocol and auto destination if required.
-	if (!empty($confconfig) && is_array(config_get_path("installedpackages/{$confconfig}/config/{$key}"))) {
+	$conf_path = "installedpackages/{$confconfig}/config/{$key}";
+	if (!empty($confconfig) && is_array(config_get_path($conf_path))) {
 
-		$conf_config	= config_get_path("installedpackages/{$confconfig}/config/{$key}");
+		$conf_config	= config_get_path($conf_path);
+		$registered	= $confconfig === 'pfblockerngdnsblsettings' && (string) $key === '0';
+		$toggle_enabled = static function (string $field) use ($conf_config, $registered): bool {
+			if ($registered) {
+				return PfbConfig::read("dnsbl/{$field}") === PfbToggle::On;
+			}
+			return pfb_dnsbl_toggle_enabled($conf_config[$field] ?? '');
+		};
 		$autotype	= array( 'autoports' => 'aliasports', 'autoaddr' => 'aliasaddr');
 
 		foreach (array('_out', '_in') as $dir) {
 
 			$pfbarr['aproto' . $dir]	= $conf_config['autoproto' . $dir];
-			$pfbarr['anot' . $dir]		= $conf_config['autonot' . $dir];
-			$pfbarr['aaddrnot' . $dir]	= $conf_config['autoaddrnot' . $dir];
+			$pfbarr['anot' . $dir]		= $toggle_enabled('autonot' . $dir) ? 'on' : '';
+			$pfbarr['aaddrnot' . $dir]	= $toggle_enabled('autoaddrnot' . $dir) ? 'on' : '';
 			$pfbarr['agateway' . $dir]	= $conf_config['agateway' . $dir];
 
 			foreach ($autotype as $akey => $atype) {
-				if ($conf_config[$akey . $dir] == 'on') {
+				if ($toggle_enabled($akey . $dir)) {
 					foreach (config_get_path('aliases/alias', []) as $palias) {
 						if ($palias['name'] == $conf_config[$atype . $dir]) {
 							if (!empty($palias['address'])) {
@@ -7148,7 +7156,7 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 
 	// Force 'Alias Native' setting to any Alias with 'Advanced Inbound/Outbound -Invert src/dst' settings.
 	// This will bypass Deduplication and Reputation features.
-	if ($pfbarr['aaddrnot_in'] == 'on' || $pfbarr['aaddrnot_out'] == 'on') {
+	if ($pfbarr['aaddrnot_in'] === 'on' || $pfbarr['aaddrnot_out'] === 'on') {
 		$pfbarr['adv'] = FALSE;
 		$pfbarr['folder'] = "{$pfb['nativedir']}";
 	}
@@ -17266,12 +17274,8 @@ function pfb_resolve_tracker(
 // Reverse-DNS (PTR) lookup for block-log entries (issue #336). Defaults OFF for
 // new installs; existing installs are seeded 'on' at upgrade (see
 // pfb_rdns_seed_value() + pfblockerng_install.inc) to preserve prior behaviour.
-// Returns FALSE when the key is absent (new install) or explicitly unchecked.
-function pfb_resolve_enabled(array $ipconfig): bool {
-	if (!array_key_exists('enable_rdns', $ipconfig)) {
-		return FALSE;
-	}
-	return pfb_cfg_toggle_read($ipconfig['enable_rdns']) === PfbToggle::On;
+function pfb_resolve_enabled(): bool {
+	return PfbConfig::read('ip/enable_rdns') === PfbToggle::On;
 }
 
 // Decide the one-time upgrade seed for enable_rdns (issue #336). An EXISTING
