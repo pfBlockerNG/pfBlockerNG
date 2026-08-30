@@ -21,6 +21,8 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 	private static array $stderrPaths = [];
 	/** @var list<resource> */
 	private static array $fixtureProcesses = [];
+	/** @var list<resource> */
+	private static array $terminatedFixtureProcesses = [];
 
 	protected function setUp(): void
 	{
@@ -33,6 +35,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		self::$pollPauses = [];
 		self::$stderrPaths = [];
 		self::$fixtureProcesses = [];
+		self::$terminatedFixtureProcesses = [];
 		self::$foreignPort = $this->startForeignServer();
 	}
 
@@ -132,6 +135,11 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		foreach (self::$fixtureProcesses as $process) {
 			$this->assertFalse(is_resource($process), "{$file}::{$method} left a failed fixture child open");
 		}
+		$this->assertSame(
+			[],
+			self::$terminatedFixtureProcesses,
+			"{$file}::{$method} tried to terminate an already-exited fixture child"
+		);
 
 		$expectedPolls = $tries * 40;
 		$this->assertCount($expectedPolls, self::$probeNonces, "{$file}::{$method} changed the 40-poll bound");
@@ -191,6 +199,13 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		return $process;
 	}
 
+	/** @param resource $process */
+	public static function terminateFixtureProcess($process, int $signal = 15): bool
+	{
+		self::$terminatedFixtureProcesses[] = $process;
+		return proc_terminate($process, $signal);
+	}
+
 	private function loadInstrumentedFixture(string $class, string $file): string
 	{
 		$source = file_get_contents($file);
@@ -231,6 +246,12 @@ function proc_open(
 		\$environment,
 		\$options
 	);
+}
+
+/** @param resource \$process */
+function proc_terminate(\$process, int \$signal = 15): bool
+{
+	return \\HttpFixtureReadinessBehaviorTest::terminateFixtureProcess(\$process, \$signal);
 }
 
 foreach (['PfbConfig', 'PfbDownloadRequest', 'PfbDownloadResult', 'PfbToggle'] as \$global) {
@@ -344,7 +365,8 @@ PHP;
 				echo 'FOREIGN';
 				return;
 			}
-			echo 'wrong-owner';
+			$path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+			echo basename(is_string($path) ? $path : '');
 			PHP));
 		$context = stream_context_create(['http' => ['timeout' => 0.05, 'ignore_errors' => TRUE]]);
 
