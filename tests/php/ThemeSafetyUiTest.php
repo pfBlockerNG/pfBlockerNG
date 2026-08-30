@@ -156,6 +156,22 @@ final class ThemeSafetyUiTest extends TestCase
 			// body running to end of file, which would swallow every declaration under it.
 			'heredoc opener in comment' => ["// the marker is written <<<EOT\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;", FALSE],
 			'heredoc opener in string'  => ["\$s = \"<<<END\nmore text\";\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;", FALSE],
+			// An opener written inside a comment is not one, even when a line below happens to
+			// carry its marker. Failing closed does not cover this: the pair matches, so the
+			// body is real as far as the pattern can tell, and it swallows the declarations
+			// between them.
+			'heredoc opener in a comment'=> ["// see <<<EOT\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\nEOT;", FALSE],
+			// An opener written inside another heredoc's body is body text, not an opener. It
+			// only matters when it names a DIFFERENT marker, because then its own marker can
+			// sit past the end of the body it was written in and it claims a run of ordinary
+			// code as a literal.
+			'opener inside a body'      => ["\$a = <<<EOT\n<<<XYZ\nEOT;\nbackground-color: #123456;\nXYZ\ncolor: red;", TRUE],
+			// A body larger than PCRE's backtrack limit made a lazy scan give up and report NO
+			// heredoc at all -- silently, with preg_last_error() still 0, so nothing could
+			// detect it. The scan is linear now and has no such ceiling. The tree's largest
+			// file is already 82% of the default limit, so this row is a live margin rather
+			// than a theoretical one.
+			'body past the scan ceiling'=> ["\$s = <<<EOT\n" . str_repeat('x', 1200000) . "\nbackground-color: #123456;\nEOT;\ncolor: red;", FALSE],
 			// An empty heredoc's single newline has to serve as both the opener's and the
 			// marker's. Read as unterminated, it takes the NEXT heredoc's marker as its own and
 			// the two bodies merge, which pairs a background with a colour outside its body.
@@ -618,35 +634,139 @@ final class ThemeSafetyUiTest extends TestCase
 	 * resolved before the quote scans and given the same treatment a quoted literal gets:
 	 * an HTML fragment in a heredoc still scopes to the style attribute that owns it.
 	 *
-	 * Opener and closing marker are matched as ONE pattern, which is what makes the
-	 * resolver fail closed. A `<<<EOT` with no closing marker below it -- ending a comment,
-	 * sitting inside a string, or simply malformed -- matches nothing and answers NULL,
-	 * rather than reporting a body that runs to end of file and swallowing every
-	 * declaration under it. Matching the pair also means an opener INSIDE a body is body
-	 * text: the scan resumes after each whole match, so it is never seen.
+	 * Openers are matched over a copy with the comments blanked out, because a `<<<EOT`
+	 * written in a comment is not one -- and failing closed does not cover that, since a
+	 * line below may carry the marker and make the pair match.
 	 *
-	 * The marker is a line of its own -- optional indentation, the identifier, then a
-	 * non-identifier character. One that merely appears in the body does not end it. The
-	 * body's leading newline is matched by a lookahead rather than consumed, so an empty
-	 * heredoc, whose one newline has to serve as both the opener's and the marker's, is
-	 * still a body of zero characters and not an unterminated one.
+	 * The marker is then found by walking lines, not by a lazy pattern spanning the body.
+	 * A pattern doing that stops matching once the body outgrows PCRE's backtrack limit,
+	 * and it does so SILENTLY -- `preg_last_error()` stays `PREG_NO_ERROR`, so the failure
+	 * is undetectable from the outside and simply reports that no heredoc is there. The
+	 * default limit is a million bytes and this tree's largest file is already four fifths
+	 * of that. Walking lines is linear and has no ceiling.
+	 *
+	 * An opener with no marker below it answers NULL rather than reporting a body that
+	 * runs to end of file and swallows every declaration under it, and an opener inside a
+	 * body already resolved is body text. The body's leading newline is not part of it, so
+	 * an empty heredoc -- whose one newline serves as both the opener's and the marker's --
+	 * is a body of zero characters rather than an unterminated one.
 	 */
 	private static function enclosingHeredoc(string $source, int $offset): ?string
 	{
-		$bodies = preg_match_all(
-			'/<<<[ \t]*(["\']?)([A-Za-z_]\w*)\1[ \t]*(?=(\R))(.*?)\R[ \t]*\2(?![A-Za-z0-9_])/s',
-			$source,
+		$openers = preg_match_all(
+			'/<<<[ \t]*(["\']?)([A-Za-z_]\w*)\1[ \t]*(?=\R)/',
+			self::withoutComments($source),
 			$matches,
 			PREG_OFFSET_CAPTURE
 		);
-		for ($i = 0; $i < $bodies; $i++) {
-			$start = $matches[4][$i][1] + strlen($matches[3][$i][0]);
-			$end = $matches[4][$i][1] + strlen($matches[4][$i][0]);
+		$resolved = 0;
+		for ($i = 0; $i < $openers; $i++) {
+			if ($matches[0][$i][1] < $resolved) {
+				continue;
+			}
+			$start = $matches[0][$i][1] + strlen($matches[0][$i][0]);
+			$start += strlen(self::newlineAt($source, $start));
+			$end = self::markerLine($source, $start, $matches[2][$i][0]);
+			if ($end === NULL) {
+				continue;
+			}
+			$resolved = $end;
 			if ($offset >= $start && $offset < $end) {
 				return self::styleContext(substr($source, $start, $end - $start), $offset - $start);
 			}
 		}
 		return NULL;
+	}
+
+	/** The line break at $at, '' when there is none. */
+	private static function newlineAt(string $source, int $at): string
+	{
+		if (substr($source, $at, 2) === "\r\n") {
+			return "\r\n";
+		}
+		$char = $source[$at] ?? '';
+		return ($char === "\n" || $char === "\r") ? $char : '';
+	}
+
+	/**
+	 * Where the body starting at $start ends, or NULL when its marker never appears.
+	 *
+	 * The marker owns its line: optional indentation, the identifier, then a character
+	 * that cannot continue it. One that merely appears in the body does not end it, and
+	 * neither does a longer word beginning with it.
+	 */
+	private static function markerLine(string $source, int $start, string $marker): ?int
+	{
+		$length = strlen($source);
+		for ($at = $start; $at <= $length; ) {
+			$break = strpos($source, "\n", $at);
+			$lineEnd = $break === FALSE ? $length : $break;
+			$line = substr($source, $at, $lineEnd - $at);
+			$body = ltrim($line, " \t");
+			if (str_starts_with($body, $marker)) {
+				$after = $body[strlen($marker)] ?? '';
+				if ($after === '' || preg_match('/[A-Za-z0-9_]/', $after) === 0) {
+					// The break BEFORE this line is the body's last character.
+					return $at === $start ? $start : $at - strlen(self::newlineBefore($source, $at));
+				}
+			}
+			if ($break === FALSE) {
+				return NULL;
+			}
+			$at = $break + 1;
+		}
+		return NULL;
+	}
+
+	/** The line break immediately before $at, '' when there is none. */
+	private static function newlineBefore(string $source, int $at): string
+	{
+		if ($at >= 2 && substr($source, $at - 2, 2) === "\r\n") {
+			return "\r\n";
+		}
+		$char = $at >= 1 ? $source[$at - 1] : '';
+		return ($char === "\n" || $char === "\r") ? $char : '';
+	}
+
+	/**
+	 * $source with every comment's characters replaced by spaces, offsets preserved.
+	 *
+	 * Only opener detection reads this, so blanking too much is the safe direction here:
+	 * it can only lose a candidate opener, and a lost one answers NULL, while blanking too
+	 * little lets a commented-out `<<<EOT` claim a body. Line breaks are kept so the
+	 * marker's own line structure, and every offset, survive.
+	 */
+	private static function withoutComments(string $source): string
+	{
+		$out = $source;
+		$length = strlen($source);
+		$quote = NULL;
+		for ($i = 0; $i < $length; $i++) {
+			if ($quote !== NULL) {
+				if ($source[$i] === '\\') {
+					$i++;
+				} elseif ($source[$i] === $quote) {
+					$quote = NULL;
+				}
+				continue;
+			}
+			if ($source[$i] === '/' || $source[$i] === '#') {
+				$end = self::endOfComment($source, $i);
+				if ($end !== NULL) {
+					for ($j = $i; $j <= $end; $j++) {
+						if ($out[$j] !== "\n" && $out[$j] !== "\r") {
+							$out[$j] = ' ';
+						}
+					}
+					$i = $end;
+					continue;
+				}
+			}
+			if (str_contains(self::DELIMITERS, $source[$i]) && !($i > 0 && preg_match('/[A-Za-z0-9]/', $source[$i - 1]))) {
+				$quote = $source[$i];
+			}
+		}
+		return $out;
 	}
 
 	/**
