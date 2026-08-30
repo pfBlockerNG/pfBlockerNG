@@ -322,3 +322,37 @@ def test_whitespace_between_brackets_does_not_evade_either_rule() -> None:
     assert _rules(save) == ["unregistered-toggle"]
     read = mirror + "$pconfig['enable_dup'] = $pfb ['iconfig'] ['enable_dup'] ?: '';\n"
     assert _rules(read) == ["page-level-default"]
+
+
+# --------------------------------------------------------------------------- #
+# Issue #2812 -- the recorded RULE 2 backlog is swept, not merely recorded
+# --------------------------------------------------------------------------- #
+
+
+def test_exempt_table_is_empty_after_the_2812_sweep() -> None:
+    """Every #2812 residue row was swept, so the recorded backlog ends empty.
+
+    EXEMPT records deliberate, still-live duplication. Once issue #2812 routed the
+    seven pre-registered toggle sites through PfbConfig::read(), no duplication is
+    deliberate any more and the table must hold no rows: a re-added row would
+    re-license a page default the registry owns.
+    """
+    assert ctr.EXEMPT == {}, (
+        "EXEMPT rows remain after issue #2812's sweep "
+        f"(route them through PfbConfig::read() and delete them): {sorted(ctr.EXEMPT)}"
+    )
+
+
+def test_www_tree_is_clean_with_the_exempt_table_emptied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real pages carry no RULE 2 residue at all -- not one hidden by a row.
+
+    Issue #2812's acceptance clause: with an empty EXEMPT table the gate still
+    exits 0, so the sweep is proven against the live tree, not against the
+    record of it.
+    """
+    monkeypatch.setattr(ctr, "EXEMPT", {})
+    assert ctr.main([]) == 0, (
+        "src/usr/local/www/pfblockerng still carries page-level toggle defaults: issue #2812's sweep is incomplete"
+    )

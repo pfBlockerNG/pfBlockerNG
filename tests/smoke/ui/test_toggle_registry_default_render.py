@@ -195,3 +195,87 @@ def test_absent_syncinterfaces_renders_unchecked_from_the_registered_default(
         "an absent syncinterfaces must render UNCHECKED -- the registered '' default "
         "must reproduce the page default #2123 deleted"
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #2812: the seven residue toggles whose page-level default the registry
+# now owns exclusively (the sites #2123's regrowth gate exempted). The sweep is
+# behaviour-equivalent by design -- every toggle-contract state renders exactly
+# as before -- so these tests pin the end-state observable on the real pages: a
+# stored 'on' renders CHECKED (control), and an absent key renders UNCHECKED
+# (registry defaults: '' for five, legacy-'off' for lenient), plus the lenient
+# key's two Off spellings ('' and legacy 'off') both rendering UNCHECKED.
+# Every case mutates config.xml, so each rides the isolation net (dual-marked
+# ui_e2e per conftest's _ui_pfb_isolation marker discipline).
+
+_DNSBL_SETTINGS_PAGE = "/pfblockerng/pfblockerng_dnsbl.php"
+_GENERAL_SETTINGS_PAGE = "/pfblockerng/pfblockerng_general.php"
+
+_SWEPT_DNSBL_TOGGLES = {
+    "pfb_dnsbl": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl",
+    "pfb_dnsvip_auto": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto",
+    "pfb_dnsbl_nonat": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat",
+    "pfb_idn_escalate_suspicious": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
+    "pfb_regex_cap": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap",
+    "pfb_dnsbl_lenient": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient",
+}
+CFG_ENABLE_CB = "installedpackages/pfblockerng/config/0/enable_cb"
+
+
+@pytest.mark.ui_e2e
+@pytest.mark.parametrize("name", sorted(_SWEPT_DNSBL_TOGGLES))
+def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None], name: str
+) -> None:
+    """issue #2812: each swept DNSBL toggle's checked state comes from the registry.
+
+    Given the key stored as 'on', the checkbox renders CHECKED -- the control that
+    the page can render this box checked at all. Given the key absent, it renders
+    UNCHECKED: the registered '' (or, for the lenient key, legacy-'off') default
+    that replaced the page literal #2812 deleted.
+    """
+    path = _SWEPT_DNSBL_TOGGLES[name]
+    node_state(path, "on")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    assert _checkbox_is_checked(html, name), f"control: a stored 'on' {name} must render checked"
+
+    node_state(path, None)
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+    assert not _checkbox_is_checked(html, name), (
+        f"an absent {name} must render UNCHECKED -- the registered default "
+        "must reproduce the page default #2812 deleted"
+    )
+
+
+@pytest.mark.ui_e2e
+def test_swept_pfb_dnsbl_lenient_off_spellings_render_unchecked(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2812: the lenient key's registry default is legacy 'off' where the old
+    page literal was '' -- under the #2120 toggle contract both spell Off, so both
+    stored spellings render UNCHECKED (the equivalence the sweep relied on)."""
+    for stored in ("off", ""):
+        node_state(_SWEPT_DNSBL_TOGGLES["pfb_dnsbl_lenient"], stored)
+        html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+        assert not _checkbox_is_checked(html, "pfb_dnsbl_lenient"), (
+            f"a stored {stored!r} pfb_dnsbl_lenient must render UNCHECKED -- both Off "
+            "spellings agree under the #2120 toggle contract"
+        )
+
+
+@pytest.mark.ui_e2e
+def test_swept_general_enable_cb_renders_on_when_stored_and_off_when_absent(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2812: the General page's master-enable checkbox with no stored key
+    renders UNCHECKED (registered '' default); a stored 'on' renders CHECKED."""
+    node_state(CFG_ENABLE_CB, "on")
+    html = _render(smoke_vm, webui, _GENERAL_SETTINGS_PAGE, "General Settings")
+    assert _checkbox_is_checked(html, "enable_cb"), "control: a stored 'on' enable_cb must render checked"
+
+    node_state(CFG_ENABLE_CB, None)
+    html = _render(smoke_vm, webui, _GENERAL_SETTINGS_PAGE, "General Settings")
+    assert not _checkbox_is_checked(html, "enable_cb"), (
+        "an absent enable_cb must render UNCHECKED -- the registered '' default "
+        "must reproduce the page default #2812 deleted"
+    )

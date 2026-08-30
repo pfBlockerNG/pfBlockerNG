@@ -48,7 +48,7 @@ if (pfb_wizard_suppress_autolaunch($wizard_action,
 $pfb['gconfig'] = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 
 $pconfig = array();
-$pconfig['enable_cb']			= $pfb['gconfig']['enable_cb']				?: '';
+$pconfig['enable_cb']			= PfbConfig::read('gen/enable_cb');
 
 // Default 'on' — owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 $pconfig['pfb_keep']			= PfbConfig::read('gen/pfb_keep')->value;
