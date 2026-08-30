@@ -73,3 +73,16 @@ def test_alerts_page_ships_both_unified_palette_groups(webui: WebUI) -> None:
     assert "#665E17" in resp.text
     assert "#2D6560" in resp.text
     assert "#336279" in resp.text
+
+
+CATEGORY_EDIT = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
+_RENDER_MARKER = "Update Frequency"
+_PAIRED_STYLE = "background-color: #FFFF00; color: black;"
+
+
+def test_category_edit_failed_row_pairs_foreground_with_background(webui: WebUI) -> None:
+    """$failed_bg must pin its foreground: black-on-yellow on every theme."""
+    resp = webui.get(CATEGORY_EDIT)
+    assert resp.status_code == 200, CATEGORY_EDIT
+    assert _RENDER_MARKER in resp.text, CATEGORY_EDIT
+    assert _PAIRED_STYLE in resp.text, CATEGORY_EDIT
