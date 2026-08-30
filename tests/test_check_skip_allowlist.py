@@ -633,8 +633,8 @@ def test_canary_fixture_is_never_on_the_real_allowlist(suite: str, capsys: pytes
 
 
 # Suite prefixes the allowlist may legitimately carry, one per --suite value the gates pass:
-# run-gates.sh uses pytest/phpunit/shellspec and ui-tests.yml uses ui.
-_ALLOWLIST_SUITES = ("pytest", "phpunit", "shellspec", "ui")
+# run-gates.sh uses pytest/phpunit/shellspec; the live workflows use ui/smoke.
+_ALLOWLIST_SUITES = ("pytest", "phpunit", "shellspec", "ui", "smoke")
 
 
 def test_real_allowlist_file_parses_cleanly() -> None:
@@ -644,3 +644,28 @@ def test_real_allowlist_file_parses_cleanly() -> None:
     assert entries, "tests/skip-allowlist.txt must seed at least the known PHPUnit/pytest skips"
     for entry_id in entries:
         assert entry_id.split(":", 1)[0] in _ALLOWLIST_SUITES, entry_id
+
+
+def test_default_smoke_skips_are_allowlisted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = Path(__file__).resolve().parents[1]
+    testcases = "".join(
+        f'<testcase classname="{classname}" name="{name}"><skipped message="expected"/></testcase>'
+        for classname, name in (
+            ("tests.smoke.test_smoke_714_asn_geoip", "test_714_c1_asn_table_logs_not_stray_file"),
+            ("tests.smoke.test_smoke_714_asn_geoip", "test_714_c8_geoip_single_ip_preserved"),
+            ("tests.smoke.test_smoke_boot", "test_control_name_resolves"),
+            ("tests.smoke.test_smoke_helpers", "test_reset_returns_to_baseline"),
+            ("tests.smoke.test_smoke_matrix", "test_false_green_guard_vm"),
+        )
+    )
+    report = _report(tmp_path, "smoke.xml", testcases)
+    rc = csa.main(
+        [
+            "--suite",
+            "smoke",
+            "--allowlist",
+            str(root / "tests/skip-allowlist.txt"),
+            str(report),
+        ]
+    )
+    assert rc == 0, capsys.readouterr().err
