@@ -18,16 +18,33 @@ Describe 'install-from-repo.sh py-flavor derivation (issue #2926)'
 
   setup() {
     scrub_git_env
+    unset IFR_BOX_ABI IFR_MATRIX_MODE IPY_PROBE SMOKE_PHP_VERSION SMOKE_PY_FLAVOR
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/ifrpyspec.XXXXXX")"
     FAKE_ROOT="${WORK}/repo"
     mkdir -p "${FAKE_ROOT}/scripts"
 
     cp "${PFB_ROOT}/scripts/install-from-repo.sh" "${FAKE_ROOT}/scripts/"
 
-    # The matrix stub: two rows share freebsd_major=16 with DIFFERENT py_flavor.
+    # Matrix modes let each example exercise one resolution branch.
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py312","php_version":"8.5"}]'
+case "${IFR_MATRIX_MODE:-default}" in
+    unique)
+        printf '%s\n' '[{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"}]'
+        ;;
+    duplicate)
+        printf '%s\n' '[{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"}]'
+        ;;
+    unreadable)
+        exit 7
+        ;;
+    empty)
+        :
+        ;;
+    default)
+        printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py311","php_version":"8.4"},{"freebsd_major":"16","extra_pkgs":[],"py_flavor":"py312","php_version":"8.5"}]'
+        ;;
+esac
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
@@ -49,11 +66,13 @@ for arg in "$@"; do
 done
 case "$cmd" in
     *"pkg config ABI"*)
-        printf 'FreeBSD:16:amd64\n'
+        printf '%s\n' "${IFR_BOX_ABI-FreeBSD:16:amd64}"
         exit 0
         ;;
     *"-sqlite3"*)
-        printf '%s-sqlite3\n' "${IPY_PROBE:-py311}"
+        if [ "${IPY_PROBE:-py311}" != none ]; then
+            printf '%s-sqlite3\n' "${IPY_PROBE:-py311}"
+        fi
         exit 0
         ;;
     *"command -v rsync"*)
@@ -69,6 +88,13 @@ printf 'unhandled remote command: %s\n' "$cmd" >&2
 exit 1
 STUBEOF
     chmod +x "${WORK}/bin/ssh"
+
+    # Minimal PATH without jq for the explicit missing-tool contract.
+    mkdir -p "${WORK}/no-jq-bin"
+    ln -s "$(command -v dirname)" "${WORK}/no-jq-bin/dirname"
+    ln -s "$(command -v tr)" "${WORK}/no-jq-bin/tr"
+    ln -s "$(command -v cut)" "${WORK}/no-jq-bin/cut"
+    ln -s "${WORK}/bin/ssh" "${WORK}/no-jq-bin/ssh"
     PATH="${WORK}/bin:${PATH}"
     export PATH
   }
@@ -105,6 +131,70 @@ STUBEOF
     The stdout should include 'Installing pfBlockerNG'
   End
 
+  It 'hard-fails an EXPLICIT tuple that matches MULTIPLE matrix rows'
+    IFR_MATRIX_MODE=duplicate
+    SMOKE_PHP_VERSION=8.4
+    SMOKE_PY_FLAVOR=py311
+    IPY_PROBE=py312
+    export IFR_MATRIX_MODE SMOKE_PHP_VERSION SMOKE_PY_FLAVOR IPY_PROBE
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'matches more than one BUILD row'
+    The stdout should not include 'Python dep flavor'
+  End
+
+  It 'hard-fails an EXPLICIT tuple when the ABI has no FreeBSD major'
+    IFR_BOX_ABI=''
+    SMOKE_PY_FLAVOR=py311
+    export IFR_BOX_ABI SMOKE_PY_FLAVOR
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'does not contain a numeric FreeBSD major'
+    The stdout should not include 'Python dep flavor'
+  End
+
+  It 'hard-fails an EXPLICIT tuple when the ABI major is invalid'
+    IFR_BOX_ABI='FreeBSD:not-a-major:amd64'
+    SMOKE_PY_FLAVOR=py311
+    export IFR_BOX_ABI SMOKE_PY_FLAVOR
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'does not contain a numeric FreeBSD major'
+    The stdout should not include 'Python dep flavor'
+  End
+
+  It 'hard-fails an EXPLICIT tuple when jq is unavailable'
+    When run /usr/bin/env PATH="${WORK}/no-jq-bin" SMOKE_PY_FLAVOR=py311 \
+      /bin/sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'jq is unavailable'
+    The stdout should not include 'Python dep flavor'
+  End
+
+  It 'hard-fails an EXPLICIT tuple when the matrix reader fails without numeric diagnostics'
+    IFR_MATRIX_MODE=unreadable
+    SMOKE_PY_FLAVOR=py311
+    export IFR_MATRIX_MODE SMOKE_PY_FLAVOR
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'BUILD matrix is unavailable or invalid'
+    The stderr should not include 'integer expression expected'
+    The stderr should not include 'Illegal number'
+    The stdout should not include 'Python dep flavor'
+  End
+
+  It 'hard-fails an EXPLICIT tuple on empty matrix output without numeric diagnostics'
+    IFR_MATRIX_MODE=empty
+    SMOKE_PY_FLAVOR=py311
+    export IFR_MATRIX_MODE SMOKE_PY_FLAVOR
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 1
+    The stderr should include 'BUILD matrix is unavailable or invalid'
+    The stderr should not include 'integer expression expected'
+    The stderr should not include 'Illegal number'
+    The stdout should not include 'Python dep flavor'
+  End
+
   It 'falls through to the BOX probe when no env is given and the matrix is ambiguous'
     # The no-env regime stays functional: the matrix cannot decide, so the
     # box's own installed py3xx (IPY_PROBE=py312 here) decides instead.
@@ -114,5 +204,36 @@ STUBEOF
     The status should not equal 0
     The stderr should include 'unhandled remote command'
     The stdout should include 'Python dep flavor for FreeBSD:16:amd64: py312'
+  End
+
+  It 'uses a unique no-env matrix row instead of a conflicting BOX probe'
+    IFR_MATRIX_MODE=unique
+    IPY_PROBE=py312
+    export IFR_MATRIX_MODE IPY_PROBE
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should not equal 0
+    The stderr should include 'unhandled remote command'
+    The stdout should include 'Python dep flavor for FreeBSD:16:amd64: py311'
+  End
+
+  It 'falls through to the BOX probe when the no-env matrix is unavailable'
+    IFR_MATRIX_MODE=unreadable
+    IPY_PROBE=py312
+    export IFR_MATRIX_MODE IPY_PROBE
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should not equal 0
+    The stderr should include 'unhandled remote command'
+    The stderr should not include 'integer expression expected'
+    The stderr should not include 'Illegal number'
+    The stdout should include 'Python dep flavor for FreeBSD:16:amd64: py312'
+  End
+
+  It 'uses py311 only after the no-env matrix and BOX probe cannot resolve'
+    IPY_PROBE=none
+    export IPY_PROBE
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should not equal 0
+    The stderr should include 'unhandled remote command'
+    The stdout should include 'Python dep flavor for FreeBSD:16:amd64: py311'
   End
 End
