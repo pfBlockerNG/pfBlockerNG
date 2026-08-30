@@ -35,7 +35,7 @@ final class UnboundRestartSeamTest extends TestCase
 		// Track key EXISTENCE separately from value: 'dnsbl_python_unmount' is legitimately
 		// boolean FALSE, so a FALSE sentinel would unset a sibling suite's value instead of
 		// restoring it.
-		foreach (['log', 'errlog', 'dnsbl_python_unmount'] as $key) {
+		foreach (['log', 'errlog', 'dnsbl_python_unmount', 'php'] as $key) {
 			$this->savedPfb[$key] = [
 				array_key_exists($key, $GLOBALS['pfb'] ?? []),
 				$GLOBALS['pfb'][$key] ?? NULL,
@@ -52,6 +52,7 @@ final class UnboundRestartSeamTest extends TestCase
 			'log'                  => "{$this->dir}/pfblockerng.log",
 			'errlog'               => "{$this->dir}/error.log",
 			'dnsbl_python_unmount' => FALSE,
+			'php'                  => PHP_BINARY,
 		]);
 		$GLOBALS['g']['varrun_path'] = $this->dir;
 	}
