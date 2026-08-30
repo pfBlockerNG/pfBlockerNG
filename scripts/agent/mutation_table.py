@@ -36,9 +36,12 @@ FAILING-TEST IDS
 ----------------
 ``<classname>::<name>``, taken verbatim from the JUnit report's ``<testcase>``
 attributes -- the same shape ``scripts/check_skip_allowlist.py`` uses, minus its suite
-prefix, so an id here reads the same as an id there. Both PHPUnit (``--log-junit``) and
-pytest (``--junitxml``) write this report, which is why the suite command is asked to
-produce one rather than having its human-readable output parsed per runner.
+prefix, so an id here reads the same as an id there. Every suite this repo gates writes
+that report -- pytest, PHPUnit, shellspec and the ``node --test`` legs -- which is why the
+suite command is asked to produce one rather than having its human-readable output parsed
+per runner. shellspec's own writer emits an XML-illegal control byte for this repo's
+C-quoted-path fixtures, so the same scrub ``check_skip_allowlist.py`` applies is applied
+here; without it a report that sibling reads fine would be refused as malformed.
 
 EXIT STATUS
 -----------
@@ -69,6 +72,14 @@ from pathlib import Path
 # this is one whose name was never going to be trustworthy anyway -- the row says so
 # rather than quietly truncating to something that reads complete.
 MAX_PATCH_LINES = 12
+
+# shellspec 0.28.1 embeds a raw XML-1.0-illegal control byte verbatim when a spec
+# description carries one (tests/shell/agent_run_gates_git_spec.sh uses a literal 0x01 by
+# design). Such a byte has no legal XML representation, so a strict parse of shellspec's
+# REAL report always raises. Same scrub, same reason, as scripts/check_skip_allowlist.py --
+# claiming that file's convention while refusing a report it accepts would be a narrower
+# parser wearing a wider claim.
+_XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 class Unproducible(Exception):
@@ -115,16 +126,19 @@ def dirt(root: Path, report: Path) -> str:
     from a run that left a mutation applied. Found by pointing this script at its first real
     subject: every row after the first was refused because PHPUnit had written `junit.xml`
     next to the code it graded.
+
+    git does the excluding, via a pathspec. Parsing the porcelain here instead meant
+    re-implementing its C-quoting, and a report whose name git quotes would have slipped the
+    filter and been blamed on the revert.
     """
-    status = _run(["git", "status", "--porcelain"], root)
+    try:
+        spec = ["--", f":(exclude,literal){report.resolve().relative_to(root)}"]
+    except ValueError:
+        spec = []
+    status = _run(["git", "status", "--porcelain", *spec], root)
     if status.returncode != 0:
         raise Unproducible(f"git status failed: {status.stderr.strip()}")
-    try:
-        ignore = str(report.resolve().relative_to(root))
-    except ValueError:
-        ignore = ""
-    kept = [ln for ln in status.stdout.splitlines() if ln.strip() and ln[3:].strip('"') != ignore]
-    return "\n".join(kept)
+    return status.stdout.strip()
 
 
 def _require_untracked_report(root: Path, report: Path) -> None:
@@ -176,12 +190,10 @@ def render_patch(text: str) -> str:
                 continue
             if line.startswith(("--- ", "+++ ")):
                 path = line[4:].split("\t")[0].strip()
+                # A deletion names its file only on the `---` side, so both sides are read
+                # and deduped; `/dev/null` is not a path.
                 if path != "/dev/null":
                     path = path[2:] if path[:2] in ("a/", "b/") else path
-                    # The new side wins when both are named; a deletion keeps the old one,
-                    # which is the only place its path appears at all.
-                    if line.startswith("+++ ") and path in paths:
-                        paths.remove(path)
                     if path not in paths:
                         paths.append(path)
                 continue
@@ -219,7 +231,7 @@ def parse_failures(report: Path) -> list[str]:
     if not raw.strip():
         raise Unproducible(f"empty JUnit report at {report}")
     try:
-        root = ET.fromstring(raw)
+        root = ET.fromstring(_XML_ILLEGAL_CONTROL.sub(b"", raw))
     except ET.ParseError as exc:
         raise Unproducible(f"malformed JUnit report at {report}: {exc}") from exc
     failures: list[str] = []
@@ -253,18 +265,17 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
     The patch is reverted in a ``finally`` and the revert is VERIFIED, because a mutation
     left applied would silently label every later row with the wrong tree.
 
-    The verification RAISES rather than exiting, and only when nothing is already propagating.
-    ``sys.exit`` here exited 1 -- the status reserved for "a mutation killed nothing" -- so a
-    caller reading the documented contract would have taken a tree left dirty for a finished
-    table. Worse, raising SystemExit from a ``finally`` replaces whatever failure was already
-    on its way out, so the malformed report or the KeyboardInterrupt that caused the mess was
-    the one thing the operator never saw.
+    The revert runs in a ``finally``; the VERIFICATION runs after it, so it cannot replace a
+    failure already on its way out. ``sys.exit`` here exited 1 -- the status reserved for "a
+    mutation killed nothing" -- so a caller reading the documented contract would have taken
+    a tree left dirty for a finished table, and raising from the ``finally`` hid the
+    malformed report or the KeyboardInterrupt that caused the mess in the first place.
     """
     if patch is not None:
         applied = _run(["git", "apply", str(patch.resolve())], root)
         if applied.returncode != 0:
             raise Unproducible(f"{patch} does not apply: {applied.stderr.strip()}")
-    failed = False
+    reverted: subprocess.CompletedProcess[str] | None = None
     try:
         report.unlink(missing_ok=True)
         run = _run(suite, root, timeout)
@@ -273,20 +284,22 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
                 f"the suite wrote no report at {report} (exit {run.returncode}): "
                 f"{(run.stderr or run.stdout).strip()[-400:]}"
             )
-        return parse_failures(report)
-    except BaseException:
-        failed = True
-        raise
+        failures = parse_failures(report)
     finally:
         if patch is not None:
             reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
-            residue = dirt(root, report)
-            if not failed and (reverted.returncode != 0 or residue):
-                raise Unproducible(
-                    f"reverting {patch} did not take, so every later row would be measured "
-                    f"under it. git apply -R exit {reverted.returncode}: "
-                    f"{reverted.stderr.strip()}\nremaining:\n{residue or '(none)'}"
-                )
+    # Reached only when nothing was propagating, which is the point: verifying inside the
+    # `finally` meant a failure HERE replaced whatever failure was already on its way out,
+    # so the malformed report that caused the mess was the one thing never reported.
+    if reverted is not None:
+        residue = dirt(root, report)
+        if reverted.returncode != 0 or residue:
+            raise Unproducible(
+                f"reverting {patch} did not take, so every later row would be measured "
+                f"under it. git apply -R exit {reverted.returncode}: "
+                f"{reverted.stderr.strip()}\nremaining:\n{residue or '(none)'}"
+            )
+    return failures
 
 
 def render(head: str, suite: list[str], baseline: int, rows: list[Row]) -> str:

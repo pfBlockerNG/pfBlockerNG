@@ -87,13 +87,13 @@ def killing_patch(repo: Path) -> Path:
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "agent" / "mutation_table.py"
 
 
-def _run(repo: Path, *patches: Path) -> subprocess.CompletedProcess[str]:
+def _run(repo: Path, *patches: Path, suite: str = "sh suite.sh") -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
             str(_SCRIPT),
             "--suite",
-            "sh suite.sh",
+            suite,
             "--report",
             "report.xml",
             "--root",
@@ -205,6 +205,19 @@ def test_parse_failures_does_not_count_a_skipped_case(tmp_path: Path) -> None:
     assert mt.parse_failures(report) == ["C::bad"]
 
 
+def test_parse_failures_survives_shellspecs_illegal_control_byte(tmp_path: Path) -> None:
+    """shellspec's own writer emits a byte XML cannot represent, for this repo's fixtures.
+
+    check_skip_allowlist.py scrubs it, and this file claims that file's convention. Refusing
+    a report the sibling reads fine would make the claim wider than the parser.
+    """
+    report = tmp_path / "r.xml"
+    report.write_bytes(
+        b'<testsuites><testsuite><testcase classname="C" name="wi\x01th"><failure/></testcase></testsuite></testsuites>'
+    )
+    assert mt.parse_failures(report) == ["C::with"]
+
+
 @pytest.mark.parametrize(
     ("content", "expected"),
     [(None, "no JUnit report"), ("", "empty JUnit report"), ("<testsuite", "malformed JUnit report")],
@@ -229,25 +242,23 @@ def test_the_row_carries_the_patch_and_the_tests_it_killed(repo: Path, killing_p
     Given a green baseline and a patch that removes a guard the suite checks,
     When the table is generated,
     Then ONE row carries both the patch's own changed lines and the id of the test that
-      failed under it -- so the label and the measurement cannot be separated, which is
-      how #2920 shipped four numbers attached to the wrong experiment.
+      failed under it, under a header naming the tree measured -- so the label and the
+      measurement cannot be separated, which is how #2920 shipped four numbers attached to
+      the wrong experiment.
     """
+    head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
     result = _run(repo, killing_patch)
     assert result.returncode == 0, result.stderr
+    # The table must name the tree it measured, or a block pasted into a PR body stops being
+    # checkable the moment that tree moves on.
+    assert head in result.stdout.splitlines()[0], result.stdout
     row = [ln for ln in result.stdout.splitlines() if ln.startswith("| <code>guard.txt</code>")]
     assert len(row) == 1, result.stdout
     assert "<code>-GUARD</code>" in row[0] and "<code>+MUTATED</code>" in row[0], row[0]
     assert "<code>T::alpha</code>" in row[0], row[0]
     assert "| 1 |" in row[0], row[0]
-
-
-def test_the_table_names_the_commit_it_measured(repo: Path, killing_patch: Path) -> None:
-    """A table pasted into a body must still say which tree it describes."""
-    head = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    result = _run(repo, killing_patch)
-    assert head in result.stdout.splitlines()[0], result.stdout
 
 
 def test_a_mutation_that_kills_nothing_is_reported_as_a_finding(repo: Path) -> None:
@@ -352,24 +363,9 @@ def test_a_revert_that_does_not_take_is_refused_and_does_not_look_like_a_finding
     assert "did not take" in result.stderr, result.stderr
 
 
-def test_a_suite_that_cannot_run_is_refused_rather_than_reported_as_a_kill(repo: Path) -> None:
+def test_a_suite_that_cannot_run_is_refused_rather_than_reported_as_a_kill(repo: Path, killing_patch: Path) -> None:
     """A missing binary used to escape as a traceback on exit 1 -- the finding's own status."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(_SCRIPT),
-            "--suite",
-            "no-such-suite-binary-xyz",
-            "--report",
-            "report.xml",
-            "--root",
-            str(repo),
-            str(repo.parent / "any.patch"),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run(repo, killing_patch, suite="no-such-suite-binary-xyz")
     assert result.returncode == 2, f"rc={result.returncode}\n{result.stderr}"
     assert "cannot run" in result.stderr, result.stderr
 
