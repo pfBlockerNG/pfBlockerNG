@@ -105,8 +105,13 @@ final class UnboundRestartSeamTest extends TestCase
 	 *
 	 * @return array{status: int, output: list<string>, payload: array<string, mixed>|null}
 	 */
-	private function runIsolatedStart(string $startCommand, int $budget = 5): array
+	private function runIsolatedStart(
+		string $startCommand,
+		int $budget = 5,
+		?string $phpCli = NULL
+	): array
 	{
+		$phpCli ??= PHP_BINARY;
 		$id = bin2hex(random_bytes(4));
 		$runner = "{$this->dir}/runner_{$id}.php";
 		$log = "{$this->dir}/isolated_{$id}.log";
@@ -120,6 +125,7 @@ final class UnboundRestartSeamTest extends TestCase
 			. "define('PFB_HOOK_KILL_GRACE', 1);\n"
 			. 'require ' . var_export($bootstrap, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'timeout\'] = ' . var_export($timeout, TRUE) . ";\n"
+			. '$GLOBALS[\'pfb\'][\'php\'] = ' . var_export($phpCli, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'log\'] = ' . var_export($log, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'errlog\'] = ' . var_export($errlog, TRUE) . ";\n"
 			. "\$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;\n"
@@ -262,6 +268,28 @@ final class UnboundRestartSeamTest extends TestCase
 			'RED issue #2882: the launcher must publish its group only after setpgid succeeds');
 		$this->assertSame($expected, $actual,
 			'the start command must not execute until it is inside the launcher process group');
+	}
+
+	public function testSupervisorUsesConfiguredCliPhpInsteadOfCurrentSapiBinary(): void
+	{
+		$argvLog = "{$this->dir}/php-cli.argv";
+		$phpCli = $this->makeStartScript('php-cli',
+			'printf \'%s\\n\' "$@" > ' . escapeshellarg($argvLog) . "\n"
+			. 'exec ' . escapeshellarg(PHP_BINARY) . ' "$@"');
+		$start = $this->makeStartScript('cli-start.sh', 'exit 0');
+
+		$run = $this->runIsolatedStart(escapeshellarg($start), 5, $phpCli);
+		$argv = file_exists($argvLog) ? (file($argvLog, FILE_IGNORE_NEW_LINES) ?: []) : [];
+
+		$this->assertSame(0, $run['status'],
+			'the configured-CLI runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(0, $run['payload']['final']['retval'],
+			'the configured CLI executable must run the supervisor and preserve child success');
+		$this->assertSame('-r', $argv[0] ?? NULL,
+			'RED issue #2882: the supervisor must invoke the configured CLI PHP, not PHP_BINARY/php-cgi');
+		$this->assertContains('--', $argv,
+			'the CLI supervisor arguments must retain the option terminator before runtime values');
 	}
 
 	public function testTermIgnoringStartExpiresObservablyAndLeavesNoProcess(): void
@@ -420,6 +448,13 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertGreaterThan($acknowledged, $deadline,
 			'the start-command deadline must begin after the child start event, not during supervisor setup');
 
+		$this->assertStringContainsString(
+			"\$php_cli = (string) (\$pfb['php'] ?? (PHP_BINDIR . '/php'));",
+			$body,
+			'the appliance must select the canonical CLI executable without a version hardcode'
+		);
+		$this->assertStringNotContainsString('PHP_BINARY', $body,
+			'the web php-cgi SAPI binary must never launch the CLI-only -r supervisor');
 		$this->assertStringContainsString('PFB_UNBOUND_START_CMD', $body,
 			'the daemon start must run through the constant so a harness can neuter it');
 		$this->assertStringNotContainsString('/usr/local/sbin/unbound', $body,
