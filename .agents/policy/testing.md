@@ -22,6 +22,37 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 - **On failure, print expected vs actual — no guessing.** Every assertion/poll that can fail puts comparison on terminal (AssertJ-style, redacted against usual secrets); bare "False" matcher not acceptable; diagnostic filtering by token must match value's **rendered** form (`pfctl` prints port 53 as `domain`). Exemplar: `_redir_match_report` in `tests/smoke/test_dns_redirect.py`.
 - **CI-gate wiring proves its red path in-job (the red canary).** CI job whose verdict rides shell wiring unit tests cannot cover (pipes, `set` options, exit propagation) ships red canary: leading lines in **same** `run:` block as enforce command (same shell options, so option drift trips it) feed known-violating input through identical pipeline shape and require nonzero before real check runs. Canary is that wiring's red→green (PR #933: default `bash -e {0}` has no `pipefail`, so `| tee` masked script's exit 1; exemplar: `coverage-pairing` job in `test.yml`). Broader corollary: **any newly wired blocking gate** (pre-commit block, CI step) demonstrates its red path once, in-session — feed violating input, watch gate fail — even when wiring is bare `run:` line (PR #937's wiring shipped green-path-only, #943).
 
+## Retiring a named test
+
+Named-test retirement is blocking in pre-commit and pull-request CI. The checker judges only
+the current staged or PR diff, not the unchanged test tree: deleting or renaming a named
+Python, PHPUnit, or ShellSpec test must be discharged exactly once by a successor or a
+newly added tombstone.
+
+A successor is a standalone hash comment immediately associated with one newly added named
+test, in this exact format:
+
+`# successor: <old repo path>::<exact declaration name>`
+
+The declaration's bare name may replace the canonical `<path>::<name>` identity only when it
+selects exactly one retirement in that diff. Decorators, attributes, and blank lines may sit
+between marker and declaration; prose, strings, unchanged tests, and non-test declarations do
+not count.
+
+An intentional retirement without a successor adds one line to
+`docs/history/retired-tests.md`, in this exact JSON-bullet format:
+
+`- {"date":"YYYY-MM-DD","test":"<old repo path>::<exact declaration name>","reason":"<nonblank reason>"}`
+
+The date must be a real ISO date no later than today. The test field follows the same
+canonical-identity and uniquely selecting bare-name rule as successor markers. Only a record
+added in the retirement diff counts; an existing row is history, not advance authorization
+for a later retirement.
+
+The checker proves only that a successor was named, not that it preserves the retired
+assertion. Reviewers MUST compare the old assertion with the successor's observable contract;
+a renamed or weaker test is not an honest successor.
+
 ## Running tests
 
 **Tools run directly on the host — no container** (issue #2513 deleted `scripts/run-in-docker.sh` and the `ci-runner` images). Python comes from `uv` against the committed `uv.lock`; PHP tools from `vendor/bin` after `composer install`.

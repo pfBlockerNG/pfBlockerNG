@@ -223,6 +223,8 @@ main() {
 		rm -rf "$skip_report_dir"
 		exit 2
 	}
+	PFB_GATE_BASE=$base
+	export PFB_GATE_BASE
 	PFB_SKIP_REPORT_DIR=$skip_report_dir
 	export PFB_SKIP_REPORT_DIR
 	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"' EXIT
@@ -252,8 +254,11 @@ main() {
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	cmds=$(printf '%s\n' "$files" | gates_for)
 	pairing_cmd='python3 scripts/check_coverage_pairing.py --name-status-z'
+	# shellcheck disable=SC2016 # PFB_GATE_BASE expands later inside run_gate's sh -c
+	retirement_cmd='python3 scripts/check_named_test_retirement.py --diff "$PFB_GATE_BASE"'
 	all_cmds="$pairing_cmd
-$cmds"
+$cmds
+$retirement_cmd"
 
 	if [ "$plan" -eq 1 ]; then
 		printf '%s' "$all_cmds"

@@ -1160,6 +1160,45 @@ jobs:
           # mentions and blockquotes must not count; pinned by its unit tests).
           python3 scripts/check_coverage_pairing.py --name-status-z ${WARN_ONLY:+--warn-only} --pr-body-file pr_body.txt < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
+  named-test-retirement:
+    name: Named-test retirement (successor or tombstone)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Block unrecorded named-test retirement
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
+          canary=$(mktemp -d)
+          trap 'rm -rf "$canary"' EXIT
+          git -C "$canary" init -q
+          git -C "$canary" config user.name named-test-retirement-canary
+          git -C "$canary" config user.email named-test-retirement-canary@example.invalid
+          mkdir -p "$canary/tests"
+          cat > "$canary/tests/test_ci_canary.py" <<'PY'
+          def test_ci_canary_old():
+              assert True
+          PY
+          git -C "$canary" add -- tests/test_ci_canary.py
+          git -C "$canary" commit -qm baseline
+          canary_base=$(git -C "$canary" rev-parse HEAD)
+          : > "$canary/tests/test_ci_canary.py"
+          git -C "$canary" add -- tests/test_ci_canary.py
+          git -C "$canary" commit -qm planted-retirement
+          if (cd "$canary" && python3 "$GITHUB_WORKSPACE/scripts/check_named_test_retirement.py" --diff "$canary_base") | tee /dev/null; then
+            echo "::error::named-test-retirement red canary failed: planted retirement passed"
+            exit 1
+          fi
+          python3 scripts/check_named_test_retirement.py --diff "origin/$BASE" | tee -a "$GITHUB_STEP_SUMMARY"
+
   # ── Comment-narration gate (CLAUDE.md "Comments — constraint, not narration") ──
   # PR-only, diff-scoped: judges only the lines this PR ADDS under src/ + scripts/,
   # so the pre-existing narration is grandfathered until its cleanup lands. Forbids
@@ -1199,7 +1238,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, named-test-retirement, comment-narration]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -1274,6 +1313,10 @@ jobs:
           case "${{ needs.coverage-pairing.result }}" in
             success|skipped) ;;
             *) echo "Coverage-pairing gate (src/tests, www/ui) failed or was cancelled."; exit 1 ;;
+          esac
+          case "${{ needs.named-test-retirement.result }}" in
+            success|skipped) ;;
+            *) echo "Named-test-retirement gate failed or was cancelled."; exit 1 ;;
           esac
           # Comment-narration gate: 'skipped' (push, no PR base) is a PASS; a PR
           # that ADDS process-narration comments (Phase N, RESULTS/, review

@@ -150,6 +150,15 @@ elif have python3; then
 	py_bin=python3
 fi
 
+if exempted scripts/check_named_test_retirement.py; then
+	exempt named-test-retirement
+elif [ -n "$py_bin" ]; then
+	step 'named-test-retirement (retired named tests need a successor or tombstone)'
+	"$py_bin" scripts/check_named_test_retirement.py --staged || failed 'named-test-retirement'
+else
+	skip named-test-retirement
+fi
+
 # =============================== Markdown (*.md) ============================= #
 if [ "$staged_md" = 1 ]; then
 	if have npx; then
