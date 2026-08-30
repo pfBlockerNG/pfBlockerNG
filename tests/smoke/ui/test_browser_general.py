@@ -359,3 +359,72 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
     finally:
         for name, state in original.items():
             helpers.config_restore_state(smoke_vm, paths[name], state)
+
+
+# --------------------------------------------------------------------------- #
+# issue #2851 — Advanced Settings: the one global nested-pass timeout (Tier B)
+# --------------------------------------------------------------------------- #
+
+_CFG_REENTRY_TIMEOUT = "installedpackages/pfblockerng/config/0/pfb_reentry_timeout"
+
+
+def test_nested_pass_timeout_section_and_save_roundtrip(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    screenshot_dir: Path,
+) -> None:
+    """The Nested pass timeout control lives in a collapsible Advanced Settings section,
+    accepts the window's bounds through a real save, and rejects nothing silently.
+
+    Scenario: issue #2851's single operator surface for issue #2016's nested-pass budget.
+      Background: pfBlockerNG deployed; General page authenticated and settled.
+
+    Given the General page is loaded in the authenticated browser,
+    Then an "Advanced Settings" section header is present, it starts COLLAPSED (the
+      house shape for an advanced panel), and expanding it reveals the number input
+      carrying the accepted window as its own min/max;
+    When the maximum (7200) is typed and the page saved,
+    Then the stored value is 7200 and the reloaded field re-renders it;
+    When an above-window 9999 is typed and the page saved,
+    Then the save still succeeds and both the stored value and the re-rendered field read
+      the finite 1800 default -- the page never shows a budget the seams would not use.
+    """
+    page = browser_page
+    original = helpers.config_get_state(smoke_vm, _CFG_REENTRY_TIMEOUT)
+    try:
+        _open(page, webui, GENERAL_PAGE)
+
+        header = page.get_by_text("Advanced Settings", exact=True)
+        expect(header).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+        field = page.locator('input[name="pfb_reentry_timeout"]')
+        expect(field).to_be_attached(timeout=JS_TIMEOUT_MS)
+        # Collapsed on load (COLLAPSIBLE|SEC_CLOSED), so the control is in the DOM but hidden.
+        expect(field).to_be_hidden(timeout=JS_TIMEOUT_MS)
+        expect(field).to_have_attribute("type", "number", timeout=JS_TIMEOUT_MS)
+        expect(field).to_have_attribute("min", "60", timeout=JS_TIMEOUT_MS)
+        expect(field).to_have_attribute("max", "7200", timeout=JS_TIMEOUT_MS)
+        expect(field).to_have_attribute("placeholder", "1800", timeout=JS_TIMEOUT_MS)
+
+        header.click()
+        expect(field).to_be_visible(timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "general_advanced_nested_pass_timeout")
+
+        resp = webui.post(GENERAL_PAGE, {"pfb_reentry_timeout": "7200"}, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "nested-pass timeout save lost the session (got login page)"
+        stored = helpers.config_get(smoke_vm, _CFG_REENTRY_TIMEOUT)
+        assert stored == "7200", f"the accepted maximum must persist verbatim, stored {stored!r}"
+
+        _open(page, webui, GENERAL_PAGE)
+        expect(page.locator('input[name="pfb_reentry_timeout"]')).to_have_value("7200", timeout=JS_TIMEOUT_MS)
+
+        resp = webui.post(GENERAL_PAGE, {"pfb_reentry_timeout": "9999"}, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Sign In" not in resp.text, "above-window timeout save lost the session (got login page)"
+        stored = helpers.config_get(smoke_vm, _CFG_REENTRY_TIMEOUT)
+        assert stored == "1800", f"an above-window budget must canonicalize to 1800, stored {stored!r}"
+
+        _open(page, webui, GENERAL_PAGE)
+        expect(page.locator('input[name="pfb_reentry_timeout"]')).to_have_value("1800", timeout=JS_TIMEOUT_MS)
+    finally:
+        helpers.config_restore_state(smoke_vm, _CFG_REENTRY_TIMEOUT, original)

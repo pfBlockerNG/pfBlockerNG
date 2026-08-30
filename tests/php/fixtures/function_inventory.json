@@ -9761,6 +9761,19 @@
             }
         ]
     },
+    "pfb_reentry_timeout": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "raw",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_registry_pass": {
         "returnsRef": false,
         "returnType": "array",

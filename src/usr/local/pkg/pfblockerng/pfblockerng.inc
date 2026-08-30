@@ -5006,8 +5006,22 @@ if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
 // update pass (issue #2016). Generous on purpose: it must exceed a full MaxMind +
 // blacklist download pass on a slow link, and its only job is to stop a stalled child
 // from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
+// Since issue #2851 it is also the ABSENT/INVALID value of the configurable budget
+// (General -> Advanced, 'Nested pass timeout'), so a degraded setting lands here.
 if (!defined('PFB_REENTRY_TIMEOUT')) {
 	define('PFB_REENTRY_TIMEOUT', 1800);
+}
+
+// issue #2851: the window (whole seconds) an operator may configure the nested-pass
+// budget to. BBcan177's case is a slow link or low-powered appliance needing longer than
+// the default; the bounds keep that from degrading into an impractical or unbounded wait.
+// pfblockerng.sh's pfb_reentry_timeout() mirrors both values (pinned by
+// ReentryTimeoutSettingTest), so one stored value means the same seconds in both seams.
+if (!defined('PFB_REENTRY_TIMEOUT_MIN')) {
+	define('PFB_REENTRY_TIMEOUT_MIN', 60);
+}
+if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
+	define('PFB_REENTRY_TIMEOUT_MAX', 7200);
 }
 
 // The re-entry target. Single-sourced so no caller composes the child command itself.
@@ -5062,10 +5076,34 @@ function pfb_list_script_exec(string $script_path, string $script_name, string $
 }
 
 /*
+ * issue #2851: resolve a STORED or SUBMITTED nested-pass timeout to the seconds the seam
+ * may use. Whole seconds inside [PFB_REENTRY_TIMEOUT_MIN, PFB_REENTRY_TIMEOUT_MAX] are
+ * honoured; absent, empty, non-integral, signed, padded, zero, negative, out-of-range,
+ * 64-bit-overflowing and non-scalar values ALL resolve to the finite
+ * PFB_REENTRY_TIMEOUT -- never to no timeout, which is issue #2488's degradation class.
+ * Both the General page's save and pfb_reentry_budget() below normalize through here, so
+ * the stored value is always the effective one. The /D anchor is load-bearing: without it
+ * a trailing newline would slip past $ and the shell seam (which rejects it) would
+ * disagree. PURE.
+ */
+function pfb_reentry_timeout($raw): int {
+	if (is_int($raw) || (is_string($raw) && preg_match('/^[0-9]+$/D', $raw) === 1)) {
+		$secs = (int) $raw;
+		if ($secs >= PFB_REENTRY_TIMEOUT_MIN && $secs <= PFB_REENTRY_TIMEOUT_MAX) {
+			return $secs;
+		}
+	}
+	return PFB_REENTRY_TIMEOUT;
+}
+
+/*
  * issue #2016/#2488: resolve a nested re-entry budget FAIL-SAFE BY CONSTRUCTION --
- * start at the default and take the caller's value only once it is proven positive-
+ * start at the configured value and take the caller's only once it is proven positive-
  * integral, so no input can leave timeout(1) an empty or non-numeric duration (which
- * is how a bound silently degrades back into an unbounded wait).
+ * is how a bound silently degrades back into an unbounded wait). The caller's budget is
+ * the off-appliance injection point (ReentryBoundsTest's executed expiry rows); no
+ * production call site names one, so the configured value (issue #2851) is what the
+ * appliance actually runs.
  */
 function pfb_reentry_budget($budget): int {
 	if (is_int($budget) && $budget > 0) {
@@ -5074,7 +5112,9 @@ function pfb_reentry_budget($budget): int {
 	if (is_string($budget) && ctype_digit($budget) && (int) $budget > 0) {
 		return (int) $budget;
 	}
-	return PFB_REENTRY_TIMEOUT;
+	global $pfb;
+	// The gen-section mirror pfb_global() populates through PfbConfig::readSection().
+	return pfb_reentry_timeout($pfb['config']['pfb_reentry_timeout'] ?? NULL);
 }
 
 /*

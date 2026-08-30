@@ -36,6 +36,27 @@ pfb_make_tmpdir() {
 	tmpxlsx="${tmpdir}/xlsx/"
 }
 
+# issue #2851: normalize a STORED nested-pass timeout into the seconds the re-entry seam
+# may use. Accepts whole seconds inside the same 60..7200 window pfblockerng.inc's
+# pfb_reentry_timeout() accepts, and resolves everything else -- absent, empty,
+# non-numeric, signed, padded, zero, negative, out-of-range, 64-bit-overflowing -- to the
+# same finite 1800-second default, so a stored value can neither weaken the bound nor
+# leave timeout(1) an empty duration (issue #2488's degradation class). Defined above the
+# init block on purpose: sh executes top to bottom, and the init block below calls this.
+# `test -ge/-le` compares DECIMAL (POSIX), so a hand-edited '0060' is sixty seconds here
+# exactly as in PHP; arithmetic expansion would have read it as octal forty-eight.
+pfb_reentry_timeout() {
+	_pfbrt=1800
+	case "${1:-}" in
+	''|*[!0-9]*) : ;;
+	*)	if [ "${1}" -ge 60 ] 2>/dev/null && [ "${1}" -le 7200 ] 2>/dev/null; then
+			_pfbrt="${1}"
+		fi
+		;;
+	esac
+	printf '%s\n' "${_pfbrt}"
+}
+
 # Top-level initialisation. Guarded so the script can be sourced for unit tests
 # (PFB_SOURCED=1) to exercise the functions below in isolation without running
 # any of this; the executable path runs it because PFB_SOURCED is unset. The
@@ -52,11 +73,14 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	pathtar=/usr/bin/tar
 	pathpfctl=/sbin/pfctl
 	pathphp=/usr/local/bin/php
-	# issue #2016: the nested re-entry target and its ceiling (seconds). pfb_reentry()
+	# issue #2016: the nested re-entry target and its budget (seconds). pfb_reentry()
 	# floors an empty/non-numeric/zero value to its own default, so a degraded value can
 	# never restore an unbounded wait.
 	pathpfbphp=/usr/local/www/pfblockerng/pfblockerng.php
-	pfbreentrytimeout=1800
+	# issue #2851: the operator's budget (General -> Advanced, 'Nested pass timeout'),
+	# normalized to the accepted window here -- the boundary where the stored value enters
+	# this process -- exactly as pfb_reentry_budget() normalizes it in PHP.
+	pfbreentrytimeout="$(pfb_reentry_timeout "$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerng/config/pfb_reentry_timeout)")"
 
 	# Script Arguments
 	alias="${2}"

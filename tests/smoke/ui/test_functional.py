@@ -893,6 +893,68 @@ def test_general_log_trim_margin_pct_oversized_value_is_canonicalized_on_save(
     assert got == "1000", f"an oversized margin must be clamped to the 1000 bound on save, got {got!r}"
 
 
+NESTED_TIMEOUT_CFG = "installedpackages/pfblockerng/config/0/pfb_reentry_timeout"
+
+
+@pytest.fixture
+def nested_timeout_original(webui: WebUI, smoke_vm: helpers.SmokeVM) -> Iterator[str]:
+    """Yield ``pfb_reentry_timeout``'s pre-test value, then restore it and PROVE it took.
+
+    Same order-dependency trap as ``margin_pct_original``: a silently failed restore would
+    leak a 60-second nested-pass budget into whatever runs next, where it surfaces as an
+    unrelated download timing out. The post-yield re-read fails HERE instead, naming both
+    values.
+    """
+    original = helpers.config_get(smoke_vm, NESTED_TIMEOUT_CFG) or "1800"
+    yield original
+    webui.post(GENERAL_PAGE, {"pfb_reentry_timeout": original}, timeout=SAVE_TIMEOUT)
+    restored = helpers.config_get(smoke_vm, NESTED_TIMEOUT_CFG) or "1800"
+    assert restored == original, (
+        f"pfb_reentry_timeout restore did not take: expected {original!r}, got {restored!r} "
+        f"-- a sibling test would inherit the stale budget"
+    )
+
+
+def test_general_nested_pass_timeout_accepted_bounds_persist(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    nested_timeout_original: str,
+) -> None:
+    """issue #2851: both accepted bounds persist verbatim through the GUI save.
+
+    BEFORE: the registered default '1800' (asserted first -- transition-test rule). Then the
+    owner-ruled minimum 60 and maximum 7200 each store verbatim, and the default restores.
+    """
+    vm = smoke_vm
+    assert nested_timeout_original == "1800", (
+        f"pfb_reentry_timeout already non-default before the save (original={nested_timeout_original!r})"
+    )
+    assert _post_and_confirm_general(webui, vm, {"pfb_reentry_timeout": "60"}, NESTED_TIMEOUT_CFG) == "60"
+    assert _post_and_confirm_general(webui, vm, {"pfb_reentry_timeout": "7200"}, NESTED_TIMEOUT_CFG) == "7200"
+    assert (
+        _post_and_confirm_general(webui, vm, {"pfb_reentry_timeout": nested_timeout_original}, NESTED_TIMEOUT_CFG)
+        == nested_timeout_original
+    )
+
+
+@pytest.mark.parametrize("bogus", ["", "abc", "1.5", "-5", "0", "59", "7201", "99999999999999999999", "  900 "])
+def test_general_nested_pass_timeout_degraded_value_canonicalizes_to_the_default(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    nested_timeout_original: str,  # noqa: ARG001 -- restore-and-prove fixture
+    bogus: str,
+) -> None:
+    """issue #2851: no submitted value can weaken the nested-pass bound.
+
+    Every shape outside the accepted 60..7200 window -- empty, non-numeric, decimal,
+    negative, zero, below-minimum, above-maximum, 64-bit overflow, padded -- is
+    canonicalized on SAVE to the finite 1800-second default, so config.xml never claims a
+    budget the two seams would not actually use, and the field never re-renders one.
+    """
+    got = _post_and_confirm_general(webui, smoke_vm, {"pfb_reentry_timeout": bogus}, NESTED_TIMEOUT_CFG)
+    assert got == "1800", f"degraded pfb_reentry_timeout={bogus!r} must canonicalize to 1800, got {got!r}"
+
+
 def test_general_log_trim_margin_pct_save_preserves_log_max_days_sibling(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,

@@ -160,6 +160,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/pfb_quiet_hours',
 		// issue #1109: log-retention trim hysteresis margin percent
 		'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct',
+		// issue #2851: the one global nested-pass re-entry timeout
+		'installedpackages/pfblockerng/config/0/pfb_reentry_timeout',
 		// installedpackages/pfblockerngdnsblsettings/config/0 (DNSBL settings)
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsvip_auto',

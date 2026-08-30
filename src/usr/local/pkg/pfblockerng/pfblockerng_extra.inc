@@ -1072,6 +1072,18 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => '#1109 hysteresis margin; new 4.0 field, \'0\' = exact trim = prior behaviour',
 		],
 
+		// issue #2851: the ONE global nested-pass timeout (seconds as string) for every
+		// pfblockerng.php re-entry an update pass launches -- GeoIP, blacklist, TOP1M and
+		// ASN alike, no per-subsystem override. Default '1800' = the budget issue #2016
+		// hardcoded. Normalized to [60, 7200] on read by pfb_reentry_timeout(), which
+		// resolves anything else back to 1800, so no stored value can weaken the bound.
+		'gen/pfb_reentry_timeout' => [
+			'default'       => '1800',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
+			'no_grandfather' => '#2851 exposes #2016\'s hardcoded 1800s budget; the absent default IS that budget, so an upgrade\'s wait is unchanged',
+		],
+
 		// Software update check last-seen version (string or null). Default ''.
 		// issue #1887: toggle adapter adopted, and the effective ON default moves from
 		// the hand-written reader (`!== 'off'`) into the registry where every other
