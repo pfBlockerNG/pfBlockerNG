@@ -92,11 +92,15 @@ final class WizardGridUiTest extends TestCase
 	 * col-sm-offset-* carries the same gutter padding as a width class, so it is a column
 	 * for the purpose of "must sit in a row" while contributing nothing to the 12 that a
 	 * row holds. Matching the width pattern alone made these invisible to both assertions.
+	 *
+	 * Every breakpoint counts here for the same reason -- Bootstrap 3 gives them identical
+	 * gutters. Width stays col-sm-* because that is the breakpoint this tree declares and
+	 * widths at different breakpoints do not share a twelve.
 	 */
 	private static function isColumn(string $class): bool
 	{
 		foreach (self::classTokens($class) as $token) {
-			if (preg_match('/^col-sm-(?:offset-)?\d+$/', $token) === 1) {
+			if (preg_match('/^col-(?:xs|sm|md|lg)-(?:offset-)?\d+$/', $token) === 1) {
 				return TRUE;
 			}
 		}
@@ -157,6 +161,8 @@ final class WizardGridUiTest extends TestCase
 			['<div class="col-sm-6">a</div>', TRUE, 'a bare column'],
 			['<div class="row"><div class="col-sm-offset-3">a</div></div>', FALSE, 'an offset-only column in a row'],
 			['<div class="col-sm-offset-3">a</div>', TRUE, 'an offset-only column with no row'],
+			['<div class="col-md-8">a</div>', TRUE, 'another breakpoint still needs a row'],
+			['<div class="row"><div class="col-md-8">a</div></div>', FALSE, 'another breakpoint in a row'],
 			['<div class="narrow"><div class="col-sm-6">a</div></div>', TRUE, '"narrow" is not "row"'],
 			['<div class="row-fluid"><div class="col-sm-6">a</div></div>', TRUE, '"row-fluid" is not "row"'],
 			['<div class="row"><div><div class="col-sm-6">a</div></div></div>', FALSE, 'a column nested below its row'],
@@ -183,6 +189,7 @@ final class WizardGridUiTest extends TestCase
 	{
 		return [
 			['col-sm-6', 6],
+			['col-sm-6 col-sm-3', 9],
 			['col-sm-offset-3', 0],
 			['col-sm-offset-3 col-sm-6', 6],
 			['col-sm-6 col-sm-offset-3', 6],
