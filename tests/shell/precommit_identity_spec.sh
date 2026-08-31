@@ -104,14 +104,43 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
       'a@EXAMPLE.com'
       'a@localhost'
       'a@'
+      'a@example.invalid.'
+      'a@EXAMPLE.invalid.'
+      'a@sub.example.com'
+      'a@sub.example.invalid'
+      'a@deep.sub.example.org'
+      'a@x.example.net'
+      'a@y.localhost'
     End
 
-    It 'rejects the domain case-insensitively'
+    It 'rejects the domain case-insensitively, including trailing-dot and subdomain variants'
       gitc config user.email "$1"
       When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
       The status should equal 1
       The stderr should include "[check-commit-identity] FAILED: author email domain is a placeholder or empty: '$1'"
     End
+  End
+
+  Describe 'hostile author email internal-whitespace variants'
+    Parameters
+      'a@ example.invalid'
+      'a@ex ample.com'
+      'a b@realcorp.dev'
+    End
+
+    It 'rejects the email without deleting the whitespace into a different address'
+      gitc config user.email "$1"
+      When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
+      The status should equal 1
+      The stderr should include "[check-commit-identity] FAILED: author email contains internal whitespace: '$1'"
+    End
+    End
+
+  It 'rejects an email whose domain contains a tab'
+    gitc config user.email "a@example$(printf '\t')invalid"
+    When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
+    The status should equal 1
+    The stderr should include "[check-commit-identity] FAILED: author email contains internal whitespace: 'a@example$(printf '\t')invalid'"
   End
 
   It 'rejects a placeholder committer email from GIT_COMMITTER_EMAIL despite valid config'
@@ -131,6 +160,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
       'Andre Brait|andrebrait@gmail.com'
       'BBcan177|bbcan177@gmail.com'
       'Some Contributor|some@realcorp.dev'
+      'Deep Sub|a@mail.realcorp.dev'
     End
 
     It 'accepts the identity when signing prerequisites are valid'
@@ -204,7 +234,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
     gitc config user.signingkey "$repo/my missing key.pub"
     When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
     The status should equal 1
-    The stderr should include '[check-commit-identity] FAILED: SSH signing key not found or unreadable: '
+    The stderr should include "[check-commit-identity] FAILED: SSH signing key not found or unreadable: $repo/my missing key.pub"
   End
 
   It 'rejects an unreadable SSH signing key path'
@@ -213,7 +243,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
     gitc config user.signingkey "$repo/locked.pub"
     When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
     The status should equal 1
-    The stderr should include '[check-commit-identity] FAILED: SSH signing key not found or unreadable: '
+    The stderr should include "[check-commit-identity] FAILED: SSH signing key not found or unreadable: $repo/locked.pub"
   End
 
   It 'accepts a readable SSH signing key path containing spaces'
@@ -326,7 +356,13 @@ scripts/agent/check-agent-config-parity.sh'
     make_repo
     mkdir -p "$repo/src" "$repo/scripts" "$repo/tests" "$repo/.claude/hooks"
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    # Commit the manifest so the index starts EMPTY: the allow-empty example
+    # below must exercise the hook's no-staged exit, not a staged manifest
+    # (review round: the ordering claim was never truly exercised before).
+    # -c commit.gpgsign=false: the sandbox key.pub is an empty stand-in, and this
+    # fixture commit is plumbing, not a signing test.
     gitc add .githooks-exempt
+    gitc -c commit.gpgsign=false commit -q -m seed --no-verify
     printf '#!/bin/sh\nexit 0\n' > "$repo/src/ok.sh"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/shellcheck"
@@ -358,6 +394,16 @@ scripts/agent/check-agent-config-parity.sh'
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 1
     The stderr should include '[pre-commit] FAILED: commit identity & signing prerequisites'
+    The stderr should include "[check-commit-identity] FAILED: author name is a generic placeholder: 'Verifier'"
+    The output should include '[pre-commit] commit identity & signing prerequisites'
+  End
+
+  It 'fails closed on a missing checker even with an empty index (allow-empty path)'
+    make_wired_repo
+    rm -f "$repo/.githooks/check-commit-identity.sh"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The stderr should include '[pre-commit] FAILED: commit identity checker missing or not executable: '
     The output should include '[pre-commit] commit identity & signing prerequisites'
   End
 

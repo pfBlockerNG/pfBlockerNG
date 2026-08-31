@@ -44,8 +44,21 @@ check_email() { # $1=role  $2=value
 	*@*) ;;
 	*) bad "$1 email is malformed (no '@'): '$2'" ;;
 	esac
-	case ${e##*@} in
-	''|example.invalid|example.com|localhost) bad "$1 email domain is a placeholder or empty: '$2'" ;;
+	# Interior whitespace is judged on the RAW value (outer-trimmed only): norm
+	# deletes control whitespace, which would silently rewrite an address such
+	# as 'a@example<TAB>invalid' into a different one before any comparison.
+	ws=$(printf '%s' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+	case $ws in
+	*[[:space:]]*) bad "$1 email contains internal whitespace: '$2'" ;;
+	esac
+	d=${e##*@}
+	# A trailing dot carries no identity ('example.invalid.' is the same reserved
+	# domain), and the placeholder families cover every subdomain depth
+	# ('sub.example.com'), so a fabricated identity cannot hide one label deep.
+	while [ "$d" != "${d%.}" ]; do d=${d%.}; done
+	case $d in
+	''|example.invalid|example.com|example.net|example.org|localhost|*.example.invalid|*.example.com|*.example.net|*.example.org|*.localhost)
+		bad "$1 email domain is a placeholder or empty: '$2'" ;;
 	esac
 }
 

@@ -101,12 +101,13 @@ gate_exempt() { printf '[pre-commit] exempt (gate not adopted on this branch; li
 
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
-#     deletion stages nothing to lint.) Nothing staged -> nothing to do.
+#     deletion stages nothing to lint.) Nothing staged -> nothing left to run;
+#     the identity gate's verdict above still decides via the exit below.
 #     -z + tr: the newline listing C-quotes a path holding a quote, backslash,
 #     control byte or non-ASCII byte, so the suffix regexes below match nothing
 #     and that commit's language gates silently never run (issue #2212). ---
 staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n' | grep -v '^legacy/' || true)
-[ -n "$staged_all" ] || exit 0
+[ -n "$staged_all" ] || exit "$fail"
 staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n' | grep -v '^legacy/' || true)
 staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
 staged_py=0;  staged_has '\.py$'        && staged_py=1
