@@ -32,6 +32,7 @@ REJECTED_LOOKUPS: tuple[tuple[str, str, str], ...] = (
     ("invalid_host", "host=not-an-ip", "Invalid IP Address, cannot proceed!"),
     ("invalid_domain", "domain=not%20a%20domain", "Invalid Domain name, cannot proceed!"),
     ("invalid_port", "port=99999", "Invalid Port cannot proceed!"),
+    ("array_port", "port[]=8443", "Invalid Port cannot proceed!"),
     ("missing", "", "No Requests found, cannot proceed!"),
 )
 LOOKUP_TITLES = tuple(row[2] for row in VALID_LOOKUPS)
@@ -84,6 +85,13 @@ def test_threats_http_title_and_breadcrumb(
 
     breadcrumb = _expected_breadcrumb(path, lookup_title)
     assert breadcrumb in response.text, f"{name}: expected ordered breadcrumb {breadcrumb!r}"
+    shortcut = re.search(
+        r'<ul class="context-links">.*?<a href="/status_logs_packages\.php\?pkg=[^"]+" '
+        r'title="Related log entries"><i class="fa-regular fa-rectangle-list"></i></a>',
+        response.text,
+        re.DOTALL,
+    )
+    assert shortcut is not None, f"{name}: pfBlockerNG package-log shortcut was not rendered"
 
 
 @pytest.mark.ui_render
@@ -137,6 +145,10 @@ def test_threats_browser_title_and_breadcrumb(
     assert crumbs.nth(1).locator("a").get_attribute("href") == "/pfblockerng/pfblockerng_general.php"
     assert crumbs.nth(2).locator("a").get_attribute("href") == "/pfblockerng/pfblockerng_alerts.php"
     assert crumbs.nth(3).locator("a").get_attribute("href") == path
+    shortcut = page.locator('ul.context-links a[title="Related log entries"][href^="/status_logs_packages.php?pkg="]')
+    sync_api.expect(shortcut).to_have_count(1)
+    sync_api.expect(shortcut.locator("i.fa-rectangle-list")).to_have_count(1)
+    assert page.locator('ul.context-links a[href^="status_logs_packages.php?pkg="]').count() == 0
 
     mask_page_identity(page)
     page.screenshot(path=str(screenshot_dir / f"threats_header_{name}.png"), full_page=True)
