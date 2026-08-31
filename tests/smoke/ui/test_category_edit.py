@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import body_has_php_error
+from .render_oracle import body_has_php_error, input_errors_block
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -110,6 +110,11 @@ def _post_form(webui: WebUI, payload: dict[str, str]) -> None:
     data["save"] = "save"
     resp = webui.session.post(webui.url(CATEGORY_PAGE), data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "category POST returned the login form (session lost)"
+    # A REJECTED save renders its reason and aborts the whole write. Saying so here
+    # names the rejection; leaving it to the caller's next assertion names the config
+    # path instead, which is the wrong layer (issue #2954).
+    errors = input_errors_block(resp.text)
+    assert errors == "<no input-errors block in response>", f"the page rejected this save: {errors}"
 
 
 def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
