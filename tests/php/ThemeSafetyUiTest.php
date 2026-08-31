@@ -116,6 +116,14 @@ final class ThemeSafetyUiTest extends TestCase
 			'sibling element colour'    => ['$s = "<span style=\"color: black;\"></span><input style=\"background-color: #123456;\">";', FALSE],
 			'same element colour'       => ['$s = "<span style=\"color: black; background-color: #FFFF00;\">x</span>";', TRUE],
 			'single-quoted attribute'   => ['$s = \'<input style="background-color: #123456;">\';', FALSE],
+			// Issue #2952, as filed, claimed a brace inside an escaped-quote span pops the
+			// declaration depth so a neighbour's colour launders the background. Measured
+			// against this tree that is FALSE -- structureMask() blanks the escaped span
+			// and the brace inside it never counts as structure. The real defect was in
+			// scan()'s vocabulary, not the mask, and is covered by backgroundSyntaxes.
+			// These rows pin the behaviour the issue misread, so the claim cannot return.
+			'brace in escaped span'     => ['$s = "<input style=\"background-color: #123456;\" data-t=\"}\">";', FALSE],
+			'brace in escaped, paired'  => ['$s = "<input style=\"background-color: #123456; color: black;\" data-t=\"}\">";', TRUE],
 			// An apostrophe in prose is not a string opener.
 			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
 			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
@@ -315,6 +323,8 @@ final class ThemeSafetyUiTest extends TestCase
 			'js bare key'       => ['{ backgroundColor: "#fff" }', '{ backgroundColor: "#fff", color: "#000" }'],
 			'js quoted key'     => ['{ "background-color": "#fff" }', '{ "background-color": "#fff", "color": "#000" }'],
 			'js quoted camel'   => ['{ "backgroundColor": "#fff" }', '{ "backgroundColor": "#fff", "color": "#000" }'],
+			'esc quoted key'    => ['{ \"background-color\": \"#fff\" }', '{ \"background-color\": \"#fff\", \"color\": \"#000\" }'],
+			'esc quoted camel'  => ['{ \"backgroundColor\": \"#fff\" }', '{ \"backgroundColor\": \"#fff\", \"color\": \"#000\" }'],
 			'jquery setter'     => ["\$(x).css('background-color', '#fff');", "\$(x).css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on a var'   => ["\$el.css('background-color', '#fff');", "\$el.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on this'    => ["this.css('background-color', '#fff');", "this.css({'background-color': '#fff', 'color': '#000'});"],
@@ -340,6 +350,21 @@ final class ThemeSafetyUiTest extends TestCase
 			'scan() must detect this background syntax: ' . $unpaired);
 		$this->assertSame([], self::scan($paired),
 			'contextHasForeground() must accept the pairing idiom native to this syntax: ' . $paired);
+	}
+
+	/**
+	 * Issue #2952: the escaped-quote branches capture the VALUE too, and the escape must
+	 * not land inside it. With a value class that admits a backslash, \"transparent\"
+	 * captures `transparent\` -- isTranslucent() then does not recognise it, and the guard
+	 * reports a transparent background as an unpaired opaque one. A false positive is the
+	 * one failure this guard cannot afford: it is what teaches people to ignore it.
+	 */
+	public function testAnEscapedTranslucentValueIsNotReported(): void
+	{
+		$this->assertSame([], self::scan('{ \"background-color\": \"transparent\" }'),
+			'the escape must not be captured as part of the colour');
+		$this->assertSame([], self::scan('{ \"background-color\": \"rgba(0, 0, 0, 0.5)\" }'),
+			'an escaped rgba() background is still translucent');
 	}
 
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
@@ -402,13 +427,22 @@ final class ThemeSafetyUiTest extends TestCase
 		// issue #2864: every shape that can set a background, not just the declaration and
 		// the bare object key. Named groups, because an alternation numbers groups globally
 		// and a hand-written backreference silently points at the wrong branch.
+		//
+		// issue #2952: each quote may arrive backslash-escaped. JS embedded in a PHP
+		// double-quoted string carries \"background-color\": \"#fff\", and an unescaped-only
+		// vocabulary reads that as no background at all -- the element is then never
+		// examined, so it is silently exempt rather than reported. $bs makes the escape
+		// optional everywhere a quote delimits, and the value classes exclude a backslash
+		// so the captured colour is the colour and not the colour plus its escape.
+		$bs = '\\\\?';
 		if (preg_match_all(
 			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
-			. '|backgroundColor\s*:\s*(?<jsq>["\'])(?<js>[^"\']+)\k<jsq>'
-			. '|(?<objq>["\'])background(?:-color|Color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*+)\k<objvq>'
-			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*(?<setq>["\'])background(?:-color|Color)?\k<setq>\s*,\s*'
-			. '(?<setvq>["\'])(?<set>[^"\']*+)\k<setvq>'
-			. '|\.style\.backgroundColor\s*=\s*(?<domq>["\'])(?<dom>[^"\']*+)\k<domq>/i',
+			. '|backgroundColor\s*:\s*' . $bs . '(?<jsq>["\'])(?<js>[^"\'\\\\]+)' . $bs . '\k<jsq>'
+			. '|' . $bs . '(?<objq>["\'])background(?:-color|Color)?' . $bs . '\k<objq>\s*:\s*'
+			. $bs . '(?<objvq>["\'])(?<obj>[^"\'\\\\]*+)' . $bs . '\k<objvq>'
+			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*' . $bs . '(?<setq>["\'])background(?:-color|Color)?' . $bs . '\k<setq>\s*,\s*'
+			. $bs . '(?<setvq>["\'])(?<set>[^"\'\\\\]*+)' . $bs . '\k<setvq>'
+			. '|\.style\.backgroundColor\s*=\s*' . $bs . '(?<domq>["\'])(?<dom>[^"\'\\\\]*+)' . $bs . '\k<domq>/i',
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
@@ -1142,10 +1176,13 @@ final class ThemeSafetyUiTest extends TestCase
 		// Every way a foreground can be set must be recognised here, or code paired through
 		// a form scan() detects but this does not reports as a violation. The two
 		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
+		// issue #2952: the escaped-quote forms scan() now detects pair with escaped-quote
+		// foregrounds -- \"color\": \"#000\". Accepting them here is not optional: leaving
+		// them out would make scan() report code that is correctly paired.
 		return (bool)preg_match(
-			'/(?<![A-Za-z0-9_-])color["\']?\s*:'
+			'/(?<![A-Za-z0-9_-])color(?:\\\\?["\'])?\s*:'
 			. '|(?<![A-Za-z0-9_-])color\s*='
-			. '|setProperty\(\s*["\']color["\']/i',
+			. '|setProperty\(\s*\\\\?["\']color/i',
 			$ctx
 		);
 	}
