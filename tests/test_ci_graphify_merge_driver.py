@@ -25,7 +25,9 @@ _GIT_MUTATION_RE = re.compile(
 )
 _GH_MUTATION_RE = re.compile(r"^gh\s+pr\s+merge(?:\s|$)")
 _WRAPPER_MUTATION_RE = re.compile(r"^sh\s+\S*scripts/(?:publish-pkg-repo|render-pkg-site)\.sh(?:\s|$)")
-_TAG_ONLY_PUSH_RE = re.compile(r"""^git\s+push\s+origin\s+["']?refs/tags/""")
+_TAG_ONLY_PUSH_RE = re.compile(
+    r"""^git\s+push\s+origin\s+(?:"refs/tags/[^"\s:]+"|'refs/tags/[^'\s:]+'|refs/tags/[^\s:]+)$"""
+)
 
 
 @dataclass(frozen=True)
@@ -326,6 +328,24 @@ def test_tag_ref_push_does_not_require_a_content_merge_driver() -> None:
     command = 'git push origin "refs/tags/${TAG}"'
     job = f"      - name: Push tag\n        run: {command}\n"
     assert _first_mutation(_steps(job)) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "git push origin refs/tags/v1 refs/heads/main",
+        "git push origin refs/tags/",
+        "git push origin refs/tags/v1:refs/heads/main",
+        'git push origin "refs/tags/v1" "HEAD:refs/heads/main"',
+        "git push origin refs/tags/v1 && git push origin main",
+        "git push --atomic origin refs/tags/v1",
+        "env TOKEN=x git push origin refs/tags/v1",
+        "git push origin HEAD:refs/heads/refs/tags/main",
+    ),
+)
+def test_tag_ref_exemption_rejects_non_tag_only_pushes(command: str) -> None:
+    job = f"      - name: Push\n        run: {command}\n"
+    assert _first_mutation(_steps(job)) == (0, command)
 
 
 def test_driver_scanner_distinguishes_a_nonmutating_job() -> None:

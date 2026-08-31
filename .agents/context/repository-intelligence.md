@@ -34,7 +34,7 @@ Load when: every agent session, from `AGENTS.md`.
   reports success. Until upstream releases Graphify-Labs/graphify#3075, that fix rides
   as `.agents/patches/graphify-3075-language-overrides.patch`, applied to the installed
   package by `scripts/agent/patch-graphify.sh` from its two call sites:
-  `ensure-graphify-merge-driver.sh` (the entry point 8 CI workflows use) and
+  `ensure-graphify-merge-driver.sh` (the entry point seven branch/content mutation workflows use) and
   `init-worktree-tools.sh`, before it refreshes the graph. It patches only the package
   owned by the interpreter named on the `graphify` shebang, so a `pip --user` or
   PYTHONPATH-only Graphify is skipped rather than patched — caught by the tracked
