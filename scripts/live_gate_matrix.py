@@ -54,10 +54,11 @@ def compute_live_gate_matrix(
     destinations: Sequence[str],
     touched: Sequence[str],
     ci_matrix: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    route_rows: Sequence[Mapping[str, Any]] = (),
+) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
     """Cross-reference a publish's touched targets against the CI matrix.
 
-    Returns ``(matrix, untestable, drifted)``:
+    Returns ``(matrix, untestable, drifted, skipped)``:
 
     - ``matrix``: one row per (destination, CI leg) pair whose
       ``"<destination>/<varver>"`` is in ``touched`` -- the exact set of live-VM
@@ -71,23 +72,47 @@ def compute_live_gate_matrix(
     - ``drifted``: ``touched`` entries whose channel prefix is not even present in
       ``destinations`` -- state drift between what ``resolve`` classified and what
       the stage step actually wrote.
+    - ``skipped``: ``touched`` entries whose varver has no CI-matrix leg BUT whose
+      ``route_rows`` entry declares ``ci: false`` -- a served varver the matrix says
+      deliberately has no smoke image (Plus 25.11: no licensed VM image exists, issue
+      #2926). Sorted, so one publish always renders one audit string. The caller warns
+      and carries on; these are never install-tested and never an error.
 
     ``ci_matrix`` rows are exactly ``read-version-matrix.sh --github-output``'s
     ``ci_matrix`` entries (one row per pfSense version, never deduped by
     freebsd_major); ``leg["variant"]`` is CE/Plus, unrelated to the destination
     ``channel`` in the returned rows.
+
+    ``route_rows`` are exactly ``read-version-matrix.sh --print-route`` rows (the
+    served set, verbatim from supported-versions.json, so ``ci`` survives untouched)
+    and ONLY classify tolerance -- ``ci_matrix`` stays the single source of smoke
+    legs. Tolerance needs an EXPLICIT ``ci: false``: an absent ``ci`` is the matrix's
+    build-role default, so a missing leg there is still disagreement between the two
+    matrices and stays ``untestable`` (fail closed). Omitting ``route_rows``
+    reproduces the pre-tolerance classification exactly -- nothing is ever skipped
+    without positive ci:false evidence.
     """
     per_leg_varver = [(leg, catalog_name_from_version(leg["pfsense_version"], leg["variant"])) for leg in ci_matrix]
     leg_varvers = {varver for _leg, varver in per_leg_varver}
     dest_set = set(destinations)
+    ci_false_varvers = {
+        catalog_name_from_version(row["pfsense_version"], row["variant"])
+        for row in route_rows
+        if row.get("ci") is False
+    }
 
     drifted: list[str] = []
     untestable: list[str] = []
+    skipped: list[str] = []
     for target in touched:
         channel, _, varver = target.partition("/")
         if channel not in dest_set:
             drifted.append(target)
-        elif varver not in leg_varvers:
+        elif varver in leg_varvers:
+            continue
+        elif varver in ci_false_varvers:
+            skipped.append(target)
+        else:
             untestable.append(target)
 
     touched_set = set(touched)
@@ -110,4 +135,4 @@ def compute_live_gate_matrix(
                     "extra_pkgs": leg.get("extra_pkgs", []),
                 }
             )
-    return matrix, untestable, drifted
+    return matrix, untestable, drifted, sorted(skipped)

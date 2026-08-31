@@ -109,21 +109,31 @@ jobs:
           CI_MATRIX: ${{ steps.ci.outputs.ci_matrix }}
         run: |
           set -eu
+          # The ROUTE matrix (served set, verbatim from supported-versions.json) is the
+          # only place a varver's `ci: false` is visible -- the read-version-matrix
+          # action's outputs deliberately strip `ci`. The reader fetches ci-metadata
+          # itself, so no extra fetch step is needed here.
+          ROUTE_ROWS="$(sh scripts/read-version-matrix.sh --print-route)"
+          export ROUTE_ROWS
           python3 - <<'PY'
           import json
           import os
 
           from scripts.live_gate_matrix import compute_live_gate_matrix
 
-          matrix, untestable, drifted = compute_live_gate_matrix(
+          matrix, untestable, drifted, skipped = compute_live_gate_matrix(
               json.loads(os.environ["DESTINATIONS"]),
               json.loads(os.environ["TOUCHED"]),
               json.loads(os.environ["CI_MATRIX"]),
+              json.loads(os.environ["ROUTE_ROWS"]),
           )
           if untestable or drifted or not matrix:
-              raise SystemExit(f"untestable={untestable} drifted={drifted} matrix={matrix}")
+              raise SystemExit(f"untestable={untestable} drifted={drifted} skipped={skipped} matrix={matrix}")
+          if skipped:
+              print("::warning::live gate skipped (ci:false, no smoke image): " + ", ".join(skipped))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
+              output.write("skipped=" + json.dumps(skipped, separators=(",", ":")) + "\n")
           PY
 
   validate-live-pages-install:
