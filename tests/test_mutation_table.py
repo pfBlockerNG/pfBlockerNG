@@ -179,6 +179,28 @@ def test_a_cell_cannot_break_the_table_or_inject_markdown() -> None:
     assert mt.cell("`x`") == "`` `x` ``"
 
 
+def test_an_empty_cell_is_a_real_span_and_cannot_eat_the_next_one() -> None:
+    """An empty failing-test id must still produce a span that opens AND closes.
+
+    Without padding, the two fence backticks land adjacent and CommonMark reads `` as one
+    run of length two rather than an opener and a closer. render() joins cells with `<br>`
+    and the whole string is inline-parsed together, so that dangling run reaches across the
+    join and takes the NEXT cell's opening fence as its own closer -- stripping the code span
+    off a cell that had one, and putting markdown in a test id back on the page. Verified
+    against GitHub's own GFM renderer, not a local approximation.
+
+    An id can be empty: parse_failures builds `classname::name` from attributes that both
+    default to '', so a `<testcase><failure/></testcase>` with neither attribute yields one.
+    """
+    empty = mt.cell("")
+    assert empty.startswith("`") and empty.endswith("`"), empty
+    assert empty != "``", "two adjacent backticks are one run, not a span"
+    assert empty.strip("`").strip() == "", empty
+    joined = "<br>".join(mt.cell(f) for f in ["", "`*danger*"])
+    assert joined.count("<br>") == 1, joined
+    assert joined.endswith("`*danger* ``"), f"the second cell lost its own fence: {joined}"
+
+
 def test_render_patch_says_so_when_it_truncates() -> None:
     """A truncated label must READ truncated, or it reads like a complete description."""
     n = mt.MAX_PATCH_LINES + 5
@@ -350,6 +372,29 @@ def test_the_report_the_suite_writes_is_not_mistaken_for_dirt(repo: Path, killin
     rows = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
     assert len(rows) == 2, f"the second row never ran:\n{result.stdout}\n{result.stderr}"
     assert "`+MUTATED`" in rows[0] and "`+OTHER`" in rows[1], rows
+
+
+def test_undo_reports_rather_than_raises_when_git_is_gone(
+    repo: Path, killing_patch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """undo()'s whole contract is that it returns a description and never raises.
+
+    Its callers reach it on the exception path BEFORE their own `raise`, so anything thrown
+    here replaces the failure already propagating -- a malformed report, or a real
+    KeyboardInterrupt. Only the second subprocess call was guarded; the reverse-apply itself
+    was not, and `_run` raises when the binary is missing.
+    """
+    real = mt._run
+
+    def missing_git(argv: list[str], cwd: Path, timeout: float | None = None):  # type: ignore[no-untyped-def]
+        if argv[:3] == ["git", "apply", "-R"]:
+            raise mt.Unproducible("cannot run 'git': [simulated] No such file or directory")
+        return real(argv, cwd, timeout)
+
+    monkeypatch.setattr(mt, "_run", missing_git)
+    problem = mt.undo(repo, repo / "report.xml", killing_patch)
+    assert "reverse-apply could not run" in problem, problem
+    assert "simulated" in problem, problem
 
 
 def test_a_dirty_tree_is_refused(repo: Path, killing_patch: Path) -> None:

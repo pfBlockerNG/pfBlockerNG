@@ -124,7 +124,12 @@ def cell(text: str) -> str:
     flat = text.replace("\r", "\\r").replace("\n", "\\n").replace("|", "\\|")
     longest = max((len(m) for m in re.findall(r"`+", flat)), default=0)
     fence = "`" * (longest + 1)
-    pad = " " if flat.startswith("`") or flat.endswith("`") else ""
+    # Empty text pads too. Without it the two fence backticks land adjacent, and CommonMark
+    # reads `` as ONE run of length two rather than an opener and a closer -- so the span
+    # never opens, and the dangling run reaches across the <br> join in render() and eats the
+    # NEXT cell's opening fence as its own closer. That strips the code span off a cell that
+    # had one, which is how markdown in a test id went live again after the span fix.
+    pad = " " if not flat or flat.startswith("`") or flat.endswith("`") else ""
     return f"{fence}{pad}{flat}{pad}{fence}"
 
 
@@ -342,18 +347,32 @@ def undo(root: Path, report: Path, patch: Path) -> str:
     how to tell those apart -- inside a ``finally`` it reports the exception being HANDLED,
     which for one merely passing through is None, so a ``finally`` that consulted it stayed
     silent in precisely the case it was added for.
+
+    NOTHING in here raises, which is the promise the docstring above makes and did not keep:
+    both subprocess calls are guarded, not only the second. ``_run`` raises when the binary is
+    missing, so an absent ``git`` at the reverse-apply threw straight through the caller's
+    exception path and replaced whatever was already propagating.
     """
-    reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
+    try:
+        reverted = _run(["git", "apply", "-R", str(patch.resolve())], root)
+        reverse = f"git apply -R exit {reverted.returncode}: {reverted.stderr.strip()}"
+        clean = reverted.returncode == 0
+    except Unproducible as exc:
+        # This call was the one thing in here that could still raise, which made the
+        # docstring's promise false exactly when it mattered: on the exception path the
+        # caller reaches undo() BEFORE its `raise`, so anything thrown here replaces the
+        # failure already on its way out -- a malformed report, or a KeyboardInterrupt.
+        reverse = f"the reverse-apply could not run: {exc}"
+        clean = False
     try:
         residue = dirt(root, report)
     except Unproducible:  # pragma: no cover - git itself is unavailable
         residue = "(git status unavailable)"
-    if reverted.returncode == 0 and not residue:
+    if clean and not residue:
         return ""
     return (
         f"reverting {patch} did not take, so every later row would be measured under it. "
-        f"git apply -R exit {reverted.returncode}: {reverted.stderr.strip()}\n"
-        f"remaining:\n{residue or '(none)'}"
+        f"{reverse}\nremaining:\n{residue or '(none)'}"
     )
 
 
