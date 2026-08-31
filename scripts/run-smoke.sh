@@ -196,6 +196,13 @@ if [ -n "$_FILTER" ]; then
 fi
 
 # 4b. Prepend the fixed canonical flags (the drift-kill; see ADR §5.3).
+#
+# -ra makes the run record WHY anything skipped, xfailed or errored. Without it the
+# artifact carries the count and the word SKIPPED and nothing else, so a skip caused
+# by a degraded environment is indistinguishable from a designed self-skip -- and
+# both testing.md ("never read a skip as coverage") and the --no-two-vm trap ask a
+# reader to tell them apart from the log (issue #2960). It belongs in THIS block and
+# not in pyproject's addopts, which the first line below wipes.
 set -- \
     --override-ini="addopts=" \
     --override-ini="timeout_func_only=true" \
@@ -203,6 +210,7 @@ set -- \
     --timeout-method=signal \
     --durations=0 \
     --capture=tee-sys \
+    -ra \
     -v \
     "$@"
 
