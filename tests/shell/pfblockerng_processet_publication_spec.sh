@@ -95,10 +95,11 @@ RUNNER
 
 	Context 'when a conforming grep emits matching binary bytes'
 		It 'rejects the NUL-bearing category and preserves the prior category generation'
+			greppath="$(command -v grep)"
 			mkdir "${work}/shim"
-			cat > "${work}/shim/grep" <<'SHIM'
+			cat > "${work}/shim/grep" <<SHIM
 #!/bin/sh
-exec /usr/bin/grep -a "$@"
+exec "${greppath}" -a "\$@"
 SHIM
 			chmod +x "${work}/shim/grep"
 			printf '%s\n' "${prior_category}" > "${etdir}/ET_Cnc.txt"
@@ -181,4 +182,24 @@ SHIM
 			The contents of file "${etdir}/ET_Cnc.txt" should equal "${prior_category}"
 		End
 	End
+
+Context 'when no Block category is selected'
+	It 'publishes the empty block generation instead of refusing the pass'
+		printf '%s\n' '192.0.2.10,1,90' > "${raw}"
+		When run sh "${runner}" x x
+		The status should be success
+		The output should include 'Final count'
+		The contents of file "${live}" should equal ''
+		The contents of file "${etdir}/ET_Cnc.txt" should equal '192.0.2.10'
+	End
+
+	It 'still publishes the Match aggregate when Match categories are selected'
+		printf '%s\n' '192.0.2.10,1,90' > "${raw}"
+		When run sh "${runner}" x ET_Cnc
+		The status should be success
+		The output should include 'Final count'
+		The contents of file "${live}" should equal ''
+		The contents of file "${match}pfB_Match_ET_v4.txt" should equal '192.0.2.10'
+	End
+End
 End
