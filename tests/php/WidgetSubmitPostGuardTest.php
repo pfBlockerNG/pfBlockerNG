@@ -56,19 +56,47 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		])));
 	}
 
-	/** @return array{status:int,stderr:string,state:array<string,mixed>} */
+	/**
+	 * Issue #2846 — the shim's shutdown hook is load-bearing only where the page exits.
+	 *
+	 * pfblockerng.widget.php ends in exit(0) at five points, every one of them inside a
+	 * pfb_widget_post_guard() arm. This class is the only one that opens that guard, so it
+	 * is the only place the mandated register_shutdown_function differs observably from a
+	 * trailing cleanup statement: on an exit path a trailing statement is never reached and
+	 * the shim directory survives the run.
+	 *
+	 * Both directions matter and both are here: assertSame(0, status) is the before-state,
+	 * because a run where the shim was never created also leaves no residue and would pass
+	 * the residue assertion vacuously -- removing the mkdir makes the child exit 255.
+	 */
+	public function testWidgetRunLeavesNoShimResidue(): void
+	{
+		$result = $this->runWidget(['pfb_submit' => 'save']);
+		$this->assertSame(0, $result['status'], $result['stderr']);
+		$this->assertSame([], $result['residue'],
+			'the include shim outlived the widget run: ' . implode(', ', $result['residue']));
+	}
+
+	/** @return array{status:int,stderr:string,state:array<string,mixed>,residue:list<string>} */
 	private function runWidget(array $post): array
 	{
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
 		$postCode = var_export($post, TRUE);
+		// The child picks its own per-invocation shim name, as the exemplar mandates, but
+		// underneath a base directory the PARENT owns -- otherwise the name is unknowable
+		// here and residue cannot be observed at all. The mkdir guard, the random suffix
+		// and the shutdown hook below are unchanged.
+		$base = sys_get_temp_dir() . '/pfb_widget_shim_base_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($base, 0700, TRUE), 'shim base directory creation failed');
+		$baseCode = var_export($base, TRUE);
 		$script = <<<PHP
 require {$root} . '/tests/php/bootstrap.php';
 \$_GET = [];
 \$_POST = {$postCode};
 \$_SERVER = ['HTTP_SEC_FETCH_SITE' => 'same-origin'];
 \$widgetname = 'pfblockerng';
-\$shim = sys_get_temp_dir() . '/pfb_widget_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
+\$shim = {$baseCode} . '/pfb_widget_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
 if (!mkdir(\$shim, 0700, TRUE)) {
 	fwrite(STDERR, "widget include shim creation failed\\n");
 	exit(1);
@@ -100,6 +128,12 @@ PHP;
 		$this->assertIsInt($marker, $stdout);
 		$state = json_decode(substr($stdout, $marker + strlen('__PFB_STATE__')), TRUE, 512, JSON_THROW_ON_ERROR);
 		$this->assertIsArray($state);
-		return ['status' => $status, 'stderr' => $stderr, 'state' => $state];
+		$residue = array_values(array_diff((array) scandir($base), ['.', '..']));
+		foreach ($residue as $leftover) {
+			@unlink($base . '/' . $leftover . '/guiconfig.inc');
+			@rmdir($base . '/' . $leftover);
+		}
+		@rmdir($base);
+		return ['status' => $status, 'stderr' => $stderr, 'state' => $state, 'residue' => $residue];
 	}
 }
