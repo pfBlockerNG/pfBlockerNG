@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `6cf8c77f`  fix(apply): honor ET reuse processet exit status  (#2980) — finished review before bot-suggested fix; two quota notices on fix heads; four carried legs + exact-head CI PASS.
 - `118acc80`  fix(download): bound rsync wall time  (#2981) — two quota notices (25 min, then 36 s), no review; four carried legs CLEAN on identical content.
 - `ee9490e9`  geoip: fix bare-text `<ul>` help markup and make long paths/URL wrap  (#2927) — two quota notices, no review; four exact-head legs + verifier PASS; rebase CI/gates PASS.
 - `3b622554`  pfblockerng: route runtime toggles through config gateway  (#2933) — two quota notices, no review; four final exact-head legs and canonical/CI PASS.
