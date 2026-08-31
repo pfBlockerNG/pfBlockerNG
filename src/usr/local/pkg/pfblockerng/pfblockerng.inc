@@ -14273,6 +14273,36 @@ function pfb_rsync_pin_url($list_url, $ip) {
 	return '';
 }
 
+// Issue #2876: build the rsync feed-transfer spawn under a whole-transfer
+// wall-clock deadline. rsync's own --timeout is a maximum I/O timeout — it
+// fires only when NO data moves for that interval, so a peer that trickles one
+// byte per interval resets it forever and the exec() below would wait
+// unboundedly; the byte ceiling (#2667) bounds disk, not elapsed time. The
+// wrapper is timeout(1) in its DEFAULT (reaper) mode on purpose: rsync may
+// start remote-shell descendants, and a hung transfer must die as a whole tree
+// on expiry (docs/misc/external-process-waits.md "Choosing the mode") —
+// --foreground would kill only the direct child and orphan the rest, whose
+// inherited stdio could even hold exec()'s capture pipe open. The budget is
+// the SAME per-feed whole-transfer deadline the cURL path already applies to
+// the same download (CURLOPT_TIMEOUT, PfbDownloadRequest::$timeout; every
+// caller passes 300), so the two transports for one feed share one settled
+// product value — no new operator setting, floored at one second so a
+// degenerate value can never disable the bound. $pfb['timeout'] and
+// $pfb['rsync_bin'] are the established off-appliance injection points,
+// mirroring pfb_reentry_cmd()'s $pfb['timeout'] / $pfb['php']. $src/$dst
+// arrive unescaped and are escaped here, exactly once.
+function pfb_rsync_transfer_cmd(string $src, string $dst, int $blocks, int $budget): string {
+	global $pfb;
+
+	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+	$rsync_esc   = escapeshellarg($pfb['rsync_bin'] ?? '/usr/local/bin/rsync');
+	$src_esc     = escapeshellarg($src);
+	$dst_esc     = escapeshellarg($dst);
+
+	return pfb_extract_cmd("{$timeout_esc} -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
+		max(1, $budget) . " {$rsync_esc} --timeout=5 {$src_esc} {$dst_esc}", $blocks);
+}
+
 
 // Issue #890: redact the query string and userinfo ('user:pass@') from a feed/download URL
 // before it is written to any log — either can carry a credential, and log files ship inside
@@ -14548,7 +14578,6 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 		}
-		$rsync_src_esc = escapeshellarg("{$rsync_src}");
 
 		// issue #2667: bound the rsync ingest path, which writes the fetched body
 		// straight to {file}.raw and was bounded by neither #2658 ceiling. Two halves:
@@ -14573,7 +14602,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 		// integer division keeps the bound exact for every ceiling (a float cast is
 		// undefined once 2 * ceiling leaves the integer range).
 		$rsync_blocks = intdiv($rsync_ceiling, 256);
-		exec(pfb_extract_cmd("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_blocks), $rsync_output, $rsync_rc);
+		// Issue #2876: the spawn runs under the bounded-wait seam (whole-transfer
+		// wall deadline; see pfb_rsync_transfer_cmd()) — rsync's --timeout=5 stays,
+		// bounding a silent peer, while the wrapper bounds a slow-progress one.
+		exec(pfb_rsync_transfer_cmd($rsync_src, "{$file_dwn}.raw", $rsync_blocks, $timeout), $rsync_output, $rsync_rc);
 		if ($rsync_rc === 0) {
 			clearstatcache(TRUE, "{$file_dwn}.raw");
 			$rsync_size = @filesize("{$file_dwn}.raw");
@@ -14583,6 +14615,15 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			$http_status = '200';
+		} elseif ($rsync_rc === 124) {
+			// Issue #2876: deadline expiry is its own named failure, in the same
+			// language as every other bounded spawn (timeout(1)'s status, whole
+			// transfer tree reaped): nothing the killed transfer wrote may
+			// survive, and the prior good publication is untouched by the
+			// failure return below.
+			pfb_logger("\n  RSYNC transfer TIMED OUT (killed); discarding its output\n", "{$logtype}");
+			unlink_if_exists("{$file_dwn}.raw");
+			return PfbDownloadResult::failure();
 		} else {
 			$rsync_msg = trim(implode(' ', $rsync_output));
 			$log = "\n  RSYNC Failed (exit {$rsync_rc})" . ($rsync_msg !== '' ? ": {$rsync_msg}" : '') . "...\n";
