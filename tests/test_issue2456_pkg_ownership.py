@@ -16,6 +16,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 PUBLISHED = (WORKFLOWS / "release-published.yml").read_text(encoding="utf-8")
 REPUBLISH = (WORKFLOWS / "pkg-republish.yml").read_text(encoding="utf-8")
 TAGGED = WORKFLOWS / "pkg-tagged-ingest.yml"
+SMOKE_SINGLE = (WORKFLOWS / "smoke-single.yml").read_text(encoding="utf-8")
 NIGHTLY = (WORKFLOWS / "nightly.yml").read_text(encoding="utf-8")
 REPO_SMOKE = (ROOT / "tests" / "smoke" / "test_repo_install.py").read_text(encoding="utf-8")
 NIGHTLY_SMOKE = (ROOT / "tests" / "smoke" / "test_nightly_install.py").read_text(encoding="utf-8")
@@ -137,6 +138,18 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
         self.assertNotRegex(ingest, r"artifact_ref:\s*ghcr\.io/.+:(?:latest|nightly)")
         self.assertLess(NIGHTLY.index("operation=nightly"), NIGHTLY.index("test_install_from_live_nightly_url"))
         self.assertLess(NIGHTLY.index("test_install_from_live_nightly_url"), NIGHTLY.index("operation=nightly-cleanup"))
+
+    def test_live_catalogue_routes_are_part_of_smoke_concurrency_identity(self) -> None:
+        concurrency = yaml.safe_load(SMOKE_SINGLE)["concurrency"]
+        self.assertEqual(
+            concurrency["group"],
+            (
+                "${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-"
+                "${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}-"
+                "${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}"
+            ),
+        )
+        self.assertIs(concurrency["cancel-in-progress"], False)
 
     def test_tagged_finalize_depends_on_the_live_gate_and_discards_failure(self) -> None:
         tagged = TAGGED.read_text(encoding="utf-8")
