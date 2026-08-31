@@ -112,6 +112,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     cd "${base}/A" || return 1
     git_fixture fetch -q origin || return 1
     git_fixture checkout -q -B integrity origin/devel || return 1
+    signing_key_override=''
 
     case "$mode" in
       openpgp)
@@ -132,12 +133,17 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         [ -n "$openpgp_fingerprint" ] || return 1
         git_fixture config user.signingkey "$openpgp_fingerprint" || return 1
         ;;
-      wrong-signer)
-        ssh-keygen -q -t ed25519 -N '' -C other@example.com \
+      wrong-signer|wrong-key-same-email)
+        if [ "$mode" = wrong-signer ]; then
+          signing_principal=other@example.com
+        else
+          signing_principal=a@example.com
+        fi
+        ssh-keygen -q -t ed25519 -N '' -C "$signing_principal" \
           -f "${base}/other_signing_key" || return 1
-        { printf 'other@example.com '; cat "${base}/other_signing_key.pub"; } \
+        { printf '%s ' "$signing_principal"; cat "${base}/other_signing_key.pub"; } \
           >>"${base}/allowed_signers"
-        git_fixture config user.signingkey "${base}/other_signing_key" || return 1
+        signing_key_override="${base}/other_signing_key"
         ;;
     esac
 
@@ -163,6 +169,13 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
           -F "${base}/commit-message"
         ;;
     esac
+    case "$mode" in
+      wrong-signer|wrong-key-same-email)
+        set -- -c core.hooksPath=/dev/null \
+          -c "user.signingkey=${signing_key_override}" \
+          commit -q -F "${base}/commit-message"
+        ;;
+    esac
     CLAUDECODE=1 \
       GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email" \
       GIT_COMMITTER_NAME="$committer_name" GIT_COMMITTER_EMAIL="$committer_email" \
@@ -181,6 +194,31 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     if [ "$mode" = openpgp ]; then
       git_fixture log -1 --format='%%G?=%G?%n%%GS=%GS' "$local_sha" || return 1
     fi
+    case "$mode" in
+      wrong-signer|wrong-key-same-email)
+        signature_metadata=$(
+          git_fixture log -1 --format='%G?|%GS|%GF' "$local_sha"
+        ) || return 1
+        signature_status=${signature_metadata%%|*}
+        signature_rest=${signature_metadata#*|}
+        signature_signer=${signature_rest%%|*}
+        signature_fingerprint=${signature_rest#*|}
+        configured_fingerprint=$(
+          ssh-keygen -lf "${base}/signing_key.pub" | awk '{ print $2 }'
+        ) || return 1
+        if [ "$mode" = wrong-signer ]; then
+          expected_signer=other@example.com
+        else
+          expected_signer=a@example.com
+        fi
+        [ "$signature_status" = G ] || return 1
+        [ "$signature_signer" = "$expected_signer" ] || return 1
+        [ -n "$configured_fingerprint" ] || return 1
+        [ "$signature_fingerprint" != "$configured_fingerprint" ] || return 1
+        printf '%%G?=%s\n%%GS=%s\n%%GF!=configured=true\n' \
+          "$signature_status" "$signature_signer"
+        ;;
+    esac
 
     case "$mode" in
       tag-lightweight)
@@ -349,7 +387,6 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       coauthor-tab    A       a@example.com     A       a@example.com     'Co-authored-by trailers are forbidden'
       unsigned        A       a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
       unsigned-then-valid A   a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
-      wrong-signer    A       a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
       author-name     Other   a@example.com     A       a@example.com     'Agent commits must use the configured user identity'
       author-email    A       other@example.com A       a@example.com     'Agent commits must use the configured user identity'
       committer-name  A       a@example.com     Other   a@example.com     'Agent commits must use the configured user identity'
@@ -360,6 +397,21 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       When call outgoing_agent_hook "$1" "$2" "$3" "$4" "$5"
       The status should equal 1
       The stderr should equal "$6"
+    End
+  End
+
+  Context 'outgoing SSH signer binding'
+    Parameters
+      wrong-signer         other@example.com
+      wrong-key-same-email a@example.com
+    End
+
+    It "rejects a good signature from unconfigured key mode $1"
+      When call outgoing_agent_hook "$1" A a@example.com A a@example.com
+      The status should equal 1
+      The output should equal "$(printf '%s\n%s\n%s' \
+        '%G?=G' "%GS=$2" '%GF!=configured=true')"
+      The stderr should equal 'Agent commits must be signed by the configured user identity'
     End
   End
 
