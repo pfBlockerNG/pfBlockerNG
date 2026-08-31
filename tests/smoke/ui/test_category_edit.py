@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import NO_INPUT_ERRORS, body_has_php_error, input_errors_block
+from .render_oracle import body_has_php_error, input_errors_block, rejection_verdict
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -97,8 +97,7 @@ def _post_form(
     webui: WebUI,
     payload: dict[str, str],
     *,
-    expect_rejection: bool = False,
-    expect_reason: str | None = None,
+    expect_rejection: bool | str = False,
 ) -> None:
     """POST a fully-enumerated category-edit payload (token harvested fresh).
 
@@ -124,17 +123,17 @@ def _post_form(
     # MUST reject and prove it only by reading config back afterwards -- which an
     # unrelated no-op write would satisfy just as well. expect_rejection pins the
     # rejection itself, so those cases assert the thing they are actually testing.
-    errors = input_errors_block(resp.text)
-    if not expect_rejection:
-        assert errors is None, f"the page rejected this save: {errors}"
-        return
-    assert errors is not None, f"the page ACCEPTED a save this case requires it to reject: {NO_INPUT_ERRORS}"
-    # WHICH rejection, not merely that one happened. Several validators append to
-    # $input_errors on the same page -- pfb_maxmind_credential_notice adds one to any
-    # geoip row when seeded credentials are missing -- so a case can go green on a
-    # rejection that has nothing to do with the guard it is testing.
-    if expect_reason is not None:
-        assert expect_reason in errors, f"rejected for the wrong reason: expected {expect_reason!r} in {errors!r}"
+    # A 500 is not an accepted save and not a rejection; without this it passes the
+    # accept branch silently, and on the reject branch prints the actively wrong
+    # "the page ACCEPTED a save this case requires it to reject".
+    assert resp.ok, f"category POST returned HTTP {resp.status_code}"
+    # A REJECTED save renders its reason and aborts the whole write, so the response
+    # already says which layer failed. Asserting on it here names the rejection;
+    # leaving it to the caller's next assertion names the config path (issue #2954).
+    # Pass the expected reason as a STRING to pin which rejection, not merely that one
+    # happened -- several validators append to $input_errors on this page.
+    verdict = rejection_verdict(input_errors_block(resp.text), expect_rejection)
+    assert verdict is None, verdict
 
 
 def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
@@ -315,7 +314,11 @@ def test_dnsbl_alias_bad_name_rejected_leaves_config_unchanged(
         assert helpers.config_get(vm, f"{base}/aliasname") == good, "precondition: valid alias did not persist"
 
         # REJECT: a space makes aliasname match /\W/ -> the whole save aborts.
-        _post_form(webui, _dnsbl_payload(rowid, "bad name"), expect_rejection=True)
+        _post_form(
+            webui,
+            _dnsbl_payload(rowid, "bad name"),
+            expect_rejection="Name field cannot contain spaces",
+        )
         assert helpers.config_get(vm, f"{base}/aliasname") == good, (
             "a bad aliasname must abort the save (alias unchanged), but it changed"
         )
@@ -353,7 +356,11 @@ def test_dnsbl_disabled_row_reserved_header_rejected_leaves_config_unchanged(
         assert helpers.config_get(vm, f"{base}/row/0/header") == "", "precondition: placeholder header not empty"
 
         # REJECT: a reserved Header on a Disabled row must abort the save (header UNCHANGED).
-        _post_form(webui, _dnsbl_payload(rowid, good, **{"header-0": "DNSBLIP"}), expect_rejection=True)
+        _post_form(
+            webui,
+            _dnsbl_payload(rowid, good, **{"header-0": "DNSBLIP"}),
+            expect_rejection="is reserved by pfBlockerNG",
+        )
         assert helpers.config_get(vm, f"{base}/row/0/header") == "", (
             "a Disabled row's reserved Header ('DNSBLIP') must abort the save (row/0/header unchanged), but it changed"
         )
@@ -475,7 +482,7 @@ def test_dnsbl_url_geoip_breakout_char_rejected_leaves_config_unchanged(
                     "url-0": "US <script>alert(1)</script>",
                 },
             ),
-            expect_rejection=True,
+            expect_rejection="Source field contains a disallowed character",
         )
         assert helpers.config_get(vm, cfg) == "US CA", (
             "a '<script>' breakout in url-0 must abort the save (row/0/url unchanged), but it changed"
@@ -689,7 +696,9 @@ def test_ipv4_alias_permit_any_guard_rejects_and_valid_persists(
         assert helpers.config_get(vm, cfg) == "Deny_Both", "valid Deny_Both action did not persist"
         # REJECT: Permit_Inbound + proto 'Any' + no custom port/dest -> save aborts.
         _post_form(
-            webui, _ipv4_payload(rowid, "smokeip4", action="Permit_Inbound", autoproto_in="any"), expect_rejection=True
+            webui,
+            _ipv4_payload(rowid, "smokeip4", action="Permit_Inbound", autoproto_in="any"),
+            expect_rejection="Advanced Inbound Custom Protocol",
         )
         assert helpers.config_get(vm, cfg) == "Deny_Both", (
             "Permit_Inbound + 'Any' must abort the save (action unchanged at Deny_Both)"

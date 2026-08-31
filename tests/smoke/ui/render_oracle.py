@@ -98,11 +98,35 @@ def body_has_php_error(body: str) -> str | None:
 # <div class="alert alert-danger input-errors">...</div> per response. Non-greedy
 # because the block is non-nested: a greedy match swallows the rest of the document
 # and buries the reason this exists to surface.
-# `\b` alone matches inside `no-input-errors`, because `-` is a non-word
-# character: the boundary falls between `no-` and `input`, so a class the page
-# may plausibly grow would read as a rejection. The lookbehind requires the
-# name to START here.
-_INPUT_ERRORS_RE = re.compile(r"<div[^>]*(?<![-\w])input-errors\b[^>]*>.*?</div>", re.DOTALL)
+# The name must be exactly `input-errors`, bounded on BOTH sides. `\b` alone is no
+# help either way, because `-` is a non-word character: it matches inside
+# `no-input-errors` (boundary between `no-` and `input`) and inside
+# `input-errors-template` (boundary between `errors` and `-template`). Either would
+# read as a rejection, so both are excluded explicitly.
+_INPUT_ERRORS_RE = re.compile(r"<div[^>]*(?<![-\w])input-errors(?![-\w])[^>]*>.*?</div>", re.DOTALL)
+
+
+def rejection_verdict(errors: str | None, expect: bool | str) -> str | None:
+    """The failure message for a save's rejection state, or ``None`` when it is right.
+
+    Split out from the POST helper so the decision is reachable without a guest: the
+    helper needs a live session, this needs a string. ``expect`` is ``False`` for a
+    save that must be accepted, ``True`` for one that must be rejected, and the
+    expected reason as a **string** when it must be rejected FOR that reason.
+
+    One parameter rather than two, so "a reason without expecting a rejection" cannot
+    be written: that combination silently asserted nothing when it was two.
+    """
+    if not expect:
+        return None if errors is None else f"the page rejected this save: {errors}"
+    if errors is None:
+        return f"the page ACCEPTED a save this case requires it to reject: {NO_INPUT_ERRORS}"
+    # WHICH rejection, not merely that one happened. Several validators append to
+    # $input_errors on the same page, so a case can go green on a rejection that has
+    # nothing to do with the guard it is testing.
+    if isinstance(expect, str) and expect not in errors:
+        return f"rejected for the wrong reason: expected {expect!r} in {errors!r}"
+    return None
 
 
 NO_INPUT_ERRORS = "<no input-errors block in response>"
