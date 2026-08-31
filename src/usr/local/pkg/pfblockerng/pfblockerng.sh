@@ -2225,11 +2225,17 @@ processet() (
 	done
 	echo '-------------------------------------------'
 
-	pfb_et_output_valid "${blockstage}" "${blocklive}" || {
-		etrc=$?
-		pfb_et_abort 'the block validation' "${etrc}"
-		return "${etrc}"
-	}
+	# The 'x' sentinel (no Block category selected) publishes an intentionally
+	# empty block generation -- the commit below is unconditional for Block, as
+	# the base mv always was -- so the empty-over-live refusal applies only to a
+	# selected category whose staged derivation came back empty.
+	if [ "${etblock}" != 'x' ]; then
+		pfb_et_output_valid "${blockstage}" "${blocklive}" || {
+			etrc=$?
+			pfb_et_abort 'the block validation' "${etrc}"
+			return "${etrc}"
+		}
+	fi
 	if [ "${etmatch}" != 'x' ]; then
 		pfb_et_output_valid "${matchstage}" "${matchlive}" || {
 			etrc=$?
