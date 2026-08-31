@@ -5,9 +5,11 @@
 # Emits and executes:
 #   $PYTHON -m pytest $PATHS -m $MARKER
 #     --override-ini="addopts=" --override-ini="timeout_func_only=true"
-#     --timeout=$TIMEOUT --timeout-method=signal --durations=0 --capture=tee-sys -v
+#     --timeout=$TIMEOUT --timeout-method=signal --durations=0 --capture=tee-sys -ra -v
 #     [-k $K] [passthrough...]
 #
+# -ra makes the run record WHY anything skipped, xfailed or errored -- see the flag
+#   itself for why it cannot live in pyproject (issue #2960).
 # --durations=0 reports every test's setup/call/teardown phase timing (issue #605
 #   Layer A); --capture=tee-sys streams stdout live so the per-step PFB_TIMING lines
 #   (Layer B, tests/timing.py) show on a PASSING run, not only on failure.
@@ -197,12 +199,11 @@ fi
 
 # 4b. Prepend the fixed canonical flags (the drift-kill; see ADR §5.3).
 #
-# -ra makes the run record WHY anything skipped, xfailed or errored. Without it the
-# artifact carries the count and the word SKIPPED and nothing else, so a skip caused
-# by a degraded environment is indistinguishable from a designed self-skip -- and
-# both testing.md ("never read a skip as coverage") and the --no-two-vm trap ask a
-# reader to tell them apart from the log (issue #2960). It belongs in THIS block and
-# not in pyproject's addopts, which the first line below wipes.
+# -ra belongs in THIS block and not in pyproject's addopts, which the first line
+# below wipes -- the obvious edit there is silently a no-op for this tier. Without
+# it the artifact carries the count and the word SKIPPED and nothing else, so a skip
+# caused by a degraded environment is indistinguishable from a designed self-skip,
+# which is what testing.md and the --no-two-vm trap both ask a reader to tell apart.
 set -- \
     --override-ini="addopts=" \
     --override-ini="timeout_func_only=true" \
