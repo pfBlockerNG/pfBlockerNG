@@ -120,7 +120,13 @@ def test_omp_adapter_and_client_detection() -> None:
         assert "omp_session" in body, f"{hook} lost omp_session helper"
 
     adapter = (ROOT / ".agents/context/omp-adapter.md").read_text(encoding="utf-8")
-    for contract in (".omp/AGENTS.md", ".omp/RULES.md", "OMP_CLI=1", "PI_CLI=1", "adds no attribution"):
+    for contract in (
+        ".omp/AGENTS.md",
+        ".omp/RULES.md",
+        "OMP_CLI=1",
+        "PI_CLI=1",
+        "OMP adds no attribution to commits or public bodies.",
+    ):
         assert contract in adapter, f"OMP adapter lost {contract}"
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert ".agents/context/omp-adapter.md" in bootstrap

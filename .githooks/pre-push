@@ -144,6 +144,65 @@ if [ "$agent_runtime" = "1" ]; then
     done <<PFB_LEASE_UPDATES
 $updates
 PFB_LEASE_UPDATES
+
+    configured_name=$(git config --get user.name 2>/dev/null) || configured_name=
+    configured_email=$(git config --get user.email 2>/dev/null) || configured_email=
+
+    check_agent_commit() {
+        agent_commit=$1
+        agent_message=$(git log -1 --format=%B "$agent_commit" 2>/dev/null) || return 1
+        printf '%s\n' "$agent_message" | LC_ALL=C grep -Eiq '^[[:space:]]*Co-authored-by:' >/dev/null
+        agent_coauthor_status=$?
+        case "$agent_coauthor_status" in
+            0)
+                echo "Co-authored-by trailers are forbidden" >&2
+                return 1
+                ;;
+            1) ;;
+            *) return 1 ;;
+        esac
+
+        if [ -z "$configured_name" ] || [ -z "$configured_email" ]; then
+            echo "Agent commits must use the configured user identity" >&2
+            return 1
+        fi
+        agent_author_name=$(git log -1 --format=%an "$agent_commit" 2>/dev/null) || return 1
+        agent_author_email=$(git log -1 --format=%ae "$agent_commit" 2>/dev/null) || return 1
+        agent_committer_name=$(git log -1 --format=%cn "$agent_commit" 2>/dev/null) || return 1
+        agent_committer_email=$(git log -1 --format=%ce "$agent_commit" 2>/dev/null) || return 1
+        if [ "$agent_author_name" != "$configured_name" ] ||
+            [ "$agent_author_email" != "$configured_email" ] ||
+            [ "$agent_committer_name" != "$configured_name" ] ||
+            [ "$agent_committer_email" != "$configured_email" ]; then
+            echo "Agent commits must use the configured user identity" >&2
+            return 1
+        fi
+
+        agent_signature_status=$(git log -1 --format=%G? "$agent_commit" 2>/dev/null) || return 1
+        agent_signer=$(git log -1 --format=%GS "$agent_commit" 2>/dev/null) || return 1
+        if [ "$agent_signature_status" != "G" ] || [ "$agent_signer" != "$configured_email" ]; then
+            echo "Agent commits must be signed by the configured user identity" >&2
+            return 1
+        fi
+    }
+
+    while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do
+        case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
+        [ "$local_sha" = "$z40" ] && continue
+        if [ "$remote_sha" = "$z40" ]; then
+            outgoing_commits=$(git rev-list "$local_sha" --not --remotes="$remote_name" 2>/dev/null) || exit 1
+        else
+            outgoing_commits=$(git rev-list "$local_sha" "^$remote_sha" 2>/dev/null) || exit 1
+        fi
+        while IFS= read -r outgoing_commit; do
+            [ -z "$outgoing_commit" ] && continue
+            check_agent_commit "$outgoing_commit" || exit 1
+        done <<PFB_AGENT_COMMITS
+$outgoing_commits
+PFB_AGENT_COMMITS
+    done <<PFB_AGENT_UPDATES
+$updates
+PFB_AGENT_UPDATES
 fi
 unset agent_runtime
 

@@ -13,8 +13,7 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
   `COPILOT_CLI`, which CLI exports into every shell it spawns. Never unset to dodge
   guard it trips.
-- Human owner stays author, committer, signer. `Co-authored-by:` trailer for
-  Copilot emitted only from locally configured `coauthor.copilot.*` identity; none
-  configured → disclose authorship in PR body instead.
+- Copilot adds no commit or public-body attribution. Configured user identity remains
+  authoritative.
 - **Copilot code review stays disabled** (owner directive, `.agents/policy/landing.md`).
   Directive about review bot, not restrict Copilot as agent client.

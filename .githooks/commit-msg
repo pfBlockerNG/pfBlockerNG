@@ -1,0 +1,9 @@
+#!/bin/sh
+set -u
+
+if grep -qi '^[[:space:]]*Co-authored-by:' "$1"; then
+	printf '%s\n' 'Co-authored-by trailers are forbidden' >&2
+	exit 1
+fi
+
+exit 0

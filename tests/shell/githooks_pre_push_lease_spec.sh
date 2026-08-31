@@ -21,11 +21,16 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/prepushlease.XXXXXX")"
+    ssh-keygen -q -t ed25519 -N '' -C a@example.com -f "${base}/signing_key"
+    { printf 'a@example.com '; cat "${base}/signing_key.pub"; } >"${base}/allowed_signers"
     git_fixture init -q --bare "${base}/remote.git"
     git_fixture clone -q "${base}/remote.git" "${base}/A" 2>/dev/null
     git_fixture -C "${base}/A" config user.email a@example.com
     git_fixture -C "${base}/A" config user.name A
-    git_fixture -C "${base}/A" config commit.gpgsign false
+    git_fixture -C "${base}/A" config gpg.format ssh
+    git_fixture -C "${base}/A" config user.signingkey "${base}/signing_key"
+    git_fixture -C "${base}/A" config gpg.ssh.allowedSignersFile "${base}/allowed_signers"
+    git_fixture -C "${base}/A" config commit.gpgsign true
     ( cd "${base}/A" && git_fixture checkout -q -b devel && echo one > f \
         && git_fixture add f && git_fixture commit -q -m c1 && git_fixture push -q origin devel )
     git_fixture clone -q "${base}/remote.git" "${base}/B" 2>/dev/null
@@ -92,6 +97,36 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
         -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
         sh "$hook" origin "${base}/remote.git"
+  }
+
+  outgoing_agent_hook() {
+    mode=$1
+    author_name=$2
+    author_email=$3
+    committer_name=$4
+    committer_email=$5
+    cd "${base}/A" || return 1
+    git_fixture fetch -q origin || return 1
+    git_fixture checkout -q -B integrity origin/devel || return 1
+    printf '%s\n' "$mode" >>f
+    git_fixture add f || return 1
+    printf 'integrity fixture\n' >"${base}/commit-message"
+    if [ "$mode" = coauthor ]; then
+      printf '\nCo-authored-by: Other <other@example.com>\n' >>"${base}/commit-message"
+    fi
+
+    set -- -c core.hooksPath=/dev/null commit -q -F "${base}/commit-message"
+    if [ "$mode" = unsigned ]; then
+      set -- -c core.hooksPath=/dev/null commit -q --no-gpg-sign -F "${base}/commit-message"
+    fi
+    CLAUDECODE=1 \
+      GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email" \
+      GIT_COMMITTER_NAME="$committer_name" GIT_COMMITTER_EMAIL="$committer_email" \
+      git_fixture "$@" || return 1
+
+    local_sha=$(git_fixture rev-parse refs/heads/integrity) || return 1
+    remote_sha=$(git_fixture rev-parse refs/remotes/origin/devel) || return 1
+    agent_hook "refs/heads/integrity $local_sha refs/heads/devel $remote_sha"
   }
 
   It 'denies an agent history rewrite when the remote moved past the tracking ref'
@@ -186,6 +221,29 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 0
     The stderr should equal ''
+  End
+
+  It 'allows a signed outgoing agent commit with the configured identity'
+    When call outgoing_agent_hook valid A a@example.com A a@example.com
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  Context 'outgoing agent commit integrity'
+    Parameters
+      coauthor        A       a@example.com     A       a@example.com     'Co-authored-by trailers are forbidden'
+      unsigned        A       a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
+      author-name     Other   a@example.com     A       a@example.com     'Agent commits must use the configured user identity'
+      author-email    A       other@example.com A       a@example.com     'Agent commits must use the configured user identity'
+      committer-name  A       a@example.com     Other   a@example.com     'Agent commits must use the configured user identity'
+      committer-email A       a@example.com     A       other@example.com 'Agent commits must use the configured user identity'
+    End
+
+    It "rejects an outgoing $1 commit"
+      When call outgoing_agent_hook "$1" "$2" "$3" "$4" "$5"
+      The status should equal 1
+      The stderr should equal "$6"
+    End
   End
 
   # The money rows: a REAL bare force push through core.hooksPath. The human

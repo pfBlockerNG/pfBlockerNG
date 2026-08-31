@@ -9,8 +9,8 @@
 - Hooks live in `.claude/settings.json` (branch freshness, discipline, guards);
   skills at `.claude/skills/` symlink onto canonical
   `.agents/skills/`.
-- Shared git hooks recognise Claude via `CLAUDECODE=1`; Claude verified coauthor
-  identity `Claude <noreply@anthropic.com>`.
+- Shared git hooks recognise Claude via `CLAUDECODE=1`. Claude adds no commit or
+  public-body attribution; configured user identity remains authoritative.
 - Claude sessions may start inside harness session worktree (`.claude/worktrees/…`) — see
   `.agents/policy/sessions.md`.
 - Soft routing backstops live in `.claude/rules/*.md` (`paths:` frontmatter,
