@@ -70,4 +70,28 @@ PATCH_GRAPHIFY
       The stderr should include 'graphify merge-driver %O %A %B'
     End
   End
+
+  Context 'foreign target without a target-local patch (issue #3004)'
+    # The trusted helper checkout runs the helper against a foreign checkout
+    # (e.g. FreeBSD-ports) that ships no scripts/agent/patch-graphify.sh; the
+    # helper must fall back to its own trusted sibling instead of failing, and
+    # must not create anything inside the foreign checkout.
+    It 'falls back to the trusted sibling patch next to the helper script'
+      helperdir="$fixture/helper/scripts/agent"
+      mkdir -p "$helperdir" "$fixture/helper/scripts/lib"
+      cp "$script_abs" scripts/agent/agent_env.sh "$helperdir/"
+      cp scripts/lib/git-env-scrub.sh "$fixture/helper/scripts/lib/"
+      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
+PATCH_GRAPHIFY
+      chmod +x "$helperdir/patch-graphify.sh"
+      rm -rf "$repo/scripts/agent"
+      When run sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
+      The status should equal 0
+      The contents of file "$graphify_log" should equal \
+        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
+    End
+  End
 End
