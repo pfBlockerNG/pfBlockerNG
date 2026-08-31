@@ -266,7 +266,9 @@ jobs:
           # destination — checking this out first would wipe it again.
           ref: ${{ github.workflow_sha }}
           repository: pfBlockerNG/pfBlockerNG
-          sparse-checkout: scripts/
+          sparse-checkout: |
+            scripts/
+            .agents/patches/
           sparse-checkout-cone-mode: false
           path: pfblockerng-src
           persist-credentials: false
