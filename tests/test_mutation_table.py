@@ -118,9 +118,9 @@ def test_render_patch_keeps_the_changed_lines_and_the_path() -> None:
         "diff --git a/x.php b/x.php\nindex 1..2 100644\n--- a/x.php\n+++ b/x.php\n"
         "@@ -1,3 +1,3 @@\n unchanged\n-if ($ok) {\n+if (FALSE) {\n more\n"
     )
-    assert "`x.php`" in rendered, rendered
-    assert "`-if ($ok) {`" in rendered, rendered
-    assert "`+if (FALSE) {`" in rendered, rendered
+    assert "x.php" in rendered, rendered
+    assert "-if ($ok) {" in rendered, rendered
+    assert "+if (FALSE) {" in rendered, rendered
     assert "unchanged" not in rendered, f"context bloats the label: {rendered}"
     assert "@@" not in rendered, f"hunk headers bloat the label: {rendered}"
     assert "index 1..2" not in rendered, f"preamble bloats the label: {rendered}"
@@ -142,63 +142,33 @@ def test_render_patch_reads_dashes_inside_a_hunk_as_content() -> None:
     rendered = mt.render_patch(
         "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- old comment\n-SELECT 1;\n+++ i;\n+SELECT 2;\n"
     )
-    assert "`--- old comment`" in rendered, rendered
-    assert "`+++ i;`" in rendered, rendered
-    assert rendered.count("`q.sql`") == 1, rendered
-    assert "`i;`" not in rendered, f"a hunk line was mistaken for a path: {rendered}"
+    assert "--- old comment" in rendered, rendered
+    assert "+++ i;" in rendered, rendered
+    assert rendered.count("q.sql") == 1, rendered
+    assert "i;" not in rendered, f"a hunk line was mistaken for a path: {rendered}"
 
 
 def test_render_patch_keeps_the_old_path_when_a_file_is_deleted() -> None:
     """A deletion names its file only on the `---` side, so dropping that loses WHERE."""
     rendered = mt.render_patch("--- a/gone.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-bye\n")
-    assert "`gone.txt`" in rendered, rendered
+    assert "gone.txt" in rendered, rendered
     assert "/dev/null" not in rendered, rendered
 
 
-def test_a_cell_cannot_break_the_table_or_inject_markdown() -> None:
-    """A cell must be inert: no cell split, and no markdown syntax of any kind.
+def test_the_block_fences_past_any_backticks_in_its_own_content() -> None:
+    """The one sequence a fence cannot contain is a longer run of its own backticks.
 
-    The first two attempts here were enumerations -- `|` and a backtick, then `\\r` and
-    `\\n` -- wrapped in an HTML ``<code>`` element. That element is raw HTML, not a code
-    span, so GFM kept parsing inline syntax inside it and `*x*`, `~~x~~` and `[x](url)` still
-    rendered as emphasis, strikethrough and a live link. A real code span closes the class
-    rather than the next character in it, which is why this test asserts on the CLASS.
+    Everything else inside a fenced block is inert, which is the whole reason for the block:
+    four review rounds went into escaping a markdown TABLE for arbitrary patch and test-id
+    bytes, and each round found a character or a corner the last had missed. There is nothing
+    to enumerate here -- only this one measurement.
     """
-    # The delimiter, and the two characters that end a row before any span can exist.
-    assert "\\|" in mt.cell("-if ($a || $b) {")
-    for raw in ("\r", "\n"):
-        assert raw not in mt.cell(f"a{raw}b"), repr(mt.cell(f"a{raw}b"))
-    # Inline markdown, none of which an HTML <code> element suppressed.
-    for hostile in ("*em*", "_em_", "~~strike~~", "[click](https://evil.example/)", "<b>x</b>"):
-        rendered = mt.cell(hostile)
-        assert rendered.startswith("`") and rendered.endswith("`"), rendered
-        assert hostile in rendered, rendered
-    # A backtick run needs a longer fence, and a leading/trailing one needs padding.
-    assert mt.cell("a`b") == "``a`b``"
-    assert mt.cell("``x``") == "``` ``x`` ```"
-    assert mt.cell("`x`") == "`` `x` ``"
-
-
-def test_an_empty_cell_is_a_real_span_and_cannot_eat_the_next_one() -> None:
-    """An empty failing-test id must still produce a span that opens AND closes.
-
-    Without padding, the two fence backticks land adjacent and CommonMark reads `` as one
-    run of length two rather than an opener and a closer. render() joins cells with `<br>`
-    and the whole string is inline-parsed together, so that dangling run reaches across the
-    join and takes the NEXT cell's opening fence as its own closer -- stripping the code span
-    off a cell that had one, and putting markdown in a test id back on the page. Verified
-    against GitHub's own GFM renderer, not a local approximation.
-
-    An id can be empty: parse_failures builds `classname::name` from attributes that both
-    default to '', so a `<testcase><failure/></testcase>` with neither attribute yields one.
-    """
-    empty = mt.cell("")
-    assert empty.startswith("`") and empty.endswith("`"), empty
-    assert empty != "``", "two adjacent backticks are one run, not a span"
-    assert empty.strip("`").strip() == "", empty
-    joined = "<br>".join(mt.cell(f) for f in ["", "`*danger*"])
-    assert joined.count("<br>") == 1, joined
-    assert joined.endswith("`*danger* ``"), f"the second cell lost its own fence: {joined}"
+    row = mt.Row(Path("p.patch"), ["f.php", "-x = ```backticks```;"], ["T::a"])
+    out = mt.render("abc1234", ["sh", "suite.sh"], 2, [row])
+    fence = out.splitlines()[0]
+    assert fence.startswith("````"), f"fence must clear a run of 3: {fence!r}"
+    assert out.rstrip().endswith(fence.rstrip("text")), out
+    assert "```backticks```" in out, out
 
 
 def test_render_patch_says_so_when_it_truncates() -> None:
@@ -206,7 +176,7 @@ def test_render_patch_says_so_when_it_truncates() -> None:
     n = mt.MAX_PATCH_LINES + 5
     body = "".join(f"+line {i}\n" for i in range(n))
     rendered = mt.render_patch(f"--- a/x\n+++ b/x\n@@ -1,0 +1,{n} @@\n{body}")
-    assert "and 5 more changed lines" in rendered, rendered
+    assert any("and 5 more changed lines" in line for line in rendered), rendered
 
 
 # --------------------------------------------------------------------------- #
@@ -260,29 +230,13 @@ def test_parse_failures_survives_shellspecs_illegal_control_byte(tmp_path: Path)
     assert len(set(found)) == 2, f"the scrub collapsed two distinct ids: {found}"
 
 
-def test_a_newline_in_a_test_id_cannot_end_the_row(tmp_path: Path) -> None:
-    """A JUnit writer keeps an intentional newline in an attribute as `&#10;`.
-
-    A raw newline in an attribute is whitespace-normalised away, so `&#10;` is how a
-    compliant writer preserves one -- and the parser hands it back as a real newline, which
-    ends the markdown row outright. Same threat as the pipe and the backtick, different
-    character.
-    """
-    report = tmp_path / "r.xml"
-    report.write_text(
-        '<testsuites><testsuite><testcase classname="C" name="a&#10;b"><failure/></testcase></testsuite></testsuites>',
-        encoding="utf-8",
-    )
-    (found,) = mt.parse_failures(report)
-    assert "\n" in found, found
-    rendered = mt.cell(found)
-    assert "\n" not in rendered and "\r" not in rendered, repr(rendered)
-    assert "\\n" in rendered, rendered
-
-
 @pytest.mark.parametrize(
     ("content", "expected"),
-    [(None, "no JUnit report"), ("", "empty JUnit report"), ("<testsuite", "malformed JUnit report")],
+    [
+        (None, "no JUnit report"),
+        ("", "empty JUnit report"),
+        ("<testsuite", "malformed JUnit report"),
+    ],
 )
 def test_parse_failures_raises_rather_than_reporting_zero(tmp_path: Path, content: str | None, expected: str) -> None:
     """Missing, empty and truncated reports each raise -- none may read as a clean run."""
@@ -313,14 +267,15 @@ def test_the_row_carries_the_patch_and_the_tests_it_killed(repo: Path, killing_p
     ).stdout.strip()
     result = _run(repo, killing_patch)
     assert result.returncode == 0, result.stderr
-    # The table must name the tree it measured, or a block pasted into a PR body stops being
-    # checkable the moment that tree moves on.
-    assert head in result.stdout.splitlines()[0], result.stdout
-    row = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
-    assert len(row) == 1, result.stdout
-    assert "`-GUARD`" in row[0] and "`+MUTATED`" in row[0], row[0]
-    assert "`T::alpha`" in row[0], row[0]
-    assert "| 1 |" in row[0], row[0]
+    # The block must name the tree it measured, or one pasted into a PR body stops being
+    # checkable the moment that tree moves on. Line 0 is the fence; the header follows it.
+    assert result.stdout.splitlines()[0].endswith("text"), result.stdout
+    assert head in result.stdout.splitlines()[1], result.stdout
+    assert result.stdout.count("mutation: kill.patch") == 1, result.stdout
+    assert [ln for ln in result.stdout.splitlines() if ln.strip() == "guard.txt"], result.stdout
+    assert "-GUARD" in result.stdout and "+MUTATED" in result.stdout, result.stdout
+    assert "T::alpha" in result.stdout, result.stdout
+    assert "killed 1:" in result.stdout, result.stdout
 
 
 def test_a_mutation_that_kills_nothing_is_reported_as_a_finding(repo: Path) -> None:
@@ -329,7 +284,7 @@ def test_a_mutation_that_kills_nothing_is_reported_as_a_finding(repo: Path) -> N
     inert.write_text("--- a/guard.txt\n+++ b/guard.txt\n@@ -1 +1,2 @@\n GUARD\n+harmless\n", encoding="utf-8")
     result = _run(repo, inert)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "**0 — nothing**" in result.stdout, result.stdout
+    assert "killed NOTHING" in result.stdout, result.stdout
     assert "killed nothing" in result.stderr, result.stderr
 
 
@@ -369,9 +324,9 @@ def test_the_report_the_suite_writes_is_not_mistaken_for_dirt(repo: Path, killin
     second.write_text("--- a/guard.txt\n+++ b/guard.txt\n@@ -1 +1 @@\n-GUARD\n+OTHER\n", encoding="utf-8")
     result = _run(repo, killing_patch, second)
     assert result.returncode == 0, result.stdout + result.stderr
-    rows = [ln for ln in result.stdout.splitlines() if ln.startswith("| `guard.txt`")]
+    rows = [ln for ln in result.stdout.splitlines() if ln.strip() == "guard.txt"]
     assert len(rows) == 2, f"the second row never ran:\n{result.stdout}\n{result.stderr}"
-    assert "`+MUTATED`" in rows[0] and "`+OTHER`" in rows[1], rows
+    assert "+MUTATED" in result.stdout and "+OTHER" in result.stdout, result.stdout
 
 
 def test_undo_reports_rather_than_raises_when_git_is_gone(
@@ -522,7 +477,7 @@ def test_a_quoted_suite_argument_survives_parsing(repo: Path, killing_patch: Pat
     _git(repo, "commit", "-qam", "a suite that requires exactly one argument")
     result = _run(repo, killing_patch, suite="sh suite.sh 'one arg with spaces'")
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert "`+MUTATED`" in result.stdout, result.stdout
+    assert "+MUTATED" in result.stdout, result.stdout
 
 
 def test_a_suite_that_outlasts_the_timeout_is_refused(repo: Path, killing_patch: Path) -> None:
