@@ -170,6 +170,22 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     assert payload["dependency_builder"] == DEPENDENCY_BUILDER
 
 
+def test_dependency_free_handoff_may_omit_builder() -> None:
+    module = _module()
+    handoff = module.build_handoff(
+        release_tag=TAG,
+        source_sha=SOURCE_SHA,
+        ci_metadata_sha=CI_METADATA_SHA,
+        ports_sha=PORTS_SHA,
+        route_matrix=[ROW],
+        dependency_packages={},
+        source_date_epoch=SOURCE_DATE_EPOCH,
+        dependency_builder=None,
+    )
+
+    assert handoff["dependency_builder"] is None
+
+
 def test_load_accepts_exact_release_and_source(tmp_path: Path) -> None:
     path = tmp_path / "handoff.json"
     _write(path, _payload())
@@ -312,6 +328,17 @@ def _write_package(path: Path, record: dict[str, object], *, name: str) -> None:
         member.size = len(payload)
         tf.addfile(member, io.BytesIO(payload))
     path.write_bytes(lzma.compress(archive.getvalue()))
+
+
+def test_dependency_free_package_record_may_omit_builder(tmp_path: Path) -> None:
+    module = _module()
+    package = tmp_path / CANONICAL_ASSET
+    record = _canonical_record()
+    record.pop("dependency_builder")
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    _write_package(package, record, name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+
+    module.validate_packages(_payload(), [package])
 
 
 def _dependency_record(**changes: object) -> dict[str, object]:

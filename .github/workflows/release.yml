@@ -486,8 +486,8 @@ jobs:
       route_matrix: ${{ steps.pins.outputs.route_matrix }}
       ci_metadata_sha: ${{ steps.pins.outputs.ci_metadata_sha }}
       ports_sha: ${{ steps.pins.outputs.ports_sha }}
-      dependency_builder: ${{ steps.pins.outputs.dependency_builder }}
-      dependency_packages: ${{ steps.pins.outputs.dependency_packages }}
+      dependency_builder: ${{ steps.dependencies.outputs.dependency_builder || 'null' }}
+      dependency_packages: ${{ steps.dependencies.outputs.dependency_packages || '{}' }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
       release_stage: ${{ steps.channel.outputs.release_stage }}
@@ -578,18 +578,6 @@ jobs:
           PY
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Check out pinned dependency-builder source
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || steps.destinations.outputs.source_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-          path: pinned-builder
-          sparse-checkout: |
-            scripts/
-            uv.lock
-          sparse-checkout-cone-mode: false
-
       - name: Pin ci-metadata, ROUTE, and Ports identities
         id: pins
         env:
@@ -616,72 +604,103 @@ jobs:
           if [ "$INPUT_SOURCE" = "release/3.3" ]; then
             ROUTE_MATRIX=$(printf '%s' "$ROUTE_MATRIX" | jq -ce 'map(.extra_pkgs = [])')
           fi
-          PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
-          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
-          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$SOURCE_SHA")"
-          DEPENDENCY_PACKAGES='{}'
           ORIGINS=$(printf '%s' "$ROUTE_MATRIX" | jq -r '[.[].extra_pkgs[]?] | unique[]')
           if [ -n "$ORIGINS" ]; then
-            PORTS_DIR="$RUNNER_TEMP/dependency-identity-ports"
-            git clone --filter=blob:none --no-checkout --depth 1 \
-              --branch pfblockerng/use-github \
-              https://github.com/pfBlockerNG/FreeBSD-ports "$PORTS_DIR"
-            git -C "$PORTS_DIR" sparse-checkout init --cone
-            for ORIGIN in $ORIGINS; do
-              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
-            done
-            git -C "$PORTS_DIR" checkout --detach "$PORTS_SHA"
-            ROW_COUNT=$(printf '%s' "$ROUTE_MATRIX" | jq 'length')
-            ROW_INDEX=0
-            while [ "$ROW_INDEX" -lt "$ROW_COUNT" ]; do
-              ROW=$(printf '%s' "$ROUTE_MATRIX" | jq -ce ".[$ROW_INDEX]")
-              SUFFIX=$(printf '%s' "$ROW" | jq -r '"-" + .variant + "-" + .pfsense_version + ".pkg"')
-              PY_FLAVOR=$(printf '%s' "$ROW" | jq -r '.py_flavor')
-              FREEBSD_MAJOR=$(printf '%s' "$ROW" | jq -r '.freebsd_major')
-              ROW_ORIGINS=$(printf '%s' "$ROW" | jq -r '.extra_pkgs[]?')
-              for ORIGIN in $ROW_ORIGINS; do
-                IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
-                  --print-port-identity \
-                  --ports "$PORTS_DIR" \
-                  --ports-sha "$PORTS_SHA" \
-                  --port "$ORIGIN")
-                DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" | jq -ce \
-                  --argjson current "$DEPENDENCY_PACKAGES" \
-                  --arg suffix "$SUFFIX" \
-                  --arg origin "$ORIGIN" \
-                  --arg py_flavor "$PY_FLAVOR" \
-                  --arg freebsd_major "$FREEBSD_MAJOR" \
-                  --arg ports_sha "$PORTS_SHA" \
-                  --argjson source_date_epoch "$SOURCE_DATE_EPOCH" \
-                  --argjson toolchain "$DEPENDENCY_BUILDER" \
-                  'if .port_origin != $origin then error("dependency origin mismatch")
-                   else . as $recipe
-                   | ($py_flavor + "-" + $recipe.portname) as $package_name
-                   | ($recipe | del(.port_origin) + {
-                       package_name: $package_name,
-                       package_version: $recipe.port_version,
-                       filename: ($package_name + "-" + $recipe.port_version + $suffix),
-                       freebsd_ports_sha: $ports_sha,
-                       source_date_epoch: $source_date_epoch,
-                       toolchain: $toolchain,
-                       abi: ("FreeBSD:" + $freebsd_major + ":*"),
-                       freebsd_major: $freebsd_major,
-                       py_flavor: $py_flavor
-                     }) as $identity
-                   | $current + {
-                       ($suffix): (($current[$suffix] // {}) + {($origin): $identity})
-                     }
-                   end')
-              done
-              ROW_INDEX=$((ROW_INDEX + 1))
-            done
+            HAS_DEPENDENCIES=true
+          else
+            HAS_DEPENDENCIES=false
           fi
           {
             echo "ci_metadata_sha=${CI_METADATA_SHA}"
             echo "ports_sha=${PORTS_SHA}"
+            echo "route_matrix=${ROUTE_MATRIX}"
+            echo "source_date_epoch=$(git show -s --format=%ct "$SOURCE_SHA")"
+            echo "has_dependencies=${HAS_DEPENDENCIES}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out pinned dependency-builder source
+        if: steps.pins.outputs.has_dependencies == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || steps.destinations.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: pinned-builder
+          sparse-checkout: |
+            scripts/
+            uv.lock
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve dependency identities
+        id: dependencies
+        if: steps.pins.outputs.has_dependencies == 'true'
+        env:
+          ROUTE_MATRIX: ${{ steps.pins.outputs.route_matrix }}
+          PORTS_SHA: ${{ steps.pins.outputs.ports_sha }}
+          SOURCE_DATE_EPOCH: ${{ steps.pins.outputs.source_date_epoch }}
+        run: |
+          set -eu
+          PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
+          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
+          DEPENDENCY_PACKAGES='{}'
+          ORIGINS=$(printf '%s' "$ROUTE_MATRIX" | jq -r '[.[].extra_pkgs[]?] | unique[]')
+          [ -n "$ORIGINS" ] || { echo "::error::dependency identity step has no origins"; exit 1; }
+          PORTS_DIR="$RUNNER_TEMP/dependency-identity-ports"
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            --branch pfblockerng/use-github \
+            https://github.com/pfBlockerNG/FreeBSD-ports "$PORTS_DIR"
+          git -C "$PORTS_DIR" sparse-checkout init --cone
+          for ORIGIN in $ORIGINS; do
+            git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+          done
+          git -C "$PORTS_DIR" checkout --detach "$PORTS_SHA"
+          ROW_COUNT=$(printf '%s' "$ROUTE_MATRIX" | jq 'length')
+          ROW_INDEX=0
+          while [ "$ROW_INDEX" -lt "$ROW_COUNT" ]; do
+            ROW=$(printf '%s' "$ROUTE_MATRIX" | jq -ce ".[$ROW_INDEX]")
+            SUFFIX=$(printf '%s' "$ROW" | jq -r '"-" + .variant + "-" + .pfsense_version + ".pkg"')
+            PY_FLAVOR=$(printf '%s' "$ROW" | jq -r '.py_flavor')
+            FREEBSD_MAJOR=$(printf '%s' "$ROW" | jq -r '.freebsd_major')
+            ROW_ORIGINS=$(printf '%s' "$ROW" | jq -r '.extra_pkgs[]?')
+            for ORIGIN in $ROW_ORIGINS; do
+              IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
+                --print-port-identity \
+                --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
+                --port "$ORIGIN")
+              DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" | jq -ce \
+                --argjson current "$DEPENDENCY_PACKAGES" \
+                --arg suffix "$SUFFIX" \
+                --arg origin "$ORIGIN" \
+                --arg py_flavor "$PY_FLAVOR" \
+                --arg freebsd_major "$FREEBSD_MAJOR" \
+                --arg ports_sha "$PORTS_SHA" \
+                --argjson source_date_epoch "$SOURCE_DATE_EPOCH" \
+                --argjson toolchain "$DEPENDENCY_BUILDER" \
+                'if .port_origin != $origin then error("dependency origin mismatch")
+                 else . as $recipe
+                 | ($py_flavor + "-" + $recipe.portname) as $package_name
+                 | ($recipe | del(.port_origin) + {
+                     package_name: $package_name,
+                     package_version: $recipe.port_version,
+                     filename: ($package_name + "-" + $recipe.port_version + $suffix),
+                     freebsd_ports_sha: $ports_sha,
+                     source_date_epoch: $source_date_epoch,
+                     toolchain: $toolchain,
+                     abi: ("FreeBSD:" + $freebsd_major + ":*"),
+                     freebsd_major: $freebsd_major,
+                     py_flavor: $py_flavor
+                   }) as $identity
+                 | $current + {
+                     ($suffix): (($current[$suffix] // {}) + {($origin): $identity})
+                   }
+                 end')
+            done
+            ROW_INDEX=$((ROW_INDEX + 1))
+          done
+          {
             echo "dependency_builder=${DEPENDENCY_BUILDER}"
             echo "dependency_packages=${DEPENDENCY_PACKAGES}"
-            echo "route_matrix=${ROUTE_MATRIX}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Read matrix from ci-metadata
@@ -1209,15 +1228,29 @@ jobs:
           ref: ${{ needs.prepare-release.outputs.sha || needs.read-matrix.outputs.source_sha }}
           persist-credentials: false
 
+      - name: Resolve release-line extras
+        id: extras
+        env:
+          SOURCE: ${{ github.event.inputs.source }}
+          MATRIX_EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
+        run: |
+          set -eu
+          case "$SOURCE" in
+            release/3.3) EXTRA_PKGS='[]' ;;
+            *) EXTRA_PKGS="$MATRIX_EXTRA_PKGS" ;;
+          esac
+          EXTRA_PKGS="$(printf '%s' "$EXTRA_PKGS" | jq -c .)"
+          printf 'extra_pkgs=%s\n' "$EXTRA_PKGS" >> "$GITHUB_OUTPUT"
+
       - name: Set up the pinned dependency-package toolchain
-        if: github.event.inputs.source != 'release/3.3'
+        if: steps.extras.outputs.extra_pkgs != '[]'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.6"
           activate-environment: true
 
       - name: Sync the locked dependency-package toolchain
-        if: github.event.inputs.source != 'release/3.3'
+        if: steps.extras.outputs.extra_pkgs != '[]'
         run: uv sync --locked --only-group dep-pkg-build
 
       - name: Compute this leg's LEG/ABI
@@ -1251,20 +1284,6 @@ jobs:
           else
             git tag "${TAG}" "$COMMIT"
           fi
-
-      - name: Resolve release-line extras
-        id: extras
-        env:
-          SOURCE: ${{ github.event.inputs.source }}
-          MATRIX_EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
-        run: |
-          set -eu
-          case "$SOURCE" in
-            release/3.3) EXTRA_PKGS='[]' ;;
-            *) EXTRA_PKGS="$MATRIX_EXTRA_PKGS" ;;
-          esac
-          EXTRA_PKGS="$(printf '%s' "$EXTRA_PKGS" | jq -c .)"
-          printf 'extra_pkgs=%s\n' "$EXTRA_PKGS" >> "$GITHUB_OUTPUT"
 
       - name: Write the destination-bound build record
         env:
