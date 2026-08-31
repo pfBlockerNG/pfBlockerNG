@@ -5,8 +5,8 @@
     "add": "Add an entry when a new pfSense beta or GA lands (curated — a human edits this file). Set status='beta' until the release is GA.",
     "drop_ce": "Drop the oldest CE entry only when the newest CE goes GA. The supported window is always (previous GA CE + current GA CE), transiently +1 during an active beta.",
     "plus": "Plus runs in CI from a PRIVATE, licensed GHCR image (ghcr.io/pfblockerng/pfsense-plus). To enable: set ci=true + image_name=pfsense-plus. The VM identity (NIC MAC + SMBIOS uuid, which the Netgate Device ID is keyed to) comes from the SMOKE_PLUS_MAC + SMOKE_PLUS_SMBIOS_UUID repo secrets, NEVER this matrix; the smoke harness redacts that identity from the uploaded diagnostics. Image refresh covers CE AND Plus (image-refresh.yml is a CE+Plus matrix gated per variant on upgrade.available); scripts/image-publish.sh remains the manual fallback (gate failure, or the initial Plus image seed) (ADR-24).",
-    "arm": "RETIRED (issue #1806): there is no `arch` field any more. Every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build already serves every CPU arch (incl. aarch64) of a FreeBSD major — a separate ARM entry/build was never actually needed. Netgate ARM appliances run pfSense Plus on the SAME freebsd_major as its amd64 build; no matrix change is required to support them.",
-    "extra_pkgs": "Optional array of port origins (e.g. [\"textproc/py-charset-normalizer\"]) this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry sharing that freebsd_major. Omit or [] when the edition's own repo already carries everything.",
+    "arm": "RETIRED (issue #1806): there is no `arch` field any more. Every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build already serves every CPU arch (incl. aarch64) of a runtime tuple — a separate ARM entry/build was never actually needed. Netgate ARM appliances use the same (freebsd_major, php_version, py_flavor) tuple as an amd64 build; no matrix change is required to support them.",
+    "extra_pkgs": "Optional array of port origins (e.g. [\"textproc/py-charset-normalizer\"]) this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry sharing the exact (freebsd_major, php_version, py_flavor) runtime tuple. Omit or [] when the edition's own repo already carries everything.",
     "eol_route_only": "ADR-27 Part 2: when a pfSense version is EOL'd but still has installs in the field, set role='route-only' (instead of dropping the entry) + ci=false + last_tag=<the GitHub Release tag holding its last .pkg>. It is then no longer built or smoked, but its last .pkg stays served from a frozen catalog so existing installs keep receiving it; the reader keeps it out of --print-build/-ci/-test and only in --print-route. Absent role = 'build' (normal). No route-only entry exists yet — this is forward-looking.",
     "image_upgrade": "Set upgrade.available=true on an entry to make image-refresh.yml (Upgrade pfSense smoke images) upgrade that variant's published GHCR image. 'available' does NOT mean 'this version is released' — it means a NEWER public build (pre-release/GA/patch) exists than the image we currently publish for this floating tag; set it when such a build appears and reset to false once the refresh has published it (so most days the refresh is a no-op). Optional sub-fields: upgrade.branch = a pfSense update-branch name (from pkg_list_repos()) to switch to for a pre-release/development build (omit = stay on the configured stable branch); upgrade.target = informational target version; upgrade.from = source floating tag to upgrade FROM (defaults to this entry's own tag = self-replace; set to the prior Major.Minor only when bootstrapping a brand-new image). Absent block or available=false => the variant is skipped.",
     "ci_metadata_pr": "Changes to this file should be made via a PR against ci-metadata (branch-protected) so there is a git audit trail (diff/blame/rollback) without touching main/devel.",
@@ -26,6 +26,22 @@
       "extra_pkgs": [
         "textproc/py-charset-normalizer"
       ],
+      "upgrade": {
+        "available": false
+      }
+    },
+    {
+      "pfsense_version": "25.11",
+      "channel": "Plus",
+      "freebsd_version": "16.0-RELEASE",
+      "freebsd_major": "16",
+      "php_version": "8.4",
+      "py_flavor": "py311",
+      "variant": "Plus",
+      "status": "active",
+      "ci": false,
+      "image_name": "pfsense-plus",
+      "extra_pkgs": [],
       "upgrade": {
         "available": false
       }
