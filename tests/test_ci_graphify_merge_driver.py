@@ -25,6 +25,7 @@ _GIT_MUTATION_RE = re.compile(
 )
 _GH_MUTATION_RE = re.compile(r"^gh\s+pr\s+merge(?:\s|$)")
 _WRAPPER_MUTATION_RE = re.compile(r"^sh\s+\S*scripts/(?:publish-pkg-repo|render-pkg-site)\.sh(?:\s|$)")
+_TAG_ONLY_PUSH_RE = re.compile(r"""^git\s+push\s+origin\s+["']?refs/tags/""")
 
 
 @dataclass(frozen=True)
@@ -78,13 +79,6 @@ PUSH_JOBS = (
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$1"',
         checkout_groups=(("uses: actions/checkout@v6",),),
-    ),
-    PushJob(
-        "release.yml",
-        "tag-release",
-        "sh scripts/agent/ensure-graphify-merge-driver.sh .",
-        'git push origin "refs/tags/${TAG}"',
-        checkout_groups=(("uses: actions/checkout@v6", "ref: ${{ needs.prepare-release.outputs.sha }}"),),
     ),
     PushJob(
         "release-published.yml",
@@ -150,6 +144,8 @@ def _command_step(steps: list[str], command: str, label: str) -> int:
 def _first_mutation(steps: list[str]) -> tuple[int, str] | None:
     for index, step in enumerate(steps):
         for command in _run_commands(step):
+            if _TAG_ONLY_PUSH_RE.match(command):
+                continue
             if _GIT_MUTATION_RE.match(command) or _GH_MUTATION_RE.match(command) or _WRAPPER_MUTATION_RE.match(command):
                 return index, command
     return None
@@ -223,12 +219,12 @@ def _discovered_driver_jobs() -> set[tuple[str, str]]:
 
 def test_exhaustive_push_matrix_has_graphify_driver_before_each_mutation() -> None:
     expected = {(spec.workflow, spec.job) for spec in PUSH_JOBS}
-    assert len(PUSH_JOBS) == len(expected) == 8, "issue #2713 defines 8 unique mutating jobs"
+    assert len(PUSH_JOBS) == len(expected) == 7, "issue #2713 defines 7 branch/content mutation jobs"
     assert _discovered_mutation_jobs() == expected, (
-        "the workflow push/pull/merge inventory changed; update the issue #2713 matrix"
+        "the workflow branch/content push/pull/merge inventory changed; update the issue #2713 matrix"
     )
     assert _discovered_driver_jobs() == expected, (
-        "Graphify merge-driver setup exists outside the 8 push/pull/merge jobs"
+        "Graphify merge-driver setup exists outside the 7 branch/content mutation jobs"
     )
 
     failures: list[str] = []
@@ -324,6 +320,12 @@ def test_comments_cannot_spoof_tool_pins_or_checkout_paths() -> None:
 def test_mutation_scanner_recognizes_every_guarded_command_class(command: str) -> None:
     job = f"      - name: Mutate\n        run: {command}\n"
     assert _first_mutation(_steps(job)) == (0, command)
+
+
+def test_tag_ref_push_does_not_require_a_content_merge_driver() -> None:
+    command = 'git push origin "refs/tags/${TAG}"'
+    job = f"      - name: Push tag\n        run: {command}\n"
+    assert _first_mutation(_steps(job)) is None
 
 
 def test_driver_scanner_distinguishes_a_nonmutating_job() -> None:

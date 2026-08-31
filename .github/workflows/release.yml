@@ -784,12 +784,6 @@ jobs:
           fetch-depth: 0             # full history + tags: the resume check below
           persist-credentials: true  # need to push the tag via GITHUB_TOKEN
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Install the Graphify merge driver
-        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
-
       - name: Create + push the tag on the verified commit
         id: tag
         # RESUME semantics, narrowed to the crash-after-tag window: the only
