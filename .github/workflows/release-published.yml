@@ -78,14 +78,14 @@ jobs:
           [ -n "${DISPATCHED_RELEASE_TAG}" ] || { echo "::error::release_tag must not be empty"; exit 1; }
           RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${DISPATCHED_RELEASE_ID}") || {
             echo "::error::cannot resolve Release ID ${DISPATCHED_RELEASE_ID} in ${GITHUB_REPOSITORY}"; exit 1; }
-          export RELEASE_JSON DISPATCHED_RELEASE_ID DISPATCHED_RELEASE_TAG GITHUB_OUTPUT
+          export DISPATCHED_RELEASE_ID DISPATCHED_RELEASE_TAG GITHUB_OUTPUT
           printf '%s' "${RELEASE_JSON}" | python3 -c '
           import json
           import os
           import sys
 
           try:
-              release = json.loads(os.environ["RELEASE_JSON"])
+              release = json.load(sys.stdin)
           except ValueError:
               sys.exit("::error::the resolved Release payload is not valid JSON")
 
@@ -105,6 +105,8 @@ jobs:
               refuse(f"Release ID {dispatched_id} resolved to a different Release (id {resolved_id})")
           if not isinstance(resolved_tag, str) or not resolved_tag:
               refuse(f"Release ID {dispatched_id} resolved to a Release without a tag")
+          if any(ord(character) < 32 or ord(character) == 127 for character in resolved_tag):
+              refuse(f"Release ID {dispatched_id} carries control characters in its tag")
           if resolved_tag != dispatched_tag:
               refuse(f"Release ID {dispatched_id} carries tag {resolved_tag}, not the dispatched {dispatched_tag}")
           if draft is not False:

@@ -117,11 +117,16 @@ def test_changelog_skill_dispatches_and_watches_the_exact_downstream_run() -> No
         "Dispatch `release-published.yml`",
         "`release_id`",
         "`release_tag`",
+        "publish response",
+        "never from a re-derivation",
+        "default branch",
+        "dispatch response",
         "exact downstream run ID",
         "attempt",
         "wait for every job",
         "Ports fork bump",
         "pfBlockerNG/pkg ingest",
+        "before any redispatch",
         "never republish the same version",
     )
     missing = [phrase for phrase in required if phrase not in content]

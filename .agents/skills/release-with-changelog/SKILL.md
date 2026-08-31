@@ -80,10 +80,12 @@ do not invent a predecessor or use an unrelated global tag. Omit empty or intern
    `workflow_dispatch` inputs `release_id` and `release_tag` set to the published
    Release's exact ID and tag, on the default branch. Obtain the exact Release ID
    from the publish response, never from a re-derivation. Record the exact downstream run ID
-   and attempt, and wait for every job in that run to finish. Report the Ports fork bump
-   and the pfBlockerNG/pkg ingest outcomes from that run. A failed or cancelled downstream
-   run is a failed publication: never republish the same version, and never leave the
-   downstream outcome unobserved.
+   and attempt from the dispatch response. If the dispatch response is missing or ambiguous,
+   inspect existing runs for that dispatch before any redispatch; never retry blindly. Then
+   wait for every job in that exact run to finish. Report the Ports fork bump and the
+   pfBlockerNG/pkg ingest outcomes from that run. A failed or cancelled
+   downstream run is a failed publication: never republish the same version, and never
+   leave the downstream outcome unobserved.
 
 Nightly input identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 Every scheduled or manual invocation builds `YYYYMMDDHHMMSS.<7-character source SHA>` using UTC.

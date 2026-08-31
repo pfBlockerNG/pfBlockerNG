@@ -93,15 +93,15 @@ def test_issue_2388_ports_sync_runs_only_after_published_release_resolution() ->
     release_jobs = _workflow_jobs(ROOT / ".github/workflows/release.yml")
     published_jobs = _workflow_jobs(published_path)
     assert "sync-ports-fork" not in release_jobs, "the draft workflow must stop at the complete draft"
-    assert "sync-ports-fork" in published_jobs, "publishing must trigger the FreeBSD-ports bump"
+    assert "sync-ports-fork" in published_jobs, "explicit post-publication dispatch must run the FreeBSD-ports bump"
     job_names = list(published_jobs)
     assert job_names.index("sync-ports-fork") == job_names.index("resolve") + 1
     concurrency = extract_between(published, "\nconcurrency:\n", "\njobs:\n")
-    assert "  queue: max" in concurrency, "every published release must keep its queued ports bump"
+    assert "  queue: max" in concurrency, "every dispatched release must keep its queued ports bump"
 
     sync = "\n".join(published_jobs["sync-ports-fork"])
     assert re.search(r"^    needs: \[resolve\]$", sync, re.MULTILINE), sync
-    assert "dry_run" not in sync, "the published event has no draft-workflow dry-run gate"
+    assert "dry_run" not in sync, "the post-publication workflow has no draft-workflow dry-run gate"
     for env_name, output in {
         "SOURCE": "source",
         "TAG": "release_tag",

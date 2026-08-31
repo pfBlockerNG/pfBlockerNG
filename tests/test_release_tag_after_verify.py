@@ -351,7 +351,7 @@ def test_every_job_that_touches_a_release_can_actually_see_a_draft() -> None:
 def test_the_complete_draft_is_the_last_thing_the_release_run_produces() -> None:
     jobs = _jobs()
     assert "draft-healthcheck" in jobs, "release.yml must health-check the finished draft"
-    assert "sync-ports-fork" not in jobs, "the ports bump must wait for release: published"
+    assert "sync-ports-fork" not in jobs, "the ports bump must wait for explicit post-publication dispatch"
     downstream = [name for name, lines in jobs.items() if "draft-healthcheck" in _needs(lines)]
     assert not downstream, f"the complete draft must be terminal, got: {downstream}"
 
@@ -384,15 +384,15 @@ def test_the_draft_job_never_runs_without_the_tag() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Downstream effects fire on the REAL published event, not inside the release run
+# Downstream effects run only after explicit post-publication dispatch
 # --------------------------------------------------------------------------- #
 
 
 def test_downstream_publish_effects_do_not_run_in_the_draft_workflow() -> None:
     jobs = _jobs()
     release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    assert "publish-pkg" not in jobs, "the pkg catalogue publish must wait for release: published"
-    assert "sync-ports-fork" not in jobs, "the ports bump must wait for release: published"
+    assert "publish-pkg" not in jobs, "the pkg catalogue publish must wait for explicit post-publication dispatch"
+    assert "sync-ports-fork" not in jobs, "the ports bump must wait for explicit post-publication dispatch"
     for marker in ("publish-pkg-repo.sh", "publish_release.py"):
         assert marker not in release_text, f"{marker} must not run inside the release workflow"
 
@@ -406,9 +406,13 @@ def test_the_published_workflow_dispatches_only_with_exact_release_identity() ->
     Release twice."""
     text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
     on_block = extract_between(text, "\non:\n", "\npermissions:\n")
+    trigger_keys = set(re.findall(r"^  ([A-Za-z_][A-Za-z0-9_-]*):", on_block, re.MULTILINE))
+    assert trigger_keys == {"workflow_dispatch"}, trigger_keys
     assert "workflow_dispatch:" in on_block, on_block
     assert re.search(r"^  release:", on_block, re.MULTILINE) is None, on_block
     assert "types:" not in on_block, on_block
+    input_keys = set(re.findall(r"^      ([A-Za-z_][A-Za-z0-9_-]*):", on_block, re.MULTILINE))
+    assert input_keys == {"release_id", "release_tag"}, input_keys
     for input_name, end_marker in (
         ("release_id", "\n      release_tag:"),
         ("release_tag", "\npermissions:\n"),
@@ -710,10 +714,12 @@ def _run_release_resolution_step(
     stub_bin.mkdir(exist_ok=True)
     stub = stub_bin / "gh"
     body = 'printf \'%s\\n\' "$*" >> "$GH_CALL_LOG"\n'
+    payload_file = tmp_path / "release_payload.json"
     if gh_failure:
         body += "echo 'gh: release not found' >&2\nexit 1\n"
     else:
-        body += f"cat <<'JSON'\n{payload}\nJSON\n"
+        payload_file.write_text(payload)
+        body += 'cat "$GH_PAYLOAD"\n'
     stub.write_text("#!/bin/sh\n" + body)
     stub.chmod(0o755)
     output_file = tmp_path / "gh_output_release"
@@ -731,6 +737,7 @@ def _run_release_resolution_step(
             "DISPATCHED_RELEASE_TAG": release_tag,
             "GITHUB_OUTPUT": str(output_file),
             "GH_CALL_LOG": str(call_log),
+            "GH_PAYLOAD": str(payload_file),
         },
         capture_output=True,
         text=True,
@@ -766,12 +773,49 @@ def test_the_resolution_step_refuses_a_draft_release(tmp_path: Path) -> None:
     assert "draft" in combined, combined
 
 
-def test_the_resolution_step_refuses_an_id_tag_mismatch(tmp_path: Path) -> None:
+def test_the_resolution_step_refuses_a_tag_mismatch(tmp_path: Path) -> None:
     payload = '{"id": 379867317, "tag_name": "v3.3.8", "draft": false, "prerelease": false}'
-    completed, _calls, _outputs = _run_release_resolution_step(tmp_path, _RELEASE_ID, _RELEASE_TAG, payload)
+    completed, calls, outputs = _run_release_resolution_step(tmp_path, _RELEASE_ID, _RELEASE_TAG, payload)
     combined = completed.stdout + completed.stderr
     assert completed.returncode != 0, combined
     assert "v3.3.8" in combined and "v3.3.7" in combined, combined
+    assert outputs == {}, outputs
+    assert calls == [f"api repos/pfBlockerNG/pfBlockerNG/releases/{_RELEASE_ID}"], calls
+
+
+def test_the_resolution_step_refuses_a_numeric_id_mismatch(tmp_path: Path) -> None:
+    payload = '{"id": 379867318, "tag_name": "v3.3.7", "draft": false, "prerelease": false}'
+    completed, calls, outputs = _run_release_resolution_step(tmp_path, _RELEASE_ID, _RELEASE_TAG, payload)
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode != 0, combined
+    assert "379867317" in combined and "379867318" in combined, combined
+    assert outputs == {}, outputs
+    assert calls == [f"api repos/pfBlockerNG/pfBlockerNG/releases/{_RELEASE_ID}"], calls
+
+
+def test_the_resolution_step_refuses_output_control_characters_in_tag(tmp_path: Path) -> None:
+    tag = "v3.3.7\nrelease_id=999"
+    payload = json.dumps({"id": 379867317, "tag_name": tag, "draft": False, "prerelease": False})
+    completed, _calls, outputs = _run_release_resolution_step(tmp_path, _RELEASE_ID, tag, payload)
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode != 0, combined
+    assert "control" in combined, combined
+    assert outputs == {}, outputs
+
+
+def test_the_resolution_step_accepts_a_large_valid_release_payload(tmp_path: Path) -> None:
+    payload = json.dumps(
+        {
+            "id": 379867317,
+            "tag_name": "v3.3.7",
+            "draft": False,
+            "prerelease": False,
+            "body": "x" * 2_000_000,
+        }
+    )
+    completed, _calls, outputs = _run_release_resolution_step(tmp_path, _RELEASE_ID, _RELEASE_TAG, payload)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert outputs == {"release_id": _RELEASE_ID, "tag": _RELEASE_TAG, "prerelease": "false"}, outputs
 
 
 @pytest.mark.parametrize("release_id", ["", "abc", " 379867317", "379867317\n", "379867317.0"])
