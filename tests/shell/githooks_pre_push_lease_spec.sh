@@ -121,17 +121,28 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         GNUPGHOME=$gpg_home
         export GNUPGHOME
         if ! gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
-          --quick-generate-key 'A <a@example.com>' ed25519 sign 0 >"${base}/gpg-keygen.log" 2>&1; then
+          --quick-generate-key 'A <a@example.com>' ed25519 cert 0 >"${base}/gpg-keygen.log" 2>&1; then
           cat "${base}/gpg-keygen.log" >&2
           return 1
         fi
-        git_fixture config gpg.format openpgp || return 1
         openpgp_fingerprint=$(
           gpg --batch --with-colons --list-secret-keys 2>/dev/null |
             awk -F: '$1 == "fpr" { print $10; exit }'
         )
         [ -n "$openpgp_fingerprint" ] || return 1
+        if ! gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-add-key "$openpgp_fingerprint" ed25519 sign 0 >"${base}/gpg-subkey.log" 2>&1; then
+          cat "${base}/gpg-subkey.log" >&2
+          return 1
+        fi
+        git_fixture config gpg.format openpgp || return 1
         git_fixture config user.signingkey "$openpgp_fingerprint" || return 1
+        ;;
+      ssh-inline)
+        inline_signing_key=$(cat "${base}/signing_key.pub") || return 1
+        [ -n "$inline_signing_key" ] || return 1
+        git_fixture config user.signingkey "key::${inline_signing_key}" || return 1
+        signing_key_override="${base}/signing_key"
         ;;
       wrong-signer|wrong-key-same-email)
         if [ "$mode" = wrong-signer ]; then
@@ -170,7 +181,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         ;;
     esac
     case "$mode" in
-      wrong-signer|wrong-key-same-email)
+      wrong-signer|wrong-key-same-email|ssh-inline)
         set -- -c core.hooksPath=/dev/null \
           -c "user.signingkey=${signing_key_override}" \
           commit -q -F "${base}/commit-message"
@@ -192,10 +203,24 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
     local_sha=$(git_fixture rev-parse refs/heads/integrity) || return 1
     if [ "$mode" = openpgp ]; then
-      git_fixture log -1 --format='%%G?=%G?%n%%GS=%GS' "$local_sha" || return 1
+      openpgp_metadata=$(
+        git_fixture log -1 --format='%G?|%GS|%GF|%GP' "$local_sha"
+      ) || return 1
+      openpgp_status=${openpgp_metadata%%|*}
+      openpgp_rest=${openpgp_metadata#*|}
+      openpgp_signer=${openpgp_rest%%|*}
+      openpgp_rest=${openpgp_rest#*|}
+      openpgp_signing_fingerprint=${openpgp_rest%%|*}
+      openpgp_primary_fingerprint=${openpgp_rest#*|}
+      [ "$openpgp_status" = G ] || return 1
+      [ "$openpgp_signer" = 'A <a@example.com>' ] || return 1
+      [ "$openpgp_signing_fingerprint" != "$openpgp_primary_fingerprint" ] || return 1
+      [ "$openpgp_primary_fingerprint" = "$openpgp_fingerprint" ] || return 1
+      printf '%%G?=%s\n%%GS=%s\n%%GF!=%%GP=true\n%%GP=configured=true\n' \
+        "$openpgp_status" "$openpgp_signer"
     fi
     case "$mode" in
-      wrong-signer|wrong-key-same-email)
+      wrong-signer|wrong-key-same-email|ssh-inline)
         signature_metadata=$(
           git_fixture log -1 --format='%G?|%GS|%GF' "$local_sha"
         ) || return 1
@@ -206,17 +231,22 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         configured_fingerprint=$(
           ssh-keygen -lf "${base}/signing_key.pub" | awk '{ print $2 }'
         ) || return 1
-        if [ "$mode" = wrong-signer ]; then
-          expected_signer=other@example.com
-        else
-          expected_signer=a@example.com
-        fi
+        case "$mode" in
+          wrong-signer) expected_signer=other@example.com ;;
+          *) expected_signer=a@example.com ;;
+        esac
         [ "$signature_status" = G ] || return 1
         [ "$signature_signer" = "$expected_signer" ] || return 1
         [ -n "$configured_fingerprint" ] || return 1
-        [ "$signature_fingerprint" != "$configured_fingerprint" ] || return 1
-        printf '%%G?=%s\n%%GS=%s\n%%GF!=configured=true\n' \
-          "$signature_status" "$signature_signer"
+        if [ "$mode" = ssh-inline ]; then
+          [ "$signature_fingerprint" = "$configured_fingerprint" ] || return 1
+          printf '%%G?=%s\n%%GS=%s\n%%GF=inline-configured=true\n' \
+            "$signature_status" "$signature_signer"
+        else
+          [ "$signature_fingerprint" != "$configured_fingerprint" ] || return 1
+          printf '%%G?=%s\n%%GS=%s\n%%GF!=configured=true\n' \
+            "$signature_status" "$signature_signer"
+        fi
         ;;
     esac
 
@@ -348,10 +378,19 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     The stderr should equal ''
   End
 
+  It 'allows an SSH-signed commit with an inline configured public key'
+    When call outgoing_agent_hook ssh-inline A a@example.com A a@example.com
+    The status should equal 0
+    The output should equal "$(printf '%s\n%s\n%s' \
+      '%G?=G' '%GS=a@example.com' '%GF=inline-configured=true')"
+    The stderr should equal ''
+  End
+
   It 'allows an OpenPGP-signed outgoing commit from the configured identity'
     When call outgoing_agent_hook openpgp A a@example.com A a@example.com
     The status should equal 0
-    The output should equal "$(printf '%s\n%s' '%G?=G' '%GS=A <a@example.com>')"
+    The output should equal "$(printf '%s\n%s\n%s\n%s' \
+      '%G?=G' '%GS=A <a@example.com>' '%GF!=%GP=true' '%GP=configured=true')"
     The stderr should equal ''
   End
 
