@@ -13,6 +13,9 @@ Describe 'ensure-graphify-merge-driver.sh'
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/ensure-graphify-merge-driver.sh" "$script_home/"
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/ensure-graphify.sh" "$script_home/"
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/agent_env.sh" "$script_home/"
+    if [ -f "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/resolve-graphify.sh" ]; then
+      cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/resolve-graphify.sh" "$script_home/"
+    fi
     script_abs="$script_home/ensure-graphify-merge-driver.sh"
     repo="$fixture/requested-root"
     git_fixture init -q "$repo" || return 1
@@ -23,7 +26,17 @@ Describe 'ensure-graphify-merge-driver.sh'
 
     cat > "$stubdir/uv" <<'UV'
 #!/bin/sh
-printf '%s\n' "$*" >> "$UV_LOG"
+case "$*" in
+  'tool install --upgrade graphifyy>=0.9.51')
+    printf '%s\n' "$*" >> "$UV_LOG"
+    if [ "${UV_PROGRESS_FIXTURE:-0}" = 1 ]; then printf '%s\n' 'uv progress'; fi
+    ;;
+  'tool dir --bin')
+    [ -n "${UV_TOOL_BIN_FIXTURE:-}" ] || exit 9
+    printf '%s\n' "$UV_TOOL_BIN_FIXTURE"
+    ;;
+  *) exit 9 ;;
+esac
 UV
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
@@ -86,6 +99,9 @@ PATCH_GRAPHIFY
       helperdir="$fixture/helper/scripts/agent"
       mkdir -p "$helperdir" "$fixture/helper/scripts/lib"
       cp "$script_abs" "$script_home/ensure-graphify.sh" scripts/agent/agent_env.sh "$helperdir/"
+      if [ -f "$script_home/resolve-graphify.sh" ]; then
+        cp "$script_home/resolve-graphify.sh" "$helperdir/"
+      fi
       cp scripts/lib/git-env-scrub.sh "$fixture/helper/scripts/lib/"
       cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
@@ -97,6 +113,39 @@ PATCH_GRAPHIFY
       The status should equal 0
       The contents of file "$graphify_log" should equal \
         "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
+    End
+
+    It 'uses the off-PATH launcher returned by setup for a foreign target'
+      helperdir="$fixture/off-path-helper/scripts/agent"
+      mkdir -p "$helperdir" "$fixture/off-path-helper/scripts/lib"
+      cp "$script_abs" "$script_home/ensure-graphify.sh" scripts/agent/agent_env.sh "$helperdir/"
+      if [ -f "$script_home/resolve-graphify.sh" ]; then
+        cp "$script_home/resolve-graphify.sh" "$helperdir/"
+      fi
+      cp scripts/lib/git-env-scrub.sh "$fixture/off-path-helper/scripts/lib/"
+      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
+PATCH_GRAPHIFY
+      chmod +x "$helperdir/patch-graphify.sh"
+      rm -rf "$repo/scripts/agent"
+      uv_tool_bin="$fixture/uv tool bin"
+      mkdir -p "$uv_tool_bin"
+      cp "$stubdir/graphify" "$uv_tool_bin/graphify"
+      off_path="$fixture/off path"
+      mkdir -p "$off_path"
+      for tool in dirname git sh; do
+        ln -s "$(command -v "$tool")" "$off_path/$tool"
+      done
+      ln -s "$stubdir/uv" "$off_path/uv"
+      When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
+        UV_PROGRESS_FIXTURE=1 sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
+      The status should equal 0
+      The stderr should include 'uv progress'
+      The contents of file "$graphify_log" should equal \
+        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
       The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
     End
   End

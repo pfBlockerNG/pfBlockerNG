@@ -17,6 +17,8 @@ fail() {
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
+	# shellcheck source=scripts/agent/resolve-graphify.sh
+	. "$(dirname "$0")/resolve-graphify.sh"
 	scrub_git_env "$0"
 	[ "$#" -le 1 ] || usage
 	require_tool git
@@ -38,16 +40,13 @@ main() {
 	[ -f "$patch_graphify" ] ||
 		fail "required target or trusted sibling patch-graphify.sh is missing"
 
-	uv tool install --upgrade 'graphifyy>=0.9.51' || fail 'Graphify installation failed'
-	if ! command -v graphify >/dev/null 2>&1; then
-		uv_tool_bin=$(uv tool dir --bin) ||
-			fail 'cannot resolve uv tool executable directory'
-		[ -x "$uv_tool_bin/graphify" ] ||
-			fail "Graphify launcher '$uv_tool_bin/graphify' is not executable after installation"
-		PATH="$uv_tool_bin:$PATH"
-		export PATH
-	fi
-	sh "$patch_graphify" || fail "Graphify language-override patch failed for '$root'"
+	uv tool install --upgrade 'graphifyy>=0.9.51' 1>&2 ||
+		fail 'Graphify installation failed'
+	graphify_bin=$(resolve_graphify_launcher) ||
+		fail 'cannot resolve the installed Graphify launcher'
+	sh "$patch_graphify" ||
+		fail "Graphify language-override patch failed for '$root'"
+	printf '%s\n' "$graphify_bin"
 }
 
 main "$@"

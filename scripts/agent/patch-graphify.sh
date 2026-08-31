@@ -32,6 +32,8 @@ fail() {
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
+	# shellcheck source=scripts/agent/resolve-graphify.sh
+	. "$(dirname "$0")/resolve-graphify.sh"
 
 	# The script and its patch always ship together, so the patch comes from this
 	# script's own checkout -- a worktree cut from a branch that predates the patch
@@ -41,17 +43,13 @@ main() {
 	[ -f "$patch_file" ] || fail "vendored patch '$patch_file' is missing"
 
 	require_tool sed
-	graphify_bin=$(command -v graphify) ||
-		fail "Graphify is not installed; run 'uv tool install --upgrade graphifyy' first"
-	# The interpreter that owns the package is read off the CLI's own shebang -- never
-	# hardcoded, and never the ambient python3. A wrapper or shim must fail closed:
-	# another interpreter could patch an unrelated package and report success.
-	interpreter=$(sed -n '1s/^#![[:space:]]*//p' "$graphify_bin")
-	interpreter=${interpreter%% *}
-	case "$interpreter" in
-		/*python*) ;;
-		*) fail "'$graphify_bin' does not name a Python interpreter on its shebang; reinstall the direct uv launcher with 'uv tool install --reinstall graphifyy'" ;;
-	esac
+	graphify_bin=$(resolve_graphify_launcher) || exit 1
+	# Direct Python shebangs identify their owning environment. uv emits a precise
+	# /bin/sh trampoline when that environment path contains spaces; the shared
+	# resolver accepts only uv's selected launcher and derives its interpreter from
+	# the graphifyy tool directory. Arbitrary wrappers remain authoritative and fail.
+	interpreter=$(resolve_graphify_interpreter "$graphify_bin") ||
+		fail "'$graphify_bin' does not name a Python interpreter on its shebang or a validated uv trampoline; reinstall it with 'uv tool install --reinstall graphifyy'"
 
 	# Both probes run isolated (-I), which since Python 3.4 keeps the caller's directory
 	# off sys.path and, by implying -E and -s, keeps PYTHONPATH and the user site

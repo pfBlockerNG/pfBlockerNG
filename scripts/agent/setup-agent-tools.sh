@@ -174,7 +174,7 @@ setup_serena_client() {
 
 setup_graphify_client() {
 	# Integration and platform-skill installers are separate update surfaces.
-	(cd "$HOME" && graphify "$1" install && graphify install --platform "$1")
+	(cd "$HOME" && "$graphify_bin" "$1" install && "$graphify_bin" install --platform "$1")
 }
 
 configure_agents() {
@@ -189,9 +189,9 @@ configure_agents() {
 		setup_graphify_client codex
 	fi
 	if command -v grok >/dev/null 2>&1; then
-		(cd "$HOME" && graphify agents install)
+		(cd "$HOME" && "$graphify_bin" agents install)
 		setup_serena_client grok grok
-		(cd "$HOME" && graphify install --platform agents)
+		(cd "$HOME" && "$graphify_bin" install --platform agents)
 		if ! grok mcp doctor codegraph --json >/dev/null 2>&1; then
 			grok mcp remove codegraph >/dev/null 2>&1 || true
 			grok mcp add codegraph -- codegraph serve --mcp
@@ -211,6 +211,8 @@ main() {
 
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
+	# shellcheck source=scripts/agent/resolve-graphify.sh
+	. "$(dirname "$0")/resolve-graphify.sh"
 	scrub_git_env "$0"
 	require_tool uname
 	platform=$(uname -s)
@@ -276,7 +278,8 @@ main() {
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
 	require_tool serena
-	require_tool graphify
+	graphify_bin=$(resolve_graphify_launcher) ||
+		fail 'cannot resolve the installed Graphify launcher'
 	require_tool ast-grep
 	require_tool semgrep
 

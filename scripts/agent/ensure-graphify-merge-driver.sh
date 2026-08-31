@@ -24,11 +24,11 @@ main() {
 	}
 
 	# The hook rebuilds the graph, so the shared installer applies the override first.
-	sh "$(dirname "$0")/ensure-graphify.sh" "$root" || {
+	graphify_bin=$(sh "$(dirname "$0")/ensure-graphify.sh" "$root") || {
 		echo "ensure-graphify-merge-driver.sh: Graphify setup failed for '$root'" >&2
 		exit 1
 	}
-	(cd "$root" && graphify hook install) || {
+	(cd "$root" && "$graphify_bin" hook install) || {
 		echo "ensure-graphify-merge-driver.sh: Graphify hook installation failed in '$root'" >&2
 		exit 1
 	}
