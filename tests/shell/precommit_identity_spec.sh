@@ -22,7 +22,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
     gitc config user.email 'andrebrait@gmail.com'
     gitc config commit.gpgsign true
     gitc config gpg.format ssh
-    : > "$repo/key.pub"
+    true > "$repo/key.pub"
     gitc config user.signingkey "$repo/key.pub"
     mkdir -p "$repo/.githooks"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
@@ -69,6 +69,12 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
     When run env GIT_AUTHOR_NAME=verifier sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
     The status should equal 1
     The stderr should include "[check-commit-identity] FAILED: author name is a generic placeholder: 'verifier'"
+  End
+
+  It 'rejects a placeholder author email from GIT_AUTHOR_EMAIL despite valid config'
+    When run env GIT_AUTHOR_EMAIL=b@localhost sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
+    The status should equal 1
+    The stderr should include "[check-commit-identity] FAILED: author email domain is a placeholder or empty: 'b@localhost'"
   End
 
   It 'rejects a missing author name'
@@ -202,7 +208,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
   End
 
   It 'rejects an unreadable SSH signing key path'
-    : > "$repo/locked.pub"
+    true > "$repo/locked.pub"
     chmod 000 "$repo/locked.pub"
     gitc config user.signingkey "$repo/locked.pub"
     When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
@@ -211,7 +217,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
   End
 
   It 'accepts a readable SSH signing key path containing spaces'
-    : > "$repo/my key file.pub"
+    true > "$repo/my key file.pub"
     gitc config user.signingkey "$repo/my key file.pub"
     When run sh -c "cd '$repo' && sh .githooks/check-commit-identity.sh"
     The status should equal 0

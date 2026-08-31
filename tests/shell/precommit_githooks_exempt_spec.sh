@@ -30,7 +30,7 @@ scripts/agent/check-agent-config-parity.sh'
     gitc config user.email t@t
     gitc config commit.gpgsign true
     gitc config gpg.format ssh
-    : > "$repo/key.pub"
+    true > "$repo/key.pub"
     gitc config user.signingkey "$repo/key.pub"
     mkdir -p "$repo/.githooks" "$repo/scripts" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
