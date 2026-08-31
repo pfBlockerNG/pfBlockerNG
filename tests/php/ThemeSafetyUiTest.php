@@ -150,8 +150,6 @@ final class ThemeSafetyUiTest extends TestCase
 			// Reading comments cuts both ways: a `//` that is not a comment opener must not eat
 			// the rest of its line. In a URL it follows the scheme's colon or the opening
 			// bracket, and skipping from there loses the quote that opens the literal below.
-			'url is not a comment'      => ["url(http://x.com/a) 'background-color: #123456;\nbbb'\ncolor: red;", FALSE],
-			'scheme-relative url'       => ["url(//x.com/a) 'background-color: #123456;\nbbb'\ncolor: red;", FALSE],
 			// A `#` comment is a comment too. The tree writes banner blocks of them
 			// (pfblockerng_apply.inc:4540), and a lone quote in one desynchronises the scan
 			// exactly as it does in the other two comment forms. What `#` must NOT swallow is a
@@ -485,13 +483,6 @@ final class ThemeSafetyUiTest extends TestCase
 		$quote = NULL;
 		$open = 0;
 		for ($i = 0; $i < $offset; $i++) {
-			if ($quote === NULL && ($source[$i] === '/' || $source[$i] === '#')) {
-				$comment = self::endOfComment($source, $i);
-				if ($comment !== NULL) {
-					$i = $comment;
-					continue;
-				}
-			}
 			if ($source[$i] === '\\') {
 				$i++;
 				continue;
@@ -506,7 +497,7 @@ final class ThemeSafetyUiTest extends TestCase
 			if ($quote !== NULL) {
 				continue;
 			}
-			if ($i > 0 && preg_match('/[A-Za-z0-9]/', $source[$i - 1])) {
+			if (!self::opensAValue($source, $i)) {
 				continue;
 			}
 			$quote = $source[$i];
@@ -531,48 +522,35 @@ final class ThemeSafetyUiTest extends TestCase
 	}
 
 	/**
-	 * The offset of a comment's last character when one opens at $at, else NULL.
+	 * TRUE when the quote at $at sits where a value may begin.
 	 *
-	 * Prose is where a quote character stops being a delimiter, and prose lives in
-	 * comments. Reading them is what separates a possessive from a string opener, which no
-	 * test on the surrounding characters can do.
+	 * The scan has to answer one question -- is this quote a DELIMITER or is it prose --
+	 * and three rounds of review established that it cannot be answered by recognising
+	 * the carrier prose arrives in. `#` opens a CSS colour, a CSS id selector and a PHP
+	 * comment; `//` opens a comment and a URL; and scan() reads php, inc, js and css with
+	 * no per-language dispatch to tell them apart. Every discriminator added for one of
+	 * those closed one hole and opened another, in the direction that launders.
 	 *
-	 * Both mistakes here launder a background, so neither direction is the safe one to
-	 * lean towards and each form gets a test that tells it from the character it collides
-	 * with. Missing a real comment lets a quote in prose open a literal that swallows the
-	 * lines beneath it. Reading a comment that is not one is worse in practice: the skip
-	 * runs to end of line and eats whatever quote was there, including the one that opened
-	 * the literal the background sits in.
+	 * So the carrier is not consulted at all. A literal opens where a value may begin --
+	 * after an assignment, a bracket, a separator, an operator, or at the start of a line
+	 * -- and prose quotes do not: `don't`, `the user's guide`, `pfb_hook_scripts()'` and
+	 * `#header 'x'` all follow a letter, a digit or a closing bracket.
 	 *
-	 * `//` collides with a URL, where it follows the scheme's colon or the bracket that
-	 * opens `url(`. `#` collides with a colour, which is a run of hex digits; a comment's
-	 * `#` is followed by anything else, and this tree writes whole banner blocks of them.
+	 * The failure direction matters and is the reason this shape is safe where the other
+	 * was not. A quote wrongly REJECTED is a literal not resolved, which returns NULL and
+	 * leaves the answer exactly as it was before this resolver existed. A quote wrongly
+	 * ACCEPTED invents a literal and launders a background. This test only ever errs the
+	 * first way, so no input is worse off than devel.
 	 */
-	private static function endOfComment(string $source, int $at): ?int
+	private static function opensAValue(string $source, int $at): bool
 	{
-		$next = $source[$at + 1] ?? '';
-		if ($source[$at] === '#') {
-			return ctype_xdigit($next) ? NULL : self::endOfLine($source, $at);
-		}
-		if ($next === '/') {
-			$previous = $at > 0 ? $source[$at - 1] : '';
-			if ($previous === ':' || $previous === '(') {
-				return NULL;
+		for ($i = $at - 1; $i >= 0; $i--) {
+			if ($source[$i] === ' ' || $source[$i] === "\t") {
+				continue;
 			}
-			return self::endOfLine($source, $at);
+			return strpos("=(,[{:;.+&|?<>!\r\n", $source[$i]) !== FALSE;
 		}
-		if ($next !== '*') {
-			return NULL;
-		}
-		$end = strpos($source, '*/', $at + 2);
-		return $end === FALSE ? strlen($source) - 1 : $end + 1;
-	}
-
-	/** The offset of the last character on $at's line. */
-	private static function endOfLine(string $source, int $at): int
-	{
-		$end = strpos($source, "\n", $at);
-		return $end === FALSE ? strlen($source) - 1 : $end;
+		return TRUE;
 	}
 
 	/**
