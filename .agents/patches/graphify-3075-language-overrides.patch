@@ -5,8 +5,18 @@
 #
 # The PR's tests/test_language_overrides.py and README.md hunks are stripped: the
 # published wheel ships neither, so they cannot apply to an installed package.
-diff --git a/graphify/cache.py b/graphify/cache.py
-index 8fb168ce3..440993882 100644
+#
+# This patch SURVIVES AN UPGRADE ONLY IN HALF, which is its most dangerous property.
+# graphify/rcfile.py is created here from /dev/null, so it is absent from the wheel's
+# RECORD and `uv tool install --upgrade` leaves it in place as an orphan. The five
+# files this patch MODIFIES are owned by the wheel, so the same upgrade replaces them
+# and silently reverts their hunks. The install is then left with the override API
+# present and wired into nothing: detect.classify_file reads path.suffix again and
+# .inc extracts as Pascal. Measured on 0.9.53 in this repository -- .inc nodes fell
+# 783 -> 29 while extraction reported success and every other extension grew, so the
+# loss read as ordinary shrinkage. patch-graphify.sh detects that half-patched state
+# and clears the orphan before re-applying; its probe requires the wiring, not just
+# the API, because the surviving orphan satisfies an API-only check.
 --- a/graphify/cache.py
 +++ b/graphify/cache.py
 @@ -921,11 +921,19 @@ def cache_dir(root: Path = Path("."), kind: str = "ast",
