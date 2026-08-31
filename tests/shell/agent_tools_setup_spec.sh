@@ -245,18 +245,17 @@ CODEGRAPH
     cat > "$installables/graphify" <<'GRAPHIFY'
 #!/bin/sh
 printf 'graphify:%s:%s\n' "$(pwd -P)" "$*" >> "$DEBIAN_TOOL_LOG"
-if [ "$*" = 'install --platform agents' ] && [ "$(pwd -P)" = "$DEBIAN_REPOSITORY" ]; then
+if [ "$*" = 'agents install' ] && [ "$(pwd -P)" = "$DEBIAN_REPOSITORY" ]; then
   printf '%s\n' '# graphify rewrote repository agents' > "$DEBIAN_REPOSITORY/AGENTS.md"
-  printf '%s\n' '# graphify rewrote repository policy' > "$DEBIAN_REPOSITORY/.agents/policy/invariants.txt"
 fi
-# The client subcommand wires integrations; only the platform installer refreshes
-# the skill copy. The setup contract requires both for every detected harness.
+# Claude/Codex client commands wire integrations only. Copilot, Pi, and agents
+# client commands also copy their skill, but every platform installer refreshes it.
 case "$*" in
   'install --platform claude') stub_client=claude ;;
   'install --platform codex') stub_client=codex ;;
-  'install --platform copilot') stub_client=copilot ;;
-  'install --platform pi') stub_client=pi ;;
-  'install --platform agents') stub_client=agents ;;
+  'copilot install'|'install --platform copilot') stub_client=copilot ;;
+  'pi install'|'install --platform pi') stub_client=pi ;;
+  'agents install'|'install --platform agents') stub_client=agents ;;
   *) stub_client='' ;;
 esac
 if [ -n "$stub_client" ]; then
