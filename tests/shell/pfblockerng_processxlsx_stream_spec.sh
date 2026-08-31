@@ -311,16 +311,24 @@ PY
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
 			The path "${orig}${alias}.orig.tmp" should not be exist
 			The output should include 'XLSX processing failed'
-			# No stderr assertion here, deliberately. Nothing in processxlsx()
-			# writes to stderr on this path -- the 'XLSX processing failed' line
-			# is stdout and the rest goes to errorlog -- so the only writer is
-			# tar, and whether tar says anything depends on the SIGPIPE
-			# disposition it inherits rather than on the code under test:
+			# stderr is ACKNOWLEDGED here and deliberately not constrained.
+			# Nothing in processxlsx() writes to it on this path -- the
+			# 'XLSX processing failed' line is stdout and the rest goes to
+			# errorlog -- so the only writer is tar, and whether tar says
+			# anything depends on the SIGPIPE disposition it inherits rather
+			# than on the code under test:
 			#   SIGPIPE default -> killed by the signal, silent   (0 bytes)
 			#   SIGPIPE ignored -> EPIPE from write(), complains  (82 bytes)
-			# Same GNU tar, same arguments, opposite verdicts. The sibling
-			# context above keeps its stderr assertion because there tar fails
-			# outright rather than dying of EPIPE, which is deterministic.
+			# Same GNU tar, same arguments, opposite verdicts. Asserting either
+			# one fails on the other half of the world, and asserting NOTHING is
+			# not an option: shellspec WARNS on unexpected stderr and a warning
+			# fails the suite, which is how CI caught the first attempt at this.
+			# So the expectation matches anything, which records that the stream
+			# was considered and that its content is environmental.
+			# The sibling context above keeps a real stderr assertion because
+			# there tar fails outright rather than dying of EPIPE, which is
+			# deterministic.
+			The stderr should match pattern "*"
 			The contents of file "${errorlog}" should include 'exit 153'
 		End
 	End
