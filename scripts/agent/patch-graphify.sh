@@ -73,13 +73,54 @@ main() {
 	[ -d "$package" ] || fail "Graphify package directory '$package' does not exist"
 	site=$(CDPATH='' cd "$package/.." && pwd -P) || exit 2
 
-	# Ask the package itself, not the file text: this no-ops both on an already
-	# patched install and on the release that finally carries the change upstream.
-	if "$interpreter" -I -c \
-		'import graphify.rcfile as rc; raise SystemExit(0 if hasattr(rc, "activate_language_overrides") else 1)' \
-		>/dev/null 2>&1; then
+	# Ask the package itself, not the file text -- and ask whether the override is
+	# WIRED IN, not merely whether its API exists. This patch creates
+	# graphify/rcfile.py from /dev/null, so that file is absent from the wheel's
+	# RECORD and `uv tool install --upgrade` leaves it behind as an orphan while
+	# replacing the five files the patch MODIFIES. The install is then left with the
+	# API present and wired into nothing, and an `hasattr(rc,
+	# "activate_language_overrides")` probe is satisfied by the orphan: it skips the
+	# patch and reports success while .inc extracts as Pascal again. Measured on
+	# 0.9.53 in this repository, .inc nodes fell 783 -> 29 that way. So the probe
+	# requires the seam the patch actually adds -- detect must consult
+	# effective_suffix -- which no-ops on a fully patched install and on the release
+	# that finally carries the change end to end, and fires on the half-patched one.
+	if "$interpreter" -I -c '
+import inspect
+import graphify.detect as detect
+import graphify.rcfile as rc
+
+api = hasattr(rc, "activate_language_overrides") and hasattr(rc, "effective_suffix")
+wired = "effective_suffix" in inspect.getsource(detect)
+raise SystemExit(0 if api and wired else 1)
+' >/dev/null 2>&1; then
 		echo "patch-graphify.sh: '$package' already provides the .inc language override; nothing to patch" >&2
 		return 0
+	fi
+
+	# Half-patched: the orphan rcfile.py survived an upgrade that reverted the
+	# wiring. The patch creates that file, so its hunk cannot apply over the
+	# survivor and `patch --forward` fails the whole run on the ignored hunk.
+	# Clear the orphan first -- but only after confirming no installed distribution
+	# claims it, so a release that starts shipping rcfile.py is never deleted here.
+	if [ -f "$package/rcfile.py" ]; then
+		if "$interpreter" -I -c '
+import pathlib, sys
+
+site = pathlib.Path(sys.argv[1])
+owned = any(
+    line.startswith("graphify/rcfile.py,")
+    for record in site.glob("*.dist-info/RECORD")
+    for line in record.read_text(encoding="utf-8").splitlines()
+)
+raise SystemExit(1 if owned else 0)
+' "$site" >/dev/null 2>&1; then
+			rm -f "$package/rcfile.py"
+			rm -rf "$package/__pycache__"
+			echo "patch-graphify.sh: cleared the orphan rcfile.py left by an upgrade that reverted the wiring" >&2
+		else
+			fail "'$package/rcfile.py' is owned by an installed distribution but the wiring is absent; reinstall Graphify with 'uv tool install --reinstall graphifyy'"
+		fi
 	fi
 
 	require_tool patch
