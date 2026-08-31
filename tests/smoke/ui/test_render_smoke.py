@@ -617,9 +617,6 @@ def test_ip_page_renders_aggregate_select(webui: WebUI) -> None:
 # verbatim order_0 label from $options_pass_order -- and must not name the retired
 # 'original format' option that no select row offers (a user following that help would
 # hunt for a nonexistent choice and be told the wrong rule order is active by default).
-# Substrings verified against the real pfblockerng_ip.php setHelp() copy and
-# $options_pass_order; pairs with tests/php/IpRuleOrderHelpParityTest.php, which pins
-# the same strings at unit level.
 _IP_ORDER_DEFAULT_LABEL = "| pfB_Pass/Match/Block/Reject | All other Rules | (Default format)"
 _IP_ORDER_RETIRED_OPTION_NAME = "original format"
 

@@ -49,6 +49,7 @@ final class IpRuleOrderHelpParityTest extends TestCase
 		return array_column($options, 2, 1);
 	}
 
+	/** The help's stated default is the verbatim order_0 option label. */
 	public function testStatedDefaultMatchesOrderZeroLabelExactly(): void
 	{
 		$labels = self::optionLabels();
@@ -62,6 +63,7 @@ final class IpRuleOrderHelpParityTest extends TestCase
 		);
 	}
 
+	/** The help names no option label the select does not offer. */
 	public function testHelpNamesNoOptionLabelTheSelectDoesNotOffer(): void
 	{
 		$help = self::help();
@@ -77,6 +79,7 @@ final class IpRuleOrderHelpParityTest extends TestCase
 			'the retired "original format" option name must not reappear in the help');
 	}
 
+	/** The infoblock still explains the selection and the re-order warning. */
 	public function testHelpInfoblockStillExplainsTheSelection(): void
 	{
 		$help = self::help();
