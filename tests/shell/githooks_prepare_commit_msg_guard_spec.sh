@@ -330,6 +330,8 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     Parameters
       'Pair Human' human@example.com
       Human pair@example.com
+      human human@example.com
+      Human Human@Example.com
     End
 
     It "rejects mismatched committer identity $1 <$2>"
