@@ -60,6 +60,7 @@ from .test_repo_install import (
     repo_priority,
     restore_pages_hosts,
     reversion_pkg,
+    write_live_repo_conf,
 )
 
 pytestmark = pytest.mark.repo
@@ -80,7 +81,7 @@ CONF = "/usr/local/etc/pkg/repos/pfb_nightly_smoke.conf"
 # Phase-5d — live nightly Pages URL check (dispatch-only; gated on SMOKE_NIGHTLY_LIVE_URL).
 # Unset -> SKIP (the file:// VM-acceptance above is the always-on proof).
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
-DEFAULT_LIVE_NIGHTLY_URL = "https://pkg.pfblockerng.com/nightly"
+DEFAULT_LIVE_NIGHTLY_URL = "http://pkg.pfblockerng.com/nightly"
 NIGHTLY_LIVE_CONF = "/usr/local/etc/pkg/repos/pfb_nightly_live_smoke.conf"
 
 # The rc.packages install hook aborts with one of these when the registration name
@@ -325,7 +326,7 @@ def _live_nightly_url() -> str | None:
     """The live nightly Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_NIGHTLY_LIVE_URL``: set it to the deployed nightly base
-    (e.g. ``https://pkg.pfblockerng.com/nightly``) after a nightly publish
+    (e.g. ``http://pkg.pfblockerng.com/nightly``) after a nightly publish
     dispatch; leave it unset and the test SKIPS.  A bare ``1``/``true`` selects
     the default base.
     """
@@ -340,7 +341,7 @@ def _live_nightly_url() -> str | None:
 @pytest.mark.timeout(900)
 def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     """A real pfSense box installs the canonical package from the
-    deployed nightly Pages catalog over its public HTTPS URL (no ``-f``).
+    deployed nightly Pages catalogue over its public URL (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_NIGHTLY_LIVE_URL`` (unset -> SKIP). The
     always-on proof is the ``file://`` VM-acceptance above; this exercises the
@@ -356,7 +357,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
       (NO ``-r``, NO ``-f``),
     Then the install comes from our nightly repo (``pkg query %R`` ==
       ``pfblockerng-nightly``) with deps resolved and the .pkg checksum validated —
-      the deployed nightly Pages catalog is real + installable over HTTPS.
+      the deployed nightly Pages catalogue is real + installable over HTTP.
     """
     base_url = _live_nightly_url()
     if base_url is None:
@@ -373,7 +374,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     assert host, f"could not parse a host from {base_url!r}"
 
     # BACKSTOP: prove the deploy actually serves the nightly catalog from the runner
-    # first (independent of the guest) — polls through first-deploy / DNS / cert lag.
+    # first (independent of the guest) — polls through first-deploy / DNS lag.
     # The varver to poll is read from the BOX itself via the _box_real_varver oracle:
     # the guest, not the matrix, is the authority for which release line this leg
     # runs. This base already ends in /nightly,
@@ -388,7 +389,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     # nightly_vm module fixture's file:// catalog, same NIGHTLY_REPO name) sorts AFTER
     # "pfb_nightly_live_smoke.conf" (this test's conf, written below) — so a stale copy
     # left by a fixture that errored mid-setup would silently win and this test would
-    # never actually touch the live HTTPS URL. Clear it unconditionally before proceeding.
+    # never actually touch the live catalogue URL. Clear it unconditionally before proceeding.
     smoke_vm.ssh("/bin/rm", "-f", CONF, timeout=60.0)
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), nightly package absent, our
@@ -398,28 +399,16 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
         pfsense_prio = repo_priority(smoke_vm, "pfSense")
         pkg_delete(smoke_vm, CANONICAL_PKG_NAME)
 
-        # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
-        # The URL is fully resolved (arch-less, NO_ARCH — issue #1806): no ${ABI} pkg(8)
-        # variable any more, just the box's own varver under the nightly base.
-        conf = (
-            f"{NIGHTLY_REPO}: {{\n"
-            f'  url: "{base_url}/{varver}",\n'
-            "  mirror_type: none,\n"
-            "  signature_type: none,\n"
-            f"  priority: {pfsense_prio + 100},\n"
-            "  enabled: yes\n"
-            "}\n"
+        # Use the production generator so the HTTP catalogue is authenticated by
+        # the shipped ECDSA fingerprint, matching every other live channel gate.
+        write_live_repo_conf(
+            smoke_vm,
+            base_url,
+            varver,
+            priority=pfsense_prio + 100,
+            channel="nightly",
+            conf_path=NIGHTLY_LIVE_CONF,
         )
-        r = subprocess.run(
-            smoke_vm.ssh_argv("tee", NIGHTLY_LIVE_CONF),
-            input=conf,
-            capture_output=True,
-            text=True,
-            timeout=60.0,
-            check=False,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(f"write nightly live conf failed: rc={r.returncode} {r.stderr!r}")
 
         # WHEN: pkg update reads the live nightly catalog.
         pkg_update(smoke_vm)

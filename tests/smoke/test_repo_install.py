@@ -149,7 +149,7 @@ PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the flat por
 RC_D_HOOK_SRC = Path(__file__).resolve().parents[2] / "src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 # The caller supplies a selected channel root beneath the project Pages URL through
-# SMOKE_REPO_LIVE_URL; when unset, the live HTTPS check is skipped.
+# SMOKE_REPO_LIVE_URL; when unset, the live catalogue check is skipped.
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
 LIVE_EXPECTED_SOURCE_SHA_ENV = "SMOKE_REPO_EXPECTED_SOURCE_SHA"
@@ -157,12 +157,12 @@ LIVE_EXPECTED_VERSION_ENV = "SMOKE_REPO_EXPECTED_VERSION"
 LIVE_EXPECTED_CHANNEL_ENV = "SMOKE_REPO_EXPECTED_CHANNEL"
 NIGHTLY_EXPECTED_SOURCE_SHA_ENV = "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA"
 NIGHTLY_EXPECTED_VERSION_ENV = "SMOKE_NIGHTLY_EXPECTED_VERSION"
-DEFAULT_LIVE_BASE_URL = "https://pkg.pfblockerng.com/stable"
+DEFAULT_LIVE_BASE_URL = "http://pkg.pfblockerng.com/stable"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
-# only answers `uuid-*.com`, so `pkg.pfblockerng.com` does not resolve on the guest. Pinning
-# the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
-# (TLS SNI still presents `pkg.pfblockerng.com`, validated by the Pages custom-domain cert) without
-# touching the resolver. Egress is OPEN for this flow (_ensure_egress_open).
+# only answers `uuid-*.com`, so `pkg.pfblockerng.com` does not resolve on the guest.
+# Pinning the Pages IPs in the guest /etc/hosts lets `pkg`'s catalogue fetch reach
+# Pages by name without touching the resolver. Egress is OPEN for this flow
+# (_ensure_egress_open).
 PAGES_IPS = ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153")
 
 
@@ -568,8 +568,8 @@ def write_repo_conf(
     flow runs with egress open so they are reachable); callers set ours/decoy
     priorities a clear margin ABOVE the pfSense repo (see ``repo_priority``) so the
     real Netgate repo never wins regardless of what it offers. ``signature_type:
-    none`` (pfSense honors per-repo ``none``; trust = the local ``file://`` path
-    here, HTTPS in production).
+    none`` (pfSense honors per-repo ``none``; trust here is the local ``file://``
+    path, while production uses a signed catalogue over plain HTTP).
     """
     conf = _repo_block(OURS_REPO_NAME, ours_dir, ours_priority)
     if decoy_dir is not None:
@@ -1224,7 +1224,7 @@ def _live_base_url() -> str | None:
     """The live Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
-    ``https://pkg.pfblockerng.com/stable``, or a staged
+    ``http://pkg.pfblockerng.com/stable``, or a staged
     ``.../pkg/staging/<seg>/<channel>`` root pre-promote, issue #2389) to run the live
     check after a publish dispatch; leave it unset and the test SKIPS (the always-on
     proof is the file:// VM-acceptance above). A bare ``1``/``true`` selects the
@@ -1239,7 +1239,7 @@ def _live_base_url() -> str | None:
 
 
 def poll_catalog_served(base_url: str, catalog_path: str, *, attempts: int = 30, delay: float = 10.0) -> None:
-    """Poll the live ``<base>/<catalog_path>/meta.conf`` until it serves (first deploy + DNS/cert lag).
+    """Poll the live ``<base>/<catalog_path>/meta.conf`` until it serves (first deploy + DNS lag).
 
     Arch-less (NO_ARCH — issue #1806): a published catalog is keyed by varver alone,
     no ``${ABI}``/CPU segment. ``catalog_path`` is the caller's full subtree under
@@ -1255,7 +1255,7 @@ def poll_catalog_served(base_url: str, catalog_path: str, *, attempts: int = 30,
         try:
             for fname in ("meta.conf", "packagesite.pkg"):
                 url = f"{base_url}/{catalog_path}/{fname}"
-                with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 (fixed https Pages URL)
+                with urllib.request.urlopen(url, timeout=15) as resp:  # noqa: S310 (controlled Pages URL)
                     if resp.status != 200:
                         raise RuntimeError(f"{url} -> HTTP {resp.status}")
                     if not resp.read(1):
@@ -1272,8 +1272,8 @@ def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> str:
 
     The smoke harness sandboxes guest DNS to a mock answering only ``uuid-*.com``,
     so the Pages host does not resolve on the box. A static ``/etc/hosts`` entry
-    routes ``pkg``'s HTTPS fetch to Pages by IP while TLS SNI still presents ``host``
-    (GitHub's *.github.io cert validates). Idempotent: the entry is removed first.
+    routes ``pkg``'s catalogue fetch to Pages by IP. Idempotent: the entry is
+    removed first.
 
     Returns the pre-pin ``/etc/hosts`` content — pass it to :func:`restore_pages_hosts`
     in the caller's ``finally`` so the pin never outlives the test (issue #582: it
@@ -1285,7 +1285,7 @@ def pin_pages_hosts(vm: SmokeVM, host: str, *, timeout: float = 60.0) -> str:
 
     # Drop any prior line carrying this host as a whitespace-separated field (not
     # just a line-ending match, so stale aliases/comments don't survive), then pin
-    # ALL the Pages IPs (resilient to a single-IP failure; pkg follows the cert).
+    # ALL the Pages IPs (resilient to a single-IP failure).
     # Atomic via a tmp file + mv.
     strip = f"grep -Ev '[[:space:]]{re.escape(host)}([[:space:]]|$)' /etc/hosts > /etc/hosts.pfb 2>/dev/null"
     script = (
@@ -1467,7 +1467,7 @@ def _cleanup_live_pages(vm: SmokeVM, prior_hosts: str) -> None:
     _raise_live_pages_errors("live Pages teardown failed", errors)
 
 
-@pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
+@pytest.mark.timeout(900)  # live deploy/DNS can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """Install the canonical package from the selected live Pages repository."""
     base_url = _live_base_url()
@@ -1485,7 +1485,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     assert host, f"could not parse a host from {base_url!r}"
 
     # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
-    # (independent of the guest) — polls through first-deploy / DNS / cert lag. The
+    # (independent of the guest) — polls through first-deploy / DNS lag. The
     # varver to poll is read from the BOX itself via the _box_real_varver oracle: the
     # guest, not the matrix, is the authority for which release line this leg runs.
     # The caller passes a selected channel root, so the subtree is the bare varver.
@@ -1500,8 +1500,8 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         _ensure_live_pages_packages_absent(repo_vm)
         write_live_repo_conf(repo_vm, base_url, varver, priority=pfsense_prio + 100)
 
-        # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
-        # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
+        # WHEN: pkg update must ACCEPT the signed live catalogue (a rejected catalogue —
+        # bad meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
         pkg_update(repo_vm)
         assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
             f"{CANONICAL_PKG_NAME} unexpectedly present before the live-URL install"
@@ -2300,7 +2300,7 @@ def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
     # POSIX class [[:space:]] — NOT GNU \s: BSD grep -E (FreeBSD/pfSense) treats \s as a
     # literal 's', so ^\s*url: would not match the space-indented `  url:` conf line.
     result = _ssh_check(vm, "grep", "-E", r"^[[:space:]]*url:", conf_path)
-    # url: "https://..."  -> strip the key, whitespace, and surrounding quotes.
+    # url: "http://..."  -> strip the key, whitespace, and surrounding quotes.
     raw = result.stdout.strip()
     match = re.search(r'url:\s*"([^"]+)"', raw)
     if not match:

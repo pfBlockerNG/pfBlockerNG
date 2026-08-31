@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import textwrap
 import unittest
 from pathlib import Path
+
+import yaml
 
 from tests._workflow_steps import extract_after, extract_before, extract_job, extract_step
 
@@ -14,6 +17,8 @@ PUBLISHED = (WORKFLOWS / "release-published.yml").read_text(encoding="utf-8")
 REPUBLISH = (WORKFLOWS / "pkg-republish.yml").read_text(encoding="utf-8")
 TAGGED = WORKFLOWS / "pkg-tagged-ingest.yml"
 NIGHTLY = (WORKFLOWS / "nightly.yml").read_text(encoding="utf-8")
+REPO_SMOKE = (ROOT / "tests" / "smoke" / "test_repo_install.py").read_text(encoding="utf-8")
+NIGHTLY_SMOKE = (ROOT / "tests" / "smoke" / "test_nightly_install.py").read_text(encoding="utf-8")
 REPO_INSTALL = (WORKFLOWS / "repo-install.yml").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 
@@ -70,6 +75,52 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
             self.assertIn(needle, NIGHTLY)
         ingest = extract_job(NIGHTLY, "ingest-pkg")
         live = extract_job(NIGHTLY, "validate-live-pages-install")
+        live_inputs = yaml.safe_load(NIGHTLY)["jobs"]["validate-live-pages-install"]["with"]
+        self.assertEqual(live_inputs["smoke_nightly_live_url"], "http://pkg.pfblockerng.com/nightly")
+
+        smoke_tree = ast.parse(NIGHTLY_SMOKE)
+        defaults = [
+            node
+            for node in smoke_tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "DEFAULT_LIVE_NIGHTLY_URL" for target in node.targets)
+        ]
+        self.assertEqual(len(defaults), 1)
+        self.assertEqual(ast.literal_eval(defaults[0].value), "http://pkg.pfblockerng.com/nightly")
+        functions = [
+            node
+            for node in smoke_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "test_install_from_live_nightly_url"
+        ]
+        self.assertEqual(len(functions), 1)
+        all_helper_calls = [
+            node
+            for node in ast.walk(functions[0])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "write_live_repo_conf"
+        ]
+        try_blocks = [node for node in functions[0].body if isinstance(node, ast.Try)]
+        self.assertEqual(len(try_blocks), 1)
+        direct_helper_calls = [
+            statement.value
+            for statement in try_blocks[0].body
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id == "write_live_repo_conf"
+        ]
+        self.assertEqual(len(all_helper_calls), 1)
+        self.assertEqual(direct_helper_calls, all_helper_calls)
+        keywords = {keyword.arg: keyword.value for keyword in direct_helper_calls[0].keywords}
+        self.assertEqual(ast.literal_eval(keywords["channel"]), "nightly")
+        conf_path = keywords["conf_path"]
+        assert isinstance(conf_path, ast.Name)
+        self.assertEqual(conf_path.id, "NIGHTLY_LIVE_CONF")
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Constant) and isinstance(node.value, str) and "signature_type: none" in node.value
+                for node in ast.walk(functions[0])
+            )
+        )
         cleanup = extract_job(NIGHTLY, "cleanup-nightly-oci")
         digest = "needs.publish-nightly-oci.outputs.artifact_ref"
         self.assertIn("needs: [prepare, publish-nightly-oci]", ingest)
@@ -95,16 +146,26 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
             "fail-fast: false",
             "pytest_marker: repo",
             "pytest_filter: test_install_from_live_pages_url",
-            (
-                "smoke_repo_live_url: https://pkg.pfblockerng.com/"
-                "${{ needs.stage-pkg.outputs.staging_prefix }}/${{ matrix.channel }}"
-            ),
             "smoke_repo_expected_source_sha: ${{ inputs.source_sha }}",
             "smoke_repo_expected_version: ${{ inputs.portversion }}",
             "smoke_repo_expected_channel: ${{ inputs.channel }}",
             "checkout_ref: ${{ github.workflow_sha }}",
         ):
             self.assertIn(contract, live)
+        live_inputs = yaml.safe_load(tagged)["jobs"]["validate-live-pages-install"]["with"]
+        self.assertEqual(
+            live_inputs["smoke_repo_live_url"],
+            "http://pkg.pfblockerng.com/${{ needs.stage-pkg.outputs.staging_prefix }}/${{ matrix.channel }}",
+        )
+        smoke_tree = ast.parse(REPO_SMOKE)
+        defaults = [
+            node
+            for node in smoke_tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "DEFAULT_LIVE_BASE_URL" for target in node.targets)
+        ]
+        self.assertEqual(len(defaults), 1)
+        self.assertEqual(ast.literal_eval(defaults[0].value), "http://pkg.pfblockerng.com/stable")
         self.assertIn("needs: [stage-pkg, prepare-live-gate]", live)
         self.assertIn(
             "needs: [stage-pkg, prepare-live-gate, validate-live-pages-install]",
