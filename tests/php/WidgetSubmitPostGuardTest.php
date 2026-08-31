@@ -10,6 +10,18 @@ final class WidgetSubmitPostGuardTest extends TestCase
 	private const ROOT = __DIR__ . '/../..';
 	private const WIDGET = self::ROOT . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php';
 
+	/** @var list<string> shim base directories to sweep, recorded before creation */
+	private array $bases = [];
+
+	protected function tearDown(): void
+	{
+		foreach ($this->bases as $base) {
+			rmdir_recursive($base);
+		}
+		$this->bases = [];
+		parent::tearDown();
+	}
+
 	public function testCraftedPostMissingAllFieldsRaisesNoWarnings(): void
 	{
 		$result = $this->runWidget(['pfb_submit' => 'save']);
@@ -65,19 +77,29 @@ final class WidgetSubmitPostGuardTest extends TestCase
 	 * trailing cleanup statement: on an exit path a trailing statement is never reached and
 	 * the shim directory survives the run.
 	 *
-	 * Both directions matter and both are here: assertSame(0, status) is the before-state,
-	 * because a run where the shim was never created also leaves no residue and would pass
-	 * the residue assertion vacuously -- removing the mkdir makes the child exit 255.
+	 * Three things, because the obvious one alone proves nothing. The child reports the
+	 * path it used; the test asserts that path was inside the window the parent watches,
+	 * that it is gone, and that the window is empty. Dropping the first two lets a shim
+	 * relocated out of the window pass while leaking -- absence of residue is not evidence
+	 * of cleanup unless you also know something was there to clean.
 	 */
 	public function testWidgetRunLeavesNoShimResidue(): void
 	{
 		$result = $this->runWidget(['pfb_submit' => 'save']);
 		$this->assertSame(0, $result['status'], $result['stderr']);
+		// Location first, then absence. An empty residue list is equally satisfied by "the
+		// hook ran" and "the shim was never in the window we watched" -- so a shim relocated
+		// out of $base with the hook deleted would leave this green while leaking. Assert
+		// where it was before asserting it is gone.
+		$this->assertStringStartsWith($result['base'] . '/', $result['shim'],
+			'the shim must be created inside the observed base, or the residue check watches nothing');
+		$this->assertDirectoryDoesNotExist($result['shim'],
+			'the shim the child reported outlived the widget run');
 		$this->assertSame([], $result['residue'],
 			'the include shim outlived the widget run: ' . implode(', ', $result['residue']));
 	}
 
-	/** @return array{status:int,stderr:string,state:array<string,mixed>,residue:list<string>} */
+	/** @return array{status:int,stderr:string,state:array<string,mixed>,residue:list<string>,shim:string,base:string} */
 	private function runWidget(array $post): array
 	{
 		$root = var_export(self::ROOT, TRUE);
@@ -87,8 +109,16 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		// underneath a base directory the PARENT owns -- otherwise the name is unknowable
 		// here and residue cannot be observed at all. The mkdir guard, the random suffix
 		// and the shutdown hook below are unchanged.
+		//
+		// Recorded for the tearDown() sweep before it is created: every assertion between
+		// here and the cleanup below aborts the method and skips that cleanup, so a
+		// parent-owned directory would leak on exactly the failure paths this class exists
+		// to exercise -- a test about residue leaving residue. tearDown() runs regardless.
 		$base = sys_get_temp_dir() . '/pfb_widget_shim_base_' . getmypid() . '_' . bin2hex(random_bytes(8));
-		$this->assertTrue(mkdir($base, 0700, TRUE), 'shim base directory creation failed');
+		$this->bases[] = $base;
+		if (!mkdir($base, 0700, TRUE)) {
+			throw new RuntimeException("shim base directory creation failed: {$base}");
+		}
 		$baseCode = var_export($base, TRUE);
 		$script = <<<PHP
 require {$root} . '/tests/php/bootstrap.php';
@@ -111,7 +141,8 @@ set_error_handler(static function (int \$severity, string \$message): bool {
 	fwrite(STDERR, \$severity . ': ' . \$message . "\\n");
 	return TRUE;
 });
-register_shutdown_function(static function (): void {
+register_shutdown_function(static function () use (\$shim): void {
+	echo "\\n__PFB_SHIM__" . \$shim;
 	echo "\\n__PFB_STATE__" . json_encode(\$GLOBALS['pfb']['wglobal'] ?? []);
 });
 require {$widget};
@@ -128,12 +159,17 @@ PHP;
 		$this->assertIsInt($marker, $stdout);
 		$state = json_decode(substr($stdout, $marker + strlen('__PFB_STATE__')), TRUE, 512, JSON_THROW_ON_ERROR);
 		$this->assertIsArray($state);
-		$residue = array_values(array_diff((array) scandir($base), ['.', '..']));
-		foreach ($residue as $leftover) {
-			@unlink($base . '/' . $leftover . '/guiconfig.inc');
-			@rmdir($base . '/' . $leftover);
-		}
-		@rmdir($base);
-		return ['status' => $status, 'stderr' => $stderr, 'state' => $state, 'residue' => $residue];
+		$entries = scandir($base);
+		$this->assertIsArray($entries, "shim base directory unreadable: {$base}");
+		$residue = array_values(array_diff($entries, ['.', '..']));
+		// Recursive: a leftover may be a file, or a shim holding more than guiconfig.inc, and
+		// a hand-rolled two-step would leave exactly the residue this method reports on.
+		// tearDown() repeats this for the paths that never reach here.
+		rmdir_recursive($base);
+		$shimMarker = strrpos($stdout, '__PFB_SHIM__');
+		$this->assertIsInt($shimMarker, $stdout);
+		$shim = trim(substr($stdout, $shimMarker + strlen('__PFB_SHIM__'), $marker - $shimMarker - strlen('__PFB_SHIM__')));
+		return ['status' => $status, 'stderr' => $stderr, 'state' => $state, 'residue' => $residue,
+			'shim' => $shim, 'base' => $base];
 	}
 }
