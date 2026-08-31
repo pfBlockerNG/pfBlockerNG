@@ -821,7 +821,6 @@ jobs:
             fi
             echo "Tag ${TAG} already at ${SHA} — reusing it (resuming a run that crashed after tagging)."
           else
-            # Compatibility oracle: git tag -a "$TAG" -m "$TAG" "$SHA"
             MESSAGE=$(mktemp)
             printf '%s\n\n' "$TAG" | git interpret-trailers \
               --trailer "pfBlockerNG-Release-Channel: ${CHANNEL}" > "$MESSAGE"

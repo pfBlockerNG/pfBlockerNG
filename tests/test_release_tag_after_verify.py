@@ -282,12 +282,10 @@ def test_prepare_release_pins_a_sha_output() -> None:
     )
 
 
-def test_tag_release_creates_the_tag_on_the_pinned_sha() -> None:
-    jobs = _jobs()
-    script = _step_run_script(_step(jobs["tag-release"], "Create + push the tag on the verified commit"))
-    assert 'git tag -a "$TAG" -m "$TAG" "$SHA"' in script, (
-        f"the tag must be created ON the pinned SHA (the channel branch may have moved), got:\n{script}"
-    )
+def test_tag_release_creates_an_annotated_tag_on_the_pinned_sha() -> None:
+    script = _step_run_script(_step(_jobs()["tag-release"], "Create + push the tag on the verified commit"))
+    commands = {line.strip() for line in script.splitlines() if line.strip() and not line.lstrip().startswith("#")}
+    assert 'git tag -a "$TAG" -F "$MESSAGE" "$SHA"' in commands, commands
 
 
 @pytest.mark.parametrize("job", ["resolve-stamp", "build-pkgs-portable", "release"])
@@ -1077,13 +1075,18 @@ def _run_tag_step(repo: Path, tag: str, sha: str) -> subprocess.CompletedProcess
     )
 
 
-def test_tag_step_creates_and_pushes_the_tag_on_the_pinned_sha(tmp_path: Path) -> None:
-    repo, head, _older = _tag_repo(tmp_path)
-    result = _run_tag_step(repo, "v9.9.9.r1", head)
+def test_tag_step_creates_and_pushes_an_annotated_tag_on_the_pinned_sha(tmp_path: Path) -> None:
+    repo, head, older = _tag_repo(tmp_path)
+    assert head != older
+    result = _run_tag_step(repo, "v9.9.9.r1", older)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.r1") == head
-    assert "v9.9.9.r1" in _git(repo, "ls-remote", "--tags", "origin")
-    assert f"sha={head}" in (repo / "gh_output").read_text()
+    origin = Path(_git(repo, "remote", "get-url", "origin"))
+    assert _git(origin, "cat-file", "-t", "refs/tags/v9.9.9.r1") == "tag"
+    assert _git(origin, "rev-parse", "refs/tags/v9.9.9.r1^{commit}") == older
+    contents = _git(origin, "for-each-ref", "--format=%(contents)", "refs/tags/v9.9.9.r1")
+    trailers = [line for line in contents.splitlines() if line.startswith("pfBlockerNG-Release-Channel:")]
+    assert trailers == ["pfBlockerNG-Release-Channel: testing"]
+    assert f"sha={older}" in (repo / "gh_output").read_text()
 
 
 def test_tag_step_resumes_a_tag_that_already_points_at_the_verified_sha(tmp_path: Path) -> None:
