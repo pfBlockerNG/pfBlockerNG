@@ -8,9 +8,9 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 
 ## Fixed floors (never weaken)
 
-- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, rebase-merge (dev-only: push to `devel`). Commit alone not landing.
+- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, squash-merge (dev-only: push to `devel`). Commit alone not landing.
 - **Review before merge.** Merge step never start until review step complete cleanly.
-- **Rebase-only merges.** Never merge commit, never squash; history across `main` ← `devel` stay strictly linear.
+- **Squash-only merges.** Never merge commit, never rebase-merge (owner, 2026-08-31: server-side rebase lands PR commits unsigned).
 - **Advisory bots never gate.** No bot's state ever blocks the CI wait or the merge; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
@@ -112,9 +112,12 @@ First **dedupe across reviewers** (by file:line + substance — reviewers routin
 ### Replies and the audit trail
 
 - Reply on **every** thread/finding, always via body **file** (never inline bodies — shells mangle backticks and `${...}`), stating verdict plainly: applied (cite commit) / skipped (validated reason) / deferred (link issue). Inline findings get threaded replies (REST `pulls/N/comments/{id}/replies` endpoint); nitpick/outside-diff-range findings (no thread) get one top-level comment.
-- **Attribution footer on every public body** — replies, comments, issue and PR bodies — naming true generating client and account it posts through (per-client canonical footers below); never another client's identity.
+- **No synthetic attribution** — public bodies contain only substantive project content;
+  add no generated-by, model, client, or harness footer.
 - **Deferred findings → tracking issue in SAME public repo** (finding already public on PR — routing it private disclose nothing and hide work; genuinely undisclosed vulnerability you found yourself still follow private disclosure rules). Body self-contained: finding, `file:line`, why out of scope for this PR, validated issue-gate block (producer, supported path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and link back to review comment; link issue in thread reply. Optionally also fix it in own branch + PR — issue is required artifact.
-- **One audit comment on the PR per leg** (leg name, model, effort, and **head SHA reviewed** — pointer that leg's next re-review keys on), plus one orchestrator comment noting CodeRabbit's review if one arrived and per-finding resolution across all legs.
+- **One audit comment on the PR per leg** (leg name and **head SHA reviewed** — pointer
+  that leg's next re-review keys on), plus one orchestrator comment noting CodeRabbit's
+  review if one arrived and per-finding resolution across all legs.
 
 ### The merge gate (all paths)
 
@@ -150,7 +153,7 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ### Merge and clean up
 
-- Merge with rebase (`gh pr merge N --rebase`); never `--merge` or `--squash`.
+- Merge with squash (`gh pr merge N --squash --subject "<scope>: <summary>" --body "<body>"`); never `--merge`/`--rebase`. PR title = final subject; squash commit lands GitHub-signed.
 - **Do not pass `--delete-branch`:** its local post-merge step check out base branch and fail when another worktree hold it, even though remote merge succeeded. Merge first, verify, then delete separately.
 - **Verify the merge actually landed:** PR's state must read `MERGED` (local step can error while remote merge succeeded).
 - Run `git fetch origin` after that verification so cleanup checks integration against the current remote base.
@@ -167,17 +170,16 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 - **Sync the work item's state:** `Fixes #N` reference auto-close issue on merge — verify it closed; clear legacy `WIP`/`Waiting PR` label if present (states per workflow.md "Ticket states").
 - **Trigger sweep (mandatory):** task reached terminal state — kill every trigger class (background polls, scheduled check-ins, subscriptions), then sweep once for stale waits from earlier items (waits.md).
-- **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on), reviews received (models, skips), merge result, cleanup. Abort says why and what needed to proceed.
+- **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on), review
+  legs and skips, merge result, cleanup. Abort says why and what needed to proceed.
 
 ## Per-client mapping
 
 Behavioral equivalence, not surface parity (workflow.md "Vendor mapping"):
 
-- **Claude:** each leg run as fresh read-only sub-agent implementing contract above; per-finding validation may fan out to fresh read-only validators; waits stopped via task tools. Footer: `🤖 Generated by [Claude Code](https://claude.com/claude-code),
-  posted via @<gh-login>'s account on their behalf.`
-- **Codex / Copilot / OMP:** native roles per `AGENTS.md` and the matching
-  adapter. Footers:
-  `🤖 Generated by OpenAI Codex and posted on behalf of @<login>.` /
-  `🤖 Generated by GitHub Copilot and posted on behalf of @<login>.` /
-  `🤖 Generated by Oh My Pi and posted on behalf of @<login>.`
-- Never post one client's attribution for another's. Model tiers resolve through `.agents/model-tiers.conf` in every client.
+- **Claude:** each leg run as fresh read-only sub-agent implementing contract above;
+  per-finding validation may fan out to fresh read-only validators; waits stopped via task
+  tools.
+- **Codex / Copilot / OMP:** native roles per `AGENTS.md` and the matching adapter.
+- Every client publishes the same unannotated project content; none adds synthetic
+  attribution.

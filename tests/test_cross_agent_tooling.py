@@ -68,13 +68,6 @@ def test_copilot_client_detection_needs_nothing_installed() -> None:
         assert "COPILOT_CLI" in body, f"{hook} lost Copilot detection"
         assert "COPILOT_AGENT_PROMPT" in body, f"{hook} lost cloud-agent detection"
 
-    # Every client present is credited from its OWN key, and the legacy key —
-    # which holds Claude's identity here — is gated on no client being present.
-    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot grok omp" in trailer, "attribution is no longer per-client"
-    assert "coauthor.${pfb_provider}.email" in trailer, "identities no longer come from per-client keys"
-    assert "any_client" in trailer, "the legacy coauthor key is no longer gated on a client marker"
-
 
 def test_copilot_instructions_route_at_the_canonical_bootstrap() -> None:
     instructions = (ROOT / ".github/copilot-instructions.md").read_text(encoding="utf-8")
@@ -99,10 +92,6 @@ def test_grok_client_detection_needs_nothing_installed() -> None:
         assert "GROK_SESSION_ID" in body, f"{hook} lost Grok session detection"
         assert "GROK_AGENT" in body, f"{hook} lost Grok agent detection"
         assert "grok_session" in body, f"{hook} lost grok_session helper"
-
-    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot grok omp" in trailer, "Grok is missing from per-client attribution"
-    assert "grok) grok_session || continue" in trailer, "Grok is no longer a trailer provider"
 
 
 def test_grok_adapter_routes_at_the_canonical_bootstrap() -> None:
@@ -130,12 +119,8 @@ def test_omp_adapter_and_client_detection() -> None:
         assert "PI_CLI" in body, f"{hook} lost Pi-compatible detection"
         assert "omp_session" in body, f"{hook} lost omp_session helper"
 
-    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot grok omp" in trailer
-    assert "omp) omp_session || continue" in trailer
-
     adapter = (ROOT / ".agents/context/omp-adapter.md").read_text(encoding="utf-8")
-    for contract in (".omp/AGENTS.md", ".omp/RULES.md", "OMP_CLI=1", "PI_CLI=1", "coauthor.omp"):
+    for contract in (".omp/AGENTS.md", ".omp/RULES.md", "OMP_CLI=1", "PI_CLI=1", "adds no attribution"):
         assert contract in adapter, f"OMP adapter lost {contract}"
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert ".agents/context/omp-adapter.md" in bootstrap

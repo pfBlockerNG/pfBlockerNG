@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# Grok attribution and agent detection in the git hooks (issue #2439).
+# Grok agent detection in the git hooks (issue #2439).
 #
 # Grok CLI exports GROK_AGENT=1 and GROK_SESSION_ID into every shell it
 # spawns — inherited by nested shells and visible to git hooks (probed on
@@ -8,10 +8,8 @@
 # and Copilot (COPILOT_CLI) are: environment variables, nothing installed,
 # no process inspection.
 #
-# The attribution rows are the load-bearing ones. This repo sets the legacy
-# `coauthor.email` to Claude's identity, so a Grok commit with no provider
-# detection is credited to CLAUDE — the same misattribution the Codex and
-# Copilot branches exist to prevent.
+# Coauthor identities are retired: marker detection still drives the worktree
+# guard, but neither provider-local nor legacy config ever creates a trailer.
 
 Describe 'Grok detection in the git hooks (issue #2439)'
   pcm_hook="${PFB_ROOT}/.githooks/prepare-commit-msg"
@@ -45,70 +43,75 @@ Describe 'Grok detection in the git hooks (issue #2439)'
   # CLAUDECODE=1, CODEX_THREAD_ID, COPILOT_CLI, or GROK_SESSION_ID.
   grok_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u OMP_CLI -u PI_CLI \
       GROK_AGENT=1 GROK_SESSION_ID=grok-test sh "$pcm_hook" "$2"
   }
   human_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
       -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
-      -u GROK_SESSION_ID -u GROK_AGENT sh "$pcm_hook" "$2"
+      -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI sh "$pcm_hook" "$2"
   }
 
-  It 'never credits the legacy Claude identity to a Grok commit'
+  It 'ignores the legacy fake Claude identity in a Grok session'
     git_fixture -C "$primary" config coauthor.name Claude
     git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
     When run grok_hook_in "$wt" "$wt_msg"
     The status should equal 0
+    The contents of file "$wt_msg" should not include 'Co-Authored-By:'
     The contents of file "$wt_msg" should not include 'noreply@anthropic.com'
   End
 
-  It 'credits the Grok-specific identity when one is configured'
-    git_fixture -C "$primary" config coauthor.grok.name Owner
-    git_fixture -C "$primary" config coauthor.grok.email owner@example.com
+  It 'ignores the retired Grok-specific identity config'
+    git_fixture -C "$primary" config coauthor.grok.name Grok
+    git_fixture -C "$primary" config coauthor.grok.email noreply@x.ai
     When run grok_hook_in "$wt" "$wt_msg"
     The status should equal 0
-    The contents of file "$wt_msg" should include 'Co-Authored-By: Owner <owner@example.com>'
+    The contents of file "$wt_msg" should not include 'Co-Authored-By:'
+    The contents of file "$wt_msg" should not include 'noreply@x.ai'
   End
 
-  It 'still credits the legacy identity for a plain human commit'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+  It 'ignores the legacy human identity config for a plain human commit'
+    git_fixture -C "$primary" config coauthor.name 'Pair Human'
+    git_fixture -C "$primary" config coauthor.email pair@example.com
     When run human_hook_in "$wt" "$wt_msg"
     The status should equal 0
-    The contents of file "$wt_msg" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
+    The contents of file "$wt_msg" should not include 'Co-Authored-By:'
+    The contents of file "$wt_msg" should not include 'pair@example.com'
   End
 
-  It 'credits every client present when one agent runs inside another'
+  It 'ignores provider-specific identities when one agent runs inside another'
     # Grok launched from a Claude session inherits CLAUDECODE while setting
-    # GROK_SESSION_ID: both ran, so both are credited rather than one winning.
-    git_fixture -C "$primary" config coauthor.claude.name Claude
+    # GROK_SESSION_ID. Both markers remain active, but neither owns attribution.
+    git_fixture -C "$primary" config coauthor.claude.name 'Claude Sonnet 5'
     git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com
-    git_fixture -C "$primary" config coauthor.grok.name Owner
-    git_fixture -C "$primary" config coauthor.grok.email owner@example.com
+    git_fixture -C "$primary" config coauthor.grok.name Grok
+    git_fixture -C "$primary" config coauthor.grok.email noreply@x.ai
     nested() {
       cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
-        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u OMP_CLI -u PI_CLI \
         CLAUDECODE=1 GROK_AGENT=1 GROK_SESSION_ID=grok-test \
         sh "$pcm_hook" "$wt_msg"
     }
     When run nested
     The status should equal 0
-    The contents of file "$wt_msg" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
-    The contents of file "$wt_msg" should include 'Co-Authored-By: Owner <owner@example.com>'
+    The contents of file "$wt_msg" should not include 'Co-Authored-By:'
+    The contents of file "$wt_msg" should not include 'noreply@anthropic.com'
+    The contents of file "$wt_msg" should not include 'noreply@x.ai'
   End
 
-  It 'invents no identity for a client that has none configured'
-    git_fixture -C "$primary" config coauthor.claude.name Claude
+  It 'invents no identity for nested clients'
+    git_fixture -C "$primary" config coauthor.claude.name 'Claude Sonnet 5'
     git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com
     nested_unconfigured() {
       cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
-        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u OMP_CLI -u PI_CLI \
         CLAUDECODE=1 GROK_AGENT=1 GROK_SESSION_ID=grok-test \
         sh "$pcm_hook" "$wt_msg"
     }
     When run nested_unconfigured
     The status should equal 0
-    The contents of file "$wt_msg" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
+    The contents of file "$wt_msg" should not include 'Co-Authored-By:'
+    The contents of file "$wt_msg" should not include 'noreply@anthropic.com'
     The contents of file "$wt_msg" should not include 'grok'
   End
 
@@ -127,10 +130,21 @@ Describe 'Grok detection in the git hooks (issue #2439)'
   It 'detects GROK_AGENT alone, without GROK_SESSION_ID'
     agent_only() {
       cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID \
+        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID -u OMP_CLI -u PI_CLI \
         GROK_AGENT=1 sh "$pcm_hook" .git/PCM_MSG
     }
     When run agent_only
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'detects GROK_SESSION_ID alone, without GROK_AGENT'
+    session_only() {
+      cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
+        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_AGENT -u OMP_CLI -u PI_CLI \
+        GROK_SESSION_ID=grok-test sh "$pcm_hook" .git/PCM_MSG
+    }
+    When run session_only
     The status should equal 1
     The stderr should include 'primary checkout'
   End

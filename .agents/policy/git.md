@@ -15,8 +15,7 @@ stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/sk
 workflows/configuration** (`.claude/workflows/`, `.codex/`), **documentation-only**
 changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses worktree but
 commits/pushes **directly to `devel`** (fetch + rebase first). Anything touching `src/`,
-`tests/`, or CI — ADR *implementation* included — uses full worktree + rebase-only-PR
-flow.
+`tests/`, or CI — ADR *implementation* included — uses full worktree + PR flow.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
@@ -86,8 +85,9 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   (agents commit only in linked worktrees — issue #1262; state-checked via
   `--git-dir` vs `--git-common-dir`, never command text; agent-dedicated checkouts opt out via `CLAUDE_CODE_USER_EMAIL`
   (managed-remote) or
-  `git config pfblockerng.allowprimarycommit true`), then appends owner's
-  `Co-authored-by:` trailer (see Commit style); runs even under `--no-verify`.
+  `git config pfblockerng.allowprimarycommit true`), then rejects every
+  `Co-authored-by:` trailer and any agent author/committer identity that differs
+  from configured `user.name` / `user.email`; runs even under `--no-verify`.
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; also
   denies agent (Claude, Codex, Copilot, Grok, or OMP marker set) branch push
   that would rewrite remote history the agent never fetched (advertised remote oid must equal
@@ -136,61 +136,27 @@ collision. Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsb
 invocation`, `pfblockerng: fix IPv6 subnet match`). No trailing period; body optional for
 non-obvious changes.
 
-**Attribution:** every environment keeps human owner visible and earns GitHub
-**Verified** badge. On box with **user's own signing key**, user
-authors/commits/signs as themselves. Credit AI client with `Co-authored-by:`
-trailer only when its provider adapter defines verified, GitHub-recognized
-identity; otherwise disclose it in PR audit/footer and never fabricate or
-borrow another provider's identity. Claude's adapter uses
-`Claude <noreply@anthropic.com>`; Codex and OMP have no verified coauthor
-identity by default; Copilot's is whatever `coauthor.copilot.*` names locally;
-Grok's is whatever `coauthor.grok.*` names locally.
-**Every client whose marker is present gets its own trailer** — agent launched
-from inside another agent's session inherits outer marker while setting its
-own, and both worked on the commit. Each identity comes only from that client's
-own `coauthor.<client>.*` keys; legacy `coauthor.*` key holds Claude's (and
-human session's) identity and is read only when no client marker present at
-all, so an unconfigured non-Claude client is never credited to Claude.
-Client markers: `CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus
-`COPILOT_AGENT_PROMPT` for Copilot's cloud agent), `GROK_SESSION_ID` /
-`GROK_AGENT`, and `OMP_CLI` / `PI_CLI`. In **agent/managed-remote**
-environments, active
-agent is committer+signer, human is author (`--author=`), and
-`prepare-commit-msg` hook injects owner's `Co-authored-by:` trailer automatically.
-Full two-model spec + badge preconditions: below.
+**Commit identity:** agent-created commits are indistinguishable from the configured user
+committing alone. `user.name` and `user.email` must be both author and committer, and the
+user's normal signing configuration produces the signature. Commit messages carry no
+`Co-authored-by:` trailers. Provider-specific and legacy `coauthor.*` configuration is
+ignored.
+
+`.githooks/prepare-commit-msg` enforces this before every commit, including merge and
+squash messages. It rejects any `Co-authored-by:` trailer and, when an agent marker is
+present, rejects author or committer identity that differs from configured `user.name` /
+`user.email`. Client markers are `CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus
+`COPILOT_AGENT_PROMPT` for Copilot's cloud agent), `GROK_SESSION_ID` / `GROK_AGENT`, and
+`OMP_CLI` / `PI_CLI`.
 
 ## Author, committer, and signing (full text)
 
-Two environments, two attribution shapes — both keep human owner visible and earn GitHub
-**Verified** badge. Pick by whether box has user's own signing key.
-
-**Default — agent / managed-remote environment (no user signing key on the box):**
-
-- **Committer = signer = Claude's GitHub identity** (account whose verified email owns the
-  registered signing key). GitHub binds Verified badge — and commit credit — to
-  committer, so committer must be Claude for signature to verify.
-- **Author = human owner** (`Andre Brait <andrebrait@gmail.com>`), set explicitly
-  (`--author=` / `GIT_AUTHOR_*`).
-- **Credit human with `Co-authored-by:` trailer for owner** — mandatory; with Claude
-  as committer GitHub credits only Claude otherwise. Injected automatically by
-  `.githooks/prepare-commit-msg`, which resolves owner generically (`coauthor.email`/
-  `coauthor.name` git config, else `$CLAUDE_CODE_USER_EMAIL`, else commit author) and is
-  no-op when human already committer or already credited. (`Co-authored-by:` for
-  *Claude* is redundant there — Claude already committer.)
-- **Sign every commit** (`-S`; SSH or GPG). Valid signature + key on Claude's account +
-  matching committer email ⇒ Verified, attributed to Claude.
-
-**User's personal environment, signing with the user's own key** (`commit.gpgsign = true`, or
-configured `user.signingkey`): do **not** override local identity — user authors,
-commits, and signs as themselves (Verified as user). Claude then not committer, so
-credit it via trailer: **add `Co-authored-by: Claude <…>` as final line(s)**, using
-Claude's GitHub-recognized identity (unrecognized email credits no one). Mandatory: never
-let user-signed commit ship with no mention of Claude. Leave user's `-S` in place; do
-not add `--author=`.
-
-**Badge precondition** (one-time infrastructure): default model needs Claude's committer
-email verified on its GitHub account and that account holding registered signing key. In
-Claude Code managed-remote environment this is platform-provided (every commit signed by
-platform key under `claude` committer identity, human as author). Only bare /
-self-hosted agent setup must provision key + email itself (until then commits land
-correctly attributed but read *Unverified*).
+- **Author = committer = configured user identity.** Never override either with an agent,
+  model, service, or harness identity.
+- **Sign with the user's configured key.** Valid signature + matching user email preserves
+  GitHub's normal **Verified** result.
+- **Message = ordinary project commit message.** No generated-by line, attribution footer,
+  or co-author trailer.
+- **Unavailable user identity or signing key = no commit.** A managed/remote environment
+  that cannot produce the same commit the user would produce returns the patch to the user
+  instead of committing under a substitute identity.

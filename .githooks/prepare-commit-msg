@@ -1,27 +1,7 @@
 #!/bin/sh
-# prepare-commit-msg: agent worktree guard, then credit the human owner as a
-# Co-Authored-By trailer.
+# prepare-commit-msg: guard agent commits and enforce configured identity.
 #
-# In agent / managed-remote environments the *committer* is the agent (e.g.
-# Claude) and GitHub attributes the commit — and the contribution credit it
-# shows — to that committer. The human is recorded only as the git author,
-# which GitHub does NOT surface as a contributor on the commit. This hook
-# appends a Co-Authored-By trailer for the human so they are credited, while
-# the agent stays the committer/signer (e.g. for a Verified signature).
-#
-# The coauthor is resolved without hardcoding an identity. Provider-specific
-# coauthor.<provider>.* keys win. The legacy coauthor.* key remains the Claude
-# and human-session fallback, but is deliberately ignored in Codex sessions so
-# a clone configured to credit Claude cannot misattribute Codex work. Then:
-#   1. the matching provider-specific / legacy git config
-#   2. $CLAUDE_CODE_USER_EMAIL (managed-remote owner)
-#   3. the commit author, when it differs from the committer
-# The display name falls back to a prior commit by that email, then the email's
-# local-part. The hook is a NO-OP when the human is already the committer (a
-# developer signing their own commits), when no human can be resolved, or when
-# that co-author is already present — so it is safe in every environment.
-#
-# Enable: git config core.hooksPath .githooks
+# Agent markers control the linked-worktree guard and identity enforcement.
 
 set -u
 
@@ -66,90 +46,44 @@ if [ "$agent_runtime" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
 		exit 1
 	fi
 fi
-unset agent_runtime
 
 msg_file=$1
-msg_type=${2:-}
 
-# Only touch ordinary commits — leave merge/squash messages alone.
-case "$msg_type" in
-	merge|squash) exit 0 ;;
-esac
+if LC_ALL=C grep -qi '^[[:space:]]*co-authored-by[[:space:]]*:' "$msg_file" 2>/dev/null; then
+	echo "Co-authored-by trailers are forbidden" >&2
+	exit 1
+fi
+
+ident_name() {
+	# Extract the exact name from a "Name <email> ts tz" ident line.
+	printf '%s\n' "$1" |
+		sed -n 's/^\(.*\) <[^<>]*> [0-9][0-9]* [-+][0-9][0-9][0-9][0-9]$/\1/p'
+}
 
 ident_email() {
-	# Extract the <email> from a "Name <email> ts tz" ident line.
-	printf '%s\n' "$1" | sed -n 's/.*<\(.*\)>.*/\1/p'
+	# Extract the exact email from a "Name <email> ts tz" ident line.
+	printf '%s\n' "$1" |
+		sed -n 's/^.* <\([^<>]*\)> [0-9][0-9]* [-+][0-9][0-9][0-9][0-9]$/\1/p'
 }
 
-committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
-committer_email=$(ident_email "$committer_ident")
+if [ "$agent_runtime" = "1" ]; then
+	configured_name=$(git config --get user.name 2>/dev/null || true)
+	configured_email=$(git config --get user.email 2>/dev/null || true)
+	author_ident=$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)
+	committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null || true)
+	author_name=$(ident_name "$author_ident")
+	author_email=$(ident_email "$author_ident")
+	committer_name=$(ident_name "$committer_ident")
+	committer_email=$(ident_email "$committer_ident")
 
-# Credit EVERY client whose marker is present, not just one: an agent launched
-# from inside another agent's session inherits the outer marker while setting its
-# own, and both of them worked on the commit. Each client is credited only from
-# its OWN configured identity — no identity is ever invented for a client, and
-# the legacy `coauthor.*` key stays Claude's (and the human's) alone, so another
-# client with no configured identity is never misattributed to Claude.
-credited=0
-any_client=0
-
-append_trailer() {
-	pfb_email=$1
-	pfb_name=$2
-	[ -n "$pfb_email" ] || return 0
-	# The human IS the committer (already credited) → nothing to add.
-	[ "$pfb_email" != "$committer_email" ] || return 0
-	# Already credited in this message? (case-insensitive, literal email)
-	if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$pfb_email>"; then
-		credited=1
-		return 0
+	if [ -z "$configured_name" ] || [ -z "$configured_email" ] ||
+		[ "$author_name" != "$configured_name" ] ||
+		[ "$author_email" != "$configured_email" ] ||
+		[ "$committer_name" != "$configured_name" ] ||
+		[ "$committer_email" != "$configured_email" ]; then
+		echo "Agent commits must use the configured user identity" >&2
+		exit 1
 	fi
-	# Resolve a display name (cosmetic — GitHub matches the co-author by email).
-	[ -n "$pfb_name" ] || pfb_name=$(git log -1 --author="$pfb_email" --format='%an' 2>/dev/null || true)
-	[ -n "$pfb_name" ] || pfb_name=${pfb_email%@*}
-	# Append as a real trailer (interpret-trailers handles the blank-line block);
-	# fall back to a plain append if interpret-trailers is unavailable.
-	git interpret-trailers --in-place \
-		--trailer "Co-Authored-By: $pfb_name <$pfb_email>" "$msg_file" 2>/dev/null \
-		|| printf '\nCo-Authored-By: %s <%s>\n' "$pfb_name" "$pfb_email" >>"$msg_file"
-	credited=1
-}
-
-for pfb_provider in claude codex copilot grok omp; do
-	case "$pfb_provider" in
-		claude) [ "${CLAUDECODE:-}" = "1" ] || continue ;;
-		codex) [ -n "${CODEX_THREAD_ID:-}" ] || continue ;;
-		copilot) copilot_session || continue ;;
-		grok) grok_session || continue ;;
-		omp) omp_session || continue ;;
-	esac
-	any_client=1
-	email=$(git config --get "coauthor.${pfb_provider}.email" 2>/dev/null || true)
-	name=$(git config --get "coauthor.${pfb_provider}.name" 2>/dev/null || true)
-	if [ "$pfb_provider" = claude ]; then
-		# The legacy key predates the per-provider ones and holds Claude's identity.
-		[ -n "$email" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
-		[ -n "$name" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
-	fi
-	append_trailer "$email" "$name"
-done
-
-# No client credited: a human session (the legacy key), the managed-remote owner,
-# or an author who differs from the committer. The legacy key holds Claude's
-# identity here, so it is read ONLY when no client marker was present at all —
-# otherwise an unconfigured agent commit could be credited to Claude.
-if [ "$credited" = "0" ]; then
-	email=''
-	[ "$any_client" = "1" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
-	[ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
-	if [ -z "$email" ]; then
-		author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
-		[ -n "$author_email" ] && [ "$author_email" != "$committer_email" ] && email=$author_email
-	fi
-	[ -n "$email" ] || exit 0
-	name=''
-	[ "$any_client" = "1" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
-	append_trailer "$email" "$name"
 fi
 
 exit 0
