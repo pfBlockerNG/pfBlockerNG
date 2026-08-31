@@ -261,6 +261,28 @@ final class ThemeSafetyUiTest extends TestCase
 			// Same-scope pairings that must keep working.
 			'same object colour'        => ['$(x).css({"background-color": "#123456", color: "red"});', TRUE],
 			'same rule colour'          => ['.a { background-color: #123456; color: red; }', TRUE],
+			// Issue #2929: a brace inside a quoted VALUE is data, not structure. The
+			// unbalanced closing brace is the shape that launders -- it pops the depth, the
+			// background's own rule stops being found, and the fallback window then reads a
+			// neighbouring element's colour as the pairing.
+			'quoted brace in css'       => ['.a { content: "}"; background-color: #123456; } .b { color: red; }', FALSE],
+			'quoted brace in js'        => ['$(x).css({tip: "}", "background-color": "#123456"}); $(y).css({color: "red"});', FALSE],
+			// The opening brace does not launder on devel -- the depth desynchronises but
+			// coincidentally resolves a valid scope. Pinned anyway: the obvious wrong fix,
+			// masking from a quote to end of line, breaks these two as well.
+			'quoted open brace in css'  => ['.a { content: "{"; background-color: #123456; } .b { color: red; }', FALSE],
+			'quoted open brace in js'   => ['$(x).css({tip: "{", "background-color": "#123456"}); $(y).css({color: "red"});', FALSE],
+			// A bare brace inside a block comment reaches no quote rule at all, which is why
+			// blanking the comment is what fixes it and the span guard cannot.
+			'bare brace in a comment'   => ['.a { /* } */ background-color: #123456; } .b { color: red; }', FALSE],
+			// A backslash before the opener does not escape it -- CSS has no such escape, so
+			// `\\/*` still starts a comment. A scan that skips the escaped character never
+			// sees it begin.
+			'escaped comment opener'    => ['.a { \\/* } */ background-color: #123456; } .b { color: red; }', FALSE],
+			// The mask is threaded through the counters that decide a literal's own groups,
+			// so each consuming call site needs a row.
+			'quoted brace, literal grp' => ['$s = "foo({tip: \'}\', background-color: \'#123456\'}) color: \'red\'";', FALSE],
+			'quoted brace, nested rule' => ['.a { content: "}"; background-color: #123456; .n { color: red; } }', FALSE],
 		];
 	}
 
@@ -474,9 +496,16 @@ final class ThemeSafetyUiTest extends TestCase
 		if ($inline !== NULL) {
 			return $inline;
 		}
-		$block = self::enclosingBlock($source, $offset);
+		// Brace counting reads the MASK; every character kept comes from the source. The mask
+		// is length-preserving, so an offset taken from one indexes the other unchanged.
+		$mask = self::structureMask($source);
+		$block = self::enclosingBlock($mask, $offset);
 		if ($block !== NULL) {
-			return self::withoutNestedBlocks(substr($source, $block[0], $block[1] - $block[0] + 1));
+			$length = $block[1] - $block[0] + 1;
+			return self::withoutNestedBlocks(
+				substr($source, $block[0], $length),
+				substr($mask, $block[0], $length)
+			);
 		}
 		return substr($source, max(0, $offset - 80), 160);
 	}
@@ -768,6 +797,86 @@ final class ThemeSafetyUiTest extends TestCase
 		return $end === FALSE ? strlen($source) - 1 : $end + 1;
 	}
 
+	/**
+	 * $source with block comments and brace-swallowing quoted spans blanked, so that brace
+	 * counting sees structure only.
+	 *
+	 * NOT built on withoutComments(). That mask deliberately over-masks -- it treats `#` as a
+	 * comment opener, so `background-color: #123456;` loses the rest of its line -- which is
+	 * safe where it is used, because over-masking a heredoc OPENER costs a candidate and
+	 * answers NULL. Brace counting has no such safety: a blanked `}` is a scope that stops
+	 * being found, and the fallback window then pairs a neighbouring element's colour.
+	 * Measured on `.a { content: "}"; background-color: #123456; } .b { color: red; }`,
+	 * withoutComments() blanks from the hex colour to end of input.
+	 *
+	 * So `#` is not a comment here. It opens every CSS hex colour and every id selector, and
+	 * this scanner has no per-language dispatch to tell those from a PHP comment. `//` is not
+	 * one either: it opens a protocol-relative URL as readily as a comment, and blanking to
+	 * end of line would eat the `}` of `.a { background: url(//cdn/x.png); }`. A bare brace
+	 * inside a `#` or `//` comment therefore still miscounts, exactly as it does on devel --
+	 * that is issue #2953, recorded rather than claimed fixed.
+	 *
+	 * A quoted span is blanked when it OPENS WHERE A VALUE GOES. Two quotes can straddle a
+	 * brace without being a string at all -- a pair of contractions in prose does exactly
+	 * that -- and blanking between them would eat real structure. opensAValue() is already
+	 * this file's answer to that question and is asked rather than duplicated. Blanking a
+	 * brace-free span is inert here, since nothing but braces is read from the mask, so no
+	 * further filter earns its place.
+	 */
+	private static function structureMask(string $source): string
+	{
+		// One entry, same reason and same shape as withoutComments(): scan() asks per
+		// background hit and finishes a source before it starts the next.
+		static $lastSource = NULL;
+		static $lastMask = NULL;
+		if ($lastSource === $source) {
+			return $lastMask;
+		}
+
+		$mask = $source;
+		$length = strlen($source);
+		for ($i = 0; $i < $length; $i++) {
+			if ($source[$i] === '/' && ($source[$i + 1] ?? '') === '*') {
+				$end = strpos($source, '*/', $i + 2);
+				if ($end === FALSE) {
+					continue;
+				}
+				for ($j = $i; $j <= $end + 1; $j++) {
+					if ($mask[$j] !== "\n" && $mask[$j] !== "\r") {
+						$mask[$j] = ' ';
+					}
+				}
+				$i = $end + 1;
+				continue;
+			}
+			if (!str_contains(self::DELIMITERS, $source[$i]) || !self::opensAValue($source, $i)) {
+				continue;
+			}
+			$close = NULL;
+			for ($j = $i + 1; $j < $length && $source[$j] !== "\n"; $j++) {
+				if ($source[$j] === '\\') {
+					$j++;
+					continue;
+				}
+				if ($source[$j] === $source[$i]) {
+					$close = $j;
+					break;
+				}
+			}
+			if ($close === NULL) {
+				continue;
+			}
+			for ($k = $i; $k <= $close; $k++) {
+				$mask[$k] = ' ';
+			}
+			$i = $close;
+		}
+
+		$lastSource = $source;
+		$lastMask = $mask;
+		return $mask;
+	}
+
 	private static function withoutComments(string $source): string
 	{
 		// scan() calls this once per background hit, and the mask depends only on the
@@ -863,13 +972,20 @@ final class ThemeSafetyUiTest extends TestCase
 		// Scope to the group the background is actually in, then drop that group's own
 		// nested groups. A literal carries the same nesting a rule does, so it gets the
 		// same treatment: a colour one level out is not the background's.
-		$group = self::enclosingBlock($literal, $rel);
+		// The literal's own delimiters are skipped: masking from offset 0 would start on the
+		// opening quote and swallow the whole literal, braces included.
+		$mask = ' ' . self::structureMask(substr($literal, 1));
+		$group = self::enclosingBlock($mask, $rel);
 		if ($group !== NULL) {
-			$out = self::withoutNestedBlocks(substr($literal, $group[0], $group[1] - $group[0] + 1));
+			$length = $group[1] - $group[0] + 1;
+			$out = self::withoutNestedBlocks(
+				substr($literal, $group[0], $length),
+				substr($mask, $group[0], $length)
+			);
 			$cuts = self::styleAttributeSpans($out);
 		} else {
 			$out = $literal;
-			$cuts = array_merge($spans, self::foreignBraceGroups($literal, $rel));
+			$cuts = array_merge($spans, self::foreignBraceGroups($mask, $rel));
 		}
 
 		foreach (array_reverse(self::mergedCuts($cuts)) as [$start, $end]) {
@@ -981,13 +1097,13 @@ final class ThemeSafetyUiTest extends TestCase
 	 * a token the source does not contain -- `c{n}olor: red;` becomes a `color:` that
 	 * pairs a background nothing pairs (issue #2934).
 	 */
-	private static function withoutNestedBlocks(string $block): string
+	private static function withoutNestedBlocks(string $block, string $mask): string
 	{
 		$out = '';
 		$depth = 0;
 		$length = strlen($block);
 		for ($i = 0; $i < $length; $i++) {
-			if ($block[$i] === '{') {
+			if ($mask[$i] === '{') {
 				$depth++;
 				if ($depth === 1) {
 					$out .= $block[$i];
@@ -996,7 +1112,7 @@ final class ThemeSafetyUiTest extends TestCase
 				}
 				continue;
 			}
-			if ($block[$i] === '}') {
+			if ($mask[$i] === '}') {
 				$depth--;
 				if ($depth === 0) {
 					$out .= $block[$i];
