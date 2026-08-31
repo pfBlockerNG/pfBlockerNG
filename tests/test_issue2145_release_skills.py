@@ -106,6 +106,33 @@ def test_changelog_skill_pins_family_scoped_bases_and_single_publication() -> No
     assert not missing, f"{CHANGELOG}: missing changelog contract {missing}"
 
 
+def test_changelog_skill_dispatches_and_watches_the_exact_downstream_run() -> None:
+    """issue #3004: publication must deterministically start the downstream
+    ingest -- GitHub suppresses the implicit release event for GITHUB_TOKEN
+    actors, so the skill itself dispatches `release-published.yml` with the exact
+    published Release identity, watches that exact run to completion, and reports
+    both downstream outcomes."""
+    content = _text(CHANGELOG)
+    required = (
+        "Dispatch `release-published.yml`",
+        "`release_id`",
+        "`release_tag`",
+        "publish response",
+        "never from a re-derivation",
+        "default branch",
+        "dispatch response",
+        "exact downstream run ID",
+        "attempt",
+        "wait for every job",
+        "Ports fork bump",
+        "pfBlockerNG/pkg ingest",
+        "before any redispatch",
+        "never republish the same version",
+    )
+    missing = [phrase for phrase in required if phrase not in content]
+    assert not missing, f"{CHANGELOG}: missing explicit downstream dispatch contract {missing}"
+
+
 def test_release_skills_reject_nightly_and_retired_shapes() -> None:
     for path in (RELEASE, CHANGELOG):
         content = _text(path)

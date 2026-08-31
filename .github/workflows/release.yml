@@ -92,8 +92,8 @@ on:
 # Least-privilege default; jobs that need more elevate explicitly below
 # (release: contents:write to create the draft; tag-release: contents:write to push
 # the tag; ui-suite: packages:read to pull the pfSense image from private GHCR).
-# The pkg-repo republish and the FreeBSD-ports bump are not here at all — they hang
-# off the real `release: published` event in release-published.yml.
+# The pkg-repo ingest and FreeBSD-ports bump are not here; release-with-changelog
+# dispatches release-published.yml explicitly after publication.
 permissions:
   contents: read
   packages: read
