@@ -613,6 +613,30 @@ def test_ip_page_renders_aggregate_select(webui: WebUI) -> None:
     )
 
 
+# issue #2895: the Firewall 'Auto' Rule Order help must state the REAL default -- the
+# verbatim order_0 label from $options_pass_order -- and must not name the retired
+# 'original format' option that no select row offers (a user following that help would
+# hunt for a nonexistent choice and be told the wrong rule order is active by default).
+# Substrings verified against the real pfblockerng_ip.php setHelp() copy and
+# $options_pass_order; pairs with tests/php/IpRuleOrderHelpParityTest.php, which pins
+# the same strings at unit level.
+_IP_ORDER_DEFAULT_LABEL = "| pfB_Pass/Match/Block/Reject | All other Rules | (Default format)"
+_IP_ORDER_RETIRED_OPTION_NAME = "original format"
+
+
+def test_ip_page_rule_order_help_states_the_order_zero_default(webui: WebUI) -> None:
+    """The IP page's 'Auto' Rule Order help states the verbatim order_0 default and
+    no longer names the retired 'original format' option (#2895).
+    """
+    resp = webui.get(_IP_PAGE)
+    assert resp.status_code == 200, f"GET {_IP_PAGE} -> HTTP {resp.status_code} (expected 200)"
+    body = resp.text
+    assert _IP_ORDER_DEFAULT_LABEL in body, "the rule-order help no longer states the verbatim order_0 default label"
+    assert _IP_ORDER_RETIRED_OPTION_NAME not in body, (
+        "the rule-order help still names the retired 'original format' option"
+    )
+
+
 def test_ip_page_renders_v6_suppression_section(webui: WebUI) -> None:
     """The IP page renders the new IPv6 Suppression section (ADR-53 Phase 6).
 
