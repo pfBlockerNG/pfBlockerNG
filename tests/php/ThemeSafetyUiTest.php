@@ -442,6 +442,36 @@ final class ThemeSafetyUiTest extends TestCase
 	}
 
 	/**
+	 * Pins scanTree()'s 'css' entry as aspirational rather than stale (issue #2963):
+	 * a .css probe under a scanned root must be reported, and an unlisted .scss with
+	 * identical content skipped -- so widening the list to everything fails the row
+	 * too. The rationale for keeping the entry lives on the list itself.
+	 */
+	public function testScanTreeReadsAStylesheetAndSkipsAnUnlistedExtension(): void
+	{
+		$root = sys_get_temp_dir() . '/pfb_themesafety_scantree_' . uniqid('', TRUE);
+		$dir = "{$root}/src/usr/local/www/pfblockerng";
+		$rule = ".pfb-generated { background-color: #f0f0f0; }\n";
+		try {
+			// Inside the try so a partially created tree is still torn down.
+			$this->assertTrue(mkdir($dir, 0755, TRUE), 'test setup: could not create the scan root');
+			$this->assertNotFalse(file_put_contents("{$dir}/pfb_probe.css", $rule),
+				'test setup: could not write the stylesheet');
+			$this->assertNotFalse(file_put_contents("{$dir}/pfb_probe.scss", $rule),
+				'test setup: could not write the unlisted-extension file');
+
+			$found = self::scanTree($root);
+
+			$this->assertArrayHasKey('src/usr/local/www/pfblockerng/pfb_probe.css', $found,
+				'a .css file under a scan root must be scanned -- css is in the extension list');
+			$this->assertArrayNotHasKey('src/usr/local/www/pfblockerng/pfb_probe.scss', $found,
+				'an extension absent from the list must be skipped, identical content notwithstanding');
+		} finally {
+			rmdir_recursive($root);
+		}
+	}
+
+	/**
 	 * @return array<string, list<array{line:int, excerpt:string}>>
 	 */
 	public static function scanTree(string $root): array
@@ -470,6 +500,8 @@ final class ThemeSafetyUiTest extends TestCase
 					continue;
 				}
 				$ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+				// 'css' matches nothing under these roots today; kept for a stylesheet that
+				// lands later, pinned by testScanTreeReadsAStylesheet...() (issue #2963).
 				if (!in_array($ext, ['php', 'inc', 'js', 'css'], TRUE)) {
 					continue;
 				}
