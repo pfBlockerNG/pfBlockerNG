@@ -57,6 +57,11 @@ constraint on ALL direct work: session context usage ≤ 50% — past 50% sessio
 
 ## The delegation contract (brief → handoff → gate)
 
+**Review legs are spawned by the seat landing the PR** (owner, 2026-08-31):
+independence comes from the reviewer's fresh context, not from a different box or
+seat — never route the four legs to another seat, and spawning them needs no ask
+beyond the assignment.
+
 Three fixed artifacts govern **every** delegated step — ticket packets under
 [`workflow.md`](workflow.md) and ad-hoc delegation alike. Design principle: **cheap models
 reliably fill required fields and reliably drop optional virtues**, so every check is named

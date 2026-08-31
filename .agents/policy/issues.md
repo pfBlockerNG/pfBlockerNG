@@ -6,6 +6,11 @@ Scope: work, triage, or transition GitHub issues. Load when: any issue work.
 (`gh issue view <N> --comments`); later comments routinely revise/narrow/downgrade/invalidate
 original (issue #25). Never act on opening text alone. Branch: `issue/{NN}-{slug}`.
 
+**Filing is a dev seat's job** (owner, 2026-08-31). A smoke seat that finds something
+relays it to a dev seat to open the issue or PR, unless the owner is working with that
+smoke seat directly. The finder still supplies the evidence; the dev seat files it and
+owns it from there.
+
 ## Scanner/audit finding gate
 
 Scanner, audit, or review finding **actionable** and may become GitHub issue only when

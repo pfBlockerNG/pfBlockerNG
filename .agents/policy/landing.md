@@ -20,6 +20,7 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 - **Bounded waits.** Every background wait self-terminating (hard iteration cap + wall-clock deadline inside loop), swept instant task reach terminal state.
 - **Worktree isolation.** All rebase/push work happen in dedicated worktree the session created, never primary checkout, never foreign worktree.
 - **User-directed merge.** Invoking landing flow IS user's standing authorization to merge once gates (review clean, PR open/ready/mergeable, CI green) pass; no extra per-merge confirmation needed.
+- **Assignment authorizes the whole chain, and nothing beyond it** (owner, 2026-08-31). "Work on issue N" authorizes issue→branch→PR→review→merge→close with no per-step confirmation; returning a green, fully gated PR to ask permission to merge is a defect. The grant covers THAT item's own artifacts only — never another action class, work item, or actor's PR: may MERGE is not may POST, and yesterday's grant is not today's. Outside it, ask.
 
 ## Preflight
 

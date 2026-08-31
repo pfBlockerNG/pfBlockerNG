@@ -2,6 +2,12 @@
 
 Scope: writing/changing tests, running suites. Load when: any change ships tests (every change does) or suite runs locally.
 
+**Runtime claims need a smoke seat** (owner, 2026-08-31): behaviour a checkout
+cannot exercise — real boot, real filesystem, real pfSense — is live-tested by a
+smoke seat and the result cited in the PR; a dev seat never reports runtime
+behaviour it only reasoned about. Cross-box roles and VM leasing: lab
+`docs/ROLES.md`.
+
 ## Test coverage (mandatory) — the five principles
 
 Tests = how change proves itself. **Five non-negotiable principles govern every change — unit, integration, E2E, smoke, UI. Each a hard gate: change violating any one is NOT done, no matter what line-coverage number says.**
