@@ -7095,19 +7095,8 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 		$pfbarr['descr'] = ' Auto ';
 	}
 
-	// Determine length of header to format log output
-	$tabtype = strlen($header);
-	if ($tabtype > 27) {
-		$pfbarr['logtab'] = '';
-	} elseif ($tabtype > 19) {
-		$pfbarr['logtab'] = "\t";
-	} elseif ($tabtype > 11) {
-		$pfbarr['logtab'] = "\t\t";
-	} elseif ($tabtype < 4) {
-		$pfbarr['logtab'] = "\t\t\t\t";
-	} else {
-		$pfbarr['logtab'] = "\t\t\t";
-	}
+	// issue #2989: fixed spaces keep status columns aligned after the 20-character ISO timestamp.
+	$pfbarr['logtab'] = str_repeat(' ', max(0, 28 - strlen($header)));
 
 	// Configure autoports/protocol and auto destination if required.
 	$conf_path = "installedpackages/{$confconfig}/config/{$key}";
