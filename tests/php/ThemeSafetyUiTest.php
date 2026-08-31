@@ -736,6 +736,30 @@ final class ThemeSafetyUiTest extends TestCase
 	 * little lets a commented-out `<<<EOT` claim a body. Line breaks are kept so the
 	 * marker's own line structure, and every offset, survive.
 	 */
+	/**
+	 * The offset of a comment's last character when one opens at $at, else NULL.
+	 *
+	 * Only opener detection reads this, and that is what lets it be blunt. Every comment
+	 * carrier is taken at face value -- `//`, `#` and the block form -- with none of the
+	 * discriminators the quote scan needed, because `#` also opens a colour and `//` also
+	 * opens a URL and misreading one HERE costs only a candidate `<<<` opener, which
+	 * answers NULL. In the quote scan the same mistake ate a real quote and laundered a
+	 * background, which is why that scan stopped recognising carriers altogether.
+	 */
+	private static function endOfComment(string $source, int $at): ?int
+	{
+		$next = $source[$at + 1] ?? '';
+		if ($source[$at] === '#' || $next === '/') {
+			$end = strpos($source, "\n", $at);
+			return $end === FALSE ? strlen($source) - 1 : $end;
+		}
+		if ($next !== '*') {
+			return NULL;
+		}
+		$end = strpos($source, '*/', $at + 2);
+		return $end === FALSE ? strlen($source) - 1 : $end + 1;
+	}
+
 	private static function withoutComments(string $source): string
 	{
 		// scan() calls this once per background hit, and the mask depends only on the
