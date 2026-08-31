@@ -147,6 +147,38 @@ PFB_LEASE_UPDATES
 
     configured_name=$(git config --get user.name 2>/dev/null) || configured_name=
     configured_email=$(git config --get user.email 2>/dev/null) || configured_email=
+    configured_signing_key=$(git config --get user.signingkey 2>/dev/null) || configured_signing_key=
+    configured_gpg_format=$(git config --get gpg.format 2>/dev/null) || configured_gpg_format=openpgp
+    [ -n "$configured_gpg_format" ] || configured_gpg_format=openpgp
+    configured_fingerprint=
+    if [ -n "$configured_signing_key" ]; then
+        case "$configured_gpg_format" in
+            ssh)
+                case "$configured_signing_key" in
+                    key::*)
+                        configured_key_record=$(printf '%s\n' "${configured_signing_key#key::}" |
+                            ssh-keygen -lf - 2>/dev/null) || configured_key_record=
+                        ;;
+                    *)
+                        configured_key_record=$(ssh-keygen -lf "$configured_signing_key" 2>/dev/null) ||
+                            configured_key_record=
+                        ;;
+                esac
+                case "$configured_key_record" in
+                    *" "*)
+                        configured_fingerprint=${configured_key_record#* }
+                        configured_fingerprint=${configured_fingerprint%% *}
+                        ;;
+                esac
+                ;;
+            openpgp)
+                configured_key_records=$(gpg --batch --with-colons --fingerprint \
+                    --list-keys "$configured_signing_key" 2>/dev/null) || configured_key_records=
+                configured_fingerprint=$(printf '%s\n' "$configured_key_records" |
+                    awk -F: '$1 == "fpr" { print $10; exit }')
+                ;;
+        esac
+    fi
 fi
 
     check_outgoing_commit() {
@@ -181,12 +213,40 @@ fi
             return 1
         fi
 
+        if [ -z "$configured_fingerprint" ]; then
+            echo "Agent commits must be signed by the configured user identity" >&2
+            return 1
+        fi
         agent_signature_status=$(git log -1 --format=%G? "$agent_commit" 2>/dev/null) || return 1
         agent_signer=$(git log -1 --format=%GS "$agent_commit" 2>/dev/null) || return 1
-        if [ "$agent_signature_status" = "G" ]; then
-            case "$agent_signer" in
-                "$configured_email"|*"<$configured_email>"*) return 0 ;;
-            esac
+        agent_signature_fingerprint=$(git log -1 --format=%GF "$agent_commit" 2>/dev/null) || return 1
+        agent_primary_fingerprint=$(git log -1 --format=%GP "$agent_commit" 2>/dev/null) || return 1
+
+        agent_signer_ok=0
+        case "$agent_signer" in
+            "$configured_email"|*"<$configured_email>"*) agent_signer_ok=1 ;;
+        esac
+
+        agent_fingerprint_ok=0
+        case "$configured_gpg_format" in
+            ssh)
+                if [ "$configured_fingerprint" = "$agent_signature_fingerprint" ] ||
+                    [ "$configured_fingerprint" = "$agent_primary_fingerprint" ]; then
+                    agent_fingerprint_ok=1
+                fi
+                ;;
+            openpgp)
+                if printf '%s\n%s\n' "$agent_signature_fingerprint" "$agent_primary_fingerprint" |
+                    LC_ALL=C grep -Fixq "$configured_fingerprint" >/dev/null; then
+                    agent_fingerprint_ok=1
+                fi
+                ;;
+        esac
+
+        if [ "$agent_signature_status" = "G" ] &&
+            [ "$agent_signer_ok" = "1" ] &&
+            [ "$agent_fingerprint_ok" = "1" ]; then
+            return 0
         fi
         echo "Agent commits must be signed by the configured user identity" >&2
         return 1
