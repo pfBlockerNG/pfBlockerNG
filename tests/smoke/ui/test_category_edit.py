@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from .. import helpers
-from .render_oracle import body_has_php_error, input_errors_block
+from .render_oracle import NO_INPUT_ERRORS, body_has_php_error, input_errors_block
 from .webui import extract_csrf_token, looks_like_login_page
 
 if TYPE_CHECKING:
@@ -93,7 +93,13 @@ def _del_rowid(vm: helpers.SmokeVM, cfg_root: str, rowid: int) -> None:
         raise RuntimeError(f"_del_rowid({cfg_root}/{rowid}) failed: rc={result.returncode} {result.stdout!r}")
 
 
-def _post_form(webui: WebUI, payload: dict[str, str], *, expect_rejection: bool = False) -> None:
+def _post_form(
+    webui: WebUI,
+    payload: dict[str, str],
+    *,
+    expect_rejection: bool = False,
+    expect_reason: str | None = None,
+) -> None:
     """POST a fully-enumerated category-edit payload (token harvested fresh).
 
     GETs the page to obtain a current ``__csrf_magic`` (the csrf-magic output
@@ -119,11 +125,16 @@ def _post_form(webui: WebUI, payload: dict[str, str], *, expect_rejection: bool 
     # unrelated no-op write would satisfy just as well. expect_rejection pins the
     # rejection itself, so those cases assert the thing they are actually testing.
     errors = input_errors_block(resp.text)
-    rejected = errors != "<no input-errors block in response>"
-    if expect_rejection:
-        assert rejected, "the page ACCEPTED a save this case requires it to reject: no input-errors block was rendered"
-    else:
-        assert not rejected, f"the page rejected this save: {errors}"
+    if not expect_rejection:
+        assert errors is None, f"the page rejected this save: {errors}"
+        return
+    assert errors is not None, f"the page ACCEPTED a save this case requires it to reject: {NO_INPUT_ERRORS}"
+    # WHICH rejection, not merely that one happened. Several validators append to
+    # $input_errors on the same page -- pfb_maxmind_credential_notice adds one to any
+    # geoip row when seeded credentials are missing -- so a case can go green on a
+    # rejection that has nothing to do with the guard it is testing.
+    if expect_reason is not None:
+        assert expect_reason in errors, f"rejected for the wrong reason: expected {expect_reason!r} in {errors!r}"
 
 
 def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
