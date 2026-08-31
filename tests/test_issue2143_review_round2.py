@@ -49,7 +49,8 @@ def test_build_record_step_uses_pinned_ports_sha_in_python_child(tmp_path: Path)
             "CLASSIFICATION": "final",
             "COMMIT": "0" * 40,
             "CREATED": "1700000000",
-            "MATRIX_ROW": '{"variant":"CE","pfsense_version":"2.8"}',
+            "MATRIX_ROW": '{"variant":"CE","pfsense_version":"2.8","extra_pkgs":[]}',
+            "EXTRA_PKGS": "[]",
             "PORTS_SHA": ports_sha,
             "DEPENDENCY_BUILDER": json.dumps(
                 {

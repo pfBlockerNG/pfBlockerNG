@@ -1276,6 +1276,7 @@ jobs:
           COMMIT:        ${{ needs.resolve-stamp.outputs.commit }}
           CREATED:       ${{ needs.resolve-stamp.outputs.created }}
           MATRIX_ROW:    ${{ toJson(matrix) }}
+          EXTRA_PKGS:   ${{ steps.extras.outputs.extra_pkgs }}
           PORTS_SHA:     ${{ needs.read-matrix.outputs.ports_sha }}
           DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
         run: |
@@ -1288,6 +1289,7 @@ jobs:
           from scripts.pfb_pkg import build_input_digest
 
           row = json.loads(os.environ["MATRIX_ROW"])
+          row["extra_pkgs"] = json.loads(os.environ["EXTRA_PKGS"])
           channel = os.environ["CHANNEL"]
           version = os.environ["PORTVERSION"]
           major, minor = row["pfsense_version"].split(".", 1)
@@ -1307,9 +1309,10 @@ jobs:
               "freebsd_ports_sha": os.environ["PORTS_SHA"],
               "route": f"{channel}/{row['variant'].lower()}-{major}.{minor}",
               "source_date_epoch": int(os.environ["CREATED"]),
-              "dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"]),
               "build_input_digest": "",
           }
+          if row["extra_pkgs"]:
+              record["dependency_builder"] = json.loads(os.environ["DEPENDENCY_BUILDER"])
           record["build_input_digest"] = build_input_digest(record)
           Path(os.environ["RUNNER_TEMP"], "build-record.json").write_text(
               json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",

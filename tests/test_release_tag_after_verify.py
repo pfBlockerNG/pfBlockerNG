@@ -891,34 +891,34 @@ def test_other_release_lines_keep_matrix_extra_packages(tmp_path: Path, extra_pk
     assert json.loads(_run_extra_pkgs_decision(tmp_path, "release/4.0", rendered)) == extra_pkgs
 
 
-def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -> None:
+def _run_build_record(
+    tmp_path: Path,
+    *,
+    source: str,
+    matrix_extra_pkgs: list[str],
+    effective_extra_pkgs: list[str],
+) -> dict[str, object]:
     script = _step_run_script(_step(_jobs()["build-pkgs-portable"], "Write the destination-bound build record"))
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    git_stub = bin_dir / "git"
-    git_stub.write_text("#!/bin/sh\nprintf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n")
-    git_stub.chmod(0o755)
     row = {
         "variant": "CE",
         "pfsense_version": "2.8",
         "freebsd_major": "15",
-        "extra_pkgs": ["textproc/py-charset-normalizer"],
+        "extra_pkgs": matrix_extra_pkgs,
     }
-    github_env = tmp_path / "github_env"
-    github_env.write_text("")
     completed = subprocess.run(  # noqa: S603
         ["sh", "-c", script],
         cwd=ROOT,
         env={
-            "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/local/bin",
-            "TAG": "v3.3.3.a1",
-            "CHANNEL": "testing",
-            "SOURCE": "release/3.3",
-            "PORTVERSION": "3.3.3.a1",
-            "CLASSIFICATION": "alpha",
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "TAG": "v3.3.5",
+            "CHANNEL": "stable",
+            "SOURCE": source,
+            "PORTVERSION": "3.3.5",
+            "CLASSIFICATION": "final",
             "COMMIT": "b" * 40,
             "CREATED": "1",
             "MATRIX_ROW": json.dumps(row),
+            "EXTRA_PKGS": json.dumps(effective_extra_pkgs),
             "PORTS_SHA": "a" * 40,
             "DEPENDENCY_BUILDER": json.dumps(
                 {
@@ -932,13 +932,45 @@ def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -
                 }
             ),
             "RUNNER_TEMP": str(tmp_path),
-            "GITHUB_ENV": str(github_env),
         },
         capture_output=True,
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert json.loads((tmp_path / "build-record.json").read_text())["matrix_row"] == row
+    return json.loads((tmp_path / "build-record.json").read_text())
+
+
+def test_release_33_build_record_uses_effective_empty_extras(tmp_path: Path) -> None:
+    record = _run_build_record(
+        tmp_path,
+        source="release/3.3",
+        matrix_extra_pkgs=["textproc/py-charset-normalizer"],
+        effective_extra_pkgs=[],
+    )
+
+    matrix_row = record["matrix_row"]
+    assert isinstance(matrix_row, dict)
+    assert matrix_row["extra_pkgs"] == []
+    assert "dependency_builder" not in record
+
+
+@pytest.mark.parametrize(
+    ("extra_pkgs", "has_dependency_builder"),
+    [([], False), (["textproc/py-charset-normalizer"], True)],
+)
+def test_build_record_only_records_dependency_builder_for_extra_packages(
+    tmp_path: Path,
+    extra_pkgs: list[str],
+    has_dependency_builder: bool,
+) -> None:
+    record = _run_build_record(
+        tmp_path,
+        source="release/4.0",
+        matrix_extra_pkgs=extra_pkgs,
+        effective_extra_pkgs=extra_pkgs,
+    )
+
+    assert ("dependency_builder" in record) is has_dependency_builder
 
 
 def test_release_33_decision_and_matrix_bindings_are_not_bypassed() -> None:
