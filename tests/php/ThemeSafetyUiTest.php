@@ -738,6 +738,16 @@ final class ThemeSafetyUiTest extends TestCase
 	 */
 	private static function withoutComments(string $source): string
 	{
+		// scan() calls this once per background hit, and the mask depends only on the
+		// source, so recomputing it per hit is the file walked once per declaration --
+		// 31s on a 156 KB source with 4000 hits, against 25 hits in the whole tree today.
+		// One entry is enough: scan() finishes a source before it starts the next.
+		static $lastSource = NULL;
+		static $lastMask = NULL;
+		if ($lastSource === $source) {
+			return $lastMask;
+		}
+
 		$out = $source;
 		$length = strlen($source);
 		$quote = NULL;
@@ -766,6 +776,9 @@ final class ThemeSafetyUiTest extends TestCase
 				$quote = $source[$i];
 			}
 		}
+
+		$lastSource = $source;
+		$lastMask = $out;
 		return $out;
 	}
 
