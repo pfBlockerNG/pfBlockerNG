@@ -122,8 +122,15 @@ def dirt(root: Path, report: Path) -> str:
     filter and been blamed on the revert.
     """
     try:
-        spec = ["--", f":(exclude,literal){report.resolve().relative_to(root)}"]
+        # Both sides resolved, or a root spelled through a symlink makes relative_to raise
+        # and the except below drops the exclusion entirely -- the report then reads as
+        # dirt and a clean tree is refused. main() already resolves --root, so this is
+        # belt and braces; it is here because dirt()'s correctness should not depend on a
+        # precondition its signature does not state.
+        spec = ["--", f":(exclude,literal){report.resolve().relative_to(root.resolve())}"]
     except ValueError:
+        # The report genuinely lives outside the tree. It is not dirt, so there is
+        # nothing to exclude and an empty pathspec is the right answer.
         spec = []
     status = _run(["git", "status", "--porcelain", *spec], root)
     if status.returncode != 0:

@@ -406,6 +406,36 @@ def test_the_tree_is_clean_again_afterwards(repo: Path, killing_patch: Path) -> 
 # --------------------------------------------------------------------------- #
 
 
+def test_the_report_is_excluded_even_when_the_root_reaches_it_through_a_symlink(
+    repo: Path,
+) -> None:
+    """Scenario: a caller hands dirt() a root that is not the path the filesystem resolves to.
+
+    Given a root reached through a symlink, and the JUnit report inside it,
+
+    When dirt() builds its exclude pathspec,
+
+    Then the report is still excluded -- report.resolve() returns the real path, so
+      relative_to() on an unresolved root raises ValueError, the except swallows it, and
+      the pathspec silently becomes EMPTY. The report then counts as tree dirt and a run
+      that should have worked refuses with a dirty-tree error.
+
+    main() resolves --root before it gets here, so this is not reachable through the CLI
+    today. It is pinned because dirt()'s correctness otherwise rests on a precondition
+    nothing states and nothing checks -- the next caller has no way to know. Fails closed
+    either way: it cannot pass a left-applied mutation, only refuse a clean tree.
+
+    Raised by claude-smoke reviewing this PR; the reachable half was already fixed.
+    """
+    link = repo.parent / "through-a-symlink"
+    link.symlink_to(repo, target_is_directory=True)
+    (repo / "junit.xml").write_text("<testsuite/>\n", encoding="utf-8")
+
+    assert mt.dirt(link, link / "junit.xml") == "", (
+        "the report must be excluded regardless of how the caller spelled the root"
+    )
+
+
 def test_the_report_the_suite_writes_is_not_mistaken_for_dirt(repo: Path, killing_patch: Path) -> None:
     """Scenario: the suite writes its JUnit inside the tree it grades, which is the norm.
 
