@@ -105,10 +105,14 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		$root = var_export(self::ROOT, TRUE);
 		$widget = var_export(self::WIDGET, TRUE);
 		$postCode = var_export($post, TRUE);
-		// The child picks its own per-invocation shim name, as the exemplar mandates, but
-		// underneath a base directory the PARENT owns -- otherwise the name is unknowable
-		// here and residue cannot be observed at all. The mkdir guard, the random suffix
-		// and the shutdown hook below are unchanged.
+		// The child names its shim under a base directory the PARENT owns. The sibling
+		// classes instead glob sys_get_temp_dir() and filter by the child's PID from
+		// proc_get_status(); that works, but the glob sees every concurrent class's shims,
+		// so it needs a before/after snapshot and is still exposed to PID reuse. A private
+		// base needs neither. #2849 extracts these five sites into one trait and should
+		// take this shape, not the glob -- the exemplar deliberately diverges from its
+		// four copies until then. The mkdir guard, the random suffix and the shutdown
+		// hook are unchanged.
 		//
 		// Recorded for the tearDown() sweep before it is created: every assertion between
 		// here and the cleanup below aborts the method and skips that cleanup, so a
@@ -159,6 +163,8 @@ PHP;
 		$this->assertIsInt($marker, $stdout);
 		$state = json_decode(substr($stdout, $marker + strlen('__PFB_STATE__')), TRUE, 512, JSON_THROW_ON_ERROR);
 		$this->assertIsArray($state);
+		// Captured BEFORE the cleanup below, which is what erases the evidence. Reversing
+		// these two makes every residue assertion in this class vacuously true.
 		$entries = scandir($base);
 		$this->assertIsArray($entries, "shim base directory unreadable: {$base}");
 		$residue = array_values(array_diff($entries, ['.', '..']));
