@@ -207,6 +207,52 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     The stderr should equal 'Co-authored-by trailers are forbidden'
   End
 
+  write_scissored_diff_message() {
+    printf '%s\n' \
+      'subject' \
+      '' \
+      'body' \
+      "$1" \
+      'diff --git a/file b/file' \
+      '@@ -1 +1 @@' \
+      ' Co-authored-by: Pair Human <pair@example.com>' \
+      > "${primary}/.git/worktrees/wt/PCM_MSG"
+  }
+
+  It 'ignores a diff-context Co-authored-by below the default scissors marker'
+    write_scissored_diff_message '# ------------------------ >8 ------------------------'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/default-scissors.before"
+    When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/default-scissors.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
+  End
+
+  It 'ignores a diff-context Co-authored-by below a custom-comment scissors marker'
+    git_fixture -C "$primary" config core.commentChar ';'
+    write_scissored_diff_message '; ------------------------ >8 ------------------------'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/custom-scissors.before"
+    When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/custom-scissors.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
+  End
+
+  It 'rejects an actual Co-authored-by trailer before the scissors marker'
+    printf '%s\n' \
+      'subject' \
+      '' \
+      'Co-authored-by: Pair Human <pair@example.com>' \
+      '# ------------------------ >8 ------------------------' \
+      'diff --git a/file b/file' \
+      '@@ -1 +1 @@' \
+      ' Co-authored-by: Pair Human <pair@example.com>' \
+      > "${primary}/.git/worktrees/wt/PCM_MSG"
+    When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should not equal 0
+    The stderr should equal 'Co-authored-by trailers are forbidden'
+  End
+
   It 'ignores the retired Claude-specific identity config'
     git_fixture -C "$primary" config coauthor.claude.name 'Claude Sonnet 5'
     git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com

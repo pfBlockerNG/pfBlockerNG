@@ -49,7 +49,16 @@ fi
 
 msg_file=$1
 
-if LC_ALL=C grep -qi '^[[:space:]]*co-authored-by[[:space:]]*:' "$msg_file" 2>/dev/null; then
+comment_string=$(git config --get core.commentString 2>/dev/null ||
+	git config --get core.commentChar 2>/dev/null || printf '#')
+[ "$comment_string" = auto ] && comment_string='#'
+scissors_marker="${comment_string} ------------------------ >8 ------------------------"
+message_body=$(awk -v marker="$scissors_marker" '
+	$0 == marker || index($0, "------------------------ >8 ------------------------") { exit }
+	{ print }
+' "$msg_file") || exit 1
+if printf '%s\n' "$message_body" |
+	LC_ALL=C grep -qi '^[[:space:]]*co-authored-by[[:space:]]*:'; then
 	echo "Co-authored-by trailers are forbidden" >&2
 	exit 1
 fi
