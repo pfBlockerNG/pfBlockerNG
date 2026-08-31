@@ -104,8 +104,21 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    cat > "$stubdir/graphify" <<'GRAPHIFY'
+    graphify_package="$fixture/toolvenv/package/graphify"
+    mkdir -p "$graphify_package"
+    interpreter="$fixture/toolvenv/bin/python3"
+    mkdir -p "$fixture/toolvenv/bin"
+    cat > "$interpreter" <<'INTERPRETER'
 #!/bin/sh
+case "$*" in
+  *os.path.dirname*) printf '%s\n' "$CODEGRAPH_GRAPHIFY_PACKAGE"; exit 0 ;;
+  *activate_language_overrides*) exit 0 ;;
+esac
+exec sh "$@"
+INTERPRETER
+    chmod +x "$interpreter"
+    printf '#!%s\n' "$interpreter" > "$stubdir/graphify"
+    cat >> "$stubdir/graphify" <<'GRAPHIFY'
 [ "$#" -eq 3 ] && [ "$1" = extract ] && [ "$3" = --code-only ] || exit 9
 mkdir -p "$2/graphify-out"
 true > "$2/graphify-out/graph.json"
@@ -116,7 +129,7 @@ GRAPHIFY
 exit 0
 SERENA
     chmod +x "$stubdir/codegraph" "$stubdir/graphify" "$stubdir/serena"
-    export CODEGRAPH_LOG="$codegraph_log"
+    export CODEGRAPH_LOG="$codegraph_log" CODEGRAPH_GRAPHIFY_PACKAGE="$graphify_package"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }

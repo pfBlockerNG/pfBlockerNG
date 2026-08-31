@@ -32,10 +32,11 @@ scripts/agent/check-agent-config-parity.sh'
     gitc config gpg.format ssh
     true > "$repo/key.pub"
     gitc config user.signingkey "$repo/key.pub"
-    mkdir -p "$repo/.githooks" "$repo/scripts" "$repo/src" "$repo/vendor/bin"
+    mkdir -p "$repo/.githooks" "$repo/scripts/agent" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
       && chmod +x "$repo/.githooks/check-commit-identity.sh"
+    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/patch-graphify.sh"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
 

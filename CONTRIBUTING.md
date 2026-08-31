@@ -30,7 +30,7 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `CLA
   [pfBlockerNG/FreeBSD-ports](https://github.com/pfBlockerNG/FreeBSD-ports), branch
   `pfblockerng/use-github` (the build-input branch carrying our port; ADR-17 self-hosted
   distribution — we do **not** use the upstream `pfsense/FreeBSD-ports`)
-- The developer toolchain below (Python via `uv`, PHP, and the pinned shell/workflow linters)
+- The developer toolchain below (`uv`, PHP, and the pinned shell/workflow linters)
 
 ### Toolchain setup
 
@@ -127,11 +127,10 @@ The repository ships hooks in `.githooks/` — a tracked directory, so they are
 shared and reviewed (the default `.git/hooks` is local-only and cannot be
 committed):
 
-- **`pre-commit`** runs the fast linters and the unit suites (Ruff, pytest,
-  markdownlint, ShellCheck + `sh -n`, shellspec, `php -l`; PHPStan and PHPUnit
-  only when `vendor/` is present) and blocks the commit on any failure. A check
-  whose tool is not installed is skipped (CI is the hard gate); bypass with
-  `git commit --no-verify`.
+- **`pre-commit`** reapplies the temporary Graphify `.inc=php` compatibility patch,
+  then runs the fast linters and policy checks. Patch failure blocks even an empty
+  commit; a missing optional lint tool is skipped (CI is the hard gate). Agents do
+  not bypass hooks with `git commit --no-verify`.
 - **`pre-push`** enforces the release tag scheme before anything is pushed (single source:
   [`scripts/release-version.sh`](scripts/release-version.sh)):
 
@@ -143,11 +142,16 @@ committed):
 | Malformed or mismatched trailer | push is rejected |
 
 Activate the hooks once after cloning (git cannot auto-apply a committed hooks
-path):
+path). This command requires `uv`, installs or upgrades Graphify, and applies the
+temporary [Graphify-Labs/graphify#3075](https://github.com/Graphify-Labs/graphify/pull/3075)
+`.inc=php` patch before enabling the hooks:
 
 ```sh
-sh scripts/setup-hooks.sh    # sets core.hooksPath to .githooks
+sh scripts/setup-hooks.sh
 ```
+
+Until a Graphify release includes that upstream change, setup and every commit
+must apply the patch; an installation that cannot be patched fails closed.
 
 These are local client-side guards. CI enforces the same checks (and the tag
 rules) server-side, so anything that bypasses a hook is still caught by GitHub

@@ -43,6 +43,11 @@ POLICY_MARKER
     cp "$policy_marker" "$fixture/policy.before"
 
     helper_log="$fixture/helpers.log"
+    cat > "$repository/scripts/agent/ensure-graphify.sh" <<'ENSURE_GRAPHIFY'
+#!/bin/sh
+printf 'ensure-graphify:%s\n' "$1" >> "$DEBIAN_HELPER_LOG"
+uv tool install --upgrade graphifyy
+ENSURE_GRAPHIFY
     cat > "$repository/scripts/setup-hooks.sh" <<'SETUP_HOOKS'
 #!/bin/sh
 printf 'setup-hooks:%s\n' "$*" >> "$DEBIAN_HELPER_LOG"
@@ -574,7 +579,7 @@ UNMANAGED_UV
     The path "$home/.serena/serena_config.yml" should not be exist
   End
 
-  It 'disables only the root Serena dashboard key and calls both repository helpers for the default repository'
+  It 'disables only the root Serena dashboard key and calls every repository helper for the default repository'
     When run sh -c 'cd "$1" && exec sh "$2"' _ "$repository" "$script_abs"
     The status should equal 0
     The contents of file "$home/.serena/serena_config.yml" should equal "$(printf '%s\n' \
@@ -583,7 +588,8 @@ UNMANAGED_UV
       'projects:' \
       '  demo:' \
       '    web_dashboard: true')"
-    The contents of file "$helper_log" should equal "$(printf 'setup-hooks:\ninit-worktree-tools:%s' "$repository")"
+    The contents of file "$helper_log" should equal \
+      "$(printf 'ensure-graphify:%s\nsetup-hooks:\ninit-worktree-tools:%s' "$repository" "$repository")"
     The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should include 'wt:config shell install --yes'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
@@ -597,7 +603,7 @@ UNMANAGED_UV
       'projects:' \
       '  demo:' \
       '    web_dashboard: true')"
-    The file "$helper_log" should not be exist
+    The contents of file "$helper_log" should equal "$(printf 'ensure-graphify:%s' "$repository")"
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
@@ -908,7 +914,7 @@ CONFIG
     The contents of file "$worktrunk_config" should equal "$(cat "$worktrunk_multiline_expected")"
     The value "$(wc -c < "$worktrunk_config" | tr -d '[:space:]')" should equal \
       "$(wc -c < "$worktrunk_multiline_expected" | tr -d '[:space:]')"
-    The file "$helper_log" should not be exist
+    The contents of file "$helper_log" should equal "$(printf 'ensure-graphify:%s' "$repository")"
   End
 
   It 'inserts only the global Worktrunk key while preserving hostile comments, tables, and nested paths byte-for-byte'
@@ -986,6 +992,7 @@ CONFIG
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^wt:config shell install --yes$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]
+    Assert [ "$(grep -c "^ensure-graphify:$repository$" "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
   End
@@ -1006,12 +1013,21 @@ CONFIG
     Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 1 ]
   End
 
-  It 'requires both repository setup helpers before running either one'
+  It 'requires every repository setup helper before running any of them'
     rm -f "$repository/scripts/agent/init-worktree-tools.sh"
     When run sh "$script_abs" "$repository"
     The status should not equal 0
     The stderr should include 'init-worktree-tools.sh'
     The file "$helper_log" should not be exist
+  End
+
+  It 'fails before tool installation when the shared Graphify helper is missing'
+    rm -f "$repository/scripts/agent/ensure-graphify.sh"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'ensure-graphify.sh'
+    The file "$helper_log" should not be exist
+    The file "$tool_log" should not be exist
   End
 
   It 'rejects more than one repository argument'

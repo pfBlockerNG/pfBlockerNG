@@ -34,7 +34,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
   }
   cleanup() {
     rm -rf "$repo" "$stubdir"
-    unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+    unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PATCH_GRAPHIFY_LOG PATCH_GRAPHIFY_RC
   }
   Before 'make_repo'
   After 'cleanup'
@@ -354,7 +354,14 @@ scripts/agent/check-agent-config-parity.sh'
   # gate decides the hook verdict.
   make_wired_repo() {
     make_repo
-    mkdir -p "$repo/src" "$repo/scripts" "$repo/tests" "$repo/.claude/hooks"
+    mkdir -p "$repo/src" "$repo/scripts/agent" "$repo/tests" "$repo/.claude/hooks"
+    patch_graphify_log="$repo/patch-graphify.log"
+    export PATCH_GRAPHIFY_LOG="$patch_graphify_log"
+    cat > "$repo/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf '%s\n' patch-graphify >> "$PATCH_GRAPHIFY_LOG"
+exit "${PATCH_GRAPHIFY_RC:-0}"
+PATCH_GRAPHIFY
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
     # Commit the manifest so the index starts EMPTY: the allow-empty example
     # below must exercise the hook's no-staged exit, not a staged manifest
@@ -405,6 +412,23 @@ scripts/agent/check-agent-config-parity.sh'
     The status should equal 1
     The stderr should include '[pre-commit] FAILED: commit identity checker missing or not executable: '
     The output should include '[pre-commit] commit identity & signing prerequisites'
+  End
+
+  It 'runs the Graphify patch guard before the no-staged-files exit'
+    make_wired_repo
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include '[pre-commit] Graphify .inc language override'
+    The contents of file "$patch_graphify_log" should equal 'patch-graphify'
+  End
+
+  It 'fails closed when the Graphify patch guard fails with an empty index'
+    make_wired_repo
+    export PATCH_GRAPHIFY_RC=17
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The stderr should include '[pre-commit] FAILED: Graphify .inc language override'
+    The contents of file "$patch_graphify_log" should equal 'patch-graphify'
   End
 
   It 'does not suppress the other staged gates when the identity check fails'

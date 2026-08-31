@@ -242,7 +242,9 @@ in `read-version-matrix.sh`.
 | --- | --- |
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
-| [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` and initialize CodeGraph when installed (run once after cloning). |
+| [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: install/patch Graphify, point git at `.githooks`, and initialize CodeGraph when installed. |
+| [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade plus temporary `.inc=php` patch entry point. |
+| [`agent/patch-graphify.sh`](agent/patch-graphify.sh) | Idempotently apply Graphify-Labs/graphify#3075; fails closed when the selected launcher cannot identify its package. |
 | [`agent/ensure-codegraph.sh`](agent/ensure-codegraph.sh) | Idempotently create an exact-root CodeGraph index for one checkout. |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |

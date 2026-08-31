@@ -7,8 +7,8 @@
 # reports success (issue #2810). Upstream fixes that in Graphify-Labs/graphify#3075,
 # which is unreleased, so the patch rides in .agents/patches/ and is re-applied after
 # every install: a bare `uv tool upgrade graphifyy` replaces site-packages and reverts
-# it. Delete this script, its patch, and its two call sites once a released graphifyy
-# provides the override API -- this script no-ops from that release on.
+# it. Delete this script, its patch, and its bootstrap call sites once a released
+# graphifyy provides the override API -- this script no-ops from that release on.
 #
 # No repository is touched and no cache is purged: the patch salts the AST cache key
 # with the remapped language (rcfile.cache_salt, cache._salted_key, salt= threaded
@@ -28,12 +28,6 @@ fail() {
 	exit 1
 }
 
-# A Graphify this script cannot reach is a skip, never a dead worktree cut and never a
-# guess. The tracked graph's include-node floor catches a real install that got skipped.
-skip() {
-	echo "patch-graphify.sh: $*; skipping the $UPSTREAM override" >&2
-	exit 0
-}
 
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
@@ -49,16 +43,14 @@ main() {
 	require_tool sed
 	graphify_bin=$(command -v graphify) ||
 		fail "Graphify is not installed; run 'uv tool install --upgrade graphifyy' first"
-	# A uv tool venv carries its Python minor version in the site-packages path, so the
-	# interpreter that owns the package is read off the CLI's own shebang -- never
-	# hardcoded, and never the ambient python3: a different interpreter imports a
-	# DIFFERENT graphify, so falling back patches an unrelated package and reports
-	# success. A wrapper or shim that hides the interpreter is therefore a skip.
+	# The interpreter that owns the package is read off the CLI's own shebang -- never
+	# hardcoded, and never the ambient python3. A wrapper or shim must fail closed:
+	# another interpreter could patch an unrelated package and report success.
 	interpreter=$(sed -n '1s/^#![[:space:]]*//p' "$graphify_bin")
 	interpreter=${interpreter%% *}
 	case "$interpreter" in
 		/*python*) ;;
-		*) skip "'$graphify_bin' does not name a Python interpreter on its shebang" ;;
+		*) fail "'$graphify_bin' does not name a Python interpreter on its shebang; reinstall the direct uv launcher with 'uv tool install --reinstall graphifyy'" ;;
 	esac
 
 	# Both probes run isolated (-I), which since Python 3.4 keeps the caller's directory
@@ -69,7 +61,7 @@ main() {
 	# interpreter already resolves its own graphify.
 	package=$("$interpreter" -I -c \
 		'import graphify, os; print(os.path.dirname(graphify.__file__))' 2>/dev/null) || package=''
-	[ -n "$package" ] || skip "cannot locate an importable Graphify package for '$graphify_bin'"
+	[ -n "$package" ] || fail "cannot locate an importable Graphify package for '$graphify_bin'; reinstall it with 'uv tool install --reinstall graphifyy'"
 	[ -d "$package" ] || fail "Graphify package directory '$package' does not exist"
 	site=$(CDPATH='' cd "$package/.." && pwd -P) || exit 2
 
