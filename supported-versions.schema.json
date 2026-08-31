@@ -40,15 +40,15 @@
           },
           "freebsd_major": {
             "type": "string",
-            "description": "FreeBSD major version digit only, e.g. '15'. Every pfSense-pkg-pfBlockerNG port is NO_ARCH (issue #1806): one wildcard-ABI .pkg build (FreeBSD:<major>:*) serves every CPU arch AND every edition/version sharing this major, so the BUILD matrix (read-version-matrix.sh --print-build) dedupes to one row per distinct freebsd_major."
+            "description": "FreeBSD major version digit only, e.g. '15'. Every pfSense-pkg-pfBlockerNG port is NO_ARCH (issue #1806): one wildcard-ABI .pkg build (FreeBSD:<major>:*) serves every CPU arch, and the BUILD matrix (read-version-matrix.sh --print-build) dedupes to one row per exact runtime tuple (freebsd_major, php_version, py_flavor) — issue #2926."
           },
           "php_version": {
             "type": "string",
-            "description": "PHP version string, e.g. '8.3'. Passed to both builders to pin USES=php so dep names match the target pfSense. Entries sharing a freebsd_major MUST agree on php_version (the BUILD-matrix dedup hard-errors otherwise)."
+            "description": "PHP version string, e.g. '8.3'. Passed to both builders to pin USES=php so dep names match the target pfSense. A freebsd_major MAY carry entries with different php_version (issue #2926): each exact (freebsd_major, php_version, py_flavor) tuple becomes its own BUILD row; only identical tuples merge."
           },
           "py_flavor": {
             "type": "string",
-            "description": "Python flavor string, e.g. 'py311'. Passed to build-pkg-linux.yml (portable builder). build-pkg.yml derives it from the VM's installed Python. Entries sharing a freebsd_major MUST agree on py_flavor (the BUILD-matrix dedup hard-errors otherwise)."
+            "description": "Python flavor string, e.g. 'py311'. Passed to build-pkg-linux.yml (portable builder). build-pkg.yml derives it from the VM's installed Python. A freebsd_major MAY carry entries with different py_flavor (issue #2926): each exact (freebsd_major, php_version, py_flavor) tuple becomes its own BUILD row; only identical tuples merge."
           },
           "status": {
             "type": "string",
@@ -81,7 +81,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Port origins (e.g. 'textproc/py-charset-normalizer') this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry sharing this freebsd_major. Omit or [] when the edition's own repo already carries everything; entries sharing a freebsd_major union their extra_pkgs in the BUILD matrix."
+            "description": "Port origins (e.g. 'textproc/py-charset-normalizer') this entry's edition needs that its OWN upstream pkg repo does not carry (issue #1806 — e.g. Netgate builds some py3xx-* ports for Plus only). scripts/build-dep-pkg-portable.py builds each as a NO_ARCH .pkg straight from the FreeBSD-ports port definition; build-repo-portable.py --dep-pkgs folds the result into the release/nightly catalogs of every entry whose FreeBSD-major ABI matches the dep AND that declares that origin in its own extra_pkgs. Omit or [] when the edition's own repo already carries everything; identical BUILD tuples union their extra_pkgs in the BUILD matrix."
           },
           "role": {
             "type": "string",
