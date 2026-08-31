@@ -636,9 +636,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}', $refusal,
 			'the ET branch must not bypass the wrapper by clearing live artifacts directly');
 
-		$finalize = strpos(self::$source, 'pfb_download_finalize_text(', $scopeEnd);
+		$finalize = strpos(self::$source, 'pfb_download_finalize_text(', $start);
 		$this->assertNotFalse($finalize);
-		$this->assertLessThan($finalize, $scopeEnd,
+		$this->assertGreaterThan($scopeEnd, $finalize,
 			'the accepted raw body hash and text finalization must happen after processet succeeds');
 	}
 
