@@ -105,6 +105,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     author_email=$3
     committer_name=$4
     committer_email=$5
+    target_branch=${6:-devel}
     cd "${base}/A" || return 1
     git_fixture fetch -q origin || return 1
     git_fixture checkout -q -B integrity origin/devel || return 1
@@ -125,8 +126,8 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       git_fixture "$@" || return 1
 
     local_sha=$(git_fixture rev-parse refs/heads/integrity) || return 1
-    remote_sha=$(git_fixture rev-parse refs/remotes/origin/devel) || return 1
-    agent_hook "refs/heads/integrity $local_sha refs/heads/devel $remote_sha"
+    remote_sha=$(git_fixture rev-parse "refs/remotes/origin/${target_branch}") || return 1
+    agent_hook "refs/heads/integrity $local_sha refs/heads/${target_branch} $remote_sha"
   }
 
   It 'denies an agent history rewrite when the remote moved past the tracking ref'
@@ -225,6 +226,14 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   It 'allows a signed outgoing agent commit with the configured identity'
     When call outgoing_agent_hook valid A a@example.com A a@example.com
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'allows a rebased signed topic whose base is already on another remote branch'
+    git_fixture -C "${base}/A" -c core.hooksPath=/dev/null \
+      push -q origin "${a_local}:refs/heads/topic"
+    When call outgoing_agent_hook valid A a@example.com A a@example.com topic
     The status should equal 0
     The stderr should equal ''
   End

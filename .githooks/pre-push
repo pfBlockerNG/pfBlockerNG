@@ -190,9 +190,9 @@ PFB_LEASE_UPDATES
         case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
         [ "$local_sha" = "$z40" ] && continue
         if [ "$remote_sha" = "$z40" ]; then
-            outgoing_commits=$(git rev-list "$local_sha" --not --remotes="$remote_name" 2>/dev/null) || exit 1
+            outgoing_commits=$(git rev-list "$local_sha" --not --remotes="${remote_name}/*" 2>/dev/null) || exit 1
         else
-            outgoing_commits=$(git rev-list "$local_sha" "^$remote_sha" 2>/dev/null) || exit 1
+            outgoing_commits=$(git rev-list "$local_sha" "^$remote_sha" --not --remotes="${remote_name}/*" 2>/dev/null) || exit 1
         fi
         while IFS= read -r outgoing_commit; do
             [ -z "$outgoing_commit" ] && continue
