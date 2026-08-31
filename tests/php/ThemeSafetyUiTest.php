@@ -448,37 +448,32 @@ final class ThemeSafetyUiTest extends TestCase
 	 * dead. The entry is KEPT as aspirational, and this row is what makes that a
 	 * decision rather than a guess -- it builds a throwaway root, puts a stylesheet
 	 * with an unpaired opaque background under one of the four scanned directories,
-	 * and asserts scanTree() reports it.
-	 *
-	 * The second assertion pins the filter's other side: an extension absent from the
-	 * list is skipped despite identical content. Without it the row would still pass
-	 * if the list were widened to accept everything.
+	 * and asserts scanTree() reports it. The second assertion pins the filter's
+	 * other side, so widening the list to everything fails the row too.
 	 */
 	public function testScanTreeReadsAStylesheetAndSkipsAnUnlistedExtension(): void
 	{
 		$root = sys_get_temp_dir() . '/pfb_themesafety_scantree_' . uniqid('', TRUE);
 		$dir = "{$root}/src/usr/local/www/pfblockerng";
-		$this->assertTrue(mkdir($dir, 0755, TRUE), 'test setup: could not create the scan root');
-
 		$rule = ".pfb-generated { background-color: #f0f0f0; }\n";
 		try {
-			$this->assertNotFalse(file_put_contents("{$dir}/pfb_probe.css", $rule),
-				'test setup: could not write the stylesheet');
+			// Inside the try so a partially created tree is still torn down.
+			$this->assertTrue(mkdir($dir, 0755, TRUE), 'test setup: could not create the scan root');
+			file_put_contents("{$dir}/pfb_probe.css", $rule);
+			// Asserted, unlike the .css write: a silent failure here would make the
+			// assertArrayNotHasKey below pass vacuously.
 			$this->assertNotFalse(file_put_contents("{$dir}/pfb_probe.scss", $rule),
 				'test setup: could not write the unlisted-extension file');
 
 			$found = self::scanTree($root);
 
 			$this->assertArrayHasKey('src/usr/local/www/pfblockerng/pfb_probe.css', $found,
-				'a .css file under a scan root must be scanned -- css is in the extension list');
+				'scanTree() must reach and scan a .css file under a scan root -- if this fails '
+				. 'while the background-syntax rows still pass, the extension list is the cause');
 			$this->assertArrayNotHasKey('src/usr/local/www/pfblockerng/pfb_probe.scss', $found,
 				'an extension absent from the list must be skipped, identical content notwithstanding');
 		} finally {
-			@unlink("{$dir}/pfb_probe.css");
-			@unlink("{$dir}/pfb_probe.scss");
-			for ($d = $dir; str_starts_with($d, $root); $d = dirname($d)) {
-				@rmdir($d);
-			}
+			rmdir_recursive($root);
 		}
 	}
 
@@ -511,6 +506,9 @@ final class ThemeSafetyUiTest extends TestCase
 					continue;
 				}
 				$ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+				// 'css' matches nothing under these roots today; kept deliberately for a
+				// stylesheet that lands later, and pinned by
+				// testScanTreeReadsAStylesheetAndSkipsAnUnlistedExtension() (issue #2963).
 				if (!in_array($ext, ['php', 'inc', 'js', 'css'], TRUE)) {
 					continue;
 				}
