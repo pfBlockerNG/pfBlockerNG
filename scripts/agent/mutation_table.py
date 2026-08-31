@@ -94,6 +94,7 @@ class Row:
     patch: Path
     label: list[str]
     failures: list[str]
+    reported: int
 
 
 def _run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
@@ -228,6 +229,18 @@ def _parse_report(report: Path) -> ET.Element:
         raise Unproducible(f"malformed JUnit report at {report}: {exc}") from exc
 
 
+def _failures_of(root: ET.Element) -> list[str]:
+    """Every failing or erroring testcase id under $root, in document order."""
+    failures: list[str] = []
+    for case in root.iter("testcase"):
+        if case.find("failure") is None and case.find("error") is None:
+            continue
+        classname = case.get("classname", "")
+        name = case.get("name", "")
+        failures.append(flatten(f"{classname}::{name}" if classname else name))
+    return failures
+
+
 def parse_failures(report: Path) -> list[str]:
     """Every failing/erroring testcase id in a JUnit report, in document order.
 
@@ -281,7 +294,9 @@ def _head(root: Path) -> str:
     return rev.stdout.strip()
 
 
-def measure(root: Path, suite: list[str], report: Path, patch: Path | None, timeout: float | None) -> list[str]:
+def measure(
+    root: Path, suite: list[str], report: Path, patch: Path | None, timeout: float | None
+) -> tuple[list[str], int]:
     """Run the suite once, optionally under a patch, and return the ids that failed.
 
     The patch is reverted in a ``finally`` and the revert is VERIFIED, because a mutation
@@ -305,7 +320,9 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
                 f"the suite wrote no report at {report} (exit {run.returncode}): "
                 f"{(run.stderr or run.stdout).strip()[-400:]}"
             )
-        failures = parse_failures(report)
+        parsed = _parse_report(report)
+        failures = _failures_of(parsed)
+        reported = len(list(parsed.iter("testcase")))
     except BaseException:
         # Something else is already on its way out. Undo the patch anyway, and REPORT rather
         # than raise -- raising here replaces the failure that caused the mess, which is the
@@ -319,7 +336,7 @@ def measure(root: Path, suite: list[str], report: Path, patch: Path | None, time
         problem = undo(root, report, patch)
         if problem:
             raise Unproducible(problem)
-    return failures
+    return failures, reported
 
 
 def undo(root: Path, report: Path, patch: Path) -> str:
@@ -395,8 +412,18 @@ def render(head: str, suite: list[str], baseline: int, rows: list[Row]) -> str:
         lines.append("")
         lines.append(f"mutation: {row.patch.name}")
         lines.extend(f"  {line}" for line in row.label)
+        if row.reported != baseline:
+            # A mutation that changes WHAT RUNS makes the count a statement about a different
+            # suite. "killed NOTHING" would then be confidently false -- the fixtures did not
+            # survive to run -- and "killed 1" indistinguishable from a healthy pin while the
+            # rest of the suite silently vanished. Reachable by this tool's own primary use:
+            # mutating a data provider shrinks PHPUnit's collection with no failure at all.
+            lines.append(
+                f"  INCOMPARABLE: {row.reported} tests ran, baseline ran {baseline}. This "
+                "mutation changed what runs, so the count below is not a verdict on fixtures."
+            )
         if row.failures:
-            lines.append(f"  killed {len(row.failures)}:")
+            lines.append(f"  killed {len(row.failures)} of {row.reported} tests run:")
             lines.extend(f"    {f}" for f in row.failures)
         else:
             lines.append("  killed NOTHING -- this code has no failing fixture")
@@ -406,7 +433,7 @@ def render(head: str, suite: list[str], baseline: int, rows: list[Row]) -> str:
 
 
 def longest_backtick_run(text: str) -> int:
-    """The longest run of backticks in $text, so a fence can be built that clears it."""
+    """The longest run of backticks in $text. Kept named because it is what the fence is."""
     return max((len(m) for m in re.findall(r"`+", text)), default=0)
 
 
@@ -435,13 +462,12 @@ def main(argv: list[str] | None = None) -> int:
         _require_untracked_report(root, report)
         _require_clean(root, report)
         head = _head(root)
-        baseline_failures = measure(root, suite, report, None, args.timeout)
+        baseline_failures, baseline_count = measure(root, suite, report, None, args.timeout)
         if baseline_failures:
             raise Unproducible(
                 "the baseline is not green, so no row could tell a killed test from an "
                 "already-dead one:\n  " + "\n  ".join(baseline_failures)
             )
-        baseline_count = len(list(_parse_report(report).iter("testcase")))
         if baseline_count == 0:
             raise Unproducible("the baseline ran no tests; the suite command selects nothing")
         rows = []
@@ -450,7 +476,8 @@ def main(argv: list[str] | None = None) -> int:
                 text = patch.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 raise Unproducible(f"cannot read {patch}: {exc}") from exc
-            rows.append(Row(patch, render_patch(text), measure(root, suite, report, patch, args.timeout)))
+            failures, reported = measure(root, suite, report, patch, args.timeout)
+            rows.append(Row(patch, render_patch(text), failures, reported))
     except Unproducible as exc:
         print(f"mutation_table.py: {exc}", file=sys.stderr)
         return 2
