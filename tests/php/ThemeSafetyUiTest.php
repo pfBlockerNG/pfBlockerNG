@@ -279,10 +279,19 @@ final class ThemeSafetyUiTest extends TestCase
 			// `\\/*` still starts a comment. A scan that skips the escaped character never
 			// sees it begin.
 			'escaped comment opener'    => ['.a { \\/* } */ background-color: #123456; } .b { color: red; }', FALSE],
-			// The mask is threaded through the counters that decide a literal's own groups,
-			// so each consuming call site needs a row.
+			// The mask is threaded through four counting call sites and each decides cases
+			// the others do not, so each needs its own row. Two of these were added after a
+			// review found their lines revertible with the suite still green.
 			'quoted brace, literal grp' => ['$s = "foo({tip: \'}\', background-color: \'#123456\'}) color: \'red\'";', FALSE],
 			'quoted brace, nested rule' => ['.a { content: "}"; background-color: #123456; .n { color: red; } }', FALSE],
+			'quoted brace, foreign grp' => ['$s = "background-color: \'#123456\'; foo({tip: \'}\', color: \'red\'})";', FALSE],
+			'quoted brace, literal nest'=> ['$s = "foo({background-color: \'#123456\', tip: \'}\', sub: {color: \'red\'}})";', FALSE],
+			// An escaped quote does not close its span, so the brace after it is still data.
+			// Without that skip the span ends early and the `}` is counted as structure.
+			'escaped quote in the mask' => ['.a { content: "\\"}"; background-color: #123456; } .b { color: red; }', FALSE],
+			// A span may not cross a line. Two apostrophes on separate lines are prose, and
+			// pairing them would blank the structure between -- which is what this is.
+			'apostrophes across lines'  => [".a { background-color: #123456; x: 'tis }\n.b { color: red; don't }", FALSE],
 		];
 	}
 
@@ -842,9 +851,11 @@ final class ThemeSafetyUiTest extends TestCase
 					continue;
 				}
 				for ($j = $i; $j <= $end + 1; $j++) {
-					if ($mask[$j] !== "\n" && $mask[$j] !== "\r") {
-						$mask[$j] = ' ';
-					}
+					// Newlines are blanked with everything else. withoutComments() preserves
+					// them because its output feeds offset-bearing regex work; nothing reads
+					// anything but braces from THIS mask, so preserving them here was a habit
+					// copied from that function rather than a requirement of this one.
+					$mask[$j] = ' ';
 				}
 				$i = $end + 1;
 				continue;
