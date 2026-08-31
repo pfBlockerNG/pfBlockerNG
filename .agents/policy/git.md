@@ -88,10 +88,12 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   `git config pfblockerng.allowprimarycommit true`), then rejects every
   `Co-authored-by:` trailer and any agent author/committer identity that differs
   from configured `user.name` / `user.email`; runs even under `--no-verify`.
-- **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; also
-  denies agent (Claude, Codex, Copilot, Grok, or OMP marker set) branch push
-  that would rewrite remote history the agent never fetched (advertised remote oid must equal
-  remote-tracking ref — issue #1307, `--force-with-lease`'s check enforced by effect).
+- **`commit-msg`** — rejects any `Co-authored-by:` trailer after Git's message
+  editor runs, closing the post-`prepare-commit-msg` insertion window.
+- **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
+  agent branch rewrites over unfetched remote history (issue #1307); and validates every
+  outgoing agent commit's final message, configured author/committer identity, and good
+  signature from the configured user email.
 
 ## Rebase and diff hygiene
 
@@ -142,12 +144,11 @@ user's normal signing configuration produces the signature. Commit messages carr
 `Co-authored-by:` trailers. Provider-specific and legacy `coauthor.*` configuration is
 ignored.
 
-`.githooks/prepare-commit-msg` enforces this before every commit, including merge and
-squash messages. It rejects any `Co-authored-by:` trailer and, when an agent marker is
-present, rejects author or committer identity that differs from configured `user.name` /
-`user.email`. Client markers are `CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus
-`COPILOT_AGENT_PROMPT` for Copilot's cloud agent), `GROK_SESSION_ID` / `GROK_AGENT`, and
-`OMP_CLI` / `PI_CLI`.
+`.githooks/prepare-commit-msg` enforces configured identity and rejects early
+`Co-authored-by:` trailers; `.githooks/commit-msg` repeats the trailer check after Git's
+message editor runs. Identity enforcement applies when a client marker is present:
+`CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus `COPILOT_AGENT_PROMPT` for
+Copilot's cloud agent), `GROK_SESSION_ID` / `GROK_AGENT`, and `OMP_CLI` / `PI_CLI`.
 
 ## Author, committer, and signing (full text)
 

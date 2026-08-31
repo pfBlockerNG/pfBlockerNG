@@ -18,9 +18,8 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
   `GROK_SESSION_ID` and `GROK_AGENT` (probed on 1.0.4, 2026-08-15: exported into
   nested sh/bash). Never unset to dodge guard it trips.
-- Human owner stays author, committer, signer. `Co-authored-by:` trailer for
-  Grok emitted only from locally configured `coauthor.grok.*` identity; none
-  configured → disclose authorship in PR body instead.
+- Grok adds no commit or public-body attribution. Configured user identity remains
+  authoritative.
 - Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
   Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
   `plan`) rather than inventing a fourth role tree.

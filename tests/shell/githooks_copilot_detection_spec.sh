@@ -51,6 +51,12 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
       -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI sh "$pcm_hook" "$2"
   }
 
+  copilot_cloud_hook_in() {
+    cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
+      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
+      COPILOT_AGENT_PROMPT='work the issue' sh "$pcm_hook" "$2"
+  }
+
   It 'ignores the legacy fake Claude identity in a Copilot session'
     git_fixture -C "$primary" config coauthor.name Claude
     git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
@@ -112,6 +118,22 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
     The contents of file "$wt_msg" should not include 'copilot'
   End
 
+  It 'leaves a clean Copilot CLI message byte-identical'
+    cp "$wt_msg" "${base}/copilot-cli.before"
+    When run copilot_hook_in "$wt" "$wt_msg"
+    The status should equal 0
+    The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/copilot-cli.before" "$wt_msg"; printf '%s' "$?")" -eq 0 ]
+  End
+
+  It 'leaves a clean Copilot cloud message byte-identical'
+    cp "$wt_msg" "${base}/copilot-cloud.before"
+    When run copilot_cloud_hook_in "$wt" "$wt_msg"
+    The status should equal 0
+    The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/copilot-cloud.before" "$wt_msg"; printf '%s' "$?")" -eq 0 ]
+  End
+
   It 'blocks a Copilot commit in the primary checkout (issue #1262)'
     When run copilot_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
@@ -125,12 +147,7 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
   End
 
   It 'detects the Copilot cloud agent, which sets its own prompt variable'
-    cloud() {
-      cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
-        COPILOT_AGENT_PROMPT='work the issue' sh "$pcm_hook" .git/PCM_MSG
-    }
-    When run cloud
+    When run copilot_cloud_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
     The stderr should include 'primary checkout'
   End

@@ -52,6 +52,12 @@ Describe 'Grok detection in the git hooks (issue #2439)'
       -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI sh "$pcm_hook" "$2"
   }
 
+  grok_marker_hook_in() {
+    cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_AGENT -u GROK_SESSION_ID \
+      -u OMP_CLI -u PI_CLI "$3" sh "$pcm_hook" "$2"
+  }
+
   It 'ignores the legacy fake Claude identity in a Grok session'
     git_fixture -C "$primary" config coauthor.name Claude
     git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
@@ -115,6 +121,21 @@ Describe 'Grok detection in the git hooks (issue #2439)'
     The contents of file "$wt_msg" should not include 'grok'
   End
 
+  Context 'independent Grok marker successes'
+    Parameters
+      agent GROK_AGENT=1
+      session GROK_SESSION_ID=grok-test
+    End
+
+    It "leaves a clean GROK_$1-only message byte-identical"
+      cp "$wt_msg" "${base}/grok-marker.before"
+      When run grok_marker_hook_in "$wt" "$wt_msg" "$2"
+      The status should equal 0
+      The stderr should equal ''
+      Assert [ "$(cmp -s "${base}/grok-marker.before" "$wt_msg"; printf '%s' "$?")" -eq 0 ]
+    End
+  End
+
   It 'blocks a Grok commit in the primary checkout (issue #1262)'
     When run grok_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
@@ -128,23 +149,13 @@ Describe 'Grok detection in the git hooks (issue #2439)'
   End
 
   It 'detects GROK_AGENT alone, without GROK_SESSION_ID'
-    agent_only() {
-      cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID -u OMP_CLI -u PI_CLI \
-        GROK_AGENT=1 sh "$pcm_hook" .git/PCM_MSG
-    }
-    When run agent_only
+    When run grok_marker_hook_in "$primary" .git/PCM_MSG GROK_AGENT=1
     The status should equal 1
     The stderr should include 'primary checkout'
   End
 
   It 'detects GROK_SESSION_ID alone, without GROK_AGENT'
-    session_only() {
-      cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_AGENT -u OMP_CLI -u PI_CLI \
-        GROK_SESSION_ID=grok-test sh "$pcm_hook" .git/PCM_MSG
-    }
-    When run session_only
+    When run grok_marker_hook_in "$primary" .git/PCM_MSG GROK_SESSION_ID=grok-test
     The status should equal 1
     The stderr should include 'primary checkout'
   End

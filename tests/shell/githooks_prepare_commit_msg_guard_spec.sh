@@ -75,6 +75,15 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       -u OMP_CLI -u PI_CLI sh "$hook" "$2"
   }
 
+  marker_mismatch_hook_in() {
+    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+      -u OMP_CLI -u PI_CLI "$3" \
+      GIT_AUTHOR_NAME='Pair Human' GIT_AUTHOR_EMAIL=pair@example.com \
+      GIT_COMMITTER_NAME='Pair Human' GIT_COMMITTER_EMAIL=pair@example.com \
+      sh "$hook" "$2"
+  }
+
   It 'blocks an agent commit in the primary checkout'
     When run agent_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
@@ -97,9 +106,11 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'passes a Codex commit in a linked worktree'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/codex.before"
     When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/codex.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
   End
 
   It 'blocks a Grok commit in the primary checkout'
@@ -121,9 +132,11 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'passes an OMP commit in a linked worktree'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/omp.before"
     When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/omp.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
   End
 
   It 'blocks a PI_CLI-only commit in the primary checkout'
@@ -133,9 +146,11 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'passes a PI_CLI-only commit in a linked worktree'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/pi.before"
     When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/pi.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
   End
 
   Context 'forbidden Co-authored-by trailers'
@@ -156,16 +171,20 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     End
   End
 
-  Context 'forbidden trailers in generated commit messages'
+  Context 'forbidden trailers across commit message sources'
     Parameters
-      merge
-      squash
+      empty ''
+      message message
+      template template
+      merge merge
+      squash squash
+      commit commit
     End
 
-    It "rejects a pre-seeded forbidden trailer in a $1 message"
+    It "rejects a pre-seeded forbidden trailer for the $1 source"
       printf '%s\n\n%s\n' 'msg' 'Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>' \
         > "${primary}/.git/worktrees/wt/PCM_MSG"
-      When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG "$1"
+      When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG "${2:-}"
       The status should not equal 0
       The stderr should equal 'Co-authored-by trailers are forbidden'
       The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>'
@@ -289,6 +308,8 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     Parameters
       'Pair Human' human@example.com
       Human pair@example.com
+      human human@example.com
+      Human Human@Example.com
     End
 
     It "rejects mismatched author identity $1 <$2>"
@@ -325,6 +346,46 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     End
   End
 
+  Context 'identity mismatch through each independent agent marker'
+    Parameters
+      claude CLAUDECODE=1
+      codex CODEX_THREAD_ID=codex-test
+      'copilot CLI' COPILOT_CLI=1
+      'copilot cloud' 'COPILOT_AGENT_PROMPT=work the issue'
+      'grok agent' GROK_AGENT=1
+      'grok session' GROK_SESSION_ID=grok-test
+      omp OMP_CLI=1
+      pi PI_CLI=1
+    End
+
+    It "rejects mismatched author and committer identities through $1"
+      When run marker_mismatch_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG "$2"
+      The status should not equal 0
+      The stderr should equal 'Agent commits must use the configured user identity'
+    End
+  End
+
+  It 'does not let allowprimarycommit exempt an identity mismatch'
+    git_fixture -C "$primary" config pfblockerng.allowprimarycommit true
+    When run marker_mismatch_hook_in "$primary" .git/PCM_MSG CLAUDECODE=1
+    The status should not equal 0
+    The stderr should equal 'Agent commits must use the configured user identity'
+  End
+
+  It 'does not let CLAUDE_CODE_USER_EMAIL exempt an identity mismatch'
+    managed_mismatch_hook() {
+      cd "$primary" && env -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
+        CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=human@example.com \
+        GIT_AUTHOR_NAME='Pair Human' GIT_AUTHOR_EMAIL=pair@example.com \
+        GIT_COMMITTER_NAME='Pair Human' GIT_COMMITTER_EMAIL=pair@example.com \
+        sh "$hook" .git/PCM_MSG
+    }
+    When run managed_mismatch_hook
+    The status should not equal 0
+    The stderr should equal 'Agent commits must use the configured user identity'
+  End
+
   # The money rows: a REAL verify-skipping commit (git commit -n skips
   # pre-commit/commit-msg but not prepare-commit-msg). The human control row
   # proves the abort is CAUSED by the agent guard, not by the harness setup.
@@ -350,6 +411,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
         && echo change >> seed.txt && git_fixture add seed.txt \
         && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          -u OMP_CLI -u PI_CLI \
           git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit_human
