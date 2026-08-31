@@ -252,9 +252,9 @@ def validate_build_record(
         raise _record_error("record must be an object")
     _json_safe(record)
     keys = set(record)
-    if keys != _RECORD_FIELDS:
-        missing = sorted(_RECORD_FIELDS - keys)
-        unknown = sorted(keys - _RECORD_FIELDS)
+    missing = sorted((_RECORD_FIELDS - {"dependency_builder"}) - keys)
+    unknown = sorted(keys - _RECORD_FIELDS)
+    if missing or unknown:
         raise _record_error(f"exact fields required (missing={missing}, unknown={unknown})")
     if type(record["schema"]) is not int or record["schema"] != 1:
         raise _record_error("schema must be integer 1")
@@ -262,6 +262,8 @@ def validate_build_record(
     if channel not in ("stable", "testing", "edge", "nightly"):
         raise _record_error("channel is invalid")
     row = validate_build_matrix_row(record["matrix_row"])
+    if row["extra_pkgs"] and "dependency_builder" not in record:
+        raise _record_error("dependency_builder is required when matrix_row.extra_pkgs is non-empty")
     if abi is not None:
         if not isinstance(abi, str) or not re.fullmatch(r"FreeBSD:[0-9]+:[A-Za-z0-9._+-]+", abi):
             raise _record_error("abi is malformed")
@@ -281,7 +283,8 @@ def validate_build_record(
     epoch = record["source_date_epoch"]
     if type(epoch) is not int or epoch < 0:
         raise _record_error("source_date_epoch must be a non-negative integer")
-    validate_dependency_builder(record["dependency_builder"])
+    if "dependency_builder" in record:
+        validate_dependency_builder(record["dependency_builder"])
 
     expected_recipe = CANONICAL_EMITTED_IDENTITY if channel == "stable" else f"{CANONICAL_EMITTED_IDENTITY}-{channel}"
     if record["emitted_identity"] != CANONICAL_EMITTED_IDENTITY or record["native_recipe_identity"] != expected_recipe:

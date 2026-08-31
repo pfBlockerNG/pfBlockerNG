@@ -541,9 +541,10 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert pins["env"]["INPUT_SOURCE"] == "${{ github.event.inputs.source }}"
     assert pins["env"]["SOURCE_SHA"] == "${{ steps.destinations.outputs.source_sha }}"
     assert "map(.extra_pkgs = [])" in pins["run"]
-    assert "CREATED" in record["env"] and "DEPENDENCY_BUILDER" in record["env"]
+    assert {"CREATED", "DEPENDENCY_BUILDER", "EXTRA_PKGS"} <= record["env"].keys()
     assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
-    assert '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
+    assert 'if row["extra_pkgs"]:' in record["run"]
+    assert 'record["dependency_builder"] = json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
     assert 'record["build_input_digest"] = build_input_digest(record)' in record["run"]
     assert '--ports-sha "$PORTS_SHA"' in build["run"]
     assert '--source-date-epoch "$CREATED"' in build["run"]
