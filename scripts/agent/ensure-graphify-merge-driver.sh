@@ -30,7 +30,11 @@ main() {
 	}
 	# The hook this installs rebuilds the graph, so the override has to be on the
 	# freshly installed package first (issue #2810).
+	# Prefer the requested checkout's own copy, but a foreign target (e.g.
+	# FreeBSD-ports) ships no patch of its own (issue #3004): fall back to the
+	# trusted sibling next to this helper instead of failing the run.
 	patch_graphify=$root/scripts/agent/patch-graphify.sh
+	[ -f "$patch_graphify" ] || patch_graphify=$(dirname "$0")/patch-graphify.sh
 	sh "$patch_graphify" || {
 		echo "ensure-graphify-merge-driver.sh: Graphify language-override patch failed for '$root'" >&2
 		exit 1
