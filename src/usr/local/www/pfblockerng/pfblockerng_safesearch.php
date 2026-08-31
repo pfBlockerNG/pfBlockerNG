@@ -144,7 +144,7 @@ $section->addInput(new Form_Select(
 	$pconfig['safesearch_youtube'],
 	$options_safesearch_youtube
 ))->setHelp('Select YouTube Restrictions. You can check it by visiting: '
-		. '<a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/check_content_restrictions">Check Youtube Content Restrictions</a>.')
+		. '<a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/check_content_restrictions">Check YouTube Content Restrictions</a>.')
   ->setAttribute('style', 'width: auto');
 $form->add($section);
 print($form);
