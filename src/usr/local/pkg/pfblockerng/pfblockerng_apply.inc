@@ -3822,12 +3822,24 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 									// Process Emerging Threats IQRisk if required
 								if (strpos($row['url'], 'iprepdata.txt') !== FALSE) {
+									$et_status = 0;
 									pfb_apply_gunzip_orig_pipeline(
 										"{$file_dwn}.raw", "{$file_dwn}.orig",
-										static function (string $orig) use ($pfb, $header_esc, $elog): void {
-											exec("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}");
+										static function (string $orig) use ($pfb, $header_esc, $elog, &$et_status): void {
+											// issue #2776: the reuse arm reads processet()'s exit status too --
+											// the gated shape issue #2683 gave pfb_download()'s et arm, with the
+											// same extraction ceiling riding along via pfb_extract_cmd().
+											exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $et_output, $et_status);
 										}
 									);
+									// issue #2776: an aborted reuse pass must not read as completed -- the
+									// pfB_Match_ET_* publications it should have refreshed stay stale, so
+									// escalate the way the download arm's failure above already does.
+									if (!pfb_download_extraction_succeeded($et_status)) {
+										pfb_logger("\n[ {$header} ] ET processet failed on reuse (script exit {$et_status})" . pfb_extract_cap_note($et_status), 2);
+										$pfb_dl_failed = TRUE;
+										pfb_download_ledger_failure('ip', $alias, $header, $pfb['dbdir']);
+									}
 								}
 								}
 								else {
