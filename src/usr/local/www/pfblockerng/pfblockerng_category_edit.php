@@ -1496,7 +1496,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 						<li>'Alias Native' lists are kept in their Native format without any modifications.</li></ul>
 				<span class=\"text-danger\">Note: </span><ul>
 					When manually creating 'Alias' type firewall rules; Prefix the Firewall rule Description with <strong>pfb_</strong>
-					This will ensure that that Dashboard widget reports those statistics correctly. <strong>Do not</strong> 
+					This will ensure that Dashboard widget reports those statistics correctly. <strong>Do not</strong> 
 					prefix with (pfB_) as those Rules will be auto-removed by package when 'Auto' rules are defined.</ul>
 			</div>";
 }
@@ -1565,7 +1565,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 		$pconfig['aliaslog'],
 		$options_aliaslog
 	))->setHelp('Default: <strong>Enable</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
-		. 'This can be overriden by the \'Force Global IP Logging\' option on the IP Tab.')
+		. 'This can be overridden by the \'Force Global IP Logging\' option on the IP Tab.')
 	  ->setAttribute('style', 'width: auto');
 
 	$section->addInput(new Form_Select(
@@ -1647,8 +1647,8 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 			"Custom {$custom_location}",
 			'text',
 			$pconfig['aliasaddr_' . $advmode]
-		))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-			. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
+		))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>
+			Do not manually enter Address(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 			. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)<br />Must be an address-type (Host, Network, URL or URL Table) alias.")
 		  ->setWidth(8);
 		$section->add($group);
@@ -1730,8 +1730,7 @@ if ($gtype == 'ipv4') {
 		'Suppression CIDR Limit',
 		$pconfig['suppression_cidr'],
 		$options_suppression_cidr
-	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv4 Alias'
-		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
+	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv4 Alias (Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
 	  ->setAttribute('style', 'width: auto');
 }
 
@@ -1742,8 +1741,7 @@ if ($gtype == 'ipv6') {
 		'Suppression CIDR Limit',
 		$pconfig['suppression_cidr_v6'],
 		$options_suppression_cidr_v6
-	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv6 Alias'
-		. '(Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
+	))->setHelp('When suppression is enabled, this option will limit the CIDR block for this entire IPv6 Alias (Excluding the Custom List IP addresses)<br />Default: <strong>Disabled</strong> (No CIDR limit)')
 	  ->setAttribute('style', 'width: auto');
 }
 
@@ -1752,7 +1750,7 @@ $section->addInput(new Form_Select(
 	'cURL Interface',
 	$pconfig['srcint'],
 	$options_srcint
-))->setHelp('Use this interface when downloadling lists. This option sets <code>CURLOPT_INTERFACE</code>'
+))->setHelp('Use this interface when downloading lists. This option sets <code>CURLOPT_INTERFACE</code>'
 	. ' to the value selected above for all Feeds in this Alias.')
   ->setAttribute('style', 'width: auto');
 
