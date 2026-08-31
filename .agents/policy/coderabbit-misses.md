@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `ee9490e9`  geoip: fix bare-text `<ul>` help markup and make long paths/URL wrap  (#2927) — two quota notices, no review; four exact-head legs + verifier PASS; rebase CI/gates PASS.
 - `3b622554`  pfblockerng: route runtime toggles through config gateway  (#2933) — two quota notices, no review; four final exact-head legs and canonical/CI PASS.
 - `4e040033`  unbound: bound daemon startup wait  (#2925) — two quota notices, no review; four exact-head legs, canonical/CI/live PASS.
 - `c25135ab`  smoke: stop reading the due ledger while Run Now writes it  (#2921) — never asked; test-only, slot held for shipped code. Three legs, oracle driven against fake ledgers. CI green.
