@@ -14,7 +14,7 @@ set -eu
 
 root=$(git rev-parse --show-toplevel)
 script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
-sh "$script_dir/agent/ensure-graphify.sh" "$root"
+sh "$script_dir/agent/ensure-graphify.sh" "$root" >/dev/null
 git -C "$root" config core.hooksPath .githooks
 
 if command -v codegraph >/dev/null 2>&1; then

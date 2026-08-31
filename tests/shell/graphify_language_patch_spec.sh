@@ -29,6 +29,7 @@ case "\$*" in
   *activate_language_overrides*)
     grep -q 'def activate_language_overrides' '$package/rcfile.py' 2>/dev/null || exit 1
     ;;
+  *'import graphify'*) : ;;
   *) exit 9 ;;
 esac
 INTERPRETER
@@ -62,6 +63,9 @@ INTERPRETER
     mkdir -p "$checkout/scripts/agent" "$checkout/.agents/patches" || return 1
     cp "$project_root/scripts/agent/patch-graphify.sh" "$checkout/scripts/agent/" || return 1
     cp "$project_root/scripts/agent/agent_env.sh" "$checkout/scripts/agent/" || return 1
+    if [ -f "$project_root/scripts/agent/resolve-graphify.sh" ]; then
+      cp "$project_root/scripts/agent/resolve-graphify.sh" "$checkout/scripts/agent/" || return 1
+    fi
     script_abs="$checkout/scripts/agent/patch-graphify.sh"
 
     cat > "$checkout/.agents/patches/graphify-3075-language-overrides.patch" <<'PATCH'
@@ -181,6 +185,41 @@ RCFILE
     Assert [ -z "$(find "$fixture/site packages" \( -name '*.~[0-9]*~' -o \( -name '*.orig' ! -name 'with.orig' \) \) -print)" ]
   End
 
+
+  It 'patches through a real-shape uv shell trampoline under a tool path with spaces'
+    uv_tool_dir="$fixture/home with spaces/.local/share/uv/tools"
+    uv_tool_bin="$fixture/home with spaces/.local/bin"
+    uv_python="$uv_tool_dir/graphifyy/bin/python"
+    make_interpreter "$uv_python"
+    mkdir -p "$uv_tool_bin"
+    {
+      printf '#!/bin/sh\n'
+      printf "'''exec' '%s' \"\$0\" \"\$@\"\n" "$uv_python"
+      printf "' '''\n"
+      printf 'exit 0\n'
+    } > "$uv_tool_bin/graphify"
+    chmod +x "$uv_tool_bin/graphify"
+    resolver_path="$fixture/resolver path"
+    mkdir -p "$resolver_path"
+    for tool in dirname grep patch sed sh; do
+      ln -s "$(command -v "$tool")" "$resolver_path/$tool"
+    done
+    cat > "$resolver_path/uv" <<UV
+#!/bin/sh
+case "\$*" in
+  'tool dir --bin') printf '%s\n' '$uv_tool_bin' ;;
+  'tool dir') printf '%s\n' '$uv_tool_dir' ;;
+  *) exit 9 ;;
+esac
+UV
+    chmod +x "$resolver_path/uv"
+    When run env PATH="$resolver_path" sh "$script_abs"
+    The status should equal 0
+    The stderr should include 'applied Graphify-Labs/graphify#3075'
+    The stderr should include "$package"
+    The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
+    The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
+  End
   It 'fails closed when the graphify shebang does not name a Python interpreter'
     # The ambient python3 is NOT a fallback: another interpreter imports another
     # graphify, so falling back patches an unrelated package and reports success. A

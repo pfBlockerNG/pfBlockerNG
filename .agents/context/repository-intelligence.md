@@ -18,10 +18,15 @@ Load when: every agent session, from `AGENTS.md`.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
   installs or upgrades `graphifyy>=0.9.51` with `uv` and runs
-  `scripts/agent/patch-graphify.sh`, before activating `.githooks`. Missing `uv`,
-  a wrapper launcher without a Python shebang, or an interpreter that cannot import
-  the selected Graphify package fails closed. `setup-agent-tools.sh` runs this canonical
-  setup at Graphify's install-order slot, before ast-grep and semgrep.
+  `scripts/agent/patch-graphify.sh`, before activating `.githooks`.
+  `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH` and only
+  when none exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper
+  remains authoritative and fails closed. A Python shebang is used directly. Only the
+  exact uv-owned launcher may use uv's `/bin/sh` trampoline, in which case the resolver
+  validates and uses the `graphifyy` tool environment's Python. Missing `uv` or a
+  launcher/interpreter that cannot import its selected Graphify package fails closed.
+  `setup-agent-tools.sh` runs this canonical setup at Graphify's install-order slot,
+  before ast-grep and semgrep.
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`. It runs
   `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index, reapplies
   the Graphify patch, then runs `graphify update <root>` when the root graph exists.
@@ -33,11 +38,13 @@ Load when: every agent session, from `AGENTS.md`.
   includes from roughly 767 nodes to roughly 30 while extraction still succeeds.
   Until a release includes Graphify-Labs/graphify#3075, the fix rides as
   `.agents/patches/graphify-3075-language-overrides.patch`. The tracked
-  `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify-merge-driver.sh`
-  delegates to the shared installer before `graphify hook install`;
-  `init-worktree-tools.sh` patches before update; and `.githooks/pre-commit` patches
-  before its no-staged-files exit, repairing a bare Graphify upgrade before the
-  post-commit rebuild. The include-node floor in `tests/test_cross_agent_tooling.py`
+  `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify.sh` emits the
+  validated executable launcher path; `ensure-graphify-merge-driver.sh` captures and
+  quotes that path for target-rooted `hook install`; `init-worktree-tools.sh` resolves
+  the same launcher for update; and `.githooks/pre-commit` resolves and patches again
+  before its no-staged-files exit, repairing a bare Graphify upgrade in a fresh process
+  before the post-commit rebuild. The include-node floor in
+  `tests/test_cross_agent_tooling.py`
   remains the final graph guard. Delete this machinery once the upstream change ships.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,

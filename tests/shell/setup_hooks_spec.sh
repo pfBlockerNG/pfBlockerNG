@@ -4,6 +4,7 @@
 
 Describe 'setup-hooks.sh contributor bootstrap'
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/setup-hooks.sh"
+  precommit_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/.githooks/pre-commit"
 
   setup() {
     . "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/git-env-scrub.sh"
@@ -21,7 +22,7 @@ Describe 'setup-hooks.sh contributor bootstrap'
     graphify_log="$fixture/graphify.log"
     missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
     missing_uv_path="$fixture/no-uv"; mkdir -p "$missing_uv_path"
-    for tool in basename cat chmod dirname git mkdir sh; do
+    for tool in basename cat chmod dirname git grep mkdir sh tr; do
       ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
       ln -s "$(command -v "$tool")" "$missing_uv_path/$tool"
     done
@@ -45,10 +46,18 @@ esac
 UV
     ln -s "$stubdir/uv" "$missing_codegraph_path/uv"
     mkdir -p "$primary/scripts/agent"
+    if [ -f "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/resolve-graphify.sh" ]; then
+      cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/resolve-graphify.sh" "$primary/scripts/agent/"
+    fi
     cat > "$primary/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
-if [ -n "${EXPECTED_GRAPHIFY_BIN:-}" ]; then
+if [ -f "$(dirname "$0")/resolve-graphify.sh" ]; then
+  . "$(dirname "$0")/resolve-graphify.sh"
+  graphify_bin=$(resolve_graphify_launcher) || exit 17
+else
   graphify_bin=$(command -v graphify) || exit 17
+fi
+if [ -n "${EXPECTED_GRAPHIFY_BIN:-}" ]; then
   printf 'patch-graphify:%s\n' "$graphify_bin" >> "$GRAPHIFY_LOG"
   [ "$graphify_bin" = "$EXPECTED_GRAPHIFY_BIN" ] || exit 18
 else
@@ -111,6 +120,26 @@ CODEGRAPH
     The contents of file "$graphify_log" should equal \
       "$(printf '%s\n%s' 'tool install --upgrade graphifyy>=0.9.51' "patch-graphify:$uv_tool_bin/graphify")"
     The value "$(git_fixture -C "$primary" config --get core.hooksPath)" should equal '.githooks'
+  End
+
+  It 'repairs through pre-commit in a fresh process with the original off-PATH environment'
+    uv_tool_bin="$fixture/uv tool bin"
+    cp "$precommit_abs" "$primary/.githooks/pre-commit"
+    cat > "$primary/.githooks/check-commit-identity.sh" <<'IDENTITY'
+#!/bin/sh
+exit 0
+IDENTITY
+    chmod +x "$primary/.githooks/check-commit-identity.sh"
+    When run env \
+      PATH="$missing_codegraph_path" \
+      UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
+      UV_TOOL_BIN_DIR="$uv_tool_bin" \
+      EXPECTED_GRAPHIFY_BIN="$uv_tool_bin/graphify" \
+      sh -c 'cd "$1" && sh "$2" && exec sh .githooks/pre-commit' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include '[pre-commit] Graphify .inc language override'
+    The contents of file "$graphify_log" should equal \
+      "$(printf '%s\n%s\n%s' 'tool install --upgrade graphifyy>=0.9.51' "patch-graphify:$uv_tool_bin/graphify" "patch-graphify:$uv_tool_bin/graphify")"
   End
 
   It 'does not bypass a Graphify wrapper already selected by PATH'
