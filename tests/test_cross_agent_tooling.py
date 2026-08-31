@@ -418,12 +418,15 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
         ".githooks/pre-commit": "sh scripts/agent/patch-graphify.sh || failed 'Graphify .inc language override'",
         "scripts/agent/init-worktree-tools.sh": 'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
         "scripts/agent/ensure-graphify-merge-driver.sh": 'sh "$(dirname "$0")/ensure-graphify.sh" "$root"',
-        "scripts/agent/setup-agent-tools.sh": 'sh "$ensure_graphify" "$root"',
+        "scripts/agent/setup-agent-tools.sh": '(cd "$root" && sh "$setup_hooks")',
     }
     for caller, invocation in callers.items():
         source = (ROOT / caller).read_text(encoding="utf-8")
         assert invocation in source, f"{caller} lost mandatory Graphify install/patch reachability"
         assert install_command not in source, f"{caller} duplicates the shared Graphify installation convention"
+
+    agent_setup = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
+    assert 'sh "$ensure_graphify" "$root"' not in agent_setup, "agent setup duplicates canonical Graphify setup"
 
     rc = (ROOT / ".graphifyrc").read_text(encoding="utf-8").splitlines()
     assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"

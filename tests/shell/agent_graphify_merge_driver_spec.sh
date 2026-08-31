@@ -11,15 +11,9 @@ Describe 'ensure-graphify-merge-driver.sh'
     mkdir -p "$script_home" "$fixture/suite/scripts/lib"
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/git-env-scrub.sh" "$fixture/suite/scripts/lib/"
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/ensure-graphify-merge-driver.sh" "$script_home/"
-    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/ensure-graphify.sh" "$script_home/ensure-graphify-real.sh"
+    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/ensure-graphify.sh" "$script_home/"
     cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/agent_env.sh" "$script_home/"
     script_abs="$script_home/ensure-graphify-merge-driver.sh"
-    cat > "$script_home/ensure-graphify.sh" <<'ENSURE_GRAPHIFY'
-#!/bin/sh
-[ -f "$1/scripts/agent/patch-graphify.sh" ] &&
-  printf 'ensure-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-exec sh "$(dirname "$0")/ensure-graphify-real.sh" "$@"
-ENSURE_GRAPHIFY
     repo="$fixture/requested-root"
     git_fixture init -q "$repo" || return 1
     stubdir="$fixture/bin"
@@ -64,7 +58,7 @@ PATCH_GRAPHIFY
     The status should equal 0
     The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
     The contents of file "$graphify_log" should equal \
-      "$(printf 'ensure-graphify\t%s\npatch-graphify\t\n%s\thook install' "$repo" "$repo")"
+      "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
   End
 
@@ -91,8 +85,7 @@ PATCH_GRAPHIFY
     It 'falls back to the trusted sibling patch next to the helper script'
       helperdir="$fixture/helper/scripts/agent"
       mkdir -p "$helperdir" "$fixture/helper/scripts/lib"
-      cp "$script_abs" "$script_home/ensure-graphify.sh" "$script_home/ensure-graphify-real.sh" \
-        scripts/agent/agent_env.sh "$helperdir/"
+      cp "$script_abs" "$script_home/ensure-graphify.sh" scripts/agent/agent_env.sh "$helperdir/"
       cp scripts/lib/git-env-scrub.sh "$fixture/helper/scripts/lib/"
       cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
