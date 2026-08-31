@@ -247,12 +247,7 @@ main() {
 	case "$platform" in
 		Linux)
 			if command -v uv >/dev/null 2>&1; then
-				# Maintenance, not a prerequisite: every later use is
-				# `uv tool install --upgrade`, which any uv performs. A uv
-				# that did not come from the standalone installer refuses to
-				# self-update and exits non-zero; under `set -eu` that ends
-				# the run before a single tool is installed.
-				uv self update || :
+				uv self update
 			else
 				install_from_url 'https://astral.sh/uv/install.sh'
 			fi
