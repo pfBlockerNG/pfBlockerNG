@@ -1143,7 +1143,7 @@ def test_release_channel_metadata_and_edge_following_do_not_start_a_second_relea
     published = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
     assert "pfBlockerNG-Release-Channel" in release, release
     assert "pfBlockerNG-Release-Channel" in published, published
-    assert "workflow_dispatch" not in published, published
+    assert "  release:\n" not in published, published
     assert "release.yml" not in published, published
     assert "build-pkg" not in published, published
 
