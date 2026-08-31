@@ -101,6 +101,7 @@ final class SyncGuardLoggingTest extends TestCase
 
 		$paths = array_merge(
 			glob("{$this->dir}/db/*") ?: [],
+			glob("{$this->dir}/db/.*") ?: [],
 			glob("{$this->dir}/state/*") ?: [],
 			glob("{$this->dir}/cc/*") ?: [],
 			glob("{$this->dir}/cc/.*") ?: [],
@@ -147,16 +148,17 @@ final class SyncGuardLoggingTest extends TestCase
 
 	public function testStagePublishRecoverFailureLogsThePrecondition(): void
 	{
-		// scandir(FALSE) path: dbdir vanished out from under the run.
-		//
-		// This reaches the stage/publish guard only because pfb_feed_pass_acquire()
-		// FAILS OPEN (pfblockerng.inc:17685): with dbdir gone its lock fopen() fails, it
-		// logs "Feed pass lock: open failed [...], proceeding unlocked" and returns TRUE,
-		// so pfb_feed_pass_begin('sync') — which runs FIRST — does not abort the sync.
-		// If that policy ever flips to fail-closed this row goes RED (the log would carry
-		// the feed-pass skip wording instead of stage/publish), which is the correct
-		// signal: the row would no longer be testing what it claims.
-		$GLOBALS['pfb']['dbdir'] = "{$this->dir}/db-nonexistent";
+		// Unrecoverable backup pair: pfb_stage_publish_dir_recover() finds a
+		// '.pfbstagebak2_<name>' backup DIRECTORY whose live target '<name>' already
+		// exists and is NOT a directory, so it cannot restore or discard it and
+		// returns FALSE. dbdir must stay present and writable, or issue #3000's
+		// fail-closed lock aborts the sync at pfb_feed_pass_begin() first and this
+		// row stops testing the guard it names.
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		$this->assertTrue(mkdir("{$dbdir}/.pfbstagebak2_orphan", 0755),
+			'test setup: could not create the stale stage backup directory');
+		$this->assertNotFalse(file_put_contents("{$dbdir}/orphan", "not a directory\n"),
+			'test setup: could not create the non-directory that blocks recovery');
 
 		$this->assertFalse(sync_package_pfblockerng('noupdates'),
 			'before-state: an unrecoverable stage/publish dir must abort the sync');

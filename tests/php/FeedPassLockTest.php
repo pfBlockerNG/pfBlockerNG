@@ -272,6 +272,24 @@ final class FeedPassLockTest extends TestCase
 		}
 	}
 
+	public function testFeedOpenErrorReportsFailureWithoutContention(): void
+	{
+		// issue #3000: the feed lock's OPEN error, the fourth cell of this matrix.
+		// A missing parent directory makes fopen(..., 'c') fail with ENOENT, which
+		// is an existence error rather than a permission one -- so unlike the
+		// chmod fixture below, this row needs no root skip guard.
+		$GLOBALS['pfb']['dbdir'] = "{$this->dbdir}/missing/child";
+		$contended = TRUE;
+
+		$this->assertFalse(pfb_feed_pass_acquire($contended),
+			'an unopenable feed lock must abort the pass, never proceed unlocked');
+		$this->assertFalse($contended, 'a feed open error is not contention');
+
+		$log = is_file($GLOBALS['pfb']['log']) ? (string) file_get_contents($GLOBALS['pfb']['log']) : '';
+		$this->assertStringNotContainsString('proceeding unlocked', $log,
+			'the abort must not log the old fail-open wording');
+	}
+
 	public function testDispatcherOpenErrorReportsFailureWithoutContention(): void
 	{
 		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
@@ -432,9 +450,11 @@ final class FeedPassLockTest extends TestCase
 			'the outer guarded release (owner flag TRUE) must free the lock');
 	}
 
-	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-open
-	// (an unwritable dbdir must never block a legitimate pass).
-	public function testBeginFailsOpenWhenLockFileUnopenable(): void
+	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-CLOSED
+	// (issue #3000). A pass that cannot serialise must refuse: running unserialised
+	// corrupts shared recompute staging silently, while a refusal is visible in the
+	// exit code.
+	public function testBeginFailsClosedWhenLockFileUnopenable(): void
 	{
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {
 			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
@@ -446,8 +466,8 @@ final class FeedPassLockTest extends TestCase
 		chmod($denydir, 0555);
 
 		try {
-			$this->assertTrue(pfb_feed_pass_begin('sync'),
-				'an unwritable dbdir must fail OPEN -- begin() returns TRUE rather than blocking legitimate work');
+			$this->assertFalse(pfb_feed_pass_begin('sync'),
+				'an unwritable dbdir must fail CLOSED -- begin() returns FALSE rather than running a pass with no mutual exclusion');
 		} finally {
 			chmod($denydir, 0755);
 		}
