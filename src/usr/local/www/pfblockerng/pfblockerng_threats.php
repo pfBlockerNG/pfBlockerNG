@@ -41,7 +41,7 @@ if (isset($_REQUEST)) {
 		$domain	= htmlspecialchars($_REQUEST['domain']);
 	}
 	elseif (isset($_REQUEST['port'])) {
-		if (!is_port($_REQUEST['port'])) {
+		if (!is_string($_REQUEST['port']) || !is_port($_REQUEST['port'])) {
 			print_info_box("Invalid Port cannot proceed!");
 			exit;
 		}

@@ -38,6 +38,7 @@ $state = [
 	'auth_loaded' => $GLOBALS['pfb_threats_auth_loaded'] ?? FALSE,
 	'pgtitle' => $pgtitle ?? NULL,
 	'pglinks' => $pglinks ?? NULL,
+	'shortcut_section' => $shortcut_section ?? NULL,
 ];
 echo 'PFB_HEAD_STATE:' . base64_encode(json_encode($state, JSON_THROW_ON_ERROR)) . "\n";
 PHP));
@@ -76,16 +77,18 @@ PHP));
 		$this->assertTrue($state['auth_loaded'], 'guiconfig authentication must load before head.inc');
 		$this->assertSame(['Firewall', 'pfBlockerNG', 'Alerts', $lookupTitle], $state['pgtitle']);
 		$this->assertSame(self::LINKS, $state['pglinks']);
+		$this->assertSame('pfblockerng', $state['shortcut_section']);
 		$this->assertStringContainsString('PFB_FOOT', $result['stdout']);
 		$this->assertStringContainsString('PFB_AFTER_PAGE', $result['stdout']);
 	}
 
-	/** @return iterable<string,array{0:array<string,string>,1:string}> */
+	/** @return iterable<string,array{0:array<string,mixed>,1:string}> */
 	public static function rejectedLookupProvider(): iterable
 	{
 		yield 'invalid host' => [['host' => 'not-an-ip'], 'Invalid IP Address, cannot proceed!'];
 		yield 'invalid domain' => [['domain' => 'not a domain'], 'Invalid Domain name, cannot proceed!'];
 		yield 'invalid port' => [['port' => '99999'], 'Invalid Port cannot proceed!'];
+		yield 'array port' => [['port' => ['8443']], 'Invalid Port cannot proceed!'];
 		yield 'missing request' => [[], 'No Requests found, cannot proceed!'];
 	}
 
@@ -102,7 +105,7 @@ PHP));
 		$this->assertStringNotContainsString('PFB_AFTER_PAGE', $result['stdout']);
 	}
 
-	/** @return array{auth_loaded:bool,pgtitle:list<string>,pglinks:list<string>} */
+	/** @return array{auth_loaded:bool,pgtitle:list<string>,pglinks:list<string>,shortcut_section:string} */
 	private function headState(string $stdout): array
 	{
 		$line = strtok($stdout, "\n");
@@ -115,7 +118,7 @@ PHP));
 		return $state;
 	}
 
-	/** @param array<string,string> $request @return array{status:int,stdout:string,stderr:string} */
+	/** @param array<string,mixed> $request @return array{status:int,stdout:string,stderr:string} */
 	private function request(array $request): array
 	{
 		$root = var_export(dirname(__DIR__, 2), TRUE);
