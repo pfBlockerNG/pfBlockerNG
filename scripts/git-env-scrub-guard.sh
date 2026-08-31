@@ -84,7 +84,7 @@ composer_cloud_install_spec.sh:4
 git_no_docs_spec.sh:5
 githooks_pre_push_lease_spec.sh:34
 githooks_pre_push_tag_scheme_spec.sh:28
-githooks_prepare_commit_msg_guard_spec.sh:30
+githooks_prepare_commit_msg_guard_spec.sh:27
 impacted_tests_spec.sh:2
 pfblockerng_truncate_survival_spec.sh:4
 precommit_composer_vendor_spec.sh:2

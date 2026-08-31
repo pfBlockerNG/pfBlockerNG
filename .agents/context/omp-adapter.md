@@ -19,9 +19,8 @@ directory (normally `~/.omp/agent`), not legacy `~/.pi`.
 - Set `OMP_CLI=1` in the active OMP agent `.env`; OMP mirrors it to `PI_CLI=1`.
   Both markers are inherited by child shells and recognized by
   `.githooks/prepare-commit-msg` and `.githooks/pre-push`.
-- Attribution comes only from `coauthor.omp.name` and `coauthor.omp.email`. When
-  they are unset, disclose OMP authorship in the PR body; never borrow another
-  provider's identity.
+- OMP adds no attribution to commits or public bodies. Commit identity and public content
+  follow `git.md` and `landing.md`.
 - Reviews use the repository role contracts in `.agents/policy/agent-roles.md`.
   When an exact custom role is unavailable, dispatch OMP's `reviewer` with that
   contract in the task brief rather than weakening the review.

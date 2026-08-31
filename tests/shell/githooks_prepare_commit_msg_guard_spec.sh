@@ -1,11 +1,11 @@
 #shellcheck shell=sh
 # .githooks/prepare-commit-msg agent worktree guard (issue #1262): an agent
 # commit (Claude, Codex, Copilot, Grok, or OMP marker set) in the PRIMARY
-# checkout aborts; a linked-worktree commit, a human commit, and an
-# agent-dedicated checkout (managed-remote marker CLAUDE_CODE_USER_EMAIL, or the
-# pfblockerng.allowprimarycommit valve) all pass. Enforced in
-# prepare-commit-msg because that hook still runs when
-# verification is skipped — the verify-skip row below is the point.
+# checkout aborts. Linked-worktree and human commits pass; a managed-remote
+# marker or allowprimarycommit valve bypasses only the primary-location check.
+# Every agent ident must still match the configured user, and every
+# Co-authored-by trailer is forbidden. Enforced here because this hook still
+# runs when verification is skipped — the verify-skip row below is the point.
 #
 # The guard discriminates on git STATE (--git-dir vs --git-common-dir), never
 # on command text, so nothing here exercises payload parsing: these rows pin
@@ -47,7 +47,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   agent_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
       -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
-      CLAUDECODE=1 sh "$hook" "$2"
+      CLAUDECODE=1 sh "$hook" "$2" "${3:-}"
   }
   codex_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
@@ -83,9 +83,11 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   End
 
   It 'passes an agent commit in a linked worktree'
+    cp "${primary}/.git/worktrees/wt/PCM_MSG" "${base}/ordinary.before"
     When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+    Assert [ "$(cmp -s "${base}/ordinary.before" "${primary}/.git/worktrees/wt/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
   End
 
   It 'blocks a Codex commit in the primary checkout'
@@ -124,70 +126,112 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     The stderr should equal ''
   End
 
-  It 'credits OMP only from its provider-specific identity'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    git_fixture -C "$primary" config coauthor.omp.name OMP
-    git_fixture -C "$primary" config coauthor.omp.email omp@example.com
-    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
-    The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: OMP <omp@example.com>'
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
-  End
-
-  It 'blocks a Pi-compatible commit in the primary checkout'
+  It 'blocks a PI_CLI-only commit in the primary checkout'
     When run pi_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
     The stderr should include 'primary checkout'
   End
 
-  It 'passes a Pi-compatible commit in a linked worktree'
+  It 'passes a PI_CLI-only commit in a linked worktree'
     When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
   End
 
-  It 'credits a Pi-compatible session as OMP'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    git_fixture -C "$primary" config coauthor.omp.name OMP
-    git_fixture -C "$primary" config coauthor.omp.email omp@example.com
-    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
-    The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: OMP <omp@example.com>'
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  Context 'forbidden Co-authored-by trailers'
+    Parameters
+      'Claude Sonnet 5 <noreply@anthropic.com>'
+      'GPT-5.6 Sol <noreply@openai.com>'
+      'Oh My Pi GLM lane <noreply@omp.local>'
+      'Pair Human <pair@example.com>'
+    End
+
+    It "rejects pre-seeded $1"
+      printf '%s\n\nCo-authored-by: %s\n' 'msg' "$1" \
+        > "${primary}/.git/worktrees/wt/PCM_MSG"
+      When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+      The status should not equal 0
+      The stderr should equal 'Co-authored-by trailers are forbidden'
+      The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include "Co-authored-by: $1"
+    End
   End
 
-  It 'does not borrow the legacy Claude identity for unconfigured OMP'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
-    The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  Context 'forbidden trailers in generated commit messages'
+    Parameters
+      merge
+      squash
+    End
+
+    It "rejects a pre-seeded forbidden trailer in a $1 message"
+      printf '%s\n\n%s\n' 'msg' 'Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>' \
+        > "${primary}/.git/worktrees/wt/PCM_MSG"
+      When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG "$1"
+      The status should not equal 0
+      The stderr should equal 'Co-authored-by trailers are forbidden'
+      The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>'
+    End
   End
 
-  It 'does not borrow the legacy Claude identity for unconfigured Pi compatibility'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
-    The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  It 'rejects a mixed-case Co-authored-by token with leading whitespace'
+    printf '%s\n\n%s\n' 'msg' '  cO-aUtHoReD-bY: Pair Human <pair@example.com>' \
+      > "${primary}/.git/worktrees/wt/PCM_MSG"
+    When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should not equal 0
+    The stderr should equal 'Co-authored-by trailers are forbidden'
   End
 
-  It 'does not apply a legacy Claude coauthor identity to a Codex commit'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
-    The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  It 'rejects a human Co-authored-by trailer without an agent marker'
+    printf '%s\n\n%s\n' 'msg' 'Co-authored-by: Pair Human <pair@example.com>' \
+      > "${primary}/.git/worktrees/wt/PCM_MSG"
+    When run human_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should not equal 0
+    The stderr should equal 'Co-authored-by trailers are forbidden'
   End
 
-  It 'keeps the legacy coauthor identity for a Claude commit'
-    git_fixture -C "$primary" config coauthor.name Claude
-    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+  It 'ignores the retired Claude-specific identity config'
+    git_fixture -C "$primary" config coauthor.claude.name 'Claude Sonnet 5'
+    git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com
     When run agent_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
-    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  End
+
+  It 'ignores the retired Codex-specific identity config'
+    git_fixture -C "$primary" config coauthor.codex.name 'GPT-5.6 Sol'
+    git_fixture -C "$primary" config coauthor.codex.email noreply@openai.com
+    When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@openai.com'
+  End
+
+  It 'ignores the retired OMP-specific identity config'
+    git_fixture -C "$primary" config coauthor.omp.name 'Oh My Pi GLM lane'
+    git_fixture -C "$primary" config coauthor.omp.email noreply@omp.local
+    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@omp.local'
+  End
+
+  It 'ignores the retired OMP identity config in Pi compatibility mode'
+    git_fixture -C "$primary" config coauthor.omp.name 'Oh My Pi GLM lane'
+    git_fixture -C "$primary" config coauthor.omp.email noreply@omp.local
+    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@omp.local'
+  End
+
+  It 'ignores the legacy coauthor identity config for a plain human commit'
+    git_fixture -C "$primary" config coauthor.name 'Pair Human'
+    git_fixture -C "$primary" config coauthor.email pair@example.com
+    When run human_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'pair@example.com'
   End
 
   It 'passes a human commit in the primary checkout'
@@ -203,7 +247,10 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     The stderr should equal ''
   End
 
-  It 'passes an agent commit in a managed-remote session (owner email marker set)'
+  It 'passes a managed-remote agent whose idents match the configured user'
+    git_fixture -C "$primary" config user.name Owner
+    git_fixture -C "$primary" config user.email owner@example.com
+    cp "${primary}/.git/PCM_MSG" "${base}/managed.before"
     managed_hook() {
       cd "$primary" && env -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
         -u GROK_SESSION_ID -u GROK_AGENT \
@@ -213,6 +260,69 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     When run managed_hook
     The status should equal 0
     The stderr should equal ''
+    The contents of file "${primary}/.git/PCM_MSG" should not include 'Co-Authored-By:'
+    The contents of file "${primary}/.git/PCM_MSG" should not include 'owner@example.com'
+    Assert [ "$(cmp -s "${base}/managed.before" "${primary}/.git/PCM_MSG"; printf '%s' "$?")" -eq 0 ]
+  End
+
+  Context 'missing configured user identity fields'
+    Parameters
+      user.name
+      user.email
+    End
+
+    It "rejects an agent commit when $1 is missing"
+      git_fixture -C "$primary" config --unset "$1"
+      missing_user_hook() {
+        cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          -u OMP_CLI -u PI_CLI GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+          CLAUDECODE=1 sh "$hook" ../primary/.git/worktrees/wt/PCM_MSG
+      }
+      When run missing_user_hook
+      The status should not equal 0
+      The stderr should equal 'Agent commits must use the configured user identity'
+    End
+  End
+
+  Context 'agent author identity mismatches'
+    Parameters
+      'Pair Human' human@example.com
+      Human pair@example.com
+    End
+
+    It "rejects mismatched author identity $1 <$2>"
+      differing_author_hook() {
+        cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          -u OMP_CLI -u PI_CLI CLAUDECODE=1 \
+          GIT_AUTHOR_NAME="$1" GIT_AUTHOR_EMAIL="$2" \
+          sh "$hook" ../primary/.git/worktrees/wt/PCM_MSG
+      }
+      When run differing_author_hook "$1" "$2"
+      The status should not equal 0
+      The stderr should equal 'Agent commits must use the configured user identity'
+    End
+  End
+
+  Context 'agent committer identity mismatches'
+    Parameters
+      'Pair Human' human@example.com
+      Human pair@example.com
+    End
+
+    It "rejects mismatched committer identity $1 <$2>"
+      differing_committer_hook() {
+        cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          -u OMP_CLI -u PI_CLI CLAUDECODE=1 \
+          GIT_COMMITTER_NAME="$1" GIT_COMMITTER_EMAIL="$2" \
+          sh "$hook" ../primary/.git/worktrees/wt/PCM_MSG
+      }
+      When run differing_committer_hook "$1" "$2"
+      The status should not equal 0
+      The stderr should equal 'Agent commits must use the configured user identity'
+    End
   End
 
   # The money rows: a REAL verify-skipping commit (git commit -n skips
