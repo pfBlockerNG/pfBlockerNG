@@ -589,6 +589,50 @@ def test_a_suite_that_outlasts_the_timeout_is_refused(repo: Path, killing_patch:
     assert "outlasted --timeout" in result.stderr, result.stderr
 
 
+def test_an_unanticipated_failure_is_no_table_rather_than_a_finding(
+    repo: Path, killing_patch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 1 must be reachable ONLY from the deliberate unexercised-mutation branch.
+
+    Four review rounds each found a different path landing on 1 -- the status that means "the
+    table is fine and one mutation killed nothing" -- and each fix closed one more path. The
+    shape was the defect: 2 was reachable only through an exception type someone had
+    predicted, so anything unpredicted fell through to 1 and a caller reading the documented
+    contract would act on a table that was never printed.
+
+    This asserts the shape rather than another path: an exception nobody anticipated, from a
+    place nobody guarded, still exits 2.
+    """
+    probe = repo.parent / "explode.py"
+    probe.write_text(
+        "import sys\nsys.path.insert(0, sys.argv[1])\n"
+        "from scripts.agent import mutation_table as mt\n"
+        "mt.render_patch = lambda text: (_ for _ in ()).throw(RuntimeError('unanticipated'))\n"
+        "sys.exit(mt.main(sys.argv[2:]))\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(probe),
+            str(_SCRIPT.parents[2]),
+            "--suite",
+            "sh suite.sh",
+            "--report",
+            "report.xml",
+            "--root",
+            str(repo),
+            str(killing_patch),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, f"rc={result.returncode}\n{result.stdout}\n{result.stderr}"
+    assert "unexpected RuntimeError" in result.stderr, result.stderr
+    assert result.stdout.strip() == "", f"a table was printed anyway:\n{result.stdout}"
+
+
 def test_a_tracked_report_is_refused(repo: Path, killing_patch: Path) -> None:
     """The report is deleted before every run and hidden from every check, so tracking it
     would mean silently destroying a real file and still exiting 0."""

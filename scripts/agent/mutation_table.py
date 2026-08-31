@@ -48,12 +48,13 @@ EXIT STATUS
 * ``0`` -- every patch applied, ran, and reverted; the table is on stdout.
 * ``1`` -- a mutation killed nothing. That is the finding the table exists to surface
   (an unexercised branch), so it is reported in the table AND in the status.
-* ``2`` -- the table could not be produced: dirty tree, red or empty baseline, a patch
-  that does not apply, a missing or malformed report, a suite that will not run, a run that
-  outlasts ``--timeout``, or a revert that did not take. A table that is wrong is worse than
-  no table, so none of these fall through to 0, and none of them is allowed to land on 1 --
-  a caller reading the contract would take that for "the table is fine, one branch is
-  unexercised" and act on a table that does not exist.
+* ``2`` -- the table could not be produced, for ANY reason. Dirty tree, red or empty
+  baseline, a patch that does not apply, a missing or malformed report, a suite that will not
+  run, a run that outlasts ``--timeout``, a revert that did not take -- and equally anything
+  nobody anticipated. A table that is wrong is worse than no table, and none of these may
+  land on 1: a caller reading the contract would take that for "the table is fine, one branch
+  is unexercised" and act on a table that does not exist. **1 is reachable only from the
+  deliberate branch that reports an unexercised mutation.**
 """
 
 from __future__ import annotations
@@ -478,11 +479,22 @@ def main(argv: list[str] | None = None) -> int:
                 raise Unproducible(f"cannot read {patch}: {exc}") from exc
             failures, reported = measure(root, suite, report, patch, args.timeout)
             rows.append(Row(patch, render_patch(text), failures, reported))
+        print(render(head, suite, baseline_count, rows))
     except Unproducible as exc:
         print(f"mutation_table.py: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001 - see below; this breadth is the point
+        # EVERY unanticipated failure is "no table", not "a table with a finding".
+        #
+        # Four review rounds each found a different path landing on 1 -- the status reserved
+        # for "the table is fine and one mutation killed nothing" -- and each fix closed one
+        # more path. The shape was the defect: 2 was reachable only through an exception type
+        # someone had predicted, so anything unpredicted fell through to 1 and a caller
+        # reading the contract would act on a table that was never printed. Now 1 is
+        # reachable only from the branch below, deliberately, and everything else is 2.
+        print(f"mutation_table.py: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
 
-    print(render(head, suite, baseline_count, rows))
     unexercised = [r.patch for r in rows if not r.failures]
     if unexercised:
         print(
