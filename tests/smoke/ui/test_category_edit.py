@@ -93,7 +93,7 @@ def _del_rowid(vm: helpers.SmokeVM, cfg_root: str, rowid: int) -> None:
         raise RuntimeError(f"_del_rowid({cfg_root}/{rowid}) failed: rc={result.returncode} {result.stdout!r}")
 
 
-def _post_form(webui: WebUI, payload: dict[str, str]) -> None:
+def _post_form(webui: WebUI, payload: dict[str, str], *, expect_rejection: bool = False) -> None:
     """POST a fully-enumerated category-edit payload (token harvested fresh).
 
     GETs the page to obtain a current ``__csrf_magic`` (the csrf-magic output
@@ -110,11 +110,20 @@ def _post_form(webui: WebUI, payload: dict[str, str]) -> None:
     data["save"] = "save"
     resp = webui.session.post(webui.url(CATEGORY_PAGE), data=data, verify=webui._verify, timeout=SAVE_TIMEOUT)
     assert not looks_like_login_page(resp.text), "category POST returned the login form (session lost)"
-    # A REJECTED save renders its reason and aborts the whole write. Saying so here
-    # names the rejection; leaving it to the caller's next assertion names the config
-    # path instead, which is the wrong layer (issue #2954).
+    # A REJECTED save renders its reason and aborts the whole write, so the response
+    # already says which layer failed. Asserting on it here names the rejection;
+    # leaving it to the caller's next assertion names the config path (issue #2954).
+    #
+    # BOTH directions are asserted, because several callers POST payloads the page
+    # MUST reject and prove it only by reading config back afterwards -- which an
+    # unrelated no-op write would satisfy just as well. expect_rejection pins the
+    # rejection itself, so those cases assert the thing they are actually testing.
     errors = input_errors_block(resp.text)
-    assert errors == "<no input-errors block in response>", f"the page rejected this save: {errors}"
+    rejected = errors != "<no input-errors block in response>"
+    if expect_rejection:
+        assert rejected, "the page ACCEPTED a save this case requires it to reject: no input-errors block was rendered"
+    else:
+        assert not rejected, f"the page rejected this save: {errors}"
 
 
 def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str]:
@@ -295,7 +304,7 @@ def test_dnsbl_alias_bad_name_rejected_leaves_config_unchanged(
         assert helpers.config_get(vm, f"{base}/aliasname") == good, "precondition: valid alias did not persist"
 
         # REJECT: a space makes aliasname match /\W/ -> the whole save aborts.
-        _post_form(webui, _dnsbl_payload(rowid, "bad name"))
+        _post_form(webui, _dnsbl_payload(rowid, "bad name"), expect_rejection=True)
         assert helpers.config_get(vm, f"{base}/aliasname") == good, (
             "a bad aliasname must abort the save (alias unchanged), but it changed"
         )
@@ -333,7 +342,7 @@ def test_dnsbl_disabled_row_reserved_header_rejected_leaves_config_unchanged(
         assert helpers.config_get(vm, f"{base}/row/0/header") == "", "precondition: placeholder header not empty"
 
         # REJECT: a reserved Header on a Disabled row must abort the save (header UNCHANGED).
-        _post_form(webui, _dnsbl_payload(rowid, good, **{"header-0": "DNSBLIP"}))
+        _post_form(webui, _dnsbl_payload(rowid, good, **{"header-0": "DNSBLIP"}), expect_rejection=True)
         assert helpers.config_get(vm, f"{base}/row/0/header") == "", (
             "a Disabled row's reserved Header ('DNSBLIP') must abort the save (row/0/header unchanged), but it changed"
         )
@@ -455,6 +464,7 @@ def test_dnsbl_url_geoip_breakout_char_rejected_leaves_config_unchanged(
                     "url-0": "US <script>alert(1)</script>",
                 },
             ),
+            expect_rejection=True,
         )
         assert helpers.config_get(vm, cfg) == "US CA", (
             "a '<script>' breakout in url-0 must abort the save (row/0/url unchanged), but it changed"
@@ -667,7 +677,9 @@ def test_ipv4_alias_permit_any_guard_rejects_and_valid_persists(
         _post_form(webui, _ipv4_payload(rowid, "smokeip4", action="Deny_Both"))
         assert helpers.config_get(vm, cfg) == "Deny_Both", "valid Deny_Both action did not persist"
         # REJECT: Permit_Inbound + proto 'Any' + no custom port/dest -> save aborts.
-        _post_form(webui, _ipv4_payload(rowid, "smokeip4", action="Permit_Inbound", autoproto_in="any"))
+        _post_form(
+            webui, _ipv4_payload(rowid, "smokeip4", action="Permit_Inbound", autoproto_in="any"), expect_rejection=True
+        )
         assert helpers.config_get(vm, cfg) == "Deny_Both", (
             "Permit_Inbound + 'Any' must abort the save (action unchanged at Deny_Both)"
         )
