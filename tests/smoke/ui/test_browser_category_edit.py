@@ -62,6 +62,7 @@ import pytest
 
 from .. import helpers
 from .conftest import mask_page_identity
+from .render_oracle import input_errors_block
 from .test_category_edit import (
     CFG_DNSBL,
     CFG_IPV4,
@@ -471,22 +472,6 @@ _CATEGORY_PAGE = "/pfblockerng/pfblockerng_category_edit.php"
 _SAVE_TIMEOUT = 120.0
 _CFG_IPV4 = "installedpackages/pfblockernglistsv4/config"
 
-# pfSense's print_input_errors() (guiconfig.inc) renders one non-nested
-# <div class="alert alert-danger input-errors">...</div> per response.
-_INPUT_ERRORS_RE = re.compile(r"<div[^>]*\binput-errors\b[^>]*>.*?</div>", re.DOTALL)
-
-
-def _input_errors_block(body: str) -> str:
-    """Extract pfSense's ``print_input_errors()`` alert block from a save-response body.
-
-    Pulling just that block out of the full page keeps failure diagnostics readable
-    (CLAUDE.md "On failure, print expected vs actual"). Absent the div -- the save carried
-    no validation error -- returns an explicit marker so a diagnostic never reads as "the
-    response was empty".
-    """
-    match = _INPUT_ERRORS_RE.search(body)
-    return match.group(0) if match else "<no input-errors block in response>"
-
 
 def _post_ipv4_form(webui: WebUI, payload: dict[str, str]) -> str:
     """POST a fully-enumerated IPv4 category-edit payload and return the response body.
@@ -674,7 +659,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
                 f"expected NO {error!r} error -- the whitelist sanitiser resets a wrong-type "
                 f"alias to '' before pfb_adv_alias_field_errors() ever runs, so this value "
                 f"never reaches validation as an error.\n"
-                f"  response input-errors block: {_input_errors_block(norm_body)}"
+                f"  response input-errors block: {input_errors_block(norm_body)}"
             )
 
         # The save WENT THROUGH -- a rejected save would write nothing at all.
@@ -683,7 +668,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
             f"expected the save to go through (a rejected save writes nothing)\n"
             f"  expected aliasname: {aliasname!r}\n"
             f"  actual aliasname  : {got_aliasname!r}\n"
-            f"  response input-errors block: {_input_errors_block(norm_body)}"
+            f"  response input-errors block: {input_errors_block(norm_body)}"
         )
 
         # The wrong-type value was dropped -- normalized to '', not saved verbatim.
@@ -710,7 +695,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
         )
         assert "Must use a Port-type alias" not in accept_body, (
             f"expected no alias-type error when a port alias is used in a port field\n"
-            f"  response input-errors block: {_input_errors_block(accept_body)}"
+            f"  response input-errors block: {input_errors_block(accept_body)}"
         )
         got_accept_ports_in = helpers.config_get(vm, f"{base}/aliasports_in")
         assert got_accept_ports_in == port_alias, (
