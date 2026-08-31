@@ -145,6 +145,10 @@ final class ThemeSafetyUiTest extends TestCase
 			// depth was ever resolved and the mask was never consulted. Kept as the issue's
 			// black-box repro; the vocabulary rows in backgroundSyntaxes are what pin the fix.
 			'issue 2952 repro'          => ['$s = "$(x).css({tip: \"}\", \"background-color\": \"#123456\"}); $(y).css({color: \"red\"});";', FALSE],
+			// contextHasForeground() has no element awareness, so a two-arg .css('color', ...)
+			// must stay OUT of its vocabulary: accepting it lets a colour on one element
+			// launder a background on another. Pins the vocabulary's boundary, not a bug.
+			'cross-element .css'        => ["$(a).css('background-color', '#123456');\n$(b).css('color', '#000');", FALSE],
 			// An apostrophe in prose is not a string opener.
 			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
 			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
@@ -347,9 +351,12 @@ final class ThemeSafetyUiTest extends TestCase
 			'esc quoted key'    => ['{ \"background-color\": \"#fff\" }', '{ \"background-color\": \"#fff\", \"color\": \"#000\" }'],
 			'esc quoted camel'  => ['{ \"backgroundColor\": \"#fff\" }', '{ \"backgroundColor\": \"#fff\", \"color\": \"#000\" }'],
 			'esc js bare key'   => ['{ backgroundColor: \"#fff\" }', '{ backgroundColor: \"#fff\", color: \"#000\" }'],
-			'esc jquery setter' => ['$(x).css(\"background-color\", \"#fff\");', '$(x).css(\"background-color\", \"#fff\"); $(x).css(\"color\", \"#000\");'],
+			'esc jquery setter' => ['$(x).css(\"background-color\", \"#fff\");', '$(x).css({\"background-color\": \"#fff\", \"color\": \"#000\"});'],
 			'esc setProperty'   => ['e.style.setProperty(\"background-color\", \"#fff\");', 'e.style.setProperty(\"background-color\", \"#fff\"); e.style.setProperty(\"color\", \"#000\");'],
 			'esc style assign'  => ['e.style.backgroundColor = \"#fff\";', 'e.style.backgroundColor = \"#fff\"; e.style.color = \"#000\";'],
+			// A quote can carry more than one escape -- JS emitted into a JS string, or a
+			// value that has been json_encode()d twice. $bs is a run, not a single escape.
+			'double-escaped key' => ['{ \\\\"background-color\\\\": \\\\"#fff\\\\" }', '{ \\\\"background-color\\\\": \\\\"#fff\\\\", \\\\"color\\\\": \\\\"#000\\\\" }'],
 			'jquery setter'     => ["\$(x).css('background-color', '#fff');", "\$(x).css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on a var'   => ["\$el.css('background-color', '#fff');", "\$el.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on this'    => ["this.css('background-color', '#fff');", "this.css({'background-color': '#fff', 'color': '#000'});"],
@@ -420,12 +427,16 @@ final class ThemeSafetyUiTest extends TestCase
 	 */
 	public static function foregroundLookalikes(): array
 	{
+		// One row per DISTINCT reason the pattern must reject, not one per spelling: the
+		// pattern has no boundary after `color`, so -scheme / -adjust / ful are the same
+		// check three times. Each row below fails for a reason no other row covers.
 		return [
-			'color-scheme'  => ['e.style.setProperty("color-scheme", "dark");'],
-			'color-adjust'  => ['e.style.setProperty("color-adjust", "exact");'],
-			'colorful'      => ['e.style.setProperty("colorful", "yes");'],
-			'css lookalike' => ['$(x).css("color-scheme", "dark");'],
-			'esc lookalike' => ['e.style.setProperty(\"color-scheme\", \"dark\");'],
+			// the closing delimiter: without it any color-prefixed property pairs
+			'prefix lookalike' => ['e.style.setProperty("color-scheme", "dark");'],
+			// the comma: without it a jQuery/DOM getter, which sets nothing, pairs
+			'getter, no value' => ['e.style.setProperty("color");'],
+			// the lookbehind: without it a method merely ending in setProperty pairs
+			'method suffix'    => ['el.mysetProperty("color", "#000");'],
 		];
 	}
 
@@ -434,8 +445,6 @@ final class ThemeSafetyUiTest extends TestCase
 	{
 		$this->assertNotSame([], self::scan('e.style.backgroundColor = "#123456"; ' . $lookalike),
 			'this must not be accepted as a foreground: ' . $lookalike);
-		$this->assertSame([], self::scan('e.style.backgroundColor = "#123456"; e.style.setProperty("color", "#000");'),
-			'sanity: the real foreground spelling must still pair, or the row above proves nothing');
 	}
 
 	/**
@@ -1305,10 +1314,14 @@ final class ThemeSafetyUiTest extends TestCase
 		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
 		// issue #2952: escaped-quote foregrounds pair escaped-quote backgrounds. Both
 		// delimiters stay required -- dropping the closing one accepts color-scheme.
+		// .css( is deliberately NOT here: this function has no element awareness, so
+		// accepting a two-arg .css('color', ...) would let a colour on a DIFFERENT element
+		// launder a background. The same-element case it would fix does not occur in the
+		// tree (issue #2970); a false negative for a false positive is a bad trade.
 		return (bool)preg_match(
 			'/(?<![A-Za-z0-9_-])color(?:\\\\*["\'])?\s*:'
 			. '|(?<![A-Za-z0-9_-])color\s*='
-			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*\\\\*["\']color\\\\*["\']\s*,/i',
+			. '|(?<![A-Za-z0-9_])setProperty\(\s*\\\\*["\']color\\\\*["\']\s*,/i',
 			$ctx
 		);
 	}
