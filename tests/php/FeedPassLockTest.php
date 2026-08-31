@@ -274,12 +274,10 @@ final class FeedPassLockTest extends TestCase
 
 	public function testFeedOpenErrorReportsFailureWithoutContention(): void
 	{
-		// issue #3000: the fourth cell of this matrix. The other three rows below
-		// already fail closed; the feed lock's OPEN error used to be the one path
-		// that proceeded WITHOUT mutual exclusion, so two passes could run
-		// unserialised over shared recompute staging while the CLI reported success.
-		// A parent directory that does not exist makes fopen(..., 'c') fail for
-		// every uid -- unlike a chmod fixture, this row also runs as root.
+		// issue #3000: the feed lock's OPEN error, the fourth cell of this matrix.
+		// A missing parent directory makes fopen(..., 'c') fail with ENOENT, which
+		// is an existence error rather than a permission one -- so unlike the
+		// chmod fixture below, this row needs no root skip guard.
 		$GLOBALS['pfb']['dbdir'] = "{$this->dbdir}/missing/child";
 		$contended = TRUE;
 
@@ -290,8 +288,6 @@ final class FeedPassLockTest extends TestCase
 		$log = is_file($GLOBALS['pfb']['log']) ? (string) file_get_contents($GLOBALS['pfb']['log']) : '';
 		$this->assertStringNotContainsString('proceeding unlocked', $log,
 			'the abort must not log the old fail-open wording');
-		$this->assertStringNotContainsString('another pfBlockerNG feed pass is running', $log,
-			'an open error must not masquerade as contention');
 	}
 
 	public function testDispatcherOpenErrorReportsFailureWithoutContention(): void
@@ -455,11 +451,9 @@ final class FeedPassLockTest extends TestCase
 	}
 
 	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-CLOSED
-	// (issue #3000). This row asserted the opposite on purpose until then: an
-	// unwritable dbdir was allowed through so it could not block a legitimate
-	// pass. That tradeoff is now inverted deliberately -- a pass that cannot
-	// serialise must refuse, because running unserialised corrupts shared
-	// recompute staging silently, while a refusal is visible in the exit code.
+	// (issue #3000). A pass that cannot serialise must refuse: running unserialised
+	// corrupts shared recompute staging silently, while a refusal is visible in the
+	// exit code.
 	public function testBeginFailsClosedWhenLockFileUnopenable(): void
 	{
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {

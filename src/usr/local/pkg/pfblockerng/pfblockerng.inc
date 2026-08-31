@@ -19050,10 +19050,9 @@ function pfb_feed_pass_acquire(?bool &$contended = NULL): bool {
 	$lockpath = "{$pfb['dbdir']}/pfb_feed_pass.lock";
 	$lock = @fopen($lockpath, 'c');	// 'c': create if absent, no truncate
 	if ($lock === FALSE) {
-		// issue #3000: fail CLOSED, matching the un-contended flock failure below.
-		// Proceeding unlocked would run the pass with no mutual exclusion over
-		// shared recompute staging, and -- because $contended stays FALSE -- would
-		// report success to the CLI. A refusal is visible in the exit code.
+		// issue #3000: fail CLOSED like the un-contended flock failure below --
+		// continuing without the lock would run the pass unserialised over shared
+		// recompute staging while still reporting success to the CLI.
 		pfb_logger("\n Feed pass lock: open failed [ {$lockpath} ]; feed pass aborted.\n", 2);
 		return FALSE;
 	}

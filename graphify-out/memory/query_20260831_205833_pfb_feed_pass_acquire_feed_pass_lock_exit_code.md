@@ -10,7 +10,7 @@ outcome: "useful"
 
 ## Answer
 
-acquire() is at pfblockerng.inc:19042; its fopen-failure branch returned TRUE (fail-open) while the un-contended flock failure returned FALSE. Callers: begin() plus extra.inc/alerts.php. Fixed to fail closed for #3000.
+acquire() is at pfblockerng.inc:19042; its fopen-failure branch returned TRUE (fail-open) while the un-contended flock failure returned FALSE. Callers: begin() (called by cron.inc, apply.inc, extra.inc) plus direct acquire() in extra.inc and alerts.php. Fixed to fail closed for #3000.
 
 ## Outcome
 
