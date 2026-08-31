@@ -5,7 +5,7 @@
 
 Describe 'processet() validates staged ET category output before publication (issue #2778)'
 	portable_binary_stderr() {
-		case "${portable_binary_stderr}" in
+		case "$1" in
 			''|"grep: ${raw}: binary file matches") return 0 ;;
 		esac
 		return 1
