@@ -15,36 +15,30 @@ Load when: every agent session, from `AGENTS.md`.
   release wait on a repository commit and downgrades a host that is already ahead.
   When a setup script fails because a dependency is absent, that missing dependency is
   installed the same way, never pinned to whatever version the failure happened to name.
-- Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`.
-  `work-branch.sh --worktree` runs the same initializer after creating a worktree and
-  removes the new worktree and branch if initialization fails; it uses Git directly
-  and does not require Worktrunk. For `wt --yes switch --create <branch>`, the tracked
-  `.config/wt.toml` runs the initializer as its `pre-start` hook and prunes worktree metadata after
-  Worktrunk merge and remove operations.
-- CodeGraph and Graphify are mandatory. The initializer runs
-  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index first,
-  then runs `graphify update <root>` when the root graph already exists. When the
-  root graph is absent the initializer prints a notice and builds nothing: the
-  first build's scope is a judgement call, so create it with a `/graphify` run in
-  an AI assistant. Install or refresh Graphify in one command with
-  `uv tool install --upgrade 'graphifyy>=0.9.51'` — a floor, never an exact pin, so a
-  fresh host and an outdated one both land on the current release.
-- Graphify's suffix map parses `.inc` as Pascal, so this repository's PHP includes
-  extract as roughly 30 incidental nodes instead of roughly 767 while extraction still
-  reports success. Until upstream releases Graphify-Labs/graphify#3075, that fix rides
-  as `.agents/patches/graphify-3075-language-overrides.patch`, applied to the installed
-  package by `scripts/agent/patch-graphify.sh` from its two call sites:
-  `ensure-graphify-merge-driver.sh` (the entry point seven branch/content mutation workflows use) and
-  `init-worktree-tools.sh`, before it refreshes the graph. It patches only the package
-  owned by the interpreter named on the `graphify` shebang, so a `pip --user` or
-  PYTHONPATH-only Graphify is skipped rather than patched — caught by the tracked
-  graph's include-node floor in `tests/test_cross_agent_tooling.py`. Because it patches
-  the installed package, a bare `uv tool upgrade graphifyy` reverts it; the next
-  bootstrap, worktree cut, or CI run re-applies it. The tracked `.graphifyrc`
-  (`language.inc=php`) is inert on an unpatched Graphify, so a contributor who never
-  runs these scripts sees the old Pascal parse, not breakage. Delete the patch, the
-  script, its two call sites, and their tests once a released graphifyy carries the
-  change.
+- CodeGraph and Graphify are mandatory. Canonical post-clone setup is
+  `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
+  installs or upgrades `graphifyy>=0.9.51` with `uv` and runs
+  `scripts/agent/patch-graphify.sh`, before activating `.githooks`. Missing `uv`,
+  a wrapper launcher without a Python shebang, or an interpreter that cannot import
+  the selected Graphify package fails closed. `setup-agent-tools.sh` uses the same
+  shared installer; its later setup-hooks call is intentionally idempotent.
+- Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`. It runs
+  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index, reapplies
+  the Graphify patch, then runs `graphify update <root>` when the root graph exists.
+  When the graph is absent it prints a notice and builds nothing; first-build scope
+  is a judgement call handled by a `/graphify` run. `work-branch.sh --worktree`
+  routes through this initializer and rolls back a failed cut;
+  `wt --yes switch --create <branch>` runs it from `.config/wt.toml`.
+- Graphify's suffix map parses `.inc` as Pascal, collapsing this repository's PHP
+  includes from roughly 767 nodes to roughly 30 while extraction still succeeds.
+  Until a release includes Graphify-Labs/graphify#3075, the fix rides as
+  `.agents/patches/graphify-3075-language-overrides.patch`. The tracked
+  `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify-merge-driver.sh`
+  delegates to the shared installer before `graphify hook install`;
+  `init-worktree-tools.sh` patches before update; and `.githooks/pre-commit` patches
+  before its no-staged-files exit, repairing a bare Graphify upgrade before the
+  post-commit rebuild. The include-node floor in `tests/test_cross_agent_tooling.py`
+  remains the final graph guard. Delete this machinery once the upstream change ships.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a

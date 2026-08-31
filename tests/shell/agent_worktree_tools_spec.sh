@@ -25,6 +25,13 @@ Describe 'init-worktree-tools.sh'
         commit -q --allow-empty -m init || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
     tool_log="$fixture/tools.log"
+    graphify_package="$fixture/toolvenv/package/graphify"
+    mkdir -p "$graphify_package"
+    true > "$graphify_package/__init__.py"
+    cat > "$graphify_package/rcfile.py" <<'RCFILE'
+def activate_language_overrides(root):
+    return {}
+RCFILE
 
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
@@ -41,19 +48,20 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    # patch-graphify.sh finds the package to patch through the interpreter named on the
-    # shebang of the `graphify` on PATH, so this stub's shebang names a wrapper sitting
-    # where a uv tool venv keeps its own interpreter. The wrapper logs the patch
-    # script's probe -- which is what pins the patch call's position in this chain --
-    # and then fails it, so the patch script skips and the real installed Graphify is
-    # never touched from here. Anything that is not that probe is the stub below being
-    # executed through this shebang, so it runs as the /bin/sh script it is.
+    # patch-graphify.sh finds the package through the interpreter named on the
+    # `graphify` shebang. This fixture interpreter reports an already-patched package
+    # and logs the location probe, so no real installed Graphify is touched.
     interpreter="$fixture/toolvenv/bin/python3"
     mkdir -p "$fixture/toolvenv/bin"
     cat > "$interpreter" <<'INTERPRETER'
 #!/bin/sh
-case "$1" in
-  -I) printf 'patch-graphify:probe\n' >> "$WORKTREE_TOOL_LOG"; exit 1 ;;
+case "$*" in
+  *os.path.dirname*)
+    printf 'patch-graphify:probe\n' >> "$WORKTREE_TOOL_LOG"
+    printf '%s\n' "$WORKTREE_GRAPHIFY_PACKAGE"
+    exit 0
+    ;;
+  *activate_language_overrides*) exit 0 ;;
 esac
 exec sh "$@"
 INTERPRETER
@@ -90,7 +98,7 @@ SERENA
     ln -s "$stubdir/codegraph" "$no_serena/codegraph"
     ln -s "$stubdir/graphify" "$no_serena/graphify"
 
-    export WORKTREE_TOOL_LOG="$tool_log"
+    export WORKTREE_TOOL_LOG="$tool_log" WORKTREE_GRAPHIFY_PACKAGE="$graphify_package"
     # The initializer applies the vendored .inc language-override patch (issue #2810)
     # before refreshing the graph, so every log below carries `patch-graphify:probe`
     # between the CodeGraph line and the Graphify one.
@@ -116,12 +124,12 @@ SERENA
     The stderr should include 'run /graphify'
   End
 
-  It 'runs the vendored Graphify language override before refreshing the graph, and a stubbed graphify is a skip'
+  It 'runs the vendored Graphify language override before refreshing an existing graph'
     mkdir -p "$worktree/graphify-out"
     true > "$worktree/graphify-out/graph.json"
     When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
-    The stderr should include 'cannot locate'
+    The stderr should include 'already provides'
     The contents of file "$tool_log" should equal \
       "$(printf 'codegraph:init:%s\npatch-graphify:probe\ngraphify:update:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'

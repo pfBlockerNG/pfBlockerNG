@@ -402,44 +402,38 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     # PHP includes extract as a handful of incidental nodes (issue #2810). The fix is
     # upstream in Graphify-Labs/graphify#3075 and unreleased, so it rides as a patch
     # applied to the installed package after every install. When upstream releases it,
-    # the patch, the script, its two call sites, and this test go away together.
+    # the patch, shared installer, universal call sites, and this test go away together.
     patch = (ROOT / ".agents/patches/graphify-3075-language-overrides.patch").read_text(encoding="utf-8")
     assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
     assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
 
-    # Two call sites, each pinned by the line that RUNS the patch. Their ORDER -- the
-    # patch before that site's first use of Graphify, or that step's output is
-    # Pascal-parsed -- is asserted behaviourally by the specs that execute these
-    # scripts: agent_graphify_merge_driver_spec.sh pins the patch before
-    # `graphify hook install`, agent_worktree_tools_spec.sh before `graphify update`.
-    # setup-agent-tools.sh has no call of its own -- it ends by running
-    # init-worktree-tools.sh, which patches.
-    for install, invocation in (
-        ("scripts/agent/ensure-graphify-merge-driver.sh", 'sh "$patch_graphify" || {'),
-        (
-            "scripts/agent/init-worktree-tools.sh",
-            'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
-        ),
-    ):
-        # The invocation carries no repository argument: the script derives everything
-        # it needs from its own path and from the `graphify` on PATH.
-        source = (ROOT / install).read_text(encoding="utf-8")
-        assert invocation in source, f"{install} does not run patch-graphify.sh with no argument"
+    installer_path = "scripts/agent/ensure-graphify.sh"
+    installer = (ROOT / installer_path).read_text(encoding="utf-8")
+    install_command = "uv tool install --upgrade 'graphifyy>=0.9.51'"
+    assert install_command in installer, "the shared Graphify installer lost its install/upgrade floor"
+    assert 'sh "$patch_graphify"' in installer, "the shared Graphify installer does not apply the patch"
 
-    bootstrap = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
-    assert "patch-graphify.sh" not in bootstrap, (
-        "setup-agent-tools.sh regained a patch-graphify.sh call: it already reaches the "
-        "patch through init-worktree-tools.sh"
-    )
+    callers = {
+        "scripts/setup-hooks.sh": 'sh "$script_dir/agent/ensure-graphify.sh" "$root"',
+        ".githooks/pre-commit": "sh scripts/agent/patch-graphify.sh || failed 'Graphify .inc language override'",
+        "scripts/agent/init-worktree-tools.sh": 'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
+        "scripts/agent/ensure-graphify-merge-driver.sh": 'sh "$(dirname "$0")/ensure-graphify.sh" "$root"',
+        "scripts/agent/setup-agent-tools.sh": 'sh "$ensure_graphify" "$root"',
+    }
+    for caller, invocation in callers.items():
+        source = (ROOT / caller).read_text(encoding="utf-8")
+        assert invocation in source, f"{caller} lost mandatory Graphify install/patch reachability"
+        assert install_command not in source, f"{caller} duplicates the shared Graphify installation convention"
 
     rc = (ROOT / ".graphifyrc").read_text(encoding="utf-8").splitlines()
     assert "language.inc=php" in rc, ".graphifyrc must declare the PHP include override"
 
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
-    # Identifiers only. A prose pin fails on a pure line rewrap that changes nothing, so
-    # the document's sentences stay the reader's rather than this test's.
     for contract in (
+        "scripts/agent/ensure-graphify.sh",
         "scripts/agent/patch-graphify.sh",
+        "scripts/setup-hooks.sh",
+        ".githooks/pre-commit",
         "Graphify-Labs/graphify#3075",
         "language.inc=php",
         "include-node floor",

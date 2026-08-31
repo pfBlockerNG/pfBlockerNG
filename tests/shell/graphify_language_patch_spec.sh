@@ -181,28 +181,29 @@ RCFILE
     Assert [ -z "$(find "$fixture/site packages" \( -name '*.~[0-9]*~' -o \( -name '*.orig' ! -name 'with.orig' \) \) -print)" ]
   End
 
-  It 'skips with a warning when the graphify shebang does not name a Python interpreter'
+  It 'fails closed when the graphify shebang does not name a Python interpreter'
     # The ambient python3 is NOT a fallback: another interpreter imports another
     # graphify, so falling back patches an unrelated package and reports success. A
     # working python3 sits on PATH here precisely to prove nothing reaches for it.
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/graphify"
     make_interpreter "$stubdir/python3"
     When run sh "$script_abs"
-    The status should equal 0
+    The status should not equal 0
     The stderr should include 'does not name a Python interpreter'
     The path "$package/rcfile.py" should not be exist
     Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.before"; printf '%s' "$?")" -eq 0 ]
   End
 
-  It 'skips with a warning when the shebang interpreter cannot import graphify'
+  It 'fails closed when the shebang interpreter cannot import graphify'
     printf '#!/bin/sh\nexit 1\n' > "$interpreter"
     When run sh "$script_abs"
-    The status should equal 0
+    The status should not equal 0
     The stderr should include 'cannot locate'
     The path "$package/rcfile.py" should not be exist
+    Assert [ "$(cmp -s "$package/extract.py" "$fixture/extract.py.before"; printf '%s' "$?")" -eq 0 ]
   End
 
-  It 'ignores a hostile module in the working directory it is called from'
+  It 'fails closed while ignoring a hostile module in the working directory'
     # Both probes run isolated (-I), which keeps the caller's directory off sys.path, so
     # a graphify.py beside the caller can neither answer for the installed package nor
     # execute at all.
@@ -216,7 +217,7 @@ __file__ = '$hostile/graphify.py'
 HOSTILE
     printf '#!%s\nexit 0\n' "$(command -v python3)" > "$stubdir/graphify"
     When run sh -c 'cd "$1" && exec sh "$2"' _ "$hostile" "$script_abs"
-    The status should equal 0
+    The status should not equal 0
     The stderr should include 'cannot locate'
     The path "$hostile/executed" should not be exist
     The path "$hostile/rcfile.py" should not be exist

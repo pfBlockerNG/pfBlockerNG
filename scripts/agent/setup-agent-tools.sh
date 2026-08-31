@@ -227,8 +227,10 @@ main() {
 		fail "'$target' is not a git worktree"
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	setup_hooks=$root/scripts/setup-hooks.sh
+	ensure_graphify=$root/scripts/agent/ensure-graphify.sh
 	init_tools=$root/scripts/agent/init-worktree-tools.sh
 	[ -f "$setup_hooks" ] || fail "required repository helper '$setup_hooks' is missing"
+	[ -f "$ensure_graphify" ] || fail "required repository helper '$ensure_graphify' is missing"
 	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
 
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
@@ -270,7 +272,7 @@ main() {
 	esac
 	require_tool uv
 	uv tool install --upgrade serena-agent
-	uv tool install --upgrade graphifyy
+	sh "$ensure_graphify" "$root"
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
 	require_tool serena

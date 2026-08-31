@@ -1,22 +1,23 @@
 #!/bin/sh
-# One-time developer setup: activate tracked Git hooks and bootstrap CodeGraph.
+# One-time developer setup: patch Graphify, activate tracked hooks, and bootstrap CodeGraph.
 #
 # Run once after cloning:
 #   sh scripts/setup-hooks.sh
 #
 # git cannot auto-apply a committed core.hooksPath (by design — cloning a repo
 # must not silently install executable hooks), so this single explicit opt-in is
-# the closest to "automatic". After running it, .githooks/pre-commit and
-# .githooks/pre-push are active in this clone. When CodeGraph is installed, the
-# same command also creates this checkout's exact-root index.
+# the closest to "automatic". The setup installs and patches Graphify before
+# activating .githooks; when CodeGraph is installed, it also creates this
+# checkout's exact-root index.
 
 set -eu
 
 root=$(git rev-parse --show-toplevel)
+script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
+sh "$script_dir/agent/ensure-graphify.sh" "$root"
 git -C "$root" config core.hooksPath .githooks
 
 if command -v codegraph >/dev/null 2>&1; then
-	script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
 	sh "$script_dir/agent/ensure-codegraph.sh" "$root"
 fi
 
