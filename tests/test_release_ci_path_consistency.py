@@ -134,13 +134,14 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
     read_matrix = "\n".join(jobs["read-matrix"])
     build = "\n".join(jobs["build-pkgs-portable"])
 
-    for output in ("route_matrix", "ci_metadata_sha", "ports_sha", "dependency_packages"):
+    for output in ("route_matrix", "ci_metadata_sha", "ports_sha"):
         assert re.search(
             rf"^      {output}:\s+\$\{{\{{ steps\.pins\.outputs\.{output} \}}\}}$",
             read_matrix,
             re.MULTILINE,
         ), f"read-matrix must expose the build-time {output}"
-    assert "ref: ${{ steps.pins.outputs.ci_metadata_sha }}" in read_matrix
+    assert "dependency_builder: ${{ steps.dependencies.outputs.dependency_builder || 'null' }}" in read_matrix
+    assert "dependency_packages: ${{ steps.dependencies.outputs.dependency_packages || '{}' }}" in read_matrix
     assert read_matrix.count("git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports") == 1
     builder_checkout = extract_step(release, "Check out pinned dependency-builder source")
     assert "uses: actions/checkout@v6" in builder_checkout
@@ -157,20 +158,24 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
 
 
 @pytest.mark.parametrize(
-    ("source", "expected_extra_pkgs"),
+    ("source", "expected_extra_pkgs", "expected_has_dependencies"),
     [
-        ("release/4.0", '["textproc/py-charset-normalizer"]'),
-        ("release/3.3", "[]"),
+        ("release/4.0", '["textproc/py-charset-normalizer"]', "true"),
+        ("release/3.3", "[]", "false"),
     ],
 )
 def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
     tmp_path: Path,
     source: str,
     expected_extra_pkgs: str,
+    expected_has_dependencies: str,
 ) -> None:
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     script = textwrap.dedent(
         extract_after(extract_step(release, "Pin ci-metadata, ROUTE, and Ports identities"), "run: |\n")
+    )
+    dependency_script = textwrap.dedent(
+        extract_after(extract_step(release, "Resolve dependency identities"), "run: |\n")
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -261,10 +266,34 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
     assert f"ci_metadata_sha={ci_sha}" in emitted
     assert f"ports_sha={ports_sha}" in emitted
     assert f'"extra_pkgs":{expected_extra_pkgs}' in emitted
+    assert f"has_dependencies={expected_has_dependencies}" in emitted
     if source == "release/3.3":
-        assert "dependency_packages={}" in emitted
+        assert "dependency_builder=" not in emitted
+        assert "dependency_packages=" not in emitted
         assert "textproc/py-charset-normalizer" not in emitted
     else:
+        route_line = next(line for line in emitted.splitlines() if line.startswith("route_matrix="))
+        dependency_output = tmp_path / "dependency-output"
+        dependency_completed = subprocess.run(
+            ["sh", "-c", dependency_script],
+            cwd=ROOT,
+            env=os.environ
+            | {
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "GITHUB_OUTPUT": str(dependency_output),
+                "GITHUB_WORKSPACE": str(tmp_path),
+                "RUNNER_TEMP": str(tmp_path),
+                "GIT_LOG": str(git_log),
+                "ROUTE_MATRIX": route_line.partition("=")[2],
+                "PORTS_SHA": ports_sha,
+                "SOURCE_DATE_EPOCH": str(source_epoch),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert dependency_completed.returncode == 0, dependency_completed.stderr
+        dependency_emitted = dependency_output.read_text(encoding="utf-8")
         toolchain = {
             "python": "3.11.15",
             "pip": "26.2.1",
@@ -294,7 +323,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
                 "toolchain": toolchain,
             }
             expected[suffix] = {"textproc/py-charset-normalizer": identity}
-        line = next(line for line in emitted.splitlines() if line.startswith("dependency_packages="))
+        line = next(line for line in dependency_emitted.splitlines() if line.startswith("dependency_packages="))
         assert json.loads(line.partition("=")[2]) == expected
     commands = git_log.read_text(encoding="utf-8")
     assert "fetch --no-tags origin +refs/heads/ci-metadata:refs/remotes/origin/ci-metadata" in commands

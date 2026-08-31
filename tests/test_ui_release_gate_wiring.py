@@ -508,6 +508,7 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     build_steps = workflow["jobs"]["build-pkgs-portable"]["steps"]
     setup = next(step for step in build_steps if step.get("name") == "Set up the pinned dependency-package toolchain")
     sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
+    extras = next(step for step in build_steps if step.get("name") == "Resolve release-line extras")
     record = next(step for step in build_steps if step.get("name") == "Write the destination-bound build record")
     build = next(step for step in build_steps if step.get("name") == "Build the .pkg via build-leg.sh")
     read_matrix_steps = workflow["jobs"]["read-matrix"]["steps"]
@@ -517,6 +518,7 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     pinned_builder = next(
         step for step in read_matrix_steps if step.get("name") == "Check out pinned dependency-builder source"
     )
+    dependencies = next(step for step in read_matrix_steps if step.get("name") == "Resolve dependency identities")
     handoffs = [
         step
         for job in workflow["jobs"].values()
@@ -524,8 +526,12 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
         if step.get("name") == "Create tagged release handoff"
     ]
 
+    read_matrix_outputs = workflow["jobs"]["read-matrix"]["outputs"]
     assert setup["with"] == {"version": "0.12.6", "activate-environment": True}
     assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
+    assert build_steps.index(extras) < build_steps.index(setup) < build_steps.index(sync)
+    assert setup["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
+    assert sync["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
     assert pinned_builder["uses"] == "actions/checkout@v6"
     assert pinned_builder["with"]["ref"] == (
         "${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || "
@@ -534,14 +540,23 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert pinned_builder["with"]["path"] == "pinned-builder"
     assert "scripts/" in pinned_builder["with"]["sparse-checkout"]
     assert "uv.lock" in pinned_builder["with"]["sparse-checkout"]
-    assert 'python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain' in pins["run"]
-    assert "python3 scripts/build-dep-pkg-portable.py --print-toolchain" not in pins["run"]
-    assert "--print-port-identity" in pins["run"]
-    assert "dependency_packages=${DEPENDENCY_PACKAGES}" in pins["run"]
+    assert (
+        read_matrix_steps.index(pins) < read_matrix_steps.index(pinned_builder) < read_matrix_steps.index(dependencies)
+    )
+    assert pinned_builder["if"] == "steps.pins.outputs.has_dependencies == 'true'"
+    assert dependencies["if"] == "steps.pins.outputs.has_dependencies == 'true'"
+    assert 'python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain' in dependencies["run"]
+    assert "python3 scripts/build-dep-pkg-portable.py --print-toolchain" not in dependencies["run"]
+    assert "--print-port-identity" in dependencies["run"]
+    assert "dependency_packages=${DEPENDENCY_PACKAGES}" in dependencies["run"]
     assert pins["env"]["INPUT_SOURCE"] == "${{ github.event.inputs.source }}"
     assert pins["env"]["SOURCE_SHA"] == "${{ steps.destinations.outputs.source_sha }}"
     assert "map(.extra_pkgs = [])" in pins["run"]
-    assert {"CREATED", "DEPENDENCY_BUILDER", "EXTRA_PKGS"} <= record["env"].keys()
+    assert "has_dependencies=${HAS_DEPENDENCIES}" in pins["run"]
+    assert read_matrix_outputs["dependency_builder"] == "${{ steps.dependencies.outputs.dependency_builder || 'null' }}"
+    assert read_matrix_outputs["dependency_packages"] == "${{ steps.dependencies.outputs.dependency_packages || '{}' }}"
+    assert {"CREATED", "DEPENDENCY_BUILDER"} <= record["env"].keys()
+    assert record["env"]["EXTRA_PKGS"] == "${{ steps.extras.outputs.extra_pkgs }}"
     assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
     assert 'if row["extra_pkgs"]:' in record["run"]
     assert 'record["dependency_builder"] = json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
@@ -556,8 +571,6 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert '--dependency-builder "$DEPENDENCY_BUILDER_FILE"' in handoffs[0]["run"]
     assert "DEPENDENCY_PACKAGES" in handoffs[0]["env"]
     assert '--dependency-packages "$DEPENDENCY_PACKAGES_FILE"' in handoffs[0]["run"]
-    assert setup["if"] == "github.event.inputs.source != 'release/3.3'"
-    assert sync["if"] == "github.event.inputs.source != 'release/3.3'"
 
 
 # --------------------------------------------------------------------------- #
