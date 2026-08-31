@@ -7,9 +7,18 @@ Describe '.githooks/pre-commit Composer vendor guard'
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphp.XXXXXX")"
     git_fixture -C "$repo" init -q
-    gitc config commit.gpgsign false
+    # issue #2982: the pre-commit identity gate is fail-closed, so the sandbox
+    # carries a valid identity and SSH signing prerequisites for hook-pass rows.
+    gitc config user.name t
+    gitc config user.email t@t
+    gitc config commit.gpgsign true
+    gitc config gpg.format ssh
+    : > "$repo/key.pub"
+    gitc config user.signingkey "$repo/key.pub"
     mkdir -p "$repo/.githooks" "$repo/scripts" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
+    cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
+      && chmod +x "$repo/.githooks/check-commit-identity.sh"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
 
