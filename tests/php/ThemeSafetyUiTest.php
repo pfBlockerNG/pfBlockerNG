@@ -147,6 +147,11 @@ final class ThemeSafetyUiTest extends TestCase
 			// an apostrophe in body text is no more a delimiter there than in a docblock. A
 			// quote is not one where a letter or digit runs straight into it.
 			'apostrophe in page text'   => ["<p>Don't do that</p>\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n<p>It's fine</p>", FALSE],
+			// '>' is the one opener character that is also ordinary markup. It has to be
+			// accepted as PHP's '=>' and rejected as a closing tag, or a quote in page
+			// prose opens a literal over everything below it.
+			'array arrow opens a value' => ["\$a = [\n  'k' => \"aaa\nbackground-color: #123456;\nbbb\",\n];\ncolor: red;", FALSE],
+			'closing tag does not'      => ["<span>'Tis the season</span>\nbackground-color: #123456;" . str_repeat(' ', 200) . "\ncolor: red;\n<span>'more'</span>", FALSE],
 			// Reading comments cuts both ways: a `//` that is not a comment opener must not eat
 			// the rest of its line. In a URL it follows the scheme's colon or the opening
 			// bracket, and skipping from there loses the quote that opens the literal below.
@@ -548,7 +553,13 @@ final class ThemeSafetyUiTest extends TestCase
 			if ($source[$i] === ' ' || $source[$i] === "\t") {
 				continue;
 			}
-			return strpos("=(,[{:;.+&|?<>!\r\n", $source[$i]) !== FALSE;
+			if ($source[$i] === '>') {
+				// '>' opens a value only as PHP's '=>'. A bare one closes a tag, and
+				// scan() reads php and inc, which carry markup: <span>'Tis the season
+				// is prose, and accepting it invents a literal over the lines below.
+				return $i > 0 && $source[$i - 1] === '=';
+			}
+			return strpos("=(,[{:;.+&|?<!\r\n", $source[$i]) !== FALSE;
 		}
 		return TRUE;
 	}
