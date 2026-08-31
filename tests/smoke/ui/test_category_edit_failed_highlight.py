@@ -48,8 +48,10 @@ if TYPE_CHECKING:
 
 # Tier B: the state under test only exists after a mutating save plus an on-box sidecar
 # write, neither of which the hermetic Tier-A render sweep can produce. Tier A coverage of
-# this page stays exactly what it is (test_render_smoke.py / test_category_edit.py) -- this
-# case exists so the ONE row state that sweep cannot reach is graded somewhere.
+# this page stays exactly what it is -- the page is swept by test_render_smoke.py's
+# PAGE_TABLE, and the inline-style assertion this module extends is in
+# test_theme_legibility_render.py. This case exists so the ONE row state neither can reach
+# is graded somewhere.
 pytestmark = pytest.mark.ui_e2e
 
 # A `Deny_*` action resolves $folder to $pfb['denydir'] = "{$pfb['dbdir']}/deny", and the IP
