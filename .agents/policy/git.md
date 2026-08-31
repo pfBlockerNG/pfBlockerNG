@@ -15,8 +15,7 @@ stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/sk
 workflows/configuration** (`.claude/workflows/`, `.codex/`), **documentation-only**
 changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses worktree but
 commits/pushes **directly to `devel`** (fetch + rebase first). Anything touching `src/`,
-`tests/`, or CI — ADR *implementation* included — uses full worktree + rebase-only-PR
-flow.
+`tests/`, or CI — ADR *implementation* included — uses full worktree + PR flow.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base

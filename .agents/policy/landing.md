@@ -8,9 +8,9 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 
 ## Fixed floors (never weaken)
 
-- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, rebase-merge (dev-only: push to `devel`). Commit alone not landing.
+- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, squash-merge (dev-only: push to `devel`). Commit alone not landing.
 - **Review before merge.** Merge step never start until review step complete cleanly.
-- **Rebase-only merges.** Never merge commit, never squash; history across `main` ← `devel` stay strictly linear.
+- **Squash-only merges.** Never merge commit, never rebase-merge (owner, 2026-08-31: server-side rebase lands PR commits unsigned).
 - **Advisory bots never gate.** No bot's state ever blocks the CI wait or the merge; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
@@ -150,7 +150,7 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ### Merge and clean up
 
-- Merge with rebase (`gh pr merge N --rebase`); never `--merge` or `--squash`.
+- Merge with squash (`gh pr merge N --squash --subject "<scope>: <summary>" --body "<body + Co-authored-by trailers>"`); never `--merge`/`--rebase`. PR title = final subject; squash commit lands GitHub-signed.
 - **Do not pass `--delete-branch`:** its local post-merge step check out base branch and fail when another worktree hold it, even though remote merge succeeded. Merge first, verify, then delete separately.
 - **Verify the merge actually landed:** PR's state must read `MERGED` (local step can error while remote merge succeeded).
 - Run `git fetch origin` after that verification so cleanup checks integration against the current remote base.
