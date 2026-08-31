@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests._workflow_steps import extract_job
 
@@ -237,6 +238,21 @@ def test_exhaustive_push_matrix_has_graphify_driver_before_each_mutation() -> No
         except (AssertionError, ValueError) as error:
             failures.append(str(error))
     assert not failures, "\n" + "\n".join(failures)
+
+
+def test_foreign_target_helper_checkout_includes_graphify_patch_payload() -> None:
+    workflow = yaml.safe_load((WORKFLOWS / "release-published.yml").read_text(encoding="utf-8"))
+    checkouts = [
+        step
+        for step in workflow["jobs"]["sync-ports-fork"]["steps"]
+        if step.get("uses") == "actions/checkout@v6"
+        and step.get("with", {}).get("repository") == "pfBlockerNG/pfBlockerNG"
+        and step["with"].get("ref") == "${{ github.workflow_sha }}"
+        and step["with"].get("path") == "pfblockerng-src"
+    ]
+
+    assert len(checkouts) == 1
+    assert checkouts[0]["with"]["sparse-checkout"].splitlines() == ["scripts/", ".agents/patches/"]
 
 
 _GOOD_FIXTURE = """\
