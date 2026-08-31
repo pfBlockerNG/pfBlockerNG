@@ -48,6 +48,20 @@ step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
 skip() { skipped="${skipped}${skipped:+,} $1"; }
 
+# --- Commit identity & signing prerequisites (issue #2982): fail-closed gate
+#     before the no-staged exit, so allow-empty commits are covered too. Resolved
+#     relative to $0 because core.hooksPath is the absolute shared path (linked
+#     release worktrees must reach the same checker). Missing/non-executable
+#     checker fails closed; a checker failure joins the other `fail` results
+#     without suppressing them. Git's own signing stays the cryptographic proof. ---
+step 'commit identity & signing prerequisites'
+identity_checker=$(dirname -- "$0")/check-commit-identity.sh
+if [ ! -x "$identity_checker" ]; then
+	failed "commit identity checker missing or not executable: $identity_checker"
+else
+	"$identity_checker" || failed 'commit identity & signing prerequisites'
+fi
+
 # Explicit legacy-branch opt-out (issue #2633): every worktree runs THIS hook via the
 # absolute shared core.hooksPath, but release-line trees never shipped the devel
 # checker corpus. A repo-script gate whose checker is absent from the tree is skipped

@@ -13,9 +13,21 @@ Describe '.githooks/pre-commit with a C-quoted path'
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommithostile.XXXXXX")"
     git_fixture -C "$repo" init -q
-    gitc config commit.gpgsign false
+    # issue #2982: the pre-commit identity gate is fail-closed, so the sandbox
+    # carries a valid identity, SSH signing prerequisites, and the checker itself.
+    gitc config user.name t
+    gitc config user.email t@t
+    gitc config commit.gpgsign true
+    gitc config gpg.format ssh
+    : > "$repo/key.pub"
+    gitc config user.signingkey "$repo/key.pub"
     mkdir -p "$repo/.githooks" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
+    cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
+      && chmod +x "$repo/.githooks/check-commit-identity.sh"
+    # The staged checker makes staged_sh=1, so the shell gates run; create their
+    # scan roots so the sandbox stays silent (the spec pins classification only).
+    mkdir -p "$repo/scripts" "$repo/tests" "$repo/.claude/hooks"
     # Stubs stand in for the real analysis tools: this spec pins WHICH gates the
     # hook decides to run and what its own scans see, not what those tools conclude.
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommithostilestub.XXXXXX")"

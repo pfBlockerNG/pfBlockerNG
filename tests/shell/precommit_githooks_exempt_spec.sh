@@ -24,9 +24,18 @@ scripts/agent/check-agent-config-parity.sh'
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitexempt.XXXXXX")"
     git_fixture -C "$repo" init -q
-    gitc config commit.gpgsign false
+    # issue #2982: the pre-commit identity gate is fail-closed, so the sandbox
+    # carries a valid identity and SSH signing prerequisites for hook-pass rows.
+    gitc config user.name t
+    gitc config user.email t@t
+    gitc config commit.gpgsign true
+    gitc config gpg.format ssh
+    : > "$repo/key.pub"
+    gitc config user.signingkey "$repo/key.pub"
     mkdir -p "$repo/.githooks" "$repo/scripts" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
+    cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
+      && chmod +x "$repo/.githooks/check-commit-identity.sh"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
 
@@ -177,7 +186,9 @@ scripts/agent/check-agent-config-parity.sh'
     # so a gate cannot be dropped by a change reviewers never see.
     printf '%s\ngate:shellcheck\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
     gitc add .githooks-exempt
-    gitc commit -q -m seed --no-verify
+    # -c commit.gpgsign=false: the sandbox key.pub is an empty stand-in, and this
+    # fixture commit is plumbing, not a signing test.
+    gitc -c commit.gpgsign=false commit -q -m seed --no-verify
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
     gitc add .githooks-exempt
     printf 'gate:shellcheck\n' >> "$repo/.githooks-exempt"
