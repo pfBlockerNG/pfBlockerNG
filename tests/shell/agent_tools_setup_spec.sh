@@ -249,18 +249,20 @@ if [ "$*" = 'install --platform agents' ] && [ "$(pwd -P)" = "$DEBIAN_REPOSITORY
   printf '%s\n' '# graphify rewrote repository agents' > "$DEBIAN_REPOSITORY/AGENTS.md"
   printf '%s\n' '# graphify rewrote repository policy' > "$DEBIAN_REPOSITORY/.agents/policy/invariants.txt"
 fi
-# Only the skill copy refreshes a client's installed skill; the per-client hook
-# wiring (`graphify claude install`) leaves it untouched, exactly as the real
-# Graphify does.
+# The client subcommand wires integrations; only the platform installer refreshes
+# the skill copy. The setup contract requires both for every detected harness.
 case "$*" in
-  'copilot install'|'pi install') stub_client=${1} ;;
   'install --platform claude') stub_client=claude ;;
   'install --platform codex') stub_client=codex ;;
+  'install --platform copilot') stub_client=copilot ;;
+  'install --platform pi') stub_client=pi ;;
+  'install --platform agents') stub_client=agents ;;
   *) stub_client='' ;;
 esac
 if [ -n "$stub_client" ]; then
   case "$stub_client" in
     pi) stub_skill_dir="$HOME/.pi/agent/skills/graphify" ;;
+    agents) stub_skill_dir="$HOME/.agents/skills/graphify" ;;
     *) stub_skill_dir="$HOME/.$stub_client/skills/graphify" ;;
   esac
   mkdir -p "$stub_skill_dir"
@@ -700,11 +702,15 @@ UNMANAGED_UV
     The contents of file "$tool_log" should not include 'grok:mcp'
   End
 
-  It 'reruns healthy Grok global skill setup without changing repository agent policy'
+  It 'reruns both Grok Graphify installers without changing repository agent policy'
     enable_client grok
+    mkdir -p "$home/.agents/skills/graphify"
+    printf '%s\n' '0.9.48' > "$home/.agents/skills/graphify/.graphify_version"
     When run sh -c 'cd "$1" && sh "$2" "$1" && sh "$2" "$1"' _ "$repository" "$script_abs"
     The status should equal 0
+    The contents of file "$home/.agents/skills/graphify/.graphify_version" should equal '0.9.51'
     Assert [ "$(grep -c '^serena:setup grok$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -Fxc "graphify:$home:agents install" "$tool_log")" -eq 2 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform agents" "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^grok:mcp doctor codegraph --json$' "$tool_log")" -eq 2 ]
     The contents of file "$tool_log" should not include 'grok:mcp remove codegraph'
@@ -732,7 +738,7 @@ UNMANAGED_UV
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 1 ]
   End
 
-  It 'refreshes detected Copilot Graphify through its native home-scoped installer'
+  It 'refreshes the detected Copilot Graphify skill as well as its integration'
     enable_client copilot
     mkdir -p "$home/.copilot/skills/graphify"
     printf '%s\n' '0.9.48' > "$home/.copilot/skills/graphify/.graphify_version"
@@ -740,6 +746,7 @@ UNMANAGED_UV
     The status should equal 0
     The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal '0.9.51'
     Assert [ "$(grep -Fxc "graphify:$home:copilot install" "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform copilot" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'
   End
 
@@ -765,28 +772,34 @@ UNMANAGED_UV
     Assert [ "$(grep -Fxc "graphify:$home:install --platform codex" "$tool_log")" -eq 1 ]
   End
 
-  It 'uses one Pi-compatible home-scoped Graphify install for detected OMP'
+  It 'refreshes the detected OMP Graphify skill through both Pi-compatible installers'
     enable_client omp
+    mkdir -p "$home/.pi/agent/skills/graphify"
+    printf '%s\n' '0.9.48' > "$home/.pi/agent/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
+    The contents of file "$home/.pi/agent/skills/graphify/.graphify_version" should equal '0.9.51'
     Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform pi" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'
   End
 
-  It 'does not duplicate the shared Pi-compatible Graphify install when OMP and Pi are detected'
+  It 'does not duplicate either shared Pi-compatible Graphify installer for OMP plus Pi'
     enable_client omp
     enable_client pi
     When run sh "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform pi" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'
   End
 
-  It 'reruns detected Pi home-scoped Graphify installation without Serena client setup'
+  It 'reruns both detected Pi Graphify installers without Serena client setup'
     enable_client pi
     When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform pi" "$tool_log")" -eq 2 ]
     The contents of file "$tool_log" should not include 'serena:setup'
     The contents of file "$tool_log" should not include "graphify:$home:claude install"
     The contents of file "$tool_log" should not include "graphify:$home:codex install"

@@ -172,21 +172,24 @@ setup_serena_client() {
 	serena setup "$2"
 }
 
+setup_graphify_client() {
+	# Integration and platform-skill installers are separate update surfaces.
+	(cd "$HOME" && graphify "$1" install && graphify install --platform "$1")
+}
+
 configure_agents() {
-	# `graphify <client> install` wires the client's always-on hooks for the scope
-	# it runs in; `graphify install --platform <client>` copies the skill itself.
-	# The two are disjoint for Claude Code and Codex, so an upgrade needs both or
-	# the client keeps running the previous release's skill. Copilot and Pi have
-	# no hook wiring: their client subcommand IS the skill copy.
+	# Run both Graphify update surfaces for every detected harness mapping so neither
+	# its integration nor its skill copy stays on the previous package release.
 	if command -v claude >/dev/null 2>&1; then
 		setup_serena_client claude claude-code
-		(cd "$HOME" && graphify claude install && graphify install --platform claude)
+		setup_graphify_client claude
 	fi
 	if command -v codex >/dev/null 2>&1; then
 		setup_serena_client codex codex
-		(cd "$HOME" && graphify codex install && graphify install --platform codex)
+		setup_graphify_client codex
 	fi
 	if command -v grok >/dev/null 2>&1; then
+		(cd "$HOME" && graphify agents install)
 		setup_serena_client grok grok
 		(cd "$HOME" && graphify install --platform agents)
 		if ! grok mcp doctor codegraph --json >/dev/null 2>&1; then
@@ -195,11 +198,11 @@ configure_agents() {
 		fi
 	fi
 	if command -v copilot >/dev/null 2>&1; then
-		(cd "$HOME" && graphify copilot install)
+		setup_graphify_client copilot
 	fi
 	if command -v pi >/dev/null 2>&1 ||
 		command -v omp >/dev/null 2>&1; then
-		(cd "$HOME" && graphify pi install)
+		setup_graphify_client pi
 	fi
 }
 
