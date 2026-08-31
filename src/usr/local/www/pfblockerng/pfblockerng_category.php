@@ -621,7 +621,7 @@ if ($gtype == 'geoip') {
 			pfSense by default implicitly blocks all unsolicited inbound traffic to the WAN interface.<br />
 			Therefore adding GeoIP based firewall rules to the WAN will <strong>not</strong> provide any benefit, unless there are
 			open WAN ports.<br /><br />
-			Its also <strong>not</strong> recommended to block the "world", instead consider rules to "Permit" traffic to/from
+			It\'s also <strong>not</strong> recommended to block the "world", instead consider rules to "Permit" traffic to/from
 			selected Countries only.<br />
 			Also consider protecting just the specific open WAN ports and its just as important to protect the outbound LAN traffic.<br /><br />
 			Country ISOs can also be defined in the IPv4/6 Tabs (Refer to blue infoblocks for more details)<br /><br />

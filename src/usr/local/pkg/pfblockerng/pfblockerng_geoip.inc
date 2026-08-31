@@ -635,7 +635,7 @@ $section->addInput(new Form_Select(
 	$options_aliaslog
 ))->setHelp("Default: <strong>Enable</strong><br />
 	Select - Logging to Status: System Logs: FIREWALL ( Log )<br />
-	This can be overriden by the 'Force Global IP Logging' option on the IP Tab.");
+	This can be overridden by the 'Force Global IP Logging' option on the IP Tab.");
 
 // Print Advanced Firewall Rule Settings (Inbound and Outbound) section
 foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_type) {
@@ -707,8 +707,8 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		"Custom {$custom_location}",
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
-	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
+	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>
+		Do not manually enter Address(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
 	)->setWidth(8);
 	$section->add($group);
@@ -1057,7 +1057,7 @@ $section->addInput(new Form_StaticText(
 	. 'With <strong>Reputation</strong> enabled, these 5 IPs will be removed and a single<strong>x.x.x.0/24</strong> Block is used.<br />'
 	. 'This will completely Block/Reject this particular range from your Firewall.<br /><br />'
 	. 'Selecting Blocklists from various Threat Sources will help to highlight repeat offending IP ranges,<br />'
-	. 'Its important to select a broad range of Blocklists that cover different types of malicious activity.<br /><br />'
+	. 'It\'s important to select a broad range of Blocklists that cover different types of malicious activity.<br /><br />'
 	. 'You *may* experience some False Positives. Add any False Positive IPs manually to the<br />'
 	. '<strong>IPv4 Suppression custom list</strong> or use the "+" suppression Icon in the Alerts TAB<br /><br />'
 	. 'To help mitigate False Positives \'Countries\' can be <strong>Excluded</strong> from this process. (Refer to Country Code settings)'

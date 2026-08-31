@@ -3532,7 +3532,7 @@ $section->addInput(new Form_Select(
 	TRUE
 ))->setHelp('Select the TLDs for Whitelist. (Only showing the Top 150 TLDs)<br />'
 		. '<strong>Default: COM, NET, ORG, CA, CO, IO</strong><br /><br />'
-		. 'Detailed listing : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a>'
+		. 'Detailed listing: <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a>'
 )->setAttribute('size', '20')
  ->setWidth(3);
 
@@ -3645,7 +3645,7 @@ $section->addInput(new Form_Select(
 	$pconfig['aliaslog'],
 	$options_aliaslog
 ))->sethelp('Default: <strong>Enable</strong><br />Select - Logging to Status: System Logs: FIREWALL ( Log )<br />'
-		. 'This can be overriden by the \'Force Global IP Logging\' option on the IP Tab. '
+		. 'This can be overridden by the \'Force Global IP Logging\' option on the IP Tab. '
 		. 'Applies when List Action is not Disabled.'
 );
 $form->add($section);
@@ -3725,8 +3725,8 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		"Custom {$custom_location}",
 		'text',
 		$pconfig['aliasaddr_' . $advmode]
-	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>'
-		. 'Do not manually enter Addresses(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
+	))->sethelp('<a target="_blank" rel="noopener noreferrer" href="/firewall_aliases.php?tab=ip">Click Here to add/edit Aliases</a>
+		Do not manually enter Address(es).<br />Do not use \'pfB_\' in the address-type (Host/Network/URL/URL Table) Alias name.<br />'
 		. "Select 'invert' to invert the sense of the match. ie - Not (!) {$custom_location} Address(es)"
 	)->setWidth(8)
 	 ->addClass('dnsbl_ip');

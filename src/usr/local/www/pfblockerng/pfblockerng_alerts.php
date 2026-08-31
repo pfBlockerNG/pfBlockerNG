@@ -4678,7 +4678,7 @@ if (!$alert_summary):
 		<dt><i class="fa-solid fa-info">&nbsp;</i></dt>
 			<dd><?=gettext('Links to Threat Source lookups');?></dd>
 		<dt><i class="fa-solid fa-plus"></i></dt>
-			<dd><?=gettext('Whitelist a IP/Domain');?></dd>
+			<dd><?=gettext('Whitelist an IP/Domain');?></dd>
 		<dt><i class="fa-solid fa-plus-circle"></i></dt>
 			<dd><?=gettext('Whitelist 1) A GeoIP or large CIDR IP or 2) A TLD Domain');?></dd>
 		<dt><i class="fa-regular fa-hand"></i></dt>
