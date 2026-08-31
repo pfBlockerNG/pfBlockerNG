@@ -272,6 +272,28 @@ final class FeedPassLockTest extends TestCase
 		}
 	}
 
+	public function testFeedOpenErrorReportsFailureWithoutContention(): void
+	{
+		// issue #3000: the fourth cell of this matrix. The other three rows below
+		// already fail closed; the feed lock's OPEN error used to be the one path
+		// that proceeded WITHOUT mutual exclusion, so two passes could run
+		// unserialised over shared recompute staging while the CLI reported success.
+		// A parent directory that does not exist makes fopen(..., 'c') fail for
+		// every uid -- unlike a chmod fixture, this row also runs as root.
+		$GLOBALS['pfb']['dbdir'] = "{$this->dbdir}/missing/child";
+		$contended = TRUE;
+
+		$this->assertFalse(pfb_feed_pass_acquire($contended),
+			'an unopenable feed lock must abort the pass, never proceed unlocked');
+		$this->assertFalse($contended, 'a feed open error is not contention');
+
+		$log = is_file($GLOBALS['pfb']['log']) ? (string) file_get_contents($GLOBALS['pfb']['log']) : '';
+		$this->assertStringNotContainsString('proceeding unlocked', $log,
+			'the abort must not log the old fail-open wording');
+		$this->assertStringNotContainsString('another pfBlockerNG feed pass is running', $log,
+			'an open error must not masquerade as contention');
+	}
+
 	public function testDispatcherOpenErrorReportsFailureWithoutContention(): void
 	{
 		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/missing/child";
@@ -432,9 +454,13 @@ final class FeedPassLockTest extends TestCase
 			'the outer guarded release (owner flag TRUE) must free the lock');
 	}
 
-	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-open
-	// (an unwritable dbdir must never block a legitimate pass).
-	public function testBeginFailsOpenWhenLockFileUnopenable(): void
+	// Hostile row -- lock file unopenable: begin() inherits acquire()'s fail-CLOSED
+	// (issue #3000). This row asserted the opposite on purpose until then: an
+	// unwritable dbdir was allowed through so it could not block a legitimate
+	// pass. That tradeoff is now inverted deliberately -- a pass that cannot
+	// serialise must refuse, because running unserialised corrupts shared
+	// recompute staging silently, while a refusal is visible in the exit code.
+	public function testBeginFailsClosedWhenLockFileUnopenable(): void
 	{
 		if (function_exists('posix_getuid') && posix_getuid() === 0) {
 			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
@@ -446,8 +472,8 @@ final class FeedPassLockTest extends TestCase
 		chmod($denydir, 0555);
 
 		try {
-			$this->assertTrue(pfb_feed_pass_begin('sync'),
-				'an unwritable dbdir must fail OPEN -- begin() returns TRUE rather than blocking legitimate work');
+			$this->assertFalse(pfb_feed_pass_begin('sync'),
+				'an unwritable dbdir must fail CLOSED -- begin() returns FALSE rather than running a pass with no mutual exclusion');
 		} finally {
 			chmod($denydir, 0755);
 		}
