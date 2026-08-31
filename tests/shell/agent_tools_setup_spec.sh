@@ -998,6 +998,7 @@ CONFIG
     # a single tool was installed.
     export DEBIAN_UV_SELF_UPDATE_FAILS=1
     When run sh "$script_abs" "$repository"
+    Dump
     The status should equal 0
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
     The stderr should include 'Self-update is only available'
