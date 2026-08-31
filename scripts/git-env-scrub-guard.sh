@@ -82,7 +82,7 @@ agent_run_gates_spec.sh:4
 agent_work_branch_spec.sh:24
 composer_cloud_install_spec.sh:4
 git_no_docs_spec.sh:5
-githooks_pre_push_lease_spec.sh:53
+githooks_pre_push_lease_spec.sh:54
 githooks_pre_push_tag_scheme_spec.sh:28
 githooks_prepare_commit_msg_guard_spec.sh:28
 impacted_tests_spec.sh:2
