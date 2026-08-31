@@ -10159,6 +10159,40 @@
             }
         ]
     },
+    "pfb_rsync_transfer_cmd": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "src",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "dst",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "blocks",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_rule_alias_needs_v4_suffix": {
         "returnsRef": false,
         "returnType": null,
