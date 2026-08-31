@@ -51,6 +51,7 @@ ENSURE_GRAPHIFY
     cat > "$repository/scripts/setup-hooks.sh" <<'SETUP_HOOKS'
 #!/bin/sh
 printf 'setup-hooks:%s\n' "$*" >> "$DEBIAN_HELPER_LOG"
+sh "$(dirname "$0")/agent/ensure-graphify.sh" "$PWD"
 SETUP_HOOKS
     cat > "$repository/scripts/agent/init-worktree-tools.sh" <<'INIT_WORKTREE'
 #!/bin/sh
@@ -589,7 +590,7 @@ UNMANAGED_UV
       '  demo:' \
       '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'ensure-graphify:%s\nsetup-hooks:\ninit-worktree-tools:%s' "$repository" "$repository")"
+      "$(printf 'setup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s' "$repository" "$repository")"
     The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should include 'wt:config shell install --yes'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
@@ -603,7 +604,8 @@ UNMANAGED_UV
       'projects:' \
       '  demo:' \
       '    web_dashboard: true')"
-    The contents of file "$helper_log" should equal "$(printf 'ensure-graphify:%s' "$repository")"
+    The contents of file "$helper_log" should equal \
+      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
@@ -914,7 +916,8 @@ CONFIG
     The contents of file "$worktrunk_config" should equal "$(cat "$worktrunk_multiline_expected")"
     The value "$(wc -c < "$worktrunk_config" | tr -d '[:space:]')" should equal \
       "$(wc -c < "$worktrunk_multiline_expected" | tr -d '[:space:]')"
-    The contents of file "$helper_log" should equal "$(printf 'ensure-graphify:%s' "$repository")"
+    The contents of file "$helper_log" should equal \
+      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
   End
 
   It 'inserts only the global Worktrunk key while preserving hostile comments, tables, and nested paths byte-for-byte'

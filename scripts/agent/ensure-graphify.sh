@@ -39,6 +39,14 @@ main() {
 		fail "required target or trusted sibling patch-graphify.sh is missing"
 
 	uv tool install --upgrade 'graphifyy>=0.9.51' || fail 'Graphify installation failed'
+	if ! command -v graphify >/dev/null 2>&1; then
+		uv_tool_bin=$(uv tool dir --bin) ||
+			fail 'cannot resolve uv tool executable directory'
+		[ -x "$uv_tool_bin/graphify" ] ||
+			fail "Graphify launcher '$uv_tool_bin/graphify' is not executable after installation"
+		PATH="$uv_tool_bin:$PATH"
+		export PATH
+	fi
 	sh "$patch_graphify" || fail "Graphify language-override patch failed for '$root'"
 }
 

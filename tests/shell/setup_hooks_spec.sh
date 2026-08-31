@@ -21,19 +21,39 @@ Describe 'setup-hooks.sh contributor bootstrap'
     graphify_log="$fixture/graphify.log"
     missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
     missing_uv_path="$fixture/no-uv"; mkdir -p "$missing_uv_path"
-    for tool in sh git basename dirname; do
+    for tool in basename cat chmod dirname git mkdir sh; do
       ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
       ln -s "$(command -v "$tool")" "$missing_uv_path/$tool"
     done
     cat > "$stubdir/uv" <<'UV'
 #!/bin/sh
-printf '%s\n' "$*" >> "$GRAPHIFY_LOG"
+case "$*" in
+  'tool install --upgrade graphifyy>=0.9.51')
+    printf '%s\n' "$*" >> "$GRAPHIFY_LOG"
+    if [ -n "${UV_TOOL_BIN_FIXTURE:-}" ]; then
+      mkdir -p "$UV_TOOL_BIN_FIXTURE"
+      printf '#!/bin/sh\nexit 0\n' > "$UV_TOOL_BIN_FIXTURE/graphify"
+      chmod +x "$UV_TOOL_BIN_FIXTURE/graphify"
+    fi
+    ;;
+  'tool dir --bin')
+    [ -n "${UV_TOOL_BIN_FIXTURE:-}" ] || exit 9
+    printf '%s\n' "$UV_TOOL_BIN_FIXTURE"
+    ;;
+  *) exit 9 ;;
+esac
 UV
     ln -s "$stubdir/uv" "$missing_codegraph_path/uv"
     mkdir -p "$primary/scripts/agent"
     cat > "$primary/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
-printf '%s\n' patch-graphify >> "$GRAPHIFY_LOG"
+if [ -n "${EXPECTED_GRAPHIFY_BIN:-}" ]; then
+  graphify_bin=$(command -v graphify) || exit 17
+  printf 'patch-graphify:%s\n' "$graphify_bin" >> "$GRAPHIFY_LOG"
+  [ "$graphify_bin" = "$EXPECTED_GRAPHIFY_BIN" ] || exit 18
+else
+  printf '%s\n' patch-graphify >> "$GRAPHIFY_LOG"
+fi
 PATCH_GRAPHIFY
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
@@ -50,7 +70,9 @@ case "$1" in
 esac
 CODEGRAPH
     chmod +x "$stubdir/uv" "$stubdir/codegraph"
-    export CODEGRAPH_LOG="$codegraph_log" GRAPHIFY_LOG="$graphify_log"
+    uv_tool_bin_fixture="$fixture/default uv tool bin"
+    export CODEGRAPH_LOG="$codegraph_log" GRAPHIFY_LOG="$graphify_log" \
+      UV_TOOL_BIN_FIXTURE="$uv_tool_bin_fixture"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -75,6 +97,36 @@ CODEGRAPH
     The contents of file "$graphify_log" should equal \
       "$(printf '%s\n%s' 'tool install --upgrade graphifyy>=0.9.51' patch-graphify)"
     The file "$codegraph_log" should not be exist
+  End
+
+  It 'patches a fresh uv install when the uv tool bin is absent from PATH'
+    uv_tool_bin="$fixture/uv tool bin"
+    When run env \
+      PATH="$missing_codegraph_path" \
+      UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
+      EXPECTED_GRAPHIFY_BIN="$uv_tool_bin/graphify" \
+      sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$graphify_log" should equal \
+      "$(printf '%s\n%s' 'tool install --upgrade graphifyy>=0.9.51' "patch-graphify:$uv_tool_bin/graphify")"
+    The value "$(git_fixture -C "$primary" config --get core.hooksPath)" should equal '.githooks'
+  End
+
+  It 'does not bypass a Graphify wrapper already selected by PATH'
+    wrapper="$missing_codegraph_path/graphify"
+    printf '#!/bin/sh\nexit 0\n' > "$wrapper"
+    chmod +x "$wrapper"
+    uv_tool_bin="$fixture/uv tool bin"
+    When run env \
+      PATH="$missing_codegraph_path" \
+      UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
+      EXPECTED_GRAPHIFY_BIN="$wrapper" \
+      sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$graphify_log" should equal \
+      "$(printf '%s\n%s' 'tool install --upgrade graphifyy>=0.9.51' "patch-graphify:$wrapper")"
   End
 
   It 'fails before activating hooks when uv is unavailable'

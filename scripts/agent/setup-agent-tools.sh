@@ -272,7 +272,7 @@ main() {
 	esac
 	require_tool uv
 	uv tool install --upgrade serena-agent
-	sh "$ensure_graphify" "$root"
+	(cd "$root" && sh "$setup_hooks")
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
 	require_tool serena
@@ -297,7 +297,6 @@ main() {
 	disable_serena_dashboard
 	configure_agents
 
-	(cd "$root" && sh "$setup_hooks")
 	sh "$init_tools" "$root"
 }
 

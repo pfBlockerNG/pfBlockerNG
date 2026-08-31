@@ -20,8 +20,8 @@ Load when: every agent session, from `AGENTS.md`.
   installs or upgrades `graphifyy>=0.9.51` with `uv` and runs
   `scripts/agent/patch-graphify.sh`, before activating `.githooks`. Missing `uv`,
   a wrapper launcher without a Python shebang, or an interpreter that cannot import
-  the selected Graphify package fails closed. `setup-agent-tools.sh` uses the same
-  shared installer; its later setup-hooks call is intentionally idempotent.
+  the selected Graphify package fails closed. `setup-agent-tools.sh` runs this canonical
+  setup at Graphify's install-order slot, before ast-grep and semgrep.
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`. It runs
   `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index, reapplies
   the Graphify patch, then runs `graphify update <root>` when the root graph exists.
