@@ -82,6 +82,8 @@ final class ThemeSafetyUiTest extends TestCase
 			'EditorView.theme({ "&": { backgroundColor: "#fff", color: "#212121" } })',
 			'td style=\'font-size:10px; color: red; background-color: rgba(128, 128, 128, 0.2);\'',
 			'setAttribute(\'style\', "background: {$pfb[$u_key]}")',
+			// issue #2962: the JS mirror of the PHP row above -- scan() reads .js too.
+			'const s = `background-color: ${theme.bg}`;',
 			'colors: { background: null, segmentStroke: "#ffffff" }',
 		];
 		foreach ($good as $src) {
@@ -1177,7 +1179,9 @@ final class ThemeSafetyUiTest extends TestCase
 
 	private static function isInterpolated(string $value): bool
 	{
+		// '{$' is PHP, '${' a JS template literal -- scan() reads both (issue #2962).
 		return str_contains($value, '{$')
+			|| str_contains($value, '${')
 			|| (bool)preg_match('/\$[a-zA-Z_]/', $value);
 	}
 
