@@ -81,6 +81,11 @@ PY3EOF
       The output should include "--timeout=30"
       The output should include "--timeout-method=signal"
       The output should include "-v"
+      # -ra makes the run RECORD why anything skipped. Without it the log carries
+      # the word SKIPPED and nothing else, and "a skip is not a pass" cannot be
+      # audited from the artifact (issue #2960). It has to be in THIS block:
+      # --override-ini=addopts= above wipes anything set in pyproject.
+      The output should include "-ra"
     End
   End
 
