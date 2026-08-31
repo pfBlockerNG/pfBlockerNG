@@ -91,9 +91,9 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 - **`commit-msg`** — rejects any `Co-authored-by:` trailer after Git's message
   editor runs, closing the post-`prepare-commit-msg` insertion window.
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
-  agent branch rewrites over unfetched remote history (issue #1307); and validates every
-  outgoing agent commit's final message, configured author/committer identity, and good
-  signature from the configured user email.
+  agent branch rewrites over unfetched remote history (issue #1307); validates the final
+  message of every outgoing commit; and validates each outgoing agent commit's configured
+  author/committer identity and good signature from the configured user email.
 
 ## Rebase and diff hygiene
 

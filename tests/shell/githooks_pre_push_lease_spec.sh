@@ -21,6 +21,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/prepushlease.XXXXXX")"
+    gpg_home=''
     ssh-keygen -q -t ed25519 -N '' -C a@example.com -f "${base}/signing_key"
     { printf 'a@example.com '; cat "${base}/signing_key.pub"; } >"${base}/allowed_signers"
     git_fixture init -q --bare "${base}/remote.git"
@@ -48,6 +49,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   cleanup() {
     rm -rf "$base"
+    [ -z "${gpg_home:-}" ] || rm -rf "$gpg_home"
   }
 
   BeforeEach 'setup'
@@ -106,28 +108,106 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     committer_name=$4
     committer_email=$5
     target_branch=${6:-devel}
+    runtime=${7:-agent}
     cd "${base}/A" || return 1
     git_fixture fetch -q origin || return 1
     git_fixture checkout -q -B integrity origin/devel || return 1
+
+    case "$mode" in
+      openpgp)
+        gpg_home="$(mktemp -d "${TMPDIR:-/tmp}/pfb-gpg.XXXXXX")" || return 1
+        chmod 700 "$gpg_home" || return 1
+        GNUPGHOME=$gpg_home
+        export GNUPGHOME
+        if ! gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-generate-key 'A <a@example.com>' ed25519 sign 0 >"${base}/gpg-keygen.log" 2>&1; then
+          cat "${base}/gpg-keygen.log" >&2
+          return 1
+        fi
+        git_fixture config gpg.format openpgp || return 1
+        openpgp_fingerprint=$(
+          gpg --batch --with-colons --list-secret-keys 2>/dev/null |
+            awk -F: '$1 == "fpr" { print $10; exit }'
+        )
+        [ -n "$openpgp_fingerprint" ] || return 1
+        git_fixture config user.signingkey "$openpgp_fingerprint" || return 1
+        ;;
+      wrong-signer)
+        ssh-keygen -q -t ed25519 -N '' -C other@example.com \
+          -f "${base}/other_signing_key" || return 1
+        { printf 'other@example.com '; cat "${base}/other_signing_key.pub"; } \
+          >>"${base}/allowed_signers"
+        git_fixture config user.signingkey "${base}/other_signing_key" || return 1
+        ;;
+    esac
+
     printf '%s\n' "$mode" >>f
     git_fixture add f || return 1
     printf 'integrity fixture\n' >"${base}/commit-message"
-    if [ "$mode" = coauthor ]; then
-      printf '\nCo-authored-by: Other <other@example.com>\n' >>"${base}/commit-message"
-    fi
+    case "$mode" in
+      coauthor|tag-lightweight|tag-annotated)
+        printf '\nCo-authored-by: Other <other@example.com>\n' >>"${base}/commit-message"
+        ;;
+      coauthor-space)
+        printf '\nCo-authored-by   : Other <other@example.com>\n' >>"${base}/commit-message"
+        ;;
+      coauthor-tab)
+        printf '\nCo-authored-by\t:\tOther <other@example.com>\n' >>"${base}/commit-message"
+        ;;
+    esac
 
     set -- -c core.hooksPath=/dev/null commit -q -F "${base}/commit-message"
-    if [ "$mode" = unsigned ]; then
-      set -- -c core.hooksPath=/dev/null commit -q --no-gpg-sign -F "${base}/commit-message"
-    fi
+    case "$mode" in
+      unsigned|unsigned-then-valid)
+        set -- -c core.hooksPath=/dev/null commit -q --no-gpg-sign \
+          -F "${base}/commit-message"
+        ;;
+    esac
     CLAUDECODE=1 \
       GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email" \
       GIT_COMMITTER_NAME="$committer_name" GIT_COMMITTER_EMAIL="$committer_email" \
       git_fixture "$@" || return 1
 
+    if [ "$mode" = unsigned-then-valid ]; then
+      printf 'valid tip\n' >>f
+      git_fixture add f || return 1
+      CLAUDECODE=1 \
+        GIT_AUTHOR_NAME="$author_name" GIT_AUTHOR_EMAIL="$author_email" \
+        GIT_COMMITTER_NAME="$committer_name" GIT_COMMITTER_EMAIL="$committer_email" \
+        git_fixture -c core.hooksPath=/dev/null commit -q -m 'valid tip' || return 1
+    fi
+
     local_sha=$(git_fixture rev-parse refs/heads/integrity) || return 1
-    remote_sha=$(git_fixture rev-parse "refs/remotes/origin/${target_branch}") || return 1
-    agent_hook "refs/heads/integrity $local_sha refs/heads/${target_branch} $remote_sha"
+    if [ "$mode" = openpgp ]; then
+      git_fixture log -1 --format='%%G?=%G?%n%%GS=%GS' "$local_sha" || return 1
+    fi
+
+    case "$mode" in
+      tag-lightweight)
+        git_fixture tag scratch-bad "$local_sha" || return 1
+        tag_sha=$(git_fixture rev-parse refs/tags/scratch-bad) || return 1
+        human_hook "refs/tags/scratch-bad $tag_sha refs/tags/scratch-bad $Z40"
+        return
+        ;;
+      tag-annotated)
+        git_fixture tag -a -m 'scratch bad' scratch-bad "$local_sha" || return 1
+        tag_sha=$(git_fixture rev-parse refs/tags/scratch-bad) || return 1
+        human_hook "refs/tags/scratch-bad $tag_sha refs/tags/scratch-bad $Z40"
+        return
+        ;;
+    esac
+
+    if [ "$target_branch" = new ]; then
+      remote_sha=$Z40
+    else
+      remote_sha=$(git_fixture rev-parse "refs/remotes/origin/${target_branch}") || return 1
+    fi
+    update="refs/heads/integrity $local_sha refs/heads/${target_branch} $remote_sha"
+    if [ "$runtime" = human ]; then
+      human_hook "$update"
+    else
+      agent_hook "$update"
+    fi
   }
 
   It 'denies an agent history rewrite when the remote moved past the tracking ref'
@@ -230,18 +310,46 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
     The stderr should equal ''
   End
 
-  It 'allows a rebased signed topic whose base is already on another remote branch'
-    git_fixture -C "${base}/A" -c core.hooksPath=/dev/null \
-      push -q origin "${a_local}:refs/heads/topic"
-    When call outgoing_agent_hook valid A a@example.com A a@example.com topic
+  It 'allows an OpenPGP-signed outgoing commit from the configured identity'
+    When call outgoing_agent_hook openpgp A a@example.com A a@example.com
+    The status should equal 0
+    The output should equal "$(printf '%s\n%s' '%G?=G' '%GS=A <a@example.com>')"
+    The stderr should equal ''
+  End
+
+  It 'allows a new branch whose existing base is already reachable from origin'
+    When call outgoing_agent_hook valid A a@example.com A a@example.com new
     The status should equal 0
     The stderr should equal ''
+  End
+
+  It 'rejects a markerless human commit containing a Co-authored-by trailer'
+    When call outgoing_agent_hook coauthor A a@example.com A a@example.com devel human
+    The status should equal 1
+    The stderr should equal 'Co-authored-by trailers are forbidden'
+  End
+
+  Context 'outgoing non-version tag attribution'
+    Parameters
+      tag-lightweight lightweight
+      tag-annotated   annotated
+    End
+
+    It "rejects a $2 tag whose peeled commit contains a Co-authored-by trailer"
+      When call outgoing_agent_hook "$1" A a@example.com A a@example.com
+      The status should equal 1
+      The stderr should equal 'Co-authored-by trailers are forbidden'
+    End
   End
 
   Context 'outgoing agent commit integrity'
     Parameters
       coauthor        A       a@example.com     A       a@example.com     'Co-authored-by trailers are forbidden'
+      coauthor-space  A       a@example.com     A       a@example.com     'Co-authored-by trailers are forbidden'
+      coauthor-tab    A       a@example.com     A       a@example.com     'Co-authored-by trailers are forbidden'
       unsigned        A       a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
+      unsigned-then-valid A   a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
+      wrong-signer    A       a@example.com     A       a@example.com     'Agent commits must be signed by the configured user identity'
       author-name     Other   a@example.com     A       a@example.com     'Agent commits must use the configured user identity'
       author-email    A       other@example.com A       a@example.com     'Agent commits must use the configured user identity'
       committer-name  A       a@example.com     Other   a@example.com     'Agent commits must use the configured user identity'
@@ -310,6 +418,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
         && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
           -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          -u OMP_CLI -u PI_CLI \
           git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_human

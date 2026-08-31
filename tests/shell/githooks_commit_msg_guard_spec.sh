@@ -49,4 +49,12 @@ Describe 'commit-msg Co-authored-by trailer guard'
     The stdout should equal ''
     The stderr should equal 'Co-authored-by trailers are forbidden'
   End
+
+  It 'rejects whitespace between Co-authored-by and its colon with the exact diagnostic'
+    printf 'Co-authored-by \t: Example Agent <agent@example.invalid>\n' > "$message"
+    When run sh "$hook" "$message"
+    The status should equal 1
+    The stdout should equal ''
+    The stderr should equal 'Co-authored-by trailers are forbidden'
+  End
 End
