@@ -494,13 +494,13 @@ $section->addInput(new Form_Select(
 	'Firewall \'Auto\' Rule Order',
 	$pconfig['pass_order'],
 	$options_pass_order
-))->setHelp('Default Order:<strong> | pfB_Block/Reject | All other Rules | (original format)</strong><br />'
+))->setHelp('Default Order:<strong>| pfB_Pass/Match/Block/Reject | All other Rules | (Default format)</strong><br />'
 		. '<span class="text-danger"><strong>Note: \'Auto type\' Firewall Rules will be \'ordered\' by this selection.</strong></span>'
 		. '<div class="infoblock">'
 		. 'Refer to the blue infoblock \'List Action\' icon in the IPv4 tab for details on how to use \'Alias type\'<br />'
 		. '(ie: \'Alias Deny\') instead of \'Auto generated rules\', if required for your network design.<br /><br />'
 		. 'Select the \'<strong>Order</strong>\' of the Rules<br /><br />'
-		. '&emsp;Selecting \'original format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
+		. '&emsp;Selecting \'Default format\', sets pfBlockerNG rules at the top of the Firewall TAB.<br />'
 		. '&emsp;Selecting any other \'Order\' will re-order <strong>all the rules to the format indicated!</strong></div>')
   ->setAttribute('style', 'width: auto; max-width: 100%');
 
