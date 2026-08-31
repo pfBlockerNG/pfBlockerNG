@@ -370,7 +370,10 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 		bool $et = FALSE
 	): PfbDownloadResult
 	{
-		if ($kind === 'zip') {
+		// Only the non-ET ZIP arm extracts through a `set -o pipefail` pipeline. The ET
+		// arm is a plain `tar -xOf > stage` redirect, so requiring the capability there
+		// would skip a row every POSIX /bin/sh can run (issue #2359's gate then reds).
+		if ($kind === 'zip' && !$et) {
 			$this->requirePipefailShell();
 		}
 		$source = $this->archiveFixture($kind, $payload);
