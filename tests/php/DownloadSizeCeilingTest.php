@@ -315,6 +315,11 @@ final class DownloadSizeCeilingTest extends TestCase
 			// same exec(). Probed with a real over-ceiling tar appended to a wrapped
 			// call: the write was truncated at the ceiling anyway.
 			'exec(pfb_extract_cmd(',
+			// Issue #2876: the rsync transfer spawn routes through
+			// pfb_rsync_transfer_cmd(), which itself returns pfb_extract_cmd()'s
+			// output — so its ulimit prefix still bounds whatever follows in the
+			// same exec(), exactly the property this prefix exemption guards on.
+			'exec(pfb_rsync_transfer_cmd(',
 		];
 
 		// curl_exec() is not a shell call -- the lookbehind keeps it out.
