@@ -150,7 +150,12 @@ CURL
 #!/bin/sh
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
-  'self update') ;;
+  'self update')
+    # A uv that did not come from the standalone installer refuses to
+    # self-update and exits non-zero (issue: package-managed uv). The
+    # installer must treat that as maintenance, not a prerequisite.
+    if [ -n "${DEBIAN_UV_SELF_UPDATE_FAILS:-}" ]; then exit 1; fi
+    ;;
   'tool install --upgrade serena-agent')
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
@@ -980,6 +985,21 @@ CONFIG
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
+  End
+
+  It 'continues when a package-managed uv refuses to self-update'
+    # `uv self update` is maintenance, not a prerequisite: every later use is
+    # `uv tool install --upgrade`, which a package-managed uv performs happily.
+    # A uv installed by apt/curl-to-/usr/local rather than the standalone script
+    # exits non-zero here, and under `set -eu` that aborted the whole run before
+    # a single tool was installed.
+    export DEBIAN_UV_SELF_UPDATE_FAILS=1
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 1 ]
   End
 
   It 'requires both repository setup helpers before running either one'
