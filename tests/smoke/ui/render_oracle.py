@@ -98,24 +98,39 @@ def body_has_php_error(body: str) -> str | None:
 # <div class="alert alert-danger input-errors">...</div> per response. Non-greedy
 # because the block is non-nested: a greedy match swallows the rest of the document
 # and buries the reason this exists to surface.
-_INPUT_ERRORS_RE = re.compile(r"<div[^>]*\binput-errors\b[^>]*>.*?</div>", re.DOTALL)
+# `\b` alone matches inside `no-input-errors`, because `-` is a non-word
+# character: the boundary falls between `no-` and `input`, so a class the page
+# may plausibly grow would read as a rejection. The lookbehind requires the
+# name to START here.
+_INPUT_ERRORS_RE = re.compile(r"<div[^>]*(?<![-\w])input-errors\b[^>]*>.*?</div>", re.DOTALL)
 
 
-def input_errors_block(body: str) -> str:
-    """Return pfSense's ``print_input_errors()`` alert from a save-response body.
+NO_INPUT_ERRORS = "<no input-errors block in response>"
+"""Shown in a failure message where no block was rendered, never ``""``.
+
+An empty string reads as though the response came back blank, which points at the
+wrong layer -- the defect :func:`input_errors_block` exists to stop. DISPLAY only:
+nothing branches on it, so editing it cannot change a verdict.
+"""
+
+
+def input_errors_block(body: str) -> str | None:
+    """Return pfSense's ``print_input_errors()`` alert, or ``None`` when absent.
 
     A save the page REJECTS renders its reason here -- a reserved header name, a
-    failed protocol guard, a bad URL -- and a caller that discards it fails later at
-    whatever it asserts next, naming the config path instead of the rejection
-    (issue #2954). Pulling out just the block keeps the diagnostic readable, which
+    failed protocol guard, a bad URL -- and a caller that discards it fails later
+    at whatever it asserts next, naming the config path instead of the rejection
+    (issue #2954). Returning just the block keeps the diagnostic readable, which
     ``.agents/policy/testing.md`` requires of a failing assertion.
 
-    Absent the div -- the save carried no validation error -- returns an explicit
-    marker, never ``""``: an empty string reads in a failure message as though the
-    response came back blank, which points at the wrong layer again.
+    ``None`` rather than a sentinel string is deliberate: callers gate live
+    assertions on presence, and comparing against a marker would make that
+    MARKER TEXT load-bearing -- edit it and every off-appliance check still
+    passes while the guest-side assertions invert. Use :data:`NO_INPUT_ERRORS`
+    for display.
     """
     match = _INPUT_ERRORS_RE.search(body)
-    return match.group(0) if match else "<no input-errors block in response>"
+    return match.group(0) if match else None
 
 
 @dataclass(frozen=True)

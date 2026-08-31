@@ -62,7 +62,7 @@ import pytest
 
 from .. import helpers
 from .conftest import mask_page_identity
-from .render_oracle import input_errors_block
+from .render_oracle import NO_INPUT_ERRORS, input_errors_block
 from .test_category_edit import (
     CFG_DNSBL,
     CFG_IPV4,
@@ -659,7 +659,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
                 f"expected NO {error!r} error -- the whitelist sanitiser resets a wrong-type "
                 f"alias to '' before pfb_adv_alias_field_errors() ever runs, so this value "
                 f"never reaches validation as an error.\n"
-                f"  response input-errors block: {input_errors_block(norm_body)}"
+                f"  response input-errors block: {input_errors_block(norm_body) or NO_INPUT_ERRORS}"
             )
 
         # The save WENT THROUGH -- a rejected save would write nothing at all.
@@ -668,7 +668,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
             f"expected the save to go through (a rejected save writes nothing)\n"
             f"  expected aliasname: {aliasname!r}\n"
             f"  actual aliasname  : {got_aliasname!r}\n"
-            f"  response input-errors block: {input_errors_block(norm_body)}"
+            f"  response input-errors block: {input_errors_block(norm_body) or NO_INPUT_ERRORS}"
         )
 
         # The wrong-type value was dropped -- normalized to '', not saved verbatim.
@@ -695,7 +695,7 @@ def test_alias_type_port_field_normalizes_network_alias_away(
         )
         assert "Must use a Port-type alias" not in accept_body, (
             f"expected no alias-type error when a port alias is used in a port field\n"
-            f"  response input-errors block: {input_errors_block(accept_body)}"
+            f"  response input-errors block: {input_errors_block(accept_body) or NO_INPUT_ERRORS}"
         )
         got_accept_ports_in = helpers.config_get(vm, f"{base}/aliasports_in")
         assert got_accept_ports_in == port_alias, (
