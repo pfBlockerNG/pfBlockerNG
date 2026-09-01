@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from .. import helpers
 from .conftest import mask_page_identity
 
 sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed (Tier-B browser dep)")
@@ -201,47 +202,89 @@ def test_feeds_subtab_row_active_and_type_scoped(
     _shot(page, screenshot_dir, f"feeds_subtab_{gtype}")
 
 
+# The dark theme is a per-box setting, not a property of the Feeds page: the browser
+# fixture leaves whatever theme the box already carries (a fresh box is light), so the
+# contrast probe below selects the theme it needs and puts the previous value back.
+_THEME_CFG = "system/webgui/webguicss"
+_DARK_THEME = "pfSense-dark.css"
+
+
 def test_painted_feed_rows_scope_legible_link_foregrounds(
     browser_page: Page,
     webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Painted Feeds rows override the dark theme's low-contrast anchor palette only where needed."""
+    """Painted Feeds rows override the dark theme's low-contrast anchor palette only where needed.
+
+    Scenario:
+      Given the box is switched to the real ``pfSense-dark.css`` theme (the theme whose
+        explicit anchor palette overrides the row's inherited ``color: #212121``),
+      When the Feeds page is opened in the authenticated browser,
+      Then exactly the rows painted with an inline background carry
+        ``pfb-painted-feed-row``, every anchor inside those rows computes to the scoped
+        ``#004D40`` and clears 4.5:1 against its own computed row background, and
+        hover/focus computes to the scoped ``#003D33``.
+      Finally the box's prior theme state is restored exactly, including absence.
+    """
     page = browser_page
-    _open(page, webui, f"{FEEDS_BASE}?type=ipv4")
 
-    assert page.locator('link[rel="stylesheet"][href*="pfSense-dark.css"]').count() >= 1, (
-        "the contrast proof must run against the real pfSense dark theme"
+    prior_theme = helpers.config_get_state(smoke_vm, _THEME_CFG)
+    applied = helpers.php_eval(
+        smoke_vm,
+        f"config_set_path({helpers._php_str(_THEME_CFG)}, {helpers._php_str(_DARK_THEME)});\n"
+        "write_config('pfBlockerNG smoke #3035: select the dark theme for the Feeds contrast probe');\n"
+        "echo 'THEME-OK';",
+    )
+    assert applied.returncode == 0 and "THEME-OK" in applied.stdout, (
+        f"failed to select {_DARK_THEME}: rc={applied.returncode} "
+        f"stdout={applied.stdout!r} stderr={applied.stderr!r}"
     )
 
-    row_states = page.locator("table#pfb_table tr, table#pfb_table2 tr").evaluate_all(
-        """
-        rows => rows.map(row => ({
-          painted: row.classList.contains('pfb-painted-feed-row'),
-          inlineBackground: row.style.backgroundColor,
-        }))
-        """
-    )
-    assert any(state["painted"] for state in row_states), "Feeds page rendered no painted rows"
-    assert all(bool(state["inlineBackground"]) == state["painted"] for state in row_states), row_states
+    try:
+        stored = helpers.config_get(smoke_vm, _THEME_CFG)
+        assert stored == _DARK_THEME, f"{_THEME_CFG} is {stored!r} after the switch, expected {_DARK_THEME!r}"
 
-    links = page.locator("tr.pfb-painted-feed-row a")
-    assert links.count() >= 1, "painted Feeds rows rendered no anchors"
-    computed = links.evaluate_all(
-        """
-        anchors => anchors.map(anchor => ({
-          color: getComputedStyle(anchor).color,
-          background: getComputedStyle(anchor.closest('tr')).backgroundColor,
-        }))
-        """
-    )
-    for style in computed:
-        assert style["color"] == "rgb(0, 77, 64)", style
-        ratio = _contrast_ratio(style["color"], style["background"])
-        assert ratio >= 4.5, f"painted-row link contrast is {ratio:.3f}:1 for {style}"
+        _open(page, webui, f"{FEEDS_BASE}?type=ipv4")
 
-    first = links.first
-    first.hover()
-    expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
-    page.mouse.move(0, 0)
-    first.focus()
-    expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
+        assert page.locator('link[rel="stylesheet"][href*="pfSense-dark.css"]').count() >= 1, (
+            "the contrast proof must run against the real pfSense dark theme, but the page loaded no "
+            f"pfSense-dark.css stylesheet even though {_THEME_CFG} is {_DARK_THEME!r} -- a per-user "
+            "theme override outranks the system key"
+        )
+
+        row_states = page.locator("table#pfb_table tr, table#pfb_table2 tr").evaluate_all(
+            """
+            rows => rows.map(row => ({
+              painted: row.classList.contains('pfb-painted-feed-row'),
+              inlineBackground: row.style.backgroundColor,
+            }))
+            """
+        )
+        assert any(state["painted"] for state in row_states), "Feeds page rendered no painted rows"
+        assert all(bool(state["inlineBackground"]) == state["painted"] for state in row_states), row_states
+
+        links = page.locator("tr.pfb-painted-feed-row a")
+        assert links.count() >= 1, "painted Feeds rows rendered no anchors"
+        computed = links.evaluate_all(
+            """
+            anchors => anchors.map(anchor => ({
+              color: getComputedStyle(anchor).color,
+              background: getComputedStyle(anchor.closest('tr')).backgroundColor,
+            }))
+            """
+        )
+        for style in computed:
+            assert style["color"] == "rgb(0, 77, 64)", style
+            ratio = _contrast_ratio(style["color"], style["background"])
+            assert ratio >= 4.5, f"painted-row link contrast is {ratio:.3f}:1 for {style}"
+
+        first = links.first
+        first.hover()
+        expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
+        page.mouse.move(0, 0)
+        first.focus()
+        expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
+    finally:
+        helpers.config_restore_state(smoke_vm, _THEME_CFG, prior_theme)
+        restored = helpers.config_get_state(smoke_vm, _THEME_CFG)
+        assert restored == prior_theme, f"{_THEME_CFG} restored as {restored!r}, expected {prior_theme!r}"
