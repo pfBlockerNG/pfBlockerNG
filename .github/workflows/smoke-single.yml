@@ -278,7 +278,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}-${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}
+  group: ${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}-${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:

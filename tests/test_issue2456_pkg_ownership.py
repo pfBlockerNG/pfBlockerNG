@@ -141,14 +141,12 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
 
     def test_live_catalogue_routes_are_part_of_smoke_concurrency_identity(self) -> None:
         concurrency = yaml.safe_load(SMOKE_SINGLE)["concurrency"]
-        self.assertEqual(
-            concurrency["group"],
-            (
-                "${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-"
-                "${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}-"
-                "${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}"
-            ),
+        route_expression = "${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}"
+        shared_axes = (
+            "${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-"
+            "${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}"
         )
+        self.assertEqual(concurrency["group"], f"{route_expression}-{shared_axes}")
         self.assertIs(concurrency["cancel-in-progress"], False)
 
     def test_tagged_finalize_depends_on_the_live_gate_and_discards_failure(self) -> None:
