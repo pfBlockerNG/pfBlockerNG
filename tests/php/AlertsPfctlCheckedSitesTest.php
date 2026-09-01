@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/FailingFlockStream.php';
+
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -280,6 +282,25 @@ SH
 		}
 	}
 
+	/**
+	 * The non-contended sibling of withFeedPassContention(): the lock cannot be
+	 * ACQUIRED at all rather than being held by someone else. Issue #3012 -- the
+	 * two states must not produce the same operator message, so every row that
+	 * asserts 'mid-update' needs a partner asserting it is absent.
+	 */
+	private function withFeedPassLockError(callable $action): mixed
+	{
+		$this->assertTrue(stream_wrapper_register('pfbalertslockerr', PfbFailingFlockStream::class));
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		try {
+			$GLOBALS['pfb']['dbdir'] = 'pfbalertslockerr://state';
+			return $action();
+		} finally {
+			$GLOBALS['pfb']['dbdir'] = $dbdir;
+			stream_wrapper_unregister('pfbalertslockerr');
+		}
+	}
+
 	private function feedPassLockIsHeld(): bool
 	{
 		$probe = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
@@ -330,6 +351,32 @@ SH
 			$clists['ipsuppression']['data'],
 			'a failed re-add must KEEP the suppression customlist entry'
 		);
+	}
+
+	/**
+	 * Issue #3012: the www/ half. This row is the non-contended partner of the
+	 * 'busy' row below -- same dispatch, same oracle, opposite lock state. It is
+	 * the hermetic half testing.md requires alongside the live tier, and it fails
+	 * if either message is wrong or if the two states collapse to one wording.
+	 */
+	public function testDeleteIpLockErrorSaysSoRatherThanClaimingMidUpdate(): void
+	{
+		$clists = ['ipsuppression' => ['data' => ['198.51.100.5' => "198.51.100.5\r\n"]]];
+
+		$result = $this->withFeedPassLockError(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ip("'198.51.100.5'", "'pfB_Deny_v4'", $clists);
+			}
+		);
+
+		$this->assertFalse($result['pfb_found']);
+		$this->assertStringContainsString('could not be acquired', $result['savemsg'],
+			'an acquisition error must say the lock could not be acquired');
+		$this->assertStringNotContainsString('mid-update', $result['savemsg'],
+			'an acquisition error must NOT tell the operator to wait for a run that is not happening');
+		$this->assertArrayHasKey('198.51.100.5', $clists['ipsuppression']['data'],
+			'a refused mutation must keep the customlist entry');
+		$this->assertFileDoesNotExist($this->logPath, 'a refused mutation must not call pfctl');
 	}
 
 	public function testDeleteIpBusyKeepsSuppressionEntryAndSkipsPfctlAndWrites(): void

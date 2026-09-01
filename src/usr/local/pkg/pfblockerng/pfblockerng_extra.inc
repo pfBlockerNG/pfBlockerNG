@@ -6292,6 +6292,7 @@ function pfblockerng_tick(
 			|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 		$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
 			|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
+		$pfb_tick_contended = FALSE;
 		if (!pfb_schedule_dispatch_begin()) {
 			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another tick is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
 		} elseif (!pfb_feed_pass_begin('scheduled', $pfb_tick_contended)) {
@@ -7986,8 +7987,11 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
 				break;
 			case 'lock_error':
-				$savemsg2 = ' : The feed-pass lock could not be acquired, suppression will apply at the next reload'
-					. ' -- see the pfBlockerNG log; retrying will not clear this';
+				// Wording mirrors the 'busy' arm's shape: the caller splices
+				// " and added to the ... customlist" onto the end of this string,
+				// so it must read as a clause that a conjunction can follow.
+				$savemsg2 = ' : The feed-pass lock could not be acquired (see the pfBlockerNG log),'
+					. ' suppression will apply at the next reload';
 				break;
 			default:
 				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
