@@ -123,9 +123,10 @@ class PslRules:
     private_wildcard: tuple[str, ...] = ()
     private_exception: tuple[str, ...] = ()
     # Membership sets, built on first use and held on the instance. compare=False
-    # so value equality still reflects the rules alone, whether or not an
-    # instance has been indexed.
-    _index: tuple[_PslSets, _PslSets] | None = field(default=None, compare=False, repr=False)
+    # keeps value equality (and the hash) a function of the rules alone; init=False
+    # keeps a foreign index out of the constructor and makes dataclasses.replace
+    # rebuild rather than carry the previous rules' sets.
+    _index: tuple[_PslSets, _PslSets] | None = field(default=None, compare=False, repr=False, init=False)
 
     def index(self) -> tuple[_PslSets, _PslSets]:
         """(ICANN-only, ICANN+PRIVATE) membership sets for this rule set.
@@ -135,9 +136,11 @@ class PslRules:
         and CPython does not cache tuple hashes, so the key costs more than the
         scan the cache exists to avoid (issue #3046).
 
-        Unlocked on purpose. init_standard runs per unbound worker thread, so two
-        threads may race here; both build equal values and the worst case is one
-        wasted build.
+        Hand-rolled rather than functools.cached_property because on 3.11 that
+        descriptor takes a lock shared across all instances, serialising the first
+        build across worker threads; this check-then-set is unlocked on purpose, so
+        racing threads each build an equal value and the cost is one wasted build
+        per racing thread.
         """
         idx = self._index
         if idx is None:

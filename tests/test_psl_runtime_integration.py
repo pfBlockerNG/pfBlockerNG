@@ -403,9 +403,9 @@ def test_resolving_a_name_never_hashes_the_rule_set() -> None:
 
     ``_psl_index`` was ``@lru_cache``d on the frozen dataclass, so every lookup
     computed a key by hashing all six rule tuples. CPython does not cache tuple
-    hashes, so the key cost more than the scan the cache existed to avoid --
-    13.89us per call, against 0.034us for an ordinary small-tuple hash. Hashing
-    the rule set during a resolution is the mechanical signature of that defect,
+    hashes, so the key cost more than the scan the cache existed to avoid.
+    Hashing the rule set during a resolution is the mechanical signature of that
+    defect,
     and it is what this asserts against: not a timing, which would be flaky, but
     the operation whose cost was the defect.
 
