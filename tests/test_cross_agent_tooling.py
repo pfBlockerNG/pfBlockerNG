@@ -92,44 +92,45 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "require `origin/devel == reviewed_sha`" in local
     pre_push_fence = local.index("Immediately before push, run the PR head fence")
     push = local.index("git push origin HEAD:devel")
-    post_push_base = local.index("After push, fetch `origin` and require `origin/devel == reviewed_sha`")
-    post_push_fence = local.index("run the PR head fence again", post_push_base)
-    evidence = local.index("Fence pass: post landed evidence")
-    state_read = local.index("read the PR state")
-    merged_state = local.index("If it is `MERGED`", state_read)
-    open_state = local.index("If it is `OPEN`", merged_state)
-    close = local.index("close the PR and issue", open_state)
-    terminal = local.index("verify both terminal states", close)
-    delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
-    closed_rollback = local.index("If the PR is `CLOSED`")
-    merged_outcome = local.index("If it is already `MERGED`")
-    new_pr = local.index("route newer head commits to a new PR")
-    assert pre_push_fence < push < post_push_base < post_push_fence < evidence < state_read
-    assert state_read < merged_state < open_state < close < terminal < delete
-    assert delete < closed_rollback < merged_outcome < new_pr
-    assert "before push and before terminal PR/issue synchronization" in local
-    assert "stop; do not clean up" in local
-    assert "retain the remote head and worktree; stop; do not clean up" in local
-    assert "If the PR is `CLOSED`, reopen the PR and issue" in local
-    assert "If it is already `MERGED`, keep terminal state and route newer head commits to a new PR" in local
-    assert "If the post-push PR head fence fails, `reviewed_sha` remains landed" in local
-    assert "post evidence" in local
-    assert "retain the branch/worktree" in local
-    assert "Inspect the PR" in local
-    assert "If indirectly `MERGED`, verify the issue" in local
-    assert "route newer commits to a new PR" in local
-    assert "Stop normal flow" in local
-    assert "If it is `OPEN`, leave the PR and issue active and review the advanced head" in local
-    assert "If it is `CLOSED`, reopen the PR and issue, then review the advanced head" in local
-    assert "Any other post-push state stops" in local
-    assert "On lease failure, retain the remote head and worktree" in local
-    assert "If it is `MERGED`, verify the linked issue completed" in local
-    assert "Any other state stops" in local
-    assert "verify both terminal states and retain the worktree" in local
-    assert "and restart review" in local
+    post_push_fence = local.index("After push, fetch `origin`, run the PR head fence again")
+    mismatch_marker = "**Post-push PR head fence mismatch:**"
+    match_marker = "**Post-push PR head fence match:**"
+    assert mismatch_marker in local, "post-push fresh-fence mismatch needs an explicit state machine"
+    assert match_marker in local, "evidence and terminal synchronization need a fresh-fence success gate"
+
+    mismatch = extract_between(local, mismatch_marker, match_marker)
+    assert "After `origin/devel == reviewed_sha` but the fetched PR head differs from `reviewed_sha`" in mismatch
+    assert "retain the remote head branch and worktree; stop" in mismatch
+    mismatch_state = mismatch.index("read the PR state")
+    assert mismatch_state < mismatch.index("`MERGED` keeps terminal state")
+    assert "`MERGED` keeps terminal state and routes newer head commits to a new PR" in mismatch
+    assert "`OPEN` stays open and restarts affected review plus exact-head CI for the current head" in mismatch
+    assert (
+        "`CLOSED` reopens the PR and issue and restarts affected review plus exact-head CI for the current head"
+        in mismatch
+    )
+    assert "post landed evidence" not in mismatch
+    assert "close the PR and issue" not in mismatch
+    assert "--force-with-lease=refs/heads/<head>:<reviewed_sha>" not in mismatch
+
+    matched = extract_between(local, match_marker, "**On lease failure:**")
+    evidence = matched.index("post landed evidence")
+    state_read = matched.index("read the PR state")
+    merged_state = matched.index("If it is `MERGED`")
+    open_state = matched.index("If it is `OPEN`")
+    close = matched.index("close the PR and issue")
+    terminal = matched.index("verify both terminal states")
+    delete = matched.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
+    assert pre_push_fence < push < post_push_fence < local.index(mismatch_marker) < local.index(match_marker)
+    assert evidence < state_read < merged_state < open_state < close < terminal < delete
+
+    lease_failure = extract_between(local, "**On lease failure:**", "Only after leased deletion succeeds")
+    assert "retain the remote head branch and worktree; stop; do not clean up" in lease_failure
+    assert "`CLOSED` reopens the PR and issue and restarts review" in lease_failure
+    assert "`MERGED` keeps terminal state and routes newer head commits to a new PR" in lease_failure
     success_cleanup = merge.index("Only after leased deletion succeeds")
     outside_cleanup = merge.index("From OUTSIDE")
-    assert new_pr < success_cleanup < outside_cleanup
+    assert local.index("**On lease failure:**") < success_cleanup < outside_cleanup
     assert "restart affected review plus exact-head CI" in merge
     assert "every landed commit is locally signed and verified" in landing
 

@@ -19,15 +19,19 @@ See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](
 - **Local fast-forward is not a bypass.** It requires the same PR, findings, exact-head
   CI, and catch-all gates; every landed commit is locally signed and verified, the base
   is rechecked immediately before push, and the update must be fast-forward.
-- **Advisory bots never gate.** Triage real findings on merit.
-- **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
+- **Advisory bots never gate.** `wait-checks.sh` excludes advisory contexts; bot state
+  never blocks CI or landing. Triage real findings, including security, as unsolicited
+  review, but never gate-count the bot.
+- **Never request Copilot code review** (owner, 2026-08-01) or enable its rule/auto-request;
+  strip only that rule when bundled. Triage one that arrives, but never gate-count it or
+  publicly restate the ban.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
   role" for every leg, round, and verifier; never inherit or override it.
-- **Four independent read-only legs review the whole PR:** contract, correctness/hostile
-  inputs, test honesty, and over-engineering. Round 1 covers the full diff. Audit comments
-  record head/model/effort and per-file verdicts. Later small-tier rounds focus on changes
-  since that leg's recorded head, recheck its findings in full context, and run only
-  affected legs.
+- **Four leg reviewers, whole-PR diff, incremental focus.** Run four parallel read-only
+  lenses (contract · correctness/hostile input · test honesty · over-engineering).
+  Round 1 covers the full PR; each leg posts its reviewed SHA. Later rounds use that
+  leg's delta in full-PR context, preserve clean ground, recheck every defect, and rerun
+  only affected legs on small tier.
 - **Convergence rule.** Fix→re-review loop continue only while latest round returned `blocking` finding; all-nitpick or clean round close it (hard cap and CI-retry limits per workflow.md "Retry and fix-loop limits").
 - **Bounded waits.** Every background wait self-terminating (hard iteration cap + wall-clock deadline inside loop), swept instant task reach terminal state.
 - **Worktree isolation.** All rebase/push work happen in dedicated worktree the session created, never primary checkout, never foreign worktree.
@@ -168,31 +172,33 @@ Poll until every **required** check complete, excluding only the advisory contex
 ### Land and clean up
 
 - Bind `reviewed_sha=$(git rev-parse HEAD)` and
-  `reviewed_base=$(git rev-parse origin/devel)`. The PR head fence is:
-  `git fetch origin "pull/N/head"`; set `remote_pr_head="$(git rev-parse FETCH_HEAD)"`
-  and `local_head="$(git rev-parse HEAD)"`; run `test "$remote_pr_head" = "$reviewed_sha"`
-  and `test "$local_head" = "$reviewed_sha"`. Before either path run `git fetch origin`,
-  run the fence, and require `origin/devel == reviewed_base`; mismatch must stop and
+  `reviewed_base=$(git rev-parse origin/devel)`. PR head fence:
+  `git fetch origin "pull/N/head"`; set `remote_pr_head="$(git rev-parse FETCH_HEAD)"` and
+  `local_head="$(git rev-parse HEAD)"`; run `test "$remote_pr_head" = "$reviewed_sha"` and
+  `test "$local_head" = "$reviewed_sha"`. Before either path run `git fetch origin`,
+  run the fence, and require `origin/devel == reviewed_base`. Mismatch must stop and
   restart affected review plus exact-head CI.
 - **GitHub-hosted path:** only with an atomic strict-base gate; otherwise use local. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
-  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification and require the exact landed squash commit OID to be GitHub-signed.
-- **Maintainer-local path:** if the base moved, rebase, push, and repeat review plus CI.
-  The PR head fence runs before push and before terminal PR/issue synchronization.
-  Immediately before push, run the PR head fence, verify every commit, then run
-  `git push origin HEAD:devel` without force. After push, fetch `origin` and require `origin/devel == reviewed_sha`, then run the PR head fence again.
-  If the post-push PR head fence fails, `reviewed_sha` remains landed: post evidence and
-  retain the branch/worktree. Inspect the PR. If indirectly `MERGED`, verify the issue and
-  route newer commits to a new PR. If it is `OPEN`, leave the PR and issue active and review the advanced head.
-  If it is `CLOSED`, reopen the PR and issue, then review the advanced head. Any other post-push state stops.
-  Stop normal flow. Fence pass: post landed evidence and read the PR state.
+  Other methods stay disabled. PR's state must read `MERGED`.
+  Run `git fetch origin` after that verification and require the exact landed squash commit OID to be GitHub-signed.
+- **Maintainer-local path:** Immediately before push, run the PR head fence, verify every commit, then
+  `git push origin HEAD:devel` without force. After push, fetch `origin`, run the PR head fence again,
+  and require `origin/devel == reviewed_sha`.
+- **Post-push PR head fence mismatch:** After `origin/devel == reviewed_sha` but the fetched PR head differs from `reviewed_sha`,
+  read the PR state; retain the remote head branch and worktree; stop.
+  - `MERGED` keeps terminal state and routes newer head commits to a new PR.
+  - `OPEN` stays open and restarts affected review plus exact-head CI for the current head.
+  - `CLOSED` reopens the PR and issue and restarts affected review plus exact-head CI for the current head.
+  No evidence, closure, or deletion for this mismatched reviewed head.
+- **Post-push PR head fence match:** post landed evidence and read the PR state.
   If it is `MERGED`, verify the linked issue completed. If it is `OPEN`, close the PR and issue.
   Any other state stops. Then verify both terminal states and retain the worktree.
-- Delete the remote head with
-  `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
-  On lease failure, retain the remote head and worktree; stop; do not clean up. If the PR is `CLOSED`, reopen the PR and issue
-  and restart review. If it is already `MERGED`, keep terminal state and route newer head commits to a new PR.
-  Do not pass `--delete-branch` to GitHub merge commands.
+- Delete with `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
+- **On lease failure:** retain the remote head branch and worktree; stop; do not clean up.
+  - `CLOSED` reopens the PR and issue and restarts review.
+  - `MERGED` keeps terminal state and routes newer head commits to a new PR.
+- Never pass `--delete-branch` to GitHub merge commands.
 - Only after leased deletion succeeds, From OUTSIDE the worktree prefer
   `wt remove --foreground --format=json --yes <head>`. Inspect and report its JSON `branch_outcome`;
   cleanup requires `deleted`. For any other branch-deletion outcome, retain the local branch
