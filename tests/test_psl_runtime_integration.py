@@ -64,11 +64,8 @@ def test_psl_classifier_uses_arbitrary_depth_and_private_policy() -> None:
     [("example.com", ".com"), ("example.com", "com."), ("example.github.io", ".github.io")],
 )
 def test_psl_build_normalizes_dotted_blacklist_entries(domain: str, blacklist: str) -> None:
-    """issue #3050: the dotted-entry strip moved OUT of the per-entry classifier and
-    into ``build()``'s config boundary, so the three user-textarea shapes are pinned
-    where they are now normalized. The classifier's own contract (it consumes
-    dot-stripped roots and never re-derives them) lives in
-    tests/test_issue3050_blacklist_normalization.py.
+    """A dotted or trailing-dot user blacklist entry still blocks at its root: ``build()``
+    normalizes the textarea shape, so the entry lands as an exact DATA block (#3050).
     """
     result = P.build(
         {"feeds": [{"feed": "FEED", "group": "GRP", "log_flag": "1", "raw": "feed.raw"}]},

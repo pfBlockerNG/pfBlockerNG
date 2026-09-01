@@ -9,10 +9,8 @@ may cost O(len(blacklist)). The intent pinned here is a contract, not a duration
   SAME object for every entry -- exactly the treatment ``tld_wildcard_exclusion``
   has always had (``exclusion`` at ``build()``'s prologue).
 
-Both are asserted structurally (iteration counting, object identity), never by
-timing, and each pairs with a behaviour row proving the blacklist still decides
-the classification it is supposed to decide -- a classifier that simply ignored
-the blacklist would satisfy the cost contract alone.
+Each cost row pairs with a behaviour row: the blacklist must still decide the
+classification, so ignoring it cannot satisfy the cost contract alone.
 
 Pure pytest, stdlib only, no Unbound symbols (CI-runnable).
 """
@@ -74,8 +72,7 @@ class TestClassifierConsumesPreStrippedRoots:
         domains = ("example.co.uk", "sub.example.co.uk", "example.com", "other.co.uk", "deep.sub.example.com")
         for domain in domains:
             P.tld_wildcard_classify(domain, _rules(), set(), blacklist=roots)
-        # Snapshot first: rendering the set (repr) iterates it, so reading the
-        # counter inside the failure message would report one iteration too many.
+        # Read the counter BEFORE asserting: rendering the set iterates it.
         observed = roots.iterations
         assert observed == 0, (
             f"expected 0 iterations over the blacklist across {len(domains)} classifications, "
