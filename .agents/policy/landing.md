@@ -1,20 +1,25 @@
 # PR landing — the contract
 
-Scope: PR landing — review sources, adversarial reviewer contract, finding intake, merge gate, CI waits, post-merge. Load when: landing PR or applying review findings.
+Scope: PR landing — review sources, adversarial reviewer contract, finding intake, landing gate, CI waits, post-landing. Load when: landing PR or applying review findings.
 
-- **Owner:** repo owner. **Last-verified:** 2026-08-20.
+- **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
 Composes with [`workflow.md`](workflow.md) — its "Review" section define independent adversarial review principle, "Retry and fix-loop limits" bound every loop here. Every wait armed here follow [`waits.md`](waits.md) (no orphaned waits + bounded-wait ladder). CodeRabbit Fair Usage and spend rules live in [`coderabbit.md`](coderabbit.md); it is asked for only once the PR is merge-ready, never earlier — this file only names the landing hook.
 
 ## Fixed floors (never weaken)
 
-- **Landing means merged.** Commit, push, non-draft PR, reviews resolved, squash-merge (dev-only: push to `devel`). Commit alone not landing.
-- **Review before merge.** Merge step never start until review step complete cleanly.
-- **Squash-only merges.** Never merge commit, never rebase-merge (owner, 2026-08-31: server-side rebase lands PR commits unsigned).
-- **Signed linear landings only.** The PR path is a GitHub-signed squash. A direct
-  fast-forward is allowed only for the dev-only classes named in `git.md`, and only
-  when every landing commit is locally signed; direct push never bypasses a required PR.
-- **Advisory bots never gate.** No bot's state ever blocks the CI wait or the merge; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
+- **Landing means terminal state.** The change is on `devel`, the non-draft PR passed
+  review and CI, and the PR plus linked issue are closed correctly. Commit alone is not landing.
+- **Review before landing.** Neither landing path starts until review finishes cleanly.
+- **Two signed linear paths.** GitHub-hosted landing uses an explicit squash and produces
+  one GitHub-verified commit. Maintainer-local landing rebases the reviewed signed branch
+  onto live `devel` and fast-forwards those exact signed commits.
+- **GitHub merge methods.** Merge commits and server-side rebase merges stay disabled;
+  server-side rebase recreates signed PR commits as unsigned objects.
+- **Local fast-forward is not a bypass.** It requires the same PR, findings, exact-head
+  CI, and catch-all gates; every landed commit is locally signed and verified, the base
+  is rechecked immediately before push, and the update must be fast-forward.
+- **Advisory bots never gate.** No bot's state ever blocks the CI wait or landing; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
   role" for every leg, round, and verifier; never inherit or override it.
@@ -22,15 +27,19 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 - **Convergence rule.** Fix→re-review loop continue only while latest round returned `blocking` finding; all-nitpick or clean round close it (hard cap and CI-retry limits per workflow.md "Retry and fix-loop limits").
 - **Bounded waits.** Every background wait self-terminating (hard iteration cap + wall-clock deadline inside loop), swept instant task reach terminal state.
 - **Worktree isolation.** All rebase/push work happen in dedicated worktree the session created, never primary checkout, never foreign worktree.
-- **User-directed merge.** Invoking landing flow IS user's standing authorization to merge once gates (review clean, PR open/ready/mergeable, CI green) pass; no extra per-merge confirmation needed.
-- **Assignment authorizes the whole chain, and nothing beyond it** (owner, 2026-08-31). "Work on issue N" authorizes issue→branch→PR→review→merge→close with no per-step confirmation; returning a green, fully gated PR to ask permission to merge is a defect. The grant covers THAT item's own artifacts only — never another action class, work item, or actor's PR: may MERGE is not may POST, and yesterday's grant is not today's. Outside it, ask.
+- **User-directed landing.** Invoking landing flow IS standing authorization to land once
+  review, exact-head CI, PR readiness, and mergeability gates pass; no extra confirmation.
+- **Assignment authorizes the whole chain, and nothing beyond it** (owner, 2026-08-31).
+  "Work on issue N" authorizes issue→branch→PR→review→landing→close with no per-step
+  confirmation. The grant covers THAT item's artifacts only — never another action class,
+  work item, or actor's PR. Outside it, ask.
 
 ## Preflight
 
 - **Identify the PR:** given PR number, else current branch's open PR (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and ask. Resolve `OWNER/REPO` once.
 - **Scope check:** flow is for code-bearing PRs. Dev-only classes (documentation, ADR text, skills, agent config) land straight on `devel` with no PR — say so and stop.
 - **Transport check (once):** confirm GitHub CLI present and authenticated. Absent → use client's GitHub MCP tools with wakeup-paced bounded checks ([`waits.md`](waits.md) §4 "Managed environments"); neither transport → stop and report.
-- **Refusal cases (re-checked immediately before merging):** never merge PR that is not OPEN, is draft (ask user to mark ready), or is CONFLICTING (conflict resolution is separate work). Mergeability UNKNOWN means GitHub still computing — re-read after few seconds.
+- **Refusal cases (re-checked immediately before landing):** never land a PR that is not OPEN, is draft (ask user to mark ready), or is CONFLICTING (conflict resolution is separate work). Mergeability UNKNOWN means GitHub still computing — re-read after few seconds.
 
 ## Review step
 
@@ -65,8 +74,8 @@ Mechanics that hold for every pass:
 
 Automatic review is **off** (`.coderabbit.yaml`): opening or pushing a PR triggers nothing, so there is no acknowledgement window and no auto-review to poll. **[`coderabbit.md`](coderabbit.md) owns the whole path** — the ask precondition, the wait, every verdict (FINISHED / QUOTA / NOACK / NOTPRESENT / TIMEOUT / DECLINE), the spend rule, multiple handles, and the misses ledger. Two things belong to landing:
 
-- **Ask once, at the merge gate, when the PR is actually ready.** Ready means all three together: the legs have FULLY reviewed it; everything they found is FIXED (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Not before — an earlier ask spends the slot on code that is going to change.
-- **The ask is not the end of the step.** Wait the review out, then triage and answer every finding exactly like a leg's, before merging. A skipped or quota-only bot is never "PR clean" — surface the miss.
+- **Ask once, at the landing gate, when the PR is actually ready.** Ready means all three together: the legs have FULLY reviewed it; everything they found is FIXED (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Not before — an earlier ask spends the slot on code that is going to change.
+- **The ask is not the end of the step.** Wait the review out, then triage and answer every finding exactly like a leg's, before landing. A skipped or quota-only bot is never "PR clean" — surface the miss.
 
 ### Finding intake — enumerate everything
 
@@ -104,7 +113,7 @@ Commit only after the finding this fix answers is posted (see "Replies and the a
 - **A fix that changes behaviour carries its own test** (fail-before/pass-after per repo test policy, including `www/` coverage per `testing.md`). Pure comment/lint nits need none.
 - Re-run canonical gates for whatever fixes touched (`scripts/agent/run-gates.sh --diff <base>`); nothing red.
 - Commit (`<scope>: <imperative summary>`) and push to PR head branch — batched into ONE push.
-- **Review-fix commits are new unreviewed code** (audited defect chains have entered through them): any non-trivial APPLY get re-review round (all legs, small tier; each focused on changes since own leg's recorded head SHA) before merge gate, looping under convergence rule; closing round's nits triaged inline with no further round. Round re-run only legs whose verdict the fix could possibly change — e.g. test-output reformat or flakiness fix in test code (not production code) cannot alter implementation correctness, so correctness+hostile leg sit that round out (record skipped legs + reason in audit trail).
+- **Review-fix commits are new unreviewed code** (audited defect chains have entered through them): any non-trivial APPLY get re-review round (all legs, small tier; each focused on changes since own leg's recorded head SHA) before landing gate, looping under convergence rule; closing round's nits triaged inline with no further round. Round re-run only legs whose verdict the fix could possibly change — e.g. test-output reformat or flakiness fix in test code (not production code) cannot alter implementation correctness, so correctness+hostile leg sit that round out (record skipped legs + reason in audit trail).
   **Exempt:** round whose every APPLY implement its reviewer's own concrete suggestion, tests adjusted, differing only in formatting or in what CI catch (SKIPs/DEFERs do not block it) — reviewer cannot answer own instruction differently. Explicitly covered: purely mechanical and comment-only changes made in response to and in accordance with reviewer's feedback. Anything else — different fix, finding with no concrete suggestion to match, extra edits riding along — take re-review and reviewer's own approval.
 
 ### Replies and the audit trail
@@ -120,16 +129,16 @@ Commit only after the finding this fix answers is posted (see "Replies and the a
   orchestrator comment noting CodeRabbit's
   review if one arrived and per-finding resolution across all legs.
 
-### The merge gate (all paths)
+### The landing gate (all paths)
 
-Proceed to merge ONLY when review step finished cleanly:
+Proceed to landing ONLY when review step finished cleanly:
 
-- Every finding from **every review received** — the adversarial legs, CodeRabbit's review once asked for, any unsolicited review — triaged, accepted fixes committed and pushed, nothing left needing human decision. Adversarial review mandatory — never merge without its findings triaged, even when every bot came back clean.
-- **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to merge while any item lack outcome.
+- Every finding from **every review received** — the adversarial legs, CodeRabbit's review once asked for, any unsolicited review — triaged, accepted fixes committed and pushed, nothing left needing human decision. Adversarial review mandatory — never land without its findings triaged, even when every bot came back clean.
+- **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to land while any item lack outcome.
 - **No external reviewer** (CodeRabbit unavailable after the ask, nobody else reviewed): note skip in audit trail; the legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
-- **Catch-all sweep, last thing before merging:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before merge — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
-- **CodeRabbit at merge:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
-- Unresolved, contested, or user-decision findings → stop and report; do not merge.
+- **Catch-all sweep, last thing before landing:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before landing — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
+- **CodeRabbit at landing:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
+- Unresolved, contested, or user-decision findings → stop and report; do not land.
 
 ## Merge step
 
@@ -146,18 +155,29 @@ Base advances out of band (parallel agents). In dedicated worktree:
 Poll until every **required** check complete, excluding only the advisory contexts `wait-checks.sh` already knows (its built-in list, matched case-insensitively on WHOLE name, never substring: a required check merely CONTAINING an advisory name still gates). `--exclude REGEX` override it, unanchored. Via `scripts/agent/wait-checks.sh`, single implementation (self-exiting background task, ~40-minute cap, result file's LAST line is verdict). CLI transport unavailable → client's GitHub MCP tools with wakeup-paced bounded checks.
 
 - **Early-verdict reuse:** CI wait armed at review start that already returned `PASS` may replace this wait IFF SHA it watched still equal PR head AND rebase was no-op.
-- **PASS** → proceed to the merge gate.
-- **FAIL** → real check failed: do not merge; report failing checks and run URLs and stop.
-- **TIMEOUT** → report and ask whether to keep waiting; never merge on timeout.
-- **STALE** → head moved after arming: re-arm and retry; never merge.
-- **GH-ERROR** → mechanism failure, not verdict (exit 1): re-arm; never merge.
+- **PASS** → proceed to the landing gate.
+- **FAIL** → real check failed: do not land; report failing checks and run URLs and stop.
+- **TIMEOUT** → report and ask whether to keep waiting; never land on timeout.
+- **STALE** → head moved after arming: re-arm and retry; never land.
+- **GH-ERROR** → mechanism failure, not verdict (exit 1): re-arm; never land.
 
-### Merge and clean up
+### Land and clean up
 
-- Merge with squash (`gh pr merge N --squash --subject "<scope>: <summary>" --body "<body>"`); never `--merge`/`--rebase`. PR title = final subject; squash commit lands GitHub-signed.
-- **Do not pass `--delete-branch`:** its local post-merge step check out base branch and fail when another worktree hold it, even though remote merge succeeded. Merge first, verify, then delete separately.
-- **Verify the merge actually landed:** PR's state must read `MERGED` (local step can error while remote merge succeeded).
-- Run `git fetch origin` after that verification so cleanup checks integration against the current remote base.
+- **GitHub-hosted path:** merge with explicit squash:
+  `gh pr merge N --squash --subject "<scope>: <summary>" --body "<body>"`.
+  Never request `--merge` or `--rebase`; repository settings keep both disabled.
+  **Verify the merge actually landed:** PR's state must read `MERGED`.
+  Run `git fetch origin` after that verification and require the landed commit to be
+  GitHub-signed.
+- **Maintainer-local path:** immediately fetch `origin`. If `origin/devel` moved since
+  the reviewed exact head was based, rebase, push the branch, and repeat affected review
+  plus exact-head CI before landing. Otherwise verify every commit in
+  `origin/devel..HEAD` is signed and valid, then run `git push origin HEAD:devel` with no
+  force option. A race rejects the fast-forward; stop, never retry by force. Fetch and
+  require both `origin/devel` and the reviewed head to name the same commit.
+- **Do not pass `--delete-branch`** to GitHub merge commands: its local post-merge step
+  checks out the base and fails when another worktree holds it. Delete the remote branch
+  separately after the landing result is verified.
 - Delete the remote branch separately (`git push origin --delete <head>`).
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
   `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup
@@ -169,10 +189,16 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ## Post-merge
 
-- **Sync the work item's state:** `Fixes #N` reference auto-close issue on merge — verify it closed; clear legacy `WIP`/`Waiting PR` label if present (states per workflow.md "Ticket states").
-- **Trigger sweep (mandatory):** task reached terminal state — kill every trigger class (background polls, scheduled check-ins, subscriptions), then sweep once for stale waits from earlier items (waits.md).
-- **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on), review
-  legs and skips, merge result, cleanup. Abort says why and what needed to proceed.
+- **Sync the work item's state.** GitHub squash normally auto-closes `Fixes #N`; verify
+  both states. After a local fast-forward, post the landed commit evidence, close the PR,
+  close the issue as completed, and verify both terminal states explicitly. Clear legacy
+  `WIP`/`Waiting PR` labels if present.
+- **Trigger sweep (mandatory):** task reached terminal state — kill every trigger class
+  (background polls, scheduled check-ins, subscriptions), then sweep once for stale waits
+  from earlier items (`waits.md`).
+- **Report:** PR, landing path, rebase needed or not, exact-head CI verdict, review legs
+  and skips, landed commit/signature result, terminal issue state, and cleanup. Abort says
+  why and what is needed to proceed.
 
 ## Per-client mapping
 

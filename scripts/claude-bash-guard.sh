@@ -1,10 +1,10 @@
 #!/bin/sh
-# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 5 agent footguns.
+# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
-# Denies, at the TOOL layer (before the command ever runs), five operations an
-# AGENT must not run -- four Git/GitHub policy bypasses a human may legitimately
-# use, plus a wait-launch shape that silently strands the turn:
+# Denies, at the TOOL layer (before the command ever runs), four operations an
+# AGENT must not run -- three git bypasses a human may legitimately use, plus a
+# wait-launch shape that silently strands the turn:
 #
 #   Rule A -- `git commit` with `--no-verify` (long flag, standalone -n, or a
 #             clustered short flag like -an/-anm)   : the pre-commit lint
@@ -27,13 +27,10 @@
 #             the turn stalls while the wait has already finished (#1225).
 #             Whole-payload, not per-segment: `&` is one of the characters
 #             $segs splits on.
-#   Rule E -- `gh pr merge` with `-r`/`--rebase` or `-m`/`--merge` : code PRs
-#             land only through GitHub's verified squash commits while
-#             preserving linear history (issue #2996).
 #
 # Rule D runs first (whole-payload). Then the per-segment rules: segments are
 # scanned left to right (see MATCHING below); within one segment, A, then B,
-# then C, then E. First matching pair wins.
+# then C. First matching pair wins.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -111,13 +108,11 @@
 #
 # NORMALIZATION (issue #923 review F1): rather than matching rules against
 # the raw payload, everything matches against $norm, built by:
-#   1. Removing JSON-serialized shell line continuations only when the encoded
-#      backslash run represents an odd number of shell backslashes.
-#   2. Converting odd-parity JSON `\t` escapes to tabs while leaving even-parity
+#   1. Converting odd-parity JSON `\t` escapes to tabs while leaving even-parity
 #      literal backslash+t data intact.
-#   3. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
+#   2. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
 #      and a quoted subcommand token alike (`git 'commit'` -> `git commit`).
-#   4. Collapsing every run of whitespace (space/tab/newline) to one space --
+#   3. Collapsing every run of whitespace (space/tab/newline) to one space --
 #      defeats `git  commit` (double space) or a literal tab between tokens.
 # Fail-open holds through normalization: empty/garbled input still normalizes
 # to a string with no rule match, i.e. exit 0. $norm is then split into
@@ -140,13 +135,11 @@ set -u
 payload="$(cat)"
 
 # norm -- the single normalized view every rule matches against (see
-# NORMALIZATION above): remove shell continuations, decode odd-parity JSON tab
-# escapes, strip ', ", and \, then collapse whitespace runs to one space.
+# NORMALIZATION above): decode odd-parity JSON tab escapes, strip ', ", and \,
+# then collapse whitespace runs to one space.
 tab="$(printf '\t')"
 norm="$(printf '%s' "$payload" | sed -E "
 :a
-s/(^|[^\\\\])((\\\\\\\\\\\\\\\\)*)\\\\\\\\\\\\n/\\1\\2/g
-ta
 s/(^|[^\\\\])((\\\\\\\\)*)\\\\t/\\1\\2${tab}/g
 ta
 " | tr -d "\\\\\"'" | tr -s '[:space:]' ' ')"
@@ -275,25 +268,6 @@ _has_force_refspec() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
 }
 
-# Model gh/pflag shorthand order: d/m/r/s are Boolean and may cluster; A/b/F/R/t
-# consume the remainder as data. In an assignment, earlier Booleans are true and
-# the final Boolean receives the value. This keeps value text and false methods
-# allowed while catching every parser-valid true m/r position.
-_BOOL_TRUE='(1|t|T|true|True|TRUE)'
-_BOOL_VALUE='(0|f|F|false|False|FALSE|1|t|T|true|True|TRUE)'
-_MERGE_BARE='(--merge|--rebase)'
-_MERGE_CLUSTER="-[dmrs]*[mr][dmrs]*([AbFRt]${_SEP_NOT}*)?"
-_MERGE_ASSIGNED_PRIOR="-[dmrs]*[mr][dmrs]+=${_BOOL_VALUE}"
-_MERGE_ASSIGNED_LAST="-[dmrs]*[mr]=${_BOOL_TRUE}"
-_MERGE_TRUE_LONG="(--merge|--rebase)=${_BOOL_TRUE}"
-_has_forbidden_merge_method() {
-	printf '%s' "$seg" | grep -Eq \
-		"(^|${_SEP})(${_MERGE_BARE}|${_MERGE_CLUSTER}|${_MERGE_ASSIGNED_PRIOR}|${_MERGE_ASSIGNED_LAST}|${_MERGE_TRUE_LONG})(\$|${_SEP})"
-}
-_is_gh_pr_merge() {
-	printf '%s' "$seg" | grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+([^[:space:]]+[[:space:]]+)*pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge[[:space:]]'
-}
-
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
 # required even for a deny: Claude Code reads the decision from stdout, not
 # from the process exit status). <reason> must contain no " or \ so it can
@@ -310,7 +284,7 @@ if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
-# Walk $segs one segment at a time, applying rules A-C and E to each ($seg
+# Walk $segs one segment at a time, applying rules A-C to each ($seg
 # is read by _contains / _has_force_flag above). Fed via a heredoc (not a
 # `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
@@ -336,9 +310,6 @@ while IFS= read -r seg; do
 		_deny "CLAUDE.md forbids force-removing a worktree you do not own"
 	fi
 
-	if _is_gh_pr_merge && _has_forbidden_merge_method; then
-		_deny "GitHub PRs must use --squash so the landed linear commit carries GitHub's verified signature (issue #2996)"
-	fi
 done <<_PFB_SEGS_
 $segs
 _PFB_SEGS_

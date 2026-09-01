@@ -54,6 +54,13 @@ def test_codex_repository_hook_integrity_pins_match() -> None:
         assert digest in matches[0], f"stale Codex hook hash for {relative}"
 
 
+def test_landing_policy_pins_both_signed_linear_paths() -> None:
+    landing = (ROOT / ".agents/policy/landing.md").read_text(encoding="utf-8")
+    assert 'gh pr merge N --squash --subject "<scope>: <summary>"' in landing
+    assert "git push origin HEAD:devel" in landing
+    assert "every landed commit is locally signed and verified" in landing
+
+
 def test_copilot_client_detection_needs_nothing_installed() -> None:
     # Copilot CLI exports COPILOT_CLI into every shell it spawns, so detection is
     # one variable like the other two clients. Nothing may reappear under

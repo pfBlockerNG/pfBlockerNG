@@ -3,7 +3,7 @@
 [`AGENTS.md`](AGENTS.md) is canonical vendor-neutral agent policy bootstrap; this file only Grok adapter. Grok load `AGENTS.md` native. Read `AGENTS.md` now and follow, including routing table into `.agents/policy/`, `.agents/context/`, `docs/misc/`. Grok noun translation lives in
 [`.agents/context/grok-adapter.md`](.agents/context/grok-adapter.md) — read at session start.
 
-Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicated worktree, rebase onto the live base before each push, squash-merge PRs, keep linear signed history, ship tests with every change and red-to-green proof, route every config field through `PfbConfig`, never invoke Python directly on the appliance, and use POSIX shell only.
+Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicated worktree, rebase onto the live base before each push, land a fully gated PR by explicit GitHub squash or reviewed signed local fast-forward, keep linear history, ship tests with every change and red-to-green proof, route every config field through `PfbConfig`, never invoke Python directly on the appliance, and use POSIX shell only.
 
 ## Grok-only surfaces
 

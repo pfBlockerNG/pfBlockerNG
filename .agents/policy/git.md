@@ -16,7 +16,8 @@ workflows/configuration** (`.claude/workflows/`, `.codex/`), **documentation-onl
 changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree and
 lands directly on `devel` only as a clean fast-forward of locally signed commits after
 fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementation*
-included — uses the full PR flow; direct push is never a shortcut around that boundary.
+included — requires the full PR flow. The reviewed signed local fast-forward allowed by
+`landing.md` happens only after every PR gate; it is never a shortcut around the PR.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
@@ -110,9 +111,10 @@ churned-then-reverted code, introduced-then-unused symbols, gratuitous reformatt
 files. Cheapest before PR exists.
 
 **Push as soon as commit is green and final.** Commit that exists only on this
-workstation is invisible and unbacked-up work; never let commits pile up locally waiting for
-later batch push. Dev-only commits fast-forward directly to `devel` only when locally
-signed; code branches push to their own remote branch and carry on into PR flow
+workstation is invisible and unbacked-up work; never let commits pile up locally waiting
+for later batch push. Dev-only commits fast-forward directly to `devel` only when locally
+signed. Code branches push to their own remote through the full PR flow; only its final
+landing gate may choose GitHub squash or the reviewed signed local fast-forward
 ([`landing.md`](landing.md)).
 
 ## Branch naming (ADRs and issues)

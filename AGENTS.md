@@ -32,19 +32,17 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 - All repository work happen in dedicated git worktree — cut via
   `scripts/agent/work-branch.sh <issue|adr> <NN> [title...] --worktree`; never hand-derive
   branch slug.
-- Dev-only classes (ADR text, skills, agent workflows/config, documentation-only) land
-  directly on `devel` as a clean fast-forward of locally signed commits after fetch +
-  rebase, still from a worktree. Anything touching `src/`, `tests/`, or CI takes the
-  full rebase-before-push PR flow with independent review.
-- Merge PRs by squash only (a server-side rebase lands PR commits unsigned);
-  history stays strictly linear. Rebase onto latest base before every push, PR, or
-  CI/smoke dispatch; clean the diff before push.
-- Push every green, final commit to its remote branch immediately; work never stay only on
-  local branch. Dev-only commits push to `devel`; code branches push to own remote
-  branch.
-- Landing change ≠ committing it: mean commit, push, open non-draft PR, address
-  every review round, and squash-merge it (dev-only classes land at push to `devel`).
-  Report work landed only after that complete; otherwise report real state.
+- Dev-only classes (ADR text, skills, agent config, docs-only) need no PR; from a
+  worktree, fetch/rebase and fast-forward their locally signed commits to `devel`.
+- Anything touching `src/`, `tests/`, or CI uses the full PR flow and independent
+  review. After all gates, land by explicit GitHub squash or a maintainer-local
+  rebase plus signed fast-forward to `devel`; the local path bypasses nothing.
+- GitHub merge commits and server-side rebase merges stay disabled; server rebase
+  recreates signed commits as unsigned objects. Rebase onto the live base before
+  every push, PR, or CI/smoke dispatch; clean the diff before push.
+- Push every green commit promptly: code branches stay remote-backed until landing.
+- Landing means the change is on `devel` and the PR plus issue are terminal, not
+  merely committed. Dev-only work lands at its signed fast-forward push.
 - Behaviour change need test-first red→green proof: reproduction test executed RED
   before any production edit, frozen byte-identical, re-run GREEN unchanged — executed
   runs, never reasoned through.

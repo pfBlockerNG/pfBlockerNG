@@ -66,8 +66,11 @@ would have cleared it. Additive labels (`CI`, `dnsbl`, `security`, …) stay.
   open PR (GraphQL `closedByPullRequestsReferences` filtered to `state == OPEN` — merged PRs
   still appear even with `includeClosedPrs: false`; `linked:pr` search qualifier
   over-matches merged-but-open issues, pre-filter only). No issue write.
-- **PR merged** — issue auto-closes (`state_reason: completed`) — no write. PR closed
-  unmerged — reference drops by itself; assignee persists (back to claimed).
+- **PR merged by GitHub squash** — issue auto-closes (`state_reason: completed`) — no write.
+- **PR landed by reviewed signed fast-forward** — GitHub does not infer a merge: post
+  landed-commit evidence, close the PR, close the issue `--reason completed`, and verify
+  both terminal states. A PR closed without either landing path drops its reference;
+  assignee persists (back to claimed).
 - **Resolved without a PR** — `gh issue close <N> --reason completed`; dropped/can't-fix —
   remove assignee, close `--reason "not planned"` (or `duplicate`) + status comment
   explaining why.
