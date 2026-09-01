@@ -4,7 +4,8 @@ Scope: PR landing — review sources, adversarial reviewer contract, finding int
 
 - **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
-Composes with [`workflow.md`](workflow.md) — its "Review" section define independent adversarial review principle, "Retry and fix-loop limits" bound every loop here. Every wait armed here follow [`waits.md`](waits.md) (no orphaned waits + bounded-wait ladder). CodeRabbit Fair Usage and spend rules live in [`coderabbit.md`](coderabbit.md); it is asked for only once the PR is merge-ready, never earlier — this file only names the landing hook.
+Composes with [`workflow.md`](workflow.md) review/retry limits, [`waits.md`](waits.md)
+bounded-wait rules, and [`coderabbit.md`](coderabbit.md) Fair Usage/spend rules.
 
 ## Fixed floors (never weaken)
 
@@ -163,22 +164,25 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ### Land and clean up
 
-- Bind `reviewed_sha=$(git rev-parse HEAD)` when review and exact-head CI close. Immediately
-  before either path, re-read and require the PR head, local `HEAD`, and `reviewed_sha` to
-  match; any mismatch restarts affected review and CI.
-- **GitHub-hosted path:** run
+- At the gate bind `reviewed_sha=$(git rev-parse HEAD)` and
+  `reviewed_base=$(git rev-parse origin/devel)`. Immediately before either path, fetch
+  `origin`, re-read the PR head, and require the PR head, local `HEAD`, and `reviewed_sha`
+  to match plus `origin/devel == reviewed_base`; any mismatch restarts review and CI.
+- **GitHub-hosted path:** use only when live protection supplies an atomic strict-base gate;
+  otherwise use the local path. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
-  Repository settings keep `--merge` and `--rebase` disabled. **Verify the merge actually
-  landed:** PR's state must read `MERGED`. Run `git fetch origin` after that verification
-  and require the landed commit to be GitHub-signed.
-- **Maintainer-local path:** fetch `origin`. If `origin/devel` moved, rebase, push the
-  branch, and repeat affected review plus exact-head CI. Otherwise recheck the three-way
-  head identity before push and before terminal PR/issue synchronization, verify every
-  commit in `origin/devel..HEAD`, then run `git push origin HEAD:devel` without force.
-  A race rejects the fast-forward; stop, never force. Fetch and require `origin/devel`
-  and `reviewed_sha` to match.
-- Do not pass `--delete-branch` to GitHub merge commands. After verifying either path,
-  delete the remote branch separately: `git push origin --delete <head>`.
+  Repository settings keep other methods disabled. **Verify the merge actually landed:**
+  PR's state must read `MERGED`. Run `git fetch origin` after that verification and require
+  the landed commit to be GitHub-signed.
+- **Maintainer-local path:** fetch `origin`. If the base moved, rebase, push the branch,
+  and repeat affected review plus exact-head CI. Otherwise recheck the three-way head
+  identity before push and before terminal PR/issue synchronization, verify every commit,
+  then run `git push origin HEAD:devel` without force. Fetch and require `origin/devel ==
+  reviewed_sha`, re-read the PR head, post landed evidence, close the PR and issue, and
+  verify both terminal states while retaining the worktree.
+- After either path, delete the remote head only if it still equals `reviewed_sha`:
+  `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
+  Do not pass `--delete-branch` to GitHub merge commands.
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
   `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup
   requires `deleted`. For any other branch-deletion outcome, retain the local branch
@@ -189,10 +193,9 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ## Post-merge
 
-- **Sync the work item's state.** GitHub squash normally auto-closes `Fixes #N`; verify
-  both states. After a local fast-forward, post the landed commit evidence, close the PR,
-  close the issue as completed, and verify both terminal states explicitly. Clear legacy
-  `WIP`/`Waiting PR` labels if present.
+- **Sync the work item's state.** Verify GitHub squash auto-closed `Fixes #N`; the local
+  path already closed both artifacts before cleanup. Clear legacy `WIP`/`Waiting PR`
+  labels if present.
 - **Trigger sweep (mandatory):** task reached terminal state — kill every trigger class
   (background polls, scheduled check-ins, subscriptions), then sweep once for stale waits
   from earlier items (`waits.md`).

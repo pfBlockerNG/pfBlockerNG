@@ -57,16 +57,20 @@ def test_codex_repository_hook_integrity_pins_match() -> None:
 def test_landing_policy_pins_both_signed_linear_paths() -> None:
     landing = (ROOT / ".agents/policy/landing.md").read_text(encoding="utf-8")
     merge = extract_between(landing, "## Merge step", "## Post-merge")
-    binding = merge.index("reviewed_sha=$(git rev-parse HEAD)")
+    head_binding = merge.index("reviewed_sha=$(git rev-parse HEAD)")
+    base_binding = merge.index("reviewed_base=$(git rev-parse origin/devel)")
     hosted = merge.index("**GitHub-hosted path:**")
-    assert binding < hosted
+    assert head_binding < base_binding < hosted
     assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in merge
+    assert "atomic strict-base gate" in merge
 
-    local = extract_between(merge, "**Maintainer-local path:**", "Do not pass `--delete-branch`")
+    local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
     fetch = local.index("fetch `origin`")
     recheck = local.index("recheck the three-way")
     push = local.index("git push origin HEAD:devel")
-    assert fetch < recheck < push
+    close = local.index("close the PR")
+    delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
+    assert fetch < recheck < push < close < delete
     assert "before push and before terminal PR/issue synchronization" in local
     assert "every landed commit is locally signed and verified" in landing
     assert "PR head, local `HEAD`, and `reviewed_sha`" in merge
