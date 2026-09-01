@@ -35,13 +35,14 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 - Dev-only classes (ADR text, skills, agent workflows/config, documentation-only) commit
   direct to `devel` after fetch + rebase, still from worktree; anything touching
   `src/`, `tests/`, or CI take full rebase-only-PR flow with independent review.
-- Merge PRs by rebase only; history stay strictly linear; rebase onto latest base
+- Merge PRs by squash only (a server-side rebase lands PR commits unsigned);
+  history stay strictly linear; rebase onto latest base
   before every push, PR, or CI/smoke dispatch; clean diff before push.
 - Push every green, final commit to its remote branch immediately; work never stay only on
   local branch. Dev-only commits push to `devel`; code branches push to own remote
   branch.
 - Landing change ≠ committing it: mean commit, push, open non-draft PR, address
-  every review round, and rebase-merge it (dev-only classes land at push to `devel`).
+  every review round, and squash-merge it (dev-only classes land at push to `devel`).
   Report work landed only after that complete; otherwise report real state.
 - Behaviour change need test-first red→green proof: reproduction test executed RED
   before any production edit, frozen byte-identical, re-run GREEN unchanged — executed
