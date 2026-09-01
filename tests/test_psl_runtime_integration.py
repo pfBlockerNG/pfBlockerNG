@@ -467,3 +467,33 @@ def test_the_instance_index_matches_a_direct_build() -> None:
     rules = P.parse_psl_rules(PSL)
 
     assert rules.index() == P._psl_build_index(rules)
+
+
+def test_the_live_query_path_does_not_rebuild_the_index_per_query() -> None:
+    """issue #3046: TLD-Allow resolves through the memoised index too.
+
+    ``_tld_allow_blocks`` calls ``rules.index()`` on the live DNS query path,
+    the same method ``resolve_public_suffix`` uses on the build path. Counting
+    hashes alone does not cover it: swapping that one call site back to a direct
+    ``_psl_build_index(rules)`` rebuilds the sets on EVERY query while hashing
+    nothing, so a hash-count assertion stays green while the query path silently
+    pays the whole build. Count builds instead, after priming, so re-introducing
+    a per-query rebuild at this call site fails here.
+    """
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+    cfg = _allow_cfg(tld_allow_list=["com"])
+    rules.index()  # prime: every build counted below is one too many
+
+    builds: list[str] = []
+    original_build = P._psl_build_index
+
+    def counting_build(r: P.PslRules) -> Any:
+        builds.append("build")
+        return original_build(r)
+
+    with mock.patch.object(P, "_psl_build_index", counting_build):
+        for name in ("x.example.com", "y.example.com", "x.github.io"):
+            P.evaluate_domain(name, name, "com", False, cfg, containers)
+
+    assert builds == [], f"the live query path rebuilt the index {len(builds)} time(s); issue #3046 has regressed"
