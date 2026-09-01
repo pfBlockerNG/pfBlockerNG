@@ -96,10 +96,10 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     post_push_fence = local.index("run the PR head fence again", post_push_base)
     evidence = local.index("Fence pass: post landed evidence")
     state_read = local.index("read the PR state")
-    merged_state = local.index("If it is `MERGED`")
-    open_state = local.index("If it is `OPEN`")
-    close = local.index("close the PR and issue")
-    terminal = local.index("verify both terminal states")
+    merged_state = local.index("If it is `MERGED`", state_read)
+    open_state = local.index("If it is `OPEN`", merged_state)
+    close = local.index("close the PR and issue", open_state)
+    terminal = local.index("verify both terminal states", close)
     delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
     closed_rollback = local.index("If the PR is `CLOSED`")
     merged_outcome = local.index("If it is already `MERGED`")
@@ -113,7 +113,15 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "If the PR is `CLOSED`, reopen the PR and issue" in local
     assert "If it is already `MERGED`, keep terminal state and route newer head commits to a new PR" in local
     assert "If the post-push PR head fence fails, `reviewed_sha` remains landed" in local
-    assert "leave or reopen the PR and review the advanced head" in local
+    assert "post evidence" in local
+    assert "retain the branch/worktree" in local
+    assert "Inspect the PR" in local
+    assert "If indirectly `MERGED`, verify the issue" in local
+    assert "route newer commits to a new PR" in local
+    assert "Stop normal flow" in local
+    assert "If it is `OPEN`, leave the PR and issue active and review the advanced head" in local
+    assert "If it is `CLOSED`, reopen the PR and issue, then review the advanced head" in local
+    assert "Any other post-push state stops" in local
     assert "On lease failure, retain the remote head and worktree" in local
     assert "If it is `MERGED`, verify the linked issue completed" in local
     assert "Any other state stops" in local

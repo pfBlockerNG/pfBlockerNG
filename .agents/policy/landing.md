@@ -19,7 +19,7 @@ See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](
 - **Local fast-forward is not a bypass.** It requires the same PR, findings, exact-head
   CI, and catch-all gates; every landed commit is locally signed and verified, the base
   is rechecked immediately before push, and the update must be fast-forward.
-- **Advisory bots never gate CI or landing.** `wait-checks.sh` excludes their contexts; triage any real finding on merit.
+- **Advisory bots never gate.** Triage real findings on merit.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
   role" for every leg, round, and verifier; never inherit or override it.
@@ -181,9 +181,10 @@ Poll until every **required** check complete, excluding only the advisory contex
   The PR head fence runs before push and before terminal PR/issue synchronization.
   Immediately before push, run the PR head fence, verify every commit, then run
   `git push origin HEAD:devel` without force. After push, fetch `origin` and require `origin/devel == reviewed_sha`, then run the PR head fence again.
-  If the post-push PR head fence fails, `reviewed_sha` remains landed: post evidence,
-  retain the branch/worktree, and inspect the PR. If indirectly `MERGED`, verify the issue
-  and route newer commits to a new PR; otherwise leave or reopen the PR and review the advanced head.
+  If the post-push PR head fence fails, `reviewed_sha` remains landed: post evidence and
+  retain the branch/worktree. Inspect the PR. If indirectly `MERGED`, verify the issue and
+  route newer commits to a new PR. If it is `OPEN`, leave the PR and issue active and review the advanced head.
+  If it is `CLOSED`, reopen the PR and issue, then review the advanced head. Any other post-push state stops.
   Stop normal flow. Fence pass: post landed evidence and read the PR state.
   If it is `MERGED`, verify the linked issue completed. If it is `OPEN`, close the PR and issue.
   Any other state stops. Then verify both terminal states and retain the worktree.
