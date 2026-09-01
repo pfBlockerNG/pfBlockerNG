@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+from unittest import mock
+
 import pytest
 
 import pfb_unbound
@@ -132,10 +135,11 @@ def test_resolver_throughput_is_indexed_not_linear_scan() -> None:
     """Resolution must be O(name labels), never a scan over all ~10k shipped rules.
 
     The DNSBL build classifies every feed entry and TLD-Allow resolves on the live
-    DNS query path, so a per-lookup scan over the full rule set (measured ~3.6 ms
-    per resolve, ~30 minutes for a 500k-entry build) is a defect. 2000 resolves
-    against the SHIPPED authority must finish comfortably inside 2 seconds; the
-    indexed matcher needs ~0.1 s, the linear scan needs ~7 s.
+    DNS query path, so per-lookup work proportional to the rule set is a defect.
+
+    Asserted structurally, never on a clock (issue #3051): a resolve must neither
+    hash the rule set nor rebuild the index. A duration cannot see a constant-factor
+    scan and makes the verdict depend on the runner.
     """
     import pathlib
     import time
@@ -152,8 +156,35 @@ def test_resolver_throughput_is_indexed_not_linear_scan() -> None:
         "no-rule.zz-unknown",
         "x.act.edu.au",
     ] * 250
+    rules.index()  # prime: every build counted below is one too many
+
+    hashed: list[str] = []
+    builds: list[str] = []
+    original_hash = pfb_unbound.PslRules.__hash__
+    original_build = pfb_unbound._psl_build_index
+
+    def counting_hash(self: pfb_unbound.PslRules) -> int:
+        hashed.append("hash")
+        return original_hash(self)
+
+    def counting_build(rule_set: pfb_unbound.PslRules) -> tuple[Any, Any]:
+        builds.append("build")
+        return original_build(rule_set)
+
     started = time.perf_counter()
-    for name in names:
-        pfb_unbound.resolve_public_suffix(name, rules)
+    with (
+        mock.patch.object(pfb_unbound.PslRules, "__hash__", counting_hash),
+        mock.patch.object(pfb_unbound, "_psl_build_index", counting_build),
+    ):
+        for name in names:
+            pfb_unbound.resolve_public_suffix(name, rules)
     elapsed = time.perf_counter() - started
+
+    assert hashed == [], (
+        f"{len(hashed)} rule-set hashes across {len(names)} resolves: the index is behind a cache "
+        "keyed on the rules, so every lookup walks all six rule tuples (issue #3046)"
+    )
+    assert builds == [], f"the index was rebuilt {len(builds)} time(s) across {len(names)} resolves"
+    # Coarse salvage cap only (issue #3051): catches an outright linear matcher,
+    # ~7 s here. The two assertions above are what prove the property.
     assert elapsed < 2.0, f"2000 resolves took {elapsed:.2f}s; matcher is scanning rules per lookup"

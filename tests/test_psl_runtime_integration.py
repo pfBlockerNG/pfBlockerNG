@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -394,3 +395,94 @@ def test_allow_private_off_blocks_private_boundary_and_parent_alike() -> None:
         decision = P.evaluate_domain(name, name, "io", False, _allow_cfg(), containers)
         assert decision.is_found is True, name
         assert decision.feed == "TLD_Allow"
+
+
+def test_resolving_a_name_never_hashes_the_rule_set() -> None:
+    """issue #3046: the membership index must not sit behind a cache keyed on
+    ``PslRules``.
+
+    Computing such a key hashes all six rule tuples, and CPython does not cache
+    tuple hashes, so the key costs more than the scan the cache exists to avoid.
+    Asserted on the hashing itself rather than on a timing, which would be flaky.
+    """
+    rules = P.parse_psl_rules(PSL)
+    hashed: list[str] = []
+    original_hash = P.PslRules.__hash__
+
+    def counting_hash(self: P.PslRules) -> int:
+        hashed.append("hashed")
+        return original_hash(self)
+
+    with mock.patch.object(P.PslRules, "__hash__", counting_hash):
+        for name in ("example.com", "a.b.example.com", "example.github.io", "www.ck"):
+            P.resolve_public_suffix(name, rules)
+
+    assert hashed == [], f"resolution hashed the rule set {len(hashed)} time(s); issue #3046 has regressed"
+
+
+def test_the_index_is_built_once_per_instance() -> None:
+    """The sets are held on the instance, so repeated resolution reuses them.
+
+    Identity, not equality: two equal-but-distinct builds would mean the index
+    is being recomputed, which is the cost this change exists to remove.
+    """
+    rules = P.parse_psl_rules(PSL)
+
+    first = rules.index()
+
+    assert rules.index() is first
+    assert rules.index() is first
+
+
+def test_indexing_an_instance_leaves_value_equality_and_hash_untouched() -> None:
+    """``_index`` carries ``compare=False``, so an indexed instance stays equal
+    to an un-indexed one built from the same rules -- and keeps the same hash.
+
+    Both halves matter. Equality is the dataclass contract other tests rely on
+    (``_load_psl_authority(...) == PslRules()``); the hash must also hold,
+    because PslRules remains hashable and any caller putting one in a set or
+    dict key would otherwise see two distinct entries for the same rules
+    depending on whether a lookup had happened to run first.
+    """
+    indexed = P.parse_psl_rules(PSL)
+    fresh = P.parse_psl_rules(PSL)
+
+    indexed.index()
+
+    assert indexed == fresh
+    assert hash(indexed) == hash(fresh)
+
+
+def test_the_instance_index_matches_a_direct_build() -> None:
+    """Moving the sets onto the instance changed where they live, not what they
+    are: the memoised value equals what the builder returns for the same rules.
+    """
+    rules = P.parse_psl_rules(PSL)
+
+    assert rules.index() == P._psl_build_index(rules)
+
+
+def test_the_live_query_path_does_not_rebuild_the_index_per_query() -> None:
+    """issue #3046: TLD-Allow resolves through the memoised index too.
+
+    ``_tld_allow_blocks`` reaches the index on the live DNS query path. Builds are
+    counted rather than hashes because un-memoising that call site rebuilds the
+    sets per query while hashing nothing, which a hash count cannot see.
+    """
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+    cfg = _allow_cfg(tld_allow_list=["com"])
+    rules.index()  # prime: every build counted below is one too many
+
+    builds: list[str] = []
+    original_build = P._psl_build_index
+
+    def counting_build(r: P.PslRules) -> Any:
+        builds.append("build")
+        return original_build(r)
+
+    with mock.patch.object(P, "_psl_build_index", counting_build):
+        for name in ("x.example.com", "y.example.com", "x.github.io"):
+            P.evaluate_domain(name, name, "com", False, cfg, containers)
+
+    assert builds == [], f"the live query path rebuilt the index {len(builds)} time(s); issue #3046 has regressed"
