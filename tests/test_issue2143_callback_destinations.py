@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from tests._workflow_steps import extract_after, extract_between
 
@@ -13,6 +16,53 @@ MANUAL = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-
 TAGGED_INGEST = (ROOT / ".github/workflows/pkg-tagged-ingest.yml").read_text(encoding="utf-8")
 SMOKE_SINGLE = (ROOT / ".github/workflows/smoke-single.yml").read_text(encoding="utf-8")
 NIGHTLY = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+APP_TOKEN_ACTION = "actions/create-github-app-token@v3"
+APP_CLIENT_ID = "${{ secrets.PKG_GITHUB_APP_CLIENT_ID }}"
+APP_PRIVATE_KEY = "${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}"
+APP_TOKEN_SCOPES = {
+    "release-published.yml:sync-ports-fork:steps[0]": ("FreeBSD-ports", {"permission-contents": "write"}),
+    "pkg-tagged-ingest.yml:stage-pkg:steps[1]": ("pkg", {"permission-actions": "write"}),
+    "pkg-tagged-ingest.yml:finalize-pkg:steps[1]": ("pkg", {"permission-actions": "write"}),
+    "nightly.yml:ingest-pkg:steps[1]": ("pkg", {"permission-actions": "write"}),
+    "nightly.yml:cleanup-nightly-oci:steps[1]": ("pkg", {"permission-actions": "write"}),
+}
+
+
+def _app_token_steps() -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    workflows = ROOT / ".github/workflows"
+    for path in sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")]):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_name, job in document["jobs"].items():
+            for step_index, step in enumerate(job.get("steps", [])):
+                if step.get("uses") == APP_TOKEN_ACTION:
+                    found.append((f"{path.name}:{job_name}:steps[{step_index}]", step))
+    return found
+
+
+def test_app_token_steps_use_client_id_and_preserve_private_key() -> None:
+    steps = _app_token_steps()
+    locations = [location for location, _step in steps]
+    assert len(steps) == 5, f"expected exactly five {APP_TOKEN_ACTION} steps, got {locations}"
+    assert set(locations) == set(APP_TOKEN_SCOPES), locations
+
+    for location, step in steps:
+        inputs = step["with"]
+        assert inputs.get("client-id") == APP_CLIENT_ID, f"{location}: client-id must use the App client ID secret"
+        assert "app-id" not in inputs, f"{location}: deprecated app-id input remains"
+        assert inputs.get("private-key") == APP_PRIVATE_KEY, f"{location}: private-key changed"
+        repository, permissions = APP_TOKEN_SCOPES[location]
+        assert inputs.get("owner") == "pfBlockerNG", f"{location}: owner changed"
+        assert inputs.get("repositories") == repository, f"{location}: repository scope changed"
+        assert {name: value for name, value in inputs.items() if name.startswith("permission-")} == permissions, (
+            f"{location}: permission scope changed"
+        )
+
+    tagged = yaml.safe_load(TAGGED_INGEST)
+    secrets = tagged[True]["workflow_call"]["secrets"]
+    assert secrets.get("PKG_GITHUB_APP_CLIENT_ID", {}).get("required") is True
+    assert "PKG_GITHUB_APP_ID" not in secrets
 
 
 def test_published_callback_derives_and_forwards_the_fresh_tuple() -> None:

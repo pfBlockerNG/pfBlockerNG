@@ -3,9 +3,18 @@ paths:
     ignore:
       # GitHub added lossless concurrency queues before actionlint 1.7.12.
       - 'unexpected key "queue" for "concurrency" section'
+      # create-github-app-token v3 gained client-id after actionlint 1.7.12's metadata snapshot.
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
   .github/workflows/release-published.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
+  .github/workflows/pkg-tagged-ingest.yml:
+    ignore:
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
   .github/workflows/pkg-republish.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

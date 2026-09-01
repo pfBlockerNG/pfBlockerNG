@@ -32,12 +32,17 @@ def test_every_nightly_invocation_builds_without_durable_state() -> None:
     assert "needs.prepare.outputs.outcome" not in workflow
 
 
-def test_actionlint_exception_is_narrowly_scoped_to_workflows_using_queue_max() -> None:
+def test_actionlint_exceptions_are_narrowly_scoped_to_exact_workflows() -> None:
     queue_error = 'unexpected key "queue" for "concurrency" section'
+    token_errors = [
+        'missing input "app-id" which is required by action "actions/create-github-app-token@v3"',
+        'input "client-id" is not defined in action "actions/create-github-app-token@v3"',
+    ]
     assert yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8")) == {
         "paths": {
-            ".github/workflows/nightly.yml": {"ignore": [queue_error]},
-            ".github/workflows/release-published.yml": {"ignore": [queue_error]},
+            ".github/workflows/nightly.yml": {"ignore": [queue_error, *token_errors]},
+            ".github/workflows/release-published.yml": {"ignore": [queue_error, *token_errors]},
+            ".github/workflows/pkg-tagged-ingest.yml": {"ignore": token_errors},
             ".github/workflows/pkg-republish.yml": {"ignore": [queue_error]},
             ".github/workflows/release.yml": {"ignore": [queue_error]},
             ".github/workflows/image-refresh.yml": {"ignore": [queue_error]},

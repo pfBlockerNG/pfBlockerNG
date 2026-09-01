@@ -482,7 +482,7 @@ jobs:
         id: pkg-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          client-id: ${{ secrets.PKG_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
@@ -528,7 +528,7 @@ jobs:
         id: pkg-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          client-id: ${{ secrets.PKG_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
