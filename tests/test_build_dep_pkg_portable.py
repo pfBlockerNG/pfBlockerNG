@@ -30,6 +30,7 @@ from typing import Any
 
 import pfb_pkg
 import pytest
+from packaging.version import Version
 
 from scripts import tagged_release_handoff as trh
 from tests.gitenv import scrubbed_git_env
@@ -1441,22 +1442,27 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
     root = bdp._REPO_ROOT
     assert (root / ".python-version").read_text(encoding="utf-8") == "3.11.15\n"
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["dependency-groups"]["dep-pkg-build"] == [
-        "pip==26.2.1",
-        "setuptools==83.0.0",
-        "wheel==0.46.2",
-        "zstandard==0.25.0",
-        "uv==0.12.6",
-    ]
+    pins: dict[str, str] = {}
+    for requirement in project["dependency-groups"]["dep-pkg-build"]:
+        name, separator, version = requirement.partition("==")
+        assert separator and name and version, f"{requirement!r} is not an exact == pin"
+        assert name not in pins, f"duplicate dep-pkg-build pin: {name}"
+        assert not any(char.isspace() for char in version), f"{requirement!r} is not an exact == pin"
+        pins[name] = str(Version(version))
+    assert set(pins) == {"pip", "setuptools", "uv", "wheel", "zstandard"}
+
     lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
-    versions = {package["name"]: package["version"] for package in lock["package"]}
-    assert {name: versions[name] for name in ("pip", "setuptools", "uv", "wheel", "zstandard")} == {
-        "pip": "26.2.1",
-        "setuptools": "83.0.0",
-        "uv": "0.12.6",
-        "wheel": "0.46.2",
-        "zstandard": "0.25.0",
+    root_package = next(package for package in lock["package"] if package["name"] == project["project"]["name"])
+    locked_dependencies = root_package["dev-dependencies"]["dep-pkg-build"]
+    assert len(locked_dependencies) == len(pins)
+    assert {dependency["name"] for dependency in locked_dependencies} == set(pins)
+    locked_requirements = root_package["metadata"]["requires-dev"]["dep-pkg-build"]
+    assert len(locked_requirements) == len(pins)
+    assert {requirement["name"]: requirement["specifier"] for requirement in locked_requirements} == {
+        name: f"=={version}" for name, version in pins.items()
     }
+    versions = {package["name"]: package["version"] for package in lock["package"]}
+    assert {name: versions[name] for name in pins} == pins
     assert bdp._BUILD_TOOLCHAIN == {
         "python": (root / ".python-version").read_text(encoding="utf-8").strip(),
         **{name: versions[name] for name in ("pip", "setuptools", "wheel", "zstandard")},
