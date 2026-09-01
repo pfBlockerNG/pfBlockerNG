@@ -1027,6 +1027,87 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ""
     End
+
+    It 'E17: short rebase cluster -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -rd"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E18: short merge-commit cluster -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -md"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E19: short squash cluster -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -sd"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E20: truthy long rebase assignment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --rebase=true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E21: uppercase truthy long merge assignment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --merge=TRUE"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E22: numeric truthy short rebase assignment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -r=1"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E23: single-letter truthy short merge assignment -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -m=T"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E24: false long rebase assignment -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --rebase=false"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E25: false short merge assignment -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -m=0"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
   End
 
   # ── Rule D: a wait script backgrounded with & ───────────────────────────────

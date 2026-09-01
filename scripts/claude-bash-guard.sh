@@ -275,12 +275,14 @@ _has_force_refspec() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
 }
 
-# Merge-method tokens use exact boundaries so -R/--repo and -s/--squash remain
-# allowed. Command recognition accepts inherited gh options before or between
-# the pr/merge subcommands without matching substrings such as npr.
-_MERGE_METHOD='(--merge|--rebase|-m|-r)'
+# Merge methods match bare long flags, lowercase short clusters containing m/r,
+# and the exact truthy values accepted by gh's Boolean parser. Token boundaries
+# keep -R/--repo, -s clusters, and false-valued assignments allowed.
+_MERGE_BARE='(--merge|--rebase)'
+_MERGE_CLUSTER='-[a-z0-9]*[mr][a-z0-9]*'
+_MERGE_TRUE='(--merge|--rebase|-m|-r)=(1|t|T|true|True|TRUE)'
 _has_forbidden_merge_method() {
-	printf '%s' "$seg" | grep -Eq "(^|${_SEP})${_MERGE_METHOD}(\$|${_SEP})"
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})(${_MERGE_BARE}|${_MERGE_CLUSTER}|${_MERGE_TRUE})(\$|${_SEP})"
 }
 _is_gh_pr_merge() {
 	printf '%s' "$seg" | grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+([^[:space:]]+[[:space:]]+)*pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge[[:space:]]'
