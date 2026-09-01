@@ -31,6 +31,7 @@ final class DnsblipMarkerFolderTest extends TestCase
 {
 	/** @var array<string,array{bool,mixed}> Saved globals to restore. */
 	private array $saved = [];
+	private string $base;
 
 	private string $denydir;
 	private string $nativedir;
@@ -64,6 +65,7 @@ final class DnsblipMarkerFolderTest extends TestCase
 
 		// Real, isolated temp dirs so we can assert the marker file's actual location.
 		$base = sys_get_temp_dir() . '/pfb_marker_' . uniqid('', TRUE);
+		$this->base     = $base;
 		$this->denydir   = "{$base}/deny";
 		$this->nativedir = "{$base}/native";
 		$this->dnsdir    = "{$base}/dns";
@@ -100,6 +102,7 @@ final class DnsblipMarkerFolderTest extends TestCase
 				unset($GLOBALS[$g]);
 			}
 		}
+		rmdir_recursive($this->base);
 	}
 
 	/** @return list<string> */

@@ -16,10 +16,7 @@ final class CountryNetworksCountGuardTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob($this->dir . '/*') ?: [] as $file) {
-			@unlink($file);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	public function testCountReadFailureUsesNonPlaceholderHeader(): void
