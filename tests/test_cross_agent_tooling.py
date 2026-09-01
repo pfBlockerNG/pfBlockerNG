@@ -111,6 +111,9 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "retain the remote head and worktree; stop; do not clean up" in local
     assert "If the PR is `CLOSED`, reopen the PR and issue" in local
     assert "If it is already `MERGED`, keep terminal state and route newer head commits to a new PR" in local
+    assert "Any other state stops" in local
+    assert "verify both terminal states and retain the worktree" in local
+    assert "and restart review" in local
     success_cleanup = merge.index("Only after leased deletion succeeds")
     outside_cleanup = merge.index("From OUTSIDE")
     assert new_pr < success_cleanup < outside_cleanup
@@ -120,6 +123,8 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     issues = (ROOT / ".agents/policy/issues.md").read_text(encoding="utf-8")
     assert "GitHub squash or indirect local fast-forward" in issues
     assert "Local fast-forward not inferred as `MERGED`" in issues
+    assert "commit and issue auto-closure (`state_reason: completed`)" in issues
+    assert "close the issue `--reason completed`, and verify both terminal states" in issues
 
     git_policy = (ROOT / ".agents/policy/git.md").read_text(encoding="utf-8")
     assert "git push origin --delete <branch>" not in git_policy
