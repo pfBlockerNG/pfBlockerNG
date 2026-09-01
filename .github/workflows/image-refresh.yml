@@ -121,7 +121,7 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -228,13 +228,13 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout (for scripts/ + tests/smoke/)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

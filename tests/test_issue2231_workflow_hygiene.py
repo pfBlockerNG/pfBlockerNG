@@ -2296,7 +2296,7 @@ jobs:
   consume:
     needs: [resolve, prepare-release]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare-release.outputs.sha || needs.resolve.outputs.source_sha }}
 """,

@@ -122,7 +122,7 @@ jobs:
           print(f"Resolved Release {resolved_tag} (id {resolved_id}, prerelease={prerelease_text})")
           '
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # SECURITY: release-version.sh below is EXECUTED AS SHELL, so this checkout
           # must pin the revision the workflow itself came from — never a ref an
@@ -234,7 +234,7 @@ jobs:
           permission-contents: write
 
       - name: Checkout the FreeBSD-ports fork (use-github branch)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: pfBlockerNG/FreeBSD-ports
           ref: pfblockerng/use-github
@@ -253,7 +253,7 @@ jobs:
           sparse-checkout-cone-mode: true
 
       - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # SECURITY: portrevision-rebuild.sh below is EXECUTED AS SHELL in a job that
           # holds an App token able to push to pfblockerng/use-github. It must therefore
@@ -274,7 +274,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install the Graphify merge driver
         run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .

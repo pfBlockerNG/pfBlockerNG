@@ -131,14 +131,14 @@ jobs:
       - name: Checkout the branch under test
         # This checkout IS --local-src: the builder packages this exact tree
         # (the way the FreeBSD path pins the port's USE_GITHUB fetch to the SHA).
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Set up uv and the pinned Python
         # build-leg.sh shells out to `python3`; .python-version pins the same minor
         # the appliance carries, and uv provisions + activates it.
-        uses: astral-sh/setup-uv@v7 # v7.6.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.6"
           activate-environment: true

@@ -532,7 +532,7 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert build_steps.index(extras) < build_steps.index(setup) < build_steps.index(sync)
     assert setup["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
     assert sync["if"] == "steps.extras.outputs.extra_pkgs != '[]'"
-    assert pinned_builder["uses"] == "actions/checkout@v6"
+    assert pinned_builder["uses"] == "actions/checkout@v7"
     assert pinned_builder["with"]["ref"] == (
         "${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || "
         "steps.destinations.outputs.source_sha }}"

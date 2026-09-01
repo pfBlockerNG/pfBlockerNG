@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
@@ -33,6 +35,7 @@ _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _STEP_MARKER_RE = re.compile(r"^[ ]*-[ ]+")  # the sequence marker only, never the key that follows
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
+_EXPECTED_ACTION_VERSIONS = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.0.1"}
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
 _WITH_KEY_RE = re.compile(r"^(?P<indent>[ ]*)with:\s*(#.*)?$")
@@ -182,7 +185,7 @@ def _raw_checkout_line_count() -> int:
     inventing one the regex doesn't). Comment lines are excluded here -- the
     same predicate _find_checkout_sites applies when picking a block's
     checkout line -- so a documentation example like `# uses:
-    actions/checkout@v6` can never make the two sides disagree; a REAL
+    actions/checkout@v7` can never make the two sides disagree; a REAL
     duplicate `uses:` key inside one step is invalid YAML and out of scope."""
     count = 0
     for path in _workflow_files():
@@ -205,6 +208,32 @@ def test_enumeration_is_non_vacuous() -> None:
         f"found zero actions/checkout sites under {WORKFLOWS_DIR} (globs: {_WORKFLOW_GLOBS}) -- "
         f"a broken enumeration must never silently pass by finding nothing."
     )
+
+
+def _action_version_offenders(files: list[Path]) -> tuple[set[str], list[str]]:
+    seen: set[str] = set()
+    offenders: list[str] = []
+    for path in files:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_name, job in workflow.get("jobs", {}).items():
+            for step_index, step in enumerate(job.get("steps", [])):
+                action_ref = step.get("uses")
+                if not isinstance(action_ref, str):
+                    continue
+                for action, version in _EXPECTED_ACTION_VERSIONS.items():
+                    if action_ref.startswith(f"{action}@"):
+                        seen.add(action)
+                        if action_ref != f"{action}@{version}":
+                            offenders.append(f"{path.name}:{job_name}:step-{step_index}: uses: {action_ref}")
+    return seen, offenders
+
+
+def test_checkout_and_setup_uv_versions_are_current() -> None:
+    seen, offenders = _action_version_offenders(_workflow_files())
+    assert seen == _EXPECTED_ACTION_VERSIONS.keys(), (
+        f"expected action pins not found: {sorted(_EXPECTED_ACTION_VERSIONS.keys() - seen)}"
+    )
+    assert not offenders, "outdated GitHub Action pins:\n  " + "\n  ".join(offenders)
 
 
 def test_walker_count_matches_raw_checkout_line_count() -> None:
@@ -259,7 +288,7 @@ def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path:
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        with:\n"
         "          ref: |\n"
         "            persist-credentials: false\n",
@@ -278,7 +307,7 @@ def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path:
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        with:\n"
         "          ref: main\n"
         "          persist-credentials: false\n",
@@ -301,7 +330,7 @@ def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        env:\n"
         "          NOTES: |\n"
         "            with:\n"
@@ -324,7 +353,7 @@ def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(
         "  demo:\n"
         "    steps:\n"
         "      - -weird: x\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        env: |\n"
         "         with:\n"
         "           persist-credentials: false\n",

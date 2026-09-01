@@ -368,7 +368,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # issue #1859: the test code comes from the ref the caller names — for a
           # release that is the pinned release SHA, so the suite verifies the source
@@ -653,7 +653,7 @@ jobs:
         # activate-environment puts the project environment on PATH, so the `python3`
         # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
         # pins the same minor the appliance carries).
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           activate-environment: true

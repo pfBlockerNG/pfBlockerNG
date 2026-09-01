@@ -13,7 +13,7 @@ from tests._workflow_steps import extract_job
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-_SETUP_UV = "uses: astral-sh/setup-uv@v7"
+_SETUP_UV = "uses: astral-sh/setup-uv@v10.0.1"
 _DRIVER = "ensure-graphify-merge-driver.sh"
 _STEP_RE = re.compile(r"^      - [A-Za-z_][A-Za-z0-9_-]*:", re.MULTILINE)
 _JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", re.MULTILINE)
@@ -46,42 +46,42 @@ PUSH_JOBS = (
         "refresh",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
-        checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
+        checkout_groups=(("uses: actions/checkout@v7", "ref: devel"),),
     ),
     PushJob(
         "psl-refresh.yml",
         "refresh",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
-        checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
+        checkout_groups=(("uses: actions/checkout@v7", "ref: devel"),),
     ),
     PushJob(
         "tld-refresh.yml",
         "refresh",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
-        checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
+        checkout_groups=(("uses: actions/checkout@v7", "ref: devel"),),
     ),
     PushJob(
         "image-refresh.yml",
         "refresh",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git -C "$WT" push --force origin "$BR"',
-        checkout_groups=(("name: Checkout (for scripts/ + tests/smoke/)", "uses: actions/checkout@v6"),),
+        checkout_groups=(("name: Checkout (for scripts/ + tests/smoke/)", "uses: actions/checkout@v7"),),
     ),
     PushJob(
         "module-durations.yml",
         "refresh",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         "until git push origin HEAD:devel; do",
-        checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
+        checkout_groups=(("uses: actions/checkout@v7", "ref: devel"),),
     ),
     PushJob(
         "version-tracker.yml",
         "reconcile",
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$1"',
-        checkout_groups=(("uses: actions/checkout@v6",),),
+        checkout_groups=(("uses: actions/checkout@v7",),),
     ),
     PushJob(
         "release-published.yml",
@@ -91,12 +91,12 @@ PUSH_JOBS = (
         checkout_groups=(
             (
                 "name: Checkout the FreeBSD-ports fork (use-github branch)",
-                "uses: actions/checkout@v6",
+                "uses: actions/checkout@v7",
                 "repository: pfBlockerNG/FreeBSD-ports",
                 "ref: pfblockerng/use-github",
             ),
             (
-                "uses: actions/checkout@v6",
+                "uses: actions/checkout@v7",
                 "repository: pfBlockerNG/pfBlockerNG",
                 "ref: ${{ github.workflow_sha }}",
                 "path: pfblockerng-src",
@@ -173,10 +173,10 @@ def _assert_job_contract(job: str, spec: PushJob) -> None:
         checkout_steps.append(matches[0])
     setup_uv_steps = [index for index, step in enumerate(steps) if _has_step_line(step, _SETUP_UV)]
     assert len(setup_uv_steps) == 1, (
-        f"{label}: expected exactly one setup-uv step pinned to v7, found {len(setup_uv_steps)}"
+        f"{label}: expected exactly one setup-uv step pinned to v10.0.1, found {len(setup_uv_steps)}"
     )
     setup_uv = setup_uv_steps[0]
-    assert _SETUP_UV in steps[setup_uv], f"{label}: setup-uv must be pinned to v7"
+    assert _SETUP_UV in steps[setup_uv], f"{label}: setup-uv must be pinned to v10.0.1"
 
     ensure = _command_step(steps, spec.ensure_command, label)
     assert _DRIVER in steps[ensure]
@@ -185,7 +185,7 @@ def _assert_job_contract(job: str, spec: PushJob) -> None:
     mutation_step, mutation_command = mutation
     assert mutation_command == spec.first_mutation, f"{label}: first qualifying mutation changed: {mutation_command!r}"
     assert max(checkout_steps) < setup_uv, f"{label}: setup-uv must run after every relevant checkout"
-    assert setup_uv < ensure, f"{label}: setup-uv v7 must run before merge-driver setup"
+    assert setup_uv < ensure, f"{label}: setup-uv v10.0.1 must run before merge-driver setup"
     assert ensure < mutation_step, f"{label}: merge-driver setup must run before {mutation_command!r}"
 
 
@@ -245,7 +245,7 @@ def test_foreign_target_helper_checkout_includes_graphify_patch_payload() -> Non
     checkouts = [
         step
         for step in workflow["jobs"]["sync-ports-fork"]["steps"]
-        if step.get("uses") == "actions/checkout@v6"
+        if step.get("uses") == "actions/checkout@v7"
         and step.get("with", {}).get("repository") == "pfBlockerNG/pfBlockerNG"
         and step["with"].get("ref") == "${{ github.workflow_sha }}"
         and step["with"].get("path") == "pfblockerng-src"
@@ -257,13 +257,13 @@ def test_foreign_target_helper_checkout_includes_graphify_patch_payload() -> Non
 
 _GOOD_FIXTURE = """\
       - name: Checkout tools
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Checkout target
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: pkg-repo
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
       - name: Install Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo
       - name: Publish
@@ -271,7 +271,7 @@ _GOOD_FIXTURE = """\
 """
 _SETUP_FIXTURE = """\
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
 """
 _PUBLISH_FIXTURE = """\
       - name: Publish
@@ -283,8 +283,8 @@ _FIXTURE_SPEC = PushJob(
     "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
     "sh scripts/publish-pkg-repo.sh",
     checkout_groups=(
-        ("name: Checkout tools", "uses: actions/checkout@v6"),
-        ("name: Checkout target", "uses: actions/checkout@v6", "path: pkg-repo"),
+        ("name: Checkout tools", "uses: actions/checkout@v7"),
+        ("name: Checkout target", "uses: actions/checkout@v7", "path: pkg-repo"),
     ),
 )
 
@@ -309,8 +309,8 @@ def test_guard_rejects_planted_missing_or_late_setup(broken: str) -> None:
 
 def test_comments_cannot_spoof_tool_pins_or_checkout_paths() -> None:
     wrong_uv = _GOOD_FIXTURE.replace(
-        "        uses: astral-sh/setup-uv@v7",
-        "        uses: astral-sh/setup-uv@v6\n        # uses: astral-sh/setup-uv@v7",
+        "        uses: astral-sh/setup-uv@v10.0.1",
+        "        uses: astral-sh/setup-uv@v9\n        # uses: astral-sh/setup-uv@v10.0.1",
     )
     with pytest.raises(AssertionError, match="setup-uv"):
         _assert_job_contract(wrong_uv, _FIXTURE_SPEC)
