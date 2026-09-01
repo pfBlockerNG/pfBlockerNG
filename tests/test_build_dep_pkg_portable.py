@@ -1444,7 +1444,7 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
     assert project["dependency-groups"]["dep-pkg-build"] == [
         "pip==26.2.1",
         "setuptools==83.0.0",
-        "wheel==0.45.1",
+        "wheel==0.46.2",
         "zstandard==0.25.0",
         "uv==0.12.6",
     ]
@@ -1454,6 +1454,6 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
         "pip": "26.2.1",
         "setuptools": "83.0.0",
         "uv": "0.12.6",
-        "wheel": "0.45.1",
+        "wheel": "0.46.2",
         "zstandard": "0.25.0",
     }
