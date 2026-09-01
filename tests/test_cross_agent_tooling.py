@@ -64,16 +64,29 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in merge
     assert "atomic strict-base gate" in merge
 
-    local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
-    fetch = local.index("fetch `origin`")
-    recheck = local.index("recheck the three-way")
-    push = local.index("git push origin HEAD:devel")
-    close = local.index("close the PR")
-    delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
-    assert fetch < recheck < push < close < delete
-    assert "before push and before terminal PR/issue synchronization" in local
+    steps = merge
+    for checkpoint in (
+        "git fetch origin",
+        'git fetch origin "pull/N/head"',
+        'remote_pr_head="$(git rev-parse FETCH_HEAD)"',
+        'test "$remote_pr_head" = "$reviewed_sha"',
+        'test "$local_head" = "$reviewed_sha"',
+    ):
+        assert checkpoint in steps
+    base_fetch = steps.index("git fetch origin")
+    pr_fetch = steps.index('git fetch origin "pull/N/head"')
+    resolve = steps.index('remote_pr_head="$(git rev-parse FETCH_HEAD)"')
+    remote_guard = steps.index('test "$remote_pr_head" = "$reviewed_sha"')
+    local_guard = steps.index('test "$local_head" = "$reviewed_sha"')
+    recheck = steps.index("recheck the three-way")
+    push = steps.index("git push origin HEAD:devel")
+    close = steps.index("close the PR")
+    delete = steps.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
+    assert base_fetch < pr_fetch < resolve < remote_guard
+    assert local_guard < hosted < recheck < push < close < delete
+    assert "before push and before terminal PR/issue synchronization" in steps
+    assert "restart affected review plus exact-head CI" in steps
     assert "every landed commit is locally signed and verified" in landing
-    assert "PR head, local `HEAD`, and `reviewed_sha`" in merge
 
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:

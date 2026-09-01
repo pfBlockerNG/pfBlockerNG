@@ -165,22 +165,22 @@ Poll until every **required** check complete, excluding only the advisory contex
 ### Land and clean up
 
 - At the gate bind `reviewed_sha=$(git rev-parse HEAD)` and
-  `reviewed_base=$(git rev-parse origin/devel)`. Immediately before either path, fetch
-  `origin`, re-read the PR head, and require the PR head, local `HEAD`, and `reviewed_sha`
-  to match plus `origin/devel == reviewed_base`; any mismatch restarts review and CI.
-- **GitHub-hosted path:** use only when live protection supplies an atomic strict-base gate;
-  otherwise use the local path. Run
+  `reviewed_base=$(git rev-parse origin/devel)`. Before either path run `git fetch origin`
+  and `git fetch origin "pull/N/head"`; resolve `remote_pr_head="$(git rev-parse FETCH_HEAD)"`
+  and `local_head="$(git rev-parse HEAD)"`. Require
+  `test "$remote_pr_head" = "$reviewed_sha"`, `test "$local_head" = "$reviewed_sha"`, and
+  `origin/devel == reviewed_base`; on mismatch stop and restart affected review plus exact-head CI.
+- **GitHub-hosted path:** only with an atomic strict-base gate; otherwise use local. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
-  Repository settings keep other methods disabled. **Verify the merge actually landed:**
-  PR's state must read `MERGED`. Run `git fetch origin` after that verification and require
-  the landed commit to be GitHub-signed.
-- **Maintainer-local path:** fetch `origin`. If the base moved, rebase, push the branch,
-  and repeat affected review plus exact-head CI. Otherwise recheck the three-way head
-  identity before push and before terminal PR/issue synchronization, verify every commit,
-  then run `git push origin HEAD:devel` without force. Fetch and require `origin/devel ==
-  reviewed_sha`, re-read the PR head, post landed evidence, close the PR and issue, and
-  verify both terminal states while retaining the worktree.
-- After either path, delete the remote head only if it still equals `reviewed_sha`:
+  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification
+  and require the landed commit to be GitHub-signed.
+- **Maintainer-local path:** if the base moved, rebase, push the branch, and repeat affected
+  review plus exact-head CI. Otherwise recheck the three-way head identity
+  before push and before terminal PR/issue synchronization, verify every commit, then run
+  `git push origin HEAD:devel` without force. Fetch and require `origin/devel == reviewed_sha`,
+  repeat both head tests, post landed evidence, close the PR and issue, and verify both
+  terminal states while retaining the worktree.
+- Delete the remote head only if it still equals `reviewed_sha`:
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
   Do not pass `--delete-branch` to GitHub merge commands.
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
