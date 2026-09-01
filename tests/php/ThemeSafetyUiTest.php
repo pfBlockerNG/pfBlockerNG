@@ -71,6 +71,9 @@ final class ThemeSafetyUiTest extends TestCase
 			// issue #3016: a literal that is merely APPENDED to is still a literal --
 			// widening isInterpolated() for concatenation must not launder this.
 			"el.style = 'background-color: #f0f0f0' + suffix;",
+			// issue #3016: the var() clause is word-anchored, so an identifier that
+			// merely ends in 'var' is not a custom-property reference.
+			'.pfb-subhdr { background-color: lavar(--pfb-bg); }',
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
@@ -1223,16 +1226,16 @@ final class ThemeSafetyUiTest extends TestCase
 	private static function isInterpolated(string $value): bool
 	{
 		// '{$' is PHP, '${' a JS template literal -- scan() reads both (issue #2962).
-		// 'var(' is the CSS mirror of those: the value is resolved from a custom
-		// property, not written here. A LEADING '+' is the pre-template-literal JS
-		// idiom -- the colour position holds a concatenation operator, so the value
-		// is computed too (issue #3016). Anchoring on the leading operator is what
-		// keeps a real literal that is merely appended to ('#f0f0f0' + suffix) a hit.
+		// 'var(' is the CSS mirror of those, and a value STARTING with '+' is the
+		// pre-template-literal JS idiom: firstColorToken() strips the delimiting
+		// quotes, so "background-color: ' + theme.bg" arrives as "+ theme.bg". A
+		// literal that is merely appended to arrives as "#f0f0f0' + suffix" and stays
+		// a hit, which is why the '+' is anchored and not merely contained (#3016).
 		return str_contains($value, '{$')
 			|| str_contains($value, '${')
 			|| (bool)preg_match('/\$[a-zA-Z_]/', $value)
 			|| (bool)preg_match('/\bvar\(/i', $value)
-			|| (bool)preg_match('/^\+\s*\S/', $value);
+			|| str_starts_with($value, '+');
 	}
 
 	private static function isTranslucent(string $value): bool
