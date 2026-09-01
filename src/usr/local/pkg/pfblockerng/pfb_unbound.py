@@ -1429,9 +1429,7 @@ def init_standard(id: int, env: module_env) -> bool:
         pfb_query_watcher_thread, \
         pfb_query_stop
 
-    # issue #3058: one clock read per init, reported on the "script loaded" line
-    # below. The build duration is the window in which unbound is unresponsive on
-    # a restart, so it belongs in every user's log rather than in a support script.
+    # issue #3058: build duration, reported on the "script loaded" line below.
     init_started = time.monotonic()
 
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
@@ -2165,10 +2163,8 @@ def init_standard(id: int, env: module_env) -> bool:
 
     pfb_setup_logging()
 
-    # issue #3058: the historical prefix is preserved verbatim -- released logs
-    # carry it and a user's grep keys on it -- with the two numbers appended.
-    # Count is the LOADED total (ADR-06's pfb_py_count definition), not the raw
-    # feed line count, so it agrees with what the UI reports.
+    # issue #3058: prefix kept verbatim (greps key on it); count is ADR-06's
+    # LOADED total, matching pfb_py_count rather than the raw feed line count.
     log_info(
         "[pfBlockerNG]: init_standard script loaded in {:.1f}s ({} entries)".format(
             time.monotonic() - init_started, len(dataDB) + len(zoneDB)
