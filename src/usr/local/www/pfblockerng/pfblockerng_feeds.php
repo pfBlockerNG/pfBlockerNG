@@ -400,20 +400,20 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					// Print applicable alternating background color
 					if ($data['action'] == 'permit') {
 						if ($aliasname == $p_aliasname) {
-							$tr_style = 'background-color: #F5FBF6;';		// Light green 1
+							$tr_style = 'background-color: #F5FBF6; color: #212121;';		// Light green 1
 							if ($tr_style == $p_tr_style) {
-								$tr_style = 'background-color: #EEF7EE;';	// Light green 2
+								$tr_style = 'background-color: #EEF7EE; color: #212121;';	// Light green 2
 							}
 						} else {
 							// Dark green (New Alias/Group)
-							$tr_style = 'background-color: #A0B8A0;';	// #C8E6C9;';
+							$tr_style = 'background-color: #A0B8A0; color: #212121;';	// #C8E6C9;';
 						}
 					}
 					else {
 						$tr_style = '';
 						if ($aliasname != $p_aliasname) {
 							// Grey - (New Alias/Group)
-							$tr_style = 'background-color: #B8B8B8;';	//#D8D8D8;';
+							$tr_style = 'background-color: #B8B8B8; color: #212121;';	//#D8D8D8;';
 						}
 					}
 				?>
@@ -849,7 +849,7 @@ print ($section);
 
 								$tr_style = '';
 								if ($row['aliasname'] != $p_aliasname) {
-									$tr_style = 'background-color: #B8B8B8;';   // #D8D8D8;';
+									$tr_style = 'background-color: #B8B8B8; color: #212121;';   // #D8D8D8;';
 								}
 				?>
 
