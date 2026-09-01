@@ -23,6 +23,10 @@ _LIST_PAGES: dict[str, str] = {
     "/pfblockerng/pfblockerng_log.php": "Log/File Browser selections",
     "/pfblockerng/pfblockerng_edit_hooks.php": "Load an Existing Hook Script",
     "/pfblockerng/pfblockerng_category_edit.php?type=ipv4": "Update Frequency",
+    # issue #3035: the Feeds page paints alternating row backgrounds from
+    # $tr_style. It was absent from this list, so a full-green run of this file
+    # proved nothing about it -- 12 passed while no test opened the page.
+    "/pfblockerng/pfblockerng_feeds.php": "Pre-defined Alias/Group/Feeds",
 }
 
 

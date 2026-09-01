@@ -36,11 +36,11 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 # CPython 3.11+ internal regex AST parser used by the literal-prefilter to extract
@@ -123,6 +123,31 @@ class PslRules:
     private_exact: tuple[str, ...] = ()
     private_wildcard: tuple[str, ...] = ()
     private_exception: tuple[str, ...] = ()
+    # Membership sets, built on first use and held on the instance. compare=False
+    # keeps value equality (and the hash) a function of the rules alone; init=False
+    # keeps a foreign index out of the constructor and makes dataclasses.replace
+    # rebuild rather than carry the previous rules' sets.
+    _index: tuple[_PslSets, _PslSets] | None = field(default=None, compare=False, repr=False, init=False)
+
+    def index(self) -> tuple[_PslSets, _PslSets]:
+        """(ICANN-only, ICANN+PRIVATE) membership sets for this rule set.
+
+        Built once per instance. Do NOT reintroduce an lru_cache keyed on this
+        dataclass: computing that key hashes all six rule tuples on every call,
+        and CPython does not cache tuple hashes, so the key costs more than the
+        scan the cache exists to avoid (issue #3046).
+
+        Hand-rolled rather than functools.cached_property because on 3.11 that
+        descriptor takes a lock shared across all instances, serialising the first
+        build across worker threads; this check-then-set is unlocked on purpose, so
+        racing threads each build an equal value and the cost is one wasted build
+        per racing thread.
+        """
+        idx = self._index
+        if idx is None:
+            idx = _psl_build_index(self)
+            object.__setattr__(self, "_index", idx)
+        return idx
 
 
 @dataclass(frozen=True)
@@ -238,13 +263,13 @@ def parse_psl_rules(text: str) -> PslRules:
 _PslSets = tuple[frozenset[str], frozenset[str], frozenset[str]]
 
 
-@lru_cache(maxsize=4)
-def _psl_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
-    """(ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) membership sets.
+def _psl_build_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
+    """Build the (ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) sets.
 
-    Built once per PslRules (frozen, hashable) so each resolution costs O(name
-    labels), never a scan over the ~10k shipped rules -- the classifier runs per
-    feed entry at build time and TLD-Allow runs on the live DNS query path.
+    Called once per PslRules via PslRules.index(), which holds the result on the
+    instance, so each resolution costs O(name labels) rather than a scan over the
+    ~10k shipped rules -- the classifier runs per feed entry at build time and
+    TLD-Allow runs on the live DNS query path.
     """
     icann: _PslSets = (
         frozenset(rules.icann_exact),
@@ -288,7 +313,7 @@ def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
     """Apply PSL prevailing-rule semantics for ICANN and combined sections."""
     normalized = _psl_normalize_name(name)
     labels = normalized.split(".")
-    icann_sets, combined_sets = _psl_index(rules)
+    icann_sets, combined_sets = rules.index()
     icann_suffix = _psl_prevailing(labels, *icann_sets)
     public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_labels = public_suffix.split(".")
@@ -4565,9 +4590,13 @@ def tld_wildcard_classify(
     exclusion: set[str],
     *,
     include_private: bool = True,
-    blacklist: set[str] | None = None,
+    blacklist: AbstractSet[str] = frozenset(),
 ) -> tuple[str, str]:
-    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA."""
+    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA.
+
+    ``blacklist`` is already dot-stripped TLD roots -- the contract ``exclusion``
+    also carries -- normalized ONCE by ``build()`` at the config boundary (#3050).
+    """
     if not any(
         (
             rules.icann_exact,
@@ -4579,20 +4608,13 @@ def tld_wildcard_classify(
         )
     ):
         return DNSBL_CLASS_DATA, domain
-    root_blacklist = {entry.strip(".") for entry in blacklist or set()}
     try:
         resolution = resolve_public_suffix(domain, rules)
     except ValueError:
         return DNSBL_CLASS_DATA, domain
     suffix = resolution.public_suffix if include_private else resolution.icann_suffix
     root = suffix.rsplit(".", 1)[-1]
-    if (
-        suffix in root_blacklist
-        or root in root_blacklist
-        or suffix in exclusion
-        or root in exclusion
-        or domain in exclusion
-    ):
+    if suffix in blacklist or root in blacklist or suffix in exclusion or root in exclusion or domain in exclusion:
         return DNSBL_CLASS_DATA, domain
     labels = domain.split(".")
     suffix_labels = suffix.split(".")
@@ -5224,9 +5246,9 @@ def build(
     tallied 'suffix_drop') or a wildcard ZONE anchor demoted to exact DATA ('apex',
     tallied 'suffix_demote'); USER provenance is exempt in every state.
     """
-    tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
-    tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
-    exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
+    # issue #3050: dot-stripped ONCE here; every consumer below reads these as-is.
+    blacklist_roots = frozenset(t.strip(".") for t in config.get("tld_wildcard_blacklist", []))
+    exclusion = {e.strip(".") for e in config.get("tld_wildcard_exclusion", [])}
 
     static_cap = bool(config.get("regex_cap", False))
 
@@ -5263,8 +5285,7 @@ def build(
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
     # (feed/group ``DNSBL_TLD``, log ``1``) -- the sole writer of this row shape
     # since ADR-65 retired PHP's own equivalent write.
-    for raw_tld in tld_wildcard_blacklist:
-        tld = raw_tld.strip(".")
+    for tld in sorted(blacklist_roots):  # sorted: a set would insert in hash-seed order
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
@@ -5420,7 +5441,7 @@ def build(
                 psl_classification_rules,
                 exclusion,
                 include_private=bool(config.get("psl_include_private", True)),
-                blacklist=set(tld_wildcard_blacklist),
+                blacklist=blacklist_roots,
             )
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
@@ -6549,7 +6570,7 @@ def _tld_allow_blocks(
     except (AttributeError, TypeError, ValueError):
         # Structurally invalid names cannot be matched safely; fail closed.
         return True
-    icann_sets, combined_sets = _psl_index(rules)
+    icann_sets, combined_sets = rules.index()
     icann_suffix = _psl_prevailing(labels, *icann_sets)
     public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_roots = {
