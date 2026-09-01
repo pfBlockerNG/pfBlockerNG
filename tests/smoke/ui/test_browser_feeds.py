@@ -77,6 +77,23 @@ TYPE_LABELS = {
 JS_TIMEOUT_MS = 10_000
 
 
+def _rgb(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)", value)
+    assert match is not None, f"expected computed rgb/rgba colour, got {value!r}"
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    channels = [channel / 255 for channel in rgb]
+    linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(first: str, second: str) -> float:
+    lighter, darker = sorted((_relative_luminance(_rgb(first)), _relative_luminance(_rgb(second))), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def _open(page: Page, webui: WebUI, path: str) -> None:
     """Navigate the (cookie-authenticated) page to ``path`` and settle the DOM.
 
@@ -182,3 +199,49 @@ def test_feeds_subtab_row_active_and_type_scoped(
         )
 
     _shot(page, screenshot_dir, f"feeds_subtab_{gtype}")
+
+
+def test_painted_feed_rows_scope_legible_link_foregrounds(
+    browser_page: Page,
+    webui: WebUI,
+) -> None:
+    """Painted Feeds rows override the dark theme's low-contrast anchor palette only where needed."""
+    page = browser_page
+    _open(page, webui, f"{FEEDS_BASE}?type=ipv4")
+
+    assert page.locator('link[rel="stylesheet"][href*="pfSense-dark.css"]').count() >= 1, (
+        "the contrast proof must run against the real pfSense dark theme"
+    )
+
+    row_states = page.locator("table#pfb_table tr, table#pfb_table2 tr").evaluate_all(
+        """
+        rows => rows.map(row => ({
+          painted: row.classList.contains('pfb-painted-feed-row'),
+          inlineBackground: row.style.backgroundColor,
+        }))
+        """
+    )
+    assert any(state["painted"] for state in row_states), "Feeds page rendered no painted rows"
+    assert all(bool(state["inlineBackground"]) == state["painted"] for state in row_states), row_states
+
+    links = page.locator("tr.pfb-painted-feed-row a")
+    assert links.count() >= 1, "painted Feeds rows rendered no anchors"
+    computed = links.evaluate_all(
+        """
+        anchors => anchors.map(anchor => ({
+          color: getComputedStyle(anchor).color,
+          background: getComputedStyle(anchor.closest('tr')).backgroundColor,
+        }))
+        """
+    )
+    for style in computed:
+        assert style["color"] == "rgb(0, 77, 64)", style
+        ratio = _contrast_ratio(style["color"], style["background"])
+        assert ratio >= 4.5, f"painted-row link contrast is {ratio:.3f}:1 for {style}"
+
+    first = links.first
+    first.hover()
+    expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
+    page.mouse.move(0, 0)
+    first.focus()
+    expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)

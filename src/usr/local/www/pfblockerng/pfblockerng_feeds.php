@@ -418,7 +418,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					}
 				?>
 
-		<tr style="<?=$tr_style;?>">
+		<tr<?=!empty($tr_style) ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
 			<td>
 					<?php
 						// $ftype is always one of ipv4/ipv6/dnsbl here; the default keeps
@@ -626,6 +626,18 @@ $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), 
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', "/pfblockerng/pfblockerng_feeds.php?type={$gtype}", '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
+
+?>
+<style>
+.pfb-painted-feed-row a {
+	color: #004D40;
+}
+.pfb-painted-feed-row a:hover,
+.pfb-painted-feed-row a:focus {
+	color: #003D33;
+}
+</style>
+<?php
 
 if ($input_errors) {
 	print_input_errors($input_errors);
@@ -853,7 +865,7 @@ print ($section);
 								}
 				?>
 
-			<tr style="<?=$tr_style;?>">
+			<tr<?=!empty($tr_style) ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
 				<td>
 					<?php
 								if ($type != $p_type) {
