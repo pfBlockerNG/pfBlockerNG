@@ -357,6 +357,14 @@ final class ThemeSafetyUiTest extends TestCase
 			// A quote can carry more than one escape -- JS emitted into a JS string, or a
 			// value that has been json_encode()d twice. $bs is a run, not a single escape.
 			'double-escaped key' => ['{ \\\\"background-color\\\\": \\\\"#fff\\\\" }', '{ \\\\"background-color\\\\": \\\\"#fff\\\\", \\\\"color\\\\": \\\\"#000\\\\" }'],
+			// Every row above is a bare fragment, which is the one context where an escaped
+			// quote cannot actually occur. Inside a real PHP double-quoted literal the match
+			// offset decides the context enclosingString() reads, so a branch that starts ON
+			// the escaped quote reports a correctly-paired object (#3002 review, contract leg).
+			'esc key in php literal' => [
+				'$s = "$(x).css({\\"background-color\\": \\"#123456\\"});";',
+				'$s = "$(x).css({\\"background-color\\": \\"#123456\\", \\"color\\": \\"#000\\"});";',
+			],
 			'jquery setter'     => ["\$(x).css('background-color', '#fff');", "\$(x).css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on a var'   => ["\$el.css('background-color', '#fff');", "\$el.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on this'    => ["this.css('background-color', '#fff');", "this.css({'background-color': '#fff', 'color': '#000'});"],
@@ -437,6 +445,11 @@ final class ThemeSafetyUiTest extends TestCase
 			'getter, no value' => ['e.style.setProperty("color");'],
 			// the lookbehind: without it a method merely ending in setProperty pairs
 			'method suffix'    => ['el.mysetProperty("color", "#000");'],
+			// The three rows above all exercise the setProperty branch. The colon and
+			// assignment branches carry the same boundary and need the same pinning, or a
+			// widening there ships unseen (#3002 review, test-honesty leg).
+			'colon branch'     => ['.a { color-scheme: dark; }'],
+			'assign branch'    => ['e.style.colorScheme = "dark";'],
 		];
 	}
 
@@ -464,6 +477,33 @@ final class ThemeSafetyUiTest extends TestCase
 			'url escape'   => ['{ "background-color": "url(a\\b.png)" }'],
 			'js bare key'  => ['{ backgroundColor: "url(a\\b.png)" }'],
 		];
+	}
+
+	/**
+	 * A PCRE failure must not read as a clean file.
+	 *
+	 * scan() used to fall through to `return []` when preg_match_all() returned FALSE,
+	 * which is indistinguishable from "this source has no violations" -- the fail-open
+	 * shape #3011 closed elsewhere. The lazy value classes can exhaust the backtrack
+	 * limit on a long backslash run after an unterminated quote, so the error path is
+	 * reachable rather than theoretical.
+	 *
+	 * The limit is lowered for the duration rather than feeding scan() a flood, so the
+	 * test asserts the guard and not this machine's pcre.backtrack_limit.
+	 */
+	public function testAScanRegexFailureThrowsInsteadOfReportingNoViolations(): void
+	{
+		$src = '{ "background-color": "#123456" }' . "\n" . 'backgroundColor: "' . str_repeat('\\', 200);
+		$this->assertNotSame([], self::scan($src), 'the violation must be seen at the normal limit');
+
+		$restore = ini_get('pcre.backtrack_limit');
+		ini_set('pcre.backtrack_limit', '100');
+		try {
+			$this->expectException(RuntimeException::class);
+			self::scan($src);
+		} finally {
+			ini_set('pcre.backtrack_limit', $restore === FALSE ? '1000000' : $restore);
+		}
 	}
 
 	#[DataProvider('valuesContainingABackslash')]
@@ -539,10 +579,10 @@ final class ThemeSafetyUiTest extends TestCase
 		// background at all -- silently exempt rather than reported. Values are lazy, not
 		// backslash-excluding: a backslash inside url() or a CSS escape is part of the value.
 		$bs = '\\\\*';
-		if (preg_match_all(
+		$matched = preg_match_all(
 			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
 			. '|backgroundColor\s*:\s*' . $bs . '(?<jsq>["\'])(?<js>[^"\']*?)' . $bs . '\k<jsq>'
-			. '|(?<objq>["\'])background(?:-color|Color)?' . $bs . '\k<objq>\s*:\s*'
+			. '|' . $bs . '(?<objq>["\'])background(?:-color|Color)?' . $bs . '\k<objq>\s*:\s*'
 			. $bs . '(?<objvq>["\'])(?<obj>[^"\']*?)' . $bs . '\k<objvq>'
 			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*' . $bs . '(?<setq>["\'])background(?:-color|Color)?' . $bs . '\k<setq>\s*,\s*'
 			. $bs . '(?<setvq>["\'])(?<set>[^"\']*?)' . $bs . '\k<setvq>'
@@ -550,7 +590,15 @@ final class ThemeSafetyUiTest extends TestCase
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
-		) !== FALSE) {
+		);
+		if ($matched === FALSE) {
+			// A PCRE failure is indistinguishable from a clean file, so falling through
+			// would suppress every violation in this source (#3002 review, correctness
+			// leg). Fail loudly instead -- the lazy value classes can exhaust the
+			// backtrack limit on a long backslash run after an unterminated quote.
+			throw new RuntimeException('ThemeSafety scan() regex failed: ' . preg_last_error_msg());
+		}
+		if ($matched > 0) {
 			$count = count($matches[0]);
 			for ($i = 0; $i < $count; $i++) {
 				$full = $matches[0][$i][0];
