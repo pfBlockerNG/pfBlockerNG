@@ -2,38 +2,45 @@
 # Shared POSIX resolver for the Graphify launcher and its owning interpreter.
 # Safe to source: functions only, with all results written to stdout.
 
-resolve_graphify_launcher() {
-	_graphify_launcher=$(command -v graphify 2>/dev/null) &&
-		[ -n "$_graphify_launcher" ] && {
-			case "$_graphify_launcher" in
-				/*) ;;
-				*)
-					_graphify_name=${_graphify_launcher##*/}
-					_graphify_dir=${_graphify_launcher%/*}
-					[ "$_graphify_dir" != "$_graphify_launcher" ] || _graphify_dir=.
-					case "$_graphify_dir" in
-						-*) _graphify_dir=./$_graphify_dir ;;
-					esac
-					_graphify_dir=$(CDPATH='' cd -P "$_graphify_dir" 2>/dev/null && pwd -P) || {
-						echo "resolve-graphify.sh: cannot resolve PATH-selected launcher directory '$_graphify_dir'" >&2
-						return 1
-					}
-					_graphify_launcher=$_graphify_dir/$_graphify_name
-					;;
+absolutize_graphify_launcher() {
+	[ "$#" -eq 1 ] || return 2
+	_graphify_launcher=$1
+	case "$_graphify_launcher" in
+		/*) ;;
+		*)
+			_graphify_name=${_graphify_launcher##*/}
+			_graphify_dir=${_graphify_launcher%/*}
+			[ "$_graphify_dir" != "$_graphify_launcher" ] || _graphify_dir=.
+			case "$_graphify_dir" in
+				-*) _graphify_dir=./$_graphify_dir ;;
 			esac
-			printf '%s\n' "$_graphify_launcher"
-			return 0
-		}
+			_graphify_dir=$(CDPATH='' cd -P "$_graphify_dir" 2>/dev/null && pwd -P) || {
+				echo "resolve-graphify.sh: cannot resolve selected launcher directory '$_graphify_dir'" >&2
+				return 1
+			}
+			_graphify_launcher=$_graphify_dir/$_graphify_name
+			;;
+	esac
+	printf '%s\n' "$_graphify_launcher"
+}
 
-	command -v uv >/dev/null 2>&1 || {
-		echo "resolve-graphify.sh: Graphify is not installed; run 'uv tool install --upgrade graphifyy' first" >&2
-		return 1
-	}
-	_graphify_uv_bin=$(uv tool dir --bin 2>/dev/null) || {
-		echo 'resolve-graphify.sh: cannot resolve uv tool executable directory' >&2
-		return 1
-	}
-	_graphify_launcher=$_graphify_uv_bin/graphify
+resolve_graphify_launcher() {
+	if _graphify_launcher=$(command -v graphify 2>/dev/null) &&
+		[ -n "$_graphify_launcher" ]; then
+		:
+	else
+		command -v uv >/dev/null 2>&1 || {
+			echo "resolve-graphify.sh: Graphify is not installed; run 'uv tool install --upgrade graphifyy' first" >&2
+			return 1
+		}
+		_graphify_uv_bin=$(uv tool dir --bin 2>/dev/null) || {
+			echo 'resolve-graphify.sh: cannot resolve uv tool executable directory' >&2
+			return 1
+		}
+		_graphify_launcher=$_graphify_uv_bin/graphify
+	fi
+
+	_graphify_launcher=$(absolutize_graphify_launcher "$_graphify_launcher") || return 1
 	[ -x "$_graphify_launcher" ] || {
 		echo "resolve-graphify.sh: Graphify launcher '$_graphify_launcher' is not executable" >&2
 		return 1
@@ -57,7 +64,8 @@ resolve_graphify_interpreter() {
 	# follow a shell wrapper selected anywhere else on PATH.
 	command -v uv >/dev/null 2>&1 || return 1
 	_graphify_uv_bin=$(uv tool dir --bin 2>/dev/null) || return 1
-	[ "$_graphify_launcher" = "$_graphify_uv_bin/graphify" ] || return 1
+	_graphify_uv_launcher=$(absolutize_graphify_launcher "$_graphify_uv_bin/graphify") || return 1
+	[ "$_graphify_launcher" = "$_graphify_uv_launcher" ] || return 1
 	_graphify_uv_tools=$(uv tool dir 2>/dev/null) || return 1
 	_graphify_interpreter=$_graphify_uv_tools/graphifyy/bin/python
 	[ -x "$_graphify_interpreter" ] || return 1
