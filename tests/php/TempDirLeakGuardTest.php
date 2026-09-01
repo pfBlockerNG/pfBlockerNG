@@ -10,8 +10,7 @@ use PHPUnit\Framework\TestCase;
  * Hand-rolled teardowns removed a fixture tree by naming the files they expected
  * to find — a glob, or a list of unlink() calls, followed by one rmdir(). Anything
  * else the test wrote (a dotfile, a nested directory) made that rmdir() fail, and
- * the whole tree survived every run until /tmp filled and unrelated tests began
- * failing with code-shaped errors.
+ * the whole tree survived every run.
  *
  * The suite already ships rmdir_recursive() (tests/php/pfsense_doubles.php), which
  * recurses with scandir() and so removes exactly what the hand-rolled versions miss.
@@ -22,7 +21,6 @@ final class TempDirLeakGuardTest extends TestCase
 {
 	/**
 	 * Test files whose teardown stranded its fixture directory before #3018.
-	 * Measured leak per run on the parent commit: 22, 18, 7, 5, 4, 1, 1, 1.
 	 *
 	 * @var list<string>
 	 */
@@ -63,23 +61,22 @@ final class TempDirLeakGuardTest extends TestCase
 			// fixture below $tmp and its residue is exactly what survives teardown.
 			$process = proc_open(
 				$command,
-				[1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+				// stderr redirected into stdout: draining one pipe fully before the
+				// other deadlocks if the nested run fills the second (issue #3018).
+				[1 => ['pipe', 'w'], 2 => ['redirect', 1]],
 				$pipes,
 				$root,
 				array_merge(getenv(), ['TMPDIR' => $tmp])
 			);
 			$this->assertIsResource($process);
 			$stdout = stream_get_contents($pipes[1]);
-			$stderr = stream_get_contents($pipes[2]);
 			fclose($pipes[1]);
-			fclose($pipes[2]);
 			$status = proc_close($process);
 
 			$this->assertSame(0, $status, sprintf(
 				"the nested fixture-teardown run FAILED; every name and message below belongs to "
-				. "that nested run, not to this guard:\n%s\n%s",
-				$stdout,
-				$stderr
+				. "that nested run, not to this guard:\n%s",
+				$stdout
 			));
 
 			$residue = array_values(array_diff(scandir($tmp) ?: [], ['.', '..']));
