@@ -56,9 +56,10 @@ def test_codex_repository_hook_integrity_pins_match() -> None:
 
 def test_landing_policy_pins_both_signed_linear_paths() -> None:
     landing = (ROOT / ".agents/policy/landing.md").read_text(encoding="utf-8")
-    assert 'gh pr merge N --squash --subject "<scope>: <summary>"' in landing
+    assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in landing
     assert "git push origin HEAD:devel" in landing
     assert "every landed commit is locally signed and verified" in landing
+    assert "PR head, local `HEAD`, and `reviewed_sha`" in landing
 
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:

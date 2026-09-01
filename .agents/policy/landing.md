@@ -163,22 +163,22 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ### Land and clean up
 
-- **GitHub-hosted path:** merge with explicit squash:
-  `gh pr merge N --squash --subject "<scope>: <summary>" --body "<body>"`.
-  Never request `--merge` or `--rebase`; repository settings keep both disabled.
-  **Verify the merge actually landed:** PR's state must read `MERGED`.
-  Run `git fetch origin` after that verification and require the landed commit to be
-  GitHub-signed.
-- **Maintainer-local path:** immediately fetch `origin`. If `origin/devel` moved since
-  the reviewed exact head was based, rebase, push the branch, and repeat affected review
-  plus exact-head CI before landing. Otherwise verify every commit in
-  `origin/devel..HEAD` is signed and valid, then run `git push origin HEAD:devel` with no
-  force option. A race rejects the fast-forward; stop, never retry by force. Fetch and
-  require both `origin/devel` and the reviewed head to name the same commit.
-- **Do not pass `--delete-branch`** to GitHub merge commands: its local post-merge step
-  checks out the base and fails when another worktree holds it. Delete the remote branch
-  separately after the landing result is verified.
-- Delete the remote branch separately (`git push origin --delete <head>`).
+- Bind `reviewed_sha=$(git rev-parse HEAD)` when review and exact-head CI close. Immediately
+  before either path, re-read and require the PR head, local `HEAD`, and `reviewed_sha` to
+  match; any mismatch restarts affected review and CI.
+- **GitHub-hosted path:** run
+  `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
+  Repository settings keep `--merge` and `--rebase` disabled. **Verify the merge actually
+  landed:** PR's state must read `MERGED`. Run `git fetch origin` after that verification
+  and require the landed commit to be GitHub-signed.
+- **Maintainer-local path:** fetch `origin`. If `origin/devel` moved, rebase, push the
+  branch, and repeat affected review plus exact-head CI. Otherwise recheck the three-way
+  head identity before push and before terminal PR/issue synchronization, verify every
+  commit in `origin/devel..HEAD`, then run `git push origin HEAD:devel` without force.
+  A race rejects the fast-forward; stop, never force. Fetch and require `origin/devel`
+  and `reviewed_sha` to match.
+- Do not pass `--delete-branch` to GitHub merge commands. After verifying either path,
+  delete the remote branch separately: `git push origin --delete <head>`.
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
   `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup
   requires `deleted`. For any other branch-deletion outcome, retain the local branch
