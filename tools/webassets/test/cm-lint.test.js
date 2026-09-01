@@ -100,11 +100,44 @@ test("lezerErrorLint returns a linter extension (shape-level)", () => {
 test("lezerErrorDiagnostics flags unbalanced '(' with a non-empty range within the doc", () => {
   const doc = "(";
   const diags = lezerErrorDiagnostics(parsedState(doc));
-  assert.ok(diags.length > 0, "expected at least one error diagnostic for unbalanced '('");
+  assert.ok(diags.length > 0, "expected at least one diagnostic for unbalanced '('");
   for (const d of diags) {
-    assert.equal(d.severity, "error");
+    assert.equal(d.severity, "warning");
     assert.ok(d.to > d.from || d.from < doc.length, "expected a non-empty/visible range within the doc");
     assert.ok(d.from >= 0 && d.to <= doc.length, "expected the range to stay within the doc");
+  }
+});
+
+// issue #3059: this checker is a second implementation of Python's regex parser and
+// cannot be certain. Python gates the save, so under-reporting is harmless while
+// over-reporting makes people edit working rules until the marker goes away.
+test("lezerErrorDiagnostics reports a parse failure as a warning, never an error", () => {
+  for (const doc of ["(", "[", "(a"]) {
+    for (const d of lezerErrorDiagnostics(parsedState(doc))) {
+      assert.equal(d.severity, "warning", `severity for ${JSON.stringify(doc)}`);
+    }
+  }
+});
+
+test("lezerErrorDiagnostics does not assert a cause it has not established", () => {
+  const [d] = lezerErrorDiagnostics(parsedState("("));
+  assert.ok(d, "expected a diagnostic");
+  assert.doesNotMatch(
+    d.message,
+    /unbalanced|unclosed/i,
+    "the walk only knows the grammar failed; it must not claim which construct is at fault",
+  );
+  assert.match(d.message, /validated on save by Python/i, "the message must point at the authoritative gate");
+});
+
+// issue #3063: the grammar mis-parses a '?' quantifier followed by an inline-flag
+// letter, so this real pattern from a maintainer's live config is flagged even though
+// Python compiles it and it blocks correctly. Until that is fixed, the diagnostic it
+// produces must not claim the pattern is a syntax error.
+test("a valid real-world rule that trips the grammar is a warning, not an error", () => {
+  const doc = "^(.+[-_.])?m?ad[sxv]?[0-9]*[-_.] #R1";
+  for (const d of lezerErrorDiagnostics(parsedState(doc))) {
+    assert.equal(d.severity, "warning", "a pattern Python accepts must never be marked an error");
   }
 });
 
