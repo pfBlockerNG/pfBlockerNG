@@ -1457,3 +1457,8 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
         "wheel": "0.46.2",
         "zstandard": "0.25.0",
     }
+    assert bdp._BUILD_TOOLCHAIN == {
+        "python": (root / ".python-version").read_text(encoding="utf-8").strip(),
+        **{name: versions[name] for name in ("pip", "setuptools", "wheel", "zstandard")},
+    }
+    assert bdp._UV_VERSION == versions["uv"]

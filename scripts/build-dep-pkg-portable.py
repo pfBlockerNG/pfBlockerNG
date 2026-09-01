@@ -80,8 +80,8 @@ _REPO_ROOT = _THIS_DIR.parent
 _BUILD_TOOLCHAIN = {
     "python": "3.11.15",
     "pip": "26.2.1",
-    "setuptools": "75.6.0",
-    "wheel": "0.45.1",
+    "setuptools": "83.0.0",
+    "wheel": "0.46.2",
     "zstandard": "0.25.0",
 }
 _UV_VERSION = "0.12.6"
