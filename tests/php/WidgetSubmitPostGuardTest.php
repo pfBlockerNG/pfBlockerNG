@@ -92,9 +92,11 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		// out of $base with the hook deleted would leave this green while leaking. Assert
 		// where it was before asserting the window is empty.
 		//
-		// There is deliberately no assertDirectoryDoesNotExist($result['shim']) here:
-		// runWidget() sweeps $base before it returns, so by this point a path inside $base
-		// is gone whether or not the widget's hook ran. It could never fail.
+		// There is deliberately no assertDirectoryDoesNotExist($result['shim']) after the
+		// location assertion below: runWidget() sweeps $base before it returns, so a path
+		// already confirmed inside $base is gone whether or not the widget's hook ran.
+		// Placed BEFORE the location assertion it would fire on a relocated shim -- but
+		// that is the location assertion's job, and it reports the cause accurately.
 		$this->assertStringStartsWith($result['base'] . '/', $result['shim'],
 			'the shim must be created inside the observed base, or the residue check watches nothing');
 		$this->assertSame([], $result['residue'],
