@@ -66,11 +66,13 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in hosted_policy
     assert "only with an atomic strict-base gate; otherwise use local" in hosted_policy
     assert "--delete-branch" not in hosted_policy
+    assert "require the exact landed squash commit OID to be GitHub-signed" in hosted_policy
 
     for checkpoint in (
         "git fetch origin",
         'git fetch origin "pull/N/head"',
         'remote_pr_head="$(git rev-parse FETCH_HEAD)"',
+        'local_head="$(git rev-parse HEAD)"',
         'test "$remote_pr_head" = "$reviewed_sha"',
         'test "$local_head" = "$reviewed_sha"',
         "origin/devel == reviewed_base",
@@ -87,21 +89,37 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert base_fetch < fence_call < base_guard < hosted
 
     local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
+    assert "require `origin/devel == reviewed_sha`" in local
     pre_push_fence = local.index("Immediately before push, run the PR head fence")
     push = local.index("git push origin HEAD:devel")
     post_push_fence = local.index("After push, fetch `origin`, run the PR head fence again")
     evidence = local.index("post landed evidence")
+    state_read = local.index("read the PR state")
+    merged_state = local.index("If it is `MERGED`")
+    open_state = local.index("If it is `OPEN`")
     close = local.index("close the PR and issue")
     terminal = local.index("verify both terminal states")
     delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
     closed_rollback = local.index("If the PR is `CLOSED`")
     merged_outcome = local.index("If it is already `MERGED`")
     new_pr = local.index("route newer head commits to a new PR")
-    assert pre_push_fence < push < post_push_fence < evidence < close < terminal < delete
+    assert pre_push_fence < push < post_push_fence < evidence < state_read
+    assert state_read < merged_state < open_state < close < terminal < delete
     assert delete < closed_rollback < merged_outcome < new_pr
     assert "before push and before terminal PR/issue synchronization" in local
+    assert "stop; do not clean up" in local
+    assert "retain the remote head and worktree; stop; do not clean up" in local
+    assert "If the PR is `CLOSED`, reopen the PR and issue" in local
+    assert "If it is already `MERGED`, keep terminal state and route newer head commits to a new PR" in local
+    success_cleanup = merge.index("Only after leased deletion succeeds")
+    outside_cleanup = merge.index("From OUTSIDE")
+    assert new_pr < success_cleanup < outside_cleanup
     assert "restart affected review plus exact-head CI" in merge
     assert "every landed commit is locally signed and verified" in landing
+
+    issues = (ROOT / ".agents/policy/issues.md").read_text(encoding="utf-8")
+    assert "GitHub squash or indirect local fast-forward" in issues
+    assert "Local fast-forward not inferred as `MERGED`" in issues
 
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:

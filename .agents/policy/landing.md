@@ -4,8 +4,7 @@ Scope: PR review and signed-linear landing. Load when: landing a PR or applying 
 
 - **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
-See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and
-[`coderabbit.md`](coderabbit.md) for review, wait, and spend rules.
+See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](coderabbit.md).
 
 ## Fixed floors (never weaken)
 
@@ -173,25 +172,24 @@ Poll until every **required** check complete, excluding only the advisory contex
   restart affected review plus exact-head CI.
 - **GitHub-hosted path:** only with an atomic strict-base gate; otherwise use local. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
-  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification and require a GitHub-signed commit.
-- **Maintainer-local path:** if the base moved, rebase, push the branch, and repeat review
-  plus CI. The PR head fence runs before push and before terminal PR/issue synchronization.
+  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification and require the exact landed squash commit OID to be GitHub-signed.
+- **Maintainer-local path:** if the base moved, rebase, push, and repeat review plus CI.
+  The PR head fence runs before push and before terminal PR/issue synchronization.
   Immediately before push, run the PR head fence, verify every commit, then run
   `git push origin HEAD:devel` without force. After push, fetch `origin`, run the PR head fence again,
-  require `origin/devel == reviewed_sha`, post landed evidence, close the PR and issue,
-  and verify both terminal states; retain the worktree.
+  require `origin/devel == reviewed_sha`, post landed evidence, and read the PR state.
+  If it is `MERGED`, verify the linked issue completed. If it is `OPEN`, close the PR and issue.
+  Any other state stops. Then verify both terminal states and retain the worktree.
 - Delete the remote head with
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
-  On lease failure, retain it and the worktree. If the PR is `CLOSED`, reopen the PR and issue
+  On lease failure, retain the remote head and worktree; stop; do not clean up. If the PR is `CLOSED`, reopen the PR and issue
   and restart review. If it is already `MERGED`, keep terminal state and route newer head commits to a new PR.
   Do not pass `--delete-branch` to GitHub merge commands.
-- From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
-  `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup
-  requires `deleted`. For any other branch-deletion outcome, retain the local branch
-  and report why cleanup is incomplete rather than forcing deletion. Without `wt`,
-  retain the safe Git flow: `git worktree remove <path>` followed by
-  `git branch -d <head>`. Never force removal or branch deletion here; report a dirty
-  or unintegrated worktree instead.
+- Only after leased deletion succeeds, From OUTSIDE the worktree prefer
+  `wt remove --foreground --format=json --yes <head>`. Inspect and report its JSON `branch_outcome`;
+  cleanup requires `deleted`. For any other branch-deletion outcome, retain the local branch
+  and report incomplete cleanup. Without `wt`, use `git worktree remove <path>` then
+  `git branch -d <head>`. Never force removal or branch deletion here.
 
 ## Post-merge
 
