@@ -1,6 +1,6 @@
 # PR landing — the contract
 
-Scope: PR landing — review sources, adversarial reviewer contract, finding intake, landing gate, CI waits, post-landing. Load when: landing PR or applying review findings.
+Scope: PR review and signed-linear landing. Load when: landing a PR or applying findings.
 
 - **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
@@ -178,10 +178,12 @@ Poll until every **required** check complete, excluding only the advisory contex
   review plus exact-head CI. Otherwise recheck the three-way head identity
   before push and before terminal PR/issue synchronization, verify every commit, then run
   `git push origin HEAD:devel` without force. Fetch and require `origin/devel == reviewed_sha`,
-  repeat both head tests, post landed evidence, close the PR and issue, and verify both
-  terminal states while retaining the worktree.
+  repeat both head tests, post landed evidence, close the PR and issue, and verify both terminal states;
+  retain the worktree.
 - Delete the remote head only if it still equals `reviewed_sha`:
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
+  If that lease fails after local closure, reopen the PR and issue, retain the worktree,
+  and restart review; the terminal-state claim is void.
   Do not pass `--delete-branch` to GitHub merge commands.
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
   `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup

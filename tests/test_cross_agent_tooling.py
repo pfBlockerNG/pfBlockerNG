@@ -60,32 +60,44 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     head_binding = merge.index("reviewed_sha=$(git rev-parse HEAD)")
     base_binding = merge.index("reviewed_base=$(git rev-parse origin/devel)")
     hosted = merge.index("**GitHub-hosted path:**")
+    local_start = merge.index("**Maintainer-local path:**")
     assert head_binding < base_binding < hosted
-    assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in merge
-    assert "atomic strict-base gate" in merge
+    hosted_policy = merge[hosted:local_start]
+    assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in hosted_policy
+    assert "only with an atomic strict-base gate; otherwise use local" in hosted_policy
+    assert "--delete-branch" not in hosted_policy
 
-    steps = merge
     for checkpoint in (
         "git fetch origin",
         'git fetch origin "pull/N/head"',
         'remote_pr_head="$(git rev-parse FETCH_HEAD)"',
         'test "$remote_pr_head" = "$reviewed_sha"',
         'test "$local_head" = "$reviewed_sha"',
+        "origin/devel == reviewed_base",
     ):
-        assert checkpoint in steps
-    base_fetch = steps.index("git fetch origin")
-    pr_fetch = steps.index('git fetch origin "pull/N/head"')
-    resolve = steps.index('remote_pr_head="$(git rev-parse FETCH_HEAD)"')
-    remote_guard = steps.index('test "$remote_pr_head" = "$reviewed_sha"')
-    local_guard = steps.index('test "$local_head" = "$reviewed_sha"')
-    recheck = steps.index("recheck the three-way")
-    push = steps.index("git push origin HEAD:devel")
-    close = steps.index("close the PR")
-    delete = steps.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
-    assert base_fetch < pr_fetch < resolve < remote_guard
-    assert local_guard < hosted < recheck < push < close < delete
-    assert "before push and before terminal PR/issue synchronization" in steps
-    assert "restart affected review plus exact-head CI" in steps
+        assert checkpoint in merge
+    base_fetch = merge.index("git fetch origin")
+    pr_fetch = merge.index('git fetch origin "pull/N/head"')
+    resolve = merge.index('remote_pr_head="$(git rev-parse FETCH_HEAD)"')
+    remote_guard = merge.index('test "$remote_pr_head" = "$reviewed_sha"')
+    local_guard = merge.index('test "$local_head" = "$reviewed_sha"')
+    base_guard = merge.index("origin/devel == reviewed_base")
+    assert base_binding < base_fetch < pr_fetch < resolve < remote_guard < base_guard < hosted
+    assert local_guard < hosted
+
+    local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
+    recheck = local.index("recheck the three-way")
+    push = local.index("git push origin HEAD:devel")
+    post_fetch = local.index("Fetch and require")
+    repeat_heads = local.index("repeat both head tests")
+    evidence = local.index("post landed evidence")
+    close = local.index("close the PR and issue")
+    terminal = local.index("verify both terminal states")
+    delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
+    rollback = local.index("reopen the PR and issue")
+    assert recheck < push < post_fetch < repeat_heads < evidence < close < terminal < delete < rollback
+    assert "before push and before terminal PR/issue synchronization" in local
+    assert "restart affected review plus exact-head CI" in merge
     assert "every landed commit is locally signed and verified" in landing
 
 
