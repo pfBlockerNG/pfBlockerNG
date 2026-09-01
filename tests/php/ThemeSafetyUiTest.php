@@ -68,6 +68,9 @@ final class ThemeSafetyUiTest extends TestCase
 			'$tr_style = \'background-color: #F5FBF6;\';',
 			'<span style="font-size:12px; background-color: #424242;">',
 			'<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>',
+			// issue #3016: a literal that is merely APPENDED to is still a literal --
+			// widening isInterpolated() for concatenation must not launder this.
+			"el.style = 'background-color: #f0f0f0' + suffix;",
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
@@ -84,6 +87,14 @@ final class ThemeSafetyUiTest extends TestCase
 			'setAttribute(\'style\', "background: {$pfb[$u_key]}")',
 			// issue #2962: the JS mirror of the PHP row above -- scan() reads .js too.
 			'const s = `background-color: ${theme.bg}`;',
+			// issue #3016: var() is the CSS mirror of ${} -- the value is resolved from a
+			// custom property. It needs no .css file; an inline style attribute in a
+			// scanned .php file is enough.
+			'.pfb-subhdr { background-color: var(--pfb-bg); }',
+			'<span style="background-color: var(--pfb-bg);">Failed</span>',
+			// issue #3016: string concatenation is the pre-template-literal JS idiom for
+			// the same thing -- the colour position holds an operator, not a colour.
+			"el.style = 'background-color: ' + theme.bg + ';';",
 			'colors: { background: null, segmentStroke: "#ffffff" }',
 		];
 		foreach ($good as $src) {
@@ -1212,9 +1223,16 @@ final class ThemeSafetyUiTest extends TestCase
 	private static function isInterpolated(string $value): bool
 	{
 		// '{$' is PHP, '${' a JS template literal -- scan() reads both (issue #2962).
+		// 'var(' is the CSS mirror of those: the value is resolved from a custom
+		// property, not written here. A LEADING '+' is the pre-template-literal JS
+		// idiom -- the colour position holds a concatenation operator, so the value
+		// is computed too (issue #3016). Anchoring on the leading operator is what
+		// keeps a real literal that is merely appended to ('#f0f0f0' + suffix) a hit.
 		return str_contains($value, '{$')
 			|| str_contains($value, '${')
-			|| (bool)preg_match('/\$[a-zA-Z_]/', $value);
+			|| (bool)preg_match('/\$[a-zA-Z_]/', $value)
+			|| (bool)preg_match('/\bvar\(/i', $value)
+			|| (bool)preg_match('/^\+\s*\S/', $value);
 	}
 
 	private static function isTranslucent(string $value): bool
