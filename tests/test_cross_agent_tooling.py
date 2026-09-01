@@ -56,10 +56,20 @@ def test_codex_repository_hook_integrity_pins_match() -> None:
 
 def test_landing_policy_pins_both_signed_linear_paths() -> None:
     landing = (ROOT / ".agents/policy/landing.md").read_text(encoding="utf-8")
-    assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in landing
-    assert "git push origin HEAD:devel" in landing
+    merge = extract_between(landing, "## Merge step", "## Post-merge")
+    binding = merge.index("reviewed_sha=$(git rev-parse HEAD)")
+    hosted = merge.index("**GitHub-hosted path:**")
+    assert binding < hosted
+    assert 'gh pr merge N --squash --match-head-commit "$reviewed_sha"' in merge
+
+    local = extract_between(merge, "**Maintainer-local path:**", "Do not pass `--delete-branch`")
+    fetch = local.index("fetch `origin`")
+    recheck = local.index("recheck the three-way")
+    push = local.index("git push origin HEAD:devel")
+    assert fetch < recheck < push
+    assert "before push and before terminal PR/issue synchronization" in local
     assert "every landed commit is locally signed and verified" in landing
-    assert "PR head, local `HEAD`, and `reviewed_sha`" in landing
+    assert "PR head, local `HEAD`, and `reviewed_sha`" in merge
 
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:
