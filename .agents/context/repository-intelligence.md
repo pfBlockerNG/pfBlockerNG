@@ -19,9 +19,10 @@ Load when: every agent session, from `AGENTS.md`.
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
   installs or upgrades `graphifyy>=0.9.51` with `uv` and runs
   `scripts/agent/patch-graphify.sh`, before activating `.githooks`.
-  `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH` and only
-  when none exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper
-  remains authoritative and fails closed. A Python shebang is used directly. Only the
+  `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
+  physically absolutizes a relative selection before returning it, and only when none
+  exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper remains
+  authoritative and fails closed. A Python shebang is used directly. Only the
   exact uv-owned launcher may use uv's `/bin/sh` trampoline, in which case the resolver
   validates and uses the `graphifyy` tool environment's Python. Missing `uv` or a
   launcher/interpreter that cannot import its selected Graphify package fails closed.
@@ -39,9 +40,10 @@ Load when: every agent session, from `AGENTS.md`.
   Until a release includes Graphify-Labs/graphify#3075, the fix rides as
   `.agents/patches/graphify-3075-language-overrides.patch`. The tracked
   `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify.sh` emits the
-  validated executable launcher path; `ensure-graphify-merge-driver.sh` captures and
-  quotes that path for target-rooted `hook install`; `init-worktree-tools.sh` resolves
-  the same launcher for update; and `.githooks/pre-commit` resolves and patches again
+  validated absolute executable launcher path; `ensure-graphify-merge-driver.sh`
+  captures and quotes that path for target-rooted `hook install`;
+  `init-worktree-tools.sh` resolves the same launcher for update; and
+  `.githooks/pre-commit` resolves and patches again
   before its no-staged-files exit, repairing a bare Graphify upgrade in a fresh process
   before the post-commit rebuild. The include-node floor in
   `tests/test_cross_agent_tooling.py`

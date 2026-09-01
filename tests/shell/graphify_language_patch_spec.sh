@@ -36,6 +36,35 @@ INTERPRETER
     chmod +x "$1"
   }
 
+  make_uv_trampoline_fixture() {
+    uv_tool_dir="$fixture/home with spaces/.local/share/uv/tools"
+    uv_tool_bin="$fixture/home with spaces/.local/bin"
+    uv_python="$uv_tool_dir/graphifyy/bin/python"
+    make_interpreter "$uv_python"
+    mkdir -p "$uv_tool_bin"
+    {
+      printf '#!/bin/sh\n'
+      printf "'''exec' '%s' \"\$0\" \"\$@\"\n" "$uv_python"
+      printf "' '''\n"
+      printf 'exit 0\n'
+    } > "$uv_tool_bin/graphify"
+    chmod +x "$uv_tool_bin/graphify"
+    resolver_path="$fixture/resolver path"
+    mkdir -p "$resolver_path"
+    for tool in dirname grep patch sed sh; do
+      ln -s "$(command -v "$tool")" "$resolver_path/$tool"
+    done
+    cat > "$resolver_path/uv" <<UV
+#!/bin/sh
+case "\$*" in
+  'tool dir --bin') printf '%s\n' '$uv_tool_bin' ;;
+  'tool dir') printf '%s\n' '$uv_tool_dir' ;;
+  *) exit 9 ;;
+esac
+UV
+    chmod +x "$resolver_path/uv"
+  }
+
   # A real uv tool venv, built for the decoy example, which needs a REAL interpreter: a
   # stub can neither honour nor ignore -I, so no example resting on one can observe the
   # isolation. A symlinked python3 plus a pyvenv.cfg naming its home makes that
@@ -187,38 +216,46 @@ RCFILE
 
 
   It 'patches through a real-shape uv shell trampoline under a tool path with spaces'
-    uv_tool_dir="$fixture/home with spaces/.local/share/uv/tools"
-    uv_tool_bin="$fixture/home with spaces/.local/bin"
-    uv_python="$uv_tool_dir/graphifyy/bin/python"
-    make_interpreter "$uv_python"
-    mkdir -p "$uv_tool_bin"
-    {
-      printf '#!/bin/sh\n'
-      printf "'''exec' '%s' \"\$0\" \"\$@\"\n" "$uv_python"
-      printf "' '''\n"
-      printf 'exit 0\n'
-    } > "$uv_tool_bin/graphify"
-    chmod +x "$uv_tool_bin/graphify"
-    resolver_path="$fixture/resolver path"
-    mkdir -p "$resolver_path"
-    for tool in dirname grep patch sed sh; do
-      ln -s "$(command -v "$tool")" "$resolver_path/$tool"
-    done
-    cat > "$resolver_path/uv" <<UV
-#!/bin/sh
-case "\$*" in
-  'tool dir --bin') printf '%s\n' '$uv_tool_bin' ;;
-  'tool dir') printf '%s\n' '$uv_tool_dir' ;;
-  *) exit 9 ;;
-esac
-UV
-    chmod +x "$resolver_path/uv"
+    make_uv_trampoline_fixture
     When run env PATH="$resolver_path" sh "$script_abs"
     The status should equal 0
     The stderr should include 'applied Graphify-Labs/graphify#3075'
     The stderr should include "$package"
     The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
     The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
+  End
+
+  Context 'uv-owned shell trampoline shape validation'
+    Parameters
+      1
+      2
+      3
+    End
+
+    It "fails closed when uv-owned trampoline line $1 is malformed"
+      make_uv_trampoline_fixture
+      line1='#!/bin/sh'
+      line2="'''exec' '$uv_python' \"\$0\" \"\$@\""
+      line3="' '''"
+      case "$1" in
+        1) line1='#!/bin/sh -e' ;;
+        2) line2="'''exec' '$uv_python' \"\$0\" \"\$*\"" ;;
+        3) line3="' ''" ;;
+      esac
+      {
+        printf '%s\n' "$line1"
+        printf '%s\n' "$line2"
+        printf '%s\n' "$line3"
+        printf 'exit 0\n'
+      } > "$uv_tool_bin/graphify"
+      chmod +x "$uv_tool_bin/graphify"
+      cp -R "$package" "$fixture/package.before"
+      When run env PATH="$resolver_path" sh "$script_abs"
+      The status should not equal 0
+      The stderr should include 'does not name a Python interpreter on its shebang or a validated uv trampoline'
+      The path "$package/rcfile.py" should not be exist
+      Assert [ -z "$(diff -r "$fixture/package.before" "$package")" ]
+    End
   End
   It 'fails closed when the graphify shebang does not name a Python interpreter'
     # The ambient python3 is NOT a fallback: another interpreter imports another

@@ -244,7 +244,7 @@ in `read-version-matrix.sh`.
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: install/patch Graphify, point git at `.githooks`, and initialize CodeGraph when installed. |
 | [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade plus temporary `.inc=php` patch entry point. |
-| [`agent/resolve-graphify.sh`](agent/resolve-graphify.sh) | Prefer the PATH-selected Graphify launcher, otherwise resolve uv's direct launcher and validate its owning Python without trusting arbitrary wrappers. |
+| [`agent/resolve-graphify.sh`](agent/resolve-graphify.sh) | Prefer and physically absolutize the PATH-selected Graphify launcher; otherwise resolve uv's direct launcher and validate its owning Python without trusting arbitrary wrappers. |
 | [`agent/patch-graphify.sh`](agent/patch-graphify.sh) | Idempotently apply Graphify-Labs/graphify#3075; fails closed when the selected launcher cannot identify its package. |
 | [`agent/ensure-codegraph.sh`](agent/ensure-codegraph.sh) | Idempotently create an exact-root CodeGraph index for one checkout. |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
