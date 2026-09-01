@@ -129,7 +129,7 @@ on:
         required: false
         default: "[]"
       dep_artifact:
-        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<concurrency_key-or-non-live>-<image_name>-<pfsense_version>-s<shard>."
         required: false
         default: ""
       checkout_ref:
@@ -260,7 +260,7 @@ on:
         type: string
         default: "[]"
       dep_artifact:
-        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<concurrency_key-or-non-live>-<image_name>-<pfsense_version>-s<shard>."
         required: false
         type: string
         default: ""
@@ -329,7 +329,7 @@ jobs:
       # artifact_name input; the dep download below repeats the dep literal), so the
       # major-collapse naming that matters for cross-workflow/cross-run consumers
       # (release.yml/smoke.yml) buys nothing here.
-      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+      artifact_name: pfBlockerNG-pkg-${{ inputs.concurrency_key || 'non-live' }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
       # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
@@ -341,11 +341,10 @@ jobs:
       # uploads its dep artifact, which the "Download dep packages" step below
       # (same workflow, same run) then downloads.
       extra_pkgs: ${{ inputs.extra_pkgs }}
-      # W1: mirror artifact_name's OWN discriminator (image_name + pfsense_version + shard) — this
-      # build-pkg job's matrix (indirectly, one invocation per caller-side leg)
-      # can share a run with sibling invocations of THIS reusable workflow (e.g.
-      # repo-install.yml's fan-out); the plain per-major default would collide.
-      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
+      # W1: mirror artifact_name's route + image + version + shard identity.
+      # Sibling channels share a run, so route-blind names collide in the
+      # nested build workflow.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.concurrency_key || 'non-live' }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
@@ -612,7 +611,7 @@ jobs:
         if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
         uses: actions/download-artifact@v7
         with:
-          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-{1}-s{2}', inputs.image_name, inputs.pfsense_version, inputs.shard) }}
+          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-{1}-{2}-s{3}', inputs.concurrency_key || 'non-live', inputs.image_name, inputs.pfsense_version, inputs.shard) }}
           path: deppkgs
 
       - name: Export SMOKE_DEP_PKGS
