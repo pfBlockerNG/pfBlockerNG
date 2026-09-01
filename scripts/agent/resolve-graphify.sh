@@ -70,11 +70,12 @@ resolve_graphify_interpreter() {
 	_graphify_interpreter=$_graphify_uv_tools/graphifyy/bin/python
 	[ -x "$_graphify_interpreter" ] || return 1
 
+	_graphify_interpreter_token=$("$_graphify_interpreter" -I -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$_graphify_interpreter") || return 1
 	_graphify_line1=$(sed -n '1p' "$_graphify_launcher")
 	_graphify_line2=$(sed -n '2p' "$_graphify_launcher")
 	_graphify_line3=$(sed -n '3p' "$_graphify_launcher")
 	[ "$_graphify_line1" = '#!/bin/sh' ] || return 1
-	[ "$_graphify_line2" = "'''exec' '$_graphify_interpreter' \"\$0\" \"\$@\"" ] || return 1
+	[ "$_graphify_line2" = "'''exec' $_graphify_interpreter_token \"\$0\" \"\$@\"" ] || return 1
 	[ "$_graphify_line3" = "' '''" ] || return 1
 	"$_graphify_interpreter" -I -c 'import graphify' >/dev/null 2>&1 || return 1
 	printf '%s\n' "$_graphify_interpreter"
