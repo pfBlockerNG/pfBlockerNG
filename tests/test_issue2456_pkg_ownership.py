@@ -157,6 +157,35 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
         self.assertEqual(concurrency["group"], f"{key_expression}-{shared_axes}")
         self.assertIs(concurrency["cancel-in-progress"], False)
 
+        build_inputs = smoke["jobs"]["build-pkg"]["with"]
+        artifact_axes = "${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}"
+        self.assertEqual(build_inputs["artifact_name"], f"pfBlockerNG-pkg-{key_expression}-{artifact_axes}")
+        self.assertEqual(build_inputs["dep_artifact_name"], f"pfBlockerNG-deppkgs-{key_expression}-{artifact_axes}")
+
+        nested_build = yaml.safe_load((WORKFLOWS / "build-pkg-linux.yml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            nested_build["concurrency"]["group"],
+            "${{ github.workflow }}-${{ inputs.artifact_name }}-${{ github.ref }}",
+        )
+        pkg_download = next(
+            step
+            for step in smoke["jobs"]["smoke"]["steps"]
+            if step.get("name") == "Download the built pfBlockerNG package"
+        )
+        self.assertEqual(
+            pkg_download["with"]["name"],
+            "${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}",
+        )
+        dep_download = next(
+            step for step in smoke["jobs"]["smoke"]["steps"] if step.get("name") == "Download dep packages"
+        )
+        self.assertEqual(
+            dep_download["with"]["name"],
+            "${{ inputs.dep_artifact != '' && inputs.dep_artifact || "
+            "format('pfBlockerNG-deppkgs-{0}-{1}-{2}-s{3}', inputs.concurrency_key || 'non-live', "
+            "inputs.image_name, inputs.pfsense_version, inputs.shard) }}",
+        )
+
         tagged_inputs = yaml.safe_load(TAGGED.read_text(encoding="utf-8"))["jobs"]["validate-live-pages-install"][
             "with"
         ]
