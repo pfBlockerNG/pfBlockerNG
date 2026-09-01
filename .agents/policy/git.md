@@ -62,8 +62,8 @@ as integrated; landing observes the foreground result.
 - Name branch for its work item — `adr/{NN}-{slug}` / `issue/{NN}-{slug}`.
 - Gotchas: `git worktree remove` fails from inside tree — run from any directory
   outside tree being removed (primary checkout works; session worktree too).
-  `gh pr merge --delete-branch` can't check out base another worktree holds — verify
-  merge landed, then `git push origin --delete <branch>`.
+  Never pass `--delete-branch`; after terminal verification use the expected-value cleanup:
+  `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
 - Each worktree owns its Composer `vendor/` tree; never share or symlink `vendor/` between
   worktrees. Run `composer install --no-interaction` in current worktree.
 

@@ -121,6 +121,10 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "GitHub squash or indirect local fast-forward" in issues
     assert "Local fast-forward not inferred as `MERGED`" in issues
 
+    git_policy = (ROOT / ".agents/policy/git.md").read_text(encoding="utf-8")
+    assert "git push origin --delete <branch>" not in git_policy
+    assert "--force-with-lease=refs/heads/<head>:<reviewed_sha>" in git_policy
+
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:
     # Copilot CLI exports COPILOT_CLI into every shell it spawns, so detection is
