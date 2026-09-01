@@ -12,21 +12,16 @@ use PHPUnit\Framework\TestCase;
  * and marks valid patterns (issue #3063). Nothing in the UI told a user the marker
  * could be wrong, so the natural response was to edit a working rule until it
  * cleared -- silently weakening their blocking.
+ *
+ * The rendered string is taken from the function, not scraped out of the file: a
+ * scrape pins the shape of the source (how the value is returned) rather than the
+ * prose, and fails on a refactor that changes nothing a user sees.
  */
 final class DnsblRegexHelpCheckerTest extends TestCase
 {
 	private static function helpText(): string
 	{
-		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');
-		if ($source === FALSE) {
-			throw new RuntimeException('failed to read pfblockerng_extra.inc');
-		}
-		self::assertSame(
-			1,
-			preg_match('/function pfb_dnsbl_regex_help_text\(\): string\s*\{\s*return (.*?);\s*\}/s', $source, $m),
-			'pfb_dnsbl_regex_help_text() must exist and return a single expression'
-		);
-		return $m[1];
+		return pfb_dnsbl_regex_help_text();
 	}
 
 	public function testHelpNamesPythonAsTheAuthoritativeValidator(): void
@@ -46,39 +41,39 @@ final class DnsblRegexHelpCheckerTest extends TestCase
 
 	public function testHelpWarnsTheInlineCheckerCanFlagAValidPattern(): void
 	{
-		$help = self::helpText();
 		self::assertMatchesRegularExpression(
-			'/editing aid|may flag a valid pattern/i',
-			$help,
+			'/editing aid/i',
+			self::helpText(),
 			'the help must tell the user an inline marker is not proof the pattern is wrong'
 		);
 	}
 
 	public function testHelpLinksThePythonReSyntaxReference(): void
 	{
-		$help = self::helpText();
 		self::assertStringContainsString(
 			'docs.python.org/3/library/re.html',
-			$help,
+			self::helpText(),
 			'the help must link the Python re syntax reference'
 		);
 	}
 
 	/**
-	 * Every external link on this page carries the house attributes;
-	 * scripts/check_noopener.py enforces the rel, and this pins the pairing
-	 * at the one site this issue adds.
+	 * scripts/check_noopener.py scans `src/usr/local/www` only, and this help lives
+	 * under `src/usr/local/pkg`, so the repo-wide gate never sees these links. This
+	 * assertion is what pins them.
 	 */
 	public function testExternalLinksCarryTargetAndRel(): void
 	{
 		$help = self::helpText();
+		$links = preg_match_all('/<a\s[^>]*href="https:/', $help);
+		self::assertGreaterThan(0, $links, 'expected at least one external link to pin');
 		self::assertSame(
-			preg_match_all('/<a\s[^>]*href="https:/', $help),
+			$links,
 			preg_match_all('/<a\s[^>]*rel="noopener noreferrer"[^>]*>/', $help),
 			'every https link in this help must carry rel="noopener noreferrer"'
 		);
 		self::assertSame(
-			preg_match_all('/<a\s[^>]*href="https:/', $help),
+			$links,
 			preg_match_all('/<a\s[^>]*target="_blank"[^>]*>/', $help),
 			'every https link in this help must open in a new tab'
 		);
