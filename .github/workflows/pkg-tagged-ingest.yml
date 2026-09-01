@@ -25,7 +25,7 @@ on:
         required: true
         type: string
     secrets:
-      PKG_GITHUB_APP_ID:
+      PKG_GITHUB_APP_CLIENT_ID:
         required: true
       PKG_GITHUB_APP_PRIVATE_KEY:
         required: true
@@ -52,7 +52,7 @@ jobs:
         id: pkg-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          client-id: ${{ secrets.PKG_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
@@ -176,7 +176,7 @@ jobs:
         id: pkg-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          client-id: ${{ secrets.PKG_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
