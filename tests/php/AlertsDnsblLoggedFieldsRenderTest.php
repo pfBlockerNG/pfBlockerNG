@@ -85,22 +85,7 @@ final class AlertsDnsblLoggedFieldsRenderTest extends TestCase
 				$GLOBALS[$g] = $v;
 			}
 		}
-		$this->rrmdir($this->tmp);
-	}
-
-	private function rrmdir(string $dir): void
-	{
-		if (!is_dir($dir)) {
-			return;
-		}
-		foreach (scandir($dir) as $f) {
-			if ($f === '.' || $f === '..') {
-				continue;
-			}
-			$p = "{$dir}/{$f}";
-			is_dir($p) ? $this->rrmdir($p) : @unlink($p);
-		}
-		@rmdir($dir);
+		rmdir_recursive($this->tmp);
 	}
 
 	/** Seed the OLD grep path's data file with one NDJSON row for $domain (schema v1). */

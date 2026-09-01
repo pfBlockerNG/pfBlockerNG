@@ -46,13 +46,7 @@ final class IpRecomputeSnapshotTest extends TestCase
 		if (in_array('pfbtrunc', stream_get_wrappers(), TRUE)) {
 			stream_wrapper_unregister('pfbtrunc');
 		}
-		foreach ([$this->snapdir, $this->denydir, $this->origdir] as $d) {
-			foreach (@glob("{$d}/*") ?: [] as $f) {
-				@unlink($f);
-			}
-			@rmdir($d);
-		}
-		@rmdir($this->root);
+		rmdir_recursive($this->root);
 	}
 
 	public function testSnapshotPathIsBasenameDotSnapAndRoundTripsTheHeader(): void

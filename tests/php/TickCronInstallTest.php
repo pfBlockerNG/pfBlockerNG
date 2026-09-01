@@ -39,10 +39,7 @@ final class TickCronInstallTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob("{$this->tmp}/*") ?: [] as $f) {
-			is_dir($f) ? @rmdir($f) : @unlink($f);
-		}
-		@rmdir($this->tmp);
+		rmdir_recursive($this->tmp);
 	}
 
 	private function cronCommands(): array

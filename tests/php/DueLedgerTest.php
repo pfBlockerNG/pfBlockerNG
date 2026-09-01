@@ -98,9 +98,7 @@ final class DueLedgerTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		@unlink($this->dir . '/pfb_due_ledger.json');
-		@unlink($this->dir . '/pfb_due_ledger.json.tmp');
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	// -----------------------------------------------------------------------

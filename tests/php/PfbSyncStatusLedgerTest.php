@@ -75,10 +75,7 @@ final class PfbSyncStatusLedgerTest extends TestCase
 		// Restore a writable mode in case testUnwritableLedgerDirFailsSafely ran
 		// (chmod 0555), so the recursive cleanup below can actually delete it.
 		@chmod($this->dir, 0777);
-		foreach (glob($this->dir . '/*') ?: [] as $file) {
-			@unlink($file);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	private static function clockAt(int $ts): callable
