@@ -76,6 +76,11 @@ final class ThemeSafetyUiTest extends TestCase
 			// hyphen matters: \b treats it as a boundary, which let foo-var( through.
 			'.pfb-subhdr { background-color: lavar(--pfb-bg); }',
 			'.pfb-subhdr { background-color: foo-var(--pfb-bg); }',
+			// issue #3015: the slash form is only translucent when its alpha says so.
+			'.pfb-subhdr { background-color: rgb(0 0 0 / 100%); }',
+			'.pfb-subhdr { background-color: rgb(0 0 0); }',
+			// issue #3037: the boundary narrows detection, so pin that it still detects.
+			'<svg style="enable-background:new 0 0 1 1; background: #424242;">',
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
@@ -104,6 +109,20 @@ final class ThemeSafetyUiTest extends TestCase
 			// so it arrives as a bare '+'. Still an operator, still not a colour.
 			"el.style = 'background-color: ' +\n\ttheme.bg;",
 			'colors: { background: null, segmentStroke: "#ffffff" }',
+			// issue #3015: the theme decides these, which is the condition the
+			// transparent/none/null allow set already exists for.
+			'.pfb-subhdr { background-color: currentColor; }',
+			'.pfb-subhdr { background-color: inherit; }',
+			// issue #3015: the space/slash functional forms carry alpha after a solidus
+			// rather than a fourth comma operand.
+			'.pfb-subhdr { background-color: rgb(0 0 0 / 50%); }',
+			'.pfb-subhdr { background-color: hsl(0 0% 0% / 0.2); }',
+			'.pfb-subhdr { background-color: color-mix(in srgb, red 20%, transparent); }',
+			// issue #3037: enable-background is an inert SVG presentation attribute that
+			// ends in the token scan() looks for. It shipped in this tree at
+			// pfblockerng_general.php:579 and returns with any pasted vector-editor SVG.
+			'<svg viewBox="30 225 560 470" style="enable-background:new 30 225 560 470;">',
+			'const s = { myBackgroundColor: "#123456" };',
 		];
 		foreach ($good as $src) {
 			$this->assertSame([], self::scan($src), 'false positive in: ' . $src);
@@ -211,6 +230,11 @@ final class ThemeSafetyUiTest extends TestCase
 			'empty heredoc body'        => ["\$e = <<<EOT\nEOT;\ncolor: red;\n\$s = <<<EOT\nbackground-color: #123456;\nEOT;", FALSE],
 			// A body is one literal, so it is the scope -- the quote scans must not answer
 			// first and hand back a quoted run inside it as if it were its own literal.
+			// issue #2965: newlineAt()/newlineBefore() exist ONLY for CRLF, and markerLine()
+			// ltrims an indented PHP 7.3+ closer. Both were correct and unpinned, so a
+			// regression in either would ship green. These rows pin them from both sides.
+			'indented closer, unpaired' => ["\$s = <<<EOT\n\tbackground-color: #123456;\n\tEOT;\ncolor: red;", FALSE],
+			'indented closer, paired'   => ["\$s = <<<EOT\n\tcolor: black;" . str_repeat(' ', 200) . "\n\tbackground-color: #123456;\n\tEOT;", TRUE],
 			'heredoc outranks quotes'   => ["\$s = <<<EOT\n'background-color: #123456;' color: red;\nEOT;", TRUE],
 			'template literal, unpaired'=> ["function f() {\n\tconst a = `background-color: #123456;`;\n\tconst b = \"color: red;\";\n}", FALSE],
 			'template literal, paired'  => ["const a = `color: black;" . str_repeat(' ', 200) . "\nbackground-color: #123456;`;", TRUE],
@@ -506,6 +530,29 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 	}
 
+	/**
+	 * The CRLF helpers, pinned directly (issue #2965).
+	 *
+	 * newlineAt() and newlineBefore() exist solely so a heredoc body in a CRLF file
+	 * keeps its exact bounds. Pinning them through scan() does not work: dropping the
+	 * "\r\n" branch shifts a body boundary by ONE byte, and every pairing row carries
+	 * enough slack to absorb that, so the mutant survives a green suite. Asserting the
+	 * helpers directly is what actually fails when the CRLF branch goes.
+	 */
+	public function testTheCrlfHelpersReturnTheWholeLineBreak(): void
+	{
+		$at = new ReflectionMethod(self::class, 'newlineAt');
+		$before = new ReflectionMethod(self::class, 'newlineBefore');
+
+		$crlf = "a\r\nb";
+		$this->assertSame("\r\n", $at->invoke(NULL, $crlf, 1), 'newlineAt must return both bytes of a CRLF');
+		$this->assertSame("\r\n", $before->invoke(NULL, $crlf, 3), 'newlineBefore must return both bytes of a CRLF');
+
+		$lf = "a\nb";
+		$this->assertSame("\n", $at->invoke(NULL, $lf, 1), 'a bare LF is still one byte');
+		$this->assertSame("\n", $before->invoke(NULL, $lf, 2), 'a bare LF is still one byte');
+	}
+
 	#[DataProvider('valuesContainingABackslash')]
 	public function testABackslashInsideAValueDoesNotHideTheBackground(string $source): void
 	{
@@ -580,8 +627,12 @@ final class ThemeSafetyUiTest extends TestCase
 		// backslash-excluding: a backslash inside url() or a CSS escape is part of the value.
 		$bs = '\\\\*';
 		$matched = preg_match_all(
-			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
-			. '|backgroundColor\s*:\s*' . $bs . '(?<jsq>["\'])(?<js>[^"\']*?)' . $bs . '\k<jsq>'
+			// (?<![-\w]) so the token is the whole property: enable-background: is an inert
+			// SVG attribute ending in `background`, and myBackgroundColor: is an ordinary
+			// object key (issue #3037). The obj/set/dom branches are already bounded by a
+			// quote or a dot.
+			'/(?<![-\w])background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
+			. '|(?<![-\w])backgroundColor\s*:\s*' . $bs . '(?<jsq>["\'])(?<js>[^"\']*?)' . $bs . '\k<jsq>'
 			. '|' . $bs . '(?<objq>["\'])background(?:-color|Color)?' . $bs . '\k<objq>\s*:\s*'
 			. $bs . '(?<objvq>["\'])(?<obj>[^"\']*?)' . $bs . '\k<objvq>'
 			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*' . $bs . '(?<setq>["\'])background(?:-color|Color)?' . $bs . '\k<setq>\s*,\s*'
@@ -1390,7 +1441,9 @@ final class ThemeSafetyUiTest extends TestCase
 		if ($raw === '') {
 			return '';
 		}
-		if (preg_match('/^((?:rgba?|hsla?)\s*\([^)]*\))/i', $raw, $m)) {
+		// A functional value must survive whole: its operands are comma-separated and the
+		// generic rule below would cut it at the first one (issue #3015, color-mix).
+		if (preg_match('/^((?:rgba?|hsla?|color-mix)\s*\([^)]*\))/i', $raw, $m)) {
 			return $m[1];
 		}
 		if (preg_match('/^([^,;}\n]+)/', $raw, $m)) {
@@ -1417,11 +1470,24 @@ final class ThemeSafetyUiTest extends TestCase
 	private static function isTranslucent(string $value): bool
 	{
 		$v = strtolower(trim($value, " \t\"',"));
-		if ($v === 'transparent' || $v === 'none' || $v === 'null' || $v === '') {
+		// currentcolor and inherit defer the colour to the theme, which is the same
+		// condition transparent/none/null are here for (issue #3015).
+		if ($v === 'transparent' || $v === 'none' || $v === 'null' || $v === ''
+			|| $v === 'currentcolor' || $v === 'inherit') {
 			return TRUE;
 		}
 		if (preg_match('/^(?:rgba|hsla)\s*\(\s*[^,]+,[^,]+,[^,]+,\s*([0-9.]+)\s*\)/', $v, $m)) {
 			return (float)$m[1] < 1.0;
+		}
+		// The space/slash form carries alpha after a solidus instead of a fourth comma
+		// operand: rgb(0 0 0 / 50%). A percentage is over 100, a number over 1.
+		if (preg_match('/^(?:rgba?|hsla?)\s*\([^,\/]*\/\s*([0-9.]+)(%?)\s*\)/', $v, $m)) {
+			return (float)$m[1] < ($m[2] === '%' ? 100.0 : 1.0);
+		}
+		// color-mix() resolves through its operands; one of them being transparent is
+		// the documented way to write a translucent mix.
+		if (str_starts_with($v, 'color-mix(') && str_contains($v, 'transparent')) {
+			return TRUE;
 		}
 		if (preg_match('/^#([0-9a-f]{8})$/', $v, $m)) {
 			return hexdec(substr($m[1], 6, 2)) < 255;
