@@ -11,6 +11,9 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 - **Landing means merged.** Commit, push, non-draft PR, reviews resolved, squash-merge (dev-only: push to `devel`). Commit alone not landing.
 - **Review before merge.** Merge step never start until review step complete cleanly.
 - **Squash-only merges.** Never merge commit, never rebase-merge (owner, 2026-08-31: server-side rebase lands PR commits unsigned).
+- **Signed linear landings only.** The PR path is a GitHub-signed squash. A direct
+  fast-forward is allowed only for the dev-only classes named in `git.md`, and only
+  when every landing commit is locally signed; direct push never bypasses a required PR.
 - **Advisory bots never gate.** No bot's state ever blocks the CI wait or the merge; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per

@@ -13,9 +13,10 @@ index, `HEAD`, refs). Session layouts (primary checkout vs harness-made session 
 **Exception — dev-only classes need no PR.** Classes never shipped to users skip PR
 stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/skills/`), **agent
 workflows/configuration** (`.claude/workflows/`, `.codex/`), **documentation-only**
-changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses worktree but
-commits/pushes **directly to `devel`** (fetch + rebase first). Anything touching `src/`,
-`tests/`, or CI — ADR *implementation* included — uses full worktree + PR flow.
+changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree and
+lands directly on `devel` only as a clean fast-forward of locally signed commits after
+fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementation*
+included — uses the full PR flow; direct push is never a shortcut around that boundary.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
@@ -110,8 +111,9 @@ files. Cheapest before PR exists.
 
 **Push as soon as commit is green and final.** Commit that exists only on this
 workstation is invisible and unbacked-up work; never let commits pile up locally waiting for
-later batch push. Dev-only commits push straight to `devel`; code branches push to
-own remote branch and carry on into PR flow ([`landing.md`](landing.md)).
+later batch push. Dev-only commits fast-forward directly to `devel` only when locally
+signed; code branches push to their own remote branch and carry on into PR flow
+([`landing.md`](landing.md)).
 
 ## Branch naming (ADRs and issues)
 
