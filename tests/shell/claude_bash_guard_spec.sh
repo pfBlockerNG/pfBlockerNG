@@ -24,8 +24,8 @@
 #              at all, and NEVER lease-protected, so it denies even
 #              alongside --force-with-lease)
 #   Rule C  -- git worktree remove + force flag                -> DENY
-#   Rule E  -- gh pr merge + --rebase or --merge                  -> DENY
-#              (explicit --squash remains the signed linear path) -> PASS
+#   Rule E  -- gh pr merge + -r/--rebase or -m/--merge           -> DENY
+#              (explicit -s/--squash remains signed + linear)    -> PASS
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
 #   -f boundary -- standalone -f / an f-bearing short-flag cluster,
 #                  never matching inside --force/-force/a token
@@ -932,6 +932,96 @@ Describe 'claude-bash-guard.sh'
     It 'E6: a rebase flag in a later segment does not taint squash merge -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --squash && echo --rebase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E7: short rebase method -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E8: short merge-commit method -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -m"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E9: short squash method -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E10: long inherited repo option before pr keeps rebase visible -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh --repo pfBlockerNG/pfBlockerNG pr merge 1 --rebase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E11: short inherited repo option between pr and merge keeps merge visible -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr -R pfBlockerNG/pfBlockerNG merge 1 -m"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E12: short inherited repo option does not turn short squash into a deny -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh -R pfBlockerNG/pfBlockerNG pr merge 1 -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E13: serialized line continuation between gh and pr -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh \\\npr merge 1 --rebase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E14: serialized line continuation inside a long method -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --re\\\nbase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E15: a forbidden short method still wins beside squash -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --squash -r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E16: even shell backslashes before a serialized newline do not fuse commands -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh \\\\\npr merge 1 --rebase"}}
       End
       When run script "$GUARD"
       The status should be success

@@ -71,6 +71,19 @@ Describe 'session-branch-sync shallow-history recovery'
     When run sync_and_verify
     The status should equal 0
     The output should include 'rebased onto origin/devel'
+    The output should include 'patch-equivalent'
+  End
+
+  It 'explains dirty divergent history in squash-landing terms'
+    sync_dirty() {
+      printf '%s\n' dirty > "$session/dirty.txt"
+      cd "$session" || return 1
+      sh "$hook"
+    }
+    When run sync_dirty
+    The status should equal 0
+    The output should include 'squash commit'
+    The output should not include 'rebase-merge'
   End
 End
 

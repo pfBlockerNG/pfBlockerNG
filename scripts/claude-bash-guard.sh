@@ -27,9 +27,9 @@
 #             the turn stalls while the wait has already finished (#1225).
 #             Whole-payload, not per-segment: `&` is one of the characters
 #             $segs splits on.
-#   Rule E -- `gh pr merge` with `--rebase` or `--merge` : code PRs land only
-#             through GitHub's verified squash commits while preserving linear
-#             history (issue #2996).
+#   Rule E -- `gh pr merge` with `-r`/`--rebase` or `-m`/`--merge` : code PRs
+#             land only through GitHub's verified squash commits while
+#             preserving linear history (issue #2996).
 #
 # Rule D runs first (whole-payload). Then the per-segment rules: segments are
 # scanned left to right (see MATCHING below); within one segment, A, then B,
@@ -111,11 +111,13 @@
 #
 # NORMALIZATION (issue #923 review F1): rather than matching rules against
 # the raw payload, everything matches against $norm, built by:
-#   1. Converting odd-parity JSON `\t` escapes to tabs while leaving even-parity
+#   1. Removing JSON-serialized shell line continuations only when the encoded
+#      backslash run represents an odd number of shell backslashes.
+#   2. Converting odd-parity JSON `\t` escapes to tabs while leaving even-parity
 #      literal backslash+t data intact.
-#   2. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
+#   3. Deleting every `'`, `"`, and `\` character -- collapses JSON-escaped quotes
 #      and a quoted subcommand token alike (`git 'commit'` -> `git commit`).
-#   3. Collapsing every run of whitespace (space/tab/newline) to one space --
+#   4. Collapsing every run of whitespace (space/tab/newline) to one space --
 #      defeats `git  commit` (double space) or a literal tab between tokens.
 # Fail-open holds through normalization: empty/garbled input still normalizes
 # to a string with no rule match, i.e. exit 0. $norm is then split into
@@ -138,11 +140,13 @@ set -u
 payload="$(cat)"
 
 # norm -- the single normalized view every rule matches against (see
-# NORMALIZATION above): decode odd-parity JSON tab escapes, strip ', ", and \,
-# then collapse whitespace runs to one space.
+# NORMALIZATION above): remove shell continuations, decode odd-parity JSON tab
+# escapes, strip ', ", and \, then collapse whitespace runs to one space.
 tab="$(printf '\t')"
 norm="$(printf '%s' "$payload" | sed -E "
 :a
+s/(^|[^\\\\])((\\\\\\\\\\\\\\\\)*)\\\\\\\\\\\\n/\\1\\2/g
+ta
 s/(^|[^\\\\])((\\\\\\\\)*)\\\\t/\\1\\2${tab}/g
 ta
 " | tr -d "\\\\\"'" | tr -s '[:space:]' ' ')"
@@ -271,6 +275,17 @@ _has_force_refspec() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
 }
 
+# Merge-method tokens use exact boundaries so -R/--repo and -s/--squash remain
+# allowed. Command recognition accepts inherited gh options before or between
+# the pr/merge subcommands without matching substrings such as npr.
+_MERGE_METHOD='(--merge|--rebase|-m|-r)'
+_has_forbidden_merge_method() {
+	printf '%s' "$seg" | grep -Eq "(^|${_SEP})${_MERGE_METHOD}(\$|${_SEP})"
+}
+_is_gh_pr_merge() {
+	printf '%s' "$seg" | grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+([^[:space:]]+[[:space:]]+)*pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge[[:space:]]'
+}
+
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
 # required even for a deny: Claude Code reads the decision from stdout, not
 # from the process exit status). <reason> must contain no " or \ so it can
@@ -309,12 +324,12 @@ while IFS= read -r seg; do
 		_deny "PR branch rebases use --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
 	fi
 
-	if _contains 'gh pr merge' && { _contains '--rebase' || _contains '--merge'; }; then
-		_deny "GitHub PRs must use --squash so the landed linear commit carries GitHub's verified signature (issue #2996)"
-	fi
-
 	if _contains 'git worktree remove' && _has_force_flag; then
 		_deny "CLAUDE.md forbids force-removing a worktree you do not own"
+	fi
+
+	if _is_gh_pr_merge && _has_forbidden_merge_method; then
+		_deny "GitHub PRs must use --squash so the landed linear commit carries GitHub's verified signature (issue #2996)"
 	fi
 done <<_PFB_SEGS_
 $segs

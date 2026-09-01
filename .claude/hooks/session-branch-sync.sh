@@ -1,14 +1,12 @@
 #!/bin/sh
 # SessionStart hook: bring the checkout's current branch up to date with its base.
 #
-# Why this exists: the repo merges rebase-only, which rewrites commit hashes. A
-# leftover session branch (claude/*, issue/*, adr/*) whose PR already landed
-# still shows its commits as "unmerged" under every hash-based check
-# (git log origin/devel..HEAD, merge-base --is-ancestor) -- so agents rebuild or
-# stack on already-merged work. git rebase is the native cure: rebasing onto
-# origin/devel drops the already-applied commits by patch-id and replays only
-# the genuinely-new ones. This hook runs it every session so no agent has to
-# remember, and reports what happened.
+# Why this exists: devel advances outside a live session, so an active session
+# branch can fall behind its base. Rebasing onto origin/devel is the native
+# synchronization step: Git drops individually patch-equivalent commits and
+# replays genuinely new ones. A branch whose PR was squash-merged may instead
+# conflict because its original commit boundaries no longer exist upstream;
+# the hook aborts cleanly and reports that case rather than guessing.
 #
 #   base branch (devel/main) -> fast-forward only (ff-only) to its own remote;
 #                               a diverged base is surfaced, never rewritten
@@ -81,7 +79,7 @@ behind=$(git rev-list --count "HEAD..${base}" 2>/dev/null || echo 0)
 [ "$before" -eq 0 ] && [ "$behind" -eq 0 ] && exit 0
 
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-	emit "${kind} '${branch}': ${before} commit(s) ahead of ${base}, ${behind} behind, but the working tree is DIRTY so it was left untouched. Commit or discard your changes, then run: git rebase ${base}  (or, on a base branch, git merge --ff-only ${base}). Rebasing onto ${base} drops any already-merged commits by patch-id -- do NOT trust git log ${base}..HEAD, which overcounts them after a rebase-merge."
+	emit "${kind} '${branch}': ${before} commit(s) ahead of ${base}, ${behind} behind, but the working tree is DIRTY so it was left untouched. Commit or discard your changes, then run: git rebase ${base}  (or, on a base branch, git merge --ff-only ${base}). Rebasing can drop individually patch-equivalent commits, but git log ${base}..HEAD cannot tell whether equivalent changes already landed in a squash commit."
 	exit 0
 fi
 
@@ -103,12 +101,12 @@ case "$branch" in
 			after=$(git rev-list --count "${base}..HEAD" 2>/dev/null || echo 0)
 			dropped=$((before - after))
 			if [ "$after" -eq 0 ]; then
-				emit "SESSION BRANCH '${branch}': all ${dropped} commit(s) were already merged into devel (rebase dropped them by patch-id despite rebase-rewritten hashes). Branch now equals ${base} -- a clean, current base. Do NOT rebuild the old commits; the prior tip is in the reflog. Cut a fresh worktree for new work if the skill calls for one."
+				emit "SESSION BRANCH '${branch}': all ${dropped} commit(s) were patch-equivalent to devel and dropped by rebase. Branch now equals ${base} -- a clean, current base. Do NOT rebuild the old commits; the prior tip is in the reflog. Cut a fresh worktree for new work if the skill calls for one."
 			else
-				emit "SESSION BRANCH '${branch}': rebased onto ${base}; dropped ${dropped} already-merged commit(s) and replayed ${after} genuinely-new one(s) on the live base. Push with --force-with-lease. (Hash-based git log ${base}..HEAD had reported ${before}, overcounting the merged ones.)"
+				emit "SESSION BRANCH '${branch}': rebased onto ${base}; dropped ${dropped} patch-equivalent commit(s) and replayed ${after} genuinely-new one(s) on the live base. Push with --force-with-lease. (Hash-based git log ${base}..HEAD had reported ${before}; it counts divergent commit objects, not squash-equivalent changes.)"
 			fi
 		elif git rebase --abort >/dev/null 2>&1; then
-			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and was ABORTED -- branch is unchanged (stderr was suppressed, so the cause is unshown). Re-run by hand to see why: git rebase ${base}  (most often a merge conflict, the ~1% rebase cannot auto-resolve), then --force-with-lease push."
+			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and was ABORTED -- branch is unchanged (stderr was suppressed, so the cause is unshown). Re-run by hand to see why: git rebase ${base}  (often a merge conflict; an obsolete squash-merged branch can conflict because upstream no longer has its original commit boundaries), then --force-with-lease push."
 		else
 			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and the --abort ALSO failed -- the repo may be stuck mid-rebase. Inspect by hand: git status; git rebase --abort."
 		fi
