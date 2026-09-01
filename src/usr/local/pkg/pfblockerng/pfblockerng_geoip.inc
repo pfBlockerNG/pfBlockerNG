@@ -222,8 +222,12 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
 		$options6 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options6'} unset at the previous continent's tail is invisible to PHPStan)
 
-$php_data = <<<EOF
-<?php
+		// #3066: the leading "<?php" stays OUTSIDE this heredoc. tree-sitter-php
+		// (0.24.1, what code-graph extraction parses with) mis-parses an
+		// INTERPOLATING heredoc body that contains a PHP open tag and drops the
+		// rest of the file; nowdoc bodies below are unaffected. Output bytes are
+		// unchanged -- the tag is simply concatenated back on.
+$php_data = "<?php\n" . <<<EOF
 /*
  * pfblockerng_{$continent_en}.php
  *
