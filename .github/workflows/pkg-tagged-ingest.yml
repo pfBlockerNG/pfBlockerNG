@@ -153,6 +153,7 @@ jobs:
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
       pytest_marker: repo
       pytest_filter: test_install_from_live_pages_url
+      concurrency_key: ${{ matrix.channel }}
       smoke_repo_live_url: http://pkg.pfblockerng.com/${{ needs.stage-pkg.outputs.staging_prefix }}/${{ matrix.channel }}
       smoke_repo_expected_source_sha: ${{ inputs.source_sha }}
       smoke_repo_expected_version: ${{ inputs.portversion }}

@@ -199,6 +199,11 @@ on:
         required: false
         type: string
         default: "1"
+      concurrency_key:
+        description: "Short caller-supplied concurrency identity for live gates; non-live callers share the default."
+        required: false
+        type: string
+        default: "non-live"
       smoke_nightly_live_url:
         description: "Live nightly Pages base URL for test_install_from_live_nightly_url. Blank -> SKIP."
         required: false
@@ -278,7 +283,7 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}-${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}
+  group: ${{ inputs.concurrency_key || 'non-live' }}-${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:

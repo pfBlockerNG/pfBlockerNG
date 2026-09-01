@@ -140,14 +140,29 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
         self.assertLess(NIGHTLY.index("test_install_from_live_nightly_url"), NIGHTLY.index("operation=nightly-cleanup"))
 
     def test_live_catalogue_routes_are_part_of_smoke_concurrency_identity(self) -> None:
-        concurrency = yaml.safe_load(SMOKE_SINGLE)["concurrency"]
-        route_expression = "${{ inputs.smoke_repo_live_url || inputs.smoke_nightly_live_url || 'non-live' }}"
+        smoke = yaml.safe_load(SMOKE_SINGLE)
+        triggers = smoke[True]  # PyYAML 1.1 resolves the plain `on` key to True.
+        concurrency_input = triggers["workflow_call"]["inputs"]["concurrency_key"]
+        self.assertIs(concurrency_input["required"], False)
+        self.assertEqual(concurrency_input["type"], "string")
+        self.assertEqual(concurrency_input["default"], "non-live")
+        self.assertNotIn("concurrency_key", triggers["workflow_dispatch"]["inputs"])
+
+        concurrency = smoke["concurrency"]
+        key_expression = "${{ inputs.concurrency_key || 'non-live' }}"
         shared_axes = (
             "${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-"
             "${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}"
         )
-        self.assertEqual(concurrency["group"], f"{route_expression}-{shared_axes}")
+        self.assertEqual(concurrency["group"], f"{key_expression}-{shared_axes}")
         self.assertIs(concurrency["cancel-in-progress"], False)
+
+        tagged_inputs = yaml.safe_load(TAGGED.read_text(encoding="utf-8"))["jobs"]["validate-live-pages-install"][
+            "with"
+        ]
+        nightly_inputs = yaml.safe_load(NIGHTLY)["jobs"]["validate-live-pages-install"]["with"]
+        self.assertEqual(tagged_inputs["concurrency_key"], "${{ matrix.channel }}")
+        self.assertEqual(nightly_inputs["concurrency_key"], "nightly")
 
     def test_tagged_finalize_depends_on_the_live_gate_and_discards_failure(self) -> None:
         tagged = TAGGED.read_text(encoding="utf-8")
