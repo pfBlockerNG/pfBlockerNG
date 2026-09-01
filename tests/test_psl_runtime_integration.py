@@ -63,10 +63,23 @@ def test_psl_classifier_uses_arbitrary_depth_and_private_policy() -> None:
     ("domain", "blacklist"),
     [("example.com", ".com"), ("example.com", "com."), ("example.github.io", ".github.io")],
 )
-def test_psl_classifier_normalizes_dotted_blacklist_entries(domain: str, blacklist: str) -> None:
-    assert P.tld_wildcard_classify(domain, P.parse_psl_rules(PSL), set(), blacklist={blacklist}) == (
-        P.DNSBL_CLASS_DATA,
-        domain,
+def test_psl_build_normalizes_dotted_blacklist_entries(domain: str, blacklist: str) -> None:
+    """A dotted or trailing-dot user blacklist entry still blocks at its root: ``build()``
+    normalizes the textarea shape, so the entry lands as an exact DATA block (#3050).
+    """
+    result = P.build(
+        {"feeds": [{"feed": "FEED", "group": "GRP", "log_flag": "1", "raw": "feed.raw"}]},
+        {
+            "psl_rules": P.parse_psl_rules(PSL),
+            "tld_wildcard_blacklist": [blacklist],
+            "tld_wildcard_exclusion": [],
+            "user_whitelist": [],
+        },
+        line_reader=lambda _raw: [domain],
+    )
+    assert domain in result.data_db, (
+        f"expected an exact DATA block for {domain!r} with {blacklist!r} blacklisted, "
+        f"data_db={sorted(result.data_db)!r} zone_db={sorted(result.zone_db)!r}"
     )
 
 

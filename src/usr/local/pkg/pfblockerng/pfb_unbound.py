@@ -36,6 +36,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -4589,9 +4590,13 @@ def tld_wildcard_classify(
     exclusion: set[str],
     *,
     include_private: bool = True,
-    blacklist: set[str] | None = None,
+    blacklist: AbstractSet[str] = frozenset(),
 ) -> tuple[str, str]:
-    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA."""
+    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA.
+
+    ``blacklist`` is already dot-stripped TLD roots -- the contract ``exclusion``
+    also carries -- normalized ONCE by ``build()`` at the config boundary (#3050).
+    """
     if not any(
         (
             rules.icann_exact,
@@ -4603,20 +4608,13 @@ def tld_wildcard_classify(
         )
     ):
         return DNSBL_CLASS_DATA, domain
-    root_blacklist = {entry.strip(".") for entry in blacklist or set()}
     try:
         resolution = resolve_public_suffix(domain, rules)
     except ValueError:
         return DNSBL_CLASS_DATA, domain
     suffix = resolution.public_suffix if include_private else resolution.icann_suffix
     root = suffix.rsplit(".", 1)[-1]
-    if (
-        suffix in root_blacklist
-        or root in root_blacklist
-        or suffix in exclusion
-        or root in exclusion
-        or domain in exclusion
-    ):
+    if suffix in blacklist or root in blacklist or suffix in exclusion or root in exclusion or domain in exclusion:
         return DNSBL_CLASS_DATA, domain
     labels = domain.split(".")
     suffix_labels = suffix.split(".")
@@ -5248,9 +5246,9 @@ def build(
     tallied 'suffix_drop') or a wildcard ZONE anchor demoted to exact DATA ('apex',
     tallied 'suffix_demote'); USER provenance is exempt in every state.
     """
-    tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
-    tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
-    exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
+    # issue #3050: dot-stripped ONCE here; every consumer below reads these as-is.
+    blacklist_roots = frozenset(t.strip(".") for t in config.get("tld_wildcard_blacklist", []))
+    exclusion = {e.strip(".") for e in config.get("tld_wildcard_exclusion", [])}
 
     static_cap = bool(config.get("regex_cap", False))
 
@@ -5287,8 +5285,7 @@ def build(
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
     # (feed/group ``DNSBL_TLD``, log ``1``) -- the sole writer of this row shape
     # since ADR-65 retired PHP's own equivalent write.
-    for raw_tld in tld_wildcard_blacklist:
-        tld = raw_tld.strip(".")
+    for tld in sorted(blacklist_roots):  # sorted: a set would insert in hash-seed order
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
@@ -5444,7 +5441,7 @@ def build(
                 psl_classification_rules,
                 exclusion,
                 include_private=bool(config.get("psl_include_private", True)),
-                blacklist=set(tld_wildcard_blacklist),
+                blacklist=blacklist_roots,
             )
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
