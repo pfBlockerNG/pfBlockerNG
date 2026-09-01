@@ -189,6 +189,35 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 	 * target is at BOL (pfb_logger_format_for_target()), so dropping the message's
 	 * leading "\n" would append unstamped text to whatever was written last.
 	 */
+	/**
+	 * Issue #3012: the FEED-pass guard must name itself too.
+	 *
+	 * pfb_feed_pass_begin() logs its own skip line only when the lock is
+	 * CONTENDED. An acquisition error leaves $contended FALSE, so before #3012
+	 * this arm released the dispatcher lock and returned FALSE with nothing in
+	 * the main log naming what was skipped or why -- the operator saw a verb
+	 * silently do nothing.
+	 */
+	public function testFeedPassAcquisitionErrorNamesTheGuardInTheMainLog(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbextrasfeedlockerror', PfbFailingFlockStream::class));
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		try {
+			// Only the feed-pass lock lives under dbdir; the dispatcher lock uses
+			// schedule_state_dir, so it still acquires and this reaches the guard.
+			$GLOBALS['pfb']['dbdir'] = 'pfbextrasfeedlockerror://state';
+
+			$this->assertFalse(pfb_extras_process_begin(),
+				'an unacquirable feed-pass lock must still refuse the extras run');
+			$this->assertStringContainsString('feed pass lock could not be acquired', $this->mainLog(),
+				'an acquisition error must name itself in the main log; contention is the only case '
+				. 'pfb_feed_pass_begin() logs on its own behalf');
+		} finally {
+			$GLOBALS['pfb']['dbdir'] = $dbdir;
+			stream_wrapper_unregister('pfbextrasfeedlockerror');
+		}
+	}
+
 	public function testDeferralLineStartsOnItsOwnStampedLogLine(): void
 	{
 		file_put_contents($GLOBALS['pfb']['log'], 'unterminated line from the lock holder');

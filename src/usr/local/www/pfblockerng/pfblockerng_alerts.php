@@ -1314,9 +1314,12 @@ if (isset($_POST) && !empty($_POST)) {
 				$match = pfb_ip_suppressed_match($ip, array_keys($clists[$supp_key]['data']));
 				if ($match !== NULL) {
 					$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
-					if (!pfb_feed_pass_acquire()) {
+					$pfb_contended = FALSE;
+					if (!pfb_feed_pass_acquire($pfb_contended)) {
 						$pfb_found = FALSE;
-						$savemsg = "Table [ {$table} ] is mid-update -- please retry removing [ {$match} ] from the {$type} customlist once the current run finishes.";
+						$savemsg = $pfb_contended
+							? "Table [ {$table} ] is mid-update -- please retry removing [ {$match} ] from the {$type} customlist once the current run finishes."
+							: "Table [ {$table} ] could not be updated: the feed-pass lock could not be acquired -- see the pfBlockerNG log. Retrying will not clear this.";
 						break;
 					}
 
@@ -1369,9 +1372,12 @@ if (isset($_POST) && !empty($_POST)) {
 
 				if (isset($clists['ipwhitelist' . $vtype][$table_2]['data'][$ix[0]])) {
 					$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
-					if (!pfb_feed_pass_acquire()) {
+					$pfb_contended = FALSE;
+					if (!pfb_feed_pass_acquire($pfb_contended)) {
 						$pfb_found = FALSE;
-						$savemsg = "Table [ {$table} ] is mid-update -- please retry deleting [ {$entry} ] from the {$type} customlist once the current run finishes.";
+						$savemsg = $pfb_contended
+							? "Table [ {$table} ] is mid-update -- please retry deleting [ {$entry} ] from the {$type} customlist once the current run finishes."
+							: "Table [ {$table} ] could not be updated: the feed-pass lock could not be acquired -- see the pfBlockerNG log. Retrying will not clear this.";
 						break;
 					}
 

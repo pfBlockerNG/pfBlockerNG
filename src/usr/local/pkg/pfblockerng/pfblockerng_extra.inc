@@ -5675,7 +5675,13 @@ function pfb_schedule_cache_regenerate(): bool
 	}
 	$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
 		|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
-	if (!pfb_feed_pass_begin('schedule-cache')) {
+	$contended = FALSE;
+	if (!pfb_feed_pass_begin('schedule-cache', $contended)) {
+		// issue #3012: begin() logs its own skip line only for contention, so an
+		// acquisition error would otherwise leave no record naming schedule cache regeneration.
+		if (!$contended) {
+			pfb_logger("\n Schedule cache regeneration skipped: the feed pass lock could not be acquired.\n", 1);
+		}
 		if ($dispatch_owner) {
 			pfb_schedule_dispatch_release();
 		}
@@ -5707,7 +5713,13 @@ function pfb_extras_process_begin(): bool
 			LOG_PREFIX_PKG_PFBLOCKERNG);
 		return FALSE;
 	}
-	if (!pfb_feed_pass_begin('extras')) {
+	$contended = FALSE;
+	if (!pfb_feed_pass_begin('extras', $contended)) {
+		// issue #3012: begin() logs its own skip line only for contention, so an
+		// acquisition error would otherwise leave no record naming extras processing.
+		if (!$contended) {
+			pfb_logger("\n Extras processing skipped: the feed pass lock could not be acquired.\n", 1);
+		}
 		if ($dispatch_owner) {
 			pfb_schedule_dispatch_release();
 		}
@@ -6282,8 +6294,11 @@ function pfblockerng_tick(
 			|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
 		if (!pfb_schedule_dispatch_begin()) {
 			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another tick is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		} elseif (!pfb_feed_pass_begin('scheduled')) {
-			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		} elseif (!pfb_feed_pass_begin('scheduled', $pfb_tick_contended)) {
+			logger(LOG_INFO, $pfb_tick_contended
+				? localize_text('Tick: scheduled work deferred (another feed pass is running).')
+				: localize_text('Tick: scheduled work skipped -- the feed-pass lock could not be acquired; see the pfBlockerNG log.'),
+				LOG_PREFIX_PKG_PFBLOCKERNG);
 			if ($dispatch_owner) {
 				pfb_schedule_dispatch_release();
 			}
@@ -7844,7 +7859,10 @@ function pfb_pfctl_checked_op(string $pfctl, string $table, string $op, string $
  * @param  string $table    The pf table name (caller-validated).
  * @param  string $ip       The host to carve out (v4 or v6).
  * @return array{status: string, fail: ?string, del_cnt: int, add_cnt: int}
- *         status is one of 'applied'|'not_blocked'|'busy'|'failed'; 'fail'
+ *         status is one of 'applied'|'not_blocked'|'busy'|'lock_error'|'failed';
+ *         'busy' is contention (another pass holds the feed lock) while
+ *         'lock_error' is an acquisition failure that retrying will not clear
+ *         (issue #3012); 'fail'
  *         names the cause for 'failed' (NULL otherwise, prefixed
  *         "snapshot: " for a capture failure); the counts are 0 outside
  *         'applied'.
@@ -7852,8 +7870,12 @@ function pfb_pfctl_checked_op(string $pfctl, string $table, string $op, string $
 function pfb_live_punch_run(string $pfctl, string $aliasdir, string $dbdir, string $table, string $ip): array {
 	$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
 
-	if (!pfb_feed_pass_acquire()) {
-		return ['status' => 'busy', 'fail' => NULL, 'del_cnt' => 0, 'add_cnt' => 0];
+	$contended = FALSE;
+	if (!pfb_feed_pass_acquire($contended)) {
+		// issue #3012: contention and an acquisition error are different outcomes.
+		// Only the first is worth retrying, and only the caller can word that.
+		return ['status' => $contended ? 'busy' : 'lock_error',
+			'fail' => NULL, 'del_cnt' => 0, 'add_cnt' => 0];
 	}
 
 	try {
@@ -7963,6 +7985,10 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			case 'busy':
 				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
 				break;
+			case 'lock_error':
+				$savemsg2 = ' : The feed-pass lock could not be acquired, suppression will apply at the next reload'
+					. ' -- see the pfBlockerNG log; retrying will not clear this';
+				break;
 			default:
 				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
 				break;
@@ -8019,6 +8045,10 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			case 'busy':
 				$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry the Unlock once the current run finishes.";
 				break;
+			case 'lock_error':
+				$result['savemsg'] = "Table [ {$table} ] could not be updated: the feed-pass lock could not be acquired -- "
+					. "see the pfBlockerNG log. Retrying will not clear this.";
+				break;
 			default:
 				$result['savemsg'] = "The live unlock of IP [ {$ip} ] failed [ {$apply['fail']} ] -- table [ {$table} ] still blocks it; see the pfBlockerNG log.";
 				break;
@@ -8028,8 +8058,12 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 
 	if ($action === 'lock') {
 		$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
-		if (!pfb_feed_pass_acquire()) {
-			$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry the re-lock once the current run finishes.";
+		$contended = FALSE;
+		if (!pfb_feed_pass_acquire($contended)) {
+			$result['savemsg'] = $contended
+				? "Table [ {$table} ] is mid-update -- please retry the re-lock once the current run finishes."
+				: "Table [ {$table} ] could not be updated: the feed-pass lock could not be acquired -- "
+					. "see the pfBlockerNG log. Retrying will not clear this.";
 			return $result;
 		}
 
@@ -8066,8 +8100,12 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		}
 
 		$was_held = isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock']);
-		if (!pfb_feed_pass_acquire()) {
-			$result['savemsg'] = "Table [ {$table} ] is mid-update -- please retry adding [ {$ip} ] to the Permit Alias once the current run finishes.";
+		$contended = FALSE;
+		if (!pfb_feed_pass_acquire($contended)) {
+			$result['savemsg'] = $contended
+				? "Table [ {$table} ] is mid-update -- please retry adding [ {$ip} ] to the Permit Alias once the current run finishes."
+				: "The add of [ {$ip} ] to table [ {$table} ] could not start: the feed-pass lock could not be "
+					. "acquired -- see the pfBlockerNG log. Retrying will not clear this.";
 			return $result;
 		}
 

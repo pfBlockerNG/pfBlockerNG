@@ -265,6 +265,31 @@ SH
 	}
 
 	// -------------------------------------------------------------------
+	// issue #3012: an acquisition ERROR is not contention. A caller that
+	// cannot tell them apart reports "mid-update, please retry" for a run
+	// that is not happening, and the retry never succeeds.
+	// -------------------------------------------------------------------
+
+	public function testAcquisitionErrorIsNotReportedAsBusy(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfblivepunchlockerror', PfbFailingFlockStream::class));
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		try {
+			$GLOBALS['pfb']['dbdir'] = 'pfblivepunchlockerror://state';
+			$result = pfb_live_punch_run($this->shim, $this->aliasdir, $this->dbdir, $this->table, '203.0.113.5');
+
+			$this->assertSame('lock_error', $result['status'],
+				'a feed-pass lock that could not be acquired is not contention: reporting it as busy '
+				. 'tells the operator to wait for a run that is not happening');
+			$this->assertSame([], $this->readLog(),
+				'a lock error must short-circuit before any pfctl exec, exactly as contention does');
+		} finally {
+			$GLOBALS['pfb']['dbdir'] = $dbdir;
+			stream_wrapper_unregister('pfblivepunchlockerror');
+		}
+	}
+
+	// -------------------------------------------------------------------
 	// $was_held reentrancy guard -- a nested call inside an already-held
 	// lock must NOT release the outer caller's hold.
 	// -------------------------------------------------------------------
