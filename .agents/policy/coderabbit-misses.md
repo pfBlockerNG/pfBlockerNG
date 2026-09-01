@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `bef489935`  tests: pin the widget shim shutdown-hook cleanup where it is load-bearing  (#3001) — never asked, slot spent inside the window; four legs, one blocking fix.
 - `f7efc321d`  tests: exercise ThemeSafety's CSS scan path and pin the extension filter  (#3014) — one quota notice (38 min), owner said do not re-ask; four legs, nine findings resolved.
 - `f805d7d6`  pfblockerng: align update feed statuses  (#2993) — one quota notice (41 min), owner waived retry; four legs CLEAN and exact-head CI PASS.
 - `6cf8c77f`  fix(apply): honor ET reuse processet exit status  (#2980) — finished review before bot-suggested fix; two quota notices on fix heads; four carried legs + exact-head CI PASS.
