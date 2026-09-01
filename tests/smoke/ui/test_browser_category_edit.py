@@ -1085,6 +1085,8 @@ def test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort(
     auto-sort transform is unchanged (Semantics #2 -- ZERO delta). Seeds two
     ENABLED rows out of alphabetical header order -- the exact
     ``CategoryEditAutoSortTest`` fixture pair -- with ``sort`` left at 'sort'.
+    Each Enabled row carries an RFC 5737 Source so save validation accepts the
+    seed (issue #3044).
     """
     vm = smoke_vm
     cfg_root = CFG_DNSBL
@@ -1093,11 +1095,12 @@ def test_sort_mode_renders_no_manual_reorder_ui_and_preserves_auto_sort(
         payload = _dnsbl_payload(rowid, "pfbresortd", sort="sort")
         payload["format-0"] = "auto"
         payload["state-0"] = "Enabled"
-        payload["url-0"] = ""
+        # issue #3044: Enabled rows require Source; RFC 5737 host skips DNS.
+        payload["url-0"] = "http://192.0.2.1/bravo"
         payload["header-0"] = "Bravo"
         payload["format-1"] = "auto"
         payload["state-1"] = "Enabled"
-        payload["url-1"] = ""
+        payload["url-1"] = "http://192.0.2.1/alpha"
         payload["header-1"] = "Alpha"
         _post_form(webui, payload)
         page = browser_page
