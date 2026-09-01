@@ -5,6 +5,22 @@
 resolve_graphify_launcher() {
 	_graphify_launcher=$(command -v graphify 2>/dev/null) &&
 		[ -n "$_graphify_launcher" ] && {
+			case "$_graphify_launcher" in
+				/*) ;;
+				*)
+					_graphify_name=${_graphify_launcher##*/}
+					_graphify_dir=${_graphify_launcher%/*}
+					[ "$_graphify_dir" != "$_graphify_launcher" ] || _graphify_dir=.
+					case "$_graphify_dir" in
+						-*) _graphify_dir=./$_graphify_dir ;;
+					esac
+					_graphify_dir=$(CDPATH='' cd -P "$_graphify_dir" 2>/dev/null && pwd -P) || {
+						echo "resolve-graphify.sh: cannot resolve PATH-selected launcher directory '$_graphify_dir'" >&2
+						return 1
+					}
+					_graphify_launcher=$_graphify_dir/$_graphify_name
+					;;
+			esac
 			printf '%s\n' "$_graphify_launcher"
 			return 0
 		}
