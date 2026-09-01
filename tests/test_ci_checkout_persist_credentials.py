@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
@@ -34,10 +36,6 @@ _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _STEP_MARKER_RE = re.compile(r"^[ ]*-[ ]+")  # the sequence marker only, never the key that follows
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
 _EXPECTED_ACTION_VERSIONS = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.0.1"}
-_ACTION_USES_RE = re.compile(
-    r"""^(?:-\s+)?uses:\s*(?P<quote>["']?)(?P<action>actions/checkout|astral-sh/setup-uv)@"""
-    r"""(?P<version>[^\s"']+)(?P=quote)(?:\s+#.*)?$"""
-)
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
 _WITH_KEY_RE = re.compile(r"^(?P<indent>[ ]*)with:\s*(#.*)?$")
@@ -212,23 +210,26 @@ def test_enumeration_is_non_vacuous() -> None:
     )
 
 
-def _action_version_offenders() -> tuple[set[str], list[str]]:
+def _action_version_offenders(files: list[Path]) -> tuple[set[str], list[str]]:
     seen: set[str] = set()
     offenders: list[str] = []
-    for path in _workflow_files():
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            match = _ACTION_USES_RE.fullmatch(line.strip())
-            if match is None:
-                continue
-            action = match.group("action")
-            seen.add(action)
-            if match.group("version") != _EXPECTED_ACTION_VERSIONS[action]:
-                offenders.append(f"{path.name}:{line_number}: {line.strip()}")
+    for path in files:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_name, job in workflow.get("jobs", {}).items():
+            for step_index, step in enumerate(job.get("steps", [])):
+                action_ref = step.get("uses")
+                if not isinstance(action_ref, str):
+                    continue
+                for action, version in _EXPECTED_ACTION_VERSIONS.items():
+                    if action_ref.startswith(f"{action}@"):
+                        seen.add(action)
+                        if action_ref != f"{action}@{version}":
+                            offenders.append(f"{path.name}:{job_name}:step-{step_index}: uses: {action_ref}")
     return seen, offenders
 
 
 def test_checkout_and_setup_uv_versions_are_current() -> None:
-    seen, offenders = _action_version_offenders()
+    seen, offenders = _action_version_offenders(_workflow_files())
     assert seen == _EXPECTED_ACTION_VERSIONS.keys(), (
         f"expected action pins not found: {sorted(_EXPECTED_ACTION_VERSIONS.keys() - seen)}"
     )
