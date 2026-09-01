@@ -31,6 +31,12 @@ dev = [
     "dnspython==2.8.0",
     "charset-normalizer==3.4.9",
     "PyYAML==6.0.3",
+    # The code-graph grammar gate (#3066): extraction parses PHP with
+    # tree-sitter-php, so a file the GRAMMAR chokes on is half extracted while
+    # `php -l` still calls it clean. The parse assertion needs the same grammar
+    # extraction uses, pinned exact so a bump is a diff and not a moved verdict.
+    "tree-sitter==0.25.2",
+    "tree-sitter-php==0.24.1",
 ]
 
 # Reproducible PEP-517 dependency-package builder. The builder rejects any
