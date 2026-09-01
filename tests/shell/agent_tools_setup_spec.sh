@@ -354,6 +354,14 @@ GROK
     cp "$installables/$1" "$activebin/$1"
   }
 
+  # A uv the seat already owns, at the path the standalone installer uses. The
+  # default fixture uv lives in "$activebin" -- outside HOME -- which models the
+  # shared root-owned /usr/local/bin/uv (#3010), not a seat's own.
+  seat_uv() {
+    mkdir -p "$home/.local/bin"
+    cp "$installables/uv" "$home/.local/bin/uv"
+  }
+
   cleanup() {
     rm -rf "$fixture"
   }
@@ -458,6 +466,7 @@ GROK
   End
 
   It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
+    seat_uv
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
@@ -473,6 +482,17 @@ GROK
       'wt:config shell install --yes' \
       'serena:init')"
     The file "$apt_log" should not be exist
+  End
+
+  It 'installs a per-seat uv when the only uv on PATH lives outside HOME'
+    # A root-owned /usr/local/bin/uv satisfies `command -v uv`, so the standalone
+    # installer never runs: every seat shares one uv that no seat can update, and
+    # the two boxes drift to different versions (#3010). The seat's own uv must be
+    # provisioned regardless of what is already on PATH outside its HOME.
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$curl_log" should include 'https://astral.sh/uv/install.sh'
+    The path "$home/.local/bin/uv" should be executable
   End
 
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
@@ -833,8 +853,9 @@ UNMANAGED_UV
     The contents of file "$tool_log" should not include 'grok:mcp'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
     The file "$apt_log" should not be exist
-    The contents of file "$curl_log" should equal \
-      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
+    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
+      'https://astral.sh/uv/install.sh' \
+      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
   End
 
   It 'creates the canonical global Worktrunk key when the user config is missing'
@@ -986,7 +1007,10 @@ CONFIG
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 2 ]
+    # Run 1 has no seat uv and provisions one; run 2 finds it under HOME and
+    # self-updates. Converging on one self-update is the guard working (#3010).
+    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 1 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
@@ -1007,6 +1031,7 @@ CONFIG
     # exits non-zero here, and under `set -eu` that aborted the whole run before
     # a single tool was installed.
     export DEBIAN_UV_SELF_UPDATE_FAILS=1
+    seat_uv
     When run sh "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]

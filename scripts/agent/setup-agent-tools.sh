@@ -250,16 +250,25 @@ main() {
 
 	case "$platform" in
 		Linux)
-			if command -v uv >/dev/null 2>&1; then
-				# Maintenance, not a prerequisite: every later use is
-				# `uv tool install --upgrade`, which any uv performs. A uv
-				# that did not come from the standalone installer refuses to
-				# self-update and exits non-zero; under `set -eu` that ends
-				# the run before a single tool is installed.
-				uv self update || true
-			else
-				install_from_url 'https://astral.sh/uv/install.sh'
-			fi
+			uv_path=$(command -v uv 2>/dev/null) || uv_path=
+			case "$uv_path" in
+				"$HOME"/*)
+					# A uv this seat owns: keep it current. Maintenance, not a
+					# prerequisite -- every later use is `uv tool install --upgrade`,
+					# which any uv performs, and a self-update can still fail on a
+					# transient error; under `set -eu` that would end the run before
+					# a single tool is installed.
+					uv self update || true
+					;;
+				*)
+					# No uv, or one outside this seat's HOME -- a shared, root-owned
+					# /usr/local/bin/uv satisfies `command -v` and shadows provisioning,
+					# so every seat inherits one uv that no seat can self-update and the
+					# boxes drift apart. Provision this seat's own; PATH above already
+					# prefers it for every later call.
+					install_from_url 'https://astral.sh/uv/install.sh'
+					;;
+			esac
 			;;
 		Darwin)
 			if brew list --versions uv >/dev/null 2>&1; then
