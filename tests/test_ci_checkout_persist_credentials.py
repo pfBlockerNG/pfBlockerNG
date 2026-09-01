@@ -33,6 +33,11 @@ _WORKFLOW_GLOBS = ("*.yml", "*.yaml")
 _STEP_ITEM_RE = re.compile(r"^(?P<indent>[ ]*)-\s")
 _STEP_MARKER_RE = re.compile(r"^[ ]*-[ ]+")  # the sequence marker only, never the key that follows
 _CHECKOUT_RE = re.compile(r"uses:\s*actions/checkout@")
+_EXPECTED_ACTION_VERSIONS = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.0.1"}
+_ACTION_USES_RE = re.compile(
+    r"""^(?:-\s+)?uses:\s*(?P<quote>["']?)(?P<action>actions/checkout|astral-sh/setup-uv)@"""
+    r"""(?P<version>[^\s"']+)(?P=quote)(?:\s+#.*)?$"""
+)
 _PERSIST_RE = re.compile(r"^[ ]*persist-credentials:\s*(?P<value>true|false)\b(?P<comment>.*)$")
 _JOB_KEY_RE = re.compile(r"^ {2}[A-Za-z0-9_.-]+:\s*(#.*)?$")
 _WITH_KEY_RE = re.compile(r"^(?P<indent>[ ]*)with:\s*(#.*)?$")
@@ -207,21 +212,26 @@ def test_enumeration_is_non_vacuous() -> None:
     )
 
 
-def test_checkout_and_setup_uv_versions_are_current() -> None:
-    expected = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.0.1"}
+def _action_version_offenders() -> tuple[set[str], list[str]]:
     seen: set[str] = set()
     offenders: list[str] = []
     for path in _workflow_files():
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            action_line = line.split("#", 1)[0].strip()
-            for action, version in expected.items():
-                prefix = f"uses: {action}@"
-                if action_line.startswith(prefix):
-                    seen.add(action)
-                    if action_line != f"{prefix}{version}":
-                        offenders.append(f"{path.name}:{line_number}: {action_line}")
+            match = _ACTION_USES_RE.fullmatch(line.strip())
+            if match is None:
+                continue
+            action = match.group("action")
+            seen.add(action)
+            if match.group("version") != _EXPECTED_ACTION_VERSIONS[action]:
+                offenders.append(f"{path.name}:{line_number}: {line.strip()}")
+    return seen, offenders
 
-    assert seen == expected.keys(), f"expected action pins not found: {sorted(expected.keys() - seen)}"
+
+def test_checkout_and_setup_uv_versions_are_current() -> None:
+    seen, offenders = _action_version_offenders()
+    assert seen == _EXPECTED_ACTION_VERSIONS.keys(), (
+        f"expected action pins not found: {sorted(_EXPECTED_ACTION_VERSIONS.keys() - seen)}"
+    )
     assert not offenders, "outdated GitHub Action pins:\n  " + "\n  ".join(offenders)
 
 
