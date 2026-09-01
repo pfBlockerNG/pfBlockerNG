@@ -182,7 +182,7 @@ def _raw_checkout_line_count() -> int:
     inventing one the regex doesn't). Comment lines are excluded here -- the
     same predicate _find_checkout_sites applies when picking a block's
     checkout line -- so a documentation example like `# uses:
-    actions/checkout@v6` can never make the two sides disagree; a REAL
+    actions/checkout@v7` can never make the two sides disagree; a REAL
     duplicate `uses:` key inside one step is invalid YAML and out of scope."""
     count = 0
     for path in _workflow_files():
@@ -205,6 +205,24 @@ def test_enumeration_is_non_vacuous() -> None:
         f"found zero actions/checkout sites under {WORKFLOWS_DIR} (globs: {_WORKFLOW_GLOBS}) -- "
         f"a broken enumeration must never silently pass by finding nothing."
     )
+
+
+def test_checkout_and_setup_uv_versions_are_current() -> None:
+    expected = {"actions/checkout": "v7", "astral-sh/setup-uv": "v10.0.1"}
+    seen: set[str] = set()
+    offenders: list[str] = []
+    for path in _workflow_files():
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            action_line = line.split("#", 1)[0].strip()
+            for action, version in expected.items():
+                prefix = f"uses: {action}@"
+                if action_line.startswith(prefix):
+                    seen.add(action)
+                    if action_line != f"{prefix}{version}":
+                        offenders.append(f"{path.name}:{line_number}: {action_line}")
+
+    assert seen == expected.keys(), f"expected action pins not found: {sorted(expected.keys() - seen)}"
+    assert not offenders, "outdated GitHub Action pins:\n  " + "\n  ".join(offenders)
 
 
 def test_walker_count_matches_raw_checkout_line_count() -> None:
@@ -259,7 +277,7 @@ def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path:
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        with:\n"
         "          ref: |\n"
         "            persist-credentials: false\n",
@@ -278,7 +296,7 @@ def test_only_a_direct_child_of_the_with_block_counts_as_a_declaration(tmp_path:
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        with:\n"
         "          ref: main\n"
         "          persist-credentials: false\n",
@@ -301,7 +319,7 @@ def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(
         "  demo:\n"
         "    steps:\n"
         "      - name: Checkout\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        env:\n"
         "          NOTES: |\n"
         "            with:\n"
@@ -324,7 +342,7 @@ def test_a_decoy_with_block_inside_another_keys_scalar_is_not_the_input_mapping(
         "  demo:\n"
         "    steps:\n"
         "      - -weird: x\n"
-        "        uses: actions/checkout@v6\n"
+        "        uses: actions/checkout@v7\n"
         "        env: |\n"
         "         with:\n"
         "           persist-credentials: false\n",

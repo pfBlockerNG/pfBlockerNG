@@ -50,7 +50,7 @@ jobs:
       source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
     steps:
       - name: Checkout trusted workflow tools
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: devel
           fetch-depth: 0
@@ -58,7 +58,7 @@ jobs:
           path: trusted
 
       - name: Checkout explicit source ref as package input
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
@@ -197,7 +197,7 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
     steps:
       - name: Checkout trusted workflow tools
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
@@ -205,7 +205,7 @@ jobs:
           path: trusted
 
       - name: Checkout pinned source as package input
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
           fetch-depth: 0
@@ -213,7 +213,7 @@ jobs:
           path: source
 
       - name: Set up the pinned dependency-package toolchain
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.6"
 
@@ -355,7 +355,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted workflow tools for handoff validation
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
@@ -472,7 +472,7 @@ jobs:
     needs: [prepare, publish-nightly-oci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 1
@@ -518,7 +518,7 @@ jobs:
     needs: [prepare, publish-nightly-oci, validate-live-pages-install]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 1

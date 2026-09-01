@@ -73,7 +73,7 @@ jobs:
       build_matrix: ${{ steps.read.outputs.build_matrix }}
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0   # need history to reach the ci-metadata orphan ref
@@ -127,7 +127,7 @@ jobs:
       packages: read
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -270,13 +270,13 @@ jobs:
       actions: write         # dispatch image-refresh.yml direct legs
       packages: read         # oras pull/manifest-fetch of the smoke images
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: true   # push the tracker/* matrix-PR branches
           fetch-depth: 0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

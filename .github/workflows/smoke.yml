@@ -184,7 +184,7 @@ jobs:
       pytest_marker: ${{ steps.filter.outputs.pytest_marker }}
       pytest_filter: ${{ steps.filter.outputs.pytest_filter }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0   # reach the ci-metadata orphan ref + branch history (impacted diff)

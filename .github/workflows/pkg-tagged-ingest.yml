@@ -42,7 +42,7 @@ jobs:
       touched: ${{ steps.result.outputs.touched }}
       noop: ${{ steps.result.outputs.noop }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
@@ -92,7 +92,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
@@ -166,7 +166,7 @@ jobs:
     needs: [stage-pkg, prepare-live-gate, validate-live-pages-install]
     if: always() && needs.stage-pkg.result == 'success' && needs.stage-pkg.outputs.noop != 'true'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1

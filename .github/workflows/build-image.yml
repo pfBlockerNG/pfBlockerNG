@@ -111,7 +111,7 @@ jobs:
       py_flavor: ${{ steps.lookup.outputs.py_flavor }}
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -162,7 +162,7 @@ jobs:
       version: ${{ inputs.pfsense_ce_version }}
     steps:
       - name: Checkout (for scripts/)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -313,7 +313,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

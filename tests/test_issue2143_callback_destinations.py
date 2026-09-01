@@ -34,7 +34,7 @@ def test_manual_callback_validates_published_release_and_derives_tuple() -> None
 
 
 def test_published_callback_uses_full_history_for_branch_ancestry() -> None:
-    checkout = extract_between(PUBLISHED, "uses: actions/checkout@v6", "      - name: Classify")
+    checkout = extract_between(PUBLISHED, "uses: actions/checkout@v7", "      - name: Classify")
     assert "fetch-depth: 0" in checkout
 
 

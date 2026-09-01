@@ -667,10 +667,10 @@ jobs:
   build:
     needs: prepare
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha || github.ref }}
 """
@@ -738,7 +738,7 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.prepare.outputs.source_sha || github.ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
       - run: git checkout "$SOURCE_SHA"
@@ -763,7 +763,7 @@ jobs:
     env:
       PORTS_SHA: ${{ needs.prepare.outputs.ports_sha || github.ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.ports_sha }}
       - run: sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
@@ -788,7 +788,7 @@ jobs:
     env:
       PORTS_SHA: ${{ needs.prepare.outputs.ports_sha || github.ref }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.ports_sha }}
       - run: sh scripts/build-leg.sh --ports-ref=$PORTS_SHA

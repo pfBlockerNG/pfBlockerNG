@@ -55,14 +55,14 @@ jobs:
        github.event.workflow_run.event == 'schedule')
     steps:
       - name: Checkout devel
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: true   # need to push the refreshed table to devel via git push
           ref: devel
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

@@ -151,13 +151,13 @@ jobs:
             *) echo "::error::dry_run input must be exactly 'true' or 'false' (got: '${INPUT_DRY}')"; exit 1 ;;
           esac
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0          # full history: tag ancestry + log range
           persist-credentials: false
 
       - name: Check out the release helpers (TRUSTED ref, sparse)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # SECURITY: this job holds contents:write AND a GH_TOKEN, and it executes
           # release-version.sh + release-ci-gate.sh AS SHELL. The next step resets the
@@ -497,7 +497,7 @@ jobs:
       # and by tag-release's gate.
       run_suites:   ${{ steps.channel.outputs.run_suites }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # need full history to reach ci-metadata ref and tag
           persist-credentials: false
@@ -620,7 +620,7 @@ jobs:
 
       - name: Check out pinned dependency-builder source
         if: steps.pins.outputs.has_dependencies == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || steps.destinations.outputs.source_sha }}
           fetch-depth: 1
@@ -725,7 +725,7 @@ jobs:
       created: ${{ steps.stamp.outputs.created }}
       commit:  ${{ steps.stamp.outputs.commit }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # issue #1855: the PINNED release commit (prepare-release), not the tag —
           # nothing is tagged yet at this point. Empty on dry-run (prepare-release is
@@ -778,7 +778,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare-release.outputs.sha }}
           fetch-depth: 0             # full history + tags: the resume check below
@@ -865,7 +865,7 @@ jobs:
       source_sha:        ${{ needs.prepare-release.outputs.sha }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The PINNED release commit — identical content to the tag tag-release just
           # pushed onto it, without depending on the tag having propagated.
@@ -874,7 +874,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out the release helpers (TRUSTED ref, sparse)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # SECURITY: same rule as prepare-release. This job holds
           # contents:write and executes release-version.sh AS SHELL (the metadata step
@@ -1211,7 +1211,7 @@ jobs:
 
     steps:
       - name: Checkout the pinned release source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # issue #1855: build from prepare-release's PINNED SHA — the channel-branch
           # tip including the committed changelog. The tag is created LATER, on this
@@ -1237,7 +1237,7 @@ jobs:
 
       - name: Set up the pinned dependency-package toolchain
         if: steps.extras.outputs.extra_pkgs != '[]'
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.6"
           activate-environment: true
@@ -1480,7 +1480,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 

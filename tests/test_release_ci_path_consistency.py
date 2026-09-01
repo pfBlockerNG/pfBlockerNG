@@ -144,7 +144,7 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
     assert "dependency_packages: ${{ steps.dependencies.outputs.dependency_packages || '{}' }}" in read_matrix
     assert read_matrix.count("git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports") == 1
     builder_checkout = extract_step(release, "Check out pinned dependency-builder source")
-    assert "uses: actions/checkout@v6" in builder_checkout
+    assert "uses: actions/checkout@v7" in builder_checkout
     assert (
         "ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || "
         "steps.destinations.outputs.source_sha }}" in builder_checkout

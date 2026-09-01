@@ -89,7 +89,7 @@ jobs:
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0

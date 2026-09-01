@@ -33,7 +33,7 @@ jobs:
       channel: ${{ steps.resolve.outputs.channel }}
       portversion: ${{ steps.resolve.outputs.portversion }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           repository: pfBlockerNG/pfBlockerNG
