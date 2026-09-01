@@ -4,8 +4,8 @@ Scope: PR review and signed-linear landing. Load when: landing a PR or applying 
 
 - **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
-Composes with [`workflow.md`](workflow.md) review/retry limits, [`waits.md`](waits.md)
-bounded-wait rules, and [`coderabbit.md`](coderabbit.md) Fair Usage/spend rules.
+See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and
+[`coderabbit.md`](coderabbit.md) for review, wait, and spend rules.
 
 ## Fixed floors (never weaken)
 
@@ -164,26 +164,26 @@ Poll until every **required** check complete, excluding only the advisory contex
 
 ### Land and clean up
 
-- At the gate bind `reviewed_sha=$(git rev-parse HEAD)` and
-  `reviewed_base=$(git rev-parse origin/devel)`. Before either path run `git fetch origin`
-  and `git fetch origin "pull/N/head"`; resolve `remote_pr_head="$(git rev-parse FETCH_HEAD)"`
-  and `local_head="$(git rev-parse HEAD)"`. Require
-  `test "$remote_pr_head" = "$reviewed_sha"`, `test "$local_head" = "$reviewed_sha"`, and
-  `origin/devel == reviewed_base`; on mismatch stop and restart affected review plus exact-head CI.
+- Bind `reviewed_sha=$(git rev-parse HEAD)` and
+  `reviewed_base=$(git rev-parse origin/devel)`. The PR head fence is:
+  `git fetch origin "pull/N/head"`; set `remote_pr_head="$(git rev-parse FETCH_HEAD)"`
+  and `local_head="$(git rev-parse HEAD)"`; run `test "$remote_pr_head" = "$reviewed_sha"`
+  and `test "$local_head" = "$reviewed_sha"`. Before either path run `git fetch origin`,
+  run the fence, and require `origin/devel == reviewed_base`; mismatch must stop and
+  restart affected review plus exact-head CI.
 - **GitHub-hosted path:** only with an atomic strict-base gate; otherwise use local. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
-  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification
-  and require the landed commit to be GitHub-signed.
-- **Maintainer-local path:** if the base moved, rebase, push the branch, and repeat affected
-  review plus exact-head CI. Otherwise recheck the three-way head identity
-  before push and before terminal PR/issue synchronization, verify every commit, then run
-  `git push origin HEAD:devel` without force. Fetch and require `origin/devel == reviewed_sha`,
-  repeat both head tests, post landed evidence, close the PR and issue, and verify both terminal states;
-  retain the worktree.
-- Delete the remote head only if it still equals `reviewed_sha`:
+  Other methods stay disabled. PR's state must read `MERGED`. Run `git fetch origin` after that verification and require a GitHub-signed commit.
+- **Maintainer-local path:** if the base moved, rebase, push the branch, and repeat review
+  plus CI. The PR head fence runs before push and before terminal PR/issue synchronization.
+  Immediately before push, run the PR head fence, verify every commit, then run
+  `git push origin HEAD:devel` without force. After push, fetch `origin`, run the PR head fence again,
+  require `origin/devel == reviewed_sha`, post landed evidence, close the PR and issue,
+  and verify both terminal states; retain the worktree.
+- Delete the remote head with
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
-  If that lease fails after local closure, reopen the PR and issue, retain the worktree,
-  and restart review; the terminal-state claim is void.
+  On lease failure, retain it and the worktree. If the PR is `CLOSED`, reopen the PR and issue
+  and restart review. If it is already `MERGED`, keep terminal state and route newer head commits to a new PR.
   Do not pass `--delete-branch` to GitHub merge commands.
 - From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
   `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup

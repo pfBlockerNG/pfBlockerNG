@@ -76,26 +76,29 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
         "origin/devel == reviewed_base",
     ):
         assert checkpoint in merge
-    base_fetch = merge.index("git fetch origin")
     pr_fetch = merge.index('git fetch origin "pull/N/head"')
     resolve = merge.index('remote_pr_head="$(git rev-parse FETCH_HEAD)"')
     remote_guard = merge.index('test "$remote_pr_head" = "$reviewed_sha"')
     local_guard = merge.index('test "$local_head" = "$reviewed_sha"')
+    base_fetch = merge.index("Before either path run `git fetch origin`")
+    fence_call = merge.index("run the fence", base_fetch)
     base_guard = merge.index("origin/devel == reviewed_base")
-    assert base_binding < base_fetch < pr_fetch < resolve < remote_guard < base_guard < hosted
-    assert local_guard < hosted
+    assert base_binding < pr_fetch < resolve < remote_guard < local_guard < base_fetch
+    assert base_fetch < fence_call < base_guard < hosted
 
     local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
-    recheck = local.index("recheck the three-way")
+    pre_push_fence = local.index("Immediately before push, run the PR head fence")
     push = local.index("git push origin HEAD:devel")
-    post_fetch = local.index("Fetch and require")
-    repeat_heads = local.index("repeat both head tests")
+    post_push_fence = local.index("After push, fetch `origin`, run the PR head fence again")
     evidence = local.index("post landed evidence")
     close = local.index("close the PR and issue")
     terminal = local.index("verify both terminal states")
     delete = local.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
-    rollback = local.index("reopen the PR and issue")
-    assert recheck < push < post_fetch < repeat_heads < evidence < close < terminal < delete < rollback
+    closed_rollback = local.index("If the PR is `CLOSED`")
+    merged_outcome = local.index("If it is already `MERGED`")
+    new_pr = local.index("route newer head commits to a new PR")
+    assert pre_push_fence < push < post_push_fence < evidence < close < terminal < delete
+    assert delete < closed_rollback < merged_outcome < new_pr
     assert "before push and before terminal PR/issue synchronization" in local
     assert "restart affected review plus exact-head CI" in merge
     assert "every landed commit is locally signed and verified" in landing
