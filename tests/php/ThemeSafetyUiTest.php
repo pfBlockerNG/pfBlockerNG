@@ -137,6 +137,18 @@ final class ThemeSafetyUiTest extends TestCase
 			'sibling element colour'    => ['$s = "<span style=\"color: black;\"></span><input style=\"background-color: #123456;\">";', FALSE],
 			'same element colour'       => ['$s = "<span style=\"color: black; background-color: #FFFF00;\">x</span>";', TRUE],
 			'single-quoted attribute'   => ['$s = \'<input style="background-color: #123456;">\';', FALSE],
+			// Issue #2952's own reproduction, which the issue read as a masking defect: a `}`
+			// inside an escaped-quote span was said to pop the declaration depth so the
+			// neighbouring css({color: red}) laundered the background. The outcome was real
+			// -- nothing was reported -- but the mechanism was not. The background was never
+			// DETECTED, because its property name is delimited by escaped quotes, so no
+			// depth was ever resolved and the mask was never consulted. Kept as the issue's
+			// black-box repro; the vocabulary rows in backgroundSyntaxes are what pin the fix.
+			'issue 2952 repro'          => ['$s = "$(x).css({tip: \"}\", \"background-color\": \"#123456\"}); $(y).css({color: \"red\"});";', FALSE],
+			// contextHasForeground() has no element awareness, so a two-arg .css('color', ...)
+			// must stay OUT of its vocabulary: accepting it lets a colour on one element
+			// launder a background on another. Pins the vocabulary's boundary, not a bug.
+			'cross-element .css'        => ["$(a).css('background-color', '#123456');\n$(b).css('color', '#000');", FALSE],
 			// An apostrophe in prose is not a string opener.
 			'apostrophe in prose'       => ["/* don't */ .a { background-color: #123456; } .b { color: red; }", FALSE],
 			'apostrophe, pair below'    => ["/* it's fine */ .a { background-color: #123456;\n color: red; }", TRUE],
@@ -336,6 +348,23 @@ final class ThemeSafetyUiTest extends TestCase
 			'js bare key'       => ['{ backgroundColor: "#fff" }', '{ backgroundColor: "#fff", color: "#000" }'],
 			'js quoted key'     => ['{ "background-color": "#fff" }', '{ "background-color": "#fff", "color": "#000" }'],
 			'js quoted camel'   => ['{ "backgroundColor": "#fff" }', '{ "backgroundColor": "#fff", "color": "#000" }'],
+			'esc quoted key'    => ['{ \"background-color\": \"#fff\" }', '{ \"background-color\": \"#fff\", \"color\": \"#000\" }'],
+			'esc quoted camel'  => ['{ \"backgroundColor\": \"#fff\" }', '{ \"backgroundColor\": \"#fff\", \"color\": \"#000\" }'],
+			'esc js bare key'   => ['{ backgroundColor: \"#fff\" }', '{ backgroundColor: \"#fff\", color: \"#000\" }'],
+			'esc jquery setter' => ['$(x).css(\"background-color\", \"#fff\");', '$(x).css({\"background-color\": \"#fff\", \"color\": \"#000\"});'],
+			'esc setProperty'   => ['e.style.setProperty(\"background-color\", \"#fff\");', 'e.style.setProperty(\"background-color\", \"#fff\"); e.style.setProperty(\"color\", \"#000\");'],
+			'esc style assign'  => ['e.style.backgroundColor = \"#fff\";', 'e.style.backgroundColor = \"#fff\"; e.style.color = \"#000\";'],
+			// A quote can carry more than one escape -- JS emitted into a JS string, or a
+			// value that has been json_encode()d twice. $bs is a run, not a single escape.
+			'double-escaped key' => ['{ \\\\"background-color\\\\": \\\\"#fff\\\\" }', '{ \\\\"background-color\\\\": \\\\"#fff\\\\", \\\\"color\\\\": \\\\"#000\\\\" }'],
+			// Every row above is a bare fragment, which is the one context where an escaped
+			// quote cannot actually occur. Inside a real PHP double-quoted literal the match
+			// offset decides the context enclosingString() reads, so a branch that starts ON
+			// the escaped quote reports a correctly-paired object (#3002 review, contract leg).
+			'esc key in php literal' => [
+				'$s = "$(x).css({\\"background-color\\": \\"#123456\\"});";',
+				'$s = "$(x).css({\\"background-color\\": \\"#123456\\", \\"color\\": \\"#000\\"});";',
+			],
 			'jquery setter'     => ["\$(x).css('background-color', '#fff');", "\$(x).css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on a var'   => ["\$el.css('background-color', '#fff');", "\$el.css({'background-color': '#fff', 'color': '#000'});"],
 			'jquery on this'    => ["this.css('background-color', '#fff');", "this.css({'background-color': '#fff', 'color': '#000'});"],
@@ -361,6 +390,127 @@ final class ThemeSafetyUiTest extends TestCase
 			'scan() must detect this background syntax: ' . $unpaired);
 		$this->assertSame([], self::scan($paired),
 			'contextHasForeground() must accept the pairing idiom native to this syntax: ' . $paired);
+	}
+
+	/**
+	 * Issue #2952: the escaped-quote branches capture the VALUE too, and the escape must
+	 * not land inside it. With a value class that admits a backslash, \"transparent\"
+	 * captures `transparent\` -- isTranslucent() then does not recognise it, and the guard
+	 * reports a transparent background as an unpaired opaque one. A false positive is the
+	 * one failure this guard cannot afford: it is what teaches people to ignore it.
+	 */
+	public function testAnEscapedTranslucentValueIsNotReported(): void
+	{
+		// [] below is also what an UNDETECTED background returns, so assert the before-state
+		// or the whole test passes with escaped-quote support removed entirely.
+		$this->assertNotSame([], self::scan('{ \"background-color\": \"#123456\" }'),
+			'sanity: an escaped opaque background must be detected, or [] below means nothing');
+		// Every branch that captures a value, not just the object key: the escape is consumed
+		// by the closing delimiter in each, and a branch that gets this wrong reports a
+		// transparent background as an unpaired opaque one.
+		foreach ([
+			'object key'   => '{ \"background-color\": \"transparent\" }',
+			'js bare key'  => '{ backgroundColor: \"transparent\" }',
+			'setProperty'  => 'e.style.setProperty(\"background-color\", \"transparent\");',
+			'style assign' => 'e.style.backgroundColor = \"transparent\";',
+		] as $branch => $source) {
+			$this->assertSame([], self::scan($source),
+				"the escape must not be captured as part of the colour ({$branch})");
+		}
+		$this->assertSame([], self::scan('{ \"background-color\": \"rgba(0, 0, 0, 0.5)\" }'),
+			'an escaped rgba() background is still translucent');
+	}
+
+	/**
+	 * A property whose name merely STARTS with "color" is not a foreground.
+	 *
+	 * contextHasForeground() returning TRUE suppresses a violation, so anything it wrongly
+	 * accepts is a false negative -- unreadable UI shipping unreported, which is the failure
+	 * this guard exists to prevent and the opposite direction from the one the escaped-quote
+	 * work was worried about. Every other foreground test asserts that a real pairing IS
+	 * accepted; this one asserts a non-pairing is REJECTED. color-scheme is live vocabulary
+	 * in this tree, so the setProperty spelling is a plausible next edit.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function foregroundLookalikes(): array
+	{
+		// One row per DISTINCT reason the pattern must reject, not one per spelling: the
+		// pattern has no boundary after `color`, so -scheme / -adjust / ful are the same
+		// check three times. Each row below fails for a reason no other row covers.
+		return [
+			// the closing delimiter: without it any color-prefixed property pairs
+			'prefix lookalike' => ['e.style.setProperty("color-scheme", "dark");'],
+			// the comma: without it a jQuery/DOM getter, which sets nothing, pairs
+			'getter, no value' => ['e.style.setProperty("color");'],
+			// the lookbehind: without it a method merely ending in setProperty pairs
+			'method suffix'    => ['el.mysetProperty("color", "#000");'],
+			// The three rows above all exercise the setProperty branch. The colon and
+			// assignment branches carry the same boundary and need the same pinning, or a
+			// widening there ships unseen (#3002 review, test-honesty leg).
+			'colon branch'     => ['.a { color-scheme: dark; }'],
+			'assign branch'    => ['e.style.colorScheme = "dark";'],
+		];
+	}
+
+	#[DataProvider('foregroundLookalikes')]
+	public function testAPropertyMerelyStartingWithColorDoesNotPair(string $lookalike): void
+	{
+		$this->assertNotSame([], self::scan('e.style.backgroundColor = "#123456"; ' . $lookalike),
+			'this must not be accepted as a foreground: ' . $lookalike);
+	}
+
+	/**
+	 * A backslash INSIDE a value must not end the value.
+	 *
+	 * Excluding backslashes from the value class keeps \"transparent\" from capturing
+	 * `transparent\`, but hides any value legitimately containing one -- a Windows path in
+	 * url(), a CSS escape like \0023. A lazy value keeps both right.
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public static function valuesContainingABackslash(): array
+	{
+		return [
+			'windows path' => ['$(x).css("background", "url(C:\\images\\bg.png)");'],
+			'css escape'   => ['e.style.backgroundColor = "\\0023123456";'],
+			'url escape'   => ['{ "background-color": "url(a\\b.png)" }'],
+			'js bare key'  => ['{ backgroundColor: "url(a\\b.png)" }'],
+		];
+	}
+
+	/**
+	 * A PCRE failure must not read as a clean file.
+	 *
+	 * scan() used to fall through to `return []` when preg_match_all() returned FALSE,
+	 * which is indistinguishable from "this source has no violations" -- the fail-open
+	 * shape #3011 closed elsewhere. The lazy value classes can exhaust the backtrack
+	 * limit on a long backslash run after an unterminated quote, so the error path is
+	 * reachable rather than theoretical.
+	 *
+	 * The limit is lowered for the duration rather than feeding scan() a flood, so the
+	 * test asserts the guard and not this machine's pcre.backtrack_limit.
+	 */
+	public function testAScanRegexFailureThrowsInsteadOfReportingNoViolations(): void
+	{
+		$src = '{ "background-color": "#123456" }' . "\n" . 'backgroundColor: "' . str_repeat('\\', 200);
+		$this->assertNotSame([], self::scan($src), 'the violation must be seen at the normal limit');
+
+		$restore = ini_get('pcre.backtrack_limit');
+		ini_set('pcre.backtrack_limit', '100');
+		try {
+			$this->expectException(RuntimeException::class);
+			self::scan($src);
+		} finally {
+			ini_set('pcre.backtrack_limit', $restore === FALSE ? '1000000' : $restore);
+		}
+	}
+
+	#[DataProvider('valuesContainingABackslash')]
+	public function testABackslashInsideAValueDoesNotHideTheBackground(string $source): void
+	{
+		$this->assertNotSame([], self::scan($source),
+			'a backslash inside the value must not stop the branch matching: ' . $source);
 	}
 
 	public function testCurrentTreeInventoryMatchesTheDatedTodo(): void
@@ -423,17 +573,32 @@ final class ThemeSafetyUiTest extends TestCase
 		// issue #2864: every shape that can set a background, not just the declaration and
 		// the bare object key. Named groups, because an alternation numbers groups globally
 		// and a hand-written backreference silently points at the wrong branch.
-		if (preg_match_all(
+		//
+		// issue #2952: a delimiting quote may arrive backslash-escaped (JS emitted from a
+		// PHP double-quoted string), and an unescaped-only vocabulary reads that as no
+		// background at all -- silently exempt rather than reported. Values are lazy, not
+		// backslash-excluding: a backslash inside url() or a CSS escape is part of the value.
+		$bs = '\\\\*';
+		$matched = preg_match_all(
 			'/background(?:-color)?\s*:\s*(?<css>[^;}\n]+)'
-			. '|backgroundColor\s*:\s*(?<jsq>["\'])(?<js>[^"\']+)\k<jsq>'
-			. '|(?<objq>["\'])background(?:-color|Color)?\k<objq>\s*:\s*(?<objvq>["\'])(?<obj>[^"\']*+)\k<objvq>'
-			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*(?<setq>["\'])background(?:-color|Color)?\k<setq>\s*,\s*'
-			. '(?<setvq>["\'])(?<set>[^"\']*+)\k<setvq>'
-			. '|\.style\.backgroundColor\s*=\s*(?<domq>["\'])(?<dom>[^"\']*+)\k<domq>/i',
+			. '|backgroundColor\s*:\s*' . $bs . '(?<jsq>["\'])(?<js>[^"\']*?)' . $bs . '\k<jsq>'
+			. '|' . $bs . '(?<objq>["\'])background(?:-color|Color)?' . $bs . '\k<objq>\s*:\s*'
+			. $bs . '(?<objvq>["\'])(?<obj>[^"\']*?)' . $bs . '\k<objvq>'
+			. '|(?:\.css\(|(?<![A-Za-z0-9_])setProperty\()\s*' . $bs . '(?<setq>["\'])background(?:-color|Color)?' . $bs . '\k<setq>\s*,\s*'
+			. $bs . '(?<setvq>["\'])(?<set>[^"\']*?)' . $bs . '\k<setvq>'
+			. '|\.style\.backgroundColor\s*=\s*' . $bs . '(?<domq>["\'])(?<dom>[^"\']*?)' . $bs . '\k<domq>/i',
 			$source,
 			$matches,
 			PREG_OFFSET_CAPTURE
-		) !== FALSE) {
+		);
+		if ($matched === FALSE) {
+			// A PCRE failure is indistinguishable from a clean file, so falling through
+			// would suppress every violation in this source (#3002 review, correctness
+			// leg). Fail loudly instead -- the lazy value classes can exhaust the
+			// backtrack limit on a long backslash run after an unterminated quote.
+			throw new RuntimeException('ThemeSafety scan() regex failed: ' . preg_last_error_msg());
+		}
+		if ($matched > 0) {
 			$count = count($matches[0]);
 			for ($i = 0; $i < $count; $i++) {
 				$full = $matches[0][$i][0];
@@ -1195,10 +1360,16 @@ final class ThemeSafetyUiTest extends TestCase
 		// Every way a foreground can be set must be recognised here, or code paired through
 		// a form scan() detects but this does not reports as a violation. The two
 		// vocabularies are kept in lockstep by testEveryDetectedFormIsAlsoRecognisedWhenPaired.
+		// issue #2952: escaped-quote foregrounds pair escaped-quote backgrounds. Both
+		// delimiters stay required -- dropping the closing one accepts color-scheme.
+		// .css( is deliberately NOT here: this function has no element awareness, so
+		// accepting a two-arg .css('color', ...) would let a colour on a DIFFERENT element
+		// launder a background. The same-element case it would fix does not occur in the
+		// tree (issue #2970); a false negative for a false positive is a bad trade.
 		return (bool)preg_match(
-			'/(?<![A-Za-z0-9_-])color["\']?\s*:'
+			'/(?<![A-Za-z0-9_-])color(?:\\\\*["\'])?\s*:'
 			. '|(?<![A-Za-z0-9_-])color\s*='
-			. '|setProperty\(\s*["\']color["\']/i',
+			. '|(?<![A-Za-z0-9_])setProperty\(\s*\\\\*["\']color\\\\*["\']\s*,/i',
 			$ctx
 		);
 	}
