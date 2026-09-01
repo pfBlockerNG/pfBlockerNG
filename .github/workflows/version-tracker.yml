@@ -536,6 +536,25 @@ jobs:
       # PR body — a new family often tracks a NEWER FreeBSD than its sibling.
       # matrix_pr_ga_flip: beta entry whose final build was seen → status flip.
       # Contract pinned by tests/test_version_tracker_reconcile_contract.py.
+      - name: Configure pfblockerng-bot signing
+        if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.plan.outcome == 'success'
+        continue-on-error: true
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
+
       - name: Open matrix PRs for planned actions
         if: steps.probe_gate.outputs.probe_disabled != 'true' && steps.plan.outcome == 'success'
         continue-on-error: true
@@ -553,8 +572,6 @@ jobs:
 
           git fetch origin ci-metadata -q || true
           git show origin/ci-metadata:supported-versions.json > matrix_current.json
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # open_matrix_pr BRANCH TITLE BODY_FILE NEW_MATRIX_FILE — (re)build the
           # bot-owned tracker/* branch from ci-metadata + the new matrix file,

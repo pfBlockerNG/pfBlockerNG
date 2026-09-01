@@ -400,6 +400,24 @@ jobs:
       # continue-on-error is deliberate: the image already published, so a failure here
       # (including the refusal above) surfaces as an ::error:: annotation with no PR,
       # never a red run.
+      - name: Configure pfblockerng-bot signing
+        continue-on-error: true
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
+
       - name: Open activation PR (box-verified matrix update)
         continue-on-error: true
         env:
@@ -476,8 +494,6 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BR="tracker/matrix-activate-${VARIANT}-${FAMILY}"
           # Build the PR branch in a SEPARATE worktree: `git checkout -B` here
           # would swap the JOB's tree to the ci-metadata ref and break the
