@@ -40,7 +40,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 # CPython 3.11+ internal regex AST parser used by the literal-prefilter to extract
@@ -123,6 +122,28 @@ class PslRules:
     private_exact: tuple[str, ...] = ()
     private_wildcard: tuple[str, ...] = ()
     private_exception: tuple[str, ...] = ()
+    # Membership sets, built on first use and held on the instance. compare=False
+    # so value equality still reflects the rules alone, whether or not an
+    # instance has been indexed.
+    _index: tuple[_PslSets, _PslSets] | None = field(default=None, compare=False, repr=False)
+
+    def index(self) -> tuple[_PslSets, _PslSets]:
+        """(ICANN-only, ICANN+PRIVATE) membership sets for this rule set.
+
+        Built once per instance. Do NOT reintroduce an lru_cache keyed on this
+        dataclass: computing that key hashes all six rule tuples on every call,
+        and CPython does not cache tuple hashes, so the key costs more than the
+        scan the cache exists to avoid (issue #3046).
+
+        Unlocked on purpose. init_standard runs per unbound worker thread, so two
+        threads may race here; both build equal values and the worst case is one
+        wasted build.
+        """
+        idx = self._index
+        if idx is None:
+            idx = _psl_build_index(self)
+            object.__setattr__(self, "_index", idx)
+        return idx
 
 
 @dataclass(frozen=True)
@@ -238,13 +259,13 @@ def parse_psl_rules(text: str) -> PslRules:
 _PslSets = tuple[frozenset[str], frozenset[str], frozenset[str]]
 
 
-@lru_cache(maxsize=4)
-def _psl_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
-    """(ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) membership sets.
+def _psl_build_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
+    """Build the (ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) sets.
 
-    Built once per PslRules (frozen, hashable) so each resolution costs O(name
-    labels), never a scan over the ~10k shipped rules -- the classifier runs per
-    feed entry at build time and TLD-Allow runs on the live DNS query path.
+    Called once per PslRules via PslRules.index(), which holds the result on the
+    instance, so each resolution costs O(name labels) rather than a scan over the
+    ~10k shipped rules -- the classifier runs per feed entry at build time and
+    TLD-Allow runs on the live DNS query path.
     """
     icann: _PslSets = (
         frozenset(rules.icann_exact),
@@ -288,7 +309,7 @@ def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
     """Apply PSL prevailing-rule semantics for ICANN and combined sections."""
     normalized = _psl_normalize_name(name)
     labels = normalized.split(".")
-    icann_sets, combined_sets = _psl_index(rules)
+    icann_sets, combined_sets = rules.index()
     icann_suffix = _psl_prevailing(labels, *icann_sets)
     public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_labels = public_suffix.split(".")
@@ -6549,7 +6570,7 @@ def _tld_allow_blocks(
     except (AttributeError, TypeError, ValueError):
         # Structurally invalid names cannot be matched safely; fail closed.
         return True
-    icann_sets, combined_sets = _psl_index(rules)
+    icann_sets, combined_sets = rules.index()
     icann_suffix = _psl_prevailing(labels, *icann_sets)
     public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_roots = {
