@@ -92,8 +92,9 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "require `origin/devel == reviewed_sha`" in local
     pre_push_fence = local.index("Immediately before push, run the PR head fence")
     push = local.index("git push origin HEAD:devel")
-    post_push_fence = local.index("After push, fetch `origin`, run the PR head fence again")
-    evidence = local.index("post landed evidence")
+    post_push_base = local.index("After push, fetch `origin` and require `origin/devel == reviewed_sha`")
+    post_push_fence = local.index("run the PR head fence again", post_push_base)
+    evidence = local.index("Fence pass: post landed evidence")
     state_read = local.index("read the PR state")
     merged_state = local.index("If it is `MERGED`")
     open_state = local.index("If it is `OPEN`")
@@ -103,7 +104,7 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     closed_rollback = local.index("If the PR is `CLOSED`")
     merged_outcome = local.index("If it is already `MERGED`")
     new_pr = local.index("route newer head commits to a new PR")
-    assert pre_push_fence < push < post_push_fence < evidence < state_read
+    assert pre_push_fence < push < post_push_base < post_push_fence < evidence < state_read
     assert state_read < merged_state < open_state < close < terminal < delete
     assert delete < closed_rollback < merged_outcome < new_pr
     assert "before push and before terminal PR/issue synchronization" in local
@@ -111,6 +112,10 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert "retain the remote head and worktree; stop; do not clean up" in local
     assert "If the PR is `CLOSED`, reopen the PR and issue" in local
     assert "If it is already `MERGED`, keep terminal state and route newer head commits to a new PR" in local
+    assert "If the post-push PR head fence fails, `reviewed_sha` remains landed" in local
+    assert "leave or reopen the PR and review the advanced head" in local
+    assert "On lease failure, retain the remote head and worktree" in local
+    assert "If it is `MERGED`, verify the linked issue completed" in local
     assert "Any other state stops" in local
     assert "verify both terminal states and retain the worktree" in local
     assert "and restart review" in local
