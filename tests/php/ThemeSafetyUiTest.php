@@ -71,9 +71,11 @@ final class ThemeSafetyUiTest extends TestCase
 			// issue #3016: a literal that is merely APPENDED to is still a literal --
 			// widening isInterpolated() for concatenation must not launder this.
 			"el.style = 'background-color: #f0f0f0' + suffix;",
-			// issue #3016: the var() clause is word-anchored, so an identifier that
-			// merely ends in 'var' is not a custom-property reference.
+			// issue #3016: the var() clause is anchored on a CSS identifier boundary, so
+			// a name that merely ends in 'var' is not a custom-property reference. The
+			// hyphen matters: \b treats it as a boundary, which let foo-var( through.
 			'.pfb-subhdr { background-color: lavar(--pfb-bg); }',
+			'.pfb-subhdr { background-color: foo-var(--pfb-bg); }',
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
@@ -98,6 +100,9 @@ final class ThemeSafetyUiTest extends TestCase
 			// issue #3016: string concatenation is the pre-template-literal JS idiom for
 			// the same thing -- the colour position holds an operator, not a colour.
 			"el.style = 'background-color: ' + theme.bg + ';';",
+			// The same idiom broken across lines: scan() stops the value at the newline,
+			// so it arrives as a bare '+'. Still an operator, still not a colour.
+			"el.style = 'background-color: ' +\n\ttheme.bg;",
 			'colors: { background: null, segmentStroke: "#ffffff" }',
 		];
 		foreach ($good as $src) {
@@ -1234,7 +1239,7 @@ final class ThemeSafetyUiTest extends TestCase
 		return str_contains($value, '{$')
 			|| str_contains($value, '${')
 			|| (bool)preg_match('/\$[a-zA-Z_]/', $value)
-			|| (bool)preg_match('/\bvar\(/i', $value)
+			|| (bool)preg_match('/(?<![A-Za-z0-9_-])var\(/i', $value)
 			|| str_starts_with($value, '+');
 	}
 
