@@ -218,6 +218,11 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
     on ``pfblockerng_lint.php`` before typing is the proof the marker comes from
     ``lezerErrorLint()`` alone. Two-way: type ``(`` -> marker appears, clear back to empty
     -> marker disappears (proves the assertion is a real branch, not always-green).
+
+    The marker's SEVERITY is asserted too (issue #3059): a parse failure is reported as
+    a warning, never an error, because this grammar is a second implementation of
+    Python's regex parser and Python gates the save. Before #3059 this row was
+    severity-blind and stayed green in both directions.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -231,6 +236,11 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
 
     _clear_and_type(content, "(")
     expect(markers).to_have_count(1, timeout=LINT_TIMEOUT_MS)
+    # issue #3059: the SEVERITY, not just the presence. @codemirror/lint builds the
+    # class as "cm-lint-marker cm-lint-marker-" + severity (vendored dist/index.js:767),
+    # so this is the only place the red-to-yellow change is observable -- the node tests
+    # assert on the diagnostic object, not on what the browser renders from the bundle.
+    expect(markers).to_have_class(re.compile(r"\bcm-lint-marker-warning\b"), timeout=LINT_TIMEOUT_MS)
     _shot(page, screenshot_dir, "lint_regex_offline_after_marked")
 
     _clear_and_type(content, "")
