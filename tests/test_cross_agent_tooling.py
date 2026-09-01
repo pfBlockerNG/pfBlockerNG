@@ -401,8 +401,7 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     # Graphify's suffix map sends .inc to the Pascal extractor, so this repository's
     # PHP includes extract as a handful of incidental nodes (issue #2810). The fix is
     # upstream in Graphify-Labs/graphify#3075 and unreleased, so it rides as a patch
-    # applied to the installed package after every install. When upstream releases it,
-    # the patch, shared installer, universal call sites, and this test go away together.
+    # applied to the installed package after every install.
     patch = (ROOT / ".agents/patches/graphify-3075-language-overrides.patch").read_text(encoding="utf-8")
     assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
     assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
@@ -412,6 +411,13 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     install_command = "uv tool install --upgrade 'graphifyy>=0.9.51'"
     assert install_command in installer, "the shared Graphify installer lost its install/upgrade floor"
     assert 'sh "$patch_graphify"' in installer, "the shared Graphify installer does not apply the patch"
+
+    resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
+    quote_probe = (
+        '"$_graphify_interpreter" -I -c \'import shlex, sys; print(shlex.quote(sys.argv[1]))\' "$_graphify_interpreter"'
+    )
+    assert quote_probe in resolver, "uv trampoline validation lost isolated POSIX quoting by its owning interpreter"
+    assert "eval" not in resolver, "Graphify launcher validation must not evaluate launcher text"
 
     callers = {
         "scripts/setup-hooks.sh": 'sh "$script_dir/agent/ensure-graphify.sh" "$root"',

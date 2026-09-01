@@ -21,10 +21,12 @@ Describe 'patch-graphify.sh'
   # answer is read back off the package tree, so it flips exactly when a run patches
   # it -- an already-provided override and a fresh apply cannot both be faked.
   make_interpreter() {
+    python3_bin=$(command -v python3) || return 1
     mkdir -p "$(dirname "$1")"
     cat > "$1" <<INTERPRETER
 #!/bin/sh
 case "\$*" in
+  *shlex.quote*) exec "$python3_bin" "\$@" ;;
   *os.path.dirname*) printf '%s\n' '$package' ;;
   *activate_language_overrides*)
     grep -q 'def activate_language_overrides' '$package/rcfile.py' 2>/dev/null || exit 1
@@ -37,28 +39,32 @@ INTERPRETER
   }
 
   make_uv_trampoline_fixture() {
-    uv_tool_dir="$fixture/home with spaces/.local/share/uv/tools"
-    uv_tool_bin="$fixture/home with spaces/.local/bin"
+    uv_home=${1:-"$fixture/home with spaces"}
+    uv_tool_dir="$uv_home/.local/share/uv/tools"
+    uv_tool_bin="$uv_home/.local/bin"
     uv_python="$uv_tool_dir/graphifyy/bin/python"
     make_interpreter "$uv_python"
+    uv_python_token=$("$uv_python" -I -c 'import shlex, sys; print(shlex.quote(sys.argv[1]))' "$uv_python") || return 1
     mkdir -p "$uv_tool_bin"
     {
       printf '#!/bin/sh\n'
-      printf "'''exec' '%s' \"\$0\" \"\$@\"\n" "$uv_python"
+      printf "'''exec' %s \"\$0\" \"\$@\"\n" "$uv_python_token"
       printf "' '''\n"
       printf 'exit 0\n'
     } > "$uv_tool_bin/graphify"
     chmod +x "$uv_tool_bin/graphify"
     resolver_path="$fixture/resolver path"
     mkdir -p "$resolver_path"
-    for tool in dirname grep patch sed sh; do
+    for tool in cat dirname grep patch sed sh; do
       ln -s "$(command -v "$tool")" "$resolver_path/$tool"
     done
-    cat > "$resolver_path/uv" <<UV
+    printf '%s\n' "$uv_tool_bin" > "$resolver_path/uv-bin.out"
+    printf '%s\n' "$uv_tool_dir" > "$resolver_path/uv-tools.out"
+    cat > "$resolver_path/uv" <<'UV'
 #!/bin/sh
-case "\$*" in
-  'tool dir --bin') printf '%s\n' '$uv_tool_bin' ;;
-  'tool dir') printf '%s\n' '$uv_tool_dir' ;;
+case "$*" in
+  'tool dir --bin') cat "$(dirname "$0")/uv-bin.out" ;;
+  'tool dir') cat "$(dirname "$0")/uv-tools.out" ;;
   *) exit 9 ;;
 esac
 UV
@@ -223,6 +229,18 @@ RCFILE
     The stderr should include "$package"
     The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
     The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
+  End
+
+  It "patches through uv's real apostrophe quoting without evaluating launcher text"
+    injection_marker="$fixture/PWNED"
+    make_uv_trampoline_fixture "$fixture/home O'Brien \$(touch PWNED)"
+    When run env PATH="$resolver_path" sh -c 'cd "$1" && exec sh "$2"' _ "$fixture" "$script_abs"
+    The status should equal 0
+    The stderr should include 'applied Graphify-Labs/graphify#3075'
+    The stderr should include "$package"
+    The contents of file "$package/rcfile.py" should include 'activate_language_overrides'
+    The contents of file "$package/extract.py" should include 'SUFFIX_OVERRIDES = True'
+    The path "$injection_marker" should not be exist
   End
 
   Context 'uv-owned shell trampoline shape validation'
