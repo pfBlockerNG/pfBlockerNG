@@ -68,6 +68,14 @@ final class ThemeSafetyUiTest extends TestCase
 			'$tr_style = \'background-color: #F5FBF6;\';',
 			'<span style="font-size:12px; background-color: #424242;">',
 			'<hr style="height: 1px; border: none; background-color: #d6d6d6;"/>',
+			// issue #3016: a literal that is merely APPENDED to is still a literal --
+			// widening isInterpolated() for concatenation must not launder this.
+			"el.style = 'background-color: #f0f0f0' + suffix;",
+			// issue #3016: the var() clause is anchored on a CSS identifier boundary, so
+			// a name that merely ends in 'var' is not a custom-property reference. The
+			// hyphen matters: \b treats it as a boundary, which let foo-var( through.
+			'.pfb-subhdr { background-color: lavar(--pfb-bg); }',
+			'.pfb-subhdr { background-color: foo-var(--pfb-bg); }',
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
@@ -84,6 +92,17 @@ final class ThemeSafetyUiTest extends TestCase
 			'setAttribute(\'style\', "background: {$pfb[$u_key]}")',
 			// issue #2962: the JS mirror of the PHP row above -- scan() reads .js too.
 			'const s = `background-color: ${theme.bg}`;',
+			// issue #3016: var() is the CSS mirror of ${} -- the value is resolved from a
+			// custom property. It needs no .css file; an inline style attribute in a
+			// scanned .php file is enough.
+			'.pfb-subhdr { background-color: var(--pfb-bg); }',
+			'<span style="background-color: var(--pfb-bg);">Failed</span>',
+			// issue #3016: string concatenation is the pre-template-literal JS idiom for
+			// the same thing -- the colour position holds an operator, not a colour.
+			"el.style = 'background-color: ' + theme.bg + ';';",
+			// The same idiom broken across lines: scan() stops the value at the newline,
+			// so it arrives as a bare '+'. Still an operator, still not a colour.
+			"el.style = 'background-color: ' +\n\ttheme.bg;",
 			'colors: { background: null, segmentStroke: "#ffffff" }',
 		];
 		foreach ($good as $src) {
@@ -1212,9 +1231,16 @@ final class ThemeSafetyUiTest extends TestCase
 	private static function isInterpolated(string $value): bool
 	{
 		// '{$' is PHP, '${' a JS template literal -- scan() reads both (issue #2962).
+		// 'var(' is the CSS mirror of those, and a value STARTING with '+' is the
+		// pre-template-literal JS idiom: firstColorToken() strips the delimiting
+		// quotes, so "background-color: ' + theme.bg" arrives as "+ theme.bg". A
+		// literal that is merely appended to arrives as "#f0f0f0' + suffix" and stays
+		// a hit, which is why the '+' is anchored and not merely contained (#3016).
 		return str_contains($value, '{$')
 			|| str_contains($value, '${')
-			|| (bool)preg_match('/\$[a-zA-Z_]/', $value);
+			|| (bool)preg_match('/\$[a-zA-Z_]/', $value)
+			|| (bool)preg_match('/(?<![A-Za-z0-9_-])var\(/i', $value)
+			|| str_starts_with($value, '+');
 	}
 
 	private static function isTranslucent(string $value): bool
