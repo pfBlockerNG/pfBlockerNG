@@ -137,15 +137,9 @@ def test_resolver_throughput_is_indexed_not_linear_scan() -> None:
     The DNSBL build classifies every feed entry and TLD-Allow resolves on the live
     DNS query path, so per-lookup work proportional to the rule set is a defect.
 
-    issue #3051: this asserted only that 2000 resolves finished inside 2.0 s. That
-    ceiling is ~26x looser than the regression it exists to catch, so it stayed
-    green throughout issue #3046, where every lookup hashed all six rule tuples to
-    build an lru_cache key -- touching the whole rule set per resolve, the exact
-    failure named above. A duration also makes the verdict depend on the runner
-    rather than on the code. The property is now asserted structurally: a resolve
-    must neither hash the rule set nor rebuild the index. The elapsed time is kept
-    only as a coarse cap against an outright linear matcher and proves nothing on
-    its own.
+    Asserted structurally, never on a clock (issue #3051): a resolve must neither
+    hash the rule set nor rebuild the index. A duration cannot see a constant-factor
+    scan and makes the verdict depend on the runner.
     """
     import pathlib
     import time

@@ -401,16 +401,9 @@ def test_resolving_a_name_never_hashes_the_rule_set() -> None:
     """issue #3046: the membership index must not sit behind a cache keyed on
     ``PslRules``.
 
-    ``_psl_index`` was ``@lru_cache``d on the frozen dataclass, so every lookup
-    computed a key by hashing all six rule tuples. CPython does not cache tuple
-    hashes, so the key cost more than the scan the cache existed to avoid.
-    Hashing the rule set during a resolution is the mechanical signature of that
-    defect,
-    and it is what this asserts against: not a timing, which would be flaky, but
-    the operation whose cost was the defect.
-
-    Both call sites pay it: the per-entry classifier on the DNSBL build path and
-    TLD-Allow on the live DNS query path.
+    Computing such a key hashes all six rule tuples, and CPython does not cache
+    tuple hashes, so the key costs more than the scan the cache exists to avoid.
+    Asserted on the hashing itself rather than on a timing, which would be flaky.
     """
     rules = P.parse_psl_rules(PSL)
     hashed: list[str] = []
@@ -472,13 +465,9 @@ def test_the_instance_index_matches_a_direct_build() -> None:
 def test_the_live_query_path_does_not_rebuild_the_index_per_query() -> None:
     """issue #3046: TLD-Allow resolves through the memoised index too.
 
-    ``_tld_allow_blocks`` calls ``rules.index()`` on the live DNS query path,
-    the same method ``resolve_public_suffix`` uses on the build path. Counting
-    hashes alone does not cover it: swapping that one call site back to a direct
-    ``_psl_build_index(rules)`` rebuilds the sets on EVERY query while hashing
-    nothing, so a hash-count assertion stays green while the query path silently
-    pays the whole build. Count builds instead, after priming, so re-introducing
-    a per-query rebuild at this call site fails here.
+    ``_tld_allow_blocks`` reaches the index on the live DNS query path. Builds are
+    counted rather than hashes because un-memoising that call site rebuilds the
+    sets per query while hashing nothing, which a hash count cannot see.
     """
     rules = P.parse_psl_rules(PSL)
     containers = _allow_containers(rules)
