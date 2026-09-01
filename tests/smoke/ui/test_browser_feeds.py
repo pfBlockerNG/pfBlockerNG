@@ -208,6 +208,69 @@ def test_feeds_subtab_row_active_and_type_scoped(
 _THEME_CFG = "system/webgui/webguicss"
 _DARK_THEME = "pfSense-dark.css"
 
+# A fresh smoke box defines no custom IPv4 feed, so the Custom Feeds table renders no row
+# and nothing on the page is painted (durable RED: run 33531836648 -- "Feeds page rendered
+# no painted rows"). The probe therefore seeds ONE unmatched IPv4 list group -- an
+# example.invalid feed no predefined catalogue entry can match, so it lands in the Custom
+# Feeds table -- purely so a painted row exists to measure, and removes it again.
+_PROBE_ALIAS = "pfb3035ContrastProbe"
+_PROBE_HEADER = "pfb3035ContrastProbeFeed"
+_PROBE_URL = "https://example.invalid/pfb3035-contrast-probe.txt"
+_LIST_SNAP_OPEN = "<<<PFB3035LISTS>>>"
+_LIST_SNAP_CLOSE = "<<<PFB3035END>>>"
+
+
+def _snapshot_ipv4_lists(vm: helpers.SmokeVM) -> str | None:
+    """The IPv4 list root's exact serialized state, or ``None`` when the node is absent.
+
+    That root holds an ARRAY of list groups, so ``helpers.config_get_state`` cannot
+    round-trip it: it casts the value to a string, and restoring that would write the
+    literal ``'Array'`` over the box's real lists. serialize+base64 is the suite's
+    established array-node snapshot -- see ``test_category.py`` and
+    ``test_category_truncation_gate_render.py``.
+    """
+    result = helpers.php_eval(
+        vm,
+        f"$v = config_get_path({helpers._php_str(helpers.CFG_IP_V4_LISTS)}, NULL);\n"
+        f"echo {helpers._php_str(_LIST_SNAP_OPEN)}\n"
+        "  . ($v === NULL ? 'ABSENT' : 'PRESENT|' . base64_encode(serialize($v)))\n"
+        f"  . {helpers._php_str(_LIST_SNAP_CLOSE)};",
+    )
+    assert result.returncode == 0, (
+        f"failed to snapshot {helpers.CFG_IP_V4_LISTS}: rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    start = result.stdout.find(_LIST_SNAP_OPEN)
+    end = result.stdout.find(_LIST_SNAP_CLOSE)
+    assert start != -1 and end != -1, f"no delimited list snapshot in pfSsh.php output: {result.stdout!r}"
+    value = result.stdout[start + len(_LIST_SNAP_OPEN) : end].strip()
+    if value == "ABSENT":
+        return None
+    assert value.startswith("PRESENT|"), f"malformed list snapshot {value!r}"
+    return value[len("PRESENT|") :]
+
+
+def _restore_ipv4_lists(vm: helpers.SmokeVM, snapshot: str | None) -> None:
+    """Put the IPv4 list root back exactly, deleting the node when it was absent."""
+    if snapshot is None:
+        snippet = (
+            f"config_del_path({helpers._php_str(helpers.CFG_IP_V4_LISTS)});\n"
+            "write_config('pfBlockerNG smoke #3035: drop the Feeds contrast-probe list');\n"
+            "echo 'LISTS-RESTORE-OK';"
+        )
+    else:
+        snippet = (
+            f"config_set_path({helpers._php_str(helpers.CFG_IP_V4_LISTS)}, "
+            f"unserialize(base64_decode({helpers._php_str(snapshot)})));\n"
+            "write_config('pfBlockerNG smoke #3035: restore the prior IPv4 lists');\n"
+            "echo 'LISTS-RESTORE-OK';"
+        )
+    result = helpers.php_eval(vm, snippet)
+    assert result.returncode == 0 and "LISTS-RESTORE-OK" in result.stdout, (
+        f"failed to restore {helpers.CFG_IP_V4_LISTS}: rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+
 
 def test_painted_feed_rows_scope_legible_link_foregrounds(
     browser_page: Page,
@@ -219,19 +282,23 @@ def test_painted_feed_rows_scope_legible_link_foregrounds(
     Scenario:
       Given the box is switched to the real ``pfSense-dark.css`` theme (the theme whose
         explicit anchor palette overrides the row's inherited ``color: #212121``),
+      And one unmatched IPv4 list group is seeded so the Custom Feeds table renders a
+        painted row at all (a fresh box defines no custom feed, so nothing is painted),
       When the Feeds page is opened in the authenticated browser,
       Then exactly the rows painted with an inline background carry
         ``pfb-painted-feed-row``, every anchor inside those rows computes to the scoped
         ``#004D40`` and clears 4.5:1 against its own computed row background, and
         hover/focus computes to the scoped ``#003D33``.
-      Finally the box's prior theme state is restored exactly, including absence.
+      Finally the seeded list and the box's prior theme are both restored exactly,
+        including absence.
     """
     page = browser_page
 
-    # Only the read happens before the try: every statement that can leave the shared
-    # box on the dark theme -- the write itself and each assertion after it -- sits
-    # inside the try, so the finally restore always runs.
+    # Only the read-only snapshots happen before the try: every statement that can leave
+    # the shared box on the dark theme or carrying the probe list -- each write and each
+    # assertion after it -- sits inside the try, so the finally restores always run.
     prior_theme = helpers.config_get_state(smoke_vm, _THEME_CFG)
+    prior_lists = _snapshot_ipv4_lists(smoke_vm)
 
     try:
         applied = helpers.php_eval(
@@ -247,6 +314,29 @@ def test_painted_feed_rows_scope_legible_link_foregrounds(
 
         stored = helpers.config_get(smoke_vm, _THEME_CFG)
         assert stored == _DARK_THEME, f"{_THEME_CFG} is {stored!r} after the switch, expected {_DARK_THEME!r}"
+
+        seeded = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(helpers.CFG_IP_V4_LISTS)}, array(array(\n"
+            f"    'aliasname' => {helpers._php_str(_PROBE_ALIAS)},\n"
+            "    'action' => 'Deny_Both',\n"
+            "    'cron' => 'EveryDay',\n"
+            f"    'row' => array(array('header' => {helpers._php_str(_PROBE_HEADER)}, "
+            f"'url' => {helpers._php_str(_PROBE_URL)}, 'state' => 'Enabled', 'format' => 'auto'))\n"
+            ")));\n"
+            "write_config('pfBlockerNG smoke #3035: seed one unmatched IPv4 feed for the contrast probe');\n"
+            "echo 'LISTS-OK';",
+        )
+        assert seeded.returncode == 0 and "LISTS-OK" in seeded.stdout, (
+            f"failed to seed the probe list: rc={seeded.returncode} "
+            f"stdout={seeded.stdout!r} stderr={seeded.stderr!r}"
+        )
+
+        stored_alias = helpers.config_get(smoke_vm, f"{helpers.CFG_IP_V4_LISTS}/0/aliasname")
+        stored_url = helpers.config_get(smoke_vm, f"{helpers.CFG_IP_V4_LISTS}/0/row/0/url")
+        assert (stored_alias, stored_url) == (_PROBE_ALIAS, _PROBE_URL), (
+            f"probe list stored as {(stored_alias, stored_url)!r}, expected {(_PROBE_ALIAS, _PROBE_URL)!r}"
+        )
 
         _open(page, webui, f"{FEEDS_BASE}?type=ipv4")
 
@@ -289,6 +379,16 @@ def test_painted_feed_rows_scope_legible_link_foregrounds(
         first.focus()
         expect(first).to_have_css("color", "rgb(0, 61, 51)", timeout=JS_TIMEOUT_MS)
     finally:
-        helpers.config_restore_state(smoke_vm, _THEME_CFG, prior_theme)
-        restored = helpers.config_get_state(smoke_vm, _THEME_CFG)
-        assert restored == prior_theme, f"{_THEME_CFG} restored as {restored!r}, expected {prior_theme!r}"
+        # Nested so a failure putting the lists back cannot skip the theme restore.
+        try:
+            _restore_ipv4_lists(smoke_vm, prior_lists)
+            restored_lists = _snapshot_ipv4_lists(smoke_vm)
+            assert restored_lists == prior_lists, (
+                f"{helpers.CFG_IP_V4_LISTS} restored as {restored_lists!r}, expected {prior_lists!r}"
+            )
+        finally:
+            helpers.config_restore_state(smoke_vm, _THEME_CFG, prior_theme)
+            restored_theme = helpers.config_get_state(smoke_vm, _THEME_CFG)
+            assert restored_theme == prior_theme, (
+                f"{_THEME_CFG} restored as {restored_theme!r}, expected {prior_theme!r}"
+            )
