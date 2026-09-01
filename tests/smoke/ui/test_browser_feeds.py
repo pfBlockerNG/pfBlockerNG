@@ -208,13 +208,15 @@ def test_feeds_subtab_row_active_and_type_scoped(
 _THEME_CFG = "system/webgui/webguicss"
 _DARK_THEME = "pfSense-dark.css"
 
-# Four earlier ui_browser runs (33531836648, 33533391281, 33534796353, 33552741857) are NOT
-# evidence about this change: ui-tests.yml's checkout_ref input governs only the test-code
-# checkout, while the package under test is built from the workflow ref, and those runs were
-# dispatched against devel. They installed a devel package -- without this page's changes --
-# and ran this PR's tests against it, which is why an anchor read rgb(0, 150, 136) both
-# before and after a production edit. The durable proof is the PR-triggered labeled ui-tests
-# run, which builds the package from the PR merge ref.
+# Five earlier ui_browser runs (33531836648, 33533391281, 33534796353, 33551682383 and
+# 33552741857) are NOT evidence about this change. Every one of them installed a devel
+# package: ui-tests.yml's checkout_ref input governs only the test-code checkout, while the
+# build-pkg job builds the package from the workflow ref, and all five were dispatched against
+# devel. So they ran this PR's tests against a package without this page's changes, which is
+# why an anchor read rgb(0, 150, 136) both before and after a production edit -- including in
+# 33551682383, whose reading was cited to justify an !important that has since been reverted.
+# The durable proof is the PR-triggered labeled ui-tests run, which builds the package from
+# the PR merge ref.
 # The split stands on its own: tests/php/FeedsPaintedRowLinkContrastTest.php owns the
 # source-side proof (both row paths paint inline, and the page-local rules are scoped by that
 # inline background), and this row owns what PHP cannot see -- the real cascade under the
