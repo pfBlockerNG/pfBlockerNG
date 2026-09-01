@@ -1,11 +1,11 @@
 # Fresh-session ticket workflow — the contract
 
-- **Scope:** vendor-neutral protocol, map issue to merged PR (wayfinder map
+- **Scope:** vendor-neutral protocol, map issue to landed change plus terminal PR (wayfinder map
   [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383), resolved by ticket
   [#1385](https://github.com/pfBlockerNG/pfBlockerNG/issues/1385)).
 - **Load-when:** coordinate, claim, execute, review, or continue GitHub ticket under
   fresh-session workflow.
-- **Owner:** repo owner. **Last-verified:** 2026-07-16.
+- **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
 ## Principles (fixed by the map)
 
@@ -92,7 +92,7 @@ Every code PR gets independent adversarial review in fresh read-only context usi
 client's native reviewer surface, plus mechanical gates and CI. Reviewer never edits.
 Findings return as PR review comments. Loop limits below. Landing mechanics — review
 sources, reviewer contract, CI waits, and signed linear landing — specified in [`landing.md`](landing.md).
-  CodeRabbit is not automatic — it is asked for once, when the PR is ready to merge
+  CodeRabbit is not automatic — it is asked for once, when the PR is ready to land
   ([`coderabbit.md`](coderabbit.md)).
 
 ### Continuation
@@ -117,7 +117,7 @@ Fresh session re-claims ticket, reads packet + latest checkpoint + its Continue-
 | claimed/active | assignee | worker |
 | waiting on PR | open PR with a `Fixes #N` closing reference | worker |
 | blocked | open blocked-by relation | whoever discovers the dependency |
-| done | closed + resolution comment | worker after gates pass / merger |
+| done | closed + resolution comment | worker after landing |
 | cancelled | closed + comment stating why and what is NOT done | human (or worker on explicit human instruction) |
 
 Native signals replaced `WIP`/`Waiting PR` labels
