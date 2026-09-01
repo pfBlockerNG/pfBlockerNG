@@ -275,14 +275,20 @@ _has_force_refspec() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
 }
 
-# Merge methods match bare long flags, lowercase short clusters containing m/r,
-# and the exact truthy values accepted by gh's Boolean parser. Token boundaries
-# keep -R/--repo, -s clusters, and false-valued assignments allowed.
+# Model gh/pflag shorthand order: d/m/r/s are Boolean and may cluster; A/b/F/R/t
+# consume the remainder as data. In an assignment, earlier Booleans are true and
+# the final Boolean receives the value. This keeps value text and false methods
+# allowed while catching every parser-valid true m/r position.
+_BOOL_TRUE='(1|t|T|true|True|TRUE)'
+_BOOL_VALUE='(0|f|F|false|False|FALSE|1|t|T|true|True|TRUE)'
 _MERGE_BARE='(--merge|--rebase)'
-_MERGE_CLUSTER='-[a-z0-9]*[mr][a-z0-9]*'
-_MERGE_TRUE='(--merge|--rebase|-m|-r)=(1|t|T|true|True|TRUE)'
+_MERGE_CLUSTER="-[dmrs]*[mr][dmrs]*([AbFRt]${_SEP_NOT}*)?"
+_MERGE_ASSIGNED_PRIOR="-[dmrs]*[mr][dmrs]+=${_BOOL_VALUE}"
+_MERGE_ASSIGNED_LAST="-[dmrs]*[mr]=${_BOOL_TRUE}"
+_MERGE_TRUE_LONG="(--merge|--rebase)=${_BOOL_TRUE}"
 _has_forbidden_merge_method() {
-	printf '%s' "$seg" | grep -Eq "(^|${_SEP})(${_MERGE_BARE}|${_MERGE_CLUSTER}|${_MERGE_TRUE})(\$|${_SEP})"
+	printf '%s' "$seg" | grep -Eq \
+		"(^|${_SEP})(${_MERGE_BARE}|${_MERGE_CLUSTER}|${_MERGE_ASSIGNED_PRIOR}|${_MERGE_ASSIGNED_LAST}|${_MERGE_TRUE_LONG})(\$|${_SEP})"
 }
 _is_gh_pr_merge() {
 	printf '%s' "$seg" | grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+([^[:space:]]+[[:space:]]+)*pr[[:space:]]+([^[:space:]]+[[:space:]]+)*merge[[:space:]]'

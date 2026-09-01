@@ -1108,6 +1108,105 @@ Describe 'claude-bash-guard.sh'
       The status should be success
       The output should equal ""
     End
+
+    It 'E26: body value containing method letters beside squash -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -bsummary -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E27: subject value containing method letters beside squash -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -tsummary-with-r -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E28: merge method before attached author-email value -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -mAuser@example.com"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E29: rebase method before inherited repo shorthand -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -rR pfBlockerNG/pfBlockerNG"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E30: merge method before inherited repo shorthand -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -mR pfBlockerNG/pfBlockerNG"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E31: inherited repo shorthand value containing r beside squash -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -Rr -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E32: truthy rebase assignment after delete shorthand -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -dr=true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E33: truthy merge assignment after delete shorthand -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -dm=true"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E34: false rebase assignment after delete shorthand beside squash -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -dr=false -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E35: false merge assignment after delete shorthand beside squash -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -dm=false -s"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E36: earlier rebase remains true when a later shorthand is assigned false -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 -rd=false"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
   End
 
   # ── Rule D: a wait script backgrounded with & ───────────────────────────────
