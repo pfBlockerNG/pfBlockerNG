@@ -1281,14 +1281,25 @@ def test_tag_step_creates_and_pushes_an_annotated_tag_on_the_pinned_sha(tmp_path
     assert f"sha={older}" in (repo / "gh_output").read_text()
 
 
-def test_tag_step_resumes_a_tag_that_already_points_at_the_verified_sha(tmp_path: Path) -> None:
-    """Reuse an existing annotated tag only when it points to the pinned SHA."""
+def test_tag_step_resumes_a_signed_tag_that_already_points_at_the_verified_sha(tmp_path: Path) -> None:
+    """Reuse an existing signed annotated tag only when it points to the pinned SHA."""
     repo, head, _older = _tag_repo(tmp_path)
+    signing_key = tmp_path / "signing-key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(signing_key)],
+        check=True,
+        env=scrubbed_git_env(drop_git_vars=True),
+    )
+    _git(repo, "config", "gpg.format", "ssh")
+    _git(repo, "config", "user.signingkey", str(signing_key))
+    _git(repo, "config", "tag.gpgSign", "true")
     _git(repo, "tag", "-a", "v9.9.9.r1", "-m", "v9.9.9.r1", "-m", "pfBlockerNG-Release-Channel: testing", head)
+    assert "BEGIN SSH SIGNATURE" in _git(repo, "cat-file", "tag", "v9.9.9.r1")
     _git(repo, "push", "-q", "origin", "refs/tags/v9.9.9.r1")
     result = _run_tag_step(repo, "v9.9.9.r1", head)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _git(repo, "rev-list", "-n", "1", "refs/tags/v9.9.9.r1") == head
+    assert RELEASE_WORKFLOW.read_text(encoding="utf-8").count("--format='%(trailers)'") == 2
 
 
 def test_tag_step_refuses_a_stale_tag_pointing_at_other_code(tmp_path: Path) -> None:

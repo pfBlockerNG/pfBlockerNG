@@ -382,7 +382,7 @@ jobs:
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this release pins ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
-            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            TRAILERS=$(git for-each-ref --format='%(trailers)' "refs/tags/${TAG}")
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
             CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
@@ -844,7 +844,7 @@ jobs:
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this run built and verified ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
-            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            TRAILERS=$(git for-each-ref --format='%(trailers)' "refs/tags/${TAG}")
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
             CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
