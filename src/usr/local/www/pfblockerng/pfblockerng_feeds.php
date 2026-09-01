@@ -632,21 +632,19 @@ include_once('head.inc');
 /*
  * The dark theme sets anchors explicitly, so a painted row's inherited color: #212121 does
  * not reach its links. Scope the link foreground to the rows carrying one of the painted
- * backgrounds -- keyed off the inline background itself, because the live sortable table
- * normalises rows and drops a class attribute while preserving inline style. $tr_style is
- * the only inline background this page sets, so the attribute selector matches exactly the
- * painted rows and nothing else. The theme pins its anchor colour with !important, which no
- * amount of specificity or source order can outrank, so these declarations carry it too.
+ * backgrounds, keyed off the inline background the row already carries: $tr_style is the
+ * only inline background this page sets, so the attribute selector matches exactly those
+ * rows and needs no extra markup on them.
  */
 #pfb_table tr[style*="background-color"] a,
 #pfb_table2 tr[style*="background-color"] a {
-	color: #004D40 !important;
+	color: #004D40;
 }
 #pfb_table tr[style*="background-color"] a:hover,
 #pfb_table tr[style*="background-color"] a:focus,
 #pfb_table2 tr[style*="background-color"] a:hover,
 #pfb_table2 tr[style*="background-color"] a:focus {
-	color: #003D33 !important;
+	color: #003D33;
 }
 </style>
 <?php

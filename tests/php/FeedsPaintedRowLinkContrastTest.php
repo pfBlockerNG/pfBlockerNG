@@ -7,11 +7,9 @@ use PHPUnit\Framework\TestCase;
 /**
  * Painted Feeds rows keep visible link affordance on every shipped row background.
  *
- * The scoping must ride the inline background the rows already carry, NOT a row class:
- * the live sortable Feeds table normalises rows and strips their class attribute while
- * preserving inline style, so a class-scoped rule never reaches the rendered page
- * (observed on a real box in ui_browser run 33534796353 -- a row arrived with inline
- * background rgb(184, 184, 184) and no class).
+ * The scoping rides the inline background the rows already carry, so it needs no extra
+ * markup on the row: the four painted backgrounds are the only inline backgrounds this
+ * page sets, and both row emitters put them in the row's own style attribute.
  */
 final class FeedsPaintedRowLinkContrastTest extends TestCase
 {
@@ -123,12 +121,12 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 	}
 
 	/**
-	 * The page-local link rules, as a selector => ['color' => hex, 'important' => bool] map.
+	 * The page-local link rules, as a selector => foreground map.
 	 *
 	 * Parsed rather than regex-matched whole so grouping and ordering are free to
 	 * change without the assertions below pinning formatting.
 	 *
-	 * @return array<string, array{color: string, important: bool}>
+	 * @return array<string, string>
 	 */
 	private function pageLinkRules(): array
 	{
@@ -150,16 +148,13 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 				continue;
 			}
 			[$selectors, $body] = explode('{', $chunk, 2);
-			if (preg_match('/(?<![-\w])color:\s*(#[0-9a-fA-F]{6})(\s*!important)?\s*;/', $body, $color) !== 1) {
+			if (preg_match('/(?<![-\w])color:\s*(#[0-9a-fA-F]{6})\s*;/', $body, $color) !== 1) {
 				continue;
 			}
 			foreach (explode(',', $selectors) as $selector) {
 				$selector = trim((string) preg_replace('/\s+/', ' ', $selector));
 				if ($selector !== '') {
-					$rules[$selector] = [
-						'color'     => strtoupper($color[1]),
-						'important' => ($color[2] ?? '') !== '',
-					];
+					$rules[$selector] = strtoupper($color[1]);
 				}
 			}
 		}
@@ -220,24 +215,18 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 				$rules,
 				"painted Feeds rows must scope their link foreground by inline background: {$selector}"
 			);
-			$this->assertSame($color, $rules[$selector]['color'], $selector);
-			$this->assertTrue(
-				$rules[$selector]['important'],
-				"{$selector} must win the cascade with !important: the shipped dark theme pins its anchor "
-					. 'colour that way, so a merely more specific, later rule still loses and the link renders '
-					. 'rgb(0, 150, 136) on a painted row (run 33551682383)'
-			);
+			$this->assertSame($color, $rules[$selector], $selector);
 		}
 
-		foreach ($rules as $selector => $rule) {
-			if (!in_array($rule['color'], [self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR], TRUE)) {
+		foreach ($rules as $selector => $color) {
+			if (!in_array($color, [self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR], TRUE)) {
 				continue;
 			}
 			$this->assertMatchesRegularExpression(
 				self::SCOPED_SELECTOR_PATTERN,
 				$selector,
-				"{$selector} scopes a painted-row link colour by something other than the inline background; "
-					. 'the live sortable table strips row classes while keeping inline style (run 33534796353)'
+				"{$selector} scopes a painted-row link colour by something other than the inline "
+					. 'background the painted rows already carry'
 			);
 		}
 

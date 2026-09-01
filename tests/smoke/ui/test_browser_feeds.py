@@ -208,22 +208,20 @@ def test_feeds_subtab_row_active_and_type_scoped(
 _THEME_CFG = "system/webgui/webguicss"
 _DARK_THEME = "pfSense-dark.css"
 
-# Three exact-head browser REDs drove this shape. Runs 33531836648 and 33533391281 showed a
-# fresh smoke box renders NO painted Feeds row of its own (the predefined catalogue paints
-# nothing without aliases, and a seeded custom list never reached the rendered table), and run
-# 33534796353 then showed the real defect: a genuine row arrived with inline background
-# rgb(184, 184, 184) and NO class, because the live sortable table normalises rows and drops
-# their class while preserving inline style. So the scoping production ships -- and everything
-# graded here -- rides the inline background, never a class. Run 33551682383 then showed the
-# last cascade step: this very selector matched a real painted row, yet its anchor still
-# computed rgb(0, 150, 136), because the shipped dark theme pins anchor colour with
-# !important -- specificity and source order cannot beat that, so production declares its
-# scoped colours !important too.
-# tests/php/FeedsPaintedRowLinkContrastTest.php owns the source-side proof (both row paths
-# paint inline, and the page-local rules are scoped by inline background). This row owns what
-# PHP cannot see: the real cascade under the shipped pfSense-dark.css, over every genuine
-# painted row the box happens to render plus one synthetic row per production background so
-# all four are always measured. No config list is mutated.
+# Four earlier ui_browser runs (33531836648, 33533391281, 33534796353, 33552741857) are NOT
+# evidence about this change: ui-tests.yml's checkout_ref input governs only the test-code
+# checkout, while the package under test is built from the workflow ref, and those runs were
+# dispatched against devel. They installed a devel package -- without this page's changes --
+# and ran this PR's tests against it, which is why an anchor read rgb(0, 150, 136) both
+# before and after a production edit. The durable proof is the PR-triggered labeled ui-tests
+# run, which builds the package from the PR merge ref.
+# The split stands on its own: tests/php/FeedsPaintedRowLinkContrastTest.php owns the
+# source-side proof (both row paths paint inline, and the page-local rules are scoped by that
+# inline background), and this row owns what PHP cannot see -- the real cascade under the
+# shipped pfSense-dark.css, over every genuine painted row the box happens to render plus one
+# synthetic row per production background so all four are always measured. The synthetic rows
+# carry only the inline background and text production emits, so they cannot pass by a route
+# the live page lacks. No config list is mutated.
 _PAINTED_BACKGROUNDS = ("#F5FBF6", "#EEF7EE", "#A0B8A0", "#B8B8B8")
 _PROBE_HREF = "https://example.invalid/pfb3035-contrast-probe.txt"
 
