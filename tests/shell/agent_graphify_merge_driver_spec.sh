@@ -157,37 +157,15 @@ PATCH_GRAPHIFY
       cp scripts/lib/git-env-scrub.sh "$fixture/relative-helper/scripts/lib/"
       cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
 #!/bin/sh
-. "$(dirname "$0")/resolve-graphify.sh"
-graphify_bin=$(resolve_graphify_launcher) || exit 1
-interpreter=$(resolve_graphify_interpreter "$graphify_bin") || exit 1
-"$interpreter" -I -c 'pass' || exit 1
-printf 'patch-graphify\t%s\n' "$graphify_bin" >> "$GRAPHIFY_LOG"
+printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
 PATCH_GRAPHIFY
       chmod +x "$helperdir/patch-graphify.sh"
       rm -rf "$repo/scripts/agent"
 
       caller="$fixture/caller"
       relative_bin="$caller/relbin"
-      original_interpreter=$(command -v python3)
       mkdir -p "$relative_bin"
-      {
-        printf '#!%s\n' "$original_interpreter"
-        cat <<'PYTHON'
-import os
-import subprocess
-import sys
-
-with open(os.environ["GRAPHIFY_LOG"], "a", encoding="utf-8") as log:
-    log.write(f"original\t{os.getcwd()}\t{' '.join(sys.argv[1:])}\n")
-if sys.argv[1:] != ["hook", "install"]:
-    raise SystemExit(91)
-subprocess.run(
-    ["git", "config", "--local", "merge.graphify.driver", "graphify merge-driver %O %A %B"],
-    check=True,
-)
-PYTHON
-      } > "$relative_bin/graphify"
-      chmod +x "$relative_bin/graphify"
+      cp "$stubdir/graphify" "$relative_bin/graphify"
 
       decoy_marker="$fixture/decoy-executed"
       mkdir -p "$repo/relbin"
@@ -201,7 +179,7 @@ DECOY
 
       tool_path="$fixture/relative-tools"
       mkdir -p "$tool_path"
-      for tool in dirname git sed touch; do
+      for tool in dirname git touch; do
         ln -s "$(command -v "$tool")" "$tool_path/$tool"
       done
       ln -s "$(command -v dash || command -v sh)" "$tool_path/sh"
@@ -211,7 +189,53 @@ DECOY
         "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
       The status should equal 0
       The contents of file "$graphify_log" should equal \
-        "$(printf 'patch-graphify\t%s\noriginal\t%s\thook install' "$relative_bin/graphify" "$repo")"
+        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The path "$decoy_marker" should not be exist
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+    End
+
+    It 'absolutizes a relative uv fallback before entering a foreign target'
+      helperdir="$fixture/relative-uv-helper/scripts/agent"
+      mkdir -p "$helperdir" "$fixture/relative-uv-helper/scripts/lib"
+      cp "$script_abs" "$script_home/ensure-graphify.sh" "$script_home/resolve-graphify.sh" \
+        scripts/agent/agent_env.sh "$helperdir/"
+      cp scripts/lib/git-env-scrub.sh "$fixture/relative-uv-helper/scripts/lib/"
+      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
+#!/bin/sh
+printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
+PATCH_GRAPHIFY
+      chmod +x "$helperdir/patch-graphify.sh"
+      rm -rf "$repo/scripts/agent"
+
+      caller="$fixture/uv-caller"
+      relative_bin="$caller/relbin"
+      mkdir -p "$relative_bin"
+      cp "$stubdir/graphify" "$relative_bin/graphify"
+
+      decoy_marker="$fixture/uv-decoy-executed"
+      mkdir -p "$repo/relbin"
+      cat > "$repo/relbin/graphify" <<'DECOY'
+#!/bin/sh
+printf 'decoy\t%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
+touch "$DECOY_MARKER"
+"$GIT_TOOL" config --local merge.graphify.driver 'graphify merge-driver %O %A %B'
+DECOY
+      chmod +x "$repo/relbin/graphify"
+
+      tool_path="$fixture/relative-uv-tools"
+      mkdir -p "$tool_path"
+      for tool in dirname git touch; do
+        ln -s "$(command -v "$tool")" "$tool_path/$tool"
+      done
+      ln -s "$(command -v dash || command -v sh)" "$tool_path/sh"
+      ln -s "$stubdir/uv" "$tool_path/uv"
+      When run env PATH="$tool_path" UV_TOOL_BIN_FIXTURE=relbin \
+        GIT_TOOL="$tool_path/git" DECOY_MARKER="$decoy_marker" \
+        sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
+        "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
+      The status should equal 0
+      The contents of file "$graphify_log" should equal \
+        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
       The path "$decoy_marker" should not be exist
       The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
     End
