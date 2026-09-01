@@ -1443,7 +1443,7 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert project["dependency-groups"]["dep-pkg-build"] == [
         "pip==26.2.1",
-        "setuptools==75.6.0",
+        "setuptools==83.0.0",
         "wheel==0.45.1",
         "zstandard==0.25.0",
         "uv==0.12.6",
@@ -1452,7 +1452,7 @@ def test_dependency_build_group_and_lock_use_exact_pins() -> None:
     versions = {package["name"]: package["version"] for package in lock["package"]}
     assert {name: versions[name] for name in ("pip", "setuptools", "uv", "wheel", "zstandard")} == {
         "pip": "26.2.1",
-        "setuptools": "75.6.0",
+        "setuptools": "83.0.0",
         "uv": "0.12.6",
         "wheel": "0.45.1",
         "zstandard": "0.25.0",

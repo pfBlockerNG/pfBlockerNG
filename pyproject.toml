@@ -37,7 +37,7 @@ dev = [
 # interpreter/tool drift and disables build isolation; uv.lock supplies hashes.
 dep-pkg-build = [
     "pip==26.2.1",
-    "setuptools==75.6.0",
+    "setuptools==83.0.0",
     "wheel==0.45.1",
     "zstandard==0.25.0",
     "uv==0.12.6",
