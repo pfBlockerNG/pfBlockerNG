@@ -19,19 +19,15 @@ See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](
 - **Local fast-forward is not a bypass.** It requires the same PR, findings, exact-head
   CI, and catch-all gates; every landed commit is locally signed and verified, the base
   is rechecked immediately before push, and the update must be fast-forward.
-- **Advisory bots never gate.** `wait-checks.sh` excludes advisory contexts; bot state
-  never blocks CI or landing. Triage real findings, including security, as unsolicited
-  review, but never gate-count the bot.
+- **Advisory bots never gate.** Exclude their contexts; triage real findings on merit.
 - **Never request Copilot code review** (owner, 2026-08-01) or enable its rule/auto-request;
   strip only that rule when bundled. Triage one that arrives, but never gate-count it or
   publicly restate the ban.
 - **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
   role" for every leg, round, and verifier; never inherit or override it.
-- **Four leg reviewers, whole-PR diff, incremental focus.** Run four parallel read-only
-  lenses (contract · correctness/hostile input · test honesty · over-engineering).
-  Round 1 covers the full PR; each leg posts its reviewed SHA. Later rounds use that
-  leg's delta in full-PR context, preserve clean ground, recheck every defect, and rerun
-  only affected legs on small tier.
+- **Four independent read-only legs review the whole PR:** contract, correctness/hostile
+  input, test honesty, and over-engineering. Round 1 covers all. Later small-tier rounds
+  focus on that leg's recorded-head delta in full context and run only affected legs.
 - **Convergence rule.** Fix→re-review loop continue only while latest round returned `blocking` finding; all-nitpick or clean round close it (hard cap and CI-retry limits per workflow.md "Retry and fix-loop limits").
 - **Bounded waits.** Every background wait self-terminating (hard iteration cap + wall-clock deadline inside loop), swept instant task reach terminal state.
 - **Worktree isolation.** All rebase/push work happen in dedicated worktree the session created, never primary checkout, never foreign worktree.
@@ -184,8 +180,8 @@ Poll until every **required** check complete, excluding only the advisory contex
   Run `git fetch origin` after that verification and require the exact landed squash commit OID to be GitHub-signed.
 - **Maintainer-local path:** Immediately before push, run the PR head fence, verify every commit, then
   `git push origin HEAD:devel` without force. After push, fetch `origin`, run the PR head fence again,
-  and require `origin/devel == reviewed_sha`.
-- **Post-push PR head fence mismatch:** After `origin/devel == reviewed_sha` but the fetched PR head differs from `reviewed_sha`,
+  then run `git merge-base --is-ancestor "$reviewed_sha" origin/devel`. A non-descendant `origin/devel` stops for investigation; a descendant proves `reviewed_sha` landed.
+- **Post-push PR head fence mismatch:** After `reviewed_sha` is confirmed landed but the fetched PR head differs,
   read the PR state; retain the remote head branch and worktree; stop.
   - `MERGED` keeps terminal state and routes newer head commits to a new PR.
   - `OPEN` stays open and restarts affected review plus exact-head CI for the current head.

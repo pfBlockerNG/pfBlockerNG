@@ -89,7 +89,8 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert base_fetch < fence_call < base_guard < hosted
 
     local = extract_between(merge, "**Maintainer-local path:**", "From OUTSIDE")
-    assert "require `origin/devel == reviewed_sha`" in local
+    assert 'git merge-base --is-ancestor "$reviewed_sha" origin/devel' in local
+    assert "A non-descendant `origin/devel` stops" in local
     pre_push_fence = local.index("Immediately before push, run the PR head fence")
     push = local.index("git push origin HEAD:devel")
     post_push_fence = local.index("After push, fetch `origin`, run the PR head fence again")
@@ -99,7 +100,7 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     assert match_marker in local, "evidence and terminal synchronization need a fresh-fence success gate"
 
     mismatch = extract_between(local, mismatch_marker, match_marker)
-    assert "After `origin/devel == reviewed_sha` but the fetched PR head differs from `reviewed_sha`" in mismatch
+    assert "After `reviewed_sha` is confirmed landed but the fetched PR head differs" in mismatch
     assert "retain the remote head branch and worktree; stop" in mismatch
     mismatch_state = mismatch.index("read the PR state")
     assert mismatch_state < mismatch.index("`MERGED` keeps terminal state")
@@ -120,6 +121,9 @@ def test_landing_policy_pins_both_signed_linear_paths() -> None:
     open_state = matched.index("If it is `OPEN`")
     close = matched.index("close the PR and issue")
     terminal = matched.index("verify both terminal states")
+    assert "If it is `MERGED`, verify the linked issue completed" in matched
+    assert "Any other state stops" in matched
+    assert "verify both terminal states and retain the worktree" in matched
     delete = matched.index("--force-with-lease=refs/heads/<head>:<reviewed_sha>")
     assert pre_push_fence < push < post_push_fence < local.index(mismatch_marker) < local.index(match_marker)
     assert evidence < state_read < merged_state < open_state < close < terminal < delete
