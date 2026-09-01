@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/FailingFlockStream.php';
+
 use PHPUnit\Framework\TestCase;
 
 /** Runtime schedule source drives the real fixed tick. */
@@ -414,6 +416,41 @@ final class TickScheduleRuntimeTest extends TestCase
 		$this->assertSame(0, $this->feedRuns);
 		flock($lock, LOCK_UN);
 		fclose($lock);
+	}
+
+	public function testFeedPassAcquisitionErrorSkipsScheduledWorkWithoutClaimingContention(): void
+	{
+		$this->assertTrue(stream_wrapper_register('pfbtickfeedlockerror', PfbFailingFlockStream::class));
+		$dbdir = $GLOBALS['pfb']['dbdir'];
+		$before = file_get_contents($this->dir . '/pfb_due_ledger.json');
+		$GLOBALS['pfb_test_logger_calls'] = [];
+		try {
+			$GLOBALS['pfb']['dbdir'] = 'pfbtickfeedlockerror://state';
+
+			$this->tick();
+
+			$messages = array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message');
+			$this->assertContains(
+				'Tick: scheduled work skipped -- the feed-pass lock could not be acquired; see the pfBlockerNG log.',
+				$messages,
+				'an acquisition error must name the lock failure'
+			);
+			$this->assertNotContains(
+				'Tick: scheduled work deferred (another feed pass is running).',
+				$messages,
+				'an acquisition error must not claim another pass is running'
+			);
+			$this->assertSame(0, $this->feedRuns, 'an acquisition error must refuse scheduled feed work');
+			$this->assertSame($before, file_get_contents($this->dir . '/pfb_due_ledger.json'),
+				'an acquisition error must leave the schedule cache unchanged');
+			$this->assertFileDoesNotExist($this->stateDir . '/pfb_schedule_state.json',
+				'an acquisition error must not publish schedule state');
+			$this->assertFalse(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL),
+				'the refused tick must release its dispatcher lock');
+		} finally {
+			$GLOBALS['pfb']['dbdir'] = $dbdir;
+			stream_wrapper_unregister('pfbtickfeedlockerror');
+		}
 	}
 
 	public function testLegacyPendingApplyDispatchesWhenMasterOff(): void

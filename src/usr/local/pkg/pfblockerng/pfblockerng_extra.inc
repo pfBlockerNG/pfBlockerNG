@@ -7987,11 +7987,9 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 				$savemsg2 = ' : An update/reload pass is currently in progress, suppression will apply at the next reload';
 				break;
 			case 'lock_error':
-				// Wording mirrors the 'busy' arm's shape: the caller splices
-				// " and added to the ... customlist" onto the end of this string,
-				// so it must read as a clause that a conjunction can follow.
-				$savemsg2 = ' : The feed-pass lock could not be acquired (see the pfBlockerNG log),'
-					. ' suppression will apply at the next reload';
+				$savemsg2 = "Host IP address {$ip} was added to the IPv{$family} Suppression customlist, "
+					. 'but live suppression was deferred because the feed-pass lock could not be acquired; '
+					. 'see the pfBlockerNG log. It will apply at the next reload.';
 				break;
 			default:
 				$savemsg2 = " : Live punch failed [ {$apply['fail']} ], suppression will still apply at the next reload";
@@ -8015,7 +8013,9 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			if (!empty($descr)) {
 				$supp_dat .= " # {$descr}";
 			}
-			$result['savemsg'] = gettext("Host IP address {$ip}") . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
+			$result['savemsg'] = $apply['status'] === 'lock_error'
+				? gettext($savemsg2)
+				: gettext("Host IP address {$ip}") . gettext($savemsg2) . gettext(" and added to the IPv{$family} Suppression customlist.");
 			$data = '';
 			foreach ($supp_data as $line) {
 				$data .= "{$line}";

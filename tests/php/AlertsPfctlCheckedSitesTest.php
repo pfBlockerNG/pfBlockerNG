@@ -472,6 +472,25 @@ SH
 		);
 	}
 
+	public function testDeleteIpWhitelistLockErrorKeepsEntryAndSkipsPfctlAndWrites(): void
+	{
+		$clists = ['ipwhitelist4' => ['pfB_Permit_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.9' => "198.51.100.9\r\n"]]]];
+
+		$result = $this->withFeedPassLockError(
+			function () use (&$clists): array {
+				return pfb_alerts_oracle_delete_ipwhitelist("'198.51.100.9'", "'pfB_Permit_v4'", $clists);
+			}
+		);
+
+		$this->assertFalse($result['pfb_found']);
+		$this->assertStringContainsString('feed-pass lock could not be acquired', $result['savemsg']);
+		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
+		$this->assertArrayHasKey('198.51.100.9', $clists['ipwhitelist4']['pfB_Permit_v4']['data']);
+		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? [],
+			'an acquisition error must not persist config');
+	}
+
 	public function testDeleteIpWhitelistBusyKeepsEntryAndSkipsPfctlAndWrites(): void
 	{
 		$clists = ['ipwhitelist4' => ['pfB_Permit_v4' => ['base64_idx' => 0, 'data' => ['198.51.100.9' => "198.51.100.9\r\n"]]]];
@@ -557,6 +576,24 @@ SH
 		$this->assertTrue($result['redirect']);
 		$this->assertFileExists($GLOBALS['pfb']['ip_unlock']);
 		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']));
+	}
+
+	public function testIpRemoveLockErrorKeepsUnlockStoreAndSkipsPfctl(): void
+	{
+		$ip = '198.51.100.20';
+		$before = "{$ip},pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n";
+		$ip_unlock = [$ip => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], $before);
+
+		$result = $this->withFeedPassLockError(
+			static fn (): array => pfb_alerts_ip_action('lock', $ip, 'pfB_Deny_v4', '', [], $ip_unlock)
+		);
+
+		$this->assertStringContainsString('feed-pass lock could not be acquired', $result['savemsg']);
+		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']));
+		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
 	}
 
 	public function testIpRemoveLockBusyKeepsUnlockStoreAndSkipsPfctl(): void
@@ -726,6 +763,21 @@ SH
 		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
 	}
 
+	public function testIpRemoveUnlockLockErrorRecordsNothingAndSkipsPfctl(): void
+	{
+		$result = $this->withFeedPassLockError(
+			static fn (): array => pfb_alerts_ip_action(
+				'unlock', '198.51.100.25', 'pfB_Deny_v4', '', [], []
+			)
+		);
+
+		$this->assertStringContainsString('feed-pass lock could not be acquired', $result['savemsg']);
+		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertFileDoesNotExist($GLOBALS['pfb']['ip_unlock']);
+		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
+	}
+
 	public function testIpRemoveUnlockBusyRecordsNothing(): void
 	{
 		$lock = fopen("{$GLOBALS['pfb']['dbdir']}/pfb_feed_pass.lock", 'c');
@@ -774,6 +826,25 @@ SH
 			"{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update",
 			'a failed add must NOT touch the cron/update flag file'
 		);
+	}
+
+	public function testIpWhiteLockErrorSkipsPfctlAndAllDurableWrites(): void
+	{
+		$table = 'pfB_Whitelist_v4';
+		$clists = ['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]];
+
+		$result = $this->withFeedPassLockError(
+			static fn (): array => pfb_alerts_ip_action('ip_white', '198.51.100.30', $table, '', $clists, [])
+		);
+
+		$this->assertStringContainsString('feed-pass lock could not be acquired', $result['savemsg']);
+		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
+		$this->assertTrue($result['redirect']);
+		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['aliasdir']}/{$table}.txt");
+		$this->assertArrayNotHasKey('installedpackages', $GLOBALS['config'] ?? []);
+		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['permitdir']}/Whitelist_custom_v4.update");
 	}
 
 	public function testIpWhiteBusySkipsPfctlAndAllDurableWrites(): void
@@ -967,6 +1038,33 @@ SH
 		$this->assertTrue($result['redirect']);
 		// issue #1723: pfb_text_area_encode() normalizes the trailing CRLF to LF.
 		$this->assertSame("198.51.100.43/32\n", base64_decode(PfbConfig::read('ip/v4suppression')));
+	}
+
+	public function testAddSuppressLockErrorPersistsDurableSuppressionAndExplainsDeferredLiveWork(): void
+	{
+		$result = $this->withFeedPassLockError(
+			static fn (): array => pfb_alerts_ip_action(
+				'addsuppress',
+				'198.51.100.44',
+				'pfB_Deny_v4',
+				'',
+				['ipsuppression' => ['data' => []]],
+				[]
+			)
+		);
+
+		$this->assertSame(
+			'Host IP address 198.51.100.44 was added to the IPv4 Suppression customlist, '
+			. 'but live suppression was deferred because the feed-pass lock could not be acquired; '
+			. 'see the pfBlockerNG log. It will apply at the next reload.',
+			$result['savemsg']
+		);
+		$this->assertStringNotContainsString('mid-update', $result['savemsg']);
+		$this->assertSame("198.51.100.44/32\n", base64_decode(PfbConfig::read('ip/v4suppression')),
+			'the durable suppression-list add must succeed even though the live punch was refused');
+		$this->assertNotEmpty($GLOBALS['pfb_test_write_config_calls'] ?? []);
+		$this->assertFileExists($GLOBALS['pfb']['supptxt']);
+		$this->assertFileDoesNotExist($this->logPath, 'an acquisition error must not call pfctl');
 	}
 
 	public function testAddSuppressBusyStillPersistsStandingSuppression(): void

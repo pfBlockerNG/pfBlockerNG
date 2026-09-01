@@ -1284,6 +1284,72 @@ for ($i = 0; $i < 1200 && !file_exists('{stop}'); $i++) {{
         helpers.reset(vm)
 
 
+def test_ip_relock_acquisition_error_names_failure_and_keeps_live_and_store_state(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A real feed-pass lock acquisition error refuses a re-lock without claiming contention.
+
+    Given: a v4 feed host was unlocked through the Alerts POST, so it no longer
+        matches its live table and the unlock store records the host.
+    When: the feed-pass lock path is temporarily a directory and re-lock is posted.
+    Then: the rendered response names lock acquisition failure, never ``mid-update``,
+        and both the live table and unlock store remain unchanged.
+    """
+    vm = smoke_vm
+    target = "198.18.7.9"
+    sibling = "198.19.52.7"
+    lock_path = "/var/db/pfblockerng/pfb_feed_pass.lock"
+    feed_url = helpers.write_local_feed(vm, "ui_ip_relock_error.txt", f"{target}\n{sibling}\n")
+    spec = helpers.IpCase(aliasname="uiiprelockerr", feed_url=feed_url, header="uiiprelockerr")
+    table = spec.alias
+
+    helpers.inject(vm, spec)
+    helpers.reload(vm, "updateip")
+    helpers.apply_filter_sync(vm)
+    try:
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert matched, f"{target} expected to match pf table {table} before unlock; pfctl said: {raw!r}"
+        assert target not in _ip_unlock_hosts(vm), f"{target} already in {IP_UNLOCK_STORE} before the test"
+
+        resp = _post_action(webui, {"ip_remove": "unlock", "ip": target, "table": table})
+        assert not looks_like_login_page(resp.text), "ip_remove=unlock POST returned the login form (session lost)"
+        matched, raw = helpers.pfctl_table_test_raw(vm, table, target)
+        assert not matched, f"{target} still matches pf table {table} after unlock; pfctl said: {raw!r}"
+        assert _ip_unlock_hosts(vm).get(target) == table, (
+            f"expected {IP_UNLOCK_STORE} to record {target!r} -> {table!r}, got {_ip_unlock_hosts(vm)!r}"
+        )
+        table_before = sorted(helpers.pfctl_table_members(vm, table))
+        store_before = _ip_unlock_hosts(vm)
+
+        helpers.wait_no_active_pfb_task(vm)
+        try:
+            replace = vm.ssh(f"rm -f {lock_path} && mkdir {lock_path}")
+            assert replace.returncode == 0, (
+                f"failed to replace feed-pass lock file with a directory: "
+                f"rc={replace.returncode} stderr={replace.stderr!r}"
+            )
+            resp = _post_action(webui, {"ip_remove": "lock", "ip": target, "table": table})
+            assert not looks_like_login_page(resp.text), "lock-error ip_remove=lock POST returned the login form"
+            assert "feed-pass lock could not be acquired" in resp.text, (
+                f"acquisition-error feedback missing from Alerts response: {resp.text[:500]!r}"
+            )
+            assert "mid-update" not in resp.text, (
+                f"acquisition error was misreported as contention: {resp.text[:500]!r}"
+            )
+            assert sorted(helpers.pfctl_table_members(vm, table)) == table_before, (
+                "acquisition-error re-lock changed the live table"
+            )
+            assert _ip_unlock_hosts(vm) == store_before, f"acquisition-error re-lock changed {IP_UNLOCK_STORE}"
+        finally:
+            restore = vm.ssh(f"if [ -d {lock_path} ]; then rmdir {lock_path}; fi && touch {lock_path}")
+            assert restore.returncode == 0, (
+                f"failed to restore feed-pass lock path: rc={restore.returncode} stderr={restore.stderr!r}"
+            )
+    finally:
+        helpers.reset(vm)
+
+
 def test_ip_unlock_v6_carves_containing_range_relock_restores_and_spares_sibling(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
