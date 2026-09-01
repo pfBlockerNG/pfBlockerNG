@@ -77,11 +77,11 @@ final class WidgetSubmitPostGuardTest extends TestCase
 	 * trailing cleanup statement: on an exit path a trailing statement is never reached and
 	 * the shim directory survives the run.
 	 *
-	 * Three things, because the obvious one alone proves nothing. The child reports the
-	 * path it used; the test asserts that path was inside the window the parent watches,
-	 * that it is gone, and that the window is empty. Dropping the first two lets a shim
-	 * relocated out of the window pass while leaking -- absence of residue is not evidence
-	 * of cleanup unless you also know something was there to clean.
+	 * Two things, because the obvious one alone proves nothing. The child reports the path
+	 * it used; the test asserts that path was inside the window the parent watches, and
+	 * that the window is empty. Dropping the first lets a shim relocated out of the window
+	 * pass while leaking -- absence of residue is not evidence of cleanup unless you also
+	 * know something was there to clean.
 	 */
 	public function testWidgetRunLeavesNoShimResidue(): void
 	{
@@ -90,11 +90,13 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		// Location first, then absence. An empty residue list is equally satisfied by "the
 		// hook ran" and "the shim was never in the window we watched" -- so a shim relocated
 		// out of $base with the hook deleted would leave this green while leaking. Assert
-		// where it was before asserting it is gone.
+		// where it was before asserting the window is empty.
+		//
+		// There is deliberately no assertDirectoryDoesNotExist($result['shim']) here:
+		// runWidget() sweeps $base before it returns, so by this point a path inside $base
+		// is gone whether or not the widget's hook ran. It could never fail.
 		$this->assertStringStartsWith($result['base'] . '/', $result['shim'],
 			'the shim must be created inside the observed base, or the residue check watches nothing');
-		$this->assertDirectoryDoesNotExist($result['shim'],
-			'the shim the child reported outlived the widget run');
 		$this->assertSame([], $result['residue'],
 			'the include shim outlived the widget run: ' . implode(', ', $result['residue']));
 	}
