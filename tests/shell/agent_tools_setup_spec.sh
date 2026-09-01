@@ -157,9 +157,9 @@ CURL
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
   'self update')
-    # A uv that did not come from the standalone installer refuses to
-    # self-update and exits non-zero (issue: package-managed uv). The
-    # installer must treat that as maintenance, not a prerequisite.
+    # A self-update can fail -- transient network error, or a uv that did not
+    # come from the standalone installer. The provisioner must treat that as
+    # maintenance, not a prerequisite.
     if [ -n "${DEBIAN_UV_SELF_UPDATE_FAILS:-}" ]; then
       printf 'error: Self-update is only available for uv binaries installed via the standalone installation scripts.\n' >&2
       exit 1
@@ -485,14 +485,27 @@ GROK
   End
 
   It 'installs a per-seat uv when the only uv on PATH lives outside HOME'
-    # A root-owned /usr/local/bin/uv satisfies `command -v uv`, so the standalone
-    # installer never runs: every seat shares one uv that no seat can update, and
-    # the two boxes drift to different versions (#3010). The seat's own uv must be
-    # provisioned regardless of what is already on PATH outside its HOME.
+    # issue #3010: a uv outside this seat must not satisfy provisioning of its own.
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should include 'https://astral.sh/uv/install.sh'
     The path "$home/.local/bin/uv" should be executable
+    # Without this the example also passes an "always install" implementation:
+    # the foreign uv must be left alone, not adopted and self-updated.
+    The contents of file "$tool_log" should not include 'uv:self update'
+  End
+
+  It 'converges on the seat uv when XDG_BIN_HOME lives outside HOME'
+    # The seat's own uv is installed into $xdg_bin_home, which XDG_BIN_HOME can put
+    # outside HOME. Testing ownership against HOME alone re-classifies that uv as
+    # foreign on every later run, so it is reinstalled instead of self-updated.
+    custom_xdg_bin="$fixture/custom xdg bin"
+    When run env XDG_BIN_HOME="$custom_xdg_bin" \
+      sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
+    The path "$custom_xdg_bin/uv" should be executable
   End
 
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
@@ -1024,12 +1037,13 @@ CONFIG
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
   End
 
-  It 'continues when a package-managed uv refuses to self-update'
+  It "continues when the seat's own uv refuses to self-update"
     # `uv self update` is maintenance, not a prerequisite: every later use is
-    # `uv tool install --upgrade`, which a package-managed uv performs happily.
-    # A uv installed by apt/curl-to-/usr/local rather than the standalone script
-    # exits non-zero here, and under `set -eu` that aborted the whole run before
-    # a single tool was installed.
+    # `uv tool install --upgrade`, which any uv performs happily. A self-update
+    # can still fail -- a transient network error, or a uv the seat did not get
+    # from the standalone installer -- and under `set -eu` that aborted the whole
+    # run before a single tool was installed. Only a seat-owned uv reaches this
+    # call now, so the fixture seeds one.
     export DEBIAN_UV_SELF_UPDATE_FAILS=1
     seat_uv
     When run sh "$script_abs" "$repository"
