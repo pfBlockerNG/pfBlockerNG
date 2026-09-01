@@ -35,6 +35,8 @@ dev = [
     # tree-sitter-php, so a file the GRAMMAR chokes on is half extracted while
     # `php -l` still calls it clean. The parse assertion needs the same grammar
     # extraction uses, pinned exact so a bump is a diff and not a moved verdict.
+    # Unlike the three above it is imported unguarded: a missing grammar must
+    # ERROR, never importorskip itself into a green run with nothing parsed.
     "tree-sitter==0.25.2",
     "tree-sitter-php==0.24.1",
 ]
