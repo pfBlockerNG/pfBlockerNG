@@ -38,7 +38,7 @@ dev = [
 dep-pkg-build = [
     "pip==26.2.1",
     "setuptools==83.0.0",
-    "wheel==0.45.1",
+    "wheel==0.46.2",
     "zstandard==0.25.0",
     "uv==0.12.6",
 ]
