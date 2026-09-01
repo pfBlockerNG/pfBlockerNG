@@ -418,7 +418,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					}
 				?>
 
-		<tr<?=!empty($tr_style) ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
+		<tr<?=$tr_style !== '' ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
 			<td>
 					<?php
 						// $ftype is always one of ipv4/ipv6/dnsbl here; the default keeps
@@ -865,7 +865,7 @@ print ($section);
 								}
 				?>
 
-			<tr<?=!empty($tr_style) ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
+			<tr<?=$tr_style !== '' ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
 				<td>
 					<?php
 								if ($type != $p_type) {
