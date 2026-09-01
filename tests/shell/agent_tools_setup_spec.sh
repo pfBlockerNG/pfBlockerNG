@@ -508,6 +508,20 @@ GROK
     The path "$custom_xdg_bin/uv" should be executable
   End
 
+  It 'keeps a seat uv that lives under HOME but not in the XDG bin dir'
+    # PATH also carries $HOME/.cargo/bin, so a seat can legitimately own a uv that
+    # is not at $xdg_bin_home. That is what the HOME alternative of the guard
+    # covers, and without this example dropping it ships green.
+    rm -f "$activebin/uv"
+    custom_xdg_bin="$fixture/custom xdg bin"
+    mkdir -p "$home/.cargo/bin"
+    cp "$installables/uv" "$home/.cargo/bin/uv"
+    When run env XDG_BIN_HOME="$custom_xdg_bin" sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 0 ]
+  End
+
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
     cat > "$activebin/uv" <<'UNMANAGED_UV'
 #!/bin/sh
