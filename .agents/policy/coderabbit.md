@@ -76,6 +76,22 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
    - **NOACK / NOTPRESENT / TIMEOUT** → re-ask **once** with a fresh
      window. Still silent → CodeRabbit is unavailable; the legs
      carry the review step. Never a second silent-nudge.
+   - **DECLINE** (the PR base is not the default branch) — post one comment
+     asking for a full review (`@ coderabbitai trigger full review and tell me
+     when you are finished`), then re-arm finished-only with `--since` now.
+     Never re-trigger on a repeat decline.
+   - **The bot's wording drifts.** If diagnostics show a finished review the
+     matcher missed, read the comment body and adjust the pattern rather than
+     waiting out the timeout. Real review content beside a quota notice is
+     FINISHED — content beats the quota phrase.
+   - **Multiple handles:** run the wait once per handle and continue when all
+     **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask
+     machinery is CodeRabbit-specific — other handles use only FINISHED /
+     QUOTA / NOTPRESENT / TIMEOUT. For a human handle, the first new review or
+     comment since the wait started is FINISHED.
+   - `wait-reviewer.sh` handle matching is case-insensitive and anchored —
+     never append `[bot]` yourself.
+
 5. Merge never waits on the CodeRabbit check, but it does follow this
    path before claiming CodeRabbit reviewed the head. If the path ends in
    a recorded miss, the leg review may land the PR and the SHA stays on the

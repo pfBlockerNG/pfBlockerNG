@@ -36,7 +36,7 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 Three things start together at top of review step:
 
 1. **The CI wait — arm it NOW.** CI run on pushed head regardless of review state: start check-poll (`scripts/agent/wait-checks.sh --repo OWNER/REPO --pr N`, self-exiting, result file's LAST line is verdict) so clean PR's checks already green when review gate close. Fix push re-trigger CI — stop stale wait, re-arm after LAST fix push. Early verdict valid only for head SHA it watched. Flow abort anywhere → stop this wait as part of trigger sweep.
-2. **The adversarial review — ALWAYS, spawned first.** Every PR get four independent leg reviewers, each in fresh read-only context via client's native reviewer surface (per-client mapping below). Client-tracked: never arm wait for them; act on completions. The legs ARE the review step: they run regardless of any bot and stand alone. **Self-review exemption** (owner, 2026-08-08): for small, relatively contained change, session at ≤ 50% context usage may run the four lenses itself instead of spawning legs only when its effective model and effort already match the fixed review matrix; otherwise it MUST spawn. Past 50% context it MUST spawn. Self-review stay adversarial, cover same four-lens criteria and evidence bar as spawned legs — only spawn waived. Audit comments record leg and head SHA only. An installed `code-review` skill (Spec + Standards axes) may drive contract lens and add standards/smell pass; an installed `ponytail-review` skill drives the over-engineering lens — never replace executed-probe or mutation mandates.
+2. **The adversarial review — ALWAYS, spawned first.** Every PR get four independent leg reviewers, each in fresh read-only context via client's native reviewer surface (per-client mapping below). Client-tracked: never arm wait for them; act on completions. The legs ARE the review step: they run regardless of any bot and stand alone. **Self-review exemption** (owner, 2026-08-08): for small, relatively contained change, session at ≤ 50% context usage may run the four lenses itself instead of spawning legs only when its effective model and effort already match the fixed review matrix; otherwise it MUST spawn. Past 50% context it MUST spawn. Self-review stay adversarial, cover same four-lens criteria and evidence bar as spawned legs — only spawn waived. A self-review's audit comments carry everything a spawned leg's do — leg, head SHA reviewed, model and effort, plus the structured findings and per-file verdicts below. An installed `code-review` skill (Spec + Standards axes) may drive contract lens and add standards/smell pass; an installed `ponytail-review` skill drives the over-engineering lens — never replace executed-probe or mutation mandates.
 CodeRabbit is **not** armed here. Automatic review is off; it is asked for once at the end of the flow, and only if the PR reach that end (next section).
 
 Whichever reviews arrive, **every comment of every review received is handled**; triage below never change with source.
@@ -60,18 +60,10 @@ Mechanics that hold for every pass:
 
 ### CodeRabbit (asked for at the end — path is coderabbit.md)
 
-Automatic review is **off** (`.coderabbit.yaml`). Opening or pushing a PR triggers nothing, so there is no acknowledgement window to wait on and no auto-review to poll. Full path: [`coderabbit.md`](coderabbit.md). Short hook for landing:
+Automatic review is **off** (`.coderabbit.yaml`): opening or pushing a PR triggers nothing, so there is no acknowledgement window and no auto-review to poll. **[`coderabbit.md`](coderabbit.md) owns the whole path** — the ask precondition, the wait, every verdict (FINISHED / QUOTA / NOACK / NOTPRESENT / TIMEOUT / DECLINE), the spend rule, multiple handles, and the misses ledger. Two things belong to landing:
 
-- **Ask once, when the PR is actually ready.** Ready means all three, together: the reviewer legs have FULLY reviewed the PR; the agent driving the change has FIXED everything they found (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Then post exactly one top-level `@coderabbitai review`. Not before — an earlier ask spends the slot on code that is going to change, and nothing acknowledges a PR on its own now that automatic review is off.
-- **Then wait for it and address it.** The ask is not the end of the step: wait the review out, then triage and answer every finding it returns exactly like a leg's, before merging.
-- **Then** arm `scripts/agent/wait-reviewer.sh --handle coderabbitai --until finished --since <now>` (self-exiting; result file's LAST line is the verdict; handle matching is case-insensitive and anchored — never append `[bot]` yourself).
-- **FINISHED** — terminal result posted, including a clean pass. Content beat quota phrase: real review content beside a notice is FINISHED. Triage per below.
-- **QUOTA `<mins>`** — not a review. Wait the stated window, then one more ask; a second quota notice ends it with a recorded miss (coderabbit.md). Never nudge inside a live countdown. Always surface a miss; a skipped bot is never "PR clean".
-- **NOACK / NOTPRESENT / TIMEOUT** — re-ask once with a fresh window, then treat CodeRabbit as unavailable and let the legs carry the review step. First check TIMEOUT for a **silent pause** (walkthrough stuck with no terminal result).
-- **DECLINE** (base isn't default branch) — post one comment asking for a full review (`@coderabbitai trigger full review and tell me when you are finished`), re-arm finished-only with `--since` now (never re-trigger on repeat decline).
-- **Spend:** after a finished review, do not ask again for format-only, comment-only, lint, or mechanical APPLY rounds. Only a material behaviour change earns a second ask, and only one.
-- Bot's wording drifts — diagnostics show a finished review the matcher missed: read the comment body and adjust patterns instead of waiting out the timeout.
-- Multiple handles: run the wait once per handle, continue when all **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask machinery is CodeRabbit-specific; other handles use only FINISHED / QUOTA / NOTPRESENT / TIMEOUT. For a human handle, the first new review or comment since the wait started is FINISHED.
+- **Ask once, at the merge gate, when the PR is actually ready.** Ready means all three together: the legs have FULLY reviewed it; everything they found is FIXED (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Not before — an earlier ask spends the slot on code that is going to change.
+- **The ask is not the end of the step.** Wait the review out, then triage and answer every finding exactly like a leg's, before merging. A skipped or quota-only bot is never "PR clean" — surface the miss.
 
 ### Finding intake — enumerate everything
 
@@ -102,6 +94,8 @@ First **dedupe across reviewers** (by file:line + substance — reviewers routin
 
 ### Applying fixes
 
+Commit only after the finding this fix answers is posted (see "Replies and the audit trail").
+
 - Minimal changes matching repo conventions. **Small, well-understood fix** — e.g. one adopting reviewer suggestion session agrees with — **applied directly by session, tests included, never delegated** (delegation.md scope).
 - **A finding that names a class** ("the X clauses", "all Y call sites", "… etc.") is fixed by re-enumerating the class **tree-wide from source** (`git grep` across every scan root), never from finding's wording or the one file it names; paste enumeration into audit/reply so tick is auditable. When change *retires* a literal token, zero-hit tree grep for it is part of done (the #1047 class).
 - **A fix that changes behaviour carries its own test** (fail-before/pass-after per repo test policy, including `www/` coverage per `testing.md`). Pure comment/lint nits need none.
@@ -112,12 +106,15 @@ First **dedupe across reviewers** (by file:line + substance — reviewers routin
 
 ### Replies and the audit trail
 
+**Post before you fix.** Each leg's audit comment goes up when that leg completes and BEFORE any fix commit derived from it. The PR timeline is the audit trail; comment timestamps cannot be corrected afterwards, so a fix landing before the finding it answers makes the record unreconstructable. A finding already public — a bot's inline comment — satisfies this without a further audit comment first.
+
 - Reply on **every** thread/finding, always via body **file** (never inline bodies — shells mangle backticks and `${...}`), stating verdict plainly: applied (cite commit) / skipped (validated reason) / deferred (link issue). Inline findings get threaded replies (REST `pulls/N/comments/{id}/replies` endpoint); nitpick/outside-diff-range findings (no thread) get one top-level comment.
 - **No synthetic attribution** — public bodies contain only substantive project content;
   add no generated-by, model, client, or harness footer.
 - **Deferred findings → tracking issue in SAME public repo** (finding already public on PR — routing it private disclose nothing and hide work; genuinely undisclosed vulnerability you found yourself still follow private disclosure rules). Body self-contained: finding, `file:line`, why out of scope for this PR, validated issue-gate block (producer, supported path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and link back to review comment; link issue in thread reply. Optionally also fix it in own branch + PR — issue is required artifact.
-- **One audit comment on the PR per leg** (leg name and **head SHA reviewed** — pointer
-  that leg's next re-review keys on), plus one orchestrator comment noting CodeRabbit's
+- **One audit comment on the PR per leg** (leg name, **head SHA reviewed** — pointer
+  that leg's next re-review keys on — plus the model and effort it ran at), plus one
+  orchestrator comment noting CodeRabbit's
   review if one arrived and per-finding resolution across all legs.
 
 ### The merge gate (all paths)
