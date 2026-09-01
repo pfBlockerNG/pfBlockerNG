@@ -228,19 +228,23 @@ def test_painted_feed_rows_scope_legible_link_foregrounds(
     """
     page = browser_page
 
+    # Only the read happens before the try: every statement that can leave the shared
+    # box on the dark theme -- the write itself and each assertion after it -- sits
+    # inside the try, so the finally restore always runs.
     prior_theme = helpers.config_get_state(smoke_vm, _THEME_CFG)
-    applied = helpers.php_eval(
-        smoke_vm,
-        f"config_set_path({helpers._php_str(_THEME_CFG)}, {helpers._php_str(_DARK_THEME)});\n"
-        "write_config('pfBlockerNG smoke #3035: select the dark theme for the Feeds contrast probe');\n"
-        "echo 'THEME-OK';",
-    )
-    assert applied.returncode == 0 and "THEME-OK" in applied.stdout, (
-        f"failed to select {_DARK_THEME}: rc={applied.returncode} "
-        f"stdout={applied.stdout!r} stderr={applied.stderr!r}"
-    )
 
     try:
+        applied = helpers.php_eval(
+            smoke_vm,
+            f"config_set_path({helpers._php_str(_THEME_CFG)}, {helpers._php_str(_DARK_THEME)});\n"
+            "write_config('pfBlockerNG smoke #3035: select the dark theme for the Feeds contrast probe');\n"
+            "echo 'THEME-OK';",
+        )
+        assert applied.returncode == 0 and "THEME-OK" in applied.stdout, (
+            f"failed to select {_DARK_THEME}: rc={applied.returncode} "
+            f"stdout={applied.stdout!r} stderr={applied.stderr!r}"
+        )
+
         stored = helpers.config_get(smoke_vm, _THEME_CFG)
         assert stored == _DARK_THEME, f"{_THEME_CFG} is {stored!r} after the switch, expected {_DARK_THEME!r}"
 
