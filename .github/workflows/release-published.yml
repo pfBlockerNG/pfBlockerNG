@@ -149,7 +149,7 @@ jobs:
           git fetch --tags --force origin
           TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
           [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
-          TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+          TRAILERS=$(git for-each-ref --format='%(trailers:unfold)' "refs/tags/${TAG}")
           CHANNEL_COUNT=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
           [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
           CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)
@@ -279,10 +279,22 @@ jobs:
       - name: Install the Graphify merge driver
         run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .
 
-      - name: Configure git
+      - name: Configure pfblockerng-bot signing
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
 
       - name: Bump PORTVERSION and push to use-github
         # source/channel/version ride in via env (NOT inline ${{ }}) so a crafted tag can't

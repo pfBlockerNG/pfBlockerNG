@@ -125,12 +125,28 @@ jobs:
             git diff --stat -- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
           fi
 
+      - name: Configure pfblockerng-bot signing
+        if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
+
       - name: Open or update the refresh PR
         if: steps.refresh.outputs.changed == 'true' && env.DRY_RUN != 'true'
         run: |
           set -eu
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Rebuild the bot-owned automation branch from the current change and
           # force-push it (no human works on it, so a reset+force is safe).

@@ -129,18 +129,10 @@ def derive_destinations_from_git(
     def has_exact_channel_trailer(candidate: str, expected: Channel) -> bool:
         if git_optional("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
             return False
-        contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
-        trailer_result = subprocess.run(
-            ["git", "-C", repo_path, "interpret-trailers", "--parse"],
-            input=contents,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if trailer_result.returncode != 0:
-            raise RuntimeError(f"git interpret-trailers failed for {candidate}")
         trailers = [
-            line for line in trailer_result.stdout.splitlines() if line.startswith("pfBlockerNG-Release-Channel:")
+            line
+            for line in git("for-each-ref", "--format=%(trailers:unfold)", f"refs/tags/{candidate}").splitlines()
+            if line.startswith("pfBlockerNG-Release-Channel:")
         ]
         return trailers == [f"pfBlockerNG-Release-Channel: {expected}"]
 

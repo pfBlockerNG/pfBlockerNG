@@ -55,6 +55,50 @@ def test_classifier_validates_selected_sha_before_tag_classification(tmp_path: P
     )
 
 
+def test_classifier_accepts_a_signed_tag_with_the_exact_channel_trailer(tmp_path: Path) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    signing_key = tmp_path / "signing-key"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(signing_key)],
+        check=True,
+        env=scrubbed_git_env(),
+    )
+    _git(repo, "config", "gpg.format", "ssh")
+    _git(repo, "config", "user.signingkey", str(signing_key))
+    _git(repo, "config", "tag.gpgSign", "true")
+    _git(
+        repo,
+        "tag",
+        "-a",
+        "-m",
+        "v4.0.1.a1",
+        "-m",
+        "pfBlockerNG-Release-Channel: testing",
+        "v4.0.1.a1",
+        current,
+    )
+    assert "BEGIN SSH SIGNATURE" in _git(repo, "cat-file", "tag", "v4.0.1.a1")
+    assert derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=current) == (
+        "testing",
+        "edge",
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_readers"),
+    [
+        (".githooks/pre-push", 1),
+        (".github/workflows/release-published.yml", 1),
+        (".github/workflows/release.yml", 3),
+        ("scripts/release_version.py", 1),
+    ],
+)
+def test_all_release_channel_trailer_readers_ignore_signature_blocks(relative_path: str, expected_readers: int) -> None:
+    source = (Path(__file__).resolve().parents[1] / relative_path).read_text(encoding="utf-8")
+    assert "%(contents)" not in source
+    assert source.count("%(trailers:unfold)") + source.count("%(trailers)") == expected_readers
+
+
 def test_classifier_rejects_tag_commit_off_release_branch(tmp_path: Path) -> None:
     repo, _anchor, _current = _repo_with_release_line(tmp_path)
     _git(repo, "checkout", "-q", "main")

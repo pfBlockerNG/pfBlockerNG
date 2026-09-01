@@ -330,6 +330,24 @@ jobs:
           REPO:     ${{ github.repository }}
         run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/release-ci-gate.sh"
 
+      - name: Configure pfblockerng-bot signing
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
+          git config tag.gpgSign true
+
       - name: Pin the release SHA + mint the tag locally
         id: pin
         # PIN the channel-branch tip as THE release commit, then create the annotated
@@ -352,8 +370,6 @@ jobs:
           CHANNEL: ${{ steps.resolve.outputs.channel }}
         run: |
           set -eu
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           SHA=$(git rev-parse HEAD)
           if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
             TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
@@ -366,7 +382,7 @@ jobs:
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this release pins ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
-            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            TRAILERS=$(git for-each-ref --format='%(trailers)' "refs/tags/${TAG}")
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
             CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
@@ -784,6 +800,24 @@ jobs:
           fetch-depth: 0             # full history + tags: the resume check below
           persist-credentials: true  # need to push the tag via GITHUB_TOKEN
 
+      - name: Configure pfblockerng-bot signing
+        env:
+          PFB_BOT_SIGNING_KEY: ${{ secrets.PFB_BOT_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "${PFB_BOT_SIGNING_KEY:-}" ] || {
+            echo "::error::PFB_BOT_SIGNING_KEY secret is not set"
+            exit 1
+          }
+          install -m 600 /dev/null "$RUNNER_TEMP/pfb-bot-signing-key"
+          printf '%s\n' "$PFB_BOT_SIGNING_KEY" > "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config user.name "pfblockerng-bot"
+          git config user.email "293667935+pfblockerng-bot@users.noreply.github.com"
+          git config gpg.format ssh
+          git config user.signingkey "$RUNNER_TEMP/pfb-bot-signing-key"
+          git config commit.gpgsign true
+          git config tag.gpgSign true
+
       - name: Create + push the tag on the verified commit
         id: tag
         # RESUME semantics, narrowed to the crash-after-tag window: the only
@@ -798,8 +832,6 @@ jobs:
           CHANNEL: ${{ github.event.inputs.channel }}
         run: |
           set -eu
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch --tags --force origin
           if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null 2>&1; then
             TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
@@ -812,7 +844,7 @@ jobs:
               echo "::error::tag ${TAG} already exists at ${EXISTING}, but this run built and verified ${SHA} — delete the stale (unpublished) tag or bump the version"
               exit 1
             fi
-            TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+            TRAILERS=$(git for-each-ref --format='%(trailers)' "refs/tags/${TAG}")
             MATCHES=$(printf '%s\n' "$TRAILERS" | grep -Fxc "pfBlockerNG-Release-Channel: ${CHANNEL}" || true)
             CHANNEL_TRAILERS=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
             if [ "$MATCHES" -ne 1 ] || [ "$CHANNEL_TRAILERS" -ne 1 ]; then
@@ -988,10 +1020,11 @@ jobs:
           def exact_primary_trailer(candidate: str, primary: str) -> bool:
               if git("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
                   return False
-              contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
               trailers = [
                   line
-                  for line in git("interpret-trailers", "--parse", input_text=contents).splitlines()
+                  for line in git(
+                      "for-each-ref", "--format=%(trailers:unfold)", f"refs/tags/{candidate}"
+                  ).splitlines()
                   if line.startswith("pfBlockerNG-Release-Channel: ")
               ]
               return trailers == [f"pfBlockerNG-Release-Channel: {primary}"]
