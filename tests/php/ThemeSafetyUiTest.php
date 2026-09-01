@@ -79,12 +79,25 @@ final class ThemeSafetyUiTest extends TestCase
 			// issue #3015: the slash form is only translucent when its alpha says so.
 			'.pfb-subhdr { background-color: rgb(0 0 0 / 100%); }',
 			'.pfb-subhdr { background-color: rgb(0 0 0); }',
-			// issue #3037: the boundary narrows detection, so pin that it still detects.
-			'<svg style="enable-background:new 0 0 1 1; background: #424242;">',
 		];
 		foreach ($bad as $src) {
 			$this->assertNotSame([], self::scan($src), 'expected a violation in: ' . $src);
 		}
+	}
+
+	/**
+	 * The #3037 boundary narrows detection, so pin that it still detects.
+	 *
+	 * This cannot live in the $bad array: that is a foreach over one assertion, so any
+	 * mutation strong enough to reach this row breaks an identically-shaped earlier row
+	 * first and this one is never the failure observed. It needs its own assertion.
+	 */
+	public function testTheBackgroundBoundaryStillDetectsARealBackground(): void
+	{
+		$this->assertNotSame([], self::scan('<svg style="enable-background:new 0 0 1 1; background: #424242;">'),
+			'a real background beside enable-background must still be reported');
+		$this->assertSame([], self::scan('<svg style="enable-background:new 0 0 1 1;">'),
+			'enable-background alone must not be reported');
 	}
 
 	public function testTranslucentOrPairedForegroundIsNotAViolation(): void
@@ -1486,7 +1499,7 @@ final class ThemeSafetyUiTest extends TestCase
 		}
 		// color-mix() resolves through its operands; one of them being transparent is
 		// the documented way to write a translucent mix.
-		if (str_starts_with($v, 'color-mix(') && str_contains($v, 'transparent')) {
+		if (str_starts_with($v, 'color-mix(') && preg_match('/(?<![\w-])transparent(?![\w-])/', $v)) {
 			return TRUE;
 		}
 		if (preg_match('/^#([0-9a-f]{8})$/', $v, $m)) {
