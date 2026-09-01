@@ -418,7 +418,7 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					}
 				?>
 
-		<tr<?=$tr_style !== '' ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
+		<tr style="<?=$tr_style;?>">
 			<td>
 					<?php
 						// $ftype is always one of ipv4/ipv6/dnsbl here; the default keeps
@@ -629,11 +629,22 @@ include_once('head.inc');
 
 ?>
 <style>
-.pfb-painted-feed-row a {
+/*
+ * The dark theme sets anchors explicitly, so a painted row's inherited color: #212121 does
+ * not reach its links. Scope the link foreground to the rows carrying one of the painted
+ * backgrounds -- keyed off the inline background itself, because the live sortable table
+ * normalises rows and drops a class attribute while preserving inline style. $tr_style is
+ * the only inline background this page sets, so the attribute selector matches exactly the
+ * painted rows and nothing else.
+ */
+#pfb_table tr[style*="background-color"] a,
+#pfb_table2 tr[style*="background-color"] a {
 	color: #004D40;
 }
-.pfb-painted-feed-row a:hover,
-.pfb-painted-feed-row a:focus {
+#pfb_table tr[style*="background-color"] a:hover,
+#pfb_table tr[style*="background-color"] a:focus,
+#pfb_table2 tr[style*="background-color"] a:hover,
+#pfb_table2 tr[style*="background-color"] a:focus {
 	color: #003D33;
 }
 </style>
@@ -865,7 +876,7 @@ print ($section);
 								}
 				?>
 
-			<tr<?=$tr_style !== '' ? ' class="pfb-painted-feed-row"' : '';?> style="<?=$tr_style;?>">
+			<tr style="<?=$tr_style;?>">
 				<td>
 					<?php
 								if ($type != $p_type) {

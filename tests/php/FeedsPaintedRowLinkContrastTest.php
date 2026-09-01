@@ -4,10 +4,25 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** Painted Feeds rows keep visible link affordance on every shipped row background. */
+/**
+ * Painted Feeds rows keep visible link affordance on every shipped row background.
+ *
+ * The scoping must ride the inline background the rows already carry, NOT a row class:
+ * the live sortable Feeds table normalises rows and strips their class attribute while
+ * preserving inline style, so a class-scoped rule never reaches the rendered page
+ * (observed on a real box in ui_browser run 33534796353 -- a row arrived with inline
+ * background rgb(184, 184, 184) and no class).
+ */
 final class FeedsPaintedRowLinkContrastTest extends TestCase
 {
-	private const PAINTED_ROW_CLASS = 'pfb-painted-feed-row';
+	private const NORMAL_LINK_COLOR = '#004D40';
+	private const INTERACTIVE_LINK_COLOR = '#003D33';
+
+	/** Every background the two Feeds tables paint inline. */
+	private const PAINTED_BACKGROUNDS = ['#F5FBF6', '#EEF7EE', '#A0B8A0', '#B8B8B8'];
+
+	/** The only selector shape that survives the live table's DOM normalisation. */
+	private const SCOPED_SELECTOR_PATTERN = '/^#pfb_table2? tr\[style\*="background-color"\] a(:hover|:focus)?$/';
 
 	public static function setUpBeforeClass(): void
 	{
@@ -97,15 +112,56 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 		$this->fail("no rendered row contains {$marker}");
 	}
 
-	private function assertClassTracksBackground(string $html, string $paintedMarker, string $unpaintedMarker): void
+	private function assertPaintsInlineBackground(string $html, string $paintedMarker, string $unpaintedMarker): void
 	{
 		$painted = $this->rowContaining($html, $paintedMarker);
 		$this->assertStringContainsString('background-color:', $painted);
-		$this->assertStringContainsString(self::PAINTED_ROW_CLASS, $painted);
+		$this->assertStringContainsString('color: #212121', $painted);
 
 		$unpainted = $this->rowContaining($html, $unpaintedMarker);
 		$this->assertStringNotContainsString('background-color:', $unpainted);
-		$this->assertStringNotContainsString(self::PAINTED_ROW_CLASS, $unpainted);
+	}
+
+	/**
+	 * The page-local link rules, as a selector => foreground map.
+	 *
+	 * Parsed rather than regex-matched whole so grouping and ordering are free to
+	 * change without the assertions below pinning formatting.
+	 *
+	 * @return array<string, string>
+	 */
+	private function pageLinkRules(): array
+	{
+		$source = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_feeds.php'
+		);
+		$this->assertSame(
+			1,
+			preg_match('/<style>(.*?)<\/style>/s', $source, $style),
+			'the Feeds page must ship exactly one page-local <style> block'
+		);
+
+		// Comments are stripped first: a rule is free to carry one without its selectors
+		// arriving glued to the comment text.
+		$css   = (string) preg_replace('#/\*.*?\*/#s', '', $style[1]);
+		$rules = [];
+		foreach (explode('}', $css) as $chunk) {
+			if (!str_contains($chunk, '{')) {
+				continue;
+			}
+			[$selectors, $body] = explode('{', $chunk, 2);
+			if (preg_match('/(?<![-\w])color:\s*(#[0-9a-fA-F]{6})\s*;/', $body, $color) !== 1) {
+				continue;
+			}
+			foreach (explode(',', $selectors) as $selector) {
+				$selector = trim((string) preg_replace('/\s+/', ' ', $selector));
+				if ($selector !== '') {
+					$rules[$selector] = strtoupper($color[1]);
+				}
+			}
+		}
+
+		return $rules;
 	}
 
 	private static function relativeLuminance(string $hex): float
@@ -125,18 +181,18 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 		return ($lighter + 0.05) / ($darker + 0.05);
 	}
 
-	public function testPredefinedRowClassTracksPaintedBackground(): void
+	public function testPredefinedRowPaintsInlineBackgroundWithItsForeground(): void
 	{
-		$this->assertClassTracksBackground(
+		$this->assertPaintsInlineBackground(
 			$this->renderPredefinedRows(),
 			'painted-predefined.example',
 			'unpainted-predefined.example'
 		);
 	}
 
-	public function testCustomRowClassTracksPaintedBackground(): void
+	public function testCustomRowPaintsInlineBackgroundWithItsForeground(): void
 	{
-		$this->assertClassTracksBackground(
+		$this->assertPaintsInlineBackground(
 			$this->renderCustomRows(),
 			'painted-custom.example',
 			'unpainted-custom.example'
@@ -145,25 +201,39 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 
 	public function testScopedLinkColorsMeetNormalTextContrastOnEveryPaintedBackground(): void
 	{
-		$source = (string) file_get_contents(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_feeds.php'
-		);
-		$this->assertSame(1, preg_match(
-			'/\.pfb-painted-feed-row\s+a\s*\{\s*color:\s*(#[0-9a-f]{6})\s*;\s*\}/i',
-			$source,
-			$normalMatch
-		), 'painted Feeds rows must scope a normal link foreground');
-		$this->assertSame(1, preg_match(
-			'/\.pfb-painted-feed-row\s+a:hover\s*,\s*\.pfb-painted-feed-row\s+a:focus\s*'
-			. '\{\s*color:\s*(#[0-9a-f]{6})\s*;\s*\}/i',
-			$source,
-			$interactiveMatch
-		), 'painted Feeds rows must scope hover/focus link foregrounds');
+		$rules = $this->pageLinkRules();
 
-		$colors = [strtoupper($normalMatch[1]), strtoupper($interactiveMatch[1])];
-		$this->assertSame(['#004D40', '#003D33'], $colors);
-		foreach ($colors as $foreground) {
-			foreach (['#F5FBF6', '#EEF7EE', '#A0B8A0', '#B8B8B8'] as $background) {
+		$expected = [
+			'#pfb_table tr[style*="background-color"] a'         => self::NORMAL_LINK_COLOR,
+			'#pfb_table2 tr[style*="background-color"] a'        => self::NORMAL_LINK_COLOR,
+			'#pfb_table tr[style*="background-color"] a:hover'   => self::INTERACTIVE_LINK_COLOR,
+			'#pfb_table tr[style*="background-color"] a:focus'   => self::INTERACTIVE_LINK_COLOR,
+			'#pfb_table2 tr[style*="background-color"] a:hover'  => self::INTERACTIVE_LINK_COLOR,
+			'#pfb_table2 tr[style*="background-color"] a:focus'  => self::INTERACTIVE_LINK_COLOR,
+		];
+		foreach ($expected as $selector => $color) {
+			$this->assertArrayHasKey(
+				$selector,
+				$rules,
+				"painted Feeds rows must scope their link foreground by inline background: {$selector}"
+			);
+			$this->assertSame($color, $rules[$selector], $selector);
+		}
+
+		foreach ($rules as $selector => $color) {
+			if (!in_array($color, [self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR], TRUE)) {
+				continue;
+			}
+			$this->assertMatchesRegularExpression(
+				self::SCOPED_SELECTOR_PATTERN,
+				$selector,
+				"{$selector} scopes a painted-row link colour by something other than the inline background; "
+					. 'the live sortable table strips row classes while keeping inline style (run 33534796353)'
+			);
+		}
+
+		foreach ([self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR] as $foreground) {
+			foreach (self::PAINTED_BACKGROUNDS as $background) {
 				$ratio = self::contrastRatio($foreground, $background);
 				$this->assertGreaterThanOrEqual(
 					4.5,
