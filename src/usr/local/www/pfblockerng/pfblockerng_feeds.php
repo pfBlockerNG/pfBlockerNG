@@ -635,17 +635,18 @@ include_once('head.inc');
  * backgrounds -- keyed off the inline background itself, because the live sortable table
  * normalises rows and drops a class attribute while preserving inline style. $tr_style is
  * the only inline background this page sets, so the attribute selector matches exactly the
- * painted rows and nothing else.
+ * painted rows and nothing else. The theme pins its anchor colour with !important, which no
+ * amount of specificity or source order can outrank, so these declarations carry it too.
  */
 #pfb_table tr[style*="background-color"] a,
 #pfb_table2 tr[style*="background-color"] a {
-	color: #004D40;
+	color: #004D40 !important;
 }
 #pfb_table tr[style*="background-color"] a:hover,
 #pfb_table tr[style*="background-color"] a:focus,
 #pfb_table2 tr[style*="background-color"] a:hover,
 #pfb_table2 tr[style*="background-color"] a:focus {
-	color: #003D33;
+	color: #003D33 !important;
 }
 </style>
 <?php

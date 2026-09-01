@@ -123,12 +123,12 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 	}
 
 	/**
-	 * The page-local link rules, as a selector => foreground map.
+	 * The page-local link rules, as a selector => ['color' => hex, 'important' => bool] map.
 	 *
 	 * Parsed rather than regex-matched whole so grouping and ordering are free to
 	 * change without the assertions below pinning formatting.
 	 *
-	 * @return array<string, string>
+	 * @return array<string, array{color: string, important: bool}>
 	 */
 	private function pageLinkRules(): array
 	{
@@ -150,13 +150,16 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 				continue;
 			}
 			[$selectors, $body] = explode('{', $chunk, 2);
-			if (preg_match('/(?<![-\w])color:\s*(#[0-9a-fA-F]{6})\s*;/', $body, $color) !== 1) {
+			if (preg_match('/(?<![-\w])color:\s*(#[0-9a-fA-F]{6})(\s*!important)?\s*;/', $body, $color) !== 1) {
 				continue;
 			}
 			foreach (explode(',', $selectors) as $selector) {
 				$selector = trim((string) preg_replace('/\s+/', ' ', $selector));
 				if ($selector !== '') {
-					$rules[$selector] = strtoupper($color[1]);
+					$rules[$selector] = [
+						'color'     => strtoupper($color[1]),
+						'important' => ($color[2] ?? '') !== '',
+					];
 				}
 			}
 		}
@@ -217,11 +220,17 @@ final class FeedsPaintedRowLinkContrastTest extends TestCase
 				$rules,
 				"painted Feeds rows must scope their link foreground by inline background: {$selector}"
 			);
-			$this->assertSame($color, $rules[$selector], $selector);
+			$this->assertSame($color, $rules[$selector]['color'], $selector);
+			$this->assertTrue(
+				$rules[$selector]['important'],
+				"{$selector} must win the cascade with !important: the shipped dark theme pins its anchor "
+					. 'colour that way, so a merely more specific, later rule still loses and the link renders '
+					. 'rgb(0, 150, 136) on a painted row (run 33551682383)'
+			);
 		}
 
-		foreach ($rules as $selector => $color) {
-			if (!in_array($color, [self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR], TRUE)) {
+		foreach ($rules as $selector => $rule) {
+			if (!in_array($rule['color'], [self::NORMAL_LINK_COLOR, self::INTERACTIVE_LINK_COLOR], TRUE)) {
 				continue;
 			}
 			$this->assertMatchesRegularExpression(

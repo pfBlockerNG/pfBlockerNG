@@ -214,7 +214,11 @@ _DARK_THEME = "pfSense-dark.css"
 # 33534796353 then showed the real defect: a genuine row arrived with inline background
 # rgb(184, 184, 184) and NO class, because the live sortable table normalises rows and drops
 # their class while preserving inline style. So the scoping production ships -- and everything
-# graded here -- rides the inline background, never a class.
+# graded here -- rides the inline background, never a class. Run 33551682383 then showed the
+# last cascade step: this very selector matched a real painted row, yet its anchor still
+# computed rgb(0, 150, 136), because the shipped dark theme pins anchor colour with
+# !important -- specificity and source order cannot beat that, so production declares its
+# scoped colours !important too.
 # tests/php/FeedsPaintedRowLinkContrastTest.php owns the source-side proof (both row paths
 # paint inline, and the page-local rules are scoped by inline background). This row owns what
 # PHP cannot see: the real cascade under the shipped pfSense-dark.css, over every genuine
