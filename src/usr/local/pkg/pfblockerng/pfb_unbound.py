@@ -4589,9 +4589,17 @@ def tld_wildcard_classify(
     exclusion: set[str],
     *,
     include_private: bool = True,
-    blacklist: set[str] | None = None,
+    blacklist: frozenset[str] | set[str] | None = None,
 ) -> tuple[str, str]:
-    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA."""
+    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA.
+
+    issue #3050: ``blacklist`` is already dot-stripped TLD roots -- the same
+    contract ``exclusion`` carries -- because this runs once per feed entry at
+    build time and once per TLD-Allow query, so nothing here may cost
+    O(len(blacklist)). ``build()`` normalizes the user's textarea ONCE into that
+    frozenset before its per-entry loop; the config boundary is where a dotted
+    ``.uk`` becomes ``uk``.
+    """
     if not any(
         (
             rules.icann_exact,
@@ -4603,7 +4611,7 @@ def tld_wildcard_classify(
         )
     ):
         return DNSBL_CLASS_DATA, domain
-    root_blacklist = {entry.strip(".") for entry in blacklist or set()}
+    root_blacklist = blacklist or frozenset()
     try:
         resolution = resolve_public_suffix(domain, rules)
     except ValueError:
@@ -5250,6 +5258,10 @@ def build(
     """
     tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
     tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
+    # issue #3050: both user textareas become dot-stripped roots ONCE, here at the
+    # config boundary, and the SAME objects are handed to tld_wildcard_classify()
+    # for every feed entry -- the per-entry path never rebuilds or re-strips them.
+    blacklist_roots = frozenset(t.strip(".") for t in tld_wildcard_blacklist)
     exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
 
     static_cap = bool(config.get("regex_cap", False))
@@ -5444,7 +5456,7 @@ def build(
                 psl_classification_rules,
                 exclusion,
                 include_private=bool(config.get("psl_include_private", True)),
-                blacklist=set(tld_wildcard_blacklist),
+                blacklist=blacklist_roots,
             )
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
