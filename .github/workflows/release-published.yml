@@ -149,7 +149,7 @@ jobs:
           git fetch --tags --force origin
           TYPE=$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)
           [ "$TYPE" = tag ] || { echo "::error::published tag ${TAG} is not an annotated tag"; exit 1; }
-          TRAILERS=$(git for-each-ref --format='%(contents)' "refs/tags/${TAG}" | git interpret-trailers --parse)
+          TRAILERS=$(git for-each-ref --format='%(trailers:unfold)' "refs/tags/${TAG}")
           CHANNEL_COUNT=$(printf '%s\n' "$TRAILERS" | grep -Eic '^pfBlockerNG-Release-Channel:' || true)
           [ "$CHANNEL_COUNT" -eq 1 ] || { echo "::error::published tag ${TAG} must carry exactly one release-channel trailer"; exit 1; }
           CHANNEL_LINE=$(printf '%s\n' "$TRAILERS" | grep -F 'pfBlockerNG-Release-Channel:' || true)

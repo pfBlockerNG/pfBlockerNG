@@ -1020,10 +1020,11 @@ jobs:
           def exact_primary_trailer(candidate: str, primary: str) -> bool:
               if git("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
                   return False
-              contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
               trailers = [
                   line
-                  for line in git("interpret-trailers", "--parse", input_text=contents).splitlines()
+                  for line in git(
+                      "for-each-ref", "--format=%(trailers:unfold)", f"refs/tags/{candidate}"
+                  ).splitlines()
                   if line.startswith("pfBlockerNG-Release-Channel: ")
               ]
               return trailers == [f"pfBlockerNG-Release-Channel: {primary}"]
