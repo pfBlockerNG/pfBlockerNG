@@ -24,6 +24,8 @@
 #              at all, and NEVER lease-protected, so it denies even
 #              alongside --force-with-lease)
 #   Rule C  -- git worktree remove + force flag                -> DENY
+#   Rule E  -- gh pr merge + --rebase or --merge                  -> DENY
+#              (explicit --squash remains the signed linear path) -> PASS
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
 #   -f boundary -- standalone -f / an f-bearing short-flag cluster,
 #                  never matching inside --force/-force/a token
@@ -381,7 +383,7 @@ Describe 'claude-bash-guard.sh'
       End
       When run script "$GUARD"
       The status should be success
-      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session'"'"'s PR (CLAUDE.md)"}}'
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"PR branch rebases use --force-with-lease exclusively; a bare force-push can clobber another session'"'"'s PR (CLAUDE.md)"}}'
     End
 
     It 'P1: --force-with-lease alone -> PASS (contains substring --force but lease wins)'
@@ -872,6 +874,64 @@ Describe 'claude-bash-guard.sh'
     It 'C12 (#1292, no leak): a literal -n in an unrelated segment does not bypass an unforced commit -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"echo -n && git commit -m x"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+  End
+
+  # ── Rule E: GitHub PRs land through signed squash commits ──────────────────
+
+  Describe 'Rule E: gh pr merge method'
+    It 'E1: explicit rebase merge -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --rebase"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E2: explicit merge commit -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --merge"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E3: explicit squash merge -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --squash"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E4: quoted tokens and irregular whitespace cannot hide rebase merge -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh\t'pr'  merge 1 '--rebase'"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E5: a merge flag in an earlier segment does not taint squash merge -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"echo --merge && gh pr merge 1 --squash"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E6: a rebase flag in a later segment does not taint squash merge -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --squash && echo --rebase"}}
       End
       When run script "$GUARD"
       The status should be success

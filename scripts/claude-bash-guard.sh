@@ -1,10 +1,10 @@
 #!/bin/sh
-# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
+# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 5 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
-# Denies, at the TOOL layer (before the command ever runs), four operations an
-# AGENT must not run -- three git bypasses a human may legitimately use, plus a
-# wait-launch shape that silently strands the turn:
+# Denies, at the TOOL layer (before the command ever runs), five operations an
+# AGENT must not run -- four Git/GitHub policy bypasses a human may legitimately
+# use, plus a wait-launch shape that silently strands the turn:
 #
 #   Rule A -- `git commit` with `--no-verify` (long flag, standalone -n, or a
 #             clustered short flag like -an/-anm)   : the pre-commit lint
@@ -15,9 +15,9 @@
 #             like -uf/-fu) WITHOUT --force-with-lease, OR a `+`-prefixed
 #             force REFSPEC (`git push origin +branch:branch`) -- git's
 #             OTHER force syntax, with no flag at all and NEVER
-#             --force-with-lease-protected : the rebase-only landing flow
-#             uses --force-with-lease exclusively; a bare force-push can
-#             clobber another session's in-flight PR (CLAUDE.md "Worktrees").
+#             --force-with-lease-protected : PR branch rebases use
+#             --force-with-lease exclusively; a bare force-push can clobber
+#             another session's in-flight PR (CLAUDE.md "Worktrees").
 #   Rule C -- `git worktree remove` with a force flag : CLAUDE.md forbids
 #             force-removing a worktree an agent does not own.
 #   Rule D -- a `wait-*.sh` backgrounded with the shell's `&` : backgrounding
@@ -27,10 +27,13 @@
 #             the turn stalls while the wait has already finished (#1225).
 #             Whole-payload, not per-segment: `&` is one of the characters
 #             $segs splits on.
+#   Rule E -- `gh pr merge` with `--rebase` or `--merge` : code PRs land only
+#             through GitHub's verified squash commits while preserving linear
+#             history (issue #2996).
 #
 # Rule D runs first (whole-payload). Then the per-segment rules: segments are
 # scanned left to right (see MATCHING below); within one segment, A, then B,
-# then C. First matching pair wins.
+# then C, then E. First matching pair wins.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -284,7 +287,7 @@ if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
-# Walk $segs one segment at a time, applying rules A-C to each ($seg
+# Walk $segs one segment at a time, applying rules A-C and E to each ($seg
 # is read by _contains / _has_force_flag above). Fed via a heredoc (not a
 # `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
@@ -296,14 +299,18 @@ while IFS= read -r seg; do
 
 	if _contains 'git push' && _has_force_flag; then
 		if ! _contains '--force-with-lease' || _bare_force_after_last_lease; then
-			_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
+			_deny "PR branch rebases use --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
 		fi
 	fi
 
 	# A `+` force refspec (issue #1292) is NEVER lease-protected -- unconditional,
 	# unlike the flag check above which --force-with-lease can clear.
 	if _contains 'git push' && _has_force_refspec; then
-		_deny "the rebase-only landing flow uses --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
+		_deny "PR branch rebases use --force-with-lease exclusively; a bare force-push can clobber another session's PR (CLAUDE.md)"
+	fi
+
+	if _contains 'gh pr merge' && { _contains '--rebase' || _contains '--merge'; }; then
+		_deny "GitHub PRs must use --squash so the landed linear commit carries GitHub's verified signature (issue #2996)"
 	fi
 
 	if _contains 'git worktree remove' && _has_force_flag; then
