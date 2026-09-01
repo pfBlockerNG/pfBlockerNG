@@ -400,20 +400,20 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 					// Print applicable alternating background color
 					if ($data['action'] == 'permit') {
 						if ($aliasname == $p_aliasname) {
-							$tr_style = 'background-color: #F5FBF6;';		// Light green 1
+							$tr_style = 'background-color: #F5FBF6; color: #212121;';		// Light green 1
 							if ($tr_style == $p_tr_style) {
-								$tr_style = 'background-color: #EEF7EE;';	// Light green 2
+								$tr_style = 'background-color: #EEF7EE; color: #212121;';	// Light green 2
 							}
 						} else {
 							// Dark green (New Alias/Group)
-							$tr_style = 'background-color: #A0B8A0;';	// #C8E6C9;';
+							$tr_style = 'background-color: #A0B8A0; color: #212121;';	// #C8E6C9;';
 						}
 					}
 					else {
 						$tr_style = '';
 						if ($aliasname != $p_aliasname) {
 							// Grey - (New Alias/Group)
-							$tr_style = 'background-color: #B8B8B8;';	//#D8D8D8;';
+							$tr_style = 'background-color: #B8B8B8; color: #212121;';	//#D8D8D8;';
 						}
 					}
 				?>
@@ -626,6 +626,28 @@ $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Feeds'), 
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', "/pfblockerng/pfblockerng_feeds.php?type={$gtype}", '@self');
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
+
+?>
+<style>
+/*
+ * The dark theme sets anchors explicitly, so a painted row's inherited color: #212121 does
+ * not reach its links. Scope the link foreground to the rows carrying one of the painted
+ * backgrounds, keyed off the inline background the row already carries: $tr_style is the
+ * only inline background this page sets, so the attribute selector matches exactly those
+ * rows and needs no extra markup on them.
+ */
+#pfb_table tr[style*="background-color"] a,
+#pfb_table2 tr[style*="background-color"] a {
+	color: #004D40;
+}
+#pfb_table tr[style*="background-color"] a:hover,
+#pfb_table tr[style*="background-color"] a:focus,
+#pfb_table2 tr[style*="background-color"] a:hover,
+#pfb_table2 tr[style*="background-color"] a:focus {
+	color: #003D33;
+}
+</style>
+<?php
 
 if ($input_errors) {
 	print_input_errors($input_errors);
@@ -849,7 +871,7 @@ print ($section);
 
 								$tr_style = '';
 								if ($row['aliasname'] != $p_aliasname) {
-									$tr_style = 'background-color: #B8B8B8;';   // #D8D8D8;';
+									$tr_style = 'background-color: #B8B8B8; color: #212121;';   // #D8D8D8;';
 								}
 				?>
 

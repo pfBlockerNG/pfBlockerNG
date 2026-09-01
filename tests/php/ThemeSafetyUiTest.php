@@ -45,12 +45,6 @@ final class ThemeSafetyUiTest extends TestCase
 	 * @var array<string, list<string>>
 	 */
 	private const TODO_OPAQUE_WITHOUT_FOREGROUND_20260829 = [
-		'src/usr/local/www/pfblockerng/pfblockerng_feeds.php' => [
-			'background-color: #F5FBF6',
-			'background-color: #EEF7EE',
-			'background-color: #A0B8A0',
-			'background-color: #B8B8B8',
-		],
 		'src/usr/local/www/pfblockerng/pfblockerng_alerts.php' => [
 			'background-color: #424242',
 		],

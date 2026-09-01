@@ -301,7 +301,20 @@ def test_enabled_top1m_is_exact_allow_with_www_fallback_not_deeper_wildcard(tmp_
     assert _decision_label(deep_decision) == "block-null"
 
 
-@pytest.mark.parametrize("kind", ["missing", "directory", "unreadable"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "missing",
+        "directory",
+        pytest.param(
+            "unreadable",
+            marks=pytest.mark.skipif(
+                os.geteuid() == 0,
+                reason="root bypasses file permissions — denial cannot be simulated",
+            ),
+        ),
+    ],
+)
 def test_enabled_missing_directory_or_unreadable_fixed_file_fails_closed(tmp_path: Path, kind: str) -> None:
     manifest = _manifest(tmp_path)
     path = tmp_path / "pfb_py_top1m.txt"
