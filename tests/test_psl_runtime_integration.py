@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
@@ -394,3 +395,75 @@ def test_allow_private_off_blocks_private_boundary_and_parent_alike() -> None:
         decision = P.evaluate_domain(name, name, "io", False, _allow_cfg(), containers)
         assert decision.is_found is True, name
         assert decision.feed == "TLD_Allow"
+
+
+def test_resolving_a_name_never_hashes_the_rule_set() -> None:
+    """issue #3046: the membership index must not sit behind a cache keyed on
+    ``PslRules``.
+
+    ``_psl_index`` was ``@lru_cache``d on the frozen dataclass, so every lookup
+    computed a key by hashing all six rule tuples. CPython does not cache tuple
+    hashes, so the key cost more than the scan the cache existed to avoid --
+    13.89us per call, against 0.034us for an ordinary small-tuple hash. Hashing
+    the rule set during a resolution is the mechanical signature of that defect,
+    and it is what this asserts against: not a timing, which would be flaky, but
+    the operation whose cost was the defect.
+
+    Both call sites pay it: the per-entry classifier on the DNSBL build path and
+    TLD-Allow on the live DNS query path.
+    """
+    rules = P.parse_psl_rules(PSL)
+    hashed: list[str] = []
+    original_hash = P.PslRules.__hash__
+
+    def counting_hash(self: P.PslRules) -> int:
+        hashed.append("hashed")
+        return original_hash(self)
+
+    with mock.patch.object(P.PslRules, "__hash__", counting_hash):
+        for name in ("example.com", "a.b.example.com", "example.github.io", "www.ck"):
+            P.resolve_public_suffix(name, rules)
+
+    assert hashed == [], f"resolution hashed the rule set {len(hashed)} time(s); issue #3046 has regressed"
+
+
+def test_the_index_is_built_once_per_instance() -> None:
+    """The sets are held on the instance, so repeated resolution reuses them.
+
+    Identity, not equality: two equal-but-distinct builds would mean the index
+    is being recomputed, which is the cost this change exists to remove.
+    """
+    rules = P.parse_psl_rules(PSL)
+
+    first = rules.index()
+
+    assert rules.index() is first
+    assert rules.index() is first
+
+
+def test_indexing_an_instance_leaves_value_equality_and_hash_untouched() -> None:
+    """``_index`` carries ``compare=False``, so an indexed instance stays equal
+    to an un-indexed one built from the same rules -- and keeps the same hash.
+
+    Both halves matter. Equality is the dataclass contract other tests rely on
+    (``_load_psl_authority(...) == PslRules()``); the hash must also hold,
+    because PslRules remains hashable and any caller putting one in a set or
+    dict key would otherwise see two distinct entries for the same rules
+    depending on whether a lookup had happened to run first.
+    """
+    indexed = P.parse_psl_rules(PSL)
+    fresh = P.parse_psl_rules(PSL)
+
+    indexed.index()
+
+    assert indexed == fresh
+    assert hash(indexed) == hash(fresh)
+
+
+def test_the_instance_index_matches_a_direct_build() -> None:
+    """Moving the sets onto the instance changed where they live, not what they
+    are: the memoised value equals what the builder returns for the same rules.
+    """
+    rules = P.parse_psl_rules(PSL)
+
+    assert rules.index() == P._psl_build_index(rules)
