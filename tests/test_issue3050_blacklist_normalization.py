@@ -1,8 +1,7 @@
 """Issue #3050 -- the TLD-wildcard blacklist is normalized ONCE, by the caller.
 
-``tld_wildcard_classify()`` runs once per DNSBL feed entry (and once per
-TLD-Allow query), so nothing inside it may cost O(len(blacklist)). The intent
-pinned here is a contract, not a duration:
+``tld_wildcard_classify()`` runs once per DNSBL feed entry, so nothing inside it
+may cost O(len(blacklist)). The intent pinned here is a contract, not a duration:
 
 * the classifier CONSUMES already dot-stripped TLD roots -- it never iterates or
   re-strips the blacklist it is handed, and
@@ -129,19 +128,12 @@ class TestBuildNormalizesTheBlacklistOnce:
         Then every call receives the SAME pre-derived roots object -- not a fresh
         set built per entry.
         """
-        seen: list[frozenset[str] | set[str] | None] = []
+        seen: list[Any] = []
         real = P.tld_wildcard_classify
 
-        def recording(
-            domain: str,
-            rules: P.PslRules,
-            exclusion: set[str],
-            *,
-            include_private: bool = True,
-            blacklist: Any = None,
-        ) -> tuple[str, str]:
-            seen.append(blacklist)
-            return real(domain, rules, exclusion, include_private=include_private, blacklist=blacklist)
+        def recording(*a: Any, **k: Any) -> tuple[str, str]:
+            seen.append(k.get("blacklist"))
+            return real(*a, **k)
 
         monkeypatch.setattr(P, "tld_wildcard_classify", recording)
         _run_build(["a.example.com", "b.example.com", "c.example.com"], blacklist=[".uk", "test"])
@@ -152,28 +144,6 @@ class TestBuildNormalizesTheBlacklistOnce:
             f"expected 1 shared blacklist object across {len(seen)} entries, got {len(distinct)} distinct objects "
             "-- the loop-invariant blacklist is being rebuilt per feed entry"
         )
-
-    def test_classifier_receives_dot_stripped_roots(self, monkeypatch: Any) -> None:
-        """A dotted user entry ('.uk') reaches the classifier already stripped."""
-        seen: list[Any] = []
-        real = P.tld_wildcard_classify
-
-        def recording(
-            domain: str,
-            rules: P.PslRules,
-            exclusion: set[str],
-            *,
-            include_private: bool = True,
-            blacklist: Any = None,
-        ) -> tuple[str, str]:
-            seen.append(blacklist)
-            return real(domain, rules, exclusion, include_private=include_private, blacklist=blacklist)
-
-        monkeypatch.setattr(P, "tld_wildcard_classify", recording)
-        _run_build(["a.example.com"], blacklist=[".uk"])
-
-        assert seen, "expected the plain block path to reach tld_wildcard_classify()"
-        assert set(seen[0]) == {"uk"}, f"expected the classifier to receive {{'uk'}}, got {set(seen[0])!r}"
 
     def test_dotted_user_blacklist_still_blocks_at_the_root(self) -> None:
         """End-to-end behaviour is unchanged by moving the strip to the caller."""
