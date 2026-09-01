@@ -5285,7 +5285,7 @@ def build(
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
     # (feed/group ``DNSBL_TLD``, log ``1``) -- the sole writer of this row shape
     # since ADR-65 retired PHP's own equivalent write.
-    for tld in blacklist_roots:
+    for tld in sorted(blacklist_roots):  # sorted: a set would insert in hash-seed order
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
