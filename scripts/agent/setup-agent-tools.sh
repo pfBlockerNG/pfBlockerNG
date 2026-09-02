@@ -252,8 +252,7 @@ main() {
 	# every later use is `uv tool install --upgrade`, which any uv performs.
 	case "$platform" in
 		Linux)
-			command -v uv >/dev/null 2>&1 ||
-				install_from_url 'https://astral.sh/uv/install.sh'
+			command -v uv >/dev/null 2>&1 || install_from_url 'https://astral.sh/uv/install.sh'
 			;;
 		Darwin)
 			brew list --versions uv >/dev/null 2>&1 || brew install uv

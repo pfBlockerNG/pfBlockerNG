@@ -4,10 +4,10 @@ Scope: cross-client repository discovery, exact code semantics, and persistent g
 Load when: every agent session, from `AGENTS.md`.
 
 - Bootstrap or refresh a macOS/Debian agent host with
-  `sh scripts/agent/setup-agent-tools.sh <checkout>`. It installs or updates uv,
-  Serena, CodeGraph, Graphify, and Worktrunk; configures only detected clients;
-  disables Serena's web dashboard; and keeps Worktrunk worktrees outside the
-  repository root.
+  `sh scripts/agent/setup-agent-tools.sh <checkout>`. It installs uv when absent and
+  never updates an installed one (#3106); installs or updates Serena, CodeGraph,
+  Graphify, and Worktrunk; configures only detected clients; disables Serena's web
+  dashboard; and keeps Worktrunk worktrees outside the repository root.
 - Every agent tool installs through one command that both installs on a fresh host
   and upgrades an outdated one — `uv tool install --upgrade <tool>`, `codegraph upgrade`,
   or the tool's own installer. A `>=` floor rides along only when a minimum release is
