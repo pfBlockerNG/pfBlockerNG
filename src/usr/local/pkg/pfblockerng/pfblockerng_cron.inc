@@ -52,7 +52,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			return NULL;
 		}
 
-		$log = "\t\t\t\t\t\t\tUpdate found\n";
+		$log = pfb_log_status_line('', '', 'Update found') . "\n";
 		pfb_logger("{$log}", 1);
 		$pfb['cron_update'] = TRUE;
 		$pfb['update_cron'] = TRUE;
@@ -98,7 +98,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 	// Attempt download, when a previous 'fail' file marker is found.
 	if (file_exists("{$pfbfolder}/{$header}.fail")) {
-		$log = "\t\t\tPrevious download failed.\tRe-attempt download\n";
+		$log = pfb_log_status_line('', 'Previous download failed.', 'Re-attempt download') . "\n";
 		pfb_logger("{$log}", 1);
 		$pfb['update_cron'] = TRUE;
 		touch("{$pfbfolder}/{$header}.update");
@@ -107,7 +107,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 	// Check if List file doesn't exist or Format is 'whois'.
 	if (!file_exists("{$pfbfolder}/{$header}.txt") || $format == 'whois') {
-		$log = "\t\t\t\t\t\t\tUpdate found\n";
+		$log = pfb_log_status_line('', '', 'Update found') . "\n";
 		pfb_logger("{$log}", 1);
 		$pfb['update_cron'] = TRUE;
 		return NULL;
@@ -118,7 +118,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 	// Compare previously downloaded file timestamp with remote timestamp
 	if (file_exists($local_file)) {
 		if ($format == 'rsync') {
-			$log = "\t\t\t\t( rsync )\t\tUpdate found\n";
+			$log = pfb_log_status_line('', '( rsync )', 'Update found') . "\n";
 			pfb_logger("{$log}", 1);
 			$pfb['cron_update'] = TRUE;
 			$pfb['update_cron'] = TRUE;
@@ -138,7 +138,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			// FeedChangeHashHelpersTest.
 			$pfb['cron_update'] = pfb_local_feed_changed($list_download, $local_file);
 			if (!$pfb['cron_update']) {
-				$log = "[ {$header} ] ( local feed unchanged )\tUpdate not required\n";
+				$log = pfb_log_status_line($header, '( local feed unchanged )', 'Update not required') . "\n";
 				pfb_logger("{$log}", 1);
 				return PfbScheduleTerminalResult::Success;
 			}
@@ -167,7 +167,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 			if (!$probe_result->success || $probe_result->responseMeta === NULL) {
 				// Probe failed entirely (connection error, bad URL, etc.) → fail-safe.
-				$log = "\n\tFailed to probe feed for change detection!\tUpdate skipped\n";
+				$log = "\n" . pfb_log_status_line('', 'Failed to probe feed for change detection!', 'Update skipped') . "\n";
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 				touch("{$pfbfolder}/{$header}.fail");
 				pfb_logger("{$log}", 1);
@@ -179,7 +179,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 			if ($probe_status === '304') {
 				// Server confirmed not-modified via conditional GET → no re-ingest needed.
-				$log = "\n[ {$header} ] ( 304 not modified )\tUpdate not required\n";
+				$log = "\n" . pfb_log_status_line($header, '( 304 not modified )', 'Update not required') . "\n";
 				pfb_logger("{$log}", 1);
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 				// Persist any refreshed validators from the 304 response.
@@ -200,7 +200,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				$changed = pfb_conditional_get_decision($probe_status, $body_hash, $persisted_hash);
 
 				if ($changed) {
-					$log = "\n[ {$header} ] ( content changed )\tUpdate found\n";
+					$log = "\n" . pfb_log_status_line($header, '( content changed )', 'Update found') . "\n";
 					pfb_logger("{$log}", 1);
 					// Persist the validators from this 200 response so the next run
 					// can send a conditional GET.
@@ -211,7 +211,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 					return PfbScheduleTerminalResult::Success;
 				}
 				else {
-					$log = "\n[ {$header} ] ( content unchanged )\tUpdate not required\n";
+					$log = "\n" . pfb_log_status_line($header, '( content unchanged )', 'Update not required') . "\n";
 					pfb_logger("{$log}", 1);
 					unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 					// Refresh validators even on a spurious 200 so the next run can
@@ -222,7 +222,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			}
 
 			// Any other status → fail-safe: treat as changed, re-ingest.
-			$log = "\n\tUnexpected probe status [{$probe_status}]!\tUpdate forced (fail-safe)\n";
+			$log = "\n" . pfb_log_status_line('', "Unexpected probe status [{$probe_status}]!", 'Update forced (fail-safe)') . "\n";
 			unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 			pfb_logger("{$log}", 1);
 			$pfb['update_cron'] = TRUE;
@@ -237,7 +237,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		// Trigger CRON process if updates are found.
 		$pfb['update_cron'] = TRUE;
 
-		$log = "Update found\n";
+		$log = pfb_log_status_line('', '', 'Update found') . "\n";
 		pfb_logger("{$log}", 1);
 		touch("{$pfbfolder}/{$header}.update");
 	}

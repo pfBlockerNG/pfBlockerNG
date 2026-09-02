@@ -8358,6 +8358,19 @@
             }
         ]
     },
+    "pfb_log_header_pad": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_log_iso_timestamp": {
         "returnsRef": false,
         "returnType": "string",
@@ -8413,6 +8426,33 @@
         "returnsRef": false,
         "returnType": null,
         "params": []
+    },
+    "pfb_log_status_line": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "status",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "verdict",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "''"
+            }
+        ]
     },
     "pfb_log_tail_chunk": {
         "returnsRef": false,

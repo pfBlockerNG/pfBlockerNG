@@ -1846,7 +1846,7 @@ def test_cron_304_skips_unchanged_remote_feed(
         # The cron detector prefixes the verdict with the feed header, so the marker
         # below is scoped by header and verdict.
         h.pin_cron_due(deployed_vm)
-        not_mod_marker = f"[ {header} ] ( 304 not modified )"
+        not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
@@ -1953,7 +1953,7 @@ def test_cron_200_reingest_changed_remote_feed(
         # premise (a status-only impl that skips the hash compare) would still log
         # "Downloading update" without ever logging this, and a header-scoped count also
         # proves THIS feed (not a sibling) was the one evaluated.
-        chg_marker = f"[ {header} ] ( content changed )"
+        chg_marker = h.detector_status_marker(header, "( content changed )")
         chg_before = h.count_log_marker(deployed_vm, h.PFB_LOG, chg_marker)
 
         h.reload(deployed_vm, "cron")
@@ -2043,7 +2043,7 @@ def test_cron_no_validator_download_hash_decides(
         # the "( content unchanged )" verdict line, so the marker below proves BOTH the
         # verdict and that THIS feed's header was evaluated.
         h.pin_cron_due(deployed_vm)
-        not_unch_marker = f"[ {header} ] ( content unchanged )"
+        not_unch_marker = h.detector_status_marker(header, "( content unchanged )")
         not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 
@@ -2127,7 +2127,7 @@ def test_cron_spurious_200_same_bytes_no_reingest(
             # "( content unchanged )" verdict, so the marker below proves both the verdict
             # and that THIS feed's marker (aliasname_family) was the one evaluated.
             h.pin_cron_due(deployed_vm)
-            not_unch_marker = f"[ {feed_marker} ] ( content unchanged )"
+            not_unch_marker = h.detector_status_marker(feed_marker, "( content unchanged )")
             not_unch_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_unch_marker)
             dl_before = _feed_log_count(deployed_vm, feed_marker, "Downloading update")
 
@@ -2224,7 +2224,7 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         # the "( 304 not modified )" verdict line itself, so the marker below is scoped by
         # header AND verdict — no separate global count + "fast guard" needed.
         h.pin_cron_due(deployed_vm)
-        not_mod_marker = f"[ {header} ] ( 304 not modified )"
+        not_mod_marker = h.detector_status_marker(header, "( 304 not modified )")
         not_mod_before = h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker)
         dl_before = _feed_log_count(deployed_vm, header, "Downloading update")
 

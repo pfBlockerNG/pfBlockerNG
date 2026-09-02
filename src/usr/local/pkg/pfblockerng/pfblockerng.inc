@@ -4900,6 +4900,27 @@ function pfb_logger_format_for_target(string $path, string $raw, int $lead, stri
 		: $raw;
 }
 
+// issue #2989: pad "[ {$header} ]" so the status text a caller writes after its own
+// separating space starts in column 53, after pfb_logger()'s 20-character stamp. A
+// header wider than the field pads to nothing and keeps just that one space.
+function pfb_log_header_pad($header) {
+	return str_repeat(' ', max(0, 28 - strlen($header)));
+}
+
+// issue #3115: one status row of the Update log, in the two columns the log already
+// uses -- status text in column 53 (pfb_log_header_pad()'s), verdict text in column
+// 80 (where a probe row's appended cURL status lands). Spaces, never tabs: a tab's
+// width is the renderer's choice, so the Update viewer's textarea would place these
+// columns somewhere else. An empty $header indents to the status column instead; a
+// field wider than its column keeps exactly one separating space.
+function pfb_log_status_line($header, $status, $verdict = '') {
+	$field = ($header === '')
+		? str_repeat(' ', 33)
+		: "[ {$header} ]" . pfb_log_header_pad($header) . ' ';
+
+	return $field . $status . str_repeat(' ', max(1, 27 - strlen($status))) . $verdict;
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
@@ -7124,7 +7145,7 @@ function pfb_determine_list_detail($list='', $header='', $confconfig='', $key=''
 	}
 
 	// issue #2989: fixed spaces keep status columns aligned after the 20-character ISO timestamp.
-	$pfbarr['logtab'] = str_repeat(' ', max(0, 28 - strlen($header)));
+	$pfbarr['logtab'] = pfb_log_header_pad($header);
 
 	// Configure autoports/protocol and auto destination if required.
 	$conf_path = "installedpackages/{$confconfig}/config/{$key}";
@@ -14672,7 +14693,8 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 
 	// Cron change-detection probe (conditional GET + content hash; legacy name was 'md5')
 	if ($type == 'change_detect') {
-		pfb_logger("\t\t\t\t( change check )\t\t", 1);
+		// No verdict argument: the cURL status appended below is this row's verdict.
+		pfb_logger(pfb_log_status_line('', '( change check )'), 1);
 	}
 
 	$file_dwn_esc	= escapeshellarg("{$file_dwn}.raw");
