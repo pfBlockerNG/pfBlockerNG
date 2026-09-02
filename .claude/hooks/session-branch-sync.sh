@@ -14,7 +14,12 @@
 #                               new commits replay on the live base
 #   shallow history gap      -> unshallow once, then require a visible merge
 #                               base; otherwise report + touch nothing
-#   dirty tree               -> touch nothing; tell the agent to sync by hand
+#   dirty tree               -> touch nothing; tell the agent to sync by hand.
+#                               Only TRACKED changes count: untracked files (fresh
+#                               graphify-out/memory/ records, scratch output) never
+#                               conflict with a fast-forward or rebase unless the
+#                               incoming commits write that same path, and git
+#                               refuses that case on its own -- reported below.
 #   rebase conflict (~1%)    -> abort cleanly; tell the agent to resolve by hand
 #
 # ponytail: base is origin/devel for every non-base branch -- the documented
@@ -78,7 +83,7 @@ before=$(git rev-list --count "${base}..HEAD" 2>/dev/null || echo 0)
 behind=$(git rev-list --count "HEAD..${base}" 2>/dev/null || echo 0)
 [ "$before" -eq 0 ] && [ "$behind" -eq 0 ] && exit 0
 
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
 	emit "${kind} '${branch}': ${before} commit(s) ahead of ${base}, ${behind} behind, but the working tree is DIRTY so it was left untouched. Commit or discard your changes, then run: git rebase ${base}  (or, on a base branch, git merge --ff-only ${base}). Rebasing can drop individually patch-equivalent commits, but git log ${base}..HEAD cannot tell whether equivalent changes already landed in a squash commit."
 	exit 0
 fi
@@ -94,6 +99,8 @@ case "$branch" in
 			emit "BASE BRANCH '${branch}': has ${before} local commit(s) not on ${base}. This branch is meant to be PR-only -- reconcile by hand before starting work (push them via a PR, or reset to ${base})."
 		elif git merge --ff-only --quiet "$base" >/dev/null 2>&1; then
 			emit "BASE BRANCH '${branch}': fast-forwarded ${behind} commit(s) up to ${base}. Checkout is current."
+		else
+			emit "BASE BRANCH '${branch}': fast-forward to ${base} FAILED -- branch is unchanged (stderr was suppressed). Usually an untracked file that ${base} now tracks: move it aside, then run: git merge --ff-only ${base}"
 		fi
 		;;
 	*)

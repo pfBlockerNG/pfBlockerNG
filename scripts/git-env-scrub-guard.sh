@@ -90,7 +90,7 @@ pfblockerng_truncate_survival_spec.sh:4
 precommit_composer_vendor_spec.sh:2
 read_version_matrix_test_spec.sh:5
 release_ci_gate_spec.sh:33
-session_branch_sync_spec.sh:46
+session_branch_sync_spec.sh:64
 sparse_clone_ports_spec.sh:17
 EOF
 }
