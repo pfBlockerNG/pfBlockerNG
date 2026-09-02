@@ -313,8 +313,7 @@ main() {
 	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
 	# A `wt` cut already ran the initializer through `.config/wt.toml`'s pre-start hook,
 	# and the CodeGraph index it leaves is the marker that the tools are in place. Only
-	# the fallback route (and a pre-start that did not run) still needs the direct call;
-	# a second `graphify update` here is pure duplicated work.
+	# the fallback route (and a pre-start that did not run) still needs the direct call.
 	initializer_status=0
 	if [ ! -f "$path/.codegraph/codegraph.db" ]; then
 		sh "$initializer" "$path"
