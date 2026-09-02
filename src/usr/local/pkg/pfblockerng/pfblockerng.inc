@@ -295,6 +295,8 @@ $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
+$pfb['unbound_py_module_src']= array('/usr/local/pkg/pfblockerng/pfb_unbound.py', '/usr/local/pkg/pfblockerng/pfb_dnsbl_regex_rules.py');	// issue #3125: SHIPPED module pair fingerprinted (sha256 concat, pfb_unbound.py first) for the applied-marker compare
+$pfb['unbound_py_module_applied']= '/var/unbound/pfb_py_module.applied';	// issue #3125: python-written fingerprint of the staged pair at init
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
@@ -11232,6 +11234,23 @@ function pfb_dnsbl_unlock_action($action) {
 }
 
 
+// issue #3125: fingerprint the SHIPPED DNSBL python module pair exactly like the python
+// side's _module_fingerprint() (sha256 concat, pfb_unbound.py first, no separator) --
+// sha256, NOT pfb_content_hash(): python has no xxh128. FALSE when any member is
+// unreadable (nothing to compare, so no restart signal may be derived).
+function pfb_unbound_py_module_fingerprint(array $paths): string|false {
+	$fp = '';
+	foreach ($paths as $path) {
+		$digest = @hash_file('sha256', $path);
+		if ($digest === FALSE) {
+			return FALSE;
+		}
+		$fp .= $digest;
+	}
+	return $fp;
+}
+
+
 // Unbound python configuration file
 function pfb_unbound_python($mode) {
 	global $pfb;
@@ -11296,6 +11315,16 @@ function pfb_unbound_python($mode) {
 		if ($pfb_py_conf !== $pfb_py_conf_ex2) {
 			$pfbpython = TRUE;
 			@file_put_contents($pfb['unbound_py_conf'], $pfb_py_conf, LOCK_EX);
+		}
+
+		// issue #3125: a package upgrade re-stages the shipped python modules; signal a
+		// restart when the applied fingerprint (written by the module at init) differs --
+		// absent/stale/junk marker = drift, unreadable shipped file = no signal.
+		$pfb_py_module_fp = pfb_unbound_py_module_fingerprint($pfb['unbound_py_module_src']);
+		if ($pfb_py_module_fp !== FALSE &&
+			trim((string) @file_get_contents($pfb['unbound_py_module_applied'])) !== $pfb_py_module_fp) {
+			$pfbpython = TRUE;
+			pfb_logger("\nDNSBL Unbound python module changed -- Resolver restart required", 1);
 		}
 	}
 

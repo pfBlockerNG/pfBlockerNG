@@ -513,6 +513,11 @@ maintainer manual-smoke checklist (ADR-40 §7) — the `enable_dup`/`enable_drep
 additional harness helpers not yet in the fixture set, and real lock-hold measurement requires
 live traffic on production hardware.
 
+Issue #3125 adds a package-upgrade restart signal alongside the feed passes: at init the
+python module fingerprints the staged shipped files (`pfb_unbound.py` + `pfb_dnsbl_regex_rules.py`,
+sha256 concat) into the `pfb_py_module.applied` marker, and `pfb_unbound_python('enabled')`
+restarts the Resolver iff that marker drifts from the shipped files' fingerprint.
+
 ---
 
 ## DNSBL sinkhole VIP (ADR-13)

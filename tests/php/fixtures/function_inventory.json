@@ -13044,6 +13044,19 @@
         "returnType": null,
         "params": []
     },
+    "pfb_unbound_py_module_fingerprint": {
+        "returnsRef": false,
+        "returnType": "string|false",
+        "params": [
+            {
+                "name": "paths",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_unbound_py_normalize_absolute_path": {
         "returnsRef": false,
         "returnType": null,

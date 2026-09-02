@@ -35,7 +35,7 @@ import select
 import stat
 import sys
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -638,6 +638,46 @@ def _reload_write_applied(gen: int) -> None:
             os.unlink(tmp)
         except OSError:
             pass
+
+
+def _module_fingerprint(paths: Sequence[str]) -> str | None:
+    """Digest the staged shipped module pair: sha256(first) ++ sha256(second), no separator.
+
+    issue #3125: the cross-language contract with PHP's pfb_unbound_py_module_fingerprint()
+    -- pfb_unbound.py FIRST, lowercase hex. ``None`` if any file cannot be read (PHP's
+    side then returns FALSE and no restart signal can be derived)."""
+    parts = []
+    for path in paths:
+        try:
+            with open(path, "rb") as fh:
+                parts.append(hashlib.sha256(fh.read()).hexdigest())
+        except OSError:
+            return None
+    return "".join(parts)
+
+
+def _module_write_applied(marker_path: str, fingerprint: str) -> bool:
+    """Publish ``fingerprint`` as the module-applied marker (atomic temp + ``os.replace``).
+
+    issue #3125: PHP's pfb_unbound_python('enabled') restarts the Resolver whenever this
+    marker disagrees with the shipped files' fingerprint. Best-effort: a write failure is
+    logged (one stderr line) and returns False -- an unreadable marker reads as drift
+    downstream, so a failed write must never masquerade as success."""
+    tmp = "{}.tmp".format(marker_path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("{}\n".format(fingerprint))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, marker_path)
+    except OSError as e:
+        sys.stderr.write("[pfBlockerNG]: failed to write module fingerprint marker [ {} ]: {}\n".format(marker_path, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
 
 
 # ADR-61: Python's OWN structured status ledger (``pfb_py_status.json``, chroot-relative
@@ -1669,6 +1709,13 @@ def init_standard(id: int, env: module_env) -> bool:
     # control-watcher applies a record with seq N it writes N here (atomic temp+rename),
     # so the writer can confirm execution. Host path /var/unbound/pfb_py_control.applied.
     pfb["pfb_py_control_applied"] = "pfb_py_control.applied"
+    # issue #3125: fingerprint the staged shipped modules so PHP can restart the Resolver
+    # iff their code differs from what THIS init loaded. Best-effort: a failure must
+    # never abort init -- an absent marker simply reads as drift in PHP.
+    pfb["pfb_py_module_applied"] = "pfb_py_module.applied"
+    fp = _module_fingerprint(("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"))
+    if fp is not None:
+        _module_write_applied(pfb["pfb_py_module_applied"], fp)
     # ADR-65: the read-only DNSBL decision query channel. A local consumer writes a
     # JSON request here; the query watcher answers into the reply path below. Chroot-
     # relative, same reasoning as pfb_py_control above.
