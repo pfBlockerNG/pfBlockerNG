@@ -38,9 +38,8 @@ args, resolves the file list via ``git ls-files`` — every tracked
 ``src/usr/local/www/**`` and ``src/usr/local/pkg/**`` file ending
 ``.php``/``.inc``/``.xml`` (the Web UI surface `target="_blank"` links live in;
 pkg holds help text that renders on those same pages, issue #3075; deliberately
-excludes ``tests/`` so this checker's own bad-input fixtures never trip its
-tree scan) — or scans
-the explicit paths passed as args. It prints ``path:line: <message>`` to
+excludes ``tests/`` so this checker's own bad-input fixtures never trip its tree
+scan) — or scans the explicit paths passed as args. It prints ``path:line: <message>`` to
 stderr, exiting 1 if any violation is found, or 2 if the default (argless)
 scan set could not be enumerated (git absent / not a checkout) — failing
 closed rather than silently passing a gate it could not run.
