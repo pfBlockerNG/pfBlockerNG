@@ -222,8 +222,12 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 		$options4 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options4'} unset at the previous continent's tail is invisible to PHPStan)
 		$options6 ??= ''; // @phpstan-ignore nullCoalesce.variable (dynamic ${'options6'} unset at the previous continent's tail is invisible to PHPStan)
 
-$php_data = <<<EOF
-<?php
+		// #3066: this body must start at the "/*" -- prepending ANY line to it
+		// (observed with tree-sitter-php 0.24.1, the grammar code-graph extraction
+		// parses with) makes the grammar emit ERROR nodes here and drop the rest of
+		// the file, so the "<?php" is concatenated on outside instead. Upstream
+		// cause not isolated; tests/test_issue3066_php_grammar_parse.py is the guard.
+$php_data = "<?php\n" . <<<EOF
 /*
  * pfblockerng_{$continent_en}.php
  *

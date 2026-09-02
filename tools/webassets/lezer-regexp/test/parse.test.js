@@ -57,3 +57,124 @@ test("hostile: unclosed group/class and trailing backslash parse without throwin
     assert.doesNotThrow(() => parser.parse(input), `input ${JSON.stringify(input)} threw`);
   }
 });
+
+function errorRanges(input) {
+  const errors = [];
+  parser.parse(input).iterate({
+    enter(node) {
+      if (node.type.isError) errors.push({ from: node.from, to: node.to });
+    },
+  });
+  return errors;
+}
+
+// issue #3059: group-open tokens (`?i`, `?:`, `?=`, …) must not match after a
+// quantifier. Python's extension syntax is only valid immediately after `(`.
+const INLINE_FLAG_LETTERS = ["a", "i", "L", "m", "s", "u", "x"];
+
+test("quantifier before a Python inline-flag letter is not a FlagsMarker (issue #3059)", () => {
+  for (const letter of INLINE_FLAG_LETTERS) {
+    const input = `z?${letter}`;
+    assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
+    assert.equal(parser.parse(input).toString(), "RegExp(Literal,Quantifier,Literal)");
+  }
+});
+
+test("quantifier before group-open punctuation is not a group marker (issue #3059)", () => {
+  for (const input of ["a?:", "a?=", "a?!", "a?P<x>", "a?P=x", "a?<=", "a?<!", "a?>", "a?#"]) {
+    assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
+    assert.equal(parser.parse(input).toString(), "RegExp(Literal,Quantifier,Literal)");
+  }
+  assert.notEqual(errorRanges("a?(").length, 0, "a?( is Python-invalid and must stay an error node");
+});
+
+test("unclosed fused extension openers still produce error nodes", () => {
+  for (const input of ["(?:", "(?i", "(?=", "(?!", "(?<=", "(?<!", "(?>", "(?P<n>", "(?(1)"]) {
+    assert.notEqual(errorRanges(input).length, 0, `expected an error node for ${JSON.stringify(input)}`);
+  }
+});
+
+test("maintainer DNSBL patterns that Python accepts have no error nodes (issue #3059)", () => {
+  for (const input of [
+    "^(.+[-_.])??m?ad[sxv]?[0-9]*[-_.]",
+    "^(.+[-_.])??adse?rv(er?|ice)?s?[0-9]*[-.]",
+  ]) {
+    assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
+  }
+});
+
+test("trailing dash in a class is a literal, not a broken range (Python re docs)", () => {
+  for (const input of ["[a-]", "[.-]", "[0-]", "[a-z-]"]) {
+    assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
+  }
+  assert.equal(parser.parse("[a-]").toString(), "RegExp(CharacterClass(ClassOpen,ClassLiteral,\"-\",ClassClose))");
+});
+
+test("Python re docs syntax examples parse without error nodes", () => {
+  for (const input of [
+    ".",
+    "^a",
+    "a$",
+    "ab*",
+    "ab+",
+    "ab?",
+    "a*?",
+    "a+?",
+    "a??",
+    "a*+",
+    "a++",
+    "a?+",
+    "a{6}",
+    "a{3,5}",
+    "a{4,}",
+    "a{3,5}?",
+    "a{3,5}+",
+    "[amk]",
+    "[a-z]",
+    "[0-5][0-9]",
+    "[0-9A-Fa-f]",
+    "[a\\-z]",
+    "[-a]",
+    "[a-]",
+    "[(+*)]",
+    "[^5]",
+    "[^^]",
+    "[]()[{}]",
+    "[()[\\]{}]",
+    "A|B",
+    "[|]",
+    "(ab)",
+    "(?:ab)",
+    "(?i)",
+    "(?i:x)",
+    "(?-i:x)",
+    "(?i-s:x)",
+    "(?a:x)",
+    "(?>.*)",
+    "(?P<quote>['\"]).*?(?P=quote)",
+    "(?#foo)",
+    "Isaac (?=Asimov)",
+    "Isaac (?!Asimov)",
+    "(?<=abc)def",
+    "(?<!abc)def",
+    "(<)?(\\w+@\\w+(?:\\.\\w+)+)(?(1)>|$)",
+    "(.+) \\1",
+    "\\Afoo",
+    "\\bat\\b",
+    "at\\B",
+    "\\d+",
+    "\\D+",
+    "\\s+",
+    "\\S+",
+    "\\w+",
+    "\\W+",
+    "foo\\Z",
+    "\\x41",
+    "\\u0041",
+    "\\U00000041",
+    "\\N{LATIN SMALL LETTER A}",
+    "(?<=-)\\w+",
+  ]) {
+    assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
+  }
+});
