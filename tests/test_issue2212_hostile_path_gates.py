@@ -214,6 +214,27 @@ def test_version_literals_reads_a_hostile_path(tmp_path: Path, klass: str) -> No
     assert "Hardcoded pfSense/FreeBSD version literal" in result.stderr, result.stderr
 
 
+@pytest.mark.parametrize("klass", list(HOSTILE_STEMS))
+def test_guard_erosion_reads_a_hostile_path(tmp_path: Path, klass: str) -> None:
+    """A test retired from a C-quoted path is still an unexcused retirement.
+
+    This gate reads the REMOVED side of the diff, so the fixture adds the test in
+    one commit and deletes it in the next and diffs against the first.
+    """
+    rel = f"tests/test_{HOSTILE_STEMS[klass]}.py"
+    repo = _scratch_repo(tmp_path, {rel: "def test_reaps_the_orphan():\n    assert True\n"})
+    (repo / rel).unlink()
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "retire the guard", cwd=repo)
+    result = _run_checker("check_guard_erosion.py", repo, "--diff", "HEAD~1")
+    assert result.returncode == 1, (
+        f"{klass}: retiring the test in {rel!r} passed the gate (rc={result.returncode}); stderr={result.stderr!r}"
+    )
+    # rc 1 alone would also cover an uncaught crash; naming the retired test is
+    # what proves the gate reached a verdict about this file.
+    assert "test_reaps_the_orphan" in result.stderr, result.stderr
+
+
 # ── --name-only listings ─────────────────────────────────────────────────────
 
 

@@ -341,6 +341,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
 scripts/check_appliance_python.py
 scripts/check_version_literals.py
 scripts/check_comment_narration.py
+scripts/check_guard_erosion.py
 scripts/check_agent_roles.py
 scripts/check_context_budget.py
 scripts/check_composer_vendor.py
