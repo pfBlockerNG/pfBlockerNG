@@ -80,7 +80,7 @@ _HOOK = {
 
 
 def _run_in_background(vm: SmokeVM, command: str, out: str) -> None:
-    """Start ``command`` on the guest detached from this ssh session; output + ``RC=<n>`` land in ``out``."""
+    """Start one simple ``command`` on the guest detached from this ssh session; output + ``RC=<n>`` land in ``out``."""
     vm.ssh(f"nohup /bin/sh -c '{command} > {out} 2>&1; echo RC=$? >> {out}' >/dev/null 2>&1 &")
 
 
