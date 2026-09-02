@@ -118,11 +118,15 @@ export function lezerErrorDiagnostics(state) {
           // doc", per the design's zero-width-at-doc-end requirement, just anchored on
           // the other side.
           if (to <= from && from > 0) from = from - 1;
+          // issue #3059: an error node means this grammar failed to parse; Python
+          // gates the save and is authoritative -- warn, never error.
           diagnostics.push({
             from,
             to,
-            severity: "error",
-            message: 'Syntax error: unbalanced or unclosed "(" or "["',
+            severity: "warning",
+            message:
+              "This editor could not fully parse this pattern. " +
+              "Patterns are validated on save by Python, which is authoritative.",
           });
         }
         const mounted = node.tree && node.tree.prop(NodeProp.mounted);
