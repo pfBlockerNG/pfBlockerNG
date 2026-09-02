@@ -25,6 +25,13 @@ use PHPUnit\Framework\TestCase;
  * salvage cap and records a 'completed …' line when it gets to finish, so a missing
  * deadline reads as a COMPLETED control command in the assertions — a behavioural red,
  * never a hung runner.
+ *
+ * One platform note for whoever reads a Linux run: FreeBSD's timeout(1) sets 124
+ * whenever it timed out, kill-grace SIGKILL included, so the appliance always names an
+ * expiry. GNU/uutils timeout reports 137 for that same kill instead, which this seam
+ * logs as a non-zero reply. The termproof row therefore asserts the reaping contract
+ * rather than the log label — do NOT "fix" the seam to read 137 as an expiry on the
+ * strength of a Linux run.
  */
 #[CoversFunction('pfb_unbound_control_cmd')]
 #[CoversFunction('pfb_unbound_control_exec')]
@@ -100,9 +107,11 @@ final class UnboundControlIpcBoundTest extends TestCase
 			// Answers, but slowly enough that a per-name loop multiplies without a batch bound.
 			'crawl' => "\tsleep 0.7\n\tprintf 'completed %s\\n' \"\$*\" >> {$log}\n",
 			// Ignores SIGTERM and holds a descendant the expiry must also reap. The wait
-			// loop is pure shell (no child to signal), so only SIGKILL ends it.
+			// loop is pure shell (no child to signal), so only SIGKILL ends it, and the
+			// descendant's stdio is detached from the inherited capture pipe so its
+			// liveness is what the row observes -- not exec()'s wait for pipe EOF.
 			'termproof' => "\ttrap '' TERM\n"
-				. "\tsleep 30 &\n"
+				. "\tsleep 30 > /dev/null 2>&1 < /dev/null &\n"
 				. "\tprintf 'descendant %s\\n' \"\$!\" >> {$log}\n"
 				. "\tend=\$(( \$(date +%s) + 8 ))\n"
 				. "\twhile [ \"\$(date +%s)\" -lt \"\$end\" ]; do :; done\n"
@@ -117,6 +126,13 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'status_slow' => "\tcase \"\$1\" in\n"
 				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
 				. "\tstatus) sleep 8; printf 'unbound (pid 1) is running...\\n';"
+				. " printf 'completed %s\\n' \"\$*\" >> {$log} ;;\n"
+				. "\tesac\n",
+			// Restart path: dump and status answer, the cache restore never replies.
+			'load_slow' => "\tcase \"\$1\" in\n"
+				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
+				. "\tstatus) printf 'unbound (pid 1) is running...\\n' ;;\n"
+				. "\tload_cache) sleep 8;"
 				. " printf 'completed %s\\n' \"\$*\" >> {$log} ;;\n"
 				. "\tesac\n",
 		};
@@ -138,9 +154,11 @@ final class UnboundControlIpcBoundTest extends TestCase
 	 * tree if production regresses to an unbounded wait.
 	 *
 	 * @param array<string, mixed> $pfb $pfb overrides for the row
+	 * @param int $budget PFB_UNBOUND_CONTROL_WAIT the runner owns
+	 * @param list<string> $ini extra `php -d` flags for the runner
 	 * @return array{status: int, output: list<string>, log: string, errlog: string, control: list<string>}
 	 */
-	private function runIsolated(string $body, array $pfb): array
+	private function runIsolated(string $body, array $pfb, int $budget = self::BUDGET, array $ini = []): array
 	{
 		$runner = "{$this->dir}/runner.php";
 		$log = "{$this->dir}/pfblockerng.log";
@@ -156,7 +174,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$source = "<?php\n"
 			// The budget seam under test, plus the sibling daemon budgets so the
 			// restart rows never pay an appliance wait or start a real resolver.
-			. "define('PFB_UNBOUND_CONTROL_WAIT', " . self::BUDGET . ");\n"
+			. "define('PFB_UNBOUND_CONTROL_WAIT', {$budget});\n"
 			. "define('PFB_HOOK_KILL_GRACE', " . self::GRACE . ");\n"
 			. "define('PFB_UNBOUND_START_CMD', '/bin/true');\n"
 			. "define('PFB_UNBOUND_STOP_WAIT', 1);\n"
@@ -171,11 +189,15 @@ final class UnboundControlIpcBoundTest extends TestCase
 
 		$output = [];
 		$status = 0;
+		$flags = '';
+		foreach ($ini as $flag) {
+			$flags .= ' -d ' . escapeshellarg($flag);
+		}
 		exec('TMPDIR=' . escapeshellarg($this->dir) . ' ' . escapeshellarg($timeout) .
 			' -s TERM -k 5 ' . self::SALVAGE_SECONDS . ' ' . escapeshellarg(PHP_BINARY) .
-			' ' . escapeshellarg($runner) . ' 2>&1', $output, $status);
+			"{$flags} " . escapeshellarg($runner) . ' 2>&1', $output, $status);
 		$this->assertNotSame(124, $status,
-			"the isolated runner hit the {$this->salvageLabel()}s salvage cap — stuck run, not a verdict: "
+			'the isolated runner hit the ' . self::SALVAGE_SECONDS . 's salvage cap — stuck run, not a verdict: '
 			. implode("\n", $output));
 
 		$control = file_exists($this->controlLog())
@@ -196,10 +218,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 		];
 	}
 
-	private function salvageLabel(): string
-	{
-		return (string) self::SALVAGE_SECONDS;
-	}
 
 	/**
 	 * $pfb keys the targeted cache flush needs, wired to this row's double.
@@ -352,8 +370,15 @@ final class UnboundControlIpcBoundTest extends TestCase
 	 *   Given a double that traps TERM, publishes a `sleep 30` descendant and busy-waits
 	 *     past the budget
 	 *   When pfb_unbound_py_ccache_flush() runs
-	 *   Then the kill grace ends the command anyway and the reaped tree leaves no
-	 *     descendant behind.
+	 *   Then the kill grace ends the command anyway and nothing of the control tree is
+	 *     left behind.
+	 *
+	 * The mode itself is pinned by testShippedControlBudgetAndReaperModeArePinned, not
+	 * here: a `--foreground` mutation still leaves this row green, because off-appliance
+	 * the descendant does not outlive the run long enough for the liveness check to see
+	 * it (measured, both with and without the double's stdio detached from the capture
+	 * pipe). What this row does prove is the kill grace: the child neither completes nor
+	 * survives its budget, and no descendant is left when the pass returns.
 	 */
 	public function testTermIgnoringControlChildIsKilledAndLeavesNoDescendant(): void
 	{
@@ -427,6 +452,81 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'an expired status must be reported as a not-completed reload');
 		$this->assertStringContainsString('TIMED OUT', $run['errlog'],
 			'the expired status query must be observable in the error log');
+	}
+
+	/**
+	 * Scenario: the dump and the status answer, and the cache restore does not —
+	 * the "later load expires" half of the issue's recovery row.
+	 *   Given a double whose dump_cache and status reply and whose load_cache does not
+	 *   When pfb_reload_unbound() runs
+	 *   Then the restore is killed at the deadline, is named, and a restore that never
+	 *     completed is not reported as one.
+	 */
+	public function testLoadCacheExpiryIsNamedAndClaimsNoRestore(): void
+	{
+		$run = $this->runIsolated($this->reloadBody(), $this->reloadPfb('load_slow'));
+
+		$this->assertContains('load_cache', $run['control'],
+			'a confirmed resolver with a good dump must attempt the cache restore');
+		$this->assertNotContains('completed load_cache', $run['control'],
+			'a cache restore that never replies must be killed at the deadline');
+		$this->assertStringNotContainsString('Resolver cache restored', $run['log'],
+			'a restore that expired must never be reported as a completed restore');
+		$this->assertStringContainsString('TIMED OUT', $run['errlog'],
+			'the expired cache restore must be observable in the error log');
+	}
+
+	/**
+	 * Scenario: the reload cannot stage its cache dump file at all.
+	 *   Given a resolver-cache reload whose tempnam() fails (an unwritable /var/tmp,
+	 *     forced here with an open_basedir that excludes it)
+	 *   When pfb_reload_unbound() runs
+	 *   Then the pass survives: the resolver is still restarted and the reload returns,
+	 *     rather than dying on the unusable path while recovering from the failed dump.
+	 */
+	public function testUnstageableCacheDumpStillRestartsTheResolver(): void
+	{
+		$open_basedir = implode(PATH_SEPARATOR, [
+			dirname(__DIR__, 2),
+			$this->dir,
+			'/usr',
+			'/bin',
+			'/etc',
+			'/dev',
+			'/proc',
+		]);
+		$run = $this->runIsolated(
+			$this->reloadBody() . "print \"RELOAD-RETURNED\\n\";\n",
+			$this->reloadPfb('fast'),
+			self::BUDGET,
+			["open_basedir={$open_basedir}"]
+		);
+
+		$this->assertSame('', implode("\n", preg_grep('/(Fatal error|ValueError)/', $run['output']) ?: []),
+			'an unstageable cache dump must not fatal the update pass: ' . implode("\n", $run['output']));
+		$this->assertContains('RELOAD-RETURNED', $run['output'],
+			'pfb_reload_unbound() must return so the caller can converge its ledger');
+		$this->assertContains('status', $run['control'],
+			'the resolver must still be restarted and confirmed when no cache could be staged');
+	}
+
+	/**
+	 * Scenario: an operator (or a harness) narrows the control budget to one second.
+	 *   Given a one-second whole-batch budget and a resolver that answers immediately
+	 *   When pfb_unbound_py_ccache_flush() runs
+	 *   Then the batch still issues its first command — a budget that small must clip
+	 *     the deadline, never flush nothing at all.
+	 */
+	public function testASingleSecondBudgetStillIssuesItsFirstFlush(): void
+	{
+		$run = $this->runIsolated(
+			"pfb_unbound_py_ccache_flush(array('example.com'));\n",
+			$this->flushPfb('fast'),
+			1
+		);
+
+		$this->assertContains('flush example.com', $run['control'],
+			'a one-second budget must still issue the first flush command');
 	}
 
 	/**
@@ -558,37 +658,60 @@ final class UnboundControlIpcBoundTest extends TestCase
 	}
 
 	/**
-	 * No control call site may bypass the seam: every $pfb['chroot_cmd'] use in the
-	 * package is either the definition, the pure flush-command builder, or a call into
-	 * the bounded seam. A new raw exec() of the control command turns this red.
+	 * No control call site anywhere under src/ may bypass the seam: every
+	 * $pfb['chroot_cmd'] use is the definition, the pure flush-command builder, a call
+	 * into the bounded seam, or the one named exception issue #2880 owns. A new raw
+	 * exec() of the control command — in this package or in the web UI — turns this red.
 	 */
 	public function testNoControlSiteBypassesTheBoundedSeam(): void
 	{
-		$file = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-		$lines = file($file, FILE_IGNORE_NEW_LINES);
-		$this->assertNotFalse($lines, 'the package source must be readable');
+		// Owned by issue #2880 (Alerts wildcard-delete resolver flush), which bounds it
+		// with the page's own request semantics. When #2880 lands, this row goes red
+		// until the exception is dropped — a good failure, not a maintenance burden.
+		$deferred = ['src/usr/local/www/pfblockerng/pfblockerng_alerts.php'];
+		$root = dirname(__DIR__, 2);
+		$sources = [];
+		$walk = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/src",
+			FilesystemIterator::SKIP_DOTS));
+		foreach ($walk as $entry) {
+			if ($entry->isFile() && in_array($entry->getExtension(), ['inc', 'php', 'sh', 'py'], TRUE)) {
+				$sources[] = $entry->getPathname();
+			}
+		}
+		sort($sources);
+		$this->assertNotSame([], $sources, 'the package sources must be readable');
 
 		$offenders = [];
+		$deferrals = [];
 		$sites = 0;
-		foreach ($lines as $index => $line) {
-			if (!str_contains($line, "\$pfb['chroot_cmd']")) {
-				continue;
+		foreach ($sources as $file) {
+			$relative = substr($file, strlen($root) + 1);
+			foreach ((array) file($file, FILE_IGNORE_NEW_LINES) as $index => $line) {
+				if (!str_contains((string) $line, "\$pfb['chroot_cmd']") ||
+				    str_contains((string) $line, "\$pfb['chroot_cmd'] = ")) {
+					continue;
+				}
+				$sites++;
+				if (str_contains((string) $line, 'pfb_unbound_control_exec(') ||
+				    str_contains((string) $line, 'pfb_unbound_control_cmd(') ||
+				    str_contains((string) $line, 'pfb_unbound_py_ccache_flush_cmds(') ||
+				    str_contains((string) $line, 'pfb_unbound_py_ccache_flush(')) {
+					continue;
+				}
+				$where = $relative . ':' . ($index + 1) . ': ' . trim((string) $line);
+				if (in_array($relative, $deferred, TRUE)) {
+					$deferrals[] = $where;
+					continue;
+				}
+				$offenders[] = $where;
 			}
-			if (str_contains($line, "\$pfb['chroot_cmd'] = ")) {
-				continue;
-			}
-			$sites++;
-			if (str_contains($line, 'pfb_unbound_control_exec(') ||
-			    str_contains($line, 'pfb_unbound_control_cmd(') ||
-			    str_contains($line, 'pfb_unbound_py_ccache_flush_cmds(')) {
-				continue;
-			}
-			$offenders[] = ($index + 1) . ': ' . trim($line);
 		}
 
 		$this->assertSame([], $offenders,
 			'every unbound-control call site must run through the bounded seam, got: ' .
 			implode(' | ', $offenders));
+		$this->assertNotSame([], $deferrals,
+			'the #2880 exception must still name a real site; drop it once #2880 lands');
 		$this->assertGreaterThanOrEqual(6, $sites,
 			'the six known control call sites must still be present in the package source');
 	}

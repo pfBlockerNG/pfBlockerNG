@@ -11443,14 +11443,10 @@ if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
 	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
 }
 // issue #2879: the wall deadline every synchronous `unbound-control` request/response
-// call in this file runs under. unbound-control blocks until the resolver answers, so a
-// control socket that accepts and never replies left the six call sites below with no
-// maximum at all, and the per-domain cache flush multiplied that wait by its input
-// cardinality. The budget is the same 30 s the sibling resolver waits already use
+// call in this file runs under -- the same 30 s the sibling resolver waits use
 // (PFB_UNBOUND_STOP_WAIT / PFB_UNBOUND_START_WAIT above, and issue #2015's resolver
-// lookups) -- one settled value for resolver-side work on this appliance, no new operator
-// setting -- and it doubles as the WHOLE-BATCH ceiling for pfb_unbound_py_ccache_flush(),
-// so no number of names can multiply it. Overridable before load, like the budgets above.
+// lookups), so no new operator setting appears. It is ALSO the whole-batch ceiling for
+// pfb_unbound_py_ccache_flush(). Overridable before load, like the budgets above.
 if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 	define('PFB_UNBOUND_CONTROL_WAIT', 30);
 }
@@ -11800,15 +11796,9 @@ function pfb_unbound_control_cmd(string $cmd, ?int $budget = NULL): string {
 function pfb_unbound_control_exec(string $cmd, string $label, ?array &$lines = NULL,
     bool $log_nonzero = TRUE, ?int $budget = NULL): int {
 
-	$sink = array();
-	$out  =& $sink;
-	if ($lines !== NULL) {
-		$out =& $lines;
-	}
-
 	$secs   = max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT);
 	$status = 0;
-	if (exec(pfb_unbound_control_cmd($cmd, $secs), $out, $status) === FALSE && $status === 0) {
+	if (exec(pfb_unbound_control_cmd($cmd, $secs), $lines, $status) === FALSE && $status === 0) {
 		// exec() itself failed to launch (fork/pipe).
 		$status = -1;
 	}
@@ -11870,20 +11860,23 @@ function pfb_unbound_py_ccache_flush($names) {
 	//
 	// issue #2879: ONE whole-batch deadline for the flush, not one per name. Each command
 	// is additionally clipped to what the batch has left, so neither a single hung control
-	// call nor a long name list can push the total past the budget (plus one kill grace).
-	// An exhausted budget names the remainder instead of silently dropping it.
+	// call nor a long name list can push the total past the budget plus one kill grace.
+	// The batch always makes its FIRST attempt -- a sub-second budget bounds that attempt
+	// at one second rather than flushing nothing at all -- and stops as soon as the budget
+	// is gone, naming the remainder instead of silently dropping it.
 	$deadline = hrtime(TRUE) + (PFB_UNBOUND_CONTROL_WAIT * 1000000000);
 	$total    = count($cmds);
 	$issued   = 0;
 	foreach ($cmds as $cmd) {
-		$left = (int) floor(($deadline - hrtime(TRUE)) / 1000000000);
-		if ($left < 1) {
+		$remaining = $deadline - hrtime(TRUE);
+		$left      = (int) floor($remaining / 1000000000);
+		if ($left < 1 && !($issued === 0 && $remaining > 0)) {
 			pfb_logger("\nUnbound control [ cache flush ] TIMED OUT after " .
 				PFB_UNBOUND_CONTROL_WAIT . 's; ' . ($total - $issued) . " of {$total} " .
 				'flush command(s) not run', 2);
 			return;
 		}
-		pfb_unbound_control_exec("{$cmd} < /dev/null", 'cache flush', budget: $left);
+		pfb_unbound_control_exec("{$cmd} < /dev/null", 'cache flush', budget: max(1, $left));
 		$issued++;
 	}
 }
@@ -12113,10 +12106,13 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On) {
 			$dumped = pfb_unbound_control_exec("{$pfb['chroot_cmd']} dump_cache > " .
 				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
-			if ($dumped !== 0) {
-				// issue #2879: an expired or refused dump leaves a truncated cache (or a
-				// control error message) in the file. Discard it so the restore below
-				// cannot load a partial dump back into the fresh resolver.
+			// issue #2879: an expired or refused dump leaves a truncated cache (or a
+			// control error message) in the file. Discard it so the restore below cannot
+			// load a partial dump back into the fresh resolver. A tempnam() that failed
+			// gives FALSE, not a path: there is nothing to discard, and passing it on
+			// would end the pass in a ValueError that @ does not suppress -- the restart
+			// below must still happen on a box that cannot stage a cache file.
+			if ($dumped !== 0 && is_string($cache_dumpfile)) {
 				@file_put_contents($cache_dumpfile, '');
 			}
 			pfb_logger('.', 1);
