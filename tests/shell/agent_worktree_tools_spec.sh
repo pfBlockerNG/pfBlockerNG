@@ -68,14 +68,11 @@ INTERPRETER
     chmod +x "$interpreter"
     printf '#!%s\n' "$interpreter" > "$stubdir/graphify"
     cat >> "$stubdir/graphify" <<'GRAPHIFY'
-case "$1" in
-  update)
-    [ "$#" -eq 2 ] || exit 9
-    printf 'graphify:%s:%s\n' "$1" "$2" >> "$WORKTREE_TOOL_LOG"
-    exit "${GRAPHIFY_RC:-0}"
-    ;;
-  *) exit 9 ;;
-esac
+# Tripwire: no production path may invoke the CLI (issue #3091). Any call is logged,
+# rewrites the root graph the way a real `update` would, and fails.
+printf 'graphify:%s\n' "$*" >> "$WORKTREE_TOOL_LOG"
+[ -z "${2:-}" ] || printf 'regenerated\n' > "$2/graphify-out/graph.json"
+exit 9
 GRAPHIFY
     cat > "$stubdir/serena" <<'SERENA'
 #!/bin/sh
@@ -100,8 +97,8 @@ SERENA
 
     export WORKTREE_TOOL_LOG="$tool_log" WORKTREE_GRAPHIFY_PACKAGE="$graphify_package"
     # The initializer applies the vendored .inc language-override patch (issue #2810)
-    # before refreshing the graph, so every log below carries `patch-graphify:probe`
-    # between the CodeGraph line and the Graphify one.
+    # after CodeGraph, so every row that reaches it logs `patch-graphify:probe` after
+    # the CodeGraph line.
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -124,15 +121,20 @@ SERENA
     The stderr should include 'run /graphify'
   End
 
-  It 'runs the vendored Graphify language override before refreshing an existing graph'
+  It 'leaves a tracked root graph byte-identical so a fresh cut is born clean (issue #3091)'
     mkdir -p "$worktree/graphify-out"
-    true > "$worktree/graphify-out/graph.json"
+    printf 'committed graph\n' > "$worktree/graphify-out/graph.json"
+    git_fixture -C "$worktree" add graphify-out/graph.json
+    git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+      commit -q -m graph
     When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
     The stderr should include 'already provides'
-    The contents of file "$tool_log" should equal \
-      "$(printf 'codegraph:init:%s\npatch-graphify:probe\ngraphify:update:%s' "$worktree" "$worktree")"
     The stderr should include 'Initializing CodeGraph in'
+    The stderr should not include 'run /graphify'
+    The contents of file "$tool_log" should equal "$(printf 'codegraph:init:%s\npatch-graphify:probe' "$worktree")"
+    The contents of file "$worktree/graphify-out/graph.json" should equal 'committed graph'
+    Assert [ -z "$(git_fixture -C "$worktree" status --porcelain -- graphify-out)" ]
   End
 
   It 'fails nonzero when mandatory CodeGraph is missing'
@@ -153,16 +155,6 @@ SERENA
     When run env OMP_CLI=1 PATH="$no_graphify" sh "$script_abs" "$worktree"
     The status should not equal 0
     The stderr should include 'graphify'
-  End
-
-  It 'returns nonzero when refreshing an existing Graphify root graph fails'
-    mkdir -p "$worktree/graphify-out"
-    true > "$worktree/graphify-out/graph.json"
-    When run env OMP_CLI=1 GRAPHIFY_RC=19 sh "$script_abs" "$worktree"
-    The status should not equal 0
-    The contents of file "$tool_log" should equal \
-      "$(printf 'codegraph:init:%s\npatch-graphify:probe\ngraphify:update:%s' "$worktree" "$worktree")"
-    The stderr should include 'Initializing CodeGraph in'
   End
 
   It 'runs Serena project indexing at the exact root outside OMP when Serena is present'

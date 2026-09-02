@@ -29,13 +29,15 @@ Load when: every agent session, from `AGENTS.md`.
   `setup-agent-tools.sh` runs this canonical setup at Graphify's install-order slot,
   before ast-grep and semgrep.
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`. It runs
-  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index, reapplies
-  the Graphify patch, then runs `graphify update <root>` when the root graph exists.
-  When the graph is absent it prints a notice and builds nothing; first-build scope
-  is a judgement call handled by a `/graphify` run. `wt --yes switch --create <branch>`
-  runs it from `.config/wt.toml`'s `pre-start` hook. `work-branch.sh --worktree` cuts
-  through `wt`, skips the initializer when pre-start already left a CodeGraph index,
-  and rolls back a failed cut — reclaiming a tree `wt` left behind when its hook failed.
+  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index and reapplies
+  the Graphify patch. It never runs `graphify update`, so a cut on an unmodified base
+  has an empty `git status` (issue #3091). When the graph is absent it
+  prints a notice and builds nothing; first-build scope is a judgement call handled
+  by a `/graphify` run.
+  `wt --yes switch --create <branch>` runs it from `.config/wt.toml`'s `pre-start`
+  hook. `work-branch.sh --worktree` cuts through `wt`, skips the initializer when
+  pre-start already left a CodeGraph index, and rolls back a failed cut — reclaiming a
+  tree `wt` left behind when its hook failed.
 - Graphify's suffix map parses `.inc` as Pascal, collapsing this repository's PHP
   includes from roughly 767 nodes to roughly 30 while extraction still succeeds.
   Until a release includes Graphify-Labs/graphify#3075, the fix rides as
@@ -43,7 +45,7 @@ Load when: every agent session, from `AGENTS.md`.
   `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify.sh` emits the
   validated absolute executable launcher path; `ensure-graphify-merge-driver.sh`
   captures and quotes that path for target-rooted `hook install`;
-  `init-worktree-tools.sh` resolves the same launcher for update; and
+  `patch-graphify.sh` resolves the same launcher; and
   `.githooks/pre-commit` resolves and patches again
   before its no-staged-files exit, repairing a bare Graphify upgrade in a fresh process
   before the post-commit rebuild. The include-node floor in

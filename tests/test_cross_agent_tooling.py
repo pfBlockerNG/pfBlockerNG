@@ -280,7 +280,8 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "work-branch.sh --worktree",
         "scripts/agent/init-worktree-tools.sh",
         "scripts/agent/ensure-codegraph.sh",
-        "graphify update",
+        # issue #3091: the initializer never rewrites the tracked graph.
+        "It never runs `graphify update`",
         # The initializer no longer builds the first graph: the routing document
         # must direct that judgement call to a `/graphify` run instead.
         "prints a notice and builds nothing",
@@ -326,6 +327,7 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "temporary detached builder",
         "graphify cluster-only",
         "cluster-only",
+        "then runs `graphify update <root>`",
     ):
         assert obsolete not in folded_routing, f"obsolete Graphify store/refresh recipe remains: {obsolete}"
     assert "graphify-out/views" not in routing
