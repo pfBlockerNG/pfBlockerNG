@@ -569,6 +569,7 @@ def test_the_live_query_path_walks_the_labels_once_per_query() -> None:
 
 _EXCEPTION_TLD_PSL = """// ===BEGIN ICANN DOMAINS===
 jp
+co.jp
 kobe.jp
 *.kobe.jp
 !city.kobe.jp
@@ -581,8 +582,10 @@ kobe.jp
 @pytest.mark.parametrize(
     ("name", "public_suffix", "registrable"),
     [
-        # Exact rule wins: 'jp' is the longest surviving suffix of a name with no
-        # kobe.jp ancestry, and the exception phase found nothing.
+        # Exact rule wins below the TLD: co.jp is longer than the bare 'jp' the
+        # no-match fallback would return, so this row fails if the exact exit goes.
+        ("shop.example.co.jp", "co.jp", "example.co.jp"),
+        # Same exit at the TLD itself, where no deeper rule applies.
         ("shop.example.jp", "jp", "example.jp"),
         # Wildcard base kobe.jp promotes the suffix one label to the left.
         ("a.kobe.jp", "a.kobe.jp", ""),
@@ -599,10 +602,12 @@ def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
 
     The shared single pass cannot honour exceptions, because an exception beats an
     ordinary match at ANY depth, so ``_psl_prevailing`` routes a name whose TLD owns
-    an exception rule to ``_psl_prevailing_section`` instead. The shipped list pairs
-    exception rules with exact rules under the same TLD (8 exceptions under ck and
-    jp, 1777 exact rules under jp alone), so all three exits of that walk -- exact,
-    wildcard and exception -- are live production paths and each gets a row here.
+    an exception rule to ``_psl_prevailing_section`` instead. That walk is a live
+    production path, not a corner: the shipped list carries seven of its eight
+    exception rules under jp, which also holds 1777 exact rules, so all three exits
+    -- exact, wildcard and exception -- resolve real feed entries and each gets a
+    row here. The exact row sits below the TLD on purpose, because at the TLD that
+    exit and the no-match fallback return the same string and cannot be told apart.
     """
     rules = P.parse_psl_rules(_EXCEPTION_TLD_PSL)
 
