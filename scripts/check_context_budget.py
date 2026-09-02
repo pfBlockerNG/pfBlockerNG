@@ -618,10 +618,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for violation in violations:
         # A tracked name that is not valid UTF-8 reaches here byte-exactly, as
-        # os.fsdecode renders it -- lone surrogates a strict stdout cannot
-        # encode. Escape them so the gate REPORTS the file it measured instead
-        # of dying on the report (issue #3073).
-        print(violation.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode())
+        # os.fsdecode renders it -- lone surrogates no stdout codec can encode.
+        # Escaping them through UTF-8 in BOTH directions keeps every other name
+        # intact whatever stdout's codec is, so the gate reports the file it
+        # measured instead of dying on the report (issue #3073).
+        print(violation.encode("utf-8", "backslashreplace").decode())
     return 1 if violations else 0
 
 

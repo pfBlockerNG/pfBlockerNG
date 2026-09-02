@@ -91,7 +91,13 @@ def nul_paths(listing: str) -> list[str]:
 
 def _run(args: list[str]) -> bytes:
     """git's stdout, undecoded: the two routes out of this module disagree on how."""
-    return subprocess.run(args, capture_output=True, check=True).stdout
+    out = subprocess.run(args, capture_output=True, check=False)
+    if out.returncode != 0:
+        # stderr is a MESSAGE, not a path, and callers print it straight into
+        # their own error line -- decode it here (lossily, like diff text) so
+        # they get git's complaint rather than a bytes repr of it.
+        raise subprocess.CalledProcessError(out.returncode, args, out.stdout, out.stderr.decode("utf-8", "replace"))
+    return out.stdout
 
 
 def unified_diff(args: list[str]) -> str:

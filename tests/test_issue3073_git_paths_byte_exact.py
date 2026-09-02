@@ -213,3 +213,52 @@ def test_budget_gate_reports_a_violation_whose_path_is_not_valid_utf8(tmp_path: 
         f"the over-budget file must be named in the report; stdout={stdout!r} stderr={stderr!r}"
     )
     assert proc.returncode == 1, f"an over-budget file must fail the gate; exit={proc.returncode} stdout={stdout!r}"
+
+
+def test_budget_gate_reports_a_valid_non_ascii_name_on_a_latin1_stdout(tmp_path: Path) -> None:
+    """The escape must not narrow which names the gate can report.
+
+    Making a lone surrogate printable is worthless if it costs the ordinary
+    case: `pölicy.md` is valid UTF-8 and the unpatched gate printed it fine on
+    any stdout codec, so the escape has to round-trip in ONE codec rather than
+    encoding in stdout's and decoding as UTF-8.
+    """
+    _seed_repo(tmp_path, (b"seed.php",))
+    (tmp_path / ".agents" / "policy").mkdir(parents=True)
+    (tmp_path / ".agents" / "policy" / "pölicy.md").write_bytes(b"x" * 40_000)
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "oversized")
+
+    proc = subprocess.run(
+        [sys.executable, str(_BUDGET_TOOL), "--all", "--root", str(tmp_path)],
+        capture_output=True,
+        check=False,
+        env={**scrubbed_git_env(drop_git_vars=True), "PYTHONIOENCODING": "latin-1"},
+    )
+    stdout = proc.stdout.decode("latin-1")
+    stderr = proc.stderr.decode("latin-1")
+
+    assert "UnicodeDecodeError" not in stderr, f"the gate died reporting a perfectly valid name: {stderr}"
+    # NFC/NFD filename normalization differs per OS -- match the ASCII tail only,
+    # as tests/test_context_budget.py does for the same reason.
+    assert "licy.md" in stdout and "40000 bytes > budget" in stdout, (
+        f"the over-budget file must be named in the report; stdout={stdout!r} stderr={stderr!r}"
+    )
+
+
+def test_a_failed_git_run_reports_a_readable_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """git's stderr is a MESSAGE, not a path, so it decodes rather than staying bytes.
+
+    Both `unified_diff` consumers print `exc.stderr` straight into their own
+    error line; bytes there collapse git's multi-line complaint into one line of
+    escaped `\\n`.
+    """
+    _seed_repo(tmp_path, (b"seed.php",))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        unified_diff(["no-such-ref-xyz...HEAD"])
+
+    stderr = caught.value.stderr
+    assert isinstance(stderr, str), f"a caller printing this gets a bytes repr, not a message: {stderr!r}"
+    assert "fatal:" in stderr, f"expected git's complaint, got {stderr!r}"
