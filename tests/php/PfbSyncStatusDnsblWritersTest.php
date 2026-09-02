@@ -485,14 +485,19 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			static fn (): bool => pfb_dnsbl_apply_ledger_update());
 
 		$after = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+		// This pins the callee's own guard (it returns before its start section). It does
+		// NOT see a caller-side retry -- a retried refusal refuses again and never reaches
+		// that section either, so the count is unchanged. The KILL count below is what
+		// catches a retry; both are kept because they fail on different regressions.
 		$this->assertSame($before, $after,
-			'a refused stop must attempt no start at all -- neither the first nor the retry');
+			'a refused stop must reach no start section at all');
 
 		// A retry would call pfb_stop_start_unbound() a second time, and each call escalates
 		// to exactly one KILL. Counting the signal catches a restored retry that the
 		// start-log cannot see, because a retried refusal never reaches its start section.
 		$this->assertCount(1, $GLOBALS['pfb_test_sigkillbyname_calls'],
-			'the refusal must be reached once; a second KILL means the caller retried it');
+			'exactly one KILL: a refused stop escalates once, so a second means the stop '
+			. 'path ran twice -- a caller retry, or the callee escalating more than once');
 
 		$this->assertFileDoesNotExist($confirmProbe,
 			'the confirm block must not run for a refused stop: the process still answering '
@@ -515,6 +520,49 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'the caller must say the config was deliberately left alone, in its own words');
 		$this->assertStringNotContainsString('Fix error(s)', $log,
 			'a stop failure must not tell the operator to fix a config error that does not exist');
+	}
+
+	/**
+	 * Positive control for the recorder the test above relies on (leg 3, round 2, row B).
+	 *
+	 * That test proves the confirm block is SKIPPED on a refused stop by asserting a probe
+	 * file is absent. An absence assertion is only worth the mechanism behind it: if the
+	 * recorder cannot fire -- an unwritable probe path, or a one-character typo in the shell
+	 * fragment -- the assertion passes for the wrong reason while the bug it guards is live.
+	 * Leg 3 demonstrated both. So this pins the other direction with the SAME fragment: when
+	 * the stop succeeds and the resolver answers, the confirm block runs and the probe DOES
+	 * appear. Break the recorder and this test fails, which is what makes the absence
+	 * assertion above mean something.
+	 */
+	public function testConfirmBlockRecorderFiresWhenTheConfirmBlockActuallyRuns(): void
+	{
+		file_put_contents("{$this->dir}/unbound.conf", "server:\n");
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+
+		$confirmProbe = "{$this->dir}/confirm_ran";
+		$GLOBALS['pfb']['chroot_cmd'] = '/usr/bin/touch ' . escapeshellarg($confirmProbe) . ' ;:';
+
+		// is_process_running('unbound') call sequence for this path, enumerated from a
+		// probe rather than guessed: (1) pfb_reload_unbound's pre-restart check :12022,
+		// (2) the stop-wait loop :11458, (3) the #3055 post-loop guard :11469, (4)/(5) the
+		// same two again on the retry the harness start-double's non-zero status triggers,
+		// (6) the confirm block :12065. Only 6 is TRUE: the stop must succeed so retval is
+		// never PFB_UNBOUND_STOP_FAILED, and the resolver must answer at the confirm check.
+		$calls = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$calls): bool {
+			$calls++;
+			return $calls === 6;
+		};
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+
+		$this->assertFileExists($confirmProbe,
+			'the confirm-block recorder must actually fire when the confirm block runs -- '
+			. 'otherwise the skip assertion in the refused-stop test proves nothing');
 	}
 
 	// -----------------------------------------------------------------------
