@@ -248,25 +248,15 @@ main() {
 	PATH="$uv_tool_bin:$codegraph_bin:$xdg_bin_home:$cargo_bin:$PATH"
 	export PATH
 
+	# An installed package manager is used as found, never self-updated (#3106):
+	# every later use is `uv tool install --upgrade`, which any uv performs.
 	case "$platform" in
 		Linux)
-			if command -v uv >/dev/null 2>&1; then
-				# Maintenance, not a prerequisite: every later use is
-				# `uv tool install --upgrade`, which any uv performs. A uv
-				# that did not come from the standalone installer refuses to
-				# self-update and exits non-zero; under `set -eu` that ends
-				# the run before a single tool is installed.
-				uv self update || true
-			else
+			command -v uv >/dev/null 2>&1 ||
 				install_from_url 'https://astral.sh/uv/install.sh'
-			fi
 			;;
 		Darwin)
-			if brew list --versions uv >/dev/null 2>&1; then
-				brew upgrade uv
-			else
-				brew install uv
-			fi
+			brew list --versions uv >/dev/null 2>&1 || brew install uv
 			brew_uv_bin=$(brew --prefix uv)/bin
 			PATH="$brew_uv_bin:$PATH"
 			export PATH
