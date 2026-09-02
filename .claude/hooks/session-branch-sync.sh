@@ -6,7 +6,7 @@
 # synchronization step: Git drops individually patch-equivalent commits and
 # replays genuinely new ones. A branch whose PR was squash-merged may instead
 # conflict because its original commit boundaries no longer exist upstream;
-# the hook aborts cleanly and reports that case rather than guessing.
+# the hook aborts when it can and reports what happened rather than guessing.
 #
 #   base branch (devel/main) -> fast-forward only (ff-only) to its own remote;
 #                               a diverged base is surfaced, never rewritten
@@ -15,11 +15,11 @@
 #   shallow history gap      -> unshallow once, then require a visible merge
 #                               base; otherwise report + touch nothing
 #   dirty tree               -> touch nothing; tell the agent to sync by hand. Only
-#                               TRACKED changes count: an untracked file (a fresh
-#                               graphify-out/memory/ record) blocks nothing unless the
-#                               incoming commits track that path -- git refuses that
-#                               itself, and both arms below report it
+#                               TRACKED changes count (untracked graphify-out/memory/
+#                               records never block a sync)
 #   rebase conflict (~1%)    -> abort cleanly; tell the agent to resolve by hand
+#   untracked path collision -> git refuses the ff/rebase itself; reported as such
+#                               (a failed abort is reported as stuck mid-rebase)
 #
 # ponytail: base is origin/devel for every non-base branch -- the documented
 # branch point for adr/issue/claude branches. A rare main-targeting branch
