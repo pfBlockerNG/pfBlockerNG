@@ -620,3 +620,47 @@ def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
         registrable,
     ), f"the two-phase walk changed the resolution of {name!r}: {resolution!r}"
     assert resolution.private_active is False, f"no PRIVATE rule exists, yet {name!r} reported one: {resolution!r}"
+
+
+_FUSED_WILDCARD_PSL = """// ===BEGIN ICANN DOMAINS===
+com
+*.nom.br
+// ===END ICANN DOMAINS===
+// ===BEGIN PRIVATE DOMAINS===
+*.sub.example.com
+// ===END PRIVATE DOMAINS===
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "icann_suffix", "public_suffix", "private_active"),
+    [
+        # ICANN wildcard: the base nom.br promotes the ICANN suffix one label left.
+        # Without that arm the ICANN side falls through to the bare TLD, 'br'.
+        ("a.nom.br", "a.nom.br", "a.nom.br", False),
+        # PRIVATE wildcard: only the combined side sees sub.example.com, so the two
+        # sections must come out of the one pass with different answers.
+        ("x.sub.example.com", "com", "x.sub.example.com", True),
+    ],
+)
+def test_the_fused_pass_tracks_a_wildcard_in_each_section(
+    name: str, icann_suffix: str, public_suffix: str, private_active: bool
+) -> None:
+    """issue #3061: the single pass matches wildcards for BOTH sections independently.
+
+    This authority has no exception rule, so every name reaches the fused pass rather
+    than the two-phase walk, and each row pins the wildcard arm of one section. The
+    ICANN arm needs its own row: the shipped list has 16 ICANN wildcard rules, 8 of
+    them under TLDs with no exception rule, and every one of those resolves through
+    this arm on every build -- but the small authorities elsewhere in the suite pair
+    their ICANN wildcards with exceptions, which routes those names away from here.
+    """
+    rules = P.parse_psl_rules(_FUSED_WILDCARD_PSL)
+
+    resolution = P.resolve_public_suffix(name, rules)
+
+    assert (resolution.icann_suffix, resolution.public_suffix, resolution.private_active) == (
+        icann_suffix,
+        public_suffix,
+        private_active,
+    ), f"the fused pass changed the resolution of {name!r}: {resolution!r}"
