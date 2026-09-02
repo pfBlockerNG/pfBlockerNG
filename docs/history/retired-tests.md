@@ -11,7 +11,9 @@ deletion; the pre-commit run judges one commit's index.
 
 One row per retired test, named as its declaration was: a Python `def test_*`,
 a PHPUnit `function test*`, a shellspec `It`/`Example` description, or a
-`node --test` `test`/`it` description.
+`node --test` `test`/`it` description. No fenced blocks in this file — an
+example row and a real one are indistinguishable to a diff, so a fence is
+rejected and no row in the same change is trusted.
 
 | Date | Retired test | Reason |
 | --- | --- | --- |

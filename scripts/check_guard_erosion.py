@@ -22,7 +22,7 @@ Declaration forms and the file names each runner actually collects:
 | ---- | ----------- | --------- |
 | `.py` | `def test_*` (`async` too) | `test_*.py`, `*_test.py` (pytest) |
 | `.php` | `function test*` | `*Test.php` (PHPUnit) |
-| `.sh` | shellspec `It`/`Example` (quoted description = name) | `*_spec.sh` |
+| `.sh` | shellspec `It`/`Example` (quoted description = name) | `*_spec.sh`, `*_env.sh` |
 | `.js`/`.mjs` | `test(...)`/`it(...)` | `*.test.js`, `*.test.mjs` (node --test) |
 
 The collected column is load-bearing on BOTH sides, and a redeclaration must
@@ -38,10 +38,12 @@ changes keeps its declaration line and stays neutral. ``--no-renames`` is
 mandatory here: with git's default rename detection a pure ``git mv`` out of a
 collected name emits no hunks at all, and the retirement is invisible.
 
-Known blind spots, both deliberate: this file's own test module is excluded (its
-fixtures are declaration-shaped by construction), and a single-line regex cannot
-see string context, so a declaration-shaped line inside a docstring reads as a
-declaration. The tombstone is the escape hatch for both.
+Known blind spots, all deliberate: this file's own test module is excluded (its
+fixtures are declaration-shaped by construction); a single-line regex cannot see
+string context, so a declaration-shaped line inside a docstring reads as a
+declaration; and the scan root is ``tests/`` alone, which leaves the node tests
+under ``tools/webassets/`` uncovered. The tombstone is the escape hatch for the
+first two.
 
 Exit status: 0 = clean, 1 = violations (printed file:line), 2 = usage/git error.
 """
@@ -62,6 +64,7 @@ TOMBSTONE = "docs/history/retired-tests.md"
 # A helper, a `Describe` group, and a commented-out declaration carry no
 # assertion, so every pattern anchors at line start modulo indentation.
 _JS_DECL = re.compile(r"^\s*(?:test|it)\s*\(\s*(?P<q>[\"'`])(?P<name>.+?)(?P=q)")
+_JS_COLLECTED = re.compile(r".+\.test\.m?js", re.DOTALL)
 
 
 class _Lang(NamedTuple):
@@ -82,18 +85,28 @@ _LANGS: dict[str, _Lang] = {
     ),
     ".sh": _Lang(
         re.compile(r"^\s*(?:It|Example)\s+(?P<q>[\"'])(?P<name>.+?)(?P=q)"),
-        re.compile(r".+_spec\.sh", re.DOTALL),
+        # `_spec.sh` is shellspec's default glob. `_env.sh` is the one file a
+        # workflow selects by hand -- build-pkg-linux.yml passes
+        # `--pattern tests/shell/build_leg_ports_parity_env.sh --fail-no-examples`,
+        # and that spec says in its own header that it avoids the default glob.
+        re.compile(r".+_spec\.sh|.+_env\.sh", re.DOTALL),
     ),
-    ".js": _Lang(_JS_DECL, re.compile(r".+\.test\.js", re.DOTALL)),
-    ".mjs": _Lang(_JS_DECL, re.compile(r".+\.test\.mjs", re.DOTALL)),
+    ".js": _Lang(_JS_DECL, _JS_COLLECTED),
+    ".mjs": _Lang(_JS_DECL, _JS_COLLECTED),
 }
 
 # The marker is a comment naming exactly one retired test. Requiring equality
 # rather than a substring keeps `successor: reaps every orphan` from excusing a
 # shellspec example merely called `reaps`.
 _SUCCESSOR = re.compile(r"(?:#|//|/\*|\*)\s*successor:\s*(?P<name>.+?)\s*(?:\*/)?$")
+# One symmetric wrapping layer only: a shellspec description may itself end in a
+# quote, and str.strip would eat a character that belongs to the name.
+_WRAPPED = re.compile(r"([`'\"])(.*)\1", re.DOTALL)
 _ROW = re.compile(r"^\|(?P<cells>.*\|)\s*$")
+# The ledger has no legitimate use for a fenced block, and honouring one means
+# tracking fence state across lines the diff never shows.
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _DELIMITER = re.compile(r":?-{3,}:?")
 _HEADER = ("date", "retired test", "reason")
 
@@ -119,45 +132,48 @@ def _side(field: str, prefix: str) -> str | None:
 
 
 def _lang(path: str | None) -> _Lang | None:
-    """The language of an in-scope test file, else ``None``."""
+    """The language of a test file its runner collects, else ``None``."""
     if path is None or path in _EXCLUDED_PATHS:
         return None
     p = PurePosixPath(path)
     if not p.parts or p.parts[0] != "tests":
         return None
-    return _LANGS.get(p.suffix)
-
-
-def _collects(path: str | None) -> bool:
-    """True if ``path`` is a test file its runner actually collects."""
-    lang = _lang(path)
-    if lang is None:
-        return False
-    assert path is not None
-    return lang.collected.fullmatch(PurePosixPath(path).name) is not None
+    lang = _LANGS.get(p.suffix)
+    if lang is None or not lang.collected.fullmatch(p.name):
+        return None
+    return lang
 
 
 def _declared(path: str | None, line: str) -> tuple[str, str] | None:
     """``(suffix, name)`` this line declares in a collected test file, else ``None``."""
     lang = _lang(path)
-    if lang is None or not _collects(path):
+    if lang is None:
         return None
     assert path is not None
     match = lang.decl.search(line)
     return (PurePosixPath(path).suffix, match.group("name")) if match else None
 
 
+def _unwrap(value: str) -> str:
+    wrapped = _WRAPPED.fullmatch(value)
+    return wrapped.group(2) if wrapped else value
+
+
 def _cells(line: str) -> list[str] | None:
     row = _ROW.match(line)
     if row is None:
         return None
-    return [cell.strip().strip("`").strip() for cell in row.group("cells").split("|")[:-1]]
+    return [_unwrap(cell.strip()).strip() for cell in row.group("cells").split("|")[:-1]]
 
 
 def tombstone_entry(line: str) -> str | None:
     """The retired name a well-formed ledger row records, else ``None``."""
     cells = _cells(line)
     if cells is None or len(cells) < 3 or not all(cells[:3]):
+        return None
+    # Shape first, then reality: `date.fromisoformat` also takes `20260902` and
+    # `2026-W36-1`, and every text describing this ledger says `YYYY-MM-DD`.
+    if not _ISO_DAY.fullmatch(cells[0]):
         return None
     try:
         date.fromisoformat(cells[0])
@@ -178,7 +194,7 @@ def _is_ledger_entry_row(line: str) -> bool:
 
 def _marked_successor(line: str) -> str | None:
     marker = _SUCCESSOR.search(line)
-    return marker.group("name").strip().strip("`'\"").strip() if marker else None
+    return _unwrap(marker.group("name").strip()).strip() if marker else None
 
 
 def find_violations(diff_text: str) -> list[Violation]:
@@ -192,13 +208,12 @@ def find_violations(diff_text: str) -> list[Violation]:
     new_path: str | None = None
     old_no = new_no = 0
     in_hunk = False
-    in_fence = False
+    ledger_fenced = False
 
     for raw in diff_text.splitlines():
         if raw.startswith("diff --git"):
             old_path = new_path = None
             in_hunk = False
-            in_fence = False
             continue
         # Header only before a section's first @@ -- inside a hunk a "---"/"+++"
         # line is removed/added content and must be judged, not parsed.
@@ -228,14 +243,19 @@ def find_violations(diff_text: str) -> list[Violation]:
             declared = _declared(new_path, line)
             if declared is not None:
                 redeclared.add(declared)
-            marker = _marked_successor(line) if _collects(new_path) else None
+            marker = _marked_successor(line) if _lang(new_path) is not None else None
             if marker is not None:
                 successors.add(marker)
             if new_path == TOMBSTONE:
                 if _FENCE.match(line):
-                    # A row inside a fenced block is an example, not an entry.
-                    in_fence = not in_fence
-                elif not in_fence:
+                    # Honouring a fenced example would mean carrying fence state
+                    # across context lines `--unified=0` never shows, so a row
+                    # added inside a fence an earlier change planted would count.
+                    # A fenced ledger is therefore rejected outright, and no row
+                    # in this diff is trusted -- it costs the ledger nothing.
+                    ledger_fenced = True
+                    violations.append(Violation(TOMBSTONE, new_no, "", f"fenced block in the ledger: {line.strip()}"))
+                else:
                     entry = tombstone_entry(line)
                     if entry is not None:
                         tombstoned.add(entry)
@@ -247,6 +267,8 @@ def find_violations(diff_text: str) -> list[Violation]:
             continue
         old_no += 1
         new_no += 1
+    if ledger_fenced:
+        tombstoned.clear()
 
     for path, line_no, suffix, name in retired:
         if (suffix, name) in redeclared or name in successors or name in tombstoned:

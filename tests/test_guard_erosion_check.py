@@ -16,8 +16,12 @@ import importlib.util
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
+import pytest
+
+from tests._workflow_steps import extract_step
 from tests.gitenv import scrubbed_git_env
 
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_guard_erosion.py"
@@ -163,6 +167,42 @@ def test_successor_marker_must_name_the_exact_retired_test() -> None:
     )
     assert len(v) == 1, v
     assert v[0].name == "test_reaps_the_orphan"
+
+
+def test_successor_marker_must_not_merely_contain_the_retired_name() -> None:
+    """A phrase that swallows a short name as a word is not a marker for it.
+
+    Boundary matching read `successor: reaps every orphan` as excusing a
+    shellspec example called just `reaps`; only equality does not.
+    """
+    v = _find(
+        _edit("tests/shell/reaper_spec.sh", removed=("    It 'reaps'",)),
+        _edit("tests/shell/fleet_spec.sh", added=("    # successor: reaps every orphan",)),
+    )
+    assert len(v) == 1, v
+    assert v[0].name == "reaps"
+
+
+def test_successor_marker_must_be_a_comment() -> None:
+    """The ruling spells the marker `# successor: <name>`; a bare line is not one."""
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit("tests/test_fleet.py", added=("    successor: test_reaps_the_orphan",)),
+    )
+    assert len(v) == 1, v
+    assert v[0].name == "test_reaps_the_orphan"
+
+
+def test_successor_marker_keeps_a_quote_that_belongs_to_the_name() -> None:
+    """Four in-tree shellspec descriptions end in a quote; stripping one is wrong."""
+    name = "runs for a file named 'x'"
+    assert (
+        _find(
+            _edit("tests/shell/reaper_spec.sh", removed=(f'    It "{name}"',)),
+            _edit("tests/shell/fleet_spec.sh", added=(f"    # successor: {name}",)),
+        )
+        == []
+    )
 
 
 def test_successor_marker_may_quote_the_retired_name() -> None:
@@ -344,17 +384,36 @@ def test_tombstone_row_without_a_name_is_flagged() -> None:
     assert [item.reason for item in v if _MALFORMED in item.reason], v
 
 
-def test_tombstone_row_with_an_impossible_date_is_flagged() -> None:
-    """`9999-99-99` is date-SHAPED; "dated" has to mean a real date."""
-    v = _find(
-        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
-        _edit(cge.TOMBSTONE, added=(_tombstone_row("test_reaps_the_orphan", date="9999-99-99"),)),
+def test_tombstone_row_dates_must_be_real_and_written_as_documented() -> None:
+    """`9999-99-99` is date-shaped but unreal; `20260902` is real but undocumented.
+
+    `date.fromisoformat` alone accepts the second and the third — every text
+    describing this ledger says `YYYY-MM-DD`, so the shape is checked too.
+    """
+    for bad in ("9999-99-99", "2026-13-01", "20260902", "2026-W36-1", "2026-9-2"):
+        v = _find(
+            _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+            _edit(cge.TOMBSTONE, added=(_tombstone_row("test_reaps_the_orphan", date=bad),)),
+        )
+        assert any(item.name == "test_reaps_the_orphan" and _UNEXCUSED in item.reason for item in v), bad
+
+    # The paired accepting case, so the loop above cannot pass by always firing.
+    assert (
+        _find(
+            _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+            _edit(cge.TOMBSTONE, added=(_tombstone_row("test_reaps_the_orphan", date="2026-09-02"),)),
+        )
+        == []
     )
-    assert any(item.name == "test_reaps_the_orphan" and _UNEXCUSED in item.reason for item in v), v
 
 
-def test_tombstone_row_inside_a_fenced_block_excuses_nothing() -> None:
-    """A fenced row renders as an example to a reader; it must read that way here."""
+def test_a_fence_in_the_ledger_is_rejected_and_excuses_nothing() -> None:
+    """A fenced row renders as an example, and honouring one would need fence
+
+    state carried across context lines `--unified=0` never shows — so a row
+    added inside a fence an earlier change planted would count. Fences are
+    simply not allowed in the ledger.
+    """
     v = _find(
         _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
         _edit(
@@ -366,7 +425,8 @@ def test_tombstone_row_inside_a_fenced_block_excuses_nothing() -> None:
             ),
         ),
     )
-    assert [item.name for item in v] == ["test_reaps_the_orphan"], v
+    assert "test_reaps_the_orphan" in [item.name for item in v], v
+    assert [item.reason for item in v if "fenced block" in item.reason], v
 
 
 # --------------------------------------------------------------------------- #
@@ -377,6 +437,39 @@ def test_tombstone_row_inside_a_fenced_block_excuses_nothing() -> None:
 def test_removing_a_declaration_from_a_file_no_runner_collects_is_neutral() -> None:
     """Nothing ran, so nothing retires — the mirror of the excuse rule below."""
     assert _find(_edit("tests/helpers_util.py", removed=("def test_reaps_the_orphan(tmp_path):",))) == []
+
+
+def test_every_language_gates_on_the_name_its_runner_collects() -> None:
+    """One uncollected/collected pair per form, so each pattern is load-bearing.
+
+    Loosening any single `collected` pattern to accept the whole suffix has to
+    break something, or that pattern is decoration.
+    """
+    for uncollected, collected, line in (
+        ("tests/helpers_util.py", "tests/fleet_test.py", "def test_reaps_the_orphan(tmp_path):"),
+        ("tests/php/Reaper.php", "tests/php/ReaperTest.php", "    public function testReapsTheOrphan(): void"),
+        ("tests/shell/spec_helper.sh", "tests/shell/reaper_spec.sh", "    It 'reaps the orphan'"),
+        ("tests/js/helpers.js", "tests/js/widget.test.js", "test('escapes the ampersand', () => {"),
+        ("tests/fixtures/canary.mjs", "tests/fixtures/canary.test.mjs", "  it('reports the skip', () => {"),
+    ):
+        assert _find(_edit(uncollected, removed=(line,))) == [], uncollected
+        assert len(_find(_edit(collected, removed=(line,)))) == 1, collected
+
+
+def test_an_explicitly_selected_spec_counts_even_off_the_default_glob() -> None:
+    """`build-pkg-linux.yml` selects `tests/shell/*_env.sh` by `--pattern`.
+
+    That spec's own header says it avoids shellspec's `*_spec.sh` glob on
+    purpose, so keying only on the default glob loses a gate-carrying file.
+    """
+    v = _find(
+        _edit(
+            "tests/shell/build_leg_ports_parity_env.sh",
+            removed=("  It 'native package bytes match a direct portable-builder invocation' env:ports",),
+        )
+    )
+    assert len(v) == 1, v
+    assert v[0].name == "native package bytes match a direct portable-builder invocation"
 
 
 def test_redeclaring_in_a_file_no_runner_collects_excuses_nothing() -> None:
@@ -585,6 +678,16 @@ def test_cli_treats_a_rename_between_collected_names_as_a_move(tmp_path: Path) -
     assert result.returncode == 0, result.stderr
 
 
+def test_cli_sees_a_pure_rename_through_the_diff_mode_too(tmp_path: Path) -> None:
+    """`--diff <base>` is what CI runs, so it needs its own `--no-renames`."""
+    repo = _repo_with_a_test(tmp_path)
+    _git(repo, "mv", "tests/test_reaper.py", "tests/reaper_helpers.py")
+    _git(repo, "commit", "-qm", "move it out of collection")
+    result = _run(repo, "--diff", "devel~1")
+    assert result.returncode == 1, result.stderr
+    assert "test_reaps_the_orphan" in result.stderr
+
+
 def test_cli_cannot_be_blinded_by_a_no_diff_gitattribute(tmp_path: Path) -> None:
     """`-diff` renders a text file binary; a PR can add that in the same commit."""
     repo = _repo_with_a_test(tmp_path)
@@ -643,14 +746,31 @@ def test_ci_wires_the_gate_as_a_blocking_job() -> None:
     assert "scripts/check_guard_erosion.py --diff" in workflow
     needs = re.search(r"^    needs: \[(.+)\]$", workflow, re.MULTILINE)
     assert needs is not None and "guard-erosion" in needs.group(1), "job not folded into all-tests-passed"
-    # A bare `needs.guard-erosion.result` substring survives the failure mode
-    # this whole ticket exists to prevent: a ladder arm "simplified" into a
-    # no-op turns the gate warn-only while the interpolation stays put.
-    ladder = re.search(
-        r'case "\$\{\{ needs\.guard-erosion\.result \}\}" in\n'
-        r"\s+success\|skipped\) ;;\n"
-        r'\s+\*\) echo "[^"]+"; exit 1 ;;\n'
-        r"\s+esac",
-        workflow,
-    )
-    assert ladder is not None, "the guard-erosion result ladder does not exit 1 on a non-success result"
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [("success", 0), ("skipped", 0), ("failure", 1), ("cancelled", 1), ("", 1)],
+)
+def test_the_all_tests_passed_ladder_really_exits_on_a_failed_guard_erosion(result: str, expected: int) -> None:
+    """RUN the ladder, do not pattern-match it.
+
+    A text assertion passes on wiring that cannot execute — the arm can be
+    commented out, or the whole `case` wrapped in a heredoc, with every literal
+    still adjacent. Executing the extracted block is what proves the gate
+    blocks, and it is the bar `test_coverage_pairing_check.py` already sets.
+    """
+    workflow = (_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+    block = extract_step(workflow, "Check matrix results")
+    _, marker, script = block.partition("run: |\n")
+    assert marker, "the all-tests-passed step has no run: block"
+    body = textwrap.dedent(script)
+    # Every other job's interpolation resolves to success, so only the value
+    # under test decides the exit status.
+    script = re.sub(r"\$\{\{ needs\.guard-erosion\.result \}\}", result, body)
+    script = re.sub(r"\$\{\{ needs\.[a-z-]+\.result \}\}", "success", script)
+    assert "needs.guard-erosion.result" not in script, "the guard-erosion arm was not substituted"
+    proc = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, check=False)
+    assert proc.returncode == expected, f"result={result!r}: rc={proc.returncode}; out={proc.stdout}{proc.stderr}"
+    if expected:
+        assert "Guard-erosion gate" in proc.stdout, proc.stdout
