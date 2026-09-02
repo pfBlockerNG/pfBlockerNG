@@ -12,24 +12,16 @@ require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.in
  * issue #3115 — the scheduled detector's own status rows must land in the two columns the
  * Update log already established, for every feed-header length.
  *
- * Issue #2989 fixed the sync loop's rows (`[ header ]<pad> exists.`) by padding the header
- * field with spaces, which puts their status text in column 53. The detector's rows never
- * got that treatment: they separate `[ header ]` from its status with a single space and
- * reach their verdict with one `\t`, so both columns move with the header's length, and the
- * change-detection probe pads with four tabs and lands in a third column again.
- *
- * The two columns pinned here are the ones already in the log, not new ones: 53 is issue
- * #2989's status column, and 80 is where the probe row's `. 200 OK` already sits.
- *
+ * The two columns are the ones already in the log, not new ones: 53 is the column issue #2989
+ * pinned for the sync loop's rows, and 80 is where the probe row's `. 200 OK` already sits.
  * Tabs are rejected outright because a tab's rendered width belongs to whatever displays the
- * log — the Update viewer's textarea, `cat`, a pager — so a column contract cannot be
- * expressed with them at all.
+ * log, so a column contract cannot be expressed with them at all.
  *
- * Coverage: every detector row whose branch is decidable from the filesystem is driven
- * through pfb_update_check() itself. The four conditional-GET verdicts need a live origin
- * (they are exercised end to end by DownloadRejectValidatorClearTest and
- * tests/smoke/test_smoke_feeds.py), so their status strings are pinned here at the shared
- * formatter instead — one row per parenthetical the detector can emit.
+ * Coverage: every detector row whose branch is decidable from the filesystem is driven through
+ * pfb_update_check() itself, and the change-detection probe row through pfb_download(). The
+ * three conditional-GET parentheticals need a live origin (they are exercised end to end by
+ * DownloadRejectValidatorClearTest and tests/smoke/test_smoke_feeds.py), so those are pinned
+ * at the shared formatter instead.
  */
 #[CoversFunction('pfb_update_check')]
 #[CoversFunction('pfb_log_status_line')]
@@ -55,9 +47,7 @@ final class UpdateCheckLogAlignmentTest extends TestCase
 			$this->saved[$name] = [array_key_exists($name, $GLOBALS), $GLOBALS[$name] ?? NULL];
 		}
 
-		$this->sandbox = (string) tempnam(sys_get_temp_dir(), 'pfb_detector_alignment_');
-		$this->assertNotSame('', $this->sandbox, 'failed to create the sandbox path');
-		$this->assertTrue(unlink($this->sandbox), 'failed to claim the sandbox path');
+		$this->sandbox = sys_get_temp_dir() . '/pfb_detector_alignment_' . getmypid() . '_' . uniqid();
 		$this->folder = "{$this->sandbox}/txt";
 		$this->orig   = "{$this->sandbox}/orig";
 		foreach ([$this->sandbox, $this->folder, $this->orig] as $dir) {
@@ -224,32 +214,85 @@ final class UpdateCheckLogAlignmentTest extends TestCase
 		$this->assertRowColumns($this->rowContaining('Update found'), '', 'Update found');
 	}
 
-	/** @return list<array{string,string,string}> every parenthetical the detector can emit */
-	public static function detectorStatuses(): array
+	/**
+	 * Scenario: the change-detection probe row, driven through its real call site.
+	 *
+	 * Given a local feed the probe can read without a network
+	 * When pfb_download() runs in change-detection mode
+	 * Then the row it logs holds the status column and ends exactly at the verdict column, so
+	 *      the cURL status appended to it later starts there.
+	 *
+	 * pfb_download_fetch() always passes an empty header for this row, so driving it here is
+	 * what pins the argument shape production actually uses. The status itself is appended only
+	 * on the cURL branch, which needs a live origin; the row's own width is what decides where
+	 * it lands, and that is what this pins.
+	 */
+	public function testChangeDetectionProbeRowHoldsBothColumns(): void
+	{
+		$source = "{$this->sandbox}/probefeed.txt";
+		$this->assertNotFalse(file_put_contents($source, "198.51.100.7\n"), 'failed to write the local feed');
+
+		$probe = pfb_download(new PfbDownloadRequest(
+			listUrl: $source,
+			downloadPath: "{$this->orig}/Probe_v4.md5",
+			flex: FALSE,
+			header: 'Probe_v4',
+			format: '',
+			logType: 1,
+			type: 'change_detect',
+		));
+		$this->assertTrue($probe->success, 'the local-feed probe must succeed for its row to be logged whole');
+
+		$line = $this->rowContaining('( change check )');
+		$this->assertStringNotContainsString("\t", $line,
+			"a status row pads with spaces — a tab's width belongs to the renderer: '{$line}'");
+		$this->assertSame(self::STATUS_COL, strpos($line, '( change check )'),
+			'status text must start in column ' . self::STATUS_COL . ": '{$line}'");
+		$this->assertSame(self::VERDICT_COL, strlen($line),
+			'the row must end at column ' . self::VERDICT_COL . ", where the cURL status is appended: '{$line}'");
+	}
+
+	/** @return list<array{string,string}> the conditional-GET parentheticals, which need a live origin */
+	public static function conditionalGetStatuses(): array
 	{
 		return [
-			'change-detection probe' => ['ISC_Block_v4', '( change check )', ''],
-			'rsync'                  => ['', '( rsync )', 'Update found'],
-			'local feed unchanged'   => ['ISC_Block_v4', '( local feed unchanged )', 'Update not required'],
-			'304 not modified'       => ['ISC_Block_v4', '( 304 not modified )', 'Update not required'],
-			'content changed'        => ['ISC_Block_v4', '( content changed )', 'Update found'],
-			'content unchanged'      => ['ISC_Block_v4', '( content unchanged )', 'Update not required'],
+			'304 not modified'  => ['( 304 not modified )', 'Update not required'],
+			'content changed'   => ['( content changed )', 'Update found'],
+			'content unchanged' => ['( content unchanged )', 'Update not required'],
+		];
+	}
+
+	#[DataProvider('conditionalGetStatuses')]
+	public function testConditionalGetVerdictsHoldBothColumns(string $status, string $verdict): void
+	{
+		pfb_logger(pfb_log_status_line('ISC_Block_v4', $status, $verdict) . "\n", 1);
+
+		$this->assertRowColumns($this->rowContaining($status), $status, $verdict);
+	}
+
+	/** @return list<array{string,string}> the two detector statuses wider than the status field */
+	public static function overLongStatuses(): array
+	{
+		return [
+			'probe failed'      => ['Failed to probe feed for change detection!', 'Update skipped'],
+			'unexpected status' => ['Unexpected probe status [418]!', 'Update forced (fail-safe)'],
 		];
 	}
 
 	/**
-	 * The widest parenthetical the detector emits still leaves its verdict in column 80, so
-	 * no status the log can carry pushes the verdict column out of alignment.
+	 * A status wider than the status field cannot put its verdict in column 80, so it keeps
+	 * exactly one separating space and shifts the verdict right — the same rule an over-long
+	 * header follows. Both rows the detector formats this way are real, not hypothetical.
 	 */
-	#[DataProvider('detectorStatuses')]
-	public function testEveryDetectorStatusHoldsBothColumns(string $header, string $status, string $verdict): void
+	#[DataProvider('overLongStatuses')]
+	public function testStatusWiderThanTheFieldKeepsOneSeparatingSpace(string $status, string $verdict): void
 	{
-		// The probe row carries no verdict of its own: pfb_download() appends the cURL
-		// status to it, so stand in for that with the same '. 200 OK' the log shows.
-		$tail = $verdict === '' ? '. 200 OK' : '';
+		pfb_logger(pfb_log_status_line('', $status, $verdict) . "\n", 1);
+		$line = $this->rowContaining($status);
 
-		pfb_logger(pfb_log_status_line($header, $status, $verdict) . $tail . "\n", 1);
-
-		$this->assertRowColumns($this->rowContaining($status), $status, "{$verdict}{$tail}");
+		$this->assertSame(self::STATUS_COL, strpos($line, $status),
+			'status text must start in column ' . self::STATUS_COL . ": '{$line}'");
+		$this->assertSame("{$status} {$verdict}", substr($line, self::STATUS_COL),
+			"an over-wide status keeps exactly one separating space: '{$line}'");
 	}
 }

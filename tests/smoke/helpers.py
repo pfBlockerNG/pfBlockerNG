@@ -4272,12 +4272,11 @@ def unbound_pid(vm: SmokeVM, *, timeout: float = 30.0) -> int:
 def detector_status_marker(header: str, status: str) -> str:
     """The scheduled detector's status row for ``header``, as one fixed string.
 
-    issue #3115: the detector pads ``[ header ]`` with spaces so its status text starts in
-    column 53 of the Update log, so the number of spaces before ``status`` depends on the
-    header's length. Mirrors ``pfb_log_status_line()`` (pfblockerng.inc) — the two must move
-    together. Fixed-string by design: :func:`count_log_marker` greps with ``-F``.
+    issue #3115: mirrors ``pfb_log_status_line()`` (pfblockerng.inc), which pads by BYTES —
+    the two must move together, pinned by ``test_detector_status_marker_parity.py``. Fixed
+    string by design: :func:`count_log_marker` greps with ``-F``.
     """
-    return f"[ {header} ]" + " " * max(1, 29 - len(header)) + status
+    return f"[ {header} ]" + " " * max(1, 29 - len(header.encode())) + status
 
 
 def count_log_marker(vm: SmokeVM, path: str, marker: str, *, timeout: float = 30.0) -> int:

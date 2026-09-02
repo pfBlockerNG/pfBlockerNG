@@ -4907,18 +4907,13 @@ function pfb_log_header_pad($header) {
 	return str_repeat(' ', max(0, 28 - strlen($header)));
 }
 
-// issue #3115: one status row of the Update log, in the two columns the log already
-// uses -- status text in column 53 (pfb_log_header_pad()'s), verdict text in column
-// 80 (where a probe row's appended cURL status lands). Spaces, never tabs: a tab's
-// width is the renderer's choice, so the Update viewer's textarea would place these
-// columns somewhere else. An empty $header indents to the status column instead; a
-// field wider than its column keeps exactly one separating space.
+// issue #3115: one Update-log status row -- status in column 53, verdict in column 80 (where a
+// probe row's appended cURL status sits); 33 = strlen('[  ]') + pad(28) + 1, 27 = 80 - 53. Spaces,
+// never tabs: a tab's width is the renderer's. An over-wide field keeps one space, shifting right.
 function pfb_log_status_line($header, $status, $verdict = '') {
-	$field = ($header === '')
-		? str_repeat(' ', 33)
-		: "[ {$header} ]" . pfb_log_header_pad($header) . ' ';
+	$field = ($header === '') ? str_repeat(' ', 33) : "[ {$header} ]" . pfb_log_header_pad($header) . ' ';
 
-	return $field . $status . str_repeat(' ', max(1, 27 - strlen($status))) . $verdict;
+	return $field . str_pad("{$status} ", 27) . $verdict;
 }
 
 function pfb_logger($log, $logtype) {
