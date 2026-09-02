@@ -454,9 +454,10 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 * .error, restoring the previous config from unbound.bk, printing "Fix error(s)
 	 * and a Force Reload required!", and retrying the whole restart. None of that is
 	 * right here: the config was never the problem, there is nothing for the user to
-	 * fix, and the retry cannot succeed where the refusal already stood.
+	 * fix, and the retry cannot succeed where the refusal already stood -- and the
+	 * daemon still answering is the OLD one, so the confirm block must not credit it.
 	 */
-	public function testStopFailureNeitherRollsBackTheConfigNorRetries(): void
+	public function testStopFailureNeitherRollsBackNorRetriesNorCreditsTheOldDaemon(): void
 	{
 		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
 		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
@@ -464,12 +465,18 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
 		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
-		$GLOBALS['pfb']['chroot_cmd'] = '/bin/echo';
 		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
 		$GLOBALS['g']['varrun_path'] = $this->dir;
 
+		// The confirm block is the only caller of chroot_cmd on this path, so a recorder
+		// here is a direct spy on whether it ran at all (leg 3 row 8: skipping it was
+		// previously unasserted -- reverting the guard left every test green).
+		$confirmProbe = "{$this->dir}/confirm_ran";
+		$GLOBALS['pfb']['chroot_cmd'] = '/usr/bin/touch ' . escapeshellarg($confirmProbe) . ' ;:';
+
 		// The daemon outlives both budgets, so the stop refuses: this is the #3055 path.
 		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
 
 		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
 		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
@@ -480,37 +487,32 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$after = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 		$this->assertSame($before, $after,
 			'a refused stop must attempt no start at all -- neither the first nor the retry');
+
+		// A retry would call pfb_stop_start_unbound() a second time, and each call escalates
+		// to exactly one KILL. Counting the signal catches a restored retry that the
+		// start-log cannot see, because a retried refusal never reaches its start section.
+		$this->assertCount(1, $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'the refusal must be reached once; a second KILL means the caller retried it');
+
+		$this->assertFileDoesNotExist($confirmProbe,
+			'the confirm block must not run for a refused stop: the process still answering '
+			. 'is the daemon we failed to replace, so crediting it would report success');
+
 		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"),
 			'the resolver config must survive a stop failure: it was never the fault');
 		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error",
 			'no candidate config may be quarantined for a fault that is not the config');
 		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"),
 			'the last-known-good copy must be left untouched, not consumed by a false rollback');
-	}
 
-	/**
-	 * issue #3094: and the operator must be told what actually happened.
-	 *
-	 * "Fix error(s) and a Force Reload required!" names an action that cannot help
-	 * when the resolver simply would not stop. The log must carry the real cause.
-	 */
-	public function testStopFailureIsReportedAsAStopFailureNotAConfigFault(): void
-	{
-		file_put_contents("{$this->dir}/unbound.conf", "server:\n");
-		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
-		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
-		$GLOBALS['pfb']['chroot_cmd'] = '/bin/echo';
-		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
-		$GLOBALS['g']['varrun_path'] = $this->dir;
-		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
-
-		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
-			static fn (): bool => pfb_dnsbl_apply_ledger_update());
-
+		// "Fix error(s) and a Force Reload required!" names an action that cannot help when
+		// the resolver simply would not stop, so the log must carry the real cause instead.
 		$log = (string) @file_get_contents($GLOBALS['pfb']['log'])
 			. (string) @file_get_contents($GLOBALS['pfb']['errlog']);
-		$this->assertStringContainsString('could not be stopped', $log,
-			'the log must name the real cause -- the resolver would not stop');
+		// Pins THIS branch's own wording. 'could not be stopped' alone is also produced by
+		// pfb_stop_start_unbound()'s result text, so it would survive a reword here (leg 3 row 6).
+		$this->assertStringContainsString('config left unchanged', $log,
+			'the caller must say the config was deliberately left alone, in its own words');
 		$this->assertStringNotContainsString('Fix error(s)', $log,
 			'a stop failure must not tell the operator to fix a config error that does not exist');
 	}

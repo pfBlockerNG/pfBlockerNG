@@ -12033,15 +12033,12 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	$final = pfb_stop_start_unbound($type);
 	pfb_logger('.', 1);
 
-	// issue #3094: a refused stop is not a config fault. The recovery below quarantines
-	// unbound.conf, restores unbound.bk and retries -- all wrong here: the config was
-	// never at fault, and a retry cannot succeed where the refusal already stood. The
-	// surviving daemon is also the OLD one, so the confirm block below would read it as
-	// success; skip straight to the ledger tail with the real cause logged.
+	// issue #3094: a refused stop is not a config fault -- the quarantine/rollback/retry
+	// below would trash a good config and retry a stop that already failed. The callee
+	// has logged the reason and the shared else-arm logs it again, so say only what is new.
 	if ($final['retval'] === PFB_UNBOUND_STOP_FAILED) {
-		$log = htmlspecialchars(implode("\n", $final['result']));
 		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver could not be stopped; " .
-			"config left unchanged ***\n{$log}\n", 2);
+			"config left unchanged ***\n", 2);
 	}
 	elseif ($final['retval'] != 0) {
 

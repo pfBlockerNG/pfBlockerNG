@@ -67,4 +67,30 @@ final class InstallDnsblMoveRestartGuardTest extends TestCase
 			'install.inc assigns $u_found — a typo of $ufound that leaves the Unbound-restart guard unreset'
 		);
 	}
+	/**
+	 * issue #3094: the restart's return value must be READ.
+	 *
+	 * `$final = pfb_stop_start_unbound('')` was assigned and never used again in that
+	 * scope, so a package install could finish "successfully" with the resolver never
+	 * restarted -- the refusal (#3055) surfacing only in the pfBlockerNG log. install.inc
+	 * is not loadable by the harness and the update_status() double records nothing, so
+	 * this is pinned the way this file pins its siblings: executable tokens only.
+	 */
+	public function testInstallReportsARestartThatDidNotHappen(): void
+	{
+		$src = self::installSource();
+
+		$call = strpos($src, 'pfb_stop_start_unbound(\'\');');
+		$this->assertNotFalse($call, 'the install restart call is missing');
+
+		$tail = substr($src, $call);
+		$read = strpos($tail, '[\'retval\']');
+		$this->assertNotFalse($read,
+			'the install restart return value must be read, not just assigned (#3094)');
+		$report = strpos($tail, 'update_status', $read);
+		$this->assertNotFalse($report,
+			'a restart that did not happen must be reported to the installing user');
+		$this->assertLessThan(200, $read,
+			'the retval check must sit at the call site, not drift into an unrelated block');
+	}
 }
