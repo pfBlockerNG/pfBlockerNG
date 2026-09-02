@@ -11861,16 +11861,16 @@ function pfb_unbound_py_ccache_flush($names) {
 	// issue #2879: ONE whole-batch deadline for the flush, not one per name. Each command
 	// is additionally clipped to what the batch has left, so neither a single hung control
 	// call nor a long name list can push the total past the budget plus one kill grace.
-	// The batch always makes its FIRST attempt -- a sub-second budget bounds that attempt
-	// at one second rather than flushing nothing at all -- and stops as soon as the budget
-	// is gone, naming the remainder instead of silently dropping it.
+	// The batch always makes its FIRST attempt -- any budget under a second, degenerate
+	// values included, bounds that attempt at one second rather than flushing nothing at
+	// all -- and stops as soon as the budget is gone, naming the remainder instead of
+	// silently dropping it.
 	$deadline = hrtime(TRUE) + (PFB_UNBOUND_CONTROL_WAIT * 1000000000);
 	$total    = count($cmds);
 	$issued   = 0;
 	foreach ($cmds as $cmd) {
-		$remaining = $deadline - hrtime(TRUE);
-		$left      = (int) floor($remaining / 1000000000);
-		if ($left < 1 && !($issued === 0 && $remaining > 0)) {
+		$left = (int) floor(($deadline - hrtime(TRUE)) / 1000000000);
+		if ($left < 1 && $issued !== 0) {
 			pfb_logger("\nUnbound control [ cache flush ] TIMED OUT after " .
 				PFB_UNBOUND_CONTROL_WAIT . 's; ' . ($total - $issued) . " of {$total} " .
 				'flush command(s) not run', 2);
@@ -12108,10 +12108,9 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
 			// issue #2879: an expired or refused dump leaves a truncated cache (or a
 			// control error message) in the file. Discard it so the restore below cannot
-			// load a partial dump back into the fresh resolver. A tempnam() that failed
-			// gives FALSE, not a path: there is nothing to discard, and passing it on
-			// would end the pass in a ValueError that @ does not suppress -- the restart
-			// below must still happen on a box that cannot stage a cache file.
+			// load a partial dump back into the fresh resolver. A failed tempnam() gives
+			// FALSE, not a path: nothing to discard, and the restart below must still
+			// happen on a box that cannot stage a cache file.
 			if ($dumped !== 0 && is_string($cache_dumpfile)) {
 				@file_put_contents($cache_dumpfile, '');
 			}

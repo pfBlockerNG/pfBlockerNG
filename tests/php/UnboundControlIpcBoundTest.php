@@ -218,7 +218,6 @@ final class UnboundControlIpcBoundTest extends TestCase
 		];
 	}
 
-
 	/**
 	 * $pfb keys the targeted cache flush needs, wired to this row's double.
 	 *
@@ -374,10 +373,9 @@ final class UnboundControlIpcBoundTest extends TestCase
 	 *     left behind.
 	 *
 	 * The mode itself is pinned by testShippedControlBudgetAndReaperModeArePinned, not
-	 * here: a `--foreground` mutation still leaves this row green, because off-appliance
-	 * the descendant does not outlive the run long enough for the liveness check to see
-	 * it (measured, both with and without the double's stdio detached from the capture
-	 * pipe). What this row does prove is the kill grace: the child neither completes nor
+	 * here: whether an orphaned descendant outlives the run long enough for the liveness
+	 * check is scheduling-dependent off-appliance, so that pin is the deterministic
+	 * guard. What this row proves is the kill grace — the child neither completes nor
 	 * survives its budget, and no descendant is left when the pass returns.
 	 */
 	public function testTermIgnoringControlChildIsKilledAndLeavesNoDescendant(): void
@@ -498,8 +496,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$run = $this->runIsolated(
 			$this->reloadBody() . "print \"RELOAD-RETURNED\\n\";\n",
 			$this->reloadPfb('fast'),
-			self::BUDGET,
-			["open_basedir={$open_basedir}"]
+			ini: ["open_basedir={$open_basedir}"]
 		);
 
 		$this->assertSame('', implode("\n", preg_grep('/(Fatal error|ValueError)/', $run['output']) ?: []),
@@ -511,22 +508,27 @@ final class UnboundControlIpcBoundTest extends TestCase
 	}
 
 	/**
-	 * Scenario: an operator (or a harness) narrows the control budget to one second.
-	 *   Given a one-second whole-batch budget and a resolver that answers immediately
+	 * Scenario: an operator (or a harness) narrows the control budget below a second.
+	 *   Given a one-second and then a zero-second whole-batch budget, with a resolver
+	 *     that answers immediately
 	 *   When pfb_unbound_py_ccache_flush() runs
-	 *   Then the batch still issues its first command — a budget that small must clip
-	 *     the deadline, never flush nothing at all.
+	 *   Then each still issues its first command — a budget that small must clip the
+	 *     deadline, never flush nothing at all.
 	 */
-	public function testASingleSecondBudgetStillIssuesItsFirstFlush(): void
+	public function testASubSecondBudgetStillIssuesItsFirstFlush(): void
 	{
-		$run = $this->runIsolated(
-			"pfb_unbound_py_ccache_flush(array('example.com'));\n",
-			$this->flushPfb('fast'),
-			1
-		);
+		foreach ([1, 0] as $budget) {
+			// Each arm reads its own commands, not the previous arm's.
+			@unlink($this->controlLog());
+			$run = $this->runIsolated(
+				"pfb_unbound_py_ccache_flush(array('example.com'));\n",
+				$this->flushPfb('fast'),
+				$budget
+			);
 
-		$this->assertContains('flush example.com', $run['control'],
-			'a one-second budget must still issue the first flush command');
+			$this->assertContains('flush example.com', $run['control'],
+				"a {$budget}-second budget must still issue the first flush command");
+		}
 	}
 
 	/**
@@ -667,7 +669,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 	{
 		// Owned by issue #2880 (Alerts wildcard-delete resolver flush), which bounds it
 		// with the page's own request semantics. When #2880 lands, this row goes red
-		// until the exception is dropped — a good failure, not a maintenance burden.
+		// until the exception is dropped.
 		$deferred = ['src/usr/local/www/pfblockerng/pfblockerng_alerts.php'];
 		$root = dirname(__DIR__, 2);
 		$sources = [];
@@ -710,8 +712,9 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$this->assertSame([], $offenders,
 			'every unbound-control call site must run through the bounded seam, got: ' .
 			implode(' | ', $offenders));
-		$this->assertNotSame([], $deferrals,
-			'the #2880 exception must still name a real site; drop it once #2880 lands');
+		$this->assertCount(1, $deferrals,
+			'the #2880 exception must name exactly one real site, so a second raw spawn in ' .
+			'the same file still turns this red; drop it once #2880 lands');
 		$this->assertGreaterThanOrEqual(6, $sites,
 			'the six known control call sites must still be present in the package source');
 	}
