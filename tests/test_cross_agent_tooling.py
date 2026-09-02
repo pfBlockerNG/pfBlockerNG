@@ -327,7 +327,6 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "temporary detached builder",
         "graphify cluster-only",
         "cluster-only",
-        # The initializer's retired refresh step (issue #3091).
         "then runs `graphify update <root>`",
     ):
         assert obsolete not in folded_routing, f"obsolete Graphify store/refresh recipe remains: {obsolete}"
