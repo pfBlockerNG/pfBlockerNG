@@ -3,9 +3,9 @@
 The pre-deinstall tears down the Unbound chroot, the generated DNSBL files and the pfB
 services. Its disable pass takes the feed-pass lock non-blocking and DEFERS on
 contention, and the teardown after it used to run regardless — on top of a scheduled
-pass still publishing into the chroot. The fix takes the same bounded hold the install
-path takes (#3062) before the disable pass; this is its live proof, which the unit
-suite cannot give (the controller runs a real sync plus pfctl/exec teardown).
+pass still publishing into the chroot. Since #3090 the pre-deinstall takes the same
+bounded hold the install path takes (#3062) before the disable pass. The controller runs
+a real sync plus pfctl/exec teardown, so it is exercised here on the live VM only.
 
 The in-flight pass is a REAL one: an enabled ``pre`` update hook parks the pass — inside
 the feed-pass lock, where ``pfb_run_hooks('pre')`` fires — until the test releases it.
