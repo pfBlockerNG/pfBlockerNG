@@ -104,9 +104,12 @@ printf 'brew:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
   'list --versions uv')
     [ "${BREW_UV_INSTALLED:-1}" -eq 1 ] || exit 1
+    # An installed formula already has its binary under the prefix.
+    mkdir -p "$BREW_UV_PREFIX/bin"
+    cp "$DEBIAN_INSTALLABLES/uv" "$BREW_UV_PREFIX/bin/uv"
     printf '%s\n' 'uv 0.8.0'
     ;;
-  'install uv'|'upgrade uv')
+  'install uv')
     mkdir -p "$BREW_UV_PREFIX/bin"
     cp "$DEBIAN_INSTALLABLES/uv" "$BREW_UV_PREFIX/bin/uv"
     ;;
@@ -156,15 +159,6 @@ CURL
 #!/bin/sh
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
-  'self update')
-    # A uv that did not come from the standalone installer refuses to
-    # self-update and exits non-zero (issue: package-managed uv). The
-    # installer must treat that as maintenance, not a prerequisite.
-    if [ -n "${DEBIAN_UV_SELF_UPDATE_FAILS:-}" ]; then
-      printf 'error: Self-update is only available for uv binaries installed via the standalone installation scripts.\n' >&2
-      exit 1
-    fi
-    ;;
   'tool install --upgrade serena-agent')
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
@@ -346,7 +340,7 @@ GROK
     unset CLAUDECODE CODEX_THREAD_ID COPILOT_CLI GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
     unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE
     unset GROK_DOCTOR_RC AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
-    unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME DEBIAN_UV_SELF_UPDATE_FAILS
+    unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME
     PATH="$activebin:$basebin"; export PATH
   }
 
@@ -457,13 +451,12 @@ GROK
     The contents of file "$tool_log" should not include 'codegraph:'
   End
 
-  It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
+  It 'leaves an existing Linux uv alone and updates CodeGraph while rerunning global auto configuration'
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:self update' \
       'uv:tool install --upgrade serena-agent' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
@@ -502,13 +495,12 @@ UNMANAGED_UV
     The file "$apt_log" should not be exist
   End
 
-  It 'upgrades a managed Homebrew uv from its formula prefix on every Darwin rerun'
+  It 'reuses a managed Homebrew uv from its formula prefix without upgrading it on every Darwin rerun'
     rm -f "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
-      'brew:upgrade uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
       'uv:tool install --upgrade graphifyy' \
@@ -519,7 +511,6 @@ UNMANAGED_UV
       'wt:config shell install --yes' \
       'serena:init' \
       'brew:list --versions uv' \
-      'brew:upgrade uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
       'uv:tool install --upgrade graphifyy' \
@@ -543,7 +534,6 @@ UNMANAGED_UV
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
-      'brew:upgrade uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
       'uv:tool install --upgrade graphifyy' \
@@ -986,7 +976,6 @@ CONFIG
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
@@ -998,22 +987,6 @@ CONFIG
     Assert [ "$(grep -c "^ensure-graphify:$repository$" "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
-  End
-
-  It 'continues when a package-managed uv refuses to self-update'
-    # `uv self update` is maintenance, not a prerequisite: every later use is
-    # `uv tool install --upgrade`, which a package-managed uv performs happily.
-    # A uv installed by apt/curl-to-/usr/local rather than the standalone script
-    # exits non-zero here, and under `set -eu` that aborted the whole run before
-    # a single tool was installed.
-    export DEBIAN_UV_SELF_UPDATE_FAILS=1
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
-    The stderr should include 'Self-update is only available'
-    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 1 ]
   End
 
   It 'requires every repository setup helper before running any of them'
