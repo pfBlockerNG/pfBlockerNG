@@ -150,24 +150,16 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	}
 
 	/**
-	 * Issue #3068: skip unless this host's /usr/bin/tar can actually run the shipped
-	 * extraction, which every case reaching pfb_geoip_extract_tar_to_share() does.
+	 * Exit status of the SHIPPED extraction argv (issue #2659's PFB_TAR_EXTRACT_FLAGS)
+	 * run by this host's /usr/bin/tar against a real one-member tar.
 	 *
-	 * The helper execs PFB_TAR_EXTRACT_FLAGS (issue #2659), and GNU tar rejects
-	 * --no-fflags outright with exit 64 -- a usage error, before it reads one byte of
-	 * the archive. A case that runs anyway is not testing the branch: it reports
-	 * "extraction failed" for a reason the appliance can never produce, which is a
-	 * manufactured red at best and a vacuous green at worst. The appliance ships
-	 * bsdtar and CI installs it (test.yml diverts GNU tar and symlinks
-	 * /usr/bin/tar -> bsdtar), so this gate closes only on a dev host that has not
-	 * done the same -- and its message says how.
-	 *
-	 * Probed by running the real flag set, never by parsing a version string: it is
-	 * the tar's acceptance of the argv that decides, not its name.
+	 * Deliberately the real argv against a real archive, never a version-string parse:
+	 * what matters is whether this tar ACCEPTS the flags the branch execs, and only
+	 * running them answers that.
 	 */
-	private function skipUnlessTarRunsTheShippedExtractionFlags(): void
+	private function shippedExtractionFlagsExitCode(): int
 	{
-		$probe = "{$this->dir}/tarcap";
+		$probe = "{$this->dir}/tarcap_" . bin2hex(random_bytes(4));
 		$this->assertTrue(mkdir("{$probe}/src", 0755, TRUE));
 		$this->assertTrue(mkdir("{$probe}/out", 0755, TRUE));
 		$this->assertNotFalse(file_put_contents("{$probe}/src/probe.txt", "probe\n"));
@@ -178,19 +170,82 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->assertSame(0, $retval, 'the capability probe must be able to build a one-member tar');
 		exec('/usr/bin/tar -xf ' . escapeshellarg("{$probe}/probe.tar") . ' ' . PFB_TAR_EXTRACT_FLAGS
 			. ' -C ' . escapeshellarg("{$probe}/out") . ' 2>/dev/null', $output, $retval);
+		if ($retval === 0) {
+			$this->assertFileExists("{$probe}/out/probe.txt",
+				'a tar that accepted the flag set must also have extracted the member');
+		}
+		return $retval;
+	}
+
+	/** First line of /usr/bin/tar --version, for skip and failure messages. */
+	private function tarVersion(): string
+	{
+		$version = array();
+		exec('/usr/bin/tar --version 2>&1', $version);
+		return trim((string) ($version[0] ?? 'unknown tar'));
+	}
+
+	/**
+	 * Issue #3068: skip unless this host's /usr/bin/tar can actually run the shipped
+	 * extraction, which every case reaching pfb_geoip_extract_tar_to_share() does.
+	 *
+	 * GNU tar rejects --no-fflags outright with exit 64 -- a usage error, raised before
+	 * it reads one byte of the archive. A case that runs anyway is not testing the
+	 * branch: it reports "extraction failed" for a reason the appliance can never
+	 * produce, which is a manufactured red at best and a vacuous green at worst. The
+	 * appliance ships bsdtar and CI installs it (test.yml diverts GNU tar and symlinks
+	 * /usr/bin/tar -> bsdtar), so this gate closes only on a dev host that has not done
+	 * the same -- and its message says how.
+	 */
+	private function skipUnlessTarRunsTheShippedExtractionFlags(): void
+	{
+		$retval = $this->shippedExtractionFlagsExitCode();
 		if ($retval !== 0) {
-			$version = array();
-			exec('/usr/bin/tar --version 2>&1', $version);
 			$this->markTestSkipped(
-				'/usr/bin/tar on this host (' . ($version[0] ?? 'unknown tar') . ') rejects the shipped '
+				'/usr/bin/tar on this host (' . $this->tarVersion() . ') rejects the shipped '
 				. 'PFB_TAR_EXTRACT_FLAGS with exit ' . $retval . ' -- it is not libarchive. The appliance '
 				. 'ships bsdtar and CI installs it; to run this case here: apt-get install libarchive-tools '
 				. '&& dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar '
 				. '&& mv /usr/bin/tar /usr/sbin/tar && ln -s bsdtar /usr/bin/tar'
 			);
 		}
-		$this->assertFileExists("{$probe}/out/probe.txt",
-			'a tar that accepted the flag set must also have extracted the member');
+	}
+
+	/**
+	 * Scenario: the gate above must not be able to swallow the cases it guards.
+	 *   Given  this host's /usr/bin/tar, whatever it is
+	 *   When   the shipped flag set is run against a real archive
+	 *   Then   a libarchive tar accepts it -- so the gate stays OPEN and all five
+	 *          guarded cases really run on the appliance's toolchain and in CI
+	 *   And    a tar that is not libarchive rejects it -- so when the gate closes, it
+	 *          closes for the stated reason and not by accident.
+	 *
+	 * Without this, a gate that closed unconditionally -- a typo in the flag constant, a
+	 * probe that can never succeed -- would delete five cases from the CI run while the
+	 * suite still read green. That is exactly the issue #2356 class the skip allowlist
+	 * exists for, and an allowlisted id cannot distinguish "skipped for its reason" from
+	 * "skipped because the probe broke".
+	 *
+	 * The version string picks WHICH outcome to demand; the assertion is always on the
+	 * executed exit status. This case itself never skips, on any host.
+	 */
+	public function testTheExtractionFlagGateTracksWhetherTheHostTarIsLibarchive(): void
+	{
+		$version    = $this->tarVersion();
+		$libarchive = stripos($version, 'bsdtar') !== FALSE || stripos($version, 'libarchive') !== FALSE;
+		$retval     = $this->shippedExtractionFlagsExitCode();
+
+		if ($libarchive) {
+			$this->assertSame(0, $retval,
+				"this host's tar ({$version}) is libarchive, so it must accept the shipped "
+				. 'PFB_TAR_EXTRACT_FLAGS and leave the gate open; exit ' . $retval . ' means the five '
+				. 'guarded cases are silently skipping on the appliance toolchain and in CI');
+			return;
+		}
+		$this->assertNotSame(0, $retval,
+			"this host's tar ({$version}) is not libarchive, so it cannot accept --no-fflags; "
+			. 'a clean exit here means the probe is not running the shipped flag set at all, and the '
+			. 'gate would let the guarded cases run against an extractor that cannot express them');
 	}
 
 	/**
