@@ -617,7 +617,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"context-budget: git failed: {exc}", file=sys.stderr)
         return 2
     for violation in violations:
-        print(violation)
+        # A tracked name that is not valid UTF-8 reaches here byte-exactly, as
+        # os.fsdecode renders it -- lone surrogates a strict stdout cannot
+        # encode. Escape them so the gate REPORTS the file it measured instead
+        # of dying on the report (issue #3073).
+        print(violation.encode(sys.stdout.encoding or "utf-8", "backslashreplace").decode())
     return 1 if violations else 0
 
 

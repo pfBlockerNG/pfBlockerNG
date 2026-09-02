@@ -12,13 +12,16 @@ reports a clean pass (issue #2212).
 ``-z`` form, so those parsers decode the header here instead.
 
 This module is the single place the diff-scoped gates talk to git about paths:
-one invocation, one decode. Three gates previously carried byte-identical copies
-of the diff command and its header parse, which is why one quoting defect
-reproduced across every one of them.
+one invocation, and one decode per route -- byte-exact for a listing whose paths
+the caller will OPEN, deliberately lossy for diff text it will only match and
+print (issue #3073). Three gates previously carried byte-identical copies of the
+diff command and its header parse, which is why one quoting defect reproduced
+across every one of them.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -86,17 +89,9 @@ def nul_paths(listing: str) -> list[str]:
     return [path for path in listing.split("\0") if path]
 
 
-def _run(args: list[str]) -> str:
-    out = subprocess.run(
-        args,
-        capture_output=True,
-        # A non-UTF-8 byte anywhere in the output must not crash the whole run
-        # with a UnicodeDecodeError -- decode lossily instead of raising.
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    return out.stdout
+def _run(args: list[str]) -> bytes:
+    """git's stdout, undecoded: the two routes out of this module disagree on how."""
+    return subprocess.run(args, capture_output=True, check=True).stdout
 
 
 def unified_diff(args: list[str]) -> str:
@@ -108,6 +103,9 @@ def unified_diff(args: list[str]) -> str:
     outright — each silently defeats a gate built on ``+++ b/<path>``, so user
     config and environment cannot bypass one through this.
     """
+    # Lossy on purpose: diff text is somebody's file CONTENT, it is only matched
+    # and printed, and a stray non-UTF-8 byte in it must neither raise here nor
+    # reach a strict stdout as a lone surrogate and kill the report instead.
     return _run(
         [
             "git",
@@ -121,7 +119,7 @@ def unified_diff(args: list[str]) -> str:
             "--dst-prefix=b/",
             *args,
         ]
-    )
+    ).decode("utf-8", "replace")
 
 
 def nul_listing(root: Path, *args: str) -> list[str]:
@@ -129,5 +127,14 @@ def nul_listing(root: Path, *args: str) -> list[str]:
 
     The caller supplies ``-z`` with the rest of the subcommand, so the flag sits
     where git wants it (``ls-files -z``, ``diff --name-only -z <rev>``).
+
+    ``os.fsdecode`` because these paths get OPENED: it is the decode ``open`` and
+    ``os.listdir`` themselves use, so every name round-trips byte-exactly, raw
+    non-UTF-8 bytes included. A lossy decode instead hands back a U+FFFD name
+    that opens nothing, and a gate classifying that name against no rule reports
+    a clean pass over a file it never read (issue #3073). Hard-coding UTF-8
+    would fix only the hosts where the filesystem encoding already is UTF-8 --
+    under an ASCII one it turns a valid ``café.php`` into a ``str`` ``open``
+    cannot encode back.
     """
-    return nul_paths(_run(["git", "-C", str(root), *args]))
+    return nul_paths(os.fsdecode(_run(["git", "-C", str(root), *args])))
