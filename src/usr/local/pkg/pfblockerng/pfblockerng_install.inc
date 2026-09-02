@@ -767,6 +767,11 @@ exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&
 
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
+	// issue #3094: the return value used to be assigned and never read, so an install
+	// could finish "successfully" with the resolver never restarted.
+	if (($final['retval'] ?? 0) != 0) {
+		update_status(" Unbound Resolver did not restart; see the pfBlockerNG log.");
+	}
 }
 
 // Upgrade EasyList to new Format

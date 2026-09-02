@@ -445,6 +445,76 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertSame('apply', $open[0]['stage']);
 	}
 
+	/**
+	 * issue #3094: a stop that could not be completed is NOT a broken unbound.conf.
+	 *
+	 * pfb_stop_start_unbound() refuses to start a second resolver when the daemon
+	 * survives TERM and KILL (#3055). The caller used to read any non-zero retval as
+	 * "the generated config is bad" and respond by saving unbound.conf aside as
+	 * .error, restoring the previous config from unbound.bk, printing "Fix error(s)
+	 * and a Force Reload required!", and retrying the whole restart. None of that is
+	 * right here: the config was never the problem, there is nothing for the user to
+	 * fix, and the retry cannot succeed where the refusal already stood.
+	 */
+	public function testStopFailureNeitherRollsBackTheConfigNorRetries(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['chroot_cmd'] = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+
+		// The daemon outlives both budgets, so the stop refuses: this is the #3055 path.
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+
+		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
+		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+
+		$after = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+		$this->assertSame($before, $after,
+			'a refused stop must attempt no start at all -- neither the first nor the retry');
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"),
+			'the resolver config must survive a stop failure: it was never the fault');
+		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error",
+			'no candidate config may be quarantined for a fault that is not the config');
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"),
+			'the last-known-good copy must be left untouched, not consumed by a false rollback');
+	}
+
+	/**
+	 * issue #3094: and the operator must be told what actually happened.
+	 *
+	 * "Fix error(s) and a Force Reload required!" names an action that cannot help
+	 * when the resolver simply would not stop. The log must carry the real cause.
+	 */
+	public function testStopFailureIsReportedAsAStopFailureNotAConfigFault(): void
+	{
+		file_put_contents("{$this->dir}/unbound.conf", "server:\n");
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['chroot_cmd'] = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log'])
+			. (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		$this->assertStringContainsString('could not be stopped', $log,
+			'the log must name the real cause -- the resolver would not stop');
+		$this->assertStringNotContainsString('Fix error(s)', $log,
+			'a stop failure must not tell the operator to fix a config error that does not exist');
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_reload_unbound() -- zero-downtime swap SUCCESS early-return (issue #1024)
 	// -----------------------------------------------------------------------
