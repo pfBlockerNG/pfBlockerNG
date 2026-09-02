@@ -12,18 +12,16 @@ So this compares the two implementations by executing the shipped PHP, the same 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
-
-import pytest
 
 from tests.smoke import helpers
 
 BOOTSTRAP = Path(__file__).resolve().parent / "php" / "bootstrap.php"
 
 # Header lengths that matter: inside the field, on both sides of its edge, and past it — plus
-# non-ASCII, where PHP's byte padding and a codepoint-based mirror diverge.
+# non-ASCII, where PHP's byte padding and a codepoint-based mirror diverge, and the shapes that
+# would break a payload interpolated into the PHP script instead of passed to it.
 HEADERS = [
     "a",
     "ISC_Block_v4",
@@ -33,39 +31,48 @@ HEADERS = [
     "a" * 40,
     "é" * 10,
     "Ünïcode-Fêed",
+    "a$out",
+    '{$out}"\\',
+    "123",
 ]
 
 STATUS = "( content changed )"
 
 
-def _php_status_lines(headers: list[str], status: str) -> dict[str, str]:
-    """Render ``pfb_log_status_line($header, $status, '')`` with the shipped PHP, per header."""
+def _php_status_lines(headers: list[str], status: str) -> list[str]:
+    """Render ``pfb_log_status_line($header, $status, '')`` with the shipped PHP, in order.
+
+    The payload rides `argv`, not the script text: a header carrying `$` would otherwise
+    interpolate PHP-side. It is read before the bootstrap require, which replaces `$argv` to
+    keep the package's daemon dispatch dormant. Ordered list, not a keyed map, because PHP
+    casts a numeric-string array key to an int.
+    """
     script = (
+        f"[, $payload, $status] = $argv;"
         f"require {json.dumps(str(BOOTSTRAP))};"
         f"$out = [];"
-        f"foreach (json_decode({json.dumps(json.dumps(headers))}) as $h) {{"
-        f"    $out[$h] = pfb_log_status_line($h, {json.dumps(status)}, '');"
+        f"foreach (json_decode($payload) as $h) {{"
+        f"    $out[] = pfb_log_status_line($h, $status, '');"
         f"}}"
         f"echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);"
     )
     result = subprocess.run(
-        ["php", "-r", script],
+        ["php", "-r", script, "--", json.dumps(headers), status],
         capture_output=True,
         check=True,
         text=True,
     )
     rendered = json.loads(result.stdout)
-    assert isinstance(rendered, dict), f"PHP returned unexpected JSON: {result.stdout!r}"
+    assert isinstance(rendered, list) and len(rendered) == len(headers), (
+        f"PHP rendered {len(rendered) if isinstance(rendered, list) else type(rendered).__name__} "
+        f"rows for {len(headers)} headers: {result.stdout!r}"
+    )
     return rendered
 
 
-@pytest.mark.skipif(shutil.which("php") is None, reason="php CLI not installed")
 def test_detector_status_marker_matches_the_php_producer() -> None:
     """Every marker the smoke suite greps for is a prefix of the row PHP actually writes."""
-    rendered = _php_status_lines(HEADERS, STATUS)
-    assert set(rendered) == set(HEADERS), f"PHP skipped headers: {sorted(set(HEADERS) - set(rendered))}"
-
-    for header, php_row in rendered.items():
+    for header, php_row in zip(HEADERS, _php_status_lines(HEADERS, STATUS), strict=True):
         marker = helpers.detector_status_marker(header, STATUS)
         assert php_row.startswith(marker), (
             f"marker drifted from the producer for a {len(header.encode())}-byte header\n"
