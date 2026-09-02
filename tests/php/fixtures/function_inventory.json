@@ -4532,6 +4532,13 @@
                 "variadic": false,
                 "type": "?bool",
                 "default": "NULL"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "0.0"
             }
         ]
     },
@@ -5716,6 +5723,19 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_install_feed_pass_hold": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "300.0"
             }
         ]
     },

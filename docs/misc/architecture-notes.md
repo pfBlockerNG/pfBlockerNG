@@ -1559,11 +1559,12 @@ job's next due slot. `clearip`/`cleardnsbl` (ADR-30) and
 non-pfB cron jobs are left untouched; install/teardown stays idempotent via `pfblockerng_cron_exists`,
 and a pre-ADR-43 install's old fleet jobs are removed on the next `sync_package_pfblockerng()`.
 
-**Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process,
-non-blocking flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
+**Feed-pass serialization (issue #1175):** feed passes are mutually exclusive via a cross-process
+flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_feed_pass_*` in
 `pfblockerng.inc`). Both funnels — `sync_package_pfblockerng()` and `pfblockerng_sync_cron()` —
-acquire it at entry (`pfb_feed_pass_begin()`) and skip with a logged message when another pass
-holds it; the tick pre-checks a busy probe and **defers** (not skips) a busy feed-cron dispatch via
+acquire it **non-blocking** at entry (`pfb_feed_pass_begin()`) and skip with a logged message when
+another pass holds it; the tick pre-checks a busy probe and **defers** (not skips) a busy feed-cron
+dispatch via
 the existing `pending` mechanism, so the run retries next tick. A lock deferral (dispatcher or
 feed-pass) exits **0** for the unattended shapes — the array request `trigger=cron force=false`
 (issue #2505) and the bare `cron` verb (issue #2491) — because the pass stands down with its durable
@@ -1574,6 +1575,22 @@ outside `pfblockerng.log`. The `bl`/`bls`/`dcc` download verbs
 are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-level lock there would
 deadlock the parent). The lock is kernel-released on process death; a crashed pass never wedges
 scheduling.
+
+**The package install holds it too (issue #3062).** `pfblockerng_install.inc` restages the
+Unbound chroot (`pfblockerng.sh dnsbl_cache stage`), drops cache databases, and stops/starts the pfB
+services — the same files and daemon a pass publishes into — so it takes the same lock before it
+touches any of them (`pfb_install_feed_pass_hold()`, right after `pfb_global()`) and keeps it until
+the install process exits, which is what lets the post-install resync reenter the hold. It is the
+one holder that **waits** rather than skipping: `pfb_feed_pass_acquire()`'s optional `$timeout_s`
+(default `0.0` — the single non-blocking attempt every dispatcher must keep) is set to
+`PFB_INSTALL_FEED_PASS_WAIT` (300 s). The wait is bounded and failure is non-fatal, because a
+half-installed package is worse than an overlap: on expiry the install proceeds and logs
+`Package install proceeding WITHOUT the feed-pass lock` to `pfblockerng.log` and syslog
+(`LOG_WARNING`) — so a pass longer than the budget (a large multi-feed download) still overlaps, it
+is just no longer silent. While the hold stands, a tick firing mid-install defers exactly like any
+other contender. It is also the one holder that takes this lock **without** the dispatcher lock
+first; that inverts the order every other holder uses, and cannot deadlock only because every
+non-install feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
 
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
