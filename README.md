@@ -9,7 +9,6 @@
 <p>
   <a href="https://github.com/pfBlockerNG/pfBlockerNG/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/pfBlockerNG/pfBlockerNG/test.yml?branch=devel&label=tests" alt="Tests"></a>
   <a href="https://github.com/pfBlockerNG/pfBlockerNG/releases"><img src="https://img.shields.io/github/v/release/pfBlockerNG/pfBlockerNG?label=release&color=blue" alt="Latest release"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/pfSense-CE%202.8%20%7C%20Plus%2026.03-212121" alt="Supported pfSense versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/pfBlockerNG/pfBlockerNG?color=green" alt="License: Apache-2.0"></a>
 </p>
 
