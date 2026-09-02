@@ -128,6 +128,30 @@ GRAPHIFY
 [ "$#" -eq 3 ] && [ "$1" = project ] && [ "$2" = index ] || exit 9
 exit 0
 SERENA
+    # Hermetic `wt`: work-branch.sh cuts through wt, and this spec must exercise
+    # work-branch.sh on every host — with or without Worktrunk installed.
+    cat > "$stubdir/wt" <<'WT'
+#!/bin/sh
+wt_path=''
+wt_branch=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config-set)
+      wt_path=${2#worktree-path=\"}
+      wt_path=${wt_path%\"}
+      shift 2
+      ;;
+    switch)
+      shift
+      wt_branch=${1:-}
+      [ "$#" -eq 0 ] || shift
+      ;;
+    *) shift ;;
+  esac
+done
+exec git worktree add "$wt_path" "$wt_branch"
+WT
+    chmod +x "$stubdir/wt"
     chmod +x "$stubdir/codegraph" "$stubdir/graphify" "$stubdir/serena"
     export CODEGRAPH_LOG="$codegraph_log" CODEGRAPH_GRAPHIFY_PACKAGE="$graphify_package"
     PATH="$stubdir:$PATH"; export PATH

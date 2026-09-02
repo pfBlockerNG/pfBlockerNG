@@ -19,19 +19,25 @@ fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementatio
 included — requires the full PR flow. The reviewed signed local fast-forward allowed by
 `landing.md` happens only after every PR gate; it is never a shortcut around the PR.
 
+**Every worktree operation goes through `wt`.** Plain `git worktree` is the fallback,
+used only when `wt` is absent, exits non-zero, or reports success without leaving a
+worktree behind — never as a first choice.
+
 ```sh
-git worktree add -b <branch> <path> origin/devel   # branch off the latest base
-sh scripts/agent/init-worktree-tools.sh <path>      # mandatory per-worktree indexes
-# … work, commit, push, open the PR from inside <path> …
-git worktree remove <path>            # run from any directory OUTSIDE <path>
+wt --yes switch --create <branch> --base origin/devel   # cut off the latest base
+# … work, commit, push, open the PR from inside the worktree …
+wt remove --foreground --yes <branch>   # run from any directory OUTSIDE it
 ```
 
-`work-branch.sh … --worktree` fetches, adds below
-`<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools.
-Relative paths stay below that root; absolute paths stay exact; initialization failure
-rolls back the worktree and branch. It uses Git directly. Manual adds must run
-`init-worktree-tools.sh`; CodeGraph and Graphify are mandatory, while Serena is skipped
-when absent or under OMP.
+`wt` runs the tracked `.config/wt.toml` `pre-start` hook, so a `wt`-cut worktree
+initializes CodeGraph, Graphify, and enabled Serena tools on its own. Only the fallback
+route runs `sh scripts/agent/init-worktree-tools.sh <path>` by hand; CodeGraph and
+Graphify are mandatory, while Serena is skipped when absent or under OMP.
+
+`work-branch.sh … --worktree` fetches, cuts below
+`<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools. It
+routes through `wt` under the same fallback rule. Relative paths stay below that root;
+absolute paths stay exact; initialization failure rolls back the worktree and branch.
 
 For matching Worktrunk placement, set:
 
@@ -43,6 +49,28 @@ worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }
 The tracked `.config/wt.toml` initializes tools during `wt --yes switch --create <branch>`
 and prunes metadata after merge/removal. `wt remove` deletes only branches it verifies
 as integrated; landing observes the foreground result.
+
+**Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes. Needs git
+(history, diffing, committing) → a throwaway worktree, `wt --yes switch --create
+<branch> --base <ref>`, `wt remove` when the lane ends. Read-only → `git archive <ref> |
+tar -x -C "$SCRATCH"`: no `.git`, so it cannot commit, cannot share refs, and
+structurally cannot touch the repository. Prefer it whenever the lane never commits.
+
+`cp -a`/`cp -R`/`rsync` **of a worktree is forbidden** — the copy keeps the source's
+`.git` *pointer file*, so its git commands drive the ORIGINAL worktree's index, `HEAD`,
+and refs (a survey found nine such copies, five aimed at worktrees in active use).
+
+**Never the system temp directory**: semantics differ per platform (Linux `/tmp` is
+commonly RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp` and defaults
+`TMPDIR` under `/var/folders`), and an unregistered tree is invisible to
+`git worktree list`, so no prune, `wt remove`, or landing step can reclaim it. Worktree
+scratch goes under the worktrees root; extraction scratch under `/var/tmp/agents`,
+disk-backed on both platforms.
+
+**Scratch is reaped by its owner** when the lane ends — including agent session scratch,
+which no worktree rule covers (1.7 GB across four dead sessions on one host). Delete
+someone else's only when it is stale by mtime **and** unreferenced by any live process
+(`/proc/*/cwd` on Linux, `lsof +D` on macOS): an idle session looks dead by mtime alone.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.

@@ -125,6 +125,41 @@ esac
 exec "$WB_REAL_GIT" "$@"
 GIT
     chmod +x "$stubdir/git"
+    # `wt` stub: records the call, then cuts the worktree the way real wt does.
+    # It reaches the REAL git on purpose — the `add` event exists to catch
+    # work-branch.sh calling `git worktree add` itself, i.e. taking the fallback.
+    cat > "$stubdir/wt" <<'WT'
+#!/bin/sh
+printf '%s\n' wt >> "$WB_TOOL_EVENTS"
+[ "${WB_WT_RC:-0}" -eq 0 ] || exit "$WB_WT_RC"
+wt_path=''
+wt_branch=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config-set)
+      wt_path=${2#worktree-path=\"}
+      wt_path=${wt_path%\"}
+      shift 2
+      ;;
+    switch)
+      shift
+      wt_branch=${1:-}
+      [ "$#" -eq 0 ] || shift
+      ;;
+    *) shift ;;
+  esac
+done
+# WB_WT_EMPTY reproduces a wt that reports success and leaves no worktree.
+[ "${WB_WT_EMPTY:-0}" -eq 0 ] || exit 0
+"$WB_REAL_GIT" worktree add "$wt_path" "$wt_branch" || exit $?
+# Real wt runs the tracked .config/wt.toml `pre-start` hook, which initializes the
+# worktree's tools. WB_WT_PRESTART reproduces that already-initialized result.
+[ "${WB_WT_PRESTART:-0}" -eq 0 ] || {
+  mkdir -p "$wt_path/.codegraph"
+  true > "$wt_path/.codegraph/codegraph.db"
+}
+WT
+    chmod +x "$stubdir/wt"
     export WB_TOOL_EVENTS="$events"
     default_tool_log="$fixture/default-tools"
     export WB_DEFAULT_TOOL_LOG="$default_tool_log" WB_GRAPHIFY_PACKAGE="$graphify_package"
@@ -149,7 +184,7 @@ GIT
     The status should equal 0
     The output should equal "$(printf 'adr/41-tools\t%s/nested/worktree' "$worktree_root")"
     The stderr should include 'Preparing worktree'
-    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/nested/worktree' "$worktree_root")"
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\ninit:%s/nested/worktree' "$worktree_root")"
     The path "$worktree_root" should be directory
   End
 
@@ -161,7 +196,7 @@ GIT
     The output should equal "$(printf 'adr/44-tools\t%s/default-init' "$fixture")"
     The stderr should include 'Preparing worktree'
     The stderr should include 'Initializing CodeGraph in'
-    The contents of file "$events" should equal "$(printf 'fetch\nadd')"
+    The contents of file "$events" should equal "$(printf 'fetch\nwt')"
     The contents of file "$default_tool_log" should equal "codegraph:init:$fixture/default-init"
     The stderr should include 'run /graphify'
   End
@@ -184,9 +219,42 @@ GIT
     The status should equal 17
     The output should equal ''
     The stderr should include 'tool initialization failure'
-    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/init-fail' "$fixture")"
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\ninit:%s/init-fail' "$fixture")"
     Assert [ ! -e "$fixture/init-fail" ]
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/43-tools')" ]
+  End
+
+  It 'falls back to git worktree add when wt fails'
+    add_origin || return 1
+    export WB_WT_RC=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 55 wtfail --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-fail"
+    The status should equal 0
+    The output should equal "$(printf 'adr/55-wtfail\t%s/wt-fail' "$fixture")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\nadd\ninit:%s/wt-fail' "$fixture")"
+    The path "$fixture/wt-fail" should be directory
+  End
+
+  It 'falls back when wt reports success without leaving a worktree'
+    add_origin || return 1
+    export WB_WT_EMPTY=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 56 wtempty --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-empty"
+    The status should equal 0
+    The output should equal "$(printf 'adr/56-wtempty\t%s/wt-empty' "$fixture")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\nadd\ninit:%s/wt-empty' "$fixture")"
+    The path "$fixture/wt-empty" should be directory
+  End
+
+  It 'does not re-initialize a worktree wt already initialized through its pre-start hook'
+    add_origin || return 1
+    export WB_WT_PRESTART=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 57 prestart --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-prestart"
+    The status should equal 0
+    The stderr should include 'Preparing worktree'
+    The output should equal "$(printf 'adr/57-prestart\t%s/wt-prestart' "$fixture")"
+    The contents of file "$events" should equal "$(printf 'fetch\nwt')"
+    Assert [ -f "$fixture/wt-prestart/.codegraph/codegraph.db" ]
   End
 End
 
@@ -255,6 +323,29 @@ mkdir -p "$1/.codegraph"
 true > "$1/.codegraph/codegraph.db"
 INIT
     chmod +x "$stubdir/init-worktree-tools"
+    # Hermetic `wt`: the spec must exercise work-branch.sh, never the host's wt.
+    cat > "$stubdir/wt" <<'WT'
+#!/bin/sh
+wt_path=''
+wt_branch=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config-set)
+      wt_path=${2#worktree-path=\"}
+      wt_path=${wt_path%\"}
+      shift 2
+      ;;
+    switch)
+      shift
+      wt_branch=${1:-}
+      [ "$#" -eq 0 ] || shift
+      ;;
+    *) shift ;;
+  esac
+done
+exec git worktree add "$wt_path" "$wt_branch"
+WT
+    chmod +x "$stubdir/wt"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
@@ -545,6 +636,29 @@ CODEGRAPH
 exit 0
 INIT
     chmod +x "$stubdir/init-worktree-tools"
+    # Hermetic `wt`: the spec must exercise work-branch.sh, never the host's wt.
+    cat > "$stubdir/wt" <<'WT'
+#!/bin/sh
+wt_path=''
+wt_branch=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config-set)
+      wt_path=${2#worktree-path=\"}
+      wt_path=${wt_path%\"}
+      shift 2
+      ;;
+    switch)
+      shift
+      wt_branch=${1:-}
+      [ "$#" -eq 0 ] || shift
+      ;;
+    *) shift ;;
+  esac
+done
+exec git worktree add "$wt_path" "$wt_branch"
+WT
+    chmod +x "$stubdir/wt"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$codegraph_dir:$PATH"; export PATH
   }
