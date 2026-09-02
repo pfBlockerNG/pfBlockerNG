@@ -157,9 +157,9 @@ CURL
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
   'self update')
-    # A self-update can fail -- transient network error, or a uv that did not
-    # come from the standalone installer. The provisioner must treat that as
-    # maintenance, not a prerequisite.
+    # A uv that did not come from the standalone installer refuses to
+    # self-update and exits non-zero (issue: package-managed uv). The
+    # installer must treat that as maintenance, not a prerequisite.
     if [ -n "${DEBIAN_UV_SELF_UPDATE_FAILS:-}" ]; then
       printf 'error: Self-update is only available for uv binaries installed via the standalone installation scripts.\n' >&2
       exit 1
@@ -354,14 +354,6 @@ GROK
     cp "$installables/$1" "$activebin/$1"
   }
 
-  # A uv the seat already owns, at the path the standalone installer uses. The
-  # default fixture uv lives in "$activebin" -- outside HOME -- which models the
-  # shared root-owned /usr/local/bin/uv (#3010), not a seat's own.
-  seat_uv() {
-    mkdir -p "$home/.local/bin"
-    cp "$installables/uv" "$home/.local/bin/uv"
-  }
-
   cleanup() {
     rm -rf "$fixture"
   }
@@ -466,7 +458,6 @@ GROK
   End
 
   It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
-    seat_uv
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
@@ -482,44 +473,6 @@ GROK
       'wt:config shell install --yes' \
       'serena:init')"
     The file "$apt_log" should not be exist
-  End
-
-  It 'installs a per-seat uv when the only uv on PATH lives outside HOME'
-    # issue #3010: a uv outside this seat must not satisfy provisioning of its own.
-    When run sh "$script_abs" "$repository"
-    The status should equal 0
-    The contents of file "$curl_log" should include 'https://astral.sh/uv/install.sh'
-    The path "$home/.local/bin/uv" should be executable
-    # Without this the example also passes an "always install" implementation:
-    # the foreign uv must be left alone, not adopted and self-updated.
-    The contents of file "$tool_log" should not include 'uv:self update'
-  End
-
-  It 'converges on the seat uv when XDG_BIN_HOME lives outside HOME'
-    # The seat's own uv is installed into $xdg_bin_home, which XDG_BIN_HOME can put
-    # outside HOME. Testing ownership against HOME alone re-classifies that uv as
-    # foreign on every later run, so it is reinstalled instead of self-updated.
-    custom_xdg_bin="$fixture/custom xdg bin"
-    When run env XDG_BIN_HOME="$custom_xdg_bin" \
-      sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
-    The path "$custom_xdg_bin/uv" should be executable
-  End
-
-  It 'keeps a seat uv that lives under HOME but not in the XDG bin dir'
-    # PATH also carries $HOME/.cargo/bin, so a seat can legitimately own a uv that
-    # is not at $xdg_bin_home. That is what the HOME alternative of the guard
-    # covers, and without this example dropping it ships green.
-    rm -f "$activebin/uv"
-    custom_xdg_bin="$fixture/custom xdg bin"
-    mkdir -p "$home/.cargo/bin"
-    cp "$installables/uv" "$home/.cargo/bin/uv"
-    When run env XDG_BIN_HOME="$custom_xdg_bin" sh "$script_abs" "$repository"
-    The status should equal 0
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 0 ]
   End
 
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
@@ -880,9 +833,8 @@ UNMANAGED_UV
     The contents of file "$tool_log" should not include 'grok:mcp'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
     The file "$apt_log" should not be exist
-    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
-      'https://astral.sh/uv/install.sh' \
-      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
+    The contents of file "$curl_log" should equal \
+      'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
   End
 
   It 'creates the canonical global Worktrunk key when the user config is missing'
@@ -1034,10 +986,7 @@ CONFIG
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
-    # Run 1 has no seat uv and provisions one; run 2 finds it under HOME and
-    # self-updates. Converging on one self-update is the guard working (#3010).
-    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]
-    Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
@@ -1051,15 +1000,13 @@ CONFIG
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
   End
 
-  It "continues when the seat's own uv refuses to self-update"
+  It 'continues when a package-managed uv refuses to self-update'
     # `uv self update` is maintenance, not a prerequisite: every later use is
-    # `uv tool install --upgrade`, which any uv performs happily. A self-update
-    # can still fail -- a transient network error, or a uv the seat did not get
-    # from the standalone installer -- and under `set -eu` that aborted the whole
-    # run before a single tool was installed. Only a seat-owned uv reaches this
-    # call now, so the fixture seeds one.
+    # `uv tool install --upgrade`, which a package-managed uv performs happily.
+    # A uv installed by apt/curl-to-/usr/local rather than the standalone script
+    # exits non-zero here, and under `set -eu` that aborted the whole run before
+    # a single tool was installed.
     export DEBIAN_UV_SELF_UPDATE_FAILS=1
-    seat_uv
     When run sh "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]

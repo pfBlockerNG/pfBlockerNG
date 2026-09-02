@@ -250,23 +250,16 @@ main() {
 
 	case "$platform" in
 		Linux)
-			uv_path=$(command -v uv 2>/dev/null) || uv_path=
-			# $xdg_bin_home is where this script installs uv, and XDG_BIN_HOME can put
-			# it outside HOME; matching the PATH entry verbatim keeps a seat that sets
-			# it converging on self-update instead of reinstalling every run.
-			case "$uv_path" in
-				"$xdg_bin_home"/uv|"$HOME"/*)
-					# `|| true`: self-update is maintenance, not a prerequisite -- every
-					# later use is `uv tool install --upgrade`, which any uv performs -- so
-					# a transient failure must not end the run before a tool is installed.
-					uv self update || true
-					;;
-				*)
-					# issue #3010: a shared root-owned uv outside this seat satisfies
-					# `command -v` but no seat can self-update it -- provision our own.
-					install_from_url 'https://astral.sh/uv/install.sh'
-					;;
-			esac
+			if command -v uv >/dev/null 2>&1; then
+				# Maintenance, not a prerequisite: every later use is
+				# `uv tool install --upgrade`, which any uv performs. A uv
+				# that did not come from the standalone installer refuses to
+				# self-update and exits non-zero; under `set -eu` that ends
+				# the run before a single tool is installed.
+				uv self update || true
+			else
+				install_from_url 'https://astral.sh/uv/install.sh'
+			fi
 			;;
 		Darwin)
 			if brew list --versions uv >/dev/null 2>&1; then
