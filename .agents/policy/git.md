@@ -19,9 +19,9 @@ fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementatio
 included — requires the full PR flow. The reviewed signed local fast-forward allowed by
 `landing.md` happens only after every PR gate; it is never a shortcut around the PR.
 
-**Every worktree operation goes through `wt`.** Plain `git worktree` is the fallback,
-used only when `wt` is absent, exits non-zero, or reports success without leaving a
-worktree behind — never as a first choice.
+**Agents cut and remove worktrees through `wt`.** Plain `git worktree` is the fallback,
+never a first choice, used only when `wt` is absent, exits non-zero, or reports success
+without leaving a worktree — including when recovering from a `wt` cut that half-ran.
 
 ```sh
 wt --yes switch --create <branch> --base origin/devel   # cut off the latest base
@@ -30,9 +30,10 @@ wt remove --foreground --yes <branch>   # run from any directory OUTSIDE it
 ```
 
 `wt` runs the tracked `.config/wt.toml` `pre-start` hook, so a `wt`-cut worktree
-initializes CodeGraph, Graphify, and enabled Serena tools on its own. Only the fallback
-route runs `sh scripts/agent/init-worktree-tools.sh <path>` by hand; CodeGraph and
-Graphify are mandatory, while Serena is skipped when absent or under OMP.
+initializes CodeGraph, Graphify, and enabled Serena tools on its own. `init-worktree-tools.sh <path>` is run by hand
+only for a cut that came back without a CodeGraph index — the fallback route, or a
+pre-start that did not run. CodeGraph and Graphify are mandatory; Serena is skipped when
+absent or under OMP.
 
 `work-branch.sh … --worktree` fetches, cuts below
 `<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools. It
@@ -46,9 +47,8 @@ For matching Worktrunk placement, set:
 worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"
 ```
 
-The tracked `.config/wt.toml` initializes tools during `wt --yes switch --create <branch>`
-and prunes metadata after merge/removal. `wt remove` deletes only branches it verifies
-as integrated; landing observes the foreground result.
+`.config/wt.toml` also prunes metadata after merge/removal. `wt remove` deletes only
+branches it verifies as integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes. Needs git
 (history, diffing, committing) → a throwaway worktree, `wt --yes switch --create
@@ -58,7 +58,7 @@ structurally cannot touch the repository. Prefer it whenever the lane never comm
 
 `cp -a`/`cp -R`/`rsync` **of a worktree is forbidden** — the copy keeps the source's
 `.git` *pointer file*, so its git commands drive the ORIGINAL worktree's index, `HEAD`,
-and refs (a survey found nine such copies, five aimed at worktrees in active use).
+and refs.
 
 **Never the system temp directory**: semantics differ per platform (Linux `/tmp` is
 commonly RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp` and defaults
@@ -68,7 +68,7 @@ scratch goes under the worktrees root; extraction scratch under `/var/tmp/agents
 disk-backed on both platforms.
 
 **Scratch is reaped by its owner** when the lane ends — including agent session scratch,
-which no worktree rule covers (1.7 GB across four dead sessions on one host). Delete
+which no worktree rule covers. Delete
 someone else's only when it is stale by mtime **and** unreferenced by any live process
 (`/proc/*/cwd` on Linux, `lsof +D` on macOS): an idle session looks dead by mtime alone.
 
@@ -88,7 +88,7 @@ someone else's only when it is stale by mtime **and** unreferenced by any live p
   or legacy `WIP`/`Waiting PR` labels ⇒ another session owns it: wait, cooperate, or start
   NEW branch after merge). **Never force-push over another session's in-flight PR.**
 - Name branch for its work item — `adr/{NN}-{slug}` / `issue/{NN}-{slug}`.
-- Gotchas: `git worktree remove` fails from inside tree — run from any directory
+- Gotchas: `wt remove` / `git worktree remove` fail from inside tree — run from any directory
   outside tree being removed (primary checkout works; session worktree too).
   Never pass `--delete-branch`; after terminal verification use the expected-value cleanup:
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.

@@ -34,9 +34,8 @@ Load when: every agent session, from `AGENTS.md`.
   When the graph is absent it prints a notice and builds nothing; first-build scope
   is a judgement call handled by a `/graphify` run. `wt --yes switch --create <branch>`
   runs it from `.config/wt.toml`'s `pre-start` hook. `work-branch.sh --worktree` cuts
-  through `wt`, so that hook normally does the initializing; it calls the initializer
-  itself only when the worktree came back without a CodeGraph index (the `git worktree`
-  fallback, or a pre-start that did not run), and rolls back a failed cut either way.
+  through `wt`, skips the initializer when pre-start already left a CodeGraph index,
+  and rolls back a failed cut — reclaiming a tree `wt` left behind when its hook failed.
 - Graphify's suffix map parses `.inc` as Pascal, collapsing this repository's PHP
   includes from roughly 767 nodes to roughly 30 while extraction still succeeds.
   Until a release includes Graphify-Labs/graphify#3075, the fix rides as

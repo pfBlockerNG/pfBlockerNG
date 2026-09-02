@@ -40,7 +40,7 @@ issues, process improvements become a PR against this skill.
    parity across siblings — v4/v6, CE/Plus, channels, languages). For each, find
    where the code enforces it and try to break it with an EXECUTED probe (`uv run
    pytest`, `vendor/bin/phpunit` or `shellspec --shell dash` for suites, after
-   `uv sync --locked --group dev` / `composer install`; scratch dirs under `/tmp`;
+   `uv sync --locked --group dev` / `composer install`; scratch dirs under `/var/tmp/agents`;
    never the live boxes from the cloud). Also run `/code-review` at `medium`
    effort over the roots when the delta is large — its findings enter the same dedupe below. That
    command is a Claude Code client built-in, not a repo skill under

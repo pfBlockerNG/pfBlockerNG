@@ -79,7 +79,7 @@ check_fixture_manifest() {
     done <<'EOF'
 agent_run_gates_git_spec.sh:2
 agent_run_gates_spec.sh:4
-agent_work_branch_spec.sh:24
+agent_work_branch_spec.sh:28
 composer_cloud_install_spec.sh:4
 git_no_docs_spec.sh:5
 githooks_pre_push_lease_spec.sh:54

@@ -90,16 +90,31 @@ claim_gate() {
 # failing, or reporting success without leaving a worktree behind.
 # `--config-set` pins the exact path this script derived instead of trusting the
 # caller's `worktree-path` template; TOML basic strings escape \ and " only.
+# A worktree checkout always has a `.git` FILE, so that is the success probe: a bare
+# directory at the path is not a cut.
 cut_worktree() {
 	cw_path=$1
 	cw_branch=$2
 	if command -v wt >/dev/null 2>&1; then
 		cw_toml=$(printf '%s' "$cw_path" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
 		if wt --yes --config-set "worktree-path=\"$cw_toml\"" switch "$cw_branch" >&2 &&
-		   [ -d "$cw_path" ]; then
+		   [ -f "$cw_path/.git" ]; then
 			return 0
 		fi
 		echo "work-branch.sh: wt could not cut '$cw_path'; falling back to git worktree add" >&2
+		# wt registers the worktree BEFORE running its pre-start hook and leaves the
+		# tree behind when that hook fails. Falling back over the top of it would hit
+		# `already exists`, and the reserved branch could then not be deleted because
+		# the orphan has it checked out. Reclaim it — that also discards the marker a
+		# half-run hook left, so the retry initializes for real. Reclaim ONLY a tree
+		# holding the branch this call just reserved: at a shared explicit --path a
+		# concurrent creator may already own the tree, and removing that destroys it.
+		if [ -e "$cw_path" ] || [ -L "$cw_path" ]; then
+			cw_head=$(git -C "$cw_path" symbolic-ref --quiet HEAD 2>/dev/null) || cw_head=''
+			if [ "$cw_head" = "refs/heads/$cw_branch" ]; then
+				git worktree remove --force "$cw_path" >/dev/null 2>&1 || :
+			fi
+		fi
 	fi
 	git worktree add "$cw_path" "$cw_branch" >/dev/null
 }
@@ -129,6 +144,18 @@ main() {
 		exit 0
 	fi
 
+	# wt's `worktree-path` is a minijinja TEMPLATE, so `{{ … }}` in a --path renders
+	# instead of being taken literally, and a trailing newline is eaten by the command
+	# substitution that builds the TOML: either way wt cuts somewhere this script never
+	# reports. Reject both shapes before a branch is reserved.
+	if [ "$path_set" -eq 1 ]; then
+		case "$path" in
+			*'{{'* | *'{%'* | *'{#'* | *[[:cntrl:]]*)
+				echo "work-branch.sh: --path must not contain control characters or template markers" >&2
+				exit 2
+				;;
+		esac
+	fi
 	if [ "$path_set" -eq 1 ]; then
 		case "$path" in
 			'')

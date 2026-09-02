@@ -151,12 +151,23 @@ while [ "$#" -gt 0 ]; do
 done
 # WB_WT_EMPTY reproduces a wt that reports success and leaves no worktree.
 [ "${WB_WT_EMPTY:-0}" -eq 0 ] || exit 0
-"$WB_REAL_GIT" worktree add "$wt_path" "$wt_branch" || exit $?
+# Real wt reformats git's progress away and prints its own line; a stub that let
+# git's raw stderr through would let assertions pass on text real wt never emits.
+"$WB_REAL_GIT" worktree add "$wt_path" "$wt_branch" >/dev/null 2>&1 || exit $?
+printf '%s\n' "✓ Created worktree for $wt_branch @ $wt_path" >&2
 # Real wt runs the tracked .config/wt.toml `pre-start` hook, which initializes the
 # worktree's tools. WB_WT_PRESTART reproduces that already-initialized result.
 [ "${WB_WT_PRESTART:-0}" -eq 0 ] || {
   mkdir -p "$wt_path/.codegraph"
   true > "$wt_path/.codegraph/codegraph.db"
+}
+# WB_WT_HOOKFAIL reproduces real wt's worst shape: the worktree is created and
+# REGISTERED, the pre-start hook then fails part-way, and wt exits non-zero while
+# leaving the tree — including a half-written CodeGraph marker — behind.
+[ "${WB_WT_HOOKFAIL:-0}" -eq 0 ] || {
+  mkdir -p "$wt_path/.codegraph"
+  true > "$wt_path/.codegraph/codegraph.db"
+  exit 1
 }
 WT
     chmod +x "$stubdir/wt"
@@ -183,7 +194,7 @@ WT
     When run sh -c 'cd "$1" && exec sh "$2" adr 41 tools --worktree --base HEAD --path nested/worktree' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'adr/41-tools\t%s/nested/worktree' "$worktree_root")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The contents of file "$events" should equal "$(printf 'fetch\nwt\ninit:%s/nested/worktree' "$worktree_root")"
     The path "$worktree_root" should be directory
   End
@@ -194,7 +205,7 @@ WT
     When run env OMP_CLI=1 sh -c 'cd "$1" && exec sh "$2" adr 44 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/default-init"
     The status should equal 0
     The output should equal "$(printf 'adr/44-tools\t%s/default-init' "$fixture")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The stderr should include 'Initializing CodeGraph in'
     The contents of file "$events" should equal "$(printf 'fetch\nwt')"
     The contents of file "$default_tool_log" should equal "codegraph:init:$fixture/default-init"
@@ -246,12 +257,51 @@ WT
     The path "$fixture/wt-empty" should be directory
   End
 
+  It 'reclaims the worktree wt registered before its pre-start hook failed'
+    # Real wt creates and registers the worktree BEFORE running pre-start, and leaves
+    # it on disk when the hook fails. Falling back over the top of it would hit
+    # `fatal: already exists`, and the branch rollback would then fail because the
+    # branch is checked out in the orphan: an orphan worktree squatting the canonical
+    # path plus an undeletable branch. Its half-written CodeGraph marker must go with
+    # it, or the retry inherits a tree that only looks initialized.
+    add_origin || return 1
+    export WB_WT_HOOKFAIL=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 58 hookfail --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-hookfail"
+    The status should equal 0
+    The output should equal "$(printf 'adr/58-hookfail\t%s/wt-hookfail' "$fixture")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\nadd\ninit:%s/wt-hookfail' "$fixture")"
+    The path "$fixture/wt-hookfail" should be directory
+    Assert [ -n "$(git_fixture -C "$primary" worktree list | grep -F "$fixture/wt-hookfail")" ]
+    Assert [ "$(git_fixture -C "$primary" worktree list | grep -cF "$fixture/wt-hookfail")" -eq 1 ]
+  End
+
+  It 'rejects a --path bearing a wt template marker before reserving a branch'
+    # wt renders `worktree-path` as a minijinja template, so `{{ repo }}` in the path
+    # would place the worktree somewhere this script never reports.
+    add_origin || return 1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 59 template --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-{{ repo }}"
+    The status should equal 2
+    The stderr should include 'control characters or template markers'
+    The output should equal ''
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/59-template')" ]
+  End
+
+  It 'rejects a --path bearing a control character before reserving a branch'
+    add_origin || return 1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 60 ctrl --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$(printf '%s/wt-ctrl\t2' "$fixture")"
+    The status should equal 2
+    The stderr should include 'control characters or template markers'
+    The output should equal ''
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/60-ctrl')" ]
+  End
+
   It 'does not re-initialize a worktree wt already initialized through its pre-start hook'
     add_origin || return 1
     export WB_WT_PRESTART=1
     When run sh -c 'cd "$1" && exec sh "$2" adr 57 prestart --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-prestart"
     The status should equal 0
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The output should equal "$(printf 'adr/57-prestart\t%s/wt-prestart' "$fixture")"
     The contents of file "$events" should equal "$(printf 'fetch\nwt')"
     Assert [ -f "$fixture/wt-prestart/.codegraph/codegraph.db" ]
@@ -323,29 +373,7 @@ mkdir -p "$1/.codegraph"
 true > "$1/.codegraph/codegraph.db"
 INIT
     chmod +x "$stubdir/init-worktree-tools"
-    # Hermetic `wt`: the spec must exercise work-branch.sh, never the host's wt.
-    cat > "$stubdir/wt" <<'WT'
-#!/bin/sh
-wt_path=''
-wt_branch=''
-while [ "$#" -gt 0 ]; do
-  case $1 in
-    --config-set)
-      wt_path=${2#worktree-path=\"}
-      wt_path=${wt_path%\"}
-      shift 2
-      ;;
-    switch)
-      shift
-      wt_branch=${1:-}
-      [ "$#" -eq 0 ] || shift
-      ;;
-    *) shift ;;
-  esac
-done
-exec git worktree add "$wt_path" "$wt_branch"
-WT
-    chmod +x "$stubdir/wt"
+    make_wt_stub "$stubdir"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
@@ -361,7 +389,7 @@ WT
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The output should not include "$primary/"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The path "$worktree_root" should be directory
   End
 
@@ -371,7 +399,7 @@ WT
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The output should not include "$primary/"
     The output should not include "$fixture/pfblockerng-issue-7"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The contents of file "$codegraph_log" should equal "init $worktree_root/issue-7-tld"
     Assert [ -f "$worktree_root/issue-7-tld/.codegraph/codegraph.db" ]
   End
@@ -381,7 +409,7 @@ WT
     The status should equal 0
     The output should equal "$(printf 'issue/8-tld\t%s/wt/x' "$worktree_root")"
     The output should not include "$primary/"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It 'rejects a parent-traversing relative --path before creating a branch or worktree'
@@ -425,7 +453,7 @@ WT
     The status should equal 0
     The output should equal "$(printf 'issue/9-tld\t%s/issue-9-tld' "$worktree_root")"
     The output should not include "$primary/"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It 'is immune to an inherited CDPATH when resolving the sibling root'
@@ -435,7 +463,7 @@ WT
     The status should equal 0
     The output should equal "$(printf 'issue/10-tld\t%s/issue-10-tld' "$worktree_root")"
     The output should not include "$primary/"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It 'uses the suffixed branch name for a colliding default worktree'
@@ -444,7 +472,7 @@ WT
     The status should equal 0
     The output should equal "$(printf 'issue/14-tld-1700000000\t%s/issue-14-tld-1700000000' "$worktree_root")"
     The output should not include "$primary/"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It 'advances past repeated deterministic branch collisions'
@@ -452,7 +480,7 @@ WT
     git_fixture -C "$primary" branch adr/48-collide-1700000000
     When run sh -c 'cd "$1" && exec sh "$2" adr 48 collide --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 0
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The output should equal "$(printf 'adr/48-collide-1700000000-2\t%s/adr-48-collide-1700000000-2' "$worktree_root")"
     The path "$worktree_root/adr-48-collide-1700000000-2" should be directory
   End
@@ -542,7 +570,7 @@ WT
     When run sh -c 'cd "$1" && exec sh "$2" issue 12 tld --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/abs-target"
     The status should equal 0
     The output should equal "$(printf 'issue/12-tld\t%s/abs-target' "$fixture")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It 'fails an occupied explicit absolute --path without suffixing or leaking a branch'
@@ -568,7 +596,7 @@ WT
   It 'advances the branch when only its default worktree path is occupied'
     mkdir -p "$worktree_root/adr-53-path-only"
     When run sh -c 'cd "$1" && exec sh "$2" adr 53 path-only --worktree --base HEAD' _ "$fixture/session" "$script_abs"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The status should equal 0
     The output should equal "$(printf 'adr/53-path-only-1700000000\t%s/adr-53-path-only-1700000000' "$worktree_root")"
     The path "$worktree_root/adr-53-path-only-1700000000" should be directory
@@ -578,7 +606,7 @@ WT
     When run sh -c 'cd "$1" && exec sh "$2" issue 13 tld --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/offline"
     The status should equal 0
     The output should equal "$(printf 'issue/13-tld\t%s/offline' "$fixture")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     Assert [ -f "$fixture/offline/.codegraph/codegraph.db" ]
   End
 End
@@ -636,29 +664,7 @@ CODEGRAPH
 exit 0
 INIT
     chmod +x "$stubdir/init-worktree-tools"
-    # Hermetic `wt`: the spec must exercise work-branch.sh, never the host's wt.
-    cat > "$stubdir/wt" <<'WT'
-#!/bin/sh
-wt_path=''
-wt_branch=''
-while [ "$#" -gt 0 ]; do
-  case $1 in
-    --config-set)
-      wt_path=${2#worktree-path=\"}
-      wt_path=${wt_path%\"}
-      shift 2
-      ;;
-    switch)
-      shift
-      wt_branch=${1:-}
-      [ "$#" -eq 0 ] || shift
-      ;;
-    *) shift ;;
-  esac
-done
-exec git worktree add "$wt_path" "$wt_branch"
-WT
-    chmod +x "$stubdir/wt"
+    make_wt_stub "$stubdir"
     export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$codegraph_dir:$PATH"; export PATH
   }
@@ -688,14 +694,14 @@ WT
     When run sh -c 'cd "$1" && WB_ASSIGNEES=other,me exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
   End
 
   It '--claim assigns an unclaimed issue to the caller and proceeds'
     When run sh -c 'cd "$1" && WB_ASSIGNEES= exec sh "$2" issue 7 tld --worktree --base HEAD --claim' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The contents of file "$gh_log" should include 'issue edit 7 --add-assignee @me'
   End
 
@@ -725,7 +731,7 @@ WT
     When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" adr 9 x --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
     The output should equal "$(printf 'adr/9-x\t%s/adr-9-x' "$worktree_root")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     Assert [ ! -e "$gh_log" ]
   End
 
