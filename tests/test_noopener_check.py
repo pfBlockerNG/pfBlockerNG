@@ -294,13 +294,11 @@ def test_main_returns_0_on_clean_file(tmp_path: Path, capsys: pytest.CaptureFixt
 def test_default_scan_set_covers_both_ui_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # issue #3075: help text under src/usr/local/pkg renders on the same pages as
-    # src/usr/local/www and carries the same external links, but the ARGLESS default
-    # scan set -- the one the pre-commit hook and CI both run -- saw only www.
-    #
-    # A violation is planted in BOTH trees and both paths are asserted in stderr, so
-    # dropping either pathspec fails: rc alone cannot tell "both scanned" from
-    # "one scanned", and the rc-only form let a www-dropping regression ship green.
+    # issue #3075: pkg help text renders on the www pages and carries the same
+    # external links, so the ARGLESS default set -- the one the pre-commit hook and
+    # CI both run -- must cover both trees. A violation is planted in each and both
+    # paths are asserted, because the exit code alone cannot distinguish "both
+    # scanned" from "one scanned".
     env = scrubbed_git_env(drop_git_vars=True)
     for name in [k for k in os.environ if k.startswith("GIT_")]:
         monkeypatch.delenv(name)
@@ -315,8 +313,8 @@ def test_default_scan_set_covers_both_ui_trees(
     pkg.mkdir(parents=True)
     (www / "dirty.php").write_text('<a target="_blank" href="https://example.invalid">\n')
     (pkg / "help.inc").write_text('<a target="_blank" href="https://example.invalid">\n')
-    # A violation OUTSIDE both trees: the set must be limited to www + pkg, not
-    # merely include them -- dropping the pathspec entirely would scan this too.
+    # docs/ is outside the default scan set: the set must be LIMITED to www + pkg,
+    # not merely include them.
     outside = tmp_path / "docs"
     outside.mkdir()
     (outside / "stray.php").write_text('<a target="_blank" href="https://example.invalid">\n')
@@ -350,8 +348,8 @@ def test_main_fails_closed_when_default_scan_set_unenumerable(
 def test_ui_trees_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every tracked www + pkg .php/.inc/.xml file is noopener-clean.
 
-    Enumerated by the production helper, not a copy of its pathspec, so this guard
-    cannot drift from the set the gate actually scans (issue #3075).
+    Enumerated by the production helper rather than a copy of its pathspec
+    (issue #3075).
     """
     monkeypatch.chdir(_REPO_ROOT)
     files = cno._git_tracked_ui()
