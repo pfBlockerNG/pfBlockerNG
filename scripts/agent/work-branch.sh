@@ -4,8 +4,9 @@
 #
 # Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--claim] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
-#   --worktree  also `git fetch origin` + `git worktree add -b BRANCH PATH BASE` at an
-#               ABSOLUTE path (default <repo-parent>/.<repo-name>_worktrees/<branch
+#   --worktree  also `git fetch origin` + cut the worktree through `wt` (falling
+#               back to `git worktree add` when wt is absent, fails, or leaves no
+#               worktree) at an ABSOLUTE path (default <repo-parent>/.<repo-name>_worktrees/<branch
 #               with '/' replaced by '-'>; a relative --path anchors below that sibling
 #               root, while an absolute --path stays exact). An existing branch or path
 #               gets a `-<epoch>` suffix (collision rule). Every created worktree
@@ -84,6 +85,56 @@ claim_gate() {
 	exit 3
 }
 
+# wt renders `worktree-path` as a minijinja TEMPLATE, so a marker anywhere in the
+# value makes wt cut somewhere this script never reports — and the value is not only
+# what the caller typed: the sibling root is derived from the CHECKOUT's own directory
+# name. A control character breaks the TOML the same way. Validate every component
+# this script will hand to wt, before a branch is reserved.
+reject_wt_template_chars() {
+	case "$1" in
+		*'{{'* | *'{%'* | *'{#'* | *[[:cntrl:]]*)
+			echo "work-branch.sh: $2 must not contain control characters or template markers" >&2
+			exit 2
+			;;
+	esac
+}
+
+# Cut one worktree for an already-reserved branch. Worktree operations converge
+# on `wt` (git.md); plain `git worktree add` is the fallback for wt being absent,
+# failing, or reporting success without leaving a worktree behind.
+# `--config-set` pins the exact path this script derived instead of trusting the
+# caller's `worktree-path` template; TOML basic strings escape \ and " only.
+# A worktree checkout always has a `.git` FILE, so that is the success probe: a bare
+# directory at the path is not a cut.
+cut_worktree() {
+	cw_path=$1
+	cw_branch=$2
+	if command -v wt >/dev/null 2>&1; then
+		cw_toml=$(printf '%s' "$cw_path" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+		if wt --yes --config-set "worktree-path=\"$cw_toml\"" switch "$cw_branch" >&2 &&
+		   [ -f "$cw_path/.git" ]; then
+			return 0
+		fi
+		echo "work-branch.sh: wt could not cut '$cw_path'; falling back to git worktree add" >&2
+		# wt registers the worktree BEFORE running its pre-start hook and leaves the
+		# tree behind when that hook fails. Falling back over the top of it would hit
+		# `already exists`, and the reserved branch could then not be deleted because
+		# the orphan has it checked out. Reclaim it — that also discards the marker a
+		# half-run hook left, so the retry initializes for real. Reclaim ONLY a tree
+		# holding the branch this call just reserved: at a shared explicit --path a
+		# concurrent creator may already own the tree, and removing that destroys it.
+		# Anything else left at the path is deliberately not reclaimed — it cannot be
+		# told apart from a concurrent creator's, so the caller collision-suffixes.
+		if [ -e "$cw_path" ] || [ -L "$cw_path" ]; then
+			cw_head=$(git -C "$cw_path" symbolic-ref --quiet HEAD 2>/dev/null) || cw_head=''
+			if [ "$cw_head" = "refs/heads/$cw_branch" ]; then
+				git worktree remove --force "$cw_path" >/dev/null 2>&1 || :
+			fi
+		fi
+	fi
+	git worktree add "$cw_path" "$cw_branch" >/dev/null
+}
+
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
@@ -109,6 +160,7 @@ main() {
 		exit 0
 	fi
 
+	[ "$path_set" -eq 0 ] || reject_wt_template_chars "$path" '--path'
 	if [ "$path_set" -eq 1 ]; then
 		case "$path" in
 			'')
@@ -159,6 +211,7 @@ main() {
 	repo_name=${root##*/}
 	repo_parent=${root%/*}
 	worktree_root="$repo_parent/.${repo_name}_worktrees"
+	reject_wt_template_chars "$worktree_root" 'the worktree root'
 	if [ "$absolute_path" -eq 1 ]; then
 		mkdir -p "$(dirname "$path")" || exit 1
 	else
@@ -236,7 +289,7 @@ main() {
 	done
 
 	while true; do
-		git worktree add "$path" "$branch" >/dev/null
+		cut_worktree "$path" "$branch"
 		worktree_status=$?
 		[ "$worktree_status" -eq 0 ] && break
 		if [ "$path_set" -eq 1 ] && [ "$absolute_path" -eq 0 ] &&
@@ -258,8 +311,15 @@ main() {
 		exit "$worktree_status"
 	done
 	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
-	sh "$initializer" "$path"
-	initializer_status=$?
+	# A `wt` cut already ran the initializer through `.config/wt.toml`'s pre-start hook,
+	# and the CodeGraph index it leaves is the marker that the tools are in place. Only
+	# the fallback route (and a pre-start that did not run) still needs the direct call;
+	# a second `graphify update` here is pure duplicated work.
+	initializer_status=0
+	if [ ! -f "$path/.codegraph/codegraph.db" ]; then
+		sh "$initializer" "$path"
+		initializer_status=$?
+	fi
 	if [ "$initializer_status" -ne 0 ]; then
 		echo "work-branch.sh: removing worktree and branch after tool initialization failure" >&2
 		git worktree remove --force "$path" >/dev/null 2>&1 || {

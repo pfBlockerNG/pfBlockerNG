@@ -72,6 +72,36 @@ EOF
 	chmod +x "$1"
 }
 
+# Hermetic `wt` in $1/wt for specs that exercise work-branch.sh's worktree cut. The
+# specs must not depend on whether the host has Worktrunk installed, and must not let
+# git's raw progress output stand in for wt's — real wt swallows it and prints its own
+# line, so an assertion keyed to git's text would pass on a string wt never emits.
+make_wt_stub() {
+	cat > "$1/wt" <<'WTSTUB'
+#!/bin/sh
+wt_path=''
+wt_branch=''
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    --config-set)
+      wt_path=${2#worktree-path=\"}
+      wt_path=${wt_path%\"}
+      shift 2
+      ;;
+    switch)
+      shift
+      wt_branch=${1:-}
+      [ "$#" -eq 0 ] || shift
+      ;;
+    *) shift ;;
+  esac
+done
+git worktree add "$wt_path" "$wt_branch" >/dev/null 2>&1 || exit $?
+printf '%s\n' "✓ Created worktree for $wt_branch @ $wt_path" >&2
+WTSTUB
+	chmod +x "$1/wt"
+}
+
 # Call exitnow() against a caller-supplied tmpdir. Always run via \`When run\` so
 # the exit() lands in a subshell; afterwards the directory should be gone.
 run_exitnow_on() {

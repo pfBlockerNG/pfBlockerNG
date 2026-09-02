@@ -128,6 +128,7 @@ GRAPHIFY
 [ "$#" -eq 3 ] && [ "$1" = project ] && [ "$2" = index ] || exit 9
 exit 0
 SERENA
+    make_wt_stub "$stubdir"
     chmod +x "$stubdir/codegraph" "$stubdir/graphify" "$stubdir/serena"
     export CODEGRAPH_LOG="$codegraph_log" CODEGRAPH_GRAPHIFY_PACKAGE="$graphify_package"
     PATH="$stubdir:$PATH"; export PATH
@@ -168,7 +169,7 @@ SERENA
     When call create_unmarked_worktree
     The status should equal 0
     The output should equal "$(printf 'adr/9-codegraph\t%s/agent-worktree' "$fixture")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The contents of file "$codegraph_log" should equal "init $fixture/agent-worktree"
     Assert [ -f "$fixture/agent-worktree/.codegraph/codegraph.db" ]
   End
@@ -206,7 +207,7 @@ SERENA
     When call create_marked_worktree "$1"
     The status should equal 0
     The output should equal "$(printf 'adr/9-codegraph\t%s/agent-worktree' "$fixture")"
-    The stderr should include 'Preparing worktree'
+    The stderr should include 'Created worktree for'
     The contents of file "$codegraph_log" should equal "init $fixture/agent-worktree"
     Assert [ -f "$fixture/agent-worktree/.codegraph/codegraph.db" ]
   End
