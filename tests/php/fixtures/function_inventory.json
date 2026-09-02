@@ -12769,6 +12769,67 @@
         "returnType": null,
         "params": []
     },
+    "pfb_unbound_control_cmd": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "cmd",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_unbound_control_exec": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "cmd",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "label",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "lines",
+                "byRef": true,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            },
+            {
+                "name": "log_nonzero",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "true"
+            },
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_unbound_dnsbl": {
         "returnsRef": false,
         "returnType": null,
