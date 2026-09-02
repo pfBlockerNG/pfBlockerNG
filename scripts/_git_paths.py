@@ -104,14 +104,10 @@ def unified_diff(args: list[str]) -> str:
     """A unified diff, pinned against everything that could defeat a header parse.
 
     ``core.quotePath`` escapes non-ASCII bytes, ``diff.mnemonicPrefix``/
-    ``noprefix`` rewrite the ``a/``/``b/`` prefixes, an external driver
+    ``noprefix`` rewrite the ``a/``/``b/`` prefixes, and an external driver
     (``diff.external`` / ``GIT_EXTERNAL_DIFF``) replaces the unified output
-    outright, and a ``-diff`` ``.gitattributes`` entry reduces a text file to
-    ``Binary files ... differ`` — each silently defeats a gate built on
-    ``+++ b/<path>`` or on the hunk lines under it, so user config, environment
-    and repository attributes cannot bypass one through this. The attribute
-    matters most: it rides repository CONTENT, so a pull request can add it in
-    the same commit as the change it wants unseen.
+    outright — each silently defeats a gate built on ``+++ b/<path>``, so user
+    config and environment cannot bypass one through this.
     """
     # Lossy on purpose: diff text is somebody's file CONTENT, it is only matched
     # and printed, and a stray non-UTF-8 byte in it must neither raise here nor
@@ -125,7 +121,6 @@ def unified_diff(args: list[str]) -> str:
             "--unified=0",
             "--no-color",
             "--no-ext-diff",
-            "--text",
             "--src-prefix=a/",
             "--dst-prefix=b/",
             *args,
