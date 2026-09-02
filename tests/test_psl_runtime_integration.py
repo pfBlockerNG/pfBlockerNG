@@ -573,6 +573,7 @@ co.jp
 kobe.jp
 *.kobe.jp
 *.city.kobe.jp
+w.city.kobe.jp
 !city.kobe.jp
 !y.city.kobe.jp
 // ===END ICANN DOMAINS===
@@ -603,14 +604,18 @@ kobe.jp
         ("z.y.city.kobe.jp", "city.kobe.jp", "y.city.kobe.jp"),
         # The shorter exception still applies on a name the longer one misses.
         ("z.x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
+        # The exception beats an ordinary match the walk already found at a LONGER
+        # tail: w.city.kobe.jp matches its own exact rule first, and the carve one
+        # label down still overrides it.
+        ("w.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
     ],
 )
 def test_an_exception_tld_resolves_through_the_shared_walk(name: str, public_suffix: str, registrable: str) -> None:
     """issue #3061: an exception rule carves its name out inside the shared walk.
 
-    An exception beats an ordinary match at ANY depth, so the carve-out is tracked
-    alongside the ordinary match and applied at the end rather than resolved in a
-    walk of its own. These rows pin that precedence together with each ordinary
+    An exception beats an ordinary match at ANY depth, so a carve writes straight
+    into the section's suffix and locks it, rather than being resolved in a walk of
+    its own. These rows pin that precedence together with each ordinary
     match kind under an exception-bearing TLD -- a live production shape, since the
     shipped list keeps seven of its eight exception rules under jp, which also holds
     1777 exact rules. The exact row sits below the TLD on purpose, because at the
@@ -703,10 +708,10 @@ def test_a_private_exception_carves_only_the_combined_section(name: str, public_
     The shared walk looks the ICANN exception set up only where the combined set
     already matched, which is sound because the combined set is built from the ICANN
     rules plus the PRIVATE ones. Only a PRIVATE-only exception can tell a correct
-    per-section carve from one that applies the combined hit to both, and neither the
-    shipped list nor any other authority here has one: the shipped list carries all
-    eight of its exception rules in the ICANN section. Upstream may add a PRIVATE
-    exception at any regeneration, and this row is what would notice.
+    per-section carve from one that applies the combined hit to both, and the
+    shipped list has none: all eight of its exception rules sit in the ICANN
+    section. Upstream may add a PRIVATE exception at any regeneration, and these
+    rows are what would notice.
     """
     rules = P.parse_psl_rules(_PRIVATE_EXCEPTION_PSL)
 
