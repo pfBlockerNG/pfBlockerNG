@@ -11442,6 +11442,14 @@ if (!defined('PFB_UNBOUND_START_WAIT')) {
 if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
 	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
 }
+// issue #2879: the wall deadline every synchronous `unbound-control` request/response
+// call in this file runs under -- the same 30 s the sibling resolver waits use
+// (PFB_UNBOUND_STOP_WAIT / PFB_UNBOUND_START_WAIT above, and issue #2015's resolver
+// lookups), so no new operator setting appears. It is ALSO the whole-batch ceiling for
+// pfb_unbound_py_ccache_flush(). Overridable before load, like the budgets above.
+if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
+	define('PFB_UNBOUND_CONTROL_WAIT', 30);
+}
 
 // Function to Start Unbound
 function pfb_stop_start_unbound($type) {
@@ -11756,6 +11764,58 @@ function pfb_unbound_py_mode_active() {
 		config_get_path('unbound/python_script') == 'pfb_unbound');
 }
 
+/*
+ * issue #2879: wrap one composed `unbound-control` command in the bounded-wait seam.
+ * timeout(1) stays in its DEFAULT (reaper) mode: unbound-control is a transient
+ * request/response helper spawned through chroot(8), so an expiry must kill the whole
+ * tree -- --foreground would signal chroot alone and orphan a blocked unbound-control,
+ * whose inherited stdio could even hold exec()'s capture pipe open
+ * (docs/misc/external-process-waits.md "Choosing the mode"). SIGTERM first, SIGKILL after
+ * PFB_HOOK_KILL_GRACE, so a TERM-ignoring child still leaves nothing behind. $cmd arrives
+ * complete, redirections included, and is never re-quoted here; $budget clips the deadline
+ * for a batch caller and is floored at one second so a degenerate value cannot disable the
+ * bound. $pfb['timeout'] is the established off-appliance injection point.
+ */
+function pfb_unbound_control_cmd(string $cmd, ?int $budget = NULL): string {
+	global $pfb;
+
+	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+
+	return "{$timeout_esc} -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
+		max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT) . " {$cmd}";
+}
+
+/*
+ * issue #2879: run one bounded control command and NAME what happened. Returns 124 when
+ * the deadline expired (killed), -1 when the wrapper never launched, else the control
+ * command's own exit status -- so an expiry is never conflated with a non-zero reply, and
+ * neither is ever read as success. $label is the operator-facing name of the command.
+ * $lines is handed straight to exec(), preserving its append-to-an-existing-array
+ * contract. $log_nonzero is FALSE for a site that reports the command's own output itself.
+ */
+function pfb_unbound_control_exec(string $cmd, string $label, ?array &$lines = NULL,
+    bool $log_nonzero = TRUE, ?int $budget = NULL): int {
+
+	$secs   = max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT);
+	$status = 0;
+	if (exec(pfb_unbound_control_cmd($cmd, $secs), $lines, $status) === FALSE && $status === 0) {
+		// exec() itself failed to launch (fork/pipe).
+		$status = -1;
+	}
+
+	if ($status === 124) {
+		pfb_logger("\nUnbound control [ {$label} ] TIMED OUT after {$secs}s and was killed", 2);
+	}
+	elseif ($status === -1) {
+		pfb_logger("\nUnbound control [ {$label} ] could not be run", 2);
+	}
+	elseif ($status !== 0 && $log_nonzero) {
+		pfb_logger("\nUnbound control [ {$label} ] FAILED (exit {$status})", 2);
+	}
+
+	return $status;
+}
+
 
 // Targeted C-cache flush for an exact Alerts allow->block transition. block->allow needs NO
 // flush (decisionDB.clear() suffices); the caller supplies domains only after reload returns.
@@ -11797,8 +11857,27 @@ function pfb_unbound_py_ccache_flush($names) {
 	}
 
 	// Alerts callers invoke this after the applied-generation reload returns.
+	//
+	// issue #2879: ONE whole-batch deadline for the flush, not one per name. Each command
+	// is additionally clipped to what the batch has left, so neither a single hung control
+	// call nor a long name list can push the total past the budget plus one kill grace.
+	// The batch always makes its FIRST attempt -- any budget under a second, degenerate
+	// values included, bounds that attempt at one second rather than flushing nothing at
+	// all -- and stops as soon as the budget is gone, naming the remainder instead of
+	// silently dropping it.
+	$deadline = hrtime(TRUE) + (PFB_UNBOUND_CONTROL_WAIT * 1000000000);
+	$total    = count($cmds);
+	$issued   = 0;
 	foreach ($cmds as $cmd) {
-		exec($cmd);
+		$left = (int) floor(($deadline - hrtime(TRUE)) / 1000000000);
+		if ($left < 1 && $issued !== 0) {
+			pfb_logger("\nUnbound control [ cache flush ] TIMED OUT after " .
+				PFB_UNBOUND_CONTROL_WAIT . 's; ' . ($total - $issued) . " of {$total} " .
+				'flush command(s) not run', 2);
+			return;
+		}
+		pfb_unbound_control_exec("{$cmd} < /dev/null", 'cache flush', budget: max(1, $left));
+		$issued++;
 	}
 }
 
@@ -12025,7 +12104,16 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		pfb_logger($log, 1);
 
 		if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On) {
-			exec("{$pfb['chroot_cmd']} dump_cache > " . escapeshellarg($cache_dumpfile) . " 2>&1");
+			$dumped = pfb_unbound_control_exec("{$pfb['chroot_cmd']} dump_cache > " .
+				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
+			// issue #2879: an expired or refused dump leaves a truncated cache (or a
+			// control error message) in the file. Discard it so the restore below cannot
+			// load a partial dump back into the fresh resolver. A failed tempnam() gives
+			// FALSE, not a path: nothing to discard, and the restart below must still
+			// happen on a box that cannot stage a cache file.
+			if ($dumped !== 0 && is_string($cache_dumpfile)) {
+				@file_put_contents($cache_dumpfile, '');
+			}
 			pfb_logger('.', 1);
 		}
 	}
@@ -12065,17 +12153,22 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	if ($final['retval'] !== PFB_UNBOUND_STOP_FAILED && is_process_running('unbound')) {
 		pfb_logger('.', 1);
 
-		// $final['result'] will be appended with previous result above
-		exec("{$pfb['chroot_cmd']} status 2>&1", $final['result'], $final['retval']);
+		// $final['result'] will be appended with previous result above. The site reports
+		// the command's own output below, so a non-zero status is not logged twice; an
+		// expiry still is, and neither ever reads as a running resolver.
+		$final['retval'] = pfb_unbound_control_exec("{$pfb['chroot_cmd']} status 2>&1 < /dev/null",
+			'status', $final['result'], log_nonzero: FALSE);
 		pfb_logger('.', 1);
 		if (preg_grep("/is running.../", $final['result'])) {
 			pfb_logger(" completed", 1);
 
 			// Restore Resolver cache
 			if ($cache && $pfb['dnsbl_res_cache'] === PfbToggle::On && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
-				exec("{$pfb['chroot_cmd']} load_cache < " . escapeshellarg($cache_dumpfile) . " 2>&1");
-				$log = "\nResolver cache restored";
-				pfb_logger($log, 1);
+				$restored = pfb_unbound_control_exec("{$pfb['chroot_cmd']} load_cache < " .
+					escapeshellarg($cache_dumpfile) . ' 2>&1', 'load_cache');
+				if ($restored === 0) {
+					pfb_logger("\nResolver cache restored", 1);
+				}
 			}
 		}
 		else {
@@ -12221,7 +12314,8 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 		$swapped = pfb_reload_unbound($mode, !$datapath, $pfbpython, $datapath);
 		if ($datapath && $swapped &&
 		    ($pfb['dnsbl_cache_flush'] ?? PfbToggle::Off) === PfbToggle::On) {
-			exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
+			pfb_unbound_control_exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1 < /dev/null",
+				'flush_zone');
 		}
 	}
 
@@ -19514,7 +19608,8 @@ function pfBlockerNG_clearsqlite($mode, $totalqueries = 0) {
 
 	// Clear Unbound Resolver statistics
 	if ($mode != 'clearip' && is_process_running('unbound')) {
-		exec("{$pfb['chroot_cmd']} flush_stats 2>&1");
+		pfb_unbound_control_exec("{$pfb['chroot_cmd']} flush_stats 2>&1 < /dev/null",
+			'flush_stats');
 	}
 
 	if (!empty($todo)) {
