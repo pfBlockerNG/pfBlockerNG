@@ -1233,20 +1233,20 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// DNSBL lighttpd HTTP port. Default '' (system default).
+		// DNSBL lighttpd HTTP port. Default '8081' (the page/save contract since 3.2).
 		'dnsbl/pfb_dnsport' => [
-			'default'       => '',
+			'default'       => '8081',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+			'no_grandfather' => '#2994 page/save default 8081 is the operator-visible contract; absent already rendered 8081',
 		],
 
-		// DNSBL lighttpd HTTPS port. Default ''.
+		// DNSBL lighttpd HTTPS port. Default '8443' (the page/save contract since 3.2).
 		'dnsbl/pfb_dnsport_ssl' => [
-			'default'       => '',
+			'default'       => '8443',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+			'no_grandfather' => '#2994 page/save default 8443 is the operator-visible contract; absent already rendered 8443',
 		],
 
 		// TOP1M whitelist enable. Default ''.
@@ -1645,12 +1645,12 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as pfb_tld)',
 		],
 
-		// Aliaslog (logging mode). Default ''.
+		// Aliaslog (logging mode). Default 'enabled' (the page/save/help contract).
 		'dnsbl/aliaslog' => [
-			'default'       => '',
+			'default'       => 'enabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+			'no_grandfather' => '#2994 page select/help/save default enabled; registry empty was not a valid option',
 		],
 
 		// ADR-36: NAT DNS-redirect enable: 'on' | '' (checkbox). Default '' (off).

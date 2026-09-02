@@ -50,19 +50,20 @@ $default_tlds = array('arpa',$local_tld,'com','net','org','edu','ca','co','io');
 
 $pconfig = array();
 $pconfig['pfb_dnsbl']		= PfbConfig::read('dnsbl/pfb_dnsbl');
-$pconfig['tld_wildcard']		= $pfb['dconfig']['tld_wildcard']				?: '';
-$pconfig['pfb_control']		= $pfb['dconfig']['pfb_control']			?: '';
-$pconfig['pfb_control_legacy']	= $pfb['dconfig']['pfb_control_legacy']			?: '';
-$pconfig['pfb_dnsvip4'] = $pfb['dconfig']['pfb_dnsvip4'] ?: 'none';
-$pconfig['pfb_dnsvip6'] = $pfb['dconfig']['pfb_dnsvip6'] ?: 'none';
+$pconfig['tld_wildcard']		= PfbConfig::read('dnsbl/tld_wildcard');
+$pconfig['pfb_control']		= PfbConfig::read('dnsbl/pfb_control');
+$pconfig['pfb_control_legacy']	= PfbConfig::read('dnsbl/pfb_control_legacy');
+// Widget empty-option sentinel 'none'; stored default is '' (save maps none to '').
+$pconfig['pfb_dnsvip4'] = PfbConfig::read('dnsbl/pfb_dnsvip4') ?: 'none';
+$pconfig['pfb_dnsvip6'] = PfbConfig::read('dnsbl/pfb_dnsvip6') ?: 'none';
 $pconfig['pfb_dnsvip_auto']	= PfbConfig::read('dnsbl/pfb_dnsvip_auto');
 $pconfig['pfb_dnsbl_nonat']	= PfbConfig::read('dnsbl/pfb_dnsbl_nonat');
-$pconfig['pfb_dnsport']		= $pfb['dconfig']['pfb_dnsport']			?: '8081';
-$pconfig['pfb_dnsport_ssl']	= $pfb['dconfig']['pfb_dnsport_ssl']			?: '8443';
-$pconfig['dnsbl_interface']	= $pfb['dconfig']['dnsbl_interface']			?: 'lo0';
-$pconfig['pfb_dnsbl_rule']	= $pfb['dconfig']['pfb_dnsbl_rule']			?: '';
+$pconfig['pfb_dnsport']		= PfbConfig::read('dnsbl/pfb_dnsport');
+$pconfig['pfb_dnsport_ssl']	= PfbConfig::read('dnsbl/pfb_dnsport_ssl');
+$pconfig['dnsbl_interface']	= PfbConfig::read('dnsbl/dnsbl_interface');
+$pconfig['pfb_dnsbl_rule']	= PfbConfig::read('dnsbl/pfb_dnsbl_rule');
 $pconfig['dnsbl_allow_int']	= pfb_csv_list($pfb['dconfig']['dnsbl_allow_int'] ?? NULL);
-$pconfig['global_log']		= $pfb['dconfig']['global_log']				?: '';
+$pconfig['global_log']		= PfbConfig::read('dnsbl/global_log');
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 // Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
 // when absent.
@@ -87,26 +88,26 @@ $pconfig['pfb_idn']		= PfbConfig::read('dnsbl/pfb_idn')->value;
 // Default 'on' owned by the registry (ADR-29); PfbConfig::read applies it when absent.
 $pconfig['pfb_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 $pconfig['pfb_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');
-$pconfig['pfb_regex']		= $pfb['dconfig']['pfb_regex']				?: '';
+$pconfig['pfb_regex']		= PfbConfig::read('dnsbl/pfb_regex');
 $pconfig['pfb_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');
-$pconfig['pfb_cname']		= $pfb['dconfig']['pfb_cname']				?: '';
+$pconfig['pfb_cname']		= PfbConfig::read('dnsbl/pfb_cname');
 // ADR-22: lenient scheme parsing. Absent = unchecked (strict) for new installs; existing
 // installs are grandfathered to 'on' by the registry pass at install/upgrade (issue #1921).
 $pconfig['pfb_dnsbl_lenient']	= PfbConfig::read('dnsbl/pfb_dnsbl_lenient');
-$pconfig['pfb_noaaaa']		= $pfb['dconfig']['pfb_noaaaa']				?: '';
-$pconfig['pfb_gp']		= $pfb['dconfig']['pfb_gp']				?: '';
-$pconfig['tld_allow']		= $pfb['dconfig']['tld_allow']				?: '';
-$pconfig['tld_allow_sort']	= $pfb['dconfig']['tld_allow_sort']			?: '';
+$pconfig['pfb_noaaaa']		= PfbConfig::read('dnsbl/pfb_noaaaa');
+$pconfig['pfb_gp']		= PfbConfig::read('dnsbl/pfb_gp');
+$pconfig['tld_allow']		= PfbConfig::read('dnsbl/tld_allow');
+$pconfig['tld_allow_sort']	= PfbConfig::read('dnsbl/tld_allow_sort');
 $pconfig['tld_allow_gtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_gtld'] ?? NULL, $default_tlds);
 $pconfig['tld_allow_cctld']	= pfb_csv_list($pfb['dconfig']['tld_allow_cctld'] ?? NULL);
 $pconfig['tld_allow_itld']	= pfb_csv_list($pfb['dconfig']['tld_allow_itld'] ?? NULL);
 $pconfig['tld_allow_bgtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_bgtld'] ?? NULL);
-$pconfig['pfb_py_nolog']	= $pfb['dconfig']['pfb_py_nolog']			?: '';
+$pconfig['pfb_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');
 $pconfig['pfb_regex_list']	= pfb_b64_text($pfb['dconfig']['pfb_regex_list'] ?? NULL);
 $pconfig['pfb_noaaaa_list']	= pfb_b64_text($pfb['dconfig']['pfb_noaaaa_list'] ?? NULL);
 $pconfig['pfb_gp_bypass_list']	= pfb_b64_text($pfb['dconfig']['pfb_gp_bypass_list'] ?? NULL);
-$pconfig['action']		= $pfb['dconfig']['action']				?: 'Disabled';
-$pconfig['aliaslog']		= $pfb['dconfig']['aliaslog']				?: 'enabled';
+$pconfig['action']		= PfbConfig::read('dnsbl/action');
+$pconfig['aliaslog']		= PfbConfig::read('dnsbl/aliaslog');
 
 // issue #2123: the eight Advanced In/Outbound rule checkbox defaults are owned by the
 // registry (ADR-29), not restated here. A validation-error redisplay replaces $pconfig
@@ -132,13 +133,13 @@ $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 
 $pconfig['whitelist']		= pfb_b64_text($pfb['dconfig']['whitelist'] ?? NULL);
 
-$pconfig['top1m_enable']	= $pfb['dconfig']['top1m_enable']			?: '';
+$pconfig['top1m_enable']	= PfbConfig::read('dnsbl/top1m_enable');
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
 // (dead TOP1M source, #872/#877) coalesces to 'tranco' for the form select.
 // ->toStored() unwraps the PfbTop1mSource enum to its scalar option key (a
 // Form_Select selected-value must be the scalar, not the enum instance).
 $pconfig['top1m_source']		= PfbConfig::read('dnsbl/top1m_source')->toStored();
-$pconfig['top1m_count']		= $pfb['dconfig']['top1m_count']			?: '1000';
+$pconfig['top1m_count']		= PfbConfig::read('dnsbl/top1m_count');
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
 $pconfig['top1m_inclusion']	= pfb_csv_list($pfb['dconfig']['top1m_inclusion'] ?? NULL, array('com','net','org','ca','co','io'));

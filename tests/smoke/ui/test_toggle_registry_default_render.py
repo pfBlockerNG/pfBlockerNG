@@ -69,6 +69,29 @@ def _checkbox_is_checked(html: str, name: str) -> bool:
     return re.search(r'\bchecked\b(?!\s*=\s*"?[^">]*")', tag) is not None or 'checked="checked"' in tag
 
 
+def _input_value(html: str, name: str) -> str:
+    """The ``value`` attribute of the named ``<input>``, or '' if omitted."""
+    match = re.search(rf'<input[^>]*\bname="{re.escape(name)}"[^>]*>', html)
+    assert match is not None, f'input name="{name}" not found in the rendered page'
+    val = re.search(r'\bvalue="([^"]*)"', match.group(0))
+    return val.group(1) if val else ""
+
+
+def _select_selected(html: str, name: str) -> str:
+    """The selected option value of the named ``<select>``."""
+    match = re.search(
+        rf'<select[^>]*\bname="{re.escape(name)}"[^>]*>(.*?)</select>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None, f'select name="{name}" not found in the rendered page'
+    selected = re.search(r'<option[^>]*\bselected\b[^>]*\bvalue="([^"]*)"', match.group(1))
+    if selected is None:
+        selected = re.search(r'<option[^>]*\bvalue="([^"]*)"[^>]*\bselected\b', match.group(1))
+    assert selected is not None, f'select name="{name}" has no selected option'
+    return selected.group(1)
+
+
 def _node_state(vm: SmokeVM, path: str) -> str:
     """Serialise the node's raw state so an ABSENT key is restored as absent."""
     result = helpers.php_eval(
@@ -279,3 +302,56 @@ def test_swept_general_enable_cb_renders_on_when_stored_and_off_when_absent(
         "an absent enable_cb must render UNCHECKED -- the registered '' default "
         "must reproduce the page default #2812 deleted"
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #2994: registered plain-scalar absent-key render. The six divergences
+# were aligned so an absent key still renders the operator-visible value the
+# page used to declare itself. Dual-marked ui_e2e: each case mutates config.xml.
+# ---------------------------------------------------------------------------
+
+_CFG_DNSBL = "installedpackages/pfblockerngdnsblsettings/config/0"
+
+
+@pytest.mark.ui_e2e
+def test_absent_dnsbl_ports_render_the_page_defaults(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2994: absent pfb_dnsport/ssl still render 8081/8443 from the registry."""
+    node_state(f"{_CFG_DNSBL}/pfb_dnsport", None)
+    node_state(f"{_CFG_DNSBL}/pfb_dnsport_ssl", None)
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    assert _input_value(html, "pfb_dnsport") == "8081"
+    assert _input_value(html, "pfb_dnsport_ssl") == "8443"
+
+
+@pytest.mark.ui_e2e
+def test_absent_aliaslog_renders_enabled(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2994: absent aliaslog still selects Enable (the page/help default)."""
+    node_state(f"{_CFG_DNSBL}/aliaslog", None)
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    assert _select_selected(html, "aliaslog") == "enabled"
+
+
+@pytest.mark.ui_e2e
+def test_absent_dnsbl_rule_renders_unchecked(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2994: absent pfb_dnsbl_rule stays Off under the registry Disabled token."""
+    node_state(f"{_CFG_DNSBL}/pfb_dnsbl_rule", None)
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    assert not _checkbox_is_checked(html, "pfb_dnsbl_rule")
+
+
+@pytest.mark.ui_e2e
+def test_absent_dnsbl_vips_render_the_none_sentinel(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """issue #2994: absent pfb_dnsvip4/6 still select the widget none sentinel."""
+    node_state(f"{_CFG_DNSBL}/pfb_dnsvip4", None)
+    node_state(f"{_CFG_DNSBL}/pfb_dnsvip6", None)
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    assert _select_selected(html, "pfb_dnsvip4") == "none"
+    assert _select_selected(html, "pfb_dnsvip6") == "none"

@@ -255,12 +255,13 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
 - **RULE 1** — a `$pfb['<mirror>']['<key>'] = … PFB_FILTER_ON_OFF …` save into a section
   that `PFB_SECTIONS` knows MUST name a registered key. So a new settings checkbox
   cannot land without a registry entry.
-- **RULE 2** — a registered **toggle**'s default MUST NOT be restated by the page: no
+- **RULE 2** — a registered field's default MUST NOT be restated by the page: no
   `$pconfig[…] = $pfb['<mirror>']['<key>'] ?: '<literal>'` and no
   `isset($pfb['<mirror>']['<key>']) ? … : '<literal>'`. Read it with `PfbConfig::read()`.
-  Scoped to toggles on purpose — several registered plain scalars carry a page default
-  their registry entry does not, so widening the rule would push a behaviour change
-  through a lint (issue #2812).
+  issue #2994 widened this from toggles to every registered key after aligning the
+  six page/registry scalar divergences (`pfb_dnsport`/`pfb_dnsport_ssl`/`aliaslog`
+  follow the page; `pfb_dnsbl_rule` keeps registry `Disabled`; `pfb_dnsvip4/6`
+  store `''` and map the Form_Select sentinel `none` after the gateway read).
 - The mirror → alias mapping is DERIVED from each page's own
   `$pfb['<mirror>'] = PfbConfig::readSection('<path>')`, so a new page needs no edit here.
 - Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100

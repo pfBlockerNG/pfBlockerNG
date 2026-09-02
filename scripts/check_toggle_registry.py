@@ -13,13 +13,15 @@ which is the shape a registered scalar takes:
   RULE 1 -- REGISTERED. A `PFB_FILTER_ON_OFF` save into a section mirror must name a key
   that `pfb_cfg_registry()` knows, under the alias the mirror's own section resolves to.
 
-  RULE 2 -- NO PAGE DEFAULT. Once a key IS registered, the page must not restate its
-  default: a READ of `$pfb['<mirror>']['<key>']` may not carry a `?:` fallback or sit
-  inside an `isset(...) ? ... : <literal>`. The default belongs to the registry entry.
-  Reads are distinguished from saves by side: a save has the mirror expression on the
-  LEFT of `=`, a read has it on the right. The save site's own `?: ''` is left alone on
-  purpose -- it is transport normalisation of an absent checkbox, not a default, and
-  `PfbConfig::writeSection()` re-normalises it through the registered adapter anyway.
+  RULE 2 -- NO PAGE DEFAULT. Once a key IS registered (toggle or plain scalar), the page
+  must not restate its default: a READ of `$pfb['<mirror>']['<key>']` may not carry a
+  `?:` fallback or sit inside an `isset(...) ? ... : <literal>`. The default belongs
+  to the registry entry. issue #2994 widened this off toggles after aligning the six
+  page/registry divergences. Reads are distinguished from saves by side: a save has
+  the mirror expression on the LEFT of `=`, a read has it on the right. The save
+  site's own `?: ''` is left alone on purpose -- it is transport normalisation of an
+  absent checkbox, not a default, and `PfbConfig::writeSection()` re-normalises it
+  through the registered adapter anyway.
 
 The mirror -> section mapping is DERIVED, never listed: each page declares it itself
 with `$pfb['<mirror>'] = PfbConfig::readSection('<section path>')`, and the section path
@@ -172,16 +174,16 @@ def find_violations(
             )
         )
 
-    # RULE 2 -- scoped to TOGGLE entries. A registered plain scalar whose page still
-    # carries a `?:` fallback is a separate backlog (issue #2812), not this rule: several
-    # of those page defaults genuinely disagree with their registry entry, so deleting
-    # them would change behaviour and needs its own evidence.
+    # RULE 2 -- every registered key. issue #2994 aligned the six page/registry
+    # scalar divergences, so the toggle-only scope #2123 kept (and #2812 left as
+    # work item 2) can widen: a registered plain scalar may not restate its
+    # default on a section-mirror read either.
     seen: set[int] = set()
     for matcher in (_READ_COALESCE_RE, _READ_ISSET_RE):
         for match in matcher.finditer(text):
             mirror, key = match.group(1), match.group(2)
             alias = alias_by_mirror.get(mirror)
-            if alias is None or not registry_keys.get((alias, key), False):
+            if alias is None or (alias, key) not in registry_keys:
                 continue
             if (basename, key) in EXEMPT:
                 continue
@@ -194,7 +196,7 @@ def find_violations(
                     source,
                     lineno,
                     "page-level-default",
-                    f"'{alias}/{key}' is a registered toggle, so its default belongs to "
+                    f"'{alias}/{key}' is a registered field, so its default belongs to "
                     "the registry entry -- read it with PfbConfig::read()",
                     snippet,
                 )

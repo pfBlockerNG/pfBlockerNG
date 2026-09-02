@@ -8,7 +8,7 @@ The load-bearing assertions are:
 
 * a NEW `PFB_FILTER_ON_OFF` save into a registered section with no registry entry FAILS
   (RULE 1) -- this is the regrowth the sweep exists to stop;
-* a registered TOGGLE whose page still declares its own default FAILS (RULE 2);
+* a registered field (toggle or plain scalar) whose page still declares its own default FAILS (RULE 2);
 * the same shapes are clean once registered / routed through `PfbConfig::read()`;
 * the real tree is clean, so the gate is blocking rather than pre-broken;
 * a broken registry parse FAILS CLOSED rather than reporting every key unregistered.
@@ -110,7 +110,7 @@ def test_commented_out_save_is_not_flagged() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# RULE 2 -- a registered toggle's default belongs to the registry
+# RULE 2 -- a registered field's default belongs to the registry
 # --------------------------------------------------------------------------- #
 
 
@@ -137,14 +137,16 @@ def test_gateway_read_is_clean() -> None:
     assert _find(text) == []
 
 
-def test_registered_plain_scalar_page_default_is_not_rule_twos_business() -> None:
-    """RULE 2 is toggle-scoped: a plain scalar's page default is issue #2812's backlog.
+def test_registered_plain_scalar_page_default_is_flagged() -> None:
+    """issue #2994: RULE 2 covers registered plain scalars, not just toggles.
 
-    Several of those page defaults genuinely disagree with their registry entry, so
-    flagging them here would push a behaviour change through a lint.
+    The six page/registry divergences were aligned first, so flagging a scalar
+    page default no longer pushes a behaviour change through a lint.
     """
     text = MIRROR + "$pconfig['maxmind_locale'] = $pfb['iconfig']['maxmind_locale'] ?: 'en';\n"
-    assert _find(text) == []
+    violations = _find(text)
+    assert [v.rule for v in violations] == ["page-level-default"]
+    assert "ip/maxmind_locale" in violations[0].detail
 
 
 def test_page_default_for_an_unregistered_key_is_not_rule_twos_business() -> None:
@@ -356,3 +358,24 @@ def test_www_tree_is_clean_with_the_exempt_table_emptied(
     assert ctr.main([]) == 0, (
         "src/usr/local/www/pfblockerng still carries page-level toggle defaults: issue #2812's sweep is incomplete"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #2994 -- RULE 2 widened to registered plain scalars
+# --------------------------------------------------------------------------- #
+
+
+def test_gateway_read_of_a_plain_scalar_is_clean() -> None:
+    """The fixed form for a scalar is the same as for a toggle: PfbConfig::read()."""
+    text = MIRROR + "$pconfig['maxmind_locale'] = PfbConfig::read('ip/maxmind_locale');\n"
+    assert _find(text) == []
+
+
+def test_widget_sentinel_after_a_gateway_read_is_not_a_page_default() -> None:
+    """`$x = PfbConfig::read(...) ?: 'none'` is widget mapping, not a mirror restatement.
+
+    pfb_dnsvip4/6 store '' and the Form_Select empty option is the token 'none'.
+    That mapping must sit on the gateway result, not on `$pfb['dconfig'][...]`.
+    """
+    text = MIRROR + "$pconfig['maxmind_locale'] = PfbConfig::read('ip/maxmind_locale') ?: 'none';\n"
+    assert _find(text) == []
