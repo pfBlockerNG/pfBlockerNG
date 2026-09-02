@@ -68,14 +68,11 @@ INTERPRETER
     chmod +x "$interpreter"
     printf '#!%s\n' "$interpreter" > "$stubdir/graphify"
     cat >> "$stubdir/graphify" <<'GRAPHIFY'
-case "$1" in
-  update)
-    [ "$#" -eq 2 ] || exit 9
-    printf 'graphify:%s:%s\n' "$1" "$2" >> "$WORKTREE_TOOL_LOG"
-    exit "${GRAPHIFY_RC:-0}"
-    ;;
-  *) exit 9 ;;
-esac
+# Tripwire: no production path may invoke the CLI (issue #3091). Any call is logged,
+# rewrites the root graph the way a real `update` would, and fails.
+printf 'graphify:%s\n' "$*" >> "$WORKTREE_TOOL_LOG"
+[ -z "${2:-}" ] || printf 'regenerated\n' > "$2/graphify-out/graph.json"
+exit 9
 GRAPHIFY
     cat > "$stubdir/serena" <<'SERENA'
 #!/bin/sh
@@ -100,8 +97,8 @@ SERENA
 
     export WORKTREE_TOOL_LOG="$tool_log" WORKTREE_GRAPHIFY_PACKAGE="$graphify_package"
     # The initializer applies the vendored .inc language-override patch (issue #2810)
-    # after CodeGraph, so every log below carries `patch-graphify:probe` after the
-    # CodeGraph line.
+    # after CodeGraph, so every row that reaches it logs `patch-graphify:probe` after
+    # the CodeGraph line.
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -130,9 +127,7 @@ SERENA
     git_fixture -C "$worktree" add graphify-out/graph.json
     git_fixture -C "$worktree" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
       commit -q -m graph
-    # GRAPHIFY_RC=19 makes any `graphify update` call fail loudly, so a green run
-    # proves the initializer never issued one, not merely that it succeeded.
-    When run env OMP_CLI=1 GRAPHIFY_RC=19 sh "$script_abs" "$worktree"
+    When run env OMP_CLI=1 sh "$script_abs" "$worktree"
     The status should equal 0
     The stderr should include 'already provides'
     The stderr should include 'Initializing CodeGraph in'
