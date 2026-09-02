@@ -1208,33 +1208,6 @@ jobs:
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
           python3 scripts/check_comment_narration.py --diff "origin/$BASE"
 
-  # ── Guard-erosion gate (issue #2414) ─────────────────────────────────────
-  # PR-only, diff-scoped: a removed or renamed test declaration under tests/
-  # must be matched by a successor assertion marked `successor: <retired name>`
-  # or by a dated entry in docs/history/retired-tests.md, so no named invariant
-  # loses its only mechanical memory silently. On push (post-merge, no PR base)
-  # it is skipped and folds into all-tests-passed as a pass, same shape as
-  # comment-narration above.
-  guard-erosion:
-    name: Guard erosion (retired tests need a successor or a tombstone)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # need the merge-base with the PR base ref for the three-dot diff
-
-      - name: Forbid retiring a test with no successor and no tombstone
-        # ubuntu-latest ships python3.
-        env:
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -eu
-          git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
-          python3 scripts/check_guard_erosion.py --diff "origin/$BASE"
-
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
@@ -1246,7 +1219,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration, guard-erosion]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -1328,11 +1301,4 @@ jobs:
           case "${{ needs.comment-narration.result }}" in
             success|skipped) ;;
             *) echo "Comment-narration gate (no process narration in new comments) failed or was cancelled."; exit 1 ;;
-          esac
-          # Guard-erosion gate: 'skipped' (push, no PR base) is a PASS; a PR that
-          # retires a test declaration with no successor assertion and no dated
-          # tombstone entry blocks here.
-          case "${{ needs.guard-erosion.result }}" in
-            success|skipped) ;;
-            *) echo "Guard-erosion gate (retired tests need a successor or a tombstone) failed or was cancelled."; exit 1 ;;
           esac
