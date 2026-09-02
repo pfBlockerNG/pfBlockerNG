@@ -841,6 +841,26 @@ jobs:
           /usr/bin/tar --version | grep -q '^bsdtar'
           tar --version | grep -q 'GNU tar'
 
+      - name: Put bsdunzip at /usr/bin/unzip
+        # Same reasoning as the tar step above, for the binary issue #3068 moved the ZIP
+        # probe and lister onto. The appliance's /usr/bin/unzip is bsdunzip (libarchive);
+        # Ubuntu's is Info-ZIP, and the two disagree on inputs the code meets in
+        # production — Info-ZIP rejects an SFX/junk-prefixed zip that bsdunzip reads, and
+        # rejects a truncated zip that bsdunzip lists. Grading the zip arm on Info-ZIP
+        # would therefore test a toolchain the appliance does not run, and would turn the
+        # octet-stream recovery case into a silent skip.
+        #
+        # Same --no-rename + explicit mv + /usr/sbin diversion as tar, and for the same
+        # reason: everything resolving `unzip` by NAME (composer's --prefer-dist zip
+        # extraction, setup-* actions) keeps Info-ZIP, while the absolute path the code
+        # under test hardcodes becomes bsdunzip. Hence the two checks, one per lookup.
+        run: |
+          sudo dpkg-divert --no-rename --divert /usr/sbin/unzip --add /usr/bin/unzip
+          sudo mv /usr/bin/unzip /usr/sbin/unzip
+          sudo ln -s bsdunzip /usr/bin/unzip
+          /usr/bin/unzip --version | grep -q '^bsdunzip'
+          unzip -v | grep -q 'Info-ZIP'
+
       - name: Put rsync at /usr/local/bin/rsync
         # The code under test execs the absolute path /usr/local/bin/rsync (where the
         # appliance ships it); Debian's package installs /usr/bin/rsync, so without the

@@ -72,6 +72,27 @@ Deep pfSense-runtime integration (config apply, service reloads, pf/Unbound
 wiring, URL/MIME validation that shells out to `/usr/bin/file` or resolves
 hosts) stays the live-VM smoke's job — see `legacy/ADRs/ADR_04_VM_Smoke_Tests/`.
 
+## Host archive toolchain (why some cases skip locally)
+
+The package execs absolute paths, and on FreeBSD `/usr/bin/tar` is **bsdtar** and
+`/usr/bin/unzip` is **bsdunzip** — both libarchive. Debian puts GNU tar and Info-ZIP
+there instead, and they are not interchangeable: GNU tar rejects the shipped
+`PFB_TAR_EXTRACT_FLAGS` (`--no-fflags`) with exit 64 before reading the archive. Cases
+that drive a real extraction therefore skip on such a host, naming that reason.
+
+CI installs the appliance's binaries rather than living with the gap, and a dev host
+can do the same (`test.yml`, jobs "Put bsdtar at /usr/bin/tar" and "Put bsdunzip at
+/usr/bin/unzip"):
+
+```sh
+sudo apt-get install -y --no-install-recommends libarchive-tools
+sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
+sudo mv /usr/bin/tar /usr/sbin/tar && sudo ln -s bsdtar /usr/bin/tar
+```
+
+`/usr/sbin` precedes `/usr/bin` on PATH, so a bare `tar` still resolves to GNU tar for
+everything else. Reverse it with `dpkg-divert --remove` after moving the binary back.
+
 ## Adding a test
 
 - Put `*Test.php` here; it is picked up automatically (`phpunit.xml` testsuite

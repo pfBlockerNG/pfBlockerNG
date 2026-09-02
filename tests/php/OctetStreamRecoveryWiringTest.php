@@ -112,7 +112,7 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 	 *        and an allow-list containing application/zip but not application/octet-stream
 	 * When   pfb_filter() runs the FILE_MIME gate
 	 * Then   pfb_octet_recover_type() probes each supported type in order (zip first);
-	 *        pfb_validate_archive() confirms it is a ZIP via `tar -tf`;
+	 *        pfb_validate_archive() confirms it is a ZIP via `unzip -t`;
 	 *        pfb_filter() returns 'application/zip'.
 	 *        Before Phase 3 the same input returned FALSE.
 	 */
@@ -130,14 +130,20 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 			);
 		}
 
-		// Recovery adopts application/zip only if the structural probe (tar -tf) can list the
-		// junk-prefixed ZIP — which needs bsdtar (the FreeBSD target). On a host whose /usr/bin/tar
-		// is GNU tar (cannot read ZIP), the recovery is untestable — skip rather than fail.
-		$tarout = [];
-		exec('/usr/bin/tar -tf ' . escapeshellarg($this->junkPrefixedZip) . ' >/dev/null 2>&1', $tarout, $tarrv);
-		if ($tarrv !== 0) {
+		// Recovery adopts application/zip only if the structural probe can read the
+		// junk-prefixed ZIP. Issue #3068 moved that probe from `tar -tf` to `unzip -t`, so
+		// the guard follows it: the appliance's /usr/bin/unzip is bsdunzip, which applies
+		// libarchive's SFX-offset correction and reads the fixture, while Info-ZIP warns
+		// about the 8 leading bytes and exits 1. CI installs bsdunzip at that path for the
+		// same reason it installs bsdtar; a plain Debian host cannot exercise the recovery
+		// and skips rather than failing on its own unzip.
+		$unzipout = [];
+		exec('/usr/bin/unzip -t ' . escapeshellarg($this->junkPrefixedZip) . ' >/dev/null 2>&1',
+			$unzipout, $unziprv);
+		if ($unziprv !== 0) {
 			$this->markTestSkipped(
-				'/usr/bin/tar on this host cannot read the junk-prefixed ZIP (GNU tar, not bsdtar); '
+				'/usr/bin/unzip on this host refuses the junk-prefixed ZIP (Info-ZIP exits 1 on the '
+				. 'leading bytes; the appliance ships bsdunzip, which reads it); '
 				. 'octet-stream->zip recovery is untestable here — skipping'
 			);
 		}
@@ -152,7 +158,7 @@ final class OctetStreamRecoveryWiringTest extends TestCase
 			'Expected "application/zip" after octet-stream recovery via structural probe; '
 			. 'got: ' . var_export($result, TRUE) . '. '
 			. 'If FALSE: pfb_octet_recover_type() is not wired into pfb_filter(), '
-			. 'or tar -tf could not list the junk-prefixed ZIP on this host.'
+			. 'or unzip -t could not read the junk-prefixed ZIP on this host.'
 		);
 	}
 

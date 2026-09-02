@@ -27,7 +27,7 @@
 # name an unlisted PHPUnit skip but never its reason -- read the suite output for that.
 
 # PHPUnit -- union of PHP 8.3 and PHP 8.5 (issue #2356's four remaining skips).
-phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zip  # host file(1) classification (PHP 8.3 and 8.5)
+phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zip  # host file(1) classification (PHP 8.3 and 8.5); also skips wherever /usr/bin/unzip is Info-ZIP, which exits 1 on the fixture's leading junk bytes that the appliance's bsdunzip reads (issue #3068)
 phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
@@ -46,6 +46,11 @@ phpunit:DownloadExtractRestrictiveFlagsTest::test_the_flag_set_strips_what_the_a
 phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip payload is an HTML error page"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
 phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip payload MIME is not allowed"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
 phpunit:DownloadRejectValidatorClearTest::test_every_reject_stage_clears_the_promoted_validators with data set "zip archive fails its probe"  # Linux CI's /bin/sh is dash, which aborts on the ZIP arm's `set -o pipefail`, and GNU tar cannot read a ZIP at all; FreeBSD sh + bsdtar have both, so the arm is covered live by ADR-04 smoke (issue #2820)
+phpunit:DownloadGeoipStagePublishTest::testSuccessfulExtractionPublishesEveryMemberIntoTheLiveShare  # drives the shipped PFB_TAR_EXTRACT_FLAGS through pfb_geoip_extract_tar_to_share(); GNU tar rejects --no-fflags with exit 64, so a host whose /usr/bin/tar is not libarchive cannot run the branch at all (issue #3068)
+phpunit:DownloadGeoipStagePublishTest::testPublicationLeavesTheGenerationLockFileAndItsDirectoryUntouched  # same PFB_TAR_EXTRACT_FLAGS gate: GNU tar exits 64 before reading the archive, so the generation-lock assertions would grade a usage error (issue #3068)
+phpunit:DownloadGeoipStagePublishTest::testAPublicationRefusalIsNotLoggedAsATarFailure  # same PFB_TAR_EXTRACT_FLAGS gate: the case requires a CLEAN extractor exit to mean anything, and GNU tar cannot give one here (exit 64) (issue #3068)
+phpunit:DownloadGeoipStagePublishTest::testAnExtractorFailureStillNamesItsExitStatus  # same PFB_TAR_EXTRACT_FLAGS gate; the exit status it names must come from the archive, not from GNU tar refusing --no-fflags (issue #3068)
+phpunit:DownloadGeoipStagePublishTest::testExtractionThatFailsPartWayLeavesTheServedShareByteIdentical  # same PFB_TAR_EXTRACT_FLAGS gate; without it GNU tar's exit 64 satisfied the assertions before the part-way extraction under test ever ran (issue #3068)
 
 # ShellSpec -- macOS/BSD host lacks the GNU stat/date/touch branch exercised in Linux CI.
 shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3) lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)  # GNU-only off-box branch; BSD branch is covered live by ADR-04 smoke

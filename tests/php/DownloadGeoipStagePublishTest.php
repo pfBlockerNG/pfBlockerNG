@@ -136,6 +136,64 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	}
 
 	/**
+	 * The same ceiling wiring for a ZIP fixture. ZIP is not a tar container, and no
+	 * unzip implementation has a --strip equivalent (-j junks EVERY component, not
+	 * one), so the staged tree keeps the archive's own top-level directory. That is
+	 * irrelevant to the cases that use this: what they assert is that a failing
+	 * extraction publishes nothing and leaves the served share byte-identical, and
+	 * the shape of the staged tree never reaches the share.
+	 */
+	private function extractZipCmd(string $archive, string $into, int $blocks): string
+	{
+		return pfb_extract_cmd('/usr/bin/unzip -o -q ' . escapeshellarg($archive) . ' -d '
+			. escapeshellarg($into) . ' >/dev/null 2>&1', $blocks);
+	}
+
+	/**
+	 * Issue #3068: skip unless this host's /usr/bin/tar can actually run the shipped
+	 * extraction, which every case reaching pfb_geoip_extract_tar_to_share() does.
+	 *
+	 * The helper execs PFB_TAR_EXTRACT_FLAGS (issue #2659), and GNU tar rejects
+	 * --no-fflags outright with exit 64 -- a usage error, before it reads one byte of
+	 * the archive. A case that runs anyway is not testing the branch: it reports
+	 * "extraction failed" for a reason the appliance can never produce, which is a
+	 * manufactured red at best and a vacuous green at worst. The appliance ships
+	 * bsdtar and CI installs it (test.yml diverts GNU tar and symlinks
+	 * /usr/bin/tar -> bsdtar), so this gate closes only on a dev host that has not
+	 * done the same -- and its message says how.
+	 *
+	 * Probed by running the real flag set, never by parsing a version string: it is
+	 * the tar's acceptance of the argv that decides, not its name.
+	 */
+	private function skipUnlessTarRunsTheShippedExtractionFlags(): void
+	{
+		$probe = "{$this->dir}/tarcap";
+		$this->assertTrue(mkdir("{$probe}/src", 0755, TRUE));
+		$this->assertTrue(mkdir("{$probe}/out", 0755, TRUE));
+		$this->assertNotFalse(file_put_contents("{$probe}/src/probe.txt", "probe\n"));
+		$output = array();
+		$retval = 1;
+		exec('/usr/bin/tar -cf ' . escapeshellarg("{$probe}/probe.tar") . ' -C '
+			. escapeshellarg("{$probe}/src") . ' probe.txt 2>/dev/null', $output, $retval);
+		$this->assertSame(0, $retval, 'the capability probe must be able to build a one-member tar');
+		exec('/usr/bin/tar -xf ' . escapeshellarg("{$probe}/probe.tar") . ' ' . PFB_TAR_EXTRACT_FLAGS
+			. ' -C ' . escapeshellarg("{$probe}/out") . ' 2>/dev/null', $output, $retval);
+		if ($retval !== 0) {
+			$version = array();
+			exec('/usr/bin/tar --version 2>&1', $version);
+			$this->markTestSkipped(
+				'/usr/bin/tar on this host (' . ($version[0] ?? 'unknown tar') . ') rejects the shipped '
+				. 'PFB_TAR_EXTRACT_FLAGS with exit ' . $retval . ' -- it is not libarchive. The appliance '
+				. 'ships bsdtar and CI installs it; to run this case here: apt-get install libarchive-tools '
+				. '&& dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar '
+				. '&& mv /usr/bin/tar /usr/sbin/tar && ln -s bsdtar /usr/bin/tar'
+			);
+		}
+		$this->assertFileExists("{$probe}/out/probe.txt",
+			'a tar that accepted the flag set must also have extracted the member');
+	}
+
+	/**
 	 * Scenario: the failure issue #2658 introduced a new way to reach.
 	 *   Given  a GeoIP share already in service
 	 *   And    an archive whose member is larger than the extraction ceiling
@@ -204,19 +262,27 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 *          extraction, with one member already written
 	 *   When   it extracts through the staged publish
 	 *   Then   nothing is published and every served byte is exactly what it was.
+	 *
+	 * Both the listing and the extraction go through ZIP tools rather than tar
+	 * (issue #3068). Listing a ZIP with `tar -tf` only ever worked because the
+	 * appliance's /usr/bin/tar is bsdtar; on a GNU-tar host the lister returned NULL,
+	 * the case died on the assertion below, and even had it survived, GNU tar would
+	 * have "failed" the extraction because it cannot read a ZIP at all -- not because
+	 * the member's CRC is wrong. The whole point of the fixture is WHICH failure it
+	 * produces, so the extractor has to be one that can read the container.
 	 */
 	public function testCorruptArchiveThatListsCleanlyLeavesTheServedShareByteIdentical(): void
 	{
 		$before = $this->seedServedShare();
 		$archive = $this->buildCorruptArchive();
-		$this->assertNotNull(pfb_archive_member_names($archive),
+		$this->assertNotNull(pfb_archive_member_names($archive, 'application/zip'),
 			'the archive must list cleanly, or the branch refuses it before extracting');
 		$retval = pfb_download_initial_retval();
 		$output = array();
 
 		$published = pfb_stage_publish_dir_merge($this->share,
 			function (string $staged) use ($archive, &$output, &$retval): int {
-				exec($this->extractCmd($archive, $staged, PFB_EXTRACT_MAX_BLOCKS), $output, $retval);
+				exec($this->extractZipCmd($archive, $staged, PFB_EXTRACT_MAX_BLOCKS), $output, $retval);
 				return $retval;
 			});
 
@@ -246,6 +312,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	public function testExtractionThatFailsPartWayLeavesTheServedShareByteIdentical(): void
 	{
+		$this->skipUnlessTarRunsTheShippedExtractionFlags();
 		$this->assertTrue(symlink('/nonexistent/pfb2668', "{$this->share}/sub"));
 		$before = $this->seedServedShare();
 		// Only the leaf is archived, so no directory member replaces the symlink
@@ -261,7 +328,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 			. ' GeoLite2-Country_20260801/GeoLite2-Country.mmdb GeoLite2-Country_20260801/sub/two.csv',
 			$output, $retval);
 		$this->assertSame(0, $retval);
-		$this->assertNotNull(pfb_archive_member_names($archive),
+		$this->assertNotNull(pfb_archive_member_names($archive, 'application/x-tar'),
 			'the archive must list cleanly, or the branch refuses it before extracting');
 
 		$result = pfb_geoip_extract_tar_to_share('GeoIP', $archive, escapeshellarg($archive), $retval);
@@ -278,6 +345,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	public function testSuccessfulExtractionPublishesEveryMemberIntoTheLiveShare(): void
 	{
+		$this->skipUnlessTarRunsTheShippedExtractionFlags();
 		$this->seedServedShare();
 		$archive = $this->buildArchive(array(
 			'GeoLite2-Country.mmdb' => "fresh-mmdb\n",
@@ -321,6 +389,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	public function testPublicationLeavesTheGenerationLockFileAndItsDirectoryUntouched(): void
 	{
+		$this->skipUnlessTarRunsTheShippedExtractionFlags();
 		$this->seedServedShare();
 		$lockFile = "{$this->share}/cc/.pfb_generation.lock";
 		$inodeBefore = stat($lockFile)['ino'];
@@ -498,6 +567,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	public function testAPublicationRefusalIsNotLoggedAsATarFailure(): void
 	{
+		$this->skipUnlessTarRunsTheShippedExtractionFlags();
 		$this->seedServedShare();
 		$this->assertTrue(mkdir("{$this->build}/GeoLite2-Country_20260801", 0755));
 		// A member named like the live generation directory: tar extracts it
@@ -539,6 +609,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	/** The converse: a real extractor failure keeps naming its exit status. */
 	public function testAnExtractorFailureStillNamesItsExitStatus(): void
 	{
+		$this->skipUnlessTarRunsTheShippedExtractionFlags();
 		$this->seedServedShare();
 		$archive = $this->buildCorruptArchive();
 		$retval = pfb_download_initial_retval();

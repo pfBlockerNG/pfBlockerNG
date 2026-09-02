@@ -626,6 +626,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "canonical_type",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },

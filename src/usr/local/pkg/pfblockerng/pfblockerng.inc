@@ -1132,10 +1132,22 @@ function pfb_mime_normalise(string $raw): string {
 // Returns the binary + flags array (file NOT included; pfb_validate_archive() appends
 // it at call time so this helper stays pure and trivially oracle-testable).
 // Returns NULL for non-archive types — nothing to probe.
+//
+// issue #3068: application/zip probes with `unzip -t`, not `tar -tf`. Both binaries
+// live at the same absolute path on both platforms (FreeBSD's /usr/bin/unzip is
+// bsdunzip, Debian's is Info-ZIP), so this depends on no new package -- while
+// `tar -tf` only read a ZIP at all because the appliance's /usr/bin/tar happens to be
+// bsdtar. Two things came with that accident: the probe could not run on a GNU-tar
+// dev host, and -- worse -- libarchive reads gzip and tar too, so "is this a valid
+// application/zip?" answered TRUE for a plain .tar.gz. pfb_octet_recover_type() asks
+// exactly that, zip FIRST, so an octet-stream-typed tarball was recovered as
+// application/zip. `unzip -t` is also the real analogue of the gunzip/bzip2 arms: it
+// inflates and CRC-checks the members instead of walking the central directory, so a
+// body-corrupt ZIP is now refused at the structural gate rather than at extraction.
 function pfb_archive_probe(string $canonical_type): ?array {
 	switch ($canonical_type) {
 		case 'application/zip':
-			return array('/usr/bin/tar', '-tf');
+			return array('/usr/bin/unzip', '-t');
 		case 'application/gzip':
 		case 'application/x-gzip':
 			return array('/usr/bin/gunzip', '-t');
@@ -1217,19 +1229,33 @@ function pfb_reject_detail_summary(array $reject_detail): string {
 	return "{$reject_detail['mime_raw']} rc={$reject_detail['retval']}";
 }
 
-// ADR-46: list an archive's member names via bsdtar. stderr goes to /dev/null so a
-// bsdtar diagnostic (e.g. "tar: Failed to set default locale") can NEVER be mistaken
-// for a member name -- merging streams and prefix-filtering would let a member
-// literally named "tar: ../x" be silently dropped, bypassing the guard. Returns NULL
-// on a listing failure (rc != 0) so every DISK-writing caller fails CLOSED: the
-// gzip/UT1 sites' ADR-45 probe is only `gunzip -t` (gzip-stream integrity, not the
-// inner tar), so a valid-gzip / corrupt-inner-tar archive lists rc != 0 here and must
-// be rejected, not fail-open extracted. A genuinely intact archive always lists rc 0,
-// so this rejects nothing legitimate.
-function pfb_archive_member_names(string $file): ?array {
+// ADR-46: list an archive's member names. The lister is chosen by the archive's own
+// canonical MIME type (issue #3068): `unzip -Z1` for application/zip, `tar -tf` for
+// every other container. Listing a ZIP with tar only worked because the appliance's
+// /usr/bin/tar is bsdtar; /usr/bin/unzip is present on both platforms (bsdunzip on
+// FreeBSD, Info-ZIP on Debian) and reads exactly one format, so the guard no longer
+// depends on which tar the host installed. Callers pass the type they already
+// dispatched on; a gzip-wrapped tar lists through the tar arm, which reads it.
+//
+// stderr goes to /dev/null so a tool diagnostic (e.g. "tar: Failed to set default
+// locale") can NEVER be mistaken for a member name -- merging streams and
+// prefix-filtering would let a member literally named "tar: ../x" be silently
+// dropped, bypassing the guard. Info-ZIP additionally writes some complaints to
+// STDOUT, which is why the rc check comes FIRST and $output is never read on a
+// failure: rc, not the absence of output, is what decides.
+//
+// Returns NULL on a listing failure (rc != 0) so every DISK-writing caller fails
+// CLOSED: the gzip/UT1 sites' ADR-45 probe is only `gunzip -t` (gzip-stream
+// integrity, not the inner tar), so a valid-gzip / corrupt-inner-tar archive lists
+// rc != 0 here and must be rejected, not fail-open extracted. A genuinely intact
+// archive always lists rc 0, so this rejects nothing legitimate.
+function pfb_archive_member_names(string $file, string $canonical_type): ?array {
+	$lister = $canonical_type === 'application/zip'
+		? '/usr/bin/unzip -Z1 '
+		: '/usr/bin/tar -tf ';
 	$output = array();
 	$retval = 1;
-	exec('/usr/bin/tar -tf ' . escapeshellarg($file) . ' 2>/dev/null', $output, $retval);
+	exec($lister . escapeshellarg($file) . ' 2>/dev/null', $output, $retval);
 	if ($retval != 0) {
 		return NULL;
 	}
@@ -4378,7 +4404,9 @@ function pfb_geoip_extract_tar_to_share(
 ): PfbDownloadResult {
 	global $pfb;
 
-	$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download));
+	// The gzip and uncompressed x-tar GeoIP arms share this helper; both are tar
+	// containers, and tar reads the gzip wrapper itself.
+	$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download, 'application/x-tar'));
 	if ($unsafe_member !== NULL) {
 		pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 		unlink_if_exists($file_download);
@@ -15200,7 +15228,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					// ADR-46: disk-writing extraction of a THIRD-PARTY archive (member
 					// names feed on-disk filenames) -- reject hostile member names first
 					// (a NULL member list = unlistable archive rejects too, fail-closed).
-					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn));
+					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn, $file_type));
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_dwn);
@@ -15320,7 +15348,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			if ($type == 'geoip') {
 				// Determine if the Zip contains multiple files. A NULL list
 				// (unlistable) falls through to stdout extraction exactly as before.
-				$archive_members = pfb_archive_member_names($file_download);
+				$archive_members = pfb_archive_member_names($file_download, $file_type);
 				if ($archive_members !== NULL && count($archive_members) > 1) {
 					// ADR-46: disk-writing extraction -- reject hostile member names first.
 					$unsafe_member = pfb_archive_unsafe_member($archive_members);
@@ -15367,7 +15395,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 
 			if ($type == 'top1m') {
-				$archive_members = pfb_archive_member_names($file_download);
+				$archive_members = pfb_archive_member_names($file_download, $file_type);
 				$unsafe_member = pfb_archive_unsafe_member($archive_members);
 				if ($unsafe_member !== NULL || $archive_members === NULL || count($archive_members) === 0) {
 					if ($unsafe_member !== NULL) {
@@ -15640,7 +15668,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
-					$archive_members = pfb_archive_member_names($file_download);
+					$archive_members = pfb_archive_member_names($file_download, $file_type);
 					$unsafe_member = pfb_archive_unsafe_member($archive_members);
 					if ($unsafe_member !== NULL || $archive_members === NULL || count($archive_members) !== 1) {
 						if ($unsafe_member !== NULL) {
@@ -15760,7 +15788,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 						pfb_logger("\n Invalid filename [{$filename}]", 1);
 						return PfbDownloadResult::failure();
 					}
-					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn));
+					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn, $file_type));
 					if ($unsafe_member !== NULL) {
 						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
 						unlink_if_exists($file_dwn);

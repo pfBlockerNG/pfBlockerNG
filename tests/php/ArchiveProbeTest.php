@@ -16,12 +16,21 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_archive_probe')]
 final class ArchiveProbeTest extends TestCase
 {
-	public function test_probe_zip_returns_tar_tf(): void
+	public function test_probe_zip_returns_unzip_t(): void
 	{
-		// application/zip → bsdtar (/usr/bin/tar on FreeBSD) -tf: the same tool
-		// pfb_download() already uses for ZIP listing (L8350/L8376). File is NOT
-		// part of the output — pfb_validate_archive() appends it at call time.
-		$this->assertSame(['/usr/bin/tar', '-tf'], pfb_archive_probe('application/zip'));
+		// issue #3068: application/zip → /usr/bin/unzip -t. The previous mapping was
+		// `tar -tf`, which only worked because the appliance's /usr/bin/tar IS bsdtar
+		// (libarchive), so it happened to read ZIP. That made the probe depend on the
+		// host's tar FLAVOUR rather than on the archive format, and it was also the
+		// weakest probe of the four: `tar -tf` walks a ZIP's central directory and
+		// never inflates a member, so it accepted a body-corrupt ZIP -- and it accepted
+		// a gzip TAR as "a valid zip", which the octet-stream recovery loop turns into a
+		// MIME misidentification. `unzip -t` is the direct analogue of the gzip and
+		// bzip2 arms below: a real integrity test of the container's own format.
+		// /usr/bin/unzip exists on both platforms (bsdunzip on FreeBSD, Info-ZIP on
+		// Debian), so nothing new is depended on. File is NOT part of the output --
+		// pfb_validate_archive() appends it at call time.
+		$this->assertSame(['/usr/bin/unzip', '-t'], pfb_archive_probe('application/zip'));
 	}
 
 	public function test_probe_gzip_returns_gunzip_t(): void

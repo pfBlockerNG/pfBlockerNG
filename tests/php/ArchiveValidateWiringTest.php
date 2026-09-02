@@ -157,18 +157,30 @@ final class ArchiveValidateWiringTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Scenario: zip — valid archive accepted, truncated rejected
+	 * Scenario: zip — valid archive accepted, unreadable one rejected
 	 *
 	 * Given  a real zip file built via ZipArchive and a copy truncated to
-	 *        20 bytes (local file header start; omits end-of-central-directory)
+	 *        20 bytes (a partial local file header — no member, no central
+	 *        directory, unreadable to every unzip implementation)
 	 * When   pfb_validate_archive() is called on each with 'application/zip'
 	 * Then   the valid file returns TRUE and the truncated file returns FALSE,
-	 *        proving the tar -tf probe is wired and distinguishes them.
+	 *        proving the `unzip -t` probe is wired and distinguishes them.
+	 *
+	 * Issue #3068 removed the skip that used to sit here. The probe was `tar -tf`,
+	 * which only reads ZIP when /usr/bin/tar is bsdtar, so this case never ran on a
+	 * GNU-tar dev host and the whole zip arm of ADR-45 was CI-only. /usr/bin/unzip
+	 * exists on both platforms, so it runs everywhere now.
+	 *
+	 * The 20-byte truncation is chosen because all three implementations agree on it
+	 * (bsdtar -tf rc 1, bsdunzip -t rc 1, Info-ZIP -t rc 9). A LARGER truncation that
+	 * still carries a local header does NOT agree — bsdunzip accepts it, Info-ZIP
+	 * rejects it — so pinning one of those would pass on the appliance and fail on a
+	 * plain Debian host, which is the trap this issue exists to remove.
 	 */
 	public function test_zip_valid_accepted_and_corrupt_rejected(): void
 	{
-		if (!is_executable('/usr/bin/tar')) {
-			$this->markTestSkipped('/usr/bin/tar not available on this host');
+		if (!is_executable('/usr/bin/unzip')) {
+			$this->markTestSkipped('/usr/bin/unzip not available on this host');
 		}
 		if (!class_exists('ZipArchive')) {
 			$this->markTestSkipped('ZipArchive not available (php-zip extension missing)');
@@ -182,19 +194,6 @@ final class ArchiveValidateWiringTest extends TestCase
 		$this->assertSame(TRUE, $opened, 'ZipArchive::open() failed to create test.zip');
 		$zip->addFromString('data.txt', 'pfblockerng zip wiring test ' . uniqid('', TRUE));
 		$zip->close();
-
-		// pfBlockerNG targets FreeBSD, where /usr/bin/tar IS bsdtar (libarchive) and reads
-		// ZIP — the production probe (application/zip -> tar -tf). On a host whose /usr/bin/tar
-		// is GNU tar (typical Linux CI), tar cannot read ZIP at all, so the probe is untestable
-		// here. Skip rather than fail: it is a host-tool limitation, not a production defect.
-		$tarout = [];
-		exec('/usr/bin/tar -tf ' . escapeshellarg($validPath) . ' >/dev/null 2>&1', $tarout, $tarrv);
-		if ($tarrv !== 0) {
-			$this->markTestSkipped(
-				'/usr/bin/tar on this host cannot read ZIP (GNU tar, not bsdtar/libarchive); '
-				. 'pfBlockerNG targets FreeBSD where /usr/bin/tar is bsdtar — skipping the zip probe wiring here'
-			);
-		}
 
 		$raw = file_get_contents($validPath);
 		$this->assertNotFalse($raw, 'Could not read created zip file');
@@ -212,5 +211,44 @@ final class ArchiveValidateWiringTest extends TestCase
 			"Expected pfb_validate_archive(corrupt.zip) === FALSE; got TRUE.\n"
 			. 'File size: ' . filesize($corruptPath) . ' bytes (truncated)'
 		);
+	}
+
+	/**
+	 * Scenario: issue #3068 — the zip probe must not accept a tar.
+	 *
+	 * Given  a perfectly valid gzip TAR
+	 * When   pfb_validate_archive() is called on it with 'application/zip'
+	 * Then   it returns FALSE.
+	 *
+	 * This is the reason the mapping had to change rather than merely be made
+	 * portable. The old probe was `tar -tf`, and libarchive's tar reads gzip, tar AND
+	 * zip — so "is this a valid application/zip?" answered TRUE for a gzip tarball on
+	 * the appliance. pfb_filter()'s octet-stream recovery loop asks exactly that
+	 * question, application/zip FIRST, and adopts the first type that answers TRUE:
+	 * an octet-stream-typed .tar.gz feed was therefore recovered as application/zip
+	 * and routed down the zip arm. `unzip -t` cannot make that mistake.
+	 */
+	public function test_zip_probe_refuses_a_gzip_tar(): void
+	{
+		if (!is_executable('/usr/bin/unzip')) {
+			$this->markTestSkipped('/usr/bin/unzip not available on this host');
+		}
+		$member = $this->dir . '/member.txt';
+		$tgz    = $this->dir . '/feed.tar.gz';
+		$this->assertNotFalse(file_put_contents($member, "203.0.113.7\n"));
+		$output = [];
+		$retval = 1;
+		exec('/usr/bin/tar -czf ' . escapeshellarg($tgz) . ' -C ' . escapeshellarg($this->dir)
+			. ' member.txt 2>/dev/null', $output, $retval);
+		$this->assertSame(0, $retval, 'the fixture tarball must be built');
+
+		// Control: it really is a valid archive of its own type, so a FALSE below is
+		// the probe discriminating, not the fixture being broken.
+		$this->assertTrue(pfb_validate_archive($tgz, 'application/gzip'),
+			'the fixture must be a valid gzip stream, or the assertion below proves nothing');
+
+		$this->assertFalse(pfb_validate_archive($tgz, 'application/zip'),
+			'a gzip tarball must never pass the application/zip probe — that misidentification '
+			. 'is what the octet-stream recovery loop turns into a wrong MIME type');
 	}
 }

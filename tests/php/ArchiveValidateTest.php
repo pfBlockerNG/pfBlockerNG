@@ -98,8 +98,8 @@ final class ArchiveValidateTest extends TestCase
 		pfb_validate_archive($file, 'application/zip', $runner);
 
 		$this->assertNotNull($capturedArgv, 'Runner must have been called');
-		$this->assertSame('/usr/bin/tar', $capturedArgv[0], 'argv[0] must be the probe binary');
-		$this->assertSame('-tf',          $capturedArgv[1], 'argv[1] must be the probe flags');
+		$this->assertSame('/usr/bin/unzip', $capturedArgv[0], 'argv[0] must be the probe binary');
+		$this->assertSame('-t',             $capturedArgv[1], 'argv[1] must be the probe flags');
 		$this->assertSame($file,          $capturedArgv[2], 'argv[2] must be the $file path (last element)');
 		$this->assertCount(3, $capturedArgv, 'argv must have exactly 3 elements: binary, flags, file');
 	}
