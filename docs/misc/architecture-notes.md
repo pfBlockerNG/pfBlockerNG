@@ -1576,7 +1576,7 @@ are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-le
 deadlock the parent). The lock is kernel-released on process death; a crashed pass never wedges
 scheduling.
 
-**The package install is the third holder (issue #3062).** `pfblockerng_install.inc` restages the
+**The package install holds it too (issue #3062).** `pfblockerng_install.inc` restages the
 Unbound chroot (`pfblockerng.sh dnsbl_cache stage`), drops cache databases, and stops/starts the pfB
 services — the same files and daemon a pass publishes into — so it takes the same lock before it
 touches any of them (`pfb_install_feed_pass_hold()`, right after `pfb_global()`) and keeps it until
@@ -1586,8 +1586,11 @@ one holder that **waits** rather than skipping: `pfb_feed_pass_acquire()`'s opti
 `PFB_INSTALL_FEED_PASS_WAIT` (300 s). The wait is bounded and failure is non-fatal, because a
 half-installed package is worse than an overlap: on expiry the install proceeds and logs
 `Package install proceeding WITHOUT the feed-pass lock` to `pfblockerng.log` and syslog
-(`LOG_WARNING`). While the hold stands, a tick firing mid-install defers exactly like any other
-contender.
+(`LOG_WARNING`) — so a pass longer than the budget (a large multi-feed download) still overlaps, it
+is just no longer silent. While the hold stands, a tick firing mid-install defers exactly like any
+other contender. It is also the one holder that takes this lock **without** the dispatcher lock
+first; that inverts the order every other holder uses, and cannot deadlock only because every
+non-install feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
 
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
