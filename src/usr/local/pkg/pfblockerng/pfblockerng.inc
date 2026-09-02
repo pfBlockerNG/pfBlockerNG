@@ -19157,17 +19157,13 @@ function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
 	return FALSE;
 }
 
+
 // Seconds a package install waits for an in-flight feed pass before it proceeds anyway.
 define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
 
-// issue #3062: a package install restages the Unbound chroot ('dnsbl_cache stage'),
-// drops caches, and stops/starts the pfB services -- the same files and daemon a feed
-// pass publishes into, and nothing serialised the two. Take the feed-pass lock and keep
-// it for the rest of the install process (pfb_feed_pass_release() runs at shutdown), so
-// an in-flight pass finishes first and a tick firing mid-install defers like any other
-// contender. Bounded, and FALSE never aborts the caller: a half-installed package is
-// worse than an overlap, so the install proceeds and the overlap is logged as the
-// evidence a post-install DNS failure is traced with.
+// issue #3062: the install's hold on the feed-pass lock -- waits, then keeps it until this
+// process exits (pfb_feed_pass_release() at shutdown). FALSE never aborts the caller: an
+// install may not be abandoned. architecture-notes.md "The package install is the third holder".
 function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAIT): bool {
 	if (pfb_feed_pass_busy()) {
 		pfb_logger("\nPackage install: waiting up to {$timeout_s}s for the in-flight feed pass to finish.\n", 1);

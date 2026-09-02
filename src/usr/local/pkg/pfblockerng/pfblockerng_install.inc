@@ -29,8 +29,8 @@ pfb_global();
 // issue #3062: serialise this install against feed passes BEFORE anything it shares with
 // one is touched (config surgery, service restarts, the chroot restage below). The hold
 // lasts until this process exits, so the post-install resync reenters it.
-update_status("\nChecking for an in-flight pfBlockerNG feed pass...");
-update_status(pfb_install_feed_pass_hold() ? " none.\n" : " still running; continuing anyway.\n");
+update_status("\nSerialising against any in-flight pfBlockerNG feed pass...");
+update_status(pfb_install_feed_pass_hold() ? " done.\n" : " lock not taken; continuing anyway.\n");
 
 // issue #2371: capture DNSBL freshness before settings-family restore or migrations mutate it.
 $pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(

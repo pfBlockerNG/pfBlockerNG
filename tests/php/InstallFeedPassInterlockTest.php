@@ -121,18 +121,14 @@ final class InstallFeedPassInterlockTest extends TestCase
 	}
 
 	/**
-	 * Scenario: a feed pass is in flight and finishes while the install waits.
-	 * Given a child process holding the lock at the moment the install asks for it,
-	 * When the install takes its hold with a wait budget,
-	 * Then it blocks until the pass releases and then takes the lock -- it does not
-	 * charge ahead over the running pass (the non-blocking acquire() would).
+	 * Scenario: a feed pass in another process is in flight, then finishes.
+	 * Given a child process holding the lock, When the install asks for it,
+	 * Then it is refused while the pass runs and takes the lock once the pass releases.
+	 * Both halves are ordered by the child's own pipe, never by a sleep: the refusal is
+	 * asserted while the child provably still holds, the acquisition only after EOF.
 	 */
-	public function testHoldWaitsForAnInFlightPassAndTakesTheLockWhenItFinishes(): void
+	public function testHoldIsRefusedWhileAnotherProcessHoldsAndSucceedsOnceItReleases(): void
 	{
-		// The child holds the lock, reports ready, and keeps holding for 200ms past the
-		// parent's go-ahead: that hold-over IS the simulated in-flight pass (it makes the
-		// parent's FIRST acquisition attempt land while the lock is genuinely held), not a
-		// synchronisation device -- the assertion below is on the acquisition, not on timing.
 		$childCode = <<<'PHP'
 			$fp = fopen($argv[1], 'c');
 			if ($fp === false) { fwrite(STDOUT, "openfail\n"); exit(1); }
@@ -140,37 +136,46 @@ final class InstallFeedPassInterlockTest extends TestCase
 			fwrite(STDOUT, "ready\n");
 			fflush(STDOUT);
 			fgets(STDIN);	// blocks until the parent closes our stdin (EOF)
-			usleep(200000);	// the pass is still finishing when the install first asks
 			flock($fp, LOCK_UN);
 			fclose($fp);
 			exit(0);
 			PHP;
 
 		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']];
-		$proc = proc_open([PHP_BINARY, '-r', $childCode, $this->lockPath()], $descriptors, $pipes);
-		$this->assertTrue(is_resource($proc), 'test setup: failed to spawn the feed-pass holder');
-
+		$proc = NULL;
+		$pipes = [];
 		try {
+			$proc = proc_open([PHP_BINARY, '-r', $childCode, $this->lockPath()], $descriptors, $pipes);
+			$this->assertTrue(is_resource($proc), 'test setup: failed to spawn the feed-pass holder');
+
+			// 10s is a salvage cap for a stuck run, never the behaviour under test.
 			$read = [$pipes[1]];
 			$write = $except = NULL;
 			$this->assertSame(1, stream_select($read, $write, $except, 10),
 				'deadlock guard: the holder never signalled readiness within 10s');
 			$this->assertSame("ready\n", fgets($pipes[1]), 'the holder did not report holding the lock');
 
-			fclose($pipes[0]);	// EOF -> the holder starts winding the pass down
+			// The child cannot release before EOF, so this half is race-free.
+			$this->assertFalse(pfb_install_feed_pass_hold(0.2),
+				'the install must NOT take a lock another process is holding');
+
+			fclose($pipes[0]);	// EOF -> the holder releases and exits
 			$pipes[0] = NULL;
 
-			// 10s is a salvage cap for a stuck run, not the behaviour under test.
 			$this->assertTrue(pfb_install_feed_pass_hold(10.0),
-				'the install must WAIT for the in-flight pass and then take the lock');
+				'the install must take the lock once the in-flight pass releases it');
 			$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL),
 				'the install must hold the lock it waited for');
 		} finally {
 			if (is_resource($pipes[0] ?? NULL)) {
 				fclose($pipes[0]);
 			}
-			fclose($pipes[1]);
-			$this->assertSame(0, proc_close($proc), 'the holder process must have exited cleanly');
+			if (is_resource($pipes[1] ?? NULL)) {
+				fclose($pipes[1]);
+			}
+			if (is_resource($proc)) {
+				$this->assertSame(0, proc_close($proc), 'the holder process must have exited cleanly');
+			}
 		}
 	}
 
@@ -178,24 +183,52 @@ final class InstallFeedPassInterlockTest extends TestCase
 	 * Scenario: the in-flight pass outlasts the install's wait budget.
 	 * Given another handle holding the lock for longer than the budget,
 	 * When the install takes its hold,
-	 * Then it gives up rather than stalling the install forever, leaves the holder
-	 * untouched, and records the overlap so a later failure can be traced to it.
+	 * Then it spends the budget waiting, gives up rather than stalling the install
+	 * forever, leaves the holder untouched, and records THAT it gave up -- the evidence
+	 * a later post-install failure is traced with.
 	 */
-	public function testHoldGivesUpAndLetsTheInstallProceedWhenThePassOutlastsTheWait(): void
+	public function testHoldSpendsItsBudgetThenLetsTheInstallProceed(): void
 	{
 		$holder = fopen($this->lockPath(), 'c');
 		$this->rawFps[] = $holder;
 		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
 
-		$this->assertFalse(pfb_install_feed_pass_hold(0.2),
-			'the install must not block forever on a pass that will not finish');
+		$started = microtime(TRUE);
+		$held = pfb_install_feed_pass_hold(0.3);
+		$elapsed = microtime(TRUE) - $started;
+
+		$this->assertFalse($held, 'the install must not block forever on a pass that will not finish');
+		// Floor, not a duration assertion: a hold that returned instantly never waited at
+		// all, which is the regression (an ignored budget / a non-blocking acquire).
+		$this->assertGreaterThanOrEqual(0.25, $elapsed,
+			"the hold must spend its 0.3s budget waiting; it returned after {$elapsed}s");
 
 		$this->assertFalse(isset($GLOBALS['pfb_feed_pass_lock']),
 			'a failed hold must not leave a half-owned lock behind');
-		$this->assertTrue(flock($holder, LOCK_EX | LOCK_NB),
+		$this->assertTrue($this->rawProbeStillLocked(),
 			'the running feed pass must keep its own lock undisturbed');
-		$this->assertStringContainsString('feed pass', $this->logContents(),
-			'the overlap must be logged -- it is the evidence a post-install failure is traced with');
+		$this->assertStringContainsString('proceeding WITHOUT the feed-pass lock', $this->logContents(),
+			'the give-up itself must be logged, not merely the decision to wait');
+	}
+
+	/**
+	 * Every feed-pass dispatcher must keep deferring INSTANTLY -- the install's wait is the
+	 * one exception. Pins the default: a contended acquire with no budget returns at once.
+	 */
+	public function testFeedPassAcquireStaysNonBlockingByDefault(): void
+	{
+		$holder = fopen($this->lockPath(), 'c');
+		$this->rawFps[] = $holder;
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+
+		$started = microtime(TRUE);
+		$acquired = pfb_feed_pass_acquire($contended);
+		$elapsed = microtime(TRUE) - $started;
+
+		$this->assertFalse($acquired, 'a contended acquire must fail');
+		$this->assertTrue($contended, 'contention must be reported as contention, not as an error');
+		$this->assertLessThan(0.05, $elapsed,
+			"the default acquire must make ONE non-blocking attempt; it took {$elapsed}s");
 	}
 
 	/**
