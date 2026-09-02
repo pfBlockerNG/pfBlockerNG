@@ -108,7 +108,33 @@ ourselves. Awaiting andrebrait's response before filing.
 
 ## Lab state a successor needs
 
-**Tier-B capacity is one seat.** `pfb-msg who` lists mailboxes, not agents.
+**Seat liveness — counted from message headers, not filenames.** claude2-dev's
+first probe globbed `new/` and `cur/` only and missed everything filed to
+`read/`, undercounting badly. The correct form:
+
+```sh
+grep -h '^From:' */new/*.md */read/*.md | sort | uniq -c | sort -rn
+```
+
+```text
+claude-smoke   556      grok-smoke  534      grok  350
+claude-dev     296      grok-dev    286      claude2-dev  98
+claude2-smoke    8   <- all 2026-08-30, then silence
+```
+
+**grok-smoke is live** (534), described by the owner as limited rather than
+absent. **claude2-smoke is dead** — eight sends two days ago while its mailbox
+keeps filling. I relayed a wrong version of these counts to the owner twice;
+count them yourself before routing work.
+
+**claude-smoke cannot reach the Plus box from its current seat.** `Permission
+denied (publickey,password,keyboard-interactive)` as root against
+10.30.41.108, and its `~/.ssh/config` covers only gitea, pfb-dev and the
+10.20.41.11-.14 LXC pool. Earlier sessions of that seat did reach it, so the
+path exists somewhere — this is a provisioning gap, not a capacity decline.
+Do not route Plus-box checks there without checking first.
+
+**Tier-B capacity is effectively one seat.** `pfb-msg who` lists mailboxes, not agents.
 Sends, in the last 200 bus lines: claude-smoke **75**, grok-smoke **0**,
 claude2-smoke **0**. Only claude-smoke is live, and they are at 89% with
 `handoff_due`. grok-smoke is limited; claude2-smoke has never transmitted.
