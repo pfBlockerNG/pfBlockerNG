@@ -20,8 +20,9 @@ from tests.smoke import helpers
 BOOTSTRAP = Path(__file__).resolve().parent / "php" / "bootstrap.php"
 
 # Header lengths that matter: inside the field, on both sides of its edge, and past it — plus
-# non-ASCII, where PHP's byte padding and a codepoint-based mirror diverge, and the shapes that
-# would break a payload interpolated into the PHP script instead of passed to it.
+# non-ASCII, where PHP's byte padding and a codepoint-based mirror diverge; the two `$` shapes,
+# which corrupt a payload interpolated into the PHP script instead of passed to it; and a
+# numeric string, which PHP would cast to an int array key if the producer went back to a map.
 HEADERS = [
     "a",
     "ISC_Block_v4",
