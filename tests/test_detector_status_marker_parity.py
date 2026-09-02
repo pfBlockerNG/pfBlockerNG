@@ -43,25 +43,27 @@ STATUS = "( content changed )"
 def _php_status_lines(headers: list[str], status: str) -> list[str]:
     """Render ``pfb_log_status_line($header, $status, '')`` with the shipped PHP, in order.
 
-    The payload rides `argv`, not the script text: a header carrying `$` would otherwise
-    interpolate PHP-side. It is read before the bootstrap require, which replaces `$argv` to
-    keep the package's daemon dispatch dormant. Ordered list, not a keyed map, because PHP
-    casts a numeric-string array key to an int.
+    Nothing rides the script text: a `$` in the payload, the status or the bootstrap path would
+    interpolate PHP-side. `argv` is read before the bootstrap require, which replaces it to keep
+    the package's daemon dispatch dormant. Ordered list, not a keyed map, because PHP casts a
+    numeric-string array key to an int. UTF-8 is explicit because `JSON_UNESCAPED_UNICODE` emits
+    raw bytes and `text=True` would otherwise decode them in the locale's encoding.
     """
     script = (
-        f"[, $payload, $status] = $argv;"
-        f"require {json.dumps(str(BOOTSTRAP))};"
-        f"$out = [];"
-        f"foreach (json_decode($payload) as $h) {{"
-        f"    $out[] = pfb_log_status_line($h, $status, '');"
-        f"}}"
-        f"echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);"
+        "[, $boot, $payload, $status] = $argv;"
+        "require $boot;"
+        "$out = [];"
+        "foreach (json_decode($payload) as $h) {"
+        "    $out[] = pfb_log_status_line($h, $status, '');"
+        "}"
+        "echo json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);"
     )
     result = subprocess.run(
-        ["php", "-r", script, "--", json.dumps(headers), status],
+        ["php", "-r", script, "--", str(BOOTSTRAP), json.dumps(headers), status],
         capture_output=True,
         check=True,
         text=True,
+        encoding="utf-8",
     )
     rendered = json.loads(result.stdout)
     assert isinstance(rendered, list) and len(rendered) == len(headers), (
