@@ -682,3 +682,50 @@ def test_the_shared_walk_tracks_a_wildcard_in_each_section(
         public_suffix,
         private_active,
     ), f"the shared walk changed the resolution of {name!r}: {resolution!r}"
+
+
+_PRIVATE_EXCEPTION_PSL = """// ===BEGIN ICANN DOMAINS===
+com
+// ===END ICANN DOMAINS===
+// ===BEGIN PRIVATE DOMAINS===
+foo.com
+*.foo.com
+!x.foo.com
+// ===END PRIVATE DOMAINS===
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "public_suffix", "registrable"),
+    [
+        # The PRIVATE exception carves x.foo.com out of the PRIVATE wildcard, and
+        # must not touch the ICANN side, which knows only 'com'.
+        ("x.foo.com", "foo.com", "x.foo.com"),
+        ("a.x.foo.com", "foo.com", "x.foo.com"),
+        # A sibling the exception misses still takes the PRIVATE wildcard.
+        ("y.foo.com", "y.foo.com", ""),
+    ],
+)
+def test_a_private_exception_carves_only_the_combined_section(name: str, public_suffix: str, registrable: str) -> None:
+    """issue #3061: the carve-out is per section, and the ICANN side keeps its own.
+
+    The shared walk looks the ICANN exception set up only where the combined set
+    already matched, which is sound because the combined set is built from the ICANN
+    rules plus the PRIVATE ones. Only a PRIVATE-only exception can tell a correct
+    per-section carve from one that applies the combined hit to both, and neither the
+    shipped list nor any other authority here has one: the shipped list carries all
+    eight of its exception rules in the ICANN section. Upstream may add a PRIVATE
+    exception at any regeneration, and this row is what would notice.
+    """
+    rules = P.parse_psl_rules(_PRIVATE_EXCEPTION_PSL)
+
+    resolution = P.resolve_public_suffix(name, rules)
+
+    assert (
+        resolution.icann_suffix,
+        resolution.public_suffix,
+        resolution.registrable_domain,
+        resolution.private_active,
+    ) == ("com", public_suffix, registrable, True), (
+        f"the per-section carve changed the resolution of {name!r}: {resolution!r}"
+    )
