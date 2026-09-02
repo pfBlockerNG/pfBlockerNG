@@ -220,3 +220,23 @@ test("character-class OPENERS get the squareBracket span, all four ClassOpen* va
     );
   }
 });
+
+test("fused extension openers share the paren span with their closer (issue #3059)", () => {
+  for (const [input, opener] of [
+    ["(?:a)", "(?:"],
+    ["(?=a)", "(?="],
+    ["(?!a)", "(?!"],
+    ["(?>a)", "(?>"],
+  ]) {
+    const tree = pfbRegexListLanguage.parser.parse(input);
+    const spans = [];
+    highlightTree(tree, pfbHighlightStyle, (from, to, cls) => {
+      spans.push({ from, to, cls, text: input.slice(from, to) });
+    });
+    const openerSpan = spans.find((s) => s.text === opener);
+    const closerSpan = spans.find((s) => s.text === ")" && s.from > (openerSpan ? openerSpan.to : 0));
+    assert.ok(openerSpan, `input ${JSON.stringify(input)}: expected highlighted ${JSON.stringify(opener)}, got: ${JSON.stringify(spans)}`);
+    assert.ok(closerSpan, `input ${JSON.stringify(input)}: expected highlighted closer, got: ${JSON.stringify(spans)}`);
+    assert.equal(openerSpan.cls, closerSpan.cls, `input ${JSON.stringify(input)}: opener and closer must share one highlight class`);
+  }
+});

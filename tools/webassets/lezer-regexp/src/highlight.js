@@ -9,11 +9,12 @@ export const regexpHighlighting = styleTags({
   Quantifier: t.operator,
   "|": t.logicOperator,
   "( )": t.paren,
+  // issue #3059 fused the leading "(" into these tokens; tag them so the
+  // opener is not unstyled next to a styled ")".
+  "NonCapMarker NamedOpenMarker LookaheadMarker NegLookaheadMarker LookbehindMarker NegLookbehindMarker AtomicMarker ConditionalMarker": t.paren,
   // Named ClassOpen* / ClassClose (issue #1681 openers; ClassClose is the "]").
   "ClassOpen ClassOpenNeg ClassOpenLit ClassOpenNegLit ClassClose": t.squareBracket,
   GroupName: t.labelName,
-  // FlagsMarker includes the leading "(" (issue #3059) so `?i` after a
-  // quantifier cannot steal the `?`.
   FlagsMarker: t.modifier,
   CommentGroup: t.comment,
   "Backreference GroupRefMarker": t.variableName,

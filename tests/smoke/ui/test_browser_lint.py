@@ -246,8 +246,8 @@ def test_regex_editor_offline_lint_accepts_quantifier_before_flag_letter(
     """Python-valid ``m?ad`` must not get a Lezer error marker (issue #3059).
 
     Abort the lint endpoint so a marker can only come from ``lezerErrorLint()``.
-    Two-way: type the pattern -> still zero markers; type ``(`` -> a marker
-    appears (proves the gutter is live, not always-green).
+    Marked-then-clean: type ``(`` until a marker appears (proves the gutter is
+    live), then type the pattern and require the marker to disappear.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -257,13 +257,13 @@ def test_regex_editor_offline_lint_accepts_quantifier_before_flag_letter(
     expect(markers).to_have_count(0, timeout=LINT_TIMEOUT_MS)
     page.route("**/pfblockerng_lint.php", lambda route: route.abort())
 
-    _clear_and_type(content, "^(.+[-_.])??m?ad[sxv]?[0-9]*[-_.]")
-    expect(markers).to_have_count(0, timeout=LINT_TIMEOUT_MS)
-    _shot(page, screenshot_dir, "lint_regex_offline_flag_letter_clean")
-
     _clear_and_type(content, "(")
     expect(markers).to_have_count(1, timeout=LINT_TIMEOUT_MS)
     _shot(page, screenshot_dir, "lint_regex_offline_flag_letter_control")
+
+    _clear_and_type(content, "^(.+[-_.])??m?ad[sxv]?[0-9]*[-_.]")
+    expect(markers).to_have_count(0, timeout=LINT_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "lint_regex_offline_flag_letter_clean")
 
 
 def test_regex_editor_server_lint_reports_python_only_error(

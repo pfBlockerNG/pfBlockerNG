@@ -463,7 +463,7 @@ RegExp(Literal,"{",Literal)
 
 RegExp(Quantifier)
 
-# hostile-reversed-class-range
+# class-reversed-dash-pair-is-not-an-error
 
 [z-a]
 

@@ -81,9 +81,16 @@ test("quantifier before a Python inline-flag letter is not a FlagsMarker (issue 
 });
 
 test("quantifier before group-open punctuation is not a group marker (issue #3059)", () => {
-  for (const input of ["a?:", "a?=", "a?!"]) {
+  for (const input of ["a?:", "a?=", "a?!", "a?P<x>", "a?P=x", "a?<=", "a?<!", "a?>", "a?#"]) {
     assert.deepEqual(errorRanges(input), [], `expected no error nodes for ${JSON.stringify(input)}`);
     assert.equal(parser.parse(input).toString(), "RegExp(Literal,Quantifier,Literal)");
+  }
+  assert.notEqual(errorRanges("a?(").length, 0, "a?( is Python-invalid and must stay an error node");
+});
+
+test("unclosed fused extension openers still produce error nodes", () => {
+  for (const input of ["(?:", "(?i", "(?=", "(?!", "(?<=", "(?<!", "(?>", "(?P<n>", "(?(1)"]) {
+    assert.notEqual(errorRanges(input).length, 0, `expected an error node for ${JSON.stringify(input)}`);
   }
 });
 
