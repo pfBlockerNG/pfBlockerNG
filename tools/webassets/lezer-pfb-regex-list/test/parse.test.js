@@ -111,10 +111,10 @@ function chainAt(tree, pos) {
 test("mixed-nesting: mixedParser nests a RegExp subtree inside Pattern (position-resolved)", () => {
   const input = "ab[c-f]#trailing comment";
   const tree = mixedParser.parse(input);
-  // Position 3 sits inside "[c-f]" -- resolveInner must walk Literal/CharacterClass-class
-  // descendants, through RegExp, through Pattern, up to RegexList.
+  // Position 3 sits inside "[c-f]" -- resolveInner must walk ClassLiteral /
+  // CharacterClass, through RegExp, through Pattern, up to RegexList.
   const chain = chainAt(tree, 3);
-  assert.deepEqual(chain, ["ClassLiteral", "ClassRange", "CharacterClass", "RegExp", "Pattern", "RegexList"]);
+  assert.deepEqual(chain, ["ClassLiteral", "CharacterClass", "RegExp", "Pattern", "RegexList"]);
   // A position inside the trailing Comment must NOT resolve through Pattern/RegExp at all.
   const commentChain = chainAt(tree, 10);
   assert.deepEqual(commentChain, ["Comment", "RegexList"]);
@@ -218,5 +218,25 @@ test("character-class OPENERS get the squareBracket span, all four ClassOpen* va
       closerSpan.cls,
       `input ${JSON.stringify(input)}: opener and closer must share one highlight class`,
     );
+  }
+});
+
+test("fused extension openers share the paren span with their closer (issue #3059)", () => {
+  for (const [input, opener] of [
+    ["(?:a)", "(?:"],
+    ["(?=a)", "(?="],
+    ["(?!a)", "(?!"],
+    ["(?>a)", "(?>"],
+  ]) {
+    const tree = pfbRegexListLanguage.parser.parse(input);
+    const spans = [];
+    highlightTree(tree, pfbHighlightStyle, (from, to, cls) => {
+      spans.push({ from, to, cls, text: input.slice(from, to) });
+    });
+    const openerSpan = spans.find((s) => s.text === opener);
+    const closerSpan = spans.find((s) => s.text === ")" && s.from > (openerSpan ? openerSpan.to : 0));
+    assert.ok(openerSpan, `input ${JSON.stringify(input)}: expected highlighted ${JSON.stringify(opener)}, got: ${JSON.stringify(spans)}`);
+    assert.ok(closerSpan, `input ${JSON.stringify(input)}: expected highlighted closer, got: ${JSON.stringify(spans)}`);
+    assert.equal(openerSpan.cls, closerSpan.cls, `input ${JSON.stringify(input)}: opener and closer must share one highlight class`);
   }
 });

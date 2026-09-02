@@ -10,8 +10,6 @@
 // comments, is out of scope for this dialect).
 @skip {}
 
-@precedence { classRange @left }
-
 @top RegExp { alternation }
 
 alternation { branch ("|" branch)* }
@@ -32,51 +30,49 @@ atom {
 }
 
 CapturingGroup { "(" alternation ")" }
-NonCapturingGroup { "(" NonCapMarker alternation ")" }
-NamedGroup { "(" NamedOpenMarker GroupName ">" alternation ")" }
-GroupRef { "(" GroupRefMarker GroupName ")" }
-Lookahead { "(" LookaheadMarker alternation ")" }
-NegLookahead { "(" NegLookaheadMarker alternation ")" }
-Lookbehind { "(" LookbehindMarker alternation ")" }
-NegLookbehind { "(" NegLookbehindMarker alternation ")" }
-AtomicGroup { "(" AtomicMarker alternation ")" }
+// issue #3059: each extension opener includes the leading "(" so `?i` / `?:`
+// after a quantifier stay Quantifier + literal. Python only allows these
+// immediately after "(".
+NonCapturingGroup { NonCapMarker alternation ")" }
+NamedGroup { NamedOpenMarker GroupName ">" alternation ")" }
+GroupRef { GroupRefMarker GroupName ")" }
+Lookahead { LookaheadMarker alternation ")" }
+NegLookahead { NegLookaheadMarker alternation ")" }
+Lookbehind { LookbehindMarker alternation ")" }
+NegLookbehind { NegLookbehindMarker alternation ")" }
+AtomicGroup { AtomicMarker alternation ")" }
 
 // (?(id)yes|no) / (?(name)yes|no) -- id is a bare number or a group name;
 // reuse GroupName loosely (digits are a subset of its "not > ) |" charset).
-ConditionalGroup { "(" ConditionalMarker GroupName ")" branch ("|" branch)? ")" }
+ConditionalGroup { ConditionalMarker GroupName ")" branch ("|" branch)? ")" }
 
 // (?aiLmsux) global flags; (?i:...) / (?i-s:...) / (?-i:...) scoped flags.
-FlagsGroup { "(" FlagsMarker (":" alternation)? ")" }
+FlagsGroup { FlagsMarker (":" alternation)? ")" }
 
 CharacterClass {
-  (ClassOpen | ClassOpenNeg | ClassOpenLit | ClassOpenNegLit) classPiece* "]"
+  (ClassOpen | ClassOpenNeg | ClassOpenLit | ClassOpenNegLit) classPiece* ClassClose
 }
 
-// classAtom is deliberately single-character-wide (ClassLiteral matches one
-// char, not a run) so a-z/0-9-style ranges parse as distinct ClassRange
-// nodes instead of one greedy multi-char run swallowing a range endpoint.
-// A "-" that isn't sandwiched between two classAtoms (leading/trailing, or
-// after a range) falls through as its own classPiece -- Python treats an
-// unpaired "-" inside a class as a literal dash.
-classPiece { ClassRange | classAtom | "-" }
+// ClassLiteral is single-character-wide so a "-" between two atoms stays its
+// own piece (Python range vs literal dash is a highlight distinction we do
+// not need). A trailing/leading "-" is then just another classPiece.
+classPiece { classAtom | "-" }
 classAtom { ClassLiteral | Escape | Backreference }
-ClassRange { classAtom !classRange "-" classAtom }
 
 @tokens {
-  // --- group-open markers: fused from directly after "(" so "(" itself
-  // stays a single, uniformly-stylable anonymous token everywhere.
-  NonCapMarker { "?:" }
-  NamedOpenMarker { "?P<" }
-  GroupRefMarker { "?P=" }
-  LookaheadMarker { "?=" }
-  NegLookaheadMarker { "?!" }
-  LookbehindMarker { "?<=" }
-  NegLookbehindMarker { "?<!" }
-  AtomicMarker { "?>" }
-  ConditionalMarker { "?(" }
+  // --- group-open tokens include the leading "(" (issue #3059).
+  NonCapMarker { "(?:" }
+  NamedOpenMarker { "(?P<" }
+  GroupRefMarker { "(?P=" }
+  LookaheadMarker { "(?=" }
+  NegLookaheadMarker { "(?!" }
+  LookbehindMarker { "(?<=" }
+  NegLookbehindMarker { "(?<!" }
+  AtomicMarker { "(?>" }
+  ConditionalMarker { "(?(" }
   // Positive flags, negative-only ("-i"), or both ("i-s") -- at least one
-  // flag letter somewhere is required (an empty "?" body is NonCapMarker).
-  FlagsMarker { "?" ($[aiLmsux]+ ("-" $[aiLmsux]+)? | "-" $[aiLmsux]+) }
+  // flag letter somewhere is required (an empty "(?" body is not a flags group).
+  FlagsMarker { "(" "?" ($[aiLmsux]+ ("-" $[aiLmsux]+)? | "-" $[aiLmsux]+) }
 
   // (?#...) -- content can't contain ")" (Python stops at the first one);
   // modeled as a single leaf token (open marker + body + close all fused)
@@ -98,6 +94,7 @@ ClassRange { classAtom !classRange "-" classAtom }
   ClassOpenLit { "[]" }
   ClassOpenNeg { "[^" }
   ClassOpen { "[" }
+  ClassClose { "]" }
 
   // Single-char, not a run: a class is a set of individual members/ranges
   // (unlike top-level Literal, which is free to coalesce a run of ordinary
@@ -150,16 +147,8 @@ ClassRange { classAtom !classRange "-" classAtom }
   // `@precedence { Backreference, Escape }`, which turned out to force
   // Backreference to win even when Escape's match was strictly longer --
   // Lezer's precedence table isn't just an equal-length tie-breaker).
-  //
-  // Group-open markers are all longer than the bare "?" Quantifier when
-  // they match, but right after "(" both are reachable (CapturingGroup's
-  // content may hostile-tolerantly start with a bare Quantifier) -- state
-  // the preference explicitly so a real extension marker always wins.
-  @precedence {
-    NonCapMarker, NamedOpenMarker, GroupRefMarker, LookaheadMarker,
-    NegLookaheadMarker, LookbehindMarker, NegLookbehindMarker, AtomicMarker,
-    ConditionalMarker, FlagsMarker, Quantifier
-  }
+  // FlagsMarker overlaps the capturing "(" token; prefer it.
+  @precedence { FlagsMarker, "(" }
 
   // Top-level/branch literal run: anything not otherwise special. "]" has
   // no meaning outside a class in Python, so it stays literal here.
@@ -171,5 +160,5 @@ ClassRange { classAtom !classRange "-" classAtom }
   // "{"/"}" as literal text (coverage matrix hostile rows: `a{`, `a{x}`,
   // `a{2`). Always shorter than a successful Quantifier match, so longest
   // match already prefers Quantifier whenever it actually applies.
-  "(" ")" "[" "]" "|" "-" "{" "}"
+  "(" ")" "[" "|" "-" "{" "}"
 }

@@ -119,6 +119,21 @@ test("lezerErrorDiagnostics: balanced '(a)' produces zero diagnostics", () => {
   assert.equal(diags.length, 0, "balanced input must not produce error diagnostics");
 });
 
+test("lezerErrorDiagnostics: Python-valid ? before flag letters is clean (issue #3059)", () => {
+  for (const doc of [
+    "m?ad",
+    "^(.+[-_.])??m?ad[sxv]?[0-9]*[-_.]",
+    "^(.+[-_.])??adse?rv(er?|ice)?s?[0-9]*[-.]",
+  ]) {
+    const diags = lezerErrorDiagnostics(parsedState(doc));
+    assert.equal(diags.length, 0, `${JSON.stringify(doc)} must not produce error diagnostics`);
+  }
+});
+
+test("lezerErrorDiagnostics: trailing class dash is clean (Python re docs)", () => {
+  assert.equal(lezerErrorDiagnostics(parsedState("[a-]")).length, 0);
+});
+
 test("lezerErrorDiagnostics finds an error mounted deep inside a later Pattern (overlay recursion)", () => {
   // "ok" (line 1, clean) then "(a)" (line 2, clean) then "(" (line 3, unbalanced) --
   // proves the walk recurses into the mounted overlay at a non-zero host offset, not
