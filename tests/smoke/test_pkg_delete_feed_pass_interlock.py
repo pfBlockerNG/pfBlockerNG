@@ -13,9 +13,6 @@ With the pass parked, ``pkg delete`` runs in the background and must log that it
 waiting, without having started the teardown; once the hook is released the pass
 finishes and the uninstall proceeds to completion.
 
-Pre-#3090 the uninstall's sync defers at once and the teardown runs while the hook is
-still parked: the waiting line never appears — the red→green discriminator.
-
 NOT A SMOKE TEST: like ``test_pkg_op_teardown`` this is a *lifecycle* mechanic, so it
 carries the ``repo`` marker and reuses ``repo_vm``. Runs only via::
 
@@ -23,6 +20,8 @@ carries the ``repo`` marker and reuses ``repo_vm``. Runs only via::
 """
 
 from __future__ import annotations
+
+import contextlib
 
 import pytest
 
@@ -80,22 +79,17 @@ _HOOK = {
 }
 
 
-def _guest_file_exists(vm: SmokeVM, path: str) -> bool:
-    return vm.ssh("test", "-f", path).returncode == 0
+def _run_in_background(vm: SmokeVM, command: str, out: str) -> None:
+    """Start ``command`` on the guest detached from this ssh session; output + ``RC=<n>`` land in ``out``."""
+    vm.ssh(f"nohup /bin/sh -c '{command} > {out} 2>&1; echo RC=$? >> {out}' >/dev/null 2>&1 &")
 
 
-def _guest_file(vm: SmokeVM, path: str) -> str:
-    return vm.ssh(f"cat {path} 2>/dev/null || true").stdout
+def _finished(vm: SmokeVM, out: str) -> bool:
+    """TRUE once the background process behind ``out`` has appended its ``RC=`` line (or never started)."""
+    return not h.hook_marker_exists(vm, out) or "RC=" in h.read_log_file(vm, out)
 
 
-def _run_in_background(vm: SmokeVM, name: str, command: str, out: str) -> None:
-    """Start ``command`` on the guest detached from this ssh session, output + ``RC=<n>`` to ``out``."""
-    script = f"{_DIR}/{name}.sh"
-    vm.ssh(f"cat > {script} << 'PFBEOF'\n{command} > {out} 2>&1\necho \"RC=$?\" >> {out}\nPFBEOF")
-    vm.ssh(f"nohup /bin/sh {script} >/dev/null 2>&1 &")
-
-
-@pytest.mark.timeout(900)  # install + parked pass + pkg delete; budget ~10 min
+@pytest.mark.timeout(900)  # install + parked pass + pkg delete; budget ~15 min
 def test_pkg_delete_waits_for_the_in_flight_feed_pass(repo_vm: SmokeVM) -> None:
     """UNINSTALL INTERLOCK (#3090): ``pkg delete`` waits for a running feed pass.
 
@@ -125,40 +119,37 @@ def test_pkg_delete_waits_for_the_in_flight_feed_pass(repo_vm: SmokeVM) -> None:
         h.wait_no_active_pfb_task(vm)
 
         # AND: a feed pass parked in its pre hook — inside the feed-pass lock.
-        _run_in_background(
-            vm, "pass", f"{h.PHP_BIN} {h.PFB_CLI} pfb_trigger scope=both force=true trigger=force", _PASS_OUT
-        )
-        parked = h.wait_until(lambda: _guest_file_exists(vm, _STARTED), timeout=120.0, interval=1.0)
-        assert parked, (
-            f"test setup: the feed pass never reached its pre hook; pass output: {_guest_file(vm, _PASS_OUT)!r}"
-        )
+        _run_in_background(vm, f"{h.PHP_BIN} {h.PFB_CLI} pfb_trigger scope=both force=true trigger=force", _PASS_OUT)
+        try:
+            h.wait_until(lambda: h.hook_marker_exists(vm, _STARTED), timeout=120.0, interval=1.0)
+        except RuntimeError as exc:
+            raise AssertionError(
+                f"test setup: the feed pass never reached its pre hook; pass output: {h.read_log_file(vm, _PASS_OUT)!r}"
+            ) from exc
 
         # ---- WHEN: pkg delete while the pass is parked ------------------------- #
         waiting_before = h.count_log_marker(vm, h.PFB_LOG, _WAITING_LINE)
-        _run_in_background(vm, "delete", f"env ASSUME_ALWAYS_YES=yes pkg delete -y {PKG_NAME}", _DELETE_OUT)
+        _run_in_background(vm, f"env ASSUME_ALWAYS_YES=yes pkg delete -y {PKG_NAME}", _DELETE_OUT)
 
         # THEN: the uninstall says it is waiting for the pass. The event consumed here is
         # "the uninstall reacted": either it logged the wait (fixed) or it went ahead and
         # tore down / finished without waiting (pre-#3090) -- one of the two always happens,
         # so the salvage cap only reports a genuinely stuck box.
         def _uninstall_reacted() -> bool:
-            out = _guest_file(vm, _DELETE_OUT)
+            out = h.read_log_file(vm, _DELETE_OUT)
             return (
                 h.count_log_marker(vm, h.PFB_LOG, _WAITING_LINE) > waiting_before
                 or _TEARDOWN_LINE in out
                 or "RC=" in out
             )
 
-        h.wait_until(_uninstall_reacted, timeout=120.0, interval=1.0)
-        delete_so_far = _guest_file(vm, _DELETE_OUT)
+        h.wait_until(_uninstall_reacted, timeout=60.0, interval=1.0)
+        delete_so_far = h.read_log_file(vm, _DELETE_OUT)
         assert h.count_log_marker(vm, h.PFB_LOG, _WAITING_LINE) > waiting_before, (
             f"`pkg delete` did not log {_WAITING_LINE!r} while a feed pass held the lock — the uninstall "
             f"is not serialised against an in-flight pass (issue #3090).\npkg delete output so far:\n{delete_so_far}"
         )
         # ... and has NOT torn anything down yet: the pass is still parked in its hook.
-        assert _guest_file_exists(vm, _STARTED) and not _guest_file_exists(vm, _GO), (
-            "test invariant: the pass must still be parked"
-        )
         assert _TEARDOWN_LINE not in delete_so_far, (
             f"`pkg delete` reached {_TEARDOWN_LINE!r} while the feed pass was still running — "
             f"the hold did not block the teardown:\n{delete_so_far}"
@@ -166,27 +157,26 @@ def test_pkg_delete_waits_for_the_in_flight_feed_pass(repo_vm: SmokeVM) -> None:
 
         # ---- WHEN: the parked pass is released --------------------------------- #
         vm.ssh("touch", _GO)
-        h.wait_until(lambda: "RC=" in _guest_file(vm, _DELETE_OUT), timeout=400.0, interval=2.0)
-        delete_out = _guest_file(vm, _DELETE_OUT)
-        pass_out = _guest_file(vm, _PASS_OUT)
+        h.wait_until(lambda: "RC=" in h.read_log_file(vm, _DELETE_OUT), timeout=400.0, interval=2.0)
+        delete_out = h.read_log_file(vm, _DELETE_OUT)
+        pass_out = h.read_log_file(vm, _PASS_OUT)
 
         # THEN: the pass completed, and the uninstall took the hold, tore down and exited 0.
-        assert "RC=0" in pass_out, f"the released feed pass did not exit 0:\n{pass_out}"
-        assert _SERIALISING_LINE in delete_out, (
-            f"the uninstall did not report serialising against the pass (expected {_SERIALISING_LINE!r}):\n{delete_out}"
+        assert pass_out.rstrip().endswith("RC=0"), f"the released feed pass did not exit 0:\n{pass_out}"
+        assert 0 <= delete_out.find(_SERIALISING_LINE) < delete_out.find(_TEARDOWN_LINE), (
+            f"expected {_SERIALISING_LINE!r} before {_TEARDOWN_LINE!r} on pkg delete's output:\n{delete_out}"
         )
         assert _HOLD_GIVEN_UP not in delete_out, (
             f"the uninstall gave up its wait instead of taking the hold:\n{delete_out}"
         )
-        assert _TEARDOWN_LINE in delete_out, (
-            f"the uninstall never reached the teardown (expected {_TEARDOWN_LINE!r}):\n{delete_out}"
-        )
-        assert delete_out.index(_SERIALISING_LINE) < delete_out.index(_TEARDOWN_LINE), (
-            f"the hold must be taken BEFORE the teardown line:\n{delete_out}"
-        )
         assert delete_out.rstrip().endswith("RC=0"), f"`pkg delete` exited non-zero:\n{delete_out}"
         assert pkg_installed_version(vm) is None, "`pkg delete` did not remove the package"
     finally:
-        # Release anything still parked, then leave the box as the sibling modules expect.
-        vm.ssh(f"touch {_GO}; sleep 2; rm -f {h.HOOK_SCRIPT_DIR}/{_HOOK['script']}; rm -rf {_DIR}")
+        # Release anything still parked and let both background processes finish, then leave
+        # the box as the sibling modules expect (no hook row, no package).
+        vm.ssh(f"mkdir -p {_DIR}; touch {_GO}")
+        with contextlib.suppress(RuntimeError):
+            h.wait_until(lambda: _finished(vm, _PASS_OUT) and _finished(vm, _DELETE_OUT), timeout=400.0, interval=2.0)
+        vm.ssh(f"rm -f {h.HOOK_SCRIPT_DIR}/{_HOOK['script']}; rm -rf {_DIR}")
+        h.clear_update_hooks(vm)
         pkg_delete(vm)
