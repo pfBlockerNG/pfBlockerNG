@@ -110,7 +110,6 @@ function pfb_ip_regex_matches(string $family, string $line, array $config): arra
 
 // #3121: $ip_data is appended in place, never returned -- a by-value copy handed back
 // through the result made every append copy the whole buffer (O(n²) over the feed).
-// A progress dot every 50 000 lines keeps the live tail moving on a large feed.
 /** @return array{line_number:int,raw_line:string,line:string,ip_suppressed:bool,parse_fail:int,messages:list<string>,detailed_parse_fail:bool} */
 function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_number,
     string &$ip_data, bool $ip_suppressed, int $parse_fail): array {
@@ -118,12 +117,8 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
 	foreach ($parsed['entries'] as $entry) {
 		$ip_data .= $entry . "\n";
 	}
-	$line_number++;
-	if ($line_number % 50000 === 0) {
-		$parsed['messages'][] = '.';
-	}
 	return [
-		'line_number'       => $line_number,
+		'line_number'       => $line_number + 1,
 		'raw_line'          => $raw_line,
 		'line'              => $parsed['line'],
 		'ip_suppressed'     => $ip_suppressed || $parsed['suppressed'],

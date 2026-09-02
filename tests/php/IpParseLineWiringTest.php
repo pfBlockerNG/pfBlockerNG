@@ -55,26 +55,17 @@ final class IpParseLineWiringTest extends TestCase
 		$this->assertSame("192.0.2.1\n192.0.2.2\n192.0.2.3\n", $ip_data);
 	}
 
-	/** #3121: a large feed keeps the live tail moving -- one progress dot every 50 000 lines. */
-	public function testReplayEmitsAProgressDotEveryFiftyThousandLines(): void
+	/** #3123: the result's messages are the parser's own -- no synthetic progress output at any line count. */
+	public function testReplayReturnsOnlyParserMessages(): void
 	{
 		$ip_data = '';
 		$config  = $this->config('_v4', 'auto');
 
-		$before = pfb_ip_parse_line_replay("192.0.2.1\n", $config, 49998, $ip_data, FALSE, 0);
-		$this->assertSame(49999, $before['line_number']);
-		$this->assertSame([], $before['messages'], 'no dot short of the boundary');
-
-		$at = pfb_ip_parse_line_replay("192.0.2.2\n", $config, 49999, $ip_data, FALSE, 0);
-		$this->assertSame(50000, $at['line_number']);
-		$this->assertSame(['.'], $at['messages'], 'the 50 000th line emits exactly one dot');
-
-		$after = pfb_ip_parse_line_replay("192.0.2.3\n", $config, 50000, $ip_data, FALSE, 0);
-		$this->assertSame([], $after['messages'], 'no dot past the boundary');
-
-		$twice = pfb_ip_parse_line_replay("192.0.2.4\n", $config, 99999, $ip_data, FALSE, 0);
-		$this->assertSame(['.'], $twice['messages'], 'every multiple of 50 000');
-		$this->assertSame("192.0.2.1\n192.0.2.2\n192.0.2.3\n192.0.2.4\n", $ip_data);
+		foreach ([0, 49999, 99999] as $line_number) {
+			$state = pfb_ip_parse_line_replay("192.0.2.1\n", $config, $line_number, $ip_data, FALSE, 0);
+			$this->assertSame($line_number + 1, $state['line_number']);
+			$this->assertSame([], $state['messages'], "line {$state['line_number']} carries no synthetic message");
+		}
 	}
 
 	public function testReplayCarriesV6SuppressionAndExistingState(): void
