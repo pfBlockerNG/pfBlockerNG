@@ -446,6 +446,18 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	}
 
 	/**
+	 * The confirm block is the only reachable `chroot_cmd` caller on the refused-stop path,
+	 * so a command that leaves a file behind is a direct spy on whether it ran. Both the
+	 * absence assertion and its positive control build the fragment HERE, deliberately:
+	 * review leg 3 showed that two copy-pasted fragments let a typo in one escape the
+	 * other, which is how a positive control can certify a mechanism it does not share.
+	 */
+	private static function confirmRecorderCmd(string $probe): string
+	{
+		return '/usr/bin/touch ' . escapeshellarg($probe) . ' ;:';
+	}
+
+	/**
 	 * issue #3094: a stop that could not be completed is NOT a broken unbound.conf.
 	 *
 	 * pfb_stop_start_unbound() refuses to start a second resolver when the daemon
@@ -472,7 +484,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// here is a direct spy on whether it ran at all (leg 3 row 8: skipping it was
 		// previously unasserted -- reverting the guard left every test green).
 		$confirmProbe = "{$this->dir}/confirm_ran";
-		$GLOBALS['pfb']['chroot_cmd'] = '/usr/bin/touch ' . escapeshellarg($confirmProbe) . ' ;:';
+		$GLOBALS['pfb']['chroot_cmd'] = self::confirmRecorderCmd($confirmProbe);
 
 		// The daemon outlives both budgets, so the stop refuses: this is the #3055 path.
 		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
@@ -502,6 +514,13 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertFileDoesNotExist($confirmProbe,
 			'the confirm block must not run for a refused stop: the process still answering '
 			. 'is the daemon we failed to replace, so crediting it would report success');
+		// That absence is only evidence if THIS test's recorder could have fired. An
+		// unwritable probe path would satisfy the assertion above while proving nothing,
+		// so fire it by hand now and require the file to appear (review leg 3, round 3).
+		exec($GLOBALS['pfb']['chroot_cmd'] . ' status 2>&1');
+		$this->assertFileExists($confirmProbe,
+			'the recorder this test relies on must be capable of creating the probe; '
+			. 'otherwise the absence assertion above passes for the wrong reason');
 
 		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"),
 			'the resolver config must survive a stop failure: it was never the fault');
@@ -543,7 +562,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$GLOBALS['g']['varrun_path'] = $this->dir;
 
 		$confirmProbe = "{$this->dir}/confirm_ran";
-		$GLOBALS['pfb']['chroot_cmd'] = '/usr/bin/touch ' . escapeshellarg($confirmProbe) . ' ;:';
+		$GLOBALS['pfb']['chroot_cmd'] = self::confirmRecorderCmd($confirmProbe);
 
 		// is_process_running('unbound') call sequence for this path, enumerated from a
 		// probe rather than guessed: (1) pfb_reload_unbound's pre-restart check :12022,
