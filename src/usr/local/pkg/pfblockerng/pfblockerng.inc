@@ -11459,10 +11459,8 @@ function pfb_stop_start_unbound($type) {
 		}
 	}
 
-	// The wait above is bounded, so it can expire with Unbound still up (issue #3055:
-	// a large DNSBL keeps the daemon inside pythonmod init past the budget). Falling
-	// through to the start below is what produces 'bind: address already in use' and a
-	// box that needs kill -9 plus a PEM rebuild. Escalate to KILL, then refuse to start.
+	// issue #3055: the bounded wait above can expire with Unbound still up (a large DNSBL
+	// keeps it inside pythonmod init); starting anyway double-binds :53.
 	if (is_process_running('unbound')) {
 		pfb_logger("\nUnbound did not stop in " . PFB_UNBOUND_STOP_WAIT .
 			" sec; escalating to KILL", 2);

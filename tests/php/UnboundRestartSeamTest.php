@@ -47,7 +47,7 @@ final class UnboundRestartSeamTest extends TestCase
 		];
 
 		// varrun_path holds no unbound.pid, so the TERM half is skipped; the stop-wait
-		// loop and the daemon start are what this file exercises.
+		// loop, the KILL escalation and the daemon start are what this file exercises.
 		$GLOBALS['pfb'] = array_replace($GLOBALS['pfb'], [
 			'log'                  => "{$this->dir}/pfblockerng.log",
 			'errlog'               => "{$this->dir}/error.log",
@@ -262,7 +262,6 @@ final class UnboundRestartSeamTest extends TestCase
 	{
 		$before = $this->doubleInvocations();
 		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
-		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
 		$GLOBALS['pfb_test_sigkillbyname_effect'] = static function (string $name, string $sig): void {
 			if ($name === 'unbound' && $sig === 'KILL') {
 				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
