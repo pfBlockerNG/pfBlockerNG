@@ -126,7 +126,7 @@ def find_violations(
     text: str,
     source: str,
     sections_by_path: dict[str, str],
-    registry_keys: set[tuple[str, str]] | dict[tuple[str, str], object],
+    registry_keys: set[tuple[str, str]],
 ) -> list[Violation]:
     """Apply both rules to one page's source."""
     basename = Path(source).name
@@ -226,7 +226,7 @@ if ($_POST) {
 """
 
 
-def _self_test(sections_by_path: dict[str, str], registry_keys: dict[tuple[str, str], bool]) -> int:
+def _self_test(sections_by_path: dict[str, str], registry_keys: set[tuple[str, str]]) -> int:
     """Red canary: prove both rules fire on a known-violating synthetic page."""
     found = find_violations(_SELF_TEST_PAGE, "self-test/pfblockerng_ip.php", sections_by_path, registry_keys)
     rules = {v.rule for v in found}

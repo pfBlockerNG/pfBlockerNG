@@ -38,11 +38,11 @@ _spec.loader.exec_module(ctr)
 IP_SECTION = "installedpackages/pfblockerngipsettings/config/0"
 GLOBAL_SECTION = "installedpackages/pfblockerngglobal"
 
-# A minimal stand-in for the parsed registry: (alias, bare key) -> is-a-toggle.
-FAKE_KEYS: dict[tuple[str, str], bool] = {
-    ("ip", "enable_dup"): True,
-    ("ip", "maxmind_locale"): False,
-    ("global", "alertrefresh"): True,
+# A minimal stand-in for the parsed registry: registered (alias, bare key) pairs.
+FAKE_KEYS: set[tuple[str, str]] = {
+    ("ip", "enable_dup"),
+    ("ip", "maxmind_locale"),
+    ("global", "alertrefresh"),
 }
 FAKE_SECTIONS = {IP_SECTION: "ip", GLOBAL_SECTION: "global"}
 
