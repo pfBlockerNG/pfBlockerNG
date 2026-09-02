@@ -587,8 +587,14 @@ kobe.jp
         ("shop.example.co.jp", "co.jp", "example.co.jp"),
         # Same exit at the TLD itself, where no deeper rule applies.
         ("shop.example.jp", "jp", "example.jp"),
-        # Wildcard base kobe.jp promotes the suffix one label to the left.
+        # Wildcard base kobe.jp promotes the suffix one label to the left. Asserted
+        # two labels deep as well, because at one label the promoted suffix is also
+        # the whole name and a matcher that ignored the depth would look correct.
         ("a.kobe.jp", "a.kobe.jp", ""),
+        ("x.y.kobe.jp", "y.kobe.jp", "x.y.kobe.jp"),
+        # A wildcard base is not itself a public suffix through the wildcard: the
+        # bare kobe.jp resolves by its exact rule, never by promoting past the name.
+        ("kobe.jp", "kobe.jp", ""),
         # The exception carves city.kobe.jp back out of that wildcard, and beats the
         # longer wildcard match it overlaps.
         ("x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
@@ -624,9 +630,11 @@ def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
 
 _FUSED_WILDCARD_PSL = """// ===BEGIN ICANN DOMAINS===
 com
+nom.br
 *.nom.br
 // ===END ICANN DOMAINS===
 // ===BEGIN PRIVATE DOMAINS===
+sub.example.com
 *.sub.example.com
 // ===END PRIVATE DOMAINS===
 """
@@ -636,11 +644,20 @@ com
     ("name", "icann_suffix", "public_suffix", "private_active"),
     [
         # ICANN wildcard: the base nom.br promotes the ICANN suffix one label left.
-        # Without that arm the ICANN side falls through to the bare TLD, 'br'.
+        # Without that arm the ICANN side falls through to the bare TLD, 'br'. The
+        # deeper row is what pins WHICH label it promotes to; at one label the
+        # promoted suffix is also the whole name.
         ("a.nom.br", "a.nom.br", "a.nom.br", False),
+        ("a.b.nom.br", "b.nom.br", "b.nom.br", False),
+        # The bare wildcard base resolves by its exact rule: a wildcard needs a label
+        # to its left, so it must not fire on the whole name and promote past it.
+        ("nom.br", "nom.br", "nom.br", False),
         # PRIVATE wildcard: only the combined side sees sub.example.com, so the two
-        # sections must come out of the one pass with different answers.
+        # sections must come out of the one pass with different answers. Same depth
+        # and same bare-base rows as the ICANN arm above, for the same reasons.
         ("x.sub.example.com", "com", "x.sub.example.com", True),
+        ("x.y.sub.example.com", "com", "y.sub.example.com", True),
+        ("sub.example.com", "com", "sub.example.com", True),
     ],
 )
 def test_the_fused_pass_tracks_a_wildcard_in_each_section(
