@@ -324,6 +324,20 @@ else
 	skip comment-narration
 fi
 
+# --- Forbid retiring a named-invariant test with nothing left in its place:
+#     a removed/renamed `def test_*` / PHPUnit `function test*` / shellspec `It` /
+#     `node --test` `test` needs a successor assertion commented
+#     `successor: <retired name>` or a
+#     dated entry in docs/history/retired-tests.md. Diff-scoped. ---
+if exempted scripts/check_guard_erosion.py; then
+	exempt guard-erosion
+elif [ -n "$py_bin" ]; then
+	step 'guard-erosion (retired tests need a successor or a tombstone)'
+	"$py_bin" scripts/check_guard_erosion.py --staged || failed 'guard-erosion'
+else
+	skip guard-erosion
+fi
+
 # --- Agent role-family parity (issue #1387): the shared role registry
 #     (.agents/policy/agent-roles.md) vs both vendors' role definitions. The
 #     checker self-scopes: it validates iff the staged diff touches a role
