@@ -1429,6 +1429,9 @@ def init_standard(id: int, env: module_env) -> bool:
         pfb_query_watcher_thread, \
         pfb_query_stop
 
+    # issue #3058: build duration, reported on the "script loaded" line below.
+    init_started = time.monotonic()
+
     if not register_inplace_cb_reply(inplace_cb_reply, env, id):
         log_info("[pfBlockerNG]: Failed register_inplace_cb_reply")
         return False
@@ -2160,7 +2163,18 @@ def init_standard(id: int, env: module_env) -> bool:
 
     pfb_setup_logging()
 
-    log_info("[pfBlockerNG]: init_standard script loaded")
+    # issue #3058: prefix kept verbatim (greps key on it). Each structure is named
+    # rather than summed into one "entries" figure -- dnsbl and regex mirror the two
+    # counts the product already publishes (pfb_py_count, pfb_py_regex_count), so the
+    # log and the UI cannot disagree; whitelist is loaded but published nowhere else.
+    log_info(
+        "[pfBlockerNG]: init_standard script loaded in {:.1f}s (dnsbl {}, regex {}, whitelist {})".format(
+            time.monotonic() - init_started,
+            len(dataDB) + len(zoneDB),
+            len(regexDB) + len(allowRegexDB),
+            len(whiteDB),
+        )
+    )
     return True
 
 
