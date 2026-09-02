@@ -108,9 +108,13 @@ function pfb_ip_regex_matches(string $family, string $line, array $config): arra
 	return preg_match_all($pattern, $line, $matches) ? $matches[0] : [];
 }
 
-/** @return array{line_number:int,raw_line:string,line:string,ip_data:string,ip_suppressed:bool,parse_fail:int,messages:list<string>,detailed_parse_fail:bool} */
+// #3121: $ip_data is appended IN PLACE and never returned. Passing it by value (and
+// handing a copy back) left the caller's string at refcount > 1 for the whole call, so
+// every append copied the entire accumulated buffer -- O(n²) over the feed, ~3 min for a
+// 300k-line feed on a live box where the direct append is under a second.
+/** @return array{line_number:int,raw_line:string,line:string,ip_suppressed:bool,parse_fail:int,messages:list<string>,detailed_parse_fail:bool} */
 function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_number,
-    string $ip_data, bool $ip_suppressed, int $parse_fail): array {
+    string &$ip_data, bool $ip_suppressed, int $parse_fail): array {
 	$parsed = pfb_ip_parse_line($raw_line, $config);
 	foreach ($parsed['entries'] as $entry) {
 		$ip_data .= $entry . "\n";
@@ -119,7 +123,6 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
 		'line_number'       => $line_number + 1,
 		'raw_line'          => $raw_line,
 		'line'              => $parsed['line'],
-		'ip_data'           => $ip_data,
 		'ip_suppressed'     => $ip_suppressed || $parsed['suppressed'],
 		'parse_fail'        => $parse_fail + $parsed['parse_fail_delta'],
 		'messages'          => $parsed['messages'],
@@ -4018,7 +4021,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										], $ip_lineno, $ip_data, $ip_suppressed, $parse_fail);
 										$ip_lineno    = $replayed_line['line_number'];
 										$line         = $replayed_line['line'];
-										$ip_data      = $replayed_line['ip_data'];
 										$ip_suppressed = $replayed_line['ip_suppressed'];
 										$parse_fail   = $replayed_line['parse_fail'];
 										foreach ($replayed_line['messages'] as $message) {

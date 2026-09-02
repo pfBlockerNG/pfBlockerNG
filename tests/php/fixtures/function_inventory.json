@@ -6232,7 +6232,7 @@
             },
             {
                 "name": "ip_data",
-                "byRef": false,
+                "byRef": true,
                 "variadic": false,
                 "type": "string",
                 "default": null

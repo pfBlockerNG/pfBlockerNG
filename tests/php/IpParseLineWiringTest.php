@@ -24,38 +24,57 @@ final class IpParseLineWiringTest extends TestCase
 
 	public function testReplayAppendsEntriesInParserOrderAndAdvancesLineNumber(): void
 	{
+		$ip_data = "10.0.0.1\n";
 		$state = pfb_ip_parse_line_replay(
 			"from 192.0.2.1 to 198.51.100.7\n",
 			$this->config('_v4'),
 			4,
-			"10.0.0.1\n",
+			$ip_data,
 			FALSE,
 			2
 		);
 
 		$this->assertSame(5, $state['line_number']);
 		$this->assertSame("from 192.0.2.1 to 198.51.100.7", $state['line']);
-		$this->assertSame("10.0.0.1\n192.0.2.1\n198.51.100.7\n", $state['ip_data']);
+		$this->assertSame("10.0.0.1\n192.0.2.1\n198.51.100.7\n", $ip_data);
 		$this->assertFalse($state['ip_suppressed']);
 		$this->assertSame(2, $state['parse_fail']);
 		$this->assertSame([], $state['messages']);
 		$this->assertFalse($state['detailed_parse_fail']);
 	}
 
+	/**
+	 * #3121: the accumulator is appended IN PLACE. A by-value copy returned through the
+	 * result array leaves the caller's string with refcount > 1 during the call, so every
+	 * append copies the whole buffer and a 300k-line feed takes minutes instead of seconds.
+	 * The caller's variable is the only accumulator: the result carries no copy of it.
+	 */
+	public function testReplayAppendsToTheCallerAccumulatorInPlace(): void
+	{
+		$ip_data = '';
+		foreach (["192.0.2.1\n", "192.0.2.2\n", "192.0.2.3\n"] as $line) {
+			$state = pfb_ip_parse_line_replay($line, $this->config('_v4', 'auto'), 0, $ip_data, FALSE, 0);
+			$this->assertArrayNotHasKey('ip_data', $state, 'result must not carry a second copy of the accumulator');
+		}
+
+		$this->assertSame("192.0.2.1\n192.0.2.2\n192.0.2.3\n", $ip_data);
+	}
+
 	public function testReplayCarriesV6SuppressionAndExistingState(): void
 	{
+		$ip_data = '';
 		$state = pfb_ip_parse_line_replay(
 			'fc00::1',
 			$this->config('_v6', 'auto', 'on'),
 			0,
-			'',
+			$ip_data,
 			TRUE,
 			1
 		);
 
 		$this->assertSame(1, $state['line_number']);
 		$this->assertSame('fc00::1', $state['line']);
-		$this->assertSame('', $state['ip_data']);
+		$this->assertSame('', $ip_data);
 		$this->assertTrue($state['ip_suppressed']);
 		$this->assertSame(1, $state['parse_fail']);
 		$this->assertSame([], $state['messages']);
@@ -63,11 +82,12 @@ final class IpParseLineWiringTest extends TestCase
 
 	public function testReplayReturnsDetailedFailureWithRawLineForDiagnostics(): void
 	{
+		$ip_data = '';
 		$state = pfb_ip_parse_line_replay(
 			" 999.999.999.999 \n",
 			$this->config('_v4', 'auto'),
 			9,
-			'',
+			$ip_data,
 			FALSE,
 			0
 		);
