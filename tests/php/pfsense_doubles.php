@@ -1173,6 +1173,23 @@ if (!function_exists('is_process_running')) {
 	}
 }
 
+if (!function_exists('sigkillbyname')) {
+	// pfSense util.inc: signal every process matching a name. The stop-timeout
+	// escalation in pfb_stop_start_unbound() (issue #3055) reaches this; tests seed
+	// $GLOBALS['pfb_test_sigkillbyname_effect'] with a callable(string $name, string
+	// $sig): void to model what the signal does to
+	// $GLOBALS['pfb_test_process_running']. Calls are recorded in
+	// $GLOBALS['pfb_test_sigkillbyname_calls'] as [name, signal] pairs.
+	function sigkillbyname($procname, $sig) {
+		$GLOBALS['pfb_test_sigkillbyname_calls'][] = array($procname, $sig);
+		$effect = $GLOBALS['pfb_test_sigkillbyname_effect'] ?? NULL;
+		if (is_callable($effect)) {
+			$effect($procname, $sig);
+		}
+		return 0;
+	}
+}
+
 if (!function_exists('get_single_sysctl')) {
 	// pfSense pfsense-utils.inc: read one sysctl OID as a string. pfb_unbound_py_swap_fits_ram()
 	// reads 'hw.usermem' to project whether a zero-downtime swap fits in RAM. Tests seed

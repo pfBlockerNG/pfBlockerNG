@@ -47,7 +47,7 @@ final class UnboundRestartSeamTest extends TestCase
 		];
 
 		// varrun_path holds no unbound.pid, so the TERM half is skipped; the stop-wait
-		// loop and the daemon start are what this file exercises.
+		// loop, the KILL escalation and the daemon start are what this file exercises.
 		$GLOBALS['pfb'] = array_replace($GLOBALS['pfb'], [
 			'log'                  => "{$this->dir}/pfblockerng.log",
 			'errlog'               => "{$this->dir}/error.log",
@@ -72,7 +72,8 @@ final class UnboundRestartSeamTest extends TestCase
 		} else {
 			unset($GLOBALS['g']['varrun_path']);
 		}
-		unset($GLOBALS['pfb_test_process_running']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_sigkillbyname_calls'],
+			$GLOBALS['pfb_test_sigkillbyname_effect']);
 		rmdir_recursive($this->dir);
 	}
 
@@ -200,7 +201,8 @@ final class UnboundRestartSeamTest extends TestCase
 	 * Scenario: the stop-wait must not cost a test the appliance's full budget.
 	 *   Given a process-running double that never reports the daemon gone,
 	 *   When pfb_stop_start_unbound() waits for it to terminate,
-	 *   Then it polls only the harness budget -- 30 one-second polls per call otherwise.
+	 *   Then the stop-wait loop polls only the harness budget -- 30 one-second polls
+	 *   per call otherwise -- and the KILL escalation adds only its own budget.
 	 */
 	public function testStopWaitIsBoundedWhenTheDaemonNeverExits(): void
 	{
@@ -214,8 +216,68 @@ final class UnboundRestartSeamTest extends TestCase
 
 		$this->assertLessThan(30, $polls,
 			"a test that never reports the daemon gone must not pay the appliance's 30 one-second polls");
-		$this->assertSame(PFB_UNBOUND_STOP_WAIT, $polls,
-			'the wait loop must poll exactly its configured budget when the daemon never exits');
+		// The stop loop polls its budget; the timeout branch then re-checks once, polls
+		// the KILL budget, and re-checks once more before refusing to start.
+		$this->assertSame(PFB_UNBOUND_STOP_WAIT + PFB_UNBOUND_KILL_WAIT + 2, $polls,
+			'both waits must poll exactly their configured budgets when the daemon never exits');
+	}
+
+	/**
+	 * Scenario (#3055): a stop that times out must not be followed by a start.
+	 *   Given Unbound is still running after both the TERM wait and the KILL wait,
+	 *   When pfb_stop_start_unbound() runs,
+	 *   Then no start is attempted, and the refusal is reported and logged.
+	 *
+	 * Starting on top of a live daemon is 'bind: address already in use' -- the owner's
+	 * production failure, recoverable only with kill -9 and a PEM rebuild.
+	 */
+	public function testStopTimeoutRefusesToStartASecondInstance(): void
+	{
+		$before = $this->doubleInvocations();
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+
+		$final = pfb_stop_start_unbound('');
+
+		$this->assertCount(count($before), $this->doubleInvocations(),
+			'a stop that never completed must not reach the daemon start at all');
+		$this->assertSame(-1, $final['retval'],
+			'the refusal must be reported to the caller as a failure, not a silent success');
+		$this->assertNotEmpty($final['result'],
+			'the caller logs the result, so the refusal must carry a reason');
+		$this->assertSame(array(array('unbound', 'KILL')), $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'the timeout must escalate TERM to KILL exactly once before giving up');
+		$this->assertStringContainsString('not starting a second instance',
+			(string) @file_get_contents($GLOBALS['pfb']['log']),
+			'the refusal must be loud in the log, not inferable only from a return value');
+	}
+
+	/**
+	 * Scenario (#3055): the KILL escalation is the recovery, not just a louder failure.
+	 *   Given Unbound ignores TERM but dies on KILL,
+	 *   When pfb_stop_start_unbound() runs,
+	 *   Then the start proceeds normally.
+	 */
+	public function testDaemonThatOnlyDiesOnKillStillGetsRestarted(): void
+	{
+		$before = $this->doubleInvocations();
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_effect'] = static function (string $name, string $sig): void {
+			if ($name === 'unbound' && $sig === 'KILL') {
+				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+			}
+		};
+
+		try {
+			$final = pfb_stop_start_unbound('');
+		} finally {
+			unset($GLOBALS['pfb_test_sigkillbyname_effect']);
+		}
+
+		$this->assertCount(count($before) + 1, $this->doubleInvocations(),
+			'a daemon that KILL did clear must be restarted, not abandoned');
+		$this->assertSame(127, $final['retval'],
+			'the start must run through the harness double exactly as on the clean-stop path');
 	}
 	public function testDaemonizedStartSurvivesTheBoundedWrapper(): void
 	{
@@ -422,6 +484,8 @@ final class UnboundRestartSeamTest extends TestCase
 			'the appliance must still start the shipped daemon against the shipped config');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_STOP_WAIT', 30);"),
 			'the appliance must still wait up to 30 seconds for the outgoing daemon');
+		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_KILL_WAIT', 5);"),
+			'the KILL escalation must have its own finite five-second budget');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_WAIT', 30);"),
 			'the appliance start child must have an explicit finite 30-second budget');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_SETUP_WAIT', 5);"),
@@ -462,6 +526,17 @@ final class UnboundRestartSeamTest extends TestCase
 			'no branch may reach the daemon binary except through PFB_UNBOUND_START_CMD');
 		$this->assertStringContainsString('$i <= PFB_UNBOUND_STOP_WAIT;', $body,
 			'the stop-wait budget must come from the constant, not a literal');
+		$this->assertStringContainsString('$i <= PFB_UNBOUND_KILL_WAIT;', $body,
+			'the KILL-escalation budget must come from the constant, not a literal');
+		$stopLoop = strpos($body, '$i <= PFB_UNBOUND_STOP_WAIT;');
+		$refusal = strpos($body, 'not starting a ');
+		$start = strpos($body, 'PFB_UNBOUND_START_CMD,');
+		$this->assertNotFalse($refusal, 'the stop timeout must have an explicit refusal branch (#3055)');
+		$this->assertNotFalse($start, 'the daemon start must still be reachable');
+		$this->assertGreaterThan($stopLoop, $refusal,
+			'the refusal must be checked after the stop-wait loop, not inside it');
+		$this->assertLessThan($start, $refusal,
+			'the refusal must precede the daemon start, or the second instance is already launched');
 		$this->assertStringContainsString('posix_setpgid(0, 0)', $body,
 			'the start command must enter its own process group before the release barrier opens');
 		$this->assertStringContainsString('posix_kill(-$pid', $body,

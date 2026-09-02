@@ -11428,6 +11428,9 @@ if (!defined('PFB_UNBOUND_START_CMD')) {
 if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 	define('PFB_UNBOUND_STOP_WAIT', 30);
 }
+if (!defined('PFB_UNBOUND_KILL_WAIT')) {
+	define('PFB_UNBOUND_KILL_WAIT', 5);
+}
 if (!defined('PFB_UNBOUND_START_WAIT')) {
 	define('PFB_UNBOUND_START_WAIT', 30);
 }
@@ -11453,6 +11456,31 @@ function pfb_stop_start_unbound($type) {
 		} else {
 			pfb_logger("\nUnbound stopped in {$i} sec.", 1);
 			break;
+		}
+	}
+
+	// issue #3055: the bounded wait above can expire with Unbound still up (a large DNSBL
+	// keeps it inside pythonmod init); starting anyway double-binds :53.
+	if (is_process_running('unbound')) {
+		pfb_logger("\nUnbound did not stop in " . PFB_UNBOUND_STOP_WAIT .
+			" sec; escalating to KILL", 2);
+		sigkillbyname('unbound', 'KILL');
+		for ($i=1; $i <= PFB_UNBOUND_KILL_WAIT; $i++) {
+			if (!is_process_running('unbound')) {
+				pfb_logger("\nUnbound killed after {$i} sec.", 2);
+				break;
+			}
+			sleep(1);
+		}
+		// ponytail: process-liveness only. 'bind' is really about :53 and a socket can
+		// outlive the pid -- add a `sockstat -46l` check here if the double-bind is ever
+		// seen with no surviving unbound process.
+		if (is_process_running('unbound')) {
+			$final['result'] = array('Unbound could not be stopped; Resolver not restarted');
+			$final['retval'] = -1;
+			pfb_logger("\nUnbound still running after TERM and KILL; not starting a " .
+				"second instance. Resolver NOT restarted", 2);
+			return $final;
 		}
 	}
 
