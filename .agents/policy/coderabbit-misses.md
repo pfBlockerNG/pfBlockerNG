@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `5674413a6`  tests: assert the code-graph grammar parses, not a heredoc shape  (#3071) — asked twice, two quota notices; four legs over two rounds, two blocking fixed.
 - `2f17bc84c`  ci: sign workflow Git objects as project bot  (#3043) — asked twice, no engagement; four legs over three rounds, four blocking fixed.
 - `6b1863cd0`  tests: recognise escaped-quote delimiters in the theme-safety vocabulary  (#3002) — never asked (orchestrator miss); four legs over two rounds, three blocking fixed.
 - `1dd73d237`  tests: stop eight fixture teardowns stranding their temp directories  (#3022) — never asked, slot spent inside the window; four legs, no blocking.
