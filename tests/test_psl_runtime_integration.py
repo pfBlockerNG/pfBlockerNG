@@ -572,7 +572,9 @@ jp
 co.jp
 kobe.jp
 *.kobe.jp
+*.city.kobe.jp
 !city.kobe.jp
+!y.city.kobe.jp
 // ===END ICANN DOMAINS===
 // ===BEGIN PRIVATE DOMAINS===
 // ===END PRIVATE DOMAINS===
@@ -583,10 +585,8 @@ kobe.jp
     ("name", "public_suffix", "registrable"),
     [
         # Exact rule wins below the TLD: co.jp is longer than the bare 'jp' the
-        # no-match fallback would return, so this row fails if the exact exit goes.
+        # no-match fallback would return, so this row fails if the exact match goes.
         ("shop.example.co.jp", "co.jp", "example.co.jp"),
-        # Same exit at the TLD itself, where no deeper rule applies.
-        ("shop.example.jp", "jp", "example.jp"),
         # Wildcard base kobe.jp promotes the suffix one label to the left. Asserted
         # two labels deep as well, because at one label the promoted suffix is also
         # the whole name and a matcher that ignored the depth would look correct.
@@ -598,22 +598,24 @@ kobe.jp
         # The exception carves city.kobe.jp back out of that wildcard, and beats the
         # longer wildcard match it overlaps.
         ("x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
+        # Two exceptions match this name's tails; the longer one prevails, so the
+        # carve keeps the FIRST hit of the longest-first walk, not the last.
+        ("z.y.city.kobe.jp", "city.kobe.jp", "y.city.kobe.jp"),
+        # The shorter exception still applies on a name the longer one misses.
+        ("z.x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
     ],
 )
-def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
-    name: str, public_suffix: str, registrable: str
-) -> None:
-    """issue #3061: names under a TLD that carries an exception rule take the
-    two-phase walk, and each of its three exits stays correct.
+def test_an_exception_tld_resolves_through_the_shared_walk(name: str, public_suffix: str, registrable: str) -> None:
+    """issue #3061: an exception rule carves its name out inside the shared walk.
 
-    The shared single pass cannot honour exceptions, because an exception beats an
-    ordinary match at ANY depth, so ``_psl_prevailing`` routes a name whose TLD owns
-    an exception rule to ``_psl_prevailing_section`` instead. That walk is a live
-    production path, not a corner: the shipped list carries seven of its eight
-    exception rules under jp, which also holds 1777 exact rules, so all three exits
-    -- exact, wildcard and exception -- resolve real feed entries and each gets a
-    row here. The exact row sits below the TLD on purpose, because at the TLD that
-    exit and the no-match fallback return the same string and cannot be told apart.
+    An exception beats an ordinary match at ANY depth, so the carve-out is tracked
+    alongside the ordinary match and applied at the end rather than resolved in a
+    walk of its own. These rows pin that precedence together with each ordinary
+    match kind under an exception-bearing TLD -- a live production shape, since the
+    shipped list keeps seven of its eight exception rules under jp, which also holds
+    1777 exact rules. The exact row sits below the TLD on purpose, because at the
+    TLD an exact match and the no-match fallback return the same string and cannot
+    be told apart.
     """
     rules = P.parse_psl_rules(_EXCEPTION_TLD_PSL)
 
@@ -624,7 +626,7 @@ def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
         public_suffix,
         public_suffix,
         registrable,
-    ), f"the two-phase walk changed the resolution of {name!r}: {resolution!r}"
+    ), f"the shared walk changed the resolution of {name!r}: {resolution!r}"
     assert resolution.private_active is False, f"no PRIVATE rule exists, yet {name!r} reported one: {resolution!r}"
 
 
@@ -660,17 +662,16 @@ sub.example.com
         ("sub.example.com", "com", "sub.example.com", True),
     ],
 )
-def test_the_fused_pass_tracks_a_wildcard_in_each_section(
+def test_the_shared_walk_tracks_a_wildcard_in_each_section(
     name: str, icann_suffix: str, public_suffix: str, private_active: bool
 ) -> None:
     """issue #3061: the single pass matches wildcards for BOTH sections independently.
 
-    This authority has no exception rule, so every name reaches the fused pass rather
-    than the two-phase walk, and each row pins the wildcard arm of one section. The
-    ICANN arm needs its own row: the shipped list has 16 ICANN wildcard rules, 8 of
-    them under TLDs with no exception rule, and every one of those resolves through
-    this arm on every build -- but the small authorities elsewhere in the suite pair
-    their ICANN wildcards with exceptions, which routes those names away from here.
+    The two sections share one walk, so each has to carry its own wildcard state
+    through it; a row per section pins that. The ICANN row matters most: the shipped
+    list has 16 ICANN wildcard rules and every ICANN-governed name resolves through
+    that arm, while the ICANN wildcards in the other authorities here are all
+    exception-paired, which makes their names exercise the carve-out instead.
     """
     rules = P.parse_psl_rules(_FUSED_WILDCARD_PSL)
 
@@ -680,4 +681,4 @@ def test_the_fused_pass_tracks_a_wildcard_in_each_section(
         icann_suffix,
         public_suffix,
         private_active,
-    ), f"the fused pass changed the resolution of {name!r}: {resolution!r}"
+    ), f"the shared walk changed the resolution of {name!r}: {resolution!r}"
