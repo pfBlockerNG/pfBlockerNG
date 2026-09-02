@@ -357,16 +357,11 @@ GROK
   # A uv the seat already owns, at the path the standalone installer uses. The
   # default fixture uv lives in "$activebin" -- outside HOME -- which models the
   # shared root-owned /usr/local/bin/uv (#3010), not a seat's own.
-  seat_uv() {
+  # A tool the seat already owns, at the path the installer uses. The default
+  # fixture copies live in "$activebin", outside HOME, modelling a shared one.
+  seat_tool() {
     mkdir -p "$home/.local/bin"
-    cp "$installables/uv" "$home/.local/bin/uv"
-  }
-
-  # Same idea for codegraph (issue #3070): the default fixture copy lives in
-  # "$activebin", outside HOME, which models a shared one this seat cannot write.
-  seat_codegraph() {
-    mkdir -p "$home/.local/bin"
-    cp "$installables/codegraph" "$home/.local/bin/codegraph"
+    cp "$installables/$1" "$home/.local/bin/$1"
   }
 
   cleanup() {
@@ -473,8 +468,8 @@ GROK
   End
 
   It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
-    seat_uv
-    seat_codegraph
+    seat_tool uv
+    seat_tool codegraph
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
@@ -531,8 +526,9 @@ GROK
   End
 
   It 'installs a per-seat codegraph when the only one on PATH lives outside HOME'
-    # issue #3070: same adoption defect as #3010's uv, and worse -- there is no
-    # `|| true`, so upgrading a copy this seat cannot write ends the run.
+    # issue #3070: the codegraph twin of #3010's uv adoption defect. Like that one,
+    # this example is satisfied in isolation by an "always install" implementation;
+    # the sibling examples below are what rule that out.
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should include 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
@@ -544,30 +540,30 @@ GROK
     # The seat's own codegraph goes to $codegraph_bin, which CODEGRAPH_BIN_DIR can
     # place outside HOME; testing ownership against HOME alone would reinstall it
     # on every run instead of upgrading it.
-    custom_cg_bin="$fixture/custom codegraph bin"
-    When run env CODEGRAPH_BIN_DIR="$custom_cg_bin" \
+    custom_codegraph_bin="$fixture/custom codegraph bin"
+    When run env CODEGRAPH_BIN_DIR="$custom_codegraph_bin" \
       sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -c '^https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh$' "$curl_log")" -eq 1 ]
     Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 1 ]
-    The path "$custom_cg_bin/codegraph" should be executable
+    The path "$custom_codegraph_bin/codegraph" should be executable
   End
 
   It 'keeps a seat codegraph that lives under HOME but not in the codegraph bin dir'
     # PATH also carries $HOME/.cargo/bin, so a seat can own a codegraph that is not
     # at $codegraph_bin. Dropping the HOME alternative must not ship green.
     rm -f "$activebin/codegraph"
-    custom_cg_bin="$fixture/custom codegraph bin"
+    custom_codegraph_bin="$fixture/custom codegraph bin"
     mkdir -p "$home/.cargo/bin"
     cp "$installables/codegraph" "$home/.cargo/bin/codegraph"
-    When run env CODEGRAPH_BIN_DIR="$custom_cg_bin" sh "$script_abs" "$repository"
+    When run env CODEGRAPH_BIN_DIR="$custom_codegraph_bin" sh "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 1 ]
     Assert [ "$(grep -c '^https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh$' "$curl_log")" -eq 0 ]
   End
 
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
-    seat_codegraph
+    seat_tool codegraph
     cat > "$activebin/uv" <<'UNMANAGED_UV'
 #!/bin/sh
 printf 'uv-unmanaged:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
@@ -595,7 +591,7 @@ UNMANAGED_UV
   End
 
   It 'upgrades a managed Homebrew uv from its formula prefix on every Darwin rerun'
-    seat_codegraph
+    seat_tool codegraph
     rm -f "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
@@ -1108,7 +1104,7 @@ CONFIG
     # run before a single tool was installed. Only a seat-owned uv reaches this
     # call now, so the fixture seeds one.
     export DEBIAN_UV_SELF_UPDATE_FAILS=1
-    seat_uv
+    seat_tool uv
     When run sh "$script_abs" "$repository"
     The status should equal 0
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 1 ]

@@ -28,6 +28,16 @@ install_from_url() {
 	return "$installer_status"
 }
 
+seat_owns() {
+	# True when the $1 on PATH is this seat's own: at $2, where this script installs
+	# it (XDG_BIN_HOME / CODEGRAPH_BIN_DIR can place that outside HOME), or anywhere
+	# under HOME. A shared copy elsewhere satisfies `command -v` but is not writable.
+	case "$(command -v "$1" 2>/dev/null)" in
+		"$2/$1"|"$HOME"/*) ;;
+		*) return 1 ;;
+	esac
+}
+
 install_linux_prerequisites() {
 	require_tool dpkg-query
 	set --
@@ -250,23 +260,16 @@ main() {
 
 	case "$platform" in
 		Linux)
-			uv_path=$(command -v uv 2>/dev/null) || uv_path=
-			# $xdg_bin_home is where this script installs uv, and XDG_BIN_HOME can put
-			# it outside HOME; matching the PATH entry verbatim keeps a seat that sets
-			# it converging on self-update instead of reinstalling every run.
-			case "$uv_path" in
-				"$xdg_bin_home"/uv|"$HOME"/*)
-					# `|| true`: self-update is maintenance, not a prerequisite -- every
-					# later use is `uv tool install --upgrade`, which any uv performs -- so
-					# a transient failure must not end the run before a tool is installed.
-					uv self update || true
-					;;
-				*)
-					# issue #3010: a shared root-owned uv outside this seat satisfies
-					# `command -v` but no seat can self-update it -- provision our own.
-					install_from_url 'https://astral.sh/uv/install.sh'
-					;;
-			esac
+			if seat_owns uv "$xdg_bin_home"; then
+				# `|| true`: self-update is maintenance, not a prerequisite -- every
+				# later use is `uv tool install --upgrade`, which any uv performs -- so
+				# a transient failure must not end the run before a tool is installed.
+				uv self update || true
+			else
+				# issue #3010: a shared root-owned uv outside this seat satisfies
+				# `command -v` but no seat can self-update it -- provision our own.
+				install_from_url 'https://astral.sh/uv/install.sh'
+			fi
 			;;
 		Darwin)
 			if brew list --versions uv >/dev/null 2>&1; then
@@ -290,21 +293,14 @@ main() {
 	require_tool ast-grep
 	require_tool semgrep
 
-	cg_path=$(command -v codegraph 2>/dev/null) || cg_path=
-	# $codegraph_bin is where this script installs codegraph, and CODEGRAPH_BIN_DIR
-	# can put it outside HOME; matching the PATH entry verbatim keeps a seat that
-	# sets it converging on upgrade instead of reinstalling every run.
-	case "$cg_path" in
-		"$codegraph_bin"/codegraph|"$HOME"/*)
-			codegraph upgrade
-			;;
-		*)
-			# issue #3070: a shared codegraph outside this seat satisfies `command -v`
-			# but the seat cannot write it, so `upgrade` fails and -- with no `|| true`
-			# here -- ends the run under `set -eu`. Provision our own instead.
-			install_from_url 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
-			;;
-	esac
+	if seat_owns codegraph "$codegraph_bin"; then
+		codegraph upgrade
+	else
+		# issue #3070: a shared codegraph outside this seat satisfies `command -v`
+		# but the seat cannot write it, so `upgrade` fails and -- with no `|| true`
+		# here -- ends the run under `set -eu`. Provision our own instead.
+		install_from_url 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
+	fi
 	require_tool codegraph
 	codegraph install -l global -y -t auto
 
