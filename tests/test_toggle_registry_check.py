@@ -8,7 +8,7 @@ The load-bearing assertions are:
 
 * a NEW `PFB_FILTER_ON_OFF` save into a registered section with no registry entry FAILS
   (RULE 1) -- this is the regrowth the sweep exists to stop;
-* a registered TOGGLE whose page still declares its own default FAILS (RULE 2);
+* a registered field (toggle or plain scalar) whose page still declares its own default FAILS (RULE 2);
 * the same shapes are clean once registered / routed through `PfbConfig::read()`;
 * the real tree is clean, so the gate is blocking rather than pre-broken;
 * a broken registry parse FAILS CLOSED rather than reporting every key unregistered.
@@ -38,11 +38,11 @@ _spec.loader.exec_module(ctr)
 IP_SECTION = "installedpackages/pfblockerngipsettings/config/0"
 GLOBAL_SECTION = "installedpackages/pfblockerngglobal"
 
-# A minimal stand-in for the parsed registry: (alias, bare key) -> is-a-toggle.
-FAKE_KEYS: dict[tuple[str, str], bool] = {
-    ("ip", "enable_dup"): True,
-    ("ip", "maxmind_locale"): False,
-    ("global", "alertrefresh"): True,
+# A minimal stand-in for the parsed registry: registered (alias, bare key) pairs.
+FAKE_KEYS: set[tuple[str, str]] = {
+    ("ip", "enable_dup"),
+    ("ip", "maxmind_locale"),
+    ("global", "alertrefresh"),
 }
 FAKE_SECTIONS = {IP_SECTION: "ip", GLOBAL_SECTION: "global"}
 
@@ -110,7 +110,7 @@ def test_commented_out_save_is_not_flagged() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# RULE 2 -- a registered toggle's default belongs to the registry
+# RULE 2 -- a registered field's default belongs to the registry
 # --------------------------------------------------------------------------- #
 
 
@@ -137,14 +137,16 @@ def test_gateway_read_is_clean() -> None:
     assert _find(text) == []
 
 
-def test_registered_plain_scalar_page_default_is_not_rule_twos_business() -> None:
-    """RULE 2 is toggle-scoped: a plain scalar's page default is issue #2812's backlog.
+def test_registered_plain_scalar_page_default_is_flagged() -> None:
+    """issue #2994: RULE 2 covers registered plain scalars, not just toggles.
 
-    Several of those page defaults genuinely disagree with their registry entry, so
-    flagging them here would push a behaviour change through a lint.
+    The six page/registry divergences were aligned first, so flagging a scalar
+    page default no longer pushes a behaviour change through a lint.
     """
     text = MIRROR + "$pconfig['maxmind_locale'] = $pfb['iconfig']['maxmind_locale'] ?: 'en';\n"
-    assert _find(text) == []
+    violations = _find(text)
+    assert [v.rule for v in violations] == ["page-level-default"]
+    assert "ip/maxmind_locale" in violations[0].detail
 
 
 def test_page_default_for_an_unregistered_key_is_not_rule_twos_business() -> None:
@@ -182,8 +184,8 @@ def test_exempt_entry_suppresses_rule_two(monkeypatch: pytest.MonkeyPatch) -> No
 # --------------------------------------------------------------------------- #
 
 
-def test_registry_parse_finds_every_alias_and_the_toggle_entries() -> None:
-    """The parse must see all PFB_SECTIONS aliases and mark toggles as toggles."""
+def test_registry_parse_finds_every_alias_and_registered_key() -> None:
+    """The parse must see all PFB_SECTIONS aliases and the registered keys."""
     text = (_REPO_ROOT / ctr.REGISTRY_FILE).read_text(encoding="utf-8")
     sections = ctr.parse_sections(text)
     keys = ctr.parse_registry_keys(text)
@@ -193,13 +195,11 @@ def test_registry_parse_finds_every_alias_and_the_toggle_entries() -> None:
     assert sections["installedpackages/pfblockerngsync/config/0"] == "sync"
     assert len(keys) >= ctr._MIN_REGISTRY_KEYS
 
-    # issue #2123's own entries, and their adapter classification.
-    assert keys[("ip", "enable_dup")] is True
-    assert keys[("global", "alertrefresh")] is True
-    assert keys[("sync", "syncinterfaces")] is True
-    assert keys[("dnsbl", "autoaddrnot_in")] is True
-    # A registered plain scalar must NOT be classified as a toggle.
-    assert keys[("ip", "v4suppression")] is False
+    assert ("ip", "enable_dup") in keys
+    assert ("global", "alertrefresh") in keys
+    assert ("sync", "syncinterfaces") in keys
+    assert ("dnsbl", "autoaddrnot_in") in keys
+    assert ("ip", "v4suppression") in keys
 
 
 def test_every_exempt_row_still_names_a_live_site(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,34 +285,6 @@ def test_unreadable_explicit_path_fails_closed() -> None:
     assert ctr.main(["src/usr/local/www/pfblockerng/does_not_exist.php"]) == 2
 
 
-def test_every_2123_key_is_classified_as_a_toggle() -> None:
-    """All seventeen, not a sample: a plain-scalar slip would let RULE 2 skip the key."""
-    text = (_REPO_ROOT / ctr.REGISTRY_FILE).read_text(encoding="utf-8")
-    keys = ctr.parse_registry_keys(text)
-    expected = [
-        ("ip", "enable_dup"),
-        ("ip", "enable_agg"),
-        ("ip", "enable_log"),
-        ("ip", "enable_rdns"),
-        ("ip", "database_cc"),
-        ("ip", "enable_float"),
-        ("ip", "killstates"),
-        ("dnsbl", "autoaddrnot_in"),
-        ("dnsbl", "autoports_in"),
-        ("dnsbl", "autoaddr_in"),
-        ("dnsbl", "autonot_in"),
-        ("dnsbl", "autoaddrnot_out"),
-        ("dnsbl", "autoports_out"),
-        ("dnsbl", "autoaddr_out"),
-        ("dnsbl", "autonot_out"),
-        ("sync", "syncinterfaces"),
-        ("global", "alertrefresh"),
-    ]
-    assert len(expected) == 17
-    plain = [f"{a}/{b}" for a, b in expected if keys.get((a, b)) is not True]
-    assert not plain, f"issue #2123 keys not carrying the toggle read adapter: {plain}"
-
-
 def test_whitespace_between_brackets_does_not_evade_either_rule() -> None:
     """`$pfb ['iconfig'] ['x']` is valid PHP and must not slip past the matchers."""
     mirror = f"$pfb ['iconfig'] = PfbConfig::readSection('{IP_SECTION}');\n"
@@ -356,3 +328,24 @@ def test_www_tree_is_clean_with_the_exempt_table_emptied(
     assert ctr.main([]) == 0, (
         "src/usr/local/www/pfblockerng still carries page-level toggle defaults: issue #2812's sweep is incomplete"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Issue #2994 -- RULE 2 widened to registered plain scalars
+# --------------------------------------------------------------------------- #
+
+
+def test_gateway_read_of_a_plain_scalar_is_clean() -> None:
+    """The fixed form for a scalar is the same as for a toggle: PfbConfig::read()."""
+    text = MIRROR + "$pconfig['maxmind_locale'] = PfbConfig::read('ip/maxmind_locale');\n"
+    assert _find(text) == []
+
+
+def test_widget_sentinel_after_a_gateway_read_is_not_a_page_default() -> None:
+    """`$x = PfbConfig::read(...) ?: 'none'` is widget mapping, not a mirror restatement.
+
+    pfb_dnsvip4/6 store '' and the Form_Select empty option is the token 'none'.
+    That mapping must sit on the gateway result, not on `$pfb['dconfig'][...]`.
+    """
+    text = MIRROR + "$pconfig['maxmind_locale'] = PfbConfig::read('ip/maxmind_locale') ?: 'none';\n"
+    assert _find(text) == []

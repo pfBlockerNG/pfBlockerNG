@@ -137,6 +137,11 @@ final class RegistryPassTest extends TestCase
 		$this->assertSame('', $result[self::DNSBL_SECTION]['pfb_psl_feed_private_policy'] ?? NULL);
 		$this->assertSame('', $result[self::DNSBL_SECTION]['pfb_psl_feed_icann_policy'] ?? NULL);
 		$this->assertSame('Disable', $result[self::SS_SECTION]['safesearch_enable'] ?? NULL);
+		// issue #2994: page/save defaults materialise on a fresh install, so apply
+		// sees 8081/8443 ports (no "Ports are not defined" abort) and aliaslog Enable.
+		$this->assertSame('8081', $result[self::DNSBL_SECTION]['pfb_dnsport'] ?? NULL);
+		$this->assertSame('8443', $result[self::DNSBL_SECTION]['pfb_dnsport_ssl'] ?? NULL);
+		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['aliaslog'] ?? NULL);
 		$this->assertSame('', $result[self::IP_SECTION]['v6suppression'] ?? NULL);
 		$this->assertSame('', $result[self::REP_SECTION]['enable_rep'] ?? NULL);
 		// issue #2123: alertrefresh is the only default-ON key among the seventeen, so a

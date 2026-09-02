@@ -30,8 +30,8 @@ pfb_global();
 $pfb['bconfig']	= PfbConfig::readSection('installedpackages/pfblockerngsafesearch');
 
 $pconfig = array();
-$pconfig['safesearch_enable']		= $pfb['bconfig']['safesearch_enable']			?: 'Disable';
-$pconfig['safesearch_youtube']		= $pfb['bconfig']['safesearch_youtube']			?: 'Disable';
+$pconfig['safesearch_enable']		= PfbConfig::read('ss/safesearch_enable');
+$pconfig['safesearch_youtube']		= PfbConfig::read('ss/safesearch_youtube');
 
 // Select field options
 $options_safesearch_enable	= ['Disable' => 'Disable', 'Enable' => 'Enable'];
