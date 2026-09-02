@@ -108,10 +108,8 @@ function pfb_ip_regex_matches(string $family, string $line, array $config): arra
 	return preg_match_all($pattern, $line, $matches) ? $matches[0] : [];
 }
 
-// #3121: $ip_data is appended IN PLACE and never returned. Passing it by value (and
-// handing a copy back) left the caller's string at refcount > 1 for the whole call, so
-// every append copied the entire accumulated buffer -- O(n²) over the feed, ~3 min for a
-// 300k-line feed on a live box where the direct append is under a second.
+// #3121: $ip_data is appended in place, never returned -- a by-value copy handed back
+// through the result made every append copy the whole buffer (O(n²) over the feed).
 /** @return array{line_number:int,raw_line:string,line:string,ip_suppressed:bool,parse_fail:int,messages:list<string>,detailed_parse_fail:bool} */
 function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_number,
     string &$ip_data, bool $ip_suppressed, int $parse_fail): array {
@@ -4007,7 +4005,6 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 								if (($fhandle = @fopen($pfb_parse_path, 'r')) !== FALSE) {
 									while (($line = @fgets($fhandle)) !== FALSE) {
-										$raw_line = $line;
 										$replayed_line = pfb_ip_parse_line_replay($line, [
 											'vtype'         => $list['vtype'],
 											'pftype'        => $pftype,

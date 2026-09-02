@@ -43,12 +43,7 @@ final class IpParseLineWiringTest extends TestCase
 		$this->assertFalse($state['detailed_parse_fail']);
 	}
 
-	/**
-	 * #3121: the accumulator is appended IN PLACE. A by-value copy returned through the
-	 * result array leaves the caller's string with refcount > 1 during the call, so every
-	 * append copies the whole buffer and a 300k-line feed takes minutes instead of seconds.
-	 * The caller's variable is the only accumulator: the result carries no copy of it.
-	 */
+	/** #3121: the caller's variable is the only accumulator; the result carries no copy of it. */
 	public function testReplayAppendsToTheCallerAccumulatorInPlace(): void
 	{
 		$ip_data = '';
