@@ -50,15 +50,20 @@ worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }
 `.config/wt.toml` also prunes metadata after merge/removal. `wt remove` deletes only
 branches it verifies as integrated; landing observes the foreground result.
 
-**Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes. Needs git
-(history, diffing, committing) → a throwaway worktree, `wt --yes switch --create
-<branch> --base <ref>`, `wt remove` when the lane ends. Read-only → `git archive <ref> |
-tar -x -C "$SCRATCH"`: no `.git`, so it cannot commit, cannot share refs, and
-structurally cannot touch the repository. Prefer it whenever the lane never commits.
+**Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both
+taking a SHA — what "an isolated tree at commit X" needs, the recurring review case
+where four legs read one worktree and one must re-run a red half without disturbing
+it. Needs git (history, diffing, committing) → a throwaway worktree,
+`wt --yes switch --create <branch> --base <sha>`, `wt remove` when the lane ends.
+Read-only → `git archive <sha> | tar -x -C "$SCRATCH"`: no `.git`, so it cannot commit,
+cannot share refs, and structurally cannot touch the repository. Prefer the extraction
+unless the suite needs real git history. **Never mutate a checkout another agent is
+reading** — worse than any copy.
 
-`cp -a`/`cp -R`/`rsync` **of a worktree is forbidden** — the copy keeps the source's
-`.git` *pointer file*, so its git commands drive the ORIGINAL worktree's index, `HEAD`,
-and refs.
+**Copying a worktree is forbidden** — `cp -a`, `cp -R`, `cp -al`, `rsync`. The copy
+keeps the source's `.git` *pointer file*, so its git commands drive the ORIGINAL
+worktree's index, `HEAD`, and refs; `cp -al` additionally hardlinks the content, so an
+in-place write lands in the original's files.
 
 **Never the system temp directory**: semantics differ per platform (Linux `/tmp` is
 commonly RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp` and defaults
@@ -67,10 +72,10 @@ commonly RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp` and d
 scratch goes under the worktrees root; extraction scratch under `/var/tmp/agents`,
 disk-backed on both platforms.
 
-**Scratch is reaped by its owner** when the lane ends — including agent session scratch,
-which no worktree rule covers. Delete
-someone else's only when it is stale by mtime **and** unreferenced by any live process
-(`/proc/*/cwd` on Linux, `lsof +D` on macOS): an idle session looks dead by mtime alone.
+**Scratch is reaped by its owner** when the lane ends — agent session scratch included,
+which no worktree rule covers. Delete someone else's only when it is stale by mtime
+**and** unreferenced by a live process (`/proc/*/cwd` on Linux, `lsof +D` on macOS):
+an idle session looks dead by mtime alone.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.

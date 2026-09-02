@@ -151,6 +151,12 @@ while [ "$#" -gt 0 ]; do
 done
 # WB_WT_EMPTY reproduces a wt that reports success and leaves no worktree.
 [ "${WB_WT_EMPTY:-0}" -eq 0 ] || exit 0
+# WB_WT_BAREDIR reproduces success reported over a stray directory that is not a
+# worktree: no `.git` file, so the cut did not actually happen.
+[ "${WB_WT_BAREDIR:-0}" -eq 0 ] || {
+  mkdir -p "$wt_path"
+  exit 0
+}
 # Real wt reformats git's progress away and prints its own line; a stub that let
 # git's raw stderr through would let assertions pass on text real wt never emits.
 "$WB_REAL_GIT" worktree add "$wt_path" "$wt_branch" >/dev/null 2>&1 || exit $?
@@ -255,6 +261,36 @@ WT
     The stderr should include 'wt could not cut'
     The contents of file "$events" should equal "$(printf 'fetch\nwt\nadd\ninit:%s/wt-empty' "$fixture")"
     The path "$fixture/wt-empty" should be directory
+  End
+
+  It 'rejects a bare directory as a successful cut'
+    # `[ -d ]` would accept any directory; a worktree checkout always has a `.git`
+    # FILE. Without that distinction wt reporting success over a stray directory is
+    # taken as a cut, and the branch is reported against a tree that does not exist.
+    add_origin || return 1
+    export WB_WT_BAREDIR=1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 61 baredir --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/wt-baredir"
+    The status should equal 0
+    The output should equal "$(printf 'adr/61-baredir\t%s/wt-baredir' "$fixture")"
+    The stderr should include 'wt could not cut'
+    The contents of file "$events" should equal "$(printf 'fetch\nwt\nadd\ninit:%s/wt-baredir' "$fixture")"
+    Assert [ -f "$fixture/wt-baredir/.git" ]
+  End
+
+  It 'rejects a derived worktree root bearing a template marker, with no --path at all'
+    # The sibling root comes from the CHECKOUT's own directory name, so validating
+    # only what the caller typed leaves wt's template renderer reachable through an
+    # ancestor: the cut lands somewhere this script never reports.
+    marked="$fixture/pf{{ repo }}"
+    git_fixture init -q -b devel "$marked" &&
+      git_fixture -C "$marked" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q --allow-empty -m init || return 1
+    When run sh -c 'cd "$1" && exec sh "$2" adr 62 marker --worktree --base HEAD' _ "$marked" "$script_abs"
+    The status should equal 2
+    The stderr should include 'control characters or template markers'
+    The output should equal ''
+    Assert [ -z "$(git_fixture -C "$marked" branch --list 'adr/62-marker')" ]
+    Assert [ ! -e "$fixture/.pf{{ repo }}_worktrees" ]
   End
 
   It 'reclaims the worktree wt registered before its pre-start hook failed'

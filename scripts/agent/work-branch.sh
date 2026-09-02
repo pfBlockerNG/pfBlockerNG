@@ -85,6 +85,20 @@ claim_gate() {
 	exit 3
 }
 
+# wt renders `worktree-path` as a minijinja TEMPLATE, so a marker anywhere in the
+# value makes wt cut somewhere this script never reports — and the value is not only
+# what the caller typed: the sibling root is derived from the CHECKOUT's own directory
+# name. A control character breaks the TOML the same way. Validate every component
+# this script will hand to wt, before a branch is reserved.
+reject_wt_template_chars() {
+	case "$1" in
+		*'{{'* | *'{%'* | *'{#'* | *[[:cntrl:]]*)
+			echo "work-branch.sh: $2 must not contain control characters or template markers" >&2
+			exit 2
+			;;
+	esac
+}
+
 # Cut one worktree for an already-reserved branch. Worktree operations converge
 # on `wt` (git.md); plain `git worktree add` is the fallback for wt being absent,
 # failing, or reporting success without leaving a worktree behind.
@@ -109,6 +123,8 @@ cut_worktree() {
 		# half-run hook left, so the retry initializes for real. Reclaim ONLY a tree
 		# holding the branch this call just reserved: at a shared explicit --path a
 		# concurrent creator may already own the tree, and removing that destroys it.
+		# Anything else left at the path is deliberately not reclaimed — it cannot be
+		# told apart from a concurrent creator's, so the caller collision-suffixes.
 		if [ -e "$cw_path" ] || [ -L "$cw_path" ]; then
 			cw_head=$(git -C "$cw_path" symbolic-ref --quiet HEAD 2>/dev/null) || cw_head=''
 			if [ "$cw_head" = "refs/heads/$cw_branch" ]; then
@@ -144,18 +160,7 @@ main() {
 		exit 0
 	fi
 
-	# wt's `worktree-path` is a minijinja TEMPLATE, so `{{ … }}` in a --path renders
-	# instead of being taken literally, and a trailing newline is eaten by the command
-	# substitution that builds the TOML: either way wt cuts somewhere this script never
-	# reports. Reject both shapes before a branch is reserved.
-	if [ "$path_set" -eq 1 ]; then
-		case "$path" in
-			*'{{'* | *'{%'* | *'{#'* | *[[:cntrl:]]*)
-				echo "work-branch.sh: --path must not contain control characters or template markers" >&2
-				exit 2
-				;;
-		esac
-	fi
+	[ "$path_set" -eq 0 ] || reject_wt_template_chars "$path" '--path'
 	if [ "$path_set" -eq 1 ]; then
 		case "$path" in
 			'')
@@ -206,6 +211,7 @@ main() {
 	repo_name=${root##*/}
 	repo_parent=${root%/*}
 	worktree_root="$repo_parent/.${repo_name}_worktrees"
+	reject_wt_template_chars "$worktree_root" 'the worktree root'
 	if [ "$absolute_path" -eq 1 ]; then
 		mkdir -p "$(dirname "$path")" || exit 1
 	else
