@@ -5736,6 +5736,13 @@
                 "variadic": false,
                 "type": "float",
                 "default": "300.0"
+            },
+            {
+                "name": "op",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'install'"
             }
         ]
     },

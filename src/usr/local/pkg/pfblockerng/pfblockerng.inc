@@ -19109,8 +19109,8 @@ function pfb_feed_pass_deferral_message(string $deferred_by): string {
 // overlapping passes so they cannot corrupt shared recompute staging. Reentrant
 // within a process: a second acquire by the same process is a no-op success.
 // $timeout_s defaults to 0.0 -- one non-blocking attempt, the only shape a feed-pass
-// dispatcher may use (it defers instead of queueing). Package installation waits
-// (issue #3062, pfb_install_feed_pass_hold()) because it cannot be deferred.
+// dispatcher may use (it defers instead of queueing). A package install/uninstall waits
+// (issues #3062/#3090, pfb_install_feed_pass_hold()) because it cannot be deferred.
 function pfb_feed_pass_acquire(?bool &$contended = NULL, float $timeout_s = 0.0): bool {
 	global $pfb;
 	$contended = FALSE;
@@ -19199,16 +19199,17 @@ function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
 }
 
 
-// Seconds a package install waits for an in-flight feed pass before it proceeds anyway.
+// Seconds a package install/uninstall waits for an in-flight feed pass before it proceeds anyway.
 define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
 
 // issue #3062: the install's hold on the feed-pass lock -- waits, then keeps it until this
 // process exits (pfb_feed_pass_release() at shutdown). FALSE never aborts the caller: an
 // install may not be abandoned. architecture-notes.md "The package install holds it too".
-function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAIT): bool {
+// issue #3090: the uninstall takes the same hold, $op = 'uninstall' naming it in the log.
+function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAIT, string $op = 'install'): bool {
 	if (pfb_feed_pass_busy()) {
-		pfb_logger("\nPackage install: waiting up to {$timeout_s}s for the in-flight feed pass to finish.\n", 1);
-		logger(LOG_NOTICE, localize_text('Package install waiting for the in-flight feed pass to finish.'),
+		pfb_logger("\nPackage {$op}: waiting up to {$timeout_s}s for the in-flight feed pass to finish.\n", 1);
+		logger(LOG_NOTICE, localize_text('Package %s waiting for the in-flight feed pass to finish.', $op),
 			LOG_PREFIX_PKG_PFBLOCKERNG);
 	}
 
@@ -19218,12 +19219,12 @@ function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAI
 	}
 
 	if ($contended) {
-		pfb_logger("\nPackage install proceeding WITHOUT the feed-pass lock: a feed pass is still running.\n", 2);
-		logger(LOG_WARNING, localize_text('Package install proceeding without the feed-pass lock - a feed pass is still running.'),
+		pfb_logger("\nPackage {$op} proceeding WITHOUT the feed-pass lock: a feed pass is still running.\n", 2);
+		logger(LOG_WARNING, localize_text('Package %s proceeding without the feed-pass lock - a feed pass is still running.', $op),
 			LOG_PREFIX_PKG_PFBLOCKERNG);
 	} else {
-		pfb_logger("\nPackage install proceeding WITHOUT the feed-pass lock: it could not be acquired.\n", 2);
-		logger(LOG_WARNING, localize_text('Package install proceeding without the feed-pass lock - it could not be acquired.'),
+		pfb_logger("\nPackage {$op} proceeding WITHOUT the feed-pass lock: it could not be acquired.\n", 2);
+		logger(LOG_WARNING, localize_text('Package %s proceeding without the feed-pass lock - it could not be acquired.', $op),
 			LOG_PREFIX_PKG_PFBLOCKERNG);
 	}
 	return FALSE;
@@ -19973,6 +19974,12 @@ function pfblockerng_php_pre_deinstall_command() {
 	// #684: publish the pkg transition to the hooks fired by the disable pass below (they get
 	// PFB_PRE_UNINSTALL=1). Context only -- pfBlockerNG does not branch on it.
 	$pfb['hook_lifecycle'] = 'uninstall';
+
+	// issue #3090: the disable pass below takes the feed-pass lock non-blocking and DEFERS on
+	// contention, while the chroot/service teardown after it runs regardless -- so wait for
+	// and hold the lock across the whole removal, exactly as the install does (#3062).
+	update_status("Serialising against any in-flight pfBlockerNG feed pass...");
+	update_status(pfb_install_feed_pass_hold(PFB_INSTALL_FEED_PASS_WAIT, 'uninstall') ? " done.\n" : " lock not taken; continuing anyway.\n");
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();

@@ -1592,6 +1592,16 @@ other contender. It is also the one holder that takes this lock **without** the 
 first; that inverts the order every other holder uses, and cannot deadlock only because every
 non-install feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
 
+**The uninstall holds it too (issue #3090).** `pfblockerng_php_pre_deinstall_command()` tears the
+same state down — stops the pfB services, removes the Unbound chroot module and generated DNSBL
+files, kills the pf tables — through a disable pass whose own feed-pass acquire is the
+non-blocking dispatcher shape: on contention it **defers**, and the teardown after it ran anyway.
+So the teardown branch takes the same hold first (`pfb_install_feed_pass_hold(PFB_INSTALL_FEED_PASS_WAIT,
+'uninstall')`, right after the #697 pkg-operation check so an upgrade never waits), the disable
+pass reenters it, and the same bounded wait / proceed-anyway-with-a-log policy applies — an
+uninstall may not be abandoned either. The `$op` argument only names the operation in the log
+lines (`Package uninstall proceeding WITHOUT the feed-pass lock`).
+
 **The due-ledger** is a single JSON sidecar `pfb_due_ledger.json` under `$pfb['dbdir']`, one entry
 per job/feed: `{last_run, next_due, jitter}`. Pure, clock+seed-injectable helpers in
 `pfblockerng_extra.inc` (`pfb_due_ledger_*`); the tick wrapper `pfb_tick_due_jobs()` decides due-ness:
