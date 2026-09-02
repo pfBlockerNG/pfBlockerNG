@@ -78,10 +78,7 @@ smoke:tests.smoke.test_smoke_boot::test_control_name_resolves  # baked control n
 smoke:tests.smoke.test_smoke_helpers::test_reset_returns_to_baseline  # baked control name is optional; the reset executes before this scaffold assertion skips
 smoke:tests.smoke.test_smoke_matrix::test_false_green_guard_vm  # strict xfail is the guard's expected outcome and pytest records it as a JUnit skip
 
-# smoke -- the `repo` marker's live-URL cases. The 08:00 repo-install schedule deliberately
-# passes no smoke_*_live_url (issue #2389: it runs before the 09:00 nightly publish, so a live
-# URL would hit yesterday's tree or 404); the file:// proofs always run, and the live checks
-# are dispatch-only.
+# smoke -- the `repo` marker's live-URL cases; the 08:00 repo-install schedule passes no smoke_*_live_url (issue #2389).
 smoke:tests.smoke.test_nightly_install::test_install_from_live_nightly_url  # SMOKE_NIGHTLY_LIVE_URL is dispatch-only; the schedule never passes it (issue #2389)
 smoke:tests.smoke.test_repo_install::test_install_from_live_pages_url  # SMOKE_REPO_LIVE_URL is dispatch-only; the schedule never passes it (issue #2389)
 smoke:tests.smoke.test_repo_install::test_live_nightly_downgrade_requires_selected_semantic_repo  # needs both live URLs; the schedule passes neither (issue #2389)
