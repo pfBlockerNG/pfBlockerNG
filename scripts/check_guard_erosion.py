@@ -9,20 +9,39 @@ the assertion, and the fleet path lost its reaper with every gate green.
 
 A retirement in the diff must therefore be matched by ONE of:
 
-* the same declaration name added anywhere under ``tests/`` (an edit, a
-  signature change, or a move — not a retirement);
-* an added line under ``tests/`` carrying ``successor: <retired name>``, which
-  rides the assertion that took the invariant over;
+* the same declaration name added in a file the same runner collects (an edit, a
+  signature change, or a move);
+* an added comment in a collected test file reading ``successor: <retired
+  name>`` -- the marker rides the assertion that took the invariant over;
 * a dated entry in ``docs/history/retired-tests.md``:
   ``| YYYY-MM-DD | `<retired name>` | <reason> |``.
 
-Declaration forms: Python ``def test_*``, PHPUnit ``function test*``, shellspec
-``It``/``Example`` (its quoted description is the name).
+Declaration forms and the file names each runner actually collects:
+
+| Type | Declaration | Collected |
+| ---- | ----------- | --------- |
+| `.py` | `def test_*` (`async` too) | `test_*.py`, `*_test.py` (pytest) |
+| `.php` | `function test*` | `*Test.php` (PHPUnit) |
+| `.sh` | shellspec `It`/`Example` (quoted description = name) | `*_spec.sh` |
+| `.js`/`.mjs` | `test(...)`/`it(...)` | `*.test.js`, `*.test.mjs` (node --test) |
+
+The collected column is load-bearing on BOTH sides, and a redeclaration must
+match in the same language. A declaration in a file no runner collects never
+asserted anything: flagging its removal would be a false positive, and honouring
+it as an excuse would let a retirement be waved through by dead code -- the same
+name dropped into a module nothing ever imports.
 
 DIFF-SCOPED: only the diff's removed declarations are judged (``--staged`` for
 the pre-commit hook, ``--diff <base>`` for CI's PR gate), so a full-tree scan
 never runs and an untouched test is never re-litigated. A test whose body
-changes keeps its declaration line and stays neutral.
+changes keeps its declaration line and stays neutral. ``--no-renames`` is
+mandatory here: with git's default rename detection a pure ``git mv`` out of a
+collected name emits no hunks at all, and the retirement is invisible.
+
+Known blind spots, both deliberate: this file's own test module is excluded (its
+fixtures are declaration-shaped by construction), and a single-line regex cannot
+see string context, so a declaration-shaped line inside a docstring reads as a
+declaration. The tombstone is the escape hatch for both.
 
 Exit status: 0 = clean, 1 = violations (printed file:line), 2 = usage/git error.
 """
@@ -32,6 +51,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
@@ -39,19 +59,41 @@ from _git_paths import diff_header_name, unified_diff
 
 TOMBSTONE = "docs/history/retired-tests.md"
 
-# One declaration form per in-scope file type; a helper or a `Describe` group
-# carries no assertion and is not a named invariant.
-_DECLS: dict[str, re.Pattern[str]] = {
-    ".py": re.compile(r"^\s*(?:async\s+)?def\s+(?P<name>test_\w+)\s*\("),
-    ".php": re.compile(r"\bfunction\s+(?P<name>test\w+)\s*\("),
-    ".sh": re.compile(r"^\s*(?:It|Example)\s+(?P<q>[\"'])(?P<name>.+?)(?P=q)"),
+# A helper, a `Describe` group, and a commented-out declaration carry no
+# assertion, so every pattern anchors at line start modulo indentation.
+_JS_DECL = re.compile(r"^\s*(?:test|it)\s*\(\s*(?P<q>[\"'`])(?P<name>.+?)(?P=q)")
+
+
+class _Lang(NamedTuple):
+    decl: re.Pattern[str]
+    collected: re.Pattern[str]
+
+
+# A file name may hold any byte git can quote, a newline included, so the
+# collected patterns are DOTALL: `.` must not stop at one (issue #2212's class).
+_LANGS: dict[str, _Lang] = {
+    ".py": _Lang(
+        re.compile(r"^\s*(?:async\s+)?def\s+(?P<name>test_\w+)\s*\("),
+        re.compile(r"test_.+\.py|.+_test\.py", re.DOTALL),
+    ),
+    ".php": _Lang(
+        re.compile(r"^\s*(?:(?:public|protected|private|static|final|abstract)\s+)*function\s+(?P<name>test\w+)\s*\("),
+        re.compile(r".+Test\.php", re.DOTALL),
+    ),
+    ".sh": _Lang(
+        re.compile(r"^\s*(?:It|Example)\s+(?P<q>[\"'])(?P<name>.+?)(?P=q)"),
+        re.compile(r".+_spec\.sh", re.DOTALL),
+    ),
+    ".js": _Lang(_JS_DECL, re.compile(r".+\.test\.js", re.DOTALL)),
+    ".mjs": _Lang(_JS_DECL, re.compile(r".+\.test\.mjs", re.DOTALL)),
 }
 
-# Marker and ledger row. The tail is matched for the retired name on identifier
-# boundaries, so `successor: test_foo_bar` cannot excuse retiring `test_foo`.
-_SUCCESSOR = re.compile(r"(?<![\w-])successor:[^\S\r\n]*(?P<tail>\S.*)")
+# The marker is a comment naming exactly one retired test. Requiring equality
+# rather than a substring keeps `successor: reaps every orphan` from excusing a
+# shellspec example merely called `reaps`.
+_SUCCESSOR = re.compile(r"(?:#|//|/\*|\*)\s*successor:\s*(?P<name>.+?)\s*(?:\*/)?$")
 _ROW = re.compile(r"^\|(?P<cells>.*\|)\s*$")
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
 _DELIMITER = re.compile(r":?-{3,}:?")
 _HEADER = ("date", "retired test", "reason")
 
@@ -76,71 +118,87 @@ def _side(field: str, prefix: str) -> str | None:
     return name[len(prefix) :] if name.startswith(prefix) else None
 
 
-def _in_scope(path: str | None) -> bool:
+def _lang(path: str | None) -> _Lang | None:
+    """The language of an in-scope test file, else ``None``."""
     if path is None or path in _EXCLUDED_PATHS:
-        return False
+        return None
     p = PurePosixPath(path)
-    return bool(p.parts) and p.parts[0] == "tests" and p.suffix in _DECLS
+    if not p.parts or p.parts[0] != "tests":
+        return None
+    return _LANGS.get(p.suffix)
 
 
-def _declared(path: str | None, line: str) -> str | None:
-    """The test name this line declares, or ``None``."""
-    if not _in_scope(path):
+def _collects(path: str | None) -> bool:
+    """True if ``path`` is a test file its runner actually collects."""
+    lang = _lang(path)
+    if lang is None:
+        return False
+    assert path is not None
+    return lang.collected.fullmatch(PurePosixPath(path).name) is not None
+
+
+def _declared(path: str | None, line: str) -> tuple[str, str] | None:
+    """``(suffix, name)`` this line declares in a collected test file, else ``None``."""
+    lang = _lang(path)
+    if lang is None or not _collects(path):
         return None
     assert path is not None
-    match = _DECLS[PurePosixPath(path).suffix].search(line)
-    return match.group("name") if match else None
+    match = lang.decl.search(line)
+    return (PurePosixPath(path).suffix, match.group("name")) if match else None
 
 
-def _names(cells: list[str]) -> list[str]:
-    return [cell.strip().strip("`").strip() for cell in cells]
-
-
-def tombstone_entry(line: str) -> tuple[str, str, str] | None:
-    """``(date, name, reason)`` for a well-formed ledger row, else ``None``."""
+def _cells(line: str) -> list[str] | None:
     row = _ROW.match(line)
     if row is None:
         return None
-    cells = _names(row.group("cells").split("|")[:-1])
-    if len(cells) < 3 or not all(cells[:3]):
+    return [cell.strip().strip("`").strip() for cell in row.group("cells").split("|")[:-1]]
+
+
+def tombstone_entry(line: str) -> str | None:
+    """The retired name a well-formed ledger row records, else ``None``."""
+    cells = _cells(line)
+    if cells is None or len(cells) < 3 or not all(cells[:3]):
         return None
-    date, name, reason = cells[0], cells[1], cells[2]
-    return (date, name, reason) if _DATE.fullmatch(date) else None
+    try:
+        date.fromisoformat(cells[0])
+    except ValueError:
+        return None
+    return cells[1]
 
 
 def _is_ledger_entry_row(line: str) -> bool:
-    """True for a row meant to BE an entry — not the header or its delimiter."""
-    row = _ROW.match(line)
-    if row is None:
-        return False
-    cells = _names(row.group("cells").split("|")[:-1])
-    if len(cells) < 3:
+    """True for a row meant to BE an entry -- not the header or its delimiter."""
+    cells = _cells(line)
+    if cells is None or len(cells) < 3:
         return False
     if tuple(cell.lower() for cell in cells[:3]) == _HEADER:
         return False
     return not all(_DELIMITER.fullmatch(cell) for cell in cells if cell)
 
 
-def _succeeds(tail: str, name: str) -> bool:
-    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", tail) is not None
+def _marked_successor(line: str) -> str | None:
+    marker = _SUCCESSOR.search(line)
+    return marker.group("name").strip().strip("`'\"").strip() if marker else None
 
 
 def find_violations(diff_text: str) -> list[Violation]:
     """Judge one unified diff's REMOVED test declarations."""
-    retired: list[tuple[str, int, str]] = []
-    redeclared: set[str] = set()
-    successors: list[str] = []
+    retired: list[tuple[str, int, str, str]] = []
+    redeclared: set[tuple[str, str]] = set()
+    successors: set[str] = set()
     tombstoned: set[str] = set()
     violations: list[Violation] = []
     old_path: str | None = None
     new_path: str | None = None
     old_no = new_no = 0
     in_hunk = False
+    in_fence = False
 
     for raw in diff_text.splitlines():
         if raw.startswith("diff --git"):
             old_path = new_path = None
             in_hunk = False
+            in_fence = False
             continue
         # Header only before a section's first @@ -- inside a hunk a "---"/"+++"
         # line is removed/added content and must be judged, not parsed.
@@ -159,35 +217,39 @@ def find_violations(diff_text: str) -> list[Violation]:
             # "\ No newline at end of file" is a marker, not content.
             continue
         if raw.startswith("-"):
-            name = _declared(old_path, raw[1:])
-            if name is not None and old_path is not None:
-                retired.append((old_path, old_no, name))
+            declared = _declared(old_path, raw[1:])
+            if declared is not None:
+                assert old_path is not None
+                retired.append((old_path, old_no, *declared))
             old_no += 1
             continue
         if raw.startswith("+"):
             line = raw[1:]
-            name = _declared(new_path, line)
-            if name is not None:
-                redeclared.add(name)
-            if _in_scope(new_path):
-                marker = _SUCCESSOR.search(line)
-                if marker is not None:
-                    successors.append(marker.group("tail"))
+            declared = _declared(new_path, line)
+            if declared is not None:
+                redeclared.add(declared)
+            marker = _marked_successor(line) if _collects(new_path) else None
+            if marker is not None:
+                successors.add(marker)
             if new_path == TOMBSTONE:
-                entry = tombstone_entry(line)
-                if entry is not None:
-                    tombstoned.add(entry[1])
-                elif _is_ledger_entry_row(line):
-                    violations.append(Violation(TOMBSTONE, new_no, "", f"malformed retirement entry: {line.strip()}"))
+                if _FENCE.match(line):
+                    # A row inside a fenced block is an example, not an entry.
+                    in_fence = not in_fence
+                elif not in_fence:
+                    entry = tombstone_entry(line)
+                    if entry is not None:
+                        tombstoned.add(entry)
+                    elif _is_ledger_entry_row(line):
+                        violations.append(
+                            Violation(TOMBSTONE, new_no, "", f"malformed retirement entry: {line.strip()}")
+                        )
             new_no += 1
             continue
         old_no += 1
         new_no += 1
 
-    for path, line_no, name in retired:
-        if name in redeclared or name in tombstoned:
-            continue
-        if any(_succeeds(tail, name) for tail in successors):
+    for path, line_no, suffix, name in retired:
+        if (suffix, name) in redeclared or name in successors or name in tombstoned:
             continue
         violations.append(Violation(path, line_no, name, UNEXCUSED))
     return violations
@@ -196,9 +258,9 @@ def find_violations(diff_text: str) -> list[Violation]:
 def main(argv: list[str]) -> int:
     try:
         if argv == ["--staged"]:
-            diff = unified_diff(["--cached"])
+            diff = unified_diff(["--no-renames", "--cached"])
         elif len(argv) == 2 and argv[0] == "--diff":
-            diff = unified_diff([f"{argv[1]}...HEAD"])
+            diff = unified_diff(["--no-renames", f"{argv[1]}...HEAD"])
         else:
             print("usage: check_guard_erosion.py --staged | --diff <base>", file=sys.stderr)
             return 2
@@ -214,9 +276,9 @@ def main(argv: list[str]) -> int:
         print(f"  {v.path}:{v.line}: {subject}: {v.reason}", file=sys.stderr)
     print(
         "\nRetiring or renaming a test that asserts a named invariant needs a successor\n"
-        "or a tombstone. Either add the assertion that takes it over and mark it\n"
-        "`successor: <retired name>`, or record the decision in\n"
-        f"{TOMBSTONE} as a row: | YYYY-MM-DD | `<retired name>` | <reason> |",
+        "or a tombstone. Either add the assertion that takes it over -- in a file its\n"
+        "runner collects -- and comment it `successor: <retired name>`, or record the\n"
+        f"decision in {TOMBSTONE} as a row: | YYYY-MM-DD | `<retired name>` | <reason> |",
         file=sys.stderr,
     )
     return 1

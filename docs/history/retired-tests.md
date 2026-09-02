@@ -1,19 +1,17 @@
 # Retired tests — the tombstone ledger
 
-A test that asserts a named invariant is the only mechanical memory of it.
-Retiring or renaming one therefore needs either a successor assertion or an
-entry here, and `scripts/check_guard_erosion.py` blocks a retirement that has
-neither (pre-commit and CI, judging only the diff).
+`scripts/check_guard_erosion.py` blocks retiring a test that has neither a
+successor nor an entry here; the rule lives in `.agents/policy/testing.md`.
 
-Prefer the successor: add the assertion that takes the invariant over and mark
-it `successor: <retired name>` on a line of the new test. This ledger is for the
-other case — the invariant itself is gone, or it is deliberately no longer
-guarded, and that decision is what needs recording.
+Prefer the successor: add the assertion that takes the invariant over and
+comment it `successor: <retired name>`. This ledger is for the other case — the
+invariant itself is gone, or is deliberately no longer guarded, and that
+decision is what needs recording. Stage the row in the same commit as the
+deletion; the pre-commit run judges one commit's index.
 
-One row per retired test. The name is the declaration's own name: a Python
-`def test_*`, a PHPUnit `function test*`, or a shellspec `It`/`Example`
-description. The reason says why nothing replaced it, and names the commit or
-issue that removed the subject where one exists.
+One row per retired test, named as its declaration was: a Python `def test_*`,
+a PHPUnit `function test*`, a shellspec `It`/`Example` description, or a
+`node --test` `test`/`it` description.
 
 | Date | Retired test | Reason |
 | --- | --- | --- |

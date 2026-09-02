@@ -325,8 +325,9 @@ else
 fi
 
 # --- Forbid retiring a named-invariant test with nothing left in its place:
-#     a removed/renamed `def test_*` / PHPUnit `function test*` / shellspec
-#     `It` needs a successor assertion marked `successor: <retired name>` or a
+#     a removed/renamed `def test_*` / PHPUnit `function test*` / shellspec `It` /
+#     `node --test` `test` needs a successor assertion commented
+#     `successor: <retired name>` or a
 #     dated entry in docs/history/retired-tests.md. Diff-scoped. ---
 if exempted scripts/check_guard_erosion.py; then
 	exempt guard-erosion

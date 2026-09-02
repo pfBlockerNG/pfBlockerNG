@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_guard_erosion.py"
 _ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("check_guard_erosion", _TOOL)
@@ -334,6 +336,134 @@ def test_tombstone_row_excuses_only_the_test_it_names() -> None:
     assert [item.name for item in v] == ["test_reaps_the_sibling"]
 
 
+def test_tombstone_row_without_a_name_is_flagged() -> None:
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit(cge.TOMBSTONE, added=("| 2026-09-02 | | folded into the fleet reaper |",)),
+    )
+    assert [item.reason for item in v if _MALFORMED in item.reason], v
+
+
+def test_tombstone_row_with_an_impossible_date_is_flagged() -> None:
+    """`9999-99-99` is date-SHAPED; "dated" has to mean a real date."""
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit(cge.TOMBSTONE, added=(_tombstone_row("test_reaps_the_orphan", date="9999-99-99"),)),
+    )
+    assert any(item.name == "test_reaps_the_orphan" and _UNEXCUSED in item.reason for item in v), v
+
+
+def test_tombstone_row_inside_a_fenced_block_excuses_nothing() -> None:
+    """A fenced row renders as an example to a reader; it must read that way here."""
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit(
+            cge.TOMBSTONE,
+            added=(
+                "```markdown",
+                _tombstone_row("test_reaps_the_orphan", reason="just an example"),
+                "```",
+            ),
+        ),
+    )
+    assert [item.name for item in v] == ["test_reaps_the_orphan"], v
+
+
+# --------------------------------------------------------------------------- #
+# Only a file the runner collects carries an invariant — on either side
+# --------------------------------------------------------------------------- #
+
+
+def test_removing_a_declaration_from_a_file_no_runner_collects_is_neutral() -> None:
+    """Nothing ran, so nothing retires — the mirror of the excuse rule below."""
+    assert _find(_edit("tests/helpers_util.py", removed=("def test_reaps_the_orphan(tmp_path):",))) == []
+
+
+def test_redeclaring_in_a_file_no_runner_collects_excuses_nothing() -> None:
+    """pytest collects `test_*.py`/`*_test.py`; a helper module is dead code."""
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit("tests/helpers_util.py", added=("def test_reaps_the_orphan(tmp_path):",)),
+    )
+    assert [item.name for item in v] == ["test_reaps_the_orphan"], v
+
+
+def test_successor_marker_in_a_file_no_runner_collects_excuses_nothing() -> None:
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit("tests/helpers_util.py", added=("# successor: test_reaps_the_orphan",)),
+    )
+    assert [item.name for item in v] == ["test_reaps_the_orphan"], v
+
+
+def test_a_collected_sibling_naming_pattern_does_excuse() -> None:
+    """The paired firing case above: `*_test.py` is collected, so this is a move."""
+    assert (
+        _find(
+            _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+            _edit("tests/fleet_test.py", added=("def test_reaps_the_orphan(tmp_path):",)),
+        )
+        == []
+    )
+
+
+def test_a_redeclaration_in_another_language_excuses_nothing() -> None:
+    """A shellspec description that happens to spell a Python test's name is not it."""
+    v = _find(
+        _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+        _edit("tests/shell/fleet_spec.sh", added=("    It 'test_reaps_the_orphan'",)),
+    )
+    assert [item.name for item in v] == ["test_reaps_the_orphan"], v
+
+
+def test_a_successor_marker_may_cross_languages() -> None:
+    """A marker is a deliberate statement, so a cross-language handover is allowed."""
+    assert (
+        _find(
+            _edit(_PY, removed=("def test_reaps_the_orphan(tmp_path):",)),
+            _edit("tests/shell/fleet_spec.sh", added=("    # successor: test_reaps_the_orphan",)),
+        )
+        == []
+    )
+
+
+# --------------------------------------------------------------------------- #
+# node --test declarations, and commented-out declarations of every form
+# --------------------------------------------------------------------------- #
+
+
+def test_removed_node_test_declaration_is_flagged() -> None:
+    v = _find(_edit("tests/js/widget.test.js", removed=("test('escapes the ampersand', () => {",)))
+    assert len(v) == 1, v
+    assert v[0].name == "escapes the ampersand"
+
+
+def test_removed_node_it_declaration_in_an_mjs_module_is_flagged() -> None:
+    v = _find(_edit("tests/fixtures/canary.test.mjs", removed=('  it("reports the skip", () => {',)))
+    assert len(v) == 1, v
+    assert v[0].name == "reports the skip"
+
+
+def test_removed_node_describe_block_is_neutral() -> None:
+    assert _find(_edit("tests/js/widget.test.js", removed=("describe('the widget', () => {",))) == []
+
+
+def test_a_node_module_no_runner_collects_is_neutral() -> None:
+    """`node --test` is pointed at `*.test.js`; a plain helper module is not run."""
+    assert _find(_edit("tests/js/helpers.js", removed=("test('escapes the ampersand', () => {",))) == []
+
+
+def test_commented_out_declarations_are_neutral_in_every_form() -> None:
+    """A commented-out declaration carries no assertion, so removing it retires nothing."""
+    for path, line in (
+        (_PY, "    # def test_reaps_the_orphan(tmp_path):"),
+        ("tests/php/ReaperTest.php", "    // public function testReapsTheOrphan(): void"),
+        ("tests/shell/reaper_spec.sh", "    # It 'reaps the orphan'"),
+        ("tests/js/widget.test.js", "    // test('escapes the ampersand', () => {"),
+    ):
+        assert _find(_edit(path, removed=(line,))) == [], path
+
+
 # --------------------------------------------------------------------------- #
 # The committed tombstone file
 # --------------------------------------------------------------------------- #
@@ -360,11 +490,19 @@ def _git(repo: Path, *args: str) -> None:
         cwd=repo,
         check=True,
         capture_output=True,
+        env=scrubbed_git_env(),
     )
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(_TOOL), *args], cwd=repo, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, str(_TOOL), *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=scrubbed_git_env(drop_git_vars=True),
+    )
 
 
 def _repo_with_a_test(tmp_path: Path) -> Path:
@@ -425,6 +563,50 @@ def test_cli_non_utf8_diff_byte_does_not_crash_the_run(tmp_path: Path) -> None:
     assert "test_reaps_the_orphan" in result.stderr
 
 
+def test_cli_sees_a_pure_rename_out_of_a_collected_name(tmp_path: Path) -> None:
+    """`git mv` to a name pytest never collects retires every test in the file.
+
+    With git's default rename detection a 100%-similar move emits a
+    `rename from/to` section and no hunks at all, so the gate must run with
+    `--no-renames` or an innocent `git mv` erases a guard invisibly.
+    """
+    repo = _repo_with_a_test(tmp_path)
+    _git(repo, "mv", "tests/test_reaper.py", "tests/reaper_helpers.py")
+    result = _run(repo, "--staged")
+    assert result.returncode == 1, result.stderr
+    assert "test_reaps_the_orphan" in result.stderr
+
+
+def test_cli_treats_a_rename_between_collected_names_as_a_move(tmp_path: Path) -> None:
+    """The paired clean case: both names are collected, so nothing retires."""
+    repo = _repo_with_a_test(tmp_path)
+    _git(repo, "mv", "tests/test_reaper.py", "tests/test_fleet.py")
+    result = _run(repo, "--staged")
+    assert result.returncode == 0, result.stderr
+
+
+def test_cli_cannot_be_blinded_by_a_no_diff_gitattribute(tmp_path: Path) -> None:
+    """`-diff` renders a text file binary; a PR can add that in the same commit."""
+    repo = _repo_with_a_test(tmp_path)
+    (repo / ".gitattributes").write_text("tests/test_reaper.py -diff\n")
+    (repo / "tests/test_reaper.py").unlink()
+    _git(repo, "add", "-A")
+    result = _run(repo, "--staged")
+    assert result.returncode == 1, result.stderr
+    assert "test_reaps_the_orphan" in result.stderr
+
+
+def test_cli_flags_a_test_file_replaced_by_a_symlink(tmp_path: Path) -> None:
+    """A type change stops the file asserting as surely as a deletion does."""
+    repo = _repo_with_a_test(tmp_path)
+    (repo / "tests/test_reaper.py").unlink()
+    (repo / "tests/test_reaper.py").symlink_to("/dev/null")
+    _git(repo, "add", "-A")
+    result = _run(repo, "--staged")
+    assert result.returncode == 1, result.stderr
+    assert "test_reaps_the_orphan" in result.stderr
+
+
 def test_cli_usage_error(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     assert _run(tmp_path).returncode == 2
@@ -461,4 +643,14 @@ def test_ci_wires_the_gate_as_a_blocking_job() -> None:
     assert "scripts/check_guard_erosion.py --diff" in workflow
     needs = re.search(r"^    needs: \[(.+)\]$", workflow, re.MULTILINE)
     assert needs is not None and "guard-erosion" in needs.group(1), "job not folded into all-tests-passed"
-    assert "needs.guard-erosion.result" in workflow, "no result check in all-tests-passed"
+    # A bare `needs.guard-erosion.result` substring survives the failure mode
+    # this whole ticket exists to prevent: a ladder arm "simplified" into a
+    # no-op turns the gate warn-only while the interpolation stays put.
+    ladder = re.search(
+        r'case "\$\{\{ needs\.guard-erosion\.result \}\}" in\n'
+        r"\s+success\|skipped\) ;;\n"
+        r'\s+\*\) echo "[^"]+"; exit 1 ;;\n'
+        r"\s+esac",
+        workflow,
+    )
+    assert ladder is not None, "the guard-erosion result ladder does not exit 1 on a non-success result"
