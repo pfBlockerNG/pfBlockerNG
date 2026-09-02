@@ -127,10 +127,10 @@ class PslRules:
     # keeps value equality (and the hash) a function of the rules alone; init=False
     # keeps a foreign index out of the constructor and makes dataclasses.replace
     # rebuild rather than carry the previous rules' sets.
-    _index: tuple[_PslSets, _PslSets] | None = field(default=None, compare=False, repr=False, init=False)
+    _index: _PslIndex | None = field(default=None, compare=False, repr=False, init=False)
 
-    def index(self) -> tuple[_PslSets, _PslSets]:
-        """(ICANN-only, ICANN+PRIVATE) membership sets for this rule set.
+    def index(self) -> _PslIndex:
+        """(ICANN-only sets, ICANN+PRIVATE sets, exception-root labels) for this rule set.
 
         Built once per instance. Do NOT reintroduce an lru_cache keyed on this
         dataclass: computing that key hashes all six rule tuples on every call,
@@ -261,9 +261,10 @@ def parse_psl_rules(text: str) -> PslRules:
 
 
 _PslSets = tuple[frozenset[str], frozenset[str], frozenset[str]]
+_PslIndex = tuple[_PslSets, _PslSets, frozenset[str]]
 
 
-def _psl_build_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
+def _psl_build_index(rules: PslRules) -> _PslIndex:
     """Build the (ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) sets.
 
     Called once per PslRules via PslRules.index(), which holds the result on the
@@ -281,48 +282,107 @@ def _psl_build_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
         frozenset(rules.icann_wildcard + rules.private_wildcard),
         frozenset(rules.icann_exception + rules.private_exception),
     )
-    return icann, combined
+    # Final label of every exception rule in either section. An exception can only
+    # match a tail whose last label is its own, so a name whose TLD is absent here
+    # needs no exception phase at all -- the shipped list has ~10 such rules across
+    # a handful of TLDs, so the phase is skipped for practically every feed entry.
+    exception_roots = frozenset(rule.rsplit(".", 1)[-1] for rule in combined[2])
+    return icann, combined, exception_roots
 
 
-def _psl_prevailing(
-    labels: list[str],
+def _psl_tails(labels: list[str]) -> list[str]:
+    """Every dotted suffix of ``labels``, longest first (``tails[i]`` == labels[i:]).
+
+    Built once per resolution by growing one label at a time from the right, so the
+    matcher below never re-joins a slice of the label list (issue #3061).
+    """
+    tails = [labels[-1]]
+    for index in range(len(labels) - 2, -1, -1):
+        tails.append(labels[index] + "." + tails[-1])
+    tails.reverse()
+    return tails
+
+
+def _psl_prevailing_section(
+    tails: list[str],
     exact: frozenset[str],
     wildcard: frozenset[str],
     exception: frozenset[str],
 ) -> str:
     # Exception wins outright; scanning tails longest-first makes the first hit
     # the longest match. Exception output drops the rule's leftmost label.
-    count = len(labels)
+    count = len(tails)
     for start in range(count):
-        if ".".join(labels[start:]) in exception:
-            return ".".join(labels[start + 1 :])
+        if tails[start] in exception:
+            return tails[start + 1] if start + 1 < count else ""
     # Longest surviving suffix wins. A wildcard base at ``start`` yields the
     # suffix labels[start-1:], one label longer than an exact rule at ``start``
     # and the SAME string an exact rule at ``start-1`` would yield -- so the
     # longest-first walk needs no cross-kind tie-breaking.
     for start in range(count):
-        tail = ".".join(labels[start:])
+        tail = tails[start]
         if start > 0 and tail in wildcard:
-            return ".".join(labels[start - 1 :])
+            return tails[start - 1]
         if tail in exact:
             return tail
-    return labels[-1]
+    return tails[-1]
+
+
+def _psl_prevailing(
+    labels: list[str],
+    icann_sets: _PslSets,
+    combined_sets: _PslSets,
+    exception_roots: frozenset[str],
+) -> tuple[str, str]:
+    """The (ICANN-only, ICANN+PRIVATE) prevailing suffixes from ONE walk of ``labels``.
+
+    Both are always needed -- ``private_active`` is their comparison and TLD-Allow
+    reads both -- so the sections share one walk instead of taking one each
+    (issue #3061): the tails are built once and matched against both.
+    """
+    tails = _psl_tails(labels)
+    if tails[-1] in exception_roots:
+        # An exception beats an ordinary match at ANY depth, so it cannot be folded
+        # into the single pass below; the TLD test keeps that two-phase walk on the
+        # rare names that can actually reach an exception rule.
+        return (
+            _psl_prevailing_section(tails, *icann_sets),
+            _psl_prevailing_section(tails, *combined_sets),
+        )
+    icann_exact, icann_wildcard, _ = icann_sets
+    public_exact, public_wildcard, _ = combined_sets
+    icann_suffix: str | None = None
+    public_suffix: str | None = None
+    for start, tail in enumerate(tails):
+        if icann_suffix is None:
+            if start > 0 and tail in icann_wildcard:
+                icann_suffix = tails[start - 1]
+            elif tail in icann_exact:
+                icann_suffix = tail
+        if public_suffix is None:
+            if start > 0 and tail in public_wildcard:
+                public_suffix = tails[start - 1]
+            elif tail in public_exact:
+                public_suffix = tail
+    unmatched = tails[-1]
+    return (
+        unmatched if icann_suffix is None else icann_suffix,
+        unmatched if public_suffix is None else public_suffix,
+    )
 
 
 def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
     """Apply PSL prevailing-rule semantics for ICANN and combined sections."""
     normalized = _psl_normalize_name(name)
     labels = normalized.split(".")
-    icann_sets, combined_sets = rules.index()
-    icann_suffix = _psl_prevailing(labels, *icann_sets)
-    public_suffix = _psl_prevailing(labels, *combined_sets)
+    icann_suffix, public_suffix = _psl_prevailing(labels, *rules.index())
     suffix_labels = public_suffix.split(".")
     registrable = ".".join(labels[-len(suffix_labels) - 1 :]) if len(labels) > len(suffix_labels) else ""
     return PslResolution(
         icann_suffix=icann_suffix,
         public_suffix=public_suffix,
         registrable_domain=registrable,
-        private_active=len(public_suffix.split(".")) > len(icann_suffix.split(".")),
+        private_active=len(suffix_labels) > len(icann_suffix.split(".")),
     )
 
 
@@ -6584,9 +6644,7 @@ def _tld_allow_blocks(
     except (AttributeError, TypeError, ValueError):
         # Structurally invalid names cannot be matched safely; fail closed.
         return True
-    icann_sets, combined_sets = rules.index()
-    icann_suffix = _psl_prevailing(labels, *icann_sets)
-    public_suffix = _psl_prevailing(labels, *combined_sets)
+    icann_suffix, public_suffix = _psl_prevailing(labels, *rules.index())
     suffix_roots = {
         icann_suffix,
         public_suffix,

@@ -499,3 +499,65 @@ def test_the_live_query_path_does_not_rebuild_the_index_per_query() -> None:
             P.evaluate_domain(name, name, "com", False, cfg, containers)
 
     assert builds == [], f"the live query path rebuilt the index {len(builds)} time(s); issue #3046 has regressed"
+
+
+def _counting_walk(walks: list[str]) -> Any:
+    """Wrap the label walk so every call is recorded and still really resolves."""
+    original = P._psl_prevailing
+
+    def counting_prevailing(*args: Any) -> Any:
+        walks.append("walk")
+        return original(*args)
+
+    return counting_prevailing
+
+
+def test_one_resolution_walks_the_labels_once_for_both_sections() -> None:
+    """issue #3061: the ICANN-only and ICANN+PRIVATE suffixes come from ONE walk.
+
+    Both suffixes are always needed -- ``private_active`` is their comparison and
+    TLD-Allow reads both -- so the walk is shared instead of run once per section.
+    Walking twice rebuilt every label tail of the name a second time, 2.23M walks
+    per 1.2M-entry build.
+
+    Counted, never timed (issue #3051): a duration cannot see the second walk, and
+    the resolution is asserted alongside the count so a broken matcher cannot pass.
+    """
+    rules = P.parse_psl_rules(PSL)
+    rules.index()  # prime: the index build is not what is being counted
+    walks: list[str] = []
+
+    with mock.patch.object(P, "_psl_prevailing", _counting_walk(walks)):
+        resolution = P.resolve_public_suffix("evil.github.io", rules)
+
+    assert (resolution.icann_suffix, resolution.public_suffix, resolution.private_active) == (
+        "io",
+        "github.io",
+        True,
+    ), f"the shared walk changed the resolution: {resolution!r}"
+    assert len(walks) == 1, (
+        f"one resolution took {len(walks)} label walks; the two sections are still walked separately (issue #3061)"
+    )
+
+
+def test_the_live_query_path_walks_the_labels_once_per_query() -> None:
+    """issue #3061: TLD-Allow needs both suffixes too, and shares the same walk.
+
+    ``_tld_allow_blocks`` compares both suffixes against the selected roots on the
+    live DNS query path, so the second caller must not reintroduce a second walk.
+    """
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+    cfg = _allow_cfg()
+    rules.index()  # prime: the index build is not what is being counted
+    walks: list[str] = []
+
+    with mock.patch.object(P, "_psl_prevailing", _counting_walk(walks)):
+        decision = P.evaluate_domain("x.example.net", "x.example.net", "net", False, cfg, containers)
+
+    assert (decision.is_found, decision.feed) == (True, "TLD_Allow"), (
+        f"the shared walk changed the TLD-Allow decision: {decision!r}"
+    )
+    assert len(walks) == 1, (
+        f"one query took {len(walks)} label walks; TLD-Allow still walks each section separately (issue #3061)"
+    )
