@@ -241,8 +241,13 @@ final class UnboundRestartSeamTest extends TestCase
 
 		$this->assertCount(count($before), $this->doubleInvocations(),
 			'a stop that never completed must not reach the daemon start at all');
-		$this->assertSame(-1, $final['retval'],
+		$this->assertSame(PFB_UNBOUND_STOP_FAILED, $final['retval'],
 			'the refusal must be reported to the caller as a failure, not a silent success');
+		// issue #3094: the whole point of the code is that a caller can tell "the daemon
+		// would not stop" from "the generated config is bad". Sharing -1 with the generic
+		// failure would put it straight back into the unbound.bk rollback path.
+		$this->assertNotSame(-1, PFB_UNBOUND_STOP_FAILED,
+			'the stop-failure code must be distinguishable from a generic failure');
 		$this->assertNotEmpty($final['result'],
 			'the caller logs the result, so the refusal must carry a reason');
 		$this->assertSame(array(array('unbound', 'KILL')), $GLOBALS['pfb_test_sigkillbyname_calls'],
@@ -486,6 +491,8 @@ final class UnboundRestartSeamTest extends TestCase
 			'the appliance must still wait up to 30 seconds for the outgoing daemon');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_KILL_WAIT', 5);"),
 			'the KILL escalation must have its own finite five-second budget');
+		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_STOP_FAILED', -2);"),
+			'the appliance must ship the distinct stop-failure code the callers branch on');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_WAIT', 30);"),
 			'the appliance start child must have an explicit finite 30-second budget');
 		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_SETUP_WAIT', 5);"),

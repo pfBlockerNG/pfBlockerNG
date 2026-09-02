@@ -11431,6 +11431,11 @@ if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 if (!defined('PFB_UNBOUND_KILL_WAIT')) {
 	define('PFB_UNBOUND_KILL_WAIT', 5);
 }
+// issue #3094: callers treat any non-zero retval as a bad unbound.conf. A stop that
+// could not be completed is not that, so it gets its own code to branch on.
+if (!defined('PFB_UNBOUND_STOP_FAILED')) {
+	define('PFB_UNBOUND_STOP_FAILED', -2);
+}
 if (!defined('PFB_UNBOUND_START_WAIT')) {
 	define('PFB_UNBOUND_START_WAIT', 30);
 }
@@ -11477,7 +11482,7 @@ function pfb_stop_start_unbound($type) {
 		// seen with no surviving unbound process.
 		if (is_process_running('unbound')) {
 			$final['result'] = array('Unbound could not be stopped; Resolver not restarted');
-			$final['retval'] = -1;
+			$final['retval'] = PFB_UNBOUND_STOP_FAILED;
 			pfb_logger("\nUnbound still running after TERM and KILL; not starting a " .
 				"second instance. Resolver NOT restarted", 2);
 			return $final;
@@ -12028,7 +12033,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 	$final = pfb_stop_start_unbound($type);
 	pfb_logger('.', 1);
 
-	if ($final['retval'] != 0) {
+	// issue #3094: a refused stop is not a config fault -- the quarantine/rollback/retry
+	// below would trash a good config and retry a stop that already failed. The callee
+	// has logged the reason and the shared else-arm logs it again, so say only what is new.
+	if ($final['retval'] === PFB_UNBOUND_STOP_FAILED) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver could not be stopped; " .
+			"config left unchanged ***\n", 2);
+	}
+	elseif ($final['retval'] != 0) {
 
 		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.conf.error");
 		if ($mode == 'enabled') {
@@ -12048,8 +12060,9 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		$final = pfb_stop_start_unbound($type);
 	}
 
-	// Confirm that Resolver is running
-	if (is_process_running('unbound')) {
+	// Confirm that Resolver is running. A refused stop is excluded: the process that
+	// answers here is the daemon we failed to replace, not one this pass started (#3094).
+	if ($final['retval'] !== PFB_UNBOUND_STOP_FAILED && is_process_running('unbound')) {
 		pfb_logger('.', 1);
 
 		// $final['result'] will be appended with previous result above

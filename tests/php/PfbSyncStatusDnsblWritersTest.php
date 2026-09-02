@@ -445,6 +445,145 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertSame('apply', $open[0]['stage']);
 	}
 
+	/**
+	 * The confirm block is the only reachable `chroot_cmd` caller on the refused-stop path,
+	 * so a command that leaves a file behind is a direct spy on whether it ran. Both the
+	 * absence assertion and its positive control build the fragment HERE, deliberately:
+	 * review leg 3 showed that two copy-pasted fragments let a typo in one escape the
+	 * other, which is how a positive control can certify a mechanism it does not share.
+	 */
+	private static function confirmRecorderCmd(string $probe): string
+	{
+		return '/usr/bin/touch ' . escapeshellarg($probe) . ' ;:';
+	}
+
+	/**
+	 * issue #3094: a stop that could not be completed is NOT a broken unbound.conf.
+	 *
+	 * pfb_stop_start_unbound() refuses to start a second resolver when the daemon
+	 * survives TERM and KILL (#3055). The caller used to read any non-zero retval as
+	 * "the generated config is bad" and respond by saving unbound.conf aside as
+	 * .error, restoring the previous config from unbound.bk, printing "Fix error(s)
+	 * and a Force Reload required!", and retrying the whole restart. None of that is
+	 * right here: the config was never the problem, there is nothing for the user to
+	 * fix, and the retry cannot succeed where the refusal already stood -- and the
+	 * daemon still answering is the OLD one, so the confirm block must not credit it.
+	 */
+	public function testStopFailureNeitherRollsBackNorRetriesNorCreditsTheOldDaemon(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+
+		// The confirm block is the only caller of chroot_cmd on this path, so a recorder
+		// here is a direct spy on whether it ran at all (leg 3 row 8: skipping it was
+		// previously unasserted -- reverting the guard left every test green).
+		$confirmProbe = "{$this->dir}/confirm_ran";
+		$GLOBALS['pfb']['chroot_cmd'] = self::confirmRecorderCmd($confirmProbe);
+
+		// The daemon outlives both budgets, so the stop refuses: this is the #3055 path.
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+
+		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
+		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+
+		$after = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
+		// This pins the callee's own guard (it returns before its start section). It does
+		// NOT see a caller-side retry -- a retried refusal refuses again and never reaches
+		// that section either, so the count is unchanged. The KILL count below is what
+		// catches a retry; both are kept because they fail on different regressions.
+		$this->assertSame($before, $after,
+			'a refused stop must reach no start section at all');
+
+		// A retry would call pfb_stop_start_unbound() a second time, and each call escalates
+		// to exactly one KILL. Counting the signal catches a restored retry that the
+		// start-log cannot see, because a retried refusal never reaches its start section.
+		$this->assertCount(1, $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'exactly one KILL: a refused stop escalates once, so a second means the stop '
+			. 'path ran twice -- a caller retry, or the callee escalating more than once');
+
+		$this->assertFileDoesNotExist($confirmProbe,
+			'the confirm block must not run for a refused stop: the process still answering '
+			. 'is the daemon we failed to replace, so crediting it would report success');
+		// That absence is only evidence if THIS test's recorder could have fired. An
+		// unwritable probe path would satisfy the assertion above while proving nothing,
+		// so fire it by hand now and require the file to appear (review leg 3, round 3).
+		exec($GLOBALS['pfb']['chroot_cmd'] . ' status 2>&1');
+		$this->assertFileExists($confirmProbe,
+			'the recorder this test relies on must be capable of creating the probe; '
+			. 'otherwise the absence assertion above passes for the wrong reason');
+
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"),
+			'the resolver config must survive a stop failure: it was never the fault');
+		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error",
+			'no candidate config may be quarantined for a fault that is not the config');
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"),
+			'the last-known-good copy must be left untouched, not consumed by a false rollback');
+
+		// "Fix error(s) and a Force Reload required!" names an action that cannot help when
+		// the resolver simply would not stop, so the log must carry the real cause instead.
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log'])
+			. (string) @file_get_contents($GLOBALS['pfb']['errlog']);
+		// Pins THIS branch's own wording. 'could not be stopped' alone is also produced by
+		// pfb_stop_start_unbound()'s result text, so it would survive a reword here (leg 3 row 6).
+		$this->assertStringContainsString('config left unchanged', $log,
+			'the caller must say the config was deliberately left alone, in its own words');
+		$this->assertStringNotContainsString('Fix error(s)', $log,
+			'a stop failure must not tell the operator to fix a config error that does not exist');
+	}
+
+	/**
+	 * Positive control for the recorder the test above relies on (leg 3, round 2, row B).
+	 *
+	 * That test proves the confirm block is SKIPPED on a refused stop by asserting a probe
+	 * file is absent. An absence assertion is only worth the mechanism behind it: if the
+	 * recorder cannot fire -- an unwritable probe path, or a one-character typo in the shell
+	 * fragment -- the assertion passes for the wrong reason while the bug it guards is live.
+	 * Leg 3 demonstrated both. So this pins the other direction with the SAME fragment: when
+	 * the stop succeeds and the resolver answers, the confirm block runs and the probe DOES
+	 * appear. Break the recorder and this test fails, which is what makes the absence
+	 * assertion above mean something.
+	 */
+	public function testConfirmBlockRecorderFiresWhenTheConfirmBlockActuallyRuns(): void
+	{
+		file_put_contents("{$this->dir}/unbound.conf", "server:\n");
+		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
+		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
+		$GLOBALS['g']['varrun_path'] = $this->dir;
+
+		$confirmProbe = "{$this->dir}/confirm_ran";
+		$GLOBALS['pfb']['chroot_cmd'] = self::confirmRecorderCmd($confirmProbe);
+
+		// is_process_running('unbound') call sequence for this path, enumerated from a
+		// probe rather than guessed: (1) pfb_reload_unbound's pre-restart check :12022,
+		// (2) the stop-wait loop :11458, (3) the #3055 post-loop guard :11469, (4)/(5) the
+		// same two again on the retry the harness start-double's non-zero status triggers,
+		// (6) the confirm block :12065. Only 6 is TRUE: the stop must succeed so retval is
+		// never PFB_UNBOUND_STOP_FAILED, and the resolver must answer at the confirm check.
+		$calls = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$calls): bool {
+			$calls++;
+			return $calls === 6;
+		};
+
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
+			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+
+		$this->assertFileExists($confirmProbe,
+			'the confirm-block recorder must actually fire when the confirm block runs -- '
+			. 'otherwise the skip assertion in the refused-stop test proves nothing');
+	}
+
 	// -----------------------------------------------------------------------
 	// pfb_reload_unbound() -- zero-downtime swap SUCCESS early-return (issue #1024)
 	// -----------------------------------------------------------------------
