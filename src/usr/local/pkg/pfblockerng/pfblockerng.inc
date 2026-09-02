@@ -19062,12 +19062,15 @@ function pfb_feed_pass_deferral_message(string $deferred_by): string {
 	return "pfBlockerNG feed pass deferred: {$lock} is held\n";
 }
 
-// issue #1175: cross-process, non-blocking mutual exclusion for a feed pass --
+// issue #1175: cross-process mutual exclusion for a feed pass --
 // pfb_feed_task_running()/pfb_update_pass_running() above are ps-scan guards
 // (advisory-by-process-list); this flock-based sibling actually serializes two
 // overlapping passes so they cannot corrupt shared recompute staging. Reentrant
 // within a process: a second acquire by the same process is a no-op success.
-function pfb_feed_pass_acquire(?bool &$contended = NULL): bool {
+// $timeout_s defaults to 0.0 -- one non-blocking attempt, the only shape a feed-pass
+// dispatcher may use (it defers instead of queueing). Package installation waits
+// (issue #3062, pfb_install_feed_pass_hold()) because it cannot be deferred.
+function pfb_feed_pass_acquire(?bool &$contended = NULL, float $timeout_s = 0.0): bool {
 	global $pfb;
 	$contended = FALSE;
 
@@ -19084,10 +19087,8 @@ function pfb_feed_pass_acquire(?bool &$contended = NULL): bool {
 		pfb_logger("\n Feed pass lock: open failed [ {$lockpath} ]; feed pass aborted.\n", 2);
 		return FALSE;
 	}
-	$would_block = 0;
-	if (!@flock($lock, LOCK_EX | LOCK_NB, $would_block)) {
+	if (!pfb_flock_bounded($lock, LOCK_EX, $timeout_s, $contended)) {
 		@fclose($lock);
-		$contended = $would_block === 1;
 		if (!$contended) {
 			pfb_logger("\n Feed pass lock: acquire failed [ {$lockpath} ]; feed pass aborted.\n", 2);
 		}
@@ -19153,6 +19154,41 @@ function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
 	pfb_logger("\nFeed pass [ {$label} ] skipped -- another pfBlockerNG feed pass is running.\n", 1);
 	logger(LOG_NOTICE, localize_text('Feed pass [ %s ] skipped - another pfBlockerNG feed pass is running.', $label),
 		LOG_PREFIX_PKG_PFBLOCKERNG);
+	return FALSE;
+}
+
+// Seconds a package install waits for an in-flight feed pass before it proceeds anyway.
+define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
+
+// issue #3062: a package install restages the Unbound chroot ('dnsbl_cache stage'),
+// drops caches, and stops/starts the pfB services -- the same files and daemon a feed
+// pass publishes into, and nothing serialised the two. Take the feed-pass lock and keep
+// it for the rest of the install process (pfb_feed_pass_release() runs at shutdown), so
+// an in-flight pass finishes first and a tick firing mid-install defers like any other
+// contender. Bounded, and FALSE never aborts the caller: a half-installed package is
+// worse than an overlap, so the install proceeds and the overlap is logged as the
+// evidence a post-install DNS failure is traced with.
+function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAIT): bool {
+	if (pfb_feed_pass_busy()) {
+		pfb_logger("\nPackage install: waiting up to {$timeout_s}s for the in-flight feed pass to finish.\n", 1);
+		logger(LOG_NOTICE, localize_text('Package install waiting for the in-flight feed pass to finish.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+
+	$contended = FALSE;
+	if (pfb_feed_pass_acquire($contended, $timeout_s)) {
+		return TRUE;
+	}
+
+	if ($contended) {
+		pfb_logger("\nPackage install proceeding WITHOUT the feed-pass lock: a feed pass is still running.\n", 2);
+		logger(LOG_WARNING, localize_text('Package install proceeding without the feed-pass lock - a feed pass is still running.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
+	} else {
+		pfb_logger("\nPackage install proceeding WITHOUT the feed-pass lock: it could not be acquired.\n", 2);
+		logger(LOG_WARNING, localize_text('Package install proceeding without the feed-pass lock - it could not be acquired.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
 	return FALSE;
 }
 
