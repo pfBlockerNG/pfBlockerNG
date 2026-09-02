@@ -33,7 +33,7 @@ def _write(tmp_path: Any, name: str, data: bytes) -> str:
 
 
 def test_fingerprint_two_files_is_concatenated_md5_in_order(tmp_path: Any) -> None:
-    """P1: digest is md5(first) ++ md5(second), 64 lowercase hex chars --
+    """digest is md5(first) ++ md5(second), 64 lowercase hex chars --
     and swapping the pair changes it (order is part of the contract)."""
     first = _write(tmp_path, "pfb_unbound.py", b"first")
     second = _write(tmp_path, "pfb_dnsbl_regex_rules.py", b"second")
@@ -45,7 +45,7 @@ def test_fingerprint_two_files_is_concatenated_md5_in_order(tmp_path: Any) -> No
 
 
 def test_fingerprint_missing_path_returns_none(tmp_path: Any) -> None:
-    """P2: any unreadable member poisons the whole fingerprint -> None."""
+    """any unreadable member poisons the whole fingerprint -> None."""
     present = _write(tmp_path, "pfb_unbound.py", b"x")
     missing = str(tmp_path / "absent.py")
 
@@ -54,7 +54,7 @@ def test_fingerprint_missing_path_returns_none(tmp_path: Any) -> None:
 
 
 def test_write_applied_happy_path_writes_marker_atomically(tmp_path: Any) -> None:
-    """P3: marker content is fingerprint + newline and no .tmp sidecar survives."""
+    """marker content is fingerprint + newline and no .tmp sidecar survives."""
     marker = str(tmp_path / "pfb_py_module.applied")
 
     assert P._module_write_applied(marker, PARITY_FP) is True
@@ -64,7 +64,7 @@ def test_write_applied_happy_path_writes_marker_atomically(tmp_path: Any) -> Non
 
 
 def test_write_applied_unwritable_dir_returns_false_without_raising(tmp_path: Any) -> None:
-    """P4: OSError from the temp write degrades to False -- never an exception.
+    """OSError from the temp write degrades to False -- never an exception.
 
     Permission-denied needs a non-root uid; the not-a-directory shape below is
     OSError (ENOTDIR) under EVERY uid, so the run stays meaningful as root too."""
@@ -85,7 +85,7 @@ def test_write_applied_unwritable_dir_returns_false_without_raising(tmp_path: An
 
 
 def test_fingerprint_matches_php_pinned_parity_literal(tmp_path: Any) -> None:
-    """P5: for bytes b"a", b"b" the digest equals the literal pinned in BOTH
+    """for bytes b"a", b"b" the digest equals the literal pinned in BOTH
     languages (see PythonModuleFingerprintTest.php)."""
     a = _write(tmp_path, "a", b"a")
     b = _write(tmp_path, "b", b"b")
@@ -94,7 +94,7 @@ def test_fingerprint_matches_php_pinned_parity_literal(tmp_path: Any) -> None:
 
 
 def test_fingerprint_empty_files_is_md5_of_empty_pair(tmp_path: Any) -> None:
-    """Hostile (brief S5): an emptied shipped file is still a STRING digest --
+    """Hostile: an emptied shipped file is still a STRING digest --
     the md5-of-empty pair -- so it compares normally, no special case."""
     a = _write(tmp_path, "a", b"")
     b = _write(tmp_path, "b", b"")

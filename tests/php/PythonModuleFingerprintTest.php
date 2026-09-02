@@ -125,14 +125,14 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testFingerprintTwoFilesMatchesParityLiteral(): void
 	{
-		// H1: for file bytes "a" and "b" the digest is the cross-language constant.
+		// for file bytes "a" and "b" the digest is the cross-language constant.
 		$this->shipFiles();
 		$this->assertSame(self::PARITY_FP, pfb_unbound_py_module_fingerprint($GLOBALS['pfb']['unbound_py_module_src']));
 	}
 
 	public function testFingerprintUnreadableOrMissingPathIsFalse(): void
 	{
-		// H2: any unreadable member poisons the whole fingerprint -> FALSE, so an
+		// any unreadable member poisons the whole fingerprint -> FALSE, so an
 		// unreadable shipped file never fakes a restart signal. The missing-path
 		// shape runs under every uid; the chmod'd shape only when permissions bite.
 		$this->shipFiles();
@@ -158,7 +158,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testMarkerAbsentSignalsRestartAndLogs(): void
 	{
-		// H3: absent marker (fresh stage the running module never recorded) = drift.
+		// absent marker (fresh stage the running module never recorded) = drift.
 		$this->shipFiles();
 		$this->assertTrue(pfb_unbound_python('enabled'));
 		$log = (string) file_get_contents($GLOBALS['pfb']['log']);
@@ -167,7 +167,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testMarkerMatchingFingerprintConvergesToFalse(): void
 	{
-		// H4: call 1 writes the ini + whitelist (returns TRUE, before-state); with the
+		// call 1 writes the ini + whitelist (returns TRUE, before-state); with the
 		// marker already equal, call 2 has NOTHING left to signal -> FALSE.
 		$this->shipFiles();
 		file_put_contents($this->markerPath(), self::PARITY_FP . "\n");
@@ -177,7 +177,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testMarkerHoldingDifferentFingerprintKeepsSignaling(): void
 	{
-		// H5: a stale-but-wellformed marker (module changed since) = drift, again.
+		// a stale-but-wellformed marker (module changed since) = drift, again.
 		$this->shipFiles();
 		file_put_contents($this->markerPath(), str_repeat('f', 64) . "\n");
 		$this->assertTrue(pfb_unbound_python('enabled'));
@@ -186,7 +186,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testUnreadableShippedFileSuppressesSignal(): void
 	{
-		// H6: fingerprint FALSE = nothing to compare -> NO signal (second call FALSE),
+		// fingerprint FALSE = nothing to compare -> NO signal (second call FALSE),
 		// even though the marker is absent. False alarm beats restart, never the reverse.
 		$this->shipFiles();
 		$GLOBALS['pfb']['unbound_py_module_src'][0] = "{$this->tmp}/absent.py";
@@ -196,14 +196,14 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testDisabledModeNeverSignals(): void
 	{
-		// H7: the module compare lives ONLY in the enabled branch.
+		// the module compare lives ONLY in the enabled branch.
 		$this->shipFiles();
 		$this->assertFalse(pfb_unbound_python('disabled'));
 	}
 
 	public function testMarkerSurroundingWhitespaceStillMatches(): void
 	{
-		// H8: the marker is read trim()'d -- the writer's trailing newline (plus any
+		// the marker is read trim()'d -- the writer's trailing newline (plus any
 		// stray padding) must not fake a drift.
 		$this->shipFiles();
 		file_put_contents($this->markerPath(), '  ' . self::PARITY_FP . "  \n");
@@ -213,7 +213,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testMarkerJunkIsDifferentNeverCrashes(): void
 	{
-		// Hostile (brief S5): a junk marker -- 64 non-hex chars, or 10 MB of it --
+		// Hostile: a junk marker -- 64 non-hex chars, or 10 MB of it --
 		// is just "different" (restart signal); never parsed as anything else.
 		$this->shipFiles();
 		file_put_contents($this->markerPath(), str_repeat('z', 64));
@@ -225,7 +225,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testEmptiedShippedFilesStillFingerprintAsString(): void
 	{
-		// Hostile (brief S5): emptied shipped files fingerprint to the md5-of-empty
+		// Hostile: emptied shipped files fingerprint to the md5-of-empty
 		// pair -- still a string, still compares normally, no special case.
 		$this->shipFiles('', '');
 		$this->assertSame(self::EMPTY_FP, pfb_unbound_py_module_fingerprint($GLOBALS['pfb']['unbound_py_module_src']));
