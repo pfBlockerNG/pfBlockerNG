@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/.claude/hooks/session-branch-sync.sh\" 4b11454944ad59c3093f28fecbc74c880e244ff81561e4c2e51112675429015b && exec sh \"$root/.claude/hooks/session-branch-sync.sh\"",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/.claude/hooks/session-branch-sync.sh\" c8ba6b34c2d59a313a2710d66d4b58ffb8f2386a29f223e629a6ff0e07d9c768 && exec sh \"$root/.claude/hooks/session-branch-sync.sh\"",
             "timeout": 120,
             "statusMessage": "Checking branch freshness"
           }

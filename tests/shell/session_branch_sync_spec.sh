@@ -166,8 +166,84 @@ Describe 'session-branch-sync base branch with untracked files'
     }
     When run sync_collide
     The status should equal 0
-    The output should include 'fast-forward'
-    The output should include 'FAILED'
+    The output should include 'fast-forward to origin/devel FAILED'
+  End
+End
+
+Describe 'session-branch-sync session branch with untracked files'
+  hook="${PFB_ROOT}/.claude/hooks/session-branch-sync.sh"
+
+  setup() {
+    scrub_git_env
+    base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/session-sync.XXXXXX")"
+    remote="$base/remote.git"
+    seed="$base/seed"
+    session="$base/session"
+    git_fixture init -q --bare "$remote"
+    git_fixture clone -q "$remote" "$seed" 2>/dev/null
+    git_fixture -C "$seed" config user.email seed@example.com
+    git_fixture -C "$seed" config user.name Seed
+    git_fixture -C "$seed" config commit.gpgsign false
+    git_fixture -C "$seed" checkout -q -b devel
+    printf 'base-1\n' > "$seed/base.txt"
+    git_fixture -C "$seed" add base.txt
+    git_fixture -C "$seed" commit -q -m base-1
+    git_fixture -C "$seed" push -q origin devel
+
+    git_fixture clone -q --branch devel "file://$remote" "$session"
+    git_fixture -C "$session" config user.email agent@example.com
+    git_fixture -C "$session" config user.name Agent
+    git_fixture -C "$session" config commit.gpgsign false
+    git_fixture -C "$session" checkout -q -b topic
+    printf '%s\n' topic > "$session/topic.txt"
+    git_fixture -C "$session" add topic.txt
+    git_fixture -C "$session" commit -q -m topic
+
+    printf 'base-2\n' >> "$seed/base.txt"
+    mkdir -p "$seed/graphify-out/memory"
+    printf 'upstream\n' > "$seed/graphify-out/memory/collide.md"
+    git_fixture -C "$seed" add base.txt graphify-out/memory/collide.md
+    git_fixture -C "$seed" commit -q -m base-2
+    git_fixture -C "$seed" push -q origin devel
+    git_fixture -C "$session" fetch -q origin devel
+  }
+
+  cleanup() {
+    rm -rf "$base"
+  }
+
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'rebases over an untracked memory record'
+    sync_untracked() {
+      mkdir -p "$session/graphify-out/memory"
+      printf 'local\n' > "$session/graphify-out/memory/query_local.md"
+      cd "$session" || return 1
+      sh "$hook" \
+        && git_fixture merge-base --is-ancestor origin/devel HEAD \
+        && [ "$(git_fixture log -1 --format=%s)" = topic ] \
+        && [ "$(cat graphify-out/memory/query_local.md)" = local ]
+    }
+    When run sync_untracked
+    The status should equal 0
+    The output should include 'rebased onto origin/devel'
+  End
+
+  It 'reports a rebase that could not start over a colliding untracked file'
+    sync_collide() {
+      mkdir -p "$session/graphify-out/memory"
+      printf 'local\n' > "$session/graphify-out/memory/collide.md"
+      cd "$session" || return 1
+      sh "$hook" \
+        && [ "$(git_fixture rev-list --count HEAD..origin/devel)" -eq 1 ] \
+        && [ "$(git_fixture log -1 --format=%s)" = topic ] \
+        && [ "$(cat graphify-out/memory/collide.md)" = local ]
+    }
+    When run sync_collide
+    The status should equal 0
+    The output should include 'rebase onto origin/devel could not start'
+    The output should not include 'stuck mid-rebase'
   End
 End
 

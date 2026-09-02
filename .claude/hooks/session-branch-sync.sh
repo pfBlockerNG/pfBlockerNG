@@ -14,12 +14,11 @@
 #                               new commits replay on the live base
 #   shallow history gap      -> unshallow once, then require a visible merge
 #                               base; otherwise report + touch nothing
-#   dirty tree               -> touch nothing; tell the agent to sync by hand.
-#                               Only TRACKED changes count: untracked files (fresh
-#                               graphify-out/memory/ records, scratch output) never
-#                               conflict with a fast-forward or rebase unless the
-#                               incoming commits write that same path, and git
-#                               refuses that case on its own -- reported below.
+#   dirty tree               -> touch nothing; tell the agent to sync by hand. Only
+#                               TRACKED changes count: an untracked file (a fresh
+#                               graphify-out/memory/ record) blocks nothing unless the
+#                               incoming commits track that path -- git refuses that
+#                               itself, and both arms below report it
 #   rebase conflict (~1%)    -> abort cleanly; tell the agent to resolve by hand
 #
 # ponytail: base is origin/devel for every non-base branch -- the documented
@@ -114,8 +113,10 @@ case "$branch" in
 			fi
 		elif git rebase --abort >/dev/null 2>&1; then
 			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and was ABORTED -- branch is unchanged (stderr was suppressed, so the cause is unshown). Re-run by hand to see why: git rebase ${base}  (often a merge conflict; an obsolete squash-merged branch can conflict because upstream no longer has its original commit boundaries), then --force-with-lease push."
-		else
+		elif [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
 			emit "SESSION BRANCH '${branch}': rebase onto ${base} FAILED and the --abort ALSO failed -- the repo may be stuck mid-rebase. Inspect by hand: git status; git rebase --abort."
+		else
+			emit "SESSION BRANCH '${branch}': rebase onto ${base} could not start -- branch is unchanged (stderr was suppressed). Usually an untracked file that ${base} now tracks (git status shows it): move it aside, then run: git rebase ${base}"
 		fi
 		;;
 esac
