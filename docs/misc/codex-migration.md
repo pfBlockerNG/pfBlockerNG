@@ -13,7 +13,7 @@ fresh-session policy replaced workflow-era orchestration.
 | --- | --- | --- | --- |
 | Repository policy | `AGENTS.md` + `.agents/policy/` + `.agents/context/` | `CLAUDE.md` is the thin `@AGENTS.md` adapter | Loads `AGENTS.md` natively |
 | Task procedures (skills) | `.agents/skills/*/SKILL.md` | `.claude/skills/*` symlinks onto the canonical dirs | Direct discovery (`$name`) |
-| Specialist roles | `.agents/policy/agent-roles.md` + `.agents/model-tiers.conf` | Claude agents (`claude-fable-5` / `claude-opus-4-8` / `claude-sonnet-5`) | Role TOMLs in `.codex/agents/` (`gpt-5.6-sol` / `-terra` / `-luna`) |
+| Specialist roles | `.agents/policy/agent-roles.md` + `.agents/model-tiers.conf` | Claude agents (`claude-fable-5-1` / `claude-opus-4-8` / `claude-sonnet-5`) | Role TOMLs in `.codex/agents/` (`gpt-5.6-sol` / `-terra` / `-luna`) |
 | Lifecycle enforcement | Shared `.githooks/` + repository scripts | `.claude/settings.json` | `.codex/hooks.json` + `.codex/config.toml` |
 
 `AGENTS.md` stays vendor-neutral: its "Vendor adapters" section is short pointer

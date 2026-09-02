@@ -7,7 +7,7 @@ planning, spawning, or gating delegated work (ticket packets and ad-hoc alike).
 
 Provider-neutral procedures name three capability tiers — **top / mid / small**
 (disjoint from effort-level words, so "high" always mean effort value). Machine-readable
-mapping: `.agents/model-tiers.conf`. **Top tier** = `claude-fable-5` in Claude,
+mapping: `.agents/model-tiers.conf`. **Top tier** = `claude-fable-5-1` in Claude,
 `gpt-5.6-sol` in Codex; **mid tier** = `claude-opus-5` and `gpt-5.6-terra`; **small tier**
 = `claude-sonnet-5` and `gpt-5.6-luna`. Tier pick model, not effort knob: workflows still
 set required effort independently. Role families on these tiers (explorer, planner,
