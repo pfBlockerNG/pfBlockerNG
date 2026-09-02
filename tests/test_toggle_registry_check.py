@@ -184,8 +184,8 @@ def test_exempt_entry_suppresses_rule_two(monkeypatch: pytest.MonkeyPatch) -> No
 # --------------------------------------------------------------------------- #
 
 
-def test_registry_parse_finds_every_alias_and_the_toggle_entries() -> None:
-    """The parse must see all PFB_SECTIONS aliases and mark toggles as toggles."""
+def test_registry_parse_finds_every_alias_and_registered_key() -> None:
+    """The parse must see all PFB_SECTIONS aliases and the registered keys."""
     text = (_REPO_ROOT / ctr.REGISTRY_FILE).read_text(encoding="utf-8")
     sections = ctr.parse_sections(text)
     keys = ctr.parse_registry_keys(text)
@@ -195,13 +195,11 @@ def test_registry_parse_finds_every_alias_and_the_toggle_entries() -> None:
     assert sections["installedpackages/pfblockerngsync/config/0"] == "sync"
     assert len(keys) >= ctr._MIN_REGISTRY_KEYS
 
-    # issue #2123's own entries, and their adapter classification.
-    assert keys[("ip", "enable_dup")] is True
-    assert keys[("global", "alertrefresh")] is True
-    assert keys[("sync", "syncinterfaces")] is True
-    assert keys[("dnsbl", "autoaddrnot_in")] is True
-    # A registered plain scalar must NOT be classified as a toggle.
-    assert keys[("ip", "v4suppression")] is False
+    assert ("ip", "enable_dup") in keys
+    assert ("global", "alertrefresh") in keys
+    assert ("sync", "syncinterfaces") in keys
+    assert ("dnsbl", "autoaddrnot_in") in keys
+    assert ("ip", "v4suppression") in keys
 
 
 def test_every_exempt_row_still_names_a_live_site(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,34 +283,6 @@ def test_exempt_row_does_not_suppress_rule_one(monkeypatch: pytest.MonkeyPatch) 
 def test_unreadable_explicit_path_fails_closed() -> None:
     """A named page the checker cannot read must exit 2, never 0."""
     assert ctr.main(["src/usr/local/www/pfblockerng/does_not_exist.php"]) == 2
-
-
-def test_every_2123_key_is_classified_as_a_toggle() -> None:
-    """All seventeen, not a sample: a plain-scalar slip would let RULE 2 skip the key."""
-    text = (_REPO_ROOT / ctr.REGISTRY_FILE).read_text(encoding="utf-8")
-    keys = ctr.parse_registry_keys(text)
-    expected = [
-        ("ip", "enable_dup"),
-        ("ip", "enable_agg"),
-        ("ip", "enable_log"),
-        ("ip", "enable_rdns"),
-        ("ip", "database_cc"),
-        ("ip", "enable_float"),
-        ("ip", "killstates"),
-        ("dnsbl", "autoaddrnot_in"),
-        ("dnsbl", "autoports_in"),
-        ("dnsbl", "autoaddr_in"),
-        ("dnsbl", "autonot_in"),
-        ("dnsbl", "autoaddrnot_out"),
-        ("dnsbl", "autoports_out"),
-        ("dnsbl", "autoaddr_out"),
-        ("dnsbl", "autonot_out"),
-        ("sync", "syncinterfaces"),
-        ("global", "alertrefresh"),
-    ]
-    assert len(expected) == 17
-    plain = [f"{a}/{b}" for a, b in expected if keys.get((a, b)) is not True]
-    assert not plain, f"issue #2123 keys not carrying the toggle read adapter: {plain}"
 
 
 def test_whitespace_between_brackets_does_not_evade_either_rule() -> None:

@@ -320,7 +320,7 @@ def test_absent_dnsbl_ports_render_the_page_defaults(
     """issue #2994: absent pfb_dnsport/ssl still render 8081/8443 from the registry."""
     node_state(f"{_CFG_DNSBL}/pfb_dnsport", None)
     node_state(f"{_CFG_DNSBL}/pfb_dnsport_ssl", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
     assert _input_value(html, "pfb_dnsport") == "8081"
     assert _input_value(html, "pfb_dnsport_ssl") == "8443"
 
@@ -331,7 +331,7 @@ def test_absent_aliaslog_renders_enabled(
 ) -> None:
     """issue #2994: absent aliaslog still selects Enable (the page/help default)."""
     node_state(f"{_CFG_DNSBL}/aliaslog", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
     assert _select_selected(html, "aliaslog") == "enabled"
 
 
@@ -341,7 +341,7 @@ def test_absent_dnsbl_rule_renders_unchecked(
 ) -> None:
     """issue #2994: absent pfb_dnsbl_rule stays Off under the registry Disabled token."""
     node_state(f"{_CFG_DNSBL}/pfb_dnsbl_rule", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
     assert not _checkbox_is_checked(html, "pfb_dnsbl_rule")
 
 
@@ -352,6 +352,6 @@ def test_absent_dnsbl_vips_render_the_none_sentinel(
     """issue #2994: absent pfb_dnsvip4/6 still select the widget none sentinel."""
     node_state(f"{_CFG_DNSBL}/pfb_dnsvip4", None)
     node_state(f"{_CFG_DNSBL}/pfb_dnsvip6", None)
-    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL")
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
     assert _select_selected(html, "pfb_dnsvip4") == "none"
     assert _select_selected(html, "pfb_dnsvip6") == "none"

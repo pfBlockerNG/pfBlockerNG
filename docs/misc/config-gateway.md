@@ -260,8 +260,11 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
   `isset($pfb['<mirror>']['<key>']) ? … : '<literal>'`. Read it with `PfbConfig::read()`.
   issue #2994 widened this from toggles to every registered key after aligning the
   six page/registry scalar divergences (`pfb_dnsport`/`pfb_dnsport_ssl`/`aliaslog`
-  follow the page; `pfb_dnsbl_rule` keeps registry `Disabled`; `pfb_dnsvip4/6`
-  store `''` and map the Form_Select sentinel `none` after the gateway read).
+  follow the page, and a fresh install now seeds those values; `pfb_dnsbl_rule` keeps
+  registry `Disabled`; `pfb_dnsvip4/6` store `''` and map the Form_Select sentinel
+  `none` after the gateway read). The matchers require a literal key; a dynamic
+  `$pfb['gconfig']['log_max_' . $suffix]` restatement is a documented ceiling, not a
+  clean scan of those sites.
 - The mirror → alias mapping is DERIVED from each page's own
   `$pfb['<mirror>'] = PfbConfig::readSection('<path>')`, so a new page needs no edit here.
 - Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100

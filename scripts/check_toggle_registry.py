@@ -56,13 +56,12 @@ from typing import NamedTuple
 REGISTRY_FILE = "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 WWW_DIR = "src/usr/local/www/pfblockerng"
 
-# A registry entry: its path key plus enough of the entry body to see which read
-# adapter it declares. Non-greedy to the entry's own closing `],`.
+# A registry entry: its path key plus enough of the entry body to bound the match
+# to the entry's own closing `],`.
 _REGISTRY_ENTRY_RE = re.compile(
     r"^\s*'([a-z]+)/([A-Za-z0-9_]+)'\s*=>\s*\[(.*?)^\t\t\],",
     re.DOTALL | re.MULTILINE,
 )
-_TOGGLE_ADAPTER = "pfb_cfg_toggle_read"
 
 # One `PFB_SECTIONS` row: `'ip' => 'installedpackages/pfblockerngipsettings/config/0',`.
 _SECTIONS_BLOCK_RE = re.compile(r"const PFB_SECTIONS\s*=\s*\[(.*?)^\];", re.DOTALL | re.MULTILINE)
@@ -118,19 +117,16 @@ def parse_sections(registry_text: str) -> dict[str, str]:
     return {path: alias for alias, path in _SECTIONS_ROW_RE.findall(block.group(1))}
 
 
-def parse_registry_keys(registry_text: str) -> dict[tuple[str, str], bool]:
-    """Every `(alias, bare key)` pair `pfb_cfg_registry()` declares literally, mapped
-    to whether the entry carries the on/off toggle read adapter."""
-    return {
-        (alias, key): (f"'{_TOGGLE_ADAPTER}'" in body) for alias, key, body in _REGISTRY_ENTRY_RE.findall(registry_text)
-    }
+def parse_registry_keys(registry_text: str) -> set[tuple[str, str]]:
+    """Every `(alias, bare key)` pair `pfb_cfg_registry()` declares literally."""
+    return {(alias, key) for alias, key, _body in _REGISTRY_ENTRY_RE.findall(registry_text)}
 
 
 def find_violations(
     text: str,
     source: str,
     sections_by_path: dict[str, str],
-    registry_keys: dict[tuple[str, str], bool],
+    registry_keys: set[tuple[str, str]] | dict[tuple[str, str], object],
 ) -> list[Violation]:
     """Apply both rules to one page's source."""
     basename = Path(source).name

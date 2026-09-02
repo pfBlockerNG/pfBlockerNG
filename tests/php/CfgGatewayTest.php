@@ -2975,11 +2975,18 @@ final class CfgGatewayTest extends TestCase
 			);
 			$actual = $registry[$path_key];
 
-			if ($bare !== 'skipfeed') {
-				$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
+			$deliberate = [
+				'skipfeed' => ['0', '3', 'historical skipfeed fixture remains unlimited / fresh-install default is 3'],
+				'pfb_dnsport' => ['', '8081', '#2994 page/save default 8081'],
+				'pfb_dnsport_ssl' => ['', '8443', '#2994 page/save default 8443'],
+				'aliaslog' => ['', 'enabled', '#2994 page/save/help default enabled'],
+			];
+			if (isset($deliberate[$bare])) {
+				[$historical, $current, $why] = $deliberate[$bare];
+				$this->assertSame($historical, $expected['default'], "{$path_key}: historical fixture remains {$historical}");
+				$this->assertSame($current, $actual['default'], $why);
 			} else {
-				$this->assertSame('0', $expected['default'], 'historical skipfeed fixture remains unlimited');
-				$this->assertSame('3', $actual['default'], 'fresh-install skipfeed default is 3');
+				$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
 			}
 			$this->assertSame($expected['read_adapter'], $actual['read_adapter'], "{$path_key}: read_adapter must match the fixture");
 			$this->assertSame($expected['write_adapter'], $actual['write_adapter'], "{$path_key}: write_adapter must match the fixture");

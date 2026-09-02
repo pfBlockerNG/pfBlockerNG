@@ -1234,11 +1234,13 @@ function pfb_cfg_registry(): array
 		],
 
 		// DNSBL lighttpd HTTP port. Default '8081' (the page/save contract since 3.2).
+		// pfb_registry_pass seeds this on a fresh install, so apply no longer hits
+		// "DNSBL Ports are not defined" on a never-saved config.
 		'dnsbl/pfb_dnsport' => [
 			'default'       => '8081',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => '#2994 page/save default 8081 is the operator-visible contract; absent already rendered 8081',
+			'no_grandfather' => '#2994 page/save default 8081 is the operator-visible contract; absent already rendered 8081; a fresh install now seeds it',
 		],
 
 		// DNSBL lighttpd HTTPS port. Default '8443' (the page/save contract since 3.2).
@@ -1246,7 +1248,7 @@ function pfb_cfg_registry(): array
 			'default'       => '8443',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => '#2994 page/save default 8443 is the operator-visible contract; absent already rendered 8443',
+			'no_grandfather' => '#2994 page/save default 8443 is the operator-visible contract; absent already rendered 8443; a fresh install now seeds it',
 		],
 
 		// TOP1M whitelist enable. Default ''.
@@ -1646,11 +1648,13 @@ function pfb_cfg_registry(): array
 		],
 
 		// Aliaslog (logging mode). Default 'enabled' (the page/save/help contract).
+		// pfb_registry_pass seeds this on a fresh install, so DNSBLIP firewall-rule
+		// logging matches the page Default Enable without a first save.
 		'dnsbl/aliaslog' => [
 			'default'       => 'enabled',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => '#2994 page select/help/save default enabled; registry empty was not a valid option',
+			'no_grandfather' => '#2994 page select/help/save default enabled; a fresh install now seeds it so apply logs',
 		],
 
 		// ADR-36: NAT DNS-redirect enable: 'on' | '' (checkbox). Default '' (off).

@@ -2919,7 +2919,7 @@ $group->add(new Form_Select(
 $group->add(new Form_Select(
 	'pfb_dnsvip6',
 	gettext('IPv6 VIP'),
-	(!empty($pconfig['pfb_dnsvip6']) ? $pconfig['pfb_dnsvip6'] : 'none'),
+	$pconfig['pfb_dnsvip6'],
 	pfb_get_vip_options(AF_INET6)
 ))->setWidth(4)->setHelp('IPv6 Virtual IP (optional)');
 
