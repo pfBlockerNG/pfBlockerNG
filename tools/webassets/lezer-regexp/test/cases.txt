@@ -100,7 +100,7 @@ RegExp(Literal,Quantifier)
 
 ==>
 
-RegExp(CharacterClass(ClassOpen,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
+RegExp(CharacterClass(ClassOpen,ClassLiteral,ClassLiteral,ClassLiteral,ClassClose))
 
 # class-negated
 
@@ -108,7 +108,7 @@ RegExp(CharacterClass(ClassOpen,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpenNeg,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
+RegExp(CharacterClass(ClassOpenNeg,ClassLiteral,ClassLiteral,ClassLiteral,ClassClose))
 
 # class-ranges
 
@@ -116,7 +116,16 @@ RegExp(CharacterClass(ClassOpenNeg,ClassLiteral,ClassLiteral,ClassLiteral,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),ClassRange(ClassLiteral,"-",ClassLiteral),"]"))
+RegExp(CharacterClass(ClassOpen,ClassLiteral,"-",ClassLiteral,ClassLiteral,"-",ClassLiteral,ClassClose))
+
+# class-trailing-dash-literal
+
+[a-]
+
+==>
+
+RegExp(CharacterClass(ClassOpen,ClassLiteral,"-",ClassClose))
+
 
 # class-first-bracket-literal
 
@@ -124,7 +133,7 @@ RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),ClassR
 
 ==>
 
-RegExp(CharacterClass(ClassOpenLit,"]"))
+RegExp(CharacterClass(ClassOpenLit,ClassClose))
 
 # class-first-bracket-literal-with-more
 
@@ -132,7 +141,7 @@ RegExp(CharacterClass(ClassOpenLit,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpenLit,ClassLiteral,"]"))
+RegExp(CharacterClass(ClassOpenLit,ClassLiteral,ClassClose))
 
 # class-negated-first-bracket-literal
 
@@ -140,7 +149,7 @@ RegExp(CharacterClass(ClassOpenLit,ClassLiteral,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpenNegLit,"]"))
+RegExp(CharacterClass(ClassOpenNegLit,ClassClose))
 
 # class-escape-content
 
@@ -148,7 +157,7 @@ RegExp(CharacterClass(ClassOpenNegLit,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpen,Escape,Escape,"]"))
+RegExp(CharacterClass(ClassOpen,Escape,Escape,ClassClose))
 
 # class-escape-range
 
@@ -156,7 +165,7 @@ RegExp(CharacterClass(ClassOpen,Escape,Escape,"]"))
 
 ==>
 
-RegExp(CharacterClass(ClassOpen,ClassRange(Escape,"-",Escape),"]"))
+RegExp(CharacterClass(ClassOpen,Escape,"-",Escape,ClassClose))
 
 # alternation
 
@@ -460,7 +469,7 @@ RegExp(Quantifier)
 
 ==>
 
-RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),"]"))
+RegExp(CharacterClass(ClassOpen,ClassLiteral,"-",ClassLiteral,ClassClose))
 
 # hostile-bad-group-name
 

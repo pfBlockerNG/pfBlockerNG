@@ -9,12 +9,8 @@ export const regexpHighlighting = styleTags({
   Quantifier: t.operator,
   "|": t.logicOperator,
   "( )": t.paren,
-  // The '"[ ]"' shorthand styles only LITERAL bracket nodes -- the class
-  // closer. The opener is one of four NAMED nodes (the variants encode the
-  // "[^" negation / leading-"]" literal semantics), so it needs its own
-  // mapping or it renders unstyled next to a styled "]" (issue #1681).
-  "[ ]": t.squareBracket,
-  "ClassOpen ClassOpenNeg ClassOpenLit ClassOpenNegLit": t.squareBracket,
+  // Named ClassOpen* / ClassClose (issue #1681 openers; ClassClose is the "]").
+  "ClassOpen ClassOpenNeg ClassOpenLit ClassOpenNegLit ClassClose": t.squareBracket,
   GroupName: t.labelName,
   // FlagsMarker includes the leading "(" (issue #3059) so `?i` after a
   // quantifier cannot steal the `?`.

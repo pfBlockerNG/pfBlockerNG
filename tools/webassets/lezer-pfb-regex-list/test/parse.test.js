@@ -111,10 +111,10 @@ function chainAt(tree, pos) {
 test("mixed-nesting: mixedParser nests a RegExp subtree inside Pattern (position-resolved)", () => {
   const input = "ab[c-f]#trailing comment";
   const tree = mixedParser.parse(input);
-  // Position 3 sits inside "[c-f]" -- resolveInner must walk Literal/CharacterClass-class
-  // descendants, through RegExp, through Pattern, up to RegexList.
+  // Position 3 sits inside "[c-f]" -- resolveInner must walk ClassLiteral /
+  // CharacterClass, through RegExp, through Pattern, up to RegexList.
   const chain = chainAt(tree, 3);
-  assert.deepEqual(chain, ["ClassLiteral", "ClassRange", "CharacterClass", "RegExp", "Pattern", "RegexList"]);
+  assert.deepEqual(chain, ["ClassLiteral", "CharacterClass", "RegExp", "Pattern", "RegexList"]);
   // A position inside the trailing Comment must NOT resolve through Pattern/RegExp at all.
   const commentChain = chainAt(tree, 10);
   assert.deepEqual(commentChain, ["Comment", "RegexList"]);
