@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `870c6b20`  tests: gate retiring a test with no successor and no tombstone  (#3082) — asked twice, two quota notices; four legs over three rounds, thirteen blocking fixed.
 - `fa13d609`  archive: probe and list ZIP with unzip, not the host's tar flavour  (#3078) — asked once, quota (33 min); four legs, one blocking fixed.
 - `f36c2a9a8`  webassets: parse ? before flag letters as quantifiers  (#3074) — asked twice, two quota notices; four legs, one blocking applied.
 - `5674413a6`  tests: assert the code-graph grammar parses, not a heredoc shape  (#3071) — asked twice, two quota notices; four legs over two rounds, two blocking fixed.
