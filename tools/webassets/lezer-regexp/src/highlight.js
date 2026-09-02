@@ -16,9 +16,8 @@ export const regexpHighlighting = styleTags({
   "[ ]": t.squareBracket,
   "ClassOpen ClassOpenNeg ClassOpenLit ClassOpenNegLit": t.squareBracket,
   GroupName: t.labelName,
-  // No separate "Flags" leaf (delta -- see handoff): the flag letters are
-  // fused into the FlagsMarker token together with the leading "?" to keep
-  // the group-open markers a single, conflict-free tokenizer family.
+  // FlagsMarker includes the leading "(" (issue #3059) so `?i` after a
+  // quantifier cannot steal the `?`.
   FlagsMarker: t.modifier,
   CommentGroup: t.comment,
   "Backreference GroupRefMarker": t.variableName,

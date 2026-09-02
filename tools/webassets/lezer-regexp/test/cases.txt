@@ -180,7 +180,7 @@ RegExp(CapturingGroup("(",Literal,")"))
 
 ==>
 
-RegExp(NonCapturingGroup("(",NonCapMarker,Literal,")"))
+RegExp(NonCapturingGroup(NonCapMarker,Literal,")"))
 
 # named-group
 
@@ -188,7 +188,7 @@ RegExp(NonCapturingGroup("(",NonCapMarker,Literal,")"))
 
 ==>
 
-RegExp(NamedGroup("(",NamedOpenMarker,GroupName,Literal,")"))
+RegExp(NamedGroup(NamedOpenMarker,GroupName,Literal,")"))
 
 # group-ref
 
@@ -196,7 +196,7 @@ RegExp(NamedGroup("(",NamedOpenMarker,GroupName,Literal,")"))
 
 ==>
 
-RegExp(GroupRef("(",GroupRefMarker,GroupName,")"))
+RegExp(GroupRef(GroupRefMarker,GroupName,")"))
 
 # comment-group
 
@@ -212,7 +212,7 @@ RegExp(CommentGroup)
 
 ==>
 
-RegExp(Lookahead("(",LookaheadMarker,Literal,")"))
+RegExp(Lookahead(LookaheadMarker,Literal,")"))
 
 # neg-lookahead
 
@@ -220,7 +220,7 @@ RegExp(Lookahead("(",LookaheadMarker,Literal,")"))
 
 ==>
 
-RegExp(NegLookahead("(",NegLookaheadMarker,Literal,")"))
+RegExp(NegLookahead(NegLookaheadMarker,Literal,")"))
 
 # lookbehind
 
@@ -228,7 +228,7 @@ RegExp(NegLookahead("(",NegLookaheadMarker,Literal,")"))
 
 ==>
 
-RegExp(Lookbehind("(",LookbehindMarker,Literal,")"))
+RegExp(Lookbehind(LookbehindMarker,Literal,")"))
 
 # neg-lookbehind
 
@@ -236,7 +236,7 @@ RegExp(Lookbehind("(",LookbehindMarker,Literal,")"))
 
 ==>
 
-RegExp(NegLookbehind("(",NegLookbehindMarker,Literal,")"))
+RegExp(NegLookbehind(NegLookbehindMarker,Literal,")"))
 
 # conditional-numeric
 
@@ -244,7 +244,7 @@ RegExp(NegLookbehind("(",NegLookbehindMarker,Literal,")"))
 
 ==>
 
-RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,"|",Literal,")"))
+RegExp(ConditionalGroup(ConditionalMarker,GroupName,")",Literal,"|",Literal,")"))
 
 # conditional-named
 
@@ -252,7 +252,7 @@ RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,"|",Literal,
 
 ==>
 
-RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,")"))
+RegExp(ConditionalGroup(ConditionalMarker,GroupName,")",Literal,")"))
 
 # atomic-group
 
@@ -260,7 +260,7 @@ RegExp(ConditionalGroup("(",ConditionalMarker,GroupName,")",Literal,")"))
 
 ==>
 
-RegExp(AtomicGroup("(",AtomicMarker,Literal,")"))
+RegExp(AtomicGroup(AtomicMarker,Literal,")"))
 
 # flags-global
 
@@ -268,7 +268,7 @@ RegExp(AtomicGroup("(",AtomicMarker,Literal,")"))
 
 ==>
 
-RegExp(FlagsGroup("(",FlagsMarker,")"))
+RegExp(FlagsGroup(FlagsMarker,")"))
 
 # flags-scoped
 
@@ -276,7 +276,7 @@ RegExp(FlagsGroup("(",FlagsMarker,")"))
 
 ==>
 
-RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+RegExp(FlagsGroup(FlagsMarker,Literal,")"))
 
 # flags-scoped-negated
 
@@ -284,7 +284,7 @@ RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
 
 ==>
 
-RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+RegExp(FlagsGroup(FlagsMarker,Literal,")"))
 
 # flags-scoped-mixed
 
@@ -292,7 +292,7 @@ RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
 
 ==>
 
-RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+RegExp(FlagsGroup(FlagsMarker,Literal,")"))
 
 # flags-scoped-mixed-other-order
 
@@ -300,7 +300,7 @@ RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
 
 ==>
 
-RegExp(FlagsGroup("(",FlagsMarker,Literal,")"))
+RegExp(FlagsGroup(FlagsMarker,Literal,")"))
 
 # numeric-backreference
 
@@ -468,4 +468,20 @@ RegExp(CharacterClass(ClassOpen,ClassRange(ClassLiteral,"-",ClassLiteral),"]"))
 
 ==>
 
-RegExp(NamedGroup("(",NamedOpenMarker,GroupName,Literal,")"))
+RegExp(NamedGroup(NamedOpenMarker,GroupName,Literal,")"))
+
+# quantifier-before-flag-letter
+
+m?ad
+
+==>
+
+RegExp(Literal,Quantifier,Literal)
+
+# group-quantifier-before-flag-letter
+
+(er?|ice)?s?
+
+==>
+
+RegExp(CapturingGroup("(",Literal,Quantifier,"|",Literal,")"),Quantifier,Literal,Quantifier)

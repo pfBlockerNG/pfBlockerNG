@@ -32,21 +32,24 @@ atom {
 }
 
 CapturingGroup { "(" alternation ")" }
-NonCapturingGroup { "(" NonCapMarker alternation ")" }
-NamedGroup { "(" NamedOpenMarker GroupName ">" alternation ")" }
-GroupRef { "(" GroupRefMarker GroupName ")" }
-Lookahead { "(" LookaheadMarker alternation ")" }
-NegLookahead { "(" NegLookaheadMarker alternation ")" }
-Lookbehind { "(" LookbehindMarker alternation ")" }
-NegLookbehind { "(" NegLookbehindMarker alternation ")" }
-AtomicGroup { "(" AtomicMarker alternation ")" }
+// issue #3059: each extension opener includes the leading "(" so `?i` / `?:`
+// after a quantifier stay Quantifier + literal. Python only allows these
+// immediately after "(".
+NonCapturingGroup { NonCapMarker alternation ")" }
+NamedGroup { NamedOpenMarker GroupName ">" alternation ")" }
+GroupRef { GroupRefMarker GroupName ")" }
+Lookahead { LookaheadMarker alternation ")" }
+NegLookahead { NegLookaheadMarker alternation ")" }
+Lookbehind { LookbehindMarker alternation ")" }
+NegLookbehind { NegLookbehindMarker alternation ")" }
+AtomicGroup { AtomicMarker alternation ")" }
 
 // (?(id)yes|no) / (?(name)yes|no) -- id is a bare number or a group name;
 // reuse GroupName loosely (digits are a subset of its "not > ) |" charset).
-ConditionalGroup { "(" ConditionalMarker GroupName ")" branch ("|" branch)? ")" }
+ConditionalGroup { ConditionalMarker GroupName ")" branch ("|" branch)? ")" }
 
 // (?aiLmsux) global flags; (?i:...) / (?i-s:...) / (?-i:...) scoped flags.
-FlagsGroup { "(" FlagsMarker (":" alternation)? ")" }
+FlagsGroup { FlagsMarker (":" alternation)? ")" }
 
 CharacterClass {
   (ClassOpen | ClassOpenNeg | ClassOpenLit | ClassOpenNegLit) classPiece* "]"
@@ -63,20 +66,19 @@ classAtom { ClassLiteral | Escape | Backreference }
 ClassRange { classAtom !classRange "-" classAtom }
 
 @tokens {
-  // --- group-open markers: fused from directly after "(" so "(" itself
-  // stays a single, uniformly-stylable anonymous token everywhere.
-  NonCapMarker { "?:" }
-  NamedOpenMarker { "?P<" }
-  GroupRefMarker { "?P=" }
-  LookaheadMarker { "?=" }
-  NegLookaheadMarker { "?!" }
-  LookbehindMarker { "?<=" }
-  NegLookbehindMarker { "?<!" }
-  AtomicMarker { "?>" }
-  ConditionalMarker { "?(" }
+  // --- group-open tokens include the leading "(" (issue #3059).
+  NonCapMarker { "(?:" }
+  NamedOpenMarker { "(?P<" }
+  GroupRefMarker { "(?P=" }
+  LookaheadMarker { "(?=" }
+  NegLookaheadMarker { "(?!" }
+  LookbehindMarker { "(?<=" }
+  NegLookbehindMarker { "(?<!" }
+  AtomicMarker { "(?>" }
+  ConditionalMarker { "(?(" }
   // Positive flags, negative-only ("-i"), or both ("i-s") -- at least one
-  // flag letter somewhere is required (an empty "?" body is NonCapMarker).
-  FlagsMarker { "?" ($[aiLmsux]+ ("-" $[aiLmsux]+)? | "-" $[aiLmsux]+) }
+  // flag letter somewhere is required (an empty "(?" body is not a flags group).
+  FlagsMarker { "(" "?" ($[aiLmsux]+ ("-" $[aiLmsux]+)? | "-" $[aiLmsux]+) }
 
   // (?#...) -- content can't contain ")" (Python stops at the first one);
   // modeled as a single leaf token (open marker + body + close all fused)
@@ -150,16 +152,13 @@ ClassRange { classAtom !classRange "-" classAtom }
   // `@precedence { Backreference, Escape }`, which turned out to force
   // Backreference to win even when Escape's match was strictly longer --
   // Lezer's precedence table isn't just an equal-length tie-breaker).
-  //
-  // Group-open markers are all longer than the bare "?" Quantifier when
-  // they match, but right after "(" both are reachable (CapturingGroup's
-  // content may hostile-tolerantly start with a bare Quantifier) -- state
-  // the preference explicitly so a real extension marker always wins.
+  // Fused "(?" openers overlap the capturing "(" token; prefer them.
   @precedence {
-    NonCapMarker, NamedOpenMarker, GroupRefMarker, LookaheadMarker,
-    NegLookaheadMarker, LookbehindMarker, NegLookbehindMarker, AtomicMarker,
-    ConditionalMarker, FlagsMarker, Quantifier
+    CommentGroup, NonCapMarker, NamedOpenMarker, GroupRefMarker,
+    LookaheadMarker, NegLookaheadMarker, LookbehindMarker, NegLookbehindMarker,
+    AtomicMarker, ConditionalMarker, FlagsMarker, "("
   }
+
 
   // Top-level/branch literal run: anything not otherwise special. "]" has
   // no meaning outside a class in Python, so it stays literal here.
