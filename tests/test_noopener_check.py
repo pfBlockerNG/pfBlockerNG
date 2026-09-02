@@ -315,12 +315,18 @@ def test_default_scan_set_covers_both_ui_trees(
     pkg.mkdir(parents=True)
     (www / "dirty.php").write_text('<a target="_blank" href="https://example.invalid">\n')
     (pkg / "help.inc").write_text('<a target="_blank" href="https://example.invalid">\n')
+    # A violation OUTSIDE both trees: the set must be limited to www + pkg, not
+    # merely include them -- dropping the pathspec entirely would scan this too.
+    outside = tmp_path / "docs"
+    outside.mkdir()
+    (outside / "stray.php").write_text('<a target="_blank" href="https://example.invalid">\n')
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
     assert cno.main([]) == 1
     err = capsys.readouterr().err
     assert "src/usr/local/www/pfblockerng/dirty.php:1:" in err
     assert "src/usr/local/pkg/pfblockerng/help.inc:1:" in err
+    assert "docs/stray.php" not in err
 
 
 def test_main_fails_closed_when_default_scan_set_unenumerable(
@@ -341,22 +347,14 @@ def test_main_fails_closed_when_default_scan_set_unenumerable(
 # --------------------------------------------------------------------------- #
 
 
-def test_ui_trees_clean() -> None:
+def test_ui_trees_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every tracked www + pkg .php/.inc/.xml file is noopener-clean.
 
-    Routed through the production helper (issue #3075) so this guard cannot drift
-    from the set the gate actually scans, as it did while it hand-copied the
-    pathspec.
+    Enumerated by the production helper, not a copy of its pathspec, so this guard
+    cannot drift from the set the gate actually scans (issue #3075).
     """
-    monkeypatch_free_cwd = _REPO_ROOT
-    out = subprocess.run(
-        ["git", "ls-files", "-z", "src/usr/local/www", "src/usr/local/pkg"],
-        cwd=monkeypatch_free_cwd,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    files = sorted(p for p in out.split("\0") if p and p.endswith((".php", ".inc", ".xml")))
+    monkeypatch.chdir(_REPO_ROOT)
+    files = cno._git_tracked_ui()
     assert len(files) >= 26  # sanity: 16 www coverage-matrix files + the pkg tree
 
     all_violations: list[Any] = []
