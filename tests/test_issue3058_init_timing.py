@@ -7,6 +7,7 @@ two unix timestamps out of the log by hand.
 
 from __future__ import annotations
 
+import base64
 import builtins
 import json
 import re
@@ -19,7 +20,10 @@ import unboundmodule
 import pfb_unbound
 
 # The line the package has always emitted, now carrying the two numbers.
-_LOADED = re.compile(r"\[pfBlockerNG\]: init_standard script loaded in (\d+\.\d+)s \((\d+) entries\)$")
+_LOADED = re.compile(
+    r"\[pfBlockerNG\]: init_standard script loaded in (\d+\.\d+)s "
+    r"\(dnsbl (\d+), regex (\d+), whitelist (\d+)\)$"
+)
 _PREFIX = "[pfBlockerNG]: init_standard script loaded"
 
 # A feed of three plain domains, and two blacklisted TLDs. build() routes these to
@@ -29,11 +33,18 @@ _PREFIX = "[pfBlockerNG]: init_standard script loaded"
 # sum would pass unnoticed.
 _FEED_DOMAINS = ("one.example", "two.example", "three.example")
 _BLACKLIST_TLDS = ("zz", "yy")
+# Distinct non-zero sizes for every structure the line reports, so no term can be
+# dropped, swapped or folded into another and still produce the same numbers.
+_USER_REGEX = ("^adserve[0-9]*[-.]", "^trackpix[-.]")
+# An ABP allow-regex row, so allowRegexDB is non-zero too -- otherwise the regex
+# figure's two halves are indistinguishable and dropping one goes unnoticed.
+_FEED_ALLOW_REGEX = ("@@/^keepme[0-9]*\\./",)
+_WHITELIST = ("keep-one.example", "keep-two.example", "keep-three.example", "keep-four.example")
 
 
 def _init_capturing(tmp_path: Path, monkeypatch: Any) -> list[str]:
     """Drive the real init_standard over a real manifest; return every log_info line."""
-    (tmp_path / "feed.raw").write_text("\n".join(_FEED_DOMAINS) + "\n", encoding="utf-8")
+    (tmp_path / "feed.raw").write_text("\n".join(_FEED_DOMAINS + _FEED_ALLOW_REGEX) + "\n", encoding="utf-8")
     (tmp_path / "pfb_py_sources.json").write_text(
         json.dumps(
             {
@@ -41,14 +52,19 @@ def _init_capturing(tmp_path: Path, monkeypatch: Any) -> list[str]:
                 "config": {
                     "tld_wildcard_blacklist": list(_BLACKLIST_TLDS),
                     "tld_wildcard_exclusion": [],
-                    "user_whitelist": [],
+                    "user_whitelist": list(_WHITELIST),
                 },
                 "feeds": [{"raw": "feed.raw", "feed": "F", "group": "G", "log_flag": "1"}],
             }
         ),
         encoding="utf-8",
     )
-    (tmp_path / "pfb_unbound.ini").write_text("[MAIN]\npython_enable\t= true\n", encoding="utf-8")
+    regex_payload = base64.b64encode(
+        "\n".join(f"{pattern} #R{i}" for i, pattern in enumerate(_USER_REGEX, 1)).encode("utf-8")
+    ).decode("ascii")
+    (tmp_path / "pfb_unbound.ini").write_text(
+        f"[MAIN]\npython_enable\t= true\nregex_list = {regex_payload}\n", encoding="utf-8"
+    )
     monkeypatch.chdir(tmp_path)
     # init_standard() replaces sys.stderr; register monkeypatch's auto-restore.
     monkeypatch.setattr(sys, "stderr", sys.stderr)
@@ -67,11 +83,11 @@ def _init_capturing(tmp_path: Path, monkeypatch: Any) -> list[str]:
 
 
 def test_init_standard_reports_duration_and_the_exact_loaded_total(tmp_path: Path, monkeypatch: Any) -> None:
-    """The one line emitted per build carries how long it took and how much it loaded.
+    """The one line emitted per build carries how long it took and what it loaded.
 
-    The count is asserted as an exact value against both structures, not merely as
-    "some number": with a feed in dataDB and blacklisted TLDs in zoneDB, dropping
-    either term from the sum changes the printed total.
+    Each structure is named and asserted as an exact value, not summed into one
+    "entries" figure: a single total claims to cover everything while omitting regex
+    and the whitelist, which are loaded too and published separately (or not at all).
 
     The historical prefix is asserted here too. It has been in released logs for a
     long time and is the obvious thing for a user's grep or a support script to key
@@ -92,4 +108,12 @@ def test_init_standard_reports_duration_and_the_exact_loaded_total(tmp_path: Pat
     assert data_len, "fixture built no dataDB rows; the count assertion below would be vacuous"
     assert zone_len, "fixture built no zoneDB rows; dropping the zoneDB term would go unnoticed"
     assert data_len != zone_len, "equal halves make a swapped/duplicated term invisible"
+    assert len(pfb_unbound.regexDB), "fixture loaded no user regex; the regex term would be vacuous"
+    assert len(pfb_unbound.whiteDB), "fixture loaded no whitelist; the whitelist term would be vacuous"
+    assert len(pfb_unbound.allowRegexDB), "fixture loaded no allow-regex; half the regex term would be vacuous"
+
+    # Each structure is asserted against its own live length, so no term can be
+    # dropped, swapped or folded into another without changing the line.
     assert int(match.group(2)) == data_len + zone_len
+    assert int(match.group(3)) == len(pfb_unbound.regexDB) + len(pfb_unbound.allowRegexDB)
+    assert int(match.group(4)) == len(pfb_unbound.whiteDB)
