@@ -19202,10 +19202,10 @@ function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
 // Seconds a package install/uninstall waits for an in-flight feed pass before it proceeds anyway.
 define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
 
-// issue #3062: the install's hold on the feed-pass lock -- waits, then keeps it until this
-// process exits (pfb_feed_pass_release() at shutdown). FALSE never aborts the caller: an
-// install may not be abandoned. architecture-notes.md "The package install holds it too".
-// issue #3090: the uninstall takes the same hold, $op = 'uninstall' naming it in the log.
+// issues #3062/#3090: the install's/uninstall's hold ($op names it in the log) on the feed-pass
+// lock -- waits, then keeps it until this process exits (pfb_feed_pass_release() at shutdown).
+// FALSE never aborts the caller: a package operation may not be abandoned. architecture-notes.md
+// "The package install holds it too" / "The uninstall holds it too".
 function pfb_install_feed_pass_hold(float $timeout_s = PFB_INSTALL_FEED_PASS_WAIT, string $op = 'install'): bool {
 	if (pfb_feed_pass_busy()) {
 		pfb_logger("\nPackage {$op}: waiting up to {$timeout_s}s for the in-flight feed pass to finish.\n", 1);
@@ -19975,9 +19975,8 @@ function pfblockerng_php_pre_deinstall_command() {
 	// PFB_PRE_UNINSTALL=1). Context only -- pfBlockerNG does not branch on it.
 	$pfb['hook_lifecycle'] = 'uninstall';
 
-	// issue #3090: the disable pass below takes the feed-pass lock non-blocking and DEFERS on
-	// contention, while the chroot/service teardown after it runs regardless -- so wait for
-	// and hold the lock across the whole removal, exactly as the install does (#3062).
+	// issue #3090: hold the feed-pass lock across the whole removal -- the disable pass below only
+	// DEFERS on contention (#3062 install shape; architecture-notes.md "The uninstall holds it too").
 	update_status("Serialising against any in-flight pfBlockerNG feed pass...");
 	update_status(pfb_install_feed_pass_hold(PFB_INSTALL_FEED_PASS_WAIT, 'uninstall') ? " done.\n" : " lock not taken; continuing anyway.\n");
 

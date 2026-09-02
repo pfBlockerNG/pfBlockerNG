@@ -1580,17 +1580,18 @@ scheduling.
 Unbound chroot (`pfblockerng.sh dnsbl_cache stage`), drops cache databases, and stops/starts the pfB
 services — the same files and daemon a pass publishes into — so it takes the same lock before it
 touches any of them (`pfb_install_feed_pass_hold()`, right after `pfb_global()`) and keeps it until
-the install process exits, which is what lets the post-install resync reenter the hold. It is the
-one holder that **waits** rather than skipping: `pfb_feed_pass_acquire()`'s optional `$timeout_s`
+the install process exits, which is what lets the post-install resync reenter the hold. The
+package operations (install here, uninstall below) are the only holders that **wait** rather
+than skipping: `pfb_feed_pass_acquire()`'s optional `$timeout_s`
 (default `0.0` — the single non-blocking attempt every dispatcher must keep) is set to
 `PFB_INSTALL_FEED_PASS_WAIT` (300 s). The wait is bounded and failure is non-fatal, because a
 half-installed package is worse than an overlap: on expiry the install proceeds and logs
 `Package install proceeding WITHOUT the feed-pass lock` to `pfblockerng.log` and syslog
 (`LOG_WARNING`) — so a pass longer than the budget (a large multi-feed download) still overlaps, it
 is just no longer silent. While the hold stands, a tick firing mid-install defers exactly like any
-other contender. It is also the one holder that takes this lock **without** the dispatcher lock
-first; that inverts the order every other holder uses, and cannot deadlock only because every
-non-install feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
+other contender. They are also the only holders that take this lock **without** the dispatcher
+lock first; that inverts the order every other holder uses, and cannot deadlock only because every
+other feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
 
 **The uninstall holds it too (issue #3090).** `pfblockerng_php_pre_deinstall_command()` tears the
 same state down — stops the pfB services, removes the Unbound chroot module and generated DNSBL

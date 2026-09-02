@@ -19,11 +19,6 @@ use PHPUnit\Framework\TestCase;
  * process so a tick firing mid-install defers with the usual skip line. The
  * wait is bounded because an install may never be abandoned -- on expiry it
  * logs and lets the install proceed.
- *
- * issue #3090 -- the uninstall (pfblockerng_php_pre_deinstall_command()) tears the
- * same chroot and services down and takes the same hold, named 'uninstall' in
- * its log lines so an operator reading pfblockerng.log sees which pkg operation
- * waited or gave up.
  */
 final class InstallFeedPassInterlockTest extends TestCase
 {
@@ -212,8 +207,8 @@ final class InstallFeedPassInterlockTest extends TestCase
 			'a failed hold must not leave a half-owned lock behind');
 		$this->assertTrue($this->rawProbeStillLocked(),
 			'the running feed pass must keep its own lock undisturbed');
-		$this->assertStringContainsString('proceeding WITHOUT the feed-pass lock', $this->logContents(),
-			'the give-up itself must be logged, not merely the decision to wait');
+		$this->assertStringContainsString('Package install proceeding WITHOUT the feed-pass lock', $this->logContents(),
+			'the give-up itself must be logged, naming the install, not merely the decision to wait');
 	}
 
 	/**
@@ -302,11 +297,9 @@ final class InstallFeedPassInterlockTest extends TestCase
 	}
 
 	/**
-	 * The uninstall has to be WIRED too (issue #3090): pfblockerng_php_pre_deinstall_command()
-	 * must take the hold on its teardown branch -- after the #697 pkg-operation check (an
-	 * upgrade keeps pfBlockerNG live and must not wait) and before the disable pass, which
-	 * takes the feed-pass lock non-blocking and DEFERS on contention while the chroot
-	 * teardown that follows it runs regardless.
+	 * Wiring pin (issue #3090): pfblockerng_php_pre_deinstall_command() takes the hold AFTER
+	 * the #697 pkg-operation check (an upgrade must not wait) and BEFORE the disable pass and
+	 * chroot teardown, and a refused hold never abandons the uninstall.
 	 *
 	 * The controller runs a full sync plus pfctl/exec teardown and cannot be driven
 	 * off-appliance, so this pins its executable order (comments cannot satisfy it).
@@ -319,20 +312,19 @@ final class InstallFeedPassInterlockTest extends TestCase
 
 		$start = strpos($src, 'function pfblockerng_php_pre_deinstall_command');
 		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
-		$end = strpos($src, 'function ', $start + 1);
-		$this->assertNotFalse($end, 'pre-deinstall controller must be followed by another function');
-		$body = substr($src, $start, $end - $start);
 
-		$hold = strpos($body, 'pfb_install_feed_pass_hold(');
+		$hold = strpos($src, 'pfb_install_feed_pass_hold(', $start);
 		$this->assertNotFalse($hold, 'the pre-deinstall never takes the feed-pass interlock (issue #3090)');
+		$this->assertNotFalse(strpos($src, 'update_status(pfb_install_feed_pass_hold(', $start),
+			'a refused hold must be reported and never abandon the uninstall (issue #3090)');
 
-		$opCheck = strpos($body, 'pfb_pkg_op_tears_down(');
+		$opCheck = strpos($src, 'pfb_pkg_op_tears_down(', $start);
 		$this->assertNotFalse($opCheck, 'the pre-deinstall no longer checks the pkg operation');
 		$this->assertLessThan($hold, $opCheck,
 			'the interlock must be taken AFTER the pkg-operation check, so an upgrade never waits');
 
 		foreach (['sync_package_pfblockerng(', 'dnsbl_cache teardown'] as $shared) {
-			$first = strpos($body, $shared);
+			$first = strpos($src, $shared, $start);
 			$this->assertNotFalse($first, "the pre-deinstall no longer contains [ {$shared} ]");
 			$this->assertLessThan($first, $hold,
 				"the interlock must be taken BEFORE the pre-deinstall reaches [ {$shared} ]");
