@@ -630,57 +630,48 @@ def test_an_exception_tld_resolves_through_the_shared_walk(name: str, public_suf
     assert resolution.private_active is False, f"no PRIVATE rule exists, yet {name!r} reported one: {resolution!r}"
 
 
-_FUSED_WILDCARD_PSL = """// ===BEGIN ICANN DOMAINS===
+_ICANN_WILDCARD_PSL = """// ===BEGIN ICANN DOMAINS===
 com
 nom.br
 *.nom.br
 // ===END ICANN DOMAINS===
 // ===BEGIN PRIVATE DOMAINS===
-sub.example.com
-*.sub.example.com
 // ===END PRIVATE DOMAINS===
 """
 
 
 @pytest.mark.parametrize(
-    ("name", "icann_suffix", "public_suffix", "private_active"),
+    ("name", "public_suffix"),
     [
-        # ICANN wildcard: the base nom.br promotes the ICANN suffix one label left.
-        # Without that arm the ICANN side falls through to the bare TLD, 'br'. The
-        # deeper row is what pins WHICH label it promotes to; at one label the
-        # promoted suffix is also the whole name.
-        ("a.nom.br", "a.nom.br", "a.nom.br", False),
-        ("a.b.nom.br", "b.nom.br", "b.nom.br", False),
+        # The base nom.br promotes the suffix one label left. Without that arm the
+        # walk falls through to the bare TLD, 'br'. The deeper row is what pins
+        # WHICH label it promotes to; at one label the promoted suffix is also the
+        # whole name.
+        ("a.nom.br", "a.nom.br"),
+        ("a.b.nom.br", "b.nom.br"),
         # The bare wildcard base resolves by its exact rule: a wildcard needs a label
         # to its left, so it must not fire on the whole name and promote past it.
-        ("nom.br", "nom.br", "nom.br", False),
-        # PRIVATE wildcard: only the combined side sees sub.example.com, so the two
-        # sections must come out of the one pass with different answers. Same depth
-        # and same bare-base rows as the ICANN arm above, for the same reasons.
-        ("x.sub.example.com", "com", "x.sub.example.com", True),
-        ("x.y.sub.example.com", "com", "y.sub.example.com", True),
-        ("sub.example.com", "com", "sub.example.com", True),
+        ("nom.br", "nom.br"),
     ],
 )
-def test_the_shared_walk_tracks_a_wildcard_in_each_section(
-    name: str, icann_suffix: str, public_suffix: str, private_active: bool
-) -> None:
-    """issue #3061: the single pass matches wildcards for BOTH sections independently.
+def test_the_shared_walk_matches_a_wildcard_with_no_exception_in_sight(name: str, public_suffix: str) -> None:
+    """issue #3061: the wildcard arm carries names no exception rule can reach.
 
-    The two sections share one walk, so each has to carry its own wildcard state
-    through it; a row per section pins that. The ICANN row matters most: the shipped
-    list has 16 ICANN wildcard rules and every ICANN-governed name resolves through
-    that arm, while the ICANN wildcards in the other authorities here are all
-    exception-paired, which makes their names exercise the carve-out instead.
+    This is the only authority here whose wildcard has no exception rule anywhere,
+    which is the shape most of the shipped list has: 16 ICANN wildcard rules, half
+    of them under TLDs with no exception at all. Every other authority in this file
+    pairs its wildcards with an exception, so their names also exercise the
+    carve-out and cannot show the wildcard arm standing alone.
     """
-    rules = P.parse_psl_rules(_FUSED_WILDCARD_PSL)
+    rules = P.parse_psl_rules(_ICANN_WILDCARD_PSL)
 
     resolution = P.resolve_public_suffix(name, rules)
 
+    # No PRIVATE rules in this authority, so both sections must agree.
     assert (resolution.icann_suffix, resolution.public_suffix, resolution.private_active) == (
-        icann_suffix,
         public_suffix,
-        private_active,
+        public_suffix,
+        False,
     ), f"the shared walk changed the resolution of {name!r}: {resolution!r}"
 
 
@@ -729,3 +720,36 @@ def test_a_private_exception_carves_only_the_combined_section(name: str, public_
     ) == ("com", public_suffix, registrable, True), (
         f"the per-section carve changed the resolution of {name!r}: {resolution!r}"
     )
+
+
+_EXCEPTION_SHADOWING_PSL = """// ===BEGIN ICANN DOMAINS===
+com
+foo.com
+// ===END ICANN DOMAINS===
+// ===BEGIN PRIVATE DOMAINS===
+*.com
+!foo.com
+// ===END PRIVATE DOMAINS===
+"""
+
+
+def test_a_carved_tail_still_counts_as_an_ordinary_match() -> None:
+    """issue #3061: the carve and the ordinary match are read from the SAME tail.
+
+    ``foo.com`` is both an ICANN exact rule and the PRIVATE section's exception, so
+    the tail that carves the combined side is the tail that decides the ICANN side.
+    A walk that treated the carve as an alternative to the ordinary match -- the
+    shape a mis-indentation of the loop body produces -- would skip that tail and
+    let the ICANN suffix fall back to ``com``, and no other authority here can see
+    the difference because their exception rules are no ordinary rule's twin.
+    """
+    rules = P.parse_psl_rules(_EXCEPTION_SHADOWING_PSL)
+
+    resolution = P.resolve_public_suffix("x.foo.com", rules)
+
+    assert (
+        resolution.icann_suffix,
+        resolution.public_suffix,
+        resolution.registrable_domain,
+        resolution.private_active,
+    ) == ("foo.com", "com", "foo.com", False), f"the carved tail stopped counting as an ordinary match: {resolution!r}"

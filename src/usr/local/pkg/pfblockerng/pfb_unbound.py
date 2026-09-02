@@ -311,17 +311,16 @@ def _psl_prevailing(
     public_exact, public_wildcard, public_exception = combined_sets
     icann_suffix: str | None = None
     public_suffix: str | None = None
-    icann_carved: str | None = None
-    public_carved: str | None = None
+    icann_carved = public_carved = False
     for start, tail in enumerate(tails):
         if tail in public_exception:
             # Exception output drops the rule's leftmost label. Longest-first makes
             # the first hit the longest, so later ones are ignored.
             carved = tails[start + 1] if start + 1 < count else ""
-            if public_carved is None:
-                public_carved = carved
-            if icann_carved is None and tail in icann_exception:
-                icann_carved = carved
+            if not public_carved:
+                public_suffix, public_carved = carved, True
+            if not icann_carved and tail in icann_exception:
+                icann_suffix, icann_carved = carved, True
         # Longest surviving suffix wins. A wildcard base at ``start`` yields the
         # suffix labels[start-1:], one label longer than an exact rule at ``start``
         # and the SAME string an exact rule at ``start-1`` would yield -- so the
@@ -336,12 +335,11 @@ def _psl_prevailing(
                 public_suffix = tails[start - 1]
             elif tail in public_exact:
                 public_suffix = tail
-    unmatched = tails[-1]
-    if icann_carved is None:
-        icann_carved = unmatched if icann_suffix is None else icann_suffix
-    if public_carved is None:
-        public_carved = unmatched if public_suffix is None else public_suffix
-    return icann_carved, public_carved
+    if icann_suffix is None:
+        icann_suffix = tails[-1]
+    if public_suffix is None:
+        public_suffix = tails[-1]
+    return icann_suffix, public_suffix
 
 
 def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
