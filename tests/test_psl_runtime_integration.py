@@ -516,12 +516,8 @@ def test_one_resolution_walks_the_labels_once_for_both_sections() -> None:
     """issue #3061: the ICANN-only and ICANN+PRIVATE suffixes come from ONE walk.
 
     Both suffixes are always needed -- ``private_active`` is their comparison and
-    TLD-Allow reads both -- so the walk is shared instead of run once per section.
-    Walking twice rebuilt every label tail of the name a second time, 2.23M walks
-    per 1.2M-entry build.
-
-    Counted, never timed (issue #3051): a duration cannot see the second walk, and
-    the resolution is asserted alongside the count so a broken matcher cannot pass.
+    TLD-Allow reads both -- so the walk is shared, not run once per section. The
+    resolution is asserted beside the count: one walk, and the right answer.
     """
     rules = P.parse_psl_rules(PSL)
     rules.index()  # prime: the index build is not what is being counted
@@ -544,13 +540,9 @@ def test_the_live_query_path_walks_the_labels_once_per_query() -> None:
     """issue #3061: TLD-Allow needs both suffixes too, and shares the same walk.
 
     ``_tld_allow_blocks`` compares both suffixes against the selected roots on the
-    live DNS query path, so the second caller must not reintroduce a second walk.
-
-    The query is a PRIVATE boundary under an unselected root with PRIVATE allowance
-    on, because that is the decision the two suffixes actually drive: it passes only
-    while ``public_suffix`` (github.io) is longer than ``icann_suffix`` (io). A query
-    that merely falls through to the unmatched TLD would be blocked either way and
-    could not tell the two sections apart.
+    live DNS query path. The query is a PRIVATE boundary under an unselected root
+    with PRIVATE allowance on: it is allowed only while ``public_suffix``
+    (github.io) is longer than ``icann_suffix`` (io).
     """
     rules = P.parse_psl_rules(PSL)
     containers = {**_allow_containers(rules), "tld_allow_roots": ("com",)}
@@ -585,42 +577,32 @@ w.city.kobe.jp
 @pytest.mark.parametrize(
     ("name", "public_suffix", "registrable"),
     [
-        # Exact rule wins below the TLD: co.jp is longer than the bare 'jp' the
-        # no-match fallback would return, so this row fails if the exact match goes.
+        # An exact rule below the TLD prevails over the TLD itself.
         ("shop.example.co.jp", "co.jp", "example.co.jp"),
-        # Wildcard base kobe.jp promotes the suffix one label to the left. Asserted
-        # two labels deep as well, because at one label the promoted suffix is also
-        # the whole name and a matcher that ignored the depth would look correct.
+        # A wildcard base promotes the suffix one label to the left, at any depth.
         ("a.kobe.jp", "a.kobe.jp", ""),
         ("x.y.kobe.jp", "y.kobe.jp", "x.y.kobe.jp"),
-        # A wildcard base is not itself a public suffix through the wildcard: the
-        # bare kobe.jp resolves by its exact rule, never by promoting past the name.
+        # A wildcard needs a label to its left, so the bare base resolves by its
+        # exact rule instead of promoting past the name.
         ("kobe.jp", "kobe.jp", ""),
-        # The exception carves city.kobe.jp back out of that wildcard, and beats the
-        # longer wildcard match it overlaps.
+        # An exception carves its name out of the wildcard that covers it.
         ("x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
-        # Two exceptions match this name's tails; the longer one prevails, so the
-        # carve keeps the FIRST hit of the longest-first walk, not the last.
+        # Where two exceptions match, the longest prevails.
         ("z.y.city.kobe.jp", "city.kobe.jp", "y.city.kobe.jp"),
-        # The shorter exception still applies on a name the longer one misses.
+        # The shorter exception still applies to a name the longer one misses.
         ("z.x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
-        # The exception beats an ordinary match the walk already found at a LONGER
-        # tail: w.city.kobe.jp matches its own exact rule first, and the carve one
-        # label down still overrides it.
+        # An exception prevails over an ordinary match at a longer tail:
+        # w.city.kobe.jp has its own exact rule, and the carve below it still wins.
         ("w.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
     ],
 )
 def test_an_exception_tld_resolves_through_the_shared_walk(name: str, public_suffix: str, registrable: str) -> None:
     """issue #3061: an exception rule carves its name out inside the shared walk.
 
-    An exception beats an ordinary match at ANY depth, so a carve writes straight
-    into the section's suffix and locks it, rather than being resolved in a walk of
-    its own. These rows pin that precedence together with each ordinary
-    match kind under an exception-bearing TLD -- a live production shape, since the
-    shipped list keeps seven of its eight exception rules under jp, which also holds
-    1777 exact rules. The exact row sits below the TLD on purpose, because at the
-    TLD an exact match and the no-match fallback return the same string and cannot
-    be told apart.
+    An exception prevails over an ordinary match at ANY depth. These rows pin that
+    precedence beside each kind of ordinary match under an exception-bearing TLD,
+    the shape the shipped list has under jp. The exact-rule row sits below the TLD,
+    where an exact match and the no-match fallback resolve differently.
     """
     rules = P.parse_psl_rules(_EXCEPTION_TLD_PSL)
 
@@ -648,14 +630,11 @@ nom.br
 @pytest.mark.parametrize(
     ("name", "public_suffix"),
     [
-        # The base nom.br promotes the suffix one label left. Without that arm the
-        # walk falls through to the bare TLD, 'br'. The deeper row is what pins
-        # WHICH label it promotes to; at one label the promoted suffix is also the
-        # whole name.
+        # The base nom.br promotes the suffix one label left, at any depth.
         ("a.nom.br", "a.nom.br"),
         ("a.b.nom.br", "b.nom.br"),
-        # The bare wildcard base resolves by its exact rule: a wildcard needs a label
-        # to its left, so it must not fire on the whole name and promote past it.
+        # The bare base resolves by its exact rule: a wildcard needs a label to its
+        # left, so it never promotes past the whole name.
         ("nom.br", "nom.br"),
     ],
 )
@@ -663,10 +642,8 @@ def test_the_shared_walk_matches_a_wildcard_with_no_exception_in_sight(name: str
     """issue #3061: the wildcard arm carries names no exception rule can reach.
 
     This is the only authority here whose wildcard has no exception rule anywhere,
-    which is the shape most of the shipped list has: 16 ICANN wildcard rules, half
-    of them under TLDs with no exception at all. Every other authority in this file
-    pairs its wildcards with an exception, so their names also exercise the
-    carve-out and cannot show the wildcard arm standing alone.
+    the shape half the shipped list's ICANN wildcards have. Elsewhere in this file
+    every wildcard is exception-paired, so those names also exercise the carve-out.
     """
     rules = P.parse_psl_rules(_ICANN_WILDCARD_PSL)
 
@@ -707,11 +684,10 @@ def test_a_private_exception_carves_only_the_combined_section(name: str, public_
 
     The shared walk looks the ICANN exception set up only where the combined set
     already matched, which is sound because the combined set is built from the ICANN
-    rules plus the PRIVATE ones. Only a PRIVATE-only exception can tell a correct
+    rules plus the PRIVATE ones. Only a PRIVATE-only exception separates a correct
     per-section carve from one that applies the combined hit to both, and the
     shipped list has none: all eight of its exception rules sit in the ICANN
-    section. Upstream may add a PRIVATE exception at any regeneration, and these
-    rows are what would notice.
+    section, so these rows are what would notice one arriving upstream.
     """
     rules = P.parse_psl_rules(_PRIVATE_EXCEPTION_PSL)
 
@@ -743,10 +719,9 @@ def test_a_carved_tail_still_counts_as_an_ordinary_match() -> None:
 
     ``foo.com`` is both an ICANN exact rule and the PRIVATE section's exception, so
     the tail that carves the combined side is the tail that decides the ICANN side.
-    A walk that treated the carve as an alternative to the ordinary match -- the
-    shape a mis-indentation of the loop body produces -- would skip that tail and
-    let the ICANN suffix fall back to ``com``, and no other authority here can see
-    the difference because their exception rules are no ordinary rule's twin.
+    A walk that read the carve and the ordinary match as alternatives would skip
+    that tail and let the ICANN suffix fall back to ``com``. No other authority
+    here can show it: their exception rules are no ordinary rule's twin.
     """
     rules = P.parse_psl_rules(_EXCEPTION_SHADOWING_PSL)
 
