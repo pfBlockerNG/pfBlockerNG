@@ -310,7 +310,8 @@ jobs:
       - name: Forbid target="_blank" links with no adjacent rel="noopener noreferrer"
         # Reverse-tabnabbing defence-in-depth (issue #1217): a new-tab link whose
         # page can reach back via window.opener. Scans tracked src/usr/local/www
-        # .php/.inc/.xml (the checker's defaults). ubuntu-latest ships python3.
+        # and src/usr/local/pkg .php/.inc/.xml (the checker's defaults; pkg holds
+        # help text rendering on those pages, issue #3075). ubuntu-latest ships python3.
         run: python3 scripts/check_noopener.py
 
       - name: Forbid an on/off toggle declaring its default in the page

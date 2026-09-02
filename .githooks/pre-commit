@@ -238,7 +238,8 @@ fi
 
 # --- Forbid a target="_blank" link with no adjacent rel="noopener noreferrer"
 #     (issue #1217, reverse-tabnabbing defence). Relevant to the Web UI surface:
-#     PHP/inc pages and the wizard XML under src/usr/local/www. ---
+#     PHP/inc pages and the wizard XML under src/usr/local/www, plus the pkg help
+#     text that renders on those same pages (issue #3075). ---
 if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
 	if exempted scripts/check_noopener.py; then
 		exempt noopener

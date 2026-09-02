@@ -102,11 +102,7 @@ def find_violations(text: str, source: str) -> list[Violation]:
 
 
 def _git_tracked_ui() -> list[str]:
-    """Return tracked www + pkg files ending .php/.inc/.xml (sorted).
-
-    pkg carries help text that renders on the www pages, so it is the same
-    link surface and needs the same gate (issue #3075).
-    """
+    """Return tracked www + pkg files ending .php/.inc/.xml (sorted)."""
     try:
         out = subprocess.run(
             ["git", "ls-files", "-z", "src/usr/local/www", "src/usr/local/pkg"],
@@ -142,8 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         # has such files -- so error rather than exit 0 and silently skip the gate.
         if not paths:
             print(
-                "check_noopener: `git ls-files src/usr/local/www src/usr/local/pkg` "
-                "returned nothing "
+                "check_noopener: `git ls-files src/usr/local/www src/usr/local/pkg` returned nothing "
                 "(git unavailable or not a checkout) -- failing closed rather than "
                 "skipping the gate.",
                 file=sys.stderr,

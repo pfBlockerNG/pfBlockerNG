@@ -13,12 +13,15 @@ importable directly by path via importlib.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.gitenv import scrubbed_git_env
 
 # --------------------------------------------------------------------------- #
 # Load the script as a module.
@@ -288,23 +291,36 @@ def test_main_returns_0_on_clean_file(tmp_path: Path, capsys: pytest.CaptureFixt
     assert capsys.readouterr().err == ""
 
 
-def test_default_scan_set_covers_pkg_help_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_scan_set_covers_both_ui_trees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     # issue #3075: help text under src/usr/local/pkg renders on the same pages as
     # src/usr/local/www and carries the same external links, but the ARGLESS default
-    # scan set -- the one the pre-commit hook and CI both run -- saw only www, so a
-    # missing rel= on a live link shipped ungated. A clean www file is present so the
-    # set is non-empty: this pins that pkg is scanned, not merely that something was.
+    # scan set -- the one the pre-commit hook and CI both run -- saw only www.
+    #
+    # A violation is planted in BOTH trees and both paths are asserted in stderr, so
+    # dropping either pathspec fails: rc alone cannot tell "both scanned" from
+    # "one scanned", and the rc-only form let a www-dropping regression ship green.
+    env = scrubbed_git_env(drop_git_vars=True)
+    for name in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", env["GIT_CONFIG_GLOBAL"])
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", env["GIT_CONFIG_SYSTEM"])
     monkeypatch.chdir(tmp_path)
+
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     www = tmp_path / "src/usr/local/www/pfblockerng"
     pkg = tmp_path / "src/usr/local/pkg/pfblockerng"
     www.mkdir(parents=True)
     pkg.mkdir(parents=True)
-    (www / "clean.php").write_text('<a target="_blank" rel="noopener noreferrer" href="x">\n')
+    (www / "dirty.php").write_text('<a target="_blank" href="https://example.invalid">\n')
     (pkg / "help.inc").write_text('<a target="_blank" href="https://example.invalid">\n')
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
     assert cno.main([]) == 1
+    err = capsys.readouterr().err
+    assert "src/usr/local/www/pfblockerng/dirty.php:1:" in err
+    assert "src/usr/local/pkg/pfblockerng/help.inc:1:" in err
 
 
 def test_main_fails_closed_when_default_scan_set_unenumerable(
@@ -325,17 +341,23 @@ def test_main_fails_closed_when_default_scan_set_unenumerable(
 # --------------------------------------------------------------------------- #
 
 
-def test_www_tree_clean() -> None:
-    """Every tracked src/usr/local/www .php/.inc/.xml file is noopener-clean."""
+def test_ui_trees_clean() -> None:
+    """Every tracked www + pkg .php/.inc/.xml file is noopener-clean.
+
+    Routed through the production helper (issue #3075) so this guard cannot drift
+    from the set the gate actually scans, as it did while it hand-copied the
+    pathspec.
+    """
+    monkeypatch_free_cwd = _REPO_ROOT
     out = subprocess.run(
-        ["git", "ls-files", "-z", "src/usr/local/www"],
-        cwd=_REPO_ROOT,
+        ["git", "ls-files", "-z", "src/usr/local/www", "src/usr/local/pkg"],
+        cwd=monkeypatch_free_cwd,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
     files = sorted(p for p in out.split("\0") if p and p.endswith((".php", ".inc", ".xml")))
-    assert len(files) >= 16  # sanity: the coverage-matrix file set must be present
+    assert len(files) >= 26  # sanity: 16 www coverage-matrix files + the pkg tree
 
     all_violations: list[Any] = []
     for rel_path in files:
