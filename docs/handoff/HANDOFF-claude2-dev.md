@@ -27,8 +27,12 @@ Two finished changes sit uncommitted in worktrees. Do not redo them.
   a third arm. Full evidence and the patch are on **issue #3060**.
 - `.pfBlockerNG_worktrees/issue-3085-detect-escaped-quote-target` — 8 files.
   Detector widened to backslash-escaped quotes; 11 live sites fixed. Unit
-  red→green done (`3 failed, 145 passed` → `148 passed`). Patch on **issue #3085**.
-  Tiers are with claude-smoke.
+  red→green done (`3 failed, 145 passed` → `148 passed`), and **Tier A red→green
+  is now also complete** — claude-smoke ran it on the pool at `81e8c5ba`:
+  `1 failed, 5 passed` → `6 passed`, the RED being the new row and only the new
+  row, failing on the second assertion so the link demonstrably rendered without
+  its `rel`. Frozen hashes `95c19728` / `524a0d7e`, verified byte-identical to the
+  worktree. Full evidence on **issue #3085**. Nothing is outstanding but the commit.
 
 **The blocker, verified:** pfb-dev has `php-zip` but not `php-intl`. No intl →
 `composer install` crashes in Symfony String → `vendor/` never exists →
@@ -36,6 +40,20 @@ Two finished changes sit uncommitted in worktrees. Do not redo them.
 **no exemption path**: `exempted()` excuses a checker only when that checker is
 not shipped, and on `devel` it is. `--no-verify` is reserved for humans
 (`AGENTS.md`). So **no `.php`/`.inc` change can be committed from this seat.**
+
+## A finding worth more than the issue that produced it
+
+`tests/smoke/ui/test_render_smoke.py:507` asserts a **fixed attribute sequence**
+(`target="_blank" rel="noopener noreferrer" href="…"`). Measured across six live
+pages: **166 anchors render target-first, 20 render href-first**, and eight
+distinct pfBlockerNG-owned links are href-first — `/firewall_aliases.php`,
+`/firewall_rules.php`, `/status_logs_filter.php`, `publicsuffix.org`,
+`regexr.com` among them, all correctly carrying the rel.
+
+Adding any of those as a render case produces a **RED on a correct link**. About a
+fifth of the surface is therefore uncoverable at the render tier until the
+assertion is made order-tolerant. That is a defect in the test, independent of
+issue #3085, and it has no issue of its own yet.
 
 ## Open decisions the owner has not made
 
