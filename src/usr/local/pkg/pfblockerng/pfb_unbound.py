@@ -640,12 +640,14 @@ def _reload_write_applied(gen: int) -> None:
             pass
 
 
-def _module_fingerprint(paths: Sequence[str]) -> str | None:
-    """Digest the staged shipped module pair: sha256(first) ++ sha256(second), no separator.
+# issue #3125: the in-process code pair, in the order PHP's $pfb['unbound_py_module_src']
+# hashes it -- the marker below must digest the same files in the same order.
+PFB_MODULE_CODE_FILES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")
 
-    issue #3125: the cross-language contract with PHP's pfb_unbound_py_module_fingerprint()
-    -- pfb_unbound.py FIRST, lowercase hex. ``None`` if any file cannot be read (PHP's
-    side then returns FALSE and no restart signal can be derived)."""
+
+def _module_fingerprint(paths: Sequence[str]) -> str | None:
+    """issue #3125: sha256(first) ++ sha256(second), lowercase hex, no separator -- must
+    match PHP's pfb_unbound_py_module_fingerprint(). ``None`` if any file is unreadable."""
     parts = []
     for path in paths:
         try:
@@ -657,12 +659,9 @@ def _module_fingerprint(paths: Sequence[str]) -> str | None:
 
 
 def _module_write_applied(marker_path: str, fingerprint: str) -> bool:
-    """Publish ``fingerprint`` as the module-applied marker (atomic temp + ``os.replace``).
-
-    issue #3125: PHP's pfb_unbound_python('enabled') restarts the Resolver whenever this
-    marker disagrees with the shipped files' fingerprint. Best-effort: a write failure is
-    logged (one stderr line) and returns False -- an unreadable marker reads as drift
-    downstream, so a failed write must never masquerade as success."""
+    """issue #3125: publish ``fingerprint`` as the module-applied marker (atomic temp +
+    ``os.replace``). Best-effort: ``False`` plus one stderr line on OSError, never raises --
+    PHP reads an absent/stale marker as drift, so a failed write must never look like success."""
     tmp = "{}.tmp".format(marker_path)
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -1713,7 +1712,7 @@ def init_standard(id: int, env: module_env) -> bool:
     # iff their code differs from what THIS init loaded. Best-effort: a failure must
     # never abort init -- an absent marker simply reads as drift in PHP.
     pfb["pfb_py_module_applied"] = "pfb_py_module.applied"
-    fp = _module_fingerprint(("pfb_unbound.py", "pfb_dnsbl_regex_rules.py"))
+    fp = _module_fingerprint(PFB_MODULE_CODE_FILES)
     if fp is not None:
         _module_write_applied(pfb["pfb_py_module_applied"], fp)
     # ADR-65: the read-only DNSBL decision query channel. A local consumer writes a

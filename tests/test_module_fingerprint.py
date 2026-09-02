@@ -105,3 +105,9 @@ def test_fingerprint_empty_files_is_sha256_of_empty_pair(tmp_path: Any) -> None:
     fp = P._module_fingerprint((a, b))
     assert isinstance(fp, str)
     assert fp == EMPTY_FP
+
+
+def test_init_fingerprints_the_shipped_pair_in_php_order() -> None:
+    """The pair init hashes is a module constant in PHP's order -- pfb_unbound.py
+    FIRST -- so the marker can never be written in an order PHP will not match."""
+    assert P.PFB_MODULE_CODE_FILES == ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")

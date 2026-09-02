@@ -200,10 +200,10 @@ similarly additive/backwards-compatible; a breaking change would need the
 staging-generation-guard's rebuild-from-`.orig` pattern again, not a new mechanism.
 
 **Accepted transitional window.** A pkg upgrade does **not** trigger an immediate DNSBL rebuild:
-`custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()`, but
-`pfblockerng_install.inc` sets `$g['pfblockerng_install'] = TRUE` for the whole install/upgrade
-process, and `sync_package_pfblockerng()` early-returns on that flag before reaching the DNSBL
-loop (logging "Sync terminated during boot process.").
+`custom_php_resync_config_command` (`pfblockerng.xml`) calls `sync_package_pfblockerng()` as a
+save-only pass (`pfblockerng_install.inc` clears `$g['pfblockerng_install']` before it), which
+skips the DNSBL feed loop; the Unbound-integration block still runs, so the issue #3125 module
+fingerprint compare below fires on that resync.
 
 The window does **not** reliably close at the first `cron` tick, either. `pfblockerng_sync_cron()`
 (`pfblockerng_cron.inc`) only calls `sync_package_pfblockerng('cron')` when at least one in-scope feed's
