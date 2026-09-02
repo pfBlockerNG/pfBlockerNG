@@ -646,13 +646,13 @@ PFB_MODULE_CODE_FILES = ("pfb_unbound.py", "pfb_dnsbl_regex_rules.py")
 
 
 def _module_fingerprint(paths: Sequence[str]) -> str | None:
-    """issue #3125: sha256(first) ++ sha256(second), lowercase hex, no separator -- must
+    """issue #3125: md5(first) ++ md5(second), lowercase hex, no separator -- must
     match PHP's pfb_unbound_py_module_fingerprint(). ``None`` if any file is unreadable."""
     parts = []
     for path in paths:
         try:
             with open(path, "rb") as fh:
-                parts.append(hashlib.sha256(fh.read()).hexdigest())
+                parts.append(hashlib.md5(fh.read()).hexdigest())
         except OSError:
             return None
     return "".join(parts)

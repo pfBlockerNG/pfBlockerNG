@@ -4,7 +4,7 @@ WHY THIS FILE EXISTS
 --------------------
 PHP's ``pfb_unbound_python('enabled')`` restarts the Resolver iff the fingerprint
 marker (``pfb_py_module.applied``) disagrees with
-``sha256(pfb_unbound.py) ++ sha256(pfb_dnsbl_regex_rules.py)`` as staged in the
+``md5(pfb_unbound.py) ++ md5(pfb_dnsbl_regex_rules.py)`` as staged in the
 chroot. These two functions are the Python half of that cross-language contract:
 fixed file order (``pfb_unbound.py`` FIRST), no separator, lowercase hex; the
 marker write is atomic temp + ``os.replace`` and best-effort (``False`` on
@@ -18,15 +18,12 @@ from typing import Any
 
 import pfb_unbound as P
 
-# issue #3125: the cross-language parity constant -- sha256(b"a") ++ sha256(b"b").
+# issue #3125: the cross-language parity constant -- md5(b"a") ++ md5(b"b").
 # PythonModuleFingerprintTest.php pins the IDENTICAL literal; if either language
 # ever changes the digest recipe (order, separator, case, algorithm) one of the
 # two pins fails.
-PARITY_FP = (
-    "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
-    "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"
-)
-EMPTY_FP = hashlib.sha256(b"").hexdigest() * 2
+PARITY_FP = "0cc175b9c0f1b6a831c399e26977266192eb5ffee6ae2fec3ad71c777531578f"
+EMPTY_FP = hashlib.md5(b"").hexdigest() * 2
 
 
 def _write(tmp_path: Any, name: str, data: bytes) -> str:
@@ -35,14 +32,14 @@ def _write(tmp_path: Any, name: str, data: bytes) -> str:
     return str(path)
 
 
-def test_fingerprint_two_files_is_concatenated_sha256_in_order(tmp_path: Any) -> None:
-    """P1: digest is sha256(first) ++ sha256(second), 128 lowercase hex chars --
+def test_fingerprint_two_files_is_concatenated_md5_in_order(tmp_path: Any) -> None:
+    """P1: digest is md5(first) ++ md5(second), 64 lowercase hex chars --
     and swapping the pair changes it (order is part of the contract)."""
     first = _write(tmp_path, "pfb_unbound.py", b"first")
     second = _write(tmp_path, "pfb_dnsbl_regex_rules.py", b"second")
-    expected = hashlib.sha256(b"first").hexdigest() + hashlib.sha256(b"second").hexdigest()
+    expected = hashlib.md5(b"first").hexdigest() + hashlib.md5(b"second").hexdigest()
 
-    assert len(expected) == 128
+    assert len(expected) == 64
     assert P._module_fingerprint((first, second)) == expected
     assert P._module_fingerprint((second, first)) != expected
 
@@ -96,9 +93,9 @@ def test_fingerprint_matches_php_pinned_parity_literal(tmp_path: Any) -> None:
     assert P._module_fingerprint((a, b)) == PARITY_FP
 
 
-def test_fingerprint_empty_files_is_sha256_of_empty_pair(tmp_path: Any) -> None:
+def test_fingerprint_empty_files_is_md5_of_empty_pair(tmp_path: Any) -> None:
     """Hostile (brief S5): an emptied shipped file is still a STRING digest --
-    the sha256-of-empty pair -- so it compares normally, no special case."""
+    the md5-of-empty pair -- so it compares normally, no special case."""
     a = _write(tmp_path, "a", b"")
     b = _write(tmp_path, "b", b"")
 

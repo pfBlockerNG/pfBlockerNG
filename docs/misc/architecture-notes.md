@@ -515,7 +515,7 @@ live traffic on production hardware.
 
 Issue #3125 adds a package-upgrade restart signal alongside the feed passes: at init the
 python module fingerprints the staged shipped files (`pfb_unbound.py` + `pfb_dnsbl_regex_rules.py`,
-sha256 concat) into the `pfb_py_module.applied` marker, and `pfb_unbound_python('enabled')`
+md5 concat (ADR-42)) into the `pfb_py_module.applied` marker, and `pfb_unbound_python('enabled')`
 restarts the Resolver iff that marker drifts from the shipped files' fingerprint.
 
 ---

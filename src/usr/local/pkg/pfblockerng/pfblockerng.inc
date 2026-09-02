@@ -11234,13 +11234,13 @@ function pfb_dnsbl_unlock_action($action) {
 }
 
 
-// issue #3125: mirror of python's _module_fingerprint() -- sha256 concat, pfb_unbound.py
-// first, no separator; sha256 not pfb_content_hash() because python has no xxh128.
+// issue #3125: mirror of python's _module_fingerprint() -- md5 concat, pfb_unbound.py
+// first, no separator. md5: ADR-42's Python-side algorithm, hashlib has no xxh128.
 // FALSE when any member is unreadable: nothing to compare, so no restart signal.
 function pfb_unbound_py_module_fingerprint(array $paths): string|false {
 	$fp = '';
 	foreach ($paths as $path) {
-		$digest = @hash_file('sha256', $path);
+		$digest = @md5_file($path);
 		if ($digest === FALSE) {
 			return FALSE;
 		}

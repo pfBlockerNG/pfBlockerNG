@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
  * issue #3125 -- the DNSBL module fingerprint drives a Resolver restart signal.
  *
  * pfb_unbound_py_module_fingerprint() digests the SHIPPED python module pair
- * (sha256 concat, pfb_unbound.py first, no separator); pfb_unbound_python('enabled')
+ * (md5 concat, pfb_unbound.py first, no separator); pfb_unbound_python('enabled')
  * signals a restart whenever the applied marker (pfb_py_module.applied, written by
  * the python module at init) trims to anything else -- and stays silent when the
  * marker matches. The PARITY_FP literal is pinned identically in
@@ -17,10 +17,10 @@ use PHPUnit\Framework\TestCase;
  */
 final class PythonModuleFingerprintTest extends TestCase
 {
-	private const PARITY_FP = 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb'
-		. '3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d';
-	private const EMPTY_FP = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-		. 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+	private const PARITY_FP = '0cc175b9c0f1b6a831c399e269772661'
+		. '92eb5ffee6ae2fec3ad71c777531578f';
+	private const EMPTY_FP = 'd41d8cd98f00b204e9800998ecf8427e'
+		. 'd41d8cd98f00b204e9800998ecf8427e';
 
 	private string $tmp;
 	private bool $hadPfb = FALSE;
@@ -179,7 +179,7 @@ final class PythonModuleFingerprintTest extends TestCase
 	{
 		// H5: a stale-but-wellformed marker (module changed since) = drift, again.
 		$this->shipFiles();
-		file_put_contents($this->markerPath(), str_repeat('f', 128) . "\n");
+		file_put_contents($this->markerPath(), str_repeat('f', 64) . "\n");
 		$this->assertTrue(pfb_unbound_python('enabled'));
 		$this->assertTrue(pfb_unbound_python('enabled'));
 	}
@@ -213,10 +213,10 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testMarkerJunkIsDifferentNeverCrashes(): void
 	{
-		// Hostile (brief S5): a junk marker -- 128 non-hex chars, or 10 MB of it --
+		// Hostile (brief S5): a junk marker -- 64 non-hex chars, or 10 MB of it --
 		// is just "different" (restart signal); never parsed as anything else.
 		$this->shipFiles();
-		file_put_contents($this->markerPath(), str_repeat('z', 128));
+		file_put_contents($this->markerPath(), str_repeat('z', 64));
 		$this->assertTrue(pfb_unbound_python('enabled'));
 
 		file_put_contents($this->markerPath(), str_repeat('x', 10 * 1024 * 1024));
@@ -225,7 +225,7 @@ final class PythonModuleFingerprintTest extends TestCase
 
 	public function testEmptiedShippedFilesStillFingerprintAsString(): void
 	{
-		// Hostile (brief S5): emptied shipped files fingerprint to the sha256-of-empty
+		// Hostile (brief S5): emptied shipped files fingerprint to the md5-of-empty
 		// pair -- still a string, still compares normally, no special case.
 		$this->shipFiles('', '');
 		$this->assertSame(self::EMPTY_FP, pfb_unbound_py_module_fingerprint($GLOBALS['pfb']['unbound_py_module_src']));
