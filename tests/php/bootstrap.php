@@ -80,6 +80,9 @@ if (!defined('PFB_UNBOUND_START_CMD')) {
 if (!defined('PFB_UNBOUND_STOP_WAIT')) {
 	define('PFB_UNBOUND_STOP_WAIT', 2);
 }
+if (!defined('PFB_UNBOUND_KILL_WAIT')) {
+	define('PFB_UNBOUND_KILL_WAIT', 1);
+}
 if (!defined('PFB_UNBOUND_START_WAIT')) {
 	define('PFB_UNBOUND_START_WAIT', 2);
 }
