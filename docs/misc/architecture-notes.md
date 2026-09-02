@@ -1589,9 +1589,10 @@ half-installed package is worse than an overlap: on expiry the install proceeds 
 `Package install proceeding WITHOUT the feed-pass lock` to `pfblockerng.log` and syslog
 (`LOG_WARNING`) — so a pass longer than the budget (a large multi-feed download) still overlaps, it
 is just no longer silent. While the hold stands, a tick firing mid-install defers exactly like any
-other contender. They are also the only holders that take this lock **without** the dispatcher
-lock first; that inverts the order every other holder uses, and cannot deadlock only because every
-other feed-pass acquire is non-blocking and every dispatcher acquire is bounded.
+other contender. They also take this lock **without** the dispatcher lock first (as the GUI Alerts
+live-punch paths do, but those stay non-blocking); that inverts the order every scheduled holder
+uses, and cannot deadlock only because every other feed-pass acquire is non-blocking and every
+dispatcher acquire is bounded.
 
 **The uninstall holds it too (issue #3090).** `pfblockerng_php_pre_deinstall_command()` tears the
 same state down — stops the pfB services, removes the Unbound chroot module and generated DNSBL
