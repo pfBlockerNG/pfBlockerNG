@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `b621614be`  hooks: stop counting untracked files as tree dirt in session-branch-sync  (#3109) — asked twice, two quota notices; four legs over two rounds, two blocking fixed.
 - `ed6fcb85e`  agent-tools: never self-update an installed uv  (#3110) — asked twice, two quota notices; four legs, no blocking.
 - `574afbf59`  pkg repo: ci: sign pkg catalogue commits as pfblockerng-bot  (#32) — pfBlockerNG/pkg; finished review on the fix head, two quota notices on the landed one; three blocking fixed.
 - `53f0d856b`  unbound: refuse to start a second resolver when the stop wait times out  (#3093) — finished review on the pre-fix head, quota on the landed one; four legs, one blocking fixed.
