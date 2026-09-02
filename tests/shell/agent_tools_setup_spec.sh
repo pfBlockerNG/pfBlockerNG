@@ -362,6 +362,13 @@ GROK
     cp "$installables/uv" "$home/.local/bin/uv"
   }
 
+  # Same idea for codegraph (issue #3070): the default fixture copy lives in
+  # "$activebin", outside HOME, which models a shared one this seat cannot write.
+  seat_codegraph() {
+    mkdir -p "$home/.local/bin"
+    cp "$installables/codegraph" "$home/.local/bin/codegraph"
+  }
+
   cleanup() {
     rm -rf "$fixture"
   }
@@ -467,6 +474,7 @@ GROK
 
   It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
     seat_uv
+    seat_codegraph
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$curl_log" should equal \
@@ -522,7 +530,44 @@ GROK
     Assert [ "$(grep -c '^https://astral.sh/uv/install.sh$' "$curl_log")" -eq 0 ]
   End
 
+  It 'installs a per-seat codegraph when the only one on PATH lives outside HOME'
+    # issue #3070: same adoption defect as #3010's uv, and worse -- there is no
+    # `|| true`, so upgrading a copy this seat cannot write ends the run.
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$curl_log" should include 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
+    The path "$home/.local/bin/codegraph" should be executable
+    The contents of file "$tool_log" should not include 'codegraph:upgrade'
+  End
+
+  It 'converges on the seat codegraph when CODEGRAPH_BIN_DIR lives outside HOME'
+    # The seat's own codegraph goes to $codegraph_bin, which CODEGRAPH_BIN_DIR can
+    # place outside HOME; testing ownership against HOME alone would reinstall it
+    # on every run instead of upgrading it.
+    custom_cg_bin="$fixture/custom codegraph bin"
+    When run env CODEGRAPH_BIN_DIR="$custom_cg_bin" \
+      sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh$' "$curl_log")" -eq 1 ]
+    Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 1 ]
+    The path "$custom_cg_bin/codegraph" should be executable
+  End
+
+  It 'keeps a seat codegraph that lives under HOME but not in the codegraph bin dir'
+    # PATH also carries $HOME/.cargo/bin, so a seat can own a codegraph that is not
+    # at $codegraph_bin. Dropping the HOME alternative must not ship green.
+    rm -f "$activebin/codegraph"
+    custom_cg_bin="$fixture/custom codegraph bin"
+    mkdir -p "$home/.cargo/bin"
+    cp "$installables/codegraph" "$home/.cargo/bin/codegraph"
+    When run env CODEGRAPH_BIN_DIR="$custom_cg_bin" sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh$' "$curl_log")" -eq 0 ]
+  End
+
   It 'installs a managed Homebrew uv when an unmanaged Darwin uv command exists'
+    seat_codegraph
     cat > "$activebin/uv" <<'UNMANAGED_UV'
 #!/bin/sh
 printf 'uv-unmanaged:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
@@ -550,6 +595,7 @@ UNMANAGED_UV
   End
 
   It 'upgrades a managed Homebrew uv from its formula prefix on every Darwin rerun'
+    seat_codegraph
     rm -f "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
@@ -880,8 +926,9 @@ UNMANAGED_UV
     The contents of file "$tool_log" should not include 'grok:mcp'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
     The file "$apt_log" should not be exist
-    The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
+    The contents of file "$curl_log" should equal "$(printf '%s\n%s\n%s' \
       'https://astral.sh/uv/install.sh' \
+      'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
   End
 
@@ -1042,7 +1089,9 @@ CONFIG
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 2 ]
+    # Run 1 provisions the seat codegraph; run 2 finds it under HOME and upgrades.
+    Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh$' "$curl_log")" -eq 1 ]
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^wt:config shell install --yes$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]

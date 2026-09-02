@@ -290,11 +290,21 @@ main() {
 	require_tool ast-grep
 	require_tool semgrep
 
-	if command -v codegraph >/dev/null 2>&1; then
-		codegraph upgrade
-	else
-		install_from_url 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
-	fi
+	cg_path=$(command -v codegraph 2>/dev/null) || cg_path=
+	# $codegraph_bin is where this script installs codegraph, and CODEGRAPH_BIN_DIR
+	# can put it outside HOME; matching the PATH entry verbatim keeps a seat that
+	# sets it converging on upgrade instead of reinstalling every run.
+	case "$cg_path" in
+		"$codegraph_bin"/codegraph|"$HOME"/*)
+			codegraph upgrade
+			;;
+		*)
+			# issue #3070: a shared codegraph outside this seat satisfies `command -v`
+			# but the seat cannot write it, so `upgrade` fails and -- with no `|| true`
+			# here -- ends the run under `set -eu`. Provision our own instead.
+			install_from_url 'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh'
+			;;
+	esac
 	require_tool codegraph
 	codegraph install -l global -y -t auto
 
