@@ -545,19 +545,73 @@ def test_the_live_query_path_walks_the_labels_once_per_query() -> None:
 
     ``_tld_allow_blocks`` compares both suffixes against the selected roots on the
     live DNS query path, so the second caller must not reintroduce a second walk.
+
+    The query is a PRIVATE boundary under an unselected root with PRIVATE allowance
+    on, because that is the decision the two suffixes actually drive: it passes only
+    while ``public_suffix`` (github.io) is longer than ``icann_suffix`` (io). A query
+    that merely falls through to the unmatched TLD would be blocked either way and
+    could not tell the two sections apart.
     """
     rules = P.parse_psl_rules(PSL)
-    containers = _allow_containers(rules)
-    cfg = _allow_cfg()
+    containers = {**_allow_containers(rules), "tld_allow_roots": ("com",)}
+    cfg = _allow_cfg(psl_allow_private=True)
     rules.index()  # prime: the index build is not what is being counted
     walks: list[str] = []
 
     with mock.patch.object(P, "_psl_prevailing", _counting_walk(walks)):
-        decision = P.evaluate_domain("x.example.net", "x.example.net", "net", False, cfg, containers)
+        decision = P.evaluate_domain("x.github.io", "x.github.io", "io", False, cfg, containers)
 
-    assert (decision.is_found, decision.feed) == (True, "TLD_Allow"), (
-        f"the shared walk changed the TLD-Allow decision: {decision!r}"
-    )
+    assert decision.is_found is False, f"the shared walk changed the TLD-Allow decision: {decision!r}"
     assert len(walks) == 1, (
         f"one query took {len(walks)} label walks; TLD-Allow still walks each section separately (issue #3061)"
     )
+
+
+_EXCEPTION_TLD_PSL = """// ===BEGIN ICANN DOMAINS===
+jp
+kobe.jp
+*.kobe.jp
+!city.kobe.jp
+// ===END ICANN DOMAINS===
+// ===BEGIN PRIVATE DOMAINS===
+// ===END PRIVATE DOMAINS===
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "public_suffix", "registrable"),
+    [
+        # Exact rule wins: 'jp' is the longest surviving suffix of a name with no
+        # kobe.jp ancestry, and the exception phase found nothing.
+        ("shop.example.jp", "jp", "example.jp"),
+        # Wildcard base kobe.jp promotes the suffix one label to the left.
+        ("a.kobe.jp", "a.kobe.jp", ""),
+        # The exception carves city.kobe.jp back out of that wildcard, and beats the
+        # longer wildcard match it overlaps.
+        ("x.city.kobe.jp", "kobe.jp", "city.kobe.jp"),
+    ],
+)
+def test_an_exception_tld_resolves_through_the_two_phase_section_walk(
+    name: str, public_suffix: str, registrable: str
+) -> None:
+    """issue #3061: names under a TLD that carries an exception rule take the
+    two-phase walk, and each of its three exits stays correct.
+
+    The shared single pass cannot honour exceptions, because an exception beats an
+    ordinary match at ANY depth, so ``_psl_prevailing`` routes a name whose TLD owns
+    an exception rule to ``_psl_prevailing_section`` instead. The shipped list pairs
+    exception rules with exact rules under the same TLD (8 exceptions under ck and
+    jp, 1777 exact rules under jp alone), so all three exits of that walk -- exact,
+    wildcard and exception -- are live production paths and each gets a row here.
+    """
+    rules = P.parse_psl_rules(_EXCEPTION_TLD_PSL)
+
+    resolution = P.resolve_public_suffix(name, rules)
+
+    # No PRIVATE rules in this authority, so both sections must agree.
+    assert (resolution.icann_suffix, resolution.public_suffix, resolution.registrable_domain) == (
+        public_suffix,
+        public_suffix,
+        registrable,
+    ), f"the two-phase walk changed the resolution of {name!r}: {resolution!r}"
+    assert resolution.private_active is False, f"no PRIVATE rule exists, yet {name!r} reported one: {resolution!r}"

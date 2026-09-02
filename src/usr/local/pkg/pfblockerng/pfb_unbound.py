@@ -265,7 +265,8 @@ _PslIndex = tuple[_PslSets, _PslSets, frozenset[str]]
 
 
 def _psl_build_index(rules: PslRules) -> _PslIndex:
-    """Build the (ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) sets.
+    """Build the (ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) sets, plus
+    the final label of every exception rule.
 
     Called once per PslRules via PslRules.index(), which holds the result on the
     instance, so each resolution costs O(name labels) rather than a scan over the
@@ -284,8 +285,9 @@ def _psl_build_index(rules: PslRules) -> _PslIndex:
     )
     # Final label of every exception rule in either section. An exception can only
     # match a tail whose last label is its own, so a name whose TLD is absent here
-    # needs no exception phase at all -- the shipped list has ~10 such rules across
-    # a handful of TLDs, so the phase is skipped for practically every feed entry.
+    # needs no exception phase at all. The shipped list carries 8 exception rules
+    # under 2 TLDs (ck, jp), so most names skip the phase; jp is populated enough
+    # that its names keep both section walks, and still gain the shared tails.
     exception_roots = frozenset(rule.rsplit(".", 1)[-1] for rule in combined[2])
     return icann, combined, exception_roots
 
