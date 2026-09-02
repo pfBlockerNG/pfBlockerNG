@@ -35,9 +35,11 @@ tag genuinely exempt (e.g. a `target=…` inside a `<textarea>` code sample).
 The detection logic lives in :func:`find_violations` (pure, importable) so it
 is unit-tested directly without a subprocess. The :func:`main` CLI, with no
 args, resolves the file list via ``git ls-files`` — every tracked
-``src/usr/local/www/**`` file ending ``.php``/``.inc``/``.xml`` (the Web UI
-surface `target="_blank"` links live in; deliberately excludes ``tests/`` so
-this checker's own bad-input fixtures never trip its tree scan) — or scans
+``src/usr/local/www/**`` and ``src/usr/local/pkg/**`` file ending
+``.php``/``.inc``/``.xml`` (the Web UI surface `target="_blank"` links live in;
+pkg holds help text that renders on those same pages, issue #3075; deliberately
+excludes ``tests/`` so this checker's own bad-input fixtures never trip its
+tree scan) — or scans
 the explicit paths passed as args. It prints ``path:line: <message>`` to
 stderr, exiting 1 if any violation is found, or 2 if the default (argless)
 scan set could not be enumerated (git absent / not a checkout) — failing
@@ -99,11 +101,15 @@ def find_violations(text: str, source: str) -> list[Violation]:
     return violations
 
 
-def _git_tracked_www() -> list[str]:
-    """Return tracked src/usr/local/www files ending .php/.inc/.xml (sorted)."""
+def _git_tracked_ui() -> list[str]:
+    """Return tracked www + pkg files ending .php/.inc/.xml (sorted).
+
+    pkg carries help text that renders on the www pages, so it is the same
+    link surface and needs the same gate (issue #3075).
+    """
     try:
         out = subprocess.run(
-            ["git", "ls-files", "-z", "src/usr/local/www"],
+            ["git", "ls-files", "-z", "src/usr/local/www", "src/usr/local/pkg"],
             capture_output=True,
             text=True,
             check=True,
@@ -130,13 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     if args:
         paths = args
     else:
-        paths = _git_tracked_www()
+        paths = _git_tracked_ui()
         # Fail CLOSED: an empty default scan set means `git ls-files` could not
-        # enumerate the Web UI tree (git absent / not a checkout) -- this repo always
+        # enumerate the UI trees (git absent / not a checkout) -- this repo always
         # has such files -- so error rather than exit 0 and silently skip the gate.
         if not paths:
             print(
-                "check_noopener: `git ls-files src/usr/local/www` returned nothing "
+                "check_noopener: `git ls-files src/usr/local/www src/usr/local/pkg` "
+                "returned nothing "
                 "(git unavailable or not a checkout) -- failing closed rather than "
                 "skipping the gate.",
                 file=sys.stderr,

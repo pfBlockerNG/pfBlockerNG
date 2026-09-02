@@ -288,6 +288,25 @@ def test_main_returns_0_on_clean_file(tmp_path: Path, capsys: pytest.CaptureFixt
     assert capsys.readouterr().err == ""
 
 
+def test_default_scan_set_covers_pkg_help_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # issue #3075: help text under src/usr/local/pkg renders on the same pages as
+    # src/usr/local/www and carries the same external links, but the ARGLESS default
+    # scan set -- the one the pre-commit hook and CI both run -- saw only www, so a
+    # missing rel= on a live link shipped ungated. A clean www file is present so the
+    # set is non-empty: this pins that pkg is scanned, not merely that something was.
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    www = tmp_path / "src/usr/local/www/pfblockerng"
+    pkg = tmp_path / "src/usr/local/pkg/pfblockerng"
+    www.mkdir(parents=True)
+    pkg.mkdir(parents=True)
+    (www / "clean.php").write_text('<a target="_blank" rel="noopener noreferrer" href="x">\n')
+    (pkg / "help.inc").write_text('<a target="_blank" href="https://example.invalid">\n')
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    assert cno.main([]) == 1
+
+
 def test_main_fails_closed_when_default_scan_set_unenumerable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
