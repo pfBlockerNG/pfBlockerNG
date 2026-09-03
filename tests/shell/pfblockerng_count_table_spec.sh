@@ -88,8 +88,10 @@ Describe 'pfb_count_table (#3151)'
     # When the table is rendered.
     When call pfb_count_table "${work}/missing*.txt" "${work}/real.txt"
 
-    # Then only the real file's rows appear and grep's error stays inside.
+    # Then only the real file's row appears, plus the total wc -l prints whenever
+    # it was handed more than one argument -- even one that does not exist.
     The status should be success
+    The lines of stdout should equal 2
     The stdout should include "       1 ${work}/real.txt"
     The stdout should include '       1 total'
     The stderr should equal ''
@@ -103,10 +105,10 @@ Describe 'pfb_count_table (#3151)'
     # When the table is rendered.
     When call pfb_count_table "${work}/dir/a:b.txt"
 
-    # Then the row shows the full path (only the trailing :count is stripped).
+    # Then the one row shows the full path (only the trailing :count is stripped).
     The status should be success
-    The stdout should include "       3 ${work}/dir/a:b.txt"
-    The stdout should include '       3 total'
+    The lines of stdout should equal 1
+    The line 1 of stdout should equal "       3 ${work}/dir/a:b.txt"
   End
 
   It "reports the 'Deny List IP Counts' section with the grep -c count for an unterminated deny file (C8)"
