@@ -1,10 +1,11 @@
 #!/bin/sh
-# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 4 agent footguns.
+# scripts/claude-bash-guard.sh -- PreToolUse Bash guard: deny 5 agent footguns.
 #
 # Wired in .claude/settings.json as a PreToolUse hook matching the Bash tool.
-# Denies, at the TOOL layer (before the command ever runs), four operations an
-# AGENT must not run -- three git bypasses a human may legitimately use, plus a
-# wait-launch shape that silently strands the turn:
+# Denies, at the TOOL layer (before the command ever runs), five operations an
+# AGENT must not run -- three git bypasses a human may legitimately use, a
+# wait-launch shape that silently strands the turn, and the scratch-tree
+# shapes that share or strand a git tree (issue #3101):
 #
 #   Rule A -- `git commit` with `--no-verify` (long flag, standalone -n, or a
 #             clustered short flag like -an/-anm)   : the pre-commit lint
@@ -27,10 +28,34 @@
 #             the turn stalls while the wait has already finished (#1225).
 #             Whole-payload, not per-segment: `&` is one of the characters
 #             $segs splits on.
+#   Rule E -- (1) a `cp -a`/`cp -R`/`cp -r`/`cp -al`/`rsync` whose SOURCE
+#             carries a `.git` entry : the copy-a-worktree shape -- the copy
+#             keeps the source's `.git` pointer, so every git command in the
+#             copy drives the ORIGINAL tree's index, `HEAD`, and refs (issue
+#             #3101, observed writing another session's `ORIG_HEAD` and index).
+#             Sanctioned: `git archive <sha> | tar -x` (read-only) or
+#             `wt switch --create --base <sha>` (throwaway worktree).
+#             (2) a `git clone`/`git worktree add` whose TARGET resolves under
+#             the system temp dir (`/tmp`, `/private/tmp`, or `$TMPDIR` when
+#             it resolves inside either) : an unregistered tree no
+#             `git worktree list`, prune, or `wt remove` can reach, on a
+#             RAM-backed tmpfs on Linux. Sanctioned: `/var/tmp/agents`
+#             (CLAUDE.md scratch trees).
+#
+# Rule E is the ONLY rule that touches the filesystem, and only for (1): a
+# text scan cannot see a `.git` entry, so it probes the resolved SOURCE
+# argument (`test -e <src>/.git` -- a DIRECTORY in a main checkout, a FILE in
+# a linked worktree; `-e` covers both). A source that does not exist or does
+# not resolve probes FALSE (fail-open); a relative source resolves from the
+# HOOK's CWD, which differs from the agent's when the agent cd'd -- the
+# accepted gap, same class as the git-alias accepted limitation above. (2) is
+# per-segment text like the rest: a boundary-anchored path token in a git
+# clone / worktree add segment, so `/var/tmp/...`, `/tmpfoo`, and an
+# unrelated `/tmp` in another segment never match (spec E10/E11/E14).
 #
 # Rule D runs first (whole-payload). Then the per-segment rules: segments are
 # scanned left to right (see MATCHING below); within one segment, A, then B,
-# then C. First matching pair wins.
+# then C, then E. First matching pair wins.
 #
 # FAIL-OPEN CONTRACT: this hook must NEVER block a legitimate Bash call
 # because of a parsing failure. Empty stdin, garbled/non-JSON stdin, or no
@@ -268,6 +293,96 @@ _has_force_refspec() {
 	printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\+${_SEP_NOT}"
 }
 
+# _copy_srcs <anchor> -- sets _srcs to the candidate SOURCE tokens of the
+# CURRENT SEGMENT's cp/rsync, space-separated, for tool+flag anchor $1
+# (`cp -a` ... `rsync`): every non-flag token after the LAST anchor
+# occurrence except the last one (the destination), with the trailing JSON
+# braces the normalization leaves fused onto tokens stripped. The caller
+# gates on the anchor being present first (see _has_copy_source_git), so
+# the `##*` cut always lands on the real command, never the JSON prefix.
+_copy_srcs() {
+	_srcs=""
+	_last_tok=""
+	_rest="${seg##*"$1 "}"
+	for _w in $_rest; do    # shellcheck disable=SC2086  # intentional: word-splitting into tokens
+		case "$_w" in
+		-*) continue ;;
+		esac
+		while true; do
+			case "$_w" in
+			*"}" ) _w="${_w%?}" ;;
+			*) break ;;
+			esac
+		done
+		[ -n "$_w" ] || continue
+		_srcs="${_srcs:+$_srcs }$_last_tok"
+		_last_tok="$_w"
+	done
+}
+
+# _any_src_has_git -- true iff any candidate source in _srcs carries a .git
+# entry: a DIRECTORY in a main checkout, a FILE (a gitdir pointer) in a
+# linked worktree -- -e covers both. A source that does not exist or does
+# not resolve probes false: fail-open, the contract for every parse failure
+# in this guard.
+_any_src_has_git() {
+	[ -n "$_srcs" ] || return 1
+	for _w in $_srcs; do   # shellcheck disable=SC2086  # intentional: word-splitting into tokens
+		[ -e "$_w/.git" ] && return 0
+	done
+	return 1
+}
+
+# _has_copy_source_git -- true iff the CURRENT SEGMENT is a copy of a
+# git-bearing tree: cp -a/-R/-r/-al (the recursive spellings a
+# copy-a-worktree takes) or rsync, whose SOURCE contains a .git entry.
+_has_copy_source_git() {
+	if _contains 'cp -a '; then
+		_copy_srcs 'cp -a'
+		_any_src_has_git && return 0
+	fi
+	if _contains 'cp -R '; then
+		_copy_srcs 'cp -R'
+		_any_src_has_git && return 0
+	fi
+	if _contains 'cp -r '; then
+		_copy_srcs 'cp -r'
+		_any_src_has_git && return 0
+	fi
+	if _contains 'cp -al '; then
+		_copy_srcs 'cp -al'
+		_any_src_has_git && return 0
+	fi
+	if _contains 'rsync '; then
+		_copy_srcs 'rsync'
+		_any_src_has_git && return 0
+	fi
+	return 1
+}
+
+# _tmp_target -- true iff the CURRENT SEGMENT carries a path token under the
+# system temp dir as written in the command: /tmp or /tmp/..., /private/tmp
+# or /private/tmp/..., or $TMPDIR/$TMPDIR/... where $TMPDIR (this hook's
+# environment, the one the agent shell inherits) resolves inside either.
+# Boundary-anchored like the force-flag boundary, so /var/tmp/... and a
+# /tmpfoo directory never match, and neither does /tmp inside a URL path
+# (the character before a URL's /tmp is never a boundary).
+_tmp_target() {
+	if printf '%s' "$seg" | grep -Eq "(^|${_SEP})(/tmp|/private/tmp)(/|${_SEP})"; then
+		return 0
+	fi
+	case "${TMPDIR:-}" in
+	/tmp*|/private/tmp*)
+		# shellcheck disable=SC2016  # intentional: match the literal $TMPDIR token
+		if _contains '$TMPDIR' &&
+			printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\\$TMPDIR(/|${_SEP})"; then
+			return 0
+		fi
+		;;
+	esac
+	return 1
+}
+
 # _deny <reason> -- print the PreToolUse deny JSON and exit 0 (exit 0 is
 # required even for a deny: Claude Code reads the decision from stdout, not
 # from the process exit status). <reason> must contain no " or \ so it can
@@ -284,7 +399,7 @@ if printf '%s' "$norm_bg" | grep -Eq 'wait-[a-z0-9_-]*\.sh.*&'; then
 	_deny "a wait script backgrounded with & is invisible to the harness: no completion notification fires, so the turn stalls while the wait has already finished (issue #1225). Launch it as its OWN Bash call with run_in_background: true -- backgrounding is a property of the tool call, not of shell syntax (CLAUDE.md No orphaned waits)"
 fi
 
-# Walk $segs one segment at a time, applying rules A-C to each ($seg
+# Walk $segs one segment at a time, applying rules A-C and E to each ($seg
 # is read by _contains / _has_force_flag above). Fed via a heredoc (not a
 # `| while`) so this loop runs in the CURRENT shell, not a subshell: dash (the
 # box's /bin/sh) forks a subshell for the reader end of a pipe, which would
@@ -308,6 +423,18 @@ while IFS= read -r seg; do
 
 	if _contains 'git worktree remove' && _has_force_flag; then
 		_deny "CLAUDE.md forbids force-removing a worktree you do not own"
+	fi
+
+	# Rule E1: a copy of a git-bearing tree -- the copy keeps the source's
+	# .git, so its git commands drive the ORIGINAL's index/HEAD/refs (#3101).
+	if _has_copy_source_git; then
+		_deny "a cp/rsync of a git checkout keeps the source's .git, so the copy's git commands drive the ORIGINAL checkout's index, HEAD, and refs (CLAUDE.md scratch trees). Use git archive <sha> | tar -x for a read-only extraction, or wt switch --create --base <sha> for a throwaway worktree"
+	fi
+
+	# Rule E2: a clone / worktree add whose target resolves under the system
+	# temp dir -- a tree no worktree list, prune, or wt remove can reach.
+	if { _contains 'git clone' || _contains 'git worktree add'; } && _tmp_target; then
+		_deny "a clone or worktree under the system temp dir is unreclaimable: no git worktree list entry, no prune or wt remove can reach it, and /tmp is RAM-backed tmpfs on Linux. Use /var/tmp/agents for scratch trees, or wt switch --create --base <sha> for a throwaway worktree"
 	fi
 
 done <<_PFB_SEGS_
