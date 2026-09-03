@@ -562,6 +562,11 @@ reputation for every caller `pfb_ip_recompute_matrix()` (`pfblockerng.inc`) rout
 `reputation_pmax()`/`remove()`/`process255()`/`closingprocess()` are untouched and still run
 their own paths where the matrix doesn't route through recompute.
 
+`sync_package_pfblockerng()` also exports `PFB_IP_PLACEHOLDER` and `PFB_REENTRY_TIMEOUT`
+once per pass (issue #3140), so each `pfblockerng.sh` invocation's init prefers the
+environment over re-reading config.xml via `read_xml_tag.sh` — the reader stays the
+fallback for boot-time and hand-run invocations.
+
 **Snapshot store + memberlist contract.** Each v4-Deny feed's post-`_255`/`_agg`/`_rep`
 preprocessed output is persisted to `$pfb['snapdir']` as `<header>.snap`
 (`pfb_ip_recompute_write_snapshot()`), alongside the `.aggcount` original-count sidecar
