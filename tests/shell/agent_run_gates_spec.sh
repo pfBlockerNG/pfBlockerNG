@@ -208,6 +208,31 @@ Describe 'run-gates.sh gates_for()'
     The output should not include 'unsafe filename'
   End
 
+  # issue #3166: the skip gate READS tests/skip-allowlist.txt, but a .txt path matched no
+  # extension bucket, so an allowlist-only diff selected no suite at all -- and the
+  # allowlist checker plus its red canary ride on the pytest gate, as do the two tests that
+  # parse the real file. A malformed allowlist has to fail locally, not first in CI.
+  It 'maps a skip-allowlist-only diff to the pytest gate'
+    Data "tests/skip-allowlist.txt"
+    When call gates_for
+    The output should equal 'uv run --locked pytest'
+  End
+
+  It 'emits the pytest gate once when the diff touches both the allowlist and a Python file'
+    Data
+      #|tests/skip-allowlist.txt
+      #|tests/test_x.py
+    End
+    When call gates_for
+    The output should equal "$(printf '%s\n%s\n%s\n%s' 'uv run --locked pytest' 'uv run --locked ruff check .' 'uv run --locked ruff format --check .' 'uv run --locked mypy tests/')"
+  End
+
+  It 'leaves an unrelated .txt path gate-less'
+    Data "tests/fixtures/other.txt"
+    When call gates_for
+    The output should equal ''
+  End
+
   It 'emits nothing for file types with no gates'
     Data "src/usr/local/pkg/pfblockerng/info.xml"
     When call gates_for
