@@ -103,8 +103,9 @@ Serena, and Graphify, and it carries the hard invariants for the per-worktree
 
 Delegation shape: substantial coding work planned/gated by **top tier**, implemented
 by **small-tier** sub-agents, every step gated by independent small-tier verifier via
-brief → handoff → gate contract; top tier handle small one-step fixes and
-docs/config/settings/skills direct. Tiers top/mid/small map to models in
+brief → handoff → gate contract; named issues spawn a work agent; that agent
+handle small one-step fixes and docs/config/settings/skills direct. Tiers
+top/mid/small map to models in
 `.agents/model-tiers.conf` (disjoint from effort words — "high" always effort value).
 New implementation-plan ADRs stopped (wayfinder map #1383).
 

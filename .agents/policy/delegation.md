@@ -20,9 +20,10 @@ unavailable) and **implemented by small-tier** sub-agents: planner split task in
 small-tier implementer execute each, **independent small-tier verifier gate every step**
 (never brief author's model), planner validate returned records before next — that per-step
 gating is what make cheaper implementer safe. Ticket execution follow fresh-session workflow
-([`workflow.md`](workflow.md)); ad-hoc coding follow same shape. Higher model may implement
-fix **directly** when small and doable in one step — and always handle **docs / config /
-settings / skills** directly. Delegation for non-trivial, multi-step `src/`/`tests/`/CI work.
+([`workflow.md`](workflow.md)); ad-hoc coding follow same shape. The **work agent** may
+implement a small one-step fix **directly**, including **docs / config / settings /
+skills**. Named GitHub issues still spawn. Delegation for non-trivial, multi-step
+`src/`/`tests/`/CI work.
 **Review-fix rounds are canonical direct case** (owner, 2026-08-08): small fix the
 **work agent** understands — or reviewer's proposed solution it agree with — applied by
 that session itself, tests included, never spawned onward. **Ticket pickup is
