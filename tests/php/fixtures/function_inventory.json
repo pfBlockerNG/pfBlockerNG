@@ -10320,6 +10320,26 @@
             }
         ]
     },
+    "pfb_rule_change_keep_aliases": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "active_aliases",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "registered_aliases",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_run_hooks": {
         "returnsRef": false,
         "returnType": null,
