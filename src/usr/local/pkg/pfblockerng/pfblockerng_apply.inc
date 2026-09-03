@@ -984,8 +984,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['kstates'] 	= PfbConfig::read('ip/killstates');				// Firewall states removal
 
 	$pfb['ip_ph']		= pfb_filter($pfb['ipconfig']['ip_placeholder'], PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
-	// issue #3140/#3144: pfblockerng.sh init prefers PHP-exported values and keeps
-	// read_xml_tag.sh only as the boot/hand-run fallback.
+	// issue #3140/#3144: pfblockerng.sh init prefers the PHP-exported values; its shell
+	// config.xml fallbacks remain for boot and hand-run invocations.
 	putenv("PFB_IP_PLACEHOLDER={$pfb['ip_ph']}"); putenv('PFB_REENTRY_TIMEOUT=' . pfb_reentry_budget(NULL));
 	putenv('PFB_USE_MFS_TMPVAR=' . (config_path_enabled('system', 'use_mfs_tmpvar') ? '1' : '0'));
 

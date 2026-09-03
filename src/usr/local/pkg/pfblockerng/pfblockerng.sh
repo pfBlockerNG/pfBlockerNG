@@ -47,7 +47,11 @@ pfb_ensure_tmpdir() {
 # issue #3167/#3144: config.xml grep + df only for aliastables().
 pfb_ensure_mfs() {
 	[ -n "${pfb_mfs_ready:-}" ] && return 0
-	USE_MFS_TMPVAR="${PFB_USE_MFS_TMPVAR:-$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)}"
+	case "${PFB_USE_MFS_TMPVAR:-}" in
+	0|1) USE_MFS_TMPVAR="${PFB_USE_MFS_TMPVAR}" ;;
+	'') USE_MFS_TMPVAR="$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)" ;;
+	*) USE_MFS_TMPVAR=0 ;;
+	esac
 	DISK_NAME="$(/bin/df /var/db/rrd | /usr/bin/tail -1 | /usr/bin/awk '{print $1;}')"
 	DISK_TYPE="$(/usr/bin/basename "${DISK_NAME}" | /usr/bin/cut -c1-2)"
 	pfb_mfs_ready=1
