@@ -4411,14 +4411,16 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								if (file_exists("{$pfbfolder}/{$header}.txt") && $member_eligible) {
 									$suppression_body_active = pfb_ip_suppress_body_for_vtype($pfb['supp'] === PfbToggle::On, $vtype, $pfb['supp_update'], $pfbadv, in_array($alias, $final_alias_old), $pfb_recompute_ran_v4, $pfb_recompute_ran_v6);
 									// Script to run suppression process (print header only)
-									if ($pfbrunonce && $pfb['supp'] === PfbToggle::On && $vtype == '_v4' && $pfb['supp_update']) {
+									if ($pfbrunonce && $pfb['supp'] === PfbToggle::On && $vtype == '_v4' && $pfb['supp_update']
+									    && pfb_ip_suppress_list_present($pfb['supptxt'])) {
 										exec("{$pfb['script']} suppress suppressheader {$elog}");
 										$pfbrunonce = FALSE;
 									}
 									// Script to run suppression process (body) — feed-changed aliases, OR any
 									// alias recompute rewrote this pass (issue #1084 review: recompute rewrites
 									// every family alias on any trigger, not just feed-changed ones).
-									if ($suppression_body_active && $vtype == '_v4') {
+									if ($suppression_body_active && $vtype == '_v4'
+									    && pfb_ip_suppress_list_present($pfb['supptxt'])) {
 										if ($pfb['dup'] === PfbToggle::On) {
 											exec("{$pfb['script']} suppress {$header_esc} {$pfbfolder} on {$elog}");
 										} else {
@@ -4441,7 +4443,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 										$pfbrunonce = FALSE;
 									}
 									if ($suppression_body_active && $vtype == '_v6'
-									    && is_readable("{$pfb['supptxt_v6']}") && filesize("{$pfb['supptxt_v6']}") > 0) {
+									    && pfb_ip_suppress_list_present($pfb['supptxt_v6'])) {
 										$member_file = "{$pfbfolder}/{$header}.txt";
 										$pre_count   = count(@file($member_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
 										if (pfb_suppress_file_v6($member_file, "{$pfb['supptxt_v6']}")) {
