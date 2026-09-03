@@ -121,15 +121,9 @@ _MIN_REGISTRY_KEYS = 100
 # acceptable, and a row whose site is gone is dead weight -- delete it.
 EXEMPT: dict[tuple[str, str], str] = {}
 
-# alias -> foreign key-prefixes: a key that lives in a REGISTERED section but outside
-# the registry's scope -- a foreign namespace, not an unregistered save. This is the
-# key-prefix sibling of RULE 1's foreign-section escape, and the `rep` arrangement
-# docs/misc/config-gateway.md describes (a registered section with foreign siblings).
-# `global/widget-*` are the dashboard widget's keys, marked foreign in-code eleven
-# times in src/usr/local/www/widgets/widgets/pfblockerng.widget.php
-# ("foreign key: pfblockerngglobal/widget-* ... not in registry"), so they are display
-# preferences, not filter/security config. Issue #3136 (owner decision 2026-09-03):
-# recognise them, do not register them.
+# alias -> foreign key-prefixes: display-pref keys in a REGISTERED section but outside
+# the registry's scope (issue #3136 owner decision: recognise, do not register). See
+# docs/misc/config-gateway.md's `rep`-arrangement note.
 FOREIGN_KEY_PREFIXES: dict[str, tuple[str, ...]] = {"global": ("widget-",)}
 
 
