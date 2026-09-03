@@ -586,13 +586,13 @@ function pfb_feeds_render_predefined_type($ftype, $info) {
 
 						// Add link to Donate/support link
 						if (isset($feed['donate'])) {
-							print ("&emsp;<a target=\"_blank\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
+							print ("&emsp;<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{$feed['donate']}\" title=\"Click to donation/support page.\">
 							<i class=\"fa-solid fa-cart-plus\"></i></a>");
 						}
 
 						// Add link to Feed registration
 						if ($feed['register']) {
-							print ("&emsp;<a target=\"_blank\" href=\"{$feed['register']}\" title=\"Click to register\">
+							print ("&emsp;<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{$feed['register']}\" title=\"Click to register\">
 								<i class=\"fa-solid fa-right-to-bracket\"></i></a>");
 						}
 					?>
@@ -918,7 +918,7 @@ print ($section);
 								// would render `javascript:...http...` as an executable link.
 								$url_hsc = htmlspecialchars($row['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 								if (str_starts_with($row['url'], 'http://') || str_starts_with($row['url'], 'https://')) {
-									print ("<a target=\"_blank\" href=\"{$url_hsc}\">{$url_hsc}</a>");
+									print ("<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"{$url_hsc}\">{$url_hsc}</a>");
 								} else {
 									print ("{$url_hsc}");
 								}

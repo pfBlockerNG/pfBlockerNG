@@ -291,6 +291,46 @@ def test_main_returns_0_on_clean_file(tmp_path: Path, capsys: pytest.CaptureFixt
     assert capsys.readouterr().err == ""
 
 
+def test_escaped_quote_target_blank_is_a_violation() -> None:
+    # issue #3085: HTML assembled inside a PHP double-quoted string reads
+    # target=\"_blank\". Bare-quote matching misses that form.
+    line = r'print ("<a target=\"_blank\" href=\"{$feed[\'donate\']}\">x</a>");'
+    violations = cno.find_violations(line, "feeds.php")
+    assert len(violations) == 1
+    assert violations[0].line == 1
+
+
+def test_escaped_quote_target_blank_with_adjacent_rel_is_clean() -> None:
+    # Paired clean form: a correctly escaped rel= must still count as adjacent.
+    line = r'print ("<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"x\">y</a>");'
+    assert cno.find_violations(line, "feeds.php") == []
+
+
+def test_escaped_single_quote_target_blank_is_a_violation() -> None:
+    # Single-quoted sibling, escaped inside a PHP single-quoted string.
+    line = r"echo '<a target=\'_blank\' href=\'x\'>y</a>';"
+    assert len(cno.find_violations(line, "p.inc")) == 1
+
+
+def test_escaped_single_quote_target_blank_with_adjacent_rel_is_clean() -> None:
+    line = r"echo '<a target=\'_blank\' rel=\'noopener noreferrer\' href=\'x\'>y</a>';"
+    assert cno.find_violations(line, "p.inc") == []
+
+
+def test_escaped_quote_rel_noopener_evil_is_still_rejected() -> None:
+    # Token-end guard must survive escaping: rel=\"noopener-evil\" grants none
+    # of noopener's protection.
+    line = r"<a target=\"_blank\" rel=\"noopener-evil\" href=\"x\">y</a>"
+    assert len(cno.find_violations(line, "p.inc")) == 1
+
+
+def test_backslash_without_quote_is_not_an_escaped_rel() -> None:
+    # Optional backslash on rel= is only the PHP-string quote escape. A lone
+    # `rel=\noopener` is not adjacent noopener.
+    line = r'<a target=_blank rel=\noopener href="x">'
+    assert len(cno.find_violations(line, "p.inc")) == 1
+
+
 def test_default_scan_set_covers_both_ui_trees(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -678,7 +678,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 		'Custom Port',
 		'text',
 		$pconfig["aliasports_{$advmode}"]
-	))->setHelp("<a target=\"_blank\" href=\"/firewall_aliases.php?tab=port\">Click Here to add/edit Aliases</a>
+	))->setHelp("<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/firewall_aliases.php?tab=port\">Click Here to add/edit Aliases</a>
 			Do not manually enter port numbers.<br />Do not use 'pfB_' in the Port Alias name."
 	)->setWidth(8);
 	$section->add($group);

@@ -427,8 +427,8 @@ foreach ($blacklist_types as $type => $setting) {
 
 	$section->addInput(new Form_StaticText(
 		gettext('Links'),
-		"<a href=\"{$setting['WEBSITE']}\" target=\"_blank\"><i class=\"fa-solid fa-globe\"></i>&nbsp;{$setting['TITLE']} Summary</a>&emsp;"
-		. "<a href=\"{$setting['LICENSE']}\" target=\"_blank\"><i class=\"fa-solid fa-globe\"></i>&nbsp;{$setting['TITLE']} {$lic_txt}</a>"
+		"<a href=\"{$setting['WEBSITE']}\" target=\"_blank\" rel=\"noopener noreferrer\"><i class=\"fa-solid fa-globe\"></i>&nbsp;{$setting['TITLE']} Summary</a>&emsp;"
+		. "<a href=\"{$setting['LICENSE']}\" target=\"_blank\" rel=\"noopener noreferrer\"><i class=\"fa-solid fa-globe\"></i>&nbsp;{$setting['TITLE']} {$lic_txt}</a>"
 	));
 
 	// Add username/password fields if required
