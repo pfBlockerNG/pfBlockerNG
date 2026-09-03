@@ -4733,6 +4733,32 @@
             }
         ]
     },
+    "pfb_filter_reload_cmd": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_filter_reload_exec": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "budget",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_filter_service": {
         "returnsRef": false,
         "returnType": null,
