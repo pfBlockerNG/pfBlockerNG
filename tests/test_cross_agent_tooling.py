@@ -549,12 +549,54 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
         assert contract in routing, f"repository-intelligence routing lost: {contract}"
 
 
+def test_root_graph_freshness_is_enforced_at_commit_and_push() -> None:
+    # issue #3139: the tracked root graph equals `PYTHONHASHSEED=0 graphify update .`
+    # on its tree. The commit that moves code moves the graph (pre-commit rebuilds
+    # and stages it), and a push, the gate runner, and CI refuse a stale one. The
+    # detached post-commit/post-checkout rebuilds this supersedes are gone, and the
+    # merge-driver registration no longer runs `graphify hook install`, which would
+    # recreate them under core.hooksPath.
+    checker_path = "scripts/agent/check-graph-fresh.sh"
+    checker = (ROOT / checker_path).read_text(encoding="utf-8")
+    assert 'PYTHONHASHSEED=0 "$graphify_bin" update "$root"' in checker, "the rebuild must be seeded"
+    assert "resolve_graphify_launcher" in checker, "the rebuild must go through the shared launcher resolver"
+
+    pre_commit = (ROOT / ".githooks/pre-commit").read_text(encoding="utf-8")
+    assert f"sh {checker_path} --refresh" in pre_commit, "pre-commit lost the in-place rebuild"
+    assert "git add -- graphify-out/graph.json" in pre_commit, "pre-commit lost staging the rebuilt graph"
+    assert f"exempted {checker_path}" in pre_commit, "release lines opt out only through .githooks-exempt"
+    pre_push = (ROOT / ".githooks/pre-push").read_text(encoding="utf-8")
+    assert f'"${{ROOT}}/{checker_path}"' in pre_push, "pre-push lost the graph gate"
+    for retired in (".githooks/post-commit", ".githooks/post-checkout"):
+        assert not (ROOT / retired).exists(), f"{retired} is superseded by the synchronous pre-commit rebuild"
+
+    driver = (ROOT / "scripts/agent/ensure-graphify-merge-driver.sh").read_text(encoding="utf-8")
+    assert "hook install" not in driver, "graphify hook install recreates the retired hooks under core.hooksPath"
+    assert 'config merge.graphify.driver "$driver"' in driver, "the merge driver must be registered directly"
+
+    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    for contract in (
+        f"`{checker_path} --refresh`",
+        "`PYTHONHASHSEED=0 graphify update .`",
+        "refuse a stale graph",
+        "no `post-commit` or `post-checkout` hook",
+        "registers `merge.graphify.driver` with `git config`",
+    ):
+        assert contract in routing, f"repository-intelligence routing lost: {contract}"
+    for obsolete in ("post-commit rebuild", "runs `graphify hook install`", "after a hook or incremental update"):
+        assert obsolete not in routing, f"retired Graphify mechanism still documented: {obsolete}"
+
+    git_policy = (ROOT / ".agents/policy/git.md").read_text(encoding="utf-8")
+    for contract in (f"`{checker_path} --refresh`", "refuses a push whose `graphify-out/graph.json`"):
+        assert contract in git_policy, f"git policy hook inventory lost: {contract}"
+
+
 def test_tracked_graph_carries_the_php_include_corpus() -> None:
     # A Graphify without the vendored override parses all 21 .inc files with the Pascal
     # extractor: extraction still succeeds, so the only visible symptom is a collapsed
     # node count -- 30 across the corpus instead of roughly 755 (issue #2810). Nothing
-    # else catches an unattended `uv tool upgrade graphifyy` followed by a Graphify
-    # post-commit rebuild, which silently replaces site-packages and drops the patch.
+    # else catches an unattended `uv tool upgrade graphifyy` followed by a rebuild,
+    # which silently replaces site-packages and drops the patch.
     graph = json.loads((ROOT / "graphify-out/graph.json").read_text(encoding="utf-8"))
     include_files = collections.Counter(
         str(node["source_file"]) for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")

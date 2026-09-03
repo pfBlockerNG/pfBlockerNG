@@ -44,11 +44,11 @@ Load when: every agent session, from `AGENTS.md`.
   `.agents/patches/graphify-3075-language-overrides.patch`. The tracked
   `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify.sh` emits the
   validated absolute executable launcher path; `ensure-graphify-merge-driver.sh`
-  captures and quotes that path for target-rooted `hook install`;
+  registers that path, quoted, as the target root's `merge.graphify.driver`;
   `patch-graphify.sh` resolves the same launcher; and
   `.githooks/pre-commit` resolves and patches again
   before its no-staged-files exit, repairing a bare Graphify upgrade in a fresh process
-  before the post-commit rebuild. The include-node floor in
+  before the commit's own graph rebuild. The include-node floor in
   `tests/test_cross_agent_tooling.py`
   remains the final graph guard. Delete this machinery once the upstream change ships.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
@@ -59,11 +59,29 @@ Load when: every agent session, from `AGENTS.md`.
 - `graphify-out/graph.json` is tracked, and records under `graphify-out/memory/` are tracked
   with the work that produced them; everything else under `graphify-out/` is ignored and
   regenerated locally.
-  Refresh the graph with `graphify update <root>` and commit it alongside the change that
-  moved it. Every clone needs the union merge driver that `.gitattributes` assigns to the
-  graph — `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify, runs
-  `graphify hook install`, and verifies the registration. Without it a merge leaves
-  conflict markers in the graph instead of union-merging it.
+  The tracked graph is an enforced invariant (issue #3139): on every commit it equals
+  `PYTHONHASHSEED=0 graphify update .` on that commit's tree. `.githooks/pre-commit`
+  runs `scripts/agent/check-graph-fresh.sh --refresh` and stages the result unless the
+  staged set is only `graphify-out/graph.json` and/or `legacy/` (a memory record alone
+  triggers it), so the commit that moves code moves the graph; `.githooks/pre-push`,
+  `scripts/agent/run-gates.sh`, and CI run the same script in check mode -- rebuild,
+  compare bytes, restore -- and refuse a stale graph. `pre-push` grades the tree of
+  every pushed tip in a detached scratch worktree under the sibling worktrees root,
+  never the checked-out tree, and whether a tip is graded is decided by ITS tree: a tip
+  shipping no checker never adopted the invariant (release lines, pre-graph history) and
+  is skipped, while a checkout that ships no checker refuses such a tip rather than
+  guess. The verdict is the pushing host's current Graphify, so an old tag or sha is
+  held to today's toolchain. Intermediate commits of a multi-commit push are not
+  graded, and a rebase replays commits without the pre-commit rebuild, so refresh and
+  commit the graph after every rebase -- under the maintainer-local fast-forward path
+  only the tip is proven.
+  There is no `post-commit` or `post-checkout` hook: a fresh cut is born clean and a
+  linked worktree commits exactly like the primary checkout. Every clone still needs
+  the union merge driver that `.gitattributes` assigns to the graph --
+  `scripts/agent/ensure-graphify-merge-driver.sh` installs Graphify,
+  registers `merge.graphify.driver` with `git config`, and verifies the registration.
+  Without it a merge leaves conflict markers in the graph instead of union-merging it;
+  the driver's output is never trusted, because the push gate rebuilds.
 - **CodeGraph owns purely code-related questions**, and is the first call for them:
   indexed code discovery, a named symbol's verbatim source, call paths, flows,
   cross-file structure, and blast radius. Use `codegraph_explore` or
@@ -87,10 +105,11 @@ Load when: every agent session, from `AGENTS.md`.
   where a tool is installed, what a hook runs), reference counts and other text-frequency
   questions, and a third-party tool's own feature set, which lives in its `--help`.
   Read `graphify-out/GRAPH_REPORT.md` only for broad architecture
-  review, and `graphify-out/wiki/index.md`, when present, for navigation. A dirty
-  `graphify-out/` after a hook or incremental update is expected and is not a reason to
-  skip Graphify; skip it only when the task is about stale or incorrect graph output. Run
-  `graphify update .` after modifying code (AST only, no API cost).
+  review, and `graphify-out/wiki/index.md`, when present, for navigation. Run
+  `PYTHONHASHSEED=0 graphify update .` after modifying code (AST only, no API cost) to
+  query the current tree; the next commit rebuilds and stages the graph either way, so a
+  modified `graphify-out/graph.json` in between is expected and is not a reason to skip
+  Graphify. Skip it only when the task is about stale or incorrect graph output.
 - Close the loop on every query: record it with `graphify save-result --question … --answer …
   --outcome useful|dead_end|corrected`. The boundary is where the answer came from:
   `useful` when the returned subgraph answered or narrowed the question,

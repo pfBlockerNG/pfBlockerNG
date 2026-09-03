@@ -275,4 +275,65 @@ $updates
 PFB_AGENT_UPDATES
 unset agent_runtime
 
+# Root graph freshness (issue #3139): every pushed tip must carry a
+# graphify-out/graph.json byte-identical to a seeded rebuild of ITS tree, so a
+# stale commit never reaches the remote. Each distinct tip is checked out into a
+# detached scratch worktree under the sibling worktrees root (the layout
+# work-branch.sh cuts into) and graded there -- never the checked-out tree, whose
+# uncommitted bytes or other branch would launder a stale commit. Intermediate
+# commits of a multi-commit push are NOT graded: a rebase replays commits without
+# the pre-commit rebuild, so refresh and commit the graph after every rebase.
+# Graded last (the rebuild is the expensive gate); a deletion-only push moves no
+# tree. The checker refuses on its own: stale (1), no graph (2), and a missing
+# Graphify (4) all abort with its message. Whether a tip is graded is decided by
+# ITS tree, never the checkout's: a tip that ships no checker never adopted the
+# invariant (release lines, pre-graph history) and is not graded. A tip that
+# ships it is graded by this checkout's checker and the pushing host's current
+# Graphify, so an old tag or sha is held to today's toolchain, and a checkout
+# without the checker refuses such a tip rather than guess. On devel the
+# checker's presence is pinned by tests/test_cross_agent_tooling.py.
+graph_check="${ROOT}/scripts/agent/check-graph-fresh.sh"
+graph_scratch=
+# Reaps only a scratch this push cut -- a pre-existing one belongs to a concurrent
+# push of the same tip -- and prunes registrations whose directory is gone.
+drop_graph_scratch() {
+    [ -z "$graph_scratch" ] || git worktree remove --force "$graph_scratch" >/dev/null 2>&1
+    git worktree prune >/dev/null 2>&1
+    graph_scratch=
+}
+trap drop_graph_scratch EXIT
+trap 'exit 1' HUP INT TERM
+graded=
+while IFS=' ' read -r _local_ref local_sha _remote_ref _remote_sha; do
+    [ -n "$local_sha" ] || continue
+    [ "$local_sha" = "$z40" ] && continue
+    commit=$(git rev-parse --verify "${local_sha}^{commit}" 2>/dev/null) || continue
+    case " $graded " in *" $commit "*) continue ;; esac
+    graded="$graded $commit"
+    git cat-file -e "$commit:scripts/agent/check-graph-fresh.sh" 2>/dev/null || continue
+    if [ ! -f "$graph_check" ]; then
+        echo "error: the pushed tip $commit ships scripts/agent/check-graph-fresh.sh but this checkout does not, so nothing here can grade it; push it from a checkout that ships the checker (issue #3139)" >&2
+        exit 1
+    fi
+    common=$(git rev-parse --git-common-dir) && primary=$(CDPATH='' cd "$common/.." && pwd -P) &&
+        [ -d "$primary/.git" ] || {
+        echo "error: cannot locate the primary checkout to cut the graph-check worktree (issue #3139)" >&2
+        exit 1
+    }
+    worktrees_root="${primary%/*}/.${primary##*/}_worktrees"
+    scratch="$worktrees_root/.graph-check-$(printf '%.7s' "$commit")"
+    if ! mkdir -p "$worktrees_root" || ! git worktree add -q --detach "$scratch" "$commit"; then
+        echo "error: cannot cut '$scratch' to grade the pushed tip $commit (issue #3139): a concurrent push may hold it, or a killed one left it behind (git worktree remove --force); retry the push" >&2
+        exit 1
+    fi
+    graph_scratch=$scratch
+    # Content-hashed AST cache: keeps the rebuild warm, never changes its verdict.
+    [ ! -d "${ROOT}/graphify-out/cache" ] ||
+        cp -R "${ROOT}/graphify-out/cache" "$graph_scratch/graphify-out/" 2>/dev/null
+    sh "$graph_check" "$graph_scratch" || exit 1
+    drop_graph_scratch
+done <<PFB_GRAPH_UPDATES
+$updates
+PFB_GRAPH_UPDATES
+
 exit 0

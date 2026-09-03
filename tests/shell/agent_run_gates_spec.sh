@@ -222,8 +222,11 @@ Describe 'run-gates.sh Composer vendor guard'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphp.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
+    mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts/agent"
     printf 'base\n' > "$repo/README"
+    # issue #3139: the always-on graph-freshness gate runs the checkout's own script;
+    # a fresh-graph stand-in keeps these rows about the Composer checker.
+    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/check-graph-fresh.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     printf '<?php echo 1;\n' > "$repo/src/a.php"
@@ -278,14 +281,15 @@ Describe 'run-gates.sh Composer vendor guard'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 2 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
-    The line 3 of output should equal 'remediation: composer install --no-interaction'
+    The line 2 of output should equal 'GATE PASS: sh scripts/agent/check-graph-fresh.sh'
+    The line 3 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
+    The line 4 of output should equal 'remediation: composer install --no-interaction'
     The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
     The output should not include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 5
+    The lines of output should equal 6
     Assert [ -e "$pairing_marker" ]
     Assert [ -e "$checker_marker" ]
     Assert [ ! -e "$php_marker" ]
@@ -346,11 +350,20 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
   make_repo() {
     scrub_git_env
+    # Controlled stubs isolate run-gates wiring from the real checker/tool suites.
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gatestub.XXXXXX")"
+    # issue #3139: the always-on graph-freshness gate runs the checkout's own
+    # scripts/agent/check-graph-fresh.sh. The tracked copy only defers to this
+    # out-of-repo file, so an example can change the verdict without touching a
+    # tracked .sh and thereby planning extra per-file gates.
+    graph_check="$stubdir/check-graph-fresh"
+    printf '#!/bin/sh\nexit 0\n' > "$graph_check"
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungates.XXXXXX")"
     git_fixture -C "$repo" init -q
     # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
-    mkdir -p "$repo/scripts" "$repo/tests"
+    mkdir -p "$repo/scripts/agent" "$repo/tests"
     printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
+    printf '#!/bin/sh\nexec sh "%s"\n' "$graph_check" > "$repo/scripts/agent/check-graph-fresh.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     gitc rm -q scripts/gone.sh
@@ -358,8 +371,6 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
     printf 'paired\n' > "$repo/tests/coverage-pairing.fixture"
     gitc add -A; gitc commit -qm head
-    # Controlled stubs isolate run-gates wiring from the real checker/tool suites.
-    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gatestub.XXXXXX")"
     marker="$stubdir/last-gate-ran"
     pairing_raw="$stubdir/pairing.raw"
     pairing_lines="$stubdir/pairing.lines"
@@ -399,13 +410,51 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
     The status should equal 0
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    # issue #2016: the re-entry-bounds gate leads the shell bucket, so it is gate 2 here.
-    The line 2 of output should equal 'GATE PASS: uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+    # issue #3139: the graph-freshness gate is always-on and follows pairing directly.
+    The line 2 of output should equal 'GATE PASS: sh scripts/agent/check-graph-fresh.sh'
+    # issue #2016: the re-entry-bounds gate leads the shell bucket, so it is gate 3 here.
+    The line 3 of output should equal 'GATE PASS: uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
-    The line 6 of output should equal 'GATES: PASS'
+    The line 7 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
     Assert [ ! -e "$stubdir"/pfb-run-gates-skip-reports.* ]
+  End
+
+  # issue #3139: a stale graphify-out/graph.json is a property of the whole tree, not of
+  # a touched file type, so the gate is planned on every run -- right after pairing and
+  # before any file-type bucket.
+  It 'plans the graph-freshness gate second, ahead of every file-type gate'
+    When run sh "$script" --worktree "$repo" --diff "$base_sha" --plan
+    The status should equal 0
+    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py --name-status-z'
+    The line 2 of output should equal 'sh scripts/agent/check-graph-fresh.sh'
+    The line 3 of output should equal 'uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py'
+  End
+
+  It 'fails the run on a stale graph, printing the checker diagnostic first, and still runs the later gates'
+    printf '#!/bin/sh\nprintf "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree\\n" >&2\nexit 1\n' > "$graph_check"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+    The line 2 of output should equal 'check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree'
+    The line 3 of output should equal 'GATE FAIL: sh scripts/agent/check-graph-fresh.sh'
+    The output should include 'GATE PASS: shellspec'
+    The output should include 'GATES: FAIL'
+    The stderr should equal ''
+    Assert [ -e "$marker" ]
+  End
+
+  # A missing Graphify is a mandatory-tool failure for this gate: the runner resolves
+  # `sh`, never graphify, so --allow-missing cannot soften the checker's exit 4 into a SKIP.
+  It 'fails the run (never SKIP) when the graph checker reports Graphify missing, even under --allow-missing'
+    printf '#!/bin/sh\nprintf "resolve-graphify.sh: Graphify is not installed; run %s first\\n" >&2\nexit 4\n' "'uv tool install --upgrade graphifyy'" > "$graph_check"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha" --allow-missing
+    The status should equal 1
+    The line 2 of output should equal "resolve-graphify.sh: Graphify is not installed; run 'uv tool install --upgrade graphifyy' first"
+    The line 3 of output should equal 'GATE FAIL: sh scripts/agent/check-graph-fresh.sh'
+    The output should not include 'GATE SKIP: sh scripts/agent/check-graph-fresh.sh'
+    The output should include 'GATES: FAIL'
   End
 
   It 'preserves a selected suite failure and cleans its report directory'
@@ -475,9 +524,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 4 of output should equal 'shellcheck stdout diagnostic'
-    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 5 of output should equal 'shellcheck stdout diagnostic'
+    The line 6 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The output should include 'GATES: FAIL'
     Assert [ -e "$marker" ]
@@ -489,9 +538,9 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 4 of output should equal 'shellcheck stderr diagnostic'
-    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 5 of output should equal 'shellcheck stderr diagnostic'
+    The line 6 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The stderr should equal ''
   End
 
@@ -501,11 +550,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 4 of output should equal 'line one'
-    The line 5 of output should equal 'line two'
-    The line 6 of output should equal 'line three'
-    The line 7 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 5 of output should equal 'line one'
+    The line 6 of output should equal 'line two'
+    The line 7 of output should equal 'line three'
+    The line 8 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
   End
 
   It 'keeps a PASSING generic gate diagnostics fully suppressed on stdout and stderr'
@@ -516,7 +565,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should not include 'should not appear'
     The stderr should equal ''
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
+    The line 7 of output should equal 'GATES: PASS'
   End
 
   It 'does not let a failing gate own OVERALL=0 output corrupt the final verdict'
@@ -538,11 +587,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 4 of output should equal 'before'
-    The line 5 of output should equal 'OVERALL=0'
-    The line 6 of output should equal 'after'
-    The line 7 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 5 of output should equal 'before'
+    The line 6 of output should equal 'OVERALL=0'
+    The line 7 of output should equal 'after'
+    The line 8 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
     The output should include 'GATES: FAIL'
     The output should not include 'GATES: PASS'
   End
@@ -554,8 +603,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
-    The line 3 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
-    The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
+    The line 4 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
+    The line 5 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
   End
 
   It 'ignores deleted files instead of failing on their ghosts'
@@ -590,8 +639,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   It 'plans gates for a STAGED (git add, not committed) edit identically'
@@ -602,8 +651,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   It 'lists a file touched by both a commit and a further uncommitted edit exactly once'
@@ -612,8 +661,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # See run-gates.sh's staged/unstaged split comment for why: a lone `diff HEAD`
@@ -629,8 +678,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellcheck scripts/kept.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # CodeRabbit review of #1293's fix: neither `diff --cached` nor bare `diff`
@@ -642,8 +691,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 
   # Delta re-review of the untracked-files fix: --exclude-standard must respect
@@ -659,8 +708,8 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
     The output should include 'GATE PASS: shellcheck scripts/brand_new.sh'
     The output should not include 'ignored.sh'
-    The line 6 of output should equal 'GATES: PASS'
-    The lines of output should equal 6
+    The line 7 of output should equal 'GATES: PASS'
+    The lines of output should equal 7
   End
 End
 

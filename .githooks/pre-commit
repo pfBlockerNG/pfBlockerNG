@@ -111,6 +111,28 @@ gate_exempt() { printf '[pre-commit] exempt (gate not adopted on this branch; li
 #     control byte or non-ASCII byte, so the suffix regexes below match nothing
 #     and that commit's language gates silently never run (issue #2212). ---
 staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n' | grep -v '^legacy/' || true)
+
+# --- Root graph freshness (issue #3139): the commit that moves code moves the graph.
+#     Any staged change other than graphify-out/graph.json itself (legacy/ is not
+#     in the graph) rebuilds the graph in place (PYTHONHASHSEED=0, through the
+#     resolved launcher) and stages it, so pre-push, the gate runner, and CI --
+#     which rebuild and compare -- find it fresh. A tracked graphify-out/memory/
+#     record is itself a graph node, so it rebuilds too. Decided by git's own
+#     index diff, not the newline listing above: a path holding a newline splits
+#     into lines there and could pose as the graph. Synchronous, so a
+#     rebase/merge/cherry-pick in progress is no reason to skip. Graphify is
+#     mandatory: a failed rebuild or a missing launcher fails the commit like the
+#     patch step above; a line that ships no checker opts out only through the
+#     committed manifest. ---
+if ! git diff --cached --quiet -- . ':!graphify-out/graph.json' ':!legacy/'; then
+	if exempted scripts/agent/check-graph-fresh.sh; then
+		exempt 'graph freshness'
+	else
+		step 'graph freshness (rebuild graphify-out/graph.json and stage it)'
+		{ sh scripts/agent/check-graph-fresh.sh --refresh && git add -- graphify-out/graph.json; } ||
+			failed 'graph freshness'
+	fi
+fi
 [ -n "$staged_all" ] || exit "$fail"
 staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n' | grep -v '^legacy/' || true)
 staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }

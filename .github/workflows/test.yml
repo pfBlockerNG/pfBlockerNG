@@ -1211,6 +1211,56 @@ jobs:
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
           python3 scripts/check_comment_narration.py --diff "origin/$BASE"
 
+  # ── Graph-freshness gate (issue #3139) ────────────────────────────────────
+  # PR-only: rebuilds graphify-out/graph.json on the checked-out tree with the
+  # Graphify the shared installer pins and fails when the committed file differs --
+  # the commit that moves code moves the graph. On push (post-merge, no PR base)
+  # it is skipped and folds into all-tests-passed as a pass, same shape as
+  # coverage-pairing above.
+  graph-freshness:
+    name: Graph freshness (graphify-out/graph.json equals a rebuild)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Two rebuilds run in a few minutes; `graphify update` holds a blocking flock,
+    # so a hung rebuild must not sit on GitHub's six-hour default.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the PR head
+        # The graph is a function of the committed tree. The default pull_request
+        # checkout is refs/pull/N/merge, a tree the PR never rebuilt against, so it
+        # reads stale whenever the base moves; landing rebases and re-runs this job.
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install uv
+        # Same pin as the test job: the shared installer runs `uv tool install`.
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Graphify through the shared installer
+        # ensure-graphify.sh applies the .inc language override; a bare install
+        # would extract the PHP include files as Pascal and rebuild a different graph.
+        run: sh scripts/agent/ensure-graphify.sh .
+
+      - name: Enforce graphify-out/graph.json freshness
+        # Red canary first, in this same block under the same shell options: a copy
+        # of the tree with one added function MUST be reported stale (exit 1) before
+        # the real check is trusted (testing.md "CI-gate wiring proves its red path
+        # in-job"). The canary adds a symbol, not a comment: Graphify only reacts to
+        # topology, so a comment-only edit leaves graph.json byte-identical.
+        run: |
+          set -eu
+          canary="$RUNNER_TEMP/graph-freshness-canary"
+          cp -a . "$canary"
+          printf '\nfunction pfb_graph_freshness_canary() {\n\treturn 1;\n}\n' >> "$canary/src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+          echo "Red canary: the STALE verdict below is expected."
+          sh scripts/agent/check-graph-fresh.sh "$canary" && :; canary_status=$?
+          [ "$canary_status" -eq 1 ] || { echo "::error::graph-freshness red canary failed: a tree with an added function was not reported stale (checker exit $canary_status, expected 1)"; exit 1; }
+          sh scripts/agent/check-graph-fresh.sh .
+
   # Single stable job name for branch-protection required-status-checks.
   # Must use if: always() so it runs (and fails) even when 'test' fails.
   all-tests-passed:
@@ -1222,7 +1272,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration, graph-freshness]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix results
@@ -1304,4 +1354,11 @@ jobs:
           case "${{ needs.comment-narration.result }}" in
             success|skipped) ;;
             *) echo "Comment-narration gate (no process narration in new comments) failed or was cancelled."; exit 1 ;;
+          esac
+          # Graph-freshness gate (issue #3139): 'skipped' (push, no PR base) is a
+          # PASS; a PR whose graphify-out/graph.json differs from a rebuild of its
+          # tree (or whose job was cancelled) blocks the merge.
+          case "${{ needs.graph-freshness.result }}" in
+            success|skipped) ;;
+            *) echo "Graph-freshness gate (graphify-out/graph.json equals a rebuild) failed or was cancelled."; exit 1 ;;
           esac
