@@ -3889,7 +3889,15 @@ function enable_idn_mode() {
 var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
 
 function enable_top1m_token() {
-	disableInput('top1m_token', pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1);
+	var pfb_top1m_no_token = pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1;
+	// ADR-59: the field renders blank on every GET, so a value here was typed this load.
+	// A hidden input is still submitted, and the save path writes any non-empty
+	// top1m_token -- so it must be cleared, or switching away from a token provider
+	// overwrites the stored token and invalidates the TOP1M baseline.
+	if (pfb_top1m_no_token) {
+		$('#top1m_token').val('');
+	}
+	hideInput('top1m_token', pfb_top1m_no_token);
 }
 
 function enable_python_regex() {
@@ -3981,7 +3989,7 @@ events.push(function(){
 
 	var pfb_gated_ids = [
 		'pfb_psl_include_private', 'pfb_dnsport', 'pfb_dnsport_ssl',
-		'pfb_psl_allow_private', 'top1m_token', 'aliaslog'
+		'pfb_psl_allow_private', 'aliaslog'
 	];
 	$('form').submit(function() {
 		$.each(pfb_gated_ids, function(_, id) {
