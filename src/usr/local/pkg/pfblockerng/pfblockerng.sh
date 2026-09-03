@@ -36,6 +36,22 @@ pfb_make_tmpdir() {
 	tmpxlsx="${tmpdir}/xlsx/"
 }
 
+# issue #3167: mktemp only for verbs that use tempfile/tmpdir.
+pfb_ensure_tmpdir() {
+	[ -n "${tmpdir:-}" ] && return 0
+	pfb_make_tmpdir
+	mkdir "${tmpxlsx}"
+}
+
+# issue #3167/#3144: config.xml grep + df only for aliastables().
+pfb_ensure_mfs() {
+	[ -n "${pfb_mfs_ready:-}" ] && return 0
+	USE_MFS_TMPVAR="$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)"
+	DISK_NAME="$(/bin/df /var/db/rrd | /usr/bin/tail -1 | /usr/bin/awk '{print $1;}')"
+	DISK_TYPE="$(/usr/bin/basename "${DISK_NAME}" | /usr/bin/cut -c1-2)"
+	pfb_mfs_ready=1
+}
+
 # issue #2851: normalize a STORED nested-pass timeout into the seconds the re-entry seam
 # may use. Accepts whole seconds inside the same 60..7200 window pfblockerng.inc's
 # pfb_reentry_timeout() accepts, and resolves everything else -- absent, empty,
@@ -150,10 +166,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# countries, consolidated into one file
 	matchexemptfile=pfB_Match_Exempt_v4.txt
 
-	# Create a private per-run temp directory (sets tempfile, tempfile2, ...,
-	# tmpxlsx).
-	pfb_make_tmpdir
-
 	# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
 	# along with dnsbl_scrub + domaintldpy (the dropped build-time DNSBL passes).
 
@@ -166,9 +178,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	ip_placeholder2="$(echo "${ip_placeholder}" | sed 's/\./\\\./g')"
 	ip_placeholder3="$(echo "${ip_placeholder}" | cut -d '.' -f 1-3)"
 
-	USE_MFS_TMPVAR="$(/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml)"
-	DISK_NAME="$(/bin/df /var/db/rrd | /usr/bin/tail -1 | /usr/bin/awk '{print $1;}')"
-	DISK_TYPE="$(/usr/bin/basename "${DISK_NAME}" | /usr/bin/cut -c1-2)"
 
 	if [ ! -d "${pfbdb}" ]; then mkdir "${pfbdb}"; fi
 	if [ ! -d "${pfsensealias}" ]; then mkdir "${pfsensealias}"; fi
@@ -176,10 +185,6 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	if [ ! -d "${pfbmatchgen}" ]; then mkdir "${pfbmatchgen}"; fi
 	if [ ! -d "${pfbsnap}" ]; then mkdir "${pfbsnap}"; fi
 	if [ ! -d "${etdir}" ]; then mkdir "${etdir}"; fi
-	# tmpxlsx is a fresh subdir of the private mktemp -d tmpdir -- no existence
-	# guard needed (and none wanted: a pre-existing entry there would be a
-	# symlink-attack signal, not a legitimate state to tolerate).
-	mkdir "${tmpxlsx}"
 
 	if [ ! -f "${masterfile}" ]; then touch "${masterfile}"; fi
 	if [ ! -f "${mastercat}" ]; then touch "${mastercat}"; fi
@@ -189,7 +194,9 @@ fi
 # Remove the private per-run temp directory before exiting (issue #30).
 exitnow() {
 	rc="${1:-0}"
-	rm -rf "${tmpdir}"
+	if [ -n "${tmpdir:-}" ]; then
+		rm -rf "${tmpdir}"
+	fi
 	exit "${rc}"
 }
 
@@ -353,6 +360,7 @@ pfb_archive_extract() {
 
 # Function to restore IP aliastables and DNSBL database from archive on reboot. ( Ramdisk installations only )
 aliastables() {
+	pfb_ensure_mfs
 	if [ "${USE_MFS_TMPVAR}" -gt 0 ] || [ "${DISK_TYPE}" = 'md' ]; then
 		if [ ! -d '/var/unbound' ]; then
 			mkdir '/var/unbound'
@@ -2360,21 +2368,25 @@ closingprocess() {
 # Call appropriate processes using script argument $1.
 case "${1}" in
 	_*)
+		pfb_ensure_tmpdir
 		case "${1}" in *_255*) process255 ;; esac
 		case "${1}" in *_agg*) cidr_aggregate ;; esac
 		case "${1}" in *_rep*) reputation_depends; reputation_max ;; esac
 		;;
 	cidr_aggregate)
+		pfb_ensure_tmpdir
 		agg_folder=true
 		cidr_aggregate
 		;;
 	aggregate)
 		# ADR-11: pfblockerng.sh aggregate <family> <memberlist> <aggout> <consumerout>
+		pfb_ensure_tmpdir
 		pfb_aggregate "$@"
 		;;
 	recompute)
 		# issue #1084: pfblockerng.sh recompute <family> <memberlist> <countsfile>
 		#              <dedup> <repmode> <max> <cc> <ccwhite> <ccblack>
+		pfb_ensure_tmpdir
 		pfb_recompute "$@"
 		exitnow "$?"
 		;;
@@ -2388,24 +2400,29 @@ case "${1}" in
 		asn_table
 		;;
 	suppress)
+		pfb_ensure_tmpdir
 		suppress
 		;;
 	pmax)
+		pfb_ensure_tmpdir
 		reputation_depends
 		reputation_pmax
 		;;
 	et)
 		# issue #2683: same wiring as the `xlsx` arm below.
+		pfb_ensure_tmpdir
 		processet
 		exitnow "$?"
 		;;
 	xlsx)
 		# issue #2666: the tail's bare `exitnow` defaults to 0, so the status has to
 		# be threaded through here (as `recompute` does).
+		pfb_ensure_tmpdir
 		processxlsx
 		exitnow "$?"
 		;;
 	remove)
+		pfb_ensure_tmpdir
 		remove
 		;;
 	aliastables)
@@ -2434,6 +2451,7 @@ case "${1}" in
 		exitnow "$?"
 		;;
 	closing)
+		pfb_ensure_tmpdir
 		emptyfiles
 		closingprocess
 		;;
