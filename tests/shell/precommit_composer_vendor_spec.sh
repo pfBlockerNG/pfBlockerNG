@@ -20,6 +20,7 @@ Describe '.githooks/pre-commit Composer vendor guard'
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
       && chmod +x "$repo/.githooks/check-commit-identity.sh"
     printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/patch-graphify.sh"
+    printf '#!/bin/sh\nmkdir -p graphify-out && : > graphify-out/graph.json\n' > "$repo/scripts/agent/check-graph-fresh.sh"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
 

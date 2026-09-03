@@ -38,17 +38,30 @@ case "$*" in
   *) exit 9 ;;
 esac
 UV
+    # A tripwire, never a collaborator: the real `graphify hook install` writes
+    # post-commit and post-checkout into `git rev-parse --git-path hooks` (which
+    # honours core.hooksPath), and the driver is registered by the helper itself
+    # (issue #3139). Any call is logged, drops the hooks the way the CLI would,
+    # and fails.
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 printf '%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
-[ "$#" -eq 2 ] && [ "$1" = hook ] && [ "$2" = install ] || exit 91
-case "${GRAPHIFY_DRIVER_MODE:-valid}" in
-  valid) git config --local merge.graphify.driver 'graphify merge-driver %O %A %B' ;;
-  malformed) git config --local merge.graphify.driver 'graphify merge-driver %O %A' ;;
-  missing) : ;;
-  *) exit 92 ;;
-esac
+hooks_dir=$(git rev-parse --git-path hooks) && mkdir -p "$hooks_dir" &&
+  : > "$hooks_dir/post-commit" && : > "$hooks_dir/post-checkout"
+exit 91
 GRAPHIFY
+    real_git=$(command -v git)
+    gitstub="$fixture/gitstub"
+    mkdir -p "$gitstub"
+    cat > "$gitstub/git" <<'GIT'
+#!/bin/sh
+case "${GIT_STUB_MODE:-}:$*" in
+  write:*' config merge.graphify.driver '*) exit 1 ;;
+  readback:*' config --local --get merge.graphify.driver') printf '%s\n' 'graphify merge-driver %O %A'; exit 0 ;;
+esac
+exec "$REAL_GIT" "$@"
+GIT
+    chmod +x "$gitstub/git"
     # The vendored .inc language-override patch (issue #2810): this script runs the
     # requested checkout's copy, so the real installed Graphify is never touched here.
     mkdir -p "$repo/scripts/agent"
@@ -66,28 +79,54 @@ PATCH_GRAPHIFY
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs at least the required Graphify, upgrading to the latest, and configures the requested Git root'
+  It 'installs at least the required Graphify, upgrading to the latest, and registers its launcher as the union merge driver of the requested Git root'
     When run sh "$script_abs" "$repo"
     The status should equal 0
     The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
-    The contents of file "$graphify_log" should equal \
-      "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+    The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
   End
 
-  Context 'driver validation failures'
+  It 'leaves .githooks/post-commit and .githooks/post-checkout absent: registration never runs `graphify hook install` (issue #3139)'
+    git_fixture -C "$repo" config core.hooksPath .githooks
+    mkdir -p "$repo/.githooks"
+    When run sh "$script_abs" "$repo"
+    The status should equal 0
+    The path "$repo/.githooks/post-commit" should not be exist
+    The path "$repo/.githooks/post-checkout" should not be exist
+    The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+  End
+
+  Context 'registration failures'
     Parameters
-      'missing'
-      'malformed'
+      write    'git refuses to record the driver'
+      readback 'the recorded driver reads back malformed'
     End
 
-    It "fails loudly when the installed driver is $1"
-      export GRAPHIFY_DRIVER_MODE="$1"
-      When run sh "$script_abs" "$repo"
+    It "fails loudly when $2"
+      When run env PATH="$gitstub:$PATH" REAL_GIT="$real_git" GIT_STUB_MODE="$1" sh "$script_abs" "$repo"
       The status should equal 1
       The stderr should include 'merge.graphify.driver'
-      The stderr should include 'graphify merge-driver %O %A %B'
+      The stderr should include 'merge-driver %O %A %B'
     End
+  End
+
+  It 'fails closed on a launcher path git could not quote'
+    uv_tool_bin="$fixture/uv\$bin"
+    mkdir -p "$uv_tool_bin"
+    cp "$stubdir/graphify" "$uv_tool_bin/graphify"
+    off_path="$fixture/off path"
+    mkdir -p "$off_path"
+    for tool in dirname git sh; do
+      ln -s "$(command -v "$tool")" "$off_path/$tool"
+    done
+    ln -s "$stubdir/uv" "$off_path/uv"
+    When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
+    The status should equal 1
+    The stderr should include 'cannot be quoted'
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
   End
 
   Context 'foreign target without a target-local patch (issue #3004)'
@@ -111,8 +150,7 @@ PATCH_GRAPHIFY
       rm -rf "$repo/scripts/agent"
       When run sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
       The status should equal 0
-      The contents of file "$graphify_log" should equal \
-        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
       The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
     End
 
@@ -143,9 +181,8 @@ PATCH_GRAPHIFY
         UV_PROGRESS_FIXTURE=1 sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
       The status should equal 0
       The stderr should include 'uv progress'
-      The contents of file "$graphify_log" should equal \
-        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
       The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
     End
 
@@ -188,10 +225,9 @@ DECOY
         DECOY_MARKER="$decoy_marker" sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
         "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
       The status should equal 0
-      The contents of file "$graphify_log" should equal \
-        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
       The path "$decoy_marker" should not be exist
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$relative_bin/graphify\" merge-driver %O %A %B"
     End
 
     It 'absolutizes a relative uv fallback before entering a foreign target'
@@ -234,10 +270,9 @@ DECOY
         sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
         "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
       The status should equal 0
-      The contents of file "$graphify_log" should equal \
-        "$(printf 'patch-graphify\t\n%s\thook install' "$repo")"
+      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
       The path "$decoy_marker" should not be exist
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$relative_bin/graphify\" merge-driver %O %A %B"
     End
   End
 End

@@ -51,14 +51,13 @@ worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }
 branches it verifies as integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both
-taking a SHA — what "an isolated tree at commit X" needs, the recurring review case
-where four legs read one worktree and one must re-run a red half without disturbing
-it. Needs git (history, diffing, committing) → a throwaway worktree,
-`wt --yes switch --create <branch> --base <sha>`, `wt remove` when the lane ends.
-Read-only → `git archive <sha> | tar -x -C "$SCRATCH"`: no `.git`, so it cannot commit,
-cannot share refs, and structurally cannot touch the repository. Prefer the extraction
-unless the suite needs real git history. **Never mutate a checkout another agent is
-reading** — worse than any copy.
+taking a SHA — an isolated tree at commit X, as when one review leg re-runs a red half
+without disturbing the worktree the other legs read. Needs git (history, diffing,
+committing) → a throwaway worktree, `wt --yes switch --create <branch> --base <sha>`,
+`wt remove` when the lane ends. Read-only → `git archive <sha> | tar -x -C "$SCRATCH"`:
+no `.git`, so it cannot commit, share refs, or touch the repository. Prefer the
+extraction unless the suite needs real git history. **Never mutate a checkout another
+agent is reading** — worse than any copy.
 
 **Copying a worktree is forbidden** — `cp -a`, `cp -R`, `cp -al`, `rsync`. The copy
 keeps the source's `.git` *pointer file*, so its git commands drive the ORIGINAL
@@ -66,11 +65,10 @@ worktree's index, `HEAD`, and refs; `cp -al` additionally hardlinks the content,
 in-place write lands in the original's files.
 
 **Never the system temp directory**: semantics differ per platform (Linux `/tmp` is
-commonly RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp` and defaults
-`TMPDIR` under `/var/folders`), and an unregistered tree is invisible to
-`git worktree list`, so no prune, `wt remove`, or landing step can reclaim it. Worktree
-scratch goes under the worktrees root; extraction scratch under `/var/tmp/agents`,
-disk-backed on both platforms.
+often RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp`, `TMPDIR` under
+`/var/folders`), and an unregistered tree is invisible to `git worktree list`, so no
+prune, `wt remove`, or landing step can reclaim it. Worktree scratch goes under the
+worktrees root; extraction scratch under `/var/tmp/agents`, disk-backed on both platforms.
 
 **Scratch is reaped by its owner** when the lane ends — agent session scratch included,
 which no worktree rule covers. Delete someone else's only when it is stale by mtime
@@ -94,7 +92,7 @@ an idle session looks dead by mtime alone.
   NEW branch after merge). **Never force-push over another session's in-flight PR.**
 - Name branch for its work item — `adr/{NN}-{slug}` / `issue/{NN}-{slug}`.
 - Gotchas: `wt remove` / `git worktree remove` fail from inside tree — run from any directory
-  outside tree being removed (primary checkout works; session worktree too).
+  outside tree being removed (primary checkout or session worktree).
   Never pass `--delete-branch`; after terminal verification use the expected-value cleanup:
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
 - Each worktree owns its Composer `vendor/` tree; never share or symlink `vendor/` between
@@ -109,12 +107,13 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 
 - **`pre-commit`** — fast lint, style, and policy checks, path-scoped to staged file types
   (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
-  shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when
-  `*.sh`/`*.md` staged). NOT unit suites — run `python3 -m pytest` yourself while
-  iterating; tests and static analysis run in CI only. Missing tool = reported + skipped.
-  `--no-verify` bypass is for humans, not agents. Release-line trees lacking the
-  checker corpus opt out per gate via a committed root `.githooks-exempt`
-  manifest (issue #2633) instead of bypassing.
+  shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when `*.sh`/`*.md` staged);
+  rebuilds and stages `graphify-out/graph.json` (`scripts/agent/check-graph-fresh.sh --refresh`)
+  when a path outside `graphify-out/` is staged. NOT unit suites — run
+  `python3 -m pytest` yourself; tests and static analysis run in CI only. Missing tool =
+  reported + skipped; Graphify steps fail closed. `--no-verify` bypass is for humans, not
+  agents. Release-line trees lacking the checker corpus opt out per gate via a committed
+  root `.githooks-exempt` manifest (#2633) instead of bypassing.
 - **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1`,
   `CODEX_THREAD_ID`, Copilot, Grok, or OMP marker set) in **primary checkout**
   (agents commit only in linked worktrees — issue #1262; state-checked via
@@ -126,9 +125,11 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
 - **`commit-msg`** — rejects any `Co-authored-by:` trailer after Git's message
   editor runs, closing the post-`prepare-commit-msg` insertion window.
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; denies
-  agent branch rewrites over unfetched remote history (issue #1307); validates the final
-  message of every outgoing commit; and validates each outgoing agent commit's configured
-  author/committer identity and good signature from the configured user email.
+  agent branch rewrites over unfetched remote history (#1307); validates the final
+  message of every outgoing commit and each outgoing agent commit's configured
+  author/committer identity and good signature from the configured user email; and
+  refuses a push whose `graphify-out/graph.json` differs from a rebuild
+  (`scripts/agent/check-graph-fresh.sh`, #3139).
 
 ## Rebase and diff hygiene
 
@@ -143,9 +144,9 @@ what change requires — strip debug logging, dead/commented-out experiments,
 churned-then-reverted code, introduced-then-unused symbols, gratuitous reformatting, scratch
 files. Cheapest before PR exists.
 
-**Push as soon as commit is green and final.** Commit that exists only on this
-workstation is invisible and unbacked-up work; never let commits pile up locally waiting
-for later batch push. Dev-only commits fast-forward directly to `devel` only when locally
+**Push as soon as commit is green and final.** A commit that exists only on this
+workstation is invisible, unbacked-up work; never let commits pile up locally for a
+later batch push. Dev-only commits fast-forward directly to `devel` only when locally
 signed. Code branches push to their own remote through the full PR flow; only its final
 landing gate may choose GitHub squash or the reviewed signed local fast-forward
 ([`landing.md`](landing.md)).
@@ -176,10 +177,8 @@ invocation`, `pfblockerng: fix IPv6 subnet match`). No trailing period; body opt
 non-obvious changes.
 
 **Commit identity:** agent-created commits are indistinguishable from the configured user
-committing alone. `user.name` and `user.email` must be both author and committer, and the
-user's normal signing configuration produces the signature. Commit messages carry no
-`Co-authored-by:` trailers. Provider-specific and legacy `coauthor.*` configuration is
-ignored.
+committing alone (full text below). Provider-specific and legacy `coauthor.*`
+configuration is ignored.
 
 `.githooks/prepare-commit-msg` enforces configured identity and rejects early
 `Co-authored-by:` trailers; `.githooks/commit-msg` repeats the trailer check after Git's

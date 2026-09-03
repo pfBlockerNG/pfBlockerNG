@@ -348,7 +348,8 @@ scripts/check_composer_vendor.py
 scripts/check_url_encoding.py
 scripts/check_toggle_registry.py
 scripts/check_reentry_bounds.py
-scripts/agent/check-agent-config-parity.sh'
+scripts/agent/check-agent-config-parity.sh
+scripts/agent/check-graph-fresh.sh'
 
   # Sandbox laid out like the repo (all sh -n scan roots exist), the legacy
   # opt-out manifest committed, and shellcheck stubbed, so ONLY the identity

@@ -275,4 +275,24 @@ $updates
 PFB_AGENT_UPDATES
 unset agent_runtime
 
+# Root graph freshness (issue #3139): the tree being pushed must carry a
+# graphify-out/graph.json byte-identical to its own seeded rebuild, so a push
+# with a stale graph never reaches the remote. Graded last (the rebuild is the
+# expensive gate) and once per push that publishes anything; a deletion-only
+# push moves no tree. The checker refuses on its own: stale (1), no graph (2),
+# and a missing Graphify (4) all abort with its message. A tree that ships no
+# checker never adopted the invariant (release lines) and is not graded; on
+# devel the checker's presence is pinned by tests/test_cross_agent_tooling.py.
+graph_check="${ROOT}/scripts/agent/check-graph-fresh.sh"
+if [ -f "$graph_check" ]; then
+    while IFS=' ' read -r _local_ref local_sha _remote_ref _remote_sha; do
+        [ -n "$local_sha" ] || continue
+        [ "$local_sha" = "$z40" ] && continue
+        sh "$graph_check" || exit 1
+        break
+    done <<PFB_GRAPH_UPDATES
+$updates
+PFB_GRAPH_UPDATES
+fi
+
 exit 0

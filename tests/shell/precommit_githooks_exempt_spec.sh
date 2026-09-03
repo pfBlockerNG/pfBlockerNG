@@ -19,7 +19,8 @@ scripts/check_composer_vendor.py
 scripts/check_url_encoding.py
 scripts/check_toggle_registry.py
 scripts/check_reentry_bounds.py
-scripts/agent/check-agent-config-parity.sh'
+scripts/agent/check-agent-config-parity.sh
+scripts/agent/check-graph-fresh.sh'
   make_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitexempt.XXXXXX")"

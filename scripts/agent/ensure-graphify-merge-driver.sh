@@ -1,5 +1,12 @@
 #!/bin/sh
-# Install Graphify and register its merge driver in the requested checkout.
+# Install Graphify and register its union merge driver for graphify-out/graph.json
+# in the requested checkout.
+#
+# Registration is two `git config` writes, never the Graphify CLI's own hook
+# installer: that command also drops post-commit and post-checkout hooks into the
+# directory core.hooksPath names, and this repository's tracked hooks own the
+# graph's lifecycle (issue #3139). The driver's output is never trusted either --
+# the push gate rebuilds -- it only keeps conflict markers out of the graph.
 
 usage() {
 	echo "usage: ensure-graphify-merge-driver.sh [REPOSITORY]" >&2
@@ -23,24 +30,35 @@ main() {
 		exit 2
 	}
 
-	# The hook rebuilds the graph, so the shared installer applies the override first.
+	# The shared installer applies the .inc override first, so the launcher it
+	# returns is the one a rebuild must use.
 	graphify_bin=$(sh "$(dirname "$0")/ensure-graphify.sh" "$root") || {
 		echo "ensure-graphify-merge-driver.sh: Graphify setup failed for '$root'" >&2
 		exit 1
 	}
-	(cd "$root" && "$graphify_bin" hook install) || {
-		echo "ensure-graphify-merge-driver.sh: Graphify hook installation failed in '$root'" >&2
-		exit 1
-	}
-
-	driver=$(git -C "$root" config --local --get merge.graphify.driver 2>/dev/null || :)
-	case "$driver" in
-		*"graphify merge-driver %O %A %B"*) ;;
-		*)
-			echo "ensure-graphify-merge-driver.sh: merge.graphify.driver must contain 'graphify merge-driver %O %A %B' (got: '${driver:-missing}')" >&2
+	# git hands the driver string to a shell, so the launcher path is quoted;
+	# a path that double quotes cannot carry fails closed rather than registering
+	# a driver that would never run (the same allowlist the CLI applies).
+	case "$graphify_bin" in
+		*[\"\$\`\\]*)
+			echo "ensure-graphify-merge-driver.sh: Graphify launcher path '$graphify_bin' cannot be quoted for merge.graphify.driver" >&2
 			exit 1
 			;;
 	esac
+	driver="\"$graphify_bin\" merge-driver %O %A %B"
+	{
+		git -C "$root" config merge.graphify.name 'graphify graph.json union merge' &&
+			git -C "$root" config merge.graphify.driver "$driver"
+	} || {
+		echo "ensure-graphify-merge-driver.sh: cannot record merge.graphify.driver '$driver' in '$root'" >&2
+		exit 1
+	}
+
+	registered=$(git -C "$root" config --local --get merge.graphify.driver 2>/dev/null || :)
+	[ "$registered" = "$driver" ] || {
+		echo "ensure-graphify-merge-driver.sh: merge.graphify.driver must read back as '$driver' (got: '${registered:-missing}')" >&2
+		exit 1
+	}
 }
 
 main "$@"
