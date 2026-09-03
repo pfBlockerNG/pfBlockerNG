@@ -3890,10 +3890,9 @@ var pfb_top1m_token_providers = <?=$pfb_top1m_token_providers_json?>;
 
 function enable_top1m_token() {
 	var pfb_top1m_no_token = pfb_top1m_token_providers.indexOf($('#top1m_source').val()) === -1;
-	// ADR-59: the field renders blank on every GET, so a value here was typed this load.
-	// A hidden input is still submitted, and the save path writes any non-empty
-	// top1m_token -- so it must be cleared, or switching away from a token provider
-	// overwrites the stored token and invalidates the TOP1M baseline.
+	// ADR-59: the field renders blank on every GET, so a value here was typed this
+	// load. A hidden input is still submitted and the save path writes any non-empty
+	// top1m_token, so it must be cleared before hiding.
 	if (pfb_top1m_no_token) {
 		$('#top1m_token').val('');
 	}

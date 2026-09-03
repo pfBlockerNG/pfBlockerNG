@@ -1038,12 +1038,6 @@ def test_exception_fields_have_alias_autocomplete(
         )
 
 
-# A token string carrying the shapes a hostile paste would use -- an apostrophe, a double
-# quote, a shell/JS-interpolation sigil and enough length to rule out a truncating clear --
-# so the ``.val('')`` clear is proven against more than a tidy alphanumeric literal.
-_TYPED_TOKEN = "pfb'\"${IFS}<token>" + "z" * 256
-
-
 def test_top1m_token_hidden_and_cleared_for_keyless_providers(
     browser_page: Page,
     webui: WebUI,
@@ -1056,14 +1050,10 @@ def test_top1m_token_hidden_and_cleared_for_keyless_providers(
     type (Tranco) is keyless. ``cloudflare`` is the only provider whose ``auth``
     descriptor is non-``none`` (``pfblockerng_extra.inc``'s ``pfb_top1m_providers()``).
 
-    The clear is part of the contract, not decoration. A hidden input still POSTs,
-    and so does a disabled one on this page -- the submit handler re-enables every
-    id in ``pfb_gated_ids`` before submit -- while ``pfblockerng_dnsbl.php``'s save
-    path writes any NON-EMPTY ``top1m_token`` to config. So without the clear,
-    typing a token and then switching to a keyless provider overwrites the stored
-    token and flips the token half of ``$pfb_top1m_identity_changed``, invalidating
-    the TOP1M baseline. ADR-59 keeps the field blank on GET, so a value can only
-    have been typed this page load.
+    The clear is part of the contract, not decoration: ``hideInput()`` hides without
+    clearing, a hidden input is still submitted, and the save path writes any
+    non-empty ``top1m_token`` to config. ADR-59 keeps the field blank on GET, so a
+    value can only have been typed this page load.
 
     The TOP1M section is ``COLLAPSIBLE|SEC_CLOSED``, so it is expanded first --
     otherwise the field is already invisible and ``to_be_hidden()`` would pass for
@@ -1084,9 +1074,11 @@ def test_top1m_token_hidden_and_cleared_for_keyless_providers(
     expect(token).to_be_visible(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_top1m_token_visible_cloudflare")
 
-    # A value typed while the field applied ...
-    token.fill(_TYPED_TOKEN)
-    expect(token).to_have_value(_TYPED_TOKEN, timeout=JS_TIMEOUT_MS)
+    # A value typed while the field applied -- an apostrophe, a double quote, an
+    # interpolation sigil and enough length to rule out a truncating clear.
+    typed = "pfb'\"${IFS}<token>" + "z" * 256
+    token.fill(typed)
+    expect(token).to_have_value(typed, timeout=JS_TIMEOUT_MS)
 
     # ... must be hidden AND cleared on the switch to a keyless provider.
     source.select_option("tranco")
