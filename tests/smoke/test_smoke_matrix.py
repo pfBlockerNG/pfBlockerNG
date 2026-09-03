@@ -440,6 +440,35 @@ def test_dnsbl_whitelist_passthrough(deployed_vm: SmokeVM, client_vm: SmokeVM, m
         assert not h.is_null_ip(answer), f"whitelisted {domain} wrongly null-IP: {answer}"
 
 
+def test_dnsbl_whitelist_wildcard_not_demoted_by_www(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """WHITELIST: `.apex` plus later `www.apex` must still cover `sub.apex` (issue #3191).
+
+    Last-wins normalisation used to demote the leading-dot wildcard to exact when a
+    www-stripped line collided on the same key, so a feed block of ``sub.{apex}``
+    leaked through as VIP/NULL. Exact-name passthrough would not have caught that.
+    """
+    apex = h.unique_domain("wlwild")
+    blocked = f"sub.{apex}"
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_white_wild.txt", f"{blocked}\n")
+    spec = h.DnsblCase(
+        aliasname="smokewlwild",
+        feed_url=feed_url,
+        header="smokewlwild",
+        mode=h.DnsblMode.VIP,
+        whitelist=[f".{apex}", f"www.{apex}"],
+    )
+    with h.CaseContext(deployed_vm, spec):
+        h.unblock_egress()
+        answer = h.dns_probe_client(client_vm, blocked, "A")
+        assert h.resolves_to(answer, STUB_DNS_A), (
+            f"wildcard-whitelisted {blocked} should resolve via stub, got {answer}"
+        )
+        assert not h.is_vip(answer), f"wildcard-whitelisted {blocked} wrongly VIP-blocked: {answer}"
+        assert not h.is_null_ip(answer), f"wildcard-whitelisted {blocked} wrongly null-IP: {answer}"
+
+
 # ADR-10: several bounded wait-for-apply round-trips per case (each swap blocks PHP
 # until the watcher confirms the applied generation -- seconds, not the old async poll)
 # plus per-case setup exceed the smoke harness's 30s per-test cap; override it.

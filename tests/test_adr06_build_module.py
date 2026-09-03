@@ -301,6 +301,52 @@ class TestWhitelistNormalisation:
             "band": pfb_unbound.PRIO_USER_ALLOW,
         }
 
+    def _assert_apex_wildcard_covers_deep(self, white_db: dict[str, Any], apex: str) -> None:
+        assert white_db[apex]["wildcard"] is True
+        assert pfb_unbound.whitelist_check_domain(f"stun.l.{apex}", white_db, 1) is True
+        assert pfb_unbound.whitelist_check_domain(f"a.b.{apex}", white_db, 1) is True
+
+    def test_leading_dot_then_www_keeps_wildcard(self) -> None:
+        """Colliding `.apex` then `www.apex` must keep subtree coverage (issue #3191)."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"www.{apex}"], [], False)
+        self._assert_apex_wildcard_covers_deep(wl, apex)
+
+    def test_leading_dot_then_bare_apex_keeps_wildcard(self) -> None:
+        """Colliding `.apex` then bare `apex` must keep subtree coverage (issue #3191)."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", apex], [], False)
+        self._assert_apex_wildcard_covers_deep(wl, apex)
+
+    def test_www_then_leading_dot_keeps_wildcard(self) -> None:
+        """Widen is order-independent: `www.apex` then `.apex` still covers the subtree."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", f".{apex}"], [], False)
+        self._assert_apex_wildcard_covers_deep(wl, apex)
+
+    def test_www_then_bare_apex_stays_exact(self) -> None:
+        """Without a leading-dot line, www-strip + bare apex stay exact; deep names miss."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f"www.{apex}", apex], [], False)
+        assert wl[apex]["wildcard"] is False
+        assert pfb_unbound.whitelist_check_domain(f"stun.l.{apex}", wl, 1) is False
+        assert pfb_unbound.whitelist_check_domain(f"a.b.{apex}", wl, 1) is False
+
+    def test_leading_dot_plus_mail_keeps_two_keys(self) -> None:
+        """A different hostname is a second key; the `.apex` wildcard is not demoted."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}", f"mail.{apex}"], [], False)
+        assert set(wl) == {apex, f"mail.{apex}"}
+        assert wl[apex]["wildcard"] is True
+        assert wl[f"mail.{apex}"]["wildcard"] is False
+        assert pfb_unbound.whitelist_check_domain(f"stun.l.{apex}", wl, 1) is True
+
+    def test_user_wildcard_not_overwritten_by_top1m(self) -> None:
+        """TOP1M setdefault must not collapse an existing user `.apex` wildcard to exact."""
+        apex = "collapex.com"
+        wl = pfb_unbound._dnsbl_normalise_whitelist([f".{apex}"], [apex], True)
+        self._assert_apex_wildcard_covers_deep(wl, apex)
+
 
 # --------------------------------------------------------------------------- #
 # build() end-to-end vs the Phase-2 DECISION oracle

@@ -5024,8 +5024,10 @@ def _dnsbl_normalise_whitelist(
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()) into the
     query-time whiteDB shape: www-strip; leading-dot -> wildcard True else False.
-    TOP1M entries are loaded ONLY when enabled as validated canonical bare domains;
-    retired comma-framed records and invalid domains are explicitly rejected by normalise().
+    Colliding lines that collapse to one apex widen (broadest wildcard, any important,
+    max band) rather than last-wins. TOP1M entries are loaded ONLY when enabled as
+    validated canonical bare domains; retired comma-framed records and invalid
+    domains are explicitly rejected by normalise().
     No build-time list pruning -- this only populates whiteDB.
 
     ADR-07: the whiteDB value widens from a bare ``bool`` (wildcard?) to
@@ -5042,10 +5044,12 @@ def _dnsbl_normalise_whitelist(
             continue
         if line.startswith("www."):
             line = line[4:]
-        if line.startswith("."):
-            white_db[line.lstrip(".")] = {"wildcard": True, "important": True, "band": PRIO_USER_ALLOW}
-        else:
-            white_db[line] = {"wildcard": False, "important": True, "band": PRIO_USER_ALLOW}
+        wildcard = line.startswith(".")
+        domain = line.lstrip(".")
+        new_entry: dict[str, Any] = {"wildcard": wildcard, "important": True, "band": PRIO_USER_ALLOW}
+        existing = white_db.get(domain)
+        # issue #3191: colliding `.apex` / `www.apex` / bare apex widen, never last-wins demote.
+        white_db[domain] = new_entry if existing is None else _white_widen_entry(existing, new_entry)
 
     if top1m_enabled:
         for raw in top1m_lines:
@@ -5404,11 +5408,7 @@ def build(
         if existing is None:
             white_db[domain] = unlock_entry
             continue
-        white_db[domain] = {
-            "wildcard": _white_entry_wildcard(existing) or _white_entry_wildcard(unlock_entry),
-            "important": _white_entry_important(existing) or _white_entry_important(unlock_entry),
-            "band": max(_white_entry_band(existing), _white_entry_band(unlock_entry)),
-        }
+        white_db[domain] = _white_widen_entry(existing, unlock_entry)
 
     # ADR-07: an ABP-shaped line (any feed -- #1083 retired the whole-feed
     # format_hint dispatch) is routed by the per-line capture guard to the typed
@@ -6184,6 +6184,18 @@ def _white_entry_band(entry: Any) -> int:
             return band
         return PRIO_USER_ALLOW if entry.get("important", False) else PRIO_FEED_ALLOW
     return PRIO_FEED_ALLOW
+
+
+def _white_widen_entry(existing: Any, new: Any) -> dict[str, Any]:
+    """User-allow collision merge: broadest wildcard, any important, max band.
+
+    Drops feed ``index``; permit/ABP insert paths keep their own band-monotonic merge.
+    """
+    return {
+        "wildcard": _white_entry_wildcard(existing) or _white_entry_wildcard(new),
+        "important": _white_entry_important(existing) or _white_entry_important(new),
+        "band": max(_white_entry_band(existing), _white_entry_band(new)),
+    }
 
 
 def whitelist_lookup_domain(name: str, white_db: dict[str, Any], tld_seg: int) -> tuple[bool, bool]:
