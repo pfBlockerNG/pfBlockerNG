@@ -267,6 +267,11 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
   clean scan of those sites.
 - The mirror → alias mapping is DERIVED from each page's own
   `$pfb['<mirror>'] = PfbConfig::readSection('<path>')`, so a new page needs no edit here.
+- **Scan set** (issue #3087): every tracked `.php`/`.inc`/`.xml` under `src/usr/local/www`
+  and `src/usr/local/pkg` — the same roots `check_noopener.py` took after issue #3075. A
+  mirror is declared wherever the contract applies (the dashboard widget, `pfblockerng.inc`,
+  `pfblockerng_geoip.inc`), so a root narrower than that reports clean for the wrong reason.
+  A mirror read quoted inside a heredoc is a known false positive; comments are skipped.
 - Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100
   parsed keys exits 2 rather than reporting clean.
 - `--self-test` is the red canary — a synthetic violating page must trip BOTH rules — and

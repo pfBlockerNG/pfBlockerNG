@@ -36,9 +36,17 @@ Usage:
     check_toggle_registry.py [PATH ...]
     check_toggle_registry.py --self-test
 
-With no PATH, scans every tracked `src/usr/local/www/pfblockerng/*.php`. Exit 0 clean,
-1 on violations, 2 when the scan set or the registry could not be established (fail
-closed -- a gate that cannot read the registry must not report "clean").
+With no PATH, scans every tracked `.php`/`.inc`/`.xml` source under `src/usr/local/www`
+and `src/usr/local/pkg` -- issue #3087: a mirror is declared wherever the contract
+applies, so the dashboard widget and the pkg sources are in scope exactly as the
+settings pages are, and a root narrower than that surface reports clean for the wrong
+reason. Same root set as `check_noopener.py` after issue #3075. Exit 0 clean, 1 on
+violations, 2 when the scan set or the registry could not be established (fail closed --
+a gate that cannot read the registry must not report "clean").
+
+Ceiling: the matchers read source text, so a mirror read quoted inside a heredoc is a
+false positive. Comments are skipped by leading token; no heredoc in the scanned tree
+quotes one, and tracking heredoc state is more parser than this gate is worth.
 
 `--self-test` is the red canary the testing policy requires for a newly wired blocking
 gate: it feeds a known-violating synthetic page through the same matchers and exits 0
@@ -54,7 +62,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 REGISTRY_FILE = "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
-WWW_DIR = "src/usr/local/www/pfblockerng"
+
+# Every tree a `PfbConfig::readSection()` mirror is declared in: the Web UI pages and
+# widgets, and the pkg sources that share the same registry (issue #3087).
+SCAN_ROOTS = ("src/usr/local/www", "src/usr/local/pkg")
+SCAN_SUFFIXES = (".php", ".inc", ".xml")
 
 # A registry entry: its path key plus enough of the entry body to bound the match
 # to the entry's own closing `],`.
@@ -202,17 +214,17 @@ def find_violations(
 
 
 def _git_tracked_pages(root: Path) -> list[str]:
-    """Tracked `src/usr/local/www/pfblockerng/*.php` paths (sorted)."""
+    """Tracked `SCAN_ROOTS` sources with a `SCAN_SUFFIXES` extension (sorted)."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z", WWW_DIR],
+            ["git", "-C", str(root), "ls-files", "-z", *SCAN_ROOTS],
             capture_output=True,
             text=True,
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return []
-    return sorted(p for p in out.split("\0") if p.endswith(".php"))
+    return sorted(p for p in out.split("\0") if p.endswith(SCAN_SUFFIXES))
 
 
 _SELF_TEST_PAGE = """<?php
@@ -282,9 +294,9 @@ def main(argv: list[str] | None = None) -> int:
         paths = _git_tracked_pages(root)
         if not paths:
             print(
-                f"check_toggle_registry: `git ls-files {WWW_DIR}` returned nothing "
-                "(git unavailable or not a checkout) -- failing closed rather than "
-                "skipping the gate.",
+                f"check_toggle_registry: `git ls-files {' '.join(SCAN_ROOTS)}` returned "
+                "nothing (git unavailable or not a checkout) -- failing closed rather "
+                "than skipping the gate.",
                 file=sys.stderr,
             )
             return 2

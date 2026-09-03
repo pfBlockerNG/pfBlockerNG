@@ -317,7 +317,9 @@ jobs:
       - name: Forbid an on/off toggle declaring its default in the page
         # issue #2123: a PFB_FILTER_ON_OFF save into a registered config section must
         # name a pfb_cfg_registry() entry, and a registered toggle's default must not be
-        # restated by the page. The --self-test run is this gate's red canary: it feeds a
+        # restated by the page. Scans tracked src/usr/local/www and src/usr/local/pkg
+        # .php/.inc/.xml (the checker's defaults; a section mirror is declared wherever
+        # the contract applies, issue #3087). The --self-test run is this gate's red canary: it feeds a
         # known-violating synthetic page through the same matchers and fails if either
         # rule stops firing, so a matcher that rots cannot green the real scan.
         run: |
