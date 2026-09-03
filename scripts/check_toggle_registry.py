@@ -36,17 +36,24 @@ Usage:
     check_toggle_registry.py [PATH ...]
     check_toggle_registry.py --self-test
 
-With no PATH, scans every tracked `.php`/`.inc`/`.xml` source under `src/usr/local/www`
-and `src/usr/local/pkg` -- issue #3087: a mirror is declared wherever the contract
-applies, so the dashboard widget and the pkg sources are in scope exactly as the
-settings pages are, and a root narrower than that surface reports clean for the wrong
-reason. Same root set as `check_noopener.py` after issue #3075. Exit 0 clean, 1 on
-violations, 2 when the scan set or the registry could not be established (fail closed --
-a gate that cannot read the registry must not report "clean").
+With no PATH, scans every tracked `.php`/`.inc`/`.xml` under `SCAN_ROOTS` -- the root
+set `check_noopener.py` took after issue #3075. Exit 0 clean, 1 on violations, 2 when
+the scan set or the registry could not be established (fail closed -- a gate that
+cannot read the registry must not report "clean").
 
-Ceiling: the matchers read source text, so a mirror read quoted inside a heredoc is a
-false positive. Comments are skipped by leading token; no heredoc in the scanned tree
-quotes one, and tracking heredoc state is more parser than this gate is worth.
+Three matcher ceilings, none of them load-bearing on today's tree but all real:
+
+  * The key group excludes the hyphen, so a HYPHENATED key is invisible to both
+    rules. The dashboard widget's `$pfb['wglobal']['widget-popup']` saves are the live
+    instance: the file is scanned and its mirror resolves, but those three saves never
+    reach RULE 1. Registering them is a config-gateway change, so it is issue #3136,
+    not this gate's default set.
+  * RULE 2's read matcher anchors on the assignment operator, so a mirror read wrapped
+    in a call (`pfb_b64_text($pfb['dconfig']['k'] ?? NULL)`) is not seen -- issue #3137.
+  * Comments are skipped by LEADING token only, so a read quoted after code on the
+    same line, or inside a `/* */` block whose line lacks a `*`, is a false positive.
+    A heredoc body is matched as code, which is correct for the generated-page nowdocs
+    in `pfblockerng_geoip.inc` and wrong only for a heredoc carrying prose.
 
 `--self-test` is the red canary the testing policy requires for a newly wired blocking
 gate: it feeds a known-violating synthetic page through the same matchers and exits 0
@@ -60,6 +67,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
+
+from _git_paths import nul_listing
 
 REGISTRY_FILE = "src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 
@@ -216,15 +225,10 @@ def find_violations(
 def _git_tracked_pages(root: Path) -> list[str]:
     """Tracked `SCAN_ROOTS` sources with a `SCAN_SUFFIXES` extension (sorted)."""
     try:
-        out = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z", *SCAN_ROOTS],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+        paths = nul_listing(root, "ls-files", "-z", *SCAN_ROOTS)
     except (OSError, subprocess.CalledProcessError):
         return []
-    return sorted(p for p in out.split("\0") if p.endswith(SCAN_SUFFIXES))
+    return sorted(p for p in paths if p.endswith(SCAN_SUFFIXES))
 
 
 _SELF_TEST_PAGE = """<?php

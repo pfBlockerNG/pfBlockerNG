@@ -254,10 +254,9 @@ fi
 # --- Forbid an on/off toggle declaring its default in the page (issue #2123):
 #     a PFB_FILTER_ON_OFF save into a registered section must name a registry entry,
 #     and a registered toggle's default must not be restated by the page. Scans tracked
-#     src/usr/local/www and src/usr/local/pkg .php/.inc/.xml (the checker's defaults;
-#     a mirror is declared wherever the contract applies, issue #3087), so it runs on
-#     staged PHP/.inc. ---
-if [ "$staged_php" = 1 ]; then
+#     src/usr/local/www and src/usr/local/pkg .php/.inc/.xml (the checker's defaults,
+#     issue #3087). ---
+if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
 	if exempted scripts/check_toggle_registry.py; then
 		exempt toggle-registry
 	elif [ -n "$py_bin" ]; then
