@@ -23,12 +23,14 @@ gating is what make cheaper implementer safe. Ticket execution follow fresh-sess
 ([`workflow.md`](workflow.md)); ad-hoc coding follow same shape. Higher model may implement
 fix **directly** when small and doable in one step — and always handle **docs / config /
 settings / skills** directly. Delegation for non-trivial, multi-step `src/`/`tests/`/CI work.
-**Review-fix rounds are canonical direct case** (owner, 2026-08-08): small fix session
-understand — or reviewer's proposed solution it agree with — applied by session itself, tests
-included, never spawned to sub-agent. **Ticket pickup follow same rule**: session that
-analyzed ticket implement it directly when change small-ish — max handful of lines in one
-production file + couple tests + few doc files; handing that to implementer is waste. Hard
-constraint on ALL direct work: session context usage ≤ 50% — past 50% session MUST delegate.
+**Review-fix rounds are canonical direct case** (owner, 2026-08-08): small fix the
+**work agent** understands — or reviewer's proposed solution it agree with — applied by
+that session itself, tests included, never spawned onward. **Ticket pickup is
+orchestrator per workflow.md**: the top-level session named the issue spawns a work
+agent; it does not implement the ticket. The work agent still does small one-step
+fixes directly (max handful of lines in one production file + couple tests + few doc
+files). Hard constraint on ALL direct work: session context usage ≤ 50% — past 50%
+session MUST delegate. Owner override: "implement here" / "no spawn".
 
 - **Per-step verifier always small tier** (owner directive 2026-07-14) — never top-tier model
   that authored brief; different model read with different blind spots. Top model's

@@ -79,7 +79,7 @@ Serena, and Graphify, and it carries the hard invariants for the per-worktree
 | Task touches | Read first |
 | ------------ | ---------- |
 | delegating any step; validating a handoff | `.agents/policy/delegation.md` |
-| a ticket / fresh-session execution | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
+| a ticket / fresh-session execution (orchestrator spawns) | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
 | waiting on anything external | `.agents/policy/waits.md` |
 | committing, branching, worktrees, attribution | `.agents/policy/git.md` |
 | session layouts, managed-remote, resume | `.agents/policy/sessions.md` |
