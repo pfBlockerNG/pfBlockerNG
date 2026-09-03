@@ -15,6 +15,11 @@ _checker = _HELPERS["checker"]
 _checker_report = _HELPERS["_checker_report"]
 _shell_commands = _HELPERS["_shell_commands"]
 
+# issue #3117: Node 26 JUnit classname is the describe name, not "test".
+_NODE26_SKIP = (
+    "widget-js:nested # suite :: punctuation!::skips # hash, punctuation: a::b!  reason: environment reason #42"
+)
+
 
 def _mutate_widget_step(extra_command: str) -> dict[str, str]:
     texts = _workflow_texts()
@@ -106,22 +111,14 @@ def test_native_node_canary_report_is_rejected_with_exact_skip_semantics(
     )
     assert rc == 1
     err = capsys.readouterr().err
-    # issue #3117: Node 24's JUnit reporter uses classname="test"; Node 26 uses
-    # the enclosing describe name. The gate still rejects the skip; only the
-    # classname half of the id changes. Accept both so a host newer than CI's
-    # pin is not a false red.
+    # issue #3117: Node 24 classname is "test"; Node 26 uses the describe name.
     node24 = "widget-js:test::skips # hash, punctuation: a::b!  reason: environment reason #42"
-    node26 = (
-        "widget-js:nested # suite :: punctuation!::skips # hash, punctuation: a::b!  reason: environment reason #42"
-    )
-    assert node24 in err or node26 in err, err
+    assert node24 in err or _NODE26_SKIP in err, err
 
 
 def test_node26_junit_classname_canary_is_rejected_with_exact_skip_semantics(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Static Node-26 reporter shape so a CI pin bump to 26 cannot silently
-    # change every Node skip id without this row going red first.
     root = Path(__file__).resolve().parents[1]
     report = root / "tests/fixtures/skip-allowlist-node26-canary.xml"
     rc = _checker.main(
@@ -134,9 +131,7 @@ def test_node26_junit_classname_canary_is_rejected_with_exact_skip_semantics(
         ]
     )
     assert rc == 1
-    assert (
-        "widget-js:nested # suite :: punctuation!::skips # hash, punctuation: a::b!  reason: environment reason #42"
-    ) in capsys.readouterr().err
+    assert _NODE26_SKIP in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
