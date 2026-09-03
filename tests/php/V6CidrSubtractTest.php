@@ -672,4 +672,27 @@ final class V6CidrSubtractTest extends TestCase
 		$this->assertGreaterThan($before, filemtime($file),
 			'a real carve must publish (mtime moves)');
 	}
+
+	/** issue #3158: the skip path must still consume leftover .tmp debris. */
+	public function testIdenticalRemainderUnlinksStrayTmpFile(): void
+	{
+		$file     = $this->makeTempFile("2001:db8::/64\n");
+		$suppfile = $this->makeTempFile("2001:db9::/64\n");
+		$tmp      = $file . '.tmp';
+		file_put_contents($tmp, 'stale debris from a prior crashed run');
+		$this->tmpfiles[] = $tmp;
+		$before = time() - 3600;
+		touch($file, $before);
+		clearstatcache(TRUE, $file);
+		$this->assertSame($before, filemtime($file), 'before: forced mtime must take');
+
+		$ok = pfb_suppress_file_v6($file, $suppfile);
+
+		clearstatcache(TRUE, $file);
+		$this->assertTrue($ok);
+		$this->assertSame("2001:db8::/64\n", file_get_contents($file));
+		$this->assertSame($before, filemtime($file),
+			'byte-identical remainder must not republish (mtime unchanged)');
+		$this->assertFileDoesNotExist($tmp, 'skip path must unlink leftover .tmp debris');
+	}
 }

@@ -1502,15 +1502,17 @@ pfb_recompute_finish() {
 	# rc-checked -- a failure here cannot be rolled back (earlier moves in
 	# this loop may already be live), so it only logs the failing artifact
 	# and aborts; the family may be mixed until the next successful pass.
-	# issue #3158: skip the mv when .new is byte-identical so a quiet pass
-	# does not bump every member's mtime.
+	# issue #3158: skip when .new matches live OR the last recompute stamp
+	# (suppress may reshape live; that is not a recompute change).
 	while IFS=' ' read -r rec_alias _; do
 		rec_new="${pfbdeny}${rec_alias}.txt.new"
 		rec_live="${pfbdeny}${rec_alias}.txt"
-		if cmp -s "${rec_new}" "${rec_live}"; then
+		rec_stamp="${pfbdeny}${rec_alias}.txt.rec"
+		if cmp -s "${rec_new}" "${rec_stamp}" || cmp -s "${rec_new}" "${rec_live}"; then
 			rm -f "${rec_new}"
 		else
 			pfb_recompute_swap_mv "${rec_new}" "${rec_live}" "${rec_alias}.txt.new" || return 1
+			cp -f "${rec_live}" "${rec_stamp}"
 		fi
 	done < "${rec_priority}"
 

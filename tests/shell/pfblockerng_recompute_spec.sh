@@ -1439,4 +1439,26 @@ Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
 		The contents of file "${pfbdeny}Change_v4.txt" should equal '198.51.100.9'
 		The path "${pfbdeny}Change_v4.txt.new" should not be exist
 	End
+
+	It 'skips when .new matches the last recompute stamp even if live was reshaped by suppress'
+		printf '192.0.2.2/31\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt"
+		printf '192.0.2.1\n192.0.2.2\n192.0.2.3\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt.new"
+		cp -f "${pfbdeny}Keep_v4.txt.new" "${pfbdeny}Keep_v4.txt.rec"
+		touch -t 200001010000.00 "${pfbdeny}Keep_v4.txt"
+		pfb_mtime "${pfbdeny}Keep_v4.txt" > "${work}/keep.before"
+		check_stamp_skip() {
+			keep_before=$(cat "${work}/keep.before")
+			pfb_recompute_finish >/dev/null 2>&1 || return $?
+			keep_after=$(pfb_mtime "${pfbdeny}Keep_v4.txt")
+			[ "$keep_after" = "$keep_before" ] || {
+				printf 'Keep_v4.txt mtime moved: %s -> %s\n' "$keep_before" "$keep_after" >&2
+				return 1
+			}
+			return 0
+		}
+		When call check_stamp_skip
+		The status should be success
+		The contents of file "${pfbdeny}Keep_v4.txt" should equal "$(printf '192.0.2.2/31\n9.9.9.9')"
+		The path "${pfbdeny}Keep_v4.txt.new" should not be exist
+	End
 End

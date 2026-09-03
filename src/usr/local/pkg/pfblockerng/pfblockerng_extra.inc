@@ -7403,6 +7403,7 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
 	$body = empty($result) ? '' : implode(PHP_EOL, $result) . PHP_EOL;
 	// issue #3158: identical remainder must not move mtime.
 	if (@file_get_contents($file) === $body) {
+		@unlink($file . '.tmp');
 		return TRUE;
 	}
 	$tmp  = $file . '.tmp';
