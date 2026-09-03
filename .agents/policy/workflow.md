@@ -24,22 +24,12 @@
 
 When the owner names a GitHub issue to execute ("work on #N", a list, or equivalent),
 the receiving top-level session is **orchestrator** (every client): spawn one work agent
-per ticket with a complete task packet (this file).
-
-- The orchestrator does not cut that ticket's worktree, write its patches, or substitute
-  for [`landing.md`](landing.md)'s four review legs.
-- Gate every handoff: packet completeness, executed evidence, no silently narrowed
-  scope.
-- The work agent claims, implements, spawns the four independent read-only legs,
-  runs the fix→re-review loop, asks the review bot once at the merge gate (or
-  records a never-asked miss for test-only mechanical PRs per
-  [`coderabbit.md`](coderabbit.md)), and lands.
-- Small one-step fixes and review-fix APPLY stay with the **work agent** (no second
-  spawn). Named GitHub issues still go through a work agent even when they are
-  docs/config/settings/skills.
-- Owner override, that item only: "implement here" / "no spawn".
-- Sequential by default. Parallel work agents only when tickets are independent
-  and do not share a live-VM box or the review-bot slot.
+per ticket with a complete task packet (this file). It does not implement.
+Owner override, that item only: "implement here" / "no spawn". Small one-step
+fixes and review-fix APPLY stay with the work agent (no second spawn). Named
+GitHub issues still go through a work agent even when they are
+docs/config/settings/skills. The work agent runs [`landing.md`](landing.md)'s
+four independent legs and lands.
 
 ## Artifacts and schemas
 
