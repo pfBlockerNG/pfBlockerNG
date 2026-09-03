@@ -212,7 +212,8 @@ def test_every_exempt_row_still_names_a_live_site(monkeypatch: pytest.MonkeyPatc
     # Re-scan with the exemptions disabled: what fires is what genuinely needs a row.
     monkeypatch.setattr(ctr, "EXEMPT", {})
     live: set[tuple[str, str]] = set()
-    for page in sorted((_REPO_ROOT / ctr.WWW_DIR).glob("*.php")):
+    for rel in ctr._git_tracked_pages(_REPO_ROOT):
+        page = _REPO_ROOT / rel
         for v in ctr.find_violations(page.read_text(encoding="utf-8"), str(page), sections, keys):
             # detail's first quoted token is '<alias>/<key>'.
             live.add((page.name, v.detail.split("'")[1].split("/", 1)[1]))
@@ -221,8 +222,8 @@ def test_every_exempt_row_still_names_a_live_site(monkeypatch: pytest.MonkeyPatc
     assert not stale, f"EXEMPT rows no longer needed (delete them): {sorted(stale)}"
 
 
-def test_www_tree_is_clean() -> None:
-    """The real pages pass -- this gate blocks, it is not pre-broken."""
+def test_scanned_tree_is_clean() -> None:
+    """The real sources pass -- this gate blocks, it is not pre-broken."""
     result = subprocess.run(
         [sys.executable, str(_TOOL)],
         cwd=_REPO_ROOT,
@@ -230,7 +231,7 @@ def test_www_tree_is_clean() -> None:
         text=True,
         check=False,
     )
-    assert result.returncode == 0, f"src/usr/local/www/pfblockerng is not clean:\n{result.stderr}"
+    assert result.returncode == 0, f"the default scan set is not clean:\n{result.stderr}"
 
 
 def test_self_test_red_canary_passes() -> None:
@@ -315,10 +316,10 @@ def test_exempt_table_is_empty_after_the_2812_sweep() -> None:
     )
 
 
-def test_www_tree_is_clean_with_the_exempt_table_emptied(
+def test_scanned_tree_is_clean_with_the_exempt_table_emptied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The real pages carry no RULE 2 residue at all -- not one hidden by a row.
+    """The real sources carry no RULE 2 residue at all -- not one hidden by a row.
 
     Issue #2812's acceptance clause: with an empty EXEMPT table the gate still
     exits 0, so the sweep is proven against the live tree, not against the
@@ -326,7 +327,7 @@ def test_www_tree_is_clean_with_the_exempt_table_emptied(
     """
     monkeypatch.setattr(ctr, "EXEMPT", {})
     assert ctr.main([]) == 0, (
-        "src/usr/local/www/pfblockerng still carries page-level toggle defaults: issue #2812's sweep is incomplete"
+        "the scanned tree still carries page-level toggle defaults: issue #2812's sweep is incomplete"
     )
 
 
@@ -349,3 +350,119 @@ def test_widget_sentinel_after_a_gateway_read_is_not_a_page_default() -> None:
     """
     text = MIRROR + "$pconfig['maxmind_locale'] = PfbConfig::read('ip/maxmind_locale') ?: 'none';\n"
     assert _find(text) == []
+
+
+# --------------------------------------------------------------------------- #
+# Issue #3087 -- the scan set reaches every tree the contract applies to
+# --------------------------------------------------------------------------- #
+
+# The two files the review leg on PR #3084 named, plus the pkg source that turned out
+# to carry the residue: each declares a PfbConfig::readSection() mirror, and none of
+# them sat under the old `src/usr/local/www/pfblockerng` root.
+OUTSIDE_THE_OLD_ROOT = (
+    "src/usr/local/www/widgets/widgets/pfblockerng.widget.php",
+    "src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc",
+    "src/usr/local/pkg/pfblockerng/pfblockerng.inc",
+)
+
+
+def _tracked(*roots: str) -> set[str]:
+    """Tracked paths under `roots`, straight from git -- never a memorised list."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z", *roots],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {p for p in out.split("\0") if p}
+
+
+def test_default_scan_set_reaches_outside_the_old_www_pfblockerng_root() -> None:
+    """The contract is not bounded by a directory, so the scan set must not be either.
+
+    A `PFB_FILTER_ON_OFF` save into a `PfbConfig::readSection()` mirror is written in
+    the dashboard widget and in the pkg `.inc` sources exactly as it is on the settings
+    pages. While the default root was `src/usr/local/www/pfblockerng`, a green run meant
+    "the pages I looked at were clean", not "the contract holds" (issue #3087, the same
+    defect #3075 fixed in check_noopener).
+    """
+    scanned = set(ctr._git_tracked_pages(_REPO_ROOT))
+    missing = [p for p in OUTSIDE_THE_OLD_ROOT if p not in scanned]
+    assert not missing, f"these do the gated shape but the gate never looks at them: {missing}"
+
+
+def test_widening_the_scan_set_keeps_every_page_the_old_root_held() -> None:
+    """Widening must be a superset: no settings page may drop out of the gate."""
+    scanned = set(ctr._git_tracked_pages(_REPO_ROOT))
+    old_root_pages = {p for p in _tracked("src/usr/local/www/pfblockerng") if p.endswith(".php")}
+    assert old_root_pages, "the old narrow root must still enumerate pages -- the fixture is wrong, not the gate"
+    assert old_root_pages <= scanned, f"pages lost from the scan set: {sorted(old_root_pages - scanned)}"
+
+
+def test_the_pkg_sources_read_registered_fields_through_the_gateway() -> None:
+    """RULE 2's subject is the registered field, not the page it is read on.
+
+    `dnsbl/pfb_regex_list`, `dnsbl/pfb_noaaaa_list`, `dnsbl/pfb_gp_bypass_list` and
+    `gen/pfb_log_trim_margin_pct` are all in `pfb_cfg_registry()`, and pfb_global() /
+    pfb_log_mgmt() read them off the section mirror with their own `?? ''` fallback --
+    a page-level default on a registered field, in a file the old root excluded.
+    """
+    pkg_sources = sorted(p for p in _tracked("src/usr/local/pkg") if p.endswith((".php", ".inc", ".xml")))
+    assert pkg_sources, "no pkg sources enumerated -- the fixture is wrong, not the gate"
+    result = subprocess.run(
+        [sys.executable, str(_TOOL), *pkg_sources],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"src/usr/local/pkg restates a registered field's default:\n{result.stderr}"
+
+
+def test_empty_default_scan_set_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scan set that enumerates nothing must exit 2, never 0.
+
+    This is the failure the widening exists to prevent, one level down: a gate that
+    reports clean because it silently looked at no files is the same lie as a gate
+    whose root is narrower than the surface it protects.
+    """
+    monkeypatch.setattr(ctr, "_git_tracked_pages", lambda _root: [])
+    assert ctr.main([]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Issue #3087 -- adversarial rows for the widened surface
+# --------------------------------------------------------------------------- #
+
+
+def test_read_wrapped_across_lines_is_still_flagged() -> None:
+    """Reformatting a read over two physical lines must not smuggle it past RULE 2."""
+    text = MIRROR + "$pconfig['enable_dup'] =\n\t$pfb['iconfig']['enable_dup'] ?? '';\n"
+    assert _rules(text) == ["page-level-default"]
+
+
+def test_read_inside_a_comment_is_not_flagged() -> None:
+    """A read quoted in prose is documentation, not code.
+
+    The pkg `.inc` sources the widened set now covers are heavily commented, including
+    docblock lines that quote the very shape RULE 2 forbids.
+    """
+    for comment in (
+        "// $pconfig['enable_dup'] = $pfb['iconfig']['enable_dup'] ?? '';\n",
+        "/* $pconfig['enable_dup'] = $pfb['iconfig']['enable_dup'] ?? ''; */\n",
+        " * $pconfig['enable_dup'] = $pfb['iconfig']['enable_dup'] ?? '';\n",
+    ):
+        assert _find(MIRROR + comment) == [], f"a commented read must not flag: {comment!r}"
+
+
+def test_a_key_sharing_a_registered_prefix_is_not_matched() -> None:
+    """The registry lookup is on the whole key, never a substring of one.
+
+    `enable_dup_extra` is unregistered and `enable_du` is not a key at all; matching
+    either against the registered `enable_dup` would flag a site the registry does not
+    own -- and, in the RULE 1 direction, would green one it does.
+    """
+    for key in ("enable_dup_extra", "enable_du"):
+        text = MIRROR + f"$pconfig['x'] = $pfb['iconfig']['{key}'] ?? '';\n"
+        assert _find(text) == [], f"{key} is not the registered enable_dup"

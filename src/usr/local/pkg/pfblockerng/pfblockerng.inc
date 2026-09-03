@@ -3381,7 +3381,7 @@ function pfb_global() {
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
-	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
+	$pfb['dnsbl_regex_list']= PfbConfig::read('dnsbl/pfb_regex_list');	// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver Python opt-in regex length cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
@@ -3391,10 +3391,10 @@ function pfb_global() {
 	$pfb['dnsbl_psl_feed_icann_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy');		// issue #2371: feed-at-suffix PSL ICANN policy (PfbFeedSuffixPolicy enum; absent -> Honor)
 	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
-	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
+	$pfb['dnsbl_noaaaa_list']=PfbConfig::read('dnsbl/pfb_noaaaa_list');	// DNSBL Resolver python no AAAA list
 
 	$pfb['dnsbl_gp']		= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_gp'] ?? '');		// DNSBL Resolver python - DNSBL Bypass
-	$pfb['dnsbl_gp_bypass_list']	= $pfb['dnsblconfig']['pfb_gp_bypass_list'] ?? '';	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
+	$pfb['dnsbl_gp_bypass_list']	= PfbConfig::read('dnsbl/pfb_gp_bypass_list');	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// SafeSearch — read via gateway (ADR-29).
 	$pfb['safesearch_enable']	= PfbConfig::read('ss/safesearch_enable');
@@ -4718,7 +4718,7 @@ function pfb_log_mgmt() {
 	// The RAW value, never a parsed one: the guards clamp it themselves (#1258), so no
 	// caller can hand them an out-of-range margin. Hoisting the read is fine; hoisting
 	// the parse is what let an unclamped margin reach the window arithmetic.
-	$margin_raw = $pfb['config']['pfb_log_trim_margin_pct'] ?? '';
+	$margin_raw = PfbConfig::read('gen/pfb_log_trim_margin_pct');
 
 	foreach (array(	'log', 'errlog', 'extraslog', 'ip_blocklog', 'ip_permitlog', 'ip_matchlog',
 			'ip_parse_err', 'dnslog', 'dnsbl_parse_err', 'dnsreplylog', 'unilog') as $logtype) {
