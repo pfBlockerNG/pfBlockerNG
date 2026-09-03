@@ -57,6 +57,10 @@ SETUP_HOOKS
 #!/bin/sh
 printf 'init-worktree-tools:%s\n' "$1" >> "$DEBIAN_HELPER_LOG"
 INIT_WORKTREE
+    cat > "$repository/scripts/agent/provision-archivers.sh" <<'PROVISION_ARCHIVERS'
+#!/bin/sh
+printf 'provision-archivers:%s\n' "$*" >> "$DEBIAN_HELPER_LOG"
+PROVISION_ARCHIVERS
 
     basebin="$fixture/base-bin"
     activebin="$fixture/active-bin"
@@ -547,6 +551,13 @@ UNMANAGED_UV
     The file "$apt_log" should not be exist
   End
 
+  It 'never runs the Linux archiver provisioning on Darwin'
+    When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$helper_log" should equal \
+      "$(printf 'setup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s' "$repository" "$repository")"
+  End
+
   It 'fails on Darwin when Homebrew is unavailable without touching repository helpers'
     rm -f "$activebin/brew"
     When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
@@ -580,7 +591,7 @@ UNMANAGED_UV
       '  demo:' \
       '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'setup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s' "$repository" "$repository")"
+      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s' "$repository" "$repository")"
     The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should include 'wt:config shell install --yes'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
@@ -595,7 +606,7 @@ UNMANAGED_UV
       '  demo:' \
       '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
+      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s' "$repository")"
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
@@ -907,7 +918,7 @@ CONFIG
     The value "$(wc -c < "$worktrunk_config" | tr -d '[:space:]')" should equal \
       "$(wc -c < "$worktrunk_multiline_expected" | tr -d '[:space:]')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
+      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s' "$repository")"
   End
 
   It 'inserts only the global Worktrunk key while preserving hostile comments, tables, and nested paths byte-for-byte'
@@ -987,6 +998,7 @@ CONFIG
     Assert [ "$(grep -c "^ensure-graphify:$repository$" "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
+    Assert [ "$(grep -c '^provision-archivers:$' "$helper_log")" -eq 2 ]
   End
 
   It 'requires every repository setup helper before running any of them'
@@ -995,6 +1007,15 @@ CONFIG
     The status should not equal 0
     The stderr should include 'init-worktree-tools.sh'
     The file "$helper_log" should not be exist
+  End
+
+  It 'requires the archiver provisioning helper before running any helper'
+    rm -f "$repository/scripts/agent/provision-archivers.sh"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'provision-archivers.sh'
+    The file "$helper_log" should not be exist
+    The file "$tool_log" should not be exist
   End
 
   It 'fails before tool installation when the shared Graphify helper is missing'

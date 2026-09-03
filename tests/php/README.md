@@ -80,18 +80,31 @@ there instead, and they are not interchangeable: GNU tar rejects the shipped
 `PFB_TAR_EXTRACT_FLAGS` (`--no-fflags`) with exit 64 before reading the archive. Cases
 that drive a real extraction therefore skip on such a host, naming that reason.
 
-CI installs the appliance's binaries rather than living with the gap, and a dev host
-can do the same (`test.yml`, jobs "Put bsdtar at /usr/bin/tar" and "Put bsdunzip at
-/usr/bin/unzip"):
+CI installs the appliance's binaries rather than living with the gap (`test.yml`, steps
+"Put bsdtar at /usr/bin/tar", "Put bsdunzip at /usr/bin/unzip", and "Put rsync at
+/usr/local/bin/rsync"), and a Debian-family dev host does the same with one command,
+which `scripts/agent/setup-agent-tools.sh` also runs on Linux:
 
 ```sh
-sudo apt-get install -y --no-install-recommends libarchive-tools
-sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
-sudo mv /usr/bin/tar /usr/sbin/tar && sudo ln -s bsdtar /usr/bin/tar
+sh scripts/agent/provision-archivers.sh
 ```
 
-`/usr/sbin` precedes `/usr/bin` on PATH, so a bare `tar` still resolves to GNU tar for
-everything else. Reverse it with `dpkg-divert --remove` after moving the binary back.
+It installs `libarchive-tools` and `rsync`, symlinks `/usr/bin/tar` to bsdtar,
+`/usr/bin/unzip` to bsdunzip, and `/usr/local/bin/rsync` to Debian's rsync, and
+`dpkg-divert`s GNU tar and Info-ZIP out of the way so a package upgrade cannot undo the
+links. The diversion target is derived from PATH, not copied from CI: the GNU tools move
+to the first of `/usr/local/bin`, `/usr/local/sbin`, `/usr/sbin` that your PATH searches
+before `/usr/bin`, so a bare `tar` or `unzip` still resolves to them for everything else
+(`dpkg-deb`, composer). CI's fixed `/usr/sbin` target is a runner property — a default
+Debian user PATH has no `/usr/sbin` at all, and copying that recipe there hands bare
+`tar` to bsdtar (issue #3135). The script asserts both lookups, refuses before changing
+anything when no such directory precedes `/usr/bin`, and is a privilege-free no-op once
+the host is wired. The rows that stop skipping are the archive and rsync entries in
+`tests/skip-allowlist.txt`.
+
+Reverse it with `dpkg-divert --remove` after moving each binary back. macOS ships bsdtar
+already and SIP owns `/usr/bin`, so the script refuses there; its `/usr/bin/unzip` stays
+Info-ZIP and those rows keep skipping.
 
 ## Adding a test
 

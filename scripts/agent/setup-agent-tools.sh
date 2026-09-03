@@ -231,9 +231,16 @@ main() {
 	setup_hooks=$root/scripts/setup-hooks.sh
 	ensure_graphify=$root/scripts/agent/ensure-graphify.sh
 	init_tools=$root/scripts/agent/init-worktree-tools.sh
+	provision_archivers=$root/scripts/agent/provision-archivers.sh
 	[ -f "$setup_hooks" ] || fail "required repository helper '$setup_hooks' is missing"
 	[ -f "$ensure_graphify" ] || fail "required repository helper '$ensure_graphify' is missing"
 	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
+	[ -f "$provision_archivers" ] || fail "required repository helper '$provision_archivers' is missing"
+
+	# The archive cases exec the appliance's absolute paths; macOS already ships bsdtar.
+	case "$platform" in
+		Linux) sh "$provision_archivers" ;;
+	esac
 
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
 		xdg_bin_home=$XDG_BIN_HOME
