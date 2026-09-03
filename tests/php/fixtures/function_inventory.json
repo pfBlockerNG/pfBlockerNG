@@ -11253,26 +11253,6 @@
             }
         ]
     },
-    "pfb_script_env_export": {
-        "returnsRef": false,
-        "returnType": "void",
-        "params": [
-            {
-                "name": "ip_placeholder",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "reentry_timeout",
-                "byRef": false,
-                "variadic": false,
-                "type": "int",
-                "default": null
-            }
-        ]
-    },
     "pfb_select_reload_aliases": {
         "returnsRef": false,
         "returnType": "array",

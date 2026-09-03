@@ -984,7 +984,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['kstates'] 	= PfbConfig::read('ip/killstates');				// Firewall states removal
 
 	$pfb['ip_ph']		= pfb_filter($pfb['ipconfig']['ip_placeholder'], PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');	// Placeholder IP Address
-	pfb_script_env_export($pfb['ip_ph'], pfb_reentry_budget(NULL));	// issue #3140: pfblockerng.sh init prefers these over re-reading config.xml
+	// issue #3140: pfblockerng.sh init prefers these over two read_xml_tag.sh execs per
+	// invocation (~160 ms on a 500 KB config); unset (boot/hand-run) still reads config.xml.
+	putenv("PFB_IP_PLACEHOLDER={$pfb['ip_ph']}"); putenv('PFB_REENTRY_TIMEOUT=' . pfb_reentry_budget(NULL));
 
 	// DNSBL settings
 	$pfb['dnsbl_ip']	= pfb_dnsblip_action_value($pfb['dnsblconfig']['action'] ?? NULL);	// Enable/Disable IP blocking from DNSBL lists
