@@ -91,6 +91,34 @@ Describe 'reputation_pmax() collapse (no GeoIP, block-only)'
 		The contents of file "$masterfile" should not include 'PALIAS_v4 198.51.100.1'
 		The contents of file "$masterfile" should include 'PALIAS_v4 198.51.100.0/24'
 	End
+
+It 'collapses a repeat offender in a deny filename containing whitespace (issue #3176)'
+		alias='PALIAS SPACE'
+		rm -f "${pfbdeny}"*.txt
+		printf '198.51.100.1\n198.51.100.2\n198.51.100.3\n' > "${pfbdeny}${alias}.txt"
+
+		When call reputation_pmax
+		The status should be success
+		The stdout should include 'Reputation - pMax Stats'
+		The contents of file "${pfbdeny}${alias}.txt" should include '198.51.100.0/24'
+	End
+
+It 'aborts without mutation when the pMax source scan fails (issue #3176)'
+		errorlog="${work}/err.log"
+		mkdir -p "${work}/bin"
+		cat > "${work}/bin/cut" <<'EOF'
+#!/bin/sh
+printf '198.51.100\n'
+exit 2
+EOF
+		chmod +x "${work}/bin/cut"
+		PATH="${work}/bin:${PATH}"
+
+		When call reputation_pmax
+		The status should be success
+		The contents of file "${pfbdeny}PALIAS_v4.txt" should not include '198.51.100.0/24'
+		The stdout should include 'source scan'
+	End
 End
 
 Describe 'process255() collapses >253 same-/24 members within one feed'
