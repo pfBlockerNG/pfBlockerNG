@@ -123,21 +123,22 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
   End
 
   It 'never reports PASSED when the deny concatenation cannot be written (C6)'
-    # Given the same real mismatch, plus a `sort` that writes part of its output and
-    # exits nonzero -- what an exhausted tmpdir does (partial write, exit 2). Truncation
-    # only ever LOWERS the deny count, so it can drag s2 down onto s1 and print PASSED
-    # over a genuine mismatch; the sanity verdict is mirrored into the GUI dedup ledger
-    # by pfb_sync_status_dedup_check(), so a false PASSED closes a key that must stay open.
-    printf 'A 1.2.3.4\n'  > "$masterfile"
-    printf '1.2.3.4\n'    > "$mastercat"
-    printf '1.2.3.4\n'    > "${pfbdeny}A.txt"
-    printf '5.6.7.8\n'    > "${pfbdeny}B.txt"
+    # Given a deny folder twice the size of mastercat, holding a cross-file duplicate that
+    # survives truncation, plus a `sort` that writes part of its output and exits nonzero --
+    # what an exhausted tmpdir does (partial write, exit 2). Truncation only ever LOWERS the
+    # deny count, so it can drag s2 down onto s1 and print PASSED over a genuine mismatch;
+    # the verdict is mirrored into the GUI dedup ledger by pfb_sync_status_dedup_check(), so
+    # a false PASSED closes a key that must stay open.
+    printf 'A 1.2.3.4\nB 5.6.7.8\n'      > "$masterfile"
+    printf '1.2.3.4\n5.6.7.8\n'          > "$mastercat"
+    printf '1.2.3.4\n'                   > "${pfbdeny}A.txt"
+    printf '1.2.3.4\n5.6.7.8\n9.9.9.9\n' > "${pfbdeny}B.txt"
     mkdir -p "${work}/bin"
     real_sort="$(command -v sort)"
     {
       printf '#!/bin/sh\n'
       printf 'case " $* " in *" -o "*) exec %s "$@" ;; esac\n' "$real_sort"
-      printf '%s "$@" | head -1\nexit 2\n' "$real_sort"
+      printf '%s "$@" | head -2\nexit 2\n' "$real_sort"
     } > "${work}/bin/sort"
     chmod +x "${work}/bin/sort"
     PATH="${work}/bin:${PATH}"
@@ -145,11 +146,13 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     # When the final report runs.
     When call closingprocess
 
-    # Then no count is reported from the short write, the verdict stays FAILED, and the
-    # failure is logged instead of being papered over.
+    # Then the count is refused rather than reported low, the duplicate listing the partial
+    # file would have yielded is withheld, the verdict stays FAILED, and it is logged.
     The status should be success
     The stdout should not include 'PASSED'
     The stdout should include 'Database Sanity check [  FAILED  ]'
+    The stdout should include 'Deny folder Count   [ incomplete ]'
+    The stdout should include "$(printf 'Deny folder/Masterfile uniq check\n\nSync check')"
     The stdout should include 'deny folder concatenation'
     The contents of the file "$errorlog" should include 'sanity counts unreliable'
   End
