@@ -374,6 +374,22 @@ Describe 'run-gates.sh Composer vendor guard'
     Assert [ -e "$composer_marker" ]
     Assert [ -e "$phpunit_marker" ]
   End
+  # issue #3143: under a root runner composer aborts ("Do not run Composer as
+  # root/super user ... Aborting") before running either Composer-backed gate, so both
+  # gates fail for a reason unrelated to the diff. The stub below observes what a real
+  # composer invocation would inherit; both invocations must carry the authorization.
+  It 'passes superuser authorization to both composer gate invocations'
+    composer_env="$stubdir/composer-env"
+    printf '#!/bin/sh\nprintf "%%s" "$COMPOSER_ALLOW_SUPERUSER" >> "%s"\nexit 0\n' "$composer_env" > "$stubdir/composer"
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/uv"
+    chmod +x "$stubdir/composer" "$stubdir/uv"
+    unset COMPOSER_ALLOW_SUPERUSER
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: composer phpstan'
+    The output should include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
+    The contents of file "$composer_env" should equal '11'
+  End
 End
 
 Describe 'run-gates.sh main (fixture repo, stubbed tools)'
