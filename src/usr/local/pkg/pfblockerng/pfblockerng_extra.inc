@@ -6909,7 +6909,7 @@ function pfb_dnsbl_download_ledger_update(bool $download_ok, string $item, strin
 /**
  * pfb_sync_status_dedup_check — mirror the shell's "Sanity check" line (pfblockerng.sh's
  * closingprocess(), 'Database Sanity check [ PASSED / FAILED ]') into the IP dedup ledger
- * key -- the same LAST-line-wins read as the widget's `grep 'Sanity check' | tail -1`.
+ * key.
  * FAILED opens facility=ip item=dedup stage=dedup; PASSED closes it. No line recorded yet
  * (dedup never run) is left untouched -- nothing known to report either way.
  *
