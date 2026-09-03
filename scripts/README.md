@@ -243,7 +243,7 @@ in `read-version-matrix.sh`.
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Mandatory post-clone setup: install the pinned org-fork Graphify package, point git at `.githooks`, and initialize CodeGraph when installed. |
-| [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade entry point, pinned to the org fork tag with the `leiden` extra; the package provides `.inc` mapping until upstream #3075 and #3310 ship in PyPI. |
+| [`agent/ensure-graphify.sh`](agent/ensure-graphify.sh) | Shared Graphify install/upgrade entry point, pinned to the org fork commit with the `leiden` extra; the package provides `.inc` mapping until upstream #3075 and #3310 ship in PyPI. |
 | [`agent/resolve-graphify.sh`](agent/resolve-graphify.sh) | Prefer and physically absolutize the PATH-selected Graphify launcher; otherwise resolve uv's direct launcher and validate its owning Python without trusting arbitrary wrappers. |
 | [`agent/ensure-codegraph.sh`](agent/ensure-codegraph.sh) | Idempotently create an exact-root CodeGraph index for one checkout. |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install or upgrade Graphify from the pfBlockerNG fork's immutable tagged release.
+# Install or upgrade Graphify from the pfBlockerNG fork's immutable commit.
 # Usage: ensure-graphify.sh [REPOSITORY]
 
 set -eu
@@ -29,7 +29,7 @@ main() {
 		echo "ensure-graphify.sh: '$target' is not a git worktree" >&2
 		exit 2
 	}
-	uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2' 1>&2 ||
+	uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87' 1>&2 ||
 		fail 'Graphify installation failed'
 	graphify_bin=$(resolve_graphify_launcher) ||
 		fail 'cannot resolve the installed Graphify launcher'

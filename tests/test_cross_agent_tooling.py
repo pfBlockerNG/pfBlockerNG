@@ -496,13 +496,11 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
     assert findings("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
 
 
-def test_graphify_install_uses_org_tag_without_local_patch() -> None:
+def test_graphify_install_uses_org_commit_without_local_patch() -> None:
     installer_path = "scripts/agent/ensure-graphify.sh"
     installer = (ROOT / installer_path).read_text(encoding="utf-8")
-    install_command = (
-        "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'"
-    )
-    assert install_command in installer, "the shared Graphify installer lost the pinned fork tag"
+    install_command = "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'"
+    assert install_command in installer, "the shared Graphify installer lost the pinned fork commit"
 
     resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
     quote_probe = (

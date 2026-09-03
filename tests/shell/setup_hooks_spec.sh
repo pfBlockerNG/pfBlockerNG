@@ -28,7 +28,7 @@ Describe 'setup-hooks.sh contributor bootstrap'
     cat > "$stubdir/uv" <<'UV'
 #!/bin/sh
 case "$*" in
-  'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2')
+  'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87')
     printf '%s\n' "$*" >> "$INSTALL_LOG"
     if [ -n "${UV_TOOL_BIN_FIXTURE:-}" ]; then
       mkdir -p "$UV_TOOL_BIN_FIXTURE"
@@ -74,7 +74,7 @@ CODEGRAPH
     The output should include 'core.hooksPath set to: .githooks'
     The stderr should include 'Initializing CodeGraph'
     The contents of file "$codegraph_log" should equal "init $primary"
-    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'
+    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'
     Assert [ -f "$primary/.codegraph/codegraph.db" ]
   End
 
@@ -82,7 +82,7 @@ CODEGRAPH
     When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'
+    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'
     The file "$codegraph_log" should not be exist
   End
 
@@ -94,7 +94,7 @@ CODEGRAPH
       sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
-    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'
+    The contents of file "$install_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'
     The value "$(git_fixture -C "$primary" config --get core.hooksPath)" should equal '.githooks'
   End
 
