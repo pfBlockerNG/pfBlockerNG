@@ -6,10 +6,10 @@
 legacy/** linguist-documentation
 docs/** linguist-documentation
 # The tracked root graph is generated output: `graphify update` rewrites it whole, so
-# suppressing its diff is the point — linguist-generated collapses it in pull-request
-# diffs and drops it from the language stats, while merge=graphify keeps resolving
-# parallel updates through the union driver.
-graphify-out/graph.json merge=graphify linguist-generated=true
+# suppressing its diff is the point — linguist-generated collapses GitHub's web
+# diff and language stats, -diff suppresses local git diff and patch output, and
+# merge=graphify keeps resolving parallel updates through the union driver.
+graphify-out/graph.json merge=graphify linguist-generated=true -diff
 # Records are prose reviewed in diffs, so they stay out of the language stats without
 # linguist-generated, which would suppress the diffs they exist to be read in.
 graphify-out/memory/** linguist-documentation
