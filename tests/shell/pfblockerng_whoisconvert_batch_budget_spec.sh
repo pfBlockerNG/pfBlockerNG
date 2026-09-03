@@ -266,6 +266,24 @@ EOF
     The path "${pfborig}${alias}.fail" should not be exist
   End
 
+  It 'accepts a zero-padded positive budget instead of degrading to the default'
+    whoisbatchtimeout=008
+    export HOST_SLEEP=0
+    dedup='d1.example'
+    make_recording_passthrough_timeout
+    make_counting_host
+    printf '198.51.100.7\n' > "${pfborig}${alias}.orig"
+
+    When call whoisconvert
+    The status should be success
+    The stdout should not include 'TIMED OUT'
+    # 008 is eight seconds, so the first lookup is clipped to 8 not 30.
+
+    The contents of file "$timeout_args" should include "-s TERM -k 5 8 ${pathhost} -t A d1.example"
+    The contents of file "${pfborig}${alias}.orig" should include '203.0.113.1'
+    The path "${pfborig}${alias}.fail" should not be exist
+  End
+
   It 'treats an empty entry list as a no-expiry pass that restores the prior file'
     whoisbatchtimeout=2
     export HOST_SLEEP=0

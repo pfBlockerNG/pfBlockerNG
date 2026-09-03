@@ -1668,8 +1668,15 @@ whoisconvert() {
 	_whoisbatch_budget=1800
 	case "${whoisbatchtimeout:-}" in
 	''|*[!0-9]*) : ;;
-	*)	[ "${whoisbatchtimeout}" -gt 0 ] 2>/dev/null && _whoisbatch_budget="${whoisbatchtimeout}" ;;
+	*)
+		_whoisbatch_n=${whoisbatchtimeout}
+		while [ "${_whoisbatch_n}" != "${_whoisbatch_n#0}" ] && [ "${#_whoisbatch_n}" -gt 1 ]; do
+			_whoisbatch_n=${_whoisbatch_n#0}
+		done
+		[ "${_whoisbatch_n}" -gt 0 ] 2>/dev/null && _whoisbatch_budget=${_whoisbatch_n}
+		;;
 	esac
+
 	_whoisbatch_start="$(date +%s)"
 	_whoisbatch_expired=false
 
