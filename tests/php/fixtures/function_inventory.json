@@ -10325,13 +10325,6 @@
         "returnType": "array",
         "params": [
             {
-                "name": "active_aliases",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            },
-            {
                 "name": "registered_aliases",
                 "byRef": false,
                 "variadic": false,

@@ -8178,11 +8178,12 @@ function pfb_select_reload_aliases(
 }
 
 /**
- * Return the rule-referenced aliases plus the currently registered aggregate aliases that
- * rule-change cleanup must keep alive. Aggregate aliases are registered urltables without
- * firewall rules; unrelated orphan tables remain removable.
+ * Return the currently registered aggregate aliases that rule-change cleanup must keep alive.
+ *
+ * Aggregate aliases are registered urltables without firewall rules; unrelated orphan tables
+ * remain removable and rule-referenced aliases stay in the caller's active set.
  */
-function pfb_rule_change_keep_aliases(array $active_aliases, array $registered_aliases): array {
+function pfb_rule_change_keep_aliases(array $registered_aliases): array {
 	$aggregate_aliases = array();
 	foreach (PFB_AGGREGATE_TYPES as $type) {
 		foreach (array('v4', 'v6') as $family) {
@@ -8190,10 +8191,7 @@ function pfb_rule_change_keep_aliases(array $active_aliases, array $registered_a
 		}
 	}
 
-	return array_values(array_unique(array_merge(
-		$active_aliases,
-		array_intersect($registered_aliases, $aggregate_aliases)
-	)));
+	return array_values(array_intersect($registered_aliases, $aggregate_aliases));
 }
 
 

@@ -152,7 +152,6 @@ final class AliasReloadScopeTest extends TestCase
 	 */
 	public function testRuleChangeKeepsSelectedAggregatesButKillsOrphans(): void
 	{
-		$active = ['pfB_FeedA_v4'];
 		$registered = [
 			'pfB_Deny_Aggregated_v4',
 			'pfB_Deny_Aggregated_v6',
@@ -160,10 +159,10 @@ final class AliasReloadScopeTest extends TestCase
 			'pfB_Custom_Aggregated_v4',
 		];
 
-		$result = pfb_rule_change_keep_aliases($active, $registered);
+		$result = pfb_rule_change_keep_aliases($registered);
 
 		$this->assertSame(
-			['pfB_FeedA_v4', 'pfB_Deny_Aggregated_v4', 'pfB_Deny_Aggregated_v6'],
+			['pfB_Deny_Aggregated_v4', 'pfB_Deny_Aggregated_v6'],
 			$result,
 			'selected aggregate tables survive cleanup, while non-aggregate tables still require a rule'
 		);
