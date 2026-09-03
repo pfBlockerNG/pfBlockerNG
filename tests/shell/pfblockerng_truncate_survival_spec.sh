@@ -16,10 +16,11 @@
 # pfblockerng_tempfile_spec.sh) -- never `When call`, which would take the whole
 # shellspec process down with it.
 
-# Structural guard: the exact class of legacy site, scoped to shipped shell sources
-# (never tests/, which uses ": >" for ordinary fixture setup and is not part of this
-# retirement). Scoped to the whole of src/ (not just pfblockerng/) so the guard also
-# covers any future shell source elsewhere under src/.
+# Structural guard: the exact class of legacy site, scoped to exactly the top-level
+# src, scripts, and tests trees. tests/ is deliberately in scope -- a #2877/#2880
+# port spec shipped the retired idiom, its scoped runs passed, and only a
+# full-suite run caught it. Scoped to the whole of src/ (not just pfblockerng/)
+# so the guard also covers any future shell source elsewhere under src/.
 _trunc_legacy_hits() {
 	git_fixture -C "${1:-${PFB_ROOT}}" grep -nE '(^|[;&|({[:space:]]):[[:space:]]*>' -- \
 		src scripts tests
