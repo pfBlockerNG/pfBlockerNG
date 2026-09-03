@@ -139,6 +139,9 @@ PAGE_TABLE: tuple[Page, ...] = (
             # pfb_regex_list live-highlighting asset is wired on the page. Present because
             # the gating pfb_syntax_highlight toggle defaults on for a fresh box.
             "vendor/codemirror/cm-regex.min.js",
+            # issue #3088: Regex Exceptions holding pen, same DNSBL Regex section.
+            "Regex Exceptions",
+            "pfb_regex_exception_list",
             # issue #1541: the renamed PSL-era controls and both PRIVATE-policy
             # toggles render with their outcome-based labels.
             "Wildcard Blocking",

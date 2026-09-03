@@ -101,9 +101,18 @@ export function serverLint(url, lang, extraParams) {
 // recurses into every NodeProp.mounted tree it meets (overlay coordinates are relative to
 // the host node's own start, confirmed empirically), so it still sees error nodes at any
 // mount depth.
-export function lezerErrorDiagnostics(state) {
+// issue #3088: save-blocking editor flags are red. Same Diagnostic.message for
+// gutter hover and the click panel. Python remains the compile gate.
+export const PFB_REGEX_EDITOR_FLAG_MESSAGE =
+  "Regex error: this editor could not parse this line. If you believe it is a valid Python regular expression, you can move it to the Regex Exceptions list. Python still validates it when DNSBL compiles; a pattern Python rejects will not load.";
+export const PFB_REGEX_MOVE_ACTION_NAME = "Move to Regex Exceptions";
+
+export function lezerErrorDiagnostics(state, options = {}) {
   const diagnostics = [];
   const docLength = state.doc.length;
+  const severity = options.severity ?? "error";
+  const message = options.message ?? PFB_REGEX_EDITOR_FLAG_MESSAGE;
+  const moveAction = options.moveAction;
 
   function walk(tree, offset) {
     tree.iterate({
@@ -118,16 +127,11 @@ export function lezerErrorDiagnostics(state) {
           // doc", per the design's zero-width-at-doc-end requirement, just anchored on
           // the other side.
           if (to <= from && from > 0) from = from - 1;
-          // issue #3059: an error node means this grammar failed to parse; Python
-          // gates the save and is authoritative -- warn, never error.
-          diagnostics.push({
-            from,
-            to,
-            severity: "warning",
-            message:
-              "This editor could not fully parse this pattern. " +
-              "Patterns are validated on save by Python, which is authoritative.",
-          });
+          const diagnostic = { from, to, severity, message };
+          if (moveAction) {
+            diagnostic.actions = [{ name: PFB_REGEX_MOVE_ACTION_NAME, apply: moveAction }];
+          }
+          diagnostics.push(diagnostic);
         }
         const mounted = node.tree && node.tree.prop(NodeProp.mounted);
         if (mounted) walk(mounted.tree, offset + node.from);
@@ -139,6 +143,45 @@ export function lezerErrorDiagnostics(state) {
   return diagnostics;
 }
 
-export function lezerErrorLint() {
-  return linter((view) => lezerErrorDiagnostics(view.state));
+export function lezerErrorLint(options = {}) {
+  return linter((view) => {
+    const moveAction = options.getExceptionsView
+      ? (v, from) => {
+          const exceptionsView = options.getExceptionsView();
+          if (exceptionsView) moveRegexLine(v, from, exceptionsView);
+        }
+      : undefined;
+    return lezerErrorDiagnostics(view.state, {
+      severity: options.severity ?? "error",
+      message: options.message ?? PFB_REGEX_EDITOR_FLAG_MESSAGE,
+      moveAction,
+    });
+  });
+}
+
+export function moveRegexLine(mainView, from, exceptionsView) {
+  const line = mainView.state.doc.lineAt(from);
+  const text = line.text;
+  let delFrom = line.from;
+  let delTo = line.to;
+  if (line.number < mainView.state.doc.lines) {
+    delTo += 1;
+  } else if (line.from > 0) {
+    delFrom -= 1;
+  }
+  mainView.dispatch({ changes: { from: delFrom, to: delTo } });
+  const exDoc = exceptionsView.state.doc;
+  let insert = text;
+  if (exDoc.length > 0 && exDoc.line(exDoc.lines).text !== "") {
+    insert = "\n" + text;
+  }
+  exceptionsView.dispatch({ changes: { from: exDoc.length, insert } });
+}
+
+export function flaggedLineNumbers(state, diagnostics) {
+  const lines = new Set();
+  for (const d of diagnostics) {
+    lines.add(state.doc.lineAt(d.from).number);
+  }
+  return [...lines].sort((a, b) => a - b).join(",");
 }

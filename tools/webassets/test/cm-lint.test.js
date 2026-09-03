@@ -16,6 +16,10 @@ import {
   serverLintSource,
 } from "../cm-lint.js";
 
+const PFB_REGEX_EDITOR_FLAG_MESSAGE =
+  "Regex error: this editor could not parse this line. If you believe it is a valid Python regular expression, you can move it to the Regex Exceptions list. Python still validates it when DNSBL compiles; a pattern Python rejects will not load.";
+const PFB_REGEX_MOVE_ACTION_NAME = "Move to Regex Exceptions";
+
 test("buildLintBody encodes lang/content and merges extraParams", () => {
   const body = buildLintBody("regex", "a&b=c\ndé", { cap: "1" });
   assert.equal(
@@ -102,40 +106,62 @@ test("lezerErrorDiagnostics flags unbalanced '(' with a non-empty range within t
   const diags = lezerErrorDiagnostics(parsedState(doc));
   assert.ok(diags.length > 0, "expected at least one diagnostic for unbalanced '('");
   for (const d of diags) {
-    assert.equal(d.severity, "warning");
+    assert.equal(d.severity, "error");
     assert.ok(d.to > d.from || d.from < doc.length, "expected a non-empty/visible range within the doc");
     assert.ok(d.from >= 0 && d.to <= doc.length, "expected the range to stay within the doc");
   }
 });
 
-// issue #3059: this checker is a second implementation of Python's regex parser and
-// cannot be certain. Python gates the save, so under-reporting is harmless while
-// over-reporting makes people edit working rules until the marker goes away.
-// A sibling test here used to assert the same property against a real rule from a
-// maintainer's config that the grammar mis-parsed (issue #3063). That grammar bug is
-// fixed, the rule now parses cleanly, and the test became vacuous -- it looped over an
-// empty diagnostic list and asserted nothing. Removed rather than re-pointed at a
-// contrived input: the property below covers it, and there is no longer a known valid
-// pattern that trips the parser.
-test("lezerErrorDiagnostics reports a parse failure as a warning, never an error", () => {
+// issue #3088: save-blocking editor flags are red. Description-length stays
+// warning (yellow) on the server lint path. There is no known Python-valid
+// pattern that trips the current grammars after #3063; '(' is a Lezer flag
+// that Python also rejects, used here to pin colour + the Move action.
+test("lezerErrorDiagnostics reports a parse failure as an error, never a warning", () => {
   for (const doc of ["(", "[", "(a"]) {
     for (const d of lezerErrorDiagnostics(parsedState(doc))) {
-      assert.equal(d.severity, "warning", `severity for ${JSON.stringify(doc)}`);
+      assert.equal(d.severity, "error", `severity for ${JSON.stringify(doc)}`);
     }
   }
 });
 
-test("lezerErrorDiagnostics does not assert a cause it has not established", () => {
+test("lezerErrorDiagnostics uses the owner-specified editor-flag message", () => {
   const [d] = lezerErrorDiagnostics(parsedState("("));
   assert.ok(d, "expected a diagnostic");
+  assert.equal(
+    d.message,
+    PFB_REGEX_EDITOR_FLAG_MESSAGE,
+    "gutter hover and click panel share this Diagnostic.message",
+  );
   assert.doesNotMatch(
     d.message,
     /unbalanced|unclosed/i,
     "the walk only knows the grammar failed; it must not claim which construct is at fault",
   );
-  assert.match(d.message, /validated on save by Python/i, "the message must point at the authoritative gate");
 });
 
+test("lezerErrorDiagnostics on '(' offers Move to Regex Exceptions when a moveAction is supplied", () => {
+  const apply = () => {};
+  const [d] = lezerErrorDiagnostics(parsedState("("), { moveAction: apply });
+  assert.ok(d, "expected a diagnostic");
+  assert.equal(d.severity, "error");
+  assert.ok(Array.isArray(d.actions), "expected Diagnostic.actions");
+  assert.equal(d.actions.length, 1);
+  assert.equal(d.actions[0].name, PFB_REGEX_MOVE_ACTION_NAME);
+  assert.equal(d.actions[0].apply, apply);
+});
+
+test("lezerErrorDiagnostics has no Move action unless a moveAction is supplied", () => {
+  const [d] = lezerErrorDiagnostics(parsedState("("));
+  assert.ok(d, "expected a diagnostic");
+  assert.equal(d.actions, undefined);
+});
+
+test("diagnosticsToCm never attaches a Move action to server (Python) diagnostics", () => {
+  const doc = EditorState.create({ doc: "(" }).doc;
+  const [d] = diagnosticsToCm(doc, [{ line: 1, message: "Python regex compile error", severity: "error" }]);
+  assert.equal(d.severity, "error");
+  assert.equal(d.actions, undefined);
+});
 
 test("lezerErrorDiagnostics flags unbalanced '[' with a non-empty range within the doc", () => {
   const doc = "[";
