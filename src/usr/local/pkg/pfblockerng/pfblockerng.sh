@@ -38,9 +38,10 @@ pfb_make_tmpdir() {
 
 # issue #3167: mktemp only for verbs that use tempfile/tmpdir.
 pfb_ensure_tmpdir() {
-	[ -n "${tmpdir:-}" ] && return 0
+	[ -n "${pfb_tmpdir_ready:-}" ] && return 0
 	pfb_make_tmpdir
 	mkdir "${tmpxlsx}"
+	pfb_tmpdir_ready=1
 }
 
 # issue #3167/#3144: config.xml grep + df only for aliastables().
