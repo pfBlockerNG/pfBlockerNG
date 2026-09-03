@@ -9,7 +9,12 @@ reports a clean pass (issue #2212).
 
 ``git ... -z`` emits raw NUL-separated paths and is the fix wherever it exists
 (``--name-only``, ``ls-files``). A unified diff's ``---``/``+++`` header has no
-``-z`` form, so those parsers decode the header here instead.
+``-z`` form, so those parsers decode the header here instead. ``unified_diff``
+pins ``core.quotePath=true`` so a HIGH-BIT byte in that header is always
+C-escaped as plain ASCII (octal, e.g. ``\\377``) instead of emitted raw --
+plain ASCII survives the diff body's lossy ``errors="replace"`` decode intact,
+where a raw non-UTF-8 byte would have become an unrecoverable U+FFFD and left
+the gate reading a path nothing on disk answers to (issue #3076).
 
 This module is the single place the diff-scoped gates talk to git about paths:
 one invocation, and one decode per route -- byte-exact for a listing whose paths
@@ -40,7 +45,14 @@ _C_ESCAPES = {
 
 
 def unquote_git_path(field: str) -> str:
-    """Decode one C-quoted git path field; an unquoted field is returned as-is."""
+    """Decode one C-quoted git path field; an unquoted field is returned as-is.
+
+    ``os.fsdecode`` rather than a hard-coded UTF-8 decode: this field feeds
+    ``diff_header_name``, whose byte-exact result callers OPEN (e.g. ``git
+    show``), so it needs the same filesystem-encoding treatment ``nul_listing``
+    uses -- a hard-coded UTF-8 surrogateescape only round-trips on a UTF-8
+    filesystem encoding (issue #3073, issue #3076).
+    """
     if len(field) < 2 or not (field.startswith('"') and field.endswith('"')):
         return field
     # Byte-level: an octal escape names a BYTE of a multi-byte character, so the
@@ -67,7 +79,7 @@ def unquote_git_path(field: str) -> str:
         else:
             out.append(raw[i + 1])
             i += 2
-    return out.decode("utf-8", "surrogateescape")
+    return os.fsdecode(bytes(out))
 
 
 def diff_header_name(field: str) -> str:
@@ -103,8 +115,14 @@ def _run(args: list[str]) -> bytes:
 def unified_diff(args: list[str]) -> str:
     """A unified diff, pinned against everything that could defeat a header parse.
 
-    ``core.quotePath`` escapes non-ASCII bytes, ``diff.mnemonicPrefix``/
-    ``noprefix`` rewrite the ``a/``/``b/`` prefixes, and an external driver
+    ``core.quotePath=true`` (pinned, never left to user config) forces a
+    HIGH-BIT header byte to be C-escaped as plain ASCII octal rather than
+    emitted raw -- the escape survives the lossy ``errors="replace"`` decode
+    below intact, where a raw non-UTF-8 byte would decode to an unrecoverable
+    U+FFFD and the gate would classify a path nothing on disk answers to
+    (issue #3076). ``diff_header_name`` already C-unquotes a quoted header, so
+    this needs no consumer change. ``diff.mnemonicPrefix``/``noprefix``
+    rewrite the ``a/``/``b/`` prefixes, and an external driver
     (``diff.external`` / ``GIT_EXTERNAL_DIFF``) replaces the unified output
     outright — each silently defeats a gate built on ``+++ b/<path>``, so user
     config and environment cannot bypass one through this.
@@ -116,7 +134,7 @@ def unified_diff(args: list[str]) -> str:
         [
             "git",
             "-c",
-            "core.quotePath=false",
+            "core.quotePath=true",
             "diff",
             "--unified=0",
             "--no-color",
