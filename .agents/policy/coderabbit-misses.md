@@ -15,6 +15,9 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `def1073fe`  tests: match routing-doc pins on collapsed whitespace  (#3133) — never asked, owner directive; four legs, no blocking.
+- `aa0329b07`  tests: accept Node 24 and Node 26 JUnit skip classnames  (#3131) — never asked, owner directive; four legs, no blocking.
+- `ec53a84a9`  tests: skip five chmod-denial ShellSpec rows under uid 0  (#3130) — never asked, owner directive; four legs, no blocking.
 - `f0a243b32`  pfblockerng: see hyphenated config keys, classify widget-* as foreign  (#3138) — never asked, owner directive; four legs, no blocking.
 - `784b71479`  pfblockerng: gate the toggle contract wherever a config mirror is declared  (#3134) — never asked, owner directive; eight legs over two rounds, one blocking deferred to #3136.
 - `e9ad19cf4`  pfblockerng: hide the DNSBL TOP1M API Token field for keyless types  (#3132) — never asked, owner directive (slot saturated, cosmetic); four legs, no blocking.
