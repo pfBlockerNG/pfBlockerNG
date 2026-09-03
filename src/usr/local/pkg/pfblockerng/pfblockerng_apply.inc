@@ -4572,7 +4572,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	#  which themselves precede the ADR-12 post-update hook (closing tail).	#
 	#  Native => registered urltable but NEVER pfb_firewall_rule (no rule).	#
 	#########################################################################
-	pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $pfb_alias_lists);
+	pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $pfb_alias_lists, $pfb_alias_prev_sets);
 
 	#########################################
 	#	UPDATE pfSense ALIAS TABLES	#

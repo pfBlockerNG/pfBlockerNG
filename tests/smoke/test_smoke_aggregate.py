@@ -6,11 +6,12 @@ pfBlockerNG can build, per SELECTED action type x family, a Native ``urltable`` 
 ``pfb_agg_types`` (IP settings, opt-in, default ``""`` = none) gates it. The build
 runs IN the update pass (``sync_package_pfblockerng`` -> ``pfb_build_aggregate_aliases``,
 ``inc:2144``, called ``inc:11116``): for each selected type it writes the member union,
-runs ``pfblockerng.sh aggregate`` (cat | sort -u | iprange, mtime-gated), registers the
-Native alias (NEVER ``pfb_firewall_rule`` -- no rule), loads the pf table INLINE
-(``pfctl -T replace``), and writes a never-empty ``.lst`` consumer file. A deselected /
-disabled type is torn down (alias/table/files removed). A genuinely (re)built aggregate's
-name is merged into ``$pfb['changed_ip_aliases']`` -> the ADR-12 ``post`` hook's
+runs ``pfblockerng.sh aggregate`` (cat | sort -u | iprange, rebuilt on a member's mtime),
+registers the Native alias (NEVER ``pfb_firewall_rule`` -- no rule), and writes a never-empty
+``.lst`` consumer file. A deselected / disabled type is torn down (alias/table/files removed).
+Whether that rebuild counts as a CHANGE is decided on the aggregate's canonical content, not on
+its mtime (issue #3156): only a changed aggregate is loaded INLINE (``pfctl -T replace``) and
+merged into ``$pfb['changed_ip_aliases']`` -> the ADR-12 ``post`` hook's
 ``PFB_CHANGED_IP_ALIASES`` -- and the build/load completes BEFORE the ``post`` hook fires.
 
 These tests drive the REAL production path: ``helpers.reload(vm, scope)`` runs the same

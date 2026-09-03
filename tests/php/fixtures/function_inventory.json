@@ -805,6 +805,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "pfb_alias_prev_sets",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": null
             }
         ]
     },
