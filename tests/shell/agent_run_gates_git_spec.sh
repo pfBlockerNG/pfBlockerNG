@@ -18,9 +18,12 @@ Describe 'run-gates.sh over a C-quoted path'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungateshostile.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/scripts"
+    mkdir -p "$repo/scripts/agent"
     printf 'base\n' > "$repo/README.md"
-    gitc add README.md
+    # issue #3139: the always-on graph-freshness gate runs the checkout's own script;
+    # a fresh-graph stand-in keeps these rows about the git-reading path.
+    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/check-graph-fresh.sh"
+    gitc add README.md scripts/agent/check-graph-fresh.sh
     gitc commit -q -m base
     gitc branch -f base HEAD
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesstatus.XXXXXX")"
@@ -237,15 +240,26 @@ Describe 'run-gates.sh over a C-quoted path'
   # sibling agent_run_gates_spec.sh); these examples cover main() handing those exact
   # commands to the shell, which is the half the AGENT_SOURCE_ONLY seam bypasses.
   Describe 'planned commands reach the shell verbatim'
-    It 'plans the canonical Python gate commands in order'
+    It 'plans the canonical Python gate commands in order, after the two always-on gates'
       printf 'x = 1\n' > "$repo/scripts/mod.py"
       gitc add -A
       gitc commit -q -m python
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
       The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py --name-status-z'
-      The line 2 of output should equal 'uv run --locked pytest'
-      The line 3 of output should equal 'uv run --locked ruff check .'
+      The line 2 of output should equal 'sh scripts/agent/check-graph-fresh.sh'
+      The line 3 of output should equal 'uv run --locked pytest'
+      The line 4 of output should equal 'uv run --locked ruff check .'
+    End
+
+    # issue #3139: the graph gate is a property of the whole tree, so it is planned even
+    # when the diff selects no file-type gate at all.
+    It 'plans coverage pairing and the graph-freshness gate for an empty diff'
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 0
+      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py --name-status-z'
+      The line 2 of output should equal 'sh scripts/agent/check-graph-fresh.sh'
+      The lines of output should equal 2
     End
 
     It 'leaves the shellspec command substitution unexpanded for the gate shell to resolve'

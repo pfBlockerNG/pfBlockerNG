@@ -30,6 +30,12 @@
 # nothing skipped without --allow-missing). A diff touching www/ additionally prints a
 # REMINDER that Tier-A ui_render coverage is a judgment gate this script cannot run (test
 # mandate #4).
+#
+# Two gates run on EVERY diff ahead of the file-type mapping: coverage pairing (fed the
+# exact name-status stream) and scripts/agent/check-graph-fresh.sh, which rebuilds
+# graphify-out/graph.json and fails when the committed file differs -- a stale graph is a
+# property of the whole tree, not of a touched file type. Its tool is `sh`, so a missing
+# Graphify surfaces as the checker's own FAIL, never as a SKIP.
 
 worktree='' base='origin/devel' plan=0 allow_missing=0
 overall=0
@@ -252,7 +258,9 @@ main() {
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	cmds=$(printf '%s\n' "$files" | gates_for)
 	pairing_cmd='python3 scripts/check_coverage_pairing.py --name-status-z'
+	graph_cmd='sh scripts/agent/check-graph-fresh.sh'
 	all_cmds="$pairing_cmd
+$graph_cmd
 $cmds"
 
 	if [ "$plan" -eq 1 ]; then
