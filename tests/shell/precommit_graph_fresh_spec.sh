@@ -5,9 +5,8 @@
 # commit and its graph always agree. Only the graph itself staged, or nothing
 # staged, rebuilds nothing; a tracked graphify-out/memory/ record IS a graph node,
 # so it rebuilds. A rebase/merge/cherry-pick in progress changes nothing because
-# the rebuild is synchronous. A failed or tool-less rebuild fails the commit like
-# the Graphify patch step does; a tree that ships no checker opts out only through
-# the committed .githooks-exempt manifest.
+# the rebuild is synchronous. A failed or tool-less rebuild fails the commit; a tree
+# that ships no checker opts out only through the committed .githooks-exempt manifest.
 #
 # Sandbox laid out like the repo, the other repo checkers exempted through the
 # manifest and shellcheck/npx stubbed, so ONLY the graph step decides the verdict.
@@ -44,7 +43,6 @@ scripts/agent/check-agent-config-parity.sh'
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/"
     chmod +x "$repo/.githooks/check-commit-identity.sh"
-    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/patch-graphify.sh"
     check_log="$repo/check-graph-fresh.log"
     export GRAPH_CHECK_LOG="$check_log"
     cat > "$repo/scripts/agent/check-graph-fresh.sh" <<'CHECK'
@@ -158,7 +156,7 @@ graphify-out/graph.json"
     The result of function staged_graph should equal ''
   End
 
-  It 'fails the commit when Graphify is missing (checker exit 4), like the patch step'
+  It 'fails the commit when the graph freshness checker fails (exit 4)'
     export GRAPH_CHECK_RC=4
     gitc add src/ok.sh
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"

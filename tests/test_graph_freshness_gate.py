@@ -86,8 +86,8 @@ def assert_graphify_installed_before_the_check(text: str) -> None:
     install = _index_of(markers, INSTALL)
     check = _index_of(markers, CHECK)
     assert checkout < setup_uv < install < check, (
-        f"{JOB}: steps must run checkout, then uv, then the shared installer (it applies the "
-        f".inc patch), then the check; got checkout={checkout} uv={setup_uv} install={install} check={check}"
+        f"{JOB}: steps must run checkout, then uv, then the shared installer (it provides the "
+        f".inc override), then the check; got checkout={checkout} uv={setup_uv} install={install} check={check}"
     )
 
 

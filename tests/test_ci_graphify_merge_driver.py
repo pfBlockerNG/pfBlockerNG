@@ -240,7 +240,7 @@ def test_exhaustive_push_matrix_has_graphify_driver_before_each_mutation() -> No
     assert not failures, "\n" + "\n".join(failures)
 
 
-def test_foreign_target_helper_checkout_includes_graphify_patch_payload() -> None:
+def test_foreign_target_helper_checkout_includes_graphify_install_payload() -> None:
     workflow = yaml.safe_load((WORKFLOWS / "release-published.yml").read_text(encoding="utf-8"))
     checkouts = [
         step
@@ -252,7 +252,7 @@ def test_foreign_target_helper_checkout_includes_graphify_patch_payload() -> Non
     ]
 
     assert len(checkouts) == 1
-    assert checkouts[0]["with"]["sparse-checkout"].splitlines() == ["scripts/", ".agents/patches/"]
+    assert checkouts[0]["with"]["sparse-checkout"].splitlines() == ["scripts/"]
 
 
 _GOOD_FIXTURE = """\

@@ -1,5 +1,4 @@
 # pfSense ships PHP include files as .inc; Graphify's suffix map calls them Pascal.
-# Read by the vendored .agents/patches/graphify-3075-language-overrides.patch and,
-# once it ships, by upstream Graphify-Labs/graphify#3075. Inert on a Graphify that
-# carries neither: the key is ignored and extraction runs unchanged.
+# The pfBlockerNG fork package's rcfile implementation reads this override from the
+# repository root and dispatches the includes as PHP.
 language.inc=php

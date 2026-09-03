@@ -27,7 +27,7 @@ Describe 'ensure-graphify-merge-driver.sh'
     cat > "$stubdir/uv" <<'UV'
 #!/bin/sh
 case "$*" in
-  'tool install --upgrade graphifyy>=0.9.51')
+  'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87')
     printf '%s\n' "$*" >> "$UV_LOG"
     if [ "${UV_PROGRESS_FIXTURE:-0}" = 1 ]; then printf '%s\n' 'uv progress'; fi
     ;;
@@ -62,13 +62,6 @@ esac
 exec "$REAL_GIT" "$@"
 GIT
     chmod +x "$gitstub/git"
-    # The vendored .inc language-override patch (issue #2810): this script runs the
-    # requested checkout's copy, so the real installed Graphify is never touched here.
-    mkdir -p "$repo/scripts/agent"
-    cat > "$repo/scripts/agent/patch-graphify.sh" <<'PATCH_GRAPHIFY'
-#!/bin/sh
-printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-PATCH_GRAPHIFY
     chmod +x "$stubdir/uv" "$stubdir/graphify"
     export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log"
     PATH="$stubdir:$PATH"
@@ -79,11 +72,11 @@ PATCH_GRAPHIFY
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs at least the required Graphify, upgrading to the latest, and registers its launcher as the union merge driver of the requested Git root'
+  It 'installs the pinned Graphify fork and registers its launcher as the union merge driver of the requested Git root'
     When run sh "$script_abs" "$repo"
     The status should equal 0
-    The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy>=0.9.51'
-    The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
+    The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'
+    The file "$graphify_log" should not be exist
     The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
   End
@@ -95,7 +88,7 @@ PATCH_GRAPHIFY
     The status should equal 0
     The path "$repo/.githooks/post-commit" should not be exist
     The path "$repo/.githooks/post-checkout" should not be exist
-    The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
+    The file "$graphify_log" should not be exist
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
   End
 
@@ -135,153 +128,6 @@ PATCH_GRAPHIFY
       The status should equal 1
       The stderr should include 'cannot be quoted'
       The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
-    End
-  End
-
-  Context 'foreign target without a target-local patch (issue #3004)'
-    # The trusted helper checkout runs the helper against a foreign checkout
-    # (e.g. FreeBSD-ports) that ships no scripts/agent/patch-graphify.sh; the
-    # helper must fall back to its own trusted sibling instead of failing, and
-    # must not create anything inside the foreign checkout.
-    It 'falls back to the trusted sibling patch next to the helper script'
-      helperdir="$fixture/helper/scripts/agent"
-      mkdir -p "$helperdir" "$fixture/helper/scripts/lib"
-      cp "$script_abs" "$script_home/ensure-graphify.sh" scripts/agent/agent_env.sh "$helperdir/"
-      if [ -f "$script_home/resolve-graphify.sh" ]; then
-        cp "$script_home/resolve-graphify.sh" "$helperdir/"
-      fi
-      cp scripts/lib/git-env-scrub.sh "$fixture/helper/scripts/lib/"
-      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
-#!/bin/sh
-printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-PATCH_GRAPHIFY
-      chmod +x "$helperdir/patch-graphify.sh"
-      rm -rf "$repo/scripts/agent"
-      When run sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
-      The status should equal 0
-      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
-      The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
-    End
-
-    It 'uses the off-PATH launcher returned by setup for a foreign target'
-      helperdir="$fixture/off-path-helper/scripts/agent"
-      mkdir -p "$helperdir" "$fixture/off-path-helper/scripts/lib"
-      cp "$script_abs" "$script_home/ensure-graphify.sh" scripts/agent/agent_env.sh "$helperdir/"
-      if [ -f "$script_home/resolve-graphify.sh" ]; then
-        cp "$script_home/resolve-graphify.sh" "$helperdir/"
-      fi
-      cp scripts/lib/git-env-scrub.sh "$fixture/off-path-helper/scripts/lib/"
-      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
-#!/bin/sh
-printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-PATCH_GRAPHIFY
-      chmod +x "$helperdir/patch-graphify.sh"
-      rm -rf "$repo/scripts/agent"
-      uv_tool_bin="$fixture/uv tool bin"
-      mkdir -p "$uv_tool_bin"
-      cp "$stubdir/graphify" "$uv_tool_bin/graphify"
-      off_path="$fixture/off path"
-      mkdir -p "$off_path"
-      for tool in dirname git sh; do
-        ln -s "$(command -v "$tool")" "$off_path/$tool"
-      done
-      ln -s "$stubdir/uv" "$off_path/uv"
-      When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
-        UV_PROGRESS_FIXTURE=1 sh "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
-      The status should equal 0
-      The stderr should include 'uv progress'
-      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
-      The value "$(test -e "$repo/scripts/agent" && echo present || echo absent)" should equal "absent"
-    End
-
-    It 'absolutizes a relative PATH launcher before entering a foreign target'
-      helperdir="$fixture/relative-helper/scripts/agent"
-      mkdir -p "$helperdir" "$fixture/relative-helper/scripts/lib"
-      cp "$script_abs" "$script_home/ensure-graphify.sh" "$script_home/resolve-graphify.sh" \
-        scripts/agent/agent_env.sh "$helperdir/"
-      cp scripts/lib/git-env-scrub.sh "$fixture/relative-helper/scripts/lib/"
-      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
-#!/bin/sh
-printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-PATCH_GRAPHIFY
-      chmod +x "$helperdir/patch-graphify.sh"
-      rm -rf "$repo/scripts/agent"
-
-      caller="$fixture/caller"
-      relative_bin="$caller/relbin"
-      mkdir -p "$relative_bin"
-      cp "$stubdir/graphify" "$relative_bin/graphify"
-
-      decoy_marker="$fixture/decoy-executed"
-      mkdir -p "$repo/relbin"
-      cat > "$repo/relbin/graphify" <<'DECOY'
-#!/bin/sh
-printf 'decoy\t%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
-touch "$DECOY_MARKER"
-"$GIT_TOOL" config --local merge.graphify.driver 'graphify merge-driver %O %A %B'
-DECOY
-      chmod +x "$repo/relbin/graphify"
-
-      tool_path="$fixture/relative-tools"
-      mkdir -p "$tool_path"
-      for tool in dirname git touch; do
-        ln -s "$(command -v "$tool")" "$tool_path/$tool"
-      done
-      ln -s "$(command -v dash || command -v sh)" "$tool_path/sh"
-      ln -s "$stubdir/uv" "$tool_path/uv"
-      When run env PATH="relbin:$tool_path" GIT_TOOL="$tool_path/git" \
-        DECOY_MARKER="$decoy_marker" sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
-        "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
-      The status should equal 0
-      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
-      The path "$decoy_marker" should not be exist
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$relative_bin/graphify\" merge-driver %O %A %B"
-    End
-
-    It 'absolutizes a relative uv fallback before entering a foreign target'
-      helperdir="$fixture/relative-uv-helper/scripts/agent"
-      mkdir -p "$helperdir" "$fixture/relative-uv-helper/scripts/lib"
-      cp "$script_abs" "$script_home/ensure-graphify.sh" "$script_home/resolve-graphify.sh" \
-        scripts/agent/agent_env.sh "$helperdir/"
-      cp scripts/lib/git-env-scrub.sh "$fixture/relative-uv-helper/scripts/lib/"
-      cat > "$helperdir/patch-graphify.sh" <<'PATCH_GRAPHIFY'
-#!/bin/sh
-printf 'patch-graphify\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-PATCH_GRAPHIFY
-      chmod +x "$helperdir/patch-graphify.sh"
-      rm -rf "$repo/scripts/agent"
-
-      caller="$fixture/uv-caller"
-      relative_bin="$caller/relbin"
-      mkdir -p "$relative_bin"
-      cp "$stubdir/graphify" "$relative_bin/graphify"
-
-      decoy_marker="$fixture/uv-decoy-executed"
-      mkdir -p "$repo/relbin"
-      cat > "$repo/relbin/graphify" <<'DECOY'
-#!/bin/sh
-printf 'decoy\t%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
-touch "$DECOY_MARKER"
-"$GIT_TOOL" config --local merge.graphify.driver 'graphify merge-driver %O %A %B'
-DECOY
-      chmod +x "$repo/relbin/graphify"
-
-      tool_path="$fixture/relative-uv-tools"
-      mkdir -p "$tool_path"
-      for tool in dirname git touch; do
-        ln -s "$(command -v "$tool")" "$tool_path/$tool"
-      done
-      ln -s "$(command -v dash || command -v sh)" "$tool_path/sh"
-      ln -s "$stubdir/uv" "$tool_path/uv"
-      When run env PATH="$tool_path" UV_TOOL_BIN_FIXTURE=relbin \
-        GIT_TOOL="$tool_path/git" DECOY_MARKER="$decoy_marker" \
-        sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
-        "$caller" "$helperdir/ensure-graphify-merge-driver.sh" "$repo"
-      The status should equal 0
-      The contents of file "$graphify_log" should equal "$(printf 'patch-graphify\t')"
-      The path "$decoy_marker" should not be exist
-      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$relative_bin/graphify\" merge-driver %O %A %B"
     End
   End
 End

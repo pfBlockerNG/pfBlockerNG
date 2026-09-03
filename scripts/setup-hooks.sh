@@ -1,14 +1,14 @@
 #!/bin/sh
-# One-time developer setup: patch Graphify, activate tracked hooks, and bootstrap CodeGraph.
+# One-time developer setup: install Graphify from the org fork, activate tracked hooks, and bootstrap CodeGraph.
 #
 # Run once after cloning:
 #   sh scripts/setup-hooks.sh
 #
 # git cannot auto-apply a committed core.hooksPath (by design — cloning a repo
 # must not silently install executable hooks), so this single explicit opt-in is
-# the closest to "automatic". The setup installs and patches Graphify before
-# activating .githooks; when CodeGraph is installed, it also creates this
-# checkout's exact-root index.
+# the closest to "automatic". The setup installs the pinned Graphify fork before
+# activating .githooks; when CodeGraph is installed, it also creates this checkout's
+# exact-root index.
 
 set -eu
 

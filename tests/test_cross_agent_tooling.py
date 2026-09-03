@@ -496,20 +496,11 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
     assert findings("--scan-unknown-extensions") > 0, "the documented semgrep flag does not work"
 
 
-def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
-    # Graphify's suffix map sends .inc to the Pascal extractor, so this repository's
-    # PHP includes extract as a handful of incidental nodes (issue #2810). The fix is
-    # upstream in Graphify-Labs/graphify#3075 and unreleased, so it rides as a patch
-    # applied to the installed package after every install.
-    patch = (ROOT / ".agents/patches/graphify-3075-language-overrides.patch").read_text(encoding="utf-8")
-    assert "Graphify-Labs/graphify#3075" in patch, "the vendored patch must name its upstream PR"
-    assert "+++ b/graphify/rcfile.py" in patch, "the vendored patch must carry the .graphifyrc parser"
-
+def test_graphify_install_uses_org_commit_without_local_patch() -> None:
     installer_path = "scripts/agent/ensure-graphify.sh"
     installer = (ROOT / installer_path).read_text(encoding="utf-8")
-    install_command = "uv tool install --upgrade 'graphifyy>=0.9.51'"
-    assert install_command in installer, "the shared Graphify installer lost its install/upgrade floor"
-    assert 'sh "$patch_graphify"' in installer, "the shared Graphify installer does not apply the patch"
+    install_command = "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'"
+    assert install_command in installer, "the shared Graphify installer lost the pinned fork commit"
 
     resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
     quote_probe = (
@@ -520,14 +511,12 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
 
     callers = {
         "scripts/setup-hooks.sh": 'sh "$script_dir/agent/ensure-graphify.sh" "$root"',
-        ".githooks/pre-commit": "sh scripts/agent/patch-graphify.sh || failed 'Graphify .inc language override'",
-        "scripts/agent/init-worktree-tools.sh": 'sh "$(dirname "$0")/patch-graphify.sh" || exit $?',
         "scripts/agent/ensure-graphify-merge-driver.sh": 'sh "$(dirname "$0")/ensure-graphify.sh" "$root"',
         "scripts/agent/setup-agent-tools.sh": '(cd "$root" && sh "$setup_hooks")',
     }
     for caller, invocation in callers.items():
         source = (ROOT / caller).read_text(encoding="utf-8")
-        assert invocation in source, f"{caller} lost mandatory Graphify install/patch reachability"
+        assert invocation in source, f"{caller} lost mandatory Graphify install reachability"
         assert install_command not in source, f"{caller} duplicates the shared Graphify installation convention"
 
     agent_setup = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
@@ -539,10 +528,11 @@ def test_graphify_inc_language_override_rides_as_a_local_patch() -> None:
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
     for contract in (
         "scripts/agent/ensure-graphify.sh",
-        "scripts/agent/patch-graphify.sh",
         "scripts/setup-hooks.sh",
         ".githooks/pre-commit",
         "Graphify-Labs/graphify#3075",
+        "Graphify-Labs/graphify#3310",
+        "67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87",
         "language.inc=php",
         "include-node floor",
     ):
@@ -592,11 +582,10 @@ def test_root_graph_freshness_is_enforced_at_commit_and_push() -> None:
 
 
 def test_tracked_graph_carries_the_php_include_corpus() -> None:
-    # A Graphify without the vendored override parses all 21 .inc files with the Pascal
-    # extractor: extraction still succeeds, so the only visible symptom is a collapsed
-    # node count -- 30 across the corpus instead of roughly 755 (issue #2810). Nothing
-    # else catches an unattended `uv tool upgrade graphifyy` followed by a rebuild,
-    # which silently replaces site-packages and drops the patch.
+    # A Graphify without the packaged `.graphifyrc` override parses all 21 `.inc` files with
+    # the Pascal extractor: extraction still succeeds, so the only visible symptom is a
+    # collapsed node count -- 30 across the corpus instead of roughly 755 (issue #2810).
+    # The floor catches an unattended package regression that silently drops the override.
     graph = json.loads((ROOT / "graphify-out/graph.json").read_text(encoding="utf-8"))
     include_files = collections.Counter(
         str(node["source_file"]) for node in graph["nodes"] if str(node.get("source_file", "")).endswith(".inc")
@@ -606,12 +595,11 @@ def test_tracked_graph_carries_the_php_include_corpus() -> None:
     # 767 nodes, so a graph holding only that file clears any total-node floor. Breadth
     # is the discriminating half -- a file parsed as Pascal still contributes its own
     # file node, so the honest signal is how many includes contribute symbols BESIDES
-    # that node: 9 of 21 with the override, 3 without it.
+    # that node: 9 of 21 with the package override, 3 without it.
     with_symbols = sorted(path for path, nodes in include_files.items() if nodes > 1)
     assert total > 400 and len(with_symbols) >= 6, (
         f"{total} graph nodes from {len(include_files)} .inc files, and only "
         f"{len(with_symbols)} of them contribute symbols beyond their own file node "
         f"({', '.join(with_symbols) or 'none'}): the tracked graph is missing the PHP "
-        "include corpus that .agents/patches/graphify-3075-language-overrides.patch "
-        "restores"
+        "include corpus that the packaged .graphifyrc language override restores"
     )

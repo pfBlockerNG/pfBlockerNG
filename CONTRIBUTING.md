@@ -127,10 +127,8 @@ The repository ships hooks in `.githooks/` — a tracked directory, so they are
 shared and reviewed (the default `.git/hooks` is local-only and cannot be
 committed):
 
-- **`pre-commit`** reapplies the temporary Graphify `.inc=php` compatibility patch,
-  then runs the fast linters and policy checks. Patch failure blocks even an empty
-  commit; a missing optional lint tool is skipped (CI is the hard gate). Agents do
-  not bypass hooks with `git commit --no-verify`.
+- **`pre-commit`** runs the fast linters and policy checks. A missing optional lint tool is
+  skipped (CI is the hard gate). Agents do not bypass hooks with `git commit --no-verify`.
 - **`pre-push`** enforces the release tag scheme before anything is pushed (single source:
   [`scripts/release-version.sh`](scripts/release-version.sh)):
 
@@ -142,17 +140,15 @@ committed):
 | Malformed or mismatched trailer | push is rejected |
 
 Activate the hooks once after cloning (git cannot auto-apply a committed hooks
-path). This command requires `uv`, installs or upgrades Graphify, and applies the
-temporary [Graphify-Labs/graphify#3075](https://github.com/Graphify-Labs/graphify/pull/3075)
-`.inc=php` patch before enabling the hooks:
+path). This command requires `uv` and installs or upgrades the pinned
+`graphifyy[leiden]` package from the pfBlockerNG fork before enabling the hooks:
 
 ```sh
 sh scripts/setup-hooks.sh
 ```
 
-Until a Graphify release includes that upstream change, setup and every commit
-must apply the patch; an installation that cannot be patched fails closed.
-
+The fork package provides the `.inc=php` override and native Leiden extra. When
+upstream issues #3075 and #3310 both ship in a PyPI release, replace the fork pin in a deliberate commit.
 These are local client-side guards. CI enforces the same checks (and the tag
 rules) server-side, so anything that bypasses a hook is still caught by GitHub
 Actions.

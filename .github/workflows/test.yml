@@ -1241,8 +1241,8 @@ jobs:
           enable-cache: true
 
       - name: Install Graphify through the shared installer
-        # ensure-graphify.sh applies the .inc language override; a bare install
-        # would extract the PHP include files as Pascal and rebuild a different graph.
+        # ensure-graphify.sh installs the immutable org-fork package, whose rcfile
+        # honors `.graphifyrc` for PHP include files.
         run: sh scripts/agent/ensure-graphify.sh .
 
       - name: Enforce graphify-out/graph.json freshness
