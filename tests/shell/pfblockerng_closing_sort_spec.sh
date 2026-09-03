@@ -146,13 +146,14 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     # When the final report runs.
     When call closingprocess
 
-    # Then the count is refused rather than reported low, the duplicate listing the partial
-    # file would have yielded is withheld, the verdict stays FAILED, and it is logged.
+    # Then both the count and the duplicate listing say so rather than reporting the
+    # partial file's contents -- an empty listing under that heading reads as "no
+    # duplicates" -- the verdict stays FAILED, and the failure is logged.
     The status should be success
     The stdout should not include 'PASSED'
     The stdout should include 'Database Sanity check [  FAILED  ]'
     The stdout should include 'Deny folder Count   [ incomplete ]'
-    The stdout should include "$(printf 'Deny folder/Masterfile uniq check\n\nSync check')"
+    The stdout should include "$(printf 'Deny folder/Masterfile uniq check\nincomplete')"
     The stdout should include 'deny folder concatenation'
     The contents of the file "$errorlog" should include 'sanity counts unreliable'
   End

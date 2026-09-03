@@ -2234,14 +2234,15 @@ closingprocess() {
 		# issue #1084 review: mastercat (s1/s3) carries BOTH families' rows (v6 Deny joined
 		# cross-list dedup), so the shared deny concatenation (s2/s4) must include v6 too.
 		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
-		# issue #3154: one concat+sort feeds s2 and s4; a short write (exhausted tmpdir) only
-		# ever LOWERS s2, so an unchecked one could print PASSED over a real mismatch.
+		# issue #3154: one concat+sort feeds s2 and s4; a short write (exhausted tmpdir) makes
+		# the count unreliable either way, so an unchecked one could print PASSED over a real
+		# mismatch -- a truncation inside a placeholder row even RAISES it.
 		if find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"; then
 			s2="$(grep -cv "^${ip_placeholder2}$" "${tempfile}")"
 			s4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"
 		else
 			s2='incomplete'
-			s4=''
+			s4='incomplete'
 			log="closing: deny folder concatenation into [ ${tempfile} ] failed; sanity counts unreliable."
 			echo "${log}" | tee -a "${errorlog}"
 		fi
