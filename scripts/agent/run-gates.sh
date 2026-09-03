@@ -40,6 +40,11 @@
 worktree='' base='origin/devel' plan=0 allow_missing=0
 overall=0
 
+# Composer refuses to load plugins as root/superuser and aborts before the gate can
+# run (issue #3143); the gate runner itself may be invoked by root.
+COMPOSER_ALLOW_SUPERUSER=1
+export COMPOSER_ALLOW_SUPERUSER
+
 usage() {
 	echo "usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]" >&2
 	exit 2
