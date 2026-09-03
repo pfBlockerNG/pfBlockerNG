@@ -273,9 +273,15 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
     assert heading not in codex, "Codex must not own a second routing policy"
 
 
+def _collapsed_haystack(text: str) -> str:
+    # issue #3120: wrapping a Markdown paragraph must not drop a pin or hide a retired recipe.
+    return " ".join(text.split())
+
+
 def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
     assert routing.strip(), "repository-intelligence routing must not be empty"
+    flat = _collapsed_haystack(routing)
     for contract in (
         "work-branch.sh --worktree",
         "scripts/agent/init-worktree-tools.sh",
@@ -316,9 +322,9 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "an exact `==` pin is never the answer",
         "installed the same way, never pinned",
     ):
-        assert contract in routing, f"direct worktree initialization routing lost {contract}"
+        assert contract in flat, f"direct worktree initialization routing lost {contract}"
 
-    folded_routing = routing.casefold()
+    folded_routing = flat.casefold()
     for obsolete in (
         "ignored and untracked",
         "graphify-refresh-required",
@@ -364,6 +370,17 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     )
     for obsolete_path in ("scripts/agent/graphify-store.py", "tests/test_graphify_store.py"):
         assert not (ROOT / obsolete_path).exists(), f"obsolete Graphify store path returned: {obsolete_path}"
+
+
+def test_repository_intelligence_pin_match_is_wrap_proof() -> None:
+    # issue #3120: the two probes that made the raw-text loops wrap-sensitive.
+    reflowed = "prints a notice\nand builds nothing"
+    assert "prints a notice and builds nothing" not in reflowed
+    assert "prints a notice and builds nothing" in _collapsed_haystack(reflowed)
+
+    wrapped_retired = "then runs\n  `graphify update <root>` when"
+    assert "then runs `graphify update <root>`" not in wrapped_retired.casefold()
+    assert "then runs `graphify update <root>`" in _collapsed_haystack(wrapped_retired).casefold()
 
 
 def test_markdownlint_excludes_generated_graphify_reports() -> None:
