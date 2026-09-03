@@ -2252,16 +2252,14 @@ closingprocess() {
 		countm="$(grep -c ^ "${masterfile}")"
 		echo; echo "   [ Final IP Count  ]  [ ${countm} ]"; echo
 
-		# issue #1084 review: mastercat (s1/s3) carries BOTH families' rows (v6 Deny joined
-		# cross-list dedup), so the shared deny concatenation (s2/s4) must include v6 too.
-		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
-		# issue #3154: one concat+sort feeds s2 and s4; a short write (exhausted tmpdir) makes
-		# the count unreliable either way, so an unchecked one could print PASSED over a real
-		# mismatch -- a truncation inside a placeholder row even RAISES it.
-		# issue #3165: one awk over the shell's own glob -- `find | xargs` hid a producer
-		# failing mid-stream behind `sort`'s exit 0 and mis-split a name holding whitespace.
+		# issue #1084: mastercat (s1/s3) carries BOTH families, so the deny concat (s2/s4) must.
+		# issue #1263: awk 1 supplies a missing record terminator -- no weld into the neighbour.
+		# issue #3154/#3165: one producer, one in-place sort, both behind a checked status -- a
+		# failed stage or a short write (skewing the count either way) must refuse the verdict.
 		set -- "${pfbdeny}"*.txt
-		[ -e "${1}" ] || set -- /dev/null	# unmatched glob: concatenate nothing
+		# Only an unmatched glob leaves the pattern itself in $1; a real path awk cannot open
+		# has to reach awk, so the count refuses instead of reading zero.
+		case "${1}" in "${pfbdeny}*.txt") [ -e "${1}" ] || set -- /dev/null ;; esac
 		if awk 1 "$@" > "${tempfile}" && LC_ALL=C sort -o "${tempfile}" "${tempfile}"; then
 			s2="$(grep -cv "^${ip_placeholder2}$" "${tempfile}")"
 			s4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"

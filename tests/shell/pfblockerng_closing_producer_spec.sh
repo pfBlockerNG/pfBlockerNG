@@ -36,6 +36,11 @@ Describe 'closingprocess() deny concatenation producer status (#3165)'
     printf '5.6.7.8\n9.9.9.9\n7.7.7.7\n' > "${pfbdeny}B.txt"
   }
 
+  # The report driven with rows on its own stdin, which shellspec otherwise leaves empty.
+  closing_with_stdin() {
+    closingprocess < "${work}/stdin_rows"
+  }
+
   It 'refuses a verdict when the concatenation cannot read every deny file (S1)'
     # Given that hidden mismatch and an `awk` that aborts on the second file after emitting
     # what it already read -- what one-true-awk does on a file it cannot open (FATAL, exit
@@ -66,7 +71,7 @@ Describe 'closingprocess() deny concatenation producer status (#3165)'
     The stdout should include 'Database Sanity check [  FAILED  ]'
     The stdout should include 'Deny folder Count   [ incomplete ]'
     The stdout should include 'deny folder concatenation'
-    The stderr should include 'cannot open'
+    The stderr should include 'B.txt'
     The contents of the file "$errorlog" should include 'sanity counts unreliable'
   End
 
@@ -107,18 +112,46 @@ Describe 'closingprocess() deny concatenation producer status (#3165)'
     The stderr should equal ''
   End
 
-  It 'concatenates nothing when the deny folder is empty (S4)'
-    # Given no deny files at all: an unmatched glob must still yield an empty concatenation
-    # and a zero count, never a refusal and never a read of the caller's stdin.
+  It 'concatenates nothing, and reads no stdin, when the deny folder is empty (S4)'
+    # Given no deny files at all and five unrelated rows offered on the function's own
+    # stdin: an unmatched glob must yield an empty concatenation and a zero count, never a
+    # refusal, and never those rows -- a concatenation with no file operand at all would
+    # read them, and a raised count is how a false agreement gets manufactured.
     true > "$masterfile"
     true > "$mastercat"
+    printf '8.8.8.8\n8.8.4.4\n1.1.1.1\n2.2.2.2\n3.3.3.3\n' > "${work}/stdin_rows"
+
+    # When the final report runs with those rows on stdin.
+    When call closing_with_stdin
+
+    # Then the two empty sides agree and no count was printed at all.
+    The status should be success
+    The stdout should include 'Database Sanity check [  PASSED  ]'
+    The stdout should not include 'Deny folder Count'
+    The stderr should equal ''
+  End
+
+  It 'refuses a verdict when the first deny entry cannot be read (S5)'
+    # Given a deny folder whose first entry in byte order cannot be stat'ed -- here a
+    # dangling symlink, as a half-finished write or an unsearchable folder also produces --
+    # in front of a file holding three rows, against an empty mastercat. Discarding the
+    # whole match list on that entry would read zero rows and agree with the empty side,
+    # which is the false PASSED this check exists to prevent.
+    true > "$masterfile"
+    true > "$mastercat"
+    ln -s "${pfbdeny}no-such-target" "${pfbdeny}A.txt"
+    printf '1.1.1.1\n2.2.2.2\n3.3.3.3\n' > "${pfbdeny}B.txt"
 
     # When the final report runs.
     When call closingprocess
 
-    # Then the two empty sides agree.
+    # Then the unreadable entry reaches awk and the count refuses, rather than the three
+    # readable rows being thrown away.
     The status should be success
-    The stdout should include 'Database Sanity check [  PASSED  ]'
-    The stderr should equal ''
+    The stdout should not include 'PASSED'
+    The stdout should include 'Database Sanity check [  FAILED  ]'
+    The stdout should include 'Deny folder Count   [ incomplete ]'
+    The stderr should include 'A.txt'
+    The contents of the file "$errorlog" should include 'sanity counts unreliable'
   End
 End
