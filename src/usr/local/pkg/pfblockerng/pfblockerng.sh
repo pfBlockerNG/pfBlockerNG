@@ -1958,8 +1958,26 @@ EOF
 reputation_pmax(){
 	echo; echo; echo '===[ Reputation - pMax ]======================================'
 	echo; echo "  Querying for repeat offenders ( pMax=${max} ) [ ${now} ]"
-	data="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs cut -d '.' -f 1-3 |
-		awk -v max="${max}" '{a[$0]++}END{for(i in a){if(a[i] > max){print i}}}' | grep -v "^${ip_placeholder3}$")"
+	set -- "${pfbdeny}"*.txt
+	case "${1}" in "${pfbdeny}"\*.txt) set -- /dev/null ;; esac
+	if ! true > "${tempfile}"; then
+		log="reputation_pmax: cannot create [ ${tempfile} ]; aborting, keeping existing lists."
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
+	for pfbfile do
+		case "${pfbfile##*/}" in pfB*.txt|*_v6.txt) continue ;; esac
+		if ! cut -d '.' -f 1-3 "${pfbfile}" >> "${tempfile}"; then
+			log='reputation_pmax: deny-folder source scan failed; aborting, keeping existing lists.'
+			echo "${log}" | tee -a "${errorlog}"
+			return
+		fi
+	done
+	if ! data="$(awk -v max="${max}" -v placeholder="${ip_placeholder3}" '{a[$0]++}END{for(i in a){if(a[i] > max && i != placeholder){print i}}}' "${tempfile}")"; then
+		log='reputation_pmax: deny-folder source scan failed; aborting, keeping existing lists.'
+		echo "${log}" | tee -a "${errorlog}"
+		return
+	fi
 
 	if [ -n "${data}" ]; then
 		# Find repeat offenders in each individual blocklist outfile
@@ -1975,7 +1993,26 @@ reputation_pmax(){
 			pfb_is_octet_prefix "${ip}" || continue
 			count="$((count + 1))"
 			runonce=0; ii="$(pfb_anchor_octet_pattern "${ip}.")"
-			list="$(find "${pfbdeny}"*.txt ! -name 'pfB*.txt' ! -name '*_v6.txt' -type f | xargs grep -al "${ii}")"
+			if ! true > "${tempfile2}"; then
+				log="reputation_pmax: cannot create [ ${tempfile2} ]; aborting, keeping existing lists."
+				echo "${log}" | tee -a "${errorlog}"
+				return
+			fi
+			for pfbfile do
+				case "${pfbfile##*/}" in pfB*.txt|*_v6.txt) continue ;; esac
+				grep -al "${ii}" "${pfbfile}" >> "${tempfile2}"
+				grep_rc=$?
+				if [ "${grep_rc}" -gt 1 ]; then
+					log='reputation_pmax: deny-folder match scan failed; aborting, keeping existing lists.'
+					echo "${log}" | tee -a "${errorlog}"
+					return
+				fi
+			done
+			if ! list="$(cat "${tempfile2}")"; then
+				log='reputation_pmax: deny-folder match scan failed; aborting, keeping existing lists.'
+				echo "${log}" | tee -a "${errorlog}"
+				return
+			fi
 
 			# Iterate the matched blocklist files via a here-doc (no IFS re-split)
 			# so the inner body's ${runonce}/file accumulation stays in THIS shell.
@@ -2233,20 +2270,47 @@ processxlsx() {
 }
 
 
+# Concatenate globbed files record-by-record so producer failures are observable.
+pfb_concat_records() {
+	_pfb_concat_output="$1"; shift
+	if ! true > "${_pfb_concat_output}"; then
+		return 1
+	fi
+	for _pfb_concat_file do
+		if ! awk 1 "${_pfb_concat_file}" >> "${_pfb_concat_output}"; then
+			return 1
+		fi
+	done
+}
+
 # Function to report final pfBlockerNG statistics.
 closingprocess() {
 	counto=0
 	echo; echo '===[ FINAL Processing ]====================================='; echo
 	if [ -d "${pfborig}" ] && [ "$(ls -A "${pfborig}")" ]; then
-		# Sum the per-feed aggregated "Original" counts written by pfb_ip_recompute_write_snapshot()
-		# (pfblockerng.inc) -- these reflect the CIDR-aggregated input when aggregation ran. Fall back
-		# to the raw *_v4.orig total when no sidecars exist (no snapshot was ever written this pass).
-		# issue #1263: awk 1 (not cat) supplies a missing record terminator --
-		# a welded pair of unterminated counts would otherwise concatenate
-		# digits (e.g. "100" + "200" -> "100200") instead of summing to 300.
-		counto="$(find "${pfborig}"*_v4.aggcount 2>/dev/null | xargs awk 1 2>/dev/null | awk '{s += $1} END {print s + 0}')"
-		if [ "${counto}" -eq 0 ]; then
-			counto="$(find "${pfborig}"*_v4.orig 2>/dev/null | xargs awk 1 | grep -cv '^#\|^$')"
+		# Sum each globbed file as a separate awk input so missing record terminators
+		# cannot weld adjacent files, and a producer failure remains observable.
+		set -- "${pfborig}"*_v4.aggcount
+		case "${1}" in "${pfborig}"\*_v4.aggcount) set -- /dev/null ;; esac
+		if pfb_concat_records "${tempfile}" "$@" &&
+			counto="$(awk '{s += $1} END {print s + 0}' "${tempfile}")"; then
+			:
+		else
+			counto='incomplete'
+			log='closing: original count producer failed; count unreliable.'
+			echo "${log}" | tee -a "${errorlog}"
+		fi
+		if [ "${counto}" = 0 ]; then
+			set -- "${pfborig}"*_v4.orig
+			case "${1}" in "${pfborig}"\*_v4.orig) set -- /dev/null ;; esac
+			if pfb_concat_records "${tempfile}" "$@" &&
+				counto="$(awk '!/^#|^$/{n++} END {print n + 0}' "${tempfile}")"; then
+				:
+			else
+				counto='incomplete'
+				log='closing: original count fallback producer failed; count unreliable.'
+				echo "${log}" | tee -a "${errorlog}"
+			fi
 		fi
 	fi
 

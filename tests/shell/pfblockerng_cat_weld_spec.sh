@@ -42,6 +42,51 @@ Describe 'closingprocess() Original IP count: aggcount sum never welds digits to
   End
 End
 
+Describe 'closingprocess() Original IP count: whitespace sidecar names stay whole (issue #3176)'
+  setup() {
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/aggspace.XXXXXX")"
+    pfborig="${work}/orig/"; pfbdeny="${work}/deny/"
+    pfbpermit="${work}/permit/"; pfbmatch="${work}/match/"; pfbnative="${work}/native/"
+    mkdir -p "$pfborig" "$pfbdeny" "$pfbpermit" "$pfbmatch" "$pfbnative"
+    masterfile="${work}/masterfile"; mastercat="${work}/mastercat"
+    tempfile="${work}/t1"; errorlog="${work}/err.log"; now="now"
+    ip_placeholder2="127.0.0.1"
+    pathpfctl="${work}/pfctl"; printf '#!/bin/sh\n' > "$pathpfctl"; chmod +x "$pathpfctl"
+    alias='off'
+    printf '10' > "${pfborig}Feed A_v4.aggcount"
+    printf '5'  > "${pfborig}FeedB_v4.aggcount"
+  }
+  cleanup() { rm -rf "$work"; }
+  BeforeAll 'pfb_source'
+  Before 'setup'
+  After 'cleanup'
+
+  It 'sums sidecars without splitting a whitespace-bearing pathname'
+    When call closingprocess
+    The status should be success
+    The stdout should include '[ Original IP count   ]  [ 15 ]'
+  End
+
+  It 'marks the original count incomplete when its producer fails (issue #3176)'
+    mkdir -p "${work}/bin"
+    real_awk="$(command -v awk)"
+    cat > "${work}/bin/awk" <<EOF
+#!/bin/sh
+case " \$* " in
+  *aggcount*) printf '10\n'; exit 2 ;;
+  *) exec "${real_awk}" "\$@" ;;
+esac
+EOF
+    chmod +x "${work}/bin/awk"
+    PATH="${work}/bin:${PATH}"
+
+    When call closingprocess
+    The status should be success
+    The stdout should include '[ Original IP count   ]  [ incomplete ]'
+    The stdout should include 'original count'
+  End
+End
+
 Describe 'closingprocess() Original IP count: raw *_v4.orig fallback never welds lines together (issue #1263 site 4)'
   setup() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/origweld.XXXXXX")"
