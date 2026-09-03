@@ -1502,17 +1502,23 @@ pfb_recompute_finish() {
 	# rc-checked -- a failure here cannot be rolled back (earlier moves in
 	# this loop may already be live), so it only logs the failing artifact
 	# and aborts; the family may be mixed until the next successful pass.
-	# issue #3158: skip when .new matches live OR the last recompute stamp
-	# (suppress may reshape live; that is not a recompute change).
+	# issue #3158: skip when .new matches live OR the last recompute checksum
+	# stamp in snapdir (suppress may reshape live; that is not a recompute change).
+	# Stamp lives in pfbsnap, not denydir — denydir/* is grepped by filterlog.
 	while IFS=' ' read -r rec_alias _; do
 		rec_new="${pfbdeny}${rec_alias}.txt.new"
 		rec_live="${pfbdeny}${rec_alias}.txt"
-		rec_stamp="${pfbdeny}${rec_alias}.txt.rec"
-		if cmp -s "${rec_new}" "${rec_stamp}" || cmp -s "${rec_new}" "${rec_live}"; then
+		rec_stamp="${pfbsnap}${rec_alias}.rec"
+		rec_sum=$(cksum < "${rec_new}")
+		if [ -f "${rec_live}" ] && {
+			[ -f "${rec_stamp}" ] && [ "$(cat "${rec_stamp}")" = "${rec_sum}" ] ||
+				cmp -s "${rec_new}" "${rec_live}"
+		}; then
+			cksum < "${rec_new}" > "${rec_stamp}"
 			rm -f "${rec_new}"
 		else
 			pfb_recompute_swap_mv "${rec_new}" "${rec_live}" "${rec_alias}.txt.new" || return 1
-			cp -f "${rec_live}" "${rec_stamp}"
+			cksum < "${rec_live}" > "${rec_stamp}"
 		fi
 	done < "${rec_priority}"
 

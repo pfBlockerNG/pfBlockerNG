@@ -7743,12 +7743,14 @@ function pfb_ip_recompute_write_snapshot(string $src, string $header, string $sn
 	@file_put_contents("{$origdir}/{$header}.aggcount", (pfb_count_lines($src) ?? 0) . "\n", LOCK_EX);
 }
 
-// Drop a header's recompute snapshot (+ aggcount sidecar) on removal/download-failure -- else
-// a stale snapshot would outlive the live deny-file removal ('remove x x x' call sites) and
-// feed the next recompute pass phantom content.
+// Drop a header's recompute snapshot (+ aggcount sidecar + #3158 checksum stamp)
+// on removal/download-failure -- else a stale snapshot would outlive the live
+// deny-file removal ('remove x x x' call sites) and feed the next recompute
+// pass phantom content.
 function pfb_ip_recompute_forget_header(string $header, string $snapdir, string $origdir): void {
 	unlink_if_exists(pfb_ip_recompute_snapshot_path($snapdir, $header));
 	unlink_if_exists("{$origdir}/{$header}.aggcount");
+	unlink_if_exists("{$snapdir}/{$header}.rec");
 }
 
 

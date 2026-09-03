@@ -192,11 +192,13 @@ final class IpRecomputeSnapshotTest extends TestCase
 	{
 		file_put_contents("{$this->snapdir}/FeedE_v4.snap", "198.51.100.1\n");
 		file_put_contents("{$this->origdir}/FeedE_v4.aggcount", "1\n");
+		file_put_contents("{$this->snapdir}/FeedE_v4.rec", "checksum\n");
 
 		pfb_ip_recompute_forget_header('FeedE_v4', $this->snapdir, $this->origdir);
 
 		$this->assertFileDoesNotExist("{$this->snapdir}/FeedE_v4.snap");
 		$this->assertFileDoesNotExist("{$this->origdir}/FeedE_v4.aggcount");
+		$this->assertFileDoesNotExist("{$this->snapdir}/FeedE_v4.rec");
 	}
 
 	public function testForgetHeaderIsIdempotentWhenNothingExists(): void

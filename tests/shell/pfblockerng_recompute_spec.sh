@@ -1388,6 +1388,7 @@ Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recident.XXXXXX")"
 		pfbdeny="${work}/deny/"; mkdir -p "$pfbdeny"
+		pfbsnap="${work}/snapdir/"; mkdir -p "$pfbsnap"
 		errorlog="${work}/err.log"; true > "$errorlog"
 		rec_family='v4'
 		rec_prio=2
@@ -1443,7 +1444,7 @@ Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
 	It 'skips when .new matches the last recompute stamp even if live was reshaped by suppress'
 		printf '192.0.2.2/31\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt"
 		printf '192.0.2.1\n192.0.2.2\n192.0.2.3\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt.new"
-		cp -f "${pfbdeny}Keep_v4.txt.new" "${pfbdeny}Keep_v4.txt.rec"
+		cksum < "${pfbdeny}Keep_v4.txt.new" > "${pfbsnap}Keep_v4.rec"
 		touch -t 200001010000.00 "${pfbdeny}Keep_v4.txt"
 		pfb_mtime "${pfbdeny}Keep_v4.txt" > "${work}/keep.before"
 		check_stamp_skip() {
@@ -1460,5 +1461,6 @@ Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
 		The status should be success
 		The contents of file "${pfbdeny}Keep_v4.txt" should equal "$(printf '192.0.2.2/31\n9.9.9.9')"
 		The path "${pfbdeny}Keep_v4.txt.new" should not be exist
+		The path "${pfbdeny}Keep_v4.txt.rec" should not be exist
 	End
 End
