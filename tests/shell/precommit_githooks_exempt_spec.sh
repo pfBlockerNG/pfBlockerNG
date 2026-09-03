@@ -37,7 +37,6 @@ scripts/agent/check-graph-fresh.sh'
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
       && chmod +x "$repo/.githooks/check-commit-identity.sh"
-    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/patch-graphify.sh"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
 

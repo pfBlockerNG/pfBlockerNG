@@ -17,40 +17,34 @@ Load when: every agent session, from `AGENTS.md`.
   installed the same way, never pinned to whatever version the failure happened to name.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
-  installs or upgrades `graphifyy>=0.9.51` with `uv` and runs
-  `scripts/agent/patch-graphify.sh`, before activating `.githooks`.
-  `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
+  installs or upgrades the pinned org fork with
+  `uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'`
+  before activating `.githooks`.
+- `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
   physically absolutizes a relative selection before returning it, and only when none
   exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper remains
-  authoritative and fails closed. A Python shebang is used directly. Only the
-  exact uv-owned launcher may use uv's `/bin/sh` trampoline, in which case the resolver
+  authoritative and fails closed. A Python shebang is used directly. Only the exact
+  uv-owned launcher may use uv's `/bin/sh` trampoline, in which case the resolver
   validates and uses the `graphifyy` tool environment's Python. Missing `uv` or a
   launcher/interpreter that cannot import its selected Graphify package fails closed.
   `setup-agent-tools.sh` runs this canonical setup at Graphify's install-order slot,
   before ast-grep and semgrep.
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`. It runs
-  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index and reapplies
-  the Graphify patch. It never runs `graphify update`, so a cut on an unmodified base
-  has an empty `git status` (issue #3091). When the graph is absent it
-  prints a notice and builds nothing; first-build scope is a judgement call handled
-  by a `/graphify` run.
+  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index. It never runs
+  `graphify update`, so a cut on an unmodified base has an empty `git status` (issue
+  #3091). When the graph is absent it prints a notice and builds nothing; first-build
+  scope is a judgement call handled by a `/graphify` run.
   `wt --yes switch --create <branch>` runs it from `.config/wt.toml`'s `pre-start`
   hook. `work-branch.sh --worktree` cuts through `wt`, skips the initializer when
-  pre-start already left a CodeGraph index, and rolls back a failed cut — reclaiming a
-  tree `wt` left behind when its hook failed.
-- Graphify's suffix map parses `.inc` as Pascal, collapsing this repository's PHP
-  includes from roughly 767 nodes to roughly 30 while extraction still succeeds.
-  Until a release includes Graphify-Labs/graphify#3075, the fix rides as
-  `.agents/patches/graphify-3075-language-overrides.patch`. The tracked
-  `.graphifyrc` (`language.inc=php`) activates it. `ensure-graphify.sh` emits the
-  validated absolute executable launcher path; `ensure-graphify-merge-driver.sh`
-  registers that path, quoted, as the target root's `merge.graphify.driver`;
-  `patch-graphify.sh` resolves the same launcher; and
-  `.githooks/pre-commit` resolves and patches again
-  before its no-staged-files exit, repairing a bare Graphify upgrade in a fresh process
-  before the commit's own graph rebuild. The include-node floor in
-  `tests/test_cross_agent_tooling.py`
-  remains the final graph guard. Delete this machinery once the upstream change ships.
+  pre-start already left a CodeGraph index, and rolls back a failed cut -- reclaiming
+  a tree `wt` left behind when its hook failed.
+- The org fork's tagged package carries Graphify-Labs/graphify#3075 and Graphify-Labs/graphify#3310. Its
+  package-provided `rcfile.py` reads the tracked `.graphifyrc`
+  (`language.inc=php`), so `.inc` files use the PHP extractor; its `leiden` extra
+  selects native Leiden on Python 3.13+. The include-node floor in
+  `tests/test_cross_agent_tooling.py` remains the final guard. When upstream #3075
+  and #3310 both ship in a PyPI release, replace the fork pin with
+  `graphifyy[leiden]>=<that release>` in a deliberate commit.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
   verify that its active project root equals `git rev-parse --show-toplevel`; after a

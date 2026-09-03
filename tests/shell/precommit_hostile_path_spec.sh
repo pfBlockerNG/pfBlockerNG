@@ -25,7 +25,6 @@ Describe '.githooks/pre-commit with a C-quoted path'
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     cp "$PFB_ROOT/.githooks/check-commit-identity.sh" "$repo/.githooks/" \
       && chmod +x "$repo/.githooks/check-commit-identity.sh"
-    printf '#!/bin/sh\nexit 0\n' > "$repo/scripts/agent/patch-graphify.sh"
     printf '#!/bin/sh\nmkdir -p graphify-out && true > graphify-out/graph.json\n' > "$repo/scripts/agent/check-graph-fresh.sh"
     # The staged checker makes staged_sh=1, so the shell gates run; create their
     # scan roots so the sandbox stays silent (the spec pins classification only).

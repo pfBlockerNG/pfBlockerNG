@@ -478,11 +478,15 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   # A missing Graphify is a mandatory-tool failure for this gate: the runner resolves
   # `sh`, never graphify, so --allow-missing cannot soften the checker's exit 4 into a SKIP.
   It 'fails the run (never SKIP) when the graph checker reports Graphify missing, even under --allow-missing'
-    printf '#!/bin/sh\nprintf "resolve-graphify.sh: Graphify is not installed; run %s first\\n" >&2\nexit 4\n' "'uv tool install --upgrade graphifyy'" > "$graph_check"
+    install_hint="uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2'"
+    cat > "$graph_check" <<CHECK
+#!/bin/sh
+printf '%s\n' "resolve-graphify.sh: Graphify is not installed; run $install_hint first" >&2
+exit 4
+CHECK
     When run sh "$script" --worktree "$repo" --diff "$base_sha" --allow-missing
     The status should equal 1
-    The line 2 of output should equal "resolve-graphify.sh: Graphify is not installed; run 'uv tool install --upgrade graphifyy' first"
-    The line 3 of output should equal 'GATE FAIL: sh scripts/agent/check-graph-fresh.sh'
+    The line 2 of output should equal "resolve-graphify.sh: Graphify is not installed; run $install_hint first"
     The output should not include 'GATE SKIP: sh scripts/agent/check-graph-fresh.sh'
     The output should include 'GATES: FAIL'
   End

@@ -21,9 +21,6 @@ main() {
 	}
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
-	# An unpatched Graphify parses this repository's PHP .inc files as Pascal, and a
-	# bare `uv tool upgrade graphifyy` reverts the patch.
-	sh "$(dirname "$0")/patch-graphify.sh" || exit $?
 	# Never `graphify update` here: it rewrites the tracked graph wholesale, so a fresh
 	# cut was born dirty and `wt remove` refused it (issue #3091). The FIRST graph's
 	# scope is a judgement call, deferred to an AI-assisted `/graphify` run.

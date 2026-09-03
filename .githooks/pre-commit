@@ -48,10 +48,6 @@ step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
 skip() { skipped="${skipped}${skipped:+,} $1"; }
 
-# A bare Graphify upgrade replaces site-packages; repair it before any early exit.
-sh scripts/agent/patch-graphify.sh || failed 'Graphify .inc language override'
-[ "$fail" -ne 0 ] || step 'Graphify .inc language override'
-
 # --- Commit identity & signing prerequisites (issue #2982): fail-closed gate
 #     before the no-staged exit, so allow-empty commits are covered too. Resolved
 #     relative to $0 because core.hooksPath is the absolute shared path (linked
@@ -120,10 +116,9 @@ staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n'
 #     record is itself a graph node, so it rebuilds too. Decided by git's own
 #     index diff, not the newline listing above: a path holding a newline splits
 #     into lines there and could pose as the graph. Synchronous, so a
-#     rebase/merge/cherry-pick in progress is no reason to skip. Graphify is
-#     mandatory: a failed rebuild or a missing launcher fails the commit like the
-#     patch step above; a line that ships no checker opts out only through the
-#     committed manifest. ---
+#     rebase/merge/cherry-pick in progress is no reason to skip. Graphify is mandatory:
+#     a failed rebuild or a missing launcher fails the commit; a line that ships no
+#     checker opts out only through the committed manifest. ---
 if ! git diff --cached --quiet -- . ':!graphify-out/graph.json' ':!legacy/'; then
 	if exempted scripts/agent/check-graph-fresh.sh; then
 		exempt 'graph freshness'

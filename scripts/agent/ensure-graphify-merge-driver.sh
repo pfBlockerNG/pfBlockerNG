@@ -30,8 +30,8 @@ main() {
 		exit 2
 	}
 
-	# The shared installer applies the .inc override first, so the launcher it
-	# returns is the one a rebuild must use.
+	# The shared installer installs the fork package and returns the launcher a rebuild
+	# must use.
 	graphify_bin=$(sh "$(dirname "$0")/ensure-graphify.sh" "$root") || {
 		echo "ensure-graphify-merge-driver.sh: Graphify setup failed for '$root'" >&2
 		exit 1

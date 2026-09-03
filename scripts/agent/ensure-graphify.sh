@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install or upgrade Graphify and apply this checkout's temporary .inc=php patch.
+# Install or upgrade Graphify from the pfBlockerNG fork's immutable tagged release.
 # Usage: ensure-graphify.sh [REPOSITORY]
 
 set -eu
@@ -25,27 +25,14 @@ main() {
 	require_tool uv
 
 	target=${1:-.}
-	root=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null) || {
+	git -C "$target" rev-parse --show-toplevel >/dev/null 2>&1 || {
 		echo "ensure-graphify.sh: '$target' is not a git worktree" >&2
 		exit 2
 	}
-	root=$(CDPATH='' cd "$root" && pwd -P) || {
-		echo "ensure-graphify.sh: cannot resolve Git root '$root'" >&2
-		exit 2
-	}
-	# Prefer the target checkout's policy; foreign targets fall back to this
-	# trusted helper checkout without receiving repository files of their own.
-	patch_graphify=$root/scripts/agent/patch-graphify.sh
-	[ -f "$patch_graphify" ] || patch_graphify=$(dirname "$0")/patch-graphify.sh
-	[ -f "$patch_graphify" ] ||
-		fail "required target or trusted sibling patch-graphify.sh is missing"
-
-	uv tool install --upgrade 'graphifyy>=0.9.51' 1>&2 ||
+	uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@v0.9.53-pfb.2' 1>&2 ||
 		fail 'Graphify installation failed'
 	graphify_bin=$(resolve_graphify_launcher) ||
 		fail 'cannot resolve the installed Graphify launcher'
-	sh "$patch_graphify" ||
-		fail "Graphify language-override patch failed for '$root'"
 	printf '%s\n' "$graphify_bin"
 }
 
