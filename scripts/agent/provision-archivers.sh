@@ -85,9 +85,7 @@ main() {
 		fail "neither $local_bin nor $root/usr/sbin precedes $bin on PATH ($PATH): a bare 'tar' would resolve to bsdtar"
 
 	set --
-	if [ ! -x "$bin/bsdtar" ] || [ ! -x "$bin/bsdunzip" ]; then
-		set -- libarchive-tools
-	fi
+	[ -x "$bin/bsdtar" ] && [ -x "$bin/bsdunzip" ] || set -- libarchive-tools
 	[ -e "$bin/unzip" ] || [ -e "$target/unzip" ] || set -- "$@" unzip
 	[ -x "$bin/rsync" ] || set -- "$@" rsync
 	if [ "$#" -gt 0 ]; then

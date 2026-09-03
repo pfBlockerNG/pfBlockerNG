@@ -322,6 +322,22 @@ DPKG_DIVERT
     The result of function local_tar_version should equal "$gnu_tar_banner"
   End
 
+  It 'refuses a ROOT that is not a directory'
+    When run sh "$script_abs" "$root/missing"
+    The status should equal 1
+    The stderr should include 'is not a directory'
+    The file "$call_log" should not be exist
+  End
+
+  It 'never lets an empty PATH component stand in for the working directory as a candidate'
+    PATH=":$activebin:$usr_bin:$local_bin:$basebin"
+    When run sh -c 'cd "$1" && exec sh "$2" "$3"' _ "$usr_sbin" "$script_abs" "$root"
+    The status should equal 1
+    The stderr should include 'PATH'
+    The file "$call_log" should not be exist
+    Assert gnu_tools_untouched
+  End
+
   It 'refuses on a non-Linux host before touching anything'
     When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$root"
     The status should equal 1
