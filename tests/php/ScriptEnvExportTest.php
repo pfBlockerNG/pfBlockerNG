@@ -22,6 +22,11 @@ final class ScriptEnvExportTest extends TestCase
 			$source,
 			'sync_package_pfblockerng must export the two shell init values from the resolved placeholder'
 		);
+		$this->assertStringContainsString(
+			'putenv(\'PFB_USE_MFS_TMPVAR=\' . (config_path_enabled(\'system\', \'use_mfs_tmpvar\') ? \'1\' : \'0\'));',
+			$source,
+			'sync_package_pfblockerng must export the RAM-disk presence flag for shell init'
+		);
 		$this->assertStringNotContainsString('pfb_script_env_export', $source, 'the export is inline; no wrapper');
 	}
 }

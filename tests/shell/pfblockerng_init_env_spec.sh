@@ -74,6 +74,34 @@ run_placeholder_lines() {
 	printf 'ph=%s|reads=%s\n' "${ip_placeholder}" "$(wc -l < "${reader_log}")"
 }
 
+# The shipped USE_MFS_TMPVAR assignment, with its config.xml reader replaced by a
+# recording fake so the exported environment can be tested without appliance paths.
+mfs_assignment() {
+    grep -E '^[[:space:]]*USE_MFS_TMPVAR=' "${PFB_PKGDIR}/pfblockerng.sh" |
+        sed "s|/usr/bin/grep -c use_mfs_tmpvar /cf/conf/config.xml|${fake_mfs_reader}|"
+}
+
+make_mfs_reader() {
+    fake_mfs_reader="${work}/grep"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "%%s\\n" "$0 $*" >> "%s"\n' "${mfs_reader_log}"
+        printf 'printf "1\\n"\n'
+    } > "${fake_mfs_reader}"
+    chmod +x "${fake_mfs_reader}"
+}
+
+run_mfs_assignment() {
+    if [ "${1:-}" = '__UNSET__' ]; then
+        unset PFB_USE_MFS_TMPVAR
+    else
+        PFB_USE_MFS_TMPVAR="$1"
+    fi
+    true > "${mfs_reader_log}"
+    eval "$(mfs_assignment)"
+    printf 'mfs=%s|reads=%s\n' "${USE_MFS_TMPVAR}" "$(wc -l < "${mfs_reader_log}")"
+}
+
 Describe 'pfblockerng.sh init: re-entry timeout prefers the exported environment (issue #3140)'
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbinitenv.XXXXXX")"
@@ -168,5 +196,35 @@ Describe 'pfblockerng.sh init: ip_placeholder prefers the exported environment (
 		When call run_placeholder_lines '10.0.0.1;rm' ''
 		The output should equal 'ph=10.0.0.1;rm|reads=0'
 		The file "${canary}" should be exist
+	End
+End
+
+Describe 'pfblockerng.sh aliastables: mfs state prefers the exported environment (issue #3144)'
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbinitmfs.XXXXXX")"
+		mfs_reader_log="${work}/reader.log"
+		make_mfs_reader
+	}
+	cleanup() {
+		unset PFB_USE_MFS_TMPVAR USE_MFS_TMPVAR
+		rm -rf "${work}"
+	}
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'honours an enabled exported flag without invoking the config reader'
+		When call run_mfs_assignment 1
+		The output should equal 'mfs=1|reads=0'
+	End
+
+	It 'honours a disabled exported flag without invoking the config reader'
+		When call run_mfs_assignment 0
+		The output should equal 'mfs=0|reads=0'
+	End
+
+	It 'falls back to the config reader when the export is unset'
+		When call run_mfs_assignment '__UNSET__'
+		The output should equal 'mfs=1|reads=1'
 	End
 End
