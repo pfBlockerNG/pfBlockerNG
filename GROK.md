@@ -11,10 +11,8 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicate
   symlinks onto it — no Grok-specific copy exists or should be created. Grok also
   scans `.grok/skills/` if one is added.
 - `.grok/rules/harness.md` auto-loads the adapter pointer (`<dir>/.grok/rules/`
-  always scanned — Grok 1.0.4 user-guide `12-project-rules.md`). Smoke-1 bus
-  hooks live in `.grok/hooks/bus.json` (PreToolUse + Stop); install them into
-  `~/.grok/hooks/` with `sh .grok/hooks/install-home` so a stale/detached
-  worktree still enforces them. Other session hooks are not wired.
+  always scanned — Grok 1.0.4 user-guide `12-project-rules.md`). No session
+  hooks are wired.
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
   `GROK_SESSION_ID` and `GROK_AGENT` (probed on 1.0.4, 2026-08-15: exported into
   nested sh/bash). Never unset to dodge guard it trips.
@@ -23,7 +21,3 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicate
 - Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
   Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
   `plan`) rather than inventing a fourth role tree.
-- Smoke-1 `pfb-msg` bus: arm with the **monitor** tool (`persistent: true`), never
-  background bash; never long-block the turn on CI while the bus is live.
-  Home copy of the rule + hooks required (stale worktree / auto-compact).
-  Details in `.grok/rules/bus.md` and `.agents/context/grok-adapter.md`.
