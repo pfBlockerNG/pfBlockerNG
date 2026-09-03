@@ -20167,6 +20167,13 @@ function pfblockerng_php_pre_deinstall_command() {
 	// DEFERS on contention (#3062 install shape; architecture-notes.md "The uninstall holds it too").
 	update_status("Serialising against any in-flight pfBlockerNG feed pass...");
 	update_status(pfb_install_feed_pass_hold(PFB_INSTALL_FEED_PASS_WAIT, 'uninstall') ? " done.\n" : " lock not taken; continuing anyway.\n");
+	// issue #3107: the feed-pass hold does not imply dispatcher ownership; a cron tick can
+	// still hold that lock while the uninstall reaches its disable sync. Keep the same
+	// bounded package-operation wait so the disable pass is not silently skipped.
+	update_status("Serialising against any in-flight scheduler tick...");
+	$pfb_dispatch_contended = FALSE;
+	update_status(pfb_schedule_dispatch_begin(PFB_INSTALL_FEED_PASS_WAIT, $pfb_dispatch_contended)
+		? " done.\n" : " lock not taken; continuing anyway.\n");
 
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();

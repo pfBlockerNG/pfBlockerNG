@@ -330,4 +330,26 @@ final class InstallFeedPassInterlockTest extends TestCase
 				"the interlock must be taken BEFORE the pre-deinstall reaches [ {$shared} ]");
 		}
 	}
+	/**
+	 * issue #3107: the uninstall's disable sync must wait on the dispatcher lock too.
+	 * The feed-pass hold does not imply dispatcher ownership when a tick is already
+	 * in its scheduler window, so the sync needs the same bounded package-operation wait.
+	 */
+	public function testPreDeinstallTakesDispatcherHoldBeforeTheDisableSync(): void
+	{
+		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
+		$src = (string) @php_strip_whitespace($path);
+		$this->assertNotSame('', $src, "could not read {$path}");
+
+		$start = strpos($src, 'function pfblockerng_php_pre_deinstall_command');
+		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
+		$dispatch = strpos($src, 'pfb_schedule_dispatch_begin(PFB_INSTALL_FEED_PASS_WAIT', $start);
+		$this->assertNotFalse($dispatch,
+			'the uninstall must wait for the dispatcher lock before running its disable pass (issue #3107)');
+		$sync = strpos($src, 'sync_package_pfblockerng(', $start);
+		$this->assertNotFalse($sync, 'the pre-deinstall disable sync must remain present');
+		$this->assertLessThan($sync, $dispatch,
+			'the bounded dispatcher hold must be taken before the uninstall disable sync');
+	}
+
 }
