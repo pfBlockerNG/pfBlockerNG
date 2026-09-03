@@ -1,13 +1,8 @@
 #shellcheck shell=sh
-# issue #3154: closingprocess()'s dedup-mode probes re-sorted what they had just
-# sorted. mastercat got a numeric octet sort (sort -t . -k1,1n ...) whose ordering
-# no consumer reads -- every reader is a grep/awk set operation and the file is
-# re-cut from masterfile next pass -- and s3 then sorted it AGAIN to feed uniq -d;
-# the deny folder was concatenated and walked twice, once for the count (s2) and
-# once sorted for the duplicate listing (s4). One C sort per side now feeds both
-# probes. What the sanity check REPORTS -- the PASSED/FAILED line and the two
-# duplicate listings, placeholder rows included in the masterfile listing and
-# excluded from the deny listing -- must be unchanged.
+# issue #3154: closingprocess()'s dedup probes now sort each side once -- mastercat in
+# place, the deny folder into tempfile -- and read those files. What the sanity check
+# REPORTS must not move: the PASSED/FAILED line with both counts, and the two duplicate
+# listings, placeholder rows kept in the masterfile listing and dropped from the deny one.
 
 Describe 'closingprocess() dedup-mode sort trim (#3154)'
   setup() {
@@ -33,9 +28,12 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     cat "$mastercat"
   }
 
+  closing_body() {
+    sed -n '/^closingprocess()/,/^}/p' "${PFB_PKGDIR}/pfblockerng.sh"
+  }
+
   deny_concat_count() {
-    sed -n '/^closingprocess()/,/^}/p' "${PFB_PKGDIR}/pfblockerng.sh" |
-      grep -c 'find "${pfbdeny}"'
+    closing_body | grep -c 'find "${pfbdeny}"'
   }
 
   It 'leaves mastercat in byte order, not octet-numeric order (C1)'
@@ -96,7 +94,7 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
 
   It 'sorts each side once: no numeric octet sort, one deny concatenation (C4)'
     # Given the sourced script's closingprocess() body.
-    When run sh -c 'sed -n "/^closingprocess()/,/^}/p" "${PFB_PKGDIR}/pfblockerng.sh"'
+    When call closing_body
 
     # Then the extraction was real, the octet sort is gone, and the deny folder is
     # concatenated once for both probes.
@@ -105,5 +103,54 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     The output should not include 'sort -t .'
     The output should include 'uniq -d'
     The result of function deny_concat_count should equal 1
+  End
+
+  It 'reports FAILED with both counts when the two sides disagree (C5)'
+    # Given a deny folder holding one row more than mastercat -- the mismatch the check
+    # exists to catch, and the only branch that prints s2 as a number.
+    printf 'A 1.2.3.4\n'         > "$masterfile"
+    printf '1.2.3.4\n'           > "$mastercat"
+    printf '1.2.3.4\n5.6.7.8\n'  > "${pfbdeny}A.txt"
+
+    # When the final report runs.
+    When call closingprocess
+
+    # Then the verdict flips and each side's count is named.
+    The status should be success
+    The stdout should include 'Database Sanity check [  FAILED  ]'
+    The stdout should include 'Masterfile Count    [ 1 ]'
+    The stdout should include 'Deny folder Count   [ 2 ]'
+  End
+
+  It 'never reports PASSED when the deny concatenation cannot be written (C6)'
+    # Given the same real mismatch, plus a `sort` that writes part of its output and
+    # exits nonzero -- what an exhausted tmpdir does (partial write, exit 2). Truncation
+    # only ever LOWERS the deny count, so it can drag s2 down onto s1 and print PASSED
+    # over a genuine mismatch; the sanity verdict is mirrored into the GUI dedup ledger
+    # by pfb_sync_status_dedup_check(), so a false PASSED closes a key that must stay open.
+    printf 'A 1.2.3.4\n'  > "$masterfile"
+    printf '1.2.3.4\n'    > "$mastercat"
+    printf '1.2.3.4\n'    > "${pfbdeny}A.txt"
+    printf '5.6.7.8\n'    > "${pfbdeny}B.txt"
+    mkdir -p "${work}/bin"
+    real_sort="$(command -v sort)"
+    {
+      printf '#!/bin/sh\n'
+      printf 'case " $* " in *" -o "*) exec %s "$@" ;; esac\n' "$real_sort"
+      printf '%s "$@" | head -1\nexit 2\n' "$real_sort"
+    } > "${work}/bin/sort"
+    chmod +x "${work}/bin/sort"
+    PATH="${work}/bin:${PATH}"
+
+    # When the final report runs.
+    When call closingprocess
+
+    # Then no count is reported from the short write, the verdict stays FAILED, and the
+    # failure is logged instead of being papered over.
+    The status should be success
+    The stdout should not include 'PASSED'
+    The stdout should include 'Database Sanity check [  FAILED  ]'
+    The stdout should include 'deny folder concatenation'
+    The contents of the file "$errorlog" should include 'sanity counts unreliable'
   End
 End
