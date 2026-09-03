@@ -7370,7 +7370,8 @@ function pfb_cidr_subtract_v6(array $cidrs, array $holes, ?array &$errors = null
  * left untouched -- never a truncated publish on error. On success, publishes
  * via a same-directory tmp+rename (an atomic POSIX rename, so no reader ever
  * observes a partial file); a legitimately-empty remainder (everything
- * suppressed) still publishes an empty file, never a stale one. A non-CIDR
+ * suppressed) still publishes an empty file, never a stale one. A byte-identical
+ * remainder is left in place (issue #3158). A non-CIDR
  * line in either input is dropped and logged (pfb_logger), never fatal.
  *
  * PURE aside from the single target-file write (+ its companion log lines).
@@ -7399,8 +7400,12 @@ function pfb_suppress_file_v6(string $file, string $suppfile): bool
 		pfb_logger("IPv6 Suppression: dropping malformed entry [ {$bad_token} ]", 2);
 	}
 
-	$tmp  = $file . '.tmp';
 	$body = empty($result) ? '' : implode(PHP_EOL, $result) . PHP_EOL;
+	// issue #3158: identical remainder must not move mtime.
+	if (@file_get_contents($file) === $body) {
+		return TRUE;
+	}
+	$tmp  = $file . '.tmp';
 	if (@file_put_contents($tmp, $body, LOCK_EX) === FALSE) {
 		// ADR-53 review finding H1: a failed write can still leave a stray
 		// (empty/partial, or pre-existing debris from a prior crashed run) file

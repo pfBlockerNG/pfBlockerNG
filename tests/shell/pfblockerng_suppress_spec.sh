@@ -576,4 +576,65 @@ SHIM
       The status should be success
     End
   End
+
+  Describe 'n — identical remainder does not republish (issue #3158)'
+    pfb_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+    setup() {
+      work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pfbsuppn.XXXXXX")"
+      max="${work}"
+      alias='QuietList_v4'
+      pfbsuppression="${work}/suppression.txt"
+      tempfile="${work}/t1"; tempfile2="${work}/t2"; dupfile="${work}/t3"; dedupfile="${work}/t4"
+      masterfile="${work}/master"; mastercat="${work}/mastercat"
+      true > "${masterfile}"
+      dedup='off'
+      errorlog="${work}/error.log"; true > "${errorlog}"
+      pathaggregate="${work}/iprange"
+      member="${work}/${alias}.txt"
+      printf '203.0.113.5\n203.0.113.9\n' > "${member}"
+    }
+    cleanup() { rm -rf "${work}"; }
+    Before 'setup'
+    After 'cleanup'
+
+    It 'leaves the member mtime unchanged when the remainder is byte-identical'
+      write_pathaggregate_identity_shim "${pathaggregate}"
+      printf '198.51.100.1/32\n' > "${pfbsuppression}"
+      touch -t 200001010000.00 "${member}"
+      pfb_mtime "${member}" > "${work}/before"
+      check_mtime_unchanged() {
+        silently suppress || return $?
+        after=$(pfb_mtime "${member}")
+        before=$(cat "${work}/before")
+        [ "$after" = "$before" ] || {
+          printf 'mtime moved: %s -> %s\n' "$before" "$after" >&2
+          return 1
+        }
+        return 0
+      }
+      When call check_mtime_unchanged
+      The status should be success
+      The contents of file "${member}" should equal "$(printf '203.0.113.5\n203.0.113.9')"
+    End
+
+    It 'publishes and moves mtime when suppression removes an entry'
+      write_pathaggregate_shim "${pathaggregate}"
+      printf '203.0.113.5/32\n' > "${pfbsuppression}"
+      touch -t 200001010000.00 "${member}"
+      pfb_mtime "${member}" > "${work}/before"
+      check_mtime_moved() {
+        silently suppress || return $?
+        after=$(pfb_mtime "${member}")
+        before=$(cat "${work}/before")
+        [ "$after" != "$before" ] || {
+          printf 'mtime did not move: %s\n' "$before" >&2
+          return 1
+        }
+        return 0
+      }
+      When call check_mtime_moved
+      The status should be success
+      The contents of file "${member}" should equal '203.0.113.9'
+    End
+  End
 End

@@ -1379,3 +1379,64 @@ Describe 'pfb_recompute() renders a per-feed Original/Final stats table on stdou
 		The path "$countsfile" should not be exist
 	End
 End
+
+Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
+	# Direct call: the swap loop is the defect, not the compute. rec_dedup=off
+	# and rec_do_rep=0 skip masterfile / reputation arms so only member
+	# aliases + the countsfile staging are in play.
+	# shellcheck disable=SC2034
+	setup() {
+		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recident.XXXXXX")"
+		pfbdeny="${work}/deny/"; mkdir -p "$pfbdeny"
+		errorlog="${work}/err.log"; true > "$errorlog"
+		rec_family='v4'
+		rec_prio=2
+		rec_dedup='off'
+		rec_repmode='off'
+		rec_do_rep=0
+		rec_ccwhite='off'
+		rec_priority="${work}/priority"
+		rec_countsfile="${work}/counts"
+		rec_countsfile_new="${rec_countsfile}.new"
+		printf 'Keep_v4 1\nChange_v4 2\n' > "$rec_priority"
+		printf '192.0.2.1\n' > "${pfbdeny}Keep_v4.txt"
+		printf '192.0.2.1\n' > "${pfbdeny}Keep_v4.txt.new"
+		printf '198.51.100.1\n' > "${pfbdeny}Change_v4.txt"
+		printf '198.51.100.9\n' > "${pfbdeny}Change_v4.txt.new"
+		printf 'Keep_v4 1\nChange_v4 1\n' > "$rec_countsfile_new"
+		touch -t 200001010000.00 "${pfbdeny}Keep_v4.txt"
+		touch -t 200001010000.00 "${pfbdeny}Change_v4.txt"
+		pfb_mtime "${pfbdeny}Keep_v4.txt" > "${work}/keep.before"
+		pfb_mtime "${pfbdeny}Change_v4.txt" > "${work}/change.before"
+	}
+	cleanup() { rm -rf "$work"; }
+	pfb_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+	run_finish_check_mtimes() {
+		keep_before=$(cat "${work}/keep.before")
+		change_before=$(cat "${work}/change.before")
+		pfb_recompute_finish >/dev/null 2>&1 || return $?
+		keep_after=$(pfb_mtime "${pfbdeny}Keep_v4.txt")
+		change_after=$(pfb_mtime "${pfbdeny}Change_v4.txt")
+		[ "$keep_after" = "$keep_before" ] || {
+			printf 'Keep_v4.txt mtime moved: %s -> %s\n' "$keep_before" "$keep_after" >&2
+			return 1
+		}
+		[ "$change_after" != "$change_before" ] || {
+			printf 'Change_v4.txt mtime did not move: %s\n' "$change_before" >&2
+			return 1
+		}
+		return 0
+	}
+	BeforeAll 'pfb_source'
+	Before 'setup'
+	After 'cleanup'
+
+	It 'leaves a byte-identical member mtime unchanged and cleans .new; publishes a differing member'
+		When call run_finish_check_mtimes
+		The status should be success
+		The contents of file "${pfbdeny}Keep_v4.txt" should equal '192.0.2.1'
+		The path "${pfbdeny}Keep_v4.txt.new" should not be exist
+		The contents of file "${pfbdeny}Change_v4.txt" should equal '198.51.100.9'
+		The path "${pfbdeny}Change_v4.txt.new" should not be exist
+	End
+End

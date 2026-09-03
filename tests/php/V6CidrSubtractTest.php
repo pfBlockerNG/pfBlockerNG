@@ -634,4 +634,42 @@ final class V6CidrSubtractTest extends TestCase
 			@chmod($tmp, 0644); // restore writability so tearDown's cleanup can remove it if still present
 		}
 	}
+
+	/** issue #3158: a no-op remainder must not rewrite the member file. */
+	public function testIdenticalRemainderDoesNotMoveMtime(): void
+	{
+		$file     = $this->makeTempFile("2001:db8::/64\n");
+		$suppfile = $this->makeTempFile("2001:db9::/64\n");
+		$before   = time() - 3600;
+		touch($file, $before);
+		clearstatcache(TRUE, $file);
+		$this->assertSame($before, filemtime($file), 'before: forced mtime must take');
+
+		$ok = pfb_suppress_file_v6($file, $suppfile);
+
+		clearstatcache(TRUE, $file);
+		$this->assertTrue($ok);
+		$this->assertSame("2001:db8::/64\n", file_get_contents($file));
+		$this->assertSame($before, filemtime($file),
+			'byte-identical remainder must not republish (mtime unchanged)');
+	}
+
+	/** issue #3158: a real carve still publishes and moves mtime. */
+	public function testChangedRemainderPublishesAndMovesMtime(): void
+	{
+		$file     = $this->makeTempFile("2001:db8::1/128\n2001:db8::2/128\n");
+		$suppfile = $this->makeTempFile("2001:db8::1/128\n");
+		$before   = time() - 3600;
+		touch($file, $before);
+		clearstatcache(TRUE, $file);
+		$this->assertSame($before, filemtime($file), 'before: forced mtime must take');
+
+		$ok = pfb_suppress_file_v6($file, $suppfile);
+
+		clearstatcache(TRUE, $file);
+		$this->assertTrue($ok);
+		$this->assertSame("2001:db8::2/128\n", file_get_contents($file));
+		$this->assertGreaterThan($before, filemtime($file),
+			'a real carve must publish (mtime moves)');
+	}
 }

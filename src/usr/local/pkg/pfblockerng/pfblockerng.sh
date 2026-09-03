@@ -639,7 +639,12 @@ EOF
 				"${pathaggregate}" "${dedupfile}" --except "${dupfile}" > "${tempfile2}"
 				irc=$?
 				if [ "${irc}" -eq 0 ]; then
-					mv -f "${tempfile2}" "${pfbfolder}${alias}.txt"
+					# issue #3158: identical remainder must not move mtime.
+					if cmp -s "${tempfile2}" "${pfbfolder}${alias}.txt"; then
+						rm -f "${tempfile2}"
+					else
+						mv -f "${tempfile2}" "${pfbfolder}${alias}.txt"
+					fi
 				else
 					rm -f "${tempfile2}"
 					log="iprange error (rc=${irc}) suppressing [ ${alias} ]; keeping previous list"
@@ -1497,8 +1502,16 @@ pfb_recompute_finish() {
 	# rc-checked -- a failure here cannot be rolled back (earlier moves in
 	# this loop may already be live), so it only logs the failing artifact
 	# and aborts; the family may be mixed until the next successful pass.
+	# issue #3158: skip the mv when .new is byte-identical so a quiet pass
+	# does not bump every member's mtime.
 	while IFS=' ' read -r rec_alias _; do
-		pfb_recompute_swap_mv "${pfbdeny}${rec_alias}.txt.new" "${pfbdeny}${rec_alias}.txt" "${rec_alias}.txt.new" || return 1
+		rec_new="${pfbdeny}${rec_alias}.txt.new"
+		rec_live="${pfbdeny}${rec_alias}.txt"
+		if cmp -s "${rec_new}" "${rec_live}"; then
+			rm -f "${rec_new}"
+		else
+			pfb_recompute_swap_mv "${rec_new}" "${rec_live}" "${rec_alias}.txt.new" || return 1
+		fi
 	done < "${rec_priority}"
 
 	if [ "${rec_dedup}" = 'on' ]; then
