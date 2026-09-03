@@ -355,6 +355,10 @@ foreach (array('existing', 'actual') as $pftype) {
 	$pfb[$pftype]['dnsbl']	= array();
 }
 
+// Canonical action types supported by aggregate aliases and their firewall rules.
+const PFB_AGGREGATE_TYPES = array('Deny', 'Permit', 'Match', 'Native');
+
+
 // issue #2658: ceilings on how much one feed may pull down and how much it may
 // expand to. Real feeds are tens to low hundreds of MB, so both sit far above
 // anything legitimate -- they exist to stop a pathological body or an expansion
@@ -3304,10 +3308,10 @@ function pfb_global() {
 	$pfb['keep']		= PfbConfig::read('gen/pfb_keep');		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
 
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
-	// to aggregate (subset of Deny/Permit/Match/Native), default NONE -> [] -> no-op pass.
+	// to aggregate (subset of PFB_AGGREGATE_TYPES), default NONE -> [] -> no-op pass.
 	// CSV (a single string, like blacklist_selected) so it round-trips with no '<0>' list XML.
 	$pfb['agg_types']	= array_values(array_intersect(
-					array('Deny', 'Permit', 'Match', 'Native'),
+					PFB_AGGREGATE_TYPES,
 					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
@@ -8016,7 +8020,8 @@ function pfb_aggregate_read(string $path) {
 function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list, array &$pfb_alias_lists, array &$pfb_alias_prev_sets) {
 	global $pfb;
 
-	$all_types	= array('Deny', 'Permit', 'Match', 'Native');
+	$all_types	= PFB_AGGREGATE_TYPES;
+
 	$selected	= is_array($pfb['agg_types'] ?? null) ? $pfb['agg_types'] : array();
 
 	// Disabled pfBlockerNG => nothing is selected effectively (tear all down below).
@@ -8173,14 +8178,13 @@ function pfb_select_reload_aliases(
 }
 
 /**
- * Return the aliases that rule-change cleanup must keep alive.
- *
- * Aggregate aliases are registered urltables without firewall rules. Only canonical aggregate
- * names present in the current registration are added; unrelated orphan tables remain removable.
+ * Return the rule-referenced aliases plus the currently registered aggregate aliases that
+ * rule-change cleanup must keep alive. Aggregate aliases are registered urltables without
+ * firewall rules; unrelated orphan tables remain removable.
  */
 function pfb_rule_change_keep_aliases(array $active_aliases, array $registered_aliases): array {
 	$aggregate_aliases = array();
-	foreach (array('Deny', 'Permit', 'Match', 'Native') as $type) {
+	foreach (PFB_AGGREGATE_TYPES as $type) {
 		foreach (array('v4', 'v6') as $family) {
 			$aggregate_aliases[] = "pfB_{$type}_Aggregated_{$family}";
 		}
