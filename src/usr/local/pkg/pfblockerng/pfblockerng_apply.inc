@@ -4799,6 +4799,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			// to pre-sync the kernel before filter_configure runs. The delta apply
 			// (pfb_apply_alias_delta) is used only on the no-rule-change path below.
 			$pfb_active_aliases = isset($pfb_active_aliases) ? array_unique($pfb_active_aliases) : [];
+			$pfb_table_keep_aliases = pfb_rule_change_keep_aliases($pfb_active_aliases, $new_aliases_list);
 			$final_alias        = empty($pfb_alias_lists)
 				? []
 				: array_values(array_intersect(array_unique($pfb_alias_lists), $pfb_active_aliases));
@@ -4810,6 +4811,10 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						// before filter_configure() rebuilds the ruleset from the aliasdir file.
 						pfb_pfctl_table_op($pfb_table, 'replace', "-f {$pfb_table_path_esc}");
 					}
+				} elseif (in_array($pfb_table, $pfb_table_keep_aliases)) {
+					// Aggregates are urltable aliases, so ADR-11 deliberately gives them no rule.
+					// Keep selected registrations for filter_configure() to rebuild below.
+					continue;
 				} else {
 					// Remove inactive pfB aliastables
 					pfb_pfctl_table_op($pfb_table, 'kill');

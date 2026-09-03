@@ -8173,6 +8173,27 @@ function pfb_select_reload_aliases(
 }
 
 /**
+ * Return the aliases that rule-change cleanup must keep alive.
+ *
+ * Aggregate aliases are registered urltables without firewall rules. Only canonical aggregate
+ * names present in the current registration are added; unrelated orphan tables remain removable.
+ */
+function pfb_rule_change_keep_aliases(array $active_aliases, array $registered_aliases): array {
+	$aggregate_aliases = array();
+	foreach (array('Deny', 'Permit', 'Match', 'Native') as $type) {
+		foreach (array('v4', 'v6') as $family) {
+			$aggregate_aliases[] = "pfB_{$type}_Aggregated_{$family}";
+		}
+	}
+
+	return array_values(array_unique(array_merge(
+		$active_aliases,
+		array_intersect($registered_aliases, $aggregate_aliases)
+	)));
+}
+
+
+/**
  * Concatenate the content of the member .txt files for one alias.
  *
  * The current aliasdir file is a raw concatenation of each enabled member feed's .txt
