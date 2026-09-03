@@ -1344,7 +1344,7 @@ Describe 'claude-bash-guard.sh'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
       End
-      When run env TMPDIR=/tmpfoo script "$GUARD"
+      When run env TMPDIR=/tmpfoo sh "$GUARD"
       The status should be success
       The output should equal ""
     End
@@ -1353,7 +1353,7 @@ Describe 'claude-bash-guard.sh'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
       End
-      When run env TMPDIR=/tmp script "$GUARD"
+      When run env TMPDIR=/tmp sh "$GUARD"
       The status should be success
       The output should include '"permissionDecision":"deny"'
     End
