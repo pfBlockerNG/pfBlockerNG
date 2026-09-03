@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `23cb2a0ad`  pfblockerng.sh: sort each closing sanity side once  (#3162) — asked, two quota notices (10 then 59 min); eight legs over two rounds, two blocking fixed.
 - `def1073fe`  tests: match routing-doc pins on collapsed whitespace  (#3133) — never asked, owner directive; four legs, no blocking.
 - `aa0329b07`  tests: accept Node 24 and Node 26 JUnit skip classnames  (#3131) — never asked, owner directive; four legs, no blocking.
 - `ec53a84a9`  tests: skip five chmod-denial ShellSpec rows under uid 0  (#3130) — never asked, owner directive; four legs, no blocking.
