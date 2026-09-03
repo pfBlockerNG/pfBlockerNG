@@ -2223,7 +2223,11 @@ closingprocess() {
 	# Execute when 'de-duplication' is enabled
 	if [ "${alias}" = 'on' ]; then
 		LC_ALL=C sort -o "${masterfile}" "${masterfile}"
-		sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n "${mastercat}" > "${tempfile}"; mv -f "${tempfile}" "${mastercat}"
+		# issue #3154: one byte-order sort of mastercat, in place. The octet-numeric
+		# ordering this used to produce was read by nothing (every consumer is a
+		# grep/awk set operation, and the file is re-cut from masterfile next pass),
+		# while s3 below re-sorted it anyway to feed uniq -d.
+		LC_ALL=C sort -o "${mastercat}" "${mastercat}"
 
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 		countm="$(grep -c ^ "${masterfile}")"
@@ -2232,11 +2236,14 @@ closingprocess() {
 		# issue #1084 review: mastercat (s1/s3) now carries BOTH families' rows
 		# (v6 Deny joined cross-list dedup) -- the deny-folder re-scan (s2/s4) must
 		# include v6 Deny files too, else the family mismatch alone fails sanity.
-		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
 		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
-		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | grep -cv "^${ip_placeholder2}$")"
-		s3="$(LC_ALL=C sort "${mastercat}" | LC_ALL=C uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort | LC_ALL=C uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
+		# issue #3154: concatenate and sort the deny folder once; s2 counts that file
+		# and s4 lists its duplicates, instead of each walking the folder itself.
+		find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"
+		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
+		s2="$(grep -cv "^${ip_placeholder2}$" "${tempfile}")"
+		s3="$(LC_ALL=C uniq -d "${mastercat}" | tail -30)"
+		s4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi
