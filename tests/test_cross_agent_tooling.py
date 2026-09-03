@@ -532,7 +532,7 @@ def test_graphify_install_uses_org_commit_without_local_patch() -> None:
         ".githooks/pre-commit",
         "Graphify-Labs/graphify#3075",
         "Graphify-Labs/graphify#3310",
-        "v0.9.53-pfb.2",
+        "67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87",
         "language.inc=php",
         "include-node floor",
     ):
