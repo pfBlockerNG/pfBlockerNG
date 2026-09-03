@@ -61,10 +61,16 @@ Load when: every agent session, from `AGENTS.md`.
   regenerated locally.
   The tracked graph is an enforced invariant (issue #3139): on every commit it equals
   `PYTHONHASHSEED=0 graphify update .` on that commit's tree. `.githooks/pre-commit`
-  runs `scripts/agent/check-graph-fresh.sh --refresh` and stages the result whenever a
-  commit stages any path outside `graphify-out/`, so the commit that moves code moves
-  the graph; `.githooks/pre-push`, `scripts/agent/run-gates.sh`, and CI run the same
-  script in check mode -- rebuild, compare bytes, restore -- and refuse a stale graph.
+  runs `scripts/agent/check-graph-fresh.sh --refresh` and stages the result unless the
+  staged set is exactly `graphify-out/graph.json` (a memory record alone triggers it),
+  so the commit that moves code moves the graph; `.githooks/pre-push`,
+  `scripts/agent/run-gates.sh`, and CI run the same script in check mode -- rebuild,
+  compare bytes, restore -- and refuse a stale graph. `pre-push` grades the tree of
+  every pushed tip in a detached scratch worktree under the sibling worktrees root,
+  never the checked-out tree; intermediate commits of a multi-commit push are not
+  graded, and a rebase replays commits without the pre-commit rebuild, so refresh and
+  commit the graph after every rebase -- under the maintainer-local fast-forward path
+  only the tip is proven.
   There is no `post-commit` or `post-checkout` hook: a fresh cut is born clean and a
   linked worktree commits exactly like the primary checkout. Every clone still needs
   the union merge driver that `.gitattributes` assigns to the graph --

@@ -29,11 +29,10 @@ wt --yes switch --create <branch> --base origin/devel   # cut off the latest bas
 wt remove --foreground --yes <branch>   # run from any directory OUTSIDE it
 ```
 
-`wt` runs the tracked `.config/wt.toml` `pre-start` hook, so a `wt`-cut worktree
-initializes CodeGraph, Graphify, and enabled Serena tools on its own. `init-worktree-tools.sh <path>` is run by hand
-only for a cut that came back without a CodeGraph index — the fallback route, or a
-pre-start that did not run. CodeGraph and Graphify are mandatory; Serena is skipped when
-absent or under OMP.
+`wt` runs the tracked `.config/wt.toml` `pre-start` hook, which initializes CodeGraph,
+Graphify, and enabled Serena tools. Run `init-worktree-tools.sh <path>` by hand only for
+a cut that came back without a CodeGraph index (fallback route, or a pre-start that did
+not run). CodeGraph and Graphify are mandatory; Serena is skipped when absent or under OMP.
 
 `work-branch.sh … --worktree` fetches, cuts below
 `<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools. It
@@ -51,8 +50,8 @@ worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }
 branches it verifies as integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both
-taking a SHA — an isolated tree at commit X, as when one review leg re-runs a red half
-without disturbing the worktree the other legs read. Needs git (history, diffing,
+taking a SHA — an isolated tree at commit X (e.g. one review leg re-running a red half
+without disturbing the worktree the other legs read). Needs git (history, diffing,
 committing) → a throwaway worktree, `wt --yes switch --create <branch> --base <sha>`,
 `wt remove` when the lane ends. Read-only → `git archive <sha> | tar -x -C "$SCRATCH"`:
 no `.git`, so it cannot commit, share refs, or touch the repository. Prefer the
@@ -65,10 +64,10 @@ worktree's index, `HEAD`, and refs; `cp -al` additionally hardlinks the content,
 in-place write lands in the original's files.
 
 **Never the system temp directory**: semantics differ per platform (Linux `/tmp` is
-often RAM-backed tmpfs; macOS resolves it to disk-backed `/private/tmp`, `TMPDIR` under
-`/var/folders`), and an unregistered tree is invisible to `git worktree list`, so no
-prune, `wt remove`, or landing step can reclaim it. Worktree scratch goes under the
-worktrees root; extraction scratch under `/var/tmp/agents`, disk-backed on both platforms.
+often tmpfs; macOS resolves it to `/private/tmp`, `TMPDIR` under `/var/folders`), and an
+unregistered tree is invisible to `git worktree list`, so no prune, `wt remove`, or
+landing step can reclaim it. Worktree scratch goes under the worktrees root; extraction
+scratch under `/var/tmp/agents`, disk-backed on both platforms.
 
 **Scratch is reaped by its owner** when the lane ends — agent session scratch included,
 which no worktree rule covers. Delete someone else's only when it is stale by mtime
@@ -77,11 +76,10 @@ an idle session looks dead by mtime alone.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.
-- **Rebase needs visible merge base.** In shallow checkout, normal fetch can move
-  `origin/devel` beyond retained history while older worktree still points behind
-  shallow boundary; plain `git rebase origin/devel` then mistakes base commits for work and
-  replays them. If `git merge-base HEAD origin/devel` produces no commit, deepen/unshallow
-  fetch first and retry ancestry check. Never start rebase without it.
+- **Rebase needs visible merge base.** In a shallow checkout a fetch can move
+  `origin/devel` beyond retained history; `git rebase origin/devel` then mistakes base
+  commits for work and replays them. If `git merge-base HEAD origin/devel` yields no
+  commit, deepen/unshallow first. Never start a rebase without it.
 - **Reuse only YOUR OWN worktree — never adopt one you merely found.** Worktree at
   conventional path you did not create this run may belong to live parallel session:
   `git -C <path> status` — foreign uncommitted changes ⇒ not yours; never `--force`-remove
@@ -91,8 +89,8 @@ an idle session looks dead by mtime alone.
   or legacy `WIP`/`Waiting PR` labels ⇒ another session owns it: wait, cooperate, or start
   NEW branch after merge). **Never force-push over another session's in-flight PR.**
 - Name branch for its work item — `adr/{NN}-{slug}` / `issue/{NN}-{slug}`.
-- Gotchas: `wt remove` / `git worktree remove` fail from inside tree — run from any directory
-  outside tree being removed (primary checkout or session worktree).
+- Gotchas: `wt remove` / `git worktree remove` fail from inside the tree — run them from
+  a directory outside it.
   Never pass `--delete-branch`; after terminal verification use the expected-value cleanup:
   `git push --force-with-lease=refs/heads/<head>:<reviewed_sha> origin --delete <head>`.
 - Each worktree owns its Composer `vendor/` tree; never share or symlink `vendor/` between
@@ -109,7 +107,8 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
   shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when `*.sh`/`*.md` staged);
   rebuilds and stages `graphify-out/graph.json` (`scripts/agent/check-graph-fresh.sh --refresh`)
-  when a path outside `graphify-out/` is staged. NOT unit suites — run
+  unless the staged set is exactly `graphify-out/graph.json`; a memory record alone
+  triggers it. NOT unit suites — run
   `python3 -m pytest` yourself; tests and static analysis run in CI only. Missing tool =
   reported + skipped; Graphify steps fail closed. `--no-verify` bypass is for humans, not
   agents. Release-line trees lacking the checker corpus opt out per gate via a committed
@@ -129,7 +128,10 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   message of every outgoing commit and each outgoing agent commit's configured
   author/committer identity and good signature from the configured user email; and
   refuses a push whose `graphify-out/graph.json` differs from a rebuild
-  (`scripts/agent/check-graph-fresh.sh`, #3139).
+  (`scripts/agent/check-graph-fresh.sh`, #3139): grades the tree of every pushed tip;
+  a rebase replays commits without the pre-commit rebuild, so refresh and commit the
+  graph after every rebase; under the maintainer-local fast-forward path only the tip
+  is proven.
 
 ## Rebase and diff hygiene
 
@@ -142,11 +144,11 @@ freshly-rebased branch that still fails is genuinely your bug.
 **Clean diff before you push/PR.** `git diff origin/devel...HEAD` and reduce it to only
 what change requires — strip debug logging, dead/commented-out experiments,
 churned-then-reverted code, introduced-then-unused symbols, gratuitous reformatting, scratch
-files. Cheapest before PR exists.
+files.
 
 **Push as soon as commit is green and final.** A commit that exists only on this
-workstation is invisible, unbacked-up work; never let commits pile up locally for a
-later batch push. Dev-only commits fast-forward directly to `devel` only when locally
+workstation is invisible, unbacked-up work; never hold commits for a later batch
+push. Dev-only commits fast-forward directly to `devel` only when locally
 signed. Code branches push to their own remote through the full PR flow; only its final
 landing gate may choose GitHub squash or the reviewed signed local fast-forward
 ([`landing.md`](landing.md)).
@@ -173,8 +175,7 @@ collision. Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsb
 ## Commit style
 
 `<scope>: <imperative summary>` (follow existing log — e.g. `ci: simplify pytest
-invocation`, `pfblockerng: fix IPv6 subnet match`). No trailing period; body optional for
-non-obvious changes.
+invocation`). No trailing period; body optional for non-obvious changes.
 
 **Commit identity:** agent-created commits are indistinguishable from the configured user
 committing alone (full text below). Provider-specific and legacy `coauthor.*`

@@ -36,11 +36,11 @@ main() {
 		echo "ensure-graphify-merge-driver.sh: Graphify setup failed for '$root'" >&2
 		exit 1
 	}
-	# git hands the driver string to a shell, so the launcher path is quoted;
-	# a path that double quotes cannot carry fails closed rather than registering
-	# a driver that would never run (the same allowlist the CLI applies).
+	# git hands the driver string to a shell, so the launcher path is quoted, and
+	# expands %-sequences (%O %A %B) even inside the quotes; a path that the string
+	# cannot carry fails closed rather than registering a driver that never runs.
 	case "$graphify_bin" in
-		*[\"\$\`\\]*)
+		*[\"\$\`\\%]*)
 			echo "ensure-graphify-merge-driver.sh: Graphify launcher path '$graphify_bin' cannot be quoted for merge.graphify.driver" >&2
 			exit 1
 			;;

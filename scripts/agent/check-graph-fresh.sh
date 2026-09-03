@@ -6,10 +6,11 @@
 # `PYTHONHASHSEED=0 graphify update <root>` through the shared launcher resolver.
 # Check mode saves graphify-out/graph.json aside, rebuilds, compares bytes, and puts
 # the saved copy back whenever the tree would otherwise be left changed: a stale,
-# failed, or interrupted rebuild. --refresh keeps the rebuilt graph.
+# failed, or interrupted rebuild. --refresh keeps the rebuilt graph. One run per
+# worktree at a time (graphify-out/.check-graph-fresh.lock).
 #
-# Exit: 0 fresh or refreshed, 1 stale or rebuild failed, 2 usage/precondition,
-# 4 Graphify launcher missing (agent_env.sh convention).
+# Exit: 0 fresh or refreshed, 1 stale, rebuild failed, or worktree locked,
+# 2 usage/precondition, 4 Graphify launcher or cmp missing (agent_env.sh convention).
 
 set -u
 
@@ -25,11 +26,11 @@ main() {
 	. "$(dirname "$0")/resolve-graphify.sh"
 	scrub_git_env "$0"
 	require_tool git
+	require_tool cmp
 
 	refresh=0
 	case "${1:-}" in
 		--refresh) refresh=1; shift ;;
-		-*) usage ;;
 	esac
 	[ "$#" -le 1 ] || usage
 	case "${1:-}" in
@@ -52,15 +53,22 @@ main() {
 		exit 4
 	}
 
-	scratch=$(mktemp -d "${TMPDIR:-/var/tmp}/check-graph-fresh.XXXXXX") || exit 2
-	trap 'rm -rf "$scratch"' EXIT
+	# One checker per worktree: a second one saving the graph mid-rebuild would
+	# restore the wrong bytes over the first one's restore.
+	lock=$root/graphify-out/.check-graph-fresh.lock
+	mkdir "$lock" 2>/dev/null || {
+		echo "check-graph-fresh.sh: another checker holds '$lock'; wait for it, or remove the lock if its owner is gone" >&2
+		exit 1
+	}
+	scratch='' restore=0
+	# Restored unless a verdict below says the tree may keep the rebuilt graph;
+	# a signal during the rebuild takes the same exit path.
+	trap '[ "$restore" = 0 ] || cp "$saved" "$graph"; rm -rf "$lock" "$scratch"' EXIT
 	trap 'exit 1' HUP INT TERM
+	scratch=$(mktemp -d "${TMPDIR:-/var/tmp}/check-graph-fresh.XXXXXX") || exit 2
 	saved=$scratch/graph.json
 	cp "$graph" "$saved" || exit 2
-	# From here on the tree is restored unless a verdict below says it may keep
-	# the rebuilt graph; a signal during the rebuild takes the same exit path.
 	restore=1
-	trap '[ "$restore" = 0 ] || cp "$saved" "$graph"; rm -rf "$scratch"' EXIT
 
 	PYTHONHASHSEED=0 "$graphify_bin" update "$root" >&2
 	rc=$?

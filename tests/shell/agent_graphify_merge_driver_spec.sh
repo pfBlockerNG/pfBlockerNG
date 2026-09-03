@@ -113,20 +113,29 @@ PATCH_GRAPHIFY
     End
   End
 
-  It 'fails closed on a launcher path git could not quote'
-    uv_tool_bin="$fixture/uv\$bin"
-    mkdir -p "$uv_tool_bin"
-    cp "$stubdir/graphify" "$uv_tool_bin/graphify"
-    off_path="$fixture/off path"
-    mkdir -p "$off_path"
-    for tool in dirname git sh; do
-      ln -s "$(command -v "$tool")" "$off_path/$tool"
-    done
-    ln -s "$stubdir/uv" "$off_path/uv"
-    When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
-    The status should equal 1
-    The stderr should include 'cannot be quoted'
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
+  Context 'launcher path the driver string cannot carry'
+    # git hands the string to sh inside double quotes, and expands %-sequences
+    # (%O %A %B) anywhere in it, quoted or not: such a driver registers but never runs.
+    Parameters
+      "uv\$bin"  'a shell metacharacter'
+      'uv%Abin'  'a git %-sequence'
+    End
+
+    It "fails closed on $2 in the launcher path"
+      uv_tool_bin="$fixture/$1"
+      mkdir -p "$uv_tool_bin"
+      cp "$stubdir/graphify" "$uv_tool_bin/graphify"
+      off_path="$fixture/off path"
+      mkdir -p "$off_path"
+      for tool in dirname git sh; do
+        ln -s "$(command -v "$tool")" "$off_path/$tool"
+      done
+      ln -s "$stubdir/uv" "$off_path/uv"
+      When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
+      The status should equal 1
+      The stderr should include 'cannot be quoted'
+      The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
+    End
   End
 
   Context 'foreign target without a target-local patch (issue #3004)'

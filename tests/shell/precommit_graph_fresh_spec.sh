@@ -104,6 +104,20 @@ CHECK
     The result of function staged_graph should equal 'graphify-out/graph.json'
   End
 
+  It 'rebuilds when the lone staged path merely SPLITS into graph.json lines: the guard is decided NUL-safe, never on a newline listing'
+    hostile="$repo/graphify-out/graph.json
+graphify-out/graph.json"
+    mkdir -p "$(dirname "$hostile")"
+    printf 'not the graph\n' > "$hostile"
+    gitc add -- "graphify-out/graph.json
+graphify-out/graph.json"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include '[pre-commit] graph freshness'
+    The contents of file "$check_log" should equal '--refresh'
+    The result of function staged_graph should equal 'graphify-out/graph.json'
+  End
+
   It 'rebuilds nothing with an empty index'
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 0

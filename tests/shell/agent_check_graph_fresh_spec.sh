@@ -35,12 +35,17 @@ printf 'update:%s:hashseed=%s\n' "${2:-}" "${PYTHONHASHSEED:-unset}" >> "$GRAPHI
 exit "${GRAPHIFY_RC:-0}"
 GRAPHIFY
     chmod +x "$stubdir/graphify"
-    # Neither graphify nor uv: the resolver has nothing to fall back to.
+    # Neither graphify nor uv: the resolver has nothing to fall back to. And a
+    # PATH with everything but cmp: the byte compare is mandatory too.
     no_graphify="$fixture/no-graphify"
-    mkdir -p "$no_graphify"
+    no_cmp="$fixture/no-cmp"
+    mkdir -p "$no_graphify" "$no_cmp"
     for tool in sh dirname git mktemp cp cmp rm mkdir; do
       ln -s "$(command -v "$tool")" "$no_graphify/$tool"
+      [ "$tool" = cmp ] || ln -s "$(command -v "$tool")" "$no_cmp/$tool"
     done
+    ln -s "$stubdir/graphify" "$no_cmp/graphify"
+    lock="$worktree/graphify-out/.check-graph-fresh.lock"
     export GRAPHIFY_LOG="$graphify_log" TMPDIR="$scratch"
     PATH="$stubdir:$PATH"; export PATH
   }
@@ -51,7 +56,8 @@ GRAPHIFY
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  scratch_entries() { ls -A "$scratch"; }
+  # Anything the checker left behind: scratch entries, and its worktree lock.
+  leftovers() { ls -A "$scratch"; [ ! -e "$lock" ] || echo "$lock"; }
   graph_status() { git_fixture -C "$worktree" status --porcelain -- graphify-out; }
 
   It 'reports a fresh graph under a seeded rebuild of the spaced root and leaves nothing behind'
@@ -61,7 +67,7 @@ GRAPHIFY
     The stderr should include 'graph is fresh'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
     The contents of file "$graph" should equal 'committed graph'
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
   End
 
   It 'defaults to the current directory'
@@ -88,7 +94,7 @@ GRAPHIFY
     The stderr should include "PYTHONHASHSEED=0 graphify update ."
     The contents of file "$graph" should equal 'committed graph'
     The result of function graph_status should equal ''
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
   End
 
   It 'compares bytes only: a graph that is not JSON is stale, never a parse error'
@@ -111,7 +117,7 @@ GRAPHIFY
     The stderr should include 'rebuild failed'
     The contents of file "$graph" should equal 'committed graph'
     The result of function graph_status should equal ''
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
   End
 
   It 'restores the committed bytes and cleans up when terminated mid-rebuild'
@@ -120,7 +126,18 @@ GRAPHIFY
     The status should equal 1
     The contents of file "$graph" should equal 'committed graph'
     The result of function graph_status should equal ''
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
+  End
+
+  It 'exits 1 naming the lock, rebuilds nothing and touches nothing while another checker holds the worktree'
+    mkdir "$lock"
+    export GRAPHIFY_STUB_GRAPH='rebuilt graph'
+    When run sh "$script_abs" "$worktree"
+    The status should equal 1
+    The stderr should include "$lock"
+    The file "$graphify_log" should not be exist
+    The contents of file "$graph" should equal 'committed graph'
+    The result of function leftovers should equal "$lock"
   End
 
   It '--refresh keeps a changed rebuild in place and says so'
@@ -130,7 +147,7 @@ GRAPHIFY
     The stderr should include 'refreshed (changed)'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
     The contents of file "$graph" should equal 'rebuilt graph'
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
   End
 
   It '--refresh reports an unchanged rebuild'
@@ -147,7 +164,7 @@ GRAPHIFY
     The status should equal 1
     The stderr should include 'rebuild failed'
     The contents of file "$graph" should equal 'committed graph'
-    The result of function scratch_entries should equal ''
+    The result of function leftovers should equal ''
   End
 
   It 'exits 2 and points at /graphify when the tree has no root graph'
@@ -184,6 +201,15 @@ GRAPHIFY
     When run env PATH="$no_graphify" sh "$script_abs" "$worktree"
     The status should equal 4
     The stderr should include 'graphify'
+    The file "$graphify_log" should not be exist
+    The contents of file "$graph" should equal 'committed graph'
+  End
+
+  It 'exits 4 and names cmp when the byte compare tool is missing: never a false verdict'
+    export GRAPHIFY_STUB_GRAPH='committed graph'
+    When run env PATH="$no_cmp" sh "$script_abs" "$worktree"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: cmp'
     The file "$graphify_log" should not be exist
     The contents of file "$graph" should equal 'committed graph'
   End
