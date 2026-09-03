@@ -41,13 +41,15 @@ set `check_noopener.py` took after issue #3075. Exit 0 clean, 1 on violations, 2
 the scan set or the registry could not be established (fail closed -- a gate that
 cannot read the registry must not report "clean").
 
-Three matcher ceilings, none of them load-bearing on today's tree but all real:
+The key group includes the hyphen (issue #3136), so a HYPHENATED key reaches all three
+matchers. The dashboard widget's `$pfb['wglobal']['widget-*']` saves are the live
+instance: those keys are a deliberately-foreign namespace inside the registered `global`
+section (the widget marks each foreign in-code), so RULE 1 classifies them foreign via
+`FOREIGN_KEY_PREFIXES` -- the owner decided (2026-09-03) to recognise them, not register
+them -- while a hyphenated key ANYWHERE ELSE still fires normally.
 
-  * The key group excludes the hyphen, so a HYPHENATED key is invisible to both
-    rules. The dashboard widget's `$pfb['wglobal']['widget-popup']` saves are the live
-    instance: the file is scanned and its mirror resolves, but those three saves never
-    reach RULE 1. Registering them is a config-gateway change, so it is issue #3136,
-    not this gate's default set.
+Two matcher ceilings remain, neither load-bearing on today's tree but both real:
+
   * RULE 2's read matcher anchors on the assignment operator, so a mirror read wrapped
     in a call (`pfb_b64_text($pfb['dconfig']['k'] ?? NULL)`) is not seen -- issue #3137.
   * Comments are skipped by LEADING token only, so a read quoted after code on the
@@ -96,15 +98,15 @@ _MIRROR_RE = re.compile(r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*=\s*PfbConfig::readSection
 # wrapped across lines is still one match and cannot slip past the gate by being
 # reformatted.
 _SAVE_RE = re.compile(
-    r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*=[^;]*?\bPFB_FILTER_ON_OFF\b",
+    r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*=[^;]*?\bPFB_FILTER_ON_OFF\b",
     re.DOTALL,
 )
 
 # A read of a section mirror carrying its own default. Two spellings:
 #   $x = $pfb['iconfig']['enable_dup'] ?: '';
 #   $x = isset($pfb['aglobal']['alertrefresh']) ? $pfb['aglobal']['alertrefresh'] : 'on';
-_READ_COALESCE_RE = re.compile(r"=\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*\?[:?]")
-_READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'(\w+)'\s*\]\s*\)\s*\?[^?:]*:")
+_READ_COALESCE_RE = re.compile(r"=\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\?[:?]")
+_READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\)\s*\?[^?:]*:")
 
 # Sanity floor: the registry has had >100 entries since issue #1920's audit. A parse
 # that finds fewer has broken, and a broken parse must fail the gate rather than
@@ -118,6 +120,17 @@ _MIN_REGISTRY_KEYS = 100
 # DELIBERATE exemption -- a future row must name the decision that makes the duplication
 # acceptable, and a row whose site is gone is dead weight -- delete it.
 EXEMPT: dict[tuple[str, str], str] = {}
+
+# alias -> foreign key-prefixes: a key that lives in a REGISTERED section but outside
+# the registry's scope -- a foreign namespace, not an unregistered save. This is the
+# key-prefix sibling of RULE 1's foreign-section escape, and the `rep` arrangement
+# docs/misc/config-gateway.md describes (a registered section with foreign siblings).
+# `global/widget-*` are the dashboard widget's keys, marked foreign in-code eleven
+# times in src/usr/local/www/widgets/widgets/pfblockerng.widget.php
+# ("foreign key: pfblockerngglobal/widget-* ... not in registry"), so they are display
+# preferences, not filter/security config. Issue #3136 (owner decision 2026-09-03):
+# recognise them, do not register them.
+FOREIGN_KEY_PREFIXES: dict[str, tuple[str, ...]] = {"global": ("widget-",)}
 
 
 class Violation(NamedTuple):
@@ -173,6 +186,11 @@ def find_violations(
         if alias is None:
             # The mirror is not a registered section at all (no PFB_SECTIONS alias):
             # a foreign section, outside the registry's scope.
+            continue
+        if key.startswith(FOREIGN_KEY_PREFIXES.get(alias, ())):
+            # A deliberately-foreign key namespace inside a registered section -- the
+            # same out-of-scope disposition as a foreign section, keyed on the prefix.
+            # Not an EXEMPT row: that is a RULE 2 backlog record, not a classification.
             continue
         # EXEMPT is a RULE 2 record only: one backlog row must never license an
         # unregistered save of that key name forever.

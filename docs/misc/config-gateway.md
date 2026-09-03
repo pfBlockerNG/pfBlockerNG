@@ -271,8 +271,11 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
   and `src/usr/local/pkg` — the same roots `check_noopener.py` took after issue #3075. A
   mirror is declared wherever the contract applies (the dashboard widget, `pfblockerng.inc`,
   `pfblockerng_geoip.inc`).
-- **Matcher ceilings** — recorded in the checker's docstring: hyphenated keys (issue #3136),
-  a call-wrapped RULE 2 read (issue #3137), comment/heredoc skip heuristics.
+- **Hyphenated keys** (issue #3136): the key group now includes `-`, so the widget's
+  `global/widget-*` saves reach the rules; they are classified foreign via
+  `FOREIGN_KEY_PREFIXES` (the `rep` arrangement above), not registered.
+- **Matcher ceilings** — recorded in the checker's docstring: a call-wrapped RULE 2 read
+  (issue #3137), comment/heredoc skip heuristics.
 - Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100
   parsed keys exits 2 rather than reporting clean.
 - `--self-test` is the red canary — a synthetic violating page must trip BOTH rules — and
