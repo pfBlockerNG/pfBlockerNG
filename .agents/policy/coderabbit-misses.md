@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `505f1ad73`  pfblockerng: skip identical member republish  (#3172) — asked twice, two quota notices; four legs, two blocking fixed.
 - `c7aa8992b`  agent: suppress default diffs for the tracked graph  (#3169) — asked twice, two quota notices; four legs, no blocking.
 - `49d25ea0d`  agent: enforce that the committed root graph equals a rebuild of its tree  (#3147) — asked twice, two quota notices; twelve legs over three rounds, three blocking fixed.
 - `23cb2a0ad`  pfblockerng.sh: sort each closing sanity side once  (#3162) — asked, two quota notices (10 then 59 min); eight legs over two rounds, two blocking fixed.
