@@ -6,6 +6,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Per-control gating: some single-row companions disable, others hide.
+ * A control that is temporarily unavailable greys out; one that does not APPLY
+ * to the current selection hides (issue #3060's top1m_token).
  * Whole sections still hide. Disabled controls re-enable on submit so POST
  * keeps the stored value (a disabled input is omitted from the form).
  */
@@ -37,7 +39,6 @@ final class GateDisableUiTest extends TestCase
 			'pfb_dnsport',
 			'pfb_dnsport_ssl',
 			'pfb_psl_allow_private',
-			'top1m_token',
 			'aliaslog',
 		] as $id) {
 			$this->assertStringContainsString("disableInput('{$id}'", $dnsbl, "{$id} must stay visible when inert");
@@ -52,6 +53,14 @@ final class GateDisableUiTest extends TestCase
 			$this->assertStringContainsString("hideCheckbox('{$id}'", $dnsbl, "{$id} hides while its parent is off");
 			$this->assertStringNotContainsString("disableInput('{$id}'", $dnsbl);
 		}
+
+		// issue #3060: the Cloudflare Radar API Token is not APPLICABLE for a keyless
+		// TOP1M type rather than temporarily unavailable, so it hides like the IP page's
+		// delta-batch input below instead of greying out. It is the one gated control on
+		// this page that moved out of the disable group, so it is pinned by name.
+		$this->assertStringContainsString("hideInput('top1m_token'", $dnsbl, 'top1m_token hides for a keyless TOP1M type');
+		$this->assertStringNotContainsString("disableInput('top1m_token'", $dnsbl, 'top1m_token must not grey out');
+		$this->assertStringNotContainsString("hideCheckbox('top1m_token'", $dnsbl, 'top1m_token is an input, not a checkbox row');
 
 		$ip = self::ip();
 		$this->assertStringContainsString("hideInput('pfb_alias_delta_batch'", $ip);
