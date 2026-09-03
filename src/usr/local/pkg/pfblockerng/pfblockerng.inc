@@ -355,7 +355,7 @@ foreach (array('existing', 'actual') as $pftype) {
 	$pfb[$pftype]['dnsbl']	= array();
 }
 
-// Canonical action types supported by aggregate aliases and their firewall rules.
+// Canonical action types supported by aggregate aliases; Native intentionally has no firewall rule.
 const PFB_AGGREGATE_TYPES = array('Deny', 'Permit', 'Match', 'Native');
 
 
