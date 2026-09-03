@@ -466,3 +466,64 @@ def test_a_key_sharing_a_registered_prefix_is_not_matched() -> None:
     for key in ("enable_dup_extra", "enable_du"):
         text = MIRROR + f"$pconfig['x'] = $pfb['iconfig']['{key}'] ?? '';\n"
         assert _find(text) == [], f"{key} is not the registered enable_dup"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #3136 -- hyphenated keys are seen; the widget-* namespace is foreign
+# --------------------------------------------------------------------------- #
+
+# The dashboard widget's own mirror: `wglobal` resolves to the registered `global`
+# section, but its `widget-*` keys are a deliberately-foreign namespace (the widget
+# marks each in-code: "foreign key: ... not in registry").
+WGLOBAL_MIRROR = f"$pfb['wglobal'] = PfbConfig::readSection('{GLOBAL_SECTION}');\n"
+
+
+def test_foreign_widget_prefix_save_is_not_flagged() -> None:
+    """The widget's real shape: a `global/widget-*` PFB_FILTER_ON_OFF save is a
+    foreign key-namespace inside a registered section, so RULE 1 must not flag it --
+    the same out-of-scope disposition a foreign section already gets. This is red at
+    the 4a-only intermediate (the widened matcher would flag it) and green once the
+    foreign-prefix classification lands.
+    """
+    text = (
+        WGLOBAL_MIRROR
+        + "$pfb['wglobal']['widget-popup'] = pfb_filter($_POST['pfb_popup'] ?? '', PFB_FILTER_ON_OFF, 'widget');\n"
+    )
+    assert _find(text, "pfblockerng.widget.php") == []
+
+
+def test_hyphenated_key_outside_the_foreign_namespace_is_still_flagged() -> None:
+    """Anti-vacuity: widening the key group so hyphens are seen must NOT blanket-
+    silence every hyphenated key. A hyphenated key doing the registry-governed save
+    shape, in a registered section outside any foreign namespace, still fires RULE 1.
+    Red until the key group is widened (the current `\\w+` group cannot see it).
+    """
+    text = MIRROR + "$pfb['iconfig']['pfb-new-flag'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';\n"
+    violations = _find(text)
+    assert [v.rule for v in violations] == ["unregistered-toggle"]
+    assert "ip/pfb-new-flag" in violations[0].detail
+
+
+def test_foreign_prefix_is_a_boundary_not_a_substring() -> None:
+    """`widgetx-foo` shares the letters but not the `widget-` prefix boundary, so the
+    exemption is a prefix match, not a loose substring: it still fires RULE 1.
+    """
+    text = (
+        WGLOBAL_MIRROR
+        + "$pfb['wglobal']['widgetx-foo'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'widget');\n"
+    )
+    violations = _find(text, "pfblockerng.widget.php")
+    assert [v.rule for v in violations] == ["unregistered-toggle"]
+    assert "global/widgetx-foo" in violations[0].detail
+
+
+def test_widget_prefix_in_an_unregistered_section_is_foreign_via_missing_alias() -> None:
+    """A `widget-` key in a section with no PFB_SECTIONS alias is already foreign
+    through the missing-alias branch -- the prefix rule is not what saves it, so the
+    two foreign dispositions do not overlap or mask each other.
+    """
+    text = (
+        "$pfb['bconfig'] = PfbConfig::readSection('installedpackages/pfblockerngblacklist');\n"
+        "$pfb['bconfig']['widget-popup'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'b') ?: '';\n"
+    )
+    assert _find(text, "pfblockerng.widget.php") == []
