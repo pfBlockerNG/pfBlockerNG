@@ -143,4 +143,31 @@ Describe 'pfb_count_table (#3151)'
     The output should include 'pfb_count_table'
     The output should not include 'wc -l'
   End
+
+  It 'still reports a deny-folder duplicate under the dedup sanity check (C10)'
+    # Given the closingprocess sandbox in dedup mode (alias=on) with the same IP in
+    # two deny files: the "Deny folder/Masterfile uniq check" probe (s4) must name it.
+    pfborig="${work}/orig/"; pfbdeny="${work}/deny/"
+    pfbpermit="${work}/permit/"; pfbmatch="${work}/match/"; pfbnative="${work}/native/"
+    pfbmatchgen="${pfbmatch}generated/"
+    mkdir -p "$pfborig" "$pfbdeny" "$pfbpermit" "$pfbmatch" "$pfbnative" "$pfbmatchgen"
+    pfsensealias="${work}/alias/"; mkdir -p "$pfsensealias"
+    masterfile="${work}/masterfile"; mastercat="${work}/mastercat"
+    tempfile="${work}/t1"; errorlog="${work}/err.log"; now="now"
+    ip_placeholder2="127.0.0.1"
+    alias="on"
+    pathpfctl="${work}/pfctl"; printf '#!/bin/sh\n' > "$pathpfctl"; chmod +x "$pathpfctl"
+    printf 'A 1.2.3.4\nB 5.6.7.8\n' > "$masterfile"
+    printf '1.2.3.4\n5.6.7.8\n' > "$mastercat"
+    printf '1.2.3.4\n' > "${pfbdeny}A.txt"
+    printf '1.2.3.4\n5.6.7.8\n' > "${pfbdeny}B.txt"
+
+    # When the final report runs.
+    When call closingprocess
+
+    # Then the duplicate is listed right after the deny-folder uniq check heading.
+    The status should be success
+    The stdout should include 'Deny folder/Masterfile uniq check'
+    The stdout should include "$(printf 'Deny folder/Masterfile uniq check\n1.2.3.4')"
+  End
 End
