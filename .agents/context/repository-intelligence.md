@@ -62,12 +62,16 @@ Load when: every agent session, from `AGENTS.md`.
   The tracked graph is an enforced invariant (issue #3139): on every commit it equals
   `PYTHONHASHSEED=0 graphify update .` on that commit's tree. `.githooks/pre-commit`
   runs `scripts/agent/check-graph-fresh.sh --refresh` and stages the result unless the
-  staged set is exactly `graphify-out/graph.json` (a memory record alone triggers it),
-  so the commit that moves code moves the graph; `.githooks/pre-push`,
+  staged set is only `graphify-out/graph.json` and/or `legacy/` (a memory record alone
+  triggers it), so the commit that moves code moves the graph; `.githooks/pre-push`,
   `scripts/agent/run-gates.sh`, and CI run the same script in check mode -- rebuild,
   compare bytes, restore -- and refuse a stale graph. `pre-push` grades the tree of
   every pushed tip in a detached scratch worktree under the sibling worktrees root,
-  never the checked-out tree; intermediate commits of a multi-commit push are not
+  never the checked-out tree, and whether a tip is graded is decided by ITS tree: a tip
+  shipping no checker never adopted the invariant (release lines, pre-graph history) and
+  is skipped, while a checkout that ships no checker refuses such a tip rather than
+  guess. The verdict is the pushing host's current Graphify, so an old tag or sha is
+  held to today's toolchain. Intermediate commits of a multi-commit push are not
   graded, and a rebase replays commits without the pre-commit rebuild, so refresh and
   commit the graph after every rebase -- under the maintainer-local fast-forward path
   only the tip is proven.

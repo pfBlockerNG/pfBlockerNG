@@ -8,15 +8,16 @@
 # layout), graded there, and the scratch is removed whatever the verdict. The
 # checked-out tree is never what is graded: uncommitted bytes or another branch
 # at HEAD would launder a stale commit. Intermediate commits of a multi-commit
-# push are not graded. The gate runs after the cheap gates and only in a tree
-# that ships the checker.
+# push are not graded. The gate runs after the cheap gates, and only for a tip
+# whose OWN tree ships the checker: the checkout's checker is the executable and
+# decides nothing about whether a tip is graded.
 #
-# Fixture: a bare remote and clone A whose scripts/agent/check-graph-fresh.sh is a
-# stub that logs each call (cwd and the graded path) and grades the graph bytes of
-# the tree it is handed: 'fresh graph' passes, anything else is stale, absent is
-# exit 2; GRAPH_CHECK_RC forces a verdict. Direct rows feed the hook its stdin
-# contract; the money rows run a real `git push` through core.hooksPath and read
-# the remote afterwards.
+# Fixture: a bare remote and clone A whose devel commits scripts/agent/check-graph-fresh.sh
+# as a stub that logs each call (cwd and the graded path) and grades the graph
+# bytes of the tree it is handed: 'fresh graph' passes, anything else is stale,
+# absent is exit 2; GRAPH_CHECK_RC forces a verdict. Direct rows feed the hook its
+# stdin contract; the money rows run a real `git push` through core.hooksPath and
+# read the remote afterwards.
 
 Describe 'pre-push root-graph freshness gate (issue #3139)'
   hook="${PFB_ROOT}/.githooks/pre-push"
@@ -31,16 +32,9 @@ Describe 'pre-push root-graph freshness gate (issue #3139)'
     git_fixture -C "${base}/A" config user.email a@example.com
     git_fixture -C "${base}/A" config user.name A
     git_fixture -C "${base}/A" config commit.gpgsign false
-    mkdir -p "${base}/A/graphify-out"
+    mkdir -p "${base}/A/graphify-out" "${base}/A/scripts/agent"
     printf 'fresh graph\n' > "${base}/A/graphify-out/graph.json"
-    ( cd "${base}/A" && git_fixture checkout -q -b devel && echo one > f \
-        && git_fixture add f graphify-out/graph.json && git_fixture commit -q -m c1 \
-        && git_fixture push -q origin devel \
-        && echo two >> f && git_fixture add f && git_fixture commit -q -m c2 )
-    a_local="$(git_fixture -C "${base}/A" rev-parse devel)"
-    remote_tip="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/devel)"
     check_log="${base}/check.log"
-    mkdir -p "${base}/A/scripts/agent"
     cat > "${base}/A/scripts/agent/check-graph-fresh.sh" <<'CHECK'
 #!/bin/sh
 target=${1:-.}
@@ -62,6 +56,12 @@ esac
 exit "$rc"
 CHECK
     export GRAPH_CHECK_LOG="$check_log"
+    ( cd "${base}/A" && git_fixture checkout -q -b devel && echo one > f \
+        && git_fixture add f graphify-out/graph.json scripts/agent/check-graph-fresh.sh \
+        && git_fixture commit -q -m c1 && git_fixture push -q origin devel \
+        && echo two >> f && git_fixture add f && git_fixture commit -q -m c2 )
+    a_local="$(git_fixture -C "${base}/A" rev-parse devel)"
+    remote_tip="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/devel)"
   }
 
   cleanup() {
@@ -107,6 +107,13 @@ CHECK
         -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
         -u OMP_CLI -u PI_CLI \
         git push -q origin "$@" # git-env-scrub-guard: allow hook-under-test push
+  }
+  # A line that never adopted the invariant: its tree ships neither checker nor
+  # graph, so grading it would refuse (exit 2). HEAD returns to devel, which ships both.
+  rel_tip() {
+    cd "${base}/A" && git_fixture checkout -q -b rel \
+      && git_fixture rm -q -r scripts graphify-out && git_fixture commit -q -m rel \
+      && git_fixture checkout -q devel && git_fixture rev-parse rel
   }
 
   It 'lets a fast-forward through when the pushed tip graph is fresh, grading it in a scratch worktree that is gone afterwards'
@@ -191,13 +198,32 @@ CHECK
     The file "$check_log" should not be exist
   End
 
-  It 'does not grade a tree that ships no checker (a line that never adopted the invariant)'
-    rm -f "${base}/A/scripts/agent/check-graph-fresh.sh"
-    When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+  It 'does not grade a pushed tip whose tree ships no checker (a line that never adopted the invariant), whatever the checkout ships'
+    tip=$(rel_tip)
+    When run human_hook "refs/heads/rel $tip refs/heads/rel $Z40"
     The status should equal 0
     The stderr should equal ''
     The file "$check_log" should not be exist
     The result of function scratch_leftovers should equal ''
+  End
+
+  It 'refuses a pushed tip that ships the checker when the checkout does not: nothing here can grade it'
+    rm -f "${base}/A/scripts/agent/check-graph-fresh.sh"
+    When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'ships scripts/agent/check-graph-fresh.sh but this checkout does not'
+    The file "$check_log" should not be exist
+    The result of function scratch_leftovers should equal ''
+  End
+
+  It 'refuses the push and leaves a scratch it did not cut in place (a concurrent push of the same tip owns it)'
+    mkdir -p "${base}/.A_worktrees"
+    git_fixture -C "${base}/A" worktree add -q --detach "$(scratch_of "$a_local")" "$a_local"
+    When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'retry the push'
+    The file "$check_log" should not be exist
+    The result of function scratch_leftovers should include "$(scratch_of "$a_local")"
   End
 
   It 'keeps the lease guard ahead of the rebuild: a denied agent rewrite never reaches the checker'
@@ -257,6 +283,16 @@ CHECK
     The stderr should include 'graph is fresh'
     The result of function remote_tip_now should equal "$a_local"
     The contents of file "$check_log" should equal "check:${base}/A:$(scratch_of "$a_local")"
+    The result of function scratch_leftovers should equal ''
+  End
+
+  It 'lands a real push of a line that never adopted the invariant, ungraded, from a checkout that ships the checker'
+    rel_tip >/dev/null
+    When run real_push rel
+    The status should equal 0
+    The stderr should not include 'check-graph-fresh.sh'
+    The value "$(remote_has rel)" should equal 'yes'
+    The file "$check_log" should not be exist
     The result of function scratch_leftovers should equal ''
   End
 End
