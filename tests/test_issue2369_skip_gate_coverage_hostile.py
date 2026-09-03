@@ -105,8 +105,37 @@ def test_native_node_canary_report_is_rejected_with_exact_skip_semantics(
         ]
     )
     assert rc == 1
+    err = capsys.readouterr().err
+    # issue #3117: Node 24's JUnit reporter uses classname="test"; Node 26 uses
+    # the enclosing describe name. The gate still rejects the skip; only the
+    # classname half of the id changes. Accept both so a host newer than CI's
+    # pin is not a false red.
+    node24 = "widget-js:test::skips # hash, punctuation: a::b!  reason: environment reason #42"
+    node26 = (
+        "widget-js:nested # suite :: punctuation!::skips # hash, punctuation: a::b!  reason: environment reason #42"
+    )
+    assert node24 in err or node26 in err, err
+
+
+def test_node26_junit_classname_canary_is_rejected_with_exact_skip_semantics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Static Node-26 reporter shape so a CI pin bump to 26 cannot silently
+    # change every Node skip id without this row going red first.
+    root = Path(__file__).resolve().parents[1]
+    report = root / "tests/fixtures/skip-allowlist-node26-canary.xml"
+    rc = _checker.main(
+        [
+            "--suite",
+            "widget-js",
+            "--allowlist",
+            str(root / "tests/skip-allowlist.txt"),
+            str(report),
+        ]
+    )
+    assert rc == 1
     assert (
-        "widget-js:test::skips # hash, punctuation: a::b!  reason: environment reason #42"
+        "widget-js:nested # suite :: punctuation!::skips # hash, punctuation: a::b!  reason: environment reason #42"
     ) in capsys.readouterr().err
 
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+<testsuite name="nested # suite :: punctuation!" time="0.000000" disabled="0" errors="0" tests="1" failures="0" skipped="1" hostname="canary">
+<testcase name="skips # hash, punctuation: a::b!" time="0.000000" classname="nested # suite :: punctuation!">
+<skipped type="skipped" message="environment reason #42"/>
+</testcase>
+</testsuite>
+</testsuites>
