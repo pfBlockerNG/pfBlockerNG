@@ -116,6 +116,7 @@ RUNNER
 		Before 'plant_readonly_scratch'
 
 		It 'fails and keeps the live match publication byte-unchanged'
+			Skip if 'root bypasses directory permissions' [ "$(id -u)" -eq 0 ]
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'cannot create ET scratch file'
@@ -148,6 +149,7 @@ RUNNER
 		Before 'plant_readonly_etdir'
 
 		It 'fails and leaves both the feed and the live match publication untouched'
+			Skip if 'root bypasses directory permissions' [ "$(id -u)" -eq 0 ]
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'ET processing failed'
@@ -204,6 +206,7 @@ RUNNER
 		Before 'plant_readonly_origdir'
 
 		It 'fails and keeps the live match publication byte-unchanged'
+			Skip if 'root bypasses directory permissions' [ "$(id -u)" -eq 0 ]
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'ET processing failed'
@@ -222,6 +225,7 @@ RUNNER
 		Before 'plant_readonly_matchdir'
 
 		It 'fails and keeps the live match publication byte-unchanged'
+			Skip if 'root bypasses directory permissions' [ "$(id -u)" -eq 0 ]
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'ET processing failed'

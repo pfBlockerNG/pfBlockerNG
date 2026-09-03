@@ -54,6 +54,13 @@ phpunit:DownloadGeoipStagePublishTest::testExtractionThatFailsPartWayLeavesTheSe
 
 # ShellSpec -- macOS/BSD host lacks the GNU stat/date/touch branch exercised in Linux CI.
 shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3) lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)  # GNU-only off-box branch; BSD branch is covered live by ADR-04 smoke
+# ShellSpec -- uid 0 bypasses chmod denial (issue #3116). CI is unprivileged, so these
+# skip only on a root-owned host; an unobserved allowlisted id is informational.
+shellspec:tests/shell/pfblockerng_processet_exit_spec.sh::processet() exit contract (issue #2683) when the ET scratch files cannot be created fails and keeps the live match publication byte-unchanged  # root bypasses directory permissions — denial cannot be simulated
+shellspec:tests/shell/pfblockerng_processet_exit_spec.sh::processet() exit contract (issue #2683) when a category split cannot be written fails and leaves both the feed and the live match publication untouched  # root bypasses directory permissions — denial cannot be simulated
+shellspec:tests/shell/pfblockerng_processet_exit_spec.sh::processet() exit contract (issue #2683) when the block publication cannot be moved into place fails and keeps the live match publication byte-unchanged  # root bypasses directory permissions — denial cannot be simulated
+shellspec:tests/shell/pfblockerng_processet_exit_spec.sh::processet() exit contract (issue #2683) when the match publication cannot be moved into place fails and keeps the live match publication byte-unchanged  # root bypasses directory permissions — denial cannot be simulated
+shellspec:tests/shell/precommit_identity_spec.sh::.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982) rejects an unreadable SSH signing key path  # root bypasses file permissions — denial cannot be simulated
 
 # pytest -- 4 observed on the Linux CI runner.
 pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner

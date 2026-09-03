@@ -238,6 +238,7 @@ Describe '.githooks/check-commit-identity.sh + pre-commit wiring (issue #2982)'
   End
 
   It 'rejects an unreadable SSH signing key path'
+    Skip if 'root bypasses file permissions' [ "$(id -u)" -eq 0 ]
     true > "$repo/locked.pub"
     chmod 000 "$repo/locked.pub"
     gitc config user.signingkey "$repo/locked.pub"
