@@ -72,11 +72,23 @@ box's ssh config, that appliance host runs every tier itself and `PFB_BOXES` is 
 at all:
 
 ```sh
-ssh smoke pfb-test <tier> [--ref <sha>] [--filter <expr>]
+ssh smoke pfb-test smoke|ui-render|ui-e2e|ui-browser [--ref <sha>] [--filter <expr>]
+ssh smoke pfb-test unit [pytest args...]      # no --ref; runs the host's own checkout
+ssh smoke pfb-test gates [--diff BASE]        # no --ref; gates a working tree
 ```
 
-The LAST line of stdout is the results path — cite it in findings. `--ref` is fetched from
-ORIGIN on that host, so a tier run only ever sees pushed commits.
+The LAST line of stdout is the results path — cite it in findings.
+
+`--ref` and `--filter` belong to the **live-VM tiers only**; those fetch the ref from origin
+on the box, so a tier run only ever sees pushed commits. `unit` and `gates` reject `--ref`
+outright: they run where they are invoked, against a checkout that sits on `devel`. Pointing
+them at a PR branch silently returns rc=5, "no tests collected" — a zero-test green that
+proves nothing. To gate another commit, do what the harness tells you and use a worktree:
+
+```sh
+git worktree add --detach /path/to/wt <sha>
+cd /path/to/wt && uv run --locked pytest tests -q -k EXPR
+```
 
 **Otherwise** `PFB_BOXES` is the pool of ssh targets to lease from. Set it from this box's
 own configuration. **No pool address is tracked in this repository** — the boxes belong to
