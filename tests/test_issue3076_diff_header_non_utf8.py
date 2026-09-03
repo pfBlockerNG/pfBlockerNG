@@ -62,7 +62,16 @@ def _scratch(tmp_path: Path) -> Path:
 
 
 def _run(script: Path, repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run([sys.executable, str(script), *args], cwd=repo, capture_output=True, check=False)
+    # scrubbed_git_env: the invoked checker shells out to `git diff`/`git show`
+    # itself, so it needs the same hook-safety scrub `_git()` gets -- an
+    # inherited GIT_DIR would point it at the REAL repository, not `repo`.
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        cwd=repo,
+        capture_output=True,
+        env=scrubbed_git_env(drop_git_vars=True),
+        check=False,
+    )
 
 
 def test_version_literals_reports_ascii_and_non_utf8_names_identically(tmp_path: Path) -> None:
@@ -134,7 +143,7 @@ def test_valid_utf8_name_opens_under_an_ascii_filesystem_encoding(tmp_path: Path
     (repo / "src" / "café.php").write_bytes((_LITERAL_LINE + "\n").encode())
     _git(repo, "add", "-A")
     env = {
-        **os.environ,
+        **scrubbed_git_env(drop_git_vars=True),
         # PEP 540 would otherwise force UTF-8 mode for the C locale and hide
         # the difference this case exists to catch.
         "PYTHONUTF8": "0",
