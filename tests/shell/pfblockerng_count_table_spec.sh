@@ -42,7 +42,7 @@ Describe 'pfb_count_table (#3151)'
     The stdout should include "       2 ${work}/unterminated.txt"
   End
 
-  It 'renders a single file with a total row and no /dev/null row (C3)'
+  It 'renders a single file as one row with no total, like wc -l (C3)'
     # Given one file whose contents include a line that itself reads like a
     # grep "path:count" output line.
     printf 'hello\n/dev/null: 5\n' > "${work}/solo.txt"
@@ -50,25 +50,24 @@ Describe 'pfb_count_table (#3151)'
     # When the table is rendered.
     When call pfb_count_table "${work}/solo.txt"
 
-    # Then both rows show and the drop keyed on the /dev/null PATH FIELD did
-    # not eat the real file even though its content resembles that prefix.
+    # Then exactly one row shows -- wc -l prints no total for a single file --
+    # and the real file survives even though its content resembles the prefix.
     The status should be success
-    The stdout should include "       2 ${work}/solo.txt"
-    The stdout should not include '/dev/null'
+    The lines of stdout should equal 1
+    The line 1 of stdout should equal "       2 ${work}/solo.txt"
   End
 
-  It 'reports an empty file as a 0 row with a 0 total (C4)'
+  It 'reports an empty file as a single 0 row (C4)'
     # Given an empty list file.
     true > "${work}/empty.txt"
 
     # When the table is rendered.
     When call pfb_count_table "${work}/empty.txt"
 
-    # Then the file is present in the table with count 0.
+    # Then the file is present in the table with count 0 and no total row.
     The status should be success
-    The lines of stdout should equal 2
-    The stdout should include "       0 ${work}/empty.txt"
-    The stdout should include '       0 total'
+    The lines of stdout should equal 1
+    The line 1 of stdout should equal "       0 ${work}/empty.txt"
   End
 
   It 'prints nothing and succeeds with no arguments (C5)'

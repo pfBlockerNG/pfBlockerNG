@@ -1561,14 +1561,13 @@ pfb_recompute_render_stats() {
 }
 
 # Line-count table for the closing report, wc -l shaped (right-aligned count, path, a
-# 'total' row, sorted descending) but counted with grep -c ^ so an unterminated final
-# line is counted. /dev/null forces grep's 'path:' prefix for a single file; its row is dropped.
+# 'total' row only for several files, sorted descending) but counted with grep -c ^ so an
+# unterminated final line is counted. /dev/null forces grep's 'path:' prefix; record 1 is it.
 pfb_count_table() {
-	[ $# -gt 0 ] || return 0
 	grep -c ^ /dev/null "$@" 2>/dev/null | LC_ALL=C awk -F: '
-		$1 == "/dev/null" { next }
+		NR == 1 { next }
 		{ n = $NF; sub(/:[0-9]+$/, ""); printf "%8d %s\n", n, $0; t += n }
-		END { if (NR > 1) printf "%8d total\n", t }' | sort -n -r
+		END { if (NR > 2) printf "%8d total\n", t }' | sort -n -r
 }
 
 
