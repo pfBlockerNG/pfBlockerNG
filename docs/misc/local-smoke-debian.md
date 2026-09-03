@@ -67,15 +67,26 @@ variable is unset, pulls use GHCR and `SMOKE_GHCR_TOKEN` may authenticate them.
 
 Orchestrator leases box, runs EVERYTHING on it — images, build, pytest:
 
-`PFB_BOXES` is pool of ssh targets to lease from. **Current pool is `10.0.0.31`
-through `10.0.0.38` (eight boxes, `pfb-box-1` … `pfb-box-8`, ssh as `root`)** — copy line
-below verbatim. Do not infer
-pool from anywhere else in tree: `tests/shell/select_box_spec.sh` uses `10.0.0.23` and
-`10.0.0.24` as *fake* boxes for lease-token assertions, and run pointed at those fails with
-`No route to host` and reads like harness broken.
+**First check whether this box has a `smoke` host.** When `ssh smoke` resolves in the
+box's ssh config, that appliance host runs every tier itself and `PFB_BOXES` is not used
+at all:
 
 ```sh
-export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38"
+ssh smoke pfb-test <tier> [--ref <sha>] [--filter <expr>]
+```
+
+The LAST line of stdout is the results path — cite it in findings. `--ref` is fetched from
+ORIGIN on that host, so a tier run only ever sees pushed commits.
+
+**Otherwise** `PFB_BOXES` is the pool of ssh targets to lease from. Set it from this box's
+own configuration. **No pool address is tracked in this repository** — the boxes belong to
+whoever runs them, and a hardcoded pool times out for everyone else. Do not infer a pool
+from anywhere else in the tree either: `tests/shell/select_box_spec.sh` uses *fake* boxes
+for lease-token assertions, and a run pointed at those fails with `No route to host` and
+reads like harness broken.
+
+```sh
+export PFB_BOXES="root@<box-1> root@<box-2>"   # this box's own pool, never a tracked address
 
 # Full smoke (marker=smoke, current HEAD):
 scripts/local-smoke.sh
