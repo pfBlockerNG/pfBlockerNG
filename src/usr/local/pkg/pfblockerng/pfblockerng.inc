@@ -5163,6 +5163,16 @@ function pfb_reentry_budget($budget): int {
 }
 
 /*
+ * issue #3140: hand pfblockerng.sh the two values its init would otherwise re-read from
+ * config.xml on every invocation (~160 ms each on a 500 KB config); the shell falls back
+ * to read_xml_tag.sh when these are unset (boot-time and hand-run invocations).
+ */
+function pfb_script_env_export(string $ip_placeholder, int $reentry_timeout): void {
+	putenv("PFB_IP_PLACEHOLDER={$ip_placeholder}");
+	putenv("PFB_REENTRY_TIMEOUT={$reentry_timeout}");
+}
+
+/*
  * issue #2016: compose the ONE bounded nested-pfblockerng.php command; pure builder.
  * timeout(1) stays in default (reaper) mode -- a hung download pass must die as a whole
  * tree, and --foreground would SIGKILL php alone and orphan a blocked fetch

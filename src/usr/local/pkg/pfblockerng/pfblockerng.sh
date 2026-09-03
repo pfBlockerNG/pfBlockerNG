@@ -94,7 +94,9 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# issue #2851: the operator's budget (General -> Advanced, 'Nested pass timeout'),
 	# normalized to the accepted window here -- the boundary where the stored value enters
 	# this process -- exactly as pfb_reentry_budget() normalizes it in PHP.
-	pfbreentrytimeout="$(pfb_reentry_timeout_from_reader /usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerng/config/pfb_reentry_timeout)"
+	# issue #3140: PHP exports PFB_REENTRY_TIMEOUT per sync pass; prefer it and pay the
+	# read_xml_tag.sh exec only when unset (boot-time and hand-run invocations).
+	pfbreentrytimeout="$(pfb_reentry_timeout "${PFB_REENTRY_TIMEOUT:-$(pfb_reentry_timeout_from_reader /usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerng/config/pfb_reentry_timeout)}")"
 
 	# Script Arguments
 	alias="${2}"
@@ -155,7 +157,9 @@ if [ -z "${PFB_SOURCED:-}" ]; then
 	# ADR-06: domainmaster / dnsbl_tld_remove / dnsbl_python_{data,zone,count} removed
 	# along with dnsbl_scrub + domaintldpy (the dropped build-time DNSBL passes).
 
-	ip_placeholder="$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngipsettings/config/ip_placeholder)"
+	# issue #3140: prefer the placeholder PHP exports per sync pass; the reader stays
+	# the fallback when the environment is unset.
+	ip_placeholder="${PFB_IP_PLACEHOLDER:-$(/usr/local/sbin/read_xml_tag.sh string installedpackages/pfblockerngipsettings/config/ip_placeholder)}"
 	if [ -z "${ip_placeholder}" ]; then
 		ip_placeholder=127.1.7.7
 	fi
