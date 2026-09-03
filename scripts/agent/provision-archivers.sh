@@ -1,18 +1,12 @@
 #!/bin/sh
-# Put the appliance's archivers where the package execs them, mirroring the three CI
-# steps in .github/workflows/test.yml ("Put bsdtar at /usr/bin/tar", "Put bsdunzip at
-# /usr/bin/unzip", "Put rsync at /usr/local/bin/rsync") so the archive cases that probe
-# those absolute paths run locally instead of skipping or failing (issues #2356, #3068,
-# #2667, #3135). GNU tar and Info-ZIP are dpkg-diverted, not removed: they move to the
-# first of /usr/local/bin, /usr/local/sbin, /usr/sbin that this host's PATH searches
-# BEFORE /usr/bin, so callers resolving `tar`/`unzip` by name (dpkg-deb, composer)
-# keep the GNU tools. CI's fixed /usr/sbin target only works where PATH searches it
-# first; a per-user directory is never a target. Both lookups are asserted, as in CI.
+# Put bsdtar, bsdunzip, and rsync where the appliance execs them, as CI's three "Put …"
+# steps in .github/workflows/test.yml do; the why and the PATH-derived divert target are
+# in tests/php/README.md "Host archive toolchain" (issue #3135).
 # Usage: provision-archivers.sh [ROOT]
 #   ROOT  prefix for /usr/bin and /usr/local/bin (default /); tests provision a fixture tree.
-# Debian-family Linux only (macOS ships bsdtar and SIP owns /usr/bin). Idempotent: an
-# already-wired host changes nothing and needs no privilege; changes run as root or via
-# sudo. Exit 1 when a lookup would be wrong, before anything moves.
+# Debian-family Linux with libarchive >= 3.7 (bsdunzip); macOS ships bsdtar and SIP owns
+# /usr/bin. Idempotent: a wired host changes nothing and needs no privilege; changes run
+# as root or via sudo. Exit 1 before anything moves when a lookup would end up wrong.
 
 set -eu
 
@@ -26,50 +20,47 @@ fail() {
 	exit 1
 }
 
-as_root() {
-	if [ "$(id -u)" -eq 0 ]; then
-		"$@"
-	else
-		sudo "$@"
-	fi
-}
-
-# The first system directory PATH searches before $bin; merged /usr makes /bin the same
-# directory as /usr/bin, so physical paths are compared.
+# Where GNU tar and Info-ZIP go: /usr/local/bin when PATH searches it before $bin (every
+# Debian PATH shape does), else /usr/sbin (the CI runner shape). Physical paths: merged
+# /usr makes /bin the same directory as /usr/bin.
 divert_dir() {
-	bin_phys=$(cd "$bin" && pwd -P) || return 1
+	bin_phys=$(CDPATH='' cd -- "$bin" && pwd -P) || return 1
+	local_phys=$(CDPATH='' cd -- "$local_bin" 2>/dev/null && pwd -P) || local_phys=
+	sbin_phys=$(CDPATH='' cd -- "$root/usr/sbin" 2>/dev/null && pwd -P) || sbin_phys=
+	fallback=
 	rest=$PATH:
 	while [ -n "$rest" ]; do
 		dir=${rest%%:*}
 		rest=${rest#*:}
 		[ -n "$dir" ] || continue
-		dir_phys=$(cd "$dir" 2>/dev/null && pwd -P) || continue
-		[ "$dir_phys" != "$bin_phys" ] || return 1
-		case "$dir_phys" in
-			"$root/usr/local/bin" | "$root/usr/local/sbin" | "$root/usr/sbin")
-				printf '%s\n' "$dir_phys"
-				return 0
-				;;
-		esac
+		dir_phys=$(CDPATH='' cd -- "$dir" 2>/dev/null && pwd -P) || continue
+		[ "$dir_phys" != "$bin_phys" ] || break
+		if [ "$dir_phys" = "$local_phys" ]; then
+			printf '%s\n' "$dir_phys"
+			return 0
+		fi
+		[ "$dir_phys" != "$sbin_phys" ] || fallback=$dir_phys
 	done
-	return 1
+	[ -n "$fallback" ] && printf '%s\n' "$fallback"
 }
 
 # $1 tool name, $2 its libarchive replacement, $3 the GNU flavour's version flag, $4 its banner.
 put_libarchive() {
 	name=$1 bsd=$2 gnu_flag=$3 gnu_banner=$4
 	if [ "$(readlink "$bin/$name" 2>/dev/null)" != "$bsd" ]; then
-		as_root dpkg-divert --no-rename --divert "$target/$name" --add "$bin/$name"
-		if [ ! -e "$target/$name" ]; then
-			as_root mv "$bin/$name" "$target/$name"
-		elif [ -e "$bin/$name" ] && [ ! -L "$bin/$name" ]; then
-			fail "both $bin/$name and $target/$name exist; resolve by hand"
+		if [ -e "$target/$name" ]; then
+			[ ! -e "$bin/$name" ] || [ -L "$bin/$name" ] ||
+				fail "both $bin/$name and $target/$name exist; resolve by hand"
+		elif [ -L "$bin/$name" ] || [ ! -f "$bin/$name" ]; then
+			fail "$bin/$name is not the GNU $name binary and $target/$name is absent; resolve by hand"
 		fi
+		as_root dpkg-divert --no-rename --divert "$target/$name" --add "$bin/$name"
+		[ -e "$target/$name" ] || as_root mv "$bin/$name" "$target/$name"
 		as_root ln -sfn "$bsd" "$bin/$name"
 	fi
 	"$bin/$name" --version | grep -q "^$bsd" || fail "$bin/$name is not $bsd"
 	"$name" "$gnu_flag" | grep -q "$gnu_banner" ||
-		fail "a bare '$name' no longer resolves to $gnu_banner; put $target ahead of $bin on PATH"
+		fail "a bare '$name' does not resolve to $gnu_banner: GNU $name belongs at $target/$name, ahead of $bin on PATH"
 }
 
 put_rsync() {
@@ -87,20 +78,23 @@ main() {
 	require_tool apt-get
 	root=${1:-}
 	root=${root%/}
+	[ -z "$root" ] || root=$(CDPATH='' cd -- "$root" && pwd -P) || fail "ROOT '$1' is not a directory"
 	bin=$root/usr/bin
 	local_bin=$root/usr/local/bin
 	target=$(divert_dir) ||
-		fail "no system directory precedes $bin on PATH ($PATH): a bare 'tar' would resolve to bsdtar"
+		fail "neither $local_bin nor $root/usr/sbin precedes $bin on PATH ($PATH): a bare 'tar' would resolve to bsdtar"
 
 	set --
 	if [ ! -x "$bin/bsdtar" ] || [ ! -x "$bin/bsdunzip" ]; then
 		set -- libarchive-tools
 	fi
+	[ -e "$bin/unzip" ] || [ -e "$target/unzip" ] || set -- "$@" unzip
 	[ -x "$bin/rsync" ] || set -- "$@" rsync
 	if [ "$#" -gt 0 ]; then
 		as_root apt-get update
 		as_root apt-get install -y --no-install-recommends "$@"
 	fi
+	[ -x "$bin/bsdunzip" ] || fail "$bin/bsdunzip is missing: this libarchive-tools predates libarchive 3.7"
 	put_libarchive tar bsdtar --version 'GNU tar'
 	put_libarchive unzip bsdunzip -v 'Info-ZIP'
 	put_rsync

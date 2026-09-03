@@ -204,9 +204,8 @@ final class DownloadGeoipStagePublishTest extends TestCase
 			$this->markTestSkipped(
 				'/usr/bin/tar on this host (' . $this->tarVersion() . ') rejects the shipped '
 				. 'PFB_TAR_EXTRACT_FLAGS with exit ' . $retval . ' -- it is not libarchive. The appliance '
-				. 'ships bsdtar and CI installs it; to run this case here: apt-get install libarchive-tools '
-				. '&& dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar '
-				. '&& mv /usr/bin/tar /usr/sbin/tar && ln -s bsdtar /usr/bin/tar'
+				. 'ships bsdtar and CI installs it; to run this case here: '
+				. 'sh scripts/agent/provision-archivers.sh (tests/php/README.md "Host archive toolchain")'
 			);
 		}
 	}

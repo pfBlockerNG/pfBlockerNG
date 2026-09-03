@@ -591,7 +591,7 @@ UNMANAGED_UV
       '  demo:' \
       '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s' "$repository" "$repository")"
+      "$(printf 'setup-hooks:\nensure-graphify:%s\ninit-worktree-tools:%s\nprovision-archivers:' "$repository" "$repository")"
     The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should include 'wt:config shell install --yes'
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
@@ -606,7 +606,7 @@ UNMANAGED_UV
       '  demo:' \
       '    web_dashboard: true')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s' "$repository")"
+      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
@@ -918,7 +918,7 @@ CONFIG
     The value "$(wc -c < "$worktrunk_config" | tr -d '[:space:]')" should equal \
       "$(wc -c < "$worktrunk_multiline_expected" | tr -d '[:space:]')"
     The contents of file "$helper_log" should equal \
-      "$(printf 'provision-archivers:\nsetup-hooks:\nensure-graphify:%s' "$repository")"
+      "$(printf 'setup-hooks:\nensure-graphify:%s' "$repository")"
   End
 
   It 'inserts only the global Worktrunk key while preserving hostile comments, tables, and nested paths byte-for-byte'
@@ -1009,9 +1009,9 @@ CONFIG
     The file "$helper_log" should not be exist
   End
 
-  It 'requires the archiver provisioning helper before running any helper'
+  It 'requires the archiver provisioning helper before running any helper, even on Darwin'
     rm -f "$repository/scripts/agent/provision-archivers.sh"
-    When run sh "$script_abs" "$repository"
+    When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
     The status should not equal 0
     The stderr should include 'provision-archivers.sh'
     The file "$helper_log" should not be exist

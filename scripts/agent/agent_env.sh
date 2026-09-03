@@ -34,6 +34,17 @@ require_tool() {
 	fi
 }
 
+# Run a command as root: directly when already root, otherwise through sudo.
+as_root() {
+	: "${agent_uid:=$(id -u)}"
+	if [ "$agent_uid" -eq 0 ]; then
+		"$@"
+	else
+		require_tool sudo
+		sudo "$@"
+	fi
+}
+
 # Run one gh request within both its per-call cap and the wait's remaining deadline.
 gh_bounded() {
 	gh_now=$(date +%s)

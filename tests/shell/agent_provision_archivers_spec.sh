@@ -38,6 +38,7 @@ Describe 'provision-archivers.sh'
     banner_stub "$packages/bsdtar" 'bsdtar 3.7.4 - libarchive 3.7.4'
     banner_stub "$packages/bsdunzip" 'bsdunzip 3.7.4 - libarchive 3.7.4'
     banner_stub "$packages/rsync" 'rsync  version 3.4.1  protocol version 32'
+    banner_stub "$packages/unzip" "$info_zip_banner"
 
     basebin="$fixture/base-bin"
     activebin="$fixture/active-bin"
@@ -68,7 +69,11 @@ SUDO
 printf 'apt-get:%s\n' "$*" >> "$ARCHIVER_CALL_LOG"
 for argument do
   case "$argument" in
-    libarchive-tools) cp "$ARCHIVER_PACKAGES/bsdtar" "$ARCHIVER_PACKAGES/bsdunzip" "$ARCHIVER_USR_BIN/" ;;
+    libarchive-tools)
+      cp "$ARCHIVER_PACKAGES/bsdtar" "$ARCHIVER_USR_BIN/"
+      [ -n "${ARCHIVER_OLD_LIBARCHIVE:-}" ] || cp "$ARCHIVER_PACKAGES/bsdunzip" "$ARCHIVER_USR_BIN/"
+      ;;
+    unzip) cp "$ARCHIVER_PACKAGES/unzip" "$ARCHIVER_USR_BIN/" ;;
     rsync) cp "$ARCHIVER_PACKAGES/rsync" "$ARCHIVER_USR_BIN/" ;;
   esac
 done
@@ -86,7 +91,7 @@ DPKG_DIVERT
     export ARCHIVER_CALL_LOG="$call_log"
     export ARCHIVER_PACKAGES="$packages"
     export ARCHIVER_USR_BIN="$usr_bin"
-    unset ARCHIVER_TEST_UID ARCHIVER_SUDO_RC ARCHIVER_DIVERT_CLASH AGENT_TEST_OS
+    unset ARCHIVER_TEST_UID ARCHIVER_SUDO_RC ARCHIVER_DIVERT_CLASH ARCHIVER_OLD_LIBARCHIVE AGENT_TEST_OS
     # Debian's default user PATH shape: /usr/local/bin ahead of /usr/bin.
     PATH="$activebin:$local_bin:$usr_bin:$basebin"; export PATH
   }
@@ -102,11 +107,7 @@ DPKG_DIVERT
   unzip_link() { readlink "$usr_bin/unzip"; }
   rsync_link() { readlink "$local_bin/rsync"; }
   usr_tar_version() { "$usr_bin/tar" --version; }
-  usr_unzip_version() { "$usr_bin/unzip" --version; }
   local_tar_version() { "$local_bin/tar" --version; }
-  local_unzip_version() { "$local_bin/unzip" -v; }
-  sbin_tar_version() { "$usr_sbin/tar" --version; }
-  sbin_unzip_version() { "$usr_sbin/unzip" -v; }
 
   gnu_tools_untouched() {
     [ ! -L "$usr_bin/tar" ] && [ ! -L "$usr_bin/unzip" ] &&
@@ -122,9 +123,9 @@ DPKG_DIVERT
     The result of function unzip_link should equal bsdunzip
     The result of function rsync_link should equal "$usr_bin/rsync"
     The result of function usr_tar_version should equal 'bsdtar 3.7.4 - libarchive 3.7.4'
-    The result of function usr_unzip_version should equal 'bsdunzip 3.7.4 - libarchive 3.7.4'
+    The value "$("$usr_bin/unzip" --version)" should equal 'bsdunzip 3.7.4 - libarchive 3.7.4'
     The result of function local_tar_version should equal "$gnu_tar_banner"
-    The result of function local_unzip_version should equal "$info_zip_banner"
+    The value "$("$local_bin/unzip" -v)" should equal "$info_zip_banner"
     The contents of file "$call_log" should equal "$(printf '%s\n' \
       'sudo:apt-get update' \
       'apt-get:update' \
@@ -163,8 +164,8 @@ DPKG_DIVERT
     When run sh "$script_abs" "$root"
     The status should equal 0
     The result of function tar_link should equal bsdtar
-    The result of function sbin_tar_version should equal "$gnu_tar_banner"
-    The result of function sbin_unzip_version should equal "$info_zip_banner"
+    The value "$("$usr_sbin/tar" --version)" should equal "$gnu_tar_banner"
+    The value "$("$usr_sbin/unzip" -v)" should equal "$info_zip_banner"
     The result of function rsync_link should equal "$usr_bin/rsync"
     The contents of file "$call_log" should include "dpkg-divert:--no-rename --divert $usr_sbin/tar --add $usr_bin/tar"
     The contents of file "$call_log" should include "dpkg-divert:--no-rename --divert $usr_sbin/unzip --add $usr_bin/unzip"
@@ -223,6 +224,7 @@ DPKG_DIVERT
     When run sh "$script_abs" "$root"
     The status should equal 1
     The stderr should include 'resolve by hand'
+    The contents of file "$call_log" should not include 'dpkg-divert:'
     The contents of file "$call_log" should not include 'mv '
     The contents of file "$call_log" should not include 'ln '
     Assert [ ! -L "$usr_bin/tar" ]
@@ -244,6 +246,80 @@ DPKG_DIVERT
     The status should equal 1
     The stderr should include "bare 'unzip'"
     The stderr should include 'Info-ZIP'
+  End
+
+  It 'prefers usr/local/bin over a superuser PATH that leads with usr/local/sbin'
+    mkdir -p "$root/usr/local/sbin"
+    PATH="$activebin:$root/usr/local/sbin:$local_bin:$usr_sbin:$usr_bin:$basebin"
+    When run env ARCHIVER_TEST_UID=0 sh "$script_abs" "$root"
+    The status should equal 0
+    The result of function local_tar_version should equal "$gnu_tar_banner"
+    The value "$("$local_bin/unzip" -v)" should equal "$info_zip_banner"
+    The contents of file "$call_log" should not include "$root/usr/local/sbin"
+    The contents of file "$call_log" should not include "$usr_sbin/tar"
+  End
+
+  It 'refuses before diverting when libarchive-tools ships no bsdunzip'
+    When run env ARCHIVER_OLD_LIBARCHIVE=1 sh "$script_abs" "$root"
+    The status should equal 1
+    The stderr should include 'bsdunzip'
+    The contents of file "$call_log" should include 'apt-get:install -y --no-install-recommends libarchive-tools rsync'
+    The contents of file "$call_log" should not include 'dpkg-divert:'
+    Assert gnu_tools_untouched
+  End
+
+  It 'installs Info-ZIP unzip on a seat that has none before diverting it'
+    rm "$usr_bin/unzip"
+    When run sh "$script_abs" "$root"
+    The status should equal 0
+    The contents of file "$call_log" should include 'apt-get:install -y --no-install-recommends libarchive-tools unzip rsync'
+    The result of function unzip_link should equal bsdunzip
+    The value "$("$local_bin/unzip" -v)" should equal "$info_zip_banner"
+  End
+
+  It 'reports a missing sudo as TOOL-MISSING before changing anything'
+    rm "$activebin/sudo"
+    When run sh "$script_abs" "$root"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: sudo'
+    Assert gnu_tools_untouched
+  End
+
+  It 'completes a half-run whose GNU copy is already diverted and whose link is broken'
+    mv "$usr_bin/tar" "$local_bin/tar"
+    ln -s nowhere "$usr_bin/tar"
+    When run sh "$script_abs" "$root"
+    The status should equal 0
+    The result of function tar_link should equal bsdtar
+    The contents of file "$call_log" should include "sudo:ln -sfn bsdtar $usr_bin/tar"
+    The contents of file "$call_log" should not include "mv $usr_bin/tar"
+  End
+
+  It 'refuses a hand-made symlink at usr/bin/tar when no diverted GNU copy exists'
+    ln -sfn "$usr_bin/bsdtar" "$usr_bin/tar"
+    When run sh "$script_abs" "$root"
+    The status should equal 1
+    The stderr should include 'resolve by hand'
+    The contents of file "$call_log" should not include 'dpkg-divert:'
+    Assert [ ! -e "$local_bin/tar" ]
+  End
+
+  It 'names where GNU tar belongs when an older recipe diverted it elsewhere'
+    mv "$usr_bin/tar" "$usr_sbin/tar"
+    cp "$packages/bsdtar" "$packages/bsdunzip" "$usr_bin/"
+    ln -s bsdtar "$usr_bin/tar"
+    When run sh "$script_abs" "$root"
+    The status should equal 1
+    The stderr should include "$local_bin/tar"
+  End
+
+  It 'canonicalizes a symlinked usr/local and a trailing slash on ROOT'
+    mv "$root/usr/local" "$root/usr/local.real"
+    ln -s local.real "$root/usr/local"
+    When run sh "$script_abs" "$root/"
+    The status should equal 0
+    The result of function tar_link should equal bsdtar
+    The result of function local_tar_version should equal "$gnu_tar_banner"
   End
 
   It 'refuses on a non-Linux host before touching anything'

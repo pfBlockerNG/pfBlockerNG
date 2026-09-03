@@ -40,14 +40,8 @@ install_linux_prerequisites() {
 	[ "$#" -gt 0 ] || return 0
 
 	require_tool apt-get
-	if [ "$(id -u)" -eq 0 ]; then
-		apt-get update
-		apt-get install -y "$@"
-	else
-		require_tool sudo
-		sudo apt-get update
-		sudo apt-get install -y "$@"
-	fi
+	as_root apt-get update
+	as_root apt-get install -y "$@"
 }
 
 configure_worktrunk() {
@@ -237,11 +231,6 @@ main() {
 	[ -f "$init_tools" ] || fail "required repository helper '$init_tools' is missing"
 	[ -f "$provision_archivers" ] || fail "required repository helper '$provision_archivers' is missing"
 
-	# The archive cases exec the appliance's absolute paths; macOS already ships bsdtar.
-	case "$platform" in
-		Linux) sh "$provision_archivers" ;;
-	esac
-
 	if [ -n "${XDG_BIN_HOME:-}" ]; then
 		xdg_bin_home=$XDG_BIN_HOME
 	elif [ -n "${XDG_DATA_HOME:-}" ]; then
@@ -297,6 +286,9 @@ main() {
 	configure_agents
 
 	sh "$init_tools" "$root"
+
+	# Last, so a privilege refusal here leaves the agent tools installed; macOS ships bsdtar.
+	[ "$platform" != Linux ] || sh "$provision_archivers"
 }
 
 main "$@"

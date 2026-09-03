@@ -89,18 +89,19 @@ which `scripts/agent/setup-agent-tools.sh` also runs on Linux:
 sh scripts/agent/provision-archivers.sh
 ```
 
-It installs `libarchive-tools` and `rsync`, symlinks `/usr/bin/tar` to bsdtar,
-`/usr/bin/unzip` to bsdunzip, and `/usr/local/bin/rsync` to Debian's rsync, and
+It installs `libarchive-tools` (libarchive 3.7 or newer — the release that added
+`bsdunzip`; Debian 13 / Ubuntu 24.04 up), `unzip`, and `rsync`; symlinks `/usr/bin/tar` to
+bsdtar, `/usr/bin/unzip` to bsdunzip, and `/usr/local/bin/rsync` to Debian's rsync; and
 `dpkg-divert`s GNU tar and Info-ZIP out of the way so a package upgrade cannot undo the
 links. The diversion target is derived from PATH, not copied from CI: the GNU tools move
-to the first of `/usr/local/bin`, `/usr/local/sbin`, `/usr/sbin` that your PATH searches
-before `/usr/bin`, so a bare `tar` or `unzip` still resolves to them for everything else
-(`dpkg-deb`, composer). CI's fixed `/usr/sbin` target is a runner property — a default
-Debian user PATH has no `/usr/sbin` at all, and copying that recipe there hands bare
-`tar` to bsdtar (issue #3135). The script asserts both lookups, refuses before changing
-anything when no such directory precedes `/usr/bin`, and is a privilege-free no-op once
-the host is wired. The rows that stop skipping are the archive and rsync entries in
-`tests/skip-allowlist.txt`.
+to `/usr/local/bin` when your PATH searches it before `/usr/bin` (every Debian PATH shape
+does, root's and sudo's included), else to `/usr/sbin` — not CI's fixed `/usr/sbin`,
+which a default Debian user PATH never searches (issue #3135) — so a bare `tar` or
+`unzip` still resolves to them for everything else (`dpkg-deb`, composer). The script
+asserts both lookups, refuses before changing anything when neither directory precedes
+`/usr/bin` or when an earlier attempt left the tools in an ambiguous state, and is a
+privilege-free no-op once the host is wired. The rows that stop skipping are the archive
+and rsync entries in `tests/skip-allowlist.txt`.
 
 Reverse it with `dpkg-divert --remove` after moving each binary back. macOS ships bsdtar
 already and SIP owns `/usr/bin`, so the script refuses there; its `/usr/bin/unzip` stays
