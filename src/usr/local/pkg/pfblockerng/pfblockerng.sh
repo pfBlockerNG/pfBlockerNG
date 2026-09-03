@@ -1560,6 +1560,17 @@ pfb_recompute_render_stats() {
 	return 0
 }
 
+# Line-count table for the closing report, wc -l shaped (right-aligned count, path, a
+# 'total' row, sorted descending) but counted with grep -c ^ so an unterminated final
+# line is counted. /dev/null forces grep's 'path:' prefix for a single file; its row is dropped.
+pfb_count_table() {
+	[ $# -gt 0 ] || return 0
+	grep -c ^ /dev/null "$@" 2>/dev/null | LC_ALL=C awk -F: '
+		$1 == "/dev/null" { next }
+		{ n = $NF; sub(/:[0-9]+$/, ""); printf "%8d %s\n", n, $0; t += n }
+		END { if (NR > 1) printf "%8d total\n", t }' | sort -n -r
+}
+
 
 # ADR-06: dnsbl_scrub (build-time within/cross-feed De-Duplication + user-
 # whitelist removal + TOP1M removal) and domaintldpy (sort -u dedup + subdomain
@@ -2226,29 +2237,28 @@ closingprocess() {
 		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
 		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | grep -cv "^${ip_placeholder2}$")"
 		s3="$(LC_ALL=C sort "${mastercat}" | LC_ALL=C uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort | LC_ALL=C uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi
 
 	if [ -d "${pfbpermit}" ] && [ "$(ls -A "${pfbpermit}")" ]; then
 		echo; echo '===[ Permit List IP Counts ]========================='; echo
-		wc -l "${pfbpermit}"*.txt 2>/dev/null | sort -n -r
+		pfb_count_table "${pfbpermit}"*.txt
 	fi
 	# issue #1250: key on the .txt files themselves -- `ls -A "${pfbmatch}"` is now always
-	# non-empty (the generated/ subdir always exists), and `wc -l` emits a "total" line
-	# even when every glob is unmatched. The generated artifacts still belong in this count.
+	# non-empty (the generated/ subdir always exists), so the section guard must test the
+	# .txt files. The generated artifacts still belong in this count.
 	if [ -n "$(ls -A "${pfbmatch}"*.txt "${pfbmatchgen}"*.txt 2>/dev/null)" ]; then
 		echo; echo '===[ Match List IP Counts ]=========================='; echo
-		wc -l "${pfbmatch}"*.txt "${pfbmatchgen}"*.txt 2>/dev/null | sort -n -r
+		pfb_count_table "${pfbmatch}"*.txt "${pfbmatchgen}"*.txt
 	fi
 	if [ -d "${pfbdeny}" ] && [ "$(ls -A "${pfbdeny}")" ]; then
 		echo; echo '===[ Deny List IP Counts ]==========================='; echo
-		wc -l "${pfbdeny}"*.txt 2>/dev/null | sort -n -r
+		pfb_count_table "${pfbdeny}"*.txt
 	fi
 	if [ -d "${pfbnative}" ] && [ "$(ls -A "${pfbnative}")" ]; then
 		echo; echo '===[ Native List IP Counts ] ==================================='; echo
-		wc -l "${pfbnative}"*.txt 2>/dev/null | sort -n -r
+		pfb_count_table "${pfbnative}"*.txt
 	fi
 	if [ -d "${pfbdeny}" ] && [ "$(ls -A "${pfbdeny}")" ]; then
 		# grep only prefixes matches with "path:" when given >=2 file args; a deny glob that
@@ -2266,7 +2276,7 @@ closingprocess() {
 	fi
 	if [ -d "${pfbdomain}" ] && [ "$(ls -A "${pfbdomain}")" ]; then
 		echo; echo '===[ DNSBL Domain/IP Counts ] ==================================='; echo
-		wc -l "${pfbdomain}"* 2>/dev/null | sort -n -r
+		pfb_count_table "${pfbdomain}"*
 	fi
 	if [ -d "${pfborig}" ] && [ "$(ls -A "${pfborig}")" ]; then
 		echo; echo '====================[ IPv4/6 Last Updated List Summary ]=============='; echo
@@ -2299,7 +2309,7 @@ closingprocess() {
 	fi
 
 	echo; echo 'Alias table IP Counts'; echo '-----------------------------'
-	wc -l "${pfsensealias}"pfB_*.txt 2>/dev/null | sort -n -r
+	pfb_count_table "${pfsensealias}"pfB_*.txt
 
 	echo; echo 'pfSense Table Stats'; echo '-------------------'
 	"${pathpfctl}" -s memory | grep 'table-entries'
