@@ -7997,9 +7997,9 @@ function pfb_pfctl_tables_parse(array $lines): array {
 // issue #3156: the action's rebuild gate is an mtime gate, and a member rewritten with identical
 // bytes still trips it, so a rebuild is NOT a change. Changed -- the name entering
 // $pfb['changed_ip_aliases']/$pfb_alias_lists, and the pf table being pushed -- is decided on the
-// aggregate's canonical CONTENT (ADR-40's signal), plus a file-vs-kernel EMPTINESS mismatch. Only
-// emptiness, so nonzero kernel drift heals on the next content change or the ADR-61 tick, not
-// every pass -- the same trade the member-alias write loop makes.
+// aggregate's canonical CONTENT (ADR-40's signal), plus a file-vs-kernel EMPTINESS mismatch. So
+// nonzero kernel drift waits for the next content change (sooner via the ADR-61 tick only when a
+// failed apply ledgered it) -- the same trade the member-alias write loop makes.
 function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list, array &$pfb_alias_lists, array &$pfb_alias_prev_sets) {
 	global $pfb;
 
@@ -8012,9 +8012,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 	}
 
 	// ONE `pfctl -vvsTables` for every aggregate's address count (pfb_pfctl_table_count() would
-	// dump every member of every table). Skipped entirely when nothing is selected. An absent or
-	// failing pfctl yields [], so every table reads empty and every aggregate re-pushes: the
-	// over-report direction, the same one pfb_pfctl_table_count()'s callers take.
+	// dump every member of every table); skipped entirely when nothing is selected. An absent or
+	// failing pfctl yields [], so every table reads empty and re-pushes: the over-report
+	// direction pfb_pfctl_table_count()'s callers also take.
 	$table_stats = empty($selected) ? array() : pfb_pfctl_tables_parse(pfb_pfctl_tables_raw());
 
 	foreach ($all_types as $type) {
@@ -8046,8 +8046,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			@file_put_contents($memberlist, $members ? (implode("\n", $members) . "\n") : '', LOCK_EX);
 
 			// Canonical set BEFORE the build: the baseline the rebuild is judged against, and the
-			// previous set the apply site deltas from.
-			$prev_set = pfb_canonical_alias_set((string) (@file_get_contents($aggout) ?: ''));
+			// previous set the apply site deltas from. is_file() for the same reason as the
+			// post-build read below, plus it keeps a FIFO at that path from blocking the pass.
+			$prev_set = pfb_canonical_alias_set(is_file($aggout) ? (string) (@file_get_contents($aggout) ?: '') : '');
 
 			$family_esc	= escapeshellarg($family);
 			$memberlist_esc	= escapeshellarg($memberlist);
@@ -8070,10 +8071,10 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 							'detail'	=> 'DO NOT EDIT THIS ALIAS'
 							);
 
-			// Only an ABSENT aggregate is a real empty union. Anything present that is not a
-			// readable regular file is an I/O error, and inferring emptiness from it would kill a
-			// populated table -- pfb_alias_set_different() refuses the same inference. Note a
-			// directory at that path reads as '' rather than FALSE, so is_file() carries the test.
+			// Only an absent aggregate is a real empty union. A path that is present but not a
+			// readable regular file is an I/O error, and inferring emptiness would kill a populated
+			// table -- pfb_alias_set_different() refuses the same inference. is_file() carries it:
+			// a directory there reads as '' rather than FALSE.
 			$new_raw = is_file($aggout) ? @file_get_contents($aggout) : (file_exists($aggout) ? FALSE : '');
 			if ($new_raw === FALSE) {
 				pfb_logger(" Updating [ {$aliasname} ]: aggregate unreadable, leaving its table alone\n", 2);

@@ -341,15 +341,17 @@ final class AggregateAliasChangeGateTest extends TestCase
 	}
 
 	/**
-	 * Given the aggregate file exists but cannot be read
+	 * Given something other than a readable file stands at the aggregate's path
 	 * When the builder evaluates it
 	 * Then it leaves the alias alone: an I/O error is not an empty union, and inferring one
 	 *      would kill a populated table.
 	 *
-	 * A directory standing at the aggregate's path is how this is forced here — `chmod 000` does
-	 * not stop root, and the suite runs as root on some hosts.
+	 * A directory is what this forces, and it is the case `is_file()` exists for — a directory
+	 * reads as `''`, not `FALSE`, so a `=== FALSE` test alone would infer an empty union from it.
+	 * A permission-denied regular file is the other half of the guard and cannot be built here:
+	 * `chmod 000` does not stop root, and the suite runs as root on some hosts.
 	 */
-	public function testUnreadableAggregateLeavesTheTableAlone(): void
+	public function testWrongTypeAtTheAggregatePathLeavesTheTableAlone(): void
 	{
 		$this->writeMember('Feed', ['198.51.100.7']);
 		$this->runBuilder();
@@ -364,6 +366,8 @@ final class AggregateAliasChangeGateTest extends TestCase
 		$this->assertSame([], $second['ops'], 'an unreadable aggregate must not touch the kernel table');
 		$this->assertNotContains(self::ALIAS, $second['lists'], 'an unreadable aggregate must not be reported');
 		$this->assertNotContains(self::ALIAS, $second['changed'], 'an unreadable aggregate must not be reported');
+		$this->assertStringContainsString('unreadable', (string) @file_get_contents($GLOBALS['pfb']['log']),
+			'the pass says why it left the alias alone');
 		$this->assertContains(self::ALIAS, $second['registered'],
 			'the alias stays registered — dropping it would make the caller prune it as an orphan');
 	}
