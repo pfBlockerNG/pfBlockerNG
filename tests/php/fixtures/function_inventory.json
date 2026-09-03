@@ -160,6 +160,19 @@
             }
         ]
     },
+    "pfb_aggregate_read": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_alerts_default_page": {
         "returnsRef": false,
         "returnType": null,

@@ -7986,6 +7986,17 @@ function pfb_pfctl_tables_parse(array $lines): array {
 }
 
 
+// issue #3156: read an aggregate output file in the three states its change gate needs. Absent is
+// '' -- a real empty union. Present but not a readable regular file is FALSE -- an I/O error,
+// never emptiness, since inferring emptiness there would kill a populated table. is_file()
+// separates the middle case because a directory returns '' from file_get_contents(), and it also
+// keeps a FIFO at that path from blocking the pass on a read that never completes.
+// @return string|false
+function pfb_aggregate_read(string $path) {
+	return is_file($path) ? @file_get_contents($path) : (file_exists($path) ? FALSE : '');
+}
+
+
 // ADR-11: build + register the opt-in per-type aggregate ("Uber") Native aliases. ONE generic
 // loop over type->dir {Deny,Permit,Match,Native} x family {v4,v6}: each SELECTED type
 // ($pfb['agg_types']) gets a memberlist, a `pfblockerng.sh aggregate` run, and a standard pfB
@@ -8046,9 +8057,11 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			@file_put_contents($memberlist, $members ? (implode("\n", $members) . "\n") : '', LOCK_EX);
 
 			// Canonical set BEFORE the build: the baseline the rebuild is judged against, and the
-			// previous set the apply site deltas from. is_file() for the same reason as the
-			// post-build read below, plus it keeps a FIFO at that path from blocking the pass.
-			$prev_set = pfb_canonical_alias_set(is_file($aggout) ? (string) (@file_get_contents($aggout) ?: '') : '');
+			// previous set the apply site deltas from. An unreadable baseline leaves nothing to
+			// compare, so it reads as [] and the gate below over-reports -- only the post-build
+			// read is allowed to conclude the union is EMPTY.
+			$prev_raw = pfb_aggregate_read($aggout);
+			$prev_set = pfb_canonical_alias_set($prev_raw === FALSE ? '' : $prev_raw);
 
 			$family_esc	= escapeshellarg($family);
 			$memberlist_esc	= escapeshellarg($memberlist);
@@ -8071,11 +8084,10 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 							'detail'	=> 'DO NOT EDIT THIS ALIAS'
 							);
 
-			// Only an absent aggregate is a real empty union. A path that is present but not a
-			// readable regular file is an I/O error, and inferring emptiness would kill a populated
-			// table -- pfb_alias_set_different() refuses the same inference. is_file() carries it:
-			// a directory there reads as '' rather than FALSE.
-			$new_raw = is_file($aggout) ? @file_get_contents($aggout) : (file_exists($aggout) ? FALSE : '');
+			// Only an absent aggregate is a real empty union; anything present that pfb_aggregate_read()
+			// cannot read is an I/O error, and inferring emptiness would kill a populated table --
+			// pfb_alias_set_different() refuses the same inference.
+			$new_raw = pfb_aggregate_read($aggout);
 			if ($new_raw === FALSE) {
 				pfb_logger(" Updating [ {$aliasname} ]: aggregate unreadable, leaving its table alone\n", 2);
 				unlink_if_exists($memberlist);
