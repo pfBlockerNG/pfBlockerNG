@@ -107,12 +107,23 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
     When call has "LC_ALL=C sort -t ' ' -k2,2 -s \"\${rec_new_stream}\""
     The status should be success
   End
-  It 'prefixes both commands in the s3 mastercat duplicate probe with LC_ALL=C'
-    When call has 's3="$(LC_ALL=C sort "${mastercat}" | LC_ALL=C uniq -d | tail -30)"'
+  # issue #3154 sorted each side once: mastercat in place and the deny folder into
+  # tempfile, so the duplicate probes are a bare `uniq -d` over an already-C-sorted
+  # file. Every sort and uniq in the pair still carries LC_ALL=C.
+  It 'prefixes the mastercat order (sort -o) with LC_ALL=C'
+    When call has 'LC_ALL=C sort -o "${mastercat}" "${mastercat}"'
     The status should be success
   End
-  It 'prefixes both commands in the s4 deny-folder duplicate probe with LC_ALL=C'
-    When call has 's4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort | LC_ALL=C uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"'
+  It 'prefixes the s3 mastercat duplicate probe with LC_ALL=C'
+    When call has 's3="$(LC_ALL=C uniq -d "${mastercat}" | tail -30)"'
+    The status should be success
+  End
+  It 'prefixes the deny-folder concatenation sink with LC_ALL=C'
+    When call has 'find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"'
+    The status should be success
+  End
+  It 'prefixes the s4 deny-folder duplicate probe with LC_ALL=C'
+    When call has 's4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"'
     The status should be success
   End
 

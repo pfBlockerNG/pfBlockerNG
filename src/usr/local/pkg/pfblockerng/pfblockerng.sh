@@ -2223,20 +2223,31 @@ closingprocess() {
 	# Execute when 'de-duplication' is enabled
 	if [ "${alias}" = 'on' ]; then
 		LC_ALL=C sort -o "${masterfile}" "${masterfile}"
-		sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n "${mastercat}" > "${tempfile}"; mv -f "${tempfile}" "${mastercat}"
+		# issue #3154: byte order, in place -- no consumer computes on the old octet ordering
+		# (the Masterfiles log view is its only reader) and s3 re-sorted it anyway.
+		LC_ALL=C sort -o "${mastercat}" "${mastercat}"
 
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 		countm="$(grep -c ^ "${masterfile}")"
 		echo; echo "   [ Final IP Count  ]  [ ${countm} ]"; echo
 
-		# issue #1084 review: mastercat (s1/s3) now carries BOTH families' rows
-		# (v6 Deny joined cross-list dedup) -- the deny-folder re-scan (s2/s4) must
-		# include v6 Deny files too, else the family mismatch alone fails sanity.
-		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
+		# issue #1084 review: mastercat (s1/s3) carries BOTH families' rows (v6 Deny joined
+		# cross-list dedup), so the shared deny concatenation (s2/s4) must include v6 too.
 		# issue #1263: awk 1 -- an unterminated deny file no longer welds into its neighbour.
-		s2="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | grep -cv "^${ip_placeholder2}$")"
-		s3="$(LC_ALL=C sort "${mastercat}" | LC_ALL=C uniq -d | tail -30)"
-		s4="$(find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort | LC_ALL=C uniq -d | tail -30 | grep -v "^${ip_placeholder2}$")"
+		# issue #3154: one concat+sort feeds s2 and s4; a short write (exhausted tmpdir) makes
+		# the count unreliable either way, so an unchecked one could print PASSED over a real
+		# mismatch -- a truncation inside a placeholder row even RAISES it.
+		if find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"; then
+			s2="$(grep -cv "^${ip_placeholder2}$" "${tempfile}")"
+			s4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"
+		else
+			s2='incomplete'
+			s4='incomplete'
+			log="closing: deny folder concatenation into [ ${tempfile} ] failed; sanity counts unreliable."
+			echo "${log}" | tee -a "${errorlog}"
+		fi
+		s1="$(grep -cv "^${ip_placeholder2}$" "${mastercat}")"
+		s3="$(LC_ALL=C uniq -d "${mastercat}" | tail -30)"
 	else
 		echo "   [ Original IP count   ]  [ ${counto} ]"
 	fi
