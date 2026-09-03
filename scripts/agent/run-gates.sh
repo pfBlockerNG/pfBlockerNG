@@ -153,6 +153,13 @@ gate_command() {
 	'shellspec --shell $(command -v dash || command -v sh)')
 		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
 		;;
+	# issue #3143: a root runner aborts composer before loading plugins unless
+	# COMPOSER_ALLOW_SUPERUSER=1 is present. Scoped to the composer invocation: it only
+	# lets composer load plugins, so it can never read as a skip, a pass, or a
+	# missing tool -- a missing composer stays a missing tool.
+	'composer '*)
+		printf '%s' "COMPOSER_ALLOW_SUPERUSER=1 $1"
+		;;
 	*) printf '%s' "$1" ;;
 	esac
 }

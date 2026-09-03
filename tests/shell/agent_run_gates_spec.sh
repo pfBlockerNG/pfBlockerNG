@@ -124,6 +124,17 @@ Describe 'run-gates.sh gates_for()'
     The output should include '--suite shellspec'
     The output should include 'skip-allowlist-canary.xml'
   End
+  # issue #3143: a root runner aborts composer before loading plugins unless
+  # COMPOSER_ALLOW_SUPERUSER=1, so both composer gates must carry it.
+  It 'wraps the composer phpstan gate with COMPOSER_ALLOW_SUPERUSER=1'
+    When call gate_command 'composer phpstan'
+    The output should equal 'COMPOSER_ALLOW_SUPERUSER=1 composer phpstan'
+  End
+
+  It 'wraps the composer phpcs gate with COMPOSER_ALLOW_SUPERUSER=1'
+    When call gate_command 'composer phpcs -- --standard=phpcs.xml.dist src/'
+    The output should equal 'COMPOSER_ALLOW_SUPERUSER=1 composer phpcs -- --standard=phpcs.xml.dist src/'
+  End
 
   It 'syntax-checks an out-of-scope shell file but does not shellcheck it'
     # The hook + CI shellcheck only src/, scripts/ and .claude/hooks/; tests/ specs and
@@ -373,6 +384,20 @@ Describe 'run-gates.sh Composer vendor guard'
     Assert [ -e "$php_marker" ]
     Assert [ -e "$composer_marker" ]
     Assert [ -e "$phpunit_marker" ]
+  End
+  # issue #3143: the var must reach the composer process in a real gate run, not just
+  # appear in the gate text -- a root runner aborts before loading plugins without it.
+  It 'runs both composer gates with COMPOSER_ALLOW_SUPERUSER=1 in their environment'
+    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/uv"
+    chmod +x "$stubdir/uv"
+    composer_env_file="$stubdir/composer-env"
+    printf '#!/bin/sh\nprintf "%%s" "$COMPOSER_ALLOW_SUPERUSER" > "%s"\ntouch "%s"\nexit 0\n' "$composer_env_file" "$composer_marker" > "$stubdir/composer"
+    chmod +x "$stubdir/composer"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: composer phpstan'
+    The output should include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
+    The contents of file "$composer_env_file" should equal '1'
   End
 End
 
