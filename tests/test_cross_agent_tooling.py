@@ -276,6 +276,8 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
 def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
     assert routing.strip(), "repository-intelligence routing must not be empty"
+    # issue #3120: wrapping a Markdown paragraph must not drop a pin or hide a retired recipe.
+    flat = " ".join(routing.split())
     for contract in (
         "work-branch.sh --worktree",
         "scripts/agent/init-worktree-tools.sh",
@@ -316,9 +318,9 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "an exact `==` pin is never the answer",
         "installed the same way, never pinned",
     ):
-        assert contract in routing, f"direct worktree initialization routing lost {contract}"
+        assert contract in flat, f"direct worktree initialization routing lost {contract}"
 
-    folded_routing = routing.casefold()
+    folded_routing = flat.casefold()
     for obsolete in (
         "ignored and untracked",
         "graphify-refresh-required",
