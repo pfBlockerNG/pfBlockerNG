@@ -24,6 +24,15 @@
 #              at all, and NEVER lease-protected, so it denies even
 #              alongside --force-with-lease)
 #   Rule C  -- git worktree remove + force flag                -> DENY
+#   Rule E  -- (1) a cp -a/-R/-r/-al or rsync whose SOURCE carries a .git
+#              entry (the copy-a-worktree shape, #3101)                -> DENY
+#              (the guard probes the resolved source argument -- the only
+#              rule that touches the filesystem; a source without a .git
+#              entry passes)
+#              (2) git clone / git worktree add whose TARGET resolves
+#              under the system temp dir (/tmp, /private/tmp, or
+#              $TMPDIR when it resolves inside either)                 -> DENY
+#              (boundary-anchored: /var/tmp/... and /tmpfoo never match)
 #   fail-open -- empty / garbled stdin, no rule match           -> PASS
 #   -f boundary -- standalone -f / an f-bearing short-flag cluster,
 #                  never matching inside --force/-force/a token
@@ -1167,6 +1176,195 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should include '"permissionDecision":"deny"'
+    End
+  End
+
+  # ── Rule E: scratch trees -- copy a git-bearing tree / clone into system tmp ──
+  #
+  # The scratch-tree rule (#3089 prose, #3101 mechanical): a scratch tree is a
+  # throwaway worktree or a git archive extraction -- never a cp/rsync of a
+  # git-bearing tree (the copy keeps the source's .git, so its git commands
+  # drive the ORIGINAL's index, HEAD, and refs), never a tree under the
+  # system temp dir (invisible to git worktree list; no prune can reach it).
+  #
+  # E1 probes the resolved SOURCE argument -- the only rule that touches the
+  # filesystem. The `.` source resolves against the guard's CWD, which under
+  # the canonical invocation (shellspec from the repo root, CI, run-gates.sh)
+  # is the checkout root: a real .git, the strongest fixture available. The
+  # non-repo case uses tests/ (no .git entry) and passes from any CWD.
+
+  Describe 'Rule E1: cp/rsync of a git-bearing tree'
+    It 'E1: cp -a of the current checkout (a real .git) -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -a . /var/tmp/agents/guard-e1"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E2: cp -R of the current checkout -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -R . /var/tmp/agents/guard-e2"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E3: cp -r of the current checkout -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -r . /var/tmp/agents/guard-e3"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E4: cp -al of the current checkout -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -al . /var/tmp/agents/guard-e4"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E5: rsync -a of the current checkout -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"rsync -a . /var/tmp/agents/guard-e5"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E5b: scp -r is not mistaken for cp -r -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"scp -r . /var/tmp/agents/guard-e5b"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E6: cp -a of a non-repo directory (tests/ has no .git entry) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -a tests /var/tmp/agents/guard-e6"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E6b: cp -a of a source that does not exist (probe is fail-open) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -a /nonexistent/wt /var/tmp/agents/guard-e6b"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E7 (F5 full JSON validity): exact deny JSON names the two sanctioned alternatives'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"cp -a . /var/tmp/agents/guard-e1"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"a cp/rsync of a git checkout keeps the source'"'"'s .git, so the copy'"'"'s git commands drive the ORIGINAL checkout'"'"'s index, HEAD, and refs (CLAUDE.md scratch trees). Use git archive <sha> | tar -x for a read-only extraction, or wt switch --create --base <sha> for a throwaway worktree"}}'
+    End
+  End
+
+  Describe 'Rule E2: git clone / worktree add into the system temp dir'
+    It 'E8: git clone into /tmp/... -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /tmp/r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E9: git clone into exactly /tmp -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /tmp"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E10: git clone into /var/tmp/agents -> PASS (/var/tmp is not /tmp)'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /var/tmp/agents/r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E11: compound command mentioning /tmp unrelated to the clone target -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /var/tmp/agents/r && echo /tmp/junk"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E12: git worktree add under /tmp -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree add /tmp/wt deadbeef"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E13: git worktree add under /var/tmp/agents -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git worktree add /var/tmp/agents/wt deadbeef"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E14: /tmpfoo is not the system temp dir (boundary) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /tmpfoo/r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E14b: TMPDIR=/tmpfoo is not the system temp dir (boundary) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
+      End
+      When run env TMPDIR=/tmpfoo sh "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E14c: TMPDIR=/tmp is the system temp dir -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
+      End
+      When run env TMPDIR=/tmp sh "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
+    End
+
+    It 'E15 (F5 full JSON validity): exact deny JSON names /var/tmp/agents'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git /tmp/r"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"a clone or worktree under the system temp dir is unreclaimable: no git worktree list entry, no prune or wt remove can reach it, and /tmp is RAM-backed tmpfs on Linux. Use /var/tmp/agents for scratch trees, or wt switch --create --base <sha> for a throwaway worktree"}}'
     End
   End
 
