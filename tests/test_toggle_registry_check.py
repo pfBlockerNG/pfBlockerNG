@@ -527,3 +527,15 @@ def test_widget_prefix_in_an_unregistered_section_is_foreign_via_missing_alias()
         "$pfb['bconfig']['widget-popup'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'b') ?: '';\n"
     )
     assert _find(text, "pfblockerng.widget.php") == []
+
+
+def test_foreign_prefix_is_keyed_to_its_section_not_applied_globally() -> None:
+    """The exemption is keyed on the section ALIAS, not the prefix alone: a `widget-`
+    key in a DIFFERENT registered section (here `ip`) is not the widget's namespace and
+    still fires RULE 1. This pins FOREIGN_KEY_PREFIXES to `dict[alias, ...]` -- a bare
+    global `("widget-",)` prefix set, ignoring the alias, would wrongly exempt it.
+    """
+    text = MIRROR + "$pfb['iconfig']['widget-popup'] = pfb_filter($_POST['x'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';\n"
+    violations = _find(text)
+    assert [v.rule for v in violations] == ["unregistered-toggle"]
+    assert "ip/widget-popup" in violations[0].detail
