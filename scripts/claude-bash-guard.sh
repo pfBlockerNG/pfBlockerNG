@@ -233,6 +233,13 @@ _contains() {
 # the closing `}}` with no other separator left to match.
 _SEP='[[:space:];|&(){}<>,]'
 
+# _has_command -- true iff the CURRENT SEGMENT contains the command prefix
+# $1 at a non-alphanumeric boundary. This keeps a command such as `scp -r`
+# from being mistaken for `cp -r` while retaining the normalized JSON prefix.
+_has_command() {
+	printf '%s' "$seg" | grep -Eq "(^|[^[:alnum:]_])$1"
+}
+
 # _has_force_flag -- true iff the CURRENT SEGMENT ($seg) carries a force
 # flag:
 #   * the literal substring --force (covers --force and --force-with-lease
@@ -337,23 +344,23 @@ _any_src_has_git() {
 # git-bearing tree: cp -a/-R/-r/-al (the recursive spellings a
 # copy-a-worktree takes) or rsync, whose SOURCE contains a .git entry.
 _has_copy_source_git() {
-	if _contains 'cp -a '; then
+	if _has_command 'cp -a '; then
 		_copy_srcs 'cp -a'
 		_any_src_has_git && return 0
 	fi
-	if _contains 'cp -R '; then
+	if _has_command 'cp -R '; then
 		_copy_srcs 'cp -R'
 		_any_src_has_git && return 0
 	fi
-	if _contains 'cp -r '; then
+	if _has_command 'cp -r '; then
 		_copy_srcs 'cp -r'
 		_any_src_has_git && return 0
 	fi
-	if _contains 'cp -al '; then
+	if _has_command 'cp -al '; then
 		_copy_srcs 'cp -al'
 		_any_src_has_git && return 0
 	fi
-	if _contains 'rsync '; then
+	if _has_command 'rsync '; then
 		_copy_srcs 'rsync'
 		_any_src_has_git && return 0
 	fi
@@ -372,7 +379,7 @@ _tmp_target() {
 		return 0
 	fi
 	case "${TMPDIR:-}" in
-	/tmp*|/private/tmp*)
+	/tmp|/tmp/*|/private/tmp|/private/tmp/*)
 		# shellcheck disable=SC2016  # intentional: match the literal $TMPDIR token
 		if _contains '$TMPDIR' &&
 			printf '%s' "$seg" | grep -Eq "(^|${_SEP})\\\$TMPDIR(/|${_SEP})"; then
@@ -433,7 +440,7 @@ while IFS= read -r seg; do
 
 	# Rule E2: a clone / worktree add whose target resolves under the system
 	# temp dir -- a tree no worktree list, prune, or wt remove can reach.
-	if { _contains 'git clone' || _contains 'git worktree add'; } && _tmp_target; then
+	if { _has_command 'git clone ' || _has_command 'git worktree add '; } && _tmp_target; then
 		_deny "a clone or worktree under the system temp dir is unreclaimable: no git worktree list entry, no prune or wt remove can reach it, and /tmp is RAM-backed tmpfs on Linux. Use /var/tmp/agents for scratch trees, or wt switch --create --base <sha> for a throwaway worktree"
 	fi
 

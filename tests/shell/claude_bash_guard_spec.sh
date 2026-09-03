@@ -1239,6 +1239,15 @@ Describe 'claude-bash-guard.sh'
       The output should include '"permissionDecision":"deny"'
     End
 
+    It 'E5b: scp -r is not mistaken for cp -r -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"scp -r . /var/tmp/agents/guard-e5b"}}
+      End
+      When run script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
     It 'E6: cp -a of a non-repo directory (tests/ has no .git entry) -> PASS'
       Data
         #|{"tool_name":"Bash","tool_input":{"command":"cp -a tests /var/tmp/agents/guard-e6"}}
@@ -1329,6 +1338,24 @@ Describe 'claude-bash-guard.sh'
       When run script "$GUARD"
       The status should be success
       The output should equal ""
+    End
+
+    It 'E14b: TMPDIR=/tmpfoo is not the system temp dir (boundary) -> PASS'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
+      End
+      When run env TMPDIR=/tmpfoo script "$GUARD"
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'E14c: TMPDIR=/tmp is the system temp dir -> DENY'
+      Data
+        #|{"tool_name":"Bash","tool_input":{"command":"git clone https://example.com/r.git $TMPDIR/r"}}
+      End
+      When run env TMPDIR=/tmp script "$GUARD"
+      The status should be success
+      The output should include '"permissionDecision":"deny"'
     End
 
     It 'E15 (F5 full JSON validity): exact deny JSON names /var/tmp/agents'
