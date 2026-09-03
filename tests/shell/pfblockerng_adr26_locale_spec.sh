@@ -119,7 +119,7 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
     The status should be success
   End
   It 'prefixes the deny-folder concatenation sink with LC_ALL=C'
-    When call has 'find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"'
+    When call has 'LC_ALL=C sort -o "${tempfile}" "${tempfile}"'
     The status should be success
   End
   It 'prefixes the s4 deny-folder duplicate probe with LC_ALL=C'

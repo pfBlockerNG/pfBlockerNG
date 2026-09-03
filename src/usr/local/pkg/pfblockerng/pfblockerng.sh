@@ -2258,7 +2258,11 @@ closingprocess() {
 		# issue #3154: one concat+sort feeds s2 and s4; a short write (exhausted tmpdir) makes
 		# the count unreliable either way, so an unchecked one could print PASSED over a real
 		# mismatch -- a truncation inside a placeholder row even RAISES it.
-		if find "${pfbdeny}"*.txt -type f 2>/dev/null | xargs awk 1 | LC_ALL=C sort > "${tempfile}"; then
+		# issue #3165: one awk over the shell's own glob -- `find | xargs` hid a producer
+		# failing mid-stream behind `sort`'s exit 0 and mis-split a name holding whitespace.
+		set -- "${pfbdeny}"*.txt
+		[ -e "${1}" ] || set -- /dev/null	# unmatched glob: concatenate nothing
+		if awk 1 "$@" > "${tempfile}" && LC_ALL=C sort -o "${tempfile}" "${tempfile}"; then
 			s2="$(grep -cv "^${ip_placeholder2}$" "${tempfile}")"
 			s4="$(LC_ALL=C uniq -d "${tempfile}" | tail -30 | grep -v "^${ip_placeholder2}$")"
 		else

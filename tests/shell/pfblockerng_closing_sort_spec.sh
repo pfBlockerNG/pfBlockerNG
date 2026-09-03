@@ -32,8 +32,10 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     sed -n '/^closingprocess()/,/^}/p' "${PFB_PKGDIR}/pfblockerng.sh"
   }
 
+  # issue #3165 replaced the `find | xargs` walk with the shell's own glob; either shape
+  # counts here, so a second concatenation is still caught whichever one reintroduces it.
   deny_concat_count() {
-    closing_body | grep -c 'find "${pfbdeny}"'
+    closing_body | grep -c 'set -- "${pfbdeny}"\|find "${pfbdeny}"'
   }
 
   It 'leaves mastercat in byte order, not octet-numeric order (C1)'
@@ -101,6 +103,7 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     The status should be success
     The output should include 'closingprocess()'
     The output should not include 'sort -t .'
+    The output should not include 'find "${pfbdeny}"'
     The output should include 'uniq -d'
     The result of function deny_concat_count should equal 1
   End
@@ -135,10 +138,18 @@ Describe 'closingprocess() dedup-mode sort trim (#3154)'
     printf '1.2.3.4\n5.6.7.8\n9.9.9.9\n' > "${pfbdeny}B.txt"
     mkdir -p "${work}/bin"
     real_sort="$(command -v sort)"
+    # issue #3165 moved the write: awk concatenates into tempfile and `sort -o` orders it
+    # in place, so the modelled fault is that in-place sort. Every other sort in the report
+    # (masterfile, mastercat) must still succeed, or the row stops isolating one bad write.
     {
       printf '#!/bin/sh\n'
-      printf 'case " $* " in *" -o "*) exec %s "$@" ;; esac\n' "$real_sort"
-      printf '%s "$@" | head -2\nexit 2\n' "$real_sort"
+      printf 'case " $* " in\n'
+      printf '\t*" -o %s "*)\n' "$tempfile"
+      printf '\t\t%s "$3" | head -2 > "$2.part"\n' "$real_sort"
+      printf '\t\tmv -f "$2.part" "$2"\n'
+      printf '\t\texit 2 ;;\n'
+      printf 'esac\n'
+      printf 'exec %s "$@"\n' "$real_sort"
     } > "${work}/bin/sort"
     chmod +x "${work}/bin/sort"
     PATH="${work}/bin:${PATH}"

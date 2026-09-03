@@ -63,6 +63,7 @@ shellspec:tests/shell/precommit_identity_spec.sh::.githooks/check-commit-identit
 shellspec:tests/shell/pfblockerng_recompute_spec.sh::pfb_recompute() hostile inputs aborts cleanly (log + .new cleanup, live files untouched) when a Stage-A snapshot copy fails (source unreadable, issue #1084 review)  # root bypasses file permissions — denial cannot be simulated
 shellspec:tests/shell/pfblockerng_recompute_spec.sh::pfb_recompute() hostile inputs aborts the masterfile-strip pass cleanly (no masterfile.new debris) when it fails mid-write (issue #1084 review)  # root bypasses file permissions — denial cannot be simulated
 shellspec:tests/shell/pfblockerng_recompute_spec.sh::pfb_recompute() hostile inputs stops the swap and logs the failing artifact -- without rolling anything back -- when the deny dir denies the mv (EACCES mid-swap, issue #1084 review)  # root bypasses directory permissions — denial cannot be simulated
+shellspec:tests/shell/pfblockerng_closing_producer_spec.sh::closingprocess() deny concatenation producer status (#3165) refuses a verdict when a deny file is genuinely unreadable (S2)  # root bypasses file permissions — a mode-000 deny file stays readable
 
 # pytest -- 4 observed on the Linux CI runner.
 pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner
