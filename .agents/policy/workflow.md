@@ -3,14 +3,15 @@
 - **Scope:** vendor-neutral protocol, map issue to landed change plus terminal PR (wayfinder map
   [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383), resolved by ticket
   [#1385](https://github.com/pfBlockerNG/pfBlockerNG/issues/1385)).
-- **Load-when:** coordinate, claim, execute, review, or continue GitHub ticket under
-  fresh-session workflow.
-- **Owner:** repo owner. **Last-verified:** 2026-09-01.
+- **Load-when:** coordinate, claim, execute, review, continue, or orchestrate GitHub
+  tickets under fresh-session workflow.
+- **Owner:** repo owner. **Last-verified:** 2026-09-03.
 
 ## Principles (fixed by the map)
 
 - GitHub Issues and PRs = durable execution state. Session transcripts disposable.
-- One bounded ticket per fresh top-level session (wayfinder research fan-out excepted).
+- One bounded ticket per work agent (wayfinder research fan-out excepted). The
+  orchestrator may be given a list; it dispatches one work agent per ticket.
 - No worker inherits parent transcript. Workers get task packet.
 - Explorer, implementer, reviewer run fresh bounded contexts. Reviewer independent and
   read-only.
@@ -18,6 +19,17 @@
 - Compaction near = checkpoint and terminate. Correctness-critical work never continues
   through compaction.
 - No committed plan or handoff ledger duplicates GitHub state.
+
+## Orchestrator session
+
+When the owner names a GitHub issue to execute ("work on #N", a list, or equivalent),
+the receiving top-level session is **orchestrator** (every client): spawn one work agent
+per ticket with a complete task packet (this file). It does not implement.
+Owner override, that item only: "implement here" / "no spawn". Small one-step
+fixes and review-fix APPLY stay with the work agent (no second spawn). Named
+GitHub issues still go through a work agent even when they are
+docs/config/settings/skills. The work agent runs [`landing.md`](landing.md)'s
+four independent legs and lands.
 
 ## Artifacts and schemas
 
@@ -187,7 +199,7 @@ parity check are [#1387](https://github.com/pfBlockerNG/pfBlockerNG/issues/1387)
 
 ## Acceptance
 
-Fresh Claude or Codex session can take one frontier ticket, load only bootstrap routing
-rows plus packet's Required reading, complete or checkpoint it, and different fresh session
-can continue from checkpoint alone. Map's pilots validate this contract before any
-superseded flow retires.
+A fresh top-level session named an issue is orchestrator: it spawns a work agent
+from bootstrap routing plus the packet. That work agent completes or checkpoints;
+a later work agent continues from the checkpoint alone. Map's pilots validate this
+contract before any superseded flow retires.

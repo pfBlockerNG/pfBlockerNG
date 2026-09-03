@@ -79,7 +79,7 @@ Serena, and Graphify, and it carries the hard invariants for the per-worktree
 | Task touches | Read first |
 | ------------ | ---------- |
 | delegating any step; validating a handoff | `.agents/policy/delegation.md` |
-| a ticket / fresh-session execution | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
+| a ticket / fresh-session execution (orchestrator spawns) | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
 | waiting on anything external | `.agents/policy/waits.md` |
 | committing, branching, worktrees, attribution | `.agents/policy/git.md` |
 | session layouts, managed-remote, resume | `.agents/policy/sessions.md` |
@@ -103,8 +103,9 @@ Serena, and Graphify, and it carries the hard invariants for the per-worktree
 
 Delegation shape: substantial coding work planned/gated by **top tier**, implemented
 by **small-tier** sub-agents, every step gated by independent small-tier verifier via
-brief → handoff → gate contract; top tier handle small one-step fixes and
-docs/config/settings/skills direct. Tiers top/mid/small map to models in
+brief → handoff → gate contract; named issues spawn a work agent; that agent
+handle small one-step fixes and docs/config/settings/skills direct. Tiers
+top/mid/small map to models in
 `.agents/model-tiers.conf` (disjoint from effort words — "high" always effort value).
 New implementation-plan ADRs stopped (wayfinder map #1383).
 

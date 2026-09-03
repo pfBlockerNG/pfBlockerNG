@@ -273,6 +273,23 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
     assert heading not in codex, "Codex must not own a second routing policy"
 
 
+def test_named_tickets_are_orchestrator_sessions() -> None:
+    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "orchestrator spawns" in bootstrap, "bootstrap routing must name orchestrator ticket pickup"
+    workflow = (ROOT / ".agents/policy/workflow.md").read_text(encoding="utf-8")
+    for contract in (
+        "## Orchestrator session",
+        "spawn one work agent",
+        "four independent",
+        "implement here",
+    ):
+        assert contract in workflow, f"orchestrator contract lost {contract}"
+    delegation = (ROOT / ".agents/policy/delegation.md").read_text(encoding="utf-8")
+    assert "orchestrator per workflow.md" in delegation, (
+        "delegation still tells the analyzing session to implement named tickets"
+    )
+
+
 def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
     assert routing.strip(), "repository-intelligence routing must not be empty"
