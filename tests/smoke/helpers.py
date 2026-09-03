@@ -2812,10 +2812,11 @@ def read_hook_env(vm: SmokeVM, path: str, *, timeout: float = 30.0) -> dict[str,
 # see pfblockerng.inc:1174). For each selected Type x family, the update pass
 # (sync_package_pfblockerng -> pfb_build_aggregate_aliases, inc:2144) builds the Native
 # urltable alias ``pfB_<Type>_Aggregated_<family>`` (Type in {Deny,Permit,Match,Native},
-# family in {v4,v6}) = the deduped/iprange'd union of that type's dir, loads it inline
-# (``pfctl -T replace``), and writes a never-empty ``.lst`` consumer file under
-# PFB_DBDIR. NO firewall rule (Native). Deselect/disable tears the aggregate down. A
-# rebuilt aggregate's name merges into the post-hook PFB_CHANGED_IP_ALIASES.
+# family in {v4,v6}) = the deduped/iprange'd union of that type's dir, and writes a
+# never-empty ``.lst`` consumer file under PFB_DBDIR. NO firewall rule (Native).
+# Deselect/disable tears the aggregate down. A CHANGED aggregate — content, not a mere
+# rebuild (issue #3156) — is loaded inline (``pfctl -T replace``) and merges into the
+# post-hook PFB_CHANGED_IP_ALIASES.
 
 AGG_TYPES = ("Deny", "Permit", "Match", "Native")
 CFG_AGG_TYPES = CFG_GLOBAL + "/pfb_agg_types"

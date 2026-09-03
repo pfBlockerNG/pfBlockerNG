@@ -7995,10 +7995,11 @@ function pfb_pfctl_tables_parse(array $lines): array {
 // (caller's alias-registration arrays).
 //
 // issue #3156: the action's rebuild gate is an mtime gate, and a member rewritten with identical
-// bytes still trips it, so a rebuild is NOT a change. What counts as changed -- the name entering
+// bytes still trips it, so a rebuild is NOT a change. Changed -- the name entering
 // $pfb['changed_ip_aliases']/$pfb_alias_lists, and the pf table being pushed -- is decided on the
-// aggregate's canonical CONTENT, the way every member alias decides it (ADR-40), plus a
-// file-vs-kernel emptiness mismatch so an empty table still repopulates.
+// aggregate's canonical CONTENT (ADR-40's signal), plus a file-vs-kernel EMPTINESS mismatch. Only
+// emptiness, so nonzero kernel drift heals on the next content change or the ADR-61 tick, not
+// every pass -- the same trade the member-alias write loop makes.
 function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_list, array &$pfb_alias_lists, array &$pfb_alias_prev_sets) {
 	global $pfb;
 
@@ -8011,7 +8012,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 	}
 
 	// ONE `pfctl -vvsTables` for every aggregate's address count (pfb_pfctl_table_count() would
-	// dump every member of every table). Skipped entirely when nothing is selected.
+	// dump every member of every table). Skipped entirely when nothing is selected. An absent or
+	// failing pfctl yields [], so every table reads empty and every aggregate re-pushes: the
+	// over-report direction, the same one pfb_pfctl_table_count()'s callers take.
 	$table_stats = empty($selected) ? array() : pfb_pfctl_tables_parse(pfb_pfctl_tables_raw());
 
 	foreach ($all_types as $type) {
@@ -8042,11 +8045,9 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			$memberlist	= "{$pfb['dbdir']}/{$aliasname}.members";
 			@file_put_contents($memberlist, $members ? (implode("\n", $members) . "\n") : '', LOCK_EX);
 
-			// Canonical set BEFORE the build: the baseline the rebuild is judged against, and
-			// the previous set the apply site deltas from.
-			$prev_set = file_exists($aggout)
-				? pfb_canonical_alias_set((string) (@file_get_contents($aggout) ?: ''))
-				: array();
+			// Canonical set BEFORE the build: the baseline the rebuild is judged against, and the
+			// previous set the apply site deltas from.
+			$prev_set = pfb_canonical_alias_set((string) (@file_get_contents($aggout) ?: ''));
 
 			$family_esc	= escapeshellarg($family);
 			$memberlist_esc	= escapeshellarg($memberlist);
@@ -8056,16 +8057,6 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 			// the shell skips the union's redundant iprange for v4 and just sort -u's it (like v6).
 			$agg_esc	= escapeshellarg((($pfb['agg'] ?? PfbToggle::Off) === PfbToggle::On) ? 'on' : 'off');
 			exec("{$pfb['script']} aggregate {$family_esc} {$memberlist_esc} {$aggout_esc} {$consumer_esc} {$agg_esc} 2>&1");
-
-			$new_set = file_exists($aggout)
-				? pfb_canonical_alias_set((string) (@file_get_contents($aggout) ?: ''))
-				: array();
-
-			// Changed = the union's membership moved, or the file and the kernel table disagree
-			// about being empty (boot, a stray kill, or a stale table under an emptied union).
-			$want_empty  = empty($new_set);
-			$table_empty = ((int) ($table_stats[$aliasname]['addresses'] ?? 0)) === 0;
-			$changed     = ($new_set !== $prev_set) || ($want_empty !== $table_empty);
 
 			// Register the Native urltable alias (mirror the member-alias shape).
 			// NEVER pfb_firewall_rule() -- Native means no firewall rule.
@@ -8079,24 +8070,38 @@ function pfb_build_aggregate_aliases(array &$new_aliases, array &$new_aliases_li
 							'detail'	=> 'DO NOT EDIT THIS ALIAS'
 							);
 
-			// Push the table only on a change: an unchanged aggregate's table already holds this
-			// set. Done here, well before the ADR-12 post-hook, so a hook consumer (e.g. an
-			// HAProxy graceful reload) always sees the FRESH aggregate. An empty union is pruned
-			// to an empty table, matching pfB member aliases.
-			if ($changed) {
+			// Only an ABSENT aggregate is a real empty union. Anything present that is not a
+			// readable regular file is an I/O error, and inferring emptiness from it would kill a
+			// populated table -- pfb_alias_set_different() refuses the same inference. Note a
+			// directory at that path reads as '' rather than FALSE, so is_file() carries the test.
+			$new_raw = is_file($aggout) ? @file_get_contents($aggout) : (file_exists($aggout) ? FALSE : '');
+			if ($new_raw === FALSE) {
+				pfb_logger(" Updating [ {$aliasname} ]: aggregate unreadable, leaving its table alone\n", 2);
+				unlink_if_exists($memberlist);
+				continue;
+			}
+
+			// Changed = the union's membership moved, or the file and the kernel table disagree
+			// about being empty (boot, a stray kill, or a stale table under an emptied union).
+			$new_set     = pfb_canonical_alias_set($new_raw);
+			$want_empty  = empty($new_set);
+			$table_empty = ((int) ($table_stats[$aliasname]['addresses'] ?? 0)) === 0;
+
+			if (($new_set !== $prev_set) || ($want_empty !== $table_empty)) {
+				// Pushed here, well before the ADR-12 post-hook, so a hook consumer (e.g. an
+				// HAProxy graceful reload) sees the fresh aggregate.
 				if ($want_empty) {
 					pfb_pfctl_table_op($aliasname, 'kill');
 				} else {
 					pfb_pfctl_table_op($aliasname, 'replace', "-f {$aggout_esc}");
 				}
 
-				// ADR-12: PFB_CHANGED_IP_ALIASES reflects it; $pfb_alias_lists carries it into the
-				// reload set (which also gates the ramdisk archive). The previous set is stashed
-				// the way the member-alias write loop stashes -- an empty kernel table stashes an
-				// empty set, so the apply site full-replaces instead of deltaing onto nothing.
-				$pfb['changed_ip_aliases'][]		= $aliasname;
-				$pfb_alias_lists[]			= $aliasname;
-				$pfb_alias_prev_sets[$aliasname]	= $table_empty ? array() : $prev_set;
+				$pfb['changed_ip_aliases'][]	= $aliasname;
+				$pfb_alias_lists[]		= $aliasname;
+				// Stash the previous set for the apply site's delta, EXCEPT where deltaing is
+				// impossible: an empty kernel table has nothing to delta from, and a killed table
+				// no longer exists, so both stash [] and take that site's full-replace branch.
+				$pfb_alias_prev_sets[$aliasname] = ($table_empty || $want_empty) ? array() : $prev_set;
 			}
 
 			// Member list is transient scratch; the never-empty consumer + the alias file

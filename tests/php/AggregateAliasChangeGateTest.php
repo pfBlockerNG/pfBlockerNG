@@ -32,6 +32,7 @@ final class AggregateAliasChangeGateTest extends TestCase
 	private string $dbdir;
 	private string $pfctl_call_log;
 	private string $tables_fixture;
+	private string $shell_log;
 
 	private const ALIAS = 'pfB_Deny_Aggregated_v4';
 
@@ -50,6 +51,9 @@ final class AggregateAliasChangeGateTest extends TestCase
 		}
 
 		$this->pfctl_call_log = "{$this->tmp}/pfctl_calls.txt";
+		// What the shipped pfb_aggregate() printed, so a test can tell a real rebuild apart from
+		// the action's own skip.
+		$this->shell_log      = "{$this->tmp}/shell_output.txt";
 		// What the mock pfctl reports for `-vvsTables`; the tests rewrite it to say whether the
 		// aggregate's kernel table currently holds addresses.
 		$this->tables_fixture = "{$this->tmp}/pfctl_tables.txt";
@@ -141,7 +145,7 @@ final class AggregateAliasChangeGateTest extends TestCase
 			. "errorlog=\"\${tmpdir}/error.log\"\n"
 			. "pathaggregate=/nonexistent/iprange\n"
 			. "case \"\$1\" in\n"
-			. "  aggregate) pfb_aggregate \"\$@\" ;;\n"
+			. '  aggregate) pfb_aggregate "$@" >> ' . escapeshellarg($this->shell_log) . " 2>&1 ;;\n"
 			. "  *) exit 0 ;;\n"
 			. "esac\n";
 		$this->assertNotFalse(file_put_contents($path, $body), 'failed to write the script wrapper');
@@ -181,15 +185,29 @@ final class AggregateAliasChangeGateTest extends TestCase
 	}
 
 	/**
+	 * What the shipped `pfb_aggregate()` printed for the alias under test during the last pass.
+	 * Scoped by alias name because selecting a type builds both families, and the memberless v6
+	 * sibling prints its own verdict into the same log.
+	 */
+	private function shellOutput(): string
+	{
+		$raw   = is_file($this->shell_log) ? (string) file_get_contents($this->shell_log) : '';
+		$mine  = array_filter(explode("\n", $raw), static fn (string $l): bool => str_contains($l, self::ALIAS . '.txt'));
+		return implode("\n", $mine);
+	}
+
+	/**
 	 * One builder pass. Returns what it reported: the reload set, the ADR-12 changed set, the
-	 * previous-set stash, and the pfctl calls it made.
+	 * previous-set stash, the pfctl operations aimed at the alias under test, the aliases it
+	 * registered, and what the shell printed.
 	 *
-	 * @return array{lists:list<string>,changed:list<string>,prev:array<string,array<int,string>>,ops:list<string>}
+	 * @return array{lists:list<string>,changed:list<string>,prev:array<string,array<int,string>>,ops:list<string>,registered:list<string>,shell:string}
 	 */
 	private function runBuilder(): array
 	{
 		global $pfb;
 		@unlink($this->pfctl_call_log);
+		@unlink($this->shell_log);
 		$pfb['changed_ip_aliases'] = [];
 		$new_aliases      = [];
 		$new_aliases_list = [];
@@ -199,10 +217,12 @@ final class AggregateAliasChangeGateTest extends TestCase
 		pfb_build_aggregate_aliases($new_aliases, $new_aliases_list, $alias_lists, $prev_sets);
 
 		return [
-			'lists'   => $alias_lists,
-			'changed' => $pfb['changed_ip_aliases'],
-			'prev'    => $prev_sets,
-			'ops'     => $this->pfctlOps(),
+			'lists'      => $alias_lists,
+			'changed'    => $pfb['changed_ip_aliases'],
+			'prev'       => $prev_sets,
+			'ops'        => $this->pfctlOps(),
+			'registered' => $new_aliases_list,
+			'shell'      => $this->shellOutput(),
 		];
 	}
 
@@ -239,6 +259,10 @@ final class AggregateAliasChangeGateTest extends TestCase
 
 		$second = $this->runBuilder();
 
+		// Without this the case would pass vacuously if the action ever started SKIPPING here:
+		// a skip leaves the file untouched, so "byte-identical" would prove nothing.
+		$this->assertStringNotContainsString('skipping rebuild', $second['shell'],
+			"the action must really rebuild for this case to mean anything: {$second['shell']}");
 		$this->assertSame($before, (string) file_get_contents($aggregate),
 			'the rebuilt aggregate must be byte-identical — otherwise this test proves nothing');
 		$this->assertNotContains(self::ALIAS, $second['lists'],
@@ -291,6 +315,57 @@ final class AggregateAliasChangeGateTest extends TestCase
 		$this->assertSame(['replace'], $third['ops'], 'an empty kernel table must be repopulated');
 		$this->assertSame([], $third['prev'][self::ALIAS] ?? NULL,
 			'an empty kernel table stashes an empty previous set, so the apply site full-replaces');
+	}
+
+	/**
+	 * Given every member of a live aggregate is removed
+	 * When the union comes back empty while the kernel table still holds addresses
+	 * Then the table is killed and an EMPTY previous set is stashed, so the apply site
+	 *      full-replaces rather than issuing `-T delete` against a table that no longer exists —
+	 *      which under the user-selectable `Delta` mode is a logged failure and a sync-status
+	 *      ledger entry.
+	 */
+	public function testEmptiedUnionKillsTheTableAndStashesAnEmptyPreviousSet(): void
+	{
+		$member = $this->writeMember('Feed', ['198.51.100.7']);
+		$this->runBuilder();
+		$this->setKernelTable(1);
+
+		$this->assertTrue(unlink($member), 'failed to remove the last member');
+		$second = $this->runBuilder();
+
+		$this->assertContains(self::ALIAS, $second['lists'], 'an emptied union must be reported');
+		$this->assertSame(['kill'], $second['ops'], 'an emptied union prunes the table');
+		$this->assertSame([], $second['prev'][self::ALIAS] ?? NULL,
+			'a killed table stashes an empty previous set, so no delta is computed against it');
+	}
+
+	/**
+	 * Given the aggregate file exists but cannot be read
+	 * When the builder evaluates it
+	 * Then it leaves the alias alone: an I/O error is not an empty union, and inferring one
+	 *      would kill a populated table.
+	 *
+	 * A directory standing at the aggregate's path is how this is forced here — `chmod 000` does
+	 * not stop root, and the suite runs as root on some hosts.
+	 */
+	public function testUnreadableAggregateLeavesTheTableAlone(): void
+	{
+		$this->writeMember('Feed', ['198.51.100.7']);
+		$this->runBuilder();
+		$this->setKernelTable(1);
+
+		$aggregate = "{$this->aliasdir}/" . self::ALIAS . '.txt';
+		$this->assertTrue(unlink($aggregate), 'failed to remove the aggregate file');
+		$this->assertTrue(mkdir($aggregate), 'failed to put a directory in the aggregate path');
+
+		$second = $this->runBuilder();
+
+		$this->assertSame([], $second['ops'], 'an unreadable aggregate must not touch the kernel table');
+		$this->assertNotContains(self::ALIAS, $second['lists'], 'an unreadable aggregate must not be reported');
+		$this->assertNotContains(self::ALIAS, $second['changed'], 'an unreadable aggregate must not be reported');
+		$this->assertContains(self::ALIAS, $second['registered'],
+			'the alias stays registered — dropping it would make the caller prune it as an orphan');
 	}
 
 	/** A box that selects no aggregate type pays nothing: no build, no pfctl call, no report. */
