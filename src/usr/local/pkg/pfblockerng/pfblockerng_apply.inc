@@ -4811,7 +4811,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 						// before filter_configure() rebuilds the ruleset from the aliasdir file.
 						pfb_pfctl_table_op($pfb_table, 'replace', "-f {$pfb_table_path_esc}");
 					}
-				} elseif (in_array($pfb_table, $pfb_table_keep_aliases)) {
+				} elseif (in_array($pfb_table, $pfb_table_keep_aliases, TRUE)) {
 					// Aggregates are urltable aliases, so ADR-11 deliberately gives them no rule.
 					// Keep selected registrations for filter_configure() to rebuild below.
 					continue;
