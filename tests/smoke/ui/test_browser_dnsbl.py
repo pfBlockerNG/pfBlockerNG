@@ -1036,3 +1036,67 @@ def test_exception_fields_have_alias_autocomplete(
             "write_config('pfBlockerNG smoke: PR660 autocomplete cleanup');\n"
             "echo 'OK';",
         )
+
+
+# A token string carrying the shapes a hostile paste would use -- an apostrophe, a double
+# quote, a shell/JS-interpolation sigil and enough length to rule out a truncating clear --
+# so the ``.val('')`` clear is proven against more than a tidy alphanumeric literal.
+_TYPED_TOKEN = "pfb'\"${IFS}<token>" + "z" * 256
+
+
+def test_top1m_token_hidden_and_cleared_for_keyless_providers(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """``enable_top1m_token()`` HIDES the API Token field for keyless TOP1M types.
+
+    issue #3060: the handler used ``disableInput()``, which greys the field but
+    leaves it permanently visible -- dead UI on every install, since the default
+    type (Tranco) is keyless. ``cloudflare`` is the only provider whose ``auth``
+    descriptor is non-``none`` (``pfblockerng_extra.inc``'s ``pfb_top1m_providers()``).
+
+    The clear is part of the contract, not decoration. A hidden input still POSTs,
+    and so does a disabled one on this page -- the submit handler re-enables every
+    id in ``pfb_gated_ids`` before submit -- while ``pfblockerng_dnsbl.php``'s save
+    path writes any NON-EMPTY ``top1m_token`` to config. So without the clear,
+    typing a token and then switching to a keyless provider overwrites the stored
+    token and flips the token half of ``$pfb_top1m_identity_changed``, invalidating
+    the TOP1M baseline. ADR-59 keeps the field blank on GET, so a value can only
+    have been typed this page load.
+
+    The TOP1M section is ``COLLAPSIBLE|SEC_CLOSED``, so it is expanded first --
+    otherwise the field is already invisible and ``to_be_hidden()`` would pass for
+    the wrong reason. Before-state asserted, then both directions.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+    _expand_section(page, "TOP1M_Whitelist")
+
+    source = page.locator("#top1m_source")
+    token = page.locator("#top1m_token")
+    expect(source).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(token).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: the one keyed provider shows the field.
+    source.select_option("cloudflare")
+    page.evaluate("$('#top1m_source').trigger('change')")
+    expect(token).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_top1m_token_visible_cloudflare")
+
+    # A value typed while the field applied ...
+    token.fill(_TYPED_TOKEN)
+    expect(token).to_have_value(_TYPED_TOKEN, timeout=JS_TIMEOUT_MS)
+
+    # ... must be hidden AND cleared on the switch to a keyless provider.
+    source.select_option("tranco")
+    page.evaluate("$('#top1m_source').trigger('change')")
+    expect(token).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(token).to_have_value("", timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_top1m_token_hidden_tranco")
+
+    # Both directions: back to the keyed provider re-shows it, still blank.
+    source.select_option("cloudflare")
+    page.evaluate("$('#top1m_source').trigger('change')")
+    expect(token).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(token).to_have_value("", timeout=JS_TIMEOUT_MS)

@@ -1461,6 +1461,11 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     labels, both attribution notes, and the masked token field are present, while
     the removed 'Alexa TOP1M' label and its ``value="alexa"`` option are absent
     from the body.
+
+    Also pins how the emitted JS gates that token field (issue #3060): it must
+    ``hideInput()`` it for a keyless TOP1M type rather than ``disableInput()`` it,
+    and with nothing left disabling the field its ``pfb_gated_ids`` entry -- the
+    submit handler's re-enable list -- must be gone with it.
     """
     path = "/pfblockerng/pfblockerng_dnsbl.php"
     resp = webui.get(path)
@@ -1487,6 +1492,38 @@ def test_dnsbl_top1m_source_options_exclude_alexa(webui: WebUI, php_error_log_gu
     assert "(CC BY-NC) 4.0" in body, "DNSBL page is missing the Cloudflare (CC BY-NC) 4.0 attribution note"
     assert 'name="top1m_token"' in body, "DNSBL page is missing the top1m_token field"
     assert 'type="password"' in body, "DNSBL page's top1m_token field must be masked (type=password)"
+    # issue #3060: the field must be HIDDEN for a keyless TOP1M type, not greyed out --
+    # disableInput() leaves permanently-visible dead UI on every default (Tranco) install,
+    # and the emitted handler is the render-tier evidence of which idiom the page uses.
+    # Once nothing disables the field, its 'top1m_token' entry in the submit handler's
+    # re-enable list (pfb_gated_ids) is dead code, so its absence is pinned here too.
+    # The three conditions are collected rather than asserted in sequence: asserted in a
+    # row, the first regression masks the other two, and each of these must stay
+    # individually visible in the failure message.
+    gated_match = re.search(r"var pfb_gated_ids = \[(.*?)\]", body, re.DOTALL)
+    assert gated_match, "DNSBL page is missing the pfb_gated_ids submit-handler list"
+    gated_ids = re.findall(r"'([^']+)'", gated_match.group(1))
+    assert gated_ids, f"pfb_gated_ids parsed empty -- the list shape changed: {gated_match.group(1)!r}"
+    top1m_token_failures = [
+        message
+        for satisfied, message in (
+            (
+                "hideInput('top1m_token'" in body,
+                "DNSBL page must hide the top1m_token field for keyless TOP1M types (issue #3060)",
+            ),
+            (
+                "disableInput('top1m_token'" not in body,
+                "DNSBL page still greys out top1m_token instead of hiding it (issue #3060)",
+            ),
+            (
+                "top1m_token" not in gated_ids,
+                "pfb_gated_ids still re-enables top1m_token on submit, but nothing disables it "
+                f"any more -- expected the entry dropped, got {gated_ids!r} (issue #3060)",
+            ),
+        )
+        if not satisfied
+    ]
+    assert not top1m_token_failures, "; ".join(top1m_token_failures)
     for absent in ("Alexa TOP1M", 'value="alexa"'):
         assert absent not in body, f"DNSBL page still renders the dropped Alexa TOP1M option ({absent!r})"
 
