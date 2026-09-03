@@ -38,8 +38,8 @@ make_reader_fake() {
 
 # Reset the per-example reader recording and configured output.
 reset_reader() {
-	: > "${reader_log}"
-	[ -f "${reader_out}" ] || : > "${reader_out}"
+	true > "${reader_log}"
+	[ -f "${reader_out}" ] || true > "${reader_out}"
 }
 
 # Eval the SHIPPED budget init line against $1 (or unset it for '__UNSET__') with the
@@ -67,7 +67,7 @@ run_placeholder_lines() {
 	else
 		PFB_IP_PLACEHOLDER="$1"
 	fi
-	[ -f "${reader_out}" ] || : > "${reader_out}"
+	[ -f "${reader_out}" ] || true > "${reader_out}"
 	printf '%s' "${2:-}" > "${reader_out}"
 	reset_reader
 	eval "$(init_placeholder_lines)"
@@ -164,7 +164,7 @@ Describe 'pfblockerng.sh init: ip_placeholder prefers the exported environment (
 		# The env value is only ever expanded inside double quotes; if a regression ever
 		# left the assignment unquoted, eval would run `rm` and the value would not be
 		# the literal. A canary file proves nothing behind the ';' executed.
-		canary="${work}/canary"; : > "${canary}"
+		canary="${work}/canary"; true > "${canary}"
 		When call run_placeholder_lines '10.0.0.1;rm' ''
 		The output should equal 'ph=10.0.0.1;rm|reads=0'
 		The file "${canary}" should be exist
