@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `f0a243b32`  pfblockerng: see hyphenated config keys, classify widget-* as foreign  (#3138) — never asked, owner directive; four legs, no blocking.
 - `784b71479`  pfblockerng: gate the toggle contract wherever a config mirror is declared  (#3134) — never asked, owner directive; eight legs over two rounds, one blocking deferred to #3136.
 - `e9ad19cf4`  pfblockerng: hide the DNSBL TOP1M API Token field for keyless types  (#3132) — never asked, owner directive (slot saturated, cosmetic); four legs, no blocking.
 - `b621614be`  hooks: stop counting untracked files as tree dirt in session-branch-sync  (#3109) — asked twice, two quota notices; four legs over two rounds, two blocking fixed.
