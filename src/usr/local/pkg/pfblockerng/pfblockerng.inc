@@ -8351,6 +8351,11 @@ function pfb_ip_suppress_body_for_vtype(bool $supp_on, string $vtype, bool $supp
 	    $adv, $feed_changed, pfb_ip_recompute_ran_for_vtype($vtype, $ran_v4, $ran_v6));
 }
 
+// issue #3150: same predicate the v4 suppress verb evaluates (`[ -e ] && [ -s ]`).
+function pfb_ip_suppress_list_present(string $path): bool {
+	return is_readable($path) && filesize($path) > 0;
+}
+
 // ---------------------------------------------------------------------------
 // ADR-40 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------

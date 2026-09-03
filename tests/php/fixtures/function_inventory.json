@@ -7098,6 +7098,19 @@
             }
         ]
     },
+    "pfb_ip_suppress_list_present": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_ip_suppressed": {
         "returnsRef": false,
         "returnType": "bool",
