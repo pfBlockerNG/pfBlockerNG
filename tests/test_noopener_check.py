@@ -312,10 +312,22 @@ def test_escaped_single_quote_target_blank_is_a_violation() -> None:
     assert len(cno.find_violations(line, "p.inc")) == 1
 
 
+def test_escaped_single_quote_target_blank_with_adjacent_rel_is_clean() -> None:
+    line = r"echo '<a target=\'_blank\' rel=\'noopener noreferrer\' href=\'x\'>y</a>';"
+    assert cno.find_violations(line, "p.inc") == []
+
+
 def test_escaped_quote_rel_noopener_evil_is_still_rejected() -> None:
     # Token-end guard must survive escaping: rel=\"noopener-evil\" grants none
     # of noopener's protection.
     line = r"<a target=\"_blank\" rel=\"noopener-evil\" href=\"x\">y</a>"
+    assert len(cno.find_violations(line, "p.inc")) == 1
+
+
+def test_backslash_without_quote_is_not_an_escaped_rel() -> None:
+    # Optional backslash on rel= is only the PHP-string quote escape. A lone
+    # `rel=\noopener` is not adjacent noopener.
+    line = r'<a target=_blank rel=\noopener href="x">'
     assert len(cno.find_violations(line, "p.inc")) == 1
 
 

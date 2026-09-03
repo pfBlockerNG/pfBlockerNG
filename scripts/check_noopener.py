@@ -15,7 +15,8 @@ HEURISTIC (deliberately strict-adjacency, not an HTML parser)
 A `target … = … _blank…` occurrence (HTML ASCII case; double/single/no quotes;
 spaces/tabs around `=`; a `(?<![\\w-])` guard excludes `data-target="_blank"`)
 is a VIOLATION unless it is
-IMMEDIATELY followed — only whitespace between — by `rel=["']?noopener`.
+IMMEDIATELY followed — only whitespace between — by `rel=` then an optional
+backslash-escaped or bare quote and `noopener`.
 An unquoted `_blank/` prefix is deliberately treated as a flaggable near-miss:
 WHATWG includes the slash in the attribute value, but the likely typo must fail
 review rather than silently escape this checker.
@@ -72,7 +73,7 @@ _TARGET_BLANK_RE = re.compile(
 # `(?![\w-])` token-end guard (not `\b`) is required so `rel="noopener-evil"` -- a
 # DIFFERENT rel token that grants none of noopener's protection -- is NOT accepted
 # (a `\b` boundary treats the hyphen as a token end and would pass it).
-_REL_NOOPENER_ADJACENT_RE = re.compile(r'\s+rel=\\?(["\']?)noopener(?![\w-])')
+_REL_NOOPENER_ADJACENT_RE = re.compile(r'\s+rel=(?:\\?["\']|)noopener(?![\w-])')
 
 # Escape hatch, mirroring check_comment_narration.py's `narration-ok`.
 _ESCAPE_MARKER = "noopener-ok"
