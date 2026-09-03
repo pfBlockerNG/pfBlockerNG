@@ -1433,7 +1433,32 @@ if (isset($_POST) && !empty($_POST)) {
 				$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
 				if ($swapped) {
 					if ($_POST['entry_delete'] == 'delete_domainwildcard') {
-						exec("{$pfb['chroot_cmd']} flush_zone +c . 2>&1");
+						// issue #2880: this flush rides resolver-control IPC inside the
+						// page request, and raw exec() waits unboundedly -- a hung
+						// unbound-control left the HTTP request without any terminal
+						// state. Reuse the CNAME lookup seam above (issue #2083):
+						// timeout(1) default reaper mode, 30s TERM budget + 5s kill
+						// grace matching the established Alerts DNS ceiling, output
+						// to a regular file with stdin on /dev/null so no descendant
+						// can hold the capture pipe, and an explicit status. Expiry
+						// (124) and nonzero control status must never read as an
+						// ordinary success: the wildcard removal is already persisted
+						// above, so both name the saved state and the next manual
+						// recovery action instead of rolling it back silently.
+						$flush_zone_file = "{$g['tmp_path']}/pfb_alerts_flush_zone_" . getmypid() . '_' . bin2hex(random_bytes(8));
+						$flush_zone_status = 0;
+						exec(escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout') .
+							" -s TERM -k 5 30 {$pfb['chroot_cmd']} flush_zone +c . > " .
+							escapeshellarg($flush_zone_file) . " 2>&1 < /dev/null",
+							$flush_zone_output, $flush_zone_status);
+						@unlink($flush_zone_file);
+						if ($flush_zone_status === 124) {
+							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone TIMED OUT (killed); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use a DNSBL Force Reload or run 'unbound-control flush_zone' to clear them.";
+						} elseif ($flush_zone_status !== 0) {
+							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone FAILED (exit {$flush_zone_status}); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use a DNSBL Force Reload or run 'unbound-control flush_zone' to clear them.";
+						}
 					} else {
 						pfb_unbound_py_ccache_flush(array($entry));
 					}

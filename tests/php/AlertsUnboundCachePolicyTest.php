@@ -69,7 +69,7 @@ final class AlertsUnboundCachePolicyTest extends TestCase
 		$this->assertOrdered(
 			$delete,
 			'$swapped = pfb_reload_unbound(\'enabled\', FALSE, FALSE, TRUE);',
-			'exec("{$pfb[\'chroot_cmd\']} flush_zone +c . 2>&1");'
+			'exec(escapeshellarg($pfb[\'timeout\'] ?? \'/usr/bin/timeout\') . " -s TERM -k 5 30 {$pfb[\'chroot_cmd\']} flush_zone +c . > "'
 		);
 		$this->assertStringContainsString('if ($swapped)', $delete,
 			'cache work must be skipped when reload falls back to a full restart');
