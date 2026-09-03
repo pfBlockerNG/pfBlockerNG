@@ -28,6 +28,7 @@ INSTALL = "sh scripts/agent/ensure-graphify.sh ."
 SETUP_UV = "astral-sh/setup-uv@v10.0.1"
 CANARY_SOURCE = "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
 PR_ONLY = "github.event_name == 'pull_request'"
+HEAD_SHA = "${{ github.event.pull_request.head.sha }}"
 
 
 def _workflow_text() -> str:
@@ -66,6 +67,16 @@ def assert_job_is_pr_scoped(text: str) -> None:
     job = _job(text)
     assert job.get("if") == PR_ONLY, f"{JOB} must be PR-only like coverage-pairing, got if: {job.get('if')!r}"
     assert yaml.safe_load(text)["jobs"]["coverage-pairing"]["if"] == job["if"]
+
+
+def assert_job_checks_out_the_pr_head(text: str) -> None:
+    # The graph is a function of the committed tree. The default pull_request
+    # checkout is refs/pull/N/merge, whose tree the PR never rebuilt against.
+    checkouts = [step for step in _job(text)["steps"] if "actions/checkout@" in step.get("uses", "")]
+    assert len(checkouts) == 1, f"{JOB}: expected exactly one checkout step, found {len(checkouts)}"
+    assert checkouts[0].get("with", {}).get("ref") == HEAD_SHA, (
+        f"{JOB}: checkout must pin ref to the PR head, got {checkouts[0].get('with')!r}"
+    )
 
 
 def assert_graphify_installed_before_the_check(text: str) -> None:
@@ -121,6 +132,10 @@ def test_graphify_is_installed_through_the_shared_installer_before_the_check() -
     assert_graphify_installed_before_the_check(_workflow_text())
 
 
+def test_graph_freshness_job_checks_out_the_pr_head_not_the_merge_ref() -> None:
+    assert_job_checks_out_the_pr_head(_workflow_text())
+
+
 def test_red_canary_runs_first_in_the_same_block_and_requires_exit_1() -> None:
     assert_red_canary_precedes_the_real_check(_workflow_text())
 
@@ -154,6 +169,11 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
         (_without_job, assert_job_is_pr_scoped, "has no `graph-freshness` job"),
         (_in_job(JOB, f"    if: {PR_ONLY}\n", ""), assert_job_is_pr_scoped, "PR-only"),
         (
+            _in_job(JOB, f"          ref: {HEAD_SHA}\n", ""),
+            assert_job_checks_out_the_pr_head,
+            "pin ref to the PR head",
+        ),
+        (
             _in_job(JOB, f"run: {INSTALL}", "run: echo installer dropped"),
             assert_graphify_installed_before_the_check,
             "exactly one step",
@@ -173,6 +193,7 @@ def _in_job(job: str, old: str, new: str) -> Callable[[str], str]:
     ids=[
         "job-deleted",
         "job-unconditional",
+        "checkout-merge-ref",
         "installer-dropped",
         "canary-accepts-fresh",
         "canary-comment-only",

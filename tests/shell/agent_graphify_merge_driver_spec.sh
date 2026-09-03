@@ -46,8 +46,8 @@ UV
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 printf '%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
-hooks_dir=$(git rev-parse --git-path hooks) && mkdir -p "$hooks_dir" &&
-  : > "$hooks_dir/post-commit" && : > "$hooks_dir/post-checkout"
+hooks_dir=$(git rev-parse --git-path hooks) && mkdir -p "$hooks_dir" && # git-env-scrub-guard: the stub mimics the real CLI, which resolves the hooks dir of the tree under test
+  true > "$hooks_dir/post-commit" && true > "$hooks_dir/post-checkout"
 exit 91
 GRAPHIFY
     real_git=$(command -v git)

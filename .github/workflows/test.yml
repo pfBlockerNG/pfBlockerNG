@@ -1221,11 +1221,18 @@ jobs:
     name: Graph freshness (graphify-out/graph.json equals a rebuild)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # Two rebuilds run in a few minutes; `graphify update` holds a blocking flock,
+    # so a hung rebuild must not sit on GitHub's six-hour default.
+    timeout-minutes: 20
     steps:
-      - name: Checkout
+      - name: Checkout the PR head
+        # The graph is a function of the committed tree. The default pull_request
+        # checkout is refs/pull/N/merge, a tree the PR never rebuilt against, so it
+        # reads stale whenever the base moves; landing rebases and re-runs this job.
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install uv
         # Same pin as the test job: the shared installer runs `uv tool install`.
