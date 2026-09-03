@@ -1,7 +1,7 @@
 #!/bin/sh
-# run-gates.sh -- run the CLAUDE.md canonical gates for whatever a diff touches.
-# Mechanical runner for the "Canonical gates" table (CLAUDE.md stays the documented
-# source; this script implements it -- change them together).
+# run-gates.sh -- run the canonical gates for whatever a diff touches.
+# Mechanical runner for the "Canonical gates" table (.agents/policy/delegation.md stays
+# the documented source; this script implements it -- change them together).
 #
 # Gates run against the host toolchain: Python through the locked uv environment
 # (`uv sync --locked --group dev`), PHP and the shell tools from the versions
@@ -89,6 +89,11 @@ gates_for() {
 	fi
 	if printf '%s\n' "$files" | grep -q '\.py$'; then
 		out="${out}uv run --locked pytest${nl}uv run --locked ruff check .${nl}uv run --locked ruff format --check .${nl}uv run --locked mypy tests/${nl}"
+	# issue #3166: the skip gate READS tests/skip-allowlist.txt, and its checker plus red
+	# canary ride the pytest gate, which also carries the two tests that parse the real file.
+	# A .txt path matched no bucket, so an allowlist-only diff selected no suite at all.
+	elif printf '%s\n' "$files" | grep -qx 'tests/skip-allowlist\.txt'; then
+		out="${out}uv run --locked pytest${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
 		out="${out}uv run --locked python scripts/check_composer_vendor.py${nl}"
