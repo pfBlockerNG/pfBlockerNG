@@ -484,6 +484,16 @@ _NOOPENER_RENDER_CASES: tuple[tuple[str, str], ...] = (
     # GeoIP view (source guards it with `$gtype == 'geoip'`).
     ("/pfblockerng/pfblockerng_category.php?type=geoip", "https://www.maxmind.com"),
     ("/pfblockerng/pfblockerng_ip.php", "https://ipinfo.io"),
+    # issue #3085: escaped-quote PHP string form; target-first so the existing
+    # attribute-order assertion can match. href-first siblings (blacklist.php)
+    # stay unpinned until that assertion is order-tolerant.
+    ("/pfblockerng/pfblockerng_dnsbl.php", "/firewall_aliases.php?tab=port"),
+    ("/pfblockerng/pfblockerng_feeds.php", "https://botscout.com/donate.htm"),
+    ("/pfblockerng/pfblockerng_feeds.php", "https://pulsedive.com/premium/purchase.php"),
+    (
+        "/pfblockerng/pfblockerng_feeds.php",
+        "mailto:sales@bambenekconsulting.com?Subject=Access%20Request%20(pfBlockerNG)",
+    ),
 )
 
 

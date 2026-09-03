@@ -517,7 +517,7 @@ function pfBlockerNG_get_failed() {
 			}
 
 			if ($pfb_found) {
-				$link   = "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_category_edit.php?type={$type}&act=edit&rowid={$key}\" ";
+				$link   = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_category_edit.php?type={$type}&act=edit&rowid={$key}\" ";
 				$link  .= "\"title=\"Click to view Alias\" >{$pfb_prefix}{$f_alias}</a>";
 				// Prepend, never splice into $text: the message is free-text and is not
 				// guaranteed to contain "{$pfb_prefix}{$f_alias}" verbatim -- a guaranteed
@@ -932,7 +932,7 @@ function pfBlockerNG_get_header($mode='') {
 					$d_type = ($data == 'Suppression') ? 'ip' : 'dnsbl';
 					$d_anchor = pfb_widget_anchor_layout_render($d_type)[$data === 'Suppression' ? 'suppression' : 'whitelist'];
 					print("{$tab5}<td {$tdl} title=\"{$titles[$key][$data]}\"><i class=\"{$faicon[$key][$col]}\"></i>&nbsp;&nbsp;"
-						. "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_{$d_type}.php#{$d_anchor}\" title=\"Link to {$data}\">"
+						. "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_{$d_type}.php#{$d_anchor}\" title=\"Link to {$data}\">"
 						. "<small><span class=\"pfb_{$data}\">{$value}</span></small></a></td>\n");
 				}
 				else {
@@ -990,7 +990,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
 					$packets  = "<a href=\"/pfblockerng/pfblockerng_alerts.php?filterdnsbl={$pfb_alias}\" ";
-					$packets .= "target=\"_blank\" title=\"Click to view these packets in Alerts tab\" >{$values['packets']}</a>";
+					$packets .= "target=\"_blank\" rel=\"noopener noreferrer\" title=\"Click to view these packets in Alerts tab\" >{$values['packets']}</a>";
 				} else {
 					$packets = $values['packets'] ?: 0;
 				}
@@ -1008,7 +1008,7 @@ function pfBlockerNG_get_table($pfb_table, $mode='') {
 
 				// Packet column pivot to Alerts Tab
 				if ($values['packets'] > 0) {
-					$packets  = "<a target=\"_blank\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
+					$packets  = "<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"/pfblockerng/pfblockerng_alerts.php?filterip={$pfb_alias}\" ";
 					$packets .= "title=\"Click to view these packets in Alerts tab\" >{$values['packets']}</a>";
 				}
 				else {
