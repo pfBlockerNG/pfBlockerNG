@@ -145,6 +145,31 @@ final class AliasReloadScopeTest extends TestCase
 	}
 
 	/**
+	 * Rule-change cleanup keeps registered aggregate tables without reviving orphan tables.
+	 *
+	 * Aggregates are urltable aliases with no firewall rule by design, so they must be kept
+	 * separately from the rule-referenced active set while filter_configure() rebuilds tables.
+	 */
+	public function testRuleChangeKeepsSelectedAggregatesButKillsOrphans(): void
+	{
+		$registered = [
+			'pfB_Deny_Aggregated_v4',
+			'pfB_Deny_Aggregated_v6',
+			'pfB_Orphan_v4',
+			'pfB_Custom_Aggregated_v4',
+		];
+
+		$result = pfb_rule_change_keep_aliases($registered);
+
+		$this->assertSame(
+			['pfB_Deny_Aggregated_v4', 'pfB_Deny_Aggregated_v6'],
+			$result,
+			'selected aggregate tables survive cleanup, while non-aggregate tables still require a rule'
+		);
+	}
+
+
+	/**
 	 * Oracle: active_aliases null → no intersect (file-write and no-rule-change paths).
 	 *
 	 * The two call sites that do NOT intersect pass null (default). The result is the
