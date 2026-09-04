@@ -130,6 +130,13 @@ jobs:
           php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions)[0] }}
           tools: none
 
+      - name: Install libarchive-tools
+        # The PHP test bootstrap (tests/php/bootstrap.php) requires bsdtar on Linux;
+        # Python tests shelling out to PHP load that bootstrap.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+
       - name: Install uv
         # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
         # exact versions only. enable-cache persists uv's download cache between runs.

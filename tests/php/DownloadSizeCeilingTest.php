@@ -307,7 +307,7 @@ final class DownloadSizeCeilingTest extends TestCase
 			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
 			'exec("{$pfb[\'script\']} asn_table {$elog}");',
 			// Lists an archive; extracts nothing.
-			'exec("/usr/bin/tar -tf {$file_dwn_esc}");',
+			'exec("{$tar_bin} -tf {$file_dwn_esc}");',
 			// Capped. This one stays a prefix: it covers every capped call site, each
 			// with its own argument list. So a command concatenated onto a capped call
 			// is invisible HERE -- but not uncapped: ulimit is process-scoped, so the

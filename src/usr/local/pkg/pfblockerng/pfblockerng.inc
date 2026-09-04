@@ -15809,10 +15809,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			*/
 	
-			// Check if ZIP archive contains xlsx files
 			global $pfb;
 			$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
-			$xlsxtest = exec("{$tar_bin} -tf {$file_dwn_esc} 2>/dev/null");
+			$xlsxtest = exec("{$tar_bin} -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
 				// issue #2684: the helper unpacks the workbook into its OWN per-run temp
 				// directory (`mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"`), which the
