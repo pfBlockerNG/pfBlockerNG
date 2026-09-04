@@ -87,9 +87,8 @@ test("lezerErrorLint is added alongside serverLint behind the same opts.lintUrl 
   );
 });
 
-test("cm-regex mounts the Regex Exceptions textarea as well as the main list", () => {
-  assert.match(src, /pfb_regex_exception_list/);
-  assert.match(src, /Move to Regex Exceptions|moveAction|getExceptionsView/);
+test("fromTextarea forwards getExceptionsView into Lezer lint options", () => {
+  assert.match(src, /getExceptionsView:\s*opts\.getExceptionsView/);
 });
 
 test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-magic constraint)", () => {

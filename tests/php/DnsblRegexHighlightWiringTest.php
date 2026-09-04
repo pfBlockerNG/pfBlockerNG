@@ -36,5 +36,7 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 		$this->assertSame(2, substr_count($init, 'pfbCM.fromTextarea('));
 		$this->assertGreaterThanOrEqual(1, substr_count($init, "lintUrl: '/pfblockerng/pfblockerng_lint.php'"));
 		$this->assertStringContainsString("(capEl && capEl.checked) ? '1' : '0'", $init);
+		$this->assertStringContainsString("lezerSeverity: 'warning'", $init);
+		$this->assertStringContainsString('getExceptionsView:', $init);
 	}
 }

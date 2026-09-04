@@ -2458,11 +2458,6 @@
             }
         ]
     },
-    "pfb_dnsbl_regex_editor_flag_message": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": []
-    },
     "pfb_dnsbl_regex_editor_save_errors": {
         "returnsRef": false,
         "returnType": "array",
@@ -2476,19 +2471,6 @@
             },
             {
                 "name": "flagged_lines",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
-    },
-    "pfb_dnsbl_regex_error_line_numbers": {
-        "returnsRef": false,
-        "returnType": "array",
-        "params": [
-            {
-                "name": "errors",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
@@ -2520,14 +2502,7 @@
                 "default": null
             },
             {
-                "name": "editor_flagged_exception_lines",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            },
-            {
-                "name": "python_error_line_numbers",
+                "name": "python_errors",
                 "byRef": false,
                 "variadic": false,
                 "type": "array",

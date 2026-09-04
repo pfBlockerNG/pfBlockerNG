@@ -40,8 +40,9 @@ export function fromTextarea(textarea, opts) {
   // issue #1732 step 2: advisory server lint (POST pfblockerng_lint.php) + the offline
   // Lezer bracket lint, both opt-in via opts.lintUrl -- no opts means no lintUrl means
   // byte-identical behaviour to before this slice.
+  let lintOptions = null;
   if (opts && opts.lintUrl) {
-    const lintOptions = {
+    lintOptions = {
       severity: opts.lezerSeverity ?? "error",
       getExceptionsView: opts.getExceptionsView,
     };
@@ -54,12 +55,7 @@ export function fromTextarea(textarea, opts) {
     );
   }
   const view = mountTextarea(textarea, pfbRegexList(), extraExtensions);
-  if (opts && opts.lintUrl) {
-    syncFlaggedInput(textarea, view.state, {
-      severity: opts.lezerSeverity ?? "error",
-      getExceptionsView: opts.getExceptionsView,
-    });
-  }
+  if (lintOptions) syncFlaggedInput(textarea, view.state, lintOptions);
   return view;
 }
 
@@ -67,29 +63,6 @@ export function fromTextarea(textarea, opts) {
 // overlay, no lint wiring).
 export function fromTextareaList(textarea) {
   return mountTextarea(textarea, pfbPlainList(), []);
-}
-
-export const PFB_REGEX_EXCEPTION_LIST_ID = "pfb_regex_exception_list";
-
-export function mountRegexListAndExceptions(lintUrl, lintExtraParams) {
-  const exceptions = document.getElementById(PFB_REGEX_EXCEPTION_LIST_ID);
-  let exceptionsView = null;
-  if (exceptions) {
-    exceptionsView = fromTextarea(exceptions, {
-      lintUrl,
-      lintExtraParams,
-      lezerSeverity: "warning",
-    });
-  }
-  const main = document.getElementById("pfb_regex_list");
-  if (main) {
-    fromTextarea(main, {
-      lintUrl,
-      lintExtraParams,
-      getExceptionsView: () => exceptionsView,
-    });
-  }
-  return { main, exceptionsView };
 }
 
 // issue #1875 -- one call per page mounts every plain-list field; missing ids skipped so

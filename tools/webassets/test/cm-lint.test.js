@@ -12,13 +12,12 @@ import {
   diagnosticsToCm,
   lezerErrorDiagnostics,
   lezerErrorLint,
+  moveRegexLine,
+  PFB_REGEX_EDITOR_FLAG_MESSAGE,
+  PFB_REGEX_MOVE_ACTION_NAME,
   serverLint,
   serverLintSource,
 } from "../cm-lint.js";
-
-const PFB_REGEX_EDITOR_FLAG_MESSAGE =
-  "Regex error: this editor could not parse this line. If you believe it is a valid Python regular expression, you can move it to the Regex Exceptions list. Python still validates it when DNSBL compiles; a pattern Python rejects will not load.";
-const PFB_REGEX_MOVE_ACTION_NAME = "Move to Regex Exceptions";
 
 test("buildLintBody encodes lang/content and merges extraParams", () => {
   const body = buildLintBody("regex", "a&b=c\ndé", { cap: "1" });
@@ -161,6 +160,34 @@ test("diagnosticsToCm never attaches a Move action to server (Python) diagnostic
   const [d] = diagnosticsToCm(doc, [{ line: 1, message: "Python regex compile error", severity: "error" }]);
   assert.equal(d.severity, "error");
   assert.equal(d.actions, undefined);
+});
+
+function mutableDocView(doc) {
+  let state = EditorState.create({ doc });
+  return {
+    get state() {
+      return state;
+    },
+    dispatch(spec) {
+      state = state.update(spec).state;
+    },
+  };
+}
+
+test("moveRegexLine moves only the flagged line from main onto exceptions", () => {
+  const main = mutableDocView("keep-a\nbad(\nkeep-b");
+  const exceptions = mutableDocView("");
+  moveRegexLine(main, main.state.doc.line(2).from, exceptions);
+  assert.equal(main.state.doc.toString(), "keep-a\nkeep-b");
+  assert.equal(exceptions.state.doc.toString(), "bad(");
+});
+
+test("moveRegexLine appends after an existing exception line", () => {
+  const main = mutableDocView("bad(");
+  const exceptions = mutableDocView("held");
+  moveRegexLine(main, 0, exceptions);
+  assert.equal(main.state.doc.toString(), "");
+  assert.equal(exceptions.state.doc.toString(), "held\nbad(");
 });
 
 test("lezerErrorDiagnostics flags unbalanced '[' with a non-empty range within the doc", () => {

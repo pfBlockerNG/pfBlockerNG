@@ -153,8 +153,7 @@ if ($pfb_regex_ex_text !== '') {
 	$pfb_regex_ex_upgrade = pfb_dnsbl_regex_exceptions_upgrade(
 		(string) PfbConfig::read('dnsbl/pfb_regex_list'),
 		(string) PfbConfig::read('dnsbl/pfb_regex_exception_list'),
-		[],
-		pfb_dnsbl_regex_error_line_numbers($pfb_regex_ex_errors)
+		$pfb_regex_ex_errors
 	);
 	if ($pfb_regex_ex_upgrade['returned'] > 0) {
 		PfbConfig::writeSystem('dnsbl/pfb_regex_list', $pfb_regex_ex_upgrade['main_b64']);

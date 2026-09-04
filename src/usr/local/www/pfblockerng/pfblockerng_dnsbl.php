@@ -764,19 +764,6 @@ if ($_POST) {
 				$input_errors[] = $regex_error;
 			}
 		}
-		if (array_key_exists('pfb_regex_exception_list_editor_flags', $_POST)) {
-			$pfb_regex_returned = pfb_dnsbl_regex_return_accepted_exceptions(
-				(string) ($_POST['pfb_regex_list'] ?? ''),
-				(string) ($_POST['pfb_regex_exception_list'] ?? ''),
-				pfb_dnsbl_regex_parse_flagged_lines((string) $_POST['pfb_regex_exception_list_editor_flags'])
-			);
-			$_POST['pfb_regex_list'] = $pfb_regex_returned['main'];
-			$_POST['pfb_regex_exception_list'] = $pfb_regex_returned['exceptions'];
-			if ($pfb_regex_returned['returned'] > 0) {
-				$savemsg = pfb_dnsbl_regex_returned_notice($pfb_regex_returned['returned']);
-			}
-		}
-
 		// Validate DNSBL VIP address
 		// [ ADR-13 ] Auto-create mode: pfBlockerNG owns the DNSBL sinkhole VIP(s) and
 		// provisions them server side on the next pfb_create_dnsbl('enabled') pass
@@ -859,6 +846,19 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			if (array_key_exists('pfb_regex_exception_list_editor_flags', $_POST)) {
+				$pfb_regex_returned = pfb_dnsbl_regex_return_accepted_exceptions(
+					(string) ($_POST['pfb_regex_list'] ?? ''),
+					(string) ($_POST['pfb_regex_exception_list'] ?? ''),
+					pfb_dnsbl_regex_parse_flagged_lines((string) $_POST['pfb_regex_exception_list_editor_flags'])
+				);
+				$_POST['pfb_regex_list'] = $pfb_regex_returned['main'];
+				$_POST['pfb_regex_exception_list'] = $pfb_regex_returned['exceptions'];
+				if ($pfb_regex_returned['returned'] > 0) {
+					$savemsg = pfb_dnsbl_regex_returned_notice($pfb_regex_returned['returned']);
+				}
+			}
+
 			$pfb_top1m_settings_before = array(
 				'enable'   => $pfb['dconfig']['top1m_enable'] ?? '',
 				'count'    => $pfb['dconfig']['top1m_count'] ?? '',

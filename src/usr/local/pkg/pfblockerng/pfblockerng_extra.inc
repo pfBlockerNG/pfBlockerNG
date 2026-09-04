@@ -3662,12 +3662,6 @@ function pfb_dnsbl_regex_validation_errors(string $contents, string $python, boo
 	return [];
 }
 
-/** issue #3088: Diagnostic.message for a save-blocking editor (Lezer) flag. */
-function pfb_dnsbl_regex_editor_flag_message(): string
-{
-	return 'Regex error: this editor could not parse this line. If you believe it is a valid Python regular expression, you can move it to the Regex Exceptions list. Python still validates it when DNSBL compiles; a pattern Python rejects will not load.';
-}
-
 /** Suffix for a Python compile-failure diagnostic: it cannot be excepted. */
 function pfb_dnsbl_regex_python_reject_suffix(): string
 {
@@ -3800,45 +3794,38 @@ function pfb_dnsbl_regex_resolver_blob(?string $main_b64, ?string $exception_b64
 }
 
 /**
- * @param list<string> $errors
- * @return list<int>
- */
-function pfb_dnsbl_regex_error_line_numbers(array $errors): array
-{
-	$lines = [];
-	foreach ($errors as $error) {
-		if (preg_match('/^line (\d+):/', $error, $match) === 1) {
-			$lines[] = (int) $match[1];
-		}
-	}
-	return $lines;
-}
-
-/**
- * @param list<int> $editor_flagged_exception_lines
- * @param list<int> $python_error_line_numbers
+ * @param list<string> $python_errors
  * @return array{main_b64: string, exception_b64: string, returned: int, python_rejects_remain: bool}
  */
 function pfb_dnsbl_regex_exceptions_upgrade(
 	string $main_b64,
 	string $exception_b64,
-	array $editor_flagged_exception_lines,
-	array $python_error_line_numbers
+	array $python_errors
 ): array {
-	$stay = array_values(array_unique(array_merge(
-		$editor_flagged_exception_lines,
-		$python_error_line_numbers
-	)));
+	$line_numbers = [];
+	foreach ($python_errors as $error) {
+		if (preg_match('/^line (\d+):/', $error, $match) === 1) {
+			$line_numbers[] = (int) $match[1];
+		}
+	}
+	if ($python_errors !== [] && $line_numbers === []) {
+		return [
+			'main_b64' => $main_b64,
+			'exception_b64' => $exception_b64,
+			'returned' => 0,
+			'python_rejects_remain' => TRUE,
+		];
+	}
 	$result = pfb_dnsbl_regex_return_accepted_exceptions(
 		pfb_b64_text($main_b64),
 		pfb_b64_text($exception_b64),
-		$stay
+		$line_numbers
 	);
 	return [
 		'main_b64' => $result['main'] === '' ? '' : base64_encode($result['main']),
 		'exception_b64' => $result['exceptions'] === '' ? '' : base64_encode($result['exceptions']),
 		'returned' => $result['returned'],
-		'python_rejects_remain' => $python_error_line_numbers !== [],
+		'python_rejects_remain' => $python_errors !== [],
 	];
 }
 

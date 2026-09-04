@@ -15,7 +15,6 @@ use PHPUnit\Framework\TestCase;
  * exceptions, a posted Python-invalid line that must not save, and JS unit
  * coverage that '(' is a red editor flag with the Move action.
  */
-#[CoversFunction('pfb_dnsbl_regex_editor_flag_message')]
 #[CoversFunction('pfb_dnsbl_regex_python_reject_suffix')]
 #[CoversFunction('pfb_dnsbl_regex_parse_flagged_lines')]
 #[CoversFunction('pfb_dnsbl_regex_editor_save_errors')]
@@ -25,9 +24,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_dnsbl_regex_returned_notice')]
 final class DnsblRegexExceptionListTest extends TestCase
 {
-	private const OWNER_EDITOR_MESSAGE =
-		'Regex error: this editor could not parse this line. If you believe it is a valid Python regular expression, you can move it to the Regex Exceptions list. Python still validates it when DNSBL compiles; a pattern Python rejects will not load.';
-
 	private const PYTHON_VALID = '^ads\\.example\\.com$';
 	private const PYTHON_VALID_META = '(?i)evil\\.com';
 	private const PYTHON_INVALID = '(';
@@ -63,11 +59,6 @@ final class DnsblRegexExceptionListTest extends TestCase
 			$regexCap,
 			self::$timeout
 		);
-	}
-
-	public function testEditorFlagMessageIsTheOwnerSentence(): void
-	{
-		$this->assertSame(self::OWNER_EDITOR_MESSAGE, pfb_dnsbl_regex_editor_flag_message());
 	}
 
 	public function testPythonRejectSuffixSaysItCannotBeExcepted(): void
@@ -121,33 +112,6 @@ final class DnsblRegexExceptionListTest extends TestCase
 		$errors = self::pythonErrors(self::PYTHON_INVALID . "\n");
 		$this->assertNotSame([], $errors);
 		$this->assertStringContainsString('line 1:', $errors[0]);
-	}
-
-	public function testPythonRejectOnExceptionsFailsValidation(): void
-	{
-		$errors = self::pythonErrors(self::PYTHON_INVALID . "\n");
-		$this->assertNotSame([], $errors, 'exceptions use the same Python compile gate');
-	}
-
-	public function testPostedMoveOfPythonValidLineReconcilesIntoExceptions(): void
-	{
-		$main = self::PYTHON_VALID . "\n" . self::PYTHON_VALID_META . "\n";
-		$moved = pfb_dnsbl_regex_return_accepted_exceptions(
-			self::PYTHON_VALID_META . "\n",
-			self::PYTHON_VALID . "\n",
-			[1]
-		);
-		$this->assertSame(0, $moved['returned'], 'still-flagged exception lines stay put');
-		$this->assertStringContainsString(self::PYTHON_VALID, $moved['exceptions']);
-		$this->assertStringNotContainsString(self::PYTHON_VALID, $moved['main']);
-		$this->assertSame([], self::pythonErrors($moved['exceptions']));
-		$this->assertSame([], self::pythonErrors($moved['main']));
-	}
-
-	public function testMovingAPythonInvalidLineDoesNotMakeItValidInExceptions(): void
-	{
-		$errors = self::pythonErrors(self::PYTHON_INVALID . "\n");
-		$this->assertNotSame([], $errors, 'a Python-invalid line must not save in exceptions');
 	}
 
 	public function testAutoReturnMovesEditorCleanPythonOkExceptionLines(): void
@@ -222,7 +186,7 @@ final class DnsblRegexExceptionListTest extends TestCase
 	{
 		$main = base64_encode(self::PYTHON_VALID);
 		$exceptions = base64_encode(self::PYTHON_VALID_META);
-		$result = pfb_dnsbl_regex_exceptions_upgrade($main, $exceptions, [], []);
+		$result = pfb_dnsbl_regex_exceptions_upgrade($main, $exceptions, []);
 		$this->assertSame(1, $result['returned']);
 		$this->assertFalse($result['python_rejects_remain']);
 		$this->assertStringContainsString(self::PYTHON_VALID_META, pfb_b64_text($result['main_b64']));
@@ -232,10 +196,25 @@ final class DnsblRegexExceptionListTest extends TestCase
 	public function testInstallUpgradeKeepsPythonRejectsAndReportsThem(): void
 	{
 		$exceptions = base64_encode(self::PYTHON_INVALID);
-		$result = pfb_dnsbl_regex_exceptions_upgrade('', $exceptions, [], [1]);
+		$result = pfb_dnsbl_regex_exceptions_upgrade('', $exceptions, ['line 1: missing ), unterminated subpattern']);
 		$this->assertSame(0, $result['returned']);
 		$this->assertTrue($result['python_rejects_remain']);
 		$this->assertStringContainsString(self::PYTHON_INVALID, pfb_b64_text($result['exception_b64']));
+	}
+
+	public function testInstallUpgradeKeepsExceptionsWhenPythonErrorsHaveNoLineNumbers(): void
+	{
+		$main = base64_encode(self::PYTHON_VALID);
+		$exceptions = base64_encode(self::PYTHON_INVALID . "\n" . self::PYTHON_VALID_META);
+		$result = pfb_dnsbl_regex_exceptions_upgrade(
+			$main,
+			$exceptions,
+			['Python regex validator: process failed with exit 127: interpreter unavailable']
+		);
+		$this->assertSame(0, $result['returned']);
+		$this->assertTrue($result['python_rejects_remain']);
+		$this->assertSame($main, $result['main_b64']);
+		$this->assertSame($exceptions, $result['exception_b64']);
 	}
 
 	public function testDnsblPageRendersRegexExceptionsTextareaInTheRegexSection(): void
@@ -265,6 +244,34 @@ final class DnsblRegexExceptionListTest extends TestCase
 		$this->assertStringContainsString(
 			"mb_detect_encoding(\$_POST['pfb_regex_exception_list']",
 			$source
+		);
+		$this->assertStringContainsString(
+			"pfb_dnsbl_regex_validation_errors((string) (\$_POST['pfb_regex_exception_list']",
+			$source
+		);
+		$this->assertStringContainsString(
+			"pfb_dnsbl_regex_editor_save_errors( (string) (\$_POST['pfb_regex_list']",
+			$source
+		);
+		$this->assertStringNotContainsString(
+			"pfb_dnsbl_regex_editor_save_errors( (string) (\$_POST['pfb_regex_exception_list']",
+			$source
+		);
+	}
+
+	public function testAutoReturnOnSaveRunsOnlyAfterThePersistGate(): void
+	{
+		$source = php_strip_whitespace(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php'
+		);
+		$gate = strpos($source, 'if (!$input_errors)');
+		$auto = strpos($source, 'pfb_dnsbl_regex_return_accepted_exceptions');
+		$this->assertNotFalse($gate, 'expected the persist gate');
+		$this->assertNotFalse($auto, 'expected auto-return on save');
+		$this->assertGreaterThan(
+			$gate,
+			$auto,
+			'auto-return must run only inside the successful-save branch'
 		);
 	}
 

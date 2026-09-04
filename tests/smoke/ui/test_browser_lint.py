@@ -138,8 +138,8 @@ def _lint_markers(content: Locator) -> Locator:
     """Gutter lint markers (``.cm-gutter-lint .cm-lint-marker``) for a ``.cm-content`` editor.
 
     Scoped to the enclosing ``.cm-editor`` (the gutter and the content div are siblings
-    under the same editor root) -- cheap insurance even on the pages this file drives,
-    which each mount exactly one CM instance. Class names verified against the SHIPPED
+    under the same editor root). DNSBL's Regex section now mounts two editors (main +
+    Exceptions); callers must pass the intended ``.cm-content``. Class names verified against the SHIPPED
     vendor bundle (module docstring) and the vendored ``@codemirror/lint`` source
     (``dist/index.js:767`` builds ``"cm-lint-marker cm-lint-marker-" + severity``;
     ``:837`` builds the ``cm-gutter-lint`` gutter class).
@@ -182,7 +182,11 @@ def _regex_editor(page: Page) -> Locator:
         page.locator('a[data-toggle="collapse"][href="#Python_regex_list_panel-body"]').click()
     expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
 
-    content = section.locator(".cm-content")
+    content = (
+        section.locator("#pfb_regex_list")
+        .locator("xpath=preceding-sibling::div[contains(concat(' ', @class, ' '), ' cm-editor ')][1]")
+        .locator(".cm-content")
+    )
     expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
     _clear_and_type(content, "")
     return content

@@ -111,7 +111,7 @@ export function lezerErrorDiagnostics(state, options = {}) {
   const diagnostics = [];
   const docLength = state.doc.length;
   const severity = options.severity ?? "error";
-  const message = options.message ?? PFB_REGEX_EDITOR_FLAG_MESSAGE;
+  const message = PFB_REGEX_EDITOR_FLAG_MESSAGE;
   const moveAction = options.moveAction;
 
   function walk(tree, offset) {
@@ -153,7 +153,6 @@ export function lezerErrorLint(options = {}) {
       : undefined;
     return lezerErrorDiagnostics(view.state, {
       severity: options.severity ?? "error",
-      message: options.message ?? PFB_REGEX_EDITOR_FLAG_MESSAGE,
       moveAction,
     });
   });
