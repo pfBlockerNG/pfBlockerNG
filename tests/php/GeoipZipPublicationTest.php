@@ -73,7 +73,7 @@ final class GeoipZipPublicationTest extends TestCase
 			'geoip/one.dat' => "one\n",
 			'geoip/two.dat' => "two\n",
 		]);
-		exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
+		exec(escapeshellarg(pfb_test_tar()) . ' -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
 		if ($status !== 0) {
 			$this->markTestSkipped('the archiver cannot read ZIP on this host; pfSense uses bsdtar');
 		}

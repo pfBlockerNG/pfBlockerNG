@@ -170,7 +170,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($blacklist);
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
-		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar.* -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
 		$this->assertStringContainsString(
 			'pfb_blacklist_tar_finalize_staged($staged, $filename, $retval)',
@@ -263,7 +263,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
 		$this->assertStringContainsString("if (\$file_type == 'application/x-tar') {", $scope);
 		$this->assertStringContainsString('pfb_stage_publish_dir', $scope);
-		$this->assertStringContainsString('/usr/bin/tar -xf', $scope);
+		$this->assertMatchesRegularExpression('/.*tar.* -xf/', $scope);
 		// issue #2632 smoke: downloadPath may end in .tar, not .tar.gz; WORD rejects a leftover dot.
 		$this->assertStringContainsString("basename(basename(\"{\$file_esc}\", '.tar.gz'), '.tar')", $scope);
 		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
@@ -412,8 +412,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'inner tar extract must be gated on application/x-tar'
 		);
-		$this->assertStringContainsString(
-			'tar -xOf -',
+		$this->assertMatchesRegularExpression(
+			'/tar.* -xOf -/',
 			$scope,
 			'gzip inner tar must stdout-extract (-O); dropping it writes a tar archive as a feed'
 		);
@@ -533,7 +533,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($blacklist);
 		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
 		$this->assertStringContainsString("if (\$file_type == 'application/x-tar') {", $scope);
-		$this->assertStringContainsString('tar -xOf', $scope);
+		$this->assertMatchesRegularExpression('/tar.* -xOf/', $scope);
 		$this->assertStringContainsString('count($archive_members) !== 1', $scope);
 	}
 

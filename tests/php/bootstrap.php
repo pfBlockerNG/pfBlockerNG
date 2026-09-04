@@ -114,18 +114,21 @@ unset($pfb_test_timeout_out, $pfb_test_timeout_rc, $pfb_test_timeout);
  * If bsdtar cannot be resolved on the host, crash fast with RuntimeException.
  *
  * @param ?callable(string): string $lookup
+ * @param ?callable(string): bool   $executable_check
  */
-function pfb_resolve_archiver(?string $os_family = NULL, ?callable $lookup = NULL): string
+function pfb_resolve_archiver(?string $os_family = NULL, ?callable $lookup = NULL, ?callable $executable_check = NULL): string
 {
 	$family = $os_family ?? PHP_OS_FAMILY;
+	$is_exec = $executable_check ?? 'is_executable';
 	if ($family === 'BSD' || $family === 'Darwin') {
-		return '/usr/bin/tar';
+		$tar = '/usr/bin/tar';
+	} else {
+		$finder = $lookup ?? static function (string $cmd): string {
+			return trim((string) shell_exec('command -v ' . escapeshellarg($cmd) . ' 2>/dev/null'));
+		};
+		$tar = $finder('bsdtar');
 	}
-	$finder = $lookup ?? static function (string $cmd): string {
-		return trim((string) shell_exec('command -v ' . escapeshellarg($cmd) . ' 2>/dev/null'));
-	};
-	$tar = $finder('bsdtar');
-	if ($tar === '' || ($lookup === NULL && !is_executable($tar))) {
+	if ($tar === '' || !call_user_func($is_exec, $tar)) {
 		throw new RuntimeException("bsdtar binary missing on host ({$family})");
 	}
 	return $tar;

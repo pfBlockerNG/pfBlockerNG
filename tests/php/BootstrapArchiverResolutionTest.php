@@ -29,7 +29,7 @@ final class BootstrapArchiverResolutionTest extends TestCase
 		$tar = pfb_test_tar();
 		$output = [];
 		$retval = 1;
-		exec(escapeshellcmd($tar) . ' --version 2>&1', $output, $retval);
+		exec(escapeshellarg($tar) . ' --version 2>&1', $output, $retval);
 		$this->assertSame(0, $retval, "Failed to execute [{$tar} --version]");
 		$firstLine = (string) ($output[0] ?? '');
 		$this->assertTrue(
@@ -50,7 +50,7 @@ final class BootstrapArchiverResolutionTest extends TestCase
 
 		$output = [];
 		$retval = 1;
-		exec(escapeshellcmd($tar) . ' -tf ' . escapeshellarg($tmpZip) . ' 2>/dev/null', $output, $retval);
+		exec(escapeshellarg($tar) . ' -tf ' . escapeshellarg($tmpZip) . ' 2>/dev/null', $output, $retval);
 		unlink($tmpZip);
 
 		$this->assertSame(0, $retval, "Archiver [{$tar}] must be capable of reading ZIP containers");
@@ -67,19 +67,41 @@ final class BootstrapArchiverResolutionTest extends TestCase
 
 	public function test_archiver_resolver_selects_usr_bin_tar_on_bsd(): void
 	{
-		$resolved = pfb_resolve_archiver('BSD', static fn(string $cmd): string => '/unused/path');
+		$resolved = pfb_resolve_archiver('BSD', static fn(string $cmd): string => '/unused/path', static fn(string $path): bool => true);
 		$this->assertSame('/usr/bin/tar', $resolved);
+	}
+
+	public function test_archiver_resolver_fails_on_bsd_when_tar_not_executable(): void
+	{
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('bsdtar binary missing on host (BSD)');
+		pfb_resolve_archiver('BSD', static fn(string $cmd): string => '/unused/path', static fn(string $path): bool => false);
 	}
 
 	public function test_archiver_resolver_selects_usr_bin_tar_on_darwin(): void
 	{
-		$resolved = pfb_resolve_archiver('Darwin', static fn(string $cmd): string => '/unused/path');
+		$resolved = pfb_resolve_archiver('Darwin', static fn(string $cmd): string => '/unused/path', static fn(string $path): bool => true);
 		$this->assertSame('/usr/bin/tar', $resolved);
+	}
+
+	public function test_archiver_resolver_fails_on_darwin_when_tar_not_executable(): void
+	{
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('bsdtar binary missing on host (Darwin)');
+		pfb_resolve_archiver('Darwin', static fn(string $cmd): string => '/unused/path', static fn(string $path): bool => false);
 	}
 
 	public function test_archiver_resolver_locates_bsdtar_on_linux(): void
 	{
-		$resolved = pfb_resolve_archiver('Linux', static fn(string $cmd): string => '/custom/bin/bsdtar');
+		$resolved = pfb_resolve_archiver('Linux', static fn(string $cmd): string => '/custom/bin/bsdtar', static fn(string $path): bool => true);
 		$this->assertSame('/custom/bin/bsdtar', $resolved);
+	}
+
+	public function test_archiver_path_with_spaces_is_handled(): void
+	{
+		$resolved = pfb_resolve_archiver('Linux', static fn(string $cmd): string => '/path with spaces/bsdtar', static fn(string $path): bool => true);
+		$this->assertSame('/path with spaces/bsdtar', $resolved);
+		$escaped = escapeshellarg($resolved);
+		$this->assertSame("'/path with spaces/bsdtar'", $escaped);
 	}
 }

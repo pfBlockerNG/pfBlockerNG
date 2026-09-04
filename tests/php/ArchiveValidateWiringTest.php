@@ -238,7 +238,7 @@ final class ArchiveValidateWiringTest extends TestCase
 		$this->assertNotFalse(file_put_contents($member, "203.0.113.7\n"));
 		$output = [];
 		$retval = 1;
-		exec(escapeshellcmd(pfb_test_tar()) . ' -czf ' . escapeshellarg($tgz) . ' -C ' . escapeshellarg($this->dir)
+		exec(escapeshellarg(pfb_test_tar()) . ' -czf ' . escapeshellarg($tgz) . ' -C ' . escapeshellarg($this->dir)
 			. ' member.txt 2>/dev/null', $output, $retval);
 		$this->assertSame(0, $retval, 'the fixture tarball must be built');
 

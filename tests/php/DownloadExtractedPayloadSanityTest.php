@@ -296,12 +296,12 @@ final class DownloadExtractedPayloadSanityTest extends TestCase
 				$this->assertTrue($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE));
 				$this->assertTrue($zip->addFromString('payload.txt', $payload));
 				$this->assertTrue($zip->close());
-				exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($path) . ' >/dev/null 2>&1', $out, $rc);
+				exec(escapeshellarg(pfb_test_tar()) . ' -tf ' . escapeshellarg($path) . ' >/dev/null 2>&1', $out, $rc);
 				$this->assertSame(0, $rc, 'the archive tool cannot read ZIP on this host; the appliance uses bsdtar');
 				return $path;
 			case 'tar':
 				$path = "{$this->dir}/feed.tar";
-				exec(escapeshellcmd(pfb_test_tar()) . ' -cf ' . escapeshellarg($path) . ' -C ' . escapeshellarg($this->dir)
+				exec(escapeshellarg(pfb_test_tar()) . ' -cf ' . escapeshellarg($path) . ' -C ' . escapeshellarg($this->dir)
 					. ' payload.txt', $out, $rc);
 				$this->assertSame(0, $rc, 'the archive tool could not build the fixture');
 				return $path;

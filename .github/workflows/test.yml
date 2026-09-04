@@ -826,30 +826,12 @@ jobs:
       - name: Sync the test environment
         run: uv sync --locked --group dev
 
-      - name: Put bsdtar at /usr/bin/tar
-        # The appliance's /usr/bin/tar is bsdtar, which reads ZIP; Debian's is GNU tar,
-        # which does not. The ADR-45 archive cases and the TOP1M/GeoIP zip publication
-        # cases probe that exact path and SKIP when it cannot read a zip, so without this
-        # they vanish from the run while the suite still reads green (issue #2356).
-        # --no-rename plus an explicit mv, not --rename: dpkg-divert refuses to rename a
-        # file out of an Essential package, and the diversion keeps a future tar upgrade
-        # from overwriting the symlink.
-        #
-        # GNU tar moves to /usr/sbin/tar rather than going away, and the runner's PATH
-        # searches /usr/sbin before /usr/bin, so everything resolving `tar` by NAME still
-        # gets it — dpkg-deb passes the GNU-only --warning=no-timestamp, and actions/cache
-        # and the release tarball step read GNU archives. Hence the two checks: the
-        # absolute path the code under test hardcodes must be bsdtar, and the second is
-        # deliberately a BARE `tar`, because a name lookup is the only thing that proves
-        # what those callers get.
+      - name: Install libarchive-tools for bsdtar
+        # Issue #3195: bootstrap resolves bsdtar cleanly on Linux; install libarchive-tools
+        # without mutating host binaries or dpkg-divert.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libarchive-tools
-          sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
-          sudo mv /usr/bin/tar /usr/sbin/tar
-          sudo ln -s bsdtar /usr/bin/tar
-          /usr/bin/tar --version | grep -q '^bsdtar'
-          tar --version | grep -q 'GNU tar'
 
       - name: Put bsdunzip at /usr/bin/unzip
         # Same reasoning as the tar step above, for the binary issue #3068 moved the ZIP
