@@ -225,8 +225,7 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
 
     The marker's SEVERITY is asserted too (issue #3088): a save-blocking editor
     parse failure is reported as an error (red). Description-length stays a
-    warning. Before #3088 this row pinned warning because yellow-that-blocks-save
-    had not been introduced yet.
+    warning.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
