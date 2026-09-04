@@ -557,25 +557,14 @@ function pfb_editor_mount_regex(bool $enabled): string
 	}
 
 	return <<<'JS'
-var pfbRegexLintExtra = function() {
-	var capEl = document.getElementById('pfb_regex_cap');
-	return { cap: (capEl && capEl.checked) ? '1' : '0' };
-};
-var pfbRegexExEl = document.getElementById('pfb_regex_exception_list');
-var pfbRegexExView = null;
-if (pfbRegexExEl && window.pfbCM) {
-	pfbRegexExView = window.pfbCM.fromTextarea(pfbRegexExEl, {
-		lintUrl: '/pfblockerng/pfblockerng_lint.php',
-		lintExtraParams: pfbRegexLintExtra,
-		lezerSeverity: 'warning'
-	});
-}
 var pfbRegexListEl = document.getElementById('pfb_regex_list');
 if (pfbRegexListEl && window.pfbCM) {
 	window.pfbCM.fromTextarea(pfbRegexListEl, {
 		lintUrl: '/pfblockerng/pfblockerng_lint.php',
-		lintExtraParams: pfbRegexLintExtra,
-		getExceptionsView: function() { return pfbRegexExView; }
+		lintExtraParams: function() {
+			var capEl = document.getElementById('pfb_regex_cap');
+			return { cap: (capEl && capEl.checked) ? '1' : '0' };
+		}
 	});
 }
 JS;
@@ -612,19 +601,9 @@ function pfb_dnsbl_regex_help_text(): string
 		End a line with "<strong>#</strong>" to give it a Description, as in&emsp;"regex (Regular Expression) # Regex Description".<br /><br />
 		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\\#</strong>".<br /><br />
 		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
-		A red editor marker means this editor could not parse the line. That inline checker is an editing aid and may flag a valid Python pattern; move that line to the Regex Exceptions list below if you believe it is valid. Python still validates both lists on save and is authoritative; a pattern Python rejects cannot be excepted and will not load.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 		Changes to this option will require a Force Update to take effect.<br /><br />
 		Patterns use Python regular-expression syntax (the <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">re</a> module) and are validated on save by the same Python engine that runs them &mdash; that result is authoritative. The inline checker in this editor is an editing aid and may flag a valid pattern; if a line saves without an input error, it compiles.';
-}
-
-/** Help for the Regex Exceptions holding pen (issue #3088). */
-function pfb_dnsbl_regex_exception_help_text(): string
-{
-	return 'Patterns this editor could not parse. They still block via DNSBL when Python accepts them.<br /><br />
-		The inline checker does not block save of this field. Python still validates it on save and is authoritative; a pattern Python rejects cannot be excepted and will not load.<br /><br />
-		Lines the editor later accepts are returned to the Regex List on Save or package upgrade.<br /><br />
-		This List is stored as \'Base64\' format in the config.xml file.';
 }
 
 /** Whether regex validation must run for a save request. */
@@ -1429,14 +1408,6 @@ function pfb_cfg_registry(): array
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
-
-		// issue #3088: editor-flag holding pen; still compiled into resolver regex_list.
-		'dnsbl/pfb_regex_exception_list' => [
-			'default'        => '',
-			'read_adapter'   => NULL,
-			'write_adapter'  => NULL,
-			'no_grandfather' => '#3088 Regex Exceptions; \'\' = empty = prior single-list behaviour',
 		],
 
 		// Python opt-in regex length cap ('on'|''). Default ''.
@@ -3662,171 +3633,108 @@ function pfb_dnsbl_regex_validation_errors(string $contents, string $python, boo
 	return [];
 }
 
-/** Suffix for a Python compile-failure diagnostic: it cannot be excepted. */
-function pfb_dnsbl_regex_python_reject_suffix(): string
-{
-	return 'This pattern cannot be moved to the Regex Exceptions list; Python rejected it and it will never match.';
-}
-
-function pfb_dnsbl_regex_returned_notice(int $returned): string
-{
-	return sprintf(
-		'Returned %d pattern(s) to the Regex List because the editor now accepts them.',
-		$returned
-	);
-}
-
-function pfb_dnsbl_regex_upgrade_notice(int $returned, bool $python_rejects_remain): string
-{
-	$parts = [];
-	if ($returned > 0) {
-		$parts[] = pfb_dnsbl_regex_returned_notice($returned);
-	}
-	if ($python_rejects_remain) {
-		$parts[] = 'One or more Regex Exceptions patterns are still rejected by Python and will not load.';
-	}
-	return implode(' ', $parts);
-}
-
 /**
- * @return list<int>
+ * pfb_dnsbl_regex_upgrade_comment_out — issue #3194: on package install/upgrade,
+ * comment out stored Regex List lines the save-time Python probe would reject.
+ * Empty list, infrastructure-only diagnostics, and an unusable interpreter skip
+ * silently. Already-`#` lines are skipped by the probe, so a second upgrade is a
+ * no-op without a special case. Feed regex is not this list and is never rewritten.
  */
-function pfb_dnsbl_regex_parse_flagged_lines(string $raw): array
-{
-	$lines = [];
-	foreach (preg_split('/[,\s]+/', trim($raw)) ?: [] as $part) {
-		if ($part === '' || !ctype_digit($part)) {
+function pfb_dnsbl_regex_upgrade_comment_out(
+	?callable $read = NULL,
+	?callable $write = NULL,
+	?callable $flush = NULL,
+	?callable $status = NULL,
+	?callable $notice = NULL,
+	?callable $probe = NULL,
+	?bool $regex_cap = NULL
+): void {
+	$read ??= static fn(): string => (string) PfbConfig::read('dnsbl/pfb_regex_list');
+	$write ??= 'PfbConfig::writeSystem';
+	$flush ??= 'write_config';
+	$status ??= 'update_status';
+	$notice ??= 'file_notice';
+	$probe ??= static function (string $contents, bool $cap): array {
+		return pfb_dnsbl_regex_validation_errors($contents, PFB_PYTHON_WRAPPER, $cap);
+	};
+	$regex_cap ??= PfbConfig::read('dnsbl/pfb_regex_cap') === PfbToggle::On;
+
+	$text = pfb_b64_text($read());
+	if ($text === '') {
+		return;
+	}
+
+	$blocked = [];
+	foreach (pfb_lint_parse_regex_errors($probe($text, $regex_cap)) as $diag) {
+		if (($diag['severity'] ?? '') !== 'error' || $diag['line'] < 1) {
 			continue;
 		}
-		$n = (int) $part;
-		if ($n > 0) {
-			$lines[$n] = $n;
-		}
+		$blocked[$diag['line']] = $diag['message'];
 	}
-	return array_values($lines);
-}
+	if ($blocked === []) {
+		return;
+	}
 
-/**
- * @param list<int> $flagged_lines
- * @return list<string>
- */
-function pfb_dnsbl_regex_editor_save_errors(string $contents, array $flagged_lines): array
-{
-	if ($flagged_lines === []) {
-		return [];
+	$parts = preg_split('/(\r\n|\n|\r)/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+	$rows = [];
+	$n = count($parts);
+	for ($i = 0; $i < $n; $i += 2) {
+		$line_text = $parts[$i];
+		$nl = $parts[$i + 1] ?? '';
+		if ($line_text === '' && $nl === '' && $i === $n - 1 && $rows !== []) {
+			break;
+		}
+		$rows[] = ['text' => $line_text, 'nl' => $nl];
 	}
-	$lines = preg_split('/\R/', $contents);
-	if ($lines === FALSE) {
-		return [];
-	}
-	$count = count($lines);
-	$errors = [];
-	foreach ($flagged_lines as $lineno) {
-		if ($lineno < 1 || $lineno > $count) {
+
+	ksort($blocked, SORT_NUMERIC);
+	$named = [];
+	foreach ($blocked as $line => $_message) {
+		$idx = $line - 1;
+		if (!isset($rows[$idx])) {
 			continue;
 		}
-		$trimmed = trim($lines[$lineno - 1]);
-		if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+		$named[] = $rows[$idx]['text'];
+	}
+	if ($named === []) {
+		return;
+	}
+
+	krsort($blocked, SORT_NUMERIC);
+	foreach ($blocked as $line => $message) {
+		$idx = $line - 1;
+		if (!isset($rows[$idx])) {
 			continue;
 		}
-		$errors[] = "Regex List line {$lineno}: the editor could not parse this line. Move it to the Regex Exceptions list or fix it.";
+		$orig = $rows[$idx];
+		$why_nl = $orig['nl'] !== '' ? $orig['nl'] : "\n";
+		$why = '# blocked at package upgrade: ' . str_replace(["\r", "\n"], '', $message);
+		array_splice($rows, $idx, 1, [
+			['text' => $why, 'nl' => $why_nl],
+			['text' => '# ' . $orig['text'], 'nl' => $orig['nl']],
+		]);
 	}
-	return $errors;
-}
 
-/**
- * @param list<int> $editor_flagged_exception_lines
- * @return array{main: string, exceptions: string, returned: int}
- */
-function pfb_dnsbl_regex_return_accepted_exceptions(
-	string $main_list,
-	string $exception_list,
-	array $editor_flagged_exception_lines
-): array {
-	if ($exception_list === '') {
-		return ['main' => $main_list, 'exceptions' => '', 'returned' => 0];
+	$rewritten = '';
+	foreach ($rows as $row) {
+		$rewritten .= $row['text'] . $row['nl'];
 	}
-	$flagged = array_fill_keys($editor_flagged_exception_lines, TRUE);
-	$ex_lines = preg_split('/\R/', $exception_list);
-	if ($ex_lines === FALSE) {
-		return ['main' => $main_list, 'exceptions' => $exception_list, 'returned' => 0];
+	if ($rewritten === $text) {
+		return;
 	}
-	$kept = [];
-	$returned_lines = [];
-	foreach ($ex_lines as $i => $line) {
-		$lineno = $i + 1;
-		$trimmed = trim($line);
-		$is_pattern = $trimmed !== '' && !str_starts_with($trimmed, '#');
-		if ($is_pattern && !isset($flagged[$lineno])) {
-			$returned_lines[] = $line;
-		} else {
-			$kept[] = $line;
-		}
-	}
-	if ($kept === [''] && $returned_lines !== []) {
-		$kept = [];
-	}
-	$main = $main_list;
-	if ($returned_lines !== []) {
-		$chunk = implode("\n", $returned_lines);
-		$main = rtrim($main, "\n");
-		$main = ($main === '') ? $chunk : $main . "\n" . $chunk;
-	}
-	return [
-		'main' => $main,
-		'exceptions' => implode("\n", $kept),
-		'returned' => count($returned_lines),
-	];
-}
 
-function pfb_dnsbl_regex_resolver_blob(?string $main_b64, ?string $exception_b64): string
-{
-	$main_b64 = (string) ($main_b64 ?? '');
-	$ex_text = pfb_b64_text($exception_b64);
-	if ($ex_text === '') {
-		return $main_b64;
-	}
-	$main_text = pfb_b64_text($main_b64);
-	if ($main_text === '') {
-		return base64_encode($ex_text);
-	}
-	return base64_encode(rtrim($main_text, "\n") . "\n" . rtrim($ex_text, "\n"));
-}
+	$write('dnsbl/pfb_regex_list', base64_encode($rewritten));
+	$flush('[pfBlockerNG] commented out invalid Regex List patterns at package upgrade');
 
-/**
- * @param list<string> $python_errors
- * @return array{main_b64: string, exception_b64: string, returned: int, python_rejects_remain: bool}
- */
-function pfb_dnsbl_regex_exceptions_upgrade(
-	string $main_b64,
-	string $exception_b64,
-	array $python_errors
-): array {
-	$line_numbers = [];
-	foreach ($python_errors as $error) {
-		if (preg_match('/^line (\d+):/', $error, $match) === 1) {
-			$line_numbers[] = (int) $match[1];
-		}
+	$shown = array_slice($named, 0, 10);
+	$more = count($named) - count($shown);
+	$summary = implode(', ', $shown);
+	if ($more > 0) {
+		$summary .= " and {$more} more";
 	}
-	if ($python_errors !== [] && $line_numbers === []) {
-		return [
-			'main_b64' => $main_b64,
-			'exception_b64' => $exception_b64,
-			'returned' => 0,
-			'python_rejects_remain' => TRUE,
-		];
-	}
-	$result = pfb_dnsbl_regex_return_accepted_exceptions(
-		pfb_b64_text($main_b64),
-		pfb_b64_text($exception_b64),
-		$line_numbers
-	);
-	return [
-		'main_b64' => $result['main'] === '' ? '' : base64_encode($result['main']),
-		'exception_b64' => $result['exceptions'] === '' ? '' : base64_encode($result['exceptions']),
-		'returned' => $result['returned'],
-		'python_rejects_remain' => $python_errors !== [],
-	];
+	$text_notice = "pfBlockerNG commented out invalid Regex List pattern(s) at package upgrade: {$summary}";
+	$status($text_notice);
+	$notice('pfBlockerNG', $text_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
 }
 
 /**
@@ -8985,16 +8893,8 @@ function pfb_lint_diagnostics(
 		// only — pfb_dnsbl_regex_validation_errors() (what save consults) never
 		// sees them, so a long description warns without blocking a save.
 		'regex' => array_merge(
-			array_map(
-				static function (array $diagnostic): array {
-					if ($diagnostic['severity'] === 'error') {
-						$diagnostic['message'] .= ' ' . pfb_dnsbl_regex_python_reject_suffix();
-					}
-					return $diagnostic;
-				},
-				pfb_lint_parse_regex_errors(
-					pfb_dnsbl_regex_validation_errors($content, $python ?? PFB_PYTHON_WRAPPER, $cap, $timeout_bin)
-				)
+			pfb_lint_parse_regex_errors(
+				pfb_dnsbl_regex_validation_errors($content, $python ?? PFB_PYTHON_WRAPPER, $cap, $timeout_bin)
 			),
 			pfb_dnsbl_regex_description_warnings($content)
 		),

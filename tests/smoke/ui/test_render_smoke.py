@@ -139,9 +139,6 @@ PAGE_TABLE: tuple[Page, ...] = (
             # pfb_regex_list live-highlighting asset is wired on the page. Present because
             # the gating pfb_syntax_highlight toggle defaults on for a fresh box.
             "vendor/codemirror/cm-regex.min.js",
-            # issue #3088: Regex Exceptions holding pen, same DNSBL Regex section.
-            "Regex Exceptions",
-            "pfb_regex_exception_list",
             # issue #1541: the renamed PSL-era controls and both PRIVATE-policy
             # toggles render with their outcome-based labels.
             "Wildcard Blocking",
@@ -1587,22 +1584,6 @@ def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: 
         "Download Schemes",
     ):
         assert needle in body, f"DNSBL page is missing the lenient-parsing marker {needle!r}"
-
-
-def test_dnsbl_regex_exceptions_markers_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
-    """Issue #3088 Regex Exceptions holding pen must both appear on the DNSBL page.
-
-    PAGE_TABLE's render oracle matches markers with any(), so a sibling DNSBL
-    marker would still pass if these two were dropped. Dedicated assertions
-    require both the section label and the textarea name.
-    """
-    path = "/pfblockerng/pfblockerng_dnsbl.php"
-    resp = webui.get(path)
-    result = evaluate_render(path, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
-    assert result.ok, f"DNSBL render oracle failed: {result.detail}"
-    body = resp.text
-    assert "Regex Exceptions" in body, "DNSBL page is missing the Regex Exceptions label"
-    assert "pfb_regex_exception_list" in body, "DNSBL page is missing the pfb_regex_exception_list field"
 
 
 def test_dnsbl_redir_exception_and_fill_fields_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

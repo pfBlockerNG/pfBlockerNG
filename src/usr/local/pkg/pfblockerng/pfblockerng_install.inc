@@ -141,34 +141,8 @@ if (
 // hand-wired ADR-02/PFBL-03/#1898 blocks with a single ordered registry.
 pfb_install_settings_family_finalize($pfb_installed_family);
 
-// issue #3088: return Regex Exceptions the editor now accepts; notice remaining Python rejects.
-$pfb_regex_ex_text = pfb_b64_text(PfbConfig::read('dnsbl/pfb_regex_exception_list'));
-if ($pfb_regex_ex_text !== '') {
-	$pfb_regex_cap_on = PfbConfig::read('dnsbl/pfb_regex_cap') === PfbToggle::On;
-	$pfb_regex_ex_errors = pfb_dnsbl_regex_validation_errors(
-		$pfb_regex_ex_text,
-		PFB_PYTHON_WRAPPER,
-		$pfb_regex_cap_on
-	);
-	$pfb_regex_ex_upgrade = pfb_dnsbl_regex_exceptions_upgrade(
-		(string) PfbConfig::read('dnsbl/pfb_regex_list'),
-		(string) PfbConfig::read('dnsbl/pfb_regex_exception_list'),
-		$pfb_regex_ex_errors
-	);
-	if ($pfb_regex_ex_upgrade['returned'] > 0) {
-		PfbConfig::writeSystem('dnsbl/pfb_regex_list', $pfb_regex_ex_upgrade['main_b64']);
-		PfbConfig::writeSystem('dnsbl/pfb_regex_exception_list', $pfb_regex_ex_upgrade['exception_b64']);
-		write_config('[pfBlockerNG] returned Regex Exceptions the editor now accepts');
-	}
-	if ($pfb_regex_ex_upgrade['returned'] > 0 || $pfb_regex_ex_upgrade['python_rejects_remain']) {
-		$pfb_regex_ex_notice = pfb_dnsbl_regex_upgrade_notice(
-			$pfb_regex_ex_upgrade['returned'],
-			$pfb_regex_ex_upgrade['python_rejects_remain']
-		);
-		update_status("\n{$pfb_regex_ex_notice}\n");
-		file_notice('pfBlockerNG', $pfb_regex_ex_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
-	}
-}
+// issue #3194: comment out stored Regex List lines Python would reject.
+pfb_dnsbl_regex_upgrade_comment_out();
 
 // MaxMind Database is no longer pre-installed during package installation
 if (empty($pfb['maxmind_key'])) {

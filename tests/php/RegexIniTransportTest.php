@@ -96,25 +96,28 @@ final class RegexIniTransportTest extends TestCase
 		$this->assertStringNotContainsString('regex_list =', $ini);
 	}
 
-	public function testWriterMergesExceptionListAfterMainWhenFeatureOn(): void
+	/**
+	 * Issue #3194: #3192's pfb_regex_exception_list shipped only in pre-alpha, so it is
+	 * dropped outright with no migration and no fold-back. A value left behind in a dev
+	 * config is inert -- the resolver blob is the MAIN list byte-for-byte, and the stale
+	 * pattern never reaches Unbound.
+	 */
+	public function testWriterIgnoresAStaleExceptionListValueLeftInTheConfig(): void
 	{
-		$main = base64_encode('^main\\.example\\.com$');
-		$exceptions = base64_encode('^held\\.example\\.com$');
-		PfbConfig::writeSystem('dnsbl/pfb_regex', 'on');
-		PfbConfig::writeSystem('dnsbl/pfb_regex_list', $main);
-		PfbConfig::writeSystem('dnsbl/pfb_regex_exception_list', $exceptions);
-		pfb_unbound_python('enabled');
-		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
-		$this->assertNotFalse($ini);
-		$this->assertStringContainsString('[MAIN]', $ini);
-		$this->assertMatchesRegularExpression('/regex_list = [A-Za-z0-9+\/=]+/', $ini);
+		config_set_path(
+			'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_exception_list',
+			base64_encode('^stale\\.example\\.com$')
+		);
+		$stored = base64_encode('^main\\.example\\.com$');
+		$ini = $this->emit('on', $stored);
+
+		$this->assertStringContainsString("regex_list = {$stored}", $ini);
+		$this->assertStringNotContainsString('stale', pfb_b64_text($stored));
 		preg_match('/regex_list = ([A-Za-z0-9+\/=]+)/', $ini, $match);
-		$decoded = pfb_b64_text($match[1]);
-		$this->assertStringContainsString('^main\\.example\\.com$', $decoded);
-		$this->assertStringContainsString('^held\\.example\\.com$', $decoded);
-		$this->assertLessThan(
-			strpos($decoded, '^held\\.example\\.com$'),
-			strpos($decoded, '^main\\.example\\.com$')
+		$this->assertSame(
+			'^main\\.example\\.com$',
+			pfb_b64_text($match[1] ?? ''),
+			'the emitted blob must be the main list alone'
 		);
 	}
 }

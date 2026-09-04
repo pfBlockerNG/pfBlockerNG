@@ -374,11 +374,13 @@ final class LintDiagnosticsTest extends TestCase
 		$this->assertSame(1, $diagnostics[0]['line']);
 		$this->assertSame('error', $diagnostics[0]['severity']);
 		$this->assertStringContainsString("'(unclosed'", $diagnostics[0]['message']);
-		$this->assertMatchesRegularExpression(
-			'/cannot be (moved to|excepted)/i',
+		// issue #3194: the Regex Exceptions holding pen is gone, so the diagnostic must
+		// not offer to move the line into it -- help text pointing at a field that does
+		// not exist is worse than no help at all.
+		$this->assertDoesNotMatchRegularExpression(
+			'/Regex Exceptions|cannot be moved|will never match/i',
 			$diagnostics[0]['message']
 		);
-		$this->assertMatchesRegularExpression('/will never match/i', $diagnostics[0]['message']);
 	}
 
 	public function testDispatcherRegexInfraFailureIsLineOneWarning(): void
