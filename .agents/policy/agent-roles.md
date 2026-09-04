@@ -50,10 +50,12 @@ policy corpus.
 `scripts/check_agent_roles.py` parse this table. Column vocabularies: **Tiers** —
 `top`/`mid`/`small`, primary (default) tier first, `+`-separated; **Mutation** —
 `read-only`/`workspace-write`; **Independent** — `yes`/`no`; **bindings** —
-comma-separated `kind:name` (Claude kinds: `skill` = `.agents/skills/<name>/`,
-`policy` = `.agents/policy/<name>`, `session` = top-level session itself or
-fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
-`.codex/agents/<name>.toml`, plus `skill`/`policy`/`session` as for Claude).
+comma-separated `kind:name` (Claude kinds: `agent` = `.claude/agents/<name>.md`,
+`skill` = `.agents/skills/<name>/`, `policy` = `.agents/policy/<name>`,
+`session` = top-level session itself or fresh native sub-agent it spawn with
+role's contract; Codex kinds: `agent` = `.codex/agents/<name>.toml`, plus
+`skill`/`policy`/`session` as for Claude; Copilot kinds: `agent` =
+`.github/agents/<name>.agent.md`, plus `skill`/`policy`/`session` as for Claude).
 
 <!-- role-registry:begin -->
 
@@ -62,8 +64,8 @@ fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
 | explorer | small+top | read-only | no | session | agent:analyst, agent:analyst-top | agent:analyst, agent:analyst-top |
 | planner | top+mid | read-only | no | session | agent:planner | agent:planner |
 | implementer | small | workspace-write | no | session | agent:implementer | agent:implementer |
-| verifier | small | read-only | yes | session | agent:adversarial-reviewer | agent:adversarial-reviewer |
-| reviewer | small+top+mid | read-only | yes | session | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
+| verifier | small | read-only | yes | agent:adversarial-reviewer | agent:adversarial-reviewer | agent:adversarial-reviewer |
+| reviewer | small+top+mid | read-only | yes | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
 | publisher | small | workspace-write | no | policy:landing.md | policy:landing.md | policy:landing.md |
 | coordinator | small | workspace-write | no | policy:workflow.md | policy:workflow.md | policy:workflow.md |
 
@@ -238,15 +240,17 @@ go through [`model-tiers.conf`](../model-tiers.conf).
 
 ### Claude
 
-Roles = fresh sub-agents of harness, not files: **explorer** take packet-scoped
-brief (small default, top for verdict quality; `Explore` type for ad-hoc read-only
-fan-out); **implementer** execute THE BRIEF in assigned worktree at small tier;
-**verifier** re-derive one step, never on brief author's model, plus read-only
-validators per finding; **reviewer** implement [`landing.md`](landing.md) contract
-(small default, top for large or complex, mid when top unavailable). **planner**,
-**publisher**, **coordinator** = session itself (small-tier delegate may
-publish), following [`delegation.md`](delegation.md), [`landing.md`](landing.md),
-[`workflow.md`](workflow.md).
+Reviewer and verifier roles define `.claude/agents/<role>.md` files with model and
+`effort: medium` pinned in front matter, mirroring Codex and Copilot: **verifier**
+runs `adversarial-reviewer.md` at small tier; **reviewer** implements
+[`landing.md`](landing.md) contract using `adversarial-reviewer.md` (small default),
+`adversarial-reviewer-top.md` (top tier for large/complex PR), and
+`adversarial-reviewer-mid.md` (mid tier when top unavailable). **explorer** takes
+packet-scoped brief (small default, top for verdict quality; `Explore` type for
+ad-hoc read-only fan-out); **implementer** executes THE BRIEF in assigned worktree
+at small tier. **planner**, **publisher**, **coordinator** = session itself
+(small-tier delegate may publish), following [`delegation.md`](delegation.md),
+[`landing.md`](landing.md), [`workflow.md`](workflow.md).
 
 ### Codex
 

@@ -47,16 +47,17 @@ _ROLES_DOC = ".agents/policy/agent-roles.md"
 _TIERS_CONF = ".agents/model-tiers.conf"
 _CODEX_AGENTS = ".codex/agents"
 _COPILOT_AGENTS = ".github/agents"
+_CLAUDE_AGENTS = ".claude/agents"
 _CLAUDE_WORKFLOWS = ".claude/workflows"
 _SKILLS = ".agents/skills"
 _POLICY = ".agents/policy"
-
 # Role surfaces: full validation triggers iff a changed path is one of these
 # files or sits under one of these directories.
 _TRIGGER_FILES = (_ROLES_DOC, _TIERS_CONF, "scripts/check_agent_roles.py")
 _TRIGGER_DIRS = (
     f"{_CODEX_AGENTS}/",
     f"{_COPILOT_AGENTS}/",
+    f"{_CLAUDE_AGENTS}/",
     f"{_CLAUDE_WORKFLOWS}/",
     f"{_SKILLS}/",
     f"{_POLICY}/",
@@ -75,7 +76,7 @@ _HEADER = (
 )
 _TIERS = ("top", "mid", "small")
 _MUTATIONS = ("read-only", "workspace-write")
-_CLAUDE_KINDS = ("workflow", "skill", "policy")
+_CLAUDE_KINDS = ("agent", "workflow", "skill", "policy")
 _CODEX_KINDS = ("agent", "skill", "policy")
 _COPILOT_KINDS = ("agent", "skill", "policy")
 _TIER_KEYS = tuple(f"{tier.upper()}_{vendor}" for tier in _TIERS for vendor in ("CLAUDE", "CODEX", "COPILOT"))
@@ -265,6 +266,60 @@ def _check_claude_workflows(
                 )
 
 
+def _check_claude_agents(
+    root: Path, agent_roles: dict[str, list[Role]], tiers_conf: dict[str, str], problems: list[str]
+) -> None:
+    agent_model: dict[str, str | None] = {}
+    for target, bound in sorted(agent_roles.items()):
+        path = root / _CLAUDE_AGENTS / f"{target}.md"
+        names = "/".join(sorted(role.name for role in bound))
+        agent_model[target] = None
+        if not path.is_file():
+            problems.append(f"role(s) {names}: missing Claude agent {_CLAUDE_AGENTS}/{target}.md")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        fields = _agent_md_front_matter(text)
+        if not fields:
+            problems.append(f"{_CLAUDE_AGENTS}/{target}.md: missing YAML front matter")
+            continue
+        if not fields.get("description"):
+            problems.append(f"{_CLAUDE_AGENTS}/{target}.md: front matter has no description")
+        model = fields.get("model")
+        allowed = {tiers_conf.get(f"{tier.upper()}_CLAUDE") for tier in _common_tiers(bound)} - {None}
+        if model is not None:
+            agent_model[target] = model
+        if model is None or model not in allowed:
+            problems.append(
+                f"{_CLAUDE_AGENTS}/{target}.md model {model!r} is not a Claude model of "
+                f"the tier(s) declared for role(s) {names}"
+            )
+        review_roles = sorted({role.name for role in bound} & {"reviewer", "verifier"})
+        if review_roles and isinstance(model, str):
+            required_effort = "medium"
+            effort = fields.get("effort")
+            if effort != required_effort:
+                problems.append(
+                    f"{_CLAUDE_AGENTS}/{target}.md effort {effort!r} != required "
+                    f"{required_effort!r} for Claude reviewer/verifier role(s) {'/'.join(review_roles)}"
+                )
+        mutations = {role.mutation for role in bound}
+        mutation = _agent_md_mutation(text)
+        if len(mutations) > 1:
+            problems.append(f"{_CLAUDE_AGENTS}/{target}.md is bound by roles with conflicting Mutation: {names}")
+        elif mutation != next(iter(mutations)):
+            problems.append(
+                f"{_CLAUDE_AGENTS}/{target}.md mutation marker {mutation!r} != role Mutation "
+                f"'{next(iter(mutations))}' ({names})"
+            )
+    for role in {role.name: role for bound in agent_roles.values() for role in bound}.values():
+        bound_agents = [target for kind, target in role.claude if kind == "agent"]
+        primary = tiers_conf.get(f"{role.tiers[0].upper()}_CLAUDE")
+        if primary is not None and not any(agent_model.get(target) == primary for target in bound_agents):
+            problems.append(
+                f"role '{role.name}': no Claude agent binding runs its primary tier '{role.tiers[0]}' ({primary})"
+            )
+
+
 def _check_codex_agents(
     root: Path, agent_roles: dict[str, list[Role]], tiers_conf: dict[str, str], problems: list[str]
 ) -> None:
@@ -406,10 +461,12 @@ def _check_file_bindings(root: Path, roles: list[Role], problems: list[str]) -> 
 def _check_orphans(root: Path, roles: list[Role], problems: list[str]) -> None:
     claimed_agents = {target for role in roles for kind, target in role.codex if kind == "agent"}
     claimed_copilot = {target for role in roles for kind, target in role.copilot if kind == "agent"}
+    claimed_claude = {target for role in roles for kind, target in role.claude if kind == "agent"}
     claimed_workflows = {target for role in roles for kind, target in role.claude if kind == "workflow"}
     for directory, suffix, claimed, side in (
         (root / _CODEX_AGENTS, ".toml", claimed_agents, "Codex role"),
         (root / _COPILOT_AGENTS, ".agent.md", claimed_copilot, "Copilot role"),
+        (root / _CLAUDE_AGENTS, ".md", claimed_claude, "Claude agent"),
         (root / _CLAUDE_WORKFLOWS, ".js", claimed_workflows, "Claude workflow"),
     ):
         if not directory.is_dir():
@@ -442,12 +499,15 @@ def validate(root: Path) -> tuple[int, list[str]]:
     _check_sections(doc, roles, problems)
     _check_file_bindings(root, roles, problems)
     workflow_roles: dict[str, list[Role]] = {}
+    claude_agent_roles: dict[str, list[Role]] = {}
     agent_roles: dict[str, list[Role]] = {}
     copilot_roles: dict[str, list[Role]] = {}
     for role in roles:
         for kind, target in role.claude:
             if kind == "workflow":
                 workflow_roles.setdefault(target, []).append(role)
+            elif kind == "agent":
+                claude_agent_roles.setdefault(target, []).append(role)
         for kind, target in role.codex:
             if kind == "agent":
                 agent_roles.setdefault(target, []).append(role)
@@ -455,6 +515,7 @@ def validate(root: Path) -> tuple[int, list[str]]:
             if kind == "agent":
                 copilot_roles.setdefault(target, []).append(role)
     _check_claude_workflows(root, workflow_roles, tiers_conf, problems)
+    _check_claude_agents(root, claude_agent_roles, tiers_conf, problems)
     _check_codex_agents(root, agent_roles, tiers_conf, problems)
     _check_copilot_agents(root, copilot_roles, tiers_conf, problems)
     _check_orphans(root, roles, problems)

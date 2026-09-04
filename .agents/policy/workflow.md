@@ -170,6 +170,7 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
 | Branch | code, named `issue/{NN}-{slug}` (`scripts/agent/work-branch.sh`) |
 | Pull request | the change + evidence summary, linked to its ticket; review lives here |
 | Repo documents | durable norms: specs, policy, context docs |
+| Seat handoff | `/srv/Smoke/docs/handoff/HANDOFF-<seat>.md` on smoke-1, one stable file per seat, overwritten — `scp <file> smoke:/srv/Smoke/docs/handoff/`. Never committed to the repo; never dated. |
 | Nowhere | committed plan/handoff ledgers; transcript dumps |
 
 ## needs-info, ready-for-human, blocked, cancellation

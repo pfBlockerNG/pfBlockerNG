@@ -23,8 +23,8 @@ See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](
 - **Never request Copilot code review** (owner, 2026-08-01) or enable its rule/auto-request;
   strip only that rule when bundled. Triage one that arrives, but never gate-count it or
   publicly restate the ban.
-- **Review effort:** use the fixed matrix in [`delegation.md`](delegation.md) "Effort per
-  role" for every leg, round, and verifier; never inherit or override it.
+- **Review effort & agent selection:** coordinator selects agent, model, and reasoning lever
+  per [`delegation.md`](delegation.md) for each leg; never inherit without explicit configuration.
 - **Four independent read-only legs review the whole PR:** contract, correctness/hostile
   input, test honesty, and over-engineering. Round 1 covers all. Later small-tier rounds
   focus on that leg's recorded-head delta in full context and run only affected legs.
@@ -71,7 +71,7 @@ Mechanics that hold for every pass:
 - **Executed evidence.** Every blocking correctness claim grounded in executed probe (command + output) where executable off-appliance. Probes targeted — never whole-suite runs for own sake. Before returning, reviewer try to REFUTE own blocking findings, drop or downgrade anything it cannot reproduce.
 - **Structured findings:** severity (`blocking` / `nitpick` / `outside-diff`), location, explanation, reproduction evidence, suggested fix — plus per-file verdict for EVERY changed file (findings / considered-and-fine / not-examined-because). Missing per-file coverage = incomplete — re-run.
 - **Previous-review lookup, first step of every leg's pass.** List PR's top-level comments, find latest audit comment **of same leg**. None → review full PR diff fresh. One found → same full-PR diff, focus on `git diff <recorded-SHA>...HEAD`, using its pointers two ways: (a) ground covered with clean verdict not re-reviewed unless new commits touch it; (b) every defect it recorded re-checked — commits landed since → verify actually addressed; if not, hunt committer's rationale (thread replies, verdicts, commit messages); unaddressed defect with no rationale re-raised as blocking. Either way, audit comment record current head SHA for next round.
-- **Model by leg**, never by diff size (tiers per `.agents/model-tiers.conf`; owner-approved from 100-PR findings audit, 2026-08-08): correctness + hostile inputs → **top** (cross-system/state/environment catches live here; mid take over iff top unavailable); contract conformance → **mid**; test honesty → **small**, with executed mutations mandatory — execution discipline, not model size, drive that leg. **Mutations run against a private copy under that scratch root; the shared checkout is never edited** — three legs read it concurrently, and a mutated tree hands them the wrong code (#3093); over-engineering → **top** (owner directive 2026-08-21; seeing the shorter form and the platform equivalent is judgment, not scanning — mid take over iff top unavailable). Re-review rounds run every leg on small tier. Audit comments record leg, model and effort.
+- **Model by leg**, never by diff size (owner-approved 2026-08-08): correctness + hostile inputs → **top** (cross-system/state/environment catches live here; mid take over iff top unavailable); contract conformance → **mid**; test honesty → **small**, with executed mutations mandatory — execution discipline, not model size, drive that leg. **Mutations run against a private copy under that scratch root; the shared checkout is never edited** — three legs read it concurrently, and a mutated tree hands them the wrong code (#3093); over-engineering → **top** (owner directive 2026-08-21; seeing the shorter form and the platform equivalent is judgment, not scanning — mid take over iff top unavailable, and pony review lens match pony scope).
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
 ### CodeRabbit (asked for at the end — path is coderabbit.md)
@@ -129,7 +129,7 @@ Commit only after the finding this fix answers is posted (see "Replies and the a
   add no generated-by, model, client, or harness footer.
 - **Deferred findings → tracking issue in SAME public repo** (finding already public on PR — routing it private disclose nothing and hide work; genuinely undisclosed vulnerability you found yourself still follow private disclosure rules). Body self-contained: finding, `file:line`, why out of scope for this PR, validated issue-gate block (producer, supported path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and link back to review comment; link issue in thread reply. Optionally also fix it in own branch + PR — issue is required artifact.
 - **One audit comment on the PR per leg** (leg name, **head SHA reviewed** — pointer
-  that leg's next re-review keys on — plus the model and effort it ran at), plus one
+  that leg's next re-review keys on — plus harness, model, and reasoning lever), plus one
   orchestrator comment noting CodeRabbit's
   review if one arrived and per-finding resolution across all legs.
 

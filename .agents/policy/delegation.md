@@ -29,7 +29,7 @@ skills**. Named GitHub issues still spawn. Delegation for non-trivial, multi-ste
 that session itself, tests included, never spawned onward. **Ticket pickup is
 orchestrator per workflow.md**: the top-level session named the issue spawns a work
 agent; it does not implement the ticket. The work agent still does small one-step
-fixes directly (max handful of lines in one production file + couple tests + few doc
+fixes directly (handful of lines in one production file + couple tests + doc
 files). Hard constraint on ALL direct work: session context usage ≤ 50% — past 50%
 session MUST delegate. Owner override: "implement here" / "no spawn".
 
@@ -43,20 +43,27 @@ session MUST delegate. Owner override: "implement here" / "no spawn".
   field stay spawner's to fill, nested delegate's defect is spawner's defect at gate above.
   Delegating whole brief downward unexamined still a defect — split work, not responsibility.
 - **Planner's brief to small-tier implementer follow delegation contract below** — vague or
-  wrong brief is planner bug, and handful of real shipped defects trace directly to brief bugs.
+  wrong brief is planner bug, and shipped defects trace directly to brief bugs.
 - **New implementation-plan ADRs stop now** (wayfinder map #1383): big work charted as map of
   tickets with committed specs ([`workflow.md`](workflow.md)); unimplemented ADRs migrate to
   specs and tickets (#1389); implemented ADRs stay immutable historical records. Retired
   ADR-phase orchestration (`/adr-phase`, `phase-step`) live on only in those records.
 - **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
   Implementer cheaper, not exempt.
-- **Effort per role, selected through each client's native surface** (never rely on
-  inheritance): implementers run at `xhigh`; review and verification roles run at `medium`,
-  except `gpt-5.6-luna`, which runs at `high`. This matrix is fixed — no reviewer or
-  verifier runs at `xhigh`. Codex custom-agent files carry the effective effort because
-  their `model_reasoning_effort` overrides spawn values; other clients set the same matrix
-  through their native agent/session control. This bullet is the single source of truth;
-  [`landing.md`](landing.md) and every procedure point here instead of restating it.
+- **Agent and reasoning lever selection:** coordinator selects agent, model, and
+  reasoning lever (effort, thinking budget, deliberation depth) in active
+  harness per role, not a rigid matrix:
+  - **Implementers:** Maximize deliberation depth (`xhigh`, max budget) to meet
+    invariants and coverage.
+  - **Reviewers:** Match deliberation and capability to lens demands:
+    *correctness + hostile inputs* needs deep reasoning against logic, races, and
+    security boundaries; *test honesty* requires critical behavioral evaluation (contract
+    defense, vacuity checks, fault realism, and executed scratch mutations as probes,
+    not mere framework output); *over-engineering (Ponytail)* needs simplicity and
+    taste; *contract conformance* needs structured spec checks.
+  - **Independence & auditability:** Review legs need fresh, independent context
+    (never self-grading). Audit comments record invocation parameters (harness,
+    model, reasoning lever, or `n/a`).
 
 ## The delegation contract (brief → handoff → gate)
 
