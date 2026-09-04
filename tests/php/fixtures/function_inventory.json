@@ -334,6 +334,33 @@
             }
         ]
     },
+    "pfb_alerts_whitelist_needs_write": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "data",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "domain",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "wildcard",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_alerts_whitelist_unlock_tokens": {
         "returnsRef": false,
         "returnType": "array",

@@ -360,7 +360,11 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     * ADD via the form (``addwhitelistdom`` + ``dnsbl_exclude`` not 'true'): the
       handler appends ``domain`` (and ``www.domain``) and writes the base64 node.
     * AFTER: ``domain`` is present in the decoded node.
-    * RESTORE via ``entry_delete=delete_domain``: the handler removes it.
+    * WILDCARD while exact is still listed (issue #3198): ``.domain`` is appended
+      and the exact line survives. Do not ``delete_domainwildcard`` here — that
+      path also unsets the exact apex (unchanged ``entry_delete``).
+    * RESTORE via ``entry_delete=delete_domain``: the handler removes the exact
+      line; leftover ``.domain`` is removed by the later wildcard-delete or ``finally``.
     * Repeat with a wildcard entry and ``entry_delete=delete_domainwildcard`` so the
       broad allow→block cache-policy branch executes. Belt-and-suspenders config reset
       in ``finally``.
@@ -392,6 +396,24 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
         assert domain in _suppression_entries(vm, CFG_WHITELIST), (
             f"{domain} not written to the DNSBL whitelist config node after addwhitelistdom"
         )
+
+        # issue #3198: exact apex already listed must still persist .apex; append, never replace.
+        resp = _post_action(
+            webui,
+            {
+                "addwhitelistdom": "Add",
+                "domain": domain,
+                "table": "DNSBL",
+                "dnsbl_wildcard": "true",
+                "dnsbl_exclude": "false",
+            },
+        )
+        assert not looks_like_login_page(resp.text), "wildcard-after-exact POST returned the login form"
+        entries_after_wildcard = _suppression_entries(vm, CFG_WHITELIST)
+        assert f".{domain}" in entries_after_wildcard, (
+            f".{domain} not written when exact apex was already listed (issue #3198)"
+        )
+        assert domain in entries_after_wildcard, f"{domain} exact line must survive appending the wildcard"
 
         # RESTORE via entry_delete=delete_domain (reverse transition + entry_delete coverage).
         resp = _post_action(webui, {"entry_delete": "delete_domain", "domain": domain, "table": "DNSBL"})
