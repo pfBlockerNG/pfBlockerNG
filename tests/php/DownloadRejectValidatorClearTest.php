@@ -667,9 +667,9 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	{
 		$this->write('payload.txt', $bytes);
 		$path = "{$this->dir}/body.tar";
-		exec('/usr/bin/tar -cf ' . escapeshellarg($path) . ' -C ' . escapeshellarg($this->dir)
+		exec(escapeshellcmd(pfb_test_tar()) . ' -cf ' . escapeshellarg($path) . ' -C ' . escapeshellarg($this->dir)
 			. ' payload.txt', $out, $rc);
-		$this->assertSame(0, $rc, '/usr/bin/tar could not build the fixture');
+		$this->assertSame(0, $rc, 'the archive tool could not build the fixture');
 		return $path;
 	}
 
@@ -703,10 +703,10 @@ final class DownloadRejectValidatorClearTest extends TestCase
 		$this->assertTrue($zip->open($probe, ZipArchive::CREATE | ZipArchive::OVERWRITE));
 		$this->assertTrue($zip->addFromString('probe.txt', "192.0.2.1\n"));
 		$this->assertTrue($zip->close());
-		exec('/usr/bin/tar -tf ' . escapeshellarg($probe) . ' >/dev/null 2>&1', $out, $rc);
+		exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($probe) . ' >/dev/null 2>&1', $out, $rc);
 		unlink($probe);
 		if ($rc !== 0) {
-			$this->markTestSkipped('/usr/bin/tar cannot read ZIP on this host; the appliance uses bsdtar');
+			$this->markTestSkipped('the archive tool cannot read ZIP on this host; the appliance uses bsdtar');
 		}
 	}
 

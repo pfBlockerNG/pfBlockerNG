@@ -72,26 +72,21 @@ Deep pfSense-runtime integration (config apply, service reloads, pf/Unbound
 wiring, URL/MIME validation that shells out to `/usr/bin/file` or resolves
 hosts) stays the live-VM smoke's job — see `legacy/ADRs/ADR_04_VM_Smoke_Tests/`.
 
-## Host archive toolchain (why some cases skip locally)
+## Host archive toolchain
 
-The package execs absolute paths, and on FreeBSD `/usr/bin/tar` is **bsdtar** and
-`/usr/bin/unzip` is **bsdunzip** — both libarchive. Debian puts GNU tar and Info-ZIP
-there instead, and they are not interchangeable: GNU tar rejects the shipped
-`PFB_TAR_EXTRACT_FLAGS` (`--no-fflags`) with exit 64 before reading the archive. Cases
-that drive a real extraction therefore skip on such a host, naming that reason.
+On FreeBSD and macOS, `/usr/bin/tar` is **bsdtar** (libarchive). On Linux,
+`bsdtar` is provided by `libarchive-tools` (typically at `/usr/bin/bsdtar`).
 
-CI installs the appliance's binaries rather than living with the gap, and a dev host
-can do the same (`test.yml`, jobs "Put bsdtar at /usr/bin/tar" and "Put bsdunzip at
-/usr/bin/unzip"):
+The PHPUnit test bootstrap resolves the platform archiver cleanly and asserts
+`bsdtar` is executable, crashing fast on startup if missing on Linux.
+Linux development seats install it via `sh scripts/agent/setup-agent-tools.sh`
+or directly via:
 
 ```sh
 sudo apt-get install -y --no-install-recommends libarchive-tools
-sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
-sudo mv /usr/bin/tar /usr/sbin/tar && sudo ln -s bsdtar /usr/bin/tar
 ```
 
-`/usr/sbin` precedes `/usr/bin` on PATH, so a bare `tar` still resolves to GNU tar for
-everything else. Reverse it with `dpkg-divert --remove` after moving the binary back.
+No `dpkg-divert` or host binary mutation is required.
 
 ## Adding a test
 

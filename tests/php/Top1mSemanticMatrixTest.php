@@ -357,7 +357,7 @@ PHP;
 
 	private function tarReadsZip(string $archive): bool
 	{
-		exec('/usr/bin/tar -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
+		exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
 		return $status === 0;
 	}
 

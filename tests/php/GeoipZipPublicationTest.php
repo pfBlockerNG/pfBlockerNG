@@ -73,9 +73,9 @@ final class GeoipZipPublicationTest extends TestCase
 			'geoip/one.dat' => "one\n",
 			'geoip/two.dat' => "two\n",
 		]);
-		exec('/usr/bin/tar -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
+		exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
 		if ($status !== 0) {
-			$this->markTestSkipped('/usr/bin/tar cannot read ZIP on this host; pfSense uses bsdtar');
+			$this->markTestSkipped('the archiver cannot read ZIP on this host; pfSense uses bsdtar');
 		}
 		$base = "{$this->dir}/geoip-feed";
 		$target = "{$this->dir}/geoip-share";

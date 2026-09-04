@@ -106,6 +106,37 @@ if ($pfb_test_timeout_rc !== 0 || !is_executable($pfb_test_timeout)) {
 }
 $GLOBALS['pfb']['timeout'] = $pfb_test_timeout;
 unset($pfb_test_timeout_out, $pfb_test_timeout_rc, $pfb_test_timeout);
+/**
+ * Issue #3195: resolve the host's bsdtar binary.
+ *
+ * FreeBSD and macOS ship bsdtar at /usr/bin/tar.
+ * Linux development seats provide bsdtar via libarchive-tools.
+ * If bsdtar cannot be resolved on the host, crash fast with RuntimeException.
+ *
+ * @param ?callable(string): string $lookup
+ */
+function pfb_resolve_archiver(?string $os_family = NULL, ?callable $lookup = NULL): string
+{
+	$family = $os_family ?? PHP_OS_FAMILY;
+	if ($family === 'BSD' || $family === 'Darwin') {
+		return '/usr/bin/tar';
+	}
+	$finder = $lookup ?? static function (string $cmd): string {
+		return trim((string) shell_exec('command -v ' . escapeshellarg($cmd) . ' 2>/dev/null'));
+	};
+	$tar = $finder('bsdtar');
+	if ($tar === '' || ($lookup === NULL && !is_executable($tar))) {
+		throw new RuntimeException("bsdtar binary missing on host ({$family})");
+	}
+	return $tar;
+}
+
+function pfb_test_tar(): string
+{
+	return $GLOBALS['pfb']['tar'] ?? '/usr/bin/tar';
+}
+
+$GLOBALS['pfb']['tar'] = pfb_resolve_archiver();
 
 // Snapshot the SHIPPED $pfb['mime_types'] allow-list exactly as the just-loaded
 // production source defines it, before any test mutates/unsets $GLOBALS['pfb']

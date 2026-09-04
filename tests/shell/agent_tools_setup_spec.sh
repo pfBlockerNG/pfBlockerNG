@@ -356,14 +356,14 @@ GROK
   AfterEach 'cleanup'
 
   It 'installs only missing Linux prerequisites through sudo for a non-root user'
-    export DEBIAN_MISSING_PACKAGES=ca-certificates,curl,git
+    export DEBIAN_MISSING_PACKAGES=ca-certificates,curl,git,libarchive-tools
     When run env DEBIAN_TEST_UID=1000 sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$apt_log" should equal "$(printf '%s\n' \
       'sudo:apt-get update' \
       'apt-get:update' \
-      'sudo:apt-get install -y ca-certificates curl git' \
-      'apt-get:install -y ca-certificates curl git')"
+      'sudo:apt-get install -y ca-certificates curl git libarchive-tools' \
+      'apt-get:install -y ca-certificates curl git libarchive-tools')"
   End
 
   It 'runs apt-get directly as Linux root and installs only the missing package subset'

@@ -478,13 +478,13 @@ PHP;
 	private function requireZipTarSupport(string $archive): void
 	{
 		if (!$this->tarReadsZip($archive)) {
-			$this->markTestSkipped('/usr/bin/tar cannot read ZIP on this host; pfSense uses bsdtar');
+			$this->markTestSkipped('the archiver cannot read ZIP on this host; pfSense uses bsdtar');
 		}
 	}
 
 	private function tarReadsZip(string $archive): bool
 	{
-		exec('/usr/bin/tar -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
+		exec(escapeshellcmd(pfb_test_tar()) . ' -tf ' . escapeshellarg($archive) . ' >/dev/null 2>&1', $output, $status);
 		return $status === 0;
 	}
 

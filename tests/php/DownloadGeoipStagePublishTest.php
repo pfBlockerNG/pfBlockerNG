@@ -112,7 +112,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$archive = "{$this->dir}/{$name}";
 		$retval = 1;
 		$output = array();
-		exec('cd ' . escapeshellarg($this->build) . ' && /usr/bin/tar -czf ' . escapeshellarg($archive)
+		exec('cd ' . escapeshellarg($this->build) . ' && ' . escapeshellcmd(pfb_test_tar()) . ' -czf ' . escapeshellarg($archive)
 			. ' ' . escapeshellarg('GeoLite2-Country_20260801'), $output, $retval);
 		$this->assertSame(0, $retval, 'the fixture archive must be built');
 		return $archive;
@@ -131,7 +131,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	private function extractCmd(string $archive, string $into, int $blocks): string
 	{
-		return pfb_extract_cmd('/usr/bin/tar -xf ' . escapeshellarg($archive) . ' --strip=1 -C '
+		return pfb_extract_cmd(escapeshellcmd(pfb_test_tar()) . ' -xf ' . escapeshellarg($archive) . ' --strip=1 -C '
 			. escapeshellarg($into) . ' >/dev/null 2>&1', $blocks);
 	}
 
@@ -165,10 +165,10 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$this->assertNotFalse(file_put_contents("{$probe}/src/probe.txt", "probe\n"));
 		$output = array();
 		$retval = 1;
-		exec('/usr/bin/tar -cf ' . escapeshellarg("{$probe}/probe.tar") . ' -C '
+		exec(escapeshellcmd(pfb_test_tar()) . ' -cf ' . escapeshellarg("{$probe}/probe.tar") . ' -C '
 			. escapeshellarg("{$probe}/src") . ' probe.txt 2>/dev/null', $output, $retval);
 		$this->assertSame(0, $retval, 'the capability probe must be able to build a one-member tar');
-		exec('/usr/bin/tar -xf ' . escapeshellarg("{$probe}/probe.tar") . ' ' . PFB_TAR_EXTRACT_FLAGS
+		exec(escapeshellcmd(pfb_test_tar()) . ' -xf ' . escapeshellarg("{$probe}/probe.tar") . ' ' . PFB_TAR_EXTRACT_FLAGS
 			. ' -C ' . escapeshellarg("{$probe}/out") . ' 2>/dev/null', $output, $retval);
 		if ($retval === 0) {
 			$this->assertFileExists("{$probe}/out/probe.txt",
@@ -181,7 +181,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	private function tarVersion(): string
 	{
 		$version = array();
-		exec('/usr/bin/tar --version 2>&1', $version);
+		exec(escapeshellcmd(pfb_test_tar()) . ' --version 2>&1', $version);
 		return trim((string) ($version[0] ?? 'unknown tar'));
 	}
 
@@ -202,11 +202,9 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$retval = $this->shippedExtractionFlagsExitCode();
 		if ($retval !== 0) {
 			$this->markTestSkipped(
-				'/usr/bin/tar on this host (' . $this->tarVersion() . ') rejects the shipped '
+				'The archiver on this host (' . $this->tarVersion() . ') rejects the shipped '
 				. 'PFB_TAR_EXTRACT_FLAGS with exit ' . $retval . ' -- it is not libarchive. The appliance '
-				. 'ships bsdtar and CI installs it; to run this case here: apt-get install libarchive-tools '
-				. '&& dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar '
-				. '&& mv /usr/bin/tar /usr/sbin/tar && ln -s bsdtar /usr/bin/tar'
+				. 'ships bsdtar; install libarchive-tools to run this case.'
 			);
 		}
 	}
@@ -379,7 +377,7 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		$archive = "{$this->dir}/feed.tar.gz";
 		$retval = 1;
 		$output = array();
-		exec('cd ' . escapeshellarg($this->build) . ' && /usr/bin/tar -czf ' . escapeshellarg($archive)
+		exec('cd ' . escapeshellarg($this->build) . ' && ' . escapeshellcmd(pfb_test_tar()) . ' -czf ' . escapeshellarg($archive)
 			. ' GeoLite2-Country_20260801/GeoLite2-Country.mmdb GeoLite2-Country_20260801/sub/two.csv',
 			$output, $retval);
 		$this->assertSame(0, $retval);

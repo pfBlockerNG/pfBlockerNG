@@ -31,7 +31,7 @@ install_from_url() {
 install_linux_prerequisites() {
 	require_tool dpkg-query
 	set --
-	for package in ca-certificates curl git; do
+	for package in ca-certificates curl git libarchive-tools; do
 		if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null |
 			grep -q 'install ok installed'; then
 			set -- "$@" "$package"

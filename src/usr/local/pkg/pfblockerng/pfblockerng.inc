@@ -1160,7 +1160,8 @@ function pfb_archive_probe(string $canonical_type): ?array {
 		case 'application/x-bzip2':
 			return array('/usr/bin/bzip2', '-t');
 		case 'application/x-tar':
-			return array('/usr/bin/tar', '-tf');
+			global $pfb;
+			return array($pfb['tar'] ?? '/usr/bin/tar', '-tf');
 		default:
 			return NULL;
 	}
@@ -1180,6 +1181,10 @@ function pfb_validate_archive(string $file, string $canonical_type, ?callable $r
 	$argv[] = $file;    // file appended here, escaped in the runner
 	if ($runner === NULL) {
 		$runner = function (array $a): int {
+			global $pfb;
+			if ($a[0] === '/usr/bin/tar' && isset($pfb['tar'])) {
+				$a[0] = $pfb['tar'];
+			}
 			$cmd = implode(' ', array_map('escapeshellarg', $a));
 			exec($cmd . ' >/dev/null 2>&1', $out, $rv);
 			return (int) $rv;
@@ -1256,9 +1261,11 @@ function pfb_reject_detail_summary(array $reject_detail): string {
 // rc != 0 here and must be rejected, not fail-open extracted. A genuinely intact
 // archive always lists rc 0, so this rejects nothing legitimate.
 function pfb_archive_member_names(string $file, string $canonical_type): ?array {
+	global $pfb;
+	$tar_bin = $pfb['tar'] ?? '/usr/bin/tar';
 	$lister = $canonical_type === 'application/zip'
 		? '/usr/bin/unzip -Z1 '
-		: '/usr/bin/tar -tf ';
+		: escapeshellcmd($tar_bin) . ' -tf ';
 	$output = array();
 	$retval = 1;
 	exec($lister . escapeshellarg($file) . ' 2>/dev/null', $output, $retval);
@@ -4424,9 +4431,10 @@ function pfb_geoip_extract_tar_to_share(
 	// published only once tar reports success, so a failure part-way -- a killed
 	// child at issue #2658's ceiling, ENOSPC, a member libarchive refuses -- leaves
 	// the share already in service byte-identical.
+	$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
 	if (!pfb_stage_publish_dir_merge($pfb['geoipshare'],
-	    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-		exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
+	    static function (string $staged) use ($file_dwn_esc, $tar_bin, &$output, &$retval): int {
+		exec(pfb_extract_cmd("{$tar_bin} -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 		return $retval;
 	})) {
 		unlink_if_exists($file_download);
@@ -15613,9 +15621,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					// success, so a failure part-way leaves the publication already
 					// in service byte-identical.
 					$retval = pfb_download_initial_retval();
+					$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
 					if (!pfb_stage_publish_dir_merge($head_download,
-					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
+					    static function (string $staged) use ($file_dwn_esc, $tar_bin, &$output, &$retval): int {
+						exec(pfb_extract_cmd("{$tar_bin} -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);
 						return $retval;
 					})) {
 						pfb_logger("\n[pfb_download] {$type} zip " . pfb_stage_publish_failure_note($retval), 2);
@@ -15627,9 +15636,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				// ADR-46: stdout extraction -- member names never reach the filesystem.
 				$retval = pfb_download_initial_retval();
+				$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
 				if (!pfb_stage_publish($head_download,
-				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-					exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+				    static function (string $staged) use ($file_dwn_esc, $tar_bin, &$output, &$retval): int {
+					exec(pfb_extract_cmd("{$tar_bin} -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 					return $retval;
 				})) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
@@ -15667,7 +15677,8 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				$header_esc = escapeshellarg($top1m_stage);
 				$strip = $top1m_target_dir ? ' --strip=1' : '';
-				exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc}{$strip} " . PFB_TAR_EXTRACT_FLAGS . " -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
+				$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
+				exec(pfb_extract_cmd("{$tar_bin} -xf {$file_dwn_esc}{$strip} " . PFB_TAR_EXTRACT_FLAGS . " -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					rmdir_recursive($top1m_stage);
@@ -15799,7 +15810,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			*/
 	
 			// Check if ZIP archive contains xlsx files
-			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
+			global $pfb;
+			$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
+			$xlsxtest = exec("{$tar_bin} -tf {$file_dwn_esc} 2>/dev/null");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
 				// issue #2684: the helper unpacks the workbook into its OWN per-run temp
 				// directory (`mktemp -d "${TMPDIR:-/tmp}/pfb.XXXXXXXX"`), which the
@@ -15839,10 +15852,11 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				$reject_detail = array();
 				$inner_rejected = FALSE;
 				$pfb_sanity = NULL;
+				$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
 				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, $list_download,
+				    static function (string $staged) use ($file_dwn_esc, $list_download, $tar_bin,
 				        &$output, &$retval, &$reject_detail, &$inner_rejected, &$pfb_sanity): int {
-					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
+					exec(pfb_extract_cmd("set -o pipefail; {$tar_bin} -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
 					if ($retval !== 0) {
 						return $retval;
 					}
@@ -16074,7 +16088,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					$pfb_sanity = NULL;
 					if (!pfb_stage_publish($orig_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval, &$pfb_sanity): int {
-						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+						global $pfb;
+						$tar_bin = escapeshellcmd($pfb['tar'] ?? '/usr/bin/tar');
+						exec(pfb_extract_cmd("{$tar_bin} -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 						$pfb_sanity = pfb_extracted_text_sanity($staged, $retval);
 						return $pfb_sanity === NULL ? $retval : pfb_download_initial_retval();
 					})) {

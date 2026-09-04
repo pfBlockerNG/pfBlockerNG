@@ -296,9 +296,9 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		// and publishes the members only on a clean exit, so its -C is the staged
 		// path rather than the live publication. issue #2659: the disk-writing mode
 		// carries the restriction flags; the stdout mode below must not.
-		$this->assertStringContainsString('exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} " . PFB_TAR_EXTRACT_FLAGS . " --strip=1 -C " . escapeshellarg($staged) . " >/dev/null 2>&1"), $output, $retval);', $scope);
-		$this->assertStringContainsString(
-			'exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);', $scope);
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar.* -xf {\$file_dwn_esc} " \. PFB_TAR_EXTRACT_FLAGS \. " --strip=1 -C " \. escapeshellarg\(\$staged\) \. " >\/dev\/null 2>&1"\), \$output, \$retval\);/', $scope);
+		$this->assertMatchesRegularExpression(
+			'/exec\(pfb_extract_cmd\(".*tar.* -xOf {\$file_dwn_esc} > " \. escapeshellarg\(\$staged\)\), \$output, \$retval\);/', $scope);
 		// issue #2169: the stdout mode publishes through the staged helper; the
 		// directory mode publishes through the staged merge helper.
 		$this->assertStringContainsString('if (!pfb_stage_publish($head_download,', $scope);
@@ -321,7 +321,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($top1m);
 		$this->assertNotFalse($blacklist);
 		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
-		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar.* -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
@@ -515,7 +515,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringNotContainsString('-C {$pfb[\'geoipshare\']}', $body);
 		$this->assertStringNotContainsString('-C {$header_esc}', $body);
 		$this->assertStringContainsString('pfb_archive_unsafe_member', $body);
-		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $body);
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar.* -xf .*\\$output, \\$retval\);/', $body);
 	}
 
 	/**

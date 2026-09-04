@@ -84,7 +84,7 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 	{
 		$found = array();
 		foreach (self::$sources as $path => $source) {
-			if (!preg_match_all('#/usr/bin/tar -x([a-zA-Z]*)f#', $source, $m, PREG_OFFSET_CAPTURE)) {
+			if (!preg_match_all('#(?:/usr/bin/tar|\{\$tar_bin\}) -x([a-zA-Z]*)f#', $source, $m, PREG_OFFSET_CAPTURE)) {
 				continue;
 			}
 			foreach ($m[0] as $i => [$call, $offset]) {
@@ -223,7 +223,7 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 	{
 		$output = array();
 		$retval = 1;
-		exec('/usr/bin/tar --version 2>&1', $output, $retval);
+		exec(escapeshellcmd(pfb_test_tar()) . ' --version 2>&1', $output, $retval);
 		return $retval === 0 && $output !== array() ? trim((string) $output[0]) : 'unknown tar';
 	}
 
@@ -253,7 +253,7 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 		$archive = "{$this->dir}/foreign.tar";
 		$output = array();
 		$retval = 1;
-		exec('/usr/bin/tar -cf ' . escapeshellarg($archive)
+		exec(escapeshellcmd(pfb_test_tar()) . ' -cf ' . escapeshellarg($archive)
 			. ' --uid 12345 --gid 12345 --uname pfbfake --gname pfbfake -C '
 			. escapeshellarg("{$this->dir}/build") . ' member.dat 2>/dev/null', $output, $retval);
 		if ($retval !== 0) {
@@ -276,7 +276,7 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 		$this->assertTrue(mkdir($target, 0755));
 		$output = array();
 		$retval = 1;
-		exec(pfb_extract_cmd('/usr/bin/tar -xf ' . escapeshellarg($archive) . $flags . ' -C '
+		exec(pfb_extract_cmd(escapeshellcmd(pfb_test_tar()) . ' -xf ' . escapeshellarg($archive) . $flags . ' -C '
 			. escapeshellarg($target) . ' 2>&1'), $output, $retval);
 		$this->assertSame(0, $retval,
 			"extraction with '{$flags}' failed on " . $this->tarVersion() . ': ' . implode(' ', $output));
@@ -322,7 +322,7 @@ final class DownloadExtractRestrictiveFlagsTest extends TestCase
 		$probe = "{$this->dir}/repack_" . basename(dirname($path)) . '.tar';
 		$output = array();
 		$retval = 1;
-		exec('/usr/bin/tar -cf ' . escapeshellarg($probe) . ' -C ' . escapeshellarg(dirname($path))
+		exec(escapeshellcmd(pfb_test_tar()) . ' -cf ' . escapeshellarg($probe) . ' -C ' . escapeshellarg(dirname($path))
 			. ' ' . escapeshellarg(basename($path)) . ' 2>/dev/null', $output, $retval);
 		$this->assertSame(0, $retval, 'the extracted file must be re-archivable for its metadata to be read');
 		$bytes = file_get_contents($probe);
