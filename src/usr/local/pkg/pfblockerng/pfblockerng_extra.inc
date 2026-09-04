@@ -8043,6 +8043,29 @@ function pfb_alerts_unlock_drop(string $type, array $store, array $tokens): arra
 }
 
 /**
+ * Whether Reports/Alerts addwhitelistdom must append to the DNSBL whitelist.
+ *
+ * Decode keys are the line host: exact "example.com" vs wildcard ".example.com".
+ * A wildcard write must not be skipped just because the exact apex is already
+ * listed — TLD/zone children stay blocked until the leading-dot line exists.
+ *
+ * @param array<string, string> $data
+ */
+function pfb_alerts_whitelist_needs_write(array $data, string $domain, bool $wildcard): bool
+{
+	if ($domain === '') {
+		return FALSE;
+	}
+	if (isset($data['.' . $domain])) {
+		return FALSE;
+	}
+	if ($wildcard) {
+		return TRUE;
+	}
+	return !isset($data[$domain]);
+}
+
+/**
  * Unlock-store tokens that match what addwhitelistdom actually wrote.
  *
  * For every written token, also drop www.<token> — the whitelist matcher

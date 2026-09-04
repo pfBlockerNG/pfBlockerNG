@@ -1060,8 +1060,10 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 			$savemsg .= gettext(" from DNSBL. You may need to flush your OS/Browser DNS Cache!");
 
-			// Save changes
-			if (!isset($clists['dnsblwhitelist']['data'][$domain])) {
+			// Save changes. Exact apex already listed must not skip a
+			// leading-dot wildcard write — TLD/zone children stay blocked
+			// until ".{$domain}" exists.
+			if (pfb_alerts_whitelist_needs_write($clists['dnsblwhitelist']['data'], $domain, $wildcard)) {
 				$data = '';
 				if (isset($clists['dnsblwhitelist']) && is_array($clists['dnsblwhitelist']['data'])) {
 					foreach ($clists['dnsblwhitelist']['data'] as $line) {
