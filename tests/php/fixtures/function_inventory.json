@@ -2468,6 +2468,61 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_dnsbl_regex_upgrade_comment_out": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "read",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "write",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "flush",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "status",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "notice",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "probe",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "regex_cap",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_dnsbl_regex_validation_errors": {
         "returnsRef": false,
         "returnType": "array",

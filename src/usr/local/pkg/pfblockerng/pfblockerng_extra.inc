@@ -3634,6 +3634,110 @@ function pfb_dnsbl_regex_validation_errors(string $contents, string $python, boo
 }
 
 /**
+ * pfb_dnsbl_regex_upgrade_comment_out — issue #3194: on package install/upgrade,
+ * comment out stored Regex List lines the save-time Python probe would reject.
+ * Empty list, infrastructure-only diagnostics, and an unusable interpreter skip
+ * silently. Already-`#` lines are skipped by the probe, so a second upgrade is a
+ * no-op without a special case. Feed regex is not this list and is never rewritten.
+ */
+function pfb_dnsbl_regex_upgrade_comment_out(
+	?callable $read = NULL,
+	?callable $write = NULL,
+	?callable $flush = NULL,
+	?callable $status = NULL,
+	?callable $notice = NULL,
+	?callable $probe = NULL,
+	?bool $regex_cap = NULL
+): void {
+	$read ??= static fn(): string => (string) PfbConfig::read('dnsbl/pfb_regex_list');
+	$write ??= 'PfbConfig::writeSystem';
+	$flush ??= 'write_config';
+	$status ??= 'update_status';
+	$notice ??= 'file_notice';
+	$probe ??= static function (string $contents, bool $cap): array {
+		return pfb_dnsbl_regex_validation_errors($contents, PFB_PYTHON_WRAPPER, $cap);
+	};
+	$regex_cap ??= PfbConfig::read('dnsbl/pfb_regex_cap') === PfbToggle::On;
+
+	$text = pfb_b64_text($read());
+	if ($text === '') {
+		return;
+	}
+
+	$blocked = [];
+	foreach (pfb_lint_parse_regex_errors($probe($text, $regex_cap)) as $diag) {
+		if (($diag['severity'] ?? '') !== 'error' || $diag['line'] < 1) {
+			continue;
+		}
+		$blocked[$diag['line']] = $diag['message'];
+	}
+	if ($blocked === []) {
+		return;
+	}
+
+	$parts = preg_split('/(\r\n|\n|\r)/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+	$rows = [];
+	$n = count($parts);
+	for ($i = 0; $i < $n; $i += 2) {
+		$line_text = $parts[$i];
+		$nl = $parts[$i + 1] ?? '';
+		if ($line_text === '' && $nl === '' && $i === $n - 1 && $rows !== []) {
+			break;
+		}
+		$rows[] = ['text' => $line_text, 'nl' => $nl];
+	}
+
+	ksort($blocked, SORT_NUMERIC);
+	$named = [];
+	foreach ($blocked as $line => $_message) {
+		$idx = $line - 1;
+		if (!isset($rows[$idx])) {
+			continue;
+		}
+		$named[] = $rows[$idx]['text'];
+	}
+	if ($named === []) {
+		return;
+	}
+
+	krsort($blocked, SORT_NUMERIC);
+	foreach ($blocked as $line => $message) {
+		$idx = $line - 1;
+		if (!isset($rows[$idx])) {
+			continue;
+		}
+		$orig = $rows[$idx];
+		$why_nl = $orig['nl'] !== '' ? $orig['nl'] : "\n";
+		$why = '# blocked at package upgrade: ' . str_replace(["\r", "\n"], '', $message);
+		array_splice($rows, $idx, 1, [
+			['text' => $why, 'nl' => $why_nl],
+			['text' => '# ' . $orig['text'], 'nl' => $orig['nl']],
+		]);
+	}
+
+	$rewritten = '';
+	foreach ($rows as $row) {
+		$rewritten .= $row['text'] . $row['nl'];
+	}
+	if ($rewritten === $text) {
+		return;
+	}
+
+	$write('dnsbl/pfb_regex_list', base64_encode($rewritten));
+	$flush('[pfBlockerNG] commented out invalid Regex List patterns at package upgrade');
+
+	$shown = array_slice($named, 0, 10);
+	$more = count($named) - count($shown);
+	$summary = implode(', ', $shown);
+	if ($more > 0) {
+		$summary .= " and {$more} more";
+	}
+	$text_notice = "pfBlockerNG commented out invalid Regex List pattern(s) at package upgrade: {$summary}";
+	$status($text_notice);
+	$notice('pfBlockerNG', $text_notice, 'pfBlockerNG', '/pfblockerng/pfblockerng_dnsbl.php', 2);
+}
+
+/**
  * pfb_header_reserved_error — reject a source Header that collides with a
  * package-synthesized name (issue #1270): DNSBL-IP and the 9 GeoIP continent
  * aliases write to the SAME <header><vtype>.txt path a user list's Header
