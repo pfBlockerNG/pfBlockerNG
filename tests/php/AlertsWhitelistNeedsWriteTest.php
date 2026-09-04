@@ -81,7 +81,7 @@ final class AlertsWhitelistNeedsWriteTest extends TestCase
 			'addwhitelistdom must consult the exact-vs-wildcard write gate, not isset($data[$domain]) alone'
 		);
 		$this->assertStringNotContainsString(
-			'if (!isset($clists[\'dnsblwhitelist\'][\'data\'][$domain]))',
+			'isset($clists[\'dnsblwhitelist\'][\'data\'][$domain])',
 			$region,
 			'the old exact-only isset skip must not remain in addwhitelistdom'
 		);
