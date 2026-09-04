@@ -138,8 +138,8 @@ def _lint_markers(content: Locator) -> Locator:
     """Gutter lint markers (``.cm-gutter-lint .cm-lint-marker``) for a ``.cm-content`` editor.
 
     Scoped to the enclosing ``.cm-editor`` (the gutter and the content div are siblings
-    under the same editor root). DNSBL's Regex section now mounts two editors (main +
-    Exceptions); callers must pass the intended ``.cm-content``. Class names verified against the SHIPPED
+    under the same editor root) -- cheap insurance even on the pages this file drives,
+    which each mount exactly one CM instance. Class names verified against the SHIPPED
     vendor bundle (module docstring) and the vendored ``@codemirror/lint`` source
     (``dist/index.js:767`` builds ``"cm-lint-marker cm-lint-marker-" + severity``;
     ``:837`` builds the ``cm-gutter-lint`` gutter class).
@@ -182,11 +182,7 @@ def _regex_editor(page: Page) -> Locator:
         page.locator('a[data-toggle="collapse"][href="#Python_regex_list_panel-body"]').click()
     expect(body).to_be_visible(timeout=JS_TIMEOUT_MS)
 
-    content = (
-        section.locator("#pfb_regex_list")
-        .locator("xpath=preceding-sibling::div[contains(concat(' ', @class, ' '), ' cm-editor ')][1]")
-        .locator(".cm-content")
-    )
+    content = section.locator(".cm-content")
     expect(content).to_be_visible(timeout=JS_TIMEOUT_MS)
     _clear_and_type(content, "")
     return content
@@ -223,9 +219,10 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
     ``lezerErrorLint()`` alone. Two-way: type ``(`` -> marker appears, clear back to empty
     -> marker disappears (proves the assertion is a real branch, not always-green).
 
-    The marker's SEVERITY is asserted too (issue #3088): a save-blocking editor
-    parse failure is reported as an error (red). Description-length stays a
-    warning.
+    The marker's SEVERITY is asserted too (issue #3059): a parse failure is reported as
+    a warning, never an error, because this grammar is a second implementation of
+    Python's regex parser and Python gates the save. Before #3059 this row was
+    severity-blind and stayed green in both directions.
     """
     page = browser_page
     _open(page, webui, DNSBL_PAGE)
@@ -239,11 +236,11 @@ def test_regex_editor_offline_bracket_lint_marks_instantly(
 
     _clear_and_type(content, "(")
     expect(markers).to_have_count(1, timeout=LINT_TIMEOUT_MS)
-    # issue #3088: the SEVERITY, not just the presence. @codemirror/lint builds the
+    # issue #3059: the SEVERITY, not just the presence. @codemirror/lint builds the
     # class as "cm-lint-marker cm-lint-marker-" + severity (vendored dist/index.js:767),
-    # so this is the live-gutter pin of save-blocking red -- the node tests assert on
-    # the diagnostic object, not on what the browser renders from the bundle.
-    expect(markers).to_have_class(re.compile(r"\bcm-lint-marker-error\b"), timeout=LINT_TIMEOUT_MS)
+    # so this is the only place the red-to-yellow change is observable -- the node tests
+    # assert on the diagnostic object, not on what the browser renders from the bundle.
+    expect(markers).to_have_class(re.compile(r"\bcm-lint-marker-warning\b"), timeout=LINT_TIMEOUT_MS)
     _shot(page, screenshot_dir, "lint_regex_offline_after_marked")
 
     _clear_and_type(content, "")

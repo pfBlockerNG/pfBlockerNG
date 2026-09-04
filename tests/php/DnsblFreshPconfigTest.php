@@ -115,7 +115,6 @@ final class DnsblFreshPconfigTest extends TestCase
 			'tld_allow_itld'         => 'xn--p1ai',
 			'tld_allow_bgtld'        => 'app,dev',
 			'pfb_regex_list'         => base64_encode("foo\nbar"),
-			'pfb_regex_exception_list' => base64_encode('(?i)held'),
 			'pfb_noaaaa_list'        => base64_encode('example.com'),
 			'pfb_gp_bypass_list'     => base64_encode('192.0.2.1'),
 			'whitelist'              => base64_encode('192.0.2.0/24'),
@@ -136,7 +135,6 @@ final class DnsblFreshPconfigTest extends TestCase
 		$this->assertSame(['xn--p1ai'], $pconfig['tld_allow_itld']);
 		$this->assertSame(['app', 'dev'], $pconfig['tld_allow_bgtld']);
 		$this->assertSame("foo\nbar", $pconfig['pfb_regex_list']);
-		$this->assertSame('(?i)held', $pconfig['pfb_regex_exception_list']);
 		$this->assertSame('example.com', $pconfig['pfb_noaaaa_list']);
 		$this->assertSame('192.0.2.1', $pconfig['pfb_gp_bypass_list']);
 		$this->assertSame('192.0.2.0/24', $pconfig['whitelist']);

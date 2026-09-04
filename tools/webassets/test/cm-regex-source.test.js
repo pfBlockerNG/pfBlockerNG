@@ -81,14 +81,18 @@ test("serverLint is wired with lang 'regex' behind an opts.lintUrl guard", () =>
 
 test("lezerErrorLint is added alongside serverLint behind the same opts.lintUrl guard", () => {
   const block = lintUrlGuardBlock(src);
-  assert.ok(
-    block.includes("lezerErrorLint("),
-    "expected the lezerErrorLint(...) call INSIDE the opts.lintUrl guard block",
-  );
+  assert.ok(block.includes("lezerErrorLint()"), "expected the lezerErrorLint() call INSIDE the opts.lintUrl guard block");
 });
 
-test("fromTextarea forwards getExceptionsView into Lezer lint options", () => {
-  assert.match(src, /getExceptionsView:\s*opts\.getExceptionsView/);
+// issue #3194: the editor must never gate a save, so it carries no transport for
+// telling the server what it flagged. The hidden `<name>_editor_flags` input and
+// the exceptions-view plumbing #3192 added are gone; only the Python validator on
+// the save path may reject a pattern.
+test("fromTextarea emits no editor-flag transport and no exceptions plumbing", () => {
+  assert.ok(!src.includes("_editor_flags"), "expected no `<name>_editor_flags` hidden input");
+  assert.ok(!src.includes("flaggedLineNumbers"), "expected no flaggedLineNumbers() import or call");
+  assert.ok(!src.includes("getExceptionsView"), "expected no exceptions-view plumbing");
+  assert.ok(src.includes("mountTextarea("), "positive control: the textarea is still mounted");
 });
 
 test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-magic constraint)", () => {

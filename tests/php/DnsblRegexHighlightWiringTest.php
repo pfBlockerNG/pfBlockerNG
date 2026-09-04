@@ -22,21 +22,18 @@ final class DnsblRegexHighlightWiringTest extends TestCase
 
 		$this->assertStringContainsString('cm-regex.min.js?v=', $asset);
 		$this->assertStringContainsString("getElementById('pfb_regex_list')", $init);
-		$this->assertStringContainsString("getElementById('pfb_regex_exception_list')", $init);
 		$this->assertStringContainsString('window.pfbCM', $init);
 		$this->assertStringContainsString('pfbCM.fromTextarea(', $init);
 		$this->assertStringContainsString("lintUrl: '/pfblockerng/pfblockerng_lint.php'", $init);
 		$this->assertStringContainsString("getElementById('pfb_regex_cap')", $init);
 	}
 
-	public function testRegexInitializationMountsMainAndExceptionsWithLiveCapMapping(): void
+	public function testRegexInitializationHasOneReachableMountAndLiveCapMapping(): void
 	{
 		$init = pfb_dnsbl_editor_render(TRUE)['regex'];
 
-		$this->assertSame(2, substr_count($init, 'pfbCM.fromTextarea('));
-		$this->assertGreaterThanOrEqual(1, substr_count($init, "lintUrl: '/pfblockerng/pfblockerng_lint.php'"));
+		$this->assertSame(1, substr_count($init, 'pfbCM.fromTextarea('));
+		$this->assertSame(1, substr_count($init, "lintUrl: '/pfblockerng/pfblockerng_lint.php'"));
 		$this->assertStringContainsString("(capEl && capEl.checked) ? '1' : '0'", $init);
-		$this->assertStringContainsString("lezerSeverity: 'warning'", $init);
-		$this->assertStringContainsString('getExceptionsView:', $init);
 	}
 }

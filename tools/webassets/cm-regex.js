@@ -3,60 +3,22 @@
 // src/usr/local/www/pfblockerng/vendor/codemirror/cm-regex.min.js. Keep this file tiny --
 // test/cm-regex-source.test.js and tests/php/DnsblRegexHighlightWiringTest.php pin the
 // real call sites (textarea sync, DOM wiring, aria-label) this file exercises.
-import { EditorView } from "@codemirror/view";
 import { pfbRegexList, pfbPlainList } from "./lezer-pfb-regex-list/src/index.js";
-import {
-  serverLint,
-  lezerErrorLint,
-  lezerErrorDiagnostics,
-  flaggedLineNumbers,
-} from "./cm-lint.js";
+import { serverLint, lezerErrorLint } from "./cm-lint.js";
 import { mountTextarea } from "./cm-shell.js";
 
 // Server-side validation (pfb_text_area_decode(), preg_match/re.compile) stays
 // authoritative -- this is a highlighter, not a validator.
-
-function ensureFlaggedInput(textarea) {
-  const name = `${textarea.name}_editor_flags`;
-  const form = textarea.form;
-  let el = form ? form.elements.namedItem(name) : document.querySelector(`[name="${CSS.escape(name)}"]`);
-  if (el && "length" in el && !("value" in el)) el = el[0];
-  if (!el) {
-    el = document.createElement("input");
-    el.type = "hidden";
-    el.name = name;
-    textarea.insertAdjacentElement("afterend", el);
-  }
-  return el;
-}
-
-function syncFlaggedInput(textarea, state, lintOptions) {
-  const input = ensureFlaggedInput(textarea);
-  input.value = flaggedLineNumbers(state, lezerErrorDiagnostics(state, lintOptions));
-}
 
 export function fromTextarea(textarea, opts) {
   const extraExtensions = [];
   // issue #1732 step 2: advisory server lint (POST pfblockerng_lint.php) + the offline
   // Lezer bracket lint, both opt-in via opts.lintUrl -- no opts means no lintUrl means
   // byte-identical behaviour to before this slice.
-  let lintOptions = null;
   if (opts && opts.lintUrl) {
-    lintOptions = {
-      severity: opts.lezerSeverity ?? "error",
-      getExceptionsView: opts.getExceptionsView,
-    };
-    extraExtensions.push(
-      ...serverLint(opts.lintUrl, "regex", opts.lintExtraParams),
-      lezerErrorLint(lintOptions),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) syncFlaggedInput(textarea, update.state, lintOptions);
-      }),
-    );
+    extraExtensions.push(...serverLint(opts.lintUrl, "regex", opts.lintExtraParams), lezerErrorLint());
   }
-  const view = mountTextarea(textarea, pfbRegexList(), extraExtensions);
-  if (lintOptions) syncFlaggedInput(textarea, view.state, lintOptions);
-  return view;
+  return mountTextarea(textarea, pfbRegexList(), extraExtensions);
 }
 
 // issue #1875 -- plain "one entry per line, optional # comment" list fields (no regex
