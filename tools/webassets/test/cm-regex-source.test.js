@@ -81,7 +81,14 @@ test("serverLint is wired with lang 'regex' behind an opts.lintUrl guard", () =>
 
 test("lezerErrorLint is added alongside serverLint behind the same opts.lintUrl guard", () => {
   const block = lintUrlGuardBlock(src);
-  assert.ok(block.includes("lezerErrorLint()"), "expected the lezerErrorLint() call INSIDE the opts.lintUrl guard block");
+  assert.ok(
+    block.includes("lezerErrorLint("),
+    "expected the lezerErrorLint(...) call INSIDE the opts.lintUrl guard block",
+  );
+});
+
+test("fromTextarea forwards getExceptionsView into Lezer lint options", () => {
+  assert.match(src, /getExceptionsView:\s*opts\.getExceptionsView/);
 });
 
 test("cm-lint.js uses a plain XMLHttpRequest, never fetch() or FormData (csrf-magic constraint)", () => {

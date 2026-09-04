@@ -48,6 +48,14 @@ final class DnsblRegexHelpCheckerTest extends TestCase
 		);
 	}
 
+	public function testHelpNamesTheRegexExceptionsHoldingPenAndRedEditorFlag(): void
+	{
+		$help = self::helpText();
+		self::assertMatchesRegularExpression('/Regex Exceptions/i', $help);
+		self::assertMatchesRegularExpression('/red|error/i', $help);
+		self::assertDoesNotMatchRegularExpression('/regex101/i', $help);
+	}
+
 	public function testHelpLinksThePythonReSyntaxReference(): void
 	{
 		self::assertStringContainsString(

@@ -95,4 +95,26 @@ final class RegexIniTransportTest extends TestCase
 		$ini = $this->emit('on', '');
 		$this->assertStringNotContainsString('regex_list =', $ini);
 	}
+
+	public function testWriterMergesExceptionListAfterMainWhenFeatureOn(): void
+	{
+		$main = base64_encode('^main\\.example\\.com$');
+		$exceptions = base64_encode('^held\\.example\\.com$');
+		PfbConfig::writeSystem('dnsbl/pfb_regex', 'on');
+		PfbConfig::writeSystem('dnsbl/pfb_regex_list', $main);
+		PfbConfig::writeSystem('dnsbl/pfb_regex_exception_list', $exceptions);
+		pfb_unbound_python('enabled');
+		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($ini);
+		$this->assertStringContainsString('[MAIN]', $ini);
+		$this->assertMatchesRegularExpression('/regex_list = [A-Za-z0-9+\/=]+/', $ini);
+		preg_match('/regex_list = ([A-Za-z0-9+\/=]+)/', $ini, $match);
+		$decoded = pfb_b64_text($match[1]);
+		$this->assertStringContainsString('^main\\.example\\.com$', $decoded);
+		$this->assertStringContainsString('^held\\.example\\.com$', $decoded);
+		$this->assertLessThan(
+			strpos($decoded, '^held\\.example\\.com$'),
+			strpos($decoded, '^main\\.example\\.com$')
+		);
+	}
 }

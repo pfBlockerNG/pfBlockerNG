@@ -2879,8 +2879,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				$regex_cnt = $py_regex_cnt;
 			} else {
 				$regex_cnt = 0;
-				if (isset($pfb['dnsbl_regex_list'])) {
-					$regex_cnt = count(pfb_text_area_decode($pfb['dnsbl_regex_list'], TRUE, FALSE, FALSE)) ?: 0;
+				$regex_blob = pfb_dnsbl_regex_resolver_blob(
+					$pfb['dnsbl_regex_list'] ?? '',
+					$pfb['dnsbl_regex_exception_list'] ?? ''
+				);
+				if ($regex_blob !== '') {
+					$regex_cnt = count(pfb_text_area_decode($regex_blob, TRUE, FALSE, FALSE)) ?: 0;
 				}
 			}
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_Regex';

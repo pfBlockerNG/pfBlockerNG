@@ -196,6 +196,6 @@ final class DnsblTabLayoutUiTest extends TestCase
 	{
 		$source = self::source();
 		$this->assertStringNotContainsString('background:#fafafa', $source);
-		$this->assertSame(6, substr_count($source, "->setAttribute('style', 'width: 100%')"));
+		$this->assertSame(7, substr_count($source, "->setAttribute('style', 'width: 100%')"));
 	}
 }

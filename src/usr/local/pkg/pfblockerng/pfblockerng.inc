@@ -3386,6 +3386,7 @@ function pfb_global() {
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= PfbConfig::read('dnsbl/pfb_regex_list');	// DNSBL Resolver python regex list
+	$pfb['dnsbl_regex_exception_list'] = PfbConfig::read('dnsbl/pfb_regex_exception_list');	// issue #3088 editor-flag holding pen
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver Python opt-in regex length cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
@@ -11235,8 +11236,12 @@ regex_cap	= {$regex_cap}
 forwarding	= {$forwarding}
 
 EOF;
-	if ($pfb['dnsbl_regex'] === PfbToggle::On && isset($pfb['dnsbl_regex_list']) && !empty($pfb['dnsbl_regex_list'])) {
-		$pfb_py_conf .= "regex_list = {$pfb['dnsbl_regex_list']}\n";
+	$regex_blob = pfb_dnsbl_regex_resolver_blob(
+		$pfb['dnsbl_regex_list'] ?? '',
+		$pfb['dnsbl_regex_exception_list'] ?? ''
+	);
+	if ($pfb['dnsbl_regex'] === PfbToggle::On && $regex_blob !== '') {
+		$pfb_py_conf .= "regex_list = {$regex_blob}\n";
 	}
 
 	if ($pfb['dnsbl_noaaaa'] === PfbToggle::On && isset($pfb['dnsbl_noaaaa_list']) && !empty($pfb['dnsbl_noaaaa_list'])) {

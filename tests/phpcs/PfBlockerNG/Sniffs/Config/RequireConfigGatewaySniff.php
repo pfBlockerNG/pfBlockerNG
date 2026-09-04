@@ -188,6 +188,7 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_list',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_exception_list',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cname',
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow',

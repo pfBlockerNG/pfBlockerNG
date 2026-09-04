@@ -374,6 +374,11 @@ final class LintDiagnosticsTest extends TestCase
 		$this->assertSame(1, $diagnostics[0]['line']);
 		$this->assertSame('error', $diagnostics[0]['severity']);
 		$this->assertStringContainsString("'(unclosed'", $diagnostics[0]['message']);
+		$this->assertMatchesRegularExpression(
+			'/cannot be (moved to|excepted)/i',
+			$diagnostics[0]['message']
+		);
+		$this->assertMatchesRegularExpression('/will never match/i', $diagnostics[0]['message']);
 	}
 
 	public function testDispatcherRegexInfraFailureIsLineOneWarning(): void

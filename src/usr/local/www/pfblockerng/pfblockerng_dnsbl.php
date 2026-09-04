@@ -104,6 +104,7 @@ $pconfig['tld_allow_itld']	= pfb_csv_list($pfb['dconfig']['tld_allow_itld'] ?? N
 $pconfig['tld_allow_bgtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_bgtld'] ?? NULL);
 $pconfig['pfb_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');
 $pconfig['pfb_regex_list']	= pfb_b64_text($pfb['dconfig']['pfb_regex_list'] ?? NULL);
+$pconfig['pfb_regex_exception_list']	= pfb_b64_text($pfb['dconfig']['pfb_regex_exception_list'] ?? NULL);
 $pconfig['pfb_noaaaa_list']	= pfb_b64_text($pfb['dconfig']['pfb_noaaaa_list'] ?? NULL);
 $pconfig['pfb_gp_bypass_list']	= pfb_b64_text($pfb['dconfig']['pfb_gp_bypass_list'] ?? NULL);
 $pconfig['action']		= PfbConfig::read('dnsbl/action');
@@ -566,7 +567,7 @@ if ($_POST) {
 				'top1m_token', 'aliasaddr_in', 'aliasaddr_out', 'aliasports_in', 'aliasports_out') as $pfb_text_field) {
 			$_POST[$pfb_text_field] = pfb_sanitize_text((string) ($_POST[$pfb_text_field] ?? ''));
 		}
-		foreach (array('pfb_regex_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
+		foreach (array('pfb_regex_list', 'pfb_regex_exception_list', 'pfb_noaaaa_list', 'pfb_gp_bypass_list', 'whitelist', 'tld_wildcard_exclusion', 'tld_wildcard_blacklist') as $pfb_text_area_field) {
 			$_POST[$pfb_text_area_field] = pfb_sanitize_text_area((string) ($_POST[$pfb_text_area_field] ?? ''));
 		}
 
@@ -658,6 +659,9 @@ if ($_POST) {
 		if (!mb_detect_encoding($_POST['pfb_regex_list'], 'ASCII', TRUE)) {
 			$input_errors[] = 'DNSBL Regex list contains non-ascii characters';
 		}
+		if (!mb_detect_encoding($_POST['pfb_regex_exception_list'], 'ASCII', TRUE)) {
+			$input_errors[] = 'DNSBL Regex Exceptions list contains non-ascii characters';
+		}
 
 		// ADR-08: IDN Blocking mode must be one of the <select> options. PFB_FILTER_WORD
 		// only checks shape, so without this an out-of-vocabulary value (e.g. a tampered
@@ -744,11 +748,22 @@ if ($_POST) {
 			$pfb_regex_ready,
 			$_POST['pfb_regex'] ?? ''
 		)) {
-			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), PFB_PYTHON_WRAPPER, ($_POST['pfb_regex_cap'] ?? '') === 'on') as $regex_error) {
+			$pfb_regex_cap_on = ($_POST['pfb_regex_cap'] ?? '') === 'on';
+			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_list'] ?? ''), PFB_PYTHON_WRAPPER, $pfb_regex_cap_on) as $regex_error) {
 				$input_errors[] = 'Customlist pfb_regex_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 			}
+			foreach (pfb_dnsbl_regex_validation_errors((string) ($_POST['pfb_regex_exception_list'] ?? ''), PFB_PYTHON_WRAPPER, $pfb_regex_cap_on) as $regex_error) {
+				$input_errors[] = 'Customlist pfb_regex_exception_list: ' . htmlspecialchars($regex_error, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+			}
 		}
-
+		if (array_key_exists('pfb_regex_list_editor_flags', $_POST)) {
+			foreach (pfb_dnsbl_regex_editor_save_errors(
+				(string) ($_POST['pfb_regex_list'] ?? ''),
+				pfb_dnsbl_regex_parse_flagged_lines((string) $_POST['pfb_regex_list_editor_flags'])
+			) as $regex_error) {
+				$input_errors[] = $regex_error;
+			}
+		}
 		// Validate DNSBL VIP address
 		// [ ADR-13 ] Auto-create mode: pfBlockerNG owns the DNSBL sinkhole VIP(s) and
 		// provisions them server side on the next pfb_create_dnsbl('enabled') pass
@@ -831,6 +846,19 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			if (array_key_exists('pfb_regex_exception_list_editor_flags', $_POST)) {
+				$pfb_regex_returned = pfb_dnsbl_regex_return_accepted_exceptions(
+					(string) ($_POST['pfb_regex_list'] ?? ''),
+					(string) ($_POST['pfb_regex_exception_list'] ?? ''),
+					pfb_dnsbl_regex_parse_flagged_lines((string) $_POST['pfb_regex_exception_list_editor_flags'])
+				);
+				$_POST['pfb_regex_list'] = $pfb_regex_returned['main'];
+				$_POST['pfb_regex_exception_list'] = $pfb_regex_returned['exceptions'];
+				if ($pfb_regex_returned['returned'] > 0) {
+					$savemsg = pfb_dnsbl_regex_returned_notice($pfb_regex_returned['returned']);
+				}
+			}
+
 			$pfb_top1m_settings_before = array(
 				'enable'   => $pfb['dconfig']['top1m_enable'] ?? '',
 				'count'    => $pfb['dconfig']['top1m_count'] ?? '',
@@ -932,6 +960,7 @@ if ($_POST) {
 
 			// issue #1723: already sanitized by the ingestion prologue above -- plain encode.
 			$pfb['dconfig']['pfb_regex_list']	= base64_encode($_POST['pfb_regex_list'] ?? '');
+			$pfb['dconfig']['pfb_regex_exception_list']	= base64_encode($_POST['pfb_regex_exception_list'] ?? '');
 			$pfb['dconfig']['pfb_noaaaa_list']	= base64_encode($_POST['pfb_noaaaa_list'] ?? '');
 			$pfb['dconfig']['pfb_gp_bypass_list']	= base64_encode($_POST['pfb_gp_bypass_list'] ?? '');
 			$pfb['dconfig']['whitelist']		= base64_encode($_POST['whitelist'] ?? '');
@@ -1017,7 +1046,7 @@ if ($_POST) {
 			write_config('[pfBlockerNG] save DNSBL settings');
 			pfb_mark_pending_changes();	// applies on the next Update, not on save
 			if ($savemsg) {
-				header("Location: /pfblockerng/pfblockerng_dnsbl.php?savemsg={$savemsg}");
+				header('Location: /pfblockerng/pfblockerng_dnsbl.php?savemsg=' . rawurlencode($savemsg));
 			} else {
 				header('Location: /pfblockerng/pfblockerng_dnsbl.php');
 			}
@@ -3351,6 +3380,7 @@ $section->addInput(new Form_Select(
 $form->add($section);
 
 $regex_text = pfb_dnsbl_regex_help_render();
+$regex_exception_text = pfb_dnsbl_regex_exception_help_text();
 
 $section = new Form_Section('Regex List', 'Python_regex_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
@@ -3364,6 +3394,17 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'width: 100%')
   ->setHelp($regex_text);
+$section->addInput(new Form_Textarea(
+	'pfb_regex_exception_list',
+	'Regex Exceptions',
+	$pconfig['pfb_regex_exception_list']
+))->removeClass('form-control')
+  ->addClass('row-fluid col-sm-12')
+  ->setAttribute('columns', '90')
+  ->setAttribute('rows', '15')
+  ->setAttribute('wrap', 'off')
+  ->setAttribute('style', 'width: 100%')
+  ->setHelp($regex_exception_text);
 
 $form->add($section);
 
