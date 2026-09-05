@@ -320,11 +320,14 @@ daemon thread (`kqueue` `EVFILT_VNODE`, mtime-poll fallback) wakes on a generati
 single ref (GIL-atomic → visible to every query thread, no torn read, no dropped queries).
 PHP writes and `fsync`s the raw set in a sibling staging directory, renames it to immutable
 `pfb_py_raw.<xxh128>`, then **atomically replaces the manifest as the sole visibility commit**.
-The sentinel flip (next integer) then notifies the watcher. After flipping, PHP **waits (bounded)
-for the watcher's applied-generation marker** to catch up, so the reload call returns only once
-the new lists are LIVE (queries keep flowing on the old snapshot during the wait — still
-zero-downtime; this restores the "lists live on return" invariant the restart had, so the
-ADR-12 `post` hook sees the new state).
+The sentinel flip (next integer) then notifies the watcher. After flipping, PHP **waits
+(bounded — `PFB_DNSBL_SWAP_WAIT`, 1800 s) for the watcher's applied-generation marker**, so a
+**confirmed** swap returns with the new lists LIVE (queries keep flowing on the old snapshot
+during the wait — still zero-downtime; this restores the "lists live on return" invariant the
+restart had, so the ADR-12 `post` hook sees the new state). An **unconfirmed** wait is NOT a
+failure (issue #3200): the swap stays in flight on the previous snapshot and ADR-61 tick
+reconciliation re-publishes until it converges. Only **liveness loss** — Unbound exited, and
+the reload-watcher thread that applies generations lives inside it — falls back to the restart.
 
 The full writer and scalar manifest patchers share one publication lock. Old raw generations
 and staging directories remain harmless until watcher/restart convergence, then strict-name GC

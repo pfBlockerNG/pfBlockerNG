@@ -717,49 +717,29 @@ function pfb_dnsbl_script_reuse_decision(bool $verbatim_reuse_ok, $script_pre, $
 }
 
 /*
- * issue #2878: compose the ONE bounded firewall-configuration reload command; pure builder.
- * timeout(1) runs in --foreground mode -- the ADR-12 hook lane's mode, per the decision
- * table in docs/misc/external-process-waits.md: pfSense's reload starts daemons meant to
- * survive (pflog, dpinger, package service restarts), and the default reaper would hold
- * the whole budget on their account and kill them on alarm on EVERY successful apply
- * pass. On a genuine overrun the reload root itself is SIGTERM'd, then SIGKILLed after
- * the shared hook-lane grace, so no reload process outlives its budget. Output stays
- * discarded to /dev/null (mwexec's historical contract) and stdin is /dev/null, so a
- * survivor can neither hold exec()'s capture pipe nor read the parent's stdin. The
- * budget is the ONE operator setting from issue #2851, normalized by pfb_reentry_budget()
- * at the seam. $pfb['timeout'] and $pfb['filter_configure_sync'] are the off-appliance
- * injection points.
+ * Detached fire-and-forget firewall-configuration reload (issue #2878 bound
+ * superseded by owner directive 2026-09-05). pfSense's reload is not ours to
+ * bound or kill, and the script signals filterd asynchronously anyway (rules
+ * land after exit), so the pass neither waits on it nor judges its outcome:
+ * output stays discarded so the backgrounded child holds no capture pipe, and
+ * the only owned failure is the launch itself.
  */
-function pfb_filter_reload_cmd($budget = NULL): string {
+function pfb_filter_reload_exec(): int {
 	global $pfb;
 
-	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
-	$script_esc  = escapeshellarg($pfb['filter_configure_sync'] ?? '/etc/rc.filter_configure_sync');
+	$script = $pfb['filter_configure_sync'] ?? '/etc/rc.filter_configure_sync';
+	if (!is_file($script) || !is_executable($script)) {
+		pfb_logger("\nFirewall configuration reload script missing or not executable [ {$script} ]\n", 2);
+		return -1;
+	}
 
-	return "{$timeout_esc} --foreground -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
-	    pfb_reentry_budget($budget) . " {$script_esc} > /dev/null 2>&1 < /dev/null";
-}
-
-/*
- * issue #2878: run the firewall-configuration reload under that bound and return the
- * child's status. An expiry is named here once, so every caller surfaces it without
- * composing anything, and a child that never ran must never read as success.
- */
-function pfb_filter_reload_exec($budget = NULL): int {
-	$secs    = pfb_reentry_budget($budget);
 	$discard = array();
 	$retval  = 0;
-	if (exec(pfb_filter_reload_cmd($secs), $discard, $retval) === FALSE && $retval === 0) {
+	if (exec(escapeshellarg($script) . ' > /dev/null 2>&1 < /dev/null &', $discard, $retval) === FALSE && $retval === 0) {
 		// exec() itself failed to launch (fork/pipe).
 		$retval = -1;
 	}
-
-	if ($retval === 124) {
-		pfb_logger("\nFirewall configuration reload TIMED OUT after {$secs}s and was killed\n", 2);
-	} elseif ($retval !== 0) {
-		pfb_logger("\nFirewall configuration reload exited non-zero [ {$retval} ]\n", 2);
-	}
-	return $retval;
+	return ($retval === 0) ? 0 : -1;
 }
 
 // Main pfBlockerNG function
@@ -5024,14 +5004,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		// Remove any IPs in Alerts unlock feature
 		unlink_if_exists("{$pfb['ip_unlock']}");
 
-		// issue #2878: the reload is no longer an unbounded wait. An expiry (124) or a
-		// launch failure (-1) leaves the firewall state unknown: the seam names it in
-		// the pfBlockerNG and error logs, and the pass is marked pending so the next
-		// tick re-applies -- never a success report. A plain non-zero reload exit stays
-		// observable in the logs and keeps the historical continue-to-daemon behavior.
-		// Ordering is unchanged: the filter-daemon stage and later apply stages follow.
+		// Only a LAUNCH failure leaves the firewall state unknown (pending + flagged so
+		// the closing clear cannot wipe it): a detached reload's outcome is pfSense's
+		// own -- it signals filterd asynchronously and logs its own reload results.
 		$reload_status = pfb_filter_reload_exec();
-		if ($reload_status === 124 || $reload_status === -1) {
+		if ($reload_status !== 0) {
 			pfb_mark_pending_changes();
 			$pfb_filter_reload_unknown = TRUE;
 		}
