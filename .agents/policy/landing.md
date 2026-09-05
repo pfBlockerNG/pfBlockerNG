@@ -20,9 +20,6 @@ See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](
   CI, and catch-all gates; every landed commit is locally signed and verified, the base
   is rechecked immediately before push, and the update must be fast-forward.
 - **Advisory bots never gate.** Exclude their contexts; triage real findings on merit.
-- **Never request Copilot code review** (owner, 2026-08-01) or enable its rule/auto-request;
-  strip only that rule when bundled. Triage one that arrives, but never gate-count it or
-  publicly restate the ban.
 - **Review effort & agent selection:** coordinator selects agent, model, and reasoning lever
   per [`delegation.md`](delegation.md) for each leg; never inherit without explicit configuration.
 - **Four independent read-only legs review the whole PR:** contract, correctness/hostile

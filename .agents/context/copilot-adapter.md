@@ -32,7 +32,6 @@ Copilot specifics:
   did), and mode capsules ride `.github/copilot-instructions.md`, which load reliably.
   If later CLI honour repo hooks, that where capsule hook go.
 - **Reviews** use `adversarial-reviewer`(-`top`/-`mid`) from `.github/agents/` per
-  `.agents/policy/landing.md`. Copilot **code-review bot** stay disabled by owner
-  directive — unrelated surface.
+  `.agents/policy/landing.md`.
 - `work-branch.sh --worktree` resolve primary checkout from session worktree exactly
   as for other clients.
