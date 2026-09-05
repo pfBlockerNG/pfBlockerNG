@@ -1069,12 +1069,21 @@ def _delimited(out: str, opening: str, closing: str) -> str:
 
 
 def _open_apply_ledger_count(vm: SmokeVM) -> int:
-    """Count open (dnsbl) ADR-61 sync-status entries via the shared delimited-read helper."""
+    """Count open ADR-61 entries for the EXACT (dnsbl, dnsbl, apply) key.
+
+    Filtered, not a bare group count: the dnsbl group also carries download-stage
+    records, and an unrelated open download would let the apply assertion pass
+    without the apply entry ever opening.
+    """
+    expr = (
+        "count(array_filter(pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl'), "
+        "static fn($e) => ($e['item'] ?? '') === 'dnsbl' && ($e['stage'] ?? '') === 'apply'))"
+    )
     return int(
         h._php_read_scalar(  # noqa: SLF001 -- suite-internal helper, used the same way elsewhere here
             vm,
             "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();",
-            "count(pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl'))",
+            expr,
         )
     )
 
@@ -1176,8 +1185,12 @@ def test_datapath_swap_budget_expiry_keeps_resolver_serving(
         assert h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER) == swap_before + 1, (
             "exactly one fresh fast-path swap line expected for the forced-expiry reload"
         )
-        assert _open_apply_ledger_count(deployed_vm) > ledger_before, (
-            "the unconfirmed swap must OPEN the ADR-61 apply-ledger entry (visible pending state)"
+        assert ledger_before == 0, (
+            "baseline: the (dnsbl, dnsbl, apply) entry must start CLOSED, or the assertion below "
+            f"proves nothing (got {ledger_before})"
+        )
+        assert _open_apply_ledger_count(deployed_vm) >= 1, (
+            "the unconfirmed swap must OPEN the ADR-61 (dnsbl, dnsbl, apply) entry (visible pending state)"
         )
 
 

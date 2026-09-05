@@ -271,6 +271,28 @@ final class UnboundPyPublishTest extends TestCase
 			'an already-applied target must return without consulting liveness');
 	}
 
+	public function testWaitMarkerAliveProbeIsThrottledNotPolledEveryIteration(): void
+	{
+		// Structural call-count guard (never a wall-clock assertion): the marker poll
+		// runs at 200 ms, so an unthrottled probe fires ~5x across a 1 s budget while
+		// the ~1/s throttle fires once or twice. The probe forks pgrep in production,
+		// and the budget reaches PFB_DNSBL_SWAP_WAIT, so this is what keeps a slow
+		// swap from paying thousands of forks beside a RAM-heavy rebuild.
+		file_put_contents($this->applied(), "3\n");
+		$probes = 0;
+		$alive = static function () use (&$probes): bool {
+			$probes++;
+			return TRUE;	// alive throughout: the wait must run its full budget
+		};
+
+		$this->assertFalse(pfb_unbound_py_wait_marker($this->applied(), 4, 1, $alive),
+			'a never-applied marker must still read as not-applied');
+		$this->assertLessThanOrEqual(2, $probes,
+			"the liveness probe must be throttled, not consulted on every 200 ms poll (saw {$probes})");
+		$this->assertGreaterThanOrEqual(1, $probes,
+			'the probe must still be consulted at least once, or liveness is never checked at all');
+	}
+
 	public function testWaitAppliedAcceptsAliveOverride(): void
 	{
 		// The applied wait's liveness defaults to is_process_running('unbound'); the

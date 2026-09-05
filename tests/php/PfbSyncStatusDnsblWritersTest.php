@@ -39,6 +39,9 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	/** @var array<string,mixed> saved $GLOBALS['g'] keys */
 	private array $savedG = [];
 
+	/** @var array<string,mixed> saved $GLOBALS['config'] keys */
+	private array $savedConfig = [];
+
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_sync_status_dnsbl_writers_' . getmypid() . '_' . uniqid();
@@ -50,6 +53,9 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		}
 		foreach (['varrun_path'] as $k) {
 			$this->savedG[$k] = array_key_exists($k, $GLOBALS['g'] ?? []) ? $GLOBALS['g'][$k] : false;
+		}
+		foreach (['unbound'] as $k) {
+			$this->savedConfig[$k] = array_key_exists($k, $GLOBALS['config'] ?? []) ? $GLOBALS['config'][$k] : false;
 		}
 
 		$GLOBALS['pfb']['dnsbldir'] = $this->dir;
@@ -82,7 +88,17 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			}
 		}
 		$this->savedG = [];
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_swap_wait_s'], $GLOBALS['config']['unbound']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_swap_wait_s']);
+		// Restore rather than unset: the bootstrap may own config['unbound'], and
+		// deleting it made every later test order-dependent.
+		foreach ($this->savedConfig as $k => $prev) {
+			if ($prev === false) {
+				unset($GLOBALS['config'][$k]);
+			} else {
+				$GLOBALS['config'][$k] = $prev;
+			}
+		}
+		$this->savedConfig = [];
 
 		foreach (glob($this->dir . '/*') ?: [] as $file) {
 			@unlink($file);

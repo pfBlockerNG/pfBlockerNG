@@ -136,17 +136,24 @@ def _swap_reload_script(vm: SmokeVM, body: str, mode: str = "755") -> None:
     """Back up the real script and put ``body`` in its place with ``mode``."""
     cp = vm.ssh("/bin/cp", "-p", _RELOAD_SCRIPT, _RELOAD_SCRIPT_BACKUP)
     assert cp.returncode == 0, f"failed to back up {_RELOAD_SCRIPT}: {cp.stderr!r}"
-    write = subprocess.run(
-        vm.ssh_argv("tee", _RELOAD_SCRIPT),
-        input=body,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert write.returncode == 0, f"failed to write the reload double: {write.stderr!r}"
-    chmod = vm.ssh("/bin/chmod", mode, _RELOAD_SCRIPT)
-    assert chmod.returncode == 0, f"failed to chmod the reload double: {chmod.stderr!r}"
+    # The backup exists now, so ANY later failure must put the real script back:
+    # `tee` truncates before it writes, and smoke_vm is session-scoped -- a wrecked
+    # /etc/rc.filter_configure_sync would poison every later module on this VM.
+    try:
+        write = subprocess.run(
+            vm.ssh_argv("tee", _RELOAD_SCRIPT),
+            input=body,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert write.returncode == 0, f"failed to write the reload double: {write.stderr!r}"
+        chmod = vm.ssh("/bin/chmod", mode, _RELOAD_SCRIPT)
+        assert chmod.returncode == 0, f"failed to chmod the reload double: {chmod.stderr!r}"
+    except BaseException:
+        _restore_reload_script(vm)
+        raise
 
 
 def _restore_reload_script(vm: SmokeVM) -> None:

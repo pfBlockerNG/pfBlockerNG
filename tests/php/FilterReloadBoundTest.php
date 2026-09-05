@@ -57,8 +57,14 @@ final class FilterReloadBoundTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-		foreach (glob("{$this->tmp}/*") ?: [] as $file) {
-			@unlink($file);
+		// Recursive: the path-with-spaces row nests a directory under tmp, so a flat
+		// glob+unlink would leave the tree behind and rmdir would fail silently.
+		$items = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator($this->tmp, FilesystemIterator::SKIP_DOTS),
+			RecursiveIteratorIterator::CHILD_FIRST
+		);
+		foreach ($items as $item) {
+			$item->isDir() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
 		}
 		@rmdir($this->tmp);
 	}
