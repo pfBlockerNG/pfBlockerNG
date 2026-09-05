@@ -7,6 +7,8 @@ Pins that:
 - BlockListDE_6 references the same feed URLs as BlockListDE (same sources, IPv6-capable).
 - Every header in the whole catalog is unique (guards the _6-suffixed headers
   added by #318 and all existing headers against collision).
+- Both Maltrail feeds carry their live endpoints and neither retired (404) URL
+  is shipped anywhere in the catalog (issue #3205).
 """
 
 from __future__ import annotations
@@ -18,6 +20,23 @@ from pathlib import Path
 import pytest
 
 _FEEDS_JSON = Path(__file__).parent.parent / "src" / "usr" / "local" / "www" / "pfblockerng" / "pfblockerng_feeds.json"
+
+# (retired 404 endpoint, live endpoint, section, feed header) per Maltrail feed:
+# the ipv4 scanner list and the DNSBL malware-domain list (issue #3205).
+_MALTRAIL_FEEDS = (
+    (
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
+        "ipv4",
+        "Maltrail_Scanners_All",
+    ),
+    (
+        "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
+        "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
+        "dnsbl",
+        "Maltrail_BD",
+    ),
+)
 
 
 @pytest.fixture(scope="module")
@@ -109,3 +128,26 @@ def test_dead_malc0de_bl_boot_feed_is_discontinued(catalog: dict) -> None:  # ty
     assert feed.get("status") == "discontinued", (
         f"Malc0de bl/BOOT feed must be marked 'status': 'discontinued' (issue #372) — got status={feed.get('status')!r}"
     )
+
+
+def test_maltrail_feeds_use_their_live_endpoints(catalog: dict) -> None:  # type: ignore[type-arg]
+    """Each Maltrail feed must carry the endpoint that still serves (issue #3205).
+
+    The scanner trail moved inside stamparm/maltrail and the malware-domain list
+    moved out of the retired stamparm/aux repository into stamparm/trails release
+    assets. Both former URLs answer HTTP 404, so an update run stores GitHub's
+    14-byte error page instead of a list. Each URL is pinned to its own feed
+    record, so swapping the two would fail as loudly as dropping one.
+    """
+    raw = _FEEDS_JSON.read_text(encoding="utf-8")
+    for retired, live, section, header in _MALTRAIL_FEEDS:
+        urls = [
+            feed.get("url")
+            for grp in catalog.get(section, {}).values()
+            for feed in grp.get("feeds", [])
+            if feed.get("header") == header
+        ]
+        assert urls == [live], f"{header} must carry its live endpoint in the {section} section — got {urls}"
+        # Scanned in the file text, not the parsed feed rows: the retired endpoint
+        # must be gone from alternates and comments too, not just from a feed row.
+        assert retired not in raw, f"retired (404) Maltrail endpoint still shipped: {retired}"
