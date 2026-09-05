@@ -1053,6 +1053,137 @@ def test_dnsbl_fail_closed_broken_manifest(
         )
 
 
+_LEDGER_OPEN = "<<<LEDGERS>>>"
+_LEDGER_CLOSE = "<<<ENDLEDGERS>>>"
+_RET_OPEN = "<<<RET>>>"
+_RET_CLOSE = "<<<ENDRET>>>"
+_SYNC_OPEN = "<<<SYNC>>>"
+_SYNC_CLOSE = "<<<ENDSYNC>>>"
+_INFLIGHT_LINE = "swap still in flight"
+
+
+def _delimited(out: str, opening: str, closing: str) -> str:
+    start = out.find(opening)
+    end = out.find(closing)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"no delimited value in pfSsh.php output ({opening!r}..{closing!r}): {out[-500:]!r}")
+    return out[start + len(opening) : end]
+
+
+def _open_apply_ledger_count(vm: SmokeVM) -> int:
+    """Count open (dnsbl) ADR-61 sync-status entries, delimited past the pfSsh banner."""
+    ledger_echo = (
+        f"echo '{_LEDGER_OPEN}' . count("
+        "pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl')) . "
+        f"'{_LEDGER_CLOSE}';"
+    )
+    snippet = f"require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n{ledger_echo}"
+    res = h.php_eval(vm, snippet, timeout=60)
+    return int(_delimited(res.stdout, _LEDGER_OPEN, _LEDGER_CLOSE))
+
+
+# The seam-shrunk budget (1 s) plus the watcher's fail-closed build window; the pfSsh.php
+# reload round-trip itself is the long pole.
+@pytest.mark.timeout(120)
+def test_datapath_swap_budget_expiry_keeps_resolver_serving(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """#3200: a datapath swap that does not confirm in time must NOT restart Unbound.
+
+    The reload-watcher applies the generation independently of PHP's wait, so an expired
+    budget is a self-unlock, never a failure verdict: the previous snapshot keeps serving
+    while the swap stays in flight, and the ADR-61 tick reconciliation re-publishes until
+    it converges. Deterministic seat method: corrupt the manifest (parse failure with
+    unbound:unbound ownership preserved — the same trick as
+    ``test_dnsbl_fail_closed_broken_manifest``) so the applied marker can never advance,
+    then drive the REAL ``pfb_reload_unbound('enabled', FALSE, FALSE, TRUE)`` fast path
+    under the test-only budget seam (``$GLOBALS['pfb_test_swap_wait_s'] = 1``) so the
+    wait expires deterministically into the in-flight branch.
+
+    * BEFORE: the name is BLOCKED (VIP). Capture the pid, the fast-path / in-flight /
+      stop / fallback log baselines, and the open apply-ledger count.
+    * TRIGGER: corrupt the manifest, then run the reload with the 1 s seam budget.
+    * AFTER: the reload returned FALSE, ``.sync`` is cleared, the fast-path AND
+      in-flight lines were logged, ``Stopping Unbound Resolver`` and
+      ``falling back to Unbound restart`` were NOT, the ADR-61 apply-ledger entry is
+      OPEN, the name STILL blocks on the old snapshot, and Unbound's pid is UNCHANGED.
+    """
+    domain = h.unique_domain("inflight")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_inflight.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokeinflight", feed_url=feed_url, header="smokeinflight", mode=h.DnsblMode.VIP)
+    with h.CaseContext(deployed_vm, spec):
+        # BEFORE: the name is blocked (VIP) by the live snapshot; capture every baseline.
+        blocked = h.dns_probe_client(client_vm, domain, "A")
+        assert h.is_vip(blocked), f"{domain} expected VIP block before the forced expiry, got {blocked}"
+        pid_before = h.unbound_pid(deployed_vm)
+        swap_before = h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER)
+        inflight_before = h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE)
+        stop_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Stopping Unbound Resolver")
+        fallback_before = h.count_log_marker(deployed_vm, h.PFB_LOG, "falling back to Unbound restart")
+        ledger_before = _open_apply_ledger_count(deployed_vm)
+
+        # CORRUPT the manifest: a PARSE failure (ownership preserved so the chrooted
+        # module can still open it), so the watcher's rebuild fail-closes and the
+        # applied marker freezes no matter how long anyone waits.
+        corrupt = (
+            "$m = '/var/unbound/pfb_py_sources.json';\n"
+            "file_put_contents($m, '{ this is not valid json');\n"
+            "@chown($m, 'unbound'); @chgrp($m, 'unbound');\n"
+            "echo 'OK';"
+        )
+        res = h.php_eval(deployed_vm, corrupt, timeout=60)
+        assert "OK" in res.stdout, f"failed to corrupt the manifest: rc={res.returncode} {res.stderr!r}"
+
+        # TRIGGER: the real production fast path under the 1 s test-only budget seam.
+        # pfb_reload_unbound() flips the sentinel itself; the watcher cannot apply, so
+        # the wait deterministically expires into the in-flight branch.
+        reload_snippet = (
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "pfb_global();\n"
+            "$GLOBALS['pfb_test_swap_wait_s'] = 1;\n"
+            "$ret = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+            f"echo '{_RET_OPEN}' . var_export($ret, TRUE) . '{_RET_CLOSE}';\n"
+            f"echo '{_SYNC_OPEN}' . var_export("
+            "file_exists($GLOBALS['pfb']['dnsbl_file'] . '.sync'), TRUE) . "
+            f"'{_SYNC_CLOSE}';\n"
+        )
+        res = h.php_eval(deployed_vm, reload_snippet, timeout=120)
+        ret = _delimited(res.stdout, _RET_OPEN, _RET_CLOSE)
+        sync_left = _delimited(res.stdout, _SYNC_OPEN, _SYNC_CLOSE)
+        assert ret == "false", (
+            f"an unconfirmed swap must return FALSE (callers skip flushes on not-live data), got {ret!r}"
+        )
+        assert sync_left == "false", (
+            "the in-flight return must clear the .sync daemon-suppression marker (issue #713 bug 3)"
+        )
+
+        # The in-flight line is the row's core signal: wait for it while confirming the
+        # old snapshot still serves (combined predicate, fail-closed-row idiom).
+        def _inflight_and_blocked(_a: h.DnsAnswer) -> bool:
+            return h.is_vip(_a) and h.count_log_marker(deployed_vm, h.PFB_LOG, _INFLIGHT_LINE) > inflight_before
+
+        still = h.dns_probe_client_until(client_vm, domain, _inflight_and_blocked, timeout=45.0)
+        assert h.is_vip(still), f"the previous snapshot must keep serving during the in-flight swap, got {still}"
+
+        # THE #3200 INVARIANT: no restart, no fallback, exactly one fresh swap line.
+        pid_after = h.unbound_pid(deployed_vm)
+        assert pid_after == pid_before, (
+            f"a budget-expired datapath swap must NEVER restart Unbound: pid {pid_before} -> {pid_after}"
+        )
+        assert h.count_log_marker(deployed_vm, h.PFB_LOG, "Stopping Unbound Resolver") == stop_before, (
+            "'Stopping Unbound Resolver' logged for a datapath reload -- the #3200 regression"
+        )
+        assert h.count_log_marker(deployed_vm, h.PFB_LOG, "falling back to Unbound restart") == fallback_before, (
+            "the restart fallback was chosen for a slow swap -- the #3200 regression"
+        )
+        assert h.count_log_marker(deployed_vm, h.PFB_LOG, h.SWAP_LOG_MARKER) == swap_before + 1, (
+            "exactly one fresh fast-path swap line expected for the forced-expiry reload"
+        )
+        assert _open_apply_ledger_count(deployed_vm) > ledger_before, (
+            "the unconfirmed swap must OPEN the ADR-61 apply-ledger entry (visible pending state)"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 3) DNSBL-IP dual-stack — two distinct pf tables, partitioned by family
 # --------------------------------------------------------------------------- #
