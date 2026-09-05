@@ -7,6 +7,8 @@ Pins that:
 - BlockListDE_6 references the same feed URLs as BlockListDE (same sources, IPv6-capable).
 - Every header in the whole catalog is unique (guards the _6-suffixed headers
   added by #318 and all existing headers against collision).
+- Both Maltrail feeds carry their live endpoints and neither retired (404) URL
+  is shipped anywhere in the catalog (issue #3205).
 """
 
 from __future__ import annotations
