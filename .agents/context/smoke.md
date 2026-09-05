@@ -19,6 +19,7 @@ Non-obvious truths, each costly to relearn:
 - **Image bakes only deps + qemu-guest-agent** — harness injects DNSBL VIP (`ensure_dnsbl_vip`) + all per-case config; `pkg add` runs offline (RUN_DEPENDS baked via `scripts/misc/install_deps_CE_2.8.sh`); `pfb_dnsvip_auto` defaults OFF, so `ensure_dnsbl_vip` stays fixture. Smoke qcow2 cache content-keyed by GHCR digest.
 - **Branch `.pkg` built on plain Linux runner** (`build-pkg-linux.yml` → `scripts/build-pkg-portable.py`) — pfBlockerNG is `NO_BUILD` port; **sole** builder for CI + releases.
 - **Every run uploads full guest snapshot** (`smoke-diagnostics`: `/var/log`, `dmesg`, `pfctl -sa`, unbound + pfBlockerNG state, scrubbed `config.xml`). On any failure, read it first.
+- **Licensed ASN / GeoIP live-downloads are out of automated-tier scope by design** (`tests/smoke/test_smoke_714_asn_geoip.py`; issue #2971). `test_714_c1_asn_table_logs_not_stray_file` skips unless `SMOKE_ASN_SRC` is set (IPinfo ASN token). `test_714_c8_geoip_single_ip_preserved` skips unless both `SMOKE_GEOIP_KEY` and `SMOKE_GEOIP_ACCOUNT` are set (MaxMind GeoIP account). Credentials are absent from CI; both paths are dispatch-only, validate live (ADR-04 §7). Same class as `test_smoke_aggregate.py`'s "WHAT STAYS MAINTAINER-MANUAL" MaxMind GeoIP download — not a defect when the log shows those two skips. Distinct from `SMOKE_CONTROL_NAME` skips (matrix-injected control name, not a license).
 
 Web-UI tiers (ADR-14, `tests/smoke/ui/`) + mock-feed load smoke (ADR-16 Part C) documented in architecture-notes. Operative facts:
 
