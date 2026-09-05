@@ -21,6 +21,23 @@ import pytest
 
 _FEEDS_JSON = Path(__file__).parent.parent / "src" / "usr" / "local" / "www" / "pfblockerng" / "pfblockerng_feeds.json"
 
+# (retired 404 endpoint, live endpoint, section, feed header) per Maltrail feed:
+# the ipv4 scanner list and the DNSBL malware-domain list (issue #3205).
+_MALTRAIL_FEEDS = (
+    (
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
+        "ipv4",
+        "Maltrail_Scanners_All",
+    ),
+    (
+        "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
+        "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
+        "dnsbl",
+        "Maltrail_BD",
+    ),
+)
+
 
 @pytest.fixture(scope="module")
 def catalog() -> dict:  # type: ignore[type-arg]
@@ -114,25 +131,23 @@ def test_dead_malc0de_bl_boot_feed_is_discontinued(catalog: dict) -> None:  # ty
 
 
 def test_maltrail_feeds_use_their_live_endpoints(catalog: dict) -> None:  # type: ignore[type-arg]
-    """Both Maltrail feeds must point at endpoints that still serve (issue #3205).
+    """Each Maltrail feed must carry the endpoint that still serves (issue #3205).
 
     The scanner trail moved inside stamparm/maltrail and the malware-domain list
     moved out of the retired stamparm/aux repository into stamparm/trails release
     assets. Both former URLs answer HTTP 404, so an update run stores GitHub's
-    14-byte error page instead of a list.
+    14-byte error page instead of a list. Each URL is pinned to its own feed
+    record, so swapping the two would fail as loudly as dropping one.
     """
-    for url in (
-        "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
-        "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
-    ):
-        assert _find_feed_by_url(catalog, url) is not None, f"live Maltrail endpoint missing from the catalog: {url}"
     raw = _FEEDS_JSON.read_text(encoding="utf-8")
-    stale = [
-        url
-        for url in (
-            "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
-            "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
-        )
-        if url in raw
-    ]
-    assert stale == [], f"retired (404) Maltrail endpoints still shipped: {stale}"
+    for retired, live, section, header in _MALTRAIL_FEEDS:
+        urls = [
+            feed.get("url")
+            for grp in catalog.get(section, {}).values()
+            for feed in grp.get("feeds", [])
+            if feed.get("header") == header
+        ]
+        assert urls == [live], f"{header} must carry its live endpoint in the {section} section — got {urls}"
+        # Scanned in the file text, not the parsed feed rows: the retired endpoint
+        # must be gone from alternates and comments too, not just from a feed row.
+        assert retired not in raw, f"retired (404) Maltrail endpoint still shipped: {retired}"
