@@ -137,7 +137,7 @@ Proceed to landing ONLY when review step finished cleanly:
 - Every finding from **every review received** — the adversarial legs, CodeRabbit's review once asked for, any unsolicited review — triaged, accepted fixes committed and pushed, nothing left needing human decision. Adversarial review mandatory — never land without its findings triaged, even when every bot came back clean.
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to land while any item lack outcome.
 - **No external reviewer** (CodeRabbit unavailable after the ask, nobody else reviewed): note skip in audit trail; the legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
-- **Catch-all sweep, last thing before landing:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before landing — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
+- **Catch-all sweep — immediately before the push, never at gate time:** list ALL reviews and inline comments on PR (paginated, no login filter) and triage anything unhandled. The rebase and exact-head CI wait sit between this gate and the push, so a sweep taken before them is STALE: reviewers answer threads inside that window (seen 2026-09-05). Re-run it after the fence. Summary-only review with no findings noted in audit trail.
 - **CodeRabbit at landing:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
 - Unresolved, contested, or user-decision findings → stop and report; do not land.
 
@@ -169,7 +169,8 @@ Poll until every **required** check complete, excluding only the advisory contex
   `git fetch origin "pull/N/head"`; set `remote_pr_head="$(git rev-parse FETCH_HEAD)"` and
   `local_head="$(git rev-parse HEAD)"`; run `test "$remote_pr_head" = "$reviewed_sha"` and
   `test "$local_head" = "$reviewed_sha"`. Before either path run `git fetch origin`,
-  run the fence, and require `origin/devel == reviewed_base`. Mismatch must stop and
+  run the fence, require `origin/devel == reviewed_base`, and re-run the catch-all
+  sweep here — its gate-time run predates the CI wait. Mismatch must stop and
   restart affected review plus exact-head CI.
 - **GitHub-hosted path:** only with an atomic strict-base gate; otherwise use local. Run
   `gh pr merge N --squash --match-head-commit "$reviewed_sha" --subject "<scope>: <summary>" --body "<body>"`.
