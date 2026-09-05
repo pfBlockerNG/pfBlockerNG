@@ -273,11 +273,13 @@ final class UnboundPyPublishTest extends TestCase
 
 	public function testWaitMarkerAliveProbeIsThrottledNotPolledEveryIteration(): void
 	{
-		// Structural call-count guard (never a wall-clock assertion): the marker poll
-		// runs at 200 ms, so an unthrottled probe fires ~5x across a 1 s budget while
-		// the ~1/s throttle fires once or twice. The probe forks pgrep in production,
-		// and the budget reaches PFB_DNSBL_SWAP_WAIT, so this is what keeps a slow
-		// swap from paying thousands of forks beside a RAM-heavy rebuild.
+		// Rate guard, not a fixed count: the throttle allows ~1 probe per elapsed
+		// second, so the cap is derived from the MEASURED elapsed time rather than
+		// from an assumed loop speed (a fixed cap fails under load, when the same
+		// budget covers fewer, slower iterations). An unthrottled probe fires once
+		// per 200 ms poll -- ~5x the cap -- so removing the throttle fails this.
+		// The probe forks pgrep in production and the budget reaches
+		// PFB_DNSBL_SWAP_WAIT, which is what makes the throttle worth pinning.
 		file_put_contents($this->applied(), "3\n");
 		$probes = 0;
 		$alive = static function () use (&$probes): bool {
@@ -285,10 +287,18 @@ final class UnboundPyPublishTest extends TestCase
 			return TRUE;	// alive throughout: the wait must run its full budget
 		};
 
+		$started = microtime(TRUE);
 		$this->assertFalse(pfb_unbound_py_wait_marker($this->applied(), 4, 1, $alive),
 			'a never-applied marker must still read as not-applied');
-		$this->assertLessThanOrEqual(2, $probes,
-			"the liveness probe must be throttled, not consulted on every 200 ms poll (saw {$probes})");
+		$elapsed = microtime(TRUE) - $started;
+
+		$cap = (int) ceil($elapsed) + 1;
+		$this->assertLessThanOrEqual($cap, $probes, sprintf(
+			'the liveness probe must be throttled to ~1/s: saw %d probes in %.2fs (cap %d)',
+			$probes,
+			$elapsed,
+			$cap,
+		));
 		$this->assertGreaterThanOrEqual(1, $probes,
 			'the probe must still be consulted at least once, or liveness is never checked at all');
 	}

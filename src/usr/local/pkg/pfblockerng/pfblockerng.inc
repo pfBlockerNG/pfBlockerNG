@@ -10478,6 +10478,7 @@ function pfb_unbound_py_flip_sentinel() {
 function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive = NULL) {
 	$target = (int) $target;
 	$deadline = microtime(TRUE) + (float) $timeout_s;
+	$next_alive = 0.0;
 
 	do {
 		if (file_exists($path)) {
@@ -10492,9 +10493,16 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 				}
 			}
 		}
-		// Marker-first: liveness is only consulted when this pass still needs the consumer.
-		if ($alive !== NULL && !$alive()) {
-			return FALSE;
+		// Marker-first: liveness is only consulted when this pass still needs the
+		// consumer. Throttled to ~1/s because the probe forks (pgrep) while this loop
+		// polls at 200 ms: over a full PFB_DNSBL_SWAP_WAIT that was ~9000 forks beside
+		// a RAM-heavy rebuild, and the wait already tolerates minutes of latency.
+		$now = microtime(TRUE);
+		if ($alive !== NULL && $now >= $next_alive) {
+			if (!$alive()) {
+				return FALSE;
+			}
+			$next_alive = $now + 1.0;
 		}
 		usleep(200000);	// 200 ms between polls
 	} while (microtime(TRUE) < $deadline);
