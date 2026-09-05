@@ -5080,6 +5080,9 @@ if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
 // Budget (seconds) for the ADR-10 applied-generation wait. Expiry is NOT a failure:
 // the previous snapshot keeps serving and ADR-61 tick reconciliation retries -- the
 // practical failure latency is that wait's liveness probe (Unbound gone), not this.
+// The value is ANCHORED to PFB_REENTRY_TIMEOUT's precedent for one long-running
+// operator-triggered operation, never derived from it: that knob bounds an external
+// subprocess and kills it on expiry, this bounds an in-process marker poll.
 if (!defined('PFB_DNSBL_SWAP_WAIT')) {
 	define('PFB_DNSBL_SWAP_WAIT', 1800);
 }
@@ -10507,8 +10510,9 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive
 // TRUE once applied; FALSE on timeout (in flight, not an error) or liveness loss. Default
 // liveness is the Unbound process: the reload-watcher thread lives inside it, so a dead
 // Unbound can never apply the generation (issue #3200).
-// Poll cadence (~2s) + rebuild time bound the latency; the default budget covers a large ABP rebuild.
-function pfb_unbound_py_wait_applied($gen, $timeout_s = 30, ?callable $alive = NULL) {
+// Poll cadence (~2s) + rebuild time bound the latency; the budget decides only how long
+// this caller waits before reporting the swap still in flight.
+function pfb_unbound_py_wait_applied($gen, $timeout_s = PFB_DNSBL_SWAP_WAIT, ?callable $alive = NULL) {
 	global $pfb;
 
 	$alive ??= static fn (): bool => is_process_running('unbound');
@@ -12218,14 +12222,20 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					// Open the pending (dnsbl,dnsbl,apply) entry NOW: no restart tail runs
 					// to write it, and tick reconciliation keys on this entry.
 					$converged = $apply_ledger();
-					pfb_unbound_py_gc($converged);
+					// Skip the publication lock when convergence is already known
+					// false: GC is a documented no-op then, and this branch runs on
+					// every in-flight expiry. A swap that landed between the wait and
+					// this read still reports TRUE, so the useful case still collects.
+					if ($converged) {
+						pfb_unbound_py_gc($converged);
+					}
 					return FALSE;
 				}
 
 				// Unbound exited during the swap: nothing will ever apply the generation,
 				// so fall through to the restart tail -- restarting is what brings DNS
 				// back with the new manifest.
-				pfb_logger(" swap unconfirmed: Unbound exited during the swap -- recovering via restart", 2);
+				pfb_logger("\nADR-10: swap unconfirmed -- Unbound exited during the swap; recovering via restart", 2);
 				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 			else {

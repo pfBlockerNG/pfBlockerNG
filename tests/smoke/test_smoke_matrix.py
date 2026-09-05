@@ -1053,8 +1053,6 @@ def test_dnsbl_fail_closed_broken_manifest(
         )
 
 
-_LEDGER_OPEN = "<<<LEDGERS>>>"
-_LEDGER_CLOSE = "<<<ENDLEDGERS>>>"
 _RET_OPEN = "<<<RET>>>"
 _RET_CLOSE = "<<<ENDRET>>>"
 _SYNC_OPEN = "<<<SYNC>>>"
@@ -1071,15 +1069,14 @@ def _delimited(out: str, opening: str, closing: str) -> str:
 
 
 def _open_apply_ledger_count(vm: SmokeVM) -> int:
-    """Count open (dnsbl) ADR-61 sync-status entries, delimited past the pfSsh banner."""
-    ledger_echo = (
-        f"echo '{_LEDGER_OPEN}' . count("
-        "pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl')) . "
-        f"'{_LEDGER_CLOSE}';"
+    """Count open (dnsbl) ADR-61 sync-status entries via the shared delimited-read helper."""
+    return int(
+        h._php_read_scalar(  # noqa: SLF001 -- suite-internal helper, used the same way elsewhere here
+            vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();",
+            "count(pfb_sync_status_list_open($GLOBALS['pfb']['dbdir'], 'dnsbl'))",
+        )
     )
-    snippet = f"require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\npfb_global();\n{ledger_echo}"
-    res = h.php_eval(vm, snippet, timeout=60)
-    return int(_delimited(res.stdout, _LEDGER_OPEN, _LEDGER_CLOSE))
 
 
 # The seam-shrunk budget (1 s) plus the watcher's fail-closed build window; the pfSsh.php

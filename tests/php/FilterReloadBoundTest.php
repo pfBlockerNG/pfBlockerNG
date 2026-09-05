@@ -174,6 +174,58 @@ final class FilterReloadBoundTest extends TestCase
 			sprintf('stuck/environment: the launcher waited %.1fs for a double that exits instantly', $elapsed));
 	}
 
+	public function testDetachedChildNeverInheritsTheLauncherStdin(): void
+	{
+		// What this pins: the child never reads the launcher's stdin. Give a CHILD
+		// launcher a readable stdin, fire the reload from there, and let the double
+		// record what it saw. Killed mutant: making the launch synchronous (dropping
+		// the trailing '&') makes the double read the payload, so this row is the
+		// guard against a foreground launch creeping back.
+		// What it deliberately does NOT pin: the explicit `< /dev/null` alone. POSIX
+		// assigns /dev/null to an async list's stdin before any explicit redirection,
+		// verified here: `printf PAYLOAD | sh -c 'read l && echo got || echo closed &'`
+		// prints `closed`, the same foreground command prints `got` -- so removing the
+		// redirect is behaviourally undetectable and stays as documented intent only.
+		$probe  = "{$this->tmp}/stdin.seen";
+		$script = $this->fakeReload(
+			'if IFS= read -r line; then printf "inherited:%s" "$line" > ' . escapeshellarg($probe)
+			. '; else printf closed > ' . escapeshellarg($probe) . '; fi'
+		);
+		// require_once: the PHPUnit bootstrap already loads the apply include.
+		$child = sprintf(
+			'require_once %s; require_once %s; $GLOBALS[%s] = %s; pfb_filter_reload_exec();',
+			var_export(__DIR__ . '/bootstrap.php', TRUE),
+			var_export(self::APPLY, TRUE),
+			var_export('pfb', TRUE),
+			var_export([
+				'log'                   => "{$this->tmp}/pfblockerng.log",
+				'errlog'                => "{$this->tmp}/error.log",
+				'filter_configure_sync' => $script,
+			], TRUE),
+		);
+		$proc = proc_open(
+			[PHP_BINARY, '-r', $child],
+			[
+				0 => ['pipe', 'r'],
+				1 => ['file', "{$this->tmp}/child.out", 'w'],
+				2 => ['file', "{$this->tmp}/child.err", 'w'],
+			],
+			$pipes
+		);
+		$this->assertIsResource($proc, 'the stdin-bearing child launcher must start');
+		fwrite($pipes[0], "PAYLOAD\n");
+		fclose($pipes[0]);
+		$this->assertSame(0, proc_close($proc), sprintf(
+			'the child launcher must exit clean: %s',
+			(string) @file_get_contents("{$this->tmp}/child.err"),
+		));
+
+		$this->assertTrue($this->waitFor($probe),
+			'the detached double must record what it saw on stdin');
+		$this->assertSame('closed', (string) file_get_contents($probe),
+			"the detached child must read EOF on stdin, never the launcher's own payload");
+	}
+
 	// ── The launch gate: the one failure we own ─────────────────────────────────
 
 	public function testMissingScriptIsTheOneOwnedLaunchFailure(): void
@@ -200,6 +252,28 @@ final class FilterReloadBoundTest extends TestCase
 
 		$this->assertSame(-1, $status, 'a non-executable script is a launch failure, not a reload');
 		$this->assertStringContainsString('missing or not executable', $this->log('error.log'));
+	}
+
+	public function testAbsentInjectionFallsBackToTheAppliancePath(): void
+	{
+		// The null-coalesce default is the ONLY reload path that runs on a real
+		// appliance, and every other row injects a script -- so pin it here: with no
+		// injection the gate must resolve /etc/rc.filter_configure_sync itself, and a
+		// drifted default would name a different path in the log.
+		unset($GLOBALS['pfb']['filter_configure_sync']);
+		if (is_file('/etc/rc.filter_configure_sync')) {
+			$this->markTestSkipped(
+				'a real /etc/rc.filter_configure_sync is present: firing it is appliance behaviour, not a unit row'
+			);
+		}
+
+		$status = pfb_filter_reload_exec();
+
+		$this->assertSame(-1, $status, 'an absent appliance script is a launch failure, never success');
+		// Bracket-delimited, NOT a bare substring: '/etc/rc.filter_configure_sync_TYPO'
+		// contains the plain path, so a drifted default would slip past containment.
+		$this->assertStringContainsString('[ /etc/rc.filter_configure_sync ]', $this->log('error.log'),
+			'the gate must name exactly the appliance path the fallback resolved, not a drifted one');
 	}
 
 	public function testInjectedPathWithSpacesIsExecutedDetached(): void

@@ -326,8 +326,11 @@ The sentinel flip (next integer) then notifies the watcher. After flipping, PHP 
 during the wait — still zero-downtime; this restores the "lists live on return" invariant the
 restart had, so the ADR-12 `post` hook sees the new state). An **unconfirmed** wait is NOT a
 failure (issue #3200): the swap stays in flight on the previous snapshot and ADR-61 tick
-reconciliation re-publishes until it converges. Only **liveness loss** — Unbound exited, and
-the reload-watcher thread that applies generations lives inside it — falls back to the restart.
+reconciliation re-publishes until it converges. Only **liveness loss** — the Unbound process
+exited, taking the reload-watcher thread that applies generations with it — falls back to the
+restart. That probe is process-level by design: a watcher thread that died inside a still-live
+process is NOT detected, so its generation stays unapplied until the next restart, with the
+open apply-stage ledger entry as the only signal.
 
 The full writer and scalar manifest patchers share one publication lock. Old raw generations
 and staging directories remain harmless until watcher/restart convergence, then strict-name GC
