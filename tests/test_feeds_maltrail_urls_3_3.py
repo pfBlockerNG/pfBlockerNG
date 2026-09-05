@@ -13,39 +13,32 @@ from pathlib import Path
 
 _FEEDS_JSON = Path(__file__).parents[1] / "src/usr/local/www/pfblockerng/pfblockerng_feeds.json"
 
-_LIVE_URLS = (
-    "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
-    "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
+# (retired 404 endpoint, live endpoint) per Maltrail feed: the ipv4 scanner list
+# and the DNSBL malware-domain list.
+_MALTRAIL_URLS = (
+    (
+        "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+        "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
+    ),
+    (
+        "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
+        "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
+    ),
 )
-
-_RETIRED_URLS = (
-    "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
-    "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
-)
-
-
-def _catalog_urls() -> set[str]:
-    """Every 'url' the catalogue offers, across sections, feeds, and alternates."""
-    urls: set[str] = set()
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            url = node.get("url")
-            if isinstance(url, str):
-                urls.add(url)
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(json.loads(_FEEDS_JSON.read_text(encoding="utf-8")))
-    return urls
 
 
 def test_maltrail_feeds_use_their_live_endpoints() -> None:
-    urls = _catalog_urls()
-    missing = [url for url in _LIVE_URLS if url not in urls]
-    assert missing == [], f"live Maltrail endpoints missing from the catalogue: {missing}"
-    stale = [url for url in _RETIRED_URLS if url in urls]
-    assert stale == [], f"retired (404) Maltrail endpoints still shipped: {stale}"
+    text = _FEEDS_JSON.read_text(encoding="utf-8")
+    catalog = json.loads(text)
+    shipped = {
+        feed["url"]
+        for section in ("ipv4", "ipv6", "dnsbl")
+        for group in catalog.get(section, {}).values()
+        for feed in group.get("feeds", [])
+        if "url" in feed
+    }
+    for retired, live in _MALTRAIL_URLS:
+        assert live in shipped, f"live Maltrail endpoint missing from the catalogue: {live}"
+        # Scanned in the file text, not the parsed feed rows: the retired endpoint
+        # must be gone from alternates and comments too, not just from a feed row.
+        assert retired not in text, f"retired (404) Maltrail endpoint still shipped: {retired}"
