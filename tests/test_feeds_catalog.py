@@ -109,3 +109,28 @@ def test_dead_malc0de_bl_boot_feed_is_discontinued(catalog: dict) -> None:  # ty
     assert feed.get("status") == "discontinued", (
         f"Malc0de bl/BOOT feed must be marked 'status': 'discontinued' (issue #372) — got status={feed.get('status')!r}"
     )
+
+
+def test_maltrail_feeds_use_their_live_endpoints(catalog: dict) -> None:  # type: ignore[type-arg]
+    """Both Maltrail feeds must point at endpoints that still serve (issue #3205).
+
+    The scanner trail moved inside stamparm/maltrail and the malware-domain list
+    moved out of the retired stamparm/aux repository into stamparm/trails release
+    assets. Both former URLs answer HTTP 404, so an update run stores GitHub's
+    14-byte error page instead of a list.
+    """
+    for url in (
+        "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt",
+        "https://github.com/stamparm/trails/releases/latest/download/maltrail-malware-domains.txt",
+    ):
+        assert _find_feed_by_url(catalog, url) is not None, f"live Maltrail endpoint missing from the catalog: {url}"
+    raw = _FEEDS_JSON.read_text(encoding="utf-8")
+    stale = [
+        url
+        for url in (
+            "https://raw.githubusercontent.com/stamparm/maltrail/master/trails/static/mass_scanner.txt",
+            "https://raw.githubusercontent.com/stamparm/aux/master/maltrail-malware-domains.txt",
+        )
+        if url in raw
+    ]
+    assert stale == [], f"retired (404) Maltrail endpoints still shipped: {stale}"
