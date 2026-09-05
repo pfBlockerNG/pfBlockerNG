@@ -294,7 +294,7 @@ def _check_claude_agents(
                 f"the tier(s) declared for role(s) {names}"
             )
         review_roles = sorted({role.name for role in bound} & {"reviewer", "verifier"})
-        if review_roles and isinstance(model, str):
+        if review_roles:
             required_effort = "medium"
             effort = fields.get("effort")
             if effort != required_effort:

@@ -15,5 +15,3 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicate
   guard it trips.
 - Copilot adds no commit or public-body attribution. Configured user identity remains
   authoritative.
-- **Copilot code review stays disabled** (owner directive, `.agents/policy/landing.md`).
-  Directive about review bot, not restrict Copilot as agent client.

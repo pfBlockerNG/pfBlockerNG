@@ -241,7 +241,8 @@ go through [`model-tiers.conf`](../model-tiers.conf).
 ### Claude
 
 Reviewer and verifier roles define `.claude/agents/<role>.md` files with model and
-`effort: medium` pinned in front matter, mirroring Codex and Copilot: **verifier**
+`effort: medium` pinned in front matter (structure mirrors Codex/Copilot per-role files;
+effort is flat medium across Claude tiers): **verifier**
 runs `adversarial-reviewer.md` at small tier; **reviewer** implements
 [`landing.md`](landing.md) contract using `adversarial-reviewer.md` (small default),
 `adversarial-reviewer-top.md` (top tier for large/complex PR), and
