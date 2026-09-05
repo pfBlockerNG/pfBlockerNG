@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_unbound_py_atomic_write')]
 #[CoversFunction('pfb_unbound_py_stream_sync')]
 #[CoversFunction('pfb_unbound_py_flip_sentinel')]
+#[CoversFunction('pfb_unbound_py_wait_marker')]
 #[CoversFunction('pfb_unbound_py_wait_applied')]
 final class UnboundPyPublishTest extends TestCase
 {
@@ -233,5 +234,56 @@ final class UnboundPyPublishTest extends TestCase
 		// A marker BEHIND the target also times out (watcher has not caught up yet).
 		file_put_contents($this->applied(), "3\n");
 		$this->assertFalse(pfb_unbound_py_wait_applied(4, 1));
+	}
+
+	public function testWaitMarkerAliveProbeShortCircuits(): void
+	{
+		// Marker BEHIND the target and a dead consumer: the liveness probe must break
+		// the wait on the first pass -- nothing will ever apply the generation, so
+		// burning the budget would be wait-as-failure all over again (issue #3200).
+		file_put_contents($this->applied(), "3\n");
+		$probes = 0;
+		$alive = static function () use (&$probes): bool {
+			$probes++;
+			return FALSE;
+		};
+
+		$this->assertFalse(pfb_unbound_py_wait_marker($this->applied(), 4, 1, $alive),
+			'a dead consumer must read as not-applied');
+		$this->assertSame(1, $probes,
+			'the alive probe must be consulted exactly once, after the first marker read and before the first sleep');
+	}
+
+	public function testWaitMarkerAliveNotConsultedWhenMarkerFirstHits(): void
+	{
+		// Marker already >= target: TRUE on the first read, and the alive probe must
+		// never be consulted -- marker-first ordering keeps every already-applied
+		// success instant, even when liveness would report dead.
+		file_put_contents($this->applied(), "5\n");
+		$probes = 0;
+		$alive = static function () use (&$probes): bool {
+			$probes++;
+			return FALSE;
+		};
+
+		$this->assertTrue(pfb_unbound_py_wait_marker($this->applied(), 5, 1, $alive));
+		$this->assertSame(0, $probes,
+			'an already-applied target must return without consulting liveness');
+	}
+
+	public function testWaitAppliedAcceptsAliveOverride(): void
+	{
+		// The applied wait's liveness defaults to is_process_running('unbound'); the
+		// optional override keeps the wait unit-testable without a process seam.
+		file_put_contents($this->applied(), "3\n");
+		$probes = 0;
+		$alive = static function () use (&$probes): bool {
+			$probes++;
+			return FALSE;
+		};
+
+		$this->assertFalse(pfb_unbound_py_wait_applied(4, 1, $alive),
+			'the injected probe must drive the applied wait, not the process default');
+		$this->assertGreaterThanOrEqual(1, $probes, 'the injected probe must actually be consulted');
 	}
 }

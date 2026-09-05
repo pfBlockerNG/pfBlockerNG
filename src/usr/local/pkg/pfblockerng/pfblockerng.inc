@@ -5077,6 +5077,13 @@ if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
 	define('PFB_REENTRY_TIMEOUT_MAX', 7200);
 }
 
+// Budget (seconds) for the ADR-10 applied-generation wait. Expiry is NOT a failure:
+// the previous snapshot keeps serving and ADR-61 tick reconciliation retries -- the
+// practical failure latency is that wait's liveness probe (Unbound gone), not this.
+if (!defined('PFB_DNSBL_SWAP_WAIT')) {
+	define('PFB_DNSBL_SWAP_WAIT', 1800);
+}
+
 // The re-entry target. Single-sourced so no caller composes the child command itself.
 if (!defined('PFB_REENTRY_SCRIPT')) {
 	define('PFB_REENTRY_SCRIPT', '/usr/local/www/pfblockerng/pfblockerng.php');
@@ -10462,8 +10469,10 @@ function pfb_unbound_py_flip_sentinel() {
 // parses as an integer >= $target, or $timeout_s elapses. Shared by
 // pfb_unbound_py_wait_applied() (the ADR-10 reload-watcher handshake) and
 // pfb_unbound_py_wait_control_applied() (the control-channel watcher). 200 ms
-// poll interval; returns TRUE once applied, FALSE on timeout.
-function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
+// poll interval; returns TRUE once applied, FALSE on timeout. An optional $alive probe
+// is consulted marker-first -- an already-applied target returns TRUE without it -- and
+// a FALSE breaks the wait: a dead consumer can never apply (issue #3200).
+function pfb_unbound_py_wait_marker($path, $target, $timeout_s, ?callable $alive = NULL) {
 	$target = (int) $target;
 	$deadline = microtime(TRUE) + (float) $timeout_s;
 
@@ -10480,6 +10489,10 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
 				}
 			}
 		}
+		// Marker-first: liveness is only consulted when this pass still needs the consumer.
+		if ($alive !== NULL && !$alive()) {
+			return FALSE;
+		}
 		usleep(200000);	// 200 ms between polls
 	} while (microtime(TRUE) < $deadline);
 
@@ -10491,12 +10504,16 @@ function pfb_unbound_py_wait_marker($path, $target, $timeout_s) {
 // flipping the sentinel to $gen, blocks until the watcher writes a value >= $gen to the applied
 // marker (/var/unbound/pfb_py_reload.applied) — restoring the "lists live on return" invariant
 // the restart had. Queries NEVER stop during the wait (zero-downtime/zero-dropped). Returns
-// TRUE once applied; FALSE on timeout, where the caller falls back to the restart (fail-safe).
+// TRUE once applied; FALSE on timeout (in flight, not an error) or liveness loss. Default
+// liveness is the Unbound process: the reload-watcher thread lives inside it, so a dead
+// Unbound can never apply the generation (issue #3200).
 // Poll cadence (~2s) + rebuild time bound the latency; the default budget covers a large ABP rebuild.
-function pfb_unbound_py_wait_applied($gen, $timeout_s = 30) {
+function pfb_unbound_py_wait_applied($gen, $timeout_s = 30, ?callable $alive = NULL) {
 	global $pfb;
 
-	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_reload.applied", $gen, $timeout_s);
+	$alive ??= static fn (): bool => is_process_running('unbound');
+
+	return pfb_unbound_py_wait_marker("{$pfb['dnsbldir']}/pfb_py_reload.applied", $gen, $timeout_s, $alive);
 }
 
 
@@ -12129,7 +12146,9 @@ function pfb_dnsbl_manifest_failure_notice(): bool {
 // is running, no config change is pending, and the RAM gate fits, this takes the ZERO-DOWNTIME
 // fast path (flip the reload sentinel, no restart). Any other case falls back to the restart
 // (fail-safe; PHP is the PRIMARY gate — never "flip and hope"). Returns TRUE only after the
-// applied-generation handshake; restart fallback returns FALSE.
+// applied-generation handshake; FALSE = restart fallback (resolver broken) OR unconfirmed-
+// in-flight (issue #3200): queries keep the previous snapshot and the ADR-61 tick retry
+// re-publishes until the swap converges.
 function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FALSE, ?callable $apply_ledger = NULL) {
 	global $g, $pfb;
 	$apply_ledger ??= static function (): bool {
@@ -12163,11 +12182,16 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 			if ($gen !== FALSE) {
 				pfb_logger("\nReloading Unbound Resolver{$type} [ zero-downtime swap ]", 1);
 
+				$swap_wait_s = (int) ($GLOBALS['pfb_test_swap_wait_s'] ?? 0);
+				if ($swap_wait_s <= 0) {
+					$swap_wait_s = PFB_DNSBL_SWAP_WAIT;
+				}
+
 				// Readiness handshake: block (bounded) until the watcher APPLIES this
 				// generation, so the new lists are LIVE before we return -- the ADR-12
 				// post hook + the #51 alert page then see the new state, not a pending
 				// async swap. Queries keep flowing on the old snapshot during the wait.
-				if (pfb_unbound_py_wait_applied($gen)) {
+				if (pfb_unbound_py_wait_applied($gen, $swap_wait_s)) {
 					pfb_logger(" completed", 1);
 					// Clear the daemon-suppression marker before this early return: the
 					// alert/#51 path (pfb_reload_unbound called from pfblockerng_alerts.php)
@@ -12182,18 +12206,26 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 					return TRUE;
 				}
 
-				// The swap did not confirm within the budget (watcher stuck / declined
-				// its own RAM re-check / very slow box) -> fall back to the restart so
-				// the new lists definitely load. NOT an error: fail-safe by design.
-				pfb_logger(" not confirmed in time -- falling back to Unbound restart", 2);
-				// Clear the daemon-suppression marker touched above before falling
-				// through: the inline restart path below (pfb_stop_start_unbound) does
-				// NOT touch '.sync' at all -- a normal, non-fast-path reload restarts
-				// with no suppression marker involved -- so clearing it here is safe.
-				// It is still REQUIRED because the alert/#51 caller (pfb_reload_unbound
-				// invoked from pfblockerng_alerts.php) has no later clear_work_files, so
-				// leaving it set here would leak and suppress the DNSBL Queries daemon
-				// until the next full update (issue #713 bug 3).
+				// issue #3200: expiry is NOT a failure -- a slow/declined rebuild stays
+				// in flight, the previous snapshot keeps serving, and ADR-61 tick
+				// reconciliation re-publishes. Liveness, not the clock, separates
+				// in-flight from broken: a dead Unbound can never apply the generation.
+				if (is_process_running('unbound')) {
+					pfb_logger(" swap not confirmed within {$swap_wait_s}s -- swap still in flight, previous lists serving", 1);
+					// Same leak rationale as the flip-failure branch below (#713 bug 3):
+					// the alert/#51 caller has no later clear_work_files.
+					unlink_if_exists("{$pfb['dnsbl_file']}.sync");
+					// Open the pending (dnsbl,dnsbl,apply) entry NOW: no restart tail runs
+					// to write it, and tick reconciliation keys on this entry.
+					$converged = $apply_ledger();
+					pfb_unbound_py_gc($converged);
+					return FALSE;
+				}
+
+				// Unbound exited during the swap: nothing will ever apply the generation,
+				// so fall through to the restart tail -- restarting is what brings DNS
+				// back with the new manifest.
+				pfb_logger(" swap unconfirmed: Unbound exited during the swap -- recovering via restart", 2);
 				unlink_if_exists("{$pfb['dnsbl_file']}.sync");
 			}
 			else {

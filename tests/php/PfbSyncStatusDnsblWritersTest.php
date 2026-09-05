@@ -82,7 +82,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			}
 		}
 		$this->savedG = [];
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['config']['unbound']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_swap_wait_s'], $GLOBALS['config']['unbound']);
 
 		foreach (glob($this->dir . '/*') ?: [] as $file) {
 			@unlink($file);
@@ -643,6 +643,96 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			'a converged zero-downtime swap must close the dnsbl apply entry via its own early return');
 		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
 			'the success early-return must clear its own daemon-suppression marker before returning');
+	}
+
+	/**
+	 * issue #3200: a swap that does not confirm within its budget is IN FLIGHT, not
+	 * failed. The resolver must keep serving the previous snapshot: no restart, no
+	 * fall-through -- the caller is told FALSE so its cache flushes stay skipped (the
+	 * new data is not live yet), the daemon-suppression marker is still cleared (#713
+	 * bug 3: the alerts/#51 caller has no later clear_work_files), and the
+	 * (dnsbl,dnsbl,apply) entry opens immediately so ADR-61 tick reconciliation
+	 * re-publishes until the swap converges. $pfb_test_swap_wait_s of 0/negative/
+	 * non-int casts falls back to PFB_DNSBL_SWAP_WAIT via the seam's <= 0 guard.
+	 */
+	public function testZeroDowntimeSwapTimeoutKeepsResolverServingWithoutRestart(): void
+	{
+		$GLOBALS['pfb_test_swap_wait_s'] = 1;
+
+		$this->writeUnboundConf(TRUE);
+		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['g']['varrun_path']             = $this->dir;
+		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+
+		// Applied marker BEHIND the generation the flip publishes (1): the swap never
+		// confirms within the 1s test budget.
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "0\n");
+
+		// Unbound stays alive throughout: the watcher is merely slow, nothing is broken.
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+
+		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertFalse($swapped, 'an unconfirmed swap must read as not-swapped so the caller skips its cache flushes');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
+			'the in-flight return must still clear its own daemon-suppression marker before returning');
+		$this->assertStringNotContainsString('falling back to Unbound restart', $log,
+			'slowness must never restart the resolver -- the previous snapshot keeps serving');
+		$this->assertStringContainsString('swap still in flight', $log,
+			'the in-flight verdict must be named in the log');
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open,
+			'the unconfirmed swap must open the (dnsbl,dnsbl,apply) entry itself, not leave that to a restart tail that must not run');
+		$this->assertSame('apply', $open[0]['stage'] ?? '');
+	}
+
+	/**
+	 * issue #3200: the only genuinely broken swap state is a DEAD resolver -- the
+	 * reload-watcher thread lives inside Unbound, so a dead Unbound can never apply
+	 * the generation. The liveness probe must break the wait on its first pass (the
+	 * elapsed bound below is that liveness property: the budget must not be burned
+	 * by a wait nothing could ever satisfy), and the restart tail recovers DNS.
+	 */
+	public function testZeroDowntimeSwapWatcherDeathRecoversViaRestart(): void
+	{
+		$GLOBALS['pfb_test_swap_wait_s'] = 3;
+
+		$this->writeUnboundConf(TRUE);
+		$GLOBALS['pfb']['dnsbl_file']            = "{$this->dir}/dnsbl_file";
+		$GLOBALS['pfb']['unbound_py_count']      = "{$this->dir}/unbound_py_count";
+		file_put_contents($GLOBALS['pfb']['unbound_py_count'], '10');
+		$GLOBALS['pfb']['chroot_cmd']            = '/bin/echo';
+		$GLOBALS['pfb']['dnsbl_python_unmount']  = FALSE;
+		$GLOBALS['g']['varrun_path']             = $this->dir;
+		$GLOBALS['config']['unbound']            = ['python' => 'on', 'python_script' => 'pfb_unbound'];
+
+		file_put_contents("{$this->dir}/pfb_py_reload.applied", "0\n");
+
+		// Unbound is UP at the fast-path eligibility check, then GONE: the watcher
+		// died inside the swap, so nothing will ever apply the published generation.
+		$calls = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$calls): bool {
+			$calls++;
+			return $calls === 1;
+		};
+
+		$started = microtime(TRUE);
+		$swapped = pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);
+		$elapsed = microtime(TRUE) - $started;
+
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertFalse($swapped, 'the restart fallback keeps the FALSE contract');
+		$this->assertFileDoesNotExist("{$GLOBALS['pfb']['dnsbl_file']}.sync",
+			'the restart fall-through must clear the daemon-suppression marker before the shared tail');
+		$this->assertStringContainsString('recovering via restart', $log,
+			'a dead resolver during a swap must be named as the restart trigger');
+		$this->assertLessThan(2.0, $elapsed,
+			'the liveness probe must break the wait on its first pass -- a dead watcher can never apply the generation');
 	}
 
 	public function testGenericSwapReturnsAppliedAndLeavesFullFlushToCaller(): void
