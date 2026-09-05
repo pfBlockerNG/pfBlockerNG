@@ -390,6 +390,10 @@ def _agent_md_front_matter(text: str) -> dict[str, str]:
             continue
         key, sep, value = (part.strip() for part in line.partition(":"))
         if sep and value:
+            if len(value) >= 2 and (
+                (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'"))
+            ):
+                value = value[1:-1]
             fields[key] = value
     return fields
 

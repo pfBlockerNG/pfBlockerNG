@@ -89,7 +89,7 @@ def make_tree(
     doc: str | None = None,
     tiers: str = _TIERS_TEXT,
     build_js: str = "agent(p, { model: 'claude-small-x' })\n",
-    check_js: str = "a 'claude-small-x' b \"claude-top-x\"\n",
+    check_js: str | None = "a 'claude-small-x' b \"claude-top-x\"\n",
     builder_toml: str | None = None,
     checker_toml: str | None = None,
     checker_top_toml: str | None = None,
@@ -102,7 +102,8 @@ def make_tree(
     _write(root / ".agents/skills/land/SKILL.md", "# land\n")
     _write(root / ".agents/policy/flow.md", "# flow\n")
     _write(root / ".claude/workflows/build.js", build_js)
-    _write(root / ".claude/workflows/check.js", check_js)
+    if check_js is not None:
+        _write(root / ".claude/workflows/check.js", check_js)
     _write(root / ".codex/agents/builder.toml", builder_toml or _toml("codex-small", "workspace-write"))
     _write(root / ".codex/agents/checker.toml", checker_toml or _toml("codex-small", "read-only"))
     _write(root / ".codex/agents/checker-top.toml", checker_top_toml or _toml("codex-top", "read-only"))
@@ -296,8 +297,7 @@ def test_claude_agent_valid_binding(tmp_path: Path) -> None:
         "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
-    (tmp_path / ".claude/workflows/check.js").unlink()
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
     _write(tmp_path / ".claude/agents/checker-top.md", _claude_agent_md("claude-top-x"))
     assert _problems(tmp_path) == []
@@ -309,7 +309,7 @@ def test_claude_agent_file_missing(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:missing-agent | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _assert_flags(_problems(tmp_path), "missing Claude agent .claude/agents/missing-agent.md")
 
 
@@ -319,7 +319,7 @@ def test_claude_agent_missing_front_matter(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", "# No front matter\n")
     _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: missing YAML front matter")
 
@@ -330,7 +330,7 @@ def test_claude_agent_missing_description(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", "---\nname: x\nmodel: claude-small-x\n---\n")
     _assert_flags(_problems(tmp_path), ".claude/agents/checker.md: front matter has no description")
 
@@ -341,7 +341,7 @@ def test_claude_agent_model_wrong_tier(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-top-x"))
     _assert_flags(_problems(tmp_path), ".claude/agents/checker.md model 'claude-top-x' is not a Claude model")
 
@@ -353,7 +353,7 @@ def test_claude_agent_primary_tier_uncovered(tmp_path: Path) -> None:
         "| agent:checker, agent:checker-top |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
     _assert_flags(_problems(tmp_path), "no Claude agent binding runs its primary tier 'top'")
 
@@ -364,7 +364,7 @@ def test_claude_agent_mutation_mismatch(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x", mutation="workspace-write"))
     _assert_flags(
         _problems(tmp_path), ".claude/agents/checker.md mutation marker 'workspace-write' != role Mutation 'read-only'"
@@ -377,7 +377,7 @@ def test_orphan_claude_agent(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _write(tmp_path / ".claude/agents/checker.md", _claude_agent_md("claude-small-x"))
     _write(tmp_path / ".claude/agents/stray.md", _claude_agent_md("claude-small-x"))
     _assert_flags(_problems(tmp_path), "stray.md: Claude agent not claimed by any registry row")
@@ -389,8 +389,25 @@ def test_missing_claude_agents_dir_when_claimed(tmp_path: Path) -> None:
         "| checker | small | read-only | yes | agent:checker | agent:checker | agent:checker |",
         *_ROWS[2:],
     )
-    make_tree(tmp_path, doc=_doc(rows=rows))
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
     _assert_flags(_problems(tmp_path), "missing directory: .claude/agents")
+
+
+def test_claude_agent_quoted_front_matter_values_parsed(tmp_path: Path) -> None:
+    rows = (
+        _ROWS[0],
+        "| checker | small+top | read-only | yes | agent:checker, agent:checker-top "
+        "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
+        *_ROWS[2:],
+    )
+    make_tree(tmp_path, doc=_doc(rows=rows), check_js=None)
+    content = (
+        '---\nname: "x"\ndescription: \'test agent\'\nmodel: "claude-small-x"\neffort: "medium"\n---\n\n'
+        "<!-- mutation: read-only -->\n"
+    )
+    _write(tmp_path / ".claude/agents/checker.md", content)
+    _write(tmp_path / ".claude/agents/checker-top.md", _claude_agent_md("claude-top-x"))
+    assert _problems(tmp_path) == []
 
 
 def test_codex_workflow_kind_rejected(tmp_path: Path) -> None:
