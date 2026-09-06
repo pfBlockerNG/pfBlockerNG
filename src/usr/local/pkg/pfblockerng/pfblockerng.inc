@@ -6731,6 +6731,9 @@ function pfb_mirror_hook_output(string $logfile, int $offset): void {
 	$body = @file_get_contents($logfile, FALSE, NULL, $offset, $end - $offset);
 	if (is_string($body) && $body !== '') {
 		print $body;
+		// issue #3216: raw hook output -- a hook whose last line is unterminated leaves the
+		// console mid-line, so the boundary must know about these bytes too.
+		pfb_stdout_mid_line($body);
 	}
 }
 
@@ -6933,6 +6936,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 					$chunk = pfb_log_tail_chunk($logtarget, $off, FALSE);
 					if ($chunk['data'] !== '') {
 						print $chunk['data'];
+						pfb_stdout_mid_line($chunk['data']);	// issue #3216
 					}
 					$off = $chunk['offset'];
 					$st  = proc_get_status($proc);
@@ -6947,6 +6951,7 @@ function pfb_run_hooks($when, $ctx = array()) {
 				$chunk = pfb_log_tail_chunk($logtarget, $off, TRUE);
 				if ($chunk['data'] !== '') {
 					print $chunk['data'];
+					pfb_stdout_mid_line($chunk['data']);	// issue #3216
 				}
 				if (!$exited) {
 					// Cap exhausted with the child still "running" -- a pathologically wedged process.

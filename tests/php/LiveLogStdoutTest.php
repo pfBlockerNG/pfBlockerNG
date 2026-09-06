@@ -26,6 +26,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_run_streams_to_stdout')]
+#[CoversFunction('pfb_stdout_mid_line')]
 #[CoversFunction('pfb_stdout_close_line')]
 final class LiveLogStdoutTest extends TestCase
 {
@@ -223,5 +224,27 @@ final class LiveLogStdoutTest extends TestCase
 		$out = (string) ob_get_clean();
 
 		$this->assertSame('', $out, 'the boundary must not print for a pass that never mirrored');
+	}
+
+	/**
+	 * issue #3216: a write that mirrors NO bytes moves no column, so it must not disturb the
+	 * boundary state. pfb_logger('', 1) mirrors nothing whenever the log file is already
+	 * mid-line (the stamp is only inserted at a line start) -- e.g. the first write of an
+	 * install process whose log a previous pass left unterminated.
+	 */
+	#[RunInSeparateProcess]
+	public function testAWriteThatMirroredNothingLeavesTheBoundaryStateAlone(): void
+	{
+		global $pfb;
+		$pfb['hook_lifecycle'] = 'install';
+		@file_put_contents($pfb['log'], 'a previous pass left this line unterminated');
+
+		ob_start();
+		pfb_logger('', 1);
+		pfb_stdout_close_line();
+		print "done.\n";
+		$out = (string) ob_get_clean();
+
+		$this->assertSame("done.\n", $out, 'an empty mirror write must not make the boundary emit a newline');
 	}
 }

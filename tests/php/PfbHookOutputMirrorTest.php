@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -20,6 +21,7 @@ use PHPUnit\Framework\TestCase;
  * bytes, plus the no-new-bytes and empty-path guards.
  */
 #[CoversFunction('pfb_mirror_hook_output')]
+#[CoversFunction('pfb_stdout_close_line')]
 final class PfbHookOutputMirrorTest extends TestCase
 {
 	private string $logfile = '';
@@ -96,5 +98,32 @@ final class PfbHookOutputMirrorTest extends TestCase
 		ob_start();
 		pfb_mirror_hook_output('', 0);
 		$this->assertSame('', (string) ob_get_clean());
+	}
+
+	/**
+	 * issue #3216: the mirrored body is the hook's OWN output, so a hand-written hook whose last
+	 * line has no trailing newline leaves the pkg console mid-line -- and pfSense's next framing
+	 * line ("done.") was glued onto it. The mirror must record what it printed so the lifecycle
+	 * boundary can close the line.
+	 */
+	#[RunInSeparateProcess]
+	public function testAHookBodyWithoutATrailingNewlineIsClosedAtTheBoundary(): void
+	{
+		global $pfb;
+		// Given a lifecycle callback and a hook that ends its output mid-line...
+		$pfb['hook_lifecycle'] = 'install';
+		$offset = $this->seedAndOffset("[ pfB Hook ] post haproxy (hook_post_haproxy.sh)\n");
+		@file_put_contents($this->logfile, 'Reloading HAProxy', FILE_APPEND);
+
+		ob_start();
+		pfb_mirror_hook_output($this->logfile, $offset);
+		// When the pass reaches the boundary and pfSense resumes its framing...
+		pfb_stdout_close_line();
+		print "done.\n";
+		$out = (string) ob_get_clean();
+
+		// Then the framing starts on its own line.
+		$this->assertSame("Reloading HAProxy\ndone.\n", $out,
+			"core's framing must not continue the hook's last line; got: " . var_export($out, TRUE));
 	}
 }
