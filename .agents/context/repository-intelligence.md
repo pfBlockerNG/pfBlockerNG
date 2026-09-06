@@ -18,7 +18,7 @@ Load when: every agent session, from `AGENTS.md`.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
   installs or upgrades the pinned org fork with
-  `uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'`
+  `uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114'`
   before activating `.githooks`.
 - `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
   physically absolutizes a relative selection before returning it, and only when none

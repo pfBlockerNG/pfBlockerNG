@@ -30,7 +30,7 @@ resolve_graphify_launcher() {
 		:
 	else
 		command -v uv >/dev/null 2>&1 || {
-			echo "resolve-graphify.sh: Graphify is not installed; run uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87' first" >&2
+			echo "resolve-graphify.sh: Graphify is not installed; run uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114' first" >&2
 			return 1
 		}
 		_graphify_uv_bin=$(uv tool dir --bin 2>/dev/null) || {

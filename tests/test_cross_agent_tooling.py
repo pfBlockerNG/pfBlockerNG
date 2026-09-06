@@ -516,7 +516,7 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
 def test_graphify_install_uses_org_commit_without_local_patch() -> None:
     installer_path = "scripts/agent/ensure-graphify.sh"
     installer = (ROOT / installer_path).read_text(encoding="utf-8")
-    install_command = "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87'"
+    install_command = "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114'"
     assert install_command in installer, "the shared Graphify installer lost the pinned fork commit"
 
     resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
@@ -549,7 +549,7 @@ def test_graphify_install_uses_org_commit_without_local_patch() -> None:
         ".githooks/pre-commit",
         "Graphify-Labs/graphify#3075",
         "Graphify-Labs/graphify#3310",
-        "67cd9e233fca7cdc3c81ccd36e0ac0d67de46d87",
+        "3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114",
         "language.inc=php",
         "include-node floor",
     ):
