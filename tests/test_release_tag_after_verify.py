@@ -488,7 +488,14 @@ def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(
 
 
 _SCRIPTS_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+scripts(?:\.|\s)", re.MULTILINE)
-_PYTHON_INVOCATION_RE = re.compile(r"python3(?P<flags>(?:\s+-\S+)*)\s")
+# Anchored at a command position -- line start, optionally behind env assignments --
+# so `echo python3 -P -` cannot satisfy the guard while nothing trusted runs. An
+# invocation in a shape this misses (piped, `env`-prefixed) trips the no-invocation
+# assertion below instead of passing silently.
+_PYTHON_INVOCATION_RE = re.compile(
+    r"^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*python3(?P<flags>(?:[ \t]+-\S+)*)[ \t]",
+    re.MULTILINE,
+)
 _TRUSTED_PYTHONPATH = 'PYTHONPATH="${GITHUB_WORKSPACE}/pfblockerng-src"'
 
 
