@@ -74,6 +74,10 @@ git_statuses() {
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
+	# Byte semantics for every grep below: under a UTF-8 locale GNU grep classifies a
+	# list holding an invalid UTF-8 byte as binary and suppresses its matching lines,
+	# so a hostile name never reaches the unsafe-filename guard (issue #3175).
+	export LC_ALL=C
 	files=$(grep -v '^legacy/' || true)
 	out=''
 	# issue #2016: the re-entry-bounds gate belongs to the .php/.inc AND .sh buckets --

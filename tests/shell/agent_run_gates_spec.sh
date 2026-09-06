@@ -209,6 +209,19 @@ Describe 'run-gates.sh gates_for()'
     The output should not include 'unsafe filename'
   End
 
+  # issue #3175: GNU grep under a UTF-8 locale classifies a path list holding an
+  # invalid UTF-8 byte as binary and suppresses the matching lines, so the legacy
+  # filter drops the name before the unsafe-filename guard ever sees it.
+  utf8_gates_for() {
+    LC_ALL=C.UTF-8
+    export LC_ALL=C.UTF-8
+    printf 'src/bad\377name.sh\n' | gates_for
+  }
+  It 'refuses a sh-path carrying an invalid UTF-8 byte even under a UTF-8 locale'
+    When call utf8_gates_for
+    The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
+  End
+
   # issue #3166: the allowlist checker and its red canary ride the pytest gate, so an
   # allowlist-only diff must select that gate -- a malformed allowlist has to fail locally.
   It 'maps a skip-allowlist-only diff to the pytest gate'
