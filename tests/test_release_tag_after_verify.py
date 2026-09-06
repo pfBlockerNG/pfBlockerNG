@@ -506,7 +506,7 @@ def test_a_credentialled_job_imports_python_helpers_from_the_trusted_checkout() 
     and an import names a module.
     """
     checked = 0
-    for workflow, job, helper_root in CREDENTIALLED_JOBS:
+    for workflow, job, _helper_root in CREDENTIALLED_JOBS:
         for step in _steps(_jobs(workflow)[job]):
             script = _step_run_script(step) if "run: |" in "\n".join(step) else ""
             if not _SCRIPTS_IMPORT_RE.search(script):
@@ -516,8 +516,9 @@ def test_a_credentialled_job_imports_python_helpers_from_the_trusted_checkout() 
             # assignment or invocation is not what the job executes.
             commands = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
             assert _TRUSTED_PYTHONPATH in commands, (
-                f"{workflow.name}:{job}: inline Python imports scripts/ without pointing PYTHONPATH at "
-                f"{helper_root}:\n{script}"
+                f"{workflow.name}:{job}: inline Python imports scripts/ without setting "
+                f"{_TRUSTED_PYTHONPATH} -- PYTHONPATH takes the trusted checkout ROOT, not its scripts/ "
+                f"directory:\n{script}"
             )
             invocations = list(_PYTHON_INVOCATION_RE.finditer(commands))
             assert invocations, (
