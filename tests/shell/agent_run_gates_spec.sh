@@ -192,6 +192,23 @@ Describe 'run-gates.sh gates_for()'
     The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
   End
 
+  # issue #3175: under a UTF-8 locale GNU grep classifies a path list carrying an
+  # invalid UTF-8 byte as binary and silently drops the matching lines, so a byte
+  # path used to vanish before the unsafe-filename guard ever saw it. The mapping
+  # must be locale-independent: under an explicitly hostile ambient locale the byte
+  # path still reaches the guard, and the clean survivor keeps its own gate.
+  utf8_gates_for() {
+    ( LC_ALL=C.UTF-8; export LC_ALL
+      printf 'src/bad\377name.sh\ntests/skip-allowlist.txt\n' | gates_for )
+  }
+
+  It 'refuses an unsafe path carrying an invalid UTF-8 byte under a UTF-8 locale'
+    When call utf8_gates_for
+    The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
+    The line 2 of output should equal 'uv run --locked pytest'
+    The lines of output should equal 2
+  End
+
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
     Data "my file.py"
     When call gates_for
@@ -217,6 +234,16 @@ Describe 'run-gates.sh gates_for()'
     The output should equal 'uv run --locked pytest'
   End
 
+  # issue #3174: every suite gate proves its red canary against
+  # tests/fixtures/skip-allowlist-canary.xml first, so an edit that stops the canary
+  # from being un-allowlistable must select that same gate locally -- a fixture-only
+  # diff used to match no bucket and the broken canary shipped silently.
+  It 'maps a skip-allowlist-canary-fixture-only diff to the pytest gate'
+    Data "tests/fixtures/skip-allowlist-canary.xml"
+    When call gates_for
+    The output should equal 'uv run --locked pytest'
+  End
+
   It 'emits the pytest gate once when the diff touches both the allowlist and a Python file'
     Data
       #|tests/skip-allowlist.txt
@@ -226,12 +253,13 @@ Describe 'run-gates.sh gates_for()'
     The output should equal "$(printf '%s\n%s\n%s\n%s' 'uv run --locked pytest' 'uv run --locked ruff check .' 'uv run --locked ruff format --check .' 'uv run --locked mypy tests/')"
   End
 
-  # The arm matches the whole line: a near-miss path must stay gate-less, or an unrelated
-  # .txt edit pays for the pytest suite.
-  It 'leaves a .txt that is not the allowlist gate-less'
+  # The arms match the whole line: a near-miss path must stay gate-less, or an
+  # unrelated .txt or fixture edit pays for the pytest suite.
+  It 'leaves a near-miss allowlist or canary path gate-less'
     Data
       #|tests/fixtures/other.txt
       #|tests/skip-allowlist.txt.bak
+      #|tests/fixtures/skip-allowlist-canary.xml.bak
       #|other/tests/skip-allowlist.txt
     End
     When call gates_for

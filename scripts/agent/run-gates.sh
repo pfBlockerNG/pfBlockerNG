@@ -74,7 +74,11 @@ git_statuses() {
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
-	files=$(grep -v '^legacy/' || true)
+	# issue #3175: every grep here pins LC_ALL=C inline (ADR-26) -- under a UTF-8
+	# locale GNU grep classifies a list carrying an invalid UTF-8 byte as binary and
+	# drops the matching lines, so a byte path would vanish before the unsafe-name
+	# guard below instead of being refused.
+	files=$(LC_ALL=C grep -v '^legacy/' || true)
 	out=''
 	# issue #2016: the re-entry-bounds gate belongs to the .php/.inc AND .sh buckets --
 	# pfblockerng.sh owns four of the eight sites -- but it is ONE whole-tree scan, so it
@@ -87,20 +91,23 @@ gates_for() {
 	# The guard applies ONLY to those buckets -- aggregate gates (.py/.md suites)
 	# and gate-less file types never embed the filename, so an unusual name there
 	# must neither fail the run nor drop the aggregate gates.
-	unsafe=$(printf '%s\n' "$files" | grep -E '\.(php|inc|sh)$' | grep '[^A-Za-z0-9._/-]' || true)
+	unsafe=$(printf '%s\n' "$files" | LC_ALL=C grep -E '\.(php|inc|sh)$' | LC_ALL=C grep '[^A-Za-z0-9._/-]' || true)
 	if [ -n "$unsafe" ]; then
-		files=$(printf '%s\n' "$files" | grep -v '[^A-Za-z0-9._/-]' || true)
+		files=$(printf '%s\n' "$files" | LC_ALL=C grep -v '[^A-Za-z0-9._/-]' || true)
 		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
 	fi
-	if printf '%s\n' "$files" | grep -q '\.py$'; then
+	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.py$'; then
 		out="${out}uv run --locked pytest${nl}uv run --locked ruff check .${nl}uv run --locked ruff format --check .${nl}uv run --locked mypy tests/${nl}"
 	# issue #3166: the skip gate READS tests/skip-allowlist.txt, and its checker plus red
 	# canary ride the pytest gate, which also carries the two tests that parse the real file.
 	# A .txt path matched no bucket, so an allowlist-only diff selected no suite at all.
-	elif printf '%s\n' "$files" | grep -qx 'tests/skip-allowlist\.txt'; then
+	# issue #3174: the same gates run their canary against tests/fixtures/skip-allowlist-
+	# canary.xml, so a fixture-only diff must select that gate too or nothing re-proves
+	# the canary red locally.
+	elif printf '%s\n' "$files" | LC_ALL=C grep -qxE 'tests/(skip-allowlist\.txt|fixtures/skip-allowlist-canary\.xml)'; then
 		out="${out}uv run --locked pytest${nl}"
 	fi
-	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
+	if printf '%s\n' "$files" | LC_ALL=C grep -Eq '\.(php|inc)$'; then
 		out="${out}uv run --locked python scripts/check_composer_vendor.py${nl}"
 		# issue #2123: the on/off toggle contract belongs to pfb_cfg_registry(), not to
 		# the page. --self-test is the gate's own red canary and runs first.
@@ -109,16 +116,16 @@ gates_for() {
 		# pfb_reentry_exec()/pfb_reentry() seam. Same red-canary-first shape.
 		out="${out}uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py${nl}"
 		reentry_emitted=1
-		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
+		for f in $(printf '%s\n' "$files" | LC_ALL=C grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done
 		out="${out}vendor/bin/phpunit${nl}composer phpstan${nl}composer phpcs -- --standard=phpcs.xml.dist src/${nl}"
 	fi
-	if printf '%s\n' "$files" | grep -q '\.sh$'; then
+	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.sh$'; then
 		if [ "$reentry_emitted" != 1 ]; then
 			out="${out}uv run --locked python scripts/check_reentry_bounds.py --self-test && uv run --locked python scripts/check_reentry_bounds.py${nl}"
 		fi
-		for f in $(printf '%s\n' "$files" | grep '\.sh$'); do
+		for f in $(printf '%s\n' "$files" | LC_ALL=C grep '\.sh$'); do
 			out="${out}sh -n $f${nl}"
 			# issue #1210: shellcheck scope mirrors .githooks/pre-commit + test.yml
 			# (src, scripts, .claude/hooks); tests/ specs trip SC2034 false-positives.
@@ -128,7 +135,7 @@ gates_for() {
 		done
 		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
-	if printf '%s\n' "$files" | grep -q '\.md$'; then
+	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.md$'; then
 		out="${out}npx markdownlint-cli2${nl}"
 	fi
 	printf '%s' "$out"
@@ -265,7 +272,9 @@ main() {
 	staged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT --cached) || exit 2
 	unstaged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT) || exit 2
 	untracked=$(git_paths ls-files -z --others --exclude-standard) || exit 2
-	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
+	# issue #3175: the trailing grep drops the same byte paths as a UTF-8 locale would
+	# inside gates_for(), so it pins the locale too (sort already does).
+	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | LC_ALL=C grep -v '^$')
 	cmds=$(printf '%s\n' "$files" | gates_for)
 	pairing_cmd='python3 scripts/check_coverage_pairing.py --name-status-z'
 	graph_cmd='sh scripts/agent/check-graph-fresh.sh'
