@@ -113,15 +113,15 @@ run the Stable installer.
 The 3.3.x package still **looks like v3**. That is on purpose. It saves a
 copy of your current settings so v4 can upgrade them, and so you can go back.
 
-On the firewall, as root:
+On the firewall, as root, copy the **Stable** command from
+[pkg.pfblockerng.com](https://pkg.pfblockerng.com/):
 
 ```sh
-t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
 ```
 
-That is the documented installer from
-[pkg.pfblockerng.com](https://pkg.pfblockerng.com/). **Stable** is the 3.3.x
-bridge (whatever 3.3.x that page currently lists).
+**Stable** is the 3.3.x bridge (whatever 3.3.x that page currently lists).
+If the site’s copy command differs, use the site.
 
 When it finishes:
 
@@ -138,18 +138,22 @@ schedule, a custom domain). Call this **snapshot A** — “how my box looked on
 
 ## Step 2 — install v4 (Nightly)
 
-v4 is not a Stable release yet. This beta uses **Nightly**. (The installer
-also has Testing and Edge channels — do not use those for this pass unless
-someone asked you to.) Switch the same firewall with the same script, only
-the channel name changes:
+v4 is not a Stable release yet. This beta uses **Nightly** from
+[pkg.pfblockerng.com](https://pkg.pfblockerng.com/) (the site labels Nightly
+“not for daily use”). Testing and Edge are also listed there — do not use
+those for this pass unless someone asked you to.
+
+On the firewall, as root, copy the **Nightly** command from that page:
 
 ```sh
-t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel nightly; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel nightly
 ```
 
-Nightly versions look like a timestamp (`20260905123014.713025f`), not `4.0.0`.
-That is still v4. Nightly keeps its **own** saved-settings copy, separate from
-a later 4.0 release.
+If the site’s copy command differs, use the site.
+
+Nightly versions look like a timestamp (`20260905123014.713025f`), not
+`4.0.0`. That is still v4. Nightly keeps its **own** saved-settings copy,
+separate from a later 4.0 release.
 
 When it finishes:
 
@@ -164,10 +168,6 @@ When it finishes:
 
 Change one obvious setting so you can recognise this box as v4. Call that
 **snapshot B**.
-
-The same installer is also listed on
-[pkg.pfblockerng.com](https://pkg.pfblockerng.com/) and in the
-[GitHub README](https://github.com/pfBlockerNG/pfBlockerNG#installation).
 
 ---
 
