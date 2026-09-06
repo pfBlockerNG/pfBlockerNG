@@ -93,6 +93,10 @@
 		global $pfb;
 		$pfb['save'] = TRUE;
 		sync_package_pfblockerng(array('scope' => 'both', 'force' => FALSE, 'trigger' => 'manual'));
+		// issue #3216: the pass mirrors its progress to the pkg output and can end mid-line
+		// ("Restarting DNSBL Service") -- close it so pfSense's own framing ("done.", the
+		// menu/service rows) starts on its own line in the install/upgrade log.
+		pfb_stdout_close_line();
 		]]>
 	</custom_php_resync_config_command>
 </packagegui>

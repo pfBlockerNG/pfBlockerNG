@@ -4926,6 +4926,35 @@ function pfb_log_status_line($header, $status, $verdict = '') {
 	return $field . str_pad("{$status} ", 27) . $verdict;
 }
 
+// issue #3216: pfb_logger()'s STDOUT mirror (below) carries the LOG-FILE convention -- a
+// leading "\n" separates a message from the previous write, and a message may deliberately
+// end mid-line so a later write appends to it (" done.", the progress dots). pfSense's own
+// package framing (update_status(): "done.\n", "Menu items... ") is newline-TERMINATED
+// instead, so a pkg lifecycle callback that returns with the console mid-line gets core's
+// next line glued onto ours ("Restarting DNSBL Servicedone."). Record what the mirror last
+// wrote -- $mirrored is that chunk, NULL queries -- so a boundary can close the line. Empty
+// writes leave the state alone: they move no column.
+function pfb_stdout_mid_line(?string $mirrored = NULL): bool {
+	static $mid_line = FALSE;
+
+	if ($mirrored !== NULL && $mirrored !== '') {
+		$mid_line = !str_ends_with($mirrored, "\n");
+	}
+
+	return $mid_line;
+}
+
+// issue #3216: close a console line the mirror left open, so the status text that follows
+// starts in column 0. Called where our lifecycle work hands back to pfSense's framing. A
+// no-op when the mirror is silent (a cron/Run-Now pass) or already ended its line -- our own
+// update_status(" done.") appends MUST stay on the line they continue.
+function pfb_stdout_close_line(): void {
+	if (pfb_stdout_mid_line()) {
+		print "\n";
+		pfb_stdout_mid_line("\n");
+	}
+}
+
 function pfb_logger($log, $logtype) {
 	global $g, $pfb;
 
@@ -5010,6 +5039,7 @@ function pfb_logger($log, $logtype) {
 	// hooks and the detached rc.d daemons are untouched -- visibility only, not the process-safety.
 	if (($logtype == 1 || $logtype == 2) && pfb_run_streams_to_stdout()) {
 		print "{$log_out}";
+		pfb_stdout_mid_line($log_out);
 	}
 }
 
@@ -20261,6 +20291,10 @@ function pfblockerng_php_pre_deinstall_command() {
 	update_status("Removing pfBlockerNG...");
 	sync_package_pfblockerng();
 	pfb_top1m_teardown_call();
+
+	// issue #3216: the disable pass above mirrors its progress to the pkg output and can end
+	// mid-line -- close it so the teardown rows below start on their own line.
+	pfb_stdout_close_line();
 
 	// Live-object teardown always runs regardless of $pfb['keep'], so that uninstalling
 	// with the default keep=on still removes active pf tables, boot hooks, owned firewall

@@ -770,10 +770,14 @@ exec('/usr/local/pkg/pfblockerng/pfblockerng.sh dnsbl_cache stage >/dev/null 2>&
 
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
+	// issue #3216: the restart mirrors its own progress (dots, "\nStarting Unbound Resolver")
+	// to the pkg output and leaves the line open -- close it so the status below, and the
+	// migration rows after it, are not appended to that line.
+	pfb_stdout_close_line();
 	// issue #3094: the return value used to be assigned and never read, so an install
 	// could finish "successfully" with the resolver never restarted.
 	if (($final['retval'] ?? 0) != 0) {
-		update_status(" Unbound Resolver did not restart; see the pfBlockerNG log.");
+		update_status(" Unbound Resolver did not restart; see the pfBlockerNG log.\n");
 	}
 }
 

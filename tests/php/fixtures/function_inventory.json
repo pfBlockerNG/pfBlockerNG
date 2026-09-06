@@ -12010,10 +12010,28 @@
             }
         ]
     },
+    "pfb_stdout_close_line": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
     "pfb_stdout_is_terminal": {
         "returnsRef": false,
         "returnType": "bool",
         "params": []
+    },
+    "pfb_stdout_mid_line": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "mirrored",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_stop_start_unbound": {
         "returnsRef": false,

@@ -26,6 +26,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_logger')]
 #[CoversFunction('pfb_run_streams_to_stdout')]
+#[CoversFunction('pfb_stdout_close_line')]
 final class LiveLogStdoutTest extends TestCase
 {
 	private ?string $origRunlog = null;
@@ -161,5 +162,66 @@ final class LiveLogStdoutTest extends TestCase
 		$pfb['hook_lifecycle'] = 'install';
 		$pfb['run_stdout_override'] = TRUE;
 		$this->assertSame('', $this->capture('extras-only detail', 3));
+	}
+
+	/**
+	 * issue #3216: the mirror carries the LOG-FILE convention -- a leading "\n" separates a
+	 * message from the previous write and a message may end mid-line so a later write appends
+	 * to it (" done.", the progress dots). pfSense's package framing is newline-TERMINATED, so
+	 * a lifecycle callback that hands control back mid-line gets core's next line glued onto
+	 * ours ("Restarting DNSBL Servicedone."). The boundary must close that line.
+	 */
+	#[RunInSeparateProcess]
+	public function testTheBoundaryClosesAConsoleLineTheMirrorLeftOpen(): void
+	{
+		global $pfb;
+		// Given the pkg resync callback, whose last progress write is deliberately mid-line
+		// (pfblockerng.inc's "\nRestarting DNSBL Service" -- nothing appends to it)...
+		$pfb['hook_lifecycle'] = 'install';
+
+		ob_start();
+		pfb_logger("\nRestarting DNSBL Service", 1);
+		// When the callback returns to pfSense, which resumes its own framing...
+		pfb_stdout_close_line();
+		print "done.\n";
+		$out = (string) ob_get_clean();
+
+		// Then core's line starts in column 0 instead of continuing ours.
+		$this->assertStringEndsWith("Restarting DNSBL Service\ndone.\n", $out,
+			"core's framing must start on its own line; got: " . var_export($out, TRUE));
+	}
+
+	#[RunInSeparateProcess]
+	public function testAMessageThatAlreadyEndedItsLineGainsNoBlankLine(): void
+	{
+		global $pfb;
+		// The other branch: a mirrored message that terminated its own line (apply.inc's
+		// "\n**Saving configuration**\n") must not be padded with a second newline.
+		$pfb['hook_lifecycle'] = 'install';
+
+		ob_start();
+		pfb_logger("\n**Saving configuration**\n", 1);
+		pfb_stdout_close_line();
+		print "done.\n";
+		$out = (string) ob_get_clean();
+
+		$this->assertStringEndsWith("**Saving configuration**\ndone.\n", $out,
+			'closing an already-closed line must not insert a blank one; got: ' . var_export($out, TRUE));
+	}
+
+	#[RunInSeparateProcess]
+	public function testAPassThatNeverMirroredPrintsNothing(): void
+	{
+		global $pfb;
+		// A normal cron/Run-Now pass never mirrors (STDOUT is a redirected log file), so the
+		// boundary has no line of ours to close and must stay silent.
+		unset($pfb['hook_lifecycle'], $pfb['run_stdout_override']);
+
+		ob_start();
+		pfb_logger("\nRestarting DNSBL Service", 1);
+		pfb_stdout_close_line();
+		$out = (string) ob_get_clean();
+
+		$this->assertSame('', $out, 'the boundary must not print for a pass that never mirrored');
 	}
 }
