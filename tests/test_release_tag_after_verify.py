@@ -512,12 +512,19 @@ def test_a_credentialled_job_imports_python_helpers_from_the_trusted_checkout() 
             if not _SCRIPTS_IMPORT_RE.search(script):
                 continue
             checked += 1
-            assert _TRUSTED_PYTHONPATH in script, (
+            # Comment-stripped: the fix's own comment names `python3 -`, and a commented
+            # assignment or invocation is not what the job executes.
+            commands = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+            assert _TRUSTED_PYTHONPATH in commands, (
                 f"{workflow.name}:{job}: inline Python imports scripts/ without pointing PYTHONPATH at "
                 f"{helper_root}:\n{script}"
             )
-            commands = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
-            for match in _PYTHON_INVOCATION_RE.finditer(commands):
+            invocations = list(_PYTHON_INVOCATION_RE.finditer(commands))
+            assert invocations, (
+                f"{workflow.name}:{job}: a scripts/ import with no live python3 invocation to enforce -P on "
+                f"-- orphaned by a comment or written in a shape this guard cannot see:\n{script}"
+            )
+            for match in invocations:
                 flags = match.group("flags").split()
                 assert "-P" in flags, (
                     f"{workflow.name}:{job}: `python3{match.group('flags')}` imports scripts/ with the released "
