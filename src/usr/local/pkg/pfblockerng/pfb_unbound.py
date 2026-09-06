@@ -547,6 +547,12 @@ RELOAD_RAM_HEADROOM_BYTES = 64 * 1024 * 1024
 # stop Event is observed promptly). Best-effort -- a small delay is acceptable by design.
 RELOAD_POLL_INTERVAL = 2.0
 
+# issue #3222: RFC 2308 Type-2 NODATA for intercepted non-address qtypes
+# (HTTPS/SVCB/MX/…). MNAME/RNAME are RFC 2606 .invalid; MINIMUM is the
+# negative-cache TTL. There is no zone SOA to borrow — pfBlockerNG is not
+# authoritative for listed names.
+DNSBL_NODATA_SOA_RDATA = "pfb.invalid. nobody.invalid. 1 3600 1200 604800 300"
+
 
 def _reload_total_ram_bytes() -> int | None:
     """Best-effort TOTAL physical RAM in bytes, stdlib only.
@@ -7473,6 +7479,12 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     msg.answer.append(
                         "{}. 3600 IN AAAA {}".format(q_name, "::" if dnsbl.null_blocking else pfb["dnsbl_ipv6"])
                     )
+                # issue #3222: A/AAAA/ANY get a sinkhole RR; every other intercepted
+                # type was finishing as empty NOERROR with no SOA (RFC 2308 Type-3).
+                # Type-2 NODATA (NOERROR + SOA in AUTHORITY) matches "name exists
+                # (A/AAAA still sinkholed) but this type has no data".
+                if not msg.answer:
+                    msg.authority.append("{}. 3600 IN SOA {}".format(q_name, DNSBL_NODATA_SOA_RDATA))
 
                 if msg is None or not msg.set_return_msg(qstate):
                     qstate.ext_state[id] = MODULE_ERROR

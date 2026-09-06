@@ -1551,17 +1551,19 @@ class TestOperateDnsbl:
         assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), f"expected a match in {answers!r}"
+        assert DNSMessage.instances[-1].authority == [], (
+            f"A-block must not carry a NODATA SOA, got {DNSMessage.instances[-1].authority!r}"
+        )
 
-    @pytest.mark.parametrize("qtype", [64, 65])
-    def test_svcb_https_vip_block_is_empty_noerror(self, monkeypatch: Any, qtype: int) -> None:
-        # Issue #3222. Scenario: a VIP-list hit queried as SVCB (64) or HTTPS (65).
+    @pytest.mark.parametrize("qtype", [64, 65, 15, 16, 33])
+    def test_non_address_vip_block_is_nodata_soa(self, monkeypatch: Any, qtype: int) -> None:
+        # Issue #3222. Scenario: a VIP-list hit queried as a non-address type
+        # (SVCB/HTTPS/MX/TXT/SRV — the shared path, not a type-65 special case).
         #   Given evil.com on a VIP feed (log_type "1")
-        #   When operate() handles qtype 64/65 (both are in pfb["rr_types"])
-        #   Then it FINISHES with rcode NOERROR and a DNSMessage whose answer
-        #        list is empty — operate() only appends A/AAAA. No SOA is added
-        #        either (stub DNSMessage has no authority list). This is the
-        #        empty-NOERROR shape the reporter captured; a NODATA+SOA fix
-        #        must change this assertion, not silently keep it green.
+        #   When operate() intercepts that qtype
+        #   Then it FINISHES NOERROR with an empty ANSWER and exactly one SOA
+        #        in AUTHORITY (RFC 2308 Type-2 NODATA). Empty NOERROR without
+        #        SOA is the defect; NXDOMAIN would contradict the sinkhole A.
         self._enable(monkeypatch)
         add_data("evil.com", log="1", index=0)
         set_feed_group(0, "TestFeed", "TestGroup")
@@ -1575,8 +1577,13 @@ class TestOperateDnsbl:
             f"qtype {qtype} expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
         )
         assert qstate.return_msg is not None, f"qtype {qtype} expected a synthetic DNSMessage"
-        answers = DNSMessage.instances[-1].answer
-        assert answers == [], f"qtype {qtype} expected empty answer, got {answers!r}"
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"qtype {qtype} expected empty answer, got {msg.answer!r}"
+        assert len(msg.authority) == 1, f"qtype {qtype} expected one SOA, got {msg.authority!r}"
+        soa = msg.authority[0]
+        assert " IN SOA " in soa, f"qtype {qtype} authority is not SOA: {soa!r}"
+        assert "pfb.invalid." in soa, f"qtype {qtype} SOA mname should be pfb.invalid: {soa!r}"
+        assert soa.startswith("evil.com. "), f"qtype {qtype} SOA owner should be the queried name: {soa!r}"
 
     def test_nxdomain_mode_returns_bare_nxdomain(self, monkeypatch: Any) -> None:
         # Issue #31. Scenario: a DNSBL hit in NXDOMAIN-logging mode ("3").

@@ -239,22 +239,18 @@ def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
     return result.stdout
 
 
-def test_dnsbl_https_svcb_vip_empty_noerror(
-    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
-) -> None:
-    """Issue #3222 live diagnosis: VIP-blocked HTTPS/SVCB vs A on real Unbound.
+def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Issue #3222: VIP-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
 
     Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
     is armed. Then the same name is queried as HTTPS, TYPE65, TYPE64, and MX
     from both the LAN client (``dig``, the iOS-like path) and on-box
     (``drill @127.0.0.1``).
 
-    Current production synthesises A/AAAA only, so those non-address queries
-    are expected to return NOERROR with ANSWER 0 and AUTHORITY 0 — the reporter's
-    empty-NOERROR shape. A dnsbl.log line after the HTTPS query proves pythonmod
-    intercepted it (the stub upstream also answers non-A as empty NOERROR, so
-    the log is the discriminator). An unlisted control name is probed the same
-    way so a stub-NODATA reply is visible next to the blocked one.
+    Non-address intercepts must return NOERROR with ANSWER 0 and AUTHORITY 1
+    (a synthetic SOA). Empty AUTHORITY is the pre-fix defect. A dnsbl.log line
+    after the HTTPS query proves pythonmod intercepted it (the stub upstream
+    also answers non-A as empty NOERROR, so the log is the discriminator).
     """
     blocked = h.unique_domain("https3222")
     control = h.unique_domain("https3222ctl")
@@ -281,10 +277,11 @@ def test_dnsbl_https_svcb_vip_empty_noerror(
                 f"{blocked} {rtype} expected NOERROR, got {parsed.rcode} records={parsed.records!r}\n{dump}"
             )
             assert parsed.records == [], f"{blocked} {rtype} expected empty ANSWER, got {parsed.records!r}\n{dump}"
-            assert an == 0 and ns == 0, (
-                f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=0, "
+            assert an == 0 and ns == 1, (
+                f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=1 (SOA), "
                 f"got ANSWER={an} AUTHORITY={ns} ADDITIONAL={ar}\n{dump}"
             )
+            assert " SOA " in lan or " SOA " in box, f"{blocked} {rtype} expected an SOA in AUTHORITY\n{dump}"
 
         ctl_a = h.dns_probe_client(client_vm, control, "A")
         assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"

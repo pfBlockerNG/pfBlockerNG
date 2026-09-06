@@ -408,7 +408,7 @@ class reply_info(_Struct):
 class DNSMessage:
     """Reply-message builder.
 
-    Records every instance on the class so tests can inspect the answer section
+    Records every instance on the class so tests can inspect the RR sections
     of the reply that operate() constructed before it was discarded.
 
     Usage in ``operate()``::
@@ -435,7 +435,11 @@ class DNSMessage:
         self.qtype = qtype
         self.qclass = qclass
         self.flags = flags
-        self.answer: list[str] = []  # RR strings to include in the answer section
+        # Mirror Unbound pythonmod's DNSMessage (question/answer/authority/additional).
+        self.question: list[str] = []
+        self.answer: list[str] = []
+        self.authority: list[str] = []
+        self.additional: list[str] = []
         self._qstate: Any = None
         DNSMessage.instances.append(self)
 
