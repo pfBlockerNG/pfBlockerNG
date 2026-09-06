@@ -99,6 +99,29 @@ APT_GET
 printf 'sudo:%s\n' "$*" >> "$DEBIAN_APT_LOG"
 exec "$@"
 SUDO
+    cat > "$activebin/locale" <<'LOCALE'
+#!/bin/sh
+case "${1:-}" in
+  -a)
+    if [ "${DEBIAN_TEST_LOCALE:-present}" = present ] || [ -e "$DEBIAN_LOCALE_MARKER" ]; then
+      printf '%s\n' 'de_DE.utf8'
+    fi
+    ;;
+  -k)
+    case "${DEBIAN_TEST_LOCALE_PROBE:-ok}" in
+      dotted) printf '%s\n' 'decimal_point="."' ;;
+      *) printf '%s\n' 'decimal_point=","' ;;
+    esac
+    ;;
+esac
+LOCALE
+    cat > "$activebin/locale-gen" <<'LOCALE_GEN'
+#!/bin/sh
+printf 'locale-gen:%s\n' "$*" >> "$DEBIAN_APT_LOG"
+# A stub cannot generate libc locales: the marker stands in for the generated
+# locale so the verification probes see post-generation state.
+true > "$DEBIAN_LOCALE_MARKER"
+LOCALE_GEN
     cat > "$activebin/brew" <<'BREW'
 #!/bin/sh
 printf 'brew:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
@@ -115,6 +138,11 @@ case "$*" in
     cp "$DEBIAN_INSTALLABLES/uv" "$BREW_UV_PREFIX/bin/uv"
     ;;
   '--prefix uv') printf '%s\n' "$BREW_UV_PREFIX" ;;
+  'list --versions iprange')
+    [ "${BREW_IPRANGE_INSTALLED:-1}" -eq 1 ] || exit 1
+    ;;
+  'install iprange')
+    ;;
   *) exit 9 ;;
 esac
 BREW
@@ -322,13 +350,15 @@ case "$*" in
 esac
 GROK
     chmod +x "$activebin/id" "$activebin/uname" "$activebin/dpkg-query" \
-      "$activebin/apt-get" "$activebin/sudo" "$activebin/brew" "$activebin/curl" "$installables"/*
+      "$activebin/apt-get" "$activebin/sudo" "$activebin/brew" "$activebin/curl" \
+      "$activebin/locale" "$activebin/locale-gen" "$installables"/*
     for tool in uv serena codegraph graphify wt; do
       cp "$installables/$tool" "$activebin/$tool"
     done
 
     worktrunk_config="$xdg_config/worktrunk/config.toml"
     brew_prefix="$fixture/homebrew uv"
+    locale_marker="$fixture/de locale generated"
     export HOME="$home"
     export XDG_CONFIG_HOME="$xdg_config"
     export DEBIAN_HELPER_LOG="$helper_log"
@@ -338,16 +368,37 @@ GROK
     export DEBIAN_INSTALLABLES="$installables"
     export DEBIAN_REPOSITORY="$repository"
     export BREW_UV_PREFIX="$brew_prefix"
+    export DEBIAN_LOCALE_MARKER="$locale_marker"
     export SERENA_STATE_DIR="$serena_state"
     unset CLAUDECODE CODEX_THREAD_ID COPILOT_CLI GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
     unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE
     unset GROK_DOCTOR_RC AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
+    unset DEBIAN_TEST_LOCALE DEBIAN_TEST_LOCALE_PROBE BREW_IPRANGE_INSTALLED
     unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME
     PATH="$activebin:$basebin"; export PATH
   }
 
   enable_client() {
     cp "$installables/$1" "$activebin/$1"
+  }
+
+  # The comma-decimal verification probe runs awk(1); the real awk under a stub
+  # locale-gen would make the examples host-dependent, so the probe is faked while
+  # everything else delegates to the real binary.
+  stub_locale_awk() {
+    real_awk=$(command -v awk)
+    cat > "$activebin/awk" <<AWK
+#!/bin/sh
+if [ "\${1:-}" = 'BEGIN { printf "%.2f", 1.5 }' ]; then
+  case "\${DEBIAN_TEST_LOCALE_PROBE:-ok}" in
+    dotted) printf '1.50' ;;
+    *) printf '1,50' ;;
+  esac
+  exit 0
+fi
+exec "$real_awk" "\$@"
+AWK
+    chmod +x "$activebin/awk"
   }
 
   cleanup() {
@@ -375,6 +426,36 @@ GROK
     The contents of file "$apt_log" should equal "$(printf '%s\n' \
       'apt-get:update' \
       'apt-get:install -y git')"
+  End
+
+  # issue #3189: run-gates fails a *.sh diff on a host without the real iprange
+  # binary or a comma-decimal locale (the unlisted-skip class). Provision both
+  # exactly like CI and verify the locale the same way the specs probe it.
+  It 'generates and verifies the de_DE.UTF-8 locale as Linux root'
+    stub_locale_awk
+    export DEBIAN_TEST_LOCALE=absent
+    When run env DEBIAN_TEST_UID=0 sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$apt_log" should equal 'locale-gen:de_DE.UTF-8'
+  End
+
+  It 'generates the de_DE.UTF-8 locale through sudo for a non-root user'
+    stub_locale_awk
+    export DEBIAN_TEST_LOCALE=absent
+    When run env DEBIAN_TEST_UID=1000 sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$apt_log" should equal "$(printf '%s\n' \
+      'sudo:locale-gen de_DE.UTF-8' \
+      'locale-gen:de_DE.UTF-8')"
+  End
+
+  It 'fails loudly naming the remedy when the generated locale stays dotted'
+    stub_locale_awk
+    export DEBIAN_TEST_LOCALE=absent
+    export DEBIAN_TEST_LOCALE_PROBE=dotted
+    When run env DEBIAN_TEST_UID=0 sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'comma decimal'
   End
 
   It 'uses official installers and current-process user paths on an initial Linux setup'
@@ -479,7 +560,9 @@ UNMANAGED_UV
     chmod +x "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin BREW_UV_INSTALLED=0 sh "$script_abs" "$repository"
     The status should equal 0
+    The output should include 'comma-decimal locale'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
+      'brew:list --versions iprange' \
       'brew:list --versions uv' \
       'brew:install uv' \
       'brew:--prefix uv' \
@@ -501,7 +584,9 @@ UNMANAGED_UV
     rm -f "$activebin/uv"
     When run env AGENT_TEST_OS=Darwin sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
     The status should equal 0
+    The output should include 'comma-decimal locale'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
+      'brew:list --versions iprange' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
@@ -512,6 +597,7 @@ UNMANAGED_UV
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init' \
+      'brew:list --versions iprange' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
@@ -531,10 +617,12 @@ UNMANAGED_UV
     rm -f "$activebin/uv" "$activebin/codegraph"
     When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
     The status should equal 0
+    The output should include 'comma-decimal locale'
     The contents of file "$curl_log" should equal "$(printf '%s\n%s' \
       'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
+      'brew:list --versions iprange' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
       'uv:tool install --upgrade serena-agent' \
@@ -556,6 +644,22 @@ UNMANAGED_UV
     The stderr should include 'brew'
     The file "$apt_log" should not be exist
     The file "$helper_log" should not be exist
+  End
+
+  It 'installs iprange through Homebrew on a Darwin setup'
+    export BREW_IPRANGE_INSTALLED=0
+    When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$tool_log" should include "$(printf '%s\n%s' \
+      'brew:list --versions iprange' \
+      'brew:install iprange')"
+    The output should include 'comma-decimal locale'
+  End
+
+  It 'names the unprovisionable comma-decimal locale loudly on Darwin'
+    When run env AGENT_TEST_OS=Darwin sh "$script_abs" "$repository"
+    The status should equal 0
+    The output should include 'comma-decimal locale'
   End
 
   It 'rejects an unsupported host before changing tools, helpers, or user configuration'

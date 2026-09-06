@@ -31,22 +31,41 @@ install_from_url() {
 install_linux_prerequisites() {
 	require_tool dpkg-query
 	set --
-	for package in ca-certificates curl git libarchive-tools; do
+	for package in ca-certificates curl git libarchive-tools iprange locales; do
 		if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null |
 			grep -q 'install ok installed'; then
 			set -- "$@" "$package"
 		fi
 	done
-	[ "$#" -gt 0 ] || return 0
-
-	require_tool apt-get
-	if [ "$(id -u)" -eq 0 ]; then
-		apt-get update
-		apt-get install -y "$@"
-	else
-		require_tool sudo
-		sudo apt-get update
-		sudo apt-get install -y "$@"
+	if [ "$#" -gt 0 ]; then
+		require_tool apt-get
+		if [ "$(id -u)" -eq 0 ]; then
+			apt-get update
+			apt-get install -y "$@"
+		else
+			require_tool sudo
+			sudo apt-get update
+			sudo apt-get install -y "$@"
+		fi
+	fi
+	# issue #3189: the shell gates fail a *.sh diff without the real iprange binary
+	# and CI's comma-decimal locale, so generate and verify de_DE.UTF-8 exactly like
+	# test.yml does -- a locale that generates but leaves awk dotted fails HERE.
+	if ! locale -a 2>/dev/null | LC_ALL=C grep -Eqi '^de_DE\.utf-?8$'; then
+		require_tool locale-gen
+		if [ "$(id -u)" -eq 0 ]; then
+			locale-gen de_DE.UTF-8
+		else
+			require_tool sudo
+			sudo locale-gen de_DE.UTF-8
+		fi
+		locale -a 2>/dev/null | LC_ALL=C grep -Eqi '^de_DE\.utf-?8$' ||
+			fail "de_DE.UTF-8 absent after locale-gen; run 'sudo locale-gen de_DE.UTF-8' manually"
+		LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC 2>/dev/null |
+			LC_ALL=C grep -Fq 'decimal_point=","' ||
+			fail "de_DE.UTF-8 lacks a comma decimal_point; check /etc/locale.gen and re-run 'sudo locale-gen de_DE.UTF-8'"
+		[ "$(LC_ALL=de_DE.UTF-8 awk 'BEGIN { printf "%.2f", 1.5 }' 2>/dev/null)" = '1,50' ] ||
+			fail 'de_DE.UTF-8 does not give awk a comma decimal; the comma-decimal specs would skip instead of run'
 	fi
 }
 
@@ -218,7 +237,13 @@ main() {
 	platform=$(uname -s)
 	case "$platform" in
 		Linux) install_linux_prerequisites ;;
-		Darwin) require_tool brew ;;
+		Darwin)
+			require_tool brew
+			brew list --versions iprange >/dev/null 2>&1 || brew install iprange
+			# macOS has no locale-gen: if the comma-decimal specs skip here, the
+			# skip-allowlist gate fails a *.sh diff until a locale is installed.
+			printf '%s\n' 'setup-agent-tools.sh: NOTE: macOS has no locale-gen; if the comma-decimal specs skip here, run-gates fails a *.sh diff on the unlisted skips -- install a comma-decimal locale manually or run the shell gates on Linux/CI'
+			;;
 		*) fail "unsupported platform '$platform' (expected Linux or Darwin)" ;;
 	esac
 
