@@ -217,6 +217,15 @@ Describe 'run-gates.sh gates_for()'
     The output should equal 'uv run --locked pytest'
   End
 
+  # issue #3174: gate_command() feeds every suite gate the canary fixture, so a
+  # fixture-only diff must select the gate that red-canaries it -- a canary edited
+  # to pass disarms the guard silently when its own diff selects no suite.
+  It 'maps a skip-allowlist-canary-fixture-only diff to the pytest gate'
+    Data "tests/fixtures/skip-allowlist-canary.xml"
+    When call gates_for
+    The output should equal 'uv run --locked pytest'
+  End
+
   It 'emits the pytest gate once when the diff touches both the allowlist and a Python file'
     Data
       #|tests/skip-allowlist.txt
@@ -227,12 +236,13 @@ Describe 'run-gates.sh gates_for()'
   End
 
   # The arm matches the whole line: a near-miss path must stay gate-less, or an unrelated
-  # .txt edit pays for the pytest suite.
-  It 'leaves a .txt that is not the allowlist gate-less'
+  # .txt/.xml edit pays for the pytest suite.
+  It 'leaves a near-miss allowlist or canary path gate-less'
     Data
       #|tests/fixtures/other.txt
       #|tests/skip-allowlist.txt.bak
       #|other/tests/skip-allowlist.txt
+      #|tests/fixtures/skip-allowlist-canary.xml.bak
     End
     When call gates_for
     The output should equal ''

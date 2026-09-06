@@ -97,7 +97,10 @@ gates_for() {
 	# issue #3166: the skip gate READS tests/skip-allowlist.txt, and its checker plus red
 	# canary ride the pytest gate, which also carries the two tests that parse the real file.
 	# A .txt path matched no bucket, so an allowlist-only diff selected no suite at all.
-	elif printf '%s\n' "$files" | grep -qx 'tests/skip-allowlist\.txt'; then
+	# issue #3174: gate_command() points the same suite gates at the canary fixture, so a
+	# fixture-only diff must select that gate too -- a canary edited to pass would
+	# otherwise disarm every "red canary" claim with no run to notice it.
+	elif printf '%s\n' "$files" | grep -qEx 'tests/(skip-allowlist\.txt|fixtures/skip-allowlist-canary\.xml)'; then
 		out="${out}uv run --locked pytest${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
