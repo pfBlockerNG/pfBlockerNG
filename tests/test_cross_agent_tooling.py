@@ -514,11 +514,16 @@ def test_semgrep_scans_a_php_inc_file_only_with_the_documented_flag() -> None:
 
 
 def test_graphify_install_uses_org_commit_without_local_patch() -> None:
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@" in pyproject, (
+        "pyproject.toml must declare the pinned graphify org fork dependency"
+    )
+
     installer_path = "scripts/agent/ensure-graphify.sh"
     installer = (ROOT / installer_path).read_text(encoding="utf-8")
-    install_command = "uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114'"
-    assert install_command in installer, "the shared Graphify installer lost the pinned fork commit"
-
+    assert 'uv tool install --upgrade "$graphify_spec"' in installer, (
+        "the shared Graphify installer lost dynamic pyproject.toml extraction"
+    )
     resolver = (ROOT / "scripts/agent/resolve-graphify.sh").read_text(encoding="utf-8")
     quote_probe = (
         '"$_graphify_interpreter" -I -c \'import shlex, sys; print(shlex.quote(sys.argv[1]))\' "$_graphify_interpreter"'
@@ -534,7 +539,7 @@ def test_graphify_install_uses_org_commit_without_local_patch() -> None:
     for caller, invocation in callers.items():
         source = (ROOT / caller).read_text(encoding="utf-8")
         assert invocation in source, f"{caller} lost mandatory Graphify install reachability"
-        assert install_command not in source, f"{caller} duplicates the shared Graphify installation convention"
+        assert "graphifyy" not in source, f"{caller} duplicates the shared Graphify installation convention"
 
     agent_setup = (ROOT / "scripts/agent/setup-agent-tools.sh").read_text(encoding="utf-8")
     assert 'sh "$ensure_graphify" "$root"' not in agent_setup, "agent setup duplicates canonical Graphify setup"
@@ -549,7 +554,7 @@ def test_graphify_install_uses_org_commit_without_local_patch() -> None:
         ".githooks/pre-commit",
         "Graphify-Labs/graphify#3075",
         "Graphify-Labs/graphify#3310",
-        "3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114",
+        "pyproject.toml",
         "language.inc=php",
         "include-node floor",
     ):

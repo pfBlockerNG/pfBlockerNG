@@ -5,6 +5,7 @@ Describe 'setup-agent-tools.sh'
   project_root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
   script_abs="$project_root/scripts/agent/setup-agent-tools.sh"
   canonical_worktree_path='worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"'
+  expected_graphify_version=$(sed -n 's/.*graphify@\([0-9a-f]*\).*/\1/p' "$project_root/pyproject.toml")
 
   make_base_path() {
     destination=$1
@@ -273,9 +274,10 @@ if [ -n "$stub_client" ]; then
     *) stub_skill_dir="$HOME/.$stub_client/skills/graphify" ;;
   esac
   mkdir -p "$stub_skill_dir"
-  printf '%s\n' '0.9.51' > "$stub_skill_dir/.graphify_version"
+  printf '%s\n' '@GRAPHIFY_VERSION@' > "$stub_skill_dir/.graphify_version"
 fi
 GRAPHIFY
+    sed -i "s/@GRAPHIFY_VERSION@/$expected_graphify_version/" "$installables/graphify"
     for tool in ast-grep semgrep; do
       cat > "$installables/$tool" <<'STATIC_TOOL'
 #!/bin/sh
@@ -713,7 +715,7 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.agents/skills/graphify/.graphify_version"
     When run sh -c 'cd "$1" && sh "$2" "$1" && sh "$2" "$1"' _ "$repository" "$script_abs"
     The status should equal 0
-    The contents of file "$home/.agents/skills/graphify/.graphify_version" should equal '0.9.51'
+    The contents of file "$home/.agents/skills/graphify/.graphify_version" should equal "$expected_graphify_version"
     Assert [ "$(grep -c '^serena:setup grok$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -Fxc "graphify:$home:agents install" "$tool_log")" -eq 2 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform agents" "$tool_log")" -eq 2 ]
@@ -749,7 +751,7 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.copilot/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal '0.9.51'
+    The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal "$expected_graphify_version"
     Assert [ "$(grep -Fxc "graphify:$home:copilot install" "$tool_log")" -eq 1 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform copilot" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'
@@ -761,7 +763,7 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.claude/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$home/.claude/skills/graphify/.graphify_version" should equal '0.9.51'
+    The contents of file "$home/.claude/skills/graphify/.graphify_version" should equal "$expected_graphify_version"
     Assert [ "$(grep -Fxc "graphify:$home:claude install" "$tool_log")" -eq 1 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform claude" "$tool_log")" -eq 1 ]
   End
@@ -772,7 +774,7 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.codex/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$home/.codex/skills/graphify/.graphify_version" should equal '0.9.51'
+    The contents of file "$home/.codex/skills/graphify/.graphify_version" should equal "$expected_graphify_version"
     Assert [ "$(grep -Fxc "graphify:$home:codex install" "$tool_log")" -eq 1 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform codex" "$tool_log")" -eq 1 ]
   End
@@ -783,7 +785,7 @@ UNMANAGED_UV
     printf '%s\n' '0.9.48' > "$home/.pi/agent/skills/graphify/.graphify_version"
     When run sh "$script_abs" "$repository"
     The status should equal 0
-    The contents of file "$home/.pi/agent/skills/graphify/.graphify_version" should equal '0.9.51'
+    The contents of file "$home/.pi/agent/skills/graphify/.graphify_version" should equal "$expected_graphify_version"
     Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 1 ]
     Assert [ "$(grep -Fxc "graphify:$home:install --platform pi" "$tool_log")" -eq 1 ]
     The contents of file "$tool_log" should not include 'serena:setup'

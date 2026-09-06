@@ -17,8 +17,7 @@ Load when: every agent session, from `AGENTS.md`.
   installed the same way, never pinned to whatever version the failure happened to name.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
-  installs or upgrades the pinned org fork with
-  `uv tool install --upgrade 'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114'`
+  installs or upgrades the pinned org fork declared in `pyproject.toml`
   before activating `.githooks`.
 - `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
   physically absolutizes a relative selection before returning it, and only when none
@@ -43,7 +42,7 @@ Load when: every agent session, from `AGENTS.md`.
   (`language.inc=php`), so `.inc` files use the PHP extractor; its `leiden` extra
   selects native Leiden on Python 3.13+. The include-node floor in
   `tests/test_cross_agent_tooling.py` remains the final guard. When upstream #3075
-  and #3310 both ship in a PyPI release, replace the fork pin with
+  and #3310 both ship in a PyPI release, replace the fork pin in `pyproject.toml` with
   `graphifyy[leiden]>=<that release>` in a deliberate commit.
 - Every worktree owns its `.codegraph/` index: run `codegraph init` when it is absent,
   and never borrow a parent or sibling tree's index. Before Serena symbolic edits,
