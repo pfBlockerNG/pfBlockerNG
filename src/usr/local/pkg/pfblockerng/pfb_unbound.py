@@ -7453,10 +7453,17 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 if dnsbl.idn_alert is not None and not (dnsbl.is_found and not dnsbl.in_whitelist):
                     _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
             elif isCNAME and dnsbl.is_found and not dnsbl.in_whitelist:
-                # Memo hit on the CNAME *target*: still answer in the original
-                # QNAME's bailiwick (issue #3222 review F3).
-                q_name = q_name_original
-                _decision_for(q_name_original, snap.gen).dnsbl = dnsbl
+                # Memo hit on the CNAME *target*: re-evaluate in the original
+                # QNAME's CNAME-chain context so orig's whitelist still applies
+                # (issue #3222 review F3 / round-2 B1). Then answer in orig's
+                # bailiwick only if that context is still a block.
+                cfg = _evaluate_cfg(snap)
+                dnsbl = evaluate_domain(
+                    q_name, q_name_original, get_tld_from_name(q_name), True, cfg, snap.containers()
+                )
+                if dnsbl.is_found and not dnsbl.in_whitelist:
+                    q_name = q_name_original
+                    _decision_for(q_name_original, snap.gen).dnsbl = dnsbl
 
             # Block iff found and not whitelisted; an allow decision falls through to
             # the resolver (the WAIT_MODULE below).

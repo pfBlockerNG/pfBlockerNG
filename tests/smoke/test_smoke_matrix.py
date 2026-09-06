@@ -68,6 +68,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from tests.test_issue3222_soa_wire import rr_has_type
+
 from . import helpers as h
 from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
@@ -227,15 +229,6 @@ def _header_counts(raw: str) -> tuple[int | None, int | None, int | None]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
-def _rr_has_type(raw: str, rtype: str) -> bool:
-    """True if any RR line has ``rtype`` as the TYPE field (tab or space separated)."""
-    for line in raw.splitlines():
-        parts = line.split()
-        if len(parts) >= 4 and parts[3] == rtype:
-            return True
-    return False
-
-
 def _raw_dig(client_vm: SmokeVM, name: str, rtype: str) -> str:
     result = client_vm.ssh(
         f"dig +tries=1 +time=5 {shlex.quote(rtype)} {shlex.quote(name)} @{shlex.quote(PFSENSE_LAN_IP)}",
@@ -253,7 +246,7 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
     """Issue #3222: VIP-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
 
     Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
-    is armed. Then the same name is queried as HTTPS, TYPE65, TYPE64, and MX
+    is armed. Then the same name is queried as HTTPS, TYPE64, and MX
     from both the LAN client (``dig``, the iOS-like path) and on-box
     (``drill @127.0.0.1``).
 
@@ -291,7 +284,7 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
                 f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=1 (SOA), "
                 f"got ANSWER={an} AUTHORITY={ns} ADDITIONAL={ar}\n{dump}"
             )
-            assert _rr_has_type(lan, "SOA") or _rr_has_type(box, "SOA"), (
+            assert rr_has_type(lan, "SOA") or rr_has_type(box, "SOA"), (
                 f"{blocked} {rtype} expected an SOA in AUTHORITY\n{dump}"
             )
 

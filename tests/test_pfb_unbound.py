@@ -1982,6 +1982,51 @@ class TestOperateDnsbl:
         soa = DNSMessage.instances[-1].authority
         assert soa and soa[0].startswith("orig.com. "), f"expected orig.com SOA owner, got {soa!r}"
 
+    def test_cname_memoized_target_https_soa_owner_without_prior_orig_a(self, monkeypatch: Any) -> None:
+        # Round-2 N1: target memo, then orig type 65 with a CNAME chain and no
+        # intervening orig A, so the new elif (not orig's own memo) sets the SOA owner.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("evil-cname.com.", qtype=RR_A), None)
+
+        https = make_qstate("orig.com.", qtype=65, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, https, None)
+        soa = DNSMessage.instances[-1].authority
+        assert soa and soa[0].startswith("orig.com. "), f"expected orig.com SOA owner, got {soa!r}"
+
+    def test_cname_memoized_target_respects_original_whitelist(self, monkeypatch: Any) -> None:
+        # Round-2 B1: orig is whitelisted, target already memoized as a block.
+        # evaluate_domain's is_cname whitelist set is [target, original]; the
+        # hoist must not copy the target memo onto orig. orig HTTPS+CNAME and a
+        # later orig A (no CNAME) both WAIT_MODULE.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log="1", index=0)
+        add_white("orig.com", wildcard=False)
+        set_feed_group(0, "F", "G")
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, make_qstate("evil-cname.com.", qtype=RR_A), None)
+
+        https = make_qstate("orig.com.", qtype=65, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, https, None)
+        assert https.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"whitelisted orig HTTPS+CNAME must not block, got {https.ext_state[0]!r}"
+        )
+
+        follow = make_qstate("orig.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, follow, None)
+        assert follow.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"follow-up orig A must not inherit the target memo, got {follow.ext_state[0]!r}"
+        )
+        orig = pfb_unbound.decisionDB.get("orig.com")
+        blocked = orig is not None and orig.dnsbl.is_found and not orig.dnsbl.in_whitelist
+        assert not blocked, f"orig.com must not be memoized as a block, got {orig!r}"
+
     def test_cname_target_with_long_interior_label_blocks_without_decoder_stub(self, monkeypatch: Any) -> None:
         # End-to-end proof that operate()'s CNAME walk feeds the REAL convert_other()
         # decoder -- unlike the sibling tests above, convert_other is NOT monkeypatched
