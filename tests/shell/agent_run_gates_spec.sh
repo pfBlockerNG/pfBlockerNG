@@ -202,7 +202,13 @@ Describe 'run-gates.sh gates_for()'
       printf 'src/bad\377name.sh\ntests/skip-allowlist.txt\n' | gates_for )
   }
 
+  # House pattern (pfblockerng_recompute_spec.sh): the locale-independence premise
+  # needs C.UTF-8 to exist -- without it the example would pass green while
+  # exercising nothing, so it skips instead.
+  c_utf8_unavailable() { ! locale -a 2>/dev/null | grep -qiE '^C\.UTF-?8$'; }
+
   It 'refuses an unsafe path carrying an invalid UTF-8 byte under a UTF-8 locale'
+    Skip if 'requires C.UTF-8 to exercise invalid-byte handling' c_utf8_unavailable
     When call utf8_gates_for
     The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
     The line 2 of output should equal 'uv run --locked pytest'
