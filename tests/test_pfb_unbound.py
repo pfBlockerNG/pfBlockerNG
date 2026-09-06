@@ -1555,6 +1555,19 @@ class TestOperateDnsbl:
             f"A-block must not carry a NODATA SOA, got {DNSMessage.instances[-1].authority!r}"
         )
 
+    @pytest.mark.parametrize("qtype", [RR_A, RR_AAAA, 255])
+    def test_address_vip_block_has_no_nodata_soa(self, monkeypatch: Any, qtype: int) -> None:
+        # Issue #3222 criterion: A/AAAA/ANY keep sinkhole answers and must not
+        # grow a NODATA SOA.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=qtype)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        msg = DNSMessage.instances[-1]
+        assert msg.authority == [], f"qtype {qtype} expected no SOA, got {msg.authority!r}"
+        assert msg.answer != [], f"qtype {qtype} expected sinkhole answers, got {msg.answer!r}"
+
     @pytest.mark.parametrize("qtype", [64, 65, 15, 16, 33])
     def test_non_address_vip_block_is_nodata_soa(self, monkeypatch: Any, qtype: int) -> None:
         # Issue #3222. Scenario: a VIP-list hit queried as a non-address type
@@ -1579,11 +1592,19 @@ class TestOperateDnsbl:
         assert qstate.return_msg is not None, f"qtype {qtype} expected a synthetic DNSMessage"
         msg = DNSMessage.instances[-1]
         assert msg.answer == [], f"qtype {qtype} expected empty answer, got {msg.answer!r}"
-        assert len(msg.authority) == 1, f"qtype {qtype} expected one SOA, got {msg.authority!r}"
-        soa = msg.authority[0]
-        assert " IN SOA " in soa, f"qtype {qtype} authority is not SOA: {soa!r}"
-        assert "pfb.invalid." in soa, f"qtype {qtype} SOA mname should be pfb.invalid: {soa!r}"
-        assert soa.startswith("evil.com. "), f"qtype {qtype} SOA owner should be the queried name: {soa!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"qtype {qtype} expected {[expected_soa]!r}, got {msg.authority!r}"
+
+    def test_non_address_null_block_is_nodata_soa(self, monkeypatch: Any) -> None:
+        self._enable(monkeypatch)
+        add_data("evil.com", log="2", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=65)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
 
     def test_nxdomain_mode_returns_bare_nxdomain(self, monkeypatch: Any) -> None:
         # Issue #31. Scenario: a DNSBL hit in NXDOMAIN-logging mode ("3").
@@ -1932,6 +1953,34 @@ class TestOperateDnsbl:
         )
         answers = DNSMessage.instances[-1].answer
         assert any(a.startswith("orig.com. ") for a in answers), f"expected a match in {answers!r}"
+
+    def test_cname_memoized_target_block_uses_original_qname(self, monkeypatch: Any) -> None:
+        # Issue #3222 / review F3: when the CNAME *target* is already memoized,
+        # operate() used to keep q_name as the target, so A/SOA owners were
+        # out-of-bailiwick. Query the target first, then the original with a
+        # CNAME chain; both the A owner and a type-65 SOA owner must be orig.com.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log="1", index=0)
+        set_feed_group(0, "F", "G")
+
+        direct = make_qstate("evil-cname.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, direct, None)
+        assert pfb_unbound.decisionDB.get("evil-cname.com") is not None
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        answers = DNSMessage.instances[-1].answer
+        assert any(a.startswith("orig.com. ") for a in answers), f"expected orig.com owner, got {answers!r}"
+        orig = pfb_unbound.decisionDB.get("orig.com")
+        assert orig is not None and orig.dnsbl.is_found, f"expected orig.com memoized as block, got {orig!r}"
+
+        https = make_qstate("orig.com.", qtype=65, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, https, None)
+        soa = DNSMessage.instances[-1].authority
+        assert soa and soa[0].startswith("orig.com. "), f"expected orig.com SOA owner, got {soa!r}"
 
     def test_cname_target_with_long_interior_label_blocks_without_decoder_stub(self, monkeypatch: Any) -> None:
         # End-to-end proof that operate()'s CNAME walk feeds the REAL convert_other()

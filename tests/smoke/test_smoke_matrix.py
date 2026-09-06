@@ -62,13 +62,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import time
 from collections.abc import Iterator
 
 import pytest
 
 from . import helpers as h
-from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -226,9 +227,18 @@ def _header_counts(raw: str) -> tuple[int | None, int | None, int | None]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
+def _rr_has_type(raw: str, rtype: str) -> bool:
+    """True if any RR line has ``rtype`` as the TYPE field (tab or space separated)."""
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[3] == rtype:
+            return True
+    return False
+
+
 def _raw_dig(client_vm: SmokeVM, name: str, rtype: str) -> str:
     result = client_vm.ssh(
-        f"dig +tries=1 +time=5 {rtype} {name} @192.168.1.1",
+        f"dig +tries=1 +time=5 {shlex.quote(rtype)} {shlex.quote(name)} @{shlex.quote(PFSENSE_LAN_IP)}",
         timeout=30.0,
     )
     return result.stdout
@@ -248,9 +258,8 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
     (``drill @127.0.0.1``).
 
     Non-address intercepts must return NOERROR with ANSWER 0 and AUTHORITY 1
-    (a synthetic SOA). Empty AUTHORITY is the pre-fix defect. A dnsbl.log line
-    after the HTTPS query proves pythonmod intercepted it (the stub upstream
-    also answers non-A as empty NOERROR, so the log is the discriminator).
+    (a synthetic SOA). Empty AUTHORITY is the pre-fix defect. dnsbl.log hits
+    must grow after the HTTPS/SVCB queries (the A control already logs one).
     """
     blocked = h.unique_domain("https3222")
     control = h.unique_domain("https3222ctl")
@@ -264,9 +273,10 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
     with h.CaseContext(deployed_vm, spec):
         a = h.dns_probe_client(client_vm, blocked, "A")
         assert h.is_vip(a), f"{blocked} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
+        hits_after_a = _dnsbl_log_hits(deployed_vm, blocked)
 
         dumps: list[str] = []
-        for rtype in ("HTTPS", "TYPE65", "TYPE64", "MX"):
+        for rtype in ("HTTPS", "TYPE64", "MX"):
             lan = _raw_dig(client_vm, blocked, rtype)
             box = _raw_drill(deployed_vm, blocked, rtype)
             dumps.append(f"=== blocked {rtype} LAN dig ===\n{lan}\n=== blocked {rtype} on-box drill ===\n{box}")
@@ -281,23 +291,21 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
                 f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=1 (SOA), "
                 f"got ANSWER={an} AUTHORITY={ns} ADDITIONAL={ar}\n{dump}"
             )
-            assert " SOA " in lan or " SOA " in box, f"{blocked} {rtype} expected an SOA in AUTHORITY\n{dump}"
+            assert _rr_has_type(lan, "SOA") or _rr_has_type(box, "SOA"), (
+                f"{blocked} {rtype} expected an SOA in AUTHORITY\n{dump}"
+            )
 
         ctl_a = h.dns_probe_client(client_vm, control, "A")
         assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"
-        ctl_https = _raw_dig(client_vm, control, "HTTPS")
-        dumps.append(f"=== unlisted HTTPS LAN dig ===\n{ctl_https}")
 
-        deadline = time.monotonic() + 20.0
-        hits = 0
-        while time.monotonic() < deadline:
-            hits = _dnsbl_log_hits(deployed_vm, blocked)
-            if hits >= 1:
-                break
-            time.sleep(1.0)
-        assert hits >= 1, (
-            f"no dnsbl.log line for {blocked} after HTTPS/SVCB queries "
-            f"(cannot tell pythonmod intercept from stub NODATA); dumps:\n" + "\n".join(dumps)
+        dump = "\n".join(dumps)
+        h.wait_until(
+            lambda: _dnsbl_log_hits(deployed_vm, blocked) > hits_after_a,
+            timeout=20.0,
+            interval=1.0,
+        )
+        assert _dnsbl_log_hits(deployed_vm, blocked) > hits_after_a, (
+            f"dnsbl.log did not grow after HTTPS/SVCB queries (after A hits={hits_after_a}); dumps:\n{dump}"
         )
 
 

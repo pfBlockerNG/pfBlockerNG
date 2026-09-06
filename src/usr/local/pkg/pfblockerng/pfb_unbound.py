@@ -551,7 +551,7 @@ RELOAD_POLL_INTERVAL = 2.0
 # (HTTPS/SVCB/MX/…). MNAME/RNAME are RFC 2606 .invalid; MINIMUM is the
 # negative-cache TTL. There is no zone SOA to borrow — pfBlockerNG is not
 # authoritative for listed names.
-DNSBL_NODATA_SOA_RDATA = "pfb.invalid. nobody.invalid. 1 3600 1200 604800 300"
+DNSBL_NODATA_SOA_RDATA = "pfb.invalid. nobody.invalid. 1 3600 1200 604800 3600"
 
 
 def _reload_total_ram_bytes() -> int | None:
@@ -7452,6 +7452,11 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # issue #1349: preserve block/alert exclusivity after cache retirement.
                 if dnsbl.idn_alert is not None and not (dnsbl.is_found and not dnsbl.in_whitelist):
                     _log_idn_alert(q_name, q_ip, dnsbl.idn_alert, get_q_type(qstate, None))
+            elif isCNAME and dnsbl.is_found and not dnsbl.in_whitelist:
+                # Memo hit on the CNAME *target*: still answer in the original
+                # QNAME's bailiwick (issue #3222 review F3).
+                q_name = q_name_original
+                _decision_for(q_name_original, snap.gen).dnsbl = dnsbl
 
             # Block iff found and not whitelisted; an allow decision falls through to
             # the resolver (the WAIT_MODULE below).
@@ -7479,10 +7484,7 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                     msg.answer.append(
                         "{}. 3600 IN AAAA {}".format(q_name, "::" if dnsbl.null_blocking else pfb["dnsbl_ipv6"])
                     )
-                # issue #3222: A/AAAA/ANY get a sinkhole RR; every other intercepted
-                # type was finishing as empty NOERROR with no SOA (RFC 2308 Type-3).
-                # Type-2 NODATA (NOERROR + SOA in AUTHORITY) matches "name exists
-                # (A/AAAA still sinkholed) but this type has no data".
+                # issue #3222: empty answer → RFC 2308 Type-2 NODATA (SOA in AUTHORITY).
                 if not msg.answer:
                     msg.authority.append("{}. 3600 IN SOA {}".format(q_name, DNSBL_NODATA_SOA_RDATA))
 
