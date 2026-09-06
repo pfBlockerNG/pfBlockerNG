@@ -1552,6 +1552,32 @@ class TestOperateDnsbl:
         answers = DNSMessage.instances[-1].answer
         assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), f"expected a match in {answers!r}"
 
+    @pytest.mark.parametrize("qtype", [64, 65])
+    def test_svcb_https_vip_block_is_empty_noerror(self, monkeypatch: Any, qtype: int) -> None:
+        # Issue #3222. Scenario: a VIP-list hit queried as SVCB (64) or HTTPS (65).
+        #   Given evil.com on a VIP feed (log_type "1")
+        #   When operate() handles qtype 64/65 (both are in pfb["rr_types"])
+        #   Then it FINISHES with rcode NOERROR and a DNSMessage whose answer
+        #        list is empty — operate() only appends A/AAAA. No SOA is added
+        #        either (stub DNSMessage has no authority list). This is the
+        #        empty-NOERROR shape the reporter captured; a NODATA+SOA fix
+        #        must change this assertion, not silently keep it green.
+        self._enable(monkeypatch)
+        add_data("evil.com", log="1", index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+        qstate = make_qstate("evil.com.", qtype=qtype)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"qtype {qtype} expected intercept ({MODULE_FINISHED!r}), got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.return_rcode == RCODE_NOERROR, (
+            f"qtype {qtype} expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        )
+        assert qstate.return_msg is not None, f"qtype {qtype} expected a synthetic DNSMessage"
+        answers = DNSMessage.instances[-1].answer
+        assert answers == [], f"qtype {qtype} expected empty answer, got {answers!r}"
+
     def test_nxdomain_mode_returns_bare_nxdomain(self, monkeypatch: Any) -> None:
         # Issue #31. Scenario: a DNSBL hit in NXDOMAIN-logging mode ("3").
         #   Given evil.com on a feed whose Logging/Blocking mode is NXDOMAIN ("3")

@@ -212,6 +212,98 @@ def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
 
 
+_SECTION_COUNTS = re.compile(
+    r"ANSWER:\s*(\d+).*AUTHORITY:\s*(\d+).*ADDITIONAL:\s*(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _header_counts(raw: str) -> tuple[int | None, int | None, int | None]:
+    """Parse ANSWER/AUTHORITY/ADDITIONAL counts from a dig or drill header line."""
+    m = _SECTION_COUNTS.search(raw)
+    if m is None:
+        return None, None, None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def _raw_dig(client_vm: SmokeVM, name: str, rtype: str) -> str:
+    result = client_vm.ssh(
+        f"dig +tries=1 +time=5 {rtype} {name} @192.168.1.1",
+        timeout=30.0,
+    )
+    return result.stdout
+
+
+def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
+    result = vm.ssh(f"{h.DRILL_BIN} {name} {rtype} @127.0.0.1", timeout=30.0)
+    return result.stdout
+
+
+def test_dnsbl_https_svcb_vip_empty_noerror(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer
+) -> None:
+    """Issue #3222 live diagnosis: VIP-blocked HTTPS/SVCB vs A on real Unbound.
+
+    Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
+    is armed. Then the same name is queried as HTTPS, TYPE65, TYPE64, and MX
+    from both the LAN client (``dig``, the iOS-like path) and on-box
+    (``drill @127.0.0.1``).
+
+    Current production synthesises A/AAAA only, so those non-address queries
+    are expected to return NOERROR with ANSWER 0 and AUTHORITY 0 — the reporter's
+    empty-NOERROR shape. A dnsbl.log line after the HTTPS query proves pythonmod
+    intercepted it (the stub upstream also answers non-A as empty NOERROR, so
+    the log is the discriminator). An unlisted control name is probed the same
+    way so a stub-NODATA reply is visible next to the blocked one.
+    """
+    blocked = h.unique_domain("https3222")
+    control = h.unique_domain("https3222ctl")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_https3222.txt", f"{blocked}\n")
+    spec = h.DnsblCase(
+        aliasname="smokehttps3222",
+        feed_url=feed_url,
+        header="smokehttps3222",
+        mode=h.DnsblMode.VIP,
+    )
+    with h.CaseContext(deployed_vm, spec):
+        a = h.dns_probe_client(client_vm, blocked, "A")
+        assert h.is_vip(a), f"{blocked} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
+
+        dumps: list[str] = []
+        for rtype in ("HTTPS", "TYPE65", "TYPE64", "MX"):
+            lan = _raw_dig(client_vm, blocked, rtype)
+            box = _raw_drill(deployed_vm, blocked, rtype)
+            dumps.append(f"=== blocked {rtype} LAN dig ===\n{lan}\n=== blocked {rtype} on-box drill ===\n{box}")
+            parsed = h.dns_probe_client(client_vm, blocked, rtype)
+            an, ns, ar = _header_counts(lan)
+            dump = "\n".join(dumps)
+            assert parsed.rcode == "NOERROR", (
+                f"{blocked} {rtype} expected NOERROR, got {parsed.rcode} records={parsed.records!r}\n{dump}"
+            )
+            assert parsed.records == [], f"{blocked} {rtype} expected empty ANSWER, got {parsed.records!r}\n{dump}"
+            assert an == 0 and ns == 0, (
+                f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=0, "
+                f"got ANSWER={an} AUTHORITY={ns} ADDITIONAL={ar}\n{dump}"
+            )
+
+        ctl_a = h.dns_probe_client(client_vm, control, "A")
+        assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"
+        ctl_https = _raw_dig(client_vm, control, "HTTPS")
+        dumps.append(f"=== unlisted HTTPS LAN dig ===\n{ctl_https}")
+
+        deadline = time.monotonic() + 20.0
+        hits = 0
+        while time.monotonic() < deadline:
+            hits = _dnsbl_log_hits(deployed_vm, blocked)
+            if hits >= 1:
+                break
+            time.sleep(1.0)
+        assert hits >= 1, (
+            f"no dnsbl.log line for {blocked} after HTTPS/SVCB queries "
+            f"(cannot tell pythonmod intercept from stub NODATA); dumps:\n" + "\n".join(dumps)
+        )
+
+
 def test_dnsbl_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """Python-mode null sinkhole: NOERROR + 0.0.0.0/::0 for a logging='disabled' feed.
 
