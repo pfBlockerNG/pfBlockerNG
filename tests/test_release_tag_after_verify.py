@@ -487,6 +487,45 @@ def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(
     assert not untrusted_calls, f"{job} executes helpers outside its trusted checkout: {untrusted_calls}"
 
 
+_SCRIPTS_IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+scripts(?:\.|\s)", re.MULTILINE)
+_PYTHON_INVOCATION_RE = re.compile(r"python3(?P<flags>(?:\s+-\S+)*)\s")
+_TRUSTED_PYTHONPATH = 'PYTHONPATH="${GITHUB_WORKSPACE}/pfblockerng-src"'
+
+
+def test_a_credentialled_job_imports_python_helpers_from_the_trusted_checkout() -> None:
+    """Inline Python in a credentialled job must import `scripts/` from the trusted
+    checkout, not from the released tree the job is standing in (issue #3211).
+
+    `python3 -` prepends the CWD to `sys.path` AHEAD of `PYTHONPATH`, and the CWD is
+    the RELEASED tree, so setting `PYTHONPATH` alone silently runs the released
+    line's copy of the helper. That is how v3.3.8's cut died inside
+    `release/3.3`'s `release_version.py`, whose pre-signing trailer reader cannot
+    parse a signed tag. `-P` drops the CWD, leaving the trusted copy authoritative.
+
+    The sibling `sh`-execution guard cannot see this route: it matches helper paths,
+    and an import names a module.
+    """
+    checked = 0
+    for workflow, job, helper_root in CREDENTIALLED_JOBS:
+        for step in _steps(_jobs(workflow)[job]):
+            script = _step_run_script(step) if "run: |" in "\n".join(step) else ""
+            if not _SCRIPTS_IMPORT_RE.search(script):
+                continue
+            checked += 1
+            assert _TRUSTED_PYTHONPATH in script, (
+                f"{workflow.name}:{job}: inline Python imports scripts/ without pointing PYTHONPATH at "
+                f"{helper_root}:\n{script}"
+            )
+            commands = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+            for match in _PYTHON_INVOCATION_RE.finditer(commands):
+                flags = match.group("flags").split()
+                assert "-P" in flags, (
+                    f"{workflow.name}:{job}: `python3{match.group('flags')}` imports scripts/ with the released "
+                    f"tree ahead of PYTHONPATH on sys.path -- pass -P so the trusted checkout wins (issue #3211)"
+                )
+    assert checked, "no credentialled job imports a Python helper any more -- has the pipeline shape changed?"
+
+
 @pytest.mark.parametrize(
     ("workflow", "job", "_helper_root"),
     CREDENTIALLED_JOBS,
