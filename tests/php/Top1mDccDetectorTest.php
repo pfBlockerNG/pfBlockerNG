@@ -222,20 +222,20 @@ PHP;
 		$this->assertNotFalse(file_put_contents($router, sprintf($routerSource, var_export($body, TRUE))));
 		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
-			$port = random_int(20000, 60000);
 			$nonce = bin2hex(random_bytes(16));
-			$stderr = "{$this->dir}/server-{$port}-{$try}-{$nonce}.stderr";
+			$stderr = "{$this->dir}/server-{$try}-{$nonce}.stderr";
 			$proc = proc_open(
-				['php', '-S', "127.0.0.1:{$port}", $router],
+				['php', '-S', '127.0.0.1:0', $router],
 				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->dir,
 				['PATH' => (string) getenv('PATH'), 'READY_TOKEN' => $nonce]
 			);
 			if (!is_resource($proc)) {
-				$failures[] = "port {$port}: process=proc_open failed stderr=(unavailable)";
+				$failures[] = 'port 0: process=proc_open failed stderr=(unavailable)';
 				continue;
 			}
+			$port = pfb_test_http_fixture_port($stderr);
 			for ($poll = 0; $poll < 40; $poll++) {
 				if (pfb_test_http_fixture_event_received($port, $nonce)) {
 					$this->server = $proc;
@@ -510,20 +510,20 @@ PHP;
 		$failures = [];
 		$port = 0;
 		for ($try = 0; $try < 10 && $port === 0; $try++) {
-			$candidate = random_int(20000, 60000);
 			$nonce = bin2hex(random_bytes(16));
-			$stderr = "{$this->dir}/server-{$candidate}-{$try}-{$nonce}.stderr";
+			$stderr = "{$this->dir}/server-{$try}-{$nonce}.stderr";
 			$proc = proc_open(
-				['php', '-S', "127.0.0.1:{$candidate}", $router],
+				['php', '-S', '127.0.0.1:0', $router],
 				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->dir,
 				['PATH' => (string) getenv('PATH'), 'READY_TOKEN' => $nonce]
 			);
 			if (!is_resource($proc)) {
-				$failures[] = "port {$candidate}: process=proc_open failed stderr=(unavailable)";
+				$failures[] = 'port 0: process=proc_open failed stderr=(unavailable)';
 				continue;
 			}
+			$candidate = pfb_test_http_fixture_port($stderr);
 			for ($poll = 0; $poll < 40; $poll++) {
 				if (pfb_test_http_fixture_event_received($candidate, $nonce)) {
 					$this->server = $proc;

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class HttpFixtureReadinessStreamSpy
@@ -173,6 +174,69 @@ final class HttpFixtureReadinessTest extends TestCase
 			pfb_test_http_fixture_event_received($port, $token),
 			'the fixture router must count as ready after it returns the child-owned secret'
 		);
+	}
+
+	/** @return array<string,array{string,int}> */
+	public static function bannerParserRows(): array
+	{
+		return [
+			'php 8.4 banner' => [
+				"[Mon Sep  7 12:13:20 2026] PHP 8.4.24 Development Server (http://127.0.0.1:38413) started\n",
+				38413,
+			],
+			'pre-8.4 surrounding wording' => [
+				"PHP 7.4.33 Development Server (http://127.0.0.1:8000) started\n",
+				8000,
+			],
+			'unrelated stderr around the token' => [
+				"Deprecated: some notice on line 3\n[Mon Sep  7 12:13:20 2026] PHP 8.4.24 Development Server (http://127.0.0.1:9001) started\nPHP Warning: trailing noise\n",
+				9001,
+			],
+			'wrong host localhost' => ["PHP 8.4.24 Development Server (http://localhost:9001) started\n", 0],
+			'wrong host 0.0.0.0' => ["PHP 8.4.24 Development Server (http://0.0.0.0:9001) started\n", 0],
+			'wrong scheme https' => ["PHP 8.4.24 Development Server (https://127.0.0.1:9001) started\n", 0],
+			'empty stderr' => ['', 0],
+			'partial banner missing digits' => ["PHP 8.4.24 Development Server (http://127.0.0.1:", 0],
+			'partial banner missing closing paren' => ["PHP 8.4.24 Development Server (http://127.0.0.1:38413", 0],
+		];
+	}
+
+	/** Issue #3218: the port learner tolerates version-specific wording but never a truncated token. */
+	#[DataProvider('bannerParserRows')]
+	public function testFixturePortParserHandlesHostileBannerContent(string $stderrContent, int $expectedPort): void
+	{
+		$this->requireReadinessHelper();
+		$stderr = "{$this->workdir}/banner-" . bin2hex(random_bytes(4)) . '.stderr';
+		$this->assertNotFalse(file_put_contents($stderr, $stderrContent));
+		$this->assertSame($expectedPort, pfb_test_http_fixture_port($stderr));
+	}
+
+	public function testFixturePortParserWaitsForAsynchronousBannerWrite(): void
+	{
+		$this->requireReadinessHelper();
+		$stderr = "{$this->workdir}/async.stderr";
+		$this->assertNotFalse(file_put_contents($stderr, ''));
+		$code = sprintf(
+			'usleep(200000); file_put_contents(%s, "[date] PHP 8.4.24 Development Server (http://127.0.0.1:24680) started\n");',
+			var_export($stderr, TRUE)
+		);
+		$writer = proc_open(['php', '-r', $code], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
+		$this->assertIsResource($writer);
+		try {
+			$this->assertSame(
+				24680,
+				pfb_test_http_fixture_port($stderr),
+				'a banner written after the poll begins must still be learned within the bound'
+			);
+		} finally {
+			proc_close($writer);
+		}
+	}
+
+	public function testFixturePortParserReturnsZeroWhenStderrNeverAppears(): void
+	{
+		$this->requireReadinessHelper();
+		$this->assertSame(0, pfb_test_http_fixture_port("{$this->workdir}/does-not-exist.stderr"));
 	}
 
 	private function requireReadinessHelper(): void

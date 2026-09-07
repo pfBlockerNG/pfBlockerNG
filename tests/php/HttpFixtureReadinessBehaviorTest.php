@@ -6,7 +6,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\SkippedTest;
 use PHPUnit\Framework\TestCase;
 
-/** Issue #2904: occupied-port retries keep nonce, bound, and bind diagnostics observable. */
+/** Issue #2904/#3218: occupied-port retries keep nonce, bound, and bind diagnostics observable. */
 final class HttpFixtureReadinessBehaviorTest extends TestCase
 {
 	/** @var resource|null */
@@ -19,6 +19,8 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 	private static array $pollPauses = [];
 	/** @var list<string> */
 	private static array $stderrPaths = [];
+	/** @var list<list<string>> */
+	private static array $fixtureCommands = [];
 	/** @var list<resource> */
 	private static array $fixtureProcesses = [];
 	/** @var list<resource> */
@@ -34,6 +36,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		self::$probeNonces = [];
 		self::$pollPauses = [];
 		self::$stderrPaths = [];
+		self::$fixtureCommands = [];
 		self::$fixtureProcesses = [];
 		self::$terminatedFixtureProcesses = [];
 		self::$foreignPort = $this->startForeignServer();
@@ -112,7 +115,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 			$this->restoreFixtureGlobals($savedGlobals);
 		}
 
-		$this->assertNotNull($failure, "{$file}::{$method} adopted the planted foreign listener");
+		$this->assertNotNull($failure, "{$file}::{$method} must not settle on the planted foreign listener's port");
 		$this->assertNotSame(
 			[],
 			self::$probeNonces,
@@ -129,17 +132,24 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		$this->assertStringContainsString('exit=', $message);
 		$this->assertStringContainsString('close=', $message);
 		$this->assertStringContainsString('stderr=', $message);
-		$this->assertStringContainsString('Failed to listen', $message);
 		$this->assertCount($tries, self::$stderrPaths, "{$file}::{$method} changed the stderr file count");
 		$this->assertCount($tries, array_unique(self::$stderrPaths), "{$file}::{$method} must use a fresh stderr file per attempt");
+		$this->assertCount($tries, self::$fixtureCommands, "{$file}::{$method} changed the child-process count");
+		foreach (self::$fixtureCommands as $command) {
+			$this->assertSame(
+				'127.0.0.1:0',
+				$command[2] ?? NULL,
+				"{$file}::{$method} must let the kernel assign the fixture port instead of guessing one"
+			);
+		}
 		$this->assertCount($tries, self::$fixtureProcesses, "{$file}::{$method} changed the child-process count");
 		foreach (self::$fixtureProcesses as $process) {
 			$this->assertFalse(is_resource($process), "{$file}::{$method} left a failed fixture child open");
 		}
-		$this->assertSame(
-			[],
+		$this->assertCount(
+			$tries,
 			self::$terminatedFixtureProcesses,
-			"{$file}::{$method} tried to terminate an already-exited fixture child"
+			"{$file}::{$method} must terminate the still-running kernel-assigned child once its attempt is exhausted"
 		);
 
 		$expectedPolls = $tries * 40;
@@ -158,14 +168,6 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		$this->assertCount($tries, array_unique($attemptNonces), "{$file}::{$method} must generate a fresh nonce per attempt");
 	}
 
-	public static function candidatePort(int $minimum, int $maximum): int
-	{
-		if (self::$foreignPort < $minimum || self::$foreignPort > $maximum) {
-			throw new RuntimeException('planted foreign port is outside the fixture candidate range');
-		}
-		return self::$foreignPort;
-	}
-
 	public static function observeProbe(int $port, string $nonce): bool
 	{
 		if (self::$probeNonces === [] || self::$probeNonces[array_key_last(self::$probeNonces)] !== $nonce) {
@@ -180,6 +182,12 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		self::$pollPauses[] = $microseconds;
 	}
 
+	/** Plants the foreign port as the "learned" port for every attempt, forcing a nonce mismatch. */
+	public static function learnFixturePort(string $stderrPath): int
+	{
+		return self::$foreignPort;
+	}
+
 	/** @return resource|false */
 	public static function openFixtureProcess(
 		array $command,
@@ -189,6 +197,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		?array $environment,
 		?array $options = NULL
 	) {
+		self::$fixtureCommands[] = $command;
 		$stderr = $descriptorSpec[2][1] ?? NULL;
 		if (is_string($stderr)) {
 			self::$stderrPaths[] = $stderr;
@@ -216,11 +225,6 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 
 namespace {$namespace};
 
-function random_int(int \$minimum, int \$maximum): int
-{
-	return \\HttpFixtureReadinessBehaviorTest::candidatePort(\$minimum, \$maximum);
-}
-
 function usleep(int \$microseconds): void
 {
 	\\HttpFixtureReadinessBehaviorTest::recordPollPause(\$microseconds);
@@ -229,6 +233,11 @@ function usleep(int \$microseconds): void
 function pfb_test_http_fixture_event_received(int \$port, string \$nonce): bool
 {
 	return \\HttpFixtureReadinessBehaviorTest::observeProbe(\$port, \$nonce);
+}
+
+function pfb_test_http_fixture_port(string \$stderrPath): int
+{
+	return \\HttpFixtureReadinessBehaviorTest::learnFixturePort(\$stderrPath);
 }
 
 function proc_open(
