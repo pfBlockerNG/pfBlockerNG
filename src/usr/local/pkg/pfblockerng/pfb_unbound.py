@@ -7267,6 +7267,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             # Create FQDN Reply Message (AAAA -> A)
             if dec.noaaaa:
                 msg = DNSMessage(qstate.qinfo.qname_str, RR_TYPE_A, RR_CLASS_IN, PKT_QR | PKT_RA)
+                # issue #3224: empty answer -> RFC 2308 Type-2 NODATA (SOA in AUTHORITY).
+                msg.authority.append("{}. 3600 IN SOA {}".format(q_name_original, DNSBL_NODATA_SOA_RDATA))
                 if msg is None or not msg.set_return_msg(qstate):
                     qstate.ext_state[id] = MODULE_ERROR
                     return True

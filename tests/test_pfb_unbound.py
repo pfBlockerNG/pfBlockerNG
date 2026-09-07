@@ -1477,6 +1477,11 @@ class TestOperateNoAAAA:
         # The synthesized AAAA -> A reply is unsigned; it must be stamped
         # non-bogus or the validator SERVFAILs it (issue #149 class).
         assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
+        # issue #3224: empty answer -> RFC 2308 Type-2 NODATA (SOA in AUTHORITY).
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("example.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
 
     def test_wildcard_blocks_subdomain_and_caches(self) -> None:
         add_noaaaa("example.com", wildcard=True)
@@ -1487,6 +1492,11 @@ class TestOperateNoAAAA:
         # The wildcard-path synthesized reply needs the same non-bogus stamp
         # as the exact-match one (issue #149 class).
         assert qstate.return_msg.rep.security == 2, f"expected 2, got {qstate.return_msg.rep.security!r}"
+        # issue #3224: same empty-answer NODATA SOA on the wildcard-match path.
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("sub.example.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
         # The wildcard-parent hit is memoized as the child's noaaaa verdict on its
         # Decision, so a subsequent identical query short-circuits on the cache.
         assert pfb_unbound.decisionDB["sub.example.com"].noaaaa is True, (
@@ -1502,6 +1512,11 @@ class TestOperateNoAAAA:
         assert rcd2 is True, f"expected True, got {rcd2!r}"
         assert qstate2.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate2.ext_state[0]!r}"
         assert qstate2.return_msg.rep.security == 2, f"expected 2, got {qstate2.return_msg.rep.security!r}"
+        # issue #3224: the memoized/fast-path reply carries the same SOA.
+        msg2 = DNSMessage.instances[-1]
+        assert msg2.answer == [], f"expected [], got {msg2.answer!r}"
+        expected_soa2 = "{}. 3600 IN SOA {}".format("sub.example.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg2.authority == [expected_soa2], f"expected {[expected_soa2]!r}, got {msg2.authority!r}"
 
     def test_excluded_domain_not_blocked(self) -> None:
         add_noaaaa("example.com", wildcard=False)
