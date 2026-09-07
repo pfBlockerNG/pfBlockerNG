@@ -511,7 +511,10 @@ final class TickScheduleRuntimeTest extends TestCase
 			}
 
 			if ($failure === 'contention') {
-				$this->assertStringContainsString('another tick is running', $messages);
+				$this->assertStringContainsString(
+					$regenerate ? 'skipped: the scheduler dispatcher lock is contended' : 'another tick is running',
+					$messages
+				);
 				$this->assertStringNotContainsString('could not be acquired', $messages);
 			} else {
 				$this->assertStringContainsString('scheduler dispatcher lock could not be acquired', $messages);

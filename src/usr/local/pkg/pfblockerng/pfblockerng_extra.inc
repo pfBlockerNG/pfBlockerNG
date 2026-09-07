@@ -5782,7 +5782,7 @@ function pfb_schedule_cache_regenerate(): bool
 	$contended = FALSE;
 	if (!pfb_schedule_dispatch_begin(0.1, $contended)) {
 		pfb_logger($contended
-			? "\n Schedule cache regeneration deferred: another tick is running.\n"
+			? "\n Schedule cache regeneration skipped: the scheduler dispatcher lock is contended.\n"
 			: "\n Schedule cache regeneration skipped: the scheduler dispatcher lock could not be acquired; see the pfBlockerNG log.\n", 1);
 		return FALSE;
 	}
