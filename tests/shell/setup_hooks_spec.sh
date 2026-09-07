@@ -105,4 +105,22 @@ CODEGRAPH
     The value "$(git_fixture -C "$primary" config --get core.hooksPath 2>/dev/null || true)" should equal ''
     The file "$install_log" should not be exist
   End
+
+  It 'still activates Git hooks when the git root and helper checkout have no pyproject.toml'
+    # release-published.yml runs setup-hooks.sh from a scripts-only sparse
+    # checkout of pfBlockerNG while CWD is the FreeBSD-ports fork. Graphify
+    # cannot install without pyproject.toml; hook activation still must.
+    foreign="$fixture/ports"
+    helper="$foreign/pfblockerng-src"
+    git_fixture init -q "$foreign" || return 1
+    mkdir -p "$helper/scripts/agent" "$helper/scripts/lib"
+    cp "$script_abs" "$helper/scripts/setup-hooks.sh"
+    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/"*.sh "$helper/scripts/agent/"
+    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/"*.sh "$helper/scripts/lib/"
+    When run sh -c 'cd "$1" && exec sh "$2"' _ "$foreign" "$helper/scripts/setup-hooks.sh"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The value "$(git_fixture -C "$foreign" config --get core.hooksPath)" should equal '.githooks'
+    The file "$install_log" should not be exist
+  End
 End

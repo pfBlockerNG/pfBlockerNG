@@ -281,6 +281,10 @@ jobs:
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .
 
+      # Automated commits must hit the same local gates as a human commit.
+      - name: Activate git hooks
+        run: sh scripts/setup-hooks.sh
+
       # The reconcile needs EVERY family, one row per version: build_matrix is
       # deduped to one row per runtime tuple (issue #2926), which hides the
       # SIBLING VERSIONS of a merged same-tuple group (26.03 vs 26.07 share a
