@@ -1038,7 +1038,7 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     )
 
     assert "whole process tree" in body, "the help copy must say the whole process tree is terminated on expiry"
-    assert "Force Update" in body, "the help copy must give the retry guidance after an expiry"
+    assert "Run Now" in body, "the help copy must give the retry guidance after an expiry (issue #3237)"
 
 
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
