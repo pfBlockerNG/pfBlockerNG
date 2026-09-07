@@ -3188,11 +3188,8 @@ def get_details_dnsbl(
                 _dnsbl_last_event = event_sig
         else:
             _dnsbl_last_event = event_sig
-
-        # Skip logging: null-no-log ("2") and NXDOMAIN-no-log ("4"). The per-group
-        # counter above still increments (stats parity with the logged variants); only
-        # the dnsbl.log line is suppressed.
-        if dnsbl.log_type in ("2", "4"):
+        # Silent modes still increment the per-group counter above.
+        if dnsbl.log_type in ("2", "4", "6"):
             return True
 
         q_ip = get_q_ip_comm(kwargs)
@@ -4083,7 +4080,7 @@ class BuildResult:
     ``important`` is ``False`` and ``band`` is the feed-block band (1); a line the
     capture guard routes to parse_abp() sets ``important``/``band`` from the
     reconciled rule:
-        data_db[domain]          = {"log": <"0"|"1"|"2">, "index": <int>, "important": bool, "band": int}
+        data_db[domain]          = {"log": <flag>, "index": <int>, "important": bool, "band": int}
         zone_db[registrable]     = {"log": <flag>,        "index": <int>, "important": bool, "band": int}
         feed_group_index_db[idx] = {"feed": <str>, "group": <str>}
         white_db[domain]         = {"wildcard": bool, "important": bool, "band": int}
@@ -6925,17 +6922,11 @@ def evaluate_domain(
 
         if log_type == "1" and not in_hsts:
             null_blocking = False
-        # issue #31: NXDOMAIN block shape ("3" logged / "4" silent). It bypasses the
-        # synthesized A/AAAA reply entirely, so the HSTS null-override above does not
-        # apply (NXDOMAIN never triggers a TLS handshake). null_blocking stays True so
-        # the per-event logger does not treat it as a VIP block (get_details_dnsbl).
-        # HSTS played no part in this decision, so clear the attribution hsts_check_domain
-        # set above -- otherwise an NXDOMAIN block on an HSTS-listed name would mislog its
-        # p_type as HSTS / HSTS_TLD (the response shape is right, the "why" would be wrong).
-        elif log_type in ("3", "4"):
+        # NXDOMAIN and NODATA bypass address replies; HSTS did not cause the block.
+        elif log_type in ("3", "4", "5", "6"):
             in_hsts = False
             p_type = "Python"
-            nxdomain = True
+            nxdomain = log_type in ("3", "4")
 
         if is_cname:
             b_type = b_type + "_CNAME"
@@ -7486,14 +7477,15 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
                 # Create FQDN Reply Message
                 msg = DNSMessage(qstate.qinfo.qname_str, q_type, RR_CLASS_IN, PKT_QR | PKT_RA)
 
-                if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
-                    msg.answer.append(
-                        "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if dnsbl.null_blocking else pfb["dnsbl_ipv4"])
-                    )
-                if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
-                    msg.answer.append(
-                        "{}. 3600 IN AAAA {}".format(q_name, "::" if dnsbl.null_blocking else pfb["dnsbl_ipv6"])
-                    )
+                if dnsbl.log_type not in ("5", "6"):
+                    if q_type == RR_TYPE_A or q_type == RR_TYPE_ANY:
+                        msg.answer.append(
+                            "{}. 3600 IN A {}".format(q_name, "0.0.0.0" if dnsbl.null_blocking else pfb["dnsbl_ipv4"])
+                        )
+                    if q_type == RR_TYPE_AAAA or q_type == RR_TYPE_ANY:
+                        msg.answer.append(
+                            "{}. 3600 IN AAAA {}".format(q_name, "::" if dnsbl.null_blocking else pfb["dnsbl_ipv6"])
+                        )
                 # issue #3222: empty answer → RFC 2308 Type-2 NODATA (SOA in AUTHORITY).
                 if not msg.answer:
                     msg.authority.append("{}. 3600 IN SOA {}".format(q_name, DNSBL_NODATA_SOA_RDATA))

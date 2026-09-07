@@ -358,6 +358,25 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
         assert h.is_nxdomain(aaaa), f"{domain} AAAA expected NXDOMAIN (no records), got {aaaa}"
 
 
+@pytest.mark.parametrize("mode", ["nodata_log", "nodata"])
+def test_dnsbl_selected_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mode: str) -> None:
+    """Selecting NODATA replaces address replies with NOERROR and an authority SOA."""
+    domain = h.unique_domain("nodata3243")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_nodata3243.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokenodata3243", feed_url=feed_url, header="smokenodata3243", mode=h.DnsblMode.NULL)
+    with h.CaseContext(deployed_vm, spec):
+        before = h.dns_probe_client(client_vm, domain, "A")
+        assert h.is_null_ip(before), f"{domain} expected initial null block, got {before}"
+        h.config_set(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log", mode)
+        h.reload(deployed_vm, "updatednsbl")
+        for rtype in ("A", "AAAA", "ANY", "HTTPS", "TYPE64", "MX"):
+            for raw in (_raw_dig(client_vm, domain, rtype), _raw_drill(deployed_vm, domain, rtype)):
+                assert "rcode: NOERROR" in raw or "status: NOERROR" in raw, f"{mode} {rtype}:\n{raw}"
+                answers, authority, _ = _header_counts(raw)
+                assert (answers, authority) == (0, 1), f"{mode} {rtype} expected ANSWER=0 AUTHORITY=1:\n{raw}"
+                assert rr_has_type(raw, "SOA"), f"{mode} {rtype} expected an authority SOA:\n{raw}"
+
+
 def test_dnsbl_hsts_override_forces_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """HSTS override: a VIP-mode block on an HSTS-preload name is forced to NULL.
 

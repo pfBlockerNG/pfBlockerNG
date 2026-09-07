@@ -1096,6 +1096,78 @@ class TestGetDetailsDnsblNxdomain:
         assert lines == [], f"expected [], got {lines!r}"
 
 
+class TestGetDetailsDnsblNodata:
+    """Issue #3243: NODATA extends the existing null/NXDOMAIN logging-mode pattern
+    with a fifth pair -- "5" (NODATA logging) writes a dnsbl.log line same as "1"/"3";
+    "6" (NODATA no logging) must be silenced same as "2"/"4". The per-group counter
+    (fired BEFORE the logging skip-gate) must keep incrementing for BOTH variants --
+    silencing the log line is not silencing the stat.
+    """
+
+    def _dnsbl(self, log_type: str) -> Any:
+        return _dnsbl_decision(
+            is_found=True,
+            log_type=log_type,
+            b_type="DNSBL",
+            p_type="Python",
+            feed="F",
+            group="G",
+            b_eval="blocked.com",
+        )
+
+    def _qstate(self) -> types.SimpleNamespace:
+        return types.SimpleNamespace(
+            qinfo=types.SimpleNamespace(qname_str="blocked.com.", qtype_str="A"),
+            return_msg=None,
+        )
+
+    def _emit(self, monkeypatch: Any, log_type: str) -> list[tuple[str, str]]:
+        # Given a NODATA block served for blocked.com with the given log flag
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        # When the logger runs for that block
+        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(), {"pfb_addr": "1.2.3.4"}, self._dnsbl(log_type))
+        return lines
+
+    def test_nodata_logging_writes_a_line(self, monkeypatch: Any) -> None:
+        # Then the "5" variant records the block to dnsbl.log -- already true today,
+        # "5" is unhandled by the skip gate ("2","4") so it falls to the logging path.
+        lines = self._emit(monkeypatch, "5")
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a match in {lines!r}"
+
+    def test_nodata_no_logging_is_silent(self, monkeypatch: Any) -> None:
+        # RED today: "6" is NOT yet in the get_details_dnsbl skip gate ("2","4"), so
+        # this currently emits a dnsbl.log line -- it must be silenced like "2"/"4".
+        lines = self._emit(monkeypatch, "6")
+        assert lines == [], f"expected [], got {lines!r}"
+
+    def _counter_calls(self, monkeypatch: Any, log_type: str) -> list[Any]:
+        monkeypatch.setitem(pfb_unbound.pfb, "python_nolog", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_resolver_con", False)
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", True)
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda *a: None)
+        calls: list[Any] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda item: calls.append(item))
+        pfb_unbound.get_details_dnsbl("dnsbl", None, self._qstate(), {"pfb_addr": "1.2.3.4"}, self._dnsbl(log_type))
+        return calls
+
+    def test_nodata_logging_increments_group_counter(self, monkeypatch: Any) -> None:
+        # Preservation (already GREEN): the per-group counter fires before the logging
+        # skip-gate for every is_found+not-whitelisted block, "5" included.
+        calls = self._counter_calls(monkeypatch, "5")
+        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+
+    def test_nodata_no_logging_still_increments_group_counter(self, monkeypatch: Any) -> None:
+        # Preservation (already GREEN): silencing the LOG line for "6" must not
+        # silence the STAT -- the counter increments before the (to-be) "6" skip-gate
+        # entry, exactly as it already does for "2"/"4".
+        calls = self._counter_calls(monkeypatch, "6")
+        assert ("dnsbl", "G") in calls, f"expected ('dnsbl', 'G') in {calls!r}"
+
+
 class TestGetDetailsDnsblUnsetGuard:
     def test_unset_verdict_is_a_silent_noop(self, monkeypatch: Any) -> None:
         # issue #1094: UNSET (never evaluated) must short-circuit before any dnsbl.log
@@ -1672,6 +1744,154 @@ class TestOperateDnsbl:
         assert pfb_unbound.decisionDB["evil.com"].dnsbl.nxdomain is True, (
             f"expected True, got {pfb_unbound.decisionDB['evil.com'].dnsbl.nxdomain!r}"
         )
+
+    def _add_nodata(self, log_flag: str) -> None:
+        add_data("evil.com", log=log_flag, index=0)
+        set_feed_group(0, "TestFeed", "TestGroup")
+
+    @pytest.mark.parametrize("qtype", [RR_A, RR_AAAA, 255])
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_address_type_has_no_null_answer(self, monkeypatch: Any, log_flag: str, qtype: int) -> None:
+        # Issue #3243. RED today: flags "5"/"6" fall through evaluate_domain's
+        # resolution unhandled, so null_blocking stays at its True default and
+        # operate() synthesizes the SAME null "0.0.0.0"/"::" answer as flag "2" --
+        # never the empty answer + SOA (RFC 2308 Type-2 NODATA) the flag selects.
+        self._enable(monkeypatch)
+        self._add_nodata(log_flag)
+        qstate = make_qstate("evil.com.", qtype=qtype)
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, (
+            f"log {log_flag} qtype {qtype} expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        )
+        assert qstate.return_rcode == RCODE_NOERROR, (
+            f"log {log_flag} qtype {qtype} expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        )
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], (
+            f"log {log_flag} qtype {qtype} expected [], got {msg.answer!r}"
+        )  # RED: currently a null A/AAAA (or both, for ANY)
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], (
+            f"log {log_flag} qtype {qtype} expected {[expected_soa]!r}, got {msg.authority!r}"
+        )
+        assert qstate.no_cache_store == 1, f"log {log_flag} qtype {qtype} expected 1, got {qstate.no_cache_store!r}"
+
+    @pytest.mark.parametrize("qtype", [64, 65, 15])  # SVCB, HTTPS, MX
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_non_address_type_already_nodata_soa(self, monkeypatch: Any, log_flag: str, qtype: int) -> None:
+        # Preservation (already GREEN today): a non-address qtype never enters either
+        # A/AAAA answer-building branch regardless of log flag, so it already gets the
+        # empty-answer + SOA shape via the pre-existing #3222 fallthrough -- pins that
+        # flags "5"/"6" don't regress it once the address-type branch above is fixed.
+        self._enable(monkeypatch)
+        self._add_nodata(log_flag)
+        qstate = make_qstate("evil.com.", qtype=qtype)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"log {log_flag} qtype {qtype} expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], (
+            f"log {log_flag} qtype {qtype} expected {[expected_soa]!r}, got {msg.authority!r}"
+        )
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_memo_repeat_serves_same_nodata_shape(self, monkeypatch: Any, log_flag: str) -> None:
+        # The decisionDB memo re-serve path must carry the same fix as the first-hit
+        # path -- a repeat query short-circuits straight from the cached DnsblDecision
+        # (no re-evaluation) and must still build the empty-answer + SOA shape, not the
+        # null A/AAAA one, and must re-set no_cache_store on every serve.
+        self._enable(monkeypatch)
+        self._add_nodata(log_flag)
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+
+        qstate1 = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate1, None)
+        assert qstate1.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate1.ext_state[0]!r}"
+        msg1 = DNSMessage.instances[-1]
+        assert msg1.answer == [], f"expected [], got {msg1.answer!r}"  # RED on first hit
+        assert msg1.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg1.authority!r}"
+        assert qstate1.no_cache_store == 1, f"expected 1, got {qstate1.no_cache_store!r}"
+        assert _is_block(pfb_unbound.decisionDB.get("evil.com")), (
+            f"expected truthy, got {_is_block(pfb_unbound.decisionDB.get('evil.com'))!r}"
+        )
+
+        qstate2 = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate2, None)
+        assert qstate2.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate2.ext_state[0]!r}"
+        msg2 = DNSMessage.instances[-1]
+        assert msg2.answer == [], f"expected [], got {msg2.answer!r}"  # RED on memo repeat too
+        assert msg2.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg2.authority!r}"
+        assert qstate2.no_cache_store == 1, f"expected 1, got {qstate2.no_cache_store!r}"
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_whitelist_override_not_blocked(self, monkeypatch: Any, log_flag: str) -> None:
+        # Preservation (already GREEN): whitelist resolution never inspects log_type,
+        # so a whitelisted "5"/"6" entry falls through to the resolver exactly like any
+        # other flag -- pins that the NODATA fix doesn't special-case is_found ahead of
+        # the whitelist check.
+        self._enable(monkeypatch)
+        self._add_nodata(log_flag)
+        add_white("evil.com", wildcard=False)
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_WAIT_MODULE, (
+            f"expected {MODULE_WAIT_MODULE!r}, got {qstate.ext_state[0]!r}"
+        )
+        dec = pfb_unbound.decisionDB.get("evil.com")
+        assert dec is not None and not _is_block(dec), (
+            f"expected dec-not-None and not blocked, got dec={dec!r}, blocked={_is_block(dec)!r}"
+        )
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_cname_target_nodata_blocks_and_marks_original(self, monkeypatch: Any, log_flag: str) -> None:
+        # Mirrors test_cname_target_blocks_and_marks_original with a NODATA feed entry:
+        # the CNAME target is on a "5"/"6" list, so A (orig.com) blocks and the reply
+        # (empty answer + SOA) is built for the ORIGINAL name, not the target.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log=log_flag, index=0)
+        set_feed_group(0, "F", "G")
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        rcd = pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert rcd is True, f"expected True, got {rcd!r}"
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+
+        entry = pfb_unbound.decisionDB.get("orig.com")
+        assert entry is not None, f"expected not None, got {entry!r}"
+        assert entry.dnsbl.b_type == "DNSBL_CNAME", f"expected 'DNSBL_CNAME', got {entry.dnsbl.b_type!r}"
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"  # RED: currently a null A on orig.com
+        expected_soa = "{}. 3600 IN SOA {}".format("orig.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_cname_memoized_target_nodata_uses_original_qname(self, monkeypatch: Any, log_flag: str) -> None:
+        # Mirrors test_cname_memoized_target_block_uses_original_qname: query the
+        # target directly first (memoizing it), then the original with a CNAME chain --
+        # the SOA owner must still be the ORIGINAL name, not the already-memoized target.
+        self._enable(monkeypatch)
+        pfb_unbound.pfb["python_cname"] = True
+        monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
+        monkeypatch.setattr(pfb_unbound, "get_details_dnsbl", lambda *a, **k: None)
+        add_data("evil-cname.com", log=log_flag, index=0)
+        set_feed_group(0, "F", "G")
+
+        direct = make_qstate("evil-cname.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, direct, None)
+        assert pfb_unbound.decisionDB.get("evil-cname.com") is not None
+
+        qstate = make_qstate("orig.com.", qtype=RR_A, return_msg=self._cname_reply("orig.com."))
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("orig.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected orig.com SOA owner, got {msg.authority!r}"
+        orig = pfb_unbound.decisionDB.get("orig.com")
+        assert orig is not None and orig.dnsbl.is_found, f"expected orig.com memoized as block, got {orig!r}"
 
     def test_block_sets_no_cache_store(self, monkeypatch: Any) -> None:
         # #43: the synthetic block reply must NOT be stored in Unbound's C message
@@ -4028,6 +4248,49 @@ class TestEvaluateDomainNxdomain:
         assert dec.p_type == "Python", (
             f"expected 'Python', got {dec.p_type!r}"
         )  # mislabeled "HSTS"/"HSTS_TLD" before the fix
+
+
+class TestEvaluateDomainNodata:
+    """Issue #3243: log_type "5"/"6" select the NODATA block shape -- RFC 2308 Type-2
+    NOERROR/empty-answer/SOA-in-AUTHORITY -- distinct from both the null ("0"/"2") and
+    NXDOMAIN ("3"/"4") shapes. NODATA never triggers a TLS handshake either (no address
+    RR is ever synthesized for it), so the HSTS null-override that only applies to the
+    VIP ("1") shape must not leak HSTS attribution into a "5"/"6" block's p_type/in_hsts
+    -- the same reporting-accuracy fix issue #31 made for NXDOMAIN.
+    """
+
+    def _dec(self, log: str, **cfg_kw: Any) -> Any:
+        data_db: dict = {"evil.com": {"log": log, "index": 0}}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, **cfg_kw)
+        return evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_log_type_is_not_reshaped_to_nxdomain(self, log_flag: str) -> None:
+        # NODATA logging must not be misrouted into the bare-NXDOMAIN shape (nxdomain
+        # stays False; only "3"/"4" get that treatment) -- already true today, the
+        # unhandled "5"/"6" falls through both the "1" and "3"/"4" branches.
+        dec = self._dec(log_flag)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+        assert dec.log_type == log_flag, f"expected {log_flag!r}, got {dec.log_type!r}"
+
+    @pytest.mark.parametrize("log_flag", ["5", "6"])
+    def test_nodata_does_not_inherit_hsts_attribution(self, log_flag: str) -> None:
+        # Given evil.com is in the HSTS DB AND its mode is NODATA ("5"/"6") --
+        # hsts_check_domain WILL match it, so without a clear it sets in_hsts/p_type.
+        data_db: dict = {"evil.com": {"log": log_flag, "index": 0}}
+        hsts_db: dict = {"evil.com": 0}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        containers = _make_containers(dataDB=data_db, hstsDB=hsts_db, feedGroupIndexDB=fgi_db)
+        cfg = _make_cfg(dataDB=True, hstsDB=True, hsts_tlds=())
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+        assert dec.in_hsts is False, (
+            f"expected False, got {dec.in_hsts!r}"
+        )  # RED: HSTS membership currently leaks into a NODATA block
+        assert dec.p_type == "Python", f"expected 'Python', got {dec.p_type!r}"  # RED: currently mislabeled "HSTS"
 
 
 class TestEvaluateNoaaaGolden:
