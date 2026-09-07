@@ -62,13 +62,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import time
 from collections.abc import Iterator
 
 import pytest
 
+from tests.test_issue3222_soa_wire import rr_has_type
+
 from . import helpers as h
-from .conftest import STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -210,6 +213,98 @@ def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         passed = h.dns_probe_client(client_vm, sub, "A")
         assert h.resolves_to(passed, sub_ip), f"{sub} should resolve to {sub_ip} (exact != wildcard), got {passed}"
         assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
+
+
+_SECTION_COUNTS = re.compile(
+    r"ANSWER:\s*(\d+).*AUTHORITY:\s*(\d+).*ADDITIONAL:\s*(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _header_counts(raw: str) -> tuple[int | None, int | None, int | None]:
+    """Parse ANSWER/AUTHORITY/ADDITIONAL counts from a dig or drill header line."""
+    m = _SECTION_COUNTS.search(raw)
+    if m is None:
+        return None, None, None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def _raw_dig(client_vm: SmokeVM, name: str, rtype: str) -> str:
+    result = client_vm.ssh(
+        f"dig +tries=1 +time=5 {shlex.quote(rtype)} {shlex.quote(name)} @{shlex.quote(PFSENSE_LAN_IP)}",
+        timeout=30.0,
+    )
+    return result.stdout
+
+
+def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
+    drill_type = "TYPE65" if rtype == "HTTPS" else rtype
+    result = vm.ssh(f"{h.DRILL_BIN} {name} {drill_type} @127.0.0.1", timeout=30.0)
+    return result.stdout
+
+
+def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Issue #3222: VIP-blocked HTTPS/SVCB is RFC 2308 Type-2 NODATA (SOA), not empty NOERROR.
+
+    Control: the listed name's A query is the VIP sinkhole, so DNSBL python-mode
+    is armed. Then the same name is queried as HTTPS, TYPE64, and MX
+    from both the LAN client (``dig``, the iOS-like path) and on-box
+    (``drill @127.0.0.1``).
+
+    Non-address intercepts must return NOERROR with ANSWER 0 and AUTHORITY 1
+    (a synthetic SOA). Empty AUTHORITY is the pre-fix defect. dnsbl.log hits
+    must grow after the HTTPS/SVCB queries (the A control already logs one).
+    """
+    blocked = h.unique_domain("https3222")
+    control = h.unique_domain("https3222ctl")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_https3222.txt", f"{blocked}\n")
+    spec = h.DnsblCase(
+        aliasname="smokehttps3222",
+        feed_url=feed_url,
+        header="smokehttps3222",
+        mode=h.DnsblMode.VIP,
+    )
+    with h.CaseContext(deployed_vm, spec):
+        a = h.dns_probe_client(client_vm, blocked, "A")
+        assert h.is_vip(a), f"{blocked} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
+        hits_after_a = _dnsbl_log_hits(deployed_vm, blocked)
+
+        dumps: list[str] = []
+        for rtype in ("HTTPS", "TYPE64", "MX"):
+            lan = _raw_dig(client_vm, blocked, rtype)
+            box = _raw_drill(deployed_vm, blocked, rtype)
+            dumps.append(f"=== blocked {rtype} LAN dig ===\n{lan}\n=== blocked {rtype} on-box drill ===\n{box}")
+            parsed = h.dns_probe_client(client_vm, blocked, rtype)
+            lan_an, lan_ns, lan_ar = _header_counts(lan)
+            box_an, box_ns, box_ar = _header_counts(box)
+            dump = "\n".join(dumps)
+            assert parsed.rcode == "NOERROR", (
+                f"{blocked} {rtype} expected NOERROR, got {parsed.rcode} records={parsed.records!r}\n{dump}"
+            )
+            assert parsed.records == [], f"{blocked} {rtype} expected empty ANSWER, got {parsed.records!r}\n{dump}"
+            assert lan_an == 0 and lan_ns == 1, (
+                f"{blocked} {rtype} LAN expected ANSWER=0 AUTHORITY=1 (SOA), "
+                f"got ANSWER={lan_an} AUTHORITY={lan_ns} ADDITIONAL={lan_ar}\n{dump}"
+            )
+            assert box_an == 0 and box_ns == 1, (
+                f"{blocked} {rtype} on-box expected ANSWER=0 AUTHORITY=1 (SOA), "
+                f"got ANSWER={box_an} AUTHORITY={box_ns} ADDITIONAL={box_ar}\n{dump}"
+            )
+            assert rr_has_type(lan, "SOA"), f"{blocked} {rtype} LAN expected an SOA in AUTHORITY\n{dump}"
+            assert rr_has_type(box, "SOA"), f"{blocked} {rtype} on-box expected an SOA in AUTHORITY\n{dump}"
+
+        ctl_a = h.dns_probe_client(client_vm, control, "A")
+        assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"
+
+        dump = "\n".join(dumps)
+        h.wait_until(
+            lambda: _dnsbl_log_hits(deployed_vm, blocked) > hits_after_a,
+            timeout=20.0,
+            interval=1.0,
+        )
+        assert _dnsbl_log_hits(deployed_vm, blocked) > hits_after_a, (
+            f"dnsbl.log did not grow after HTTPS/SVCB queries (after A hits={hits_after_a}); dumps:\n{dump}"
+        )
 
 
 def test_dnsbl_exact_null(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
