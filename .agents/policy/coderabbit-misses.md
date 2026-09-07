@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `c6ae311db`  tests: use kernel-assigned HTTP fixture ports  (#3230) — asked twice, two quota notices; condensed review, two blocking fixed.
 - `0d6990961`  run-gates: select the pytest gate for a skip-allowlist-only diff  (#3171) — asked twice, two quota notices; four legs, no blocking.
 - `505f1ad73`  pfblockerng: skip identical member republish  (#3172) — asked twice, two quota notices; four legs, two blocking fixed.
 - `c7aa8992b`  agent: suppress default diffs for the tracked graph  (#3169) — asked twice, two quota notices; four legs, no blocking.
