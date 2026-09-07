@@ -48,6 +48,31 @@ final class HttpFixtureReadinessStreamSpy
 	}
 }
 
+final class HttpFixtureReadinessPortPollSpy
+{
+	/** @var list<string> */
+	public static array $reads = [];
+	/** @var list<int> */
+	public static array $pauses = [];
+
+	public static function reset(): void
+	{
+		self::$reads = [];
+		self::$pauses = [];
+	}
+
+	public static function read(string $path): string
+	{
+		self::$reads[] = $path;
+		return 'unmatched stderr';
+	}
+
+	public static function pause(int $microseconds): void
+	{
+		self::$pauses[] = $microseconds;
+	}
+}
+
 /** Issue #2065: HTTP fixture readiness proves which process owns the selected port. */
 final class HttpFixtureReadinessTest extends TestCase
 {
@@ -237,6 +262,41 @@ final class HttpFixtureReadinessTest extends TestCase
 	{
 		$this->requireReadinessHelper();
 		$this->assertSame(0, pfb_test_http_fixture_port("{$this->workdir}/does-not-exist.stderr"));
+	}
+
+	public function testFixturePortParserKeepsExactFortyReadAndPauseBound(): void
+	{
+		$source = file_get_contents(__DIR__ . '/support/HttpFixtureReadiness.php');
+		$this->assertIsString($source);
+		$namespace = 'PfbIssue3218\\PortPoll' . bin2hex(random_bytes(6));
+		$instrumentation = <<<PHP
+
+namespace {$namespace};
+
+function file_get_contents(string \$path): string
+{
+	return \HttpFixtureReadinessPortPollSpy::read(\$path);
+}
+
+function usleep(int \$microseconds): void
+{
+	\HttpFixtureReadinessPortPollSpy::pause(\$microseconds);
+}
+PHP;
+		$source = str_replace(
+			"declare(strict_types=1);\n",
+			"declare(strict_types=1);{$instrumentation}\n",
+			$source
+		);
+		$mirror = "{$this->workdir}/poll-helper.php";
+		$this->assertNotFalse(file_put_contents($mirror, $source));
+		HttpFixtureReadinessPortPollSpy::reset();
+		require $mirror;
+
+		$learner = "{$namespace}\\pfb_test_http_fixture_port";
+		$this->assertSame(0, $learner('/fixture.stderr'));
+		$this->assertSame(array_fill(0, 40, '/fixture.stderr'), HttpFixtureReadinessPortPollSpy::$reads);
+		$this->assertSame(array_fill(0, 40, 50000), HttpFixtureReadinessPortPollSpy::$pauses);
 	}
 
 	private function requireReadinessHelper(): void

@@ -19,6 +19,8 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 	private static array $pollPauses = [];
 	/** @var list<string> */
 	private static array $stderrPaths = [];
+	/** @var list<string> */
+	private static array $learnedStderrPaths = [];
 	/** @var list<list<string>> */
 	private static array $fixtureCommands = [];
 	/** @var list<resource> */
@@ -36,6 +38,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		self::$probeNonces = [];
 		self::$pollPauses = [];
 		self::$stderrPaths = [];
+		self::$learnedStderrPaths = [];
 		self::$fixtureCommands = [];
 		self::$fixtureProcesses = [];
 		self::$terminatedFixtureProcesses = [];
@@ -134,6 +137,11 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 		$this->assertStringContainsString('stderr=', $message);
 		$this->assertCount($tries, self::$stderrPaths, "{$file}::{$method} changed the stderr file count");
 		$this->assertCount($tries, array_unique(self::$stderrPaths), "{$file}::{$method} must use a fresh stderr file per attempt");
+		$this->assertSame(
+			self::$stderrPaths,
+			self::$learnedStderrPaths,
+			"{$file}::{$method} must learn the port from its own per-attempt stderr path"
+		);
 		$this->assertCount($tries, self::$fixtureCommands, "{$file}::{$method} changed the child-process count");
 		foreach (self::$fixtureCommands as $command) {
 			$this->assertSame(
@@ -185,6 +193,7 @@ final class HttpFixtureReadinessBehaviorTest extends TestCase
 	/** Plants the foreign port as the "learned" port for every attempt, forcing a nonce mismatch. */
 	public static function learnFixturePort(string $stderrPath): int
 	{
+		self::$learnedStderrPaths[] = $stderrPath;
 		return self::$foreignPort;
 	}
 
