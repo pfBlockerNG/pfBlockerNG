@@ -14,7 +14,7 @@ function pfb_test_http_fixture_event_received(int $port, string $secret): bool
 
 /**
  * Bounded-polls $stderrPath (40 x 50ms) for the async `php -S 127.0.0.1:0`
- * banner; parses only `http://127.0.0.1:(\d+)`, tolerant of banner wording.
+ * banner; parses only `http://127.0.0.1:(\d+)\)`, tolerant of banner wording.
  * Returns 0 if no complete match lands within the bound.
  */
 function pfb_test_http_fixture_port(string $stderrPath): int
