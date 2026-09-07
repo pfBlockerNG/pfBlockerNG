@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from tests._workflow_steps import extract_after, extract_before, extract_job, extract_step
+from tests.gitenv import scrubbed_git_env
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -481,15 +482,23 @@ def _live_build_record(
     py_flavor: str = "py311",
 ) -> dict[str, object]:
     canonical_version = record_version or version
+    release_line = ".".join(canonical_version.split(".")[:2])
+    classification = "final"
+    if channel != "stable":
+        classification = {"a": "alpha", "b": "beta", "r": "rc"}[canonical_version.rsplit(".", 1)[-1][0]]
     record: dict[str, object] = {
         "schema": 1,
         "channel": channel,
-        "release_line": "release/4.1",
-        "classification": "final",
+        "release_line": f"release/{release_line}",
+        "classification": classification,
         "source_tag": f"v{canonical_version}",
         "source_sha": source * 40,
         "canonical_package_version": canonical_version,
-        "native_recipe_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "native_recipe_identity": (
+            pfb_pkg.CANONICAL_EMITTED_IDENTITY
+            if channel == "stable"
+            else f"{pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{channel}"
+        ),
         "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
         "matrix_row": {
             "variant": "CE",
@@ -527,18 +536,16 @@ def _catalogue_entry(
     version: str,
     *,
     record: dict[str, object] | None = None,
+    annotation: str | None = None,
+    abi: str = "FreeBSD:15:*",
 ) -> dict[str, object]:
-    annotations = (
-        {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record, separators=(",", ":"), sort_keys=True)}
-        if record is not None
-        else {}
-    )
-    return {
-        "name": name,
-        "version": version,
-        "abi": "FreeBSD:15:*",
-        "annotations": annotations,
-    }
+    if annotation is not None:
+        annotations = {pfb_pkg.PFB_BUILD_RECORD_KEY: annotation}
+    elif record is not None:
+        annotations = {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record, separators=(",", ":"), sort_keys=True)}
+    else:
+        annotations = {}
+    return {"name": name, "version": version, "abi": abi, "annotations": annotations}
 
 
 def _run_live_identity_resolver(
@@ -580,7 +587,9 @@ esac
         "extra_pkgs": ["textproc/py-charset-normalizer"],
     }
     step = extract_step(NIGHTLY, "Resolve exact published Stable identity")
-    script = textwrap.dedent(extract_after(step, "        run: |\n"))
+    script = textwrap.dedent(
+        extract_before(extract_after(step, "        run: |\n"), "\n          PY") + "\n          PY\n"
+    )
     completed = subprocess.run(
         ["sh", "-c", script],
         cwd=ROOT,
@@ -604,24 +613,22 @@ def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_iden
     selected = _live_build_record("4.1.0", source="c")
     catalogue = _catalogue(
         [
-            _catalogue_entry(pfb_pkg.CANONICAL_EMITTED_IDENTITY, "4.1.0", record=selected),
-            _catalogue_entry("py311-charset-normalizer", "99.0.0"),
             _catalogue_entry(
                 pfb_pkg.CANONICAL_EMITTED_IDENTITY,
                 "4.0.0",
                 record=_live_build_record("4.0.0"),
             ),
+            _catalogue_entry("py311-charset-normalizer", "99.0.0"),
+            _catalogue_entry(pfb_pkg.CANONICAL_EMITTED_IDENTITY, "4.1.0", record=selected),
         ]
     )
 
     completed, output = _run_live_identity_resolver(tmp_path, catalogue)
 
     assert completed.returncode == 0, completed.stderr
-    assert "smoke_repo_expected_version=4.1.0" in output
-    assert f"smoke_repo_expected_source_sha={'c' * 40}" in output
-    assert "smoke_repo_expected_channel=stable" in output
-    assert "varver=ce-2.10" in output
-    assert f"pkg_repo_sha={'d' * 40}" in output
+    assert "version=4.1.0" in output
+    assert f"source_sha={'c' * 40}" in output
+    assert "channel=stable" in output
 
 
 @pytest.mark.parametrize(
@@ -633,6 +640,33 @@ def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_iden
             "absent-canonical",
             _catalogue([_catalogue_entry("py311-charset-normalizer", "99.0.0")]),
             "canonical",
+        ),
+        (
+            "missing-provenance",
+            _catalogue([_catalogue_entry(pfb_pkg.CANONICAL_EMITTED_IDENTITY, "4.1.0")]),
+            "build record",
+        ),
+        (
+            "malformed-provenance",
+            _catalogue([_catalogue_entry(pfb_pkg.CANONICAL_EMITTED_IDENTITY, "4.1.0", annotation="{")]),
+            "build record",
+        ),
+        (
+            "missing-digest",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record={
+                            key: value
+                            for key, value in _live_build_record("4.1.0").items()
+                            if key != "build_input_digest"
+                        },
+                    )
+                ]
+            ),
+            "build record",
         ),
         (
             "digest-invalid",
@@ -653,8 +687,8 @@ def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_iden
                 [
                     _catalogue_entry(
                         pfb_pkg.CANONICAL_EMITTED_IDENTITY,
-                        "4.1.0",
-                        record=_live_build_record("4.1.0", channel="testing"),
+                        "4.1.1.a1",
+                        record=_live_build_record("4.1.1.a1", channel="testing"),
                     )
                 ]
             ),
@@ -674,7 +708,20 @@ def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_iden
             "version",
         ),
         (
-            "runtime",
+            "record-abi",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0", freebsd_major="16"),
+                    )
+                ]
+            ),
+            "freebsd_major",
+        ),
+        (
+            "record-php",
             _catalogue(
                 [
                     _catalogue_entry(
@@ -685,6 +732,33 @@ def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_iden
                 ]
             ),
             "php_version",
+        ),
+        (
+            "record-python",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0", py_flavor="py312"),
+                    )
+                ]
+            ),
+            "py_flavor",
+        ),
+        (
+            "catalogue-abi",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0"),
+                        abi="FreeBSD:16:*",
+                    )
+                ]
+            ),
+            "catalogue ABI",
         ),
     ],
 )
@@ -701,41 +775,96 @@ def test_nightly_live_downgrade_resolver_fails_closed(
     assert output == ""
 
 
-def test_nightly_selects_minimum_ci_true_ce_runtime_and_fails_without_one(tmp_path: Path) -> None:
+def _matrix_row(version: str, *, channel: str = "CE", ci: bool = True) -> dict[str, object]:
+    return {
+        "pfsense_version": version,
+        "channel": channel,
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": channel,
+        "status": "active",
+        "ci": ci,
+        "extra_pkgs": [],
+    }
+
+
+def _commit_matrix(repo: Path, rows: list[dict[str, object]], message: str) -> str:
+    (repo / "supported-versions.json").write_text(
+        json.dumps({"description": "live downgrade fixture", "versions": rows}),
+        encoding="utf-8",
+    )
+    env = scrubbed_git_env(drop_git_vars=True)
+    subprocess.run(["git", "add", "supported-versions.json"], cwd=repo, env=env, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-qm", message],
+        cwd=repo,
+        env=env,
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_nightly_selects_minimum_pinned_ci_true_ce_runtime_and_fails_without_one(tmp_path: Path) -> None:
+    repo = tmp_path / "trusted"
+    repo.mkdir()
+    env = scrubbed_git_env(drop_git_vars=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, env=env, check=True)
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    (scripts / "read-version-matrix.sh").symlink_to(ROOT / "scripts" / "read-version-matrix.sh")
+    pinned_sha = _commit_matrix(
+        repo,
+        [
+            _matrix_row("2.7", ci=False),
+            _matrix_row("2.10"),
+            _matrix_row("2.9"),
+            _matrix_row("26.03", channel="Plus"),
+        ],
+        "pinned",
+    )
+    no_ce_sha = _commit_matrix(repo, [_matrix_row("26.07", channel="Plus")], "no CE")
+
     step = extract_step(NIGHTLY, "Select live downgrade runtime")
     script = textwrap.dedent(extract_after(step, "        run: |\n"))
-    rows = [
-        {"channel": "CE", "pfsense_version": "2.10"},
-        {"channel": "Plus", "pfsense_version": "1.0"},
-        {"channel": "CE", "pfsense_version": "2.9"},
-    ]
-
     output = tmp_path / "selected"
     selected = subprocess.run(
         ["sh", "-c", script],
-        cwd=tmp_path,
         check=False,
         capture_output=True,
         text=True,
         env={
             **os.environ,
-            "CI_MATRIX": json.dumps(rows),
+            "TRUSTED_DIR": str(repo),
+            "MATRIX_SHA": pinned_sha,
             "GITHUB_OUTPUT": str(output),
         },
     )
     assert selected.returncode == 0, selected.stderr
-    assert json.loads(output.read_text(encoding="utf-8").removeprefix("row="))["pfsense_version"] == "2.9"
+    row = json.loads(output.read_text(encoding="utf-8").removeprefix("row="))
+    assert row["pfsense_version"] == "2.9"
+    assert row["ci"] is True
 
     output.unlink()
     rejected = subprocess.run(
         ["sh", "-c", script],
-        cwd=tmp_path,
         check=False,
         capture_output=True,
         text=True,
         env={
             **os.environ,
-            "CI_MATRIX": '[{"channel":"Plus","pfsense_version":"1.0"}]',
+            "TRUSTED_DIR": str(repo),
+            "MATRIX_SHA": no_ce_sha,
             "GITHUB_OUTPUT": str(output),
         },
     )
@@ -754,6 +883,11 @@ def test_nightly_wires_real_live_downgrade_with_both_exact_identities() -> None:
 
     assert direct["with"]["pytest_filter"] == "test_install_from_live_nightly_url"
     assert resolver["needs"] == ["prepare", "ingest-pkg"]
+    assert resolver["outputs"] == {
+        "source_sha": "${{ steps.identity.outputs.source_sha }}",
+        "version": "${{ steps.identity.outputs.version }}",
+        "channel": "${{ steps.identity.outputs.channel }}",
+    }
     assert downgrade["needs"] == ["prepare", "resolve-live-stable-identity"]
     assert inputs == {
         "pfsense_version": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).pfsense_version }}",

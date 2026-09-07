@@ -127,8 +127,6 @@ jobs:
             --ref "$MATRIX_SHA" --print-build)"
           ROUTE_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
             --ref "$MATRIX_SHA" --print-route)"
-          CI_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
-            --ref "$MATRIX_SHA" --print-ci)"
           if ! matrix_gate "$BUILD_MATRIX" "$ROUTE_MATRIX"; then
             echo "::error::missing live BUILD/ROUTE matrix rows"
             exit 1
@@ -144,7 +142,6 @@ jobs:
           PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"
           python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
             > plan/dependency-builder.json
-          printf '%s\n' "$CI_MATRIX" > plan/ci-matrix.json
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
@@ -167,9 +164,13 @@ jobs:
 
       - name: Select live downgrade runtime
         id: live-downgrade
+        env:
+          TRUSTED_DIR: ${{ github.workspace }}/trusted
+          MATRIX_SHA: ${{ steps.inputs.outputs.matrix_sha }}
         run: |
           set -eu
-          [ -n "${CI_MATRIX:-}" ] || CI_MATRIX="$(cat plan/ci-matrix.json)"
+          CI_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
+            --ref "$MATRIX_SHA" --print-ci)"
           ROW="$(printf '%s\n' "$CI_MATRIX" | jq -c \
             '[.[] | select(.channel == "CE")] | sort_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)) | .[0] // null')"
           [ "$ROW" != null ] || { echo "::error::no ci:true CE row for the live downgrade" >&2; exit 1; }
@@ -519,9 +520,9 @@ jobs:
     needs: [prepare, ingest-pkg]
     runs-on: ubuntu-latest
     outputs:
-      source_sha: ${{ steps.identity.outputs.smoke_repo_expected_source_sha }}
-      version: ${{ steps.identity.outputs.smoke_repo_expected_version }}
-      channel: ${{ steps.identity.outputs.smoke_repo_expected_channel }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      version: ${{ steps.identity.outputs.version }}
+      channel: ${{ steps.identity.outputs.channel }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -568,7 +569,6 @@ jobs:
               PkgError,
               load_build_record,
               pkg_version_sort_key,
-              validate_build_record,
               zstd_decompress,
           )
 
@@ -599,19 +599,13 @@ jobs:
           if not isinstance(annotation, str):
               raise SystemExit("canonical package has no build record")
           try:
-              unvalidated_record = json.loads(annotation)
-          except (TypeError, ValueError) as exc:
-              raise SystemExit(f"build record is invalid: {exc}") from None
-          if not isinstance(unvalidated_record, dict):
-              raise SystemExit("build record is invalid: expected an object")
-          if unvalidated_record.get("canonical_package_version") != version:
-              raise SystemExit("catalogue version does not match the build record version")
-          if unvalidated_record.get("channel") != "stable":
-              raise SystemExit("stable catalogue selected a non-stable build record")
-          try:
               record = load_build_record(annotation)
           except PkgError as exc:
               raise SystemExit(f"build record is invalid: {exc}") from None
+          if record["canonical_package_version"] != version:
+              raise SystemExit("catalogue version does not match the build record version")
+          if record["channel"] != "stable":
+              raise SystemExit("stable catalogue selected a non-stable build record")
 
           live_row = json.loads(os.environ["LIVE_DOWNGRADE_ROW"])
           if not isinstance(live_row, dict):
@@ -619,33 +613,27 @@ jobs:
           for field in ("pfsense_version", "variant", "freebsd_major", "php_version", "py_flavor"):
               if not isinstance(live_row.get(field), str) or not live_row[field]:
                   raise SystemExit(f"selected runtime {field} is malformed")
-          validate_build_record(
-              record,
-              abi=f"FreeBSD:{live_row['freebsd_major']}:amd64",
-              php_version=live_row["php_version"],
-              py_flavor=live_row["py_flavor"],
-          )
           record_row = record["matrix_row"]
+          for field in ("freebsd_major", "php_version", "py_flavor"):
+              if record_row[field] != live_row[field]:
+                  raise SystemExit(
+                      f"build record {field} {record_row[field]!r} does not match selected runtime {live_row[field]!r}"
+                  )
           record_varver = catalog_name_from_version(record_row["pfsense_version"], record_row["variant"])
           if record_varver != os.environ["VARVER"]:
               raise SystemExit(f"build record runtime maps to {record_varver}, expected {os.environ['VARVER']}")
           if selected.get("abi") != f"FreeBSD:{live_row['freebsd_major']}:*":
               raise SystemExit("catalogue ABI does not match the selected runtime")
 
+          print(
+              f"resolved Stable {version} from {os.environ['VARVER']} at pkg commit {os.environ['PKG_SHA']}"
+          )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"smoke_repo_expected_source_sha={record['source_sha']}\n")
-              output.write(f"smoke_repo_expected_version={version}\n")
-              output.write("smoke_repo_expected_channel=stable\n")
-              output.write(f"varver={os.environ['VARVER']}\n")
-              output.write(f"pkg_repo_sha={os.environ['PKG_SHA']}\n")
+              output.write(f"source_sha={record['source_sha']}\n")
+              output.write(f"version={version}\n")
+              output.write("channel=stable\n")
           PY
 
-      - name: Confirm pinned Stable identity
-        env:
-          SOURCE_SHA: ${{ steps.identity.outputs.smoke_repo_expected_source_sha }}
-          VERSION: ${{ steps.identity.outputs.smoke_repo_expected_version }}
-          CHANNEL: ${{ steps.identity.outputs.smoke_repo_expected_channel }}
-        run: test -n "$SOURCE_SHA" && test -n "$VERSION" && test "$CHANNEL" = stable
 
   validate-live-pages-install:
     name: Live Pages pkg install
