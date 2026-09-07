@@ -182,25 +182,30 @@ $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
 $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
-$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting. Default is no global override.'
+$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting.'
 			. '<div class="infoblock">'
-			. 'Default: <strong>No Global mode</strong><br />'
+			. 'Default: <strong>Null Blocking (logging)</strong> for new configurations; an existing configuration keeps its current setting (\'No Global mode\' preserved as-is).<br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
+			. '&#8226 <strong>No Global mode</strong>, Each DNSBL Group\'s own Logging/Blocking setting applies; no global override.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
 			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
 			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NODATA (logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NODATA (no logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.'
 			. '</div>';
 
-$options_global_log	= [	''		=> 'No Global mode',
+$options_global_log	= [	'none'		=> 'No Global mode',
 				'enabled'	=> 'DNSBL WebServer/VIP',
 				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
-				'nxdomain'	=> 'NXDOMAIN (no logging)'];
+				'nxdomain'	=> 'NXDOMAIN (no logging)',
+				'nodata_log'	=> 'NODATA (logging)',
+				'nodata'	=> 'NODATA (no logging)'];
 
 $options_dnsbl_webpage = array();
 $indexdir = '/usr/local/www/pfblockerng/www';
@@ -572,7 +577,7 @@ if ($_POST) {
 
 		// Validate Select field options
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',
-						'global_log'		=> '',
+						'global_log'		=> $pconfig['global_log'],
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'top1m_source'		=> 'tranco',
 						'top1m_count'		=> '1000',
@@ -867,7 +872,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsport_ssl']	= $_POST['pfb_dnsport_ssl']						?: '8443';
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
-			$pfb['dconfig']['global_log']		= $_POST['global_log']							?: '';
+			$pfb['dconfig']['global_log']		= $_POST['global_log'];
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
@@ -2639,7 +2644,7 @@ $dnsbl_text = '<div class="infoblock">'
 		. '</ol>'
 		. 'Feed exact and wildcard matching (1–2) run only while DNSBL blocking is enabled; TLD Allow, IDN, and Regex (3–5) still run.<br /><br />'
 		. 'If a block is found, a whitelist entry, an ABP allow rule (@@) or an allow-regex can override it. Once an ABP feed loads $important rules, block and allow are resolved by priority rather than allow-always-wins.<br /><br />'
-		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN replies (logged or silent) replace a VIP or null answer; a hit via a CNAME chain is tagged _CNAME. Null-blocking is not a property of which stage matched.<br /><br />'
+		. 'If the name is still blocked, the reply is shaped last: HSTS may use null-blocking to avoid browser certificate errors; NXDOMAIN and NODATA replies (logged or silent) replace a VIP or null answer; a hit via a CNAME chain is tagged _CNAME. Null-blocking is not a property of which stage matched.<br /><br />'
 		. 'CNAME Validation and no-AAAA are separate features, not steps in this order. Feed-at-suffix (PSL) policies, the regex cap, and Download Schemes shape what is loaded, not the per-query order.'
 		. '</div><br /><br />'
 		. '<span class="text-danger">Note: </span>'
@@ -2647,7 +2652,8 @@ $dnsbl_text = '<div class="infoblock">'
 		. 'How a blocked name is answered depends on the <strong>Global Logging/Blocking Mode</strong> and on each DNSBL Group\'s own Logging/Blocking setting:<br />'
 		. '&#8226 <strong>DNSBL WebServer/VIP</strong> - the request is redirected to the DNSBL Virtual IP, where a Lighttpd instance records the hit and returns a \'1x1\' GIF. For a root domain the customizable Blocked Webpage is shown instead.<br />'
 		. '&#8226 <strong>Null Blocking</strong> - the name is answered with \'0.0.0.0\'. No Virtual IP, no web server and no block page are involved.<br />'
-		. '&#8226 <strong>NXDOMAIN</strong> - the name is answered NXDOMAIN and the block page is bypassed.<br /><br />'
+		. '&#8226 <strong>NXDOMAIN</strong> - the name is answered NXDOMAIN and the block page is bypassed.<br />'
+		. '&#8226 <strong>NODATA</strong> - the name is answered NOERROR with an empty answer (SOA in authority) and the block page is bypassed.<br /><br />'
 		. 'If browsing is slow <strong>in VIP mode</strong>, check for Firewall LAN Rules/Limiters that might be blocking access to the DNSBL VIP.<br /><br />'
 		. '<span class="text-danger">Note: </span>'
 		. 'DNSBL will block and <u>partially</u> log Alerts for HTTPS requests. '

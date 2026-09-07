@@ -2880,14 +2880,8 @@ def set_aggregate_types(vm: SmokeVM, types: list[str], *, timeout: float = 60.0)
 
 
 def _dnsbl_mode_settings(mode: DnsblMode) -> dict[str, str]:  # noqa: ARG001
-    """Global-settings fields for a response mode.
-
-    On ``next`` python mode is always on (pfblockerng.inc enforces it);
-    ``dnsbl_mode`` / ``pfb_py_block`` are dead config keys.  The response
-    shape (VIP vs null) is driven entirely by per-list ``logging`` —
-    see ``_dnsbl_list_logging``.
-    """
-    return {}
+    """Keep the case's per-group response mode independent of the install default."""
+    return {"global_log": "none"}
 
 
 def _dnsbl_list_logging(mode: DnsblMode) -> str:

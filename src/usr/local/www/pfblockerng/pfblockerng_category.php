@@ -196,7 +196,9 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 							'disabled',
 							'disabled_log',
 							'nxdomain_log',	// issue #31: NXDOMAIN logging
-							'nxdomain'	// issue #31: NXDOMAIN no logging
+							'nxdomain',	// issue #31: NXDOMAIN no logging
+							'nodata_log',	// issue #3243: NODATA logging
+							'nodata'	// issue #3243: NODATA no logging
 							);
 
 				// Parse POST and save new values
@@ -523,10 +525,12 @@ if (isset($savemsg)) {
 									'disabled_log'	=> 'Null Blocking (logging)',
 									'disabled'	=> 'Null Blocking (no logging)',
 									'nxdomain_log'	=> 'NXDOMAIN (logging)',
-									'nxdomain'	=> 'NXDOMAIN (no logging)'];
+									'nxdomain'	=> 'NXDOMAIN (no logging)',
+									'nodata_log'	=> 'NODATA (logging)',
+									'nodata'	=> 'NODATA (no logging)'];
 
 							// Global DNSBL Logging/Blocking mode
-							if (!empty($pfb['dnsbl_global_log'])) {
+							if (!empty($pfb['dnsbl_global_log']) && $pfb['dnsbl_global_log'] !== 'none') {
 								$logtype		= $pfb['dnsbl_global_log'];
 								$log_options[$logtype]	= "{$log_options[$logtype]} (Global)";
 							}

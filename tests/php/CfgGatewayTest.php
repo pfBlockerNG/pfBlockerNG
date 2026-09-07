@@ -2980,6 +2980,7 @@ final class CfgGatewayTest extends TestCase
 				'pfb_dnsport' => ['', '8081', '#2994 page/save default 8081'],
 				'pfb_dnsport_ssl' => ['', '8443', '#2994 page/save default 8443'],
 				'aliaslog' => ['', 'enabled', '#2994 page/save/help default enabled'],
+				'global_log' => ['', 'disabled_log', '#3243 NODATA support: new global default disabled_log; an existing install\'s absent/empty value grandfathers to \'none\' at upgrade so per-group modes are preserved'],
 			];
 			if (isset($deliberate[$bare])) {
 				[$historical, $current, $why] = $deliberate[$bare];

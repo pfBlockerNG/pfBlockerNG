@@ -2132,16 +2132,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							// absent is treated as 'Deny'.
 							$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
 
-							// Global DNSBL Logging/Blocking mode
-							if (!empty($pfb['dnsbl_global_log'])) {
+							// 'none' preserves each group's logging/blocking choice.
+							if (!empty($pfb['dnsbl_global_log']) && $pfb['dnsbl_global_log'] != 'none') {
 								$list['logging'] = $pfb['dnsbl_global_log'];
 							}
 
-							// Force Unbound mode Logging for 'disabled_log' to 'enabled'
-
-
-							// If Null Blocking mode is selected, use '0.0.0.0|::0', otherwise utilize DNSBL WebServer/DNSBL VIP
-							// NXDOMAIN modes ('3'/'4', issue #31) emit a bare NXDOMAIN in pfb_unbound.py; no sinkhole IP applies.
+							// Serialize the selected response mode for the Python matcher.
 							if ($list['logging'] == 'disabled') {
 								$logging_type	= '2';	// Null Blocking no logging
 							}
@@ -2153,6 +2149,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 							elseif ($list['logging'] == 'nxdomain') {
 								$logging_type	= '4';	// NXDOMAIN no logging
+							}
+							elseif ($list['logging'] == 'nodata_log') {
+								$logging_type	= '5';	// NODATA logging
+							}
+							elseif ($list['logging'] == 'nodata') {
+								$logging_type	= '6';	// NODATA no logging
 							} else {
 								$logging_type	= '1';	// DNSBL VIP logging
 							}

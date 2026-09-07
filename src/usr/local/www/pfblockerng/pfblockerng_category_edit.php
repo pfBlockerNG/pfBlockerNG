@@ -437,7 +437,9 @@ $options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
 				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
-				'nxdomain'	=> 'NXDOMAIN (no logging)' ];
+				'nxdomain'	=> 'NXDOMAIN (no logging)',
+				'nodata_log'	=> 'NODATA (logging)',
+				'nodata'	=> 'NODATA (no logging)' ];
 
 // Per-row action for DNSBL feeds: Deny (block, default) or Permit (allow list — overrides block feeds).
 $options_row_action	= [ 'Deny' => 'Deny', 'Permit' => 'Permit' ];
@@ -1692,7 +1694,9 @@ if ($gtype == 'dnsbl') {
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
 			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
-			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br /><br />'
+			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NODATA (logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.<br />'
+			. '&#8226 <strong>NODATA (no logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.<br /><br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
 			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update';

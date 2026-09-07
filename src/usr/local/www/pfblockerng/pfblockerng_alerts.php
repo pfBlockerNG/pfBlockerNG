@@ -232,7 +232,7 @@ if (!$alert_summary) {
 
 						// Collect Global DNSBL Logging type, or Group logging setting
 						$g_log = PfbConfig::read('dnsbl/global_log');
-						if (empty($g_log)) {
+						if (empty($g_log) || $g_log === 'none') {
 							// foreign structure: pfblockerngdnsbl/config/{row}/logging is a dynamic per-row key, not in registry
 							$d_log = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging");
 						} else {
@@ -240,7 +240,9 @@ if (!$alert_summary) {
 						}
 
 						// Mirror the pfblockerng.inc logging_type mapping (issue #31 adds
-						// NXDOMAIN '3'/'4'); anything else falls through to null-no-log '2'.
+						// NXDOMAIN '3'/'4', issue #3243 adds NODATA '5'/'6'); anything else
+						// (including the silent-null 'disabled' token) falls through to
+						// null-no-log '2'.
 						if ($d_log == 'disabled_log') {
 							$d_type = '0';
 						} elseif ($d_log == 'enabled') {
@@ -249,6 +251,10 @@ if (!$alert_summary) {
 							$d_type = '3';
 						} elseif ($d_log == 'nxdomain') {
 							$d_type = '4';
+						} elseif ($d_log == 'nodata_log') {
+							$d_type = '5';
+						} elseif ($d_log == 'nodata') {
+							$d_type = '6';
 						} else {
 							$d_type = '2';
 						}

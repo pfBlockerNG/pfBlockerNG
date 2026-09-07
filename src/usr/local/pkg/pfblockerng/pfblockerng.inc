@@ -3371,7 +3371,7 @@ function pfb_global() {
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
-	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default '')
+	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default 'disabled_log'; 'none' = no global override, issue #3243)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are grandfathered to 'on' by the registry pass at

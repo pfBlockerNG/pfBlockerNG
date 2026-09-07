@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * Test groups:
  *
  * A — LOAD DEFAULT PARITY
- *   Registered keys (pfb_software_check, global_log, whitelist, tld_wildcard_exclusion,
+ *   Registered keys (pfb_software_check, whitelist, tld_wildcard_exclusion,
  *   v4suppression [ADR-53]):
  *     Assert PfbConfig::read($key) on an absent section returns the correct default
  *     (parity with prior page behaviour before routing).
@@ -98,29 +98,16 @@ final class WwwGroupCGatewayTest extends TestCase
 	}
 
 	/**
-	 * global_log: absent → '' (registry default; page uses `?: ''` after gateway read).
-	 */
-	public function testGlobalLogAbsentDefaultIsEmptyString(): void
-	{
-		$path = 'installedpackages/pfblockerngdnsblsettings/config/0/global_log';
-
-		// Before: key absent.
-		$this->assertNull(config_get_path($path), 'global_log must be absent before read');
-
-		// When: gateway read.
-		$result = PfbConfig::read('dnsbl/global_log');
-
-		// Then: '' — prior page did `config_get_path(...) ?: ''`.
-		$this->assertSame('', $result, 'global_log absent -> "" (parity with prior page fallback)');
-	}
-
-	/**
 	 * global_log round-trip: write a logging mode string, read it back.
+	 *
+	 * Initial state is the registered default 'disabled_log' (issue #3243 -- a fresh
+	 * install starts with a logged-null override rather than deferring to per-group
+	 * modes); the round-trip behaviour itself (write X, read back X) is unchanged.
 	 */
 	public function testGlobalLogRoundTrips(): void
 	{
-		// Before: absent → ''.
-		$this->assertSame('', PfbConfig::read('dnsbl/global_log'), 'initial absent -> ""');
+		// Before: absent → the registered default 'disabled_log'.
+		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'initial absent -> "disabled_log"');
 
 		// When: write 'enabled'.
 		PfbConfig::write('dnsbl/global_log', 'enabled');
@@ -128,11 +115,11 @@ final class WwwGroupCGatewayTest extends TestCase
 		// Then: read back 'enabled'.
 		$this->assertSame('enabled', PfbConfig::read('dnsbl/global_log'), 'after write "enabled" -> "enabled"');
 
-		// When: write 'disabled_log'.
-		PfbConfig::write('dnsbl/global_log', 'disabled_log');
+		// When: write 'none' (no-global-override token).
+		PfbConfig::write('dnsbl/global_log', 'none');
 
-		// Then: read back 'disabled_log'.
-		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'after write "disabled_log" -> "disabled_log"');
+		// Then: read back 'none'.
+		$this->assertSame('none', PfbConfig::read('dnsbl/global_log'), 'after write "none" -> "none"');
 	}
 
 	/**
