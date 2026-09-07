@@ -783,6 +783,8 @@ def _matrix_row(version: str, *, channel: str = "CE", ci: bool = True) -> dict[s
         "freebsd_major": "15",
         "php_version": "8.3",
         "py_flavor": "py311",
+        "image_name": "pfsense-ce" if channel == "CE" else "pfsense-plus",
+        "mac": "00:11:22:33:44:55",
         "variant": channel,
         "status": "active",
         "ci": ci,
@@ -854,6 +856,8 @@ def test_nightly_selects_minimum_pinned_ci_true_ce_runtime_and_fails_without_one
     row = json.loads(output.read_text(encoding="utf-8").removeprefix("row="))
     assert row["pfsense_version"] == "2.9"
     assert row["ci"] is True
+    assert row["image_name"] == "pfsense-ce"
+    assert row["mac"] == "00:11:22:33:44:55"
 
     output.unlink()
     rejected = subprocess.run(
