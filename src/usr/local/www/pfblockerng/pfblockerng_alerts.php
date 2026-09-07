@@ -1229,14 +1229,14 @@ if (isset($_POST) && !empty($_POST)) {
 			case 'delete_domain':
 				$savemsg = "The Domain [ {$entry} ] has been deleted from the DNSBL Whitelist!";
 				if (isset($clists['dnsblwhitelist']['data'][$entry]) ||
-				    isset($clists['dnsblwhitelist']['data']['www' . $entry])) {
+				    isset($clists['dnsblwhitelist']['data']['www.' . $entry])) {
 
 					if (isset($clists['dnsblwhitelist']['data'][$entry])) {
 						unset($clists['dnsblwhitelist']['data'][$entry]);
 					}
 
-					if (isset($clists['dnsblwhitelist']['data']['www' . $entry])) {
-						unset($clists['dnsblwhitelist']['data']['www' . $entry]);
+					if (isset($clists['dnsblwhitelist']['data']['www.' . $entry])) {
+						unset($clists['dnsblwhitelist']['data']['www.' . $entry]);
 					}
 
 					// ADR-06: re-blocking is driven by the whiteDB refresh below

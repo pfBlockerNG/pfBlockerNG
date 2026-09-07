@@ -147,8 +147,7 @@ def _suppression_entries(vm: helpers.SmokeVM, cfg_path: str) -> set[str]:
     handler keys its in-memory store by the FIRST whitespace-delimited token of each
     line (``$clists[...]['data'][$line[0]]``), so an exact-token set is the faithful
     membership oracle -- a substring check would wrongly match ``example.com`` inside
-    the ``www.example.com`` entry the whitelist add also writes (and which
-    ``entry_delete=delete_domain`` deliberately leaves behind). An empty/absent node
+    the ``www.example.com`` sibling that exact whitelist add also writes. An empty/absent node
     is an empty set.
     """
     raw = helpers.config_get(vm, cfg_path)
@@ -358,13 +357,14 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
 
     * BEFORE: ``domain`` is absent from the decoded ``suppression`` node.
     * ADD via the form (``addwhitelistdom`` + ``dnsbl_exclude`` not 'true'): the
-      handler appends ``domain`` (and ``www.domain``) and writes the base64 node.
-    * AFTER: ``domain`` is present in the decoded node.
+      handler appends ``domain`` and ``www.domain`` and writes the base64 node.
+    * AFTER: ``domain`` and ``www.domain`` are present in the decoded node.
     * WILDCARD while exact is still listed (issue #3198): ``.domain`` is appended
       and the exact line survives. Do not ``delete_domainwildcard`` here — that
       path also unsets the exact apex (unchanged ``entry_delete``).
     * RESTORE via ``entry_delete=delete_domain``: the handler removes the exact
-      line; leftover ``.domain`` is removed by the later wildcard-delete or ``finally``.
+      line and ``www.domain`` (issue #3201); leftover ``.domain`` is removed by
+      the later wildcard-delete or ``finally``.
     * Repeat with a wildcard entry and ``entry_delete=delete_domainwildcard`` so the
       broad allow→block cache-policy branch executes. Belt-and-suspenders config reset
       in ``finally``.
@@ -393,8 +393,12 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
         )
         assert not looks_like_login_page(resp.text), "addwhitelistdom POST returned the login form (session lost)"
         assert "Alert Settings" in resp.text, "addwhitelistdom redirect did not render the Alerts page"
-        assert domain in _suppression_entries(vm, CFG_WHITELIST), (
+        entries_after_add = _suppression_entries(vm, CFG_WHITELIST)
+        assert domain in entries_after_add, (
             f"{domain} not written to the DNSBL whitelist config node after addwhitelistdom"
+        )
+        assert f"www.{domain}" in entries_after_add, (
+            f"www.{domain} not written with the exact apex after addwhitelistdom"
         )
 
         # issue #3198: exact apex already listed must still persist .apex; append, never replace.
@@ -418,8 +422,12 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
         # RESTORE via entry_delete=delete_domain (reverse transition + entry_delete coverage).
         resp = _post_action(webui, {"entry_delete": "delete_domain", "domain": domain, "table": "DNSBL"})
         assert not looks_like_login_page(resp.text), "entry_delete POST returned the login form (session lost)"
-        assert domain not in _suppression_entries(vm, CFG_WHITELIST), (
+        entries_after_delete = _suppression_entries(vm, CFG_WHITELIST)
+        assert domain not in entries_after_delete, (
             f"{domain} still in the DNSBL Whitelist after entry_delete=delete_domain"
+        )
+        assert f"www.{domain}" not in entries_after_delete, (
+            f"www.{domain} still in the DNSBL Whitelist after entry_delete=delete_domain"
         )
 
         # Repeat through the wildcard branch. Removing this entry can re-block any
