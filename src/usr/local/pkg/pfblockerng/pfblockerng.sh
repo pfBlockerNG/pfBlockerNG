@@ -1515,23 +1515,24 @@ pfb_recompute_finish() {
 	# rc-checked -- a failure here cannot be rolled back (earlier moves in
 	# this loop may already be live), so it only logs the failing artifact
 	# and aborts; the family may be mixed until the next successful pass.
-	# issue #3158: skip when .new matches live OR the last recompute checksum
-	# stamp in snapdir (suppress may reshape live; that is not a recompute change).
-	# Stamp lives in pfbsnap, not denydir — denydir/* is grepped by filterlog.
+	# A stamp may preserve suppressed output, but not raw parse output (#3221).
+	# Snapshots are copies of that raw live file; a missing/unreadable snapshot
+	# cannot authorize a stamp-only skip. Stamps stay outside filterlog's denydir.
 	while IFS=' ' read -r rec_alias _; do
 		rec_new="${pfbdeny}${rec_alias}.txt.new"
 		rec_live="${pfbdeny}${rec_alias}.txt"
 		rec_stamp="${pfbsnap}${rec_alias}.rec"
 		rec_sum=$(cksum < "${rec_new}")
 		if [ -f "${rec_live}" ] && {
-			[ -f "${rec_stamp}" ] && [ "$(cat "${rec_stamp}")" = "${rec_sum}" ] ||
-				cmp -s "${rec_new}" "${rec_live}"
+			cmp -s "${rec_new}" "${rec_live}" ||
+				{ [ -f "${rec_stamp}" ] && [ "$(cat "${rec_stamp}")" = "${rec_sum}" ] &&
+					{ cmp -s "${rec_live}" "${pfbsnap}${rec_alias}.snap"; [ "$?" -eq 1 ]; }; }
 		}; then
-			cksum < "${rec_new}" > "${rec_stamp}"
+			printf '%s\n' "${rec_sum}" > "${rec_stamp}"
 			rm -f "${rec_new}"
 		else
 			pfb_recompute_swap_mv "${rec_new}" "${rec_live}" "${rec_alias}.txt.new" || return 1
-			cksum < "${rec_live}" > "${rec_stamp}"
+			printf '%s\n' "${rec_sum}" > "${rec_stamp}"
 		fi
 	done < "${rec_priority}"
 

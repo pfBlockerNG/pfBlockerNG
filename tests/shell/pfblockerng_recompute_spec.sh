@@ -1441,9 +1441,43 @@ Describe 'pfb_recompute_finish() skips identical member swap (issue #3158)'
 		The path "${pfbdeny}Change_v4.txt.new" should not be exist
 	End
 
+	Describe 'a matching stamp cannot authorize raw parse output (issue #3221)'
+		Parameters
+			'v4' '198.51.100.1' '198.51.100.9'
+			'v6' '2001:db8::1' '2001:db8::9'
+			'v4' '198.51.100.1' ''
+		End
+
+		It "publishes the $1 recompute result after an unchanged feed is reparsed"
+			rec_family="$1"
+			printf '%s\n' "$2" > "${pfbdeny}Change_v4.txt"
+			if [ -n "$3" ]; then
+				printf '%s\n' "$3" > "${pfbdeny}Change_v4.txt.new"
+			else
+				true > "${pfbdeny}Change_v4.txt.new"
+			fi
+			cp "${pfbdeny}Change_v4.txt" "${pfbsnap}Change_v4.snap"
+			cksum < "${pfbdeny}Change_v4.txt.new" > "${pfbsnap}Change_v4.rec"
+			touch -t 200001010000.00 "${pfbdeny}Change_v4.txt"
+			When call run_finish_check_mtimes
+			The status should be success
+			The contents of file "${pfbdeny}Change_v4.txt" should equal "$3"
+			The path "${pfbdeny}Change_v4.txt.new" should not be exist
+		End
+	End
+
+	It 'publishes rather than trusting a stamp when the raw snapshot is unavailable'
+		cksum < "${pfbdeny}Change_v4.txt.new" > "${pfbsnap}Change_v4.rec"
+		When call run_finish_check_mtimes
+		The status should be success
+		The contents of file "${pfbdeny}Change_v4.txt" should equal '198.51.100.9'
+		The path "${pfbdeny}Change_v4.txt.new" should not be exist
+	End
+
 	It 'skips when .new matches the last recompute stamp even if live was reshaped by suppress'
 		printf '192.0.2.2/31\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt"
 		printf '192.0.2.1\n192.0.2.2\n192.0.2.3\n9.9.9.9\n' > "${pfbdeny}Keep_v4.txt.new"
+		cp "${pfbdeny}Keep_v4.txt.new" "${pfbsnap}Keep_v4.snap"
 		cksum < "${pfbdeny}Keep_v4.txt.new" > "${pfbsnap}Keep_v4.rec"
 		touch -t 200001010000.00 "${pfbdeny}Keep_v4.txt"
 		pfb_mtime "${pfbdeny}Keep_v4.txt" > "${work}/keep.before"
