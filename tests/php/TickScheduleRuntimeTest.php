@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/support/FailingFlockStream.php';
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /** Runtime schedule source drives the real fixed tick. */
@@ -464,6 +465,77 @@ final class TickScheduleRuntimeTest extends TestCase
 		$this->assertContains('Tick: dispatching pending manual apply.', $messages);
 		$entry = pfb_due_ledger_read_entry('cron', $this->dir);
 		$this->assertFalse($entry['pending_apply'] ?? FALSE);
+	}
+
+	public static function dispatcherFailures(): array
+	{
+		return [
+			'tick contention' => [FALSE, 'contention'],
+			'tick open error' => [FALSE, 'open'],
+			'tick flock error' => [FALSE, 'flock'],
+			'cache contention' => [TRUE, 'contention'],
+			'cache open error' => [TRUE, 'open'],
+			'cache flock error' => [TRUE, 'flock'],
+		];
+	}
+
+	/** Issue #3042: a storage failure must not be diagnosed as another tick running. */
+	#[DataProvider('dispatcherFailures')]
+	public function testDispatcherFailureNamesTheCauseWithoutChangingScheduledWork(bool $regenerate, string $failure): void
+	{
+		$path = $this->stateDir . '/pfb_schedule_dispatch.lock';
+		$lock = NULL;
+		$before = file_get_contents($this->dir . '/pfb_due_ledger.json');
+		$GLOBALS['pfb_test_logger_calls'] = [];
+		try {
+			if ($failure === 'contention') {
+				$lock = fopen($path, 'c');
+				$this->assertIsResource($lock);
+				$this->assertTrue(flock($lock, LOCK_EX));
+			} elseif ($failure === 'open') {
+				$this->assertTrue(mkdir($path), 'a directory at the lock path must prevent opening the lock');
+			} else {
+				$this->assertTrue(stream_wrapper_register('pfbtickdispatcherror', PfbFailingFlockStream::class));
+				$GLOBALS['pfb']['schedule_state_dir'] = 'pfbtickdispatcherror://state';
+			}
+
+			if ($regenerate) {
+				$this->assertFalse(pfb_schedule_cache_regenerate(), 'regeneration must refuse an unavailable dispatcher lock');
+				$log = $GLOBALS['pfb']['log'];
+				$messages = is_file($log) ? (string) file_get_contents($log) : '';
+				$this->assertStringContainsString('Schedule cache regeneration', $messages);
+			} else {
+				$this->tick();
+				$messages = implode("\n", array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
+				$this->assertStringContainsString('Tick: scheduled work', $messages);
+			}
+
+			if ($failure === 'contention') {
+				$this->assertStringContainsString('another tick is running', $messages);
+				$this->assertStringNotContainsString('could not be acquired', $messages);
+			} else {
+				$this->assertStringContainsString('scheduler dispatcher lock could not be acquired', $messages);
+				$this->assertStringContainsString('see the pfBlockerNG log', $messages);
+				$this->assertStringNotContainsString('another tick is running', $messages);
+			}
+			$this->assertSame(0, $this->feedRuns, 'neither failure mode may dispatch feed work');
+			$this->assertSame($before, file_get_contents($this->dir . '/pfb_due_ledger.json'),
+				'refused work must leave the schedule cache unchanged');
+			$this->assertFileDoesNotExist($this->stateDir . '/pfb_schedule_state.json');
+			$this->assertFalse(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
+			$this->assertFalse(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL));
+		} finally {
+			if (is_resource($lock)) {
+				flock($lock, LOCK_UN);
+				fclose($lock);
+			}
+			$GLOBALS['pfb']['schedule_state_dir'] = $this->stateDir;
+			if ($failure === 'flock') {
+				stream_wrapper_unregister('pfbtickdispatcherror');
+			}
+			pfb_feed_pass_release();
+			pfb_schedule_dispatch_release();
+		}
 	}
 
 	public function testDispatcherLockSuppressesConcurrentScheduledTick(): void

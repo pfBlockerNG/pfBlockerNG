@@ -5779,7 +5779,11 @@ function pfb_schedule_cache_regenerate(): bool
 	global $pfb;
 	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
-	if (!pfb_schedule_dispatch_begin()) {
+	$contended = FALSE;
+	if (!pfb_schedule_dispatch_begin(0.1, $contended)) {
+		pfb_logger($contended
+			? "\n Schedule cache regeneration deferred: another tick is running.\n"
+			: "\n Schedule cache regeneration skipped: the scheduler dispatcher lock could not be acquired; see the pfBlockerNG log.\n", 1);
 		return FALSE;
 	}
 	$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
@@ -6402,8 +6406,11 @@ function pfblockerng_tick(
 		$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
 			|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
 		$pfb_tick_contended = FALSE;
-		if (!pfb_schedule_dispatch_begin()) {
-			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another tick is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		if (!pfb_schedule_dispatch_begin(0.1, $pfb_tick_contended)) {
+			logger(LOG_INFO, $pfb_tick_contended
+				? localize_text('Tick: scheduled work deferred (another tick is running).')
+				: localize_text('Tick: scheduled work skipped -- the scheduler dispatcher lock could not be acquired; see the pfBlockerNG log.'),
+				LOG_PREFIX_PKG_PFBLOCKERNG);
 		} elseif (!pfb_feed_pass_begin('scheduled', $pfb_tick_contended)) {
 			logger(LOG_INFO, $pfb_tick_contended
 				? localize_text('Tick: scheduled work deferred (another feed pass is running).')
