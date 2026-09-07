@@ -352,7 +352,7 @@ $section->add($group);
 
 $form->add($section);
 print ($form);
-print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
+print_callout('<strong>Sync settings are used by the XMLRPC engine on each sync: automatically on configuration changes, or after each update pass (Manual mode).</strong>');
 
 include('foot.inc');
 ?>

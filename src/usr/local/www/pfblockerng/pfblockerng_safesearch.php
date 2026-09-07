@@ -70,7 +70,7 @@ if (isset($_POST['save'])) {
 		$msg = 'Saved SafeSearch configuration';
 		write_config("[ pfBlockerNG ] {$msg}");
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		$savemsg = "{$msg}. A Force Update|Reload is required to apply changes!";
+		$savemsg = "{$msg}. Run an Update ('Run Now' on the Update tab) to apply the changes!";
 		header("Location: /pfblockerng/pfblockerng_safesearch.php?savemsg={$savemsg}");
 	}
 }
@@ -148,7 +148,7 @@ $section->addInput(new Form_Select(
   ->setAttribute('style', 'width: auto');
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 ?>
 
 <?php include('foot.inc');?>

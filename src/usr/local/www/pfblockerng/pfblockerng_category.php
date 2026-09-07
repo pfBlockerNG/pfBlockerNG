@@ -628,15 +628,15 @@ if ($gtype == 'geoip') {
 			MaxMind Account ID and License Key are configured on the
 			<a href="/pfblockerng/pfblockerng_ip.php">IP tab</a>
 			(MaxMind GeoIP configuration).<br /><br />
-			<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+			<strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 }
 elseif ($gtype == 'dnsbl') {
-	print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong><br /><br />
+	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
 			DNSBL Category feeds are processed first, followed by the DNSBL Groups.<br />
 			DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
 }
 else {
-	print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 }
 ?>
 </form>

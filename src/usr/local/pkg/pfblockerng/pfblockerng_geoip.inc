@@ -740,7 +740,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 }
 
 print($form);
-print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 ?>
 
 <script type="text/javascript">
@@ -997,7 +997,7 @@ if ($_POST) {
 			$pfb['repconfig']['etblock']		= implode(',', (array)$_POST['etblock'])	?: '';
 			$pfb['repconfig']['etmatch']		= implode(',', (array)$_POST['etmatch'])	?: '';
 
-			// Set flag to update ET IQRisk on next Cron|Force update|Force reload
+			// Set flag to update ET IQRisk on the next update pass
 			$pfb['repconfig']['et_update']	= 'enabled';
 
 			PfbConfig::writeSection('installedpackages/pfblockerngreputation/config/0', $pfb['repconfig']);
@@ -1243,7 +1243,7 @@ $section->addInput(new Form_Select(
 
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 ?>
 <?php include('foot.inc');?>
 

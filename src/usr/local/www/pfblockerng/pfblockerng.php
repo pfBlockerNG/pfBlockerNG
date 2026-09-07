@@ -264,11 +264,11 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			$pfb_completed = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $pfb_deferred_by);
 			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);
-		case 'updateip':	// Sync 'Force Reload IP only' [DEPRECATED — use pfb_trigger scope=ip force=true trigger=force]
-		case 'updatednsbl':	// Sync 'Force Reload DNSBL only' [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
+		case 'updateip':	// Sync IP-only reload [DEPRECATED — use pfb_trigger scope=ip force=true trigger=force]
+		case 'updatednsbl':	// Sync DNSBL-only reload [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
 			$pfb_completed = sync_package_pfblockerng($argv[1], $pfb_deferred_by);
 			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);	// deprecation warning logged inside sync_package_pfblockerng
-		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
+		case 'update':		// Full update pass [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
 			$pfb_completed = sync_package_pfblockerng('update', $pfb_deferred_by);
 			pfb_cli_feed_pass_exit($pfb_completed, $pfb_deferred_by);	// deprecation warning logged inside sync_package_pfblockerng
 		case 'pfb_trigger':	// ADR-43: explicit {scope, force, trigger} API
@@ -430,7 +430,7 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			}
 			unset($pfb['extras'][0], $pfb['extras'][1], $pfb['extras'][2], $pfb['extras'][3], $pfb['extras'][4]); // Remove MaxMind GeoIP mmdb, CSV, TOP1M and ASN
 
-			// 'bls' called via 'Force Update|Reload'
+			// 'bls' called via an update pass
 			if ($argv[1] == 'bls') {
 				$extras_ok = pfblockerng_download_extras(600, 'blacklist');
 				exit($extras_ok ? 0 : 1);

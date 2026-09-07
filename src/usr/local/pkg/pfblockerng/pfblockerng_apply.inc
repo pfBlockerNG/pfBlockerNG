@@ -1037,7 +1037,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	// Validate pfB Script variables
 	foreach (array(
-			'et_update'		=> 'etupdate',					// Perform a Force Update on ET categories
+			'et_update'		=> 'etupdate',					// Force an update of ET categories
 			'ccwhite'		=> 'ccwhite',					// Action for whitelist Country category
 			'ccblack'		=> 'ccblack',					// Action for blacklist Country category
 			'etblock'		=> 'etblock',					// Emerging Threats IQRisk block categories
@@ -1088,7 +1088,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 
 	$new_aliases		= array();		// An array of aliases (full details)
 	$new_aliases_list	= array();		// An array of alias names
-	$pfb_alias_lists	= array();		// An array of aliases that have updated lists via CRON/force update. ('Reputation' disabled)
+	$pfb_alias_lists	= array();		// An array of aliases whose lists were updated during this pass. ('Reputation' disabled)
 	$pfb_alias_lists_all	= array();		// An array of all active aliases. ('Reputation' enabled)
 
 	$ip_types		= array( 'pfblockernglistsv4' => '_v4', 'pfblockernglistsv6' => '_v6');
@@ -3284,14 +3284,13 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		? ($pfb['domain_update'] || $pfb['domain_clear'])
 		: ($pfb_fp_old !== $pfb_fp_new);
 
-	// An explicit "Force Reload DNSBL" (the updatednsbl trigger) must ALWAYS reload — the
-	// operator forces it to apply a change the fingerprint can't see (e.g. an out-of-band
-	// edit to a chroot file outside the fingerprinted input set, or to recover from
-	// suspected runtime drift), independent of the fingerprint. reuse_dnsbl / the .reload
-	// marker can't serve as this
-	// signal — cron-reuse mode and the dnsbl-missing path also set them, which would
-	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY
-	// by the Force-Reload-DNSBL path (scope=dnsbl + force=true in the normalization block).
+	// An explicit forced DNSBL reload (the updatednsbl trigger — Run Now with Force: Parse) bypasses
+	// fingerprint gating, and only yields while publication failed: the operator is applying a change
+	// the fingerprint can't see (e.g. an out-of-band edit to a chroot file outside the fingerprinted
+	// input set) or recovering from suspected runtime drift. reuse_dnsbl / the .reload marker can't
+	// serve as this signal — cron-reuse mode and the dnsbl-missing path also set them, which would
+	// reintroduce the every-pass reload this gate removes; $pfb['updatednsbl'] is set ONLY by the
+	// forced DNSBL reload path (scope=dnsbl + force=true in the normalization block).
 	if (!empty($pfb['updatednsbl'])) {
 		$pfb_data_changed = TRUE;
 	}

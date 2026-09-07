@@ -602,7 +602,7 @@ function pfb_dnsbl_regex_help_text(): string
 		The first <strong>unescaped</strong> "#" on the line starts the Description, whether or not a space precedes it. To match a literal "#" inside a pattern, escape it as "<strong>\\#</strong>".<br /><br />
 		Keep the Description to 15 characters or fewer — it is shown on the Alerts Tab, and a longer one is flagged in this editor. If no Description is entered a default Regex line number will be utilized.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-		Changes to this option will require a Force Update to take effect.<br /><br />
+		Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br /><br />
 		Patterns use Python regular-expression syntax (the <a target="_blank" rel="noopener noreferrer" href="https://docs.python.org/3/library/re.html#regular-expression-syntax">re</a> module) and are validated on save by the same Python engine that runs them &mdash; that result is authoritative. The inline checker in this editor is an editing aid and may flag a valid pattern; if a line saves without an input error, it compiles.';
 }
 

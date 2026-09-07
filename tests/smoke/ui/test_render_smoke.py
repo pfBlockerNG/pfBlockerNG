@@ -1038,7 +1038,7 @@ def test_general_page_renders_nested_pass_timeout_field(webui: WebUI, php_error_
     )
 
     assert "whole process tree" in body, "the help copy must say the whole process tree is terminated on expiry"
-    assert "Force Update" in body, "the help copy must give the retry guidance after an expiry"
+    assert "Run Now" in body, "the help copy must give the retry guidance after an expiry (issue #3237)"
 
 
 def test_hooks_page_documents_lifecycle_env_vars(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
@@ -1557,12 +1557,41 @@ def test_dnsbl_top1m_type_help_says_update_not_force_reload(
     assert "select the type and Save, then run an Update" in body, (
         "DNSBL page's TOP1M Type help no longer tells the user an Update suffices"
     )
-    # The old TOP1M Type help's exact wording (distinct from the OTHER, still-accurate
-    # Force-Reload help texts elsewhere on this page -- TLD Exclusion / Global-log) --
+    # The old TOP1M Type help's exact wording (the sibling TLD Exclusion / Global-log
+    # Force-Reload instructions were separate stale texts, reworded by issue #3237) --
     # its absence pins that the stale instruction was actually replaced, not just added to.
     assert "select type and Save, followed by a" not in body, (
         "DNSBL page's TOP1M Type help still carries the stale Force-Reload wording"
     )
+
+
+def test_apply_guidance_names_run_now_not_retired_actions(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:
+    """Settings pages point at actions that exist: the scheduled update and the
+    Update tab's Run Now (issue #3237) — never the retired "Force Update" /
+    "Force Reload" buttons or the "applied via CRON or 'Force Update|Reload' only!"
+    footer (#886 fixed the one TOP1M instance; this covers the remaining pages).
+
+    Asserts the IP and DNSBL pages pass the clean-render oracle AND carry the
+    corrected guidance, with no retired action name anywhere in the rendered body.
+    """
+    for path, anchor, needle in (
+        (
+            "/pfblockerng/pfblockerng_ip.php",
+            "IP Configuration",
+            "Setting changes are applied on the next scheduled update.",
+        ),
+        (
+            "/pfblockerng/pfblockerng_dnsbl.php",
+            "DNSBL Webserver Configuration",
+            "A DNSBL reload is required for changes to take effect",
+        ),
+    ):
+        resp = webui.get(path)
+        result = evaluate_render(path, resp.status_code, resp.text, (anchor,))
+        assert result.ok, f"render oracle failed for {path}: {result.detail}"
+        assert needle in resp.text, f"{path} is missing the corrected apply guidance {needle!r}"
+        for retired in ("Force Reload", "Force Update", "applied via CRON"):
+            assert retired not in resp.text, f"{path} still instructs the retired action {retired!r} (issue #3237)"
 
 
 def test_dnsbl_lenient_parsing_field_renders(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:

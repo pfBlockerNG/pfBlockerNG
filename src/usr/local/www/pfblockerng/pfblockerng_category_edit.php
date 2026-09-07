@@ -892,7 +892,7 @@ if ($_POST && isset($_POST['save'])) {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
 		}
 
-		// Set flag to update CustomList on next Cron|Force update|Force reload
+		// Set flag to update CustomList on the next update pass
 		// foreign key: installedpackages/{conf_type} list structure not in registry
 		// issue #1768: no default -> config_get_path() returns NULL on a fresh row -> base64_decode(NULL) deprecation.
 		if (base64_decode(config_get_path("installedpackages/{$conf_type}/config/{$rowid}/custom", '')) != $_POST['custom']) {
@@ -1695,7 +1695,7 @@ if ($gtype == 'dnsbl') {
 			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br /><br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
 			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
-			. 'A \'Force Reload - DNSBL\' is required for changes to take effect';
+			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update';
 
 	$section->addInput(new Form_Select(
 		'logging',
@@ -1847,12 +1847,12 @@ $form->add($section);
 print ($form);
 
 if ($gtype == 'dnsbl') {
-	print_callout('<p><strong>Click to SAVE Settings and/or Rule edits.&emsp;Changes are applied via CRON or \'Force Update|Reload\' only!</strong><br /><br />
+	print_callout('<p><strong>Click to SAVE Settings and/or Rule edits.&emsp;Changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
 			DNSBL Category Feeds are processed first, followed by the DNSBL Groups.<br />
 			DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
 }
 else {
-	print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+	print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 }
 
 ?>
