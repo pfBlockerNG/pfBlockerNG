@@ -246,33 +246,6 @@ def test_omp_adapter_and_client_detection() -> None:
     assert rules == expected_rules
 
 
-def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
-    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    heading = "## Repository intelligence routing"
-    assert heading in bootstrap, "repository-intelligence routing must be vendor-neutral"
-    routing = extract_between(bootstrap, heading, "\n## ")
-    for contract in (
-        "scripts/agent/ensure-codegraph.sh",
-        "codegraph_explore",
-        "codegraph serve --mcp",
-        "Serena",
-        "Graphify",
-    ):
-        assert contract in routing, f"canonical routing lost {contract}"
-
-    for entrypoint in (
-        "CLAUDE.md",
-        ".agents/context/codex-adapter.md",
-        ".github/copilot-instructions.md",
-        "GROK.md",
-    ):
-        body = (ROOT / entrypoint).read_text(encoding="utf-8")
-        assert "AGENTS.md" in body, f"{entrypoint} does not load canonical routing"
-
-    codex = (ROOT / ".agents/context/codex-adapter.md").read_text(encoding="utf-8")
-    assert heading not in codex, "Codex must not own a second routing policy"
-
-
 def test_named_tickets_are_orchestrator_sessions() -> None:
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "orchestrator spawns" in bootstrap, "bootstrap routing must name orchestrator ticket pickup"

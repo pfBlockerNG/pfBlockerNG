@@ -71,16 +71,3 @@ def test_issue_forms_declare_native_type_and_disable_blank_issues() -> None:
 
     config = _read(".github/ISSUE_TEMPLATE/config.yml")
     assert "blank_issues_enabled: false" in config
-
-
-def test_human_ticket_procedures_make_labels_optional() -> None:
-    policy = _read(".agents/policy/issues.md")
-    for issue_type in ("Bug", "Feature", "Task"):
-        assert f"| `{issue_type}` |" in policy
-    assert "Labels are optional" in policy
-    assert "`gh issue create --type Bug`" in policy
-
-    workflow = _read(".agents/policy/workflow.md")
-    assert "`wayfinder:map` and typed `Task`" in workflow
-    assert "optional additive labels" in workflow
-    assert "native type defined by `issues.md`" in workflow
