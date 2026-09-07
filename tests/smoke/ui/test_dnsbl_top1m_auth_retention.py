@@ -13,6 +13,7 @@ from .test_dnsbl_top1m_retention import (
     TOP1M_BASE,
     TOP1M_FILES,
     TOP1M_PROVIDER_CFG,
+    _detector_fixture,
     _restore_guest_files,
     _snapshot_guest_files,
     _write_guest_file,
@@ -71,6 +72,34 @@ def test_dnsbl_top1m_token_save_retains_active_files_and_invalidates_baseline(
         for path in TOP1M_FILES[2:]:
             assert vm.ssh("test", "-e", path).returncode != 0, (
                 f"TOP1M detector sidecar {path} survived auth identity change"
+            )
+    finally:
+        _restore_guest_files(vm, original)
+
+
+def test_dnsbl_top1m_same_nonblank_token_keeps_detector_baseline(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Re-submitting the same token is not an auth identity transition."""
+    vm = smoke_vm
+    original = _snapshot_guest_files(vm)
+    token = "issue3137SameToken"
+    seeded = _detector_fixture("cloudflare")
+
+    try:
+        response = webui.post(
+            DNSBL_PAGE,
+            {"top1m_source": "cloudflare", "top1m_token": token},
+            timeout=300.0,
+        )
+        assert not looks_like_login_page(response.text), "TOP1M auth setup POST returned the login form"
+        for path, content in seeded.items():
+            _write_guest_file(vm, path, content)
+
+        response = webui.post(DNSBL_PAGE, {"top1m_token": token}, timeout=300.0)
+        assert not looks_like_login_page(response.text), "same-token TOP1M POST returned the login form"
+        assert helpers.config_get(vm, TOP1M_TOKEN_CFG) == token
+        for path, content in seeded.items():
+            assert helpers.read_log_file(vm, path) == content, (
+                f"{path} changed although the submitted TOP1M auth token was unchanged"
             )
     finally:
         _restore_guest_files(vm, original)

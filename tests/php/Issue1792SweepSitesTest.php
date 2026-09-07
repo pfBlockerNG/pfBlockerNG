@@ -31,6 +31,24 @@ final class Issue1792SweepSitesTest extends TestCase
 	private const IP_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_ip.php';
 	private const ALERTS_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
 	private const BLACKLIST_PAGE = 'src/usr/local/www/pfblockerng/pfblockerng_blacklist.php';
+	private bool $hadConfig;
+	private mixed $originalConfig;
+
+	protected function setUp(): void
+	{
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config'] = [];
+	}
+
+	protected function tearDown(): void
+	{
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+	}
 
 	public static function setUpBeforeClass(): void
 	{
@@ -43,7 +61,6 @@ final class Issue1792SweepSitesTest extends TestCase
 	{
 		$default_tlds = ['com', 'net', 'org'];
 		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['tld_allow_gtld']", [
-			'pfb'          => ['dconfig' => []],
 			'pconfig'      => [],
 			'default_tlds' => $default_tlds,
 		]);
@@ -53,8 +70,8 @@ final class Issue1792SweepSitesTest extends TestCase
 
 	public function testEmptyAlexaInclusionYieldsItsInlineDefault(): void
 	{
+		PfbConfig::writeSystem('dnsbl/top1m_inclusion', '');
 		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['top1m_inclusion']", [
-			'pfb'     => ['dconfig' => ['top1m_inclusion' => '']],
 			'pconfig' => [],
 		]);
 		$this->assertSame(['com', 'net', 'org', 'ca', 'co', 'io'], $out['pconfig']['top1m_inclusion'],
@@ -86,8 +103,8 @@ final class Issue1792SweepSitesTest extends TestCase
 
 	public function testStoredZeroWhitelistSurvivesToTheForm(): void
 	{
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode('0'));
 		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['whitelist']", [
-			'pfb'     => ['dconfig' => ['whitelist' => base64_encode('0')]],
 			'pconfig' => [],
 		]);
 		$this->assertSame('0', $out['pconfig']['whitelist'],
@@ -97,7 +114,6 @@ final class Issue1792SweepSitesTest extends TestCase
 	public function testAbsentWhitelistStillRendersEmpty(): void
 	{
 		$out = pfb_test_1792_eval_site(self::DNSBL_PAGE, "\$pconfig['whitelist']", [
-			'pfb'     => ['dconfig' => []],
 			'pconfig' => [],
 		]);
 		$this->assertSame('', $out['pconfig']['whitelist']);

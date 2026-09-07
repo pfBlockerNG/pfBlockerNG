@@ -7,21 +7,21 @@ comparison written inline at the render -- and onto `pfb_cfg_registry()`. Withou
 mechanical gate that sweep is a one-off: the next settings checkbox someone adds gets
 its own page-level `?: ''` and the drift is back.
 
-Two rules, both scoped to a SECTION-MIRROR save (`$pfb['<mirror>']['<key>'] = ...`),
-which is the shape a registered scalar takes:
+Two rules, both scoped to a literal section-mirror expression
+(`$pfb['<mirror>']['<key>']`), which is the shape a registered scalar takes:
 
-  RULE 1 -- REGISTERED. A `PFB_FILTER_ON_OFF` save into a section mirror must name a key
+  RULE 1 -- REGISTERED. A `PFB_FILTER_ON_OFF` SAVE into a section mirror must name a key
   that `pfb_cfg_registry()` knows, under the alias the mirror's own section resolves to.
 
   RULE 2 -- NO PAGE DEFAULT. Once a key IS registered (toggle or plain scalar), the page
   must not restate its default: a READ of `$pfb['<mirror>']['<key>']` may not carry a
-  `?:` fallback or sit inside an `isset(...) ? ... : <literal>`. The default belongs
-  to the registry entry. issue #2994 widened this off toggles after aligning the six
-  page/registry divergences. Reads are distinguished from saves by side: a save has
-  the mirror expression on the LEFT of `=`, a read has it on the right. The save
-  site's own `?: ''` is left alone on purpose -- it is transport normalisation of an
-  absent checkbox, not a default, and `PfbConfig::writeSection()` re-normalises it
-  through the registered adapter anyway.
+  `??` / `?:` fallback or sit inside an `isset(...) ? ... : <literal>`. The default
+  belongs to the registry entry. issue #2994 widened this off toggles after aligning
+  the six page/registry divergences. A read is recognised wherever it appears in an
+  expression, including inside a call, return, array value, or comparison. The save
+  site's own `?: ''` and `??=` assignments are left alone on purpose -- they write the
+  mirror rather than default a read, and `PfbConfig::writeSection()` re-normalises
+  stored values through the registered adapter.
 
 The mirror -> section mapping is DERIVED, never listed: each page declares it itself
 with `$pfb['<mirror>'] = PfbConfig::readSection('<section path>')`, and the section path
@@ -48,14 +48,11 @@ section (the widget marks each foreign in-code), so RULE 1 classifies them forei
 `FOREIGN_KEY_PREFIXES` -- the owner decided (2026-09-03) to recognise them, not register
 them -- while a hyphenated key ANYWHERE ELSE still fires normally.
 
-Two matcher ceilings remain, neither load-bearing on today's tree but both real:
-
-  * RULE 2's read matcher anchors on the assignment operator, so a mirror read wrapped
-    in a call (`pfb_b64_text($pfb['dconfig']['k'] ?? NULL)`) is not seen -- issue #3137.
-  * Comments are skipped by LEADING token only, so a read quoted after code on the
-    same line, or inside a `/* */` block whose line lacks a `*`, is a false positive.
-    A heredoc body is matched as code, which is correct for the generated-page nowdocs
-    in `pfblockerng_geoip.inc` and wrong only for a heredoc carrying prose.
+One matcher ceiling remains, not load-bearing on today's tree but real: comments are
+skipped by LEADING token only, so a read quoted after code on the same line, or inside
+a `/* */` block whose line lacks a `*`, is a false positive. A heredoc body is matched
+as code, which is correct for the generated-page nowdocs in `pfblockerng_geoip.inc`
+and wrong only for a heredoc carrying prose.
 
 `--self-test` is the red canary the testing policy requires for a newly wired blocking
 gate: it feeds a known-violating synthetic page through the same matchers and exits 0
@@ -90,8 +87,12 @@ _REGISTRY_ENTRY_RE = re.compile(
 _SECTIONS_BLOCK_RE = re.compile(r"const PFB_SECTIONS\s*=\s*\[(.*?)^\];", re.DOTALL | re.MULTILINE)
 _SECTIONS_ROW_RE = re.compile(r"'([a-z]+)'\s*=>\s*'([^']+)'")
 
-# A page's own mirror declaration: `$pfb['iconfig'] = PfbConfig::readSection('...');`.
-_MIRROR_RE = re.compile(r"\$pfb\s*\[\s*'(\w+)'\s*\]\s*=\s*PfbConfig::readSection\(\s*'([^']+)'")
+# A page's own mirror declaration; paired single or double quotes are equivalent:
+# `$pfb["iconfig"] = PfbConfig::readSection("...");`.
+_MIRROR_RE = re.compile(
+    r"\$pfb\s*\[\s*(?=(?:'\w+'|\"\w+\"))['\"](\w+)['\"]\s*\]\s*=\s*"
+    r"PfbConfig::readSection\(\s*(?=(?:'[^']+'|\"[^\"]+\"))['\"]([^'\"]+)['\"]"
+)
 
 # A save into a section mirror through the on/off form filter. Matched over the whole
 # file, not line by line: `[^;]*?` cannot cross a statement terminator, so a save
@@ -102,10 +103,13 @@ _SAVE_RE = re.compile(
     re.DOTALL,
 )
 
-# A read of a section mirror carrying its own default. Two spellings:
-#   $x = $pfb['iconfig']['enable_dup'] ?: '';
-#   $x = isset($pfb['aglobal']['alertrefresh']) ? $pfb['aglobal']['alertrefresh'] : 'on';
-_READ_COALESCE_RE = re.compile(r"=\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\?[:?]")
+# A section-mirror read carrying `??`, `?:`, or spaced `? :`. The paired-quote
+# lookaheads keep mirror/key in groups 1/2 without accepting mismatched PHP literals.
+_READ_COALESCE_RE = re.compile(
+    r"\$pfb\s*\[\s*(?=(?:'\w+'|\"\w+\"))['\"](\w+)['\"]\s*\]"
+    r"\s*\[\s*(?=(?:'[\w-]+'|\"[\w-]+\"))['\"]([\w-]+)['\"]\s*\]\s*"
+    r"(?:\?\?(?!=)|\?\s*:)"
+)
 _READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\)\s*\?[^?:]*:")
 
 # Sanity floor: the registry has had >100 entries since issue #1920's audit. A parse
@@ -245,7 +249,7 @@ def _git_tracked_pages(root: Path) -> list[str]:
 
 _SELF_TEST_PAGE = """<?php
 $pfb['iconfig'] = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
-$pconfig['suppression'] = $pfb['iconfig']['suppression'] ?: 'on';
+$pconfig['suppression'] = trim($pfb['iconfig']['suppression'] ?? '');
 if ($_POST) {
     $pfb['iconfig']['pfb_brand_new_toggle'] = pfb_filter(
         $_POST['pfb_brand_new_toggle'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
@@ -255,13 +259,13 @@ if ($_POST) {
 
 
 def _self_test(sections_by_path: dict[str, str], registry_keys: set[tuple[str, str]]) -> int:
-    """Red canary: prove both rules fire on a known-violating synthetic page."""
+    """Red canary: prove both rules fire at their exact known-violating sites."""
     found = find_violations(_SELF_TEST_PAGE, "self-test/pfblockerng_ip.php", sections_by_path, registry_keys)
-    rules = {v.rule for v in found}
-    missing = {"unregistered-toggle", "page-level-default"} - rules
+    expected_sites = {("page-level-default", 3), ("unregistered-toggle", 5)}
+    missing = expected_sites - {(v.rule, v.line) for v in found}
     if missing:
         print(
-            f"check_toggle_registry --self-test: rule(s) did not fire: {sorted(missing)}. "
+            f"check_toggle_registry --self-test: canary site(s) did not fire: {sorted(missing)}. "
             "The gate cannot detect the drift it exists to detect.",
             file=sys.stderr,
         )
@@ -269,8 +273,8 @@ def _self_test(sections_by_path: dict[str, str], registry_keys: set[tuple[str, s
             print(f"    fired: {v.rule} at line {v.line}", file=sys.stderr)
         return 1
     print(
-        "check_toggle_registry --self-test: both rules fired on the violating page "
-        f"({len(found)} finding(s)) -- gate wiring proven.",
+        "check_toggle_registry --self-test: both rules fired at their exact canary sites "
+        f"(including the wrapped read; {len(found)} finding(s)) -- gate wiring proven.",
     )
     return 0
 

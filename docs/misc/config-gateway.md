@@ -126,10 +126,13 @@ Authorization = property of **write**, not call site (generalises
     `Off = 'off'` backing value remains its internal/render identity. Runtime `$pfb[]`
     toggle mirrors carry
     enum itself (never `->value`), so consumers compare `=== PfbToggle::On`.
-    Registered checkbox fields still on `NULL`/`NULL` adapters (e.g. `pfb_regex`,
-    `pfb_noaaaa`, `pfb_gp`, `pfb_py_nolog`, `tld_wildcard`, `top1m_enable`)
-    keep raw `{'on', ''}` storage until they adopt pair — field joining
-    adapter set moves all its consumers in same commit (see below).
+    The seven `dnsbl/{top1m_enable,pfb_regex,pfb_cname,tld_allow,pfb_py_nolog,`
+    `pfb_noaaaa,pfb_gp}` fields also use this adapter pair (issue #3137).
+    Page checkbox rendering accepts either the enum from GET or raw POST redisplay
+    through the same adapter; TOP1M comparison snapshots use `toStored()` to keep
+    both sides scalar (`''`, not the enum's backing `'off'`).
+    Registered checkbox fields still on `NULL`/`NULL` adapters, such as
+    `tld_wildcard`, keep raw storage until all their consumers adopt the pair.
   - **The seventeen #2123 relocations.** `PFB_FILTER_ON_OFF` save sites whose default,
     stored vocabulary and render comparison were still declared in the page (the 3.2
     arrangement) now read through the registry: `ip/{enable_dup,enable_agg,enable_log,`
@@ -178,12 +181,13 @@ Authorization = property of **write**, not call site (generalises
     `pfb_alias_delta_batch` (plain string, `NULL`/`NULL` adapters) = batch-size companion
     field; stored value is decimal integer string, clamped to `[64, 4096]` at read time by
     `pfb_alias_delta_batch_clamp()`.
-  - **`pfb_reentry_timeout`** (issue #2851, plain string — `NULL`/`NULL` adapters): the ONE
+  - **`pfb_reentry_timeout`** (issue #2851, normalized string): the ONE
     global budget (whole seconds) for every nested `pfblockerng.php` re-entry an update pass
     launches — GeoIP, blacklist, TOP1M, ASN alike, no per-subsystem override. Default
     `'1800'` = the budget issue #2016 hardcoded, so an absent key preserves an upgrader's
-    wait exactly (hence `no_grandfather`). Normalized at read time by
-    `pfb_reentry_timeout()` (`pfblockerng.inc`): whole seconds in `[60, 7200]` pass
+    wait exactly (hence `no_grandfather`). Both adapters use
+    `pfb_cfg_reentry_timeout_adapter()`, which calls the shared
+    `pfb_reentry_timeout()` before scalar coercion: whole seconds in `[60, 7200]` pass
     through, everything else — absent, `''`, non-integral, signed, padded, zero, negative,
     out-of-range, 64-bit-overflowing, non-scalar — resolves to `1800`, never to no timeout.
     `pfblockerng_general.php` canonicalizes the POST through the same function, so the
@@ -255,9 +259,11 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
 - **RULE 1** — a `$pfb['<mirror>']['<key>'] = … PFB_FILTER_ON_OFF …` save into a section
   that `PFB_SECTIONS` knows MUST name a registered key. So a new settings checkbox
   cannot land without a registry entry.
-- **RULE 2** — a registered field's default MUST NOT be restated by the page: no
-  `$pconfig[…] = $pfb['<mirror>']['<key>'] ?: '<literal>'` and no
-  `isset($pfb['<mirror>']['<key>']) ? … : '<literal>'`. Read it with `PfbConfig::read()`.
+- **RULE 2** — a registered field's default MUST NOT be restated by the page:
+  `$pfb['<mirror>']['<key>'] ?? ...`, `?: ...`, or an `isset(...) ? ... : ...`
+  read must use `PfbConfig::read()`, including call-wrapped, parenthesized, returned,
+  array-value, and comparison expressions (issue #3137). Coalescing/Elvis reads cover
+  literal single/double-quoted keys and whitespace in `? :`; save-side `??=` stays a write.
   issue #2994 widened this from toggles to every registered key after aligning the
   six page/registry scalar divergences (`pfb_dnsport`/`pfb_dnsport_ssl`/`aliaslog`
   follow the page, and a fresh install now seeds those values; `pfb_dnsbl_rule` keeps
@@ -274,8 +280,8 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
 - **Hyphenated keys** (issue #3136): the key group now includes `-`, so the widget's
   `global/widget-*` saves reach the rules; they are classified foreign via
   `FOREIGN_KEY_PREFIXES` (the `rep` arrangement above), not registered.
-- **Matcher ceilings** — recorded in the checker's docstring: a call-wrapped RULE 2 read
-  (issue #3137), comment/heredoc skip heuristics.
+- **Matcher ceilings** — the checker's docstring records the existing leading-token
+  comment and heredoc skip heuristics.
 - Fails CLOSED: an unreadable registry, an unparseable `PFB_SECTIONS`, or fewer than 100
   parsed keys exits 2 rather than reporting clean.
 - `--self-test` is the red canary — a synthetic violating page must trip BOTH rules — and
@@ -283,11 +289,11 @@ pages. Wired into `.github/workflows/test.yml`, `.githooks/pre-commit` and
 - Exemptions live in the checker's `EXEMPT` table, each with a reason;
   `test_every_exempt_row_still_names_a_live_site` fails on a stale row.
 
-`tld_allow_sort` and `tld_allow_{gtld,cctld,itld,bgtld}` = plain registered scalars (`NULL`/
-`NULL` adapters) since issue #1921 — previously on foreign-key exclusion list
-below. They still stay legal on `pfblockerng_dnsbl.php`'s direct section-blob read/write (gateway
-does not require every registered field to move its consumers in same step); registration
-exists for `old_name` parity with rest of `pfb_pytld*` rename family.
+`tld_allow_sort` and `tld_allow_{gtld,cctld,itld,bgtld}` remain plain registered scalars
+(`NULL`/`NULL` adapters) since issue #1921. The DNSBL page reads each through the
+gateway, then converts the CSV buckets to display lists, retaining the local-domain
+TLD suggestions for an empty generic-TLD bucket. Section saves still preserve the
+stored CSV representation.
 
 ## Forward-upgrade contract
 

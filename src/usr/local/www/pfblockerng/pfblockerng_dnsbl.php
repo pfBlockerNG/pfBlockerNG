@@ -62,7 +62,7 @@ $pconfig['pfb_dnsport']		= PfbConfig::read('dnsbl/pfb_dnsport');
 $pconfig['pfb_dnsport_ssl']	= PfbConfig::read('dnsbl/pfb_dnsport_ssl');
 $pconfig['dnsbl_interface']	= PfbConfig::read('dnsbl/dnsbl_interface');
 $pconfig['pfb_dnsbl_rule']	= PfbConfig::read('dnsbl/pfb_dnsbl_rule');
-$pconfig['dnsbl_allow_int']	= pfb_csv_list($pfb['dconfig']['dnsbl_allow_int'] ?? NULL);
+$pconfig['dnsbl_allow_int']	= pfb_csv_list(PfbConfig::read('dnsbl/dnsbl_allow_int'));
 $pconfig['global_log']		= PfbConfig::read('dnsbl/global_log');
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 // Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
@@ -98,14 +98,14 @@ $pconfig['pfb_noaaaa']		= PfbConfig::read('dnsbl/pfb_noaaaa');
 $pconfig['pfb_gp']		= PfbConfig::read('dnsbl/pfb_gp');
 $pconfig['tld_allow']		= PfbConfig::read('dnsbl/tld_allow');
 $pconfig['tld_allow_sort']	= PfbConfig::read('dnsbl/tld_allow_sort');
-$pconfig['tld_allow_gtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_gtld'] ?? NULL, $default_tlds);
-$pconfig['tld_allow_cctld']	= pfb_csv_list($pfb['dconfig']['tld_allow_cctld'] ?? NULL);
-$pconfig['tld_allow_itld']	= pfb_csv_list($pfb['dconfig']['tld_allow_itld'] ?? NULL);
-$pconfig['tld_allow_bgtld']	= pfb_csv_list($pfb['dconfig']['tld_allow_bgtld'] ?? NULL);
+$pconfig['tld_allow_gtld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_gtld'), $default_tlds);
+$pconfig['tld_allow_cctld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_cctld'));
+$pconfig['tld_allow_itld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_itld'));
+$pconfig['tld_allow_bgtld']	= pfb_csv_list(PfbConfig::read('dnsbl/tld_allow_bgtld'));
 $pconfig['pfb_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');
-$pconfig['pfb_regex_list']	= pfb_b64_text($pfb['dconfig']['pfb_regex_list'] ?? NULL);
-$pconfig['pfb_noaaaa_list']	= pfb_b64_text($pfb['dconfig']['pfb_noaaaa_list'] ?? NULL);
-$pconfig['pfb_gp_bypass_list']	= pfb_b64_text($pfb['dconfig']['pfb_gp_bypass_list'] ?? NULL);
+$pconfig['pfb_regex_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_regex_list'));
+$pconfig['pfb_noaaaa_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_noaaaa_list'));
+$pconfig['pfb_gp_bypass_list']	= pfb_b64_text(PfbConfig::read('dnsbl/pfb_gp_bypass_list'));
 $pconfig['action']		= PfbConfig::read('dnsbl/action');
 $pconfig['aliaslog']		= PfbConfig::read('dnsbl/aliaslog');
 
@@ -131,7 +131,7 @@ $pconfig['aliasaddr_out']	= $pfb['dconfig']['aliasaddr_out']			?: '';
 $pconfig['autoproto_out']	= $pfb['dconfig']['autoproto_out']			?: 'any';
 $pconfig['agateway_out']	= $pfb['dconfig']['agateway_out']			?: 'default';
 
-$pconfig['whitelist']		= pfb_b64_text($pfb['dconfig']['whitelist'] ?? NULL);
+$pconfig['whitelist']		= pfb_b64_text(PfbConfig::read('dnsbl/whitelist'));
 
 $pconfig['top1m_enable']	= PfbConfig::read('dnsbl/top1m_enable');
 // Routed via the gateway (not the section array) so a stored legacy 'alexa'
@@ -142,10 +142,10 @@ $pconfig['top1m_source']		= PfbConfig::read('dnsbl/top1m_source')->toStored();
 $pconfig['top1m_count']		= PfbConfig::read('dnsbl/top1m_count');
 // 0 (unlimited) is meaningful, so don't use the ?: idiom (0 is falsy -> would reset to default).
 $pconfig['pfb_py_cache_max']	= (isset($pfb['dconfig']['pfb_py_cache_max']) && $pfb['dconfig']['pfb_py_cache_max'] !== '') ? $pfb['dconfig']['pfb_py_cache_max'] : '10000';
-$pconfig['top1m_inclusion']	= pfb_csv_list($pfb['dconfig']['top1m_inclusion'] ?? NULL, array('com','net','org','ca','co','io'));
+$pconfig['top1m_inclusion']	= pfb_csv_list(PfbConfig::read('dnsbl/top1m_inclusion'), array('com','net','org','ca','co','io'));
 
-$pconfig['tld_wildcard_exclusion']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_exclusion'] ?? NULL);
-$pconfig['tld_wildcard_blacklist']	= pfb_b64_text($pfb['dconfig']['tld_wildcard_blacklist'] ?? NULL);
+$pconfig['tld_wildcard_exclusion']	= pfb_b64_text(PfbConfig::read('dnsbl/tld_wildcard_exclusion'));
+$pconfig['tld_wildcard_blacklist']	= pfb_b64_text(PfbConfig::read('dnsbl/tld_wildcard_blacklist'));
 
 // DoH/DoT/DoQ blocking — stored in pfblockerngsafesearch; read via gateway (registered keys)
 $pconfig['safesearch_doh']		= PfbConfig::read('ss/safesearch_doh');
@@ -837,10 +837,10 @@ if ($_POST) {
 
 		if (!$input_errors) {
 			$pfb_top1m_settings_before = array(
-				'enable'   => $pfb['dconfig']['top1m_enable'] ?? '',
-				'count'    => $pfb['dconfig']['top1m_count'] ?? '',
-				'tld'      => $pfb['dconfig']['top1m_inclusion'] ?? '',
-				'provider' => $pfb['dconfig']['top1m_source'] ?? '',
+				'enable'   => PfbConfig::read('dnsbl/top1m_enable')->toStored(),
+				'count'    => PfbConfig::read('dnsbl/top1m_count'),
+				'tld'      => PfbConfig::read('dnsbl/top1m_inclusion'),
+				'provider' => PfbConfig::read('dnsbl/top1m_source')->toStored(),
 			);
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
@@ -948,9 +948,9 @@ if ($_POST) {
 			// the replacement download has been validated and published.
 			$pfb_top1m_provider = $_POST['top1m_source'] ?: 'tranco';
 			$pfb_top1m_identity_changed =
-				(($pfb['dconfig']['top1m_source'] ?? '') !== $pfb_top1m_provider) ||
+				(PfbConfig::read('dnsbl/top1m_source')->toStored() !== $pfb_top1m_provider) ||
 				($pfb_top1m_token_post !== '' &&
-					($pfb['dconfig']['top1m_token'] ?? '') !== $pfb_top1m_token_post);
+					PfbConfig::read('dnsbl/top1m_token') !== $pfb_top1m_token_post);
 			$pfb['dconfig']['top1m_source'] = $pfb_top1m_provider;
 
 			// top1m_token: masked/write-only -- blank means "keep the existing stored

@@ -31,19 +31,6 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 		return $source;
 	}
 
-	public function testTheFieldRendersTheRawSectionValueThroughTheSharedResolver(): void
-	{
-		$source = self::source();
-
-		$this->assertMatchesRegularExpression(
-			"/\\\$pconfig\['pfb_reentry_timeout'\]\s*=\s*\(string\) pfb_reentry_timeout\(\\\$pfb\['gconfig'\]\['pfb_reentry_timeout'\] \?\? NULL\)/",
-			$source,
-			'the page must resolve the raw section value before any gateway scalar cast can alter hostile stored input'
-		);
-		$this->assertStringNotContainsString("PfbConfig::read('gen/pfb_reentry_timeout')", $source,
-			'an adapter-less field read would cast hostile stored arrays and floats before validation');
-	}
-
 	public function testTheSaveCanonicalizesThroughTheSharedResolverBeforePersisting(): void
 	{
 		$source = self::source();

@@ -33,6 +33,8 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	private string $tmp;
 	private bool $hadPfb = false;
 	private array $originalPfb = [];
+	private bool $hadConfig;
+	private mixed $originalConfig;
 
 	/** @var list<array<string, string>> */
 	private array $feeds;
@@ -41,6 +43,9 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 	{
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config'] = [];
 
 		$this->tmp = sys_get_temp_dir() . '/adr62_corpus_' . uniqid('', true);
 		mkdir("{$this->tmp}/dnsbl", 0777, true);
@@ -64,9 +69,9 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => base64_encode("zip"),
 				'tld_wildcard_exclusion' => base64_encode("excluded.com"),
-				'whitelist'  => base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"),
 			],
 		]);
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("www.adblock.com\r\n.wildwhite.org\r\nphishing.net"));
 		file_put_contents("{$this->tmp}/db/pfbalexawhitelist.txt", "popularcdn.com\n");
 
 		$json = file_get_contents(self::CORPUS_DIR . '/feeds.json');
@@ -82,6 +87,11 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
 		}
 		rmdir_recursive($this->tmp);
 	}

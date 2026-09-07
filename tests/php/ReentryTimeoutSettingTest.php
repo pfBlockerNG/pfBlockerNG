@@ -35,11 +35,15 @@ final class ReentryTimeoutSettingTest extends TestCase
 
 	/** The stored key the one global budget lives under (gen section). */
 	private const KEY = 'pfb_reentry_timeout';
+	private const PATH = 'installedpackages/pfblockerng/config/0/pfb_reentry_timeout';
 
 	private string $tmp;
 	/** @var array<string, mixed> */
 	private array $originalPfb;
 	private bool $hadPfb;
+	/** @var array<string, mixed> */
+	private array $originalConfig;
+	private bool $hadConfig;
 
 	protected function setUp(): void
 	{
@@ -47,6 +51,9 @@ final class ReentryTimeoutSettingTest extends TestCase
 		$this->assertTrue(mkdir($this->tmp, 0700, TRUE));
 		$this->hadPfb      = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadConfig      = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? [];
+		$GLOBALS['config']    = [];
 		// A pristine mirror: no stored setting at all, which is the upgrade/new-install case.
 		$GLOBALS['pfb'] = [
 			'log'    => "{$this->tmp}/pfblockerng.log",
@@ -62,16 +69,21 @@ final class ReentryTimeoutSettingTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 		foreach (glob("{$this->tmp}/*") ?: [] as $file) {
 			@unlink($file);
 		}
 		@rmdir($this->tmp);
 	}
 
-	/** Seed the gen-section mirror pfb_global() populates, exactly as a stored value would. */
+	/** Seed authoritative config.xml state; the runtime mirror may be absent or stale. */
 	private function store(mixed $raw): void
 	{
-		$GLOBALS['pfb']['config'][self::KEY] = $raw;
+		config_set_path(self::PATH, $raw);
 	}
 
 	/**
@@ -194,7 +206,7 @@ final class ReentryTimeoutSettingTest extends TestCase
 	public function testAnAbsentSettingKeepsTheFiniteDefaultOnTheSeam(): void
 	{
 		// Before: nothing stored -- the upgrade case the issue names first.
-		$this->assertArrayNotHasKey(self::KEY, $GLOBALS['pfb']['config']);
+		$this->assertNull(config_get_path(self::PATH));
 
 		$this->assertSame(1800, pfb_reentry_budget(NULL), 'an absent setting must resolve to the finite default');
 		$this->assertSame('1800', $this->durationToken(pfb_reentry_cmd('al', ['scheduled'], "{$this->tmp}/out")),
@@ -213,6 +225,7 @@ final class ReentryTimeoutSettingTest extends TestCase
 			'negative'   => ['-1'],
 			'overflow'   => ['99999999999999999999'],
 			'array'      => [['5']],
+			'float'      => [900.0],
 		];
 	}
 
@@ -221,7 +234,14 @@ final class ReentryTimeoutSettingTest extends TestCase
 	{
 		$this->store($raw);
 
-		$secs = $this->durationToken(pfb_reentry_cmd('bls', ['scheduled', 'x'], "{$this->tmp}/out"));
+		set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
+			throw new ErrorException($message, 0, $severity, $file, $line);
+		});
+		try {
+			$secs = $this->durationToken(pfb_reentry_cmd('bls', ['scheduled', 'x'], "{$this->tmp}/out"));
+		} finally {
+			restore_error_handler();
+		}
 
 		$this->assertSame((string) PFB_REENTRY_TIMEOUT, $secs,
 			"a hostile stored budget must fall back to the finite default; got [{$secs}]");
@@ -260,6 +280,15 @@ final class ReentryTimeoutSettingTest extends TestCase
 		$this->assertSame(900, pfb_reentry_budget(''), 'a degraded caller budget must fall through to the stored setting');
 		$this->assertSame(900, pfb_reentry_budget(0), 'a zero caller budget must fall through to the stored setting');
 		$this->assertSame(900, pfb_reentry_budget(-1), 'a negative caller budget must fall through to the stored setting');
+	}
+
+	public function testAStaleSectionMirrorCannotOverrideTheGatewaySetting(): void
+	{
+		$this->store('900');
+		$GLOBALS['pfb']['config'][self::KEY] = '60';
+
+		$this->assertSame(900, pfb_reentry_budget(NULL),
+			'the authoritative field gateway must win over a stale pfb_global section mirror');
 	}
 
 	public function testTheReaperModeAndTheFileCaptureSurviveAConfiguredBudget(): void

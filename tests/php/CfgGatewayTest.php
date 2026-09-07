@@ -36,6 +36,18 @@ require_once __DIR__ . '/LogTypesFixture.php';
  */
 final class CfgGatewayTest extends TestCase
 {
+
+	private const ISSUE_3137_TOGGLES = [
+		'dnsbl/top1m_enable' => 'top1m_enable',
+		'dnsbl/pfb_regex'    => 'pfb_regex',
+		'dnsbl/pfb_cname'    => 'pfb_cname',
+		'dnsbl/tld_allow'    => 'tld_allow',
+		'dnsbl/pfb_py_nolog' => 'pfb_py_nolog',
+		'dnsbl/pfb_noaaaa'   => 'pfb_noaaaa',
+		'dnsbl/pfb_gp'       => 'pfb_gp',
+	];
+
+	private const DNSBL_SECTION = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	// -----------------------------------------------------------------------
 	// Test fixture helpers
 	// -----------------------------------------------------------------------
@@ -52,6 +64,71 @@ final class CfgGatewayTest extends TestCase
 	private function seedConfig(string $path, mixed $value): void
 	{
 		config_set_path($path, $value);
+	}
+
+	/** @return iterable<string,array{0:string,1:string,2:bool,3:mixed,4:PfbToggle}> */
+	public static function issue3137ToggleStates(): iterable
+	{
+		$states = [
+			'absent'     => [FALSE, NULL, PfbToggle::Off],
+			'null'       => [TRUE, NULL, PfbToggle::Off],
+			'empty'      => [TRUE, '', PfbToggle::Off],
+			'on'         => [TRUE, 'on', PfbToggle::On],
+			'mixed On'   => [TRUE, 'On', PfbToggle::On],
+			'mixed oN'   => [TRUE, 'oN', PfbToggle::On],
+			'legacy off' => [TRUE, 'off', PfbToggle::Off],
+			'junk'       => [TRUE, 'yes', PfbToggle::Off],
+			'non-scalar' => [TRUE, ['on'], PfbToggle::Off],
+		];
+
+		foreach (self::ISSUE_3137_TOGGLES as $key => $bare) {
+			foreach ($states as $state => [$seed, $raw, $expected]) {
+				yield "{$key} [{$state}]" => [$key, $bare, $seed, $raw, $expected];
+			}
+		}
+	}
+
+	#[DataProvider('issue3137ToggleStates')]
+	public function testIssue3137TogglesAdaptAtTheGateway(
+		string $key,
+		string $bare,
+		bool $seed,
+		mixed $raw,
+		PfbToggle $expected
+	): void {
+		$path = self::DNSBL_SECTION . "/{$bare}";
+		if ($seed) {
+			$this->seedConfig($path, $raw);
+		}
+
+		$actual = PfbConfig::read($key);
+		$this->assertSame($expected, $actual,
+			"{$key} must expose PfbToggle; only case-insensitive 'on' may enable it");
+
+		PfbConfig::write($key, $actual);
+		$this->assertSame($expected->toStored(), config_get_path($path),
+			"{$key} write(read()) must emit canonical on/empty storage");
+	}
+
+	public function testIssue3137SectionReadsStayRawAndSectionWritesLeaveForeignSiblingsUntouched(): void
+	{
+		$raw = ['foreign' => ['nested' => 'keep']];
+		foreach (self::ISSUE_3137_TOGGLES as $bare) {
+			$raw[$bare] = 'On';
+		}
+		$this->seedConfig(self::DNSBL_SECTION, $raw);
+
+		$this->assertSame($raw, PfbConfig::readSection(self::DNSBL_SECTION),
+			'readSection is the raw storage boundary even when fields have adapters');
+
+		PfbConfig::writeSection(self::DNSBL_SECTION, $raw);
+		$stored = config_get_path(self::DNSBL_SECTION);
+		$this->assertSame(['nested' => 'keep'], $stored['foreign'],
+			'a section save must not alter an unregistered sibling');
+		foreach (self::ISSUE_3137_TOGGLES as $bare) {
+			$this->assertSame('on', $stored[$bare],
+				"section writes must apply the adopted toggle adapter to {$bare}");
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -1033,7 +1110,7 @@ final class CfgGatewayTest extends TestCase
 	 * exactly the wait it ran before.
 	 *
 	 * Scenario:
-	 *   Background: pfb_reentry_timeout is a plain-string field; default = '1800'.
+	 *   Background: pfb_reentry_timeout returns normalized seconds as a string.
 	 *     Given no stored value.
 	 *     When PfbConfig::read('gen/pfb_reentry_timeout').
 	 *     Then '1800' is returned.
@@ -1054,7 +1131,7 @@ final class CfgGatewayTest extends TestCase
 	 * Both accepted bounds round-trip losslessly (write(read(v)) == v).
 	 *
 	 * Scenario:
-	 *   Background: pfb_reentry_timeout is a plain-string field (no adapter); the owner
+	 *   Background: pfb_reentry_timeout normalizes before scalar coercion; the owner
 	 *     ruling accepts whole seconds 60 through 7200 inclusive.
 	 *     Given stored = '60' / '7200'.
 	 *     When read then write back.
@@ -2489,6 +2566,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_cfg_idn_mode_read'         => ['on', 'confusable', 'off', 'all', 'junk'],
 			'pfb_cfg_top1m_source_read'     => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare', 'alexa', 'domcop', 'junk'],
 			'pfb_cfg_alias_delta_mode_read' => ['auto', 'delta', 'replace', '', 'junk'],
+			'pfb_cfg_reentry_timeout_adapter' => ['60', '7200', '5', 'junk'],
 			'pfb_cfg_feed_suffix_policy_read' => ['ignore', 'apex', 'honor', '', 'junk'],
 		];
 
@@ -2989,8 +3067,6 @@ final class CfgGatewayTest extends TestCase
 			} else {
 				$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
 			}
-			$this->assertSame($expected['read_adapter'], $actual['read_adapter'], "{$path_key}: read_adapter must match the fixture");
-			$this->assertSame($expected['write_adapter'], $actual['write_adapter'], "{$path_key}: write_adapter must match the fixture");
 			$this->assertSame(
 				array_key_exists('write_priv', $expected),
 				array_key_exists('write_priv', $actual),

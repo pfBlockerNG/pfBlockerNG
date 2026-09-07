@@ -77,6 +77,32 @@ def _input_value(html: str, name: str) -> str:
     return val.group(1) if val else ""
 
 
+def _textarea_value(html: str, name: str) -> str:
+    match = re.search(
+        rf'<textarea[^>]*\bname="{re.escape(name)}"[^>]*>(.*?)</textarea>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None, f'textarea name="{name}" not found in the rendered page'
+    return match.group(1).strip()
+
+
+def _select_selected_values(html: str, name: str) -> set[str]:
+    match = re.search(
+        rf'<select[^>]*\bname="{re.escape(name)}(?:\[\])?"[^>]*>(.*?)</select>',
+        html,
+        re.DOTALL,
+    )
+    assert match is not None, f'select name="{name}" not found in the rendered page'
+    values: set[str] = set()
+    for tag in re.findall(r"<option[^>]*>", match.group(1)):
+        if re.search(r"\bselected\b", tag):
+            value = re.search(r'\bvalue="([^"]*)"', tag)
+            if value:
+                values.add(value.group(1))
+    return values
+
+
 def _select_selected(html: str, name: str) -> str:
     """The selected option value of the named ``<select>``."""
     match = re.search(
@@ -241,6 +267,13 @@ _SWEPT_DNSBL_TOGGLES = {
     "pfb_idn_escalate_suspicious": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_idn_escalate_suspicious",
     "pfb_regex_cap": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex_cap",
     "pfb_dnsbl_lenient": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_lenient",
+    "top1m_enable": "installedpackages/pfblockerngdnsblsettings/config/0/top1m_enable",
+    "pfb_regex": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_regex",
+    "pfb_cname": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_cname",
+    "tld_allow": "installedpackages/pfblockerngdnsblsettings/config/0/tld_allow",
+    "pfb_py_nolog": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_py_nolog",
+    "pfb_noaaaa": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_noaaaa",
+    "pfb_gp": "installedpackages/pfblockerngdnsblsettings/config/0/pfb_gp",
 }
 CFG_ENABLE_CB = "installedpackages/pfblockerng/config/0/enable_cb"
 
@@ -250,12 +283,11 @@ CFG_ENABLE_CB = "installedpackages/pfblockerng/config/0/enable_cb"
 def test_swept_dnsbl_toggle_renders_on_when_stored_and_off_when_absent(
     smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None], name: str
 ) -> None:
-    """issue #2812: each swept DNSBL toggle's checked state comes from the registry.
+    """Each gateway-backed DNSBL toggle renders checked only for stored ``on``.
 
-    Given the key stored as 'on', the checkbox renders CHECKED -- the control that
-    the page can render this box checked at all. Given the key absent, it renders
-    UNCHECKED: the registered '' (or, for the lenient key, legacy-'off') default
-    that replaced the page literal #2812 deleted.
+    This includes issue #3137's seven final toggle-adapter adoptions. The stored-on
+    control and absent-Off assertion defend the real form boundary after the gateway
+    begins returning PfbToggle instances.
     """
     path = _SWEPT_DNSBL_TOGGLES[name]
     node_state(path, "on")
@@ -355,3 +387,74 @@ def test_absent_dnsbl_vips_render_the_none_sentinel(
     html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
     assert _select_selected(html, "pfb_dnsvip4") == "none"
     assert _select_selected(html, "pfb_dnsvip6") == "none"
+
+
+@pytest.mark.ui_e2e
+@pytest.mark.parametrize(
+    ("path", "page", "title", "field", "stored", "expected"),
+    [
+        (f"{_CFG_DNSBL}/whitelist", _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration", "whitelist", "MA==", "0"),
+        (
+            "installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist",
+            _GENERAL_SETTINGS_PAGE,
+            "General Settings",
+            "pfb_feed_internal_allowlist",
+            "b25lCnR3bw==",
+            "one\ntwo",
+        ),
+        (
+            "installedpackages/pfblockerngipsettings/config/0/v4suppression",
+            IP_PAGE,
+            "pfBlockerNG",
+            "v4suppression",
+            "MA==",
+            "0",
+        ),
+        (
+            "installedpackages/pfblockerngipsettings/config/0/v6suppression",
+            IP_PAGE,
+            "pfBlockerNG",
+            "v6suppression",
+            "b25lCnR3bw==",
+            "one\ntwo",
+        ),
+    ],
+)
+def test_gateway_backed_textareas_keep_decoded_content(
+    smoke_vm: SmokeVM,
+    webui: WebUI,
+    node_state: Callable[[str, str | None], None],
+    path: str,
+    page: str,
+    title: str,
+    field: str,
+    stored: str,
+    expected: str,
+) -> None:
+    node_state(path, stored)
+
+    html = _render(smoke_vm, webui, page, title)
+
+    assert _textarea_value(html, field) == expected
+
+
+@pytest.mark.ui_e2e
+def test_gateway_backed_dnsbl_csv_list_keeps_selected_entries(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    node_state(f"{_CFG_DNSBL}/top1m_inclusion", "com,net")
+
+    html = _render(smoke_vm, webui, _DNSBL_SETTINGS_PAGE, "DNSBL Webserver Configuration")
+
+    assert _select_selected_values(html, "top1m_inclusion") == {"com", "net"}
+
+
+@pytest.mark.ui_e2e
+def test_gateway_backed_timeout_renders_the_effective_configured_value(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    node_state("installedpackages/pfblockerng/config/0/pfb_reentry_timeout", "900")
+
+    html = _render(smoke_vm, webui, _GENERAL_SETTINGS_PAGE, "General Settings")
+
+    assert _input_value(html, "pfb_reentry_timeout") == "900"

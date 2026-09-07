@@ -20,6 +20,7 @@ importable directly by path via importlib.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,7 @@ GLOBAL_SECTION = "installedpackages/pfblockerngglobal"
 # A minimal stand-in for the parsed registry: registered (alias, bare key) pairs.
 FAKE_KEYS: set[tuple[str, str]] = {
     ("ip", "enable_dup"),
+    ("ip", "enable-dup"),
     ("ip", "maxmind_locale"),
     ("global", "alertrefresh"),
 }
@@ -539,3 +541,170 @@ def test_foreign_prefix_is_keyed_to_its_section_not_applied_globally() -> None:
     violations = _find(text)
     assert [v.rule for v in violations] == ["unregistered-toggle"]
     assert "ip/widget-popup" in violations[0].detail
+
+
+# --------------------------------------------------------------------------- #
+# Issue #3137 -- wrapped reads cannot evade RULE 2
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "source_line",
+    (
+        "$x = $pfb['iconfig']['enable_dup'] ?? '';",
+        "$x = trim($pfb['iconfig']['enable_dup'] ?? '');",
+        "$x = ($pfb['iconfig']['enable_dup'] ?? '');",
+        "return $pfb['iconfig']['enable_dup'] ?? '';",
+        "$x = ['k' => $pfb['iconfig']['enable_dup'] ?? ''];",
+        "if (($pfb['iconfig']['enable_dup'] ?? '') !== $x) {}",
+    ),
+)
+def test_registered_read_shapes_are_flagged_with_stable_diagnostics(source_line: str) -> None:
+    """RULE 2 follows a registered read regardless of its enclosing expression."""
+    source = "matrix.php"
+    violations = _find(MIRROR + source_line + "\n", source)
+    assert len(violations) == 1
+    violation = violations[0]
+    assert (violation.source, violation.line, violation.rule, violation.snippet) == (
+        source,
+        2,
+        "page-level-default",
+        source_line,
+    )
+    assert "'ip/enable_dup'" in violation.detail
+
+
+@pytest.mark.parametrize(
+    ("mirror", "source_line", "key"),
+    (
+        (MIRROR, "$x = $pfb['iconfig']['enable_dup'] ?: '';", "enable_dup"),
+        (MIRROR, "$x = $pfb['iconfig']['enable_dup'] ? : '';", "enable_dup"),
+        (MIRROR, "$x = $pfb['iconfig']['enable_dup'] ?\t:\t'';", "enable_dup"),
+        (
+            f'$pfb["iconfig"] = PfbConfig::readSection("{IP_SECTION}");\n',
+            '$x = $pfb["iconfig"]["enable_dup"] ?? "";',
+            "enable_dup",
+        ),
+        (MIRROR, '$x = $pfb["iconfig"][\'enable-dup\'] ?? "";', "enable-dup"),
+    ),
+)
+def test_registered_read_operators_and_paired_quotes_are_flagged(
+    mirror: str,
+    source_line: str,
+    key: str,
+) -> None:
+    """PHP's supported literal quoting and fallback spellings share one contract."""
+    violations = _find(mirror + source_line + "\n")
+    assert [v.rule for v in violations] == ["page-level-default"]
+    assert violations[0].line == 2
+    assert violations[0].detail.startswith(f"'ip/{key}' is a registered field")
+    assert violations[0].snippet == source_line
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        MIRROR + "$x = trim($pfb['iconfig']['unknown_key'] ?? '');\n",
+        (
+            "$pfb['foreign'] = PfbConfig::readSection('installedpackages/foreign/config/0');\n"
+            "$x = trim($pfb['foreign']['enable_dup'] ?? '');\n"
+        ),
+        MIRROR + "$key = 'enable_dup';\n$x = trim($pfb['iconfig'][$key] ?? '');\n",
+    ),
+)
+def test_wrapped_read_does_not_claim_unknown_foreign_or_dynamic_keys(text: str) -> None:
+    """RULE 2 only owns literal registered keys in a mapped section mirror."""
+    assert _find(text) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        (
+            f"$pfb['iconfig\"] = PfbConfig::readSection('{IP_SECTION}');\n"
+            "$x = trim($pfb['iconfig']['enable_dup'] ?? '');\n"
+        ),
+        MIRROR + "$x = trim($pfb['iconfig\"][\"enable_dup\"] ?? '');\n",
+    ),
+)
+def test_php_invalid_mismatched_quote_literals_are_out_of_scope(text: str) -> None:
+    """Malformed PHP literals are not broadened into a second parser contract."""
+    assert _find(text) == []
+
+
+def test_null_coalescing_assignment_is_a_save_not_a_defaulted_read() -> None:
+    """A registered `??=` assignment writes the mirror and must stay clean."""
+    assert _find(MIRROR + "$pfb['iconfig']['enable_dup'] ??= '';\n") == []
+
+
+def test_save_with_a_wrapped_registered_read_on_its_rhs_flags_the_read() -> None:
+    """A clean registered save must not mask another registered field read on its RHS."""
+    source_line = (
+        "$pfb['iconfig']['enable_dup'] = "
+        "pfb_filter($pfb['iconfig']['maxmind_locale'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';"
+    )
+    violations = _find(MIRROR + source_line + "\n")
+    assert [v.rule for v in violations] == ["page-level-default"]
+    assert "ip/maxmind_locale" in violations[0].detail
+    assert violations[0].snippet == source_line
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix"),
+    (("// ", "php"), ("* ", "inc"), ("/* ", "xml"), ("# ", "php")),
+)
+def test_leading_comment_prefixes_keep_wrapped_reads_out_of_scope(prefix: str, suffix: str) -> None:
+    """The existing leading-token comment heuristic applies across the scan surface."""
+    wrapped = "trim($pfb['iconfig']['enable_dup'] ?? '');"
+    assert _find(MIRROR + prefix + wrapped + "\n", f"matrix.{suffix}") == []
+
+
+@pytest.mark.parametrize(
+    ("source_line", "suffix"),
+    (
+        ("$x = 1; // trim($pfb['iconfig']['enable_dup'] ?? '');", "php"),
+        ("trim($pfb['iconfig']['enable_dup'] ?? '');", "inc"),
+        ("trim($pfb['iconfig']['enable_dup'] ?? '');", "xml"),
+    ),
+)
+def test_nonleading_or_generated_wrapped_reads_keep_the_existing_code_heuristic(
+    source_line: str,
+    suffix: str,
+) -> None:
+    """Only a leading comment token suppresses a match; generated PHP remains scanned."""
+    assert _rules(MIRROR + source_line + "\n", f"matrix.{suffix}") == ["page-level-default"]
+
+
+def test_cli_reports_a_double_quoted_wrapped_read(tmp_path: Path) -> None:
+    """The real CLI exposes wrapped findings with the established diagnostic contract."""
+    page = tmp_path / "wrapped.php"
+    source_line = '$x = trim($pfb["iconfig"]["enable_dup"] ?? "");'
+    page.write_text(
+        f'$pfb["iconfig"] = PfbConfig::readSection("{IP_SECTION}");\n{source_line}\n',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(_TOOL), str(page)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert f"{page}:2: [page-level-default]" in result.stderr
+    assert "'ip/enable_dup' is a registered field" in result.stderr
+    assert source_line in result.stderr
+
+
+def test_self_test_rejects_the_assignment_anchored_read_matcher(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The canary fails when direct reads work but its wrapped read becomes invisible."""
+    assignment_anchored = re.compile(r"=\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\?[:?]")
+    monkeypatch.setattr(ctr, "_READ_COALESCE_RE", assignment_anchored)
+
+    assert ctr._self_test(FAKE_SECTIONS, FAKE_KEYS | {("ip", "suppression")}) == 1
+    assert "page-level-default" in capsys.readouterr().err

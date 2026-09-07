@@ -3367,7 +3367,7 @@ function pfb_global() {
 
 	$pfb['dnsbl_port']	= $pfb['dnsblconfig']['pfb_dnsport'];									// Lighttpd web server http port setting
 	$pfb['dnsbl_port_ssl']	= $pfb['dnsblconfig']['pfb_dnsport_ssl'];								// Lighttpd web server https port setting
-	$pfb['dnsbl_top1m']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['top1m_enable'] ?? '');							// TOP1M whitelist
+	$pfb['dnsbl_top1m']	= PfbConfig::read('dnsbl/top1m_enable');							// TOP1M whitelist
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
@@ -3387,20 +3387,20 @@ function pfb_global() {
 	$pfb['dnsbl_idn']	= PfbConfig::read('dnsbl/pfb_idn');				// DNSBL Resolver python IDN mode (PfbIdnMode enum)
 	$pfb['dnsbl_idn_block_malicious']	= PfbConfig::read('dnsbl/pfb_idn_block_malicious');		// Confusable: block malicious homoglyphs (default 'on')
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
-	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
+	$pfb['dnsbl_regex']	= PfbConfig::read('dnsbl/pfb_regex');			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= PfbConfig::read('dnsbl/pfb_regex_list');	// DNSBL Resolver python regex list
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver Python opt-in regex length cap
-	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
-	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
+	$pfb['dnsbl_cname']	= PfbConfig::read('dnsbl/pfb_cname');			// DNSBL Resolver python CNAME Validation
+	$pfb['dnsbl_tld_allow']	= PfbConfig::read('dnsbl/tld_allow');			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');			// PSL PRIVATE recognition (default On)
 	$pfb['dnsbl_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');			// PSL PRIVATE TLD-Allow precision (default Off)
 	$pfb['dnsbl_psl_feed_private_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_private_policy');	// issue #2371: feed-at-suffix PSL PRIVATE policy (PfbFeedSuffixPolicy enum; absent -> Honor)
 	$pfb['dnsbl_psl_feed_icann_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy');		// issue #2371: feed-at-suffix PSL ICANN policy (PfbFeedSuffixPolicy enum; absent -> Honor)
-	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
-	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
+	$pfb['dnsbl_py_nolog']	= PfbConfig::read('dnsbl/pfb_py_nolog');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
+	$pfb['dnsbl_noaaaa']	= PfbConfig::read('dnsbl/pfb_noaaaa');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=PfbConfig::read('dnsbl/pfb_noaaaa_list');	// DNSBL Resolver python no AAAA list
 
-	$pfb['dnsbl_gp']		= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_gp'] ?? '');		// DNSBL Resolver python - DNSBL Bypass
+	$pfb['dnsbl_gp']		= PfbConfig::read('dnsbl/pfb_gp');		// DNSBL Resolver python - DNSBL Bypass
 	$pfb['dnsbl_gp_bypass_list']	= PfbConfig::read('dnsbl/pfb_gp_bypass_list');	// DNSBL Resolver python - List of Local IPs to bypass DNSBL
 
 	// SafeSearch — read via gateway (ADR-29).
@@ -5205,9 +5205,7 @@ function pfb_reentry_budget($budget): int {
 	if (is_string($budget) && ctype_digit($budget) && (int) $budget > 0) {
 		return (int) $budget;
 	}
-	global $pfb;
-	// The gen-section mirror pfb_global() populates through PfbConfig::readSection().
-	return pfb_reentry_timeout($pfb['config']['pfb_reentry_timeout'] ?? NULL);
+	return (int) PfbConfig::read('gen/pfb_reentry_timeout');
 }
 
 /*
@@ -9526,7 +9524,7 @@ function pfb_unbound_python_whitelist($mode='') {
 	pfb_global();
 
 	$dnsbl_whitelist = '';
-	$dnsbl_white = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'] ?? '', TRUE, FALSE, TRUE);
+	$dnsbl_white = pfb_text_area_decode(PfbConfig::read('dnsbl/whitelist'), TRUE, FALSE, TRUE);
 	if (!empty($dnsbl_white)) {
 		foreach ($dnsbl_white as $key => $line) {
 			if (!empty($line)) {
@@ -9562,9 +9560,7 @@ function pfb_unbound_python_whitelist($mode='') {
 // leading-dot wildcard form — before it reaches the manifest and query-time whiteDB; a failing
 // line is SKIPPED + logged, never silently dropped.
 function pfb_dnsbl_whitelist_lines() {
-	global $pfb;
-
-	$lines = pfb_text_area_decode($pfb['dnsblconfig']['whitelist'] ?? '', TRUE, FALSE, TRUE);
+	$lines = pfb_text_area_decode(PfbConfig::read('dnsbl/whitelist'), TRUE, FALSE, TRUE);
 	$out = array();
 	if (!empty($lines)) {
 		foreach ($lines as $line) {

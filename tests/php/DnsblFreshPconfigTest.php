@@ -5,36 +5,26 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * Fresh DNSBL-page $pconfig assembly guard (issue #1768).
+ * DNSBL-page $pconfig consumer guard (issues #1768 and #3137).
  *
- * A fresh install / first page load runs pfblockerng_dnsbl.php's $pconfig
- * assembly (:49-132) against an EMPTY installedpackages/pfblockerngdnsblsettings
- * section ($pfb['dconfig'] = [] -- the shape PfbConfig::readSection() returns
- * when the section has never been saved). Every explode()/base64_decode()
- * call in that block reads its $pfb['dconfig'][...] operand directly; on an
- * absent key that operand is NULL, and PHP 8.1+ deprecates passing NULL to
- * explode()'s/base64_decode()'s non-nullable string parameter -- these are
- * the "Passing null" deprecations issue #1768 reports blocking the release
- * functional-UI gate.
+ * The page carries top-level execution and cannot be require()d off-appliance, so its
+ * real $pconfig assembly block is eval-extracted as an executable function. Tests seed
+ * authoritative config.xml state separately from a deliberately stale $pfb['dconfig']
+ * mirror: consumer assertions therefore fail while registered fields still bypass
+ * PfbConfig::read(), without asserting on source text.
  *
- * Scope: the assertions below check only the "Passing null" deprecation
- * class. The SAME block also has ~20 untouched bare
- * `$pfb['dconfig']['key'] ?: default` reads that still emit "Undefined array
- * key" warnings on an absent key -- those are the pre-existing, explicitly
- * out-of-scope "3e bare-read class" (#1768 brief); asserting the FULL
- * diagnostics list empty would conflate the two and this test would never
- * go green.
+ * The original #1768 contract remains: fresh and populated CSV/base64 inputs emit no
+ * "Passing null" deprecations. Issue #3137 additionally pins empty/default, stored "0",
+ * populated/multiline, malformed, missing, and decode-exactly-once behavior while those
+ * fields move to the gateway. Other pre-existing diagnostics remain outside this class.
  *
- * The page carries top-level execution and cannot be require()d
- * off-appliance, so the $pconfig block is eval-extracted verbatim from the
- * REAL source (CategoryEditFreshRowPconfigTest's pattern, issue #1211),
- * anchored on the unique `$pconfig = array();` line through the trailing
- * `tld_wildcard_blacklist` assignment -- non-greedy, so the regex matches whatever the
- * RHS guard state is (pre-fix bare read or post-fix `?? ''`-guarded) and
- * survives the fix -- and run as a pure function of ($dconfig, $default_tlds).
+ * Extraction is anchored on the unique `$pconfig = array();` line through the trailing
+ * `tld_wildcard_blacklist` assignment and runs as a function of the raw section mirror,
+ * registered config state, and local-domain-derived default TLD list.
  */
 final class DnsblFreshPconfigTest extends TestCase
 {
+	private const DNSBL_SECTION = 'installedpackages/pfblockerngdnsblsettings/config/0';
 	public static function setUpBeforeClass(): void
 	{
 		$src = file_get_contents(
@@ -64,8 +54,13 @@ final class DnsblFreshPconfigTest extends TestCase
 	}
 
 	/** @return array{0: array, 1: string[]} [$pconfig, $diagnostics] */
-	private function runCapturingDiagnostics(array $dconfig, array $default_tlds): array
-	{
+	private function runCapturingDiagnostics(
+		array $dconfig,
+		array $default_tlds,
+		?array $stored = NULL
+	): array {
+		$GLOBALS['config'] = [];
+		config_set_path(self::DNSBL_SECTION, $stored ?? $dconfig);
 		$diagnostics = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
 			$diagnostics[] = $errstr;
@@ -141,5 +136,54 @@ final class DnsblFreshPconfigTest extends TestCase
 		$this->assertSame(['com', 'net', 'org'], $pconfig['top1m_inclusion']);
 		$this->assertSame('example.test', $pconfig['tld_wildcard_exclusion']);
 		$this->assertSame('bad.example', $pconfig['tld_wildcard_blacklist']);
+	}
+
+	public function testListAndTextareaConsumersUseAuthoritativeGatewayValuesWithoutChangingFallbacks(): void
+	{
+		$mirror = [
+			'dnsbl_allow_int'        => 'mirror',
+			'tld_allow_gtld'         => 'mirror',
+			'tld_allow_cctld'        => 'mirror',
+			'tld_allow_itld'         => 'mirror',
+			'tld_allow_bgtld'        => 'mirror',
+			'pfb_regex_list'         => base64_encode('mirror'),
+			'pfb_noaaaa_list'        => base64_encode('mirror'),
+			'pfb_gp_bypass_list'     => base64_encode('mirror'),
+			'whitelist'              => base64_encode('mirror'),
+			'top1m_inclusion'        => 'mirror',
+			'tld_wildcard_exclusion' => base64_encode('mirror'),
+			'tld_wildcard_blacklist' => base64_encode('mirror'),
+		];
+		$stored = [
+			'dnsbl_allow_int'        => '0',
+			'tld_allow_gtld'         => '',
+			'tld_allow_cctld'        => 'uk,de',
+			'tld_allow_bgtld'        => 'app,dev',
+			'pfb_regex_list'         => base64_encode("foo\nbar"),
+			'pfb_noaaaa_list'        => '%%%',
+			'pfb_gp_bypass_list'     => base64_encode('0'),
+			'whitelist'              => base64_encode(base64_encode('once')),
+			'top1m_inclusion'        => '',
+			'tld_wildcard_exclusion' => base64_encode("one\ntwo"),
+		];
+		$default_tlds = ['arpa', 'corp', 'com', 'net'];
+
+		[$pconfig, $diagnostics] = $this->runCapturingDiagnostics($mirror, $default_tlds, $stored);
+
+		$this->assertSame([], self::nullDeprecationsOnly($diagnostics));
+		$this->assertSame(['0'], $pconfig['dnsbl_allow_int'], "stored CSV '0' is one entry");
+		$this->assertSame($default_tlds, $pconfig['tld_allow_gtld'],
+			'an empty stored gTLD list keeps the local-domain-derived display fallback');
+		$this->assertSame(['uk', 'de'], $pconfig['tld_allow_cctld']);
+		$this->assertSame([], $pconfig['tld_allow_itld'], 'a missing CSV field remains an empty list');
+		$this->assertSame(['app', 'dev'], $pconfig['tld_allow_bgtld']);
+		$this->assertSame("foo\nbar", $pconfig['pfb_regex_list']);
+		$this->assertSame('', $pconfig['pfb_noaaaa_list'], 'malformed base64 keeps the current empty fallback');
+		$this->assertSame('0', $pconfig['pfb_gp_bypass_list'], "decoded textarea '0' must survive");
+		$this->assertSame(base64_encode('once'), $pconfig['whitelist'],
+			'a gateway-backed textarea must be decoded exactly once');
+		$this->assertSame(['com', 'net', 'org', 'ca', 'co', 'io'], $pconfig['top1m_inclusion']);
+		$this->assertSame("one\ntwo", $pconfig['tld_wildcard_exclusion']);
+		$this->assertSame('', $pconfig['tld_wildcard_blacklist'], 'a missing textarea remains empty');
 	}
 }

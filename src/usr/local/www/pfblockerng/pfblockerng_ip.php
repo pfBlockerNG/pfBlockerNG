@@ -83,11 +83,10 @@ $pconfig['enable_float']	= PfbConfig::read('ip/enable_float');
 $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= PfbConfig::read('ip/killstates');
-$pconfig['v4suppression']	= pfb_b64_text($pfb['iconfig']['v4suppression'] ?? NULL);
-// ADR-53 review finding B: '?? ""' on the array read -- v6suppression (unlike
-// v4suppression) is NEVER install-migrated, so it is absent from config.xml
-// on every install until this page's first post-upgrade save.
-$pconfig['v6suppression']	= pfb_b64_text($pfb['iconfig']['v6suppression'] ?? NULL);
+$pconfig['v4suppression']	= pfb_b64_text(PfbConfig::read('ip/v4suppression'));
+// v6suppression may remain absent until the first post-upgrade save; the registered
+// empty default reaches the same decoder fallback as the former guarded section read.
+$pconfig['v6suppression']	= pfb_b64_text(PfbConfig::read('ip/v6suppression'));
 
 // Select array options
 $options_asn_reporting 		= [	'disabled'	=> 'Disabled',

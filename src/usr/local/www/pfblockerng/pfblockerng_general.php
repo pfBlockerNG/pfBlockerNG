@@ -59,7 +59,7 @@ $pconfig['pfb_feed_internal_filter']	= PfbConfig::read('gen/pfb_feed_internal_fi
 
 // Exemptions from the internal-address feed-host check: IP addresses / CIDR ranges
 // (one per line) whose feeds are allowed even when they resolve internally.
-$pconfig['pfb_feed_internal_allowlist']	= (string) base64_decode($pfb['gconfig']['pfb_feed_internal_allowlist'] ?? '');
+$pconfig['pfb_feed_internal_allowlist']	= (string) base64_decode(PfbConfig::read('gen/pfb_feed_internal_allowlist'));
 
 $pconfig['pfb_scheduled_feed_updates'] = PfbConfig::read('gen/pfb_scheduled_feed_updates')->value;
 $pconfig['pfb_schedule_weekday'] = PfbConfig::read('gen/pfb_schedule_weekday');
@@ -101,11 +101,8 @@ $pconfig['log_syslog']			= PfbConfig::read('gen/log_syslog')->value;
 // the registered default ('0') applies when the key is absent (new install / upgrade).
 $pconfig['pfb_log_trim_margin_pct']	= PfbConfig::read('gen/pfb_log_trim_margin_pct');
 
-// issue #2851: the one global nested-pass timeout (seconds). Render the EFFECTIVE
-// budget from PfbConfig::readSection()'s raw gen-section mirror, then through the same
-// mixed-safe resolver both language seams use. A field-level read has no adapter and
-// would cast hostile arrays/floats before validation.
-$pconfig['pfb_reentry_timeout']		= (string) pfb_reentry_timeout($pfb['gconfig']['pfb_reentry_timeout'] ?? NULL);
+// The gateway normalizes before scalar coercion, using the shared timeout resolver.
+$pconfig['pfb_reentry_timeout']		= PfbConfig::read('gen/pfb_reentry_timeout');
 
 // issue #1669 slice C / #1888: client-side editor toggle (default on). Read via
 // PfbConfig::read so the registered default applies; pfb_syntax_highlight is a

@@ -828,6 +828,12 @@ function pfb_cfg_top1m_source_write(PfbTop1mSource|string $source): string
 	return ($source instanceof PfbTop1mSource ? $source : PfbTop1mSource::fromStored($source))->toStored();
 }
 
+/** Normalize the timeout before scalar coercion, retaining the gateway's string API. */
+function pfb_cfg_reentry_timeout_adapter(mixed $stored): string
+{
+	return (string) pfb_reentry_timeout($stored);
+}
+
 // ---------------------------------------------------------------------------
 // ADR-29 — PfbConfig gateway: the single sanctioned gateway for config.xml reads/writes of
 // registered installedpackages/pfblockerng* keys, wrapping config_get/set/del_path with the
@@ -1080,8 +1086,8 @@ function pfb_cfg_registry(): array
 		// resolves anything else back to 1800, so no stored value can weaken the bound.
 		'gen/pfb_reentry_timeout' => [
 			'default'       => '1800',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_reentry_timeout_adapter',
+			'write_adapter' => 'pfb_cfg_reentry_timeout_adapter',
 			'no_grandfather' => '#2851 exposes #2016\'s hardcoded 1800s budget; the absent default IS that budget, so an upgrade\'s wait is unchanged',
 		],
 
@@ -1255,8 +1261,8 @@ function pfb_cfg_registry(): array
 		// TOP1M whitelist enable. Default ''.
 		'dnsbl/top1m_enable' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'old_name'      => 'alexa_enable',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as alexa_enable)',
 		],
@@ -1397,8 +1403,8 @@ function pfb_cfg_registry(): array
 		// Python regex: 'on' | ''. Default ''.
 		'dnsbl/pfb_regex' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1421,16 +1427,16 @@ function pfb_cfg_registry(): array
 		// CNAME validation. Default ''.
 		'dnsbl/pfb_cname' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
 		// TLD Allow option. Default ''.
 		'dnsbl/tld_allow' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'old_name'      => 'pfb_pytld',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as pfb_pytld)',
 		],
@@ -1476,11 +1482,9 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'new FEED-suffix policy (#2371); absent/empty reads Honor (current pre-#2371 behaviour) on every upgrade -- the fresh-install apex/apex seed is a one-time install-time write (pfb_psl_feed_policy_is_fresh_install()), deliberately NOT a registry grandfather map, since issue #1921\'s ABSENT map is OLDCFG-only and would wrongly also apply to a genuinely-fresh install',
 		],
 
-		// issue #1921: TLD Allow sort order for the python list emit. Default ''.
-		// Consumed via the dnsbl section blob (pfblockerng_dnsbl.php), not a per-key read --
-		// stored '' is legal (config-gateway.md's foreign-key exclusion list previously
-		// carried this and its 4 siblings below as "unregistered"; registered here for
-		// old_name parity, no consumer change).
+		// issue #1921/#3137: TLD Allow sort plus the four CSV buckets below read through
+		// their per-key gateways. They remain plain strings; the page applies pfb_csv_list()
+		// to each bucket after the registered default has been resolved.
 		'dnsbl/tld_allow_sort' => [
 			'default'        => '',
 			'read_adapter'   => NULL,
@@ -1528,16 +1532,16 @@ function pfb_cfg_registry(): array
 		// Log events via DNSBL Webserver vs python. Default ''.
 		'dnsbl/pfb_py_nolog' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
 		// No AAAA blocking: 'on' | ''. Default ''.
 		'dnsbl/pfb_noaaaa' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
@@ -1552,8 +1556,8 @@ function pfb_cfg_registry(): array
 		// DNSBL bypass enable: 'on' | ''. Default ''.
 		'dnsbl/pfb_gp' => [
 			'default'       => '',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 

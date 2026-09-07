@@ -39,6 +39,8 @@ final class UnboundPythonSourcesTest extends TestCase
 	private string $tmp;
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
+	private bool $hadConfig;
+	private mixed $originalConfig;
 
 	protected function setUp(): void
 	{
@@ -46,6 +48,9 @@ final class UnboundPythonSourcesTest extends TestCase
 		// replaced dnsblconfig subtree) don't leak into later test classes.
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config'] = [];
 
 		$this->tmp = sys_get_temp_dir() . '/pfb_sources_' . uniqid('', TRUE);
 		mkdir("{$this->tmp}/dnsbl", 0777, TRUE);
@@ -66,7 +71,6 @@ final class UnboundPythonSourcesTest extends TestCase
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => '',
 				'tld_wildcard_exclusion' => '',
-				'whitelist'              => '',
 			],
 		]);
 
@@ -88,6 +92,11 @@ final class UnboundPythonSourcesTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
 		}
 
 		rmdir_recursive($this->tmp);
@@ -618,8 +627,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testWhitelistKeepsValidDomainAndWildcardLinesUnchanged(): void
 	{
 		// Plain domain + leading-dot wildcard both pass through unchanged, no log.
-		$GLOBALS['pfb']['dnsblconfig']['whitelist'] =
-			base64_encode("good.example.com\r\n.wild.example.com");
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("good.example.com\r\n.wild.example.com"));
 
 		$this->assertSame(['good.example.com', '.wild.example.com'], pfb_dnsbl_whitelist_lines());
 		$this->assertSame('', $this->logContents(), 'valid lines must not be logged');
@@ -628,8 +636,7 @@ final class UnboundPythonSourcesTest extends TestCase
 	public function testWhitelistSkipsAndLogsNonDomainLine(): void
 	{
 		// Given one failing line among valid ones, and an empty log
-		$GLOBALS['pfb']['dnsblconfig']['whitelist'] =
-			base64_encode("good.example.com\r\nbad domain;ls\r\n.wild.example.com");
+		PfbConfig::writeSystem('dnsbl/whitelist', base64_encode("good.example.com\r\nbad domain;ls\r\n.wild.example.com"));
 		$this->assertSame('', $this->logContents(), 'log must start empty');
 
 		// When the manifest whitelist is collected

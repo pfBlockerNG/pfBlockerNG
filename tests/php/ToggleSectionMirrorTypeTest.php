@@ -6,43 +6,21 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1887 — on/off mirrors read straight from a raw section blob carry PfbToggle too.
+ * Runtime identity coverage for DNSBL toggle mirrors initialized by pfb_global().
  *
- * ToggleMirrorTypeTest covers the mirrors sourced through PfbConfig::read(). These are the
- * other half: pfb_global() also publishes toggle mirrors by reaching directly into the raw
- * $pfb['dnsblconfig'] / $pfb['ipconfig'] section arrays, e.g.
+ * These fields historically came from the raw dnsbl section and were adapted at each
+ * assignment. Issue #3137 moves the remaining seven registered toggles to field-level
+ * PfbConfig::read() calls, so the runtime mirror must be the exact PfbToggle returned by
+ * the gateway. pfb_regex_cap already used that route and stays in the matrix as the
+ * established sibling.
  *
- *     $pfb['dnsbl_regex'] = $pfb['dnsblconfig']['pfb_regex'];
- *
- * Those bypass the gateway entirely, so they arrived as raw stored tokens and every
- * consumer compared them against 'on' by hand — the same untyped pattern, just reached by
- * a different route. Typing them at the single assignment site converts every downstream
- * comparison at once.
- *
- * The raw section arrays themselves stay strings: they are the storage boundary, and
- * $pfb['config'] / ['ipconfig'] / ['dnsblconfig'] are consumed by code that legitimately
- * wants the stored form (the py_unbound.ini writer, section write-back). Only the named
- * per-feature mirrors are typed.
- *
- * Scope note: mirrors assigned inside sync_package_pfblockerng() rather than pfb_global()
- * (float, dup, agg, global_log, dnsbl_control, dnsbl_control_legacy) are converted in the
- * same pass but are not asserted here — invoking that function off-box is not viable, so
- * their coverage rides the existing apply-path suites.
- *
- * issue #1907 (#1921 S3): dnsbl_res_cache, dnsbl_py_reply and supp moved OUT of this
- * file -- pfb_global() now sources all three through PfbConfig::read() (registered,
- * default 'on'), so their absent-key polarity is no longer PfbToggle::Off; they belong
- * to ToggleMirrorTypeTest now, alongside dnsbl_hsts.
- *
- * Seeding mirrors DnsblVipDisableNoticeTest::seedGlobalPrereqs().
+ * The raw section itself remains strings for storage-boundary consumers; only the named
+ * runtime mirrors are enums.
  */
 #[CoversFunction('pfb_global')]
 final class ToggleSectionMirrorTypeTest extends TestCase
 {
-	/**
-	 * Toggle mirrors pfb_global() publishes from a raw section blob, with the DNSBL
-	 * settings key each one reads.
-	 */
+	/** Runtime mirror => registered DNSBL key. */
 	private const SECTION_MIRRORS = [
 		'dnsbl_top1m'     => 'top1m_enable',
 		'dnsbl_regex'     => 'pfb_regex',
@@ -109,9 +87,7 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 		}
 	}
 
-	/**
-	 * Every section-blob toggle mirror is a PfbToggle after pfb_global().
-	 */
+	/** Every DNSBL toggle mirror is a PfbToggle after pfb_global(). */
 	public function testEverySectionMirrorIsAPfbToggleInstance(): void
 	{
 		$this->seedAll('on');
@@ -123,7 +99,7 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 			$this->assertInstanceOf(
 				PfbToggle::class,
 				$GLOBALS['pfb'][$mirror],
-				"\$pfb['{$mirror}'] reads a raw section token and must be typed at its assignment"
+				"\$pfb['{$mirror}'] must carry the gateway's PfbToggle runtime identity"
 			);
 		}
 	}
@@ -146,14 +122,7 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 		}
 	}
 
-	/**
-	 * An unset key surfaces as Off — not NULL, not ''.
-	 *
-	 * The polarity pair for the test above: without it, a mirror hard-wired to On would
-	 * satisfy the On case. Unset rather than 'off' because these keys reach pfb_global()
-	 * straight from the section array, so absent is the state a fresh install actually
-	 * presents, and the untyped code relied on NULL/'' being falsy.
-	 */
+	/** An absent registered key surfaces as Off — not NULL, not ''. */
 	public function testAbsentSectionKeySurfacesAsOff(): void
 	{
 		pfb_global();
@@ -167,20 +136,4 @@ final class ToggleSectionMirrorTypeTest extends TestCase
 		}
 	}
 
-	/**
-	 * No section mirror holds a raw string in any polarity.
-	 */
-	public function testNoSectionMirrorHoldsARawToken(): void
-	{
-		$this->seedAll('off');
-
-		pfb_global();
-
-		foreach (array_keys(self::SECTION_MIRRORS) as $mirror) {
-			$this->assertIsNotString(
-				$GLOBALS['pfb'][$mirror] ?? NULL,
-				"\$pfb['{$mirror}'] still holds a raw token"
-			);
-		}
-	}
 }
