@@ -195,6 +195,8 @@ def test_ascii_psl_validation_avoids_per_label_any_scans() -> None:
 
     profile = cProfile.Profile()
     assert profile.runcall(pfb_unbound._psl_normalize_name, "example.com") == "example.com"
-    any_calls = sum(row.callcount for row in profile.getstats() if row.code == "<built-in method builtins.any>")
+    any_calls = sum(
+        row.callcount for row in profile.getstats() if isinstance(row.code, str) and "builtins.any" in row.code
+    )
     # Only the whole-name empty-label guard needs any(); marker checks must not add calls per label.
     assert any_calls <= 1, f"ASCII PSL validation called any() {any_calls} times; per-label scans regressed"
