@@ -140,11 +140,10 @@ PHP;
 
 		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
-			$port   = random_int(20000, 60000);
 			$nonce  = bin2hex(random_bytes(16));
-			$stderr = "{$this->workdir}/server-{$port}-{$try}.stderr";
+			$stderr = "{$this->workdir}/server-{$try}-{$nonce}.stderr";
 			$proc   = proc_open(
-				['php', '-S', "127.0.0.1:{$port}", $router],
+				['php', '-S', '127.0.0.1:0', $router],
 				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
@@ -156,9 +155,10 @@ PHP;
 				]
 			);
 			if (!is_resource($proc)) {
-				$failures[] = "port {$port}: process=proc_open failed stderr=(unavailable)";
+				$failures[] = 'port 0: process=proc_open failed stderr=(unavailable)';
 				continue;
 			}
+			$port = pfb_test_http_fixture_port($stderr);
 			for ($i = 0; $i < 40; $i++) {
 				if (pfb_test_http_fixture_event_received($port, $nonce)) {
 					$this->server = $proc;
