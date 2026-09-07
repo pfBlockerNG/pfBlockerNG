@@ -613,7 +613,7 @@ $suppression_text = '<strong><u>This suppression list is for [ /8 through /32 ] 
 			remove the IPv4 address from the Deny aliastable.<br /><br />
 
 			Note: When manually adding an IPv4 address <strong>[ /8 through /32 only! ]</strong> to this Suppression List,
-			you must run a <strong>"Force Reload - IP"</strong> for the changes to take effect.';
+			you must run a forced IP reload for the changes to take effect: on the Update tab, run <strong>\'Run Now\' (Run Scope: IP, Force: Parse)</strong>.';
 
 $section->addInput(new Form_Textarea(
 	'v4suppression',
@@ -643,7 +643,7 @@ $suppression_text_v6 = '<strong><u>This suppression list is for [ /32 through /1
 			remove the IPv6 address from the Deny aliastable.<br /><br />
 
 			Note: When manually adding an IPv6 address <strong>[ /32 through /128 only! ]</strong> to this Suppression List,
-			you must run a <strong>"Force Reload - IP"</strong> for the changes to take effect.';
+			you must run a forced IP reload for the changes to take effect: on the Update tab, run <strong>\'Run Now\' (Run Scope: IP, Force: Parse)</strong>.';
 
 $section->addInput(new Form_Textarea(
 	'v6suppression',
@@ -717,7 +717,7 @@ $section->addInput(new Form_Input(
 
 $form->add($section);
 
-print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
+print_callout('<strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.');
 print ($form);
 
 ?>

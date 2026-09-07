@@ -379,7 +379,7 @@ $section->addInput(new Form_Checkbox(
 		. 'packages &mdash; with \'Keep Settings\' disabled it wipes pfBlockerNG\'s settings too. A normal '
 		. 'package update keeps them.<br /><br />'
 		. '<span class="text-danger">Note: </span>'
-		. ' To clear all downloaded lists, uncheck this checkbox and \'Save\'. Re-check it and run a \'Force Update|Reload\''
+		. ' To clear all downloaded lists, uncheck this checkbox and \'Save\'. Re-check it and run an Update (\'Run Now\' on the Update tab)'
 );
 
 $section->addInput(new Form_Checkbox(
@@ -592,7 +592,7 @@ $section->addInput(new Form_Input(
 		. 'interpreter, so a stalled download cannot outlive it; the expiry is named in the '
 		. 'pfBlockerNG and Error logs and the pass continues to a defined state. The download '
 		. 'is retried by the next scheduled update, or immediately via '
-		. '<strong>Force Update</strong>.<br />'
+		. '<strong>Run Now</strong> on the Update tab.<br />'
 		. 'Raise it for low-powered hardware or slow links where a full download pass needs '
 		. 'longer. A blank, non-numeric or out-of-range value falls back to '
 		. PFB_REENTRY_TIMEOUT . ' seconds.');
@@ -693,7 +693,7 @@ $section->addInput(new Form_StaticText(
 
 $form->add($section);
 print($form);
-print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong></p>');
+print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.</p>');
 ?>
 <?=$pfb_general_editor['asset']?>
 

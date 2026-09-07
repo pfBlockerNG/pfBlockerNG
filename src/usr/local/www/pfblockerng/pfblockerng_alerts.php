@@ -1456,10 +1456,10 @@ if (isset($_POST) && !empty($_POST)) {
 						@unlink($flush_zone_file);
 						if ($flush_zone_status === 124) {
 							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone TIMED OUT (killed); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use a DNSBL Force Reload or run 'unbound-control flush_zone' to clear them.";
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush TIMED OUT (killed after 30s) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' (Run Scope: DNSBL, Force: Parse) on the Update tab or run 'unbound-control flush_zone' to clear them.";
 						} elseif ($flush_zone_status !== 0) {
 							pfb_logger("\npfblockerng_alerts: wildcard-delete flush_zone FAILED (exit {$flush_zone_status}); the whitelist edit was saved and stale cached subdomains may persist until the next resolver reload\n", 2);
-							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use a DNSBL Force Reload or run 'unbound-control flush_zone' to clear them.";
+							$savemsg .= " The wildcard removal was saved, but the resolver cache flush FAILED (exit {$flush_zone_status}) -- stale cached subdomains may persist until the next resolver reload; use 'Run Now' (Run Scope: DNSBL, Force: Parse) on the Update tab or run 'unbound-control flush_zone' to clear them.";
 						}
 					} else {
 						pfb_unbound_py_ccache_flush(array($entry));
@@ -2152,7 +2152,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$h_wt_line = pfb_hsc($wt_line);
 		$s_txt  = "Note:&emsp;The following Domain is in the TLD Exclusion customlist:\n\n"
 			. "TLD Exclusion:&emsp;[ {$h_wt_line} ]\n\n"
-			. "&#8226; TLD Exclusions require a Force Reload when a Domain is initially added.\n"
+			. "&#8226; TLD Exclusions require an Update when a Domain is initially added.\n"
 			. "&#8226; To remove this Domain from the TLD Exclusion customlist, Click 'OK'";
 
 		$ex_dom = '&nbsp;<i class="fa-regular fa-trash-can no-confirm icon-pointer" id="DNSBLWT|'
@@ -3146,7 +3146,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "2) Whitelist the IP to an existing 'Permit' Alias customlist. Ensure that this\n"
 						. "&emsp;Permit Alias/Rule is above the Block/Reject rules (Rule Order option)\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;A Force Update is required to add the associated Firewall Permit Rule!\n\n"
+						. "&emsp;An Update is required to add the associated Firewall Permit Rule!\n\n"
 						. "Click 'OK' to continue";
 
 				$supp_ip = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $h_host
@@ -3215,7 +3215,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "&#8226; To permit access to this Blocked IP, you can add it to any\n"
 						. "&emsp;existing 'Permit' Alias.\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;A Force Update is required to add the associated Firewall Permit Rule!\n\n"
+						. "&emsp;An Update is required to add the associated Firewall Permit Rule!\n\n"
 						. "&#8226; Ensure that this Permit Alias/Rule is above the "
 						. "Block/Reject rules\n&emsp;(Rule Order option)\n\n"
 						. "Click 'OK' to continue";

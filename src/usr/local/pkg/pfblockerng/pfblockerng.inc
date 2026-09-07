@@ -6982,18 +6982,19 @@ function pfb_run_hooks($when, $ctx = array()) {
 /*
  * Map sync_package_pfblockerng()'s $cron argument to a stable PFB_TRIGGER value
  * for the hook context. The ADR's nominal set is cron|update|force-update|force-reload;
- * in practice this emits cron|update|force-reload (see below -- force-update collapses
- * to cron because the GUI Force Update dispatches the same 'pfblockerng.php update' that
+ * in practice this emits cron|update|force-reload (see below -- force-update collapsed
+ * to cron because the legacy GUI dispatched the same 'pfblockerng.php update' that
  * calls sync_package_pfblockerng('cron'), indistinguishable from the scheduled cron).
  *
  * What each $cron value means at the fire points (verified against the callers):
- *   'updateip' / 'updatednsbl' -> a GUI "Force Reload" of just IP or just DNSBL
- *       (pfblockerng_update.php -> pfblockerng.php updateip|updatednsbl) => force-reload.
+ *   'updateip' / 'updatednsbl' -> a scoped forced reload of just IP or just DNSBL
+ *       (legacy verb; the GUI equivalent is Run Now with Force: Parse) => force-reload.
  *   'cron'  -> the scheduled cron job (pfblockerng.php cron -> pfblockerng_sync_cron),
- *       AND the GUI "Force Update" / "Force Reload (All)" actions, which dispatch
- *       'pfblockerng.php update' and likewise call sync_package_pfblockerng('cron').
- *       These are INDISTINGUISHABLE inside the pass (same $cron), so 'cron' is the
- *       honest label; a hook that needs to know it ran from the GUI cannot tell here.
+ *       AND the legacy 'pfblockerng.php update' verb, which likewise calls
+ *       sync_package_pfblockerng('cron'). These are INDISTINGUISHABLE inside the pass
+ *       (same $cron), so 'cron' is the honest label here; the ADR-43 GUI 'Run Now'
+ *       dispatches pfb_trigger with trigger=manual|force instead, so hooks CAN tell a
+ *       GUI-initiated pass from a scheduled one via PFB_TRIGGER.
  *   'noupdates' -> the cron path's "nothing to update" branch => cron.
  *   '' (default) -> a settings save (pfblockerng_general.php) or the de-install path
  *       => update.
@@ -12357,14 +12358,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 
 		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.conf.error");
 		if ($mode == 'enabled') {
-			$log = "\nDNSBL {$mode} FAIL  *** Fix error(s) and a Force Reload required! ***\n";
+			$log = "\nDNSBL {$mode} FAIL  *** Fix error(s) and run an Update (Run Scope: DNSBL)! ***\n";
 			if (file_exists("{$pfb['dnsbldir']}/unbound.bk")) {
 				@rename("{$pfb['dnsbldir']}/unbound.bk", "{$pfb['dnsbldir']}/unbound.conf");
 			}
 			pfb_logger("{$log}", 2);
 		}
 		else {
-			$log = "\nDNSBL {$mode} - Unbound conf update FAIL *** Fix error(s) and a Force Reload required! ***\n";
+			$log = "\nDNSBL {$mode} - Unbound conf update FAIL *** Fix error(s) and run an Update (Run Scope: DNSBL)! ***\n";
 			pfb_logger("{$log}", 2);
 		}
 

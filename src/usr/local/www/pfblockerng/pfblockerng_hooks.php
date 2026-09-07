@@ -256,9 +256,9 @@ $section->addInput(new Form_StaticText(
 	'<small>'
 	. gettext('Each hook receives these environment variables:') . '<br />'
 	. '<code>PFB_WHEN</code> &mdash; ' . gettext('the fire point: <code>pre</code> or <code>post</code>.') . '<br />'
-	. '<code>PFB_TRIGGER</code> &mdash; ' . gettext('what started the update: <code>cron</code> (scheduled update, '
-		. 'and the GUI <em>Force Update</em> / <em>Force Reload (All)</em>), <code>update</code> (a settings save), '
-		. 'or <code>force-reload</code> (a GUI <em>Force Reload</em> of IP-only or DNSBL-only). '
+	. '<code>PFB_TRIGGER</code> &mdash; ' . gettext('what started the update: <code>cron</code> (the scheduled update, '
+		. 'and a Run Now with Force: Download or Both), <code>update</code> (a settings save, or a Run Now with '
+		. 'Force: None), or <code>force-reload</code> (a Run Now with Force: Parse). '
 		. 'Set for both <code>pre</code> and <code>post</code>.') . '<br />'
 	. '<code>PFB_POST_INSTALL</code> &mdash; ' . gettext('<code>1</code> when this run is the reconfigure right '
 		. 'after pfBlockerNG was installed or upgraded, else <code>0</code>.') . '<br />'
@@ -395,7 +395,7 @@ $section->add($group);
 
 $form->add($section);
 print($form);
-print_callout('<strong>' . gettext('Hooks run on the next CRON update or \'Force Update|Reload\'.') . '</strong>');
+print_callout('<strong>' . gettext('Hooks run on every update: the scheduled update and each \'Run Now\'.') . '</strong>');
 
 // Client-side convenience: keep each row's Script picker in sync with its Pre/Post
 // selection (the file prefix decides which scripts apply). Pure progressive

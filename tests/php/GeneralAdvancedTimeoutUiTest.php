@@ -110,7 +110,7 @@ final class GeneralAdvancedTimeoutUiTest extends TestCase
 			'the help must name the 1800-second default from the runtime constant');
 		$this->assertStringContainsString('whole process tree', $help,
 			'the help must say the WHOLE process tree is terminated on expiry (reaper mode, not --foreground)');
-		$this->assertStringContainsString('Force Update', $help,
+		$this->assertStringContainsString('<strong>Run Now</strong> on the Update tab', $help,
 			'the help must give the retry guidance for a pass that expired');
 	}
 }

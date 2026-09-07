@@ -192,7 +192,7 @@ $options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking settin
 			. '&#8226 <strong>NXDOMAIN (logging)</strong>, Reply NXDOMAIN with logging. The DNSBL block page is bypassed.<br />'
 			. '&#8226 <strong>NXDOMAIN (no logging)</strong>, Reply NXDOMAIN with no logging. The DNSBL block page is bypassed.<br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br /><br />'
-			. 'A \'Force Reload - DNSBL\' is required for changes to take effect'
+			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.'
 			. '</div>';
 
 $options_global_log	= [	''		=> 'No Global mode',
@@ -3065,7 +3065,7 @@ $section->addInput(new Form_StaticText(
 	. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
 	. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
 	. 'Picker: <strong>IANA root TLDs</strong>. Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
-	. 'Changes to this option will require a Force Update to take effect.<br /><br />'
+	. 'Changes to this option will require an Update to take effect.<br /><br />'
 	. '<strong>Legend</strong>:<br />'
 	. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
 	. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
@@ -3174,7 +3174,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'width: 100%')
   ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
-		. 'Changes to this option will require a Force Update to take effect.');
+		. 'Changes to this option will require an Update to take effect.');
 
 $form->add($section);
 
@@ -3368,7 +3368,7 @@ $noaaaa_text = 'List of no-AAAA domains to block the (IPv6) AAAA DNS Resolution.
 		Prefix domain with a "." to apply wildcard no-AAAA to all Sub-Domains. &emsp;IE: (.example.com)<br /><br />
 		Any domain added to the no-AAAA list, will never be filtered by any DNSBL blocking.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-		Changes to this option will require a Force Update to take effect.';
+		Changes to this option will require an Update to take effect.';
 
 $section = new Form_Section('no-AAAA List', 'Python_noaaaa_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(
@@ -3429,8 +3429,8 @@ $whitelist_text = 'No Regex Entries Allowed!&emsp;
 				You may use "<strong>#</strong>" after any Domain name to add comments. &emsp;IE: (example.com # Whitelist example.com)<br />
 				This List is stored as \'Base64\' format in the config.xml file.<br /><br />
 
-				<span class="text-danger">Note: </span>These entries are only Whitelisted when Feeds are downloaded or on a
-				<span class="text-danger">\'Force Reload\'.</span><br />
+				<span class="text-danger">Note: </span>These entries are applied with the next
+				<span class="text-danger">Update</span>.<br />
 
 				Use the Alerts Tab \'+\' Whitelist Icon to immediately remove a Domain (and any associated CNAMES) from Unbound DNSBL.<br />
 				Note: When manually adding a Domain to the Whitelist, check for any associated CNAMES<br />
@@ -3754,7 +3754,7 @@ foreach (array( 'In' => 'Source', 'Out' => 'Destination') as $adv_mode => $adv_t
 }
 
 print ($form);
-print_callout('<strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong>');
+print_callout('<strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.');
 
 ?>
 <?=$pfb_dnsbl_editor['asset']?>

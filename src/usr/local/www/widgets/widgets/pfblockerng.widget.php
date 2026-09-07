@@ -626,7 +626,7 @@ function pfBlockerNG_get_header($mode='') {
 			// would otherwise be misclassified as the dedup-sanity sentinel entry.
 			$pfb_ip_other	= array_filter($pfb_ip_open, fn ($entry) => $entry['stage'] !== 'dedup');
 			$pfb_msg	= empty($pfb_ip_other)
-				? 'pfBlockerNG deDuplication is out of sync. Perform a Force Reload to correct.'
+				? 'pfBlockerNG deDuplication is out of sync. Run an Update with Force: Parse to correct.'
 				: sprintf('pfBlockerNG has %d open issue(s). See the Failed Downloads list below.', count($pfb_ip_open));
 		}
 	} else {
@@ -685,7 +685,7 @@ function pfBlockerNG_get_header($mode='') {
 			$stats[$key][$type] = 0;
 			if ($type == 'DNSBL') {
 				if (isset($pfb['dnsbl_missing'])) {
-					$stats[$key][$type] = "<span title='*** SQLite database 'pfb_py_dnsbl.sqlite' is missing, Force Reload DNSBL to recover! ***'>Unknown</span>";
+					$stats[$key][$type] = "<span title=\"*** SQLite database 'pfb_py_dnsbl.sqlite' is missing; run an Update with Run Scope: DNSBL (Force: Parse) to recover! ***\">Unknown</span>";
 				} else {
 					$stats[$key][$type] = htmlspecialchars($pfb_table['stats']['DNSBL'] ?? '');
 				}

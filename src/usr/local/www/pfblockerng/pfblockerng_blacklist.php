@@ -406,7 +406,7 @@ $section->addInput(new Form_Select(
 ))->setHelp("Default: <strong>Enabled</strong><br />
 	When 'Enabled', Domains are sinkholed to the DNSBL VIP and logged via the DNSBL Web Server.<br />
 	When 'Disabled', '0.0.0.0' will be used instead of the DNSBL VIP.<br />
-	A 'Force Reload - DNSBL' is required for changes to take effect")
+	A DNSBL reload is required for changes to take effect: run 'Run Now' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.")
   ->setAttribute('style', 'width: auto');
 
 $form->add($section);
@@ -553,7 +553,7 @@ foreach ($blacklist_types as $type => $setting) {
 }
 
 print($form);
-print_callout('<p><strong>Setting changes are applied via CRON or \'Force Update|Reload\' only!</strong><br /><br />
+print_callout('<p><strong>Setting changes are applied on the next scheduled update.</strong> To apply them now, go to the <a href="/pfblockerng/pfblockerng_update.php">Update</a> tab and use the \'Run Now\' function.<br /><br />
 		DNSBL Category Feeds are processed first, followed by the DNSBL Groups.<br />
 		DNSBL Groups can be prioritized first, by selecting the \'Group Order\' option.</p>');
 ?>
