@@ -188,3 +188,13 @@ def test_resolver_throughput_is_indexed_not_linear_scan() -> None:
     # Coarse salvage cap only (issue #3051): catches an outright linear matcher,
     # ~7 s here. The two assertions above are what prove the property.
     assert elapsed < 2.0, f"2000 resolves took {elapsed:.2f}s; matcher is scanning rules per lookup"
+
+
+def test_ascii_psl_validation_avoids_per_label_any_scans() -> None:
+    import cProfile
+
+    profile = cProfile.Profile()
+    assert profile.runcall(pfb_unbound._psl_normalize_name, "example.com") == "example.com"
+    any_calls = sum(row.callcount for row in profile.getstats() if row.code == "<built-in method builtins.any>")
+    # Only the whole-name empty-label guard needs any(); marker checks must not add calls per label.
+    assert any_calls <= 1, f"ASCII PSL validation called any() {any_calls} times; per-label scans regressed"

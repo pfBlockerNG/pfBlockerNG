@@ -164,6 +164,7 @@ _PSL_ICANN_BEGIN = "// ===BEGIN ICANN DOMAINS==="
 _PSL_ICANN_END = "// ===END ICANN DOMAINS==="
 _PSL_PRIVATE_BEGIN = "// ===BEGIN PRIVATE DOMAINS==="
 _PSL_PRIVATE_END = "// ===END PRIVATE DOMAINS==="
+_PSL_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
 def _psl_normalize_name(name: str) -> str:
@@ -172,7 +173,7 @@ def _psl_normalize_name(name: str) -> str:
         raise ValueError("invalid DNS name")
     normalized: list[str] = []
     for label in labels:
-        if any(char in label for char in "*!"):
+        if "*" in label or "!" in label:
             raise ValueError("invalid DNS label")
         if label.isascii() and not label.lower().startswith("xn--"):
             # Plain-ASCII fast path (the overwhelming hot-path case): the idna
@@ -195,7 +196,7 @@ def _psl_normalize_name(name: str) -> str:
             or len(encoded.encode("ascii")) > 63
             or encoded[0] == "-"
             or encoded[-1] == "-"
-            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in encoded)
+            or not _PSL_LABEL_CHARS.issuperset(encoded)
         ):
             raise ValueError("invalid DNS label")
         normalized.append(encoded)
@@ -4651,7 +4652,7 @@ def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
     for label in host.split("."):
         if not label or label[0] == "-" or label[-1] == "-":
             return None, "shape"
-        if any(c not in _DNSBL_LABEL_CHARS for c in label):
+        if not _DNSBL_LABEL_CHARS.issuperset(label):
             return None, "shape"
     return host, None
 
