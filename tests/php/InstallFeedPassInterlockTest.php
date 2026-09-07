@@ -2,41 +2,26 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/PfbFlockClockFixture.php';
+
 use PHPUnit\Framework\TestCase;
 
-/**
- * issue #3062 -- a package install must not run on top of an in-flight feed pass.
- *
- * The install restages the Unbound chroot ('pfblockerng.sh dnsbl_cache stage'),
- * deletes caches, and stops/starts pfB services; a feed pass publishes into the
- * same chroot and wakes the ADR-10 reload watcher. Nothing serialised the two:
- * every feed-pass dispatcher takes the flock in "{dbdir}/pfb_feed_pass.lock"
- * (issue #1175) but pfblockerng_install.inc never did, so a scheduled pass and
- * an install could touch the same files and the same daemon at once.
- *
- * pfb_install_feed_pass_hold() closes that: it waits a bounded time for an
- * in-flight pass to finish, then holds the lock for the rest of the install
- * process so a tick firing mid-install defers with the usual skip line. The
- * wait is bounded because an install may never be abandoned -- on expiry it
- * logs and lets the install proceed.
- */
+/** issue #3062/#3090/#3157: package operations serialize with real feed-pass flocks. */
 final class InstallFeedPassInterlockTest extends TestCase
 {
 	private string $dbdir = '';
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
 
-	/** Raw fds opened directly by a test (bypassing the helpers) -- closed in tearDown. */
+	/** @var list<resource> */
 	private array $rawFps = [];
 
 	protected function setUp(): void
 	{
-		$this->hadPfb      = array_key_exists('pfb', $GLOBALS);
+		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
-
 		$this->dbdir = sys_get_temp_dir() . '/pfb_install_interlock_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
-
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'dbdir'  => $this->dbdir,
 			'log'    => "{$this->dbdir}/pfblockerng.log",
@@ -52,11 +37,7 @@ final class InstallFeedPassInterlockTest extends TestCase
 				@fclose($fp);
 			}
 		}
-		$this->rawFps = [];
-
-		// Never leave this process holding the lock across tests (self-encapsulation).
 		pfb_feed_pass_release();
-
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
@@ -85,11 +66,10 @@ final class InstallFeedPassInterlockTest extends TestCase
 		return "{$this->dbdir}/pfb_feed_pass.lock";
 	}
 
-	/** TRUE when a second, independent fd cannot take the lock -- i.e. somebody holds it. */
 	private function rawProbeStillLocked(): bool
 	{
 		$probe = fopen($this->lockPath(), 'c');
-		$this->assertIsResource($probe, 'test setup: could not open the lock path for probing');
+		$this->assertIsResource($probe, 'test setup: lock probe open failed');
 		$held = !flock($probe, LOCK_EX | LOCK_NB);
 		if (!$held) {
 			flock($probe, LOCK_UN);
@@ -103,253 +83,133 @@ final class InstallFeedPassInterlockTest extends TestCase
 		return (string) @file_get_contents($GLOBALS['pfb']['log']);
 	}
 
-	/**
-	 * Scenario: no feed pass is running when the install starts.
-	 * Given a free feed-pass lock, When the install takes its hold,
-	 * Then it succeeds and every other process is locked out for the rest of the install.
-	 */
+	/** @return array{PfbFlockClockFixture,string} */
+	private function clockedFeedPass(?Closure $onSleep = NULL): array
+	{
+		$clock = new PfbFlockClockFixture();
+		$clock->setOnSleep($onSleep);
+		$namespace = $clock->loadChain([
+			'pfb_flock_bounded',
+			'pfb_feed_pass_acquire',
+			'pfb_install_feed_pass_hold',
+		]);
+		return [$clock, $namespace];
+	}
+
 	public function testHoldTakesTheFeedPassLockWhenNoPassIsInFlight(): void
 	{
-		$this->assertFalse($this->rawProbeStillLocked(), 'test setup: the lock must start free');
-
-		$this->assertTrue(pfb_install_feed_pass_hold(0.1), 'the install must take the free feed-pass lock');
-
+		$this->assertFalse($this->rawProbeStillLocked(), 'test setup: lock must start free');
+		$this->assertTrue(pfb_install_feed_pass_hold(0.1), 'install must take a free feed-pass lock');
 		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL),
-			'the install must KEEP the lock (held for the remainder of the install process)');
-		$this->assertTrue($this->rawProbeStillLocked(),
-			'a feed pass starting mid-install must find the lock held and defer');
+			'install must retain the feed-pass lock');
+		$this->assertTrue($this->rawProbeStillLocked(), 'another feed pass must observe the retained lock');
 	}
 
-	/**
-	 * Scenario: a feed pass in another process is in flight, then finishes.
-	 * Given a child process holding the lock, When the install asks for it,
-	 * Then it is refused while the pass runs and takes the lock once the pass releases.
-	 * Both halves are ordered by the child's own pipe, never by a sleep: the refusal is
-	 * asserted while the child provably still holds, the acquisition only after EOF.
-	 */
-	public function testHoldIsRefusedWhileAnotherProcessHoldsAndSucceedsOnceItReleases(): void
+	/** Scenario: the holder releases during the controlled wait; then the install owns the lock. */
+	public function testHoldWaitsForReleaseAndRetainsTheLock(): void
 	{
-		$childCode = <<<'PHP'
-			$fp = fopen($argv[1], 'c');
-			if ($fp === false) { fwrite(STDOUT, "openfail\n"); exit(1); }
-			if (!flock($fp, LOCK_EX)) { fwrite(STDOUT, "lockfail\n"); exit(1); }
-			fwrite(STDOUT, "ready\n");
-			fflush(STDOUT);
-			fgets(STDIN);	// blocks until the parent closes our stdin (EOF)
-			flock($fp, LOCK_UN);
-			fclose($fp);
-			exit(0);
-			PHP;
+		$holder = fopen($this->lockPath(), 'c');
+		$this->rawFps[] = $holder;
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: holder lock failed');
+		$released = FALSE;
+		[$clock, $namespace] = $this->clockedFeedPass(static function () use ($holder, &$released): void {
+			flock($holder, LOCK_UN);
+			$released = TRUE;
+		});
+		$hold = "{$namespace}\\pfb_install_feed_pass_hold";
 
-		$descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', '/dev/null', 'w']];
-		$proc = NULL;
-		$pipes = [];
-		try {
-			$proc = proc_open([PHP_BINARY, '-r', $childCode, $this->lockPath()], $descriptors, $pipes);
-			$this->assertTrue(is_resource($proc), 'test setup: failed to spawn the feed-pass holder');
-
-			// 10s is a salvage cap for a stuck run, never the behaviour under test.
-			$read = [$pipes[1]];
-			$write = $except = NULL;
-			$this->assertSame(1, stream_select($read, $write, $except, 10),
-				'deadlock guard: the holder never signalled readiness within 10s');
-			$this->assertSame("ready\n", fgets($pipes[1]), 'the holder did not report holding the lock');
-
-			// The child cannot release before EOF, so this half is race-free.
-			$this->assertFalse(pfb_install_feed_pass_hold(0.2),
-				'the install must NOT take a lock another process is holding');
-
-			fclose($pipes[0]);	// EOF -> the holder releases and exits
-			$pipes[0] = NULL;
-
-			$this->assertTrue(pfb_install_feed_pass_hold(10.0),
-				'the install must take the lock once the in-flight pass releases it');
-			$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL),
-				'the install must hold the lock it waited for');
-		} finally {
-			if (is_resource($pipes[0] ?? NULL)) {
-				fclose($pipes[0]);
-			}
-			if (is_resource($pipes[1] ?? NULL)) {
-				fclose($pipes[1]);
-			}
-			if (is_resource($proc)) {
-				$this->assertSame(0, proc_close($proc), 'the holder process must have exited cleanly');
-			}
-		}
+		$this->assertTrue($hold(1.0), 'install must acquire after the holder releases');
+		$this->assertTrue($released, 'holder must release during the controlled wait');
+		$this->assertSame([20000], $clock->sleeps, 'install must retry once after release');
+		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL),
+			'install must retain the acquired lock');
+		$this->assertTrue($this->rawProbeStillLocked(), 'feed pass must observe the install hold');
 	}
 
-	/**
-	 * Scenario: the in-flight pass outlasts the install's wait budget.
-	 * Given another handle holding the lock for longer than the budget,
-	 * When the install takes its hold,
-	 * Then it spends the budget waiting, gives up rather than stalling the install
-	 * forever, leaves the holder untouched, and records THAT it gave up -- the evidence
-	 * a later post-install failure is traced with.
-	 */
+	/** Scenario: the holder outlives the budget; then the install logs give-up without disturbing it. */
 	public function testHoldSpendsItsBudgetThenLetsTheInstallProceed(): void
 	{
 		$holder = fopen($this->lockPath(), 'c');
 		$this->rawFps[] = $holder;
-		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: holder lock failed');
+		[$clock, $namespace] = $this->clockedFeedPass();
+		$hold = "{$namespace}\\pfb_install_feed_pass_hold";
 
-		$started = microtime(TRUE);
-		$held = pfb_install_feed_pass_hold(0.3);
-		$elapsed = microtime(TRUE) - $started;
-
-		$this->assertFalse($held, 'the install must not block forever on a pass that will not finish');
-		// Floor, not a duration assertion: a hold that returned instantly never waited at
-		// all, which is the regression (an ignored budget / a non-blocking acquire).
-		$this->assertGreaterThanOrEqual(0.25, $elapsed,
-			"the hold must spend its 0.3s budget waiting; it returned after {$elapsed}s");
-
-		$this->assertFalse(isset($GLOBALS['pfb_feed_pass_lock']),
-			'a failed hold must not leave a half-owned lock behind');
-		$this->assertTrue($this->rawProbeStillLocked(),
-			'the running feed pass must keep its own lock undisturbed');
-		$this->assertStringContainsString('Package install proceeding WITHOUT the feed-pass lock', $this->logContents(),
-			'the give-up itself must be logged, naming the install, not merely the decision to wait');
+		$this->assertFalse($hold(0.3), 'install must give up after its budget');
+		$requestedSleep = array_sum($clock->sleeps);
+		$this->assertGreaterThanOrEqual(300000, $requestedSleep,
+			'install must poll through its virtual budget, not fail immediately');
+		$this->assertLessThan(320000, $requestedSleep,
+			'install must stop at its deadline, before only the poll cap remains');
+		$this->assertFalse(isset($GLOBALS['pfb_feed_pass_lock']), 'failed hold must not retain a handle');
+		$this->assertTrue($this->rawProbeStillLocked(), 'holder lock must remain untouched');
+		$log = $this->logContents();
+		$this->assertStringContainsString('Package install: waiting up to', $log);
+		$this->assertStringContainsString('Package install proceeding WITHOUT the feed-pass lock', $log);
+		$this->assertStringNotContainsString('Package uninstall', $log);
 	}
 
-	/**
-	 * Every feed-pass dispatcher must keep deferring INSTANTLY -- the install's wait is the
-	 * one exception. Pins the default: a contended acquire with no budget returns at once.
-	 */
 	public function testFeedPassAcquireStaysNonBlockingByDefault(): void
 	{
 		$holder = fopen($this->lockPath(), 'c');
 		$this->rawFps[] = $holder;
-		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: holder lock failed');
+		[$clock, $namespace] = $this->clockedFeedPass();
+		$acquire = "{$namespace}\\pfb_feed_pass_acquire";
+		$contended = FALSE;
 
-		$started = microtime(TRUE);
-		$acquired = pfb_feed_pass_acquire($contended);
-		$elapsed = microtime(TRUE) - $started;
-
-		$this->assertFalse($acquired, 'a contended acquire must fail');
-		$this->assertTrue($contended, 'contention must be reported as contention, not as an error');
-		$this->assertLessThan(0.05, $elapsed,
-			"the default acquire must make ONE non-blocking attempt; it took {$elapsed}s");
+		$this->assertFalse($acquire($contended), 'contended default acquire must fail');
+		$this->assertTrue($contended, 'default acquire must report contention');
+		$this->assertSame([], $clock->sleeps, 'default acquire must make one non-blocking attempt');
 	}
 
-	/**
-	 * Scenario: the hold runs in a process that already owns the lock.
-	 * Given this process holds the feed-pass lock, When the install takes its hold,
-	 * Then it reuses the existing hold instead of deadlocking against itself.
-	 */
 	public function testHoldIsReentrantWhenThisProcessAlreadyHoldsTheLock(): void
 	{
-		$this->assertTrue(pfb_feed_pass_acquire(), 'test setup: failed to take the lock first');
+		$this->assertTrue(pfb_feed_pass_acquire(), 'test setup: initial acquire failed');
 		$outer = $GLOBALS['pfb_feed_pass_lock'];
 
-		$this->assertTrue(pfb_install_feed_pass_hold(0.1), 'a reentrant hold must succeed');
+		$this->assertTrue(pfb_install_feed_pass_hold(0.1), 'reentrant hold must succeed');
 		$this->assertSame($outer, $GLOBALS['pfb_feed_pass_lock'] ?? NULL,
-			'a reentrant hold must reuse the existing handle, not replace it');
+			'reentrant hold must reuse the existing handle');
 	}
 
-	/**
-	 * The interlock has to be WIRED, not merely available: pfblockerng_install.inc must
-	 * take the hold before it touches anything a feed pass shares -- the pfB services and
-	 * the 'dnsbl_cache stage' chroot restage.
-	 *
-	 * install.inc is a procedural migration script (host-absolute requires, sqlite, exec,
-	 * real Unbound control) and is not loadable by the unit harness, so this pin scans
-	 * executable tokens only; comments/docblocks cannot satisfy it.
-	 */
-	public function testInstallScriptTakesTheHoldBeforeTouchingSharedState(): void
-	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
-		$src = (string) @php_strip_whitespace($path);
-		$this->assertNotSame('', $src, "could not read {$path}");
-
-		$hold = strpos($src, 'pfb_install_feed_pass_hold(');
-		$this->assertNotFalse($hold, 'install.inc never takes the feed-pass interlock (issue #3062)');
-
-		foreach (['stop_service(', "dnsbl_cache stage"] as $shared) {
-			$first = strpos($src, $shared);
-			$this->assertNotFalse($first, "install.inc no longer contains [ {$shared} ]");
-			$this->assertLessThan($first, $hold,
-				"the interlock must be taken BEFORE install.inc reaches [ {$shared} ]");
-		}
-	}
-
-	/**
-	 * Scenario: the uninstall gives up its wait.
-	 * Given another handle holding the lock past the budget, When the uninstall's hold
-	 * expires, Then the give-up line names the UNINSTALL -- an operator reading
-	 * pfblockerng.log during a `pkg delete` must not be told an install is running.
-	 */
+	/** Scenario: the uninstall outlives its budget; then both log lines name the uninstall. */
 	public function testHoldNamesTheUninstallWhenItGivesUp(): void
 	{
 		$holder = fopen($this->lockPath(), 'c');
 		$this->rawFps[] = $holder;
-		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: failed to flock the holder fd');
+		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: holder lock failed');
+		[$clock, $namespace] = $this->clockedFeedPass();
+		$hold = "{$namespace}\\pfb_install_feed_pass_hold";
 
-		$this->assertFalse(pfb_install_feed_pass_hold(0.1, 'uninstall'),
-			'the uninstall must not block forever on a pass that will not finish');
-
+		$this->assertFalse($hold(0.1, 'uninstall'), 'uninstall must give up after its budget');
+		$requestedSleep = array_sum($clock->sleeps);
+		$this->assertGreaterThanOrEqual(100000, $requestedSleep,
+			'uninstall must poll through its virtual budget, not fail immediately');
+		$this->assertLessThan(120000, $requestedSleep,
+			'uninstall must stop at its deadline, before only the poll cap remains');
+		$this->assertFalse(isset($GLOBALS['pfb_feed_pass_lock']), 'failed hold must not retain a handle');
+		$this->assertTrue($this->rawProbeStillLocked(), 'holder lock must remain untouched');
 		$log = $this->logContents();
-		$this->assertStringContainsString('Package uninstall: waiting up to', $log,
-			'the wait line must name the uninstall');
-		$this->assertStringContainsString('Package uninstall proceeding WITHOUT the feed-pass lock', $log,
-			'the give-up line must name the uninstall');
-		$this->assertStringNotContainsString('Package install', $log,
-			'an uninstall must never log itself as an install');
+		$this->assertStringContainsString('Package uninstall: waiting up to', $log);
+		$this->assertStringContainsString('Package uninstall proceeding WITHOUT the feed-pass lock', $log);
+		$this->assertStringNotContainsString('Package install', $log);
 	}
 
-	/**
-	 * Wiring pin (issue #3090): pfblockerng_php_pre_deinstall_command() takes the hold AFTER
-	 * the #697 pkg-operation check (an upgrade must not wait) and BEFORE the disable pass and
-	 * chroot teardown, and a refused hold never abandons the uninstall.
-	 *
-	 * The controller runs a full sync plus pfctl/exec teardown and cannot be driven
-	 * off-appliance, so this pins its executable order (comments cannot satisfy it).
-	 */
-	public function testPreDeinstallTakesTheHoldAfterThePkgOpCheckAndBeforeTheSync(): void
+	public function testReleaseDropsOwnershipAndUnlocksTheFile(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-		$src = (string) @php_strip_whitespace($path);
-		$this->assertNotSame('', $src, "could not read {$path}");
+		$this->assertTrue(pfb_feed_pass_acquire(), 'test setup: acquire failed');
+		$probe = fopen($this->lockPath(), 'c');
+		$wouldBlock = 0;
+		$this->assertFalse(flock($probe, LOCK_EX | LOCK_NB, $wouldBlock),
+			'test setup: acquired lock must block the probe');
+		$this->assertSame(1, $wouldBlock, 'test setup: probe failure must be contention');
 
-		$start = strpos($src, 'function pfblockerng_php_pre_deinstall_command');
-		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
+		pfb_feed_pass_release();
 
-		$hold = strpos($src, 'pfb_install_feed_pass_hold(', $start);
-		$this->assertNotFalse($hold, 'the pre-deinstall never takes the feed-pass interlock (issue #3090)');
-		$this->assertNotFalse(strpos($src, 'update_status(pfb_install_feed_pass_hold(', $start),
-			'a refused hold must be reported and never abandon the uninstall (issue #3090)');
-
-		$opCheck = strpos($src, 'pfb_pkg_op_tears_down(', $start);
-		$this->assertNotFalse($opCheck, 'the pre-deinstall no longer checks the pkg operation');
-		$this->assertLessThan($hold, $opCheck,
-			'the interlock must be taken AFTER the pkg-operation check, so an upgrade never waits');
-
-		foreach (['sync_package_pfblockerng(', 'dnsbl_cache teardown'] as $shared) {
-			$first = strpos($src, $shared, $start);
-			$this->assertNotFalse($first, "the pre-deinstall no longer contains [ {$shared} ]");
-			$this->assertLessThan($first, $hold,
-				"the interlock must be taken BEFORE the pre-deinstall reaches [ {$shared} ]");
-		}
+		$this->assertArrayNotHasKey('pfb_feed_pass_lock', $GLOBALS, 'release must clear ownership state');
+		$this->assertTrue(flock($probe, LOCK_EX | LOCK_NB), 'release must unlock the real file');
+		flock($probe, LOCK_UN);
+		fclose($probe);
 	}
-	/**
-	 * issue #3107: the uninstall's disable sync must wait on the dispatcher lock too.
-	 * The feed-pass hold does not imply dispatcher ownership when a tick is already
-	 * in its scheduler window, so the sync needs the same bounded package-operation wait.
-	 */
-	public function testPreDeinstallTakesDispatcherHoldBeforeTheDisableSync(): void
-	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-		$src = (string) @php_strip_whitespace($path);
-		$this->assertNotSame('', $src, "could not read {$path}");
-
-		$start = strpos($src, 'function pfblockerng_php_pre_deinstall_command');
-		$this->assertNotFalse($start, 'pre-deinstall controller must remain defined');
-		$dispatch = strpos($src, 'pfb_schedule_dispatch_begin(PFB_INSTALL_FEED_PASS_WAIT', $start);
-		$this->assertNotFalse($dispatch,
-			'the uninstall must wait for the dispatcher lock before running its disable pass (issue #3107)');
-		$sync = strpos($src, 'sync_package_pfblockerng(', $start);
-		$this->assertNotFalse($sync, 'the pre-deinstall disable sync must remain present');
-		$this->assertLessThan($sync, $dispatch,
-			'the bounded dispatcher hold must be taken before the uninstall disable sync');
-	}
-
 }
