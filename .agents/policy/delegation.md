@@ -7,9 +7,8 @@ planning, spawning, or gating delegated work (ticket packets and ad-hoc alike).
 
 Provider-neutral procedures name three capability tiers — **top / mid / small**
 (disjoint from effort-level words, so "high" always mean effort value). Machine-readable
-mapping: `.agents/model-tiers.conf`. **Top tier** = `claude-fable-5-1` in Claude,
-`gpt-5.6-sol` in Codex; **mid tier** = `claude-opus-5` and `gpt-5.6-terra`; **small tier**
-= `claude-sonnet-5` and `gpt-5.6-luna`. Tier pick model, not effort knob: workflows still
+mapping: `.agents/model-tiers.conf` (authoritative — never a prose copy of model names).
+Tier picks model, not effort knob: workflows still
 set required effort independently. Role families on these tiers (explorer, planner,
 implementer, verifier, reviewer, publisher, coordinator) specified with vendor bindings in
 [`agent-roles.md`](agent-roles.md); `scripts/check_agent_roles.py` keep every vendor
@@ -76,9 +75,7 @@ Three fixed artifacts govern **every** delegated step — ticket packets under
 [`workflow.md`](workflow.md) and ad-hoc delegation alike. Design principle: **cheap models
 reliably fill required fields and reliably drop optional virtues**, so every check is named
 field in artifact, and **empty or missing field is gate failure** — never judgment call.
-Contract exist because prose-only gates demonstrably failed: one-day post-hoc audit
-(issues #900–#909) found ten reproducible defects in work that passed every prose gate and
-review.
+Contract exist because prose-only gates demonstrably failed (#900–#909, incidents index).
 
 ### THE BRIEF (planner → implementer) — mandatory sections
 
@@ -90,12 +87,10 @@ review.
    touched conditional): planner enumerate ALL rows **from source** — grep output, the
    version-matrix file, structure's own definition — **never from memory**. Each row map to
    test or explicit justified deferral. Brief saying "all X" without enumerated list is
-   invalid; planner generating enumeration is the point (implementers execute enumerated lists
-   well and under-generate them reliably: #858→#900 five-fix chain, #901, #904, PR #881's
-   missed port axis). Tool whose scope span file types (checker/parser over scan roots) get
-   mandatory axis "per in-scope file type × its comment/quote syntax", enumerated from roots'
-   actual extensions (`git ls-files <roots>`) — PR #937 shipped PHP false-positive class
-   because only languages author thought of got rows (#941).
+   invalid; planner generating enumeration is the point (implementers under-generate
+   reliably: #858→#900, #901, #904, PR #881). Tool whose scope span file types (checker
+   over scan roots) get mandatory axis "per in-scope file type × its comment/quote
+   syntax", enumerated from roots' actual extensions (`git ls-files <roots>`) (#941).
 4. **Hostile-input rows** — for any new/changed parser, regex, or input guard planner supply
    adversarial input set with expected outcomes: punycode/IDN labels, empty input,
    header/no-header, quotes + shell/regex metacharacters, tabs and consecutive spaces,
@@ -115,14 +110,19 @@ review.
    ASSUMED (or embed with no evidence) get probed before anything built on it — same STOP rule
    if probe refute it. Same rule when fix require **inventing mechanism brief never named**
    (exemption layer, state machine, heuristic): escalate, or at minimum return
-   DONE-WITH-DEVIATION — never plain DONE. PR #937's only blocking bug lived in improvised
-   exemption layer that had no hostile-input rows because nobody planned for it to exist (#943).
+   DONE-WITH-DEVIATION — never plain DONE (#943).
 8. **Implementer scope — trust brief, don't re-investigate it.** Brief embed its evidence
    (facts carry their run artifacts), so implementer's reading scope is brief + its named
    refs + code it edits: no re-fetching issue/ADR, no re-running brief's enumeration greps, no
    re-deriving its matrix — independent verifier and PR review carry the skepticism,
    duplicating them in implementer is pure step-budget burn. ESCALATE (item 7) is reactive:
    *encountered* contradiction trigger it; proactively auditing brief does not.
+   Binds only a **spawned implementer given an already-vetted body**. The session that
+   **reads GitHub** applies the `issues.md` carve-out **before any brief exists**:
+   opening body is the packet; later comments never join the spec; same GitHub user is
+   not owner intent. Mechanism inversion (host-OS mutation, developer-host root, copying
+   a CI runner step onto a laptop) → `ready-for-human`: no spawn, no implement, no body
+   rewrite; "no re-fetching" applies only after that check (#3203).
 
 ### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
 

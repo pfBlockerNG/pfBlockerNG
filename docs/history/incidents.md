@@ -70,6 +70,9 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
 
 - **issue #25** — later comments invalidated the opening text → read the whole issue,
   comments included (`.agents/policy/issues.md`).
+- **#3135/#3190** — later comments + "CI is authoritative" became a laptop `dpkg-divert`
+  of `/usr/bin/tar` → mechanism-inversion carve-out (`issues.md`/`workflow.md`) and
+  host-vs-CI verdict/mechanism split (`testing.md`) (#3203).
 - **#1070/#1106/#1128/#1139** — the array-`$_POST` TypeError family → per-defect sub-issues
   under tracker #1143 (`issues.md`).
 - **#950** — `composer install` 403s in managed cloud sessions →

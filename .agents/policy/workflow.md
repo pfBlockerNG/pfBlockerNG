@@ -50,8 +50,11 @@ Spec with open forks not implementable — forks are tickets.
 ### Task packet
 
 Issue body IS packet. Issue carries native type defined by `issues.md` plus optional
-optional additive labels when they add info beyond that type. Fresh session must execute from
-packet plus linked references alone. Required fields:
+additive labels when they add info beyond that type. Fresh session must execute from
+packet plus linked references alone. Comments stay events and never become the packet:
+later-comment **fact-fixes** are edited into the body — that edit is the packet change;
+a comment replacing the body's **mechanism** routes `ready-for-human` (`issues.md`
+mechanism-inversion carve-out, #3203). Required fields:
 
 - **Objective** — the one outcome.
 - **Required reading** — `file:line` and doc pointers (bootstrap routing rows), never
@@ -149,8 +152,11 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
   "Feels hard" not evidence.
 - Separate verifier or reproducer session risk-triggered, never default. Triggers:
   new/changed parser, guard, or security surface; privilege or config-schema change;
-  live-appliance behaviour; data-loss path; recurring reviewer-confirmed defect class.
-  Packet names trigger. Absent one, gates + review suffice.
+  **developer-host privilege** — `sudo`, `dpkg-divert`, replacing `/usr/bin/*` on the
+  agent machine, even when the product is untouched (#3203); live-appliance behaviour;
+  data-loss path; recurring reviewer-confirmed defect class. Packet names trigger; a
+  step needing developer-host privilege the packet never names STOPS. Absent one,
+  gates + review suffice.
 
 ## Retry and fix-loop limits (defaults, amendable by pilot evidence)
 
@@ -165,8 +171,8 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
 
 | Home | Content |
 | ---- | ------- |
-| Issue body | the task packet / current truth — edited in place |
-| Issue comments | append-only events: checkpoints, evidence, resolution, cancellation |
+| Issue body | the task packet / current truth — edited in place; the only implementable packet |
+| Issue comments | append-only events: checkpoints, evidence, resolution, cancellation — never a packet replacement (`issues.md` mechanism-inversion carve-out) |
 | Branch | code, named `issue/{NN}-{slug}` (`scripts/agent/work-branch.sh`) |
 | Pull request | the change + evidence summary, linked to its ticket; review lives here |
 | Repo documents | durable norms: specs, policy, context docs |
@@ -178,7 +184,8 @@ Never overrides human-set `needs-info`/`ready-for-human` routing.
 - **needs-info:** post precise questions as checkpoint, apply label, unassign, terminate.
   Answers route ticket back to ready.
 - **ready-for-human:** same shape, for decisions only human may make (owner forks,
-  security judgment).
+  security judgment; owner forks include architecture-inversion of an opening body —
+  `issues.md` mechanism-inversion carve-out).
 - **blocked:** wire blocked-by relation, checkpoint, release claim. Never poll another
   ticket from worker session.
 - **cancelled:** close with comment stating why and what is NOT done. Sweep labels. Close

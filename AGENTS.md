@@ -22,6 +22,8 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 - **Ambiguity:** pick obvious option and proceed when one exist; `AskUserQuestion`
   only when choice genuinely user's (unclear intent, diverging defensible
   approaches, architecturally significant change). Apply to autonomous flows too.
+  It never collapses host-OS mutation, developer-host root, or copying a CI runner
+  step onto a laptop — ask / `ready-for-human` even if comments look unanimous (#3203).
 - **Evidence:** claim without run artifact = ASSUMED; environmental claims written into
   artifacts probed in-session first; no self-exemption from MUST rule without quoting
   authorizing user message; debugging list ≥2 hypotheses + discriminating probe
@@ -49,11 +51,13 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 - Every change ship WITH its tests; no coverage theater (every test carry assertion
   that fail on regression); `www/` change carry reachable UI coverage required by
   `.agents/policy/testing.md`.
-- No direct Python interpreter invocation ON appliance. Consumers invoke
-  `/usr/local/pkg/pfblockerng/pfb_python.sh`; that wrapper alone derive exact versioned
-  path from installed package dependency. `pfb_python_interpreter()` delegate to wrapper
-  for compatibility and test probes. Otherwise use PHP or POSIX sh. Shell = POSIX sh
-  under strict ash/dash semantics.
+- Never mutate `/usr/bin/*` or any host OS binary **on a developer machine** to make
+  tests or gates green — install the named package, resolve the tool, or fail loud;
+  a hardcoded `/usr/bin/tar` is a platform default, not license to reshape the host.
+  CI-runner `dpkg-divert` of `/usr/bin/unzip` stays until the owner expands scope (#3203).
+- No direct Python interpreter ON appliance — invoke
+  `/usr/local/pkg/pfblockerng/pfb_python.sh` (it alone derive the versioned path);
+  `pfb_python_interpreter()` delegates to it. Otherwise PHP or POSIX sh, strict ash/dash.
 - Every registered config field go through `PfbConfig` — never direct `config_*_path`.
 - No orphaned waits: harness-tracked work get no timer; every untracked wait has hard
   cap + deadline and die with its task.
@@ -61,7 +65,9 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
   user authorization.
 - Accepted/Implemented ADR bodies and artifacts immutable — corrections append dated
   amendments.
-- Read whole GitHub issue (title, body, every comment) before working it.
+- Read whole GitHub issue (title, body, every comment) before working it. Later comments
+  may correct facts; one replacing the opening-body mechanism without a body edit is
+  `ready-for-human`, not implement (`issues.md` carve-out).
 
 Enforcement mechanical where possible: `.githooks/` pre-commit/prepare-commit-msg/
 pre-push, CI, and `scripts/agent/run-gates.sh` authoritative; lifecycle hooks carry
@@ -69,10 +75,8 @@ client mechanics.
 
 ## Repository intelligence routing
 
-At session start read `.agents/context/repository-intelligence.md`: it owns
-`scripts/agent/ensure-codegraph.sh`, `codegraph_explore`, `codegraph serve --mcp`,
-Serena, and Graphify, and it carries the hard invariants for the per-worktree
-`.codegraph/` index, Serena's active project root, and the tracked root graph.
+At session start read `.agents/context/repository-intelligence.md` (CodeGraph, Serena,
+Graphify routing; per-worktree `.codegraph/` invariants).
 
 ## Routing table — read on trigger, not up front
 
@@ -101,13 +105,10 @@ Serena, and Graphify, and it carries the hard invariants for the per-worktree
 | PSL / TLD Allow / HSTS / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|hsts-preload-list\|top1m-providers>.md` |
 | docs-only change; min-CE version bump | `git.md` dev-only classes; `docs/misc/version-bump-runbook.md` (stubs: `scripts/update-pfsense-stubs.py`) |
 
-Delegation shape: substantial coding work planned/gated by **top tier**, implemented
-by **small-tier** sub-agents, every step gated by independent small-tier verifier via
-brief → handoff → gate contract; named issues spawn a work agent; that agent
-handle small one-step fixes and docs/config/settings/skills direct. Tiers
-top/mid/small map to models in
-`.agents/model-tiers.conf` (disjoint from effort words — "high" always effort value).
-New implementation-plan ADRs stopped (wayfinder map #1383).
+Delegation shape: substantial coding work planned/gated by **top tier**, implemented by
+**small-tier** sub-agents, every step gated by an independent small-tier verifier via
+brief → handoff → gate contract (full text: `.agents/policy/delegation.md`). New
+implementation-plan ADRs stopped (wayfinder map #1383).
 
 Test law (five principles, full text in `testing.md`): red-before/green-after test-first
 proof · every change ships with its tests · no coverage theater · front-end changes need
@@ -134,8 +135,7 @@ pfBlockerNG/
 └── stubs/                 # pfsense/ (PHPStan/IDE) + python/ (unboundmodule) — not shipped
 ```
 
-`main` = Stable, `devel` = Development; tag scheme via `scripts/release-version.sh`
-(pre-releases from `devel`, stable from `main`).
+`main` = Stable, `devel` = Development; tag scheme via `scripts/release-version.sh`.
 
 ## Communication
 

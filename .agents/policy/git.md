@@ -12,7 +12,8 @@ index, `HEAD`, refs). Session layouts (primary checkout vs harness-made session 
 
 **Exception — dev-only classes need no PR.** Classes never shipped to users skip PR
 stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/skills/`), **agent
-workflows/configuration** (`.claude/workflows/`, `.codex/`), **documentation-only**
+workflows/configuration** (`.claude/workflows/`, `.claude/settings.json`, `.codex/`),
+**documentation-only**
 changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree and
 lands directly on `devel` only as a clean fast-forward of locally signed commits after
 fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementation*
