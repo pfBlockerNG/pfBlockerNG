@@ -1168,6 +1168,19 @@
             }
         ]
     },
+    "pfb_cfg_reentry_timeout_adapter": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_cfg_registry": {
         "returnsRef": false,
         "returnType": "array",
