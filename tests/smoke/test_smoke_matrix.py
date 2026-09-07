@@ -362,8 +362,9 @@ def test_dnsbl_exact_nxdomain(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fee
 def test_dnsbl_selected_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mode: str) -> None:
     """Selecting NODATA replaces address replies with NOERROR and an authority SOA."""
     domain = h.unique_domain("nodata3243")
-    feed_url = h.write_local_feed(deployed_vm, "smoke_nodata3243.txt", f"{domain}\n")
-    spec = h.DnsblCase(aliasname="smokenodata3243", feed_url=feed_url, header="smokenodata3243", mode=h.DnsblMode.NULL)
+    header = "smoke" + mode.replace("_", "") + "3243"
+    feed_url = h.write_local_feed(deployed_vm, f"{header}.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.NULL)
     with h.CaseContext(deployed_vm, spec):
         before = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(before), f"{domain} expected initial null block, got {before}"
