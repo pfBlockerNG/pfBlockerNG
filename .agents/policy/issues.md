@@ -36,6 +36,22 @@ string-typed sink — array-`$_POST` family: #1070/#1106/#1128/#1139) gets own i
 links as sub-issue of tracker #1143 (GraphQL `addSubIssue`); never fold into older
 issue. HARDENING-ONLY findings do not become tracker children.
 
+## Sub-issues and views
+
+One issue has at most one parent. `addSubIssue` rejects a child that already has a parent
+unless `AddSubIssueInput.replaceParent` is set, and setting it moves the child out of the tree
+it was in. A tracker can only adopt a child that has no parent — which is why the #1143 pattern
+works: its children are filed under it.
+
+- Never `addSubIssue` an issue that already has a parent, and never pass `replaceParent` to
+  build a view — re-parenting rearranges the hierarchy another map depends on.
+- A cross-cutting view over already-parented issues is a task list, a label, or the milestone,
+  never a second parent. Read `issue.parent` in the bulk board query before proposing any
+  grouping.
+- A tracker in another repository that lists public issues writes a "mentioned in a private
+  repository" event on each public timeline. That is a public side effect; decide it
+  deliberately.
+
 ## Classification at creation
 
 Every issue creation path — human, agent, issue form, or automation — sets exactly one
@@ -53,6 +69,12 @@ or workflow metadata not already carried by native type (`CI`, `dnsbl`, `securit
 or `Task`. Defect = `Bug`; new user-facing capability = `Feature`; improvement to
 existing behaviour or maintenance = `Task`. Set type at creation
 (`gh issue create --type Bug`); set useful additive labels at creation too.
+
+Priority, when recorded, uses the existing `priority: low|normal|high|urgent|immediate` labels —
+note their descriptions still read `Redmine priority: …` from the import, so re-describe them in
+the same change that first uses them as a board signal. Do not invent a per-document severity
+scheme (P0/P1/P2 or similar) in an issue body, map, or plan: a scheme that exists only in prose
+cannot be queried and drifts from the board within the week.
 
 ## Issue state (lifecycle — native signals, #1388)
 
