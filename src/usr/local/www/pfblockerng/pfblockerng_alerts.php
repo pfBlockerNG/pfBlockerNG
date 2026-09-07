@@ -2152,7 +2152,7 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 		$h_wt_line = pfb_hsc($wt_line);
 		$s_txt  = "Note:&emsp;The following Domain is in the TLD Exclusion customlist:\n\n"
 			. "TLD Exclusion:&emsp;[ {$h_wt_line} ]\n\n"
-			. "&#8226; TLD Exclusions require an Update when a Domain is initially added.\n"
+			. "&#8226; TLD Exclusions require a DNSBL reload when a Domain is initially added: run 'Run Now' (Run Scope: DNSBL or Both) on the Update tab.\n"
 			. "&#8226; To remove this Domain from the TLD Exclusion customlist, Click 'OK'";
 
 		$ex_dom = '&nbsp;<i class="fa-regular fa-trash-can no-confirm icon-pointer" id="DNSBLWT|'
@@ -2302,7 +2302,7 @@ function pfb_alerts_permit_option_suffix($family): string
  *
  * Confirm-dialog titles shadow the event-table copies in convert_ip_log()
  * `$supp_ip_txt` and dnsbl_whitelist_type() `$s_txt`, shortened for the panel
- * (no feed/eval-IP, no Force-Update / CNAME parenthetical).
+ * (no feed/eval-IP, no forced-update / CNAME parenthetical).
  *
  * @return array{alert: string, unlock: string, supp: string}
  */
@@ -3146,7 +3146,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "2) Whitelist the IP to an existing 'Permit' Alias customlist. Ensure that this\n"
 						. "&emsp;Permit Alias/Rule is above the Block/Reject rules (Rule Order option)\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;An Update is required to add the associated Firewall Permit Rule!\n\n"
+						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: run 'Run Now' (Run Scope: IP, Force: Parse) on the Update tab!\n\n"
 						. "Click 'OK' to continue";
 
 				$supp_ip = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $h_host
@@ -3215,7 +3215,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "&#8226; To permit access to this Blocked IP, you can add it to any\n"
 						. "&emsp;existing 'Permit' Alias.\n\n"
 						. "&emsp;If no 'Whitelist' is found, a default 'Whitelist' will be created.\n"
-						. "&emsp;An Update is required to add the associated Firewall Permit Rule!\n\n"
+						. "&emsp;A forced IP reload is required to add the associated Firewall Permit Rule: run 'Run Now' (Run Scope: IP, Force: Parse) on the Update tab!\n\n"
 						. "&#8226; Ensure that this Permit Alias/Rule is above the "
 						. "Block/Reject rules\n&emsp;(Rule Order option)\n\n"
 						. "Click 'OK' to continue";

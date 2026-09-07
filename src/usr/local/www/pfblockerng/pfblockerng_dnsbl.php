@@ -3065,7 +3065,7 @@ $section->addInput(new Form_StaticText(
 	. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
 	. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
 	. 'Picker: <strong>IANA root TLDs</strong>. Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
-	. 'Changes to this option will require an Update to take effect.<br /><br />'
+	. 'Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.<br /><br />'
 	. '<strong>Legend</strong>:<br />'
 	. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
 	. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
@@ -3174,7 +3174,7 @@ $section->addInput(new Form_Textarea(
   ->setAttribute('wrap', 'off')
   ->setAttribute('style', 'width: 100%')
   ->setHelp('Enter the Local LAN IPs (one per line) that will bypass DNSBL Blocking.<br />'
-		. 'Changes to this option will require an Update to take effect.');
+		. 'Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.');
 
 $form->add($section);
 
@@ -3368,7 +3368,7 @@ $noaaaa_text = 'List of no-AAAA domains to block the (IPv6) AAAA DNS Resolution.
 		Prefix domain with a "." to apply wildcard no-AAAA to all Sub-Domains. &emsp;IE: (.example.com)<br /><br />
 		Any domain added to the no-AAAA list, will never be filtered by any DNSBL blocking.<br /><br />
 		This List is stored as \'Base64\' format in the config.xml file.<br /><br />
-		Changes to this option will require an Update to take effect.';
+		Changes take effect on the next DNSBL reload: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.';
 
 $section = new Form_Section('no-AAAA List', 'Python_noaaaa_list', COLLAPSIBLE|SEC_CLOSED);
 $section->addInput(new Form_Textarea(

@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
 final class ApplyGuidanceWordingUiTest extends TestCase
 {
 	/** Retired GUI action names — no source line may carry them. */
-	private const RETIRED_NEEDLES = ['Force Reload', 'Force Update', 'applied via CRON', 'next CRON update'];
+	private const RETIRED_NEEDLES = ['Force Reload', 'Force Update', 'Force-Reload', 'Force-Update', 'applied via CRON', 'next CRON update'];
 
 	/**
 	 * Page => guidance needles with the EXACT number of occurrences expected in that
@@ -40,7 +40,8 @@ final class ApplyGuidanceWordingUiTest extends TestCase
 			'Setting changes are applied on the next scheduled update.' => 1,
 			"A DNSBL reload is required for changes to take effect: run \\'Run Now\\'"
 				. ' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.' => 1,
-			'Changes to this option will require an Update to take effect.' => 3,
+			'Changes take effect on the next DNSBL reload: run \\\'Run Now\\\''
+				. ' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.' => 3,
 			'These entries are applied with the next' => 1,
 		],
 		'src/usr/local/www/pfblockerng/pfblockerng_ip.php' => [
@@ -72,8 +73,9 @@ final class ApplyGuidanceWordingUiTest extends TestCase
 			'a Run Now with Force: Parse' => 1,
 		],
 		'src/usr/local/www/pfblockerng/pfblockerng_alerts.php' => [
-			'TLD Exclusions require an Update when a Domain is initially added.' => 1,
-			'An Update is required to add the associated Firewall Permit Rule!' => 2,
+			'TLD Exclusions require a DNSBL reload when a Domain is initially added' => 1,
+			"A forced IP reload is required to add the associated Firewall Permit Rule: run 'Run Now'"
+				. ' (Run Scope: IP, Force: Parse) on the Update tab!' => 2,
 			"use 'Run Now' (Run Scope: DNSBL, Force: Parse) on the Update tab"
 				. " or run 'unbound-control flush_zone' to clear them." => 2,
 		],
@@ -85,7 +87,8 @@ final class ApplyGuidanceWordingUiTest extends TestCase
 			'Setting changes are applied on the next scheduled update.' => 2,
 		],
 		'src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc' => [
-			'Changes to this option will require an Update to take effect.' => 1,
+			'Changes take effect on the next DNSBL reload: run \\\'Run Now\\\''
+				. ' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.' => 1,
 		],
 		'src/usr/local/pkg/pfblockerng/pfblockerng.inc' => [
 			'Fix error(s) and run an Update (Run Scope: DNSBL)!' => 2,
@@ -98,7 +101,7 @@ final class ApplyGuidanceWordingUiTest extends TestCase
 	private static function sources(): array
 	{
 		$paths = [];
-		foreach (['src/usr/local/www', 'src/usr/local/pkg'] as $root) {
+		foreach ([self::repoPath('src/usr/local/www'), self::repoPath('src/usr/local/pkg')] as $root) {
 			$iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
 			foreach ($iterator as $file) {
 				if (!$file->isFile()) {
@@ -119,20 +122,41 @@ final class ApplyGuidanceWordingUiTest extends TestCase
 		return dirname(__DIR__, 2) . '/' . $relative;
 	}
 
+	/** @return list<string> retired needles carried by this source line */
+	private static function retiredNamesInLine(string $line): array
+	{
+		return array_values(array_filter(
+			self::RETIRED_NEEDLES,
+			static fn (string $needle): bool => str_contains($line, $needle)
+		));
+	}
+
 	public function testRetiredActionNamesAreAbsentFromSource(): void
 	{
 		$offenders = [];
 		foreach (self::sources() as $path) {
 			$lines = file($path) ?: [];
 			foreach ($lines as $n => $line) {
-				foreach (self::RETIRED_NEEDLES as $needle) {
-					if (str_contains($line, $needle)) {
-						$offenders[] = "{$path}:" . ($n + 1) . " still names the retired action '{$needle}'";
-					}
+				foreach (self::retiredNamesInLine($line) as $needle) {
+					$offenders[] = "{$path}:" . ($n + 1) . " still names the retired action '{$needle}'";
 				}
 			}
 		}
 		$this->assertSame([], $offenders, "\n" . implode("\n", $offenders));
+	}
+
+	public function testRetiredNameScannerCatchesRetiredWording(): void
+	{
+		// The scanner above is only meaningful if it reports a source line that carries a
+		// retired action name — feed it one and require every needle class to be caught.
+		$hostile = "\$help = 'A \\'Force Reload - DNSBL\\' or \\'Force Update\\' is required, "
+			. "the Force-Reload-DNSBL / Force-Update-ET paths, applied via CRON "
+			. "or on the next CRON update.';";
+		$caught = self::retiredNamesInLine($hostile);
+		$this->assertSame(self::RETIRED_NEEDLES, $caught,
+			'the retired-wording scanner must report every retired needle on a hostile line');
+		$this->assertSame([], self::retiredNamesInLine('Run \'Run Now\' on the Update tab, or wait for the next scheduled update.'),
+			'the scanner must not flag the corrected guidance');
 	}
 
 	public function testSettingsPagesNameTheActionsThatExist(): void
