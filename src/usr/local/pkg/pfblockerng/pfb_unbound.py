@@ -7455,8 +7455,8 @@ def operate(id: int, event: int, qstate: module_qstate, qdata: Any) -> bool:
             elif isCNAME and dnsbl.is_found and not dnsbl.in_whitelist:
                 # Memo hit on the CNAME *target*: re-evaluate in the original
                 # QNAME's CNAME-chain context so orig's whitelist still applies
-                # (issue #3222 review F3 / round-2 B1). Then answer in orig's
-                # bailiwick only if that context is still a block.
+                # (issue #3222). Then answer in orig's bailiwick only if that
+                # context is still a block.
                 cfg = _evaluate_cfg(snap)
                 dnsbl = evaluate_domain(
                     q_name, q_name_original, get_tld_from_name(q_name), True, cfg, snap.containers()

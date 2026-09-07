@@ -1955,7 +1955,7 @@ class TestOperateDnsbl:
         assert any(a.startswith("orig.com. ") for a in answers), f"expected a match in {answers!r}"
 
     def test_cname_memoized_target_block_uses_original_qname(self, monkeypatch: Any) -> None:
-        # Issue #3222 / review F3: when the CNAME *target* is already memoized,
+        # Issue #3222: when the CNAME *target* is already memoized,
         # operate() used to keep q_name as the target, so A/SOA owners were
         # out-of-bailiwick. Query the target first, then the original with a
         # CNAME chain; both the A owner and a type-65 SOA owner must be orig.com.
@@ -1983,8 +1983,8 @@ class TestOperateDnsbl:
         assert soa and soa[0].startswith("orig.com. "), f"expected orig.com SOA owner, got {soa!r}"
 
     def test_cname_memoized_target_https_soa_owner_without_prior_orig_a(self, monkeypatch: Any) -> None:
-        # Round-2 N1: target memo, then orig type 65 with a CNAME chain and no
-        # intervening orig A, so the new elif (not orig's own memo) sets the SOA owner.
+        # Target memo, then orig type 65 with a CNAME chain and no intervening
+        # orig A, so the elif (not orig's own memo) sets the SOA owner.
         self._enable(monkeypatch)
         pfb_unbound.pfb["python_cname"] = True
         monkeypatch.setattr(pfb_unbound, "convert_other", lambda b: "evil-cname.com")
@@ -1999,7 +1999,7 @@ class TestOperateDnsbl:
         assert soa and soa[0].startswith("orig.com. "), f"expected orig.com SOA owner, got {soa!r}"
 
     def test_cname_memoized_target_respects_original_whitelist(self, monkeypatch: Any) -> None:
-        # Round-2 B1: orig is whitelisted, target already memoized as a block.
+        # orig is whitelisted, target already memoized as a block.
         # evaluate_domain's is_cname whitelist set is [target, original]; the
         # hoist must not copy the target memo onto orig. orig HTTPS+CNAME and a
         # later orig A (no CNAME) both WAIT_MODULE.

@@ -238,7 +238,8 @@ def _raw_dig(client_vm: SmokeVM, name: str, rtype: str) -> str:
 
 
 def _raw_drill(vm: SmokeVM, name: str, rtype: str) -> str:
-    result = vm.ssh(f"{h.DRILL_BIN} {name} {rtype} @127.0.0.1", timeout=30.0)
+    drill_type = "TYPE65" if rtype == "HTTPS" else rtype
+    result = vm.ssh(f"{h.DRILL_BIN} {name} {drill_type} @127.0.0.1", timeout=30.0)
     return result.stdout
 
 
@@ -274,19 +275,23 @@ def test_dnsbl_https_svcb_vip_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeV
             box = _raw_drill(deployed_vm, blocked, rtype)
             dumps.append(f"=== blocked {rtype} LAN dig ===\n{lan}\n=== blocked {rtype} on-box drill ===\n{box}")
             parsed = h.dns_probe_client(client_vm, blocked, rtype)
-            an, ns, ar = _header_counts(lan)
+            lan_an, lan_ns, lan_ar = _header_counts(lan)
+            box_an, box_ns, box_ar = _header_counts(box)
             dump = "\n".join(dumps)
             assert parsed.rcode == "NOERROR", (
                 f"{blocked} {rtype} expected NOERROR, got {parsed.rcode} records={parsed.records!r}\n{dump}"
             )
             assert parsed.records == [], f"{blocked} {rtype} expected empty ANSWER, got {parsed.records!r}\n{dump}"
-            assert an == 0 and ns == 1, (
-                f"{blocked} {rtype} expected ANSWER=0 AUTHORITY=1 (SOA), "
-                f"got ANSWER={an} AUTHORITY={ns} ADDITIONAL={ar}\n{dump}"
+            assert lan_an == 0 and lan_ns == 1, (
+                f"{blocked} {rtype} LAN expected ANSWER=0 AUTHORITY=1 (SOA), "
+                f"got ANSWER={lan_an} AUTHORITY={lan_ns} ADDITIONAL={lan_ar}\n{dump}"
             )
-            assert rr_has_type(lan, "SOA") or rr_has_type(box, "SOA"), (
-                f"{blocked} {rtype} expected an SOA in AUTHORITY\n{dump}"
+            assert box_an == 0 and box_ns == 1, (
+                f"{blocked} {rtype} on-box expected ANSWER=0 AUTHORITY=1 (SOA), "
+                f"got ANSWER={box_an} AUTHORITY={box_ns} ADDITIONAL={box_ar}\n{dump}"
             )
+            assert rr_has_type(lan, "SOA"), f"{blocked} {rtype} LAN expected an SOA in AUTHORITY\n{dump}"
+            assert rr_has_type(box, "SOA"), f"{blocked} {rtype} on-box expected an SOA in AUTHORITY\n{dump}"
 
         ctl_a = h.dns_probe_client(client_vm, control, "A")
         assert not h.is_vip(ctl_a), f"{control} A must not be VIP (unlisted), got {ctl_a}"

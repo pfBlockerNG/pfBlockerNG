@@ -11,8 +11,8 @@ def rr_has_type(raw: str, rtype: str) -> bool:
 
 
 def test_space_wrapped_soa_misses_tab_separated_dig() -> None:
-    # Review B1: BIND dig and ldns drill print RR fields with tabs. A check for
-    # the substring " SOA " never matches a correct Type-2 NODATA reply.
+    # BIND dig and ldns drill print RR fields with tabs. A check for the
+    # substring " SOA " never matches a correct Type-2 NODATA reply.
     raw = (
         ";; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 0\n"
         "example.com.\t3600\tIN\tSOA\tpfb.invalid. nobody.invalid. 1 3600 1200 604800 3600\n"
