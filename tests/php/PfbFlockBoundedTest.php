@@ -39,6 +39,18 @@ final class PfbFlockBoundedTest extends TestCase
 		return [$clock, $namespace . '\\pfb_flock_bounded'];
 	}
 
+	public function testFinishedClockIsCollectedAndCannotBeReused(): void
+	{
+		$clock = new PfbFlockClockFixture();
+		$namespace = $clock->loadChain(['pfb_flock_bounded']);
+		$reference = WeakReference::create($clock);
+		unset($clock);
+		$this->assertNull($reference->get(), 'the registry must not retain a finished test clock');
+
+		$this->expectException(RuntimeException::class);
+		($namespace . '\\microtime')(TRUE);
+	}
+
 	/** @return array<string,array{int,string}> */
 	public static function contendedOperations(): array
 	{

@@ -8,7 +8,7 @@ final class PfbFlockClockFixture
 	/** @var list<int> */
 	public array $sleeps = [];
 
-	/** @var array<int,self> */
+	/** @var array<int,WeakReference<self>> */
 	private static array $registry = [];
 
 	private float $now = 0.0;
@@ -35,7 +35,8 @@ final class PfbFlockClockFixture
 
 	public static function forSlot(int $slot): self
 	{
-		return self::$registry[$slot];
+		return self::$registry[$slot]->get()
+			?? throw new RuntimeException('Clock fixture outlived its test');
 	}
 
 	/**
@@ -45,7 +46,7 @@ final class PfbFlockClockFixture
 	public function loadChain(array $functions): string
 	{
 		$slot = count(self::$registry);
-		self::$registry[$slot] = $this;
+		self::$registry[$slot] = WeakReference::create($this);
 
 		$namespace = 'PfbFlockClock' . bin2hex(random_bytes(6));
 		$bodies = '';
