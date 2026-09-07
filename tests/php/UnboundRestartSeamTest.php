@@ -11,10 +11,6 @@ use PHPUnit\Framework\TestCase;
  * PFB_UNBOUND_STOP_WAIT) that tests/php/bootstrap.php overrides before the package loads,
  * so a unit run starts no resolver on a developer box that HAS Unbound installed at the
  * shipped path, and no individual test has to defuse the appliance's 30-poll stop-wait.
- *
- * The shipped appliance values are pinned from source: the harness necessarily replaces
- * both constants for the whole process, so the only place their real values can be
- * asserted is the file that ships them.
  */
 #[CoversFunction('pfb_stop_start_unbound')]
 final class UnboundRestartSeamTest extends TestCase
@@ -46,8 +42,7 @@ final class UnboundRestartSeamTest extends TestCase
 			$GLOBALS['g']['varrun_path'] ?? NULL,
 		];
 
-		// varrun_path holds no unbound.pid, so the TERM half is skipped; the stop-wait
-		// loop, the KILL escalation and the daemon start are what this file exercises.
+		// Each row owns its pidfile and process state; no signal reaches a host daemon.
 		$GLOBALS['pfb'] = array_replace($GLOBALS['pfb'], [
 			'log'                  => "{$this->dir}/pfblockerng.log",
 			'errlog'               => "{$this->dir}/error.log",
@@ -72,8 +67,9 @@ final class UnboundRestartSeamTest extends TestCase
 		} else {
 			unset($GLOBALS['g']['varrun_path']);
 		}
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_sigkillbyname_calls'],
-			$GLOBALS['pfb_test_sigkillbyname_effect']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_valid_pids'],
+			$GLOBALS['pfb_test_sigkillbypid_calls'], $GLOBALS['pfb_test_sigkillbypid_effect'],
+			$GLOBALS['pfb_test_sigkillbyname_calls'], $GLOBALS['pfb_test_sigkillbyname_effect']);
 		rmdir_recursive($this->dir);
 	}
 
@@ -105,12 +101,15 @@ final class UnboundRestartSeamTest extends TestCase
 	 * default mode reaps the whole runner tree if production regresses to an
 	 * unbounded wait.
 	 *
+	 * @param list<string> $ini PHP INI settings applied only to the isolated runner
 	 * @return array{status: int, output: list<string>, payload: array<string, mixed>|null}
 	 */
 	private function runIsolatedStart(
 		string $startCommand,
 		int $budget = 5,
-		?string $phpCli = NULL
+		?string $phpCli = NULL,
+		array $ini = [],
+		string $prelude = ''
 	): array
 	{
 		$phpCli ??= PHP_BINARY;
@@ -133,6 +132,7 @@ final class UnboundRestartSeamTest extends TestCase
 			. "\$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;\n"
 			. '$GLOBALS[\'g\'][\'varrun_path\'] = ' . var_export($this->dir, TRUE) . ";\n"
 			. "\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
+			. $prelude
 			. "\$final = pfb_stop_start_unbound('');\n"
 			. 'echo json_encode([\'final\' => $final, \'log\' => (string) @file_get_contents('
 			. var_export($log, TRUE) . '), \'errlog\' => (string) @file_get_contents('
@@ -140,9 +140,13 @@ final class UnboundRestartSeamTest extends TestCase
 
 		$output = [];
 		$status = 0;
+		$flags = '';
+		foreach ($ini as $flag) {
+			$flags .= ' -d ' . escapeshellarg($flag);
+		}
 		$cmd = 'TMPDIR=' . escapeshellarg($this->dir) . ' ' .
 			escapeshellarg($timeout) . ' -s TERM -k 2 ' . self::SALVAGE_SECONDS .
-			' ' . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1';
+			' ' . escapeshellarg(PHP_BINARY) . $flags . ' ' . escapeshellarg($runner) . ' 2>&1';
 		exec($cmd, $output, $status);
 
 		$payload = NULL;
@@ -193,6 +197,9 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertSame(127, $final['retval'],
 			'the double must keep reporting command-not-found, the status an absent binary '
 			. "already produces off-appliance, so the caller's retry branch stays exercised");
+		$this->assertArrayHasKey('start_completed', $final);
+		$this->assertTrue($final['start_completed'],
+			'a completed command-not-found result must be distinguishable from a pre-start failure');
 		$this->assertNotEmpty($final['result'],
 			'the caller logs the start output on failure, so the double must produce one');
 	}
@@ -243,6 +250,9 @@ final class UnboundRestartSeamTest extends TestCase
 			'a stop that never completed must not reach the daemon start at all');
 		$this->assertSame(PFB_UNBOUND_STOP_FAILED, $final['retval'],
 			'the refusal must be reported to the caller as a failure, not a silent success');
+		$this->assertArrayHasKey('start_completed', $final);
+		$this->assertFalse($final['start_completed'],
+			'a refused stop must report that no start command completed');
 		// issue #3094: the whole point of the code is that a caller can tell "the daemon
 		// would not stop" from "the generated config is bad". Sharing -1 with the generic
 		// failure would put it straight back into the unbound.bk rollback path.
@@ -250,8 +260,9 @@ final class UnboundRestartSeamTest extends TestCase
 			'the stop-failure code must be distinguishable from a generic failure');
 		$this->assertNotEmpty($final['result'],
 			'the caller logs the result, so the refusal must carry a reason');
-		$this->assertSame(array(array('unbound', 'KILL')), $GLOBALS['pfb_test_sigkillbyname_calls'],
-			'the timeout must escalate TERM to KILL exactly once before giving up');
+		$this->assertSame(array(array('unbound', 'TERM'), array('unbound', 'KILL')),
+			$GLOBALS['pfb_test_sigkillbyname_calls'],
+			'the timeout must attempt TERM before escalating to KILL exactly once');
 		$this->assertStringContainsString('not starting a second instance',
 			(string) @file_get_contents($GLOBALS['pfb']['log']),
 			'the refusal must be loud in the log, not inferable only from a return value');
@@ -267,6 +278,7 @@ final class UnboundRestartSeamTest extends TestCase
 	{
 		$before = $this->doubleInvocations();
 		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
 		$GLOBALS['pfb_test_sigkillbyname_effect'] = static function (string $name, string $sig): void {
 			if ($name === 'unbound' && $sig === 'KILL') {
 				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
@@ -283,6 +295,90 @@ final class UnboundRestartSeamTest extends TestCase
 			'a daemon that KILL did clear must be restarted, not abandoned');
 		$this->assertSame(127, $final['retval'],
 			'the start must run through the harness double exactly as on the clean-stop path');
+		$this->assertArrayHasKey('start_completed', $final);
+		$this->assertTrue($final['start_completed'],
+			'the post-KILL start command must report its completed non-zero status');
+		$this->assertSame(array(array('unbound', 'TERM'), array('unbound', 'KILL')),
+			$GLOBALS['pfb_test_sigkillbyname_calls'],
+			'a missing pidfile must attempt name-based TERM before KILL');
+	}
+
+	public function testValidLivePidfileUsesPidTermOnly(): void
+	{
+		$pidfile = "{$this->dir}/unbound.pid";
+		file_put_contents($pidfile, "123\n");
+		$GLOBALS['pfb_test_valid_pids'] = [$pidfile => TRUE];
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbypid_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbypid_effect'] = static function (string $file, string $sig): void {
+			if ($sig === 'TERM') {
+				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+			}
+		};
+
+		$final = pfb_stop_start_unbound('');
+
+		$this->assertSame(array(array($pidfile, 'TERM')), $GLOBALS['pfb_test_sigkillbypid_calls'],
+			'a valid live pidfile must target only that PID with TERM');
+		$this->assertSame(array(), $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'a valid live pidfile must not fan TERM out by process name');
+		$this->assertArrayHasKey('start_completed', $final);
+		$this->assertTrue($final['start_completed']);
+	}
+
+	public function testMissingPidfileUsesNameTermAndStartsWhenDaemonStops(): void
+	{
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbyname_effect'] = static function (string $name, string $sig): void {
+			if ($name === 'unbound' && $sig === 'TERM') {
+				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+			}
+		};
+
+		$final = pfb_stop_start_unbound('');
+
+		$this->assertSame(array(array('unbound', 'TERM')), $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'a live daemon without a pidfile must receive name-based TERM before any KILL');
+		$this->assertArrayHasKey('start_completed', $final);
+		$this->assertTrue($final['start_completed'],
+			'a daemon that exits on name-based TERM must proceed to one completed start');
+	}
+
+	public function testInvalidPidfileFallsBackToNameTerm(): void
+	{
+		$pidfile = "{$this->dir}/unbound.pid";
+		file_put_contents($pidfile, "not-a-pid\n");
+		$GLOBALS['pfb_test_valid_pids'] = [$pidfile => FALSE];
+		$GLOBALS['pfb_test_process_running']['unbound'] = TRUE;
+		$GLOBALS['pfb_test_sigkillbypid_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbyname_effect'] = static function (string $name, string $sig): void {
+			if ($name === 'unbound' && $sig === 'TERM') {
+				$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+			}
+		};
+
+		pfb_stop_start_unbound('');
+
+		$this->assertSame(array(), $GLOBALS['pfb_test_sigkillbypid_calls'],
+			'an invalid pidfile must never be trusted as a PID signal target');
+		$this->assertSame(array(array('unbound', 'TERM')), $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'an invalid pidfile with a live daemon must fall back to name-based TERM');
+	}
+
+	public function testNoLiveDaemonSendsNoTermSignal(): void
+	{
+		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+		$GLOBALS['pfb_test_sigkillbypid_calls'] = array();
+		$GLOBALS['pfb_test_sigkillbyname_calls'] = array();
+
+		pfb_stop_start_unbound('');
+
+		$this->assertSame(array(), $GLOBALS['pfb_test_sigkillbypid_calls']);
+		$this->assertSame(array(), $GLOBALS['pfb_test_sigkillbyname_calls'],
+			'an absent daemon must not receive a name-based signal');
 	}
 	public function testDaemonizedStartSurvivesTheBoundedWrapper(): void
 	{
@@ -305,6 +401,9 @@ final class UnboundRestartSeamTest extends TestCase
 			$this->assertIsArray($run['payload'], 'the isolated start runner must return its JSON result');
 			$this->assertSame(0, $run['payload']['final']['retval'],
 				'a successfully daemonized start must remain a successful start');
+			$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+			$this->assertTrue($run['payload']['final']['start_completed'],
+				'the successful daemon start must carry a validated completion record');
 			$this->assertTrue($this->pidIsAlive($pid),
 				'a successfully daemonized resolver must escape the supervised launcher group and survive');
 		} finally {
@@ -332,6 +431,8 @@ final class UnboundRestartSeamTest extends TestCase
 			'the process-group runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
 		$this->assertIsArray($run['payload']);
 		$this->assertSame(0, $run['payload']['final']['retval']);
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertTrue($run['payload']['final']['start_completed']);
 		$this->assertMatchesRegularExpression('/^[1-9][0-9]*$/', $expected,
 			'RED issue #2882: the launcher must publish its group only after setpgid succeeds');
 		$this->assertSame($expected, $actual,
@@ -354,6 +455,8 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertIsArray($run['payload']);
 		$this->assertSame(0, $run['payload']['final']['retval'],
 			'the configured CLI executable must run the supervisor and preserve child success');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertTrue($run['payload']['final']['start_completed']);
 		$this->assertSame('-r', $argv[0] ?? NULL,
 			'RED issue #2882: the supervisor must invoke the configured CLI PHP, not PHP_BINARY/php-cgi');
 		$this->assertContains('--', $argv,
@@ -386,7 +489,10 @@ final class UnboundRestartSeamTest extends TestCase
 			. implode("\n", $run['output']));
 		$this->assertIsArray($run['payload'], 'the bounded start must return its JSON result');
 		$this->assertSame(124, $run['payload']['final']['retval'],
-			'an expired start must surface timeout(1) status 124 so retry/recovery still runs');
+			'an expired start must retain status 124 so callers preserve the valid configuration');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertFalse($run['payload']['final']['start_completed'],
+			'a command killed at its deadline did not produce a valid completion record');
 		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 2s and was killed',
 			$run['payload']['log'], 'expiry must be explicit in the main log');
 		$this->assertStringContainsString('Unbound Resolver start TIMED OUT after 2s and was killed',
@@ -433,7 +539,10 @@ final class UnboundRestartSeamTest extends TestCase
 			'the process-tree expiry runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
 		$this->assertIsArray($run['payload']);
 		$this->assertSame(124, $run['payload']['final']['retval'],
-			'the process-tree expiry must preserve the retry-triggering timeout status');
+			'the process-tree expiry must preserve the distinguished timeout status');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertFalse($run['payload']['final']['start_completed'],
+			'an expired process tree did not produce a valid completion record');
 		$this->assertFalse($launcherAlive,
 			'the direct TERM-ignoring launcher must be absent after kill grace');
 		$this->assertFalse($helperAlive,
@@ -451,6 +560,9 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertIsArray($run['payload']);
 		$this->assertSame(7, $run['payload']['final']['retval'],
 			'a quick non-zero start must retain its status for the existing retry branch');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertTrue($run['payload']['final']['start_completed'],
+			'a quick non-zero command produced a valid completion record');
 		$this->assertSame(['start failed'], $run['payload']['final']['result'],
 			'a quick non-zero start must retain diagnostics for the existing recovery log');
 		$this->assertStringNotContainsString('TIMED OUT', $run['payload']['log'],
@@ -466,93 +578,76 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertIsArray($run['payload']);
 		$this->assertSame(127, $run['payload']['final']['retval'],
 			'a start command that cannot launch must remain non-zero for retry/recovery');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertTrue($run['payload']['final']['start_completed'],
+			'a shell-level command-not-found is still a completed start command');
 		$this->assertNotEmpty($run['payload']['final']['result'],
 			'the launch failure must retain timeout/shell diagnostics');
 	}
 
-
-	/**
-	 * The appliance keeps starting the shipped daemon against the shipped config, and
-	 * keeps both stop and start waits at 30 seconds -- asserted against the source
-	 * because the harness replaces those constants at load time in this process.
-	 */
-	public function testShippedDefaultsStillStartTheApplianceDaemon(): void
+	public function testCompletedExit124IsNotMisclassifiedAsWrapperExpiry(): void
 	{
-		$path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc';
-		$src = (string) @file_get_contents($path);
-		$this->assertNotSame('', $src, "could not read {$path}");
+		$script = $this->makeStartScript('exit-124.sh', 'exit 124');
 
-		// strpos() rather than assertStringContainsString(): the haystack is the whole
-		// 800 KB package file, and a failed containment assertion would dump all of it.
-		$this->assertNotFalse(strpos($src,
-			"define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');"),
-			'the appliance must still start the shipped daemon against the shipped config');
-		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_STOP_WAIT', 30);"),
-			'the appliance must still wait up to 30 seconds for the outgoing daemon');
-		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_KILL_WAIT', 5);"),
-			'the KILL escalation must have its own finite five-second budget');
-		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_STOP_FAILED', -2);"),
-			'the appliance must ship the distinct stop-failure code the callers branch on');
-		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_WAIT', 30);"),
-			'the appliance start child must have an explicit finite 30-second budget');
-		$this->assertNotFalse(strpos($src, "define('PFB_UNBOUND_START_SETUP_WAIT', 5);"),
-			'the process-group setup barrier must have its own finite five-second budget');
+		$run = $this->runIsolatedStart(escapeshellarg($script));
 
-		$start = strpos($src, 'function pfb_stop_start_unbound(');
-		$this->assertNotFalse($start, 'pfb_stop_start_unbound() must still exist');
-		$end = strpos($src, "\n}\n", $start);
-		$this->assertNotFalse($end, 'could not find the end of pfb_stop_start_unbound()');
-		$body = substr($src, $start, $end - $start);
-		$this->assertStringContainsString('$start_ack_deadline = NULL;', $body,
-			'the start-ack deadline must have an explicit unarmed sentinel');
-		$this->assertStringContainsString('$deadline = NULL;', $body,
-			'the command deadline must have an explicit unarmed sentinel');
-		$this->assertStringContainsString('if ($start_ack_deadline === NULL) {', $body,
-			'the start-ack loop must fail closed before reading an unarmed deadline');
-		$this->assertStringContainsString('if ($deadline === NULL) {', $body,
-			'the command loop must fail closed before reading an unarmed deadline');
-		$release = strpos($body, '@touch($release)');
-		$acknowledged = strpos($body, 'file_exists($command_started)');
-		$deadline = strpos($body, '$deadline = hrtime(TRUE) + (PFB_UNBOUND_START_WAIT');
-		$this->assertNotFalse($release, 'the parent must explicitly release the verified process group');
-		$this->assertNotFalse($acknowledged, 'the child must acknowledge command start after release');
-		$this->assertNotFalse($deadline, 'the configured command deadline must be explicit');
-		$this->assertGreaterThan($acknowledged, $deadline,
-			'the start-command deadline must begin after the child start event, not during supervisor setup');
-
-		$this->assertStringContainsString(
-			"\$php_cli = (string) (\$pfb['php'] ?? (PHP_BINDIR . '/php'));",
-			$body,
-			'the appliance must select the canonical CLI executable without a version hardcode'
-		);
-		$this->assertStringNotContainsString('PHP_BINARY', $body,
-			'the web php-cgi SAPI binary must never launch the CLI-only -r supervisor');
-		$this->assertStringContainsString('PFB_UNBOUND_START_CMD', $body,
-			'the daemon start must run through the constant so a harness can neuter it');
-		$this->assertStringNotContainsString('/usr/local/sbin/unbound', $body,
-			'no branch may reach the daemon binary except through PFB_UNBOUND_START_CMD');
-		$this->assertStringContainsString('$i <= PFB_UNBOUND_STOP_WAIT;', $body,
-			'the stop-wait budget must come from the constant, not a literal');
-		$this->assertStringContainsString('$i <= PFB_UNBOUND_KILL_WAIT;', $body,
-			'the KILL-escalation budget must come from the constant, not a literal');
-		$stopLoop = strpos($body, '$i <= PFB_UNBOUND_STOP_WAIT;');
-		$refusal = strpos($body, 'not starting a ');
-		$start = strpos($body, 'PFB_UNBOUND_START_CMD,');
-		$this->assertNotFalse($refusal, 'the stop timeout must have an explicit refusal branch (#3055)');
-		$this->assertNotFalse($start, 'the daemon start must still be reachable');
-		$this->assertGreaterThan($stopLoop, $refusal,
-			'the refusal must be checked after the stop-wait loop, not inside it');
-		$this->assertLessThan($start, $refusal,
-			'the refusal must precede the daemon start, or the second instance is already launched');
-		$this->assertStringContainsString('posix_setpgid(0, 0)', $body,
-			'the start command must enter its own process group before the release barrier opens');
-		$this->assertStringContainsString('posix_kill(-$pid', $body,
-			'expiry must signal the whole launcher group, not only its direct process');
-		$this->assertStringContainsString('PFB_UNBOUND_START_WAIT', $body,
-			'the start wait must consume its configured finite budget');
-		$this->assertStringContainsString("0 => array('file', '/dev/null', 'r')", $body,
-			'the supervised launcher must read from /dev/null');
-		$this->assertStringContainsString("1 => array('file', \$outfile, 'a')", $body,
-			'a daemon must inherit a regular output file, never proc_open() pipes');
+		$this->assertSame(0, $run['status'],
+			'the exit-124 runner must complete inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(124, $run['payload']['final']['retval']);
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertTrue($run['payload']['final']['start_completed'],
+			'a command that itself exits 124 still produced a valid completion record');
+		$this->assertStringNotContainsString('TIMED OUT', $run['payload']['log'],
+			'a completed command status 124 must not be mislabeled as wrapper expiry');
 	}
+
+	public function testSupervisorExitZeroWithoutDoneIsAnIncompleteFailure(): void
+	{
+		$startProbe = "{$this->dir}/start-ran";
+		$start = $this->makeStartScript('should-not-run.sh',
+			'touch ' . escapeshellarg($startProbe) . "\nexit 0");
+		$phpCli = $this->makeStartScript('zero-supervisor.sh', 'exit 0');
+
+		$run = $this->runIsolatedStart(escapeshellarg($start), phpCli: $phpCli);
+
+		$this->assertSame(0, $run['status'],
+			'the incomplete-supervisor runner must return inside its salvage cap: '
+			. implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(-1, $run['payload']['final']['retval'],
+			'a supervisor exit without a valid done record must never look like start success');
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertFalse($run['payload']['final']['start_completed']);
+		$this->assertFileDoesNotExist($startProbe,
+			'the configured start command must not be credited when the supervisor never ran it');
+	}
+
+	public function testUnstageableOutputIsIncompleteAndNeverRunsStart(): void
+	{
+		$startProbe = "{$this->dir}/start-ran";
+		$start = $this->makeStartScript('unstageable-should-not-run.sh',
+			'touch ' . escapeshellarg($startProbe) . "\nexit 0");
+		$root = dirname(__DIR__, 2);
+		$prelude = "ini_set('open_basedir', implode(PATH_SEPARATOR, array("
+			. var_export($root, TRUE) . ', ' . var_export($this->dir, TRUE)
+			. ", \$pfb_test_tmp, '/usr', '/bin', '/etc', '/dev', '/proc')));\n";
+
+		$run = $this->runIsolatedStart(
+			escapeshellarg($start),
+			ini: ['sys_temp_dir=/tmp'],
+			prelude: $prelude
+		);
+
+		$this->assertSame(0, $run['status'],
+			'the staging-failure runner must return inside its salvage cap: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload']);
+		$this->assertSame(-1, $run['payload']['final']['retval']);
+		$this->assertArrayHasKey('start_completed', $run['payload']['final']);
+		$this->assertFalse($run['payload']['final']['start_completed']);
+		$this->assertFileDoesNotExist($startProbe,
+			'an output-staging failure must occur before the configured start command');
+	}
+
+
 }

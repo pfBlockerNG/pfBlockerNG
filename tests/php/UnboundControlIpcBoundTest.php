@@ -102,6 +102,21 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'fast' => "\t:\n",
 			// Control command that exits non-zero straight away.
 			'nonzero' => "\texit 3\n",
+			// Control socket that exits successfully and reports a running resolver.
+			'running' => "\t[ \"\$1\" = status ] && printf 'unbound (pid 1) is running...\\n'\n",
+			// A refused status may still print stale/partial text that resembles success.
+			'status_nonzero_running' => "\tcase \"\$1\" in\n"
+				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
+				. "\tstatus) printf 'unbound (pid 1) is running...\\n'; exit 3 ;;\n"
+				. "\tesac\n",
+			'status_refused' => "\tcase \"\$1\" in\n"
+				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
+				. "\tstatus) exit 3 ;;\n"
+				. "\tesac\n",
+			'status_empty' => "\tcase \"\$1\" in\n"
+				. "\tdump_cache) printf 'CACHE-DUMP\\n' ;;\n"
+				. "\tstatus) : ;;\n"
+				. "\tesac\n",
 			// Control socket that accepts and never replies (self-capped at ~8 s).
 			'slow' => "\tsleep 8\n\tprintf 'completed %s\\n' \"\$*\" >> {$log}\n",
 			// Answers, but slowly enough that a per-name loop multiplies without a batch bound.
@@ -158,17 +173,26 @@ final class UnboundControlIpcBoundTest extends TestCase
 	 * @param list<string> $ini extra `php -d` flags for the runner
 	 * @return array{status: int, output: list<string>, log: string, errlog: string, control: list<string>}
 	 */
-	private function runIsolated(string $body, array $pfb, int $budget = self::BUDGET, array $ini = []): array
+	private function runIsolated(
+		string $body,
+		array $pfb,
+		int $budget = self::BUDGET,
+		array $ini = [],
+		string $startCommand = '/bin/true',
+		int $startWait = 5,
+		?string $phpCli = NULL
+	): array
 	{
 		$runner = "{$this->dir}/runner.php";
 		$log = "{$this->dir}/pfblockerng.log";
 		$errlog = "{$this->dir}/error.log";
 		$timeout = (string) $GLOBALS['pfb']['timeout'];
+		$phpCli ??= PHP_BINARY;
 		$pfb = array_replace([
 			'log'     => $log,
 			'errlog'  => $errlog,
 			'timeout' => $timeout,
-			'php'     => PHP_BINARY,
+			'php'     => $phpCli,
 		], $pfb);
 
 		$source = "<?php\n"
@@ -176,10 +200,10 @@ final class UnboundControlIpcBoundTest extends TestCase
 			// restart rows never pay an appliance wait or start a real resolver.
 			. "define('PFB_UNBOUND_CONTROL_WAIT', {$budget});\n"
 			. "define('PFB_HOOK_KILL_GRACE', " . self::GRACE . ");\n"
-			. "define('PFB_UNBOUND_START_CMD', '/bin/true');\n"
+			. "define('PFB_UNBOUND_START_CMD', " . var_export($startCommand, TRUE) . ");\n"
 			. "define('PFB_UNBOUND_STOP_WAIT', 1);\n"
 			. "define('PFB_UNBOUND_KILL_WAIT', 1);\n"
-			. "define('PFB_UNBOUND_START_WAIT', 5);\n"
+			. "define('PFB_UNBOUND_START_WAIT', {$startWait});\n"
 			. 'require ' . var_export(__DIR__ . '/bootstrap.php', TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'] = array_replace($GLOBALS[\'pfb\'], '
 				. var_export($pfb, TRUE) . ");\n"
@@ -247,6 +271,23 @@ final class UnboundControlIpcBoundTest extends TestCase
 		];
 	}
 
+	private function startCommand(string $name, string $body): string
+	{
+		$path = "{$this->dir}/{$name}.sh";
+		$log = escapeshellarg("{$this->dir}/start.log");
+		$this->assertNotFalse(file_put_contents($path,
+			"#!/bin/sh\nprintf '%s\\n' " . escapeshellarg($name) . " >> {$log}\n{$body}\n"));
+		$this->assertTrue(chmod($path, 0755));
+		return escapeshellarg($path);
+	}
+
+	/** @return list<string> */
+	private function startAttempts(): array
+	{
+		$path = "{$this->dir}/start.log";
+		return file_exists($path) ? (file($path, FILE_IGNORE_NEW_LINES) ?: []) : [];
+	}
+
 	/**
 	 * The restart path's is_process_running('unbound') sequence: up for the cache-dump
 	 * gate, down while the resolver is stopped, up again for the post-start status.
@@ -254,12 +295,25 @@ final class UnboundControlIpcBoundTest extends TestCase
 	private function reloadBody(): string
 	{
 		return "\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
-			. "\$calls = 0;\n"
-			. "\$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&\$calls): bool {\n"
-			. "\t\$calls++;\n"
-			. "\treturn \$calls === 1 || \$calls >= 4;\n"
+			. "\$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {\n"
+			. "\tforeach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as \$frame) {\n"
+			. "\t\tif ((\$frame['function'] ?? '') === 'pfb_stop_start_unbound') { return FALSE; }\n"
+			. "\t}\n"
+			. "\treturn TRUE;\n"
 			. "};\n"
 			. "pfb_reload_unbound('enabled', TRUE, FALSE, FALSE, static fn(): bool => TRUE);\n";
+	}
+
+	private function unrelatedDaemonAfterStopBody(): string
+	{
+		return "\$outside = 0;\n"
+			. "\$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&\$outside): bool {\n"
+			. "\tforeach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as \$frame) {\n"
+			. "\t\tif ((\$frame['function'] ?? '') === 'pfb_stop_start_unbound') { return FALSE; }\n"
+			. "\t}\n"
+			. "\t\$outside++;\n"
+			. "\treturn \$outside > 1;\n"
+			. "};\n";
 	}
 
 	/**
@@ -507,6 +561,234 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'the resolver must still be restarted and confirmed when no cache could be staged');
 	}
 
+	/** @return array<string, array{0: string}> */
+	public static function restartModes(): array
+	{
+		return ['enabled' => ['enabled'], 'disabled' => ['disabled']];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('restartModes')]
+	public function testTimedOutStartPreservesConfigAndSkipsRetryInEitherMode(string $mode): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$start = $this->startCommand('timeout', 'exec sleep 20');
+		$run = $this->runIsolated(
+			"\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
+				. "pfb_reload_unbound(" . var_export($mode, TRUE)
+				. ", FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start,
+			startWait: 1
+		);
+
+		$this->assertSame(['timeout'], $this->startAttempts(),
+			"a timed-out {$mode} start must not be retried as though the config were invalid");
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"));
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"));
+		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error");
+		$this->assertNotContains('status', $run['control'],
+			'a timed-out start must not confirm an unrelated resolver');
+		$this->assertStringContainsString('config left unchanged', $run['log']);
+	}
+
+	public function testCompletedExit124PreservesConfigWithoutRetry(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$start = $this->startCommand('exit-124', 'exit 124');
+		$run = $this->runIsolated(
+			"\$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;\n"
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start
+		);
+
+		$this->assertSame(['exit-124'], $this->startAttempts(),
+			'a completed status 124 is conservatively preserved without a config retry');
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"));
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"));
+		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error");
+		$this->assertNotContains('status', $run['control']);
+	}
+
+	public function testUnstageableStartPreservesConfigAndNeverRunsOrConfirms(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$start = $this->startCommand('unstageable', 'exit 0');
+		$root = dirname(__DIR__, 2);
+		$stopChecks = "{$this->dir}/stop-checks";
+		$body = "ini_set('open_basedir', implode(PATH_SEPARATOR, array("
+			. var_export($root, TRUE) . ', ' . var_export($this->dir, TRUE)
+			. ", \$pfb_test_tmp, '/usr', '/bin', '/etc', '/dev', '/proc')));\n"
+			. "\$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {\n"
+			. "\tforeach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as \$frame) {\n"
+			. "\t\tif ((\$frame['function'] ?? '') === 'pfb_stop_start_unbound') {\n"
+			. "\t\t\tfile_put_contents(" . var_export($stopChecks, TRUE) . ", \"stop\\n\", FILE_APPEND);\n"
+			. "\t\t\tbreak;\n\t\t}\n\t}\n\treturn FALSE;\n};\n"
+			. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n";
+		$run = $this->runIsolated(
+			$body,
+			$this->reloadPfb('running'),
+			ini: ['sys_temp_dir=/tmp'],
+			startCommand: $start
+		);
+
+		$this->assertSame([], $this->startAttempts(),
+			'a staging failure must happen before the configured start command');
+		$this->assertSame(["stop", "stop"], file($stopChecks, FILE_IGNORE_NEW_LINES),
+			'staging failure must not repeat the restart stop phase');
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"));
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"));
+		$this->assertFileDoesNotExist("{$this->dir}/unbound.conf.error");
+		$this->assertNotContains('status', $run['control']);
+		$this->assertStringContainsString('config left unchanged', $run['log']);
+	}
+
+	public function testIncompleteSupervisorCannotCreditAnUnrelatedDaemon(): void
+	{
+		$newConfig = "server:\n";
+		$oldConfig = "server:\n\tverbosity: 1\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$start = $this->startCommand('never-ran', 'exit 0');
+		$phpCli = $this->startCommand('supervisor-exit-zero', 'exit 0');
+		$run = $this->runIsolated(
+			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+				. $this->unrelatedDaemonAfterStopBody()
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start,
+			phpCli: trim($phpCli, "'")
+		);
+
+		$this->assertSame(['supervisor-exit-zero'], $this->startAttempts(),
+			'the configured start command must not run when its supervisor exits first');
+		$this->assertSame($newConfig, file_get_contents("{$this->dir}/unbound.conf"));
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.bk"));
+		$this->assertNotContains('status', $run['control'],
+			'an incomplete start must not query a daemon another actor started');
+	}
+
+	public function testStatusMustSucceedEvenWhenItsOutputSaysRunning(): void
+	{
+		$run = $this->runIsolated(
+			$this->reloadBody(),
+			$this->reloadPfb('status_nonzero_running')
+		);
+
+		$this->assertContains('status', $run['control']);
+		$this->assertNotContains('load_cache', $run['control'],
+			'a non-zero status result must not be trusted just because its output says running');
+		$this->assertStringContainsString('Not completed', $run['log']);
+	}
+
+	/** @return array<string, array{0: string}> */
+	public static function statusWithoutRunningReply(): array
+	{
+		return [
+			'failed status' => ['status_refused'],
+			'successful status without running reply' => ['status_empty'],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('statusWithoutRunningReply')]
+	public function testStartOutputCannotMasqueradeAsFreshStatusEvidence(string $scenario): void
+	{
+		$start = $this->startCommand('start-says-running',
+			"printf 'unbound (pid 7) is running...\\n'\nexit 0");
+		$run = $this->runIsolated(
+			$this->reloadBody(),
+			$this->reloadPfb($scenario),
+			startCommand: $start
+		);
+
+		$this->assertContains('status', $run['control']);
+		$this->assertNotContains('load_cache', $run['control'],
+			'start stdout must not supply the running reply missing from the status query');
+		$this->assertStringContainsString('Not completed', $run['log']);
+	}
+
+	public function testSuccessfulRecoveryRetryCanBeConfirmedByFreshStatus(): void
+	{
+		$newConfig = "server:\n\tmodule-config: \"python validator iterator\"\n";
+		$oldConfig = "server:\n\tmodule-config: \"validator iterator\"\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
+		$count = escapeshellarg("{$this->dir}/retry-count");
+		$start = $this->startCommand('retry-success',
+			"n=\$(cat {$count} 2>/dev/null || printf 0)\n"
+				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
+				. "[ \"\$n\" -eq 1 ] && exit 1\nexit 0");
+		$run = $this->runIsolated(
+			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+				. $this->unrelatedDaemonAfterStopBody()
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start
+		);
+
+		$this->assertSame(['retry-success', 'retry-success'], $this->startAttempts());
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.conf"),
+			'the successful recovery must run against the restored known-good config');
+		$this->assertContains('status', $run['control']);
+		$this->assertStringContainsString(' completed', $run['log']);
+	}
+
+	public function testTimedOutRecoveryRetryCannotCreditAnUnrelatedDaemon(): void
+	{
+		file_put_contents("{$this->dir}/unbound.conf", "server:\nnew\n");
+		file_put_contents("{$this->dir}/unbound.bk", "server:\nold\n");
+		$count = escapeshellarg("{$this->dir}/retry-count");
+		$start = $this->startCommand('retry-timeout',
+			"n=\$(cat {$count} 2>/dev/null || printf 0)\n"
+				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
+				. "[ \"\$n\" -eq 1 ] && exit 1\nexec sleep 20");
+		$run = $this->runIsolated(
+			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+				. $this->unrelatedDaemonAfterStopBody()
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start,
+			startWait: 1
+		);
+
+		$this->assertSame(['retry-timeout', 'retry-timeout'], $this->startAttempts());
+		$this->assertNotContains('status', $run['control'],
+			'a timed-out recovery retry must not confirm an unrelated daemon');
+	}
+
+	public function testIncompleteRecoveryRetryCannotCreditAnUnrelatedDaemon(): void
+	{
+		file_put_contents("{$this->dir}/unbound.conf", "server:\nnew\n");
+		file_put_contents("{$this->dir}/unbound.bk", "server:\nold\n");
+		$start = $this->startCommand('retry-incomplete', 'exit 1');
+		$count = escapeshellarg("{$this->dir}/php-count");
+		$realPhp = escapeshellarg(PHP_BINARY);
+		$phpCli = $this->startCommand('php-wrapper',
+			"n=\$(cat {$count} 2>/dev/null || printf 0)\n"
+				. "n=\$((n + 1)); printf '%s\\n' \"\$n\" > {$count}\n"
+				. "[ \"\$n\" -eq 1 ] && exec {$realPhp} \"\$@\"\nexit 0");
+		$run = $this->runIsolated(
+			"\$GLOBALS['config']['unbound'] = ['python' => 'on', 'python_script' => 'pfb_unbound'];\n"
+				. $this->unrelatedDaemonAfterStopBody()
+				. "pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn(): bool => TRUE);\n",
+			$this->reloadPfb('running'),
+			startCommand: $start,
+			phpCli: trim($phpCli, "'")
+		);
+
+		$this->assertSame(['php-wrapper', 'retry-incomplete', 'php-wrapper'], $this->startAttempts());
+		$this->assertNotContains('status', $run['control'],
+			'an incomplete recovery retry must not confirm an unrelated daemon');
+	}
 	/**
 	 * Scenario: an operator (or a harness) narrows the control budget below a second.
 	 *   Given a one-second and then a zero-second whole-batch budget, with a resolver

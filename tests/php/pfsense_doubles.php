@@ -1158,6 +1158,19 @@ if (!function_exists('isvalidpid')) {
 	}
 }
 
+if (!function_exists('sigkillbypid')) {
+	// pfSense util.inc: signal the live PID named by a validated pidfile. Tests seed
+	// an optional effect and observe calls through the same pattern as sigkillbyname().
+	function sigkillbypid($pidfile, $sig) {
+		$GLOBALS['pfb_test_sigkillbypid_calls'][] = array($pidfile, $sig);
+		$effect = $GLOBALS['pfb_test_sigkillbypid_effect'] ?? NULL;
+		if (is_callable($effect)) {
+			$effect($pidfile, $sig);
+		}
+		return 0;
+	}
+}
+
 // --- ADR-61 Phase 3 doubles: pfb_dnsbl_converged() + pfb_reload_unbound() restart path ---
 
 if (!function_exists('is_process_running')) {

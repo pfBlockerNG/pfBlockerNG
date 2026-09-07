@@ -88,7 +88,10 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			}
 		}
 		$this->savedG = [];
-		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_swap_wait_s']);
+		unset($GLOBALS['pfb_test_process_running'], $GLOBALS['pfb_test_swap_wait_s'],
+			$GLOBALS['pfb_test_valid_pids'], $GLOBALS['pfb_test_sigkillbypid_calls'],
+			$GLOBALS['pfb_test_sigkillbypid_effect'], $GLOBALS['pfb_test_sigkillbyname_calls'],
+			$GLOBALS['pfb_test_sigkillbyname_effect']);
 		// Restore rather than unset: the bootstrap may own config['unbound'], and
 		// deleting it made every later test order-dependent.
 		foreach ($this->savedConfig as $k => $prev) {
@@ -344,9 +347,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 * Drives the REAL swap-not-confirmed -> restart-fallback branch (dnsbldir
 	 * made read-only, so the sentinel flip itself fails) through to the
 	 * shared tail, exactly as a genuine stuck watcher would. Proves ONLY:
-	 * (1) the fallback + shared restart path runs to completion without
-	 * crashing/hanging ($calls sanity check), and (2) the tail's
-	 * pfb_dnsbl_apply_ledger_update() correctly reflects the REAL final
+	 * the shared ledger tail runs exactly once and records the REAL final
 	 * convergence outcome once Unbound is back up.
 	 *
 	 * Does NOT prove the fallback branch itself never calls a ledger
@@ -383,18 +384,15 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		// no 30s poll -- unlike the wait_applied-timeout sibling branch).
 		chmod($this->dir, 0555);
 
-		// is_process_running('unbound') call sequence inside ONE pfb_reload_unbound()
-		// call, in order: (1) zero-downtime eligibility check, (2) the pre-restart
-		// "should we log Reloading" check, (3)/(4) pfb_stop_start_unbound()'s own
-		// "wait for it to stop" loop -- once per invocation, TWO invocations happen
-		// here (the first restart, then this file's retval!=0 retry) -- FALSE so each
-		// loop breaks on its very first check, (5) the post-restart "Confirm that
-		// Resolver is running" check, (6) pfb_dnsbl_converged()'s own read at the tail.
-		// Only calls 3 and 4 are FALSE.
-		$calls = 0;
-		$GLOBALS['pfb_test_process_running']['unbound'] = function () use (&$calls) {
-			$calls++;
-			return !in_array($calls, [3, 4], true);
+		// The resolver is up around this restart fallback but down at every stop check.
+		// This keeps the fixture stable as the stop implementation gains checks of its own.
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function (): bool {
+			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+				if (($frame['function'] ?? '') === 'pfb_stop_start_unbound') {
+					return FALSE;
+				}
+			}
+			return TRUE;
 		};
 
 		$ledger_calls = 0;
@@ -411,8 +409,6 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 			@rmdir($writable);
 		}
 
-		$this->assertGreaterThanOrEqual(5, $calls,
-			'the restart-fallback + shared restart path must have actually run (sanity check on the call-count assumption)');
 		$this->assertSame(1, $ledger_calls,
 			'the restart fallback must reach the shared ledger tail exactly once');
 		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'dnsbl'),
@@ -462,11 +458,7 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	}
 
 	/**
-	 * The confirm block is the only reachable `chroot_cmd` caller on the refused-stop path,
-	 * so a command that leaves a file behind is a direct spy on whether it ran. Both the
-	 * absence assertion and its positive control build the fragment HERE, deliberately:
-	 * review leg 3 showed that two copy-pasted fragments let a typo in one escape the
-	 * other, which is how a positive control can certify a mechanism it does not share.
+	 * The only reachable control call on these failure paths is confirmation.
 	 */
 	private static function confirmRecorderCmd(string $probe): string
 	{
@@ -520,12 +512,15 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 		$this->assertSame($before, $after,
 			'a refused stop must reach no start section at all');
 
-		// A retry would call pfb_stop_start_unbound() a second time, and each call escalates
-		// to exactly one KILL. Counting the signal catches a restored retry that the
-		// start-log cannot see, because a retried refusal never reaches its start section.
-		$this->assertCount(1, $GLOBALS['pfb_test_sigkillbyname_calls'],
-			'exactly one KILL: a refused stop escalates once, so a second means the stop '
-			. 'path ran twice -- a caller retry, or the callee escalating more than once');
+		// A retry would call pfb_stop_start_unbound() a second time, and each call reaches
+		// one KILL. Count KILL separately now that a missing pidfile also receives TERM.
+		$this->assertSame(array(array('unbound', 'TERM'), array('unbound', 'KILL')),
+			$GLOBALS['pfb_test_sigkillbyname_calls'],
+			'a refused stop must attempt one TERM and one KILL in order');
+		$kills = array_filter($GLOBALS['pfb_test_sigkillbyname_calls'],
+			static fn(array $call): bool => $call[1] === 'KILL');
+		$this->assertCount(1, $kills,
+			'exactly one KILL proves the caller did not retry the refused stop');
 
 		$this->assertFileDoesNotExist($confirmProbe,
 			'the confirm block must not run for a refused stop: the process still answering '
@@ -558,20 +553,16 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	}
 
 	/**
-	 * Positive control for the recorder the test above relies on (leg 3, round 2, row B).
-	 *
-	 * That test proves the confirm block is SKIPPED on a refused stop by asserting a probe
-	 * file is absent. An absence assertion is only worth the mechanism behind it: if the
-	 * recorder cannot fire -- an unwritable probe path, or a one-character typo in the shell
-	 * fragment -- the assertion passes for the wrong reason while the bug it guards is live.
-	 * Leg 3 demonstrated both. So this pins the other direction with the SAME fragment: when
-	 * the stop succeeds and the resolver answers, the confirm block runs and the probe DOES
-	 * appear. Break the recorder and this test fails, which is what makes the absence
-	 * assertion above mean something.
+	 * A completed failed start may coexist with an unrelated resolver another actor
+	 * starts after this pass stopped its old daemon. That process is not evidence that
+	 * either failed command succeeded, so the confirm control call must remain absent.
 	 */
-	public function testConfirmBlockRecorderFiresWhenTheConfirmBlockActuallyRuns(): void
+	public function testFailedStartsDoNotCreditAnUnrelatedDaemon(): void
 	{
-		file_put_contents("{$this->dir}/unbound.conf", "server:\n");
+		$newConfig = "server:\n";
+		$oldConfig = "server:\n\tverbosity: 1\n";
+		file_put_contents("{$this->dir}/unbound.conf", $newConfig);
+		file_put_contents("{$this->dir}/unbound.bk", $oldConfig);
 		$GLOBALS['pfb']['dnsbl_file'] = "{$this->dir}/dnsbl_file";
 		$GLOBALS['pfb']['unbound_py_count'] = "{$this->dir}/unbound_py_count";
 		$GLOBALS['pfb']['dnsbl_python_unmount'] = FALSE;
@@ -579,25 +570,28 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$confirmProbe = "{$this->dir}/confirm_ran";
 		$GLOBALS['pfb']['chroot_cmd'] = self::confirmRecorderCmd($confirmProbe);
-
-		// is_process_running('unbound') call sequence for this path, enumerated from a
-		// probe rather than guessed: (1) pfb_reload_unbound's pre-restart check :12022,
-		// (2) the stop-wait loop :11458, (3) the #3055 post-loop guard :11469, (4)/(5) the
-		// same two again on the retry the harness start-double's non-zero status triggers,
-		// (6) the confirm block :12065. Only 6 is TRUE: the stop must succeed so retval is
-		// never PFB_UNBOUND_STOP_FAILED, and the resolver must answer at the confirm check.
-		$calls = 0;
-		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$calls): bool {
-			$calls++;
-			return $calls === 6;
+		$outside = 0;
+		$GLOBALS['pfb_test_process_running']['unbound'] = static function () use (&$outside): bool {
+			foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+				if (($frame['function'] ?? '') === 'pfb_stop_start_unbound') {
+					return FALSE;
+				}
+			}
+			$outside++;
+			return $outside > 1;
 		};
+		$startLog = (string) $GLOBALS['pfb_test_unbound_start_log'];
+		$before = file_exists($startLog) ? count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []) : 0;
 
-		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE,
-			static fn (): bool => pfb_dnsbl_apply_ledger_update());
+		pfb_reload_unbound('enabled', FALSE, FALSE, FALSE, static fn (): bool => TRUE);
 
-		$this->assertFileExists($confirmProbe,
-			'the confirm-block recorder must actually fire when the confirm block runs -- '
-			. 'otherwise the skip assertion in the refused-stop test proves nothing');
+		$after = count(file($startLog, FILE_IGNORE_NEW_LINES) ?: []);
+		$this->assertSame($before + 2, $after,
+			'the genuine completed config failure must retain exactly one recovery retry');
+		$this->assertSame($oldConfig, file_get_contents("{$this->dir}/unbound.conf"),
+			'the completed config failure must still restore the last-known-good config');
+		$this->assertFileDoesNotExist($confirmProbe,
+			'two completed failed starts must not credit an unrelated running daemon');
 	}
 
 	// -----------------------------------------------------------------------

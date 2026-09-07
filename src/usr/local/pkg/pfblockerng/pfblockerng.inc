@@ -11638,15 +11638,24 @@ if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 function pfb_stop_start_unbound($type) {
 	global $g, $pfb;
 
-	$final = array();
-	if (file_exists("{$g['varrun_path']}/unbound.pid")) {
+	// TRUE only after the supervisor's completion record has been validated. Pre-start,
+	// supervision, and expiry failures leave it FALSE.
+	$final = array('start_completed' => FALSE);
+	$pidfile = "{$g['varrun_path']}/unbound.pid";
+	$term_by_name = !isvalidpid($pidfile);
+	if (!$term_by_name) {
 		pfb_logger("\nStopping Unbound Resolver", 1);
-		sigkillbypid("{$g['varrun_path']}/unbound.pid", 'TERM');
+		sigkillbypid($pidfile, 'TERM');
 	}
 
 	// If unbound is still running, wait up to PFB_UNBOUND_STOP_WAIT seconds for it to terminate.
 	for ($i=1; $i <= PFB_UNBOUND_STOP_WAIT; $i++) {
 		if (is_process_running('unbound')) {
+			if ($term_by_name) {
+				pfb_logger("\nStopping Unbound Resolver", 1);
+				sigkillbyname('unbound', 'TERM');
+				$term_by_name = FALSE;
+			}
 			pfb_logger('.', 1);
 			sleep(1);
 		} else {
@@ -11883,9 +11892,13 @@ function pfb_stop_start_unbound($type) {
 				$failure = 'Unbound start completion status invalid';
 			} else {
 				$retval = (int) $done_status;
+				$final['start_completed'] = TRUE;
 			}
 		}
 
+		if (!$final['start_completed'] && $retval === 0 && $failure === '') {
+			$failure = 'Unbound start supervisor exited without a valid completion status';
+		}
 		if ($expired) {
 			$group_ready = $group_ready || @posix_getpgid($pid) === $pid;
 			$stop_group($proc, $pid, $group_ready);
@@ -11930,7 +11943,7 @@ function pfb_stop_start_unbound($type) {
 	}
 	$final['retval'] = (int) ($retval ?? -1);
 
-	if ($final['retval'] === 124) {
+	if ($final['retval'] === 124 && !$final['start_completed']) {
 		pfb_logger("\nUnbound Resolver start TIMED OUT after " . PFB_UNBOUND_START_WAIT .
 			"s and was killed", 2);
 	}
@@ -12332,6 +12345,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver could not be stopped; " .
 			"config left unchanged ***\n", 2);
 	}
+	elseif ($final['retval'] === 124) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver start timed out or returned status 124; " .
+			"config left unchanged ***\n", 2);
+	}
+	elseif (!$final['start_completed']) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver start did not complete; " .
+			"config left unchanged ***\n", 2);
+	}
 	elseif ($final['retval'] != 0) {
 
 		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.conf.error");
@@ -12352,18 +12373,16 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 		$final = pfb_stop_start_unbound($type);
 	}
 
-	// Confirm that Resolver is running. A refused stop is excluded: the process that
-	// answers here is the daemon we failed to replace, not one this pass started (#3094).
-	if ($final['retval'] !== PFB_UNBOUND_STOP_FAILED && is_process_running('unbound')) {
+	// Only a completed successful command can own the daemon observed here. A failed or
+	// incomplete start may race with an unrelated external restart (#3100).
+	if ($final['start_completed'] && $final['retval'] === 0 && is_process_running('unbound')) {
 		pfb_logger('.', 1);
 
-		// $final['result'] will be appended with previous result above. The site reports
-		// the command's own output below, so a non-zero status is not logged twice; an
-		// expiry still is, and neither ever reads as a running resolver.
-		$final['retval'] = pfb_unbound_control_exec("{$pfb['chroot_cmd']} status 2>&1 < /dev/null",
-			'status', $final['result'], log_nonzero: FALSE);
+		$status_result = array();
+		$status_retval = pfb_unbound_control_exec("{$pfb['chroot_cmd']} status 2>&1 < /dev/null",
+			'status', $status_result, log_nonzero: FALSE);
 		pfb_logger('.', 1);
-		if (preg_grep("/is running.../", $final['result'])) {
+		if ($status_retval === 0 && preg_grep("/is running.../", $status_result)) {
 			pfb_logger(" completed", 1);
 
 			// Restore Resolver cache
@@ -12376,7 +12395,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE, $datapath=FAL
 			}
 		}
 		else {
-			$log = htmlspecialchars(implode("\n", $final['result']));
+			$log = htmlspecialchars(implode("\n", $status_result));
 			pfb_logger(" Not completed.\n{$log}\n", 1);
 		}
 	}
