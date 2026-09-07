@@ -48,6 +48,7 @@ jobs:
       matrix_sha: ${{ steps.plan.outputs.matrix_sha }}
       matrix_digest: ${{ steps.plan.outputs.matrix_digest }}
       source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
+      live_downgrade_row: ${{ steps.live-downgrade.outputs.row }}
     steps:
       - name: Checkout trusted workflow tools
         uses: actions/checkout@v7
@@ -126,6 +127,8 @@ jobs:
             --ref "$MATRIX_SHA" --print-build)"
           ROUTE_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
             --ref "$MATRIX_SHA" --print-route)"
+          CI_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
+            --ref "$MATRIX_SHA" --print-ci)"
           if ! matrix_gate "$BUILD_MATRIX" "$ROUTE_MATRIX"; then
             echo "::error::missing live BUILD/ROUTE matrix rows"
             exit 1
@@ -141,6 +144,7 @@ jobs:
           PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"
           python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
             > plan/dependency-builder.json
+          printf '%s\n' "$CI_MATRIX" > plan/ci-matrix.json
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
@@ -160,6 +164,16 @@ jobs:
             echo "source_date_epoch=$SOURCE_DATE_EPOCH"
             echo "pkg_version=$PKG_VERSION"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Select live downgrade runtime
+        id: live-downgrade
+        run: |
+          set -eu
+          [ -n "${CI_MATRIX:-}" ] || CI_MATRIX="$(cat plan/ci-matrix.json)"
+          ROW="$(printf '%s\n' "$CI_MATRIX" | jq -c \
+            '[.[] | select(.channel == "CE")] | sort_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)) | .[0] // null')"
+          [ "$ROW" != null ] || { echo "::error::no ci:true CE row for the live downgrade" >&2; exit 1; }
+          printf 'row=%s\n' "$ROW" >> "$GITHUB_OUTPUT"
 
       - name: Expose pinned plan
         id: plan
@@ -500,6 +514,139 @@ jobs:
           export PKG_OPERATION=nightly # operation=nightly
           sh scripts/dispatch-pkg-publication.sh
 
+  resolve-live-stable-identity:
+    name: Pin deployed Stable identity
+    needs: [prepare, ingest-pkg]
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.identity.outputs.smoke_repo_expected_source_sha }}
+      version: ${{ steps.identity.outputs.smoke_repo_expected_version }}
+      channel: ${{ steps.identity.outputs.smoke_repo_expected_channel }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.12.6"
+          activate-environment: true
+
+      - name: Install the pinned catalogue decoder
+        run: uv sync --locked --only-group dep-pkg-build
+
+      - name: Resolve exact published Stable identity
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_DOWNGRADE_ROW: ${{ needs.prepare.outputs.live_downgrade_row }}
+        run: |
+          set -eu
+          PKG_SHA="$(gh api repos/pfBlockerNG/pkg/commits/main --jq .sha)"
+          case "$PKG_SHA" in
+            *[!0-9a-f]*|'') echo "::error::pkg main did not resolve to a full SHA" >&2; exit 1 ;;
+          esac
+          [ "${#PKG_SHA}" -eq 40 ] || { echo "::error::pkg main did not resolve to a full SHA" >&2; exit 1; }
+          VARVER="$(python3 -c 'import json, os; from scripts.live_gate_matrix import catalog_name_from_version; row=json.loads(os.environ["LIVE_DOWNGRADE_ROW"]); print(catalog_name_from_version(row["pfsense_version"], row["variant"]))')"
+          CATALOGUE="$(mktemp)"
+          trap 'rm -f "$CATALOGUE"' EXIT
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/pfBlockerNG/pkg/contents/docs/stable/${VARVER}/packagesite.pkg?ref=${PKG_SHA}" > "$CATALOGUE"
+          export CATALOGUE PKG_SHA VARVER
+          python3 - <<'PY'
+          import io
+          import json
+          import os
+          import tarfile
+
+          from scripts.live_gate_matrix import catalog_name_from_version
+          from scripts.pfb_pkg import (
+              CANONICAL_EMITTED_IDENTITY,
+              PFB_BUILD_RECORD_KEY,
+              PkgError,
+              load_build_record,
+              pkg_version_sort_key,
+              validate_build_record,
+              zstd_decompress,
+          )
+
+          try:
+              raw = zstd_decompress(open(os.environ["CATALOGUE"], "rb").read())
+              with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+                  member = archive.extractfile("packagesite.yaml")
+                  if member is None:
+                      raise ValueError("packagesite.yaml is missing")
+                  entries = [json.loads(line) for line in member if line.strip()]
+          except (OSError, PkgError, tarfile.TarError, UnicodeError, ValueError) as exc:
+              raise SystemExit(f"catalogue is invalid: {exc}") from None
+
+          candidates = [
+              entry
+              for entry in entries
+              if isinstance(entry, dict) and entry.get("name") == CANONICAL_EMITTED_IDENTITY
+          ]
+          if not candidates:
+              raise SystemExit("catalogue has no canonical package candidate")
+          for candidate in candidates:
+              if not isinstance(candidate.get("version"), str) or not candidate["version"]:
+                  raise SystemExit("canonical catalogue version is malformed")
+          selected = max(candidates, key=lambda entry: pkg_version_sort_key(entry["version"]))
+          version = selected["version"]
+          annotations = selected.get("annotations")
+          annotation = annotations.get(PFB_BUILD_RECORD_KEY) if isinstance(annotations, dict) else None
+          if not isinstance(annotation, str):
+              raise SystemExit("canonical package has no build record")
+          try:
+              unvalidated_record = json.loads(annotation)
+          except (TypeError, ValueError) as exc:
+              raise SystemExit(f"build record is invalid: {exc}") from None
+          if not isinstance(unvalidated_record, dict):
+              raise SystemExit("build record is invalid: expected an object")
+          if unvalidated_record.get("canonical_package_version") != version:
+              raise SystemExit("catalogue version does not match the build record version")
+          if unvalidated_record.get("channel") != "stable":
+              raise SystemExit("stable catalogue selected a non-stable build record")
+          try:
+              record = load_build_record(annotation)
+          except PkgError as exc:
+              raise SystemExit(f"build record is invalid: {exc}") from None
+
+          live_row = json.loads(os.environ["LIVE_DOWNGRADE_ROW"])
+          if not isinstance(live_row, dict):
+              raise SystemExit("selected runtime row is not an object")
+          for field in ("pfsense_version", "variant", "freebsd_major", "php_version", "py_flavor"):
+              if not isinstance(live_row.get(field), str) or not live_row[field]:
+                  raise SystemExit(f"selected runtime {field} is malformed")
+          validate_build_record(
+              record,
+              abi=f"FreeBSD:{live_row['freebsd_major']}:amd64",
+              php_version=live_row["php_version"],
+              py_flavor=live_row["py_flavor"],
+          )
+          record_row = record["matrix_row"]
+          record_varver = catalog_name_from_version(record_row["pfsense_version"], record_row["variant"])
+          if record_varver != os.environ["VARVER"]:
+              raise SystemExit(f"build record runtime maps to {record_varver}, expected {os.environ['VARVER']}")
+          if selected.get("abi") != f"FreeBSD:{live_row['freebsd_major']}:*":
+              raise SystemExit("catalogue ABI does not match the selected runtime")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"smoke_repo_expected_source_sha={record['source_sha']}\n")
+              output.write(f"smoke_repo_expected_version={version}\n")
+              output.write("smoke_repo_expected_channel=stable\n")
+              output.write(f"varver={os.environ['VARVER']}\n")
+              output.write(f"pkg_repo_sha={os.environ['PKG_SHA']}\n")
+          PY
+
+      - name: Confirm pinned Stable identity
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.smoke_repo_expected_source_sha }}
+          VERSION: ${{ steps.identity.outputs.smoke_repo_expected_version }}
+          CHANNEL: ${{ steps.identity.outputs.smoke_repo_expected_channel }}
+        run: test -n "$SOURCE_SHA" && test -n "$VERSION" && test "$CHANNEL" = stable
+
   validate-live-pages-install:
     name: Live Pages pkg install
     needs: [prepare, ingest-pkg]
@@ -513,9 +660,34 @@ jobs:
       smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}
     secrets: inherit
 
+  validate-live-downgrade:
+    name: Live Nightly to Stable downgrade
+    needs: [prepare, resolve-live-stable-identity]
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pfsense_version: ${{ fromJson(needs.prepare.outputs.live_downgrade_row).pfsense_version }}
+      image_name: ${{ fromJson(needs.prepare.outputs.live_downgrade_row).image_name }}
+      mac: ${{ fromJson(needs.prepare.outputs.live_downgrade_row).mac }}
+      abi: FreeBSD:${{ fromJson(needs.prepare.outputs.live_downgrade_row).freebsd_major }}:amd64
+      php_version: ${{ fromJson(needs.prepare.outputs.live_downgrade_row).php_version }}
+      py_flavor: ${{ fromJson(needs.prepare.outputs.live_downgrade_row).py_flavor }}
+      extra_pkgs: ${{ toJson(fromJson(needs.prepare.outputs.live_downgrade_row).extra_pkgs) }}
+      pytest_marker: repo
+      pytest_filter: test_live_nightly_downgrade_requires_selected_semantic_repo
+      concurrency_key: nightly-to-stable
+      smoke_repo_live_url: http://pkg.pfblockerng.com/stable
+      smoke_repo_expected_source_sha: ${{ needs.resolve-live-stable-identity.outputs.source_sha }}
+      smoke_repo_expected_version: ${{ needs.resolve-live-stable-identity.outputs.version }}
+      smoke_repo_expected_channel: ${{ needs.resolve-live-stable-identity.outputs.channel }}
+      smoke_nightly_live_url: http://pkg.pfblockerng.com/nightly
+      smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}
+      smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}
+      checkout_ref: ${{ needs.prepare.outputs.tools_sha }}
+    secrets: inherit
+
   cleanup-nightly-oci:
     name: Delete successfully validated Nightly OCI handoff
-    needs: [prepare, publish-nightly-oci, validate-live-pages-install]
+    needs: [prepare, publish-nightly-oci, validate-live-pages-install, validate-live-downgrade]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import ast
+import io
+import json
 import os
 import subprocess
+import tarfile
 import textwrap
 import unittest
 from pathlib import Path
 
+import pfb_pkg
+import pytest
 import yaml
 
 from tests._workflow_steps import extract_after, extract_before, extract_job, extract_step
@@ -133,7 +138,10 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
             publish,
         )
         self.assertNotIn("sha256:[0-9a-f][0-9a-f]*", publish)
-        self.assertIn("needs: [prepare, publish-nightly-oci, validate-live-pages-install]", cleanup)
+        self.assertEqual(
+            yaml.safe_load(NIGHTLY)["jobs"]["cleanup-nightly-oci"]["needs"],
+            ["prepare", "publish-nightly-oci", "validate-live-pages-install", "validate-live-downgrade"],
+        )
         self.assertIn(digest, cleanup)
         self.assertNotRegex(ingest, r"artifact_ref:\s*ghcr\.io/.+:(?:latest|nightly)")
         self.assertLess(NIGHTLY.index("operation=nightly"), NIGHTLY.index("test_install_from_live_nightly_url"))
@@ -460,6 +468,313 @@ def test_dispatch_helper_rejects_invalid_bounds_before_gh(tmp_path: Path) -> Non
         assert "dispatch bounds must be positive integers" in proc.stderr
         assert calls == ""
         assert not result.exists()
+
+
+def _live_build_record(
+    version: str,
+    *,
+    source: str = "a",
+    channel: str = "stable",
+    record_version: str | None = None,
+    freebsd_major: str = "15",
+    php_version: str = "8.3",
+    py_flavor: str = "py311",
+) -> dict[str, object]:
+    canonical_version = record_version or version
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": channel,
+        "release_line": "release/4.1",
+        "classification": "final",
+        "source_tag": f"v{canonical_version}",
+        "source_sha": source * 40,
+        "canonical_package_version": canonical_version,
+        "native_recipe_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "matrix_row": {
+            "variant": "CE",
+            "pfsense_version": "2.10.1",
+            "channel": "CE",
+            "freebsd_version": f"{freebsd_major}.0-RELEASE",
+            "freebsd_major": freebsd_major,
+            "php_version": php_version,
+            "py_flavor": py_flavor,
+            "status": "active",
+            "extra_pkgs": [],
+            "upgrade": {"available": False},
+        },
+        "freebsd_ports_sha": "b" * 40,
+        "route": f"{channel}/ce-2.10",
+        "source_date_epoch": 0,
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def _catalogue(entries: list[dict[str, object]]) -> bytes:
+    payload = b"".join(json.dumps(entry, separators=(",", ":")).encode() + b"\n" for entry in entries)
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        member = tarfile.TarInfo("packagesite.yaml")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    return pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable")
+
+
+def _catalogue_entry(
+    name: str,
+    version: str,
+    *,
+    record: dict[str, object] | None = None,
+) -> dict[str, object]:
+    annotations = (
+        {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record, separators=(",", ":"), sort_keys=True)}
+        if record is not None
+        else {}
+    )
+    return {
+        "name": name,
+        "version": version,
+        "abi": "FreeBSD:15:*",
+        "annotations": annotations,
+    }
+
+
+def _run_live_identity_resolver(
+    tmp_path: Path,
+    catalogue: bytes | None,
+    *,
+    row: dict[str, object] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True)
+    archive = tmp_path / "packagesite.pkg"
+    if catalogue is not None:
+        archive.write_bytes(catalogue)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        """#!/bin/sh
+case "$*" in
+  *"repos/pfBlockerNG/pkg/commits/main"*) printf '%s\n' "$FAKE_PKG_SHA" ;;
+  *"repos/pfBlockerNG/pkg/contents/"*)
+    [ -f "$FAKE_CATALOGUE" ] || exit 1
+    cat "$FAKE_CATALOGUE"
+    ;;
+  *) printf 'unexpected gh call: %s\n' "$*" >&2; exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    live_row = row or {
+        "pfsense_version": "2.10",
+        "channel": "CE",
+        "variant": "CE",
+        "image_name": "pfsense-ce",
+        "mac": "00:11:22:33:44:55",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "extra_pkgs": ["textproc/py-charset-normalizer"],
+    }
+    step = extract_step(NIGHTLY, "Resolve exact published Stable identity")
+    script = textwrap.dedent(extract_after(step, "        run: |\n"))
+    completed = subprocess.run(
+        ["sh", "-c", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GH_TOKEN": "test-token",
+            "FAKE_PKG_SHA": "d" * 40,
+            "FAKE_CATALOGUE": str(archive),
+            "GITHUB_OUTPUT": str(output),
+            "LIVE_DOWNGRADE_ROW": json.dumps(live_row, separators=(",", ":")),
+        },
+    )
+    return completed, output.read_text(encoding="utf-8") if output.exists() else ""
+
+
+def test_nightly_live_downgrade_resolver_selects_exact_compatible_catalogue_identity(tmp_path: Path) -> None:
+    selected = _live_build_record("4.1.0", source="c")
+    catalogue = _catalogue(
+        [
+            _catalogue_entry(pfb_pkg.CANONICAL_EMITTED_IDENTITY, "4.1.0", record=selected),
+            _catalogue_entry("py311-charset-normalizer", "99.0.0"),
+            _catalogue_entry(
+                pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                "4.0.0",
+                record=_live_build_record("4.0.0"),
+            ),
+        ]
+    )
+
+    completed, output = _run_live_identity_resolver(tmp_path, catalogue)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "smoke_repo_expected_version=4.1.0" in output
+    assert f"smoke_repo_expected_source_sha={'c' * 40}" in output
+    assert "smoke_repo_expected_channel=stable" in output
+    assert "varver=ce-2.10" in output
+    assert f"pkg_repo_sha={'d' * 40}" in output
+
+
+@pytest.mark.parametrize(
+    ("case", "catalogue", "error"),
+    [
+        ("missing", None, ""),
+        ("corrupt", b"not-a-zstd-catalogue", "catalogue"),
+        (
+            "absent-canonical",
+            _catalogue([_catalogue_entry("py311-charset-normalizer", "99.0.0")]),
+            "canonical",
+        ),
+        (
+            "digest-invalid",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record={**_live_build_record("4.1.0"), "source_sha": "f" * 40},
+                    )
+                ]
+            ),
+            "build record",
+        ),
+        (
+            "wrong-channel",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0", channel="testing"),
+                    )
+                ]
+            ),
+            "stable",
+        ),
+        (
+            "record-version",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0", record_version="4.0.0"),
+                    )
+                ]
+            ),
+            "version",
+        ),
+        (
+            "runtime",
+            _catalogue(
+                [
+                    _catalogue_entry(
+                        pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+                        "4.1.0",
+                        record=_live_build_record("4.1.0", php_version="8.5"),
+                    )
+                ]
+            ),
+            "php_version",
+        ),
+    ],
+)
+def test_nightly_live_downgrade_resolver_fails_closed(
+    tmp_path: Path,
+    case: str,
+    catalogue: bytes | None,
+    error: str,
+) -> None:
+    completed, output = _run_live_identity_resolver(tmp_path / case, catalogue)
+
+    assert completed.returncode != 0
+    assert error in completed.stderr
+    assert output == ""
+
+
+def test_nightly_selects_minimum_ci_true_ce_runtime_and_fails_without_one(tmp_path: Path) -> None:
+    step = extract_step(NIGHTLY, "Select live downgrade runtime")
+    script = textwrap.dedent(extract_after(step, "        run: |\n"))
+    rows = [
+        {"channel": "CE", "pfsense_version": "2.10"},
+        {"channel": "Plus", "pfsense_version": "1.0"},
+        {"channel": "CE", "pfsense_version": "2.9"},
+    ]
+
+    output = tmp_path / "selected"
+    selected = subprocess.run(
+        ["sh", "-c", script],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CI_MATRIX": json.dumps(rows),
+            "GITHUB_OUTPUT": str(output),
+        },
+    )
+    assert selected.returncode == 0, selected.stderr
+    assert json.loads(output.read_text(encoding="utf-8").removeprefix("row="))["pfsense_version"] == "2.9"
+
+    output.unlink()
+    rejected = subprocess.run(
+        ["sh", "-c", script],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CI_MATRIX": '[{"channel":"Plus","pfsense_version":"1.0"}]',
+            "GITHUB_OUTPUT": str(output),
+        },
+    )
+    assert rejected.returncode != 0
+    assert "no ci:true CE row" in rejected.stderr
+    assert not output.exists()
+
+
+def test_nightly_wires_real_live_downgrade_with_both_exact_identities() -> None:
+    workflow = yaml.safe_load(NIGHTLY)
+    jobs = workflow["jobs"]
+    direct = jobs["validate-live-pages-install"]
+    resolver = jobs["resolve-live-stable-identity"]
+    downgrade = jobs["validate-live-downgrade"]
+    inputs = downgrade["with"]
+
+    assert direct["with"]["pytest_filter"] == "test_install_from_live_nightly_url"
+    assert resolver["needs"] == ["prepare", "ingest-pkg"]
+    assert downgrade["needs"] == ["prepare", "resolve-live-stable-identity"]
+    assert inputs == {
+        "pfsense_version": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).pfsense_version }}",
+        "image_name": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).image_name }}",
+        "mac": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).mac }}",
+        "abi": "FreeBSD:${{ fromJson(needs.prepare.outputs.live_downgrade_row).freebsd_major }}:amd64",
+        "php_version": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).php_version }}",
+        "py_flavor": "${{ fromJson(needs.prepare.outputs.live_downgrade_row).py_flavor }}",
+        "extra_pkgs": "${{ toJson(fromJson(needs.prepare.outputs.live_downgrade_row).extra_pkgs) }}",
+        "pytest_marker": "repo",
+        "pytest_filter": "test_live_nightly_downgrade_requires_selected_semantic_repo",
+        "concurrency_key": "nightly-to-stable",
+        "smoke_repo_live_url": "http://pkg.pfblockerng.com/stable",
+        "smoke_repo_expected_source_sha": "${{ needs.resolve-live-stable-identity.outputs.source_sha }}",
+        "smoke_repo_expected_version": "${{ needs.resolve-live-stable-identity.outputs.version }}",
+        "smoke_repo_expected_channel": "${{ needs.resolve-live-stable-identity.outputs.channel }}",
+        "smoke_nightly_live_url": "http://pkg.pfblockerng.com/nightly",
+        "smoke_nightly_expected_source_sha": "${{ needs.prepare.outputs.source_sha }}",
+        "smoke_nightly_expected_version": "${{ needs.prepare.outputs.pkg_version }}",
+        "checkout_ref": "${{ needs.prepare.outputs.tools_sha }}",
+    }
 
 
 if __name__ == "__main__":
