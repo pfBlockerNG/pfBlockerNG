@@ -146,7 +146,7 @@ final class DnsblBlockingModesTest extends TestCase
 		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on', 'global_log' => $token]];
 
 		$result = pfb_registry_pass($sections);
-		$stored = $result[self::DNSBL_SECTION]['global_log'] ?? $token;
+		$stored = $result[self::DNSBL_SECTION]['global_log'] ?? NULL;
 
 		$this->assertSame($token, $stored, "an already-stored '{$token}' must survive the pass unchanged");
 
