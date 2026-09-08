@@ -146,37 +146,109 @@ function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): 
 	}
 	$uid = 65534;
 	$tmp = sys_get_temp_dir();
+	$owners = [];
+	$modes = [];
 	$tmp_owner = NULL;
-	$tmp_mode = fileperms($tmp);
-	if ($tmp_mode !== FALSE && ($tmp_mode & 0001) === 0) {
-		$tmp_owner = fileowner($tmp);
-		if ($tmp_owner === FALSE || !chown($tmp, $uid)) {
-			throw new RuntimeException("could not make nested TMPDIR {$tmp} traversable by an unprivileged fixture");
-		}
-	}
+
 	foreach ($owned_paths as $path) {
+		if (is_link($path)) {
+			throw new RuntimeException("refusing owned-path symlink {$path}");
+		}
+		if (!file_exists($path)) {
+			throw new RuntimeException("could not prepare {$path} for an unprivileged fixture");
+		}
 		$paths = [$path];
 		if (is_dir($path)) {
 			foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path,
 				FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST) as $entry) {
-				$paths[] = $entry->getPathname();
+				$owned_path = $entry->getPathname();
+				if ($entry->isLink()) {
+					throw new RuntimeException("refusing owned-path symlink {$owned_path}");
+				}
+				$paths[] = $owned_path;
 			}
 		}
 		foreach ($paths as $owned_path) {
+			$owner = fileowner($owned_path);
+			if ($owner === FALSE) {
+				throw new RuntimeException("could not inspect {$owned_path} for an unprivileged fixture");
+			}
+			$owners[$owned_path] = $owner;
+		}
+	}
+
+	for ($directory = $tmp; ; $directory = dirname($directory)) {
+		$mode = fileperms($directory);
+		if ($mode === FALSE) {
+			throw new RuntimeException("could not inspect nested TMPDIR ancestor {$directory}");
+		}
+		if (($mode & 0001) === 0) {
+			$modes[$directory] = $mode & 07777;
+		}
+		if ($directory === dirname($directory)) {
+			break;
+		}
+	}
+	if (isset($modes[$tmp])) {
+		$tmp_owner = fileowner($tmp);
+		if ($tmp_owner === FALSE) {
+			throw new RuntimeException("could not inspect nested TMPDIR {$tmp} ownership");
+		}
+	}
+
+	$restore = static function () use (&$owners, &$modes, $tmp, &$tmp_owner): void {
+		$restore_error = NULL;
+		foreach (array_reverse($owners, TRUE) as $path => $owner) {
+			if (is_link($path)) {
+				$restore_error ??= "refusing replacement symlink {$path} during ownership restore";
+				continue;
+			}
+			if (file_exists($path) && !chown($path, $owner)) {
+				$restore_error ??= "could not restore {$path} ownership";
+			}
+		}
+		if ($tmp_owner !== NULL && (!file_exists($tmp) || is_link($tmp) || !chown($tmp, $tmp_owner))) {
+			$restore_error ??= "could not safely restore nested TMPDIR {$tmp} ownership";
+		}
+		foreach (array_reverse($modes, TRUE) as $directory => $mode) {
+			if (!file_exists($directory) || is_link($directory) || !chmod($directory, $mode)) {
+				$restore_error ??= "could not safely restore nested TMPDIR ancestor {$directory} mode";
+			}
+		}
+		if ($restore_error !== NULL) {
+			throw new RuntimeException($restore_error);
+		}
+	};
+
+	$sockets = FALSE;
+	try {
+		foreach ($modes as $directory => $mode) {
+			if ($directory !== $tmp && !chmod($directory, $mode | 0001)) {
+				throw new RuntimeException("could not make nested TMPDIR ancestor {$directory} traversable");
+			}
+		}
+		if ($tmp_owner !== NULL && !chown($tmp, $uid)) {
+			throw new RuntimeException("could not make nested TMPDIR {$tmp} traversable by an unprivileged fixture");
+		}
+		foreach ($owners as $owned_path => $_owner) {
 			if (!chown($owned_path, $uid)) {
 				throw new RuntimeException("could not prepare {$owned_path} for an unprivileged fixture");
 			}
 		}
+		$sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		$pid = $sockets === FALSE ? -1 : pcntl_fork();
+		if ($pid === -1) {
+			throw new RuntimeException('could not fork an unprivileged permission-denial fixture');
+		}
+	} catch (Throwable $error) {
+		if (is_array($sockets)) {
+			fclose($sockets[0]);
+			fclose($sockets[1]);
+		}
+		$restore();
+		throw $error;
 	}
 
-	$sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
-	$pid = $sockets === FALSE ? -1 : pcntl_fork();
-	if ($pid === -1) {
-		if ($tmp_owner !== NULL) {
-			chown($tmp, $tmp_owner);
-		}
-		throw new RuntimeException('could not fork an unprivileged permission-denial fixture');
-	}
 	if ($pid === 0) {
 		fclose($sockets[0]);
 		try {
@@ -193,20 +265,30 @@ function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): 
 	}
 
 	fclose($sockets[1]);
-	$encoded = fgets($sockets[0]);
-	fclose($sockets[0]);
-	pcntl_waitpid($pid, $status);
-	if ($tmp_owner !== NULL && !chown($tmp, $tmp_owner)) {
-		throw new RuntimeException("could not restore nested TMPDIR {$tmp} ownership");
+	$waited = FALSE;
+	try {
+		$encoded = fgets($sockets[0]);
+		fclose($sockets[0]);
+		pcntl_waitpid($pid, $status);
+		$waited = TRUE;
+		$payload = is_string($encoded)
+			? unserialize(base64_decode(trim($encoded)), ['allowed_classes' => FALSE])
+			: NULL;
+		if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0 || !is_array($payload)
+			|| ($payload['ok'] ?? FALSE) !== TRUE) {
+			throw new RuntimeException('unprivileged fixture failed: '
+				. ($payload['error'] ?? 'child exited unexpectedly'));
+		}
+		return $payload['value'];
+	} finally {
+		if (is_resource($sockets[0])) {
+			fclose($sockets[0]);
+		}
+		if (!$waited) {
+			pcntl_waitpid($pid, $status);
+		}
+		$restore();
 	}
-	$payload = is_string($encoded)
-		? unserialize(base64_decode(trim($encoded)), ['allowed_classes' => FALSE])
-		: NULL;
-	if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0 || !is_array($payload)
-		|| ($payload['ok'] ?? FALSE) !== TRUE) {
-		throw new RuntimeException('unprivileged fixture failed: ' . ($payload['error'] ?? 'child exited unexpectedly'));
-	}
-	return $payload['value'];
 }
 
 $GLOBALS['pfb']['tar'] = pfb_resolve_archiver();

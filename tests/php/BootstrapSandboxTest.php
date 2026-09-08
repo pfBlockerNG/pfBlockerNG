@@ -205,4 +205,124 @@ PHP;
 			'legacy_root' => $legacyRoot,
 		];
 	}
+
+	public function testUnprivilegedHelperRejectsSymlinksWithoutChangingTheirTargets(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$external = "{$this->tmp}/external";
+		$fixture = "{$this->tmp}/fixture";
+		$this->assertTrue(mkdir($external, 0700));
+		$this->assertTrue(mkdir($fixture, 0700));
+		$sentinel = "{$external}/sentinel";
+		$this->assertSame(4, file_put_contents($sentinel, 'safe'));
+		$link = "{$fixture}/link";
+		$this->assertTrue(symlink($external, $link));
+		$owner = fileowner($sentinel);
+		$error = NULL;
+
+		try {
+			pfb_test_as_unprivileged(static fn (): bool => TRUE, [$link]);
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+		clearstatcache(TRUE, $sentinel);
+		$ownerAfter = fileowner($sentinel);
+		if ($ownerAfter !== $owner) {
+			chown($sentinel, $owner);
+		}
+
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertStringContainsString('symlink', $error->getMessage());
+		$this->assertSame($owner, $ownerAfter,
+			'rejecting an owned-path symlink must not chown its external target');
+	}
+
+	public function testUnprivilegedHelperRestoresPreparedOwnersAfterCallback(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$fixture = "{$this->tmp}/owned";
+		$this->assertTrue(mkdir($fixture, 0700));
+		$file = "{$fixture}/value";
+		$this->assertSame(1, file_put_contents($file, 'x'));
+		$owners = [$fixture => fileowner($fixture), $file => fileowner($file)];
+
+		$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE, [$fixture]));
+		clearstatcache();
+		$ownersAfter = [$fixture => fileowner($fixture), $file => fileowner($file)];
+		foreach ($owners as $path => $owner) {
+			if ($ownersAfter[$path] !== $owner) {
+				chown($path, $owner);
+			}
+		}
+
+		$this->assertSame($owners, $ownersAfter,
+			'every pre-existing fixture path must regain its original owner');
+	}
+
+	public function testUnprivilegedHelperRestoresOwnersAfterPreparationFailure(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$file = "{$this->tmp}/prepared";
+		$this->assertSame(1, file_put_contents($file, 'x'));
+		$owner = fileowner($file);
+		$error = NULL;
+
+		try {
+			pfb_test_as_unprivileged(static fn (): bool => TRUE, [$file, "{$this->tmp}/missing"]);
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+		clearstatcache(TRUE, $file);
+		$ownerAfter = fileowner($file);
+		if ($ownerAfter !== $owner) {
+			chown($file, $owner);
+		}
+
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertSame($owner, $ownerAfter,
+			'a later preparation failure must roll back earlier ownership changes');
+	}
+
+	public function testUnprivilegedHelperMakesNestedTmpdirTraversableOnlyForItsChild(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$outer = "{$this->tmp}/private";
+		$inner = "{$outer}/tmp";
+		$this->assertTrue(mkdir($inner, 0777, TRUE));
+		$this->assertTrue(chmod($outer, 0700));
+		$marker = "{$inner}/marker";
+		$this->assertSame(2, file_put_contents($marker, 'ok'));
+		$script = 'require ' . var_export(self::ROOT . '/tests/php/bootstrap.php', TRUE) . ';'
+			. '$marker=' . var_export($marker, TRUE) . ';'
+			. '$tmp=' . var_export($inner, TRUE) . ';'
+			. 'echo pfb_test_as_unprivileged(static fn (): string => (string) file_get_contents($marker), [$tmp]);';
+		$command = escapeshellarg($GLOBALS['pfb']['timeout']) . ' 10 '
+			. escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($script);
+		$output = [];
+		$status = 0;
+
+		exec('TMPDIR=' . escapeshellarg($inner) . ' ' . $command . ' 2>&1', $output, $status);
+
+		$this->assertSame(0, $status, implode("\n", $output));
+		$this->assertSame(['ok'], $output);
+		clearstatcache(TRUE, $outer);
+		$this->assertSame(0700, fileperms($outer) & 0777,
+			'ancestor search permission must be restored after the child exits');
+	}
 }
