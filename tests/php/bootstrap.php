@@ -145,7 +145,7 @@ function pfb_test_preflight_path(string $root, string $path, string $label): str
 	$path = rtrim($path, DIRECTORY_SEPARATOR) ?: DIRECTORY_SEPARATOR;
 	$prefix = $root === DIRECTORY_SEPARATOR ? $root : $root . DIRECTORY_SEPARATOR;
 	if ($path !== $root && !str_starts_with($path, $prefix)) {
-		throw new RuntimeException("refusing {$label} outside trusted temporary root {$path}");
+		throw new RuntimeException("refusing {$label} outside trusted temporary root {$root}");
 	}
 	$canonical = realpath($root);
 	if ($canonical === FALSE) {
@@ -156,7 +156,7 @@ function pfb_test_preflight_path(string $root, string $path, string $label): str
 			continue;
 		}
 		if ($component === '..') {
-			throw new RuntimeException("refusing {$label} outside trusted temporary root {$path}");
+			throw new RuntimeException("refusing {$label} outside trusted temporary root {$root}");
 		}
 		$canonical .= DIRECTORY_SEPARATOR . $component;
 		if (is_link($canonical)) {
@@ -181,9 +181,19 @@ function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): 
 	$tmp_owner = NULL;
 
 	foreach ($owned_paths as $path) {
-		pfb_test_preflight_path($tmp_path, $path, 'owned-path');
+		$canonical_path = pfb_test_preflight_path($tmp_path, $path, 'owned-path');
 		if (!file_exists($path)) {
 			throw new RuntimeException("could not prepare {$path} for an unprivileged fixture");
+		}
+		for ($directory = dirname($canonical_path); $canonical_path !== $tmp && $directory !== $tmp;
+		    $directory = dirname($directory)) {
+			$mode = fileperms($directory);
+			if ($mode === FALSE) {
+				throw new RuntimeException("could not inspect owned-path ancestor {$directory}");
+			}
+			if (($mode & 0001) === 0) {
+				$modes[$directory] = $mode & 07777;
+			}
 		}
 		$paths = [$path];
 		if (is_dir($path)) {

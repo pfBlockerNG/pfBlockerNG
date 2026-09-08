@@ -206,6 +206,38 @@ PHP;
 		];
 	}
 
+	public function testOutsideRootDiagnosticNamesTrustedRoot(): void
+	{
+		$root = "{$this->tmp}/trusted";
+		$this->assertTrue(mkdir($root, 0700));
+		$error = NULL;
+
+		try {
+			pfb_test_preflight_path($root, "{$this->tmp}/outside", 'owned-path');
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertStringEndsWith($root, $error->getMessage());
+	}
+
+	public function testDotDotDiagnosticNamesTrustedRoot(): void
+	{
+		$root = "{$this->tmp}/trusted";
+		$this->assertTrue(mkdir($root, 0700));
+		$error = NULL;
+
+		try {
+			pfb_test_preflight_path($root, "{$root}/../outside", 'owned-path');
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertStringEndsWith($root, $error->getMessage());
+	}
+
 	public function testUnprivilegedHelperRejectsSymlinksWithoutChangingTheirTargets(): void
 	{
 		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
@@ -267,6 +299,37 @@ PHP;
 			'every pre-existing fixture path must regain its original owner');
 	}
 
+	public function testUnprivilegedHelperRestoresOwnerWhenCallbackThrows(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$file = "{$this->tmp}/callback-owned";
+		$this->assertSame(1, file_put_contents($file, 'x'));
+		$owner = fileowner($file);
+		$error = NULL;
+
+		try {
+			pfb_test_as_unprivileged(static function (): never {
+				throw new LogicException('expected');
+			}, [$file]);
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+		clearstatcache(TRUE, $file);
+		$ownerAfter = fileowner($file);
+		if ($ownerAfter !== $owner) {
+			chown($file, $owner);
+		}
+
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertStringContainsString('LogicException: expected', $error->getMessage());
+		$this->assertSame($owner, $ownerAfter,
+			'a callback exception must not leak prepared ownership');
+	}
+
 	public function testUnprivilegedHelperRestoresOwnersAfterPreparationFailure(): void
 	{
 		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
@@ -324,6 +387,46 @@ PHP;
 		clearstatcache(TRUE, $outer);
 		$this->assertSame(0700, fileperms($outer) & 0777,
 			'ancestor search permission must be restored after the child exits');
+	}
+
+	public function testUnprivilegedHelperMakesOwnedPathParentTraversableAndRestoresMode(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$parent = "{$this->tmp}/restrictive-parent";
+		$owned = "{$parent}/owned";
+		$this->assertTrue(mkdir($owned, 0777, TRUE));
+		$this->assertTrue(chmod($parent, 0700));
+		$marker = "{$owned}/marker";
+		$this->assertSame(2, file_put_contents($marker, 'ok'));
+		$mode = fileperms($parent) & 07777;
+		$result = NULL;
+		$error = NULL;
+
+		try {
+			$result = pfb_test_as_unprivileged(static function () use ($marker): string {
+				$value = @file_get_contents($marker);
+				if ($value === FALSE) {
+					throw new RuntimeException('owned-path parent is not traversable');
+				}
+				return $value;
+			}, [$owned]);
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+		clearstatcache(TRUE, $parent);
+		$modeAfter = fileperms($parent) & 07777;
+		if ($modeAfter !== $mode) {
+			chmod($parent, $mode);
+		}
+
+		$this->assertSame($mode, $modeAfter,
+			'an owned-path parent must regain its original mode');
+		$this->assertNull($error, $error?->getMessage() ?? '');
+		$this->assertSame('ok', $result);
 	}
 
 	public function testUnprivilegedHelperRejectsSymlinkedOwnedPathComponentsBeforeCallback(): void
