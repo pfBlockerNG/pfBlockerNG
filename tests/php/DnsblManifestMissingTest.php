@@ -135,9 +135,6 @@ final class DnsblManifestMissingTest extends TestCase
 
 	public function testMarkerUnreadableReadsAsZero(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions -- cannot simulate an unreadable file.');
-		}
 
 		$this->writeManifest();
 		$this->writeSentinel("5\n");
@@ -146,7 +143,7 @@ final class DnsblManifestMissingTest extends TestCase
 
 		try {
 			$this->assertFalse(
-				pfb_dnsbl_manifest_missing($this->makePfb()),
+				pfb_test_as_unprivileged(fn () => pfb_dnsbl_manifest_missing($this->makePfb()), [$this->dir]),
 				'an unreadable sentinel reads as generation 0, matching an absent applied (also 0) -- not missing'
 			);
 		} finally {

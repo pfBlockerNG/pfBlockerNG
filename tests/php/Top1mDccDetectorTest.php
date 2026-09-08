@@ -428,9 +428,21 @@ PHP;
 			$old_hash = file_get_contents("{$base}.xxhash128");
 			file_put_contents("{$base}.source", $old_source);
 			pfb_validator_write("{$base}.orig", $old_etag, $old_lastmod);
+			$this->assertTrue(chmod($this->dir, 0777), 'fixture directory must remain writable while its hash is denied');
 			chmod("{$base}.xxhash128", 0444);
+			$root = function_exists('posix_geteuid') && posix_geteuid() === 0;
+			if ($root && !posix_seteuid(65534)) {
+				$this->fail('could not drop root privileges for the persistence-denial fixture');
+			}
+			try {
+				$result = $this->downloadTop1m($fixture['source'], $base, $active);
+			} finally {
+				if ($root && !posix_seteuid(0)) {
+					$this->fail('could not restore root privileges after the persistence-denial fixture');
+				}
+			}
 
-			$this->assertFalse($this->downloadTop1m($fixture['source'], $base, $active), "{$label}: persistence failure must fail");
+			$this->assertFalse($result, "{$label}: persistence failure must fail");
 			$this->assertSame("old active {$label}\n", file_get_contents($active), "{$label}: active rollback");
 			$this->assertSame($old_raw, file_get_contents("{$base}.orig"), "{$label}: raw rollback");
 			$this->assertSame($old_hash, file_get_contents("{$base}.xxhash128"), "{$label}: hash rollback");

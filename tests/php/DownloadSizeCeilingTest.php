@@ -109,12 +109,13 @@ final class DownloadSizeCeilingTest extends TestCase
 		$stderr = $this->dir . '/overflow.err';
 		$output = [];
 		$retval = 0;
-		exec(
-			'{ ' . pfb_extract_cmd('LC_ALL=C /bin/dd if=/dev/zero of=' . escapeshellarg($target) . ' bs=1024 count=1024',
-				$blocks) . '; } 2>' . escapeshellarg($stderr),
-			$output,
-			$retval
-		);
+		$command = '{ ' . pfb_extract_cmd(
+			'LC_ALL=C /bin/dd if=/dev/zero of=' . escapeshellarg($target) . ' bs=1024 count=1024',
+			$blocks
+		) . '; } 2>' . escapeshellarg($stderr);
+		$runner = 'if (!pcntl_signal(SIGXFSZ, SIG_DFL)) { exit(255); } '
+			. 'passthru(' . var_export($command, TRUE) . ', $status); exit($status);';
+		exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($runner), $output, $retval);
 
 		if (PHP_OS_FAMILY === 'Darwin') {
 			if ($retval === 1) {

@@ -19,6 +19,8 @@ final class TickSafeSearchFailureTest extends TestCase
 		$this->originalConfig = $GLOBALS['config'] ?? [];
 		$GLOBALS['pfb'] = [
 			'dbdir'     => $this->dir,
+			'pending_marker' => "{$this->dir}/pfb_pending_changes",
+			'schedule_state_dir' => $this->dir,
 			'log'       => "{$this->dir}/pfblockerng.log",
 			'errlog'    => "{$this->dir}/error.log",
 			'runlog'    => "{$this->dir}/run.log",

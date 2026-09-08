@@ -574,18 +574,18 @@ final class DownloadGeoipStagePublishTest extends TestCase
 	 */
 	public function testStagingThatEscapesTheShareRefusesBeforeExtracting(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses the directory permissions this fixture relies on');
-		}
 		$before = $this->seedServedShare();
 		$this->assertTrue(chmod($this->share, 0555));
 		$seen = NULL;
 
-		$published = pfb_stage_publish_dir_merge($this->share, static function (string $staged) use (&$seen): int {
-			$seen = $staged;
-			file_put_contents("{$staged}/GeoLite2-Country.mmdb", "fresh-mmdb\n");
-			return 0;
-		});
+		[$published, $seen] = pfb_test_as_unprivileged(function () use (&$seen): array {
+			$published = pfb_stage_publish_dir_merge($this->share, static function (string $staged) use (&$seen): int {
+				$seen = $staged;
+				file_put_contents("{$staged}/GeoLite2-Country.mmdb", "fresh-mmdb\n");
+				return 0;
+			});
+			return [$published, $seen];
+		}, [$this->share]);
 
 		$this->assertTrue(chmod($this->share, 0755));
 		$this->assertFalse($published, 'staging outside the share must refuse the publication');

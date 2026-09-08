@@ -144,9 +144,6 @@ final class PfbDnsblConvergedTest extends TestCase
 
 	public function testUnboundConfExistsButUnreadable_returnsFalseInsteadOfCrashing(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions -- cannot simulate an unreadable file.');
-		}
 
 		$this->writeSentinel(1);
 		$this->writeApplied(1);
@@ -157,7 +154,8 @@ final class PfbDnsblConvergedTest extends TestCase
 			// file_exists() sees the file (TOCTOU-style: present but unreadable), so
 			// file_get_contents() returns FALSE -- a bare strpos(FALSE, ...) call would
 			// TypeError in PHP 8+. Must degrade to FALSE, not throw.
-			$this->assertFalse(pfb_dnsbl_converged(), 'an existing-but-unreadable unbound.conf must read as not converged, never crash');
+			$this->assertFalse(pfb_test_as_unprivileged(fn () => pfb_dnsbl_converged(), [$this->dir]),
+				'an existing-but-unreadable unbound.conf must read as not converged, never crash');
 		} finally {
 			chmod("{$this->dir}/unbound.conf", 0644);
 		}
@@ -175,17 +173,16 @@ final class PfbDnsblConvergedTest extends TestCase
 
 	public function testMarkerGenerationUnreadableFile_returnsZeroInsteadOfCrashing(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions -- cannot simulate an unreadable file.');
-		}
 
 		$path = "{$this->dir}/unreadable_marker";
 		file_put_contents($path, "5\n");
 		chmod($path, 0000);
 
 		try {
-			$this->assertSame(0, pfb_unbound_py_marker_generation($path),
-				'an existing-but-unreadable marker (file_get_contents() FALSE) must read as generation 0, never crash');
+			$this->assertSame(0, pfb_test_as_unprivileged(
+				fn () => pfb_unbound_py_marker_generation($path),
+				[$this->dir]
+			), 'an existing-but-unreadable marker (file_get_contents() FALSE) must read as generation 0, never crash');
 		} finally {
 			chmod($path, 0644);
 		}

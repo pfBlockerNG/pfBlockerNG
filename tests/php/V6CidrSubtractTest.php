@@ -610,9 +610,6 @@ final class V6CidrSubtractTest extends TestCase
 	 */
 	public function testFilePutContentsFailureUnlinksStrayTmpFile(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('running as root -- permission-based failure injection cannot be simulated');
-		}
 
 		$file     = $this->makeTempFile("2001:db8::/64\n");
 		$suppfile = $this->makeTempFile("2001:db8::5353/128\n");
@@ -623,7 +620,10 @@ final class V6CidrSubtractTest extends TestCase
 		$this->tmpfiles[] = $tmp;
 
 		try {
-			$ok = pfb_suppress_file_v6($file, $suppfile);
+			$ok = pfb_test_as_unprivileged(
+				fn () => pfb_suppress_file_v6($file, $suppfile),
+				[$file, $suppfile, $tmp]
+			);
 
 			$this->assertFalse($ok, 'a file_put_contents() failure on the tmp path must fail safe (FALSE)');
 			$this->assertFileDoesNotExist(

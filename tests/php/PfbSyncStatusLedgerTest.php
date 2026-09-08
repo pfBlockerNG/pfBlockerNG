@@ -324,21 +324,20 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// Unwritable ledger dir — chosen contract: silent no-op, never an uncaught
-	// exception. Root bypasses directory permissions entirely (a root run can't
-	// simulate the denial — CLAUDE.md "Running tests"), so this is skipped there,
-	// matching the repo's established chmod-0555 permission-test convention.
+	// exception. The harness helper gives root runs the same effective permission
+	// boundary as an unprivileged runner.
 	// -----------------------------------------------------------------------
 
 	public function testUnwritableLedgerDirFailsSafely(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions -- cannot simulate the denial.');
-		}
 
 		chmod($this->dir, 0555);
 
 		// Must not throw / must not emit an uncaught error up to the caller.
-		pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
+		pfb_test_as_unprivileged(
+			fn () => pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000)),
+			[$this->dir]
+		);
 
 		// The chosen contract is a silent no-op: nothing observable changed.
 		$this->assertFileDoesNotExist($this->dir . '/pfb_sync_status.json', 'an unwritable dir must not produce a ledger file');

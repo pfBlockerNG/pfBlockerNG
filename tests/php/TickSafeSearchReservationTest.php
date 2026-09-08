@@ -17,7 +17,11 @@ final class TickSafeSearchReservationTest extends TestCase
 		mkdir($this->dir, 0755, TRUE);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
 		$this->originalConfig = $GLOBALS['config'] ?? [];
-		$GLOBALS['pfb'] = ['dbdir' => $this->dir];
+		$GLOBALS['pfb'] = [
+			'dbdir' => $this->dir,
+			'pending_marker' => "{$this->dir}/pfb_pending_changes",
+			'schedule_state_dir' => $this->dir,
+		];
 		$GLOBALS['config'] = [];
 
 		$gen = 'installedpackages/pfblockerng/config/0';

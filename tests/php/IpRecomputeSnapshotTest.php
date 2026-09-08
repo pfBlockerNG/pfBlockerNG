@@ -146,9 +146,6 @@ final class IpRecomputeSnapshotTest extends TestCase
 
 	public function testSeedSnapshotLogsAWarningWhenTheCopyFails(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable snapshot dir');
-		}
 
 		file_put_contents("{$this->denydir}/FeedF_v4.txt", "198.51.100.5\n");
 
@@ -162,7 +159,10 @@ final class IpRecomputeSnapshotTest extends TestCase
 
 		chmod($this->snapdir, 0555);
 		try {
-			$got = pfb_ip_recompute_seed_snapshot('FeedF_v4', $this->snapdir, $this->denydir);
+			$got = pfb_test_as_unprivileged(
+				fn () => pfb_ip_recompute_seed_snapshot('FeedF_v4', $this->snapdir, $this->denydir),
+				[$this->root]
+			);
 
 			$this->assertSame("{$this->snapdir}/FeedF_v4.snap", $got, 'the path contract is unchanged even when the seed copy fails');
 			$this->assertFileDoesNotExist($got);
@@ -229,14 +229,14 @@ final class IpRecomputeSnapshotTest extends TestCase
 
 	public function testWriteSnapshotAggcountIsZeroWhenSourceUnreadable(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions; cannot simulate an unreadable source');
-		}
 		$src = "{$this->denydir}/FeedUnreadable_v4.txt";
 		file_put_contents($src, "198.51.100.1\n198.51.100.2\n");
 		chmod($src, 0000);
 		try {
-			pfb_ip_recompute_write_snapshot($src, 'FeedUnreadable_v4', $this->snapdir, $this->origdir);
+			pfb_test_as_unprivileged(
+				fn () => pfb_ip_recompute_write_snapshot($src, 'FeedUnreadable_v4', $this->snapdir, $this->origdir),
+				[$this->root]
+			);
 			$this->assertSame(
 				"0\n",
 				file_get_contents("{$this->origdir}/FeedUnreadable_v4.aggcount"),

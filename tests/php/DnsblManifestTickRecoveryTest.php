@@ -38,6 +38,7 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->stateDir = $this->dir . '/state';
 		mkdir($this->stateDir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		$GLOBALS['pfb']['pending_marker'] = $this->dir . '/pfb_pending_changes';
 		$GLOBALS['pfb']['schedule_state_dir'] = $this->stateDir;
 		$GLOBALS['pfb']['runlog'] = $this->dir . '/run.log';
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';

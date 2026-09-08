@@ -128,15 +128,15 @@ final class IpRecomputeOrderChangeTest extends TestCase
 
 	public function testReturnsTrueWhenBaselineFileIsUnreadable(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions; cannot simulate an unreadable baseline');
-		}
 		$this->writeBaseline(array('FeedA_v4'));
 		$this->assertFileExists($this->memberlist, 'before-state: the baseline file exists and is readable');
 
 		chmod($this->memberlist, 0000);
 
-		$got = pfb_ip_recompute_order_changed(array('FeedA_v4'), $this->snapdir, $this->memberlist);
+		$got = pfb_test_as_unprivileged(
+			fn () => pfb_ip_recompute_order_changed(array('FeedA_v4'), $this->snapdir, $this->memberlist),
+			[$this->root]
+		);
 
 		$this->assertTrue($got, 'an unreadable baseline is treated the same as a missing one -- fail-safe TRUE');
 	}
@@ -289,15 +289,15 @@ final class IpRecomputeOrderChangeTest extends TestCase
 
 	public function testWriteToReadOnlyTargetLogsFailure(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions; cannot simulate a write-denied target');
-		}
 		file_put_contents($this->memberlist, 'stale');
 		chmod($this->memberlist, 0444);
 		$marker = "write failed for [ {$this->memberlist} ]";
 		$before = $this->countLogMarker($marker);
 
-		$got = pfb_ip_recompute_memberlist_write($this->memberlist, array('a'));
+		$got = pfb_test_as_unprivileged(
+			fn () => pfb_ip_recompute_memberlist_write($this->memberlist, array('a')),
+			[$this->root, $GLOBALS['pfb']['logdir']]
+		);
 
 		$this->assertFalse($got, 'a 0444 target must fail the write');
 		$this->assertSame($before + 1, $this->countLogMarker($marker), 'the failure must be logged');

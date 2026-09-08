@@ -184,14 +184,11 @@ final class LogAgeCutoffStreamTest extends TestCase
 	 * actually surfaces at the final rename($scratch, $temp) (destination dir
 	 * not writable). Still proves the same contract: FALSE returned, $temp
 	 * byte-for-byte untouched, and the now-orphaned-directory scratch file
-	 * cleaned up. Root bypasses directory permissions, so this cannot be
-	 * simulated there (mirrors testFailedCatNeverCorruptsLiveLogEvenWithAgeCutoffActive).
+	 * cleaned up. The harness helper gives root runs the same effective
+	 * permission boundary as an unprivileged runner.
 	 */
 	public function testStreamingHelperFailsAndLeavesTempUntouchedWhenDestinationDirReadOnly(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable scratch dir');
-		}
 
 		$this->seedMinimalConfig();
 		$this->ensureLogDir();
@@ -209,7 +206,10 @@ final class LogAgeCutoffStreamTest extends TestCase
 		$scratchBefore = glob(sys_get_temp_dir() . '/pfb_logtrim_*');
 
 		try {
-			$ok = pfb_log_age_trim_temp($temp, 30, 'log', TRUE);
+			$ok = pfb_test_as_unprivileged(
+				fn () => pfb_log_age_trim_temp($temp, 30, 'log', TRUE),
+				[$GLOBALS['pfb']['logdir']]
+			);
 
 			$this->assertFalse($ok, 'a read-only destination dir must make the streaming trim return FALSE');
 			clearstatcache(TRUE, $temp);

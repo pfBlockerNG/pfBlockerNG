@@ -46,12 +46,14 @@ final class TickApplyReconciliationTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_tick_apply_reconciliation_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir, 0755, TRUE);
 
-		foreach (['dbdir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
-			  'dnsbl_file', 'dnsbl_python_unmount'] as $k) {
+		foreach (['dbdir', 'schedule_state_dir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
+			  'dnsbl_file', 'dnsbl_python_unmount', 'pending_marker'] as $k) {
 			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : FALSE;
 		}
 
 		$GLOBALS['pfb']['dbdir']      = $this->dir;
+		$GLOBALS['pfb']['pending_marker'] = "{$this->dir}/pfb_pending_changes";
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->dir;
 		$GLOBALS['pfb']['aliasdir']   = $this->dir;
 		$GLOBALS['pfb']['dnsbldir']   = $this->dir;
 		$GLOBALS['pfb']['log']        = "{$this->dir}/pfblockerng.log";
@@ -66,11 +68,12 @@ final class TickApplyReconciliationTest extends TestCase
 
 		$this->seedTickPrereqs();
 
-		// Keep the legacy fixed-job entries future-dated and neuter $pfb['php'] so
-		// this suite remains isolated to apply reconciliation.
+		// Keep the legacy compatibility entries and enabled DCC Extras entry
+		// future-dated, and neuter $pfb['php'], so this suite remains isolated
+		// to apply reconciliation.
 		$this->installPhpArgvRecorder();
 		$now = time();
-		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+		foreach (['cron', 'dcc', 'bl', 'extra:dcc'] as $jobKey) {
 			$this->seedFutureLedgerEntry($jobKey, $now);
 		}
 	}

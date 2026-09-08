@@ -41,6 +41,8 @@ final class TickFeedPassDeferralTest extends TestCase
 	private mixed $originalExtraslog = NULL;
 	private bool $hadStateDir = FALSE;
 	private mixed $originalStateDir = NULL;
+	private bool $hadPendingMarker = FALSE;
+	private mixed $originalPendingMarker = NULL;
 	private bool $hadPhp = FALSE;
 	private mixed $originalPhp = NULL;
 
@@ -59,6 +61,8 @@ final class TickFeedPassDeferralTest extends TestCase
 		$this->originalExtraslog = $GLOBALS['pfb']['extraslog'] ?? NULL;
 		$this->hadStateDir      = array_key_exists('schedule_state_dir', $GLOBALS['pfb'] ?? []);
 		$this->originalStateDir = $GLOBALS['pfb']['schedule_state_dir'] ?? NULL;
+		$this->hadPendingMarker      = array_key_exists('pending_marker', $GLOBALS['pfb'] ?? []);
+		$this->originalPendingMarker = $GLOBALS['pfb']['pending_marker'] ?? NULL;
 
 		$this->hadPhp      = array_key_exists('php', $GLOBALS['pfb'] ?? []);
 		$this->originalPhp = $GLOBALS['pfb']['php'] ?? NULL;
@@ -66,6 +70,7 @@ final class TickFeedPassDeferralTest extends TestCase
 		$this->dbdir = sys_get_temp_dir() . '/pfb_tick_feedpass_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
+		$GLOBALS['pfb']['pending_marker'] = "{$this->dbdir}/pfb_pending_changes";
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
 		$GLOBALS['pfb']['extraslog'] = "{$this->dbdir}/extras.log";
 		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/state";
@@ -106,6 +111,11 @@ final class TickFeedPassDeferralTest extends TestCase
 			$GLOBALS['pfb']['schedule_state_dir'] = $this->originalStateDir;
 		} else {
 			unset($GLOBALS['pfb']['schedule_state_dir']);
+		}
+		if ($this->hadPendingMarker) {
+			$GLOBALS['pfb']['pending_marker'] = $this->originalPendingMarker;
+		} else {
+			unset($GLOBALS['pfb']['pending_marker']);
 		}
 		if ($this->hadPhp) {
 			$GLOBALS['pfb']['php'] = $this->originalPhp;

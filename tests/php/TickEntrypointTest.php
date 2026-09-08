@@ -48,6 +48,8 @@ final class TickEntrypointTest extends TestCase
 	private mixed $originalDbdir = NULL;
 	private bool $hadStateDir = FALSE;
 	private mixed $originalStateDir = NULL;
+	private bool $hadPendingMarker = FALSE;
+	private mixed $originalPendingMarker = NULL;
 
 	/** Whether $GLOBALS['pfb']['runlog']/['extraslog'] were set before this test, and their values. */
 	private bool $hadRunlog = FALSE;
@@ -111,6 +113,8 @@ final class TickEntrypointTest extends TestCase
 		$this->originalDbdir = $GLOBALS['pfb']['dbdir'] ?? NULL;
 		$this->hadStateDir      = array_key_exists('schedule_state_dir', $GLOBALS['pfb'] ?? []);
 		$this->originalStateDir = $GLOBALS['pfb']['schedule_state_dir'] ?? NULL;
+		$this->hadPendingMarker      = array_key_exists('pending_marker', $GLOBALS['pfb'] ?? []);
+		$this->originalPendingMarker = $GLOBALS['pfb']['pending_marker'] ?? NULL;
 
 		$this->hadRunlog      = array_key_exists('runlog', $GLOBALS['pfb'] ?? []);
 		$this->originalRunlog = $GLOBALS['pfb']['runlog'] ?? NULL;
@@ -141,6 +145,7 @@ final class TickEntrypointTest extends TestCase
 		mkdir("{$this->dbdir}/state", 0755, TRUE);
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
 		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/state";
+		$GLOBALS['pfb']['pending_marker'] = "{$this->dbdir}/pfb_pending_changes";
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
 		$GLOBALS['pfb']['extraslog'] = "{$this->dbdir}/extras.log";
 		$GLOBALS['pfb']['logdir']    = $this->dbdir;
@@ -171,6 +176,11 @@ final class TickEntrypointTest extends TestCase
 			$GLOBALS['pfb']['schedule_state_dir'] = $this->originalStateDir;
 		} else {
 			unset($GLOBALS['pfb']['schedule_state_dir']);
+		}
+		if ($this->hadPendingMarker) {
+			$GLOBALS['pfb']['pending_marker'] = $this->originalPendingMarker;
+		} else {
+			unset($GLOBALS['pfb']['pending_marker']);
 		}
 		if ($this->hadRunlog) {
 			$GLOBALS['pfb']['runlog'] = $this->originalRunlog;

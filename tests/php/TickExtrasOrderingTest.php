@@ -22,6 +22,7 @@ final class TickExtrasOrderingTest extends TestCase
 		$this->dir = sys_get_temp_dir() . '/pfb_tick_extras_' . getmypid() . '_' . uniqid();
 		mkdir($this->dir . '/state', 0777, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dir;
+		$GLOBALS['pfb']['pending_marker'] = $this->dir . '/pfb_pending_changes';
 		$GLOBALS['pfb']['schedule_state_dir'] = $this->dir . '/state';
 		$GLOBALS['pfb']['runlog'] = $this->dir . '/run.log';
 		$GLOBALS['pfb']['extraslog'] = $this->dir . '/extras.log';

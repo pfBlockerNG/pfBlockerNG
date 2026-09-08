@@ -105,16 +105,15 @@ final class HookEditorDeleteTest extends TestCase
 
 	public function testRefusesWhenTheHookDirectoryIsNotWritable(): void
 	{
-		// unlink() needs write+execute on the DIRECTORY, not on the file. Root
-		// bypasses file permissions entirely, so this cannot be simulated as root --
-		// the same guard the repo's other permission-denial tests use.
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; the denial cannot be simulated');
-		}
+		// unlink() needs write+execute on the directory, not on the file. The
+		// harness helper gives root runs the same effective permission boundary.
 		$path = $this->makeHook('hook_post_probe.sh');
 		chmod($this->dir, 0555);
 		try {
-			$this->assertFalse(pfb_hook_editor_delete('hook_post_probe.sh', 'post', $this->dir));
+			$this->assertFalse(pfb_test_as_unprivileged(
+				fn () => pfb_hook_editor_delete('hook_post_probe.sh', 'post', $this->dir),
+				[$this->dir]
+			));
 			$this->assertFileExists($path, 'a read-only hook directory must leave the hook in place');
 		} finally {
 			chmod($this->dir, 0755);

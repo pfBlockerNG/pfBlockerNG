@@ -136,9 +136,6 @@ final class ListPreScriptStageTest extends TestCase
 
 	public function testCopyFailureFailsAndKeepsTheNormalizedPath(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable staging dir');
-		}
 
 		$norm = "{$this->tmp}/feed.norm";
 		file_put_contents($norm, "1.2.3.4\n");
@@ -148,8 +145,11 @@ final class ListPreScriptStageTest extends TestCase
 		$staged = "{$deniedDir}/feed.pre";
 		$script = $this->makeScript('ip_pre_unreached.sh', 'exit 0');
 
-		$result = pfb_list_pre_script_run($norm, $staged, $script, 'ip_pre_unreached.sh', 'MyFeed_v4',
-		    escapeshellarg($staged), '');
+		$result = pfb_test_as_unprivileged(
+			fn () => pfb_list_pre_script_run($norm, $staged, $script, 'ip_pre_unreached.sh', 'MyFeed_v4',
+				escapeshellarg($staged), ''),
+			[$this->tmp]
+		);
 
 		$this->assertFalse($result['ok'], 'a copy failure must fail the stage');
 		$this->assertSame($norm, $result['path'],

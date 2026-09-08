@@ -214,12 +214,9 @@ final class PfbFeedNormalizeTest extends TestCase
 
 	public function testUnwritableDirectoryFallsBackToParsingOrig(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions; the unwritable-dir denial cannot be simulated');
-		}
 		$orig = $this->writeOrig("a.example.com\n");
 		chmod($this->dir, 0555);
-		$res = pfb_feed_normalize($orig, self::NO_CONVERTER);
+		$res = pfb_test_as_unprivileged(fn () => pfb_feed_normalize($orig, self::NO_CONVERTER), [$this->dir]);
 		$this->assertSame($orig, $res['path'], 'normalize failure must fall back to the raw .orig');
 		$this->assertFalse($res['normalized']);
 		$this->assertTrue($res['changed']);

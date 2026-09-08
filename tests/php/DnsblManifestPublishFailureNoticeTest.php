@@ -23,9 +23,6 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 
 	protected function setUp(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('running as root -- a 0555 dir does not block tempnam()/fopen() for root');
-		}
 
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
@@ -56,11 +53,7 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		// setUp() can skip BEFORE assigning the properties below, and PHPUnit still runs
-		// tearDown() after a skipped setUp. Reading an uninitialised typed property is a
-		// fatal Error, and because these fixtures share $GLOBALS it does not stop at this
-		// class: it leaves the globals dirty and every later test that reads them errors
-		// too. Bail out when setUp did not get far enough to create anything.
+		// A setup failure before the sandbox is assigned must not read an uninitialised property.
 		if (!isset($this->tmp)) {
 			return;
 		}
@@ -77,8 +70,12 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 
 	public function testPublishFailureIntoReadOnlyDirFiresANotice(): void
 	{
-		$this->assertFalse(pfb_unbound_python_sources(array()));
-
+		[$published, $notices] = pfb_test_as_unprivileged(function (): array {
+			$published = pfb_unbound_python_sources(array());
+			return [$published, $GLOBALS['pfb_test_file_notices']];
+		}, [$this->tmp]);
+		$GLOBALS['pfb_test_file_notices'] = $notices;
+		$this->assertFalse($published);
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'exactly one notice raised on publish failure');
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
 		$this->assertSame('pfBlockerNG DNSBL', $notice['id']);

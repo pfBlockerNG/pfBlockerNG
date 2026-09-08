@@ -139,6 +139,76 @@ function pfb_test_tar(): string
 	return $GLOBALS['pfb']['tar'] ?? '/usr/bin/tar';
 }
 
+function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): mixed
+{
+	if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+		return $callback();
+	}
+	$uid = 65534;
+	$tmp = sys_get_temp_dir();
+	$tmp_owner = NULL;
+	$tmp_mode = fileperms($tmp);
+	if ($tmp_mode !== FALSE && ($tmp_mode & 0001) === 0) {
+		$tmp_owner = fileowner($tmp);
+		if ($tmp_owner === FALSE || !chown($tmp, $uid)) {
+			throw new RuntimeException("could not make nested TMPDIR {$tmp} traversable by an unprivileged fixture");
+		}
+	}
+	foreach ($owned_paths as $path) {
+		$paths = [$path];
+		if (is_dir($path)) {
+			foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path,
+				FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST) as $entry) {
+				$paths[] = $entry->getPathname();
+			}
+		}
+		foreach ($paths as $owned_path) {
+			if (!chown($owned_path, $uid)) {
+				throw new RuntimeException("could not prepare {$owned_path} for an unprivileged fixture");
+			}
+		}
+	}
+
+	$sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+	$pid = $sockets === FALSE ? -1 : pcntl_fork();
+	if ($pid === -1) {
+		if ($tmp_owner !== NULL) {
+			chown($tmp, $tmp_owner);
+		}
+		throw new RuntimeException('could not fork an unprivileged permission-denial fixture');
+	}
+	if ($pid === 0) {
+		fclose($sockets[0]);
+		try {
+			if (!posix_setgid($uid) || !posix_setuid($uid)) {
+				throw new RuntimeException('could not drop privileges in permission-denial fixture');
+			}
+			$payload = ['ok' => TRUE, 'value' => $callback()];
+		} catch (Throwable $error) {
+			$payload = ['ok' => FALSE, 'error' => get_class($error) . ': ' . $error->getMessage()];
+		}
+		fwrite($sockets[1], base64_encode(serialize($payload)) . "\n");
+		fclose($sockets[1]);
+		exit($payload['ok'] ? 0 : 1);
+	}
+
+	fclose($sockets[1]);
+	$encoded = fgets($sockets[0]);
+	fclose($sockets[0]);
+	pcntl_waitpid($pid, $status);
+	if ($tmp_owner !== NULL && !chown($tmp, $tmp_owner)) {
+		throw new RuntimeException("could not restore nested TMPDIR {$tmp} ownership");
+	}
+	$payload = is_string($encoded)
+		? unserialize(base64_decode(trim($encoded)), ['allowed_classes' => FALSE])
+		: NULL;
+	if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0 || !is_array($payload)
+		|| ($payload['ok'] ?? FALSE) !== TRUE) {
+		throw new RuntimeException('unprivileged fixture failed: ' . ($payload['error'] ?? 'child exited unexpectedly'));
+	}
+	return $payload['value'];
+}
+
 $GLOBALS['pfb']['tar'] = pfb_resolve_archiver();
 
 // Snapshot the SHIPPED $pfb['mime_types'] allow-list exactly as the just-loaded

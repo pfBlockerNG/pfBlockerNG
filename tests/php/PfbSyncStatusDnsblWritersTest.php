@@ -361,9 +361,6 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 	 */
 	public function testRestartFallbackPathReachesTailWithConvergedState(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions -- cannot simulate the sentinel-flip failure.');
-		}
 
 		$writable = sys_get_temp_dir() . '/pfb_dnsbl_writable_' . getmypid() . '_' . uniqid();
 		mkdir($writable, 0777, TRUE);
@@ -397,10 +394,14 @@ final class PfbSyncStatusDnsblWritersTest extends TestCase
 
 		$ledger_calls = 0;
 		try {
-			pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, static function () use (&$ledger_calls): bool {
-				$ledger_calls++;
-				return pfb_dnsbl_apply_ledger_update();
-			});
+			$ledger_calls = pfb_test_as_unprivileged(function (): int {
+				$ledger_calls = 0;
+				pfb_reload_unbound('enabled', FALSE, FALSE, TRUE, static function () use (&$ledger_calls): bool {
+					$ledger_calls++;
+					return pfb_dnsbl_apply_ledger_update();
+				});
+				return $ledger_calls;
+			}, [$this->dir, $writable]);
 		} finally {
 			chmod($this->dir, 0777);
 			foreach (glob("{$writable}/*") ?: [] as $file) {

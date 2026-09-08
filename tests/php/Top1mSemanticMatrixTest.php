@@ -205,15 +205,15 @@ final class Top1mSemanticMatrixTest extends TestCase
 
 	public function testCandidateRejectsUnreadableFile(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions');
-		}
 		$provider = pfb_top1m_providers()['tranco'];
 		$path = "{$this->dir}/unreadable.csv";
 		$this->assertNotFalse(file_put_contents($path, "1,Example.COM\n"));
 		$this->assertTrue(chmod($path, 0000));
 		try {
-			$this->assertFalse(pfb_top1m_candidate_valid($path, $provider));
+			$this->assertFalse(pfb_test_as_unprivileged(
+				fn () => pfb_top1m_candidate_valid($path, $provider),
+				[$this->dir]
+			));
 		} finally {
 			chmod($path, 0600);
 		}

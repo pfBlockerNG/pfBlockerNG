@@ -816,15 +816,11 @@ final class LogMgmtAgeCutoffTest extends TestCase
 	 * "succeeded" into the temp file). Uses 'extraslog' to avoid stepping on
 	 * the shared 'log' path other tests in this suite use.
 	 *
-	 * Root bypasses file permissions (chmod is a no-op enforcement-wise for
-	 * root), so this test cannot simulate the denial there -- skipped, same
-	 * guard CLAUDE.md documents for the existing chmod-based PHPUnit tests.
+	 * The harness helper gives root runs the same effective permission boundary
+	 * as an unprivileged runner.
 	 */
 	public function testFailedCatNeverCorruptsLiveLogEvenWithAgeCutoffActive(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses file permissions; cannot simulate a permission-denied write');
-		}
 
 		$this->seedMinimalConfig();
 		$this->setLogCaps('extraslog', '4', '10');
@@ -840,8 +836,8 @@ final class LogMgmtAgeCutoffTest extends TestCase
 		chmod($logPath, 0444);
 
 		try {
-			pfb_log_mgmt();
-
+			pfb_test_as_unprivileged(fn () => pfb_log_mgmt(),
+				[$GLOBALS['pfb']['logdir'], $GLOBALS['g']['tmp_path']]);
 			clearstatcache(TRUE, $logPath);
 			$this->assertSame($content, file_get_contents($logPath),
 				'a failed cat-over-the-live-log step must never blank/corrupt the original content'

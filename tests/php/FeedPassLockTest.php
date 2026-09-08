@@ -456,9 +456,6 @@ final class FeedPassLockTest extends TestCase
 	// exit code.
 	public function testBeginFailsClosedWhenLockFileUnopenable(): void
 	{
-		if (function_exists('posix_getuid') && posix_getuid() === 0) {
-			$this->markTestSkipped('root bypasses directory permissions; cannot simulate an unwritable dbdir');
-		}
 
 		$denydir = "{$this->dbdir}/deny_begin";
 		mkdir($denydir, 0755, TRUE);
@@ -466,7 +463,7 @@ final class FeedPassLockTest extends TestCase
 		chmod($denydir, 0555);
 
 		try {
-			$this->assertFalse(pfb_feed_pass_begin('sync'),
+			$this->assertFalse(pfb_test_as_unprivileged(fn () => pfb_feed_pass_begin('sync'), [$denydir]),
 				'an unwritable dbdir must fail CLOSED -- begin() returns FALSE rather than running a pass with no mutual exclusion');
 		} finally {
 			chmod($denydir, 0755);
