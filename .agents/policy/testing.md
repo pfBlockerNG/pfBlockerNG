@@ -18,6 +18,21 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 4. **Front-end changes REQUIRE front-end tests.** Change touching `www/` must carry UI tests (ADR-14). webConfigurator-reachable surface requires **Tier A (`ui_render`)**. Surface recorded in `test_render_smoke.py`'s `EXCLUDED_FROM_TIER_A` because Tier A cannot reach it requires live tier named by that exclusion plus focused hermetic coverage; never relabel unreachable Tier-B flow as Tier A. **Tier B (`ui_e2e`/`ui_browser`) also REQUIRED IFF change observable *only* in Tier B** — explicitly includes **new page**, **multi-step flow** (anything spanning more than one request/interaction), and **visual/structural** changes (element positioning/addition/removal, layout). When in doubt, add Tier B.
 5. **Tests express change's INTENT — documentation, not just coverage.** Name and comments state intended outcome being pinned, never mechanics of how it coded.
 
+### Production proof and test maintenance
+
+Red→green proves a change to existing production behaviour; it does not recursively
+apply to tests themselves. Test maintenance, test deletions and fixture/golden refreshes
+do not require tests-of-tests or a historical RED for each changed test-side file.
+In the Frozen RED table, record these as **N/A — test maintenance** with the reason,
+current file hash and relevant verification, rather than inventing a failing run.
+
+Test honesty still requires assertions that catch real regressions. Realistic
+production mutations in an isolated scratch tree, with the tests unchanged, are
+permitted evidence: run green, apply the production mutant, observe the relevant
+assertion fail, then restore production and confirm green. This does not replace
+test-first proof for an actual production behaviour change or required live/UI
+coverage; mark unexecuted live checks pending, never passed.
+
 ## Satisfying the principles
 
 - **Branch coverage — test every condition, not one side.** Boolean gets off *and* on (plus any third state); every `if`/`switch`/match branch and documented input class gets own assertion (exemplar pair: `test_dnsbl_hsts_override_forces_null` / `test_dnsbl_hsts_disabled_keeps_vip`).
