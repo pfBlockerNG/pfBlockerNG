@@ -110,7 +110,10 @@ _READ_COALESCE_RE = re.compile(
     r"\s*\[\s*(?=(?:'[\w-]+'|\"[\w-]+\"))['\"]([\w-]+)['\"]\s*\]\s*"
     r"(?:\?\?(?!=)|\?\s*:)"
 )
-_READ_ISSET_RE = re.compile(r"isset\(\s*\$pfb\s*\[\s*'(\w+)'\s*\]\s*\[\s*'([\w-]+)'\s*\]\s*\)\s*\?[^?:]*:")
+_READ_ISSET_RE = re.compile(
+    r"isset\(\s*\$pfb\s*\[\s*(?=(?:'\w+'|\"\w+\"))['\"](\w+)['\"]\s*\]"
+    r"\s*\[\s*(?=(?:'[\w-]+'|\"[\w-]+\"))['\"]([\w-]+)['\"]\s*\]\s*\)\s*\?[^?:]*:"
+)
 
 # Sanity floor: the registry has had >100 entries since issue #1920's audit. A parse
 # that finds fewer has broken, and a broken parse must fail the gate rather than

@@ -84,7 +84,7 @@ def _textarea_value(html: str, name: str) -> str:
         re.DOTALL,
     )
     assert match is not None, f'textarea name="{name}" not found in the rendered page'
-    return match.group(1).strip()
+    return match.group(1)
 
 
 def _select_selected_values(html: str, name: str) -> set[str]:
@@ -415,8 +415,8 @@ def test_absent_dnsbl_vips_render_the_none_sentinel(
             IP_PAGE,
             "pfBlockerNG",
             "v6suppression",
-            "b25lCnR3bw==",
-            "one\ntwo",
+            "IG9uZQp0d28g",
+            " one\ntwo ",
         ),
     ],
 )

@@ -3012,12 +3012,9 @@ final class CfgGatewayTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Parity oracle: every fixture entry (bare key -> {section, default,
-	 * read_adapter, write_adapter, write_priv?}), captured from the pre-#1931
-	 * registry, must still resolve identically once its section is flipped to
-	 * an alias via PFB_SECTIONS and joined onto the bare key. Iterates the
-	 * FIXTURE, never the live registry -- additions to the registry stay
-	 * legal; only a removal or a changed field on an existing entry fails.
+	 * Parity oracle: the pre-#1931 fixture's paths, defaults and write privileges
+	 * survive section re-keying. Iterate the historical fixture so additions stay
+	 * legal; adapter behaviour is covered by the gateway input/output tests.
 	 *
 	 * issue #1907: the fixture pins the #1931 re-key TRANSITION (that flipping bare
 	 * keys to alias/bare paths changed nothing else), not future default-value

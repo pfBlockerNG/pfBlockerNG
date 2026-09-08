@@ -59,17 +59,24 @@ final class DnsblFreshPconfigTest extends TestCase
 		array $default_tlds,
 		?array $stored = NULL
 	): array {
-		$GLOBALS['config'] = [];
-		config_set_path(self::DNSBL_SECTION, $stored ?? $dconfig);
+		$hadConfig = array_key_exists('config', $GLOBALS);
+		$previousConfig = $GLOBALS['config'] ?? NULL;
 		$diagnostics = [];
 		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
 			$diagnostics[] = $errstr;
 			return TRUE;
 		});
 		try {
+			$GLOBALS['config'] = [];
+			config_set_path(self::DNSBL_SECTION, $stored ?? $dconfig);
 			$pconfig = pfb_dnsbl_oracle_fresh_pconfig($dconfig, $default_tlds);
 		} finally {
 			restore_error_handler();
+			if ($hadConfig) {
+				$GLOBALS['config'] = $previousConfig;
+			} else {
+				unset($GLOBALS['config']);
+			}
 		}
 		return [$pconfig, $diagnostics];
 	}
@@ -159,7 +166,7 @@ final class DnsblFreshPconfigTest extends TestCase
 			'tld_allow_gtld'         => '',
 			'tld_allow_cctld'        => 'uk,de',
 			'tld_allow_bgtld'        => 'app,dev',
-			'pfb_regex_list'         => base64_encode("foo\nbar"),
+			'pfb_regex_list'         => base64_encode(" foo\nbar "),
 			'pfb_noaaaa_list'        => '%%%',
 			'pfb_gp_bypass_list'     => base64_encode('0'),
 			'whitelist'              => base64_encode(base64_encode('once')),
@@ -177,7 +184,7 @@ final class DnsblFreshPconfigTest extends TestCase
 		$this->assertSame(['uk', 'de'], $pconfig['tld_allow_cctld']);
 		$this->assertSame([], $pconfig['tld_allow_itld'], 'a missing CSV field remains an empty list');
 		$this->assertSame(['app', 'dev'], $pconfig['tld_allow_bgtld']);
-		$this->assertSame("foo\nbar", $pconfig['pfb_regex_list']);
+		$this->assertSame(" foo\nbar ", $pconfig['pfb_regex_list']);
 		$this->assertSame('', $pconfig['pfb_noaaaa_list'], 'malformed base64 keeps the current empty fallback');
 		$this->assertSame('0', $pconfig['pfb_gp_bypass_list'], "decoded textarea '0' must survive");
 		$this->assertSame(base64_encode('once'), $pconfig['whitelist'],

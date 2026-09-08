@@ -124,12 +124,13 @@ def test_page_level_default_for_a_registered_toggle_is_flagged() -> None:
     assert "ip/enable_dup" in violations[0].detail
 
 
-def test_isset_style_page_level_default_is_flagged() -> None:
-    """The other spelling: the 3.2 `isset(...) ? ... : 'on'` fallback."""
-    text = (
-        f"$pfb['aglobal'] = PfbConfig::readSection('{GLOBAL_SECTION}');\n"
-        "$alertrefresh = isset($pfb['aglobal']['alertrefresh']) ? $pfb['aglobal']['alertrefresh'] : 'on';\n"
-    )
+@pytest.mark.parametrize("mirror_quote", ["'", '"'])
+@pytest.mark.parametrize("key_quote", ["'", '"'])
+def test_isset_style_page_level_default_is_flagged(mirror_quote: str, key_quote: str) -> None:
+    """Each supported literal quote pair preserves the isset fallback contract."""
+    mirror = f"$pfb[{mirror_quote}aglobal{mirror_quote}]"
+    field = f"{mirror}[{key_quote}alertrefresh{key_quote}]"
+    text = f"{mirror} = PfbConfig::readSection('{GLOBAL_SECTION}');\n$alertrefresh = isset({field}) ? {field} : 'on';\n"
     assert _rules(text, "pfblockerng_alerts.php") == ["page-level-default"]
 
 
@@ -610,6 +611,12 @@ def test_registered_read_operators_and_paired_quotes_are_flagged(
             "$x = trim($pfb['foreign']['enable_dup'] ?? '');\n"
         ),
         MIRROR + "$key = 'enable_dup';\n$x = trim($pfb['iconfig'][$key] ?? '');\n",
+        MIRROR + '$x = isset($pfb["iconfig"]["unknown_key"]) ? "yes" : "no";\n',
+        (
+            '$pfb["foreign"] = PfbConfig::readSection("installedpackages/foreign/config/0");\n'
+            '$x = isset($pfb["foreign"]["enable_dup"]) ? "yes" : "no";\n'
+        ),
+        MIRROR + '$x = isset($pfb["iconfig"][$key]) ? "yes" : "no";\n',
     ),
 )
 def test_wrapped_read_does_not_claim_unknown_foreign_or_dynamic_keys(text: str) -> None:
@@ -625,6 +632,8 @@ def test_wrapped_read_does_not_claim_unknown_foreign_or_dynamic_keys(text: str) 
             "$x = trim($pfb['iconfig']['enable_dup'] ?? '');\n"
         ),
         MIRROR + "$x = trim($pfb['iconfig\"][\"enable_dup\"] ?? '');\n",
+        MIRROR + '$x = isset($pfb[\'iconfig"]["enable_dup"]) ? "yes" : "no";\n',
+        MIRROR + '$x = isset($pfb["iconfig"][\'enable_dup"]) ? "yes" : "no";\n',
     ),
 )
 def test_php_invalid_mismatched_quote_literals_are_out_of_scope(text: str) -> None:
