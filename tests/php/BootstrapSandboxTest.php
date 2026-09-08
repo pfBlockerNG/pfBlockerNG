@@ -325,4 +325,105 @@ PHP;
 		$this->assertSame(0700, fileperms($outer) & 0777,
 			'ancestor search permission must be restored after the child exits');
 	}
+
+	public function testUnprivilegedHelperRejectsSymlinkedOwnedPathComponentsBeforeCallback(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$this->assertTrue(chmod($this->tmp, 0777));
+		$external = "{$this->tmp}/external";
+		$subdir = "{$external}/sub";
+		$fixture = "{$this->tmp}/fixture";
+		$this->assertTrue(mkdir($subdir, 0700, TRUE));
+		$this->assertTrue(mkdir($fixture, 0777));
+		$this->assertTrue(chmod($external, 0777));
+		$sentinel = "{$subdir}/sentinel";
+		$this->assertSame(4, file_put_contents($sentinel, 'safe'));
+		$this->assertTrue(chmod($sentinel, 0600));
+		$link = "{$fixture}/link";
+		$this->assertTrue(symlink($external, $link));
+		$owner = fileowner($sentinel);
+		$mode = fileperms($sentinel) & 07777;
+		$error = NULL;
+		$result = NULL;
+
+		try {
+			$result = pfb_test_as_unprivileged(
+				static fn (): int|false => file_put_contents("{$link}/sub/sentinel", 'changed'),
+				["{$link}/sub"]
+			);
+		} catch (RuntimeException $caught) {
+			$error = $caught;
+		}
+		clearstatcache(TRUE, $sentinel);
+		$contentAfter = file_get_contents($sentinel);
+		$ownerAfter = fileowner($sentinel);
+		$modeAfter = fileperms($sentinel) & 07777;
+		if ($contentAfter !== 'safe') {
+			file_put_contents($sentinel, 'safe');
+		}
+		if ($ownerAfter !== $owner) {
+			chown($sentinel, $owner);
+		}
+		if ($modeAfter !== $mode) {
+			chmod($sentinel, $mode);
+		}
+
+		$this->assertSame('safe', $contentAfter,
+			'an intermediate symlink must be rejected before the callback can change its target');
+		$this->assertSame($owner, $ownerAfter,
+			'an intermediate symlink must be rejected before its target is chowned');
+		$this->assertSame($mode, $modeAfter,
+			'an intermediate symlink must leave its target mode unchanged');
+		$this->assertNull($result);
+		$this->assertInstanceOf(RuntimeException::class, $error);
+		$this->assertStringContainsString('symlink', $error->getMessage());
+	}
+
+	public function testUnprivilegedHelperRejectsSymlinkedNestedTmpdirBeforeOwnershipMutation(): void
+	{
+		if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+			$this->assertTrue(pfb_test_as_unprivileged(static fn (): bool => TRUE));
+			return;
+		}
+
+		$external = "{$this->tmp}/external-tmp";
+		$nested = "{$this->tmp}/nested";
+		$link = "{$nested}/tmp";
+		$this->assertTrue(mkdir($external, 0700));
+		$this->assertTrue(mkdir($nested, 0755));
+		$this->assertTrue(symlink($external, $link));
+		$owner = fileowner($external);
+		$mode = fileperms($external) & 07777;
+		$bootstrap = var_export(self::ROOT . '/tests/php/bootstrap.php', TRUE);
+		$script = 'require ' . $bootstrap . ';'
+			. 'try { pfb_test_as_unprivileged(static fn (): bool => TRUE); }'
+			. 'catch (RuntimeException $error) { echo $error->getMessage(); }';
+		$command = 'TMPDIR=' . escapeshellarg($link) . ' '
+			. escapeshellarg($GLOBALS['pfb']['timeout']) . ' 10 '
+			. escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($script);
+		$output = [];
+		$status = 0;
+
+		exec($command . ' 2>&1', $output, $status);
+		clearstatcache(TRUE, $external);
+		$ownerAfter = fileowner($external);
+		$modeAfter = fileperms($external) & 07777;
+		if ($ownerAfter !== $owner) {
+			chown($external, $owner);
+		}
+		if ($modeAfter !== $mode) {
+			chmod($external, $mode);
+		}
+
+		$this->assertSame($owner, $ownerAfter,
+			'a symlinked TMPDIR must be rejected before its external target is chowned');
+		$this->assertSame($mode, $modeAfter,
+			'a symlinked TMPDIR must leave its external target mode unchanged');
+		$this->assertSame(0, $status, implode("\n", $output));
+		$this->assertStringContainsString('symlink', implode("\n", $output));
+	}
 }

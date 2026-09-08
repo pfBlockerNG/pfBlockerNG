@@ -139,21 +139,49 @@ function pfb_test_tar(): string
 	return $GLOBALS['pfb']['tar'] ?? '/usr/bin/tar';
 }
 
+function pfb_test_preflight_path(string $root, string $path, string $label): string
+{
+	$root = rtrim($root, DIRECTORY_SEPARATOR) ?: DIRECTORY_SEPARATOR;
+	$path = rtrim($path, DIRECTORY_SEPARATOR) ?: DIRECTORY_SEPARATOR;
+	$prefix = $root === DIRECTORY_SEPARATOR ? $root : $root . DIRECTORY_SEPARATOR;
+	if ($path !== $root && !str_starts_with($path, $prefix)) {
+		throw new RuntimeException("refusing {$label} outside trusted temporary root {$path}");
+	}
+	$canonical = realpath($root);
+	if ($canonical === FALSE) {
+		throw new RuntimeException("could not inspect trusted temporary root {$root}");
+	}
+	foreach (explode(DIRECTORY_SEPARATOR, ltrim(substr($path, strlen($root)), DIRECTORY_SEPARATOR)) as $component) {
+		if ($component === '' || $component === '.') {
+			continue;
+		}
+		if ($component === '..') {
+			throw new RuntimeException("refusing {$label} outside trusted temporary root {$path}");
+		}
+		$canonical .= DIRECTORY_SEPARATOR . $component;
+		if (is_link($canonical)) {
+			throw new RuntimeException("refusing {$label} symlink {$canonical}");
+		}
+	}
+	return $canonical;
+}
+
 function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): mixed
 {
 	if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
 		return $callback();
 	}
 	$uid = 65534;
-	$tmp = sys_get_temp_dir();
+	$tmp_path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+	$tmp_prefix_end = strpos($tmp_path, DIRECTORY_SEPARATOR, 1);
+	$tmp_prefix = $tmp_prefix_end === FALSE ? $tmp_path : substr($tmp_path, 0, $tmp_prefix_end);
+	$tmp = pfb_test_preflight_path($tmp_prefix, $tmp_path, 'nested TMPDIR');
 	$owners = [];
 	$modes = [];
 	$tmp_owner = NULL;
 
 	foreach ($owned_paths as $path) {
-		if (is_link($path)) {
-			throw new RuntimeException("refusing owned-path symlink {$path}");
-		}
+		pfb_test_preflight_path($tmp_path, $path, 'owned-path');
 		if (!file_exists($path)) {
 			throw new RuntimeException("could not prepare {$path} for an unprivileged fixture");
 		}
@@ -196,11 +224,13 @@ function pfb_test_as_unprivileged(callable $callback, array $owned_paths = []): 
 		}
 	}
 
-	$restore = static function () use (&$owners, &$modes, $tmp, &$tmp_owner): void {
+	$restore = static function () use (&$owners, &$modes, $tmp, $tmp_path, &$tmp_owner): void {
 		$restore_error = NULL;
 		foreach (array_reverse($owners, TRUE) as $path => $owner) {
-			if (is_link($path)) {
-				$restore_error ??= "refusing replacement symlink {$path} during ownership restore";
+			try {
+				pfb_test_preflight_path($tmp_path, $path, 'replacement');
+			} catch (RuntimeException $error) {
+				$restore_error ??= $error->getMessage() . ' during ownership restore';
 				continue;
 			}
 			if (file_exists($path) && !chown($path, $owner)) {
