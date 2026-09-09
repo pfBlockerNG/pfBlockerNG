@@ -375,7 +375,12 @@ SH;
 		if ($real === NULL) {
 			$this->markTestSkipped('no real rsync binary available on this host');
 		}
-		$GLOBALS['pfb']['rsync_bin'] = $real;
+		$stderrPath = "{$this->workdir}/rsync.stderr";
+		$capture = "{$this->workdir}/rsync-capture.sh";
+		$this->assertNotFalse(file_put_contents($capture, "#!/bin/sh\nexec "
+			. escapeshellarg($real) . ' "$@" 2>' . escapeshellarg($stderrPath) . "\n"));
+		$this->assertTrue(chmod($capture, 0755));
+		$GLOBALS['pfb']['rsync_bin'] = $capture;
 
 		$errno  = 0;
 		$errstr = '';
@@ -395,6 +400,9 @@ SH;
 		$this->assertNotFalse(@stream_socket_accept($this->stallServer, 0),
 			"the site must reach the stalled peer through the injected rsync binary ({$real})");
 		$this->assertFalse($result->success, 'a silent peer must still fail finitely');
+		$stderr = (string) file_get_contents($stderrPath);
+		$this->assertMatchesRegularExpression('/\b(?:timeout|timed out)\b/i', $stderr,
+			"expected an I/O timeout from {$real}; stderr: {$stderr}; log: " . $this->logText());
 		$this->assertStringContainsString('RSYNC Failed (exit', $this->logText(),
 			'the silent peer must fail through rsync\'s own I/O timeout (rsync\'s exit), not '
 			. 'the wall deadline; log: ' . $this->logText());
