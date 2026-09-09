@@ -177,6 +177,23 @@ setup_graphify_client() {
 	(cd "$HOME" && "$graphify_bin" "$1" install && "$graphify_bin" install --platform "$1")
 }
 
+install_receiving_code_review() {
+	source=$root/scripts/agent/skills/receiving-code-review
+	destination_parent=$HOME/.agents/skills
+	destination=$destination_parent/receiving-code-review
+	staged=$destination_parent/.receiving-code-review.new
+	[ -f "$source/SKILL.md" ] || fail "required vendored skill '$source/SKILL.md' is missing"
+	[ -f "$source/LICENSE" ] || fail "required vendored skill license '$source/LICENSE' is missing"
+	mkdir -p "$destination_parent"
+	rm -rf "$staged"
+	cp -R "$source" "$staged" || {
+		rm -rf "$staged"
+		return 1
+	}
+	rm -rf "$destination"
+	mv "$staged" "$destination"
+}
+
 configure_agents() {
 	# Run both Graphify update surfaces for every detected harness mapping so neither
 	# its integration nor its skill copy stays on the previous package release.
@@ -288,6 +305,7 @@ main() {
 	serena init
 	disable_serena_dashboard
 	configure_agents
+	install_receiving_code_review
 
 	sh "$init_tools" "$root"
 }
