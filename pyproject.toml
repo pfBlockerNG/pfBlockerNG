@@ -18,7 +18,7 @@ package = false
 [dependency-groups]
 # Agent and developer CLI tools. Single source of truth for versions/pins.
 tools = [
-    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@3b841eedf531e99b8e3dbbac3fe9a5e8acb6a114",
+    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@0096e39bce6074fcd343f4c4c4a92ee40000cc0a",
     "serena-agent",
     "ast-grep-cli",
     "semgrep",
