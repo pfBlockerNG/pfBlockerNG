@@ -425,6 +425,8 @@ GROK
     skill_destination="$home/.agents/skills/receiving-code-review"
     mkdir -p "$skill_destination"
     printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    mkdir -p "$home/.agents/skills/.receiving-code-review.new"
+    printf '%s\n' 'stale stage' > "$home/.agents/skills/.receiving-code-review.new/marker"
     rm "$skill_source/SKILL.md"
     When run sh "$script_abs" "$repository"
     The status should not equal 0
@@ -437,6 +439,8 @@ GROK
     skill_destination="$home/.agents/skills/receiving-code-review"
     mkdir -p "$skill_destination"
     printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    mkdir -p "$home/.agents/skills/.receiving-code-review.new"
+    printf '%s\n' 'stale stage' > "$home/.agents/skills/.receiving-code-review.new/marker"
     rm "$skill_source/LICENSE"
     When run sh "$script_abs" "$repository"
     The status should not equal 0
@@ -456,6 +460,8 @@ GROK
     cat > "$activebin/cp" <<'FAIL_SKILL_COPY'
 #!/bin/sh
 if [ "$#" -eq 3 ] && [ "$1" = -R ] && [ "$2" = "$DEBIAN_SKILL_SOURCE" ]; then
+  mkdir -p "$3"
+  printf '%s\n' partial > "$3/partial"
   exit 77
 fi
 exec "$DEBIAN_REAL_CP" "$@"
@@ -467,6 +473,30 @@ FAIL_SKILL_COPY
     The contents of file "$skill_destination/LICENSE" should equal 'installed license'
     The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
     The contents of file "$home/.agents/skills/keep-me/marker" should equal 'preserved'
+  End
+
+  It 'restores the installed review skill when publishing its refresh fails'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination"
+    printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    printf '%s\n' 'installed license' > "$skill_destination/LICENSE"
+    export DEBIAN_SKILL_STAGED="$home/.agents/skills/.receiving-code-review.new"
+    export DEBIAN_SKILL_DESTINATION="$skill_destination"
+    export DEBIAN_REAL_MV="$basebin/mv"
+    cat > "$activebin/mv" <<'FAIL_SKILL_PUBLISH'
+#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = "$DEBIAN_SKILL_STAGED" ] && [ "$2" = "$DEBIAN_SKILL_DESTINATION" ]; then
+  exit 77
+fi
+exec "$DEBIAN_REAL_MV" "$@"
+FAIL_SKILL_PUBLISH
+    chmod +x "$activebin/mv"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The contents of file "$skill_destination/SKILL.md" should equal 'installed skill'
+    The contents of file "$skill_destination/LICENSE" should equal 'installed license'
+    The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
+    The directory "$home/.agents/skills/.receiving-code-review.old" should not be exist
   End
 
   It 'resolves every initial Linux tool from its configured destination immediately'

@@ -182,16 +182,27 @@ install_receiving_code_review() {
 	destination_parent=$HOME/.agents/skills
 	destination=$destination_parent/receiving-code-review
 	staged=$destination_parent/.receiving-code-review.new
+	previous=$destination_parent/.receiving-code-review.old
+	mkdir -p "$destination_parent"
+	rm -rf "$staged" "$previous"
 	[ -f "$source/SKILL.md" ] || fail "required vendored skill '$source/SKILL.md' is missing"
 	[ -f "$source/LICENSE" ] || fail "required vendored skill license '$source/LICENSE' is missing"
-	mkdir -p "$destination_parent"
-	rm -rf "$staged"
 	cp -R "$source" "$staged" || {
 		rm -rf "$staged"
 		return 1
 	}
-	rm -rf "$destination"
-	mv "$staged" "$destination"
+	if [ -e "$destination" ]; then
+		mv "$destination" "$previous" || {
+			rm -rf "$staged"
+			return 1
+		}
+	fi
+	mv "$staged" "$destination" || {
+		rm -rf "$staged"
+		[ ! -e "$previous" ] || mv "$previous" "$destination"
+		return 1
+	}
+	rm -rf "$previous"
 }
 
 configure_agents() {
