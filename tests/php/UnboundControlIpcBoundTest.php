@@ -178,7 +178,7 @@ final class UnboundControlIpcBoundTest extends TestCase
 		array $pfb,
 		int $budget = self::BUDGET,
 		array $ini = [],
-		string $startCommand = '/bin/true',
+		string $startCommand = 'true',
 		int $startWait = 5,
 		?string $phpCli = NULL
 	): array
@@ -541,6 +541,8 @@ final class UnboundControlIpcBoundTest extends TestCase
 		$open_basedir = implode(PATH_SEPARATOR, [
 			dirname(__DIR__, 2),
 			$this->dir,
+			realpath(PHP_BINARY),
+			realpath((string) $GLOBALS['pfb']['timeout']),
 			'/usr',
 			'/bin',
 			'/etc',
