@@ -12,6 +12,7 @@ final class UnboundControlFixturePortabilityTest extends TestCase
 	{
 		$root = dirname(__DIR__, 2);
 		$result = pfb_test_run_process([
+			(string) $GLOBALS['pfb']['timeout'], '-s', 'TERM', '-k', '5', '90',
 			PHP_BINARY,
 			"{$root}/vendor/bin/phpunit",
 			'--configuration', "{$root}/phpunit.xml",
@@ -20,7 +21,7 @@ final class UnboundControlFixturePortabilityTest extends TestCase
 			'--fail-on-skipped',
 			'--filter', 'testStatusMustSucceedEvenWhenItsOutputSaysRunning|testUnstageableCacheDumpStillRestartsTheResolver',
 			__DIR__ . '/UnboundControlIpcBoundTest.php',
-		], 90.0);
+		], 100.0);
 
 		$this->assertSame(0, $result['exit'],
 			"restart fixtures must reach their control assertions rather than fail host setup:\n"

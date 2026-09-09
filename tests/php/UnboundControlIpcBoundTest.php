@@ -559,6 +559,8 @@ final class UnboundControlIpcBoundTest extends TestCase
 			'an unstageable cache dump must not fatal the update pass: ' . implode("\n", $run['output']));
 		$this->assertContains('RELOAD-RETURNED', $run['output'],
 			'pfb_reload_unbound() must return so the caller can converge its ledger');
+		$this->assertNotContains('dump_cache', $run['control'],
+			'an unstageable cache path must prevent the dump command from starting');
 		$this->assertContains('status', $run['control'],
 			'the resolver must still be restarted and confirmed when no cache could be staged');
 	}
