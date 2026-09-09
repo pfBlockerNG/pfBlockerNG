@@ -40,6 +40,10 @@ AGENTS_MARKER
 # repository policy marker
 preserve = true
 POLICY_MARKER
+    skill_source="$repository/scripts/agent/skills/receiving-code-review"
+    mkdir -p "$skill_source"
+    printf '%s\n' '# fixture receiving-code-review skill' > "$skill_source/SKILL.md"
+    printf '%s\n' 'fixture license' > "$skill_source/LICENSE"
     cp "$agent_marker" "$fixture/AGENTS.md.before"
     cp "$policy_marker" "$fixture/policy.before"
 
@@ -401,6 +405,98 @@ GROK
     The path "$home/.local/bin/semgrep" should be executable
     The path "$home/.local/bin/codegraph" should be executable
     The path "$home/.cargo/bin/wt" should be executable
+  End
+
+  It 'installs and refreshes the vendored review skill without disturbing sibling skills'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination" "$home/.agents/skills/keep-me"
+    printf '%s\n' 'stale skill' > "$skill_destination/SKILL.md"
+    printf '%s\n' 'remove me' > "$skill_destination/stale-only"
+    printf '%s\n' 'preserved' > "$home/.agents/skills/keep-me/marker"
+    When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(cmp -s "$skill_source/SKILL.md" "$skill_destination/SKILL.md"; printf '%s' "$?")" -eq 0 ]
+    Assert [ "$(cmp -s "$skill_source/LICENSE" "$skill_destination/LICENSE"; printf '%s' "$?")" -eq 0 ]
+    The file "$skill_destination/stale-only" should not be exist
+    The contents of file "$home/.agents/skills/keep-me/marker" should equal 'preserved'
+  End
+
+  It 'keeps the installed review skill when the vendored skill file is missing'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination"
+    printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    mkdir -p "$home/.agents/skills/.receiving-code-review.new"
+    printf '%s\n' 'stale stage' > "$home/.agents/skills/.receiving-code-review.new/marker"
+    rm "$skill_source/SKILL.md"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include "required vendored skill '$skill_source/SKILL.md' is missing"
+    The contents of file "$skill_destination/SKILL.md" should equal 'installed skill'
+    The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
+  End
+
+  It 'keeps the installed review skill when the vendored license is missing'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination"
+    printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    mkdir -p "$home/.agents/skills/.receiving-code-review.new"
+    printf '%s\n' 'stale stage' > "$home/.agents/skills/.receiving-code-review.new/marker"
+    rm "$skill_source/LICENSE"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include "required vendored skill license '$skill_source/LICENSE' is missing"
+    The contents of file "$skill_destination/SKILL.md" should equal 'installed skill'
+    The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
+  End
+
+  It 'keeps the installed review skill and removes staging when its refresh copy fails'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination" "$home/.agents/skills/keep-me"
+    printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    printf '%s\n' 'installed license' > "$skill_destination/LICENSE"
+    printf '%s\n' 'preserved' > "$home/.agents/skills/keep-me/marker"
+    export DEBIAN_SKILL_SOURCE="$skill_source"
+    export DEBIAN_REAL_CP="$basebin/cp"
+    cat > "$activebin/cp" <<'FAIL_SKILL_COPY'
+#!/bin/sh
+if [ "$#" -eq 3 ] && [ "$1" = -R ] && [ "$2" = "$DEBIAN_SKILL_SOURCE" ]; then
+  mkdir -p "$3"
+  printf '%s\n' partial > "$3/partial"
+  exit 77
+fi
+exec "$DEBIAN_REAL_CP" "$@"
+FAIL_SKILL_COPY
+    chmod +x "$activebin/cp"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The contents of file "$skill_destination/SKILL.md" should equal 'installed skill'
+    The contents of file "$skill_destination/LICENSE" should equal 'installed license'
+    The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
+    The contents of file "$home/.agents/skills/keep-me/marker" should equal 'preserved'
+  End
+
+  It 'restores the installed review skill when publishing its refresh fails'
+    skill_destination="$home/.agents/skills/receiving-code-review"
+    mkdir -p "$skill_destination"
+    printf '%s\n' 'installed skill' > "$skill_destination/SKILL.md"
+    printf '%s\n' 'installed license' > "$skill_destination/LICENSE"
+    export DEBIAN_SKILL_STAGED="$home/.agents/skills/.receiving-code-review.new"
+    export DEBIAN_SKILL_DESTINATION="$skill_destination"
+    export DEBIAN_REAL_MV="$basebin/mv"
+    cat > "$activebin/mv" <<'FAIL_SKILL_PUBLISH'
+#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = "$DEBIAN_SKILL_STAGED" ] && [ "$2" = "$DEBIAN_SKILL_DESTINATION" ]; then
+  exit 77
+fi
+exec "$DEBIAN_REAL_MV" "$@"
+FAIL_SKILL_PUBLISH
+    chmod +x "$activebin/mv"
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The contents of file "$skill_destination/SKILL.md" should equal 'installed skill'
+    The contents of file "$skill_destination/LICENSE" should equal 'installed license'
+    The directory "$home/.agents/skills/.receiving-code-review.new" should not be exist
+    The directory "$home/.agents/skills/.receiving-code-review.old" should not be exist
   End
 
   It 'resolves every initial Linux tool from its configured destination immediately'
