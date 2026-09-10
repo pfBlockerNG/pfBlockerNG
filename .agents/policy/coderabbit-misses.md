@@ -15,6 +15,8 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `ea8d3c43a`  Graphify rollback  (#9) — pfBlockerNG/graphify#9; silent twice.
+- `66285ab5c`  Shared Graphify skill  (#2) — andrebrait/ai-harness-settings#2; quota.
 - `c6f52993a`  test: pin singular reviewer quota units  (#3269) — asked twice, two quota notices (2 then 59 min after retry); condensed review and Copilot finding resolved.
 - `31201726f`  pfblockerng: record post-script staging failures  (#3265) — asked twice, two quota notices; condensed review and Copilot findings resolved.
 - `78a498db9`  fix: isolate webassets reproducibility build  (#3266) — asked twice, two quota notices; condensed review and Copilot approval resolved.
