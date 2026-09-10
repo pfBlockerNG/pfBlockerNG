@@ -71,9 +71,11 @@ def test_output_reader_teardown_kills_surviving_pkg_descendant(monkeypatch: pyte
         survivors = _live_group_pids(pgid)
         assert not survivors, f"installer process-group members outlived test teardown: {survivors}"
     finally:
-        if pgid > 0:
+        for captured_proc in capture:
+            captured_pgid = captured_proc.pid
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(pgid, signal.SIGKILL)
+                os.killpg(captured_pgid, signal.SIGKILL)
             deadline = time.monotonic() + 5.0
-            while _live_group_pids(pgid) and time.monotonic() < deadline:
+            while _live_group_pids(captured_pgid) and time.monotonic() < deadline:
                 time.sleep(0.05)
+            captured_proc.wait(timeout=5)

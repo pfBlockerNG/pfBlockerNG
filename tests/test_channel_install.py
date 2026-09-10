@@ -1840,10 +1840,7 @@ def _finish_install_process(
         parent_timeout = exc
 
     reader.join(timeout=10)
-    if reader.is_alive() and proc.stdout is not None:
-        proc.stdout.close()
-        reader.join(timeout=1)
-    if proc.stdout is not None and not proc.stdout.closed:
+    if not reader.is_alive() and proc.stdout is not None and not proc.stdout.closed:
         proc.stdout.close()
     if reader.is_alive():
         raise RuntimeError(f"Python output reader outlived installer cleanup for pgid={pgid}") from group_error
@@ -1911,7 +1908,7 @@ def test_install_process_cleanup_runs_after_assertion_failure() -> None:
     ready = threading.Event()
     seen: list[str] = []
     proc = subprocess.Popen(
-        ["sh", "-c", "printf 'ready\\n'; while :; do sleep 1; done"],
+        ["sh", "-c", "printf 'ready\\n'; while true; do sleep 1; done"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
