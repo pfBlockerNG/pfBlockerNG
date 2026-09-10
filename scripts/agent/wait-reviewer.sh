@@ -18,8 +18,8 @@
 # Handle matching is case-insensitive and ANCHORED, so `--handle copilot` matches
 # copilot-pull-request-reviewer[bot] and `coderabbitai` matches coderabbitai[bot], but a
 # login that merely CONTAINS the handle does not count.
-# `--handle snyk` reads the head-SHA commit status/check-runs instead of comments; a
-# non-terminal error exits nonzero rather than inventing a quota duration.
+# `--handle snyk` reads the head-SHA commit status/check-runs instead of comments;
+# an unclassifiable Snyk state exits nonzero rather than inventing a quota duration.
 # Login match is ANCHORED: == handle, == handle[bot], or startswith(handle-).
 # A wall-clock deadline (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides)
 # bounds the wait even when individual gh calls stall.
@@ -44,7 +44,7 @@ usage() {
 classify() {
 	if [ "$handle" = "snyk" ]; then
 		if printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)'; then
-			printf 'wait-reviewer.sh: non-terminal Snyk state has no authoritative duration\n' >&2
+			printf 'wait-reviewer.sh: unclassifiable Snyk state has no authoritative duration\n' >&2
 			return 1
 		fi
 		if printf '%s' "$sinfo" | grep -Eqi '^(success|failure|neutral|completed)'; then
