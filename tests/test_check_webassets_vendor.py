@@ -36,6 +36,118 @@ EXPECTED_FILES = (
 )
 
 
+def _checker_fixture(tmp_path: Path, mode: str) -> tuple[Path, str]:
+    root = tmp_path / mode
+    vendor = root / "src/usr/local/www/pfblockerng/vendor/codemirror"
+    tools = root / "tools/webassets"
+    scripts = root / "scripts"
+    vendor.mkdir(parents=True)
+    tools.mkdir(parents=True)
+    scripts.mkdir()
+    (vendor / "bundle.js").write_text("committed\n", encoding="utf-8")
+    if mode == "missing":
+        (vendor / "stale.js").write_text("committed stale\n", encoding="utf-8")
+    (tools / "generated.txt").write_text("committed source\n", encoding="utf-8")
+    (tools / "mode").write_text(mode, encoding="utf-8")
+    (scripts / "build-webassets.sh").write_text(
+        """#!/bin/sh
+set -eu
+root="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
+vendor="$root/src/usr/local/www/pfblockerng/vendor/codemirror"
+mode="$(cat "$root/tools/webassets/mode")"
+rm -rf "$vendor"
+mkdir -p "$vendor"
+printf 'committed\\n' > "$vendor/bundle.js"
+printf 'generated\\n' > "$root/tools/webassets/generated.txt"
+case "$mode" in
+    changed) printf 'rebuilt\\n' > "$vendor/bundle.js" ;;
+    extra) printf 'unexpected\\n' > "$vendor/extra.js" ;;
+    failure) printf 'partial\\n' > "$vendor/bundle.js"; exit 9 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    return root, status
+
+
+@pytest.mark.parametrize("mode", ("same", "changed", "missing", "extra"))
+def test_checker_compares_rebuilt_tree_without_modifying_checkout(tmp_path: Path, mode: str) -> None:
+    root, status_before = _checker_fixture(tmp_path, mode)
+
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, capture_output=True, text=True)
+
+    expected_status = 0 if mode == "same" else 1
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    if expected_status == 1:
+        assert "vendor tree drifted from its pinned source" in result.stderr
+        assert "sh scripts/build-webassets.sh, then commit the result" in result.stderr
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    assert status_after == status_before, (
+        f"checker modified its checkout for {mode=}\nbefore:\n{status_before}\nafter:\n{status_after}"
+    )
+
+
+def test_checker_rejects_dirty_vendor_tree_that_matches_rebuild(tmp_path: Path) -> None:
+    root, _ = _checker_fixture(tmp_path, "changed")
+    vendor_file = root / "src/usr/local/www/pfblockerng/vendor/codemirror/bundle.js"
+    vendor_file.write_text("rebuilt\n", encoding="utf-8")
+    status_before = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, capture_output=True, text=True)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "vendor tree drifted from its pinned source" in result.stderr
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    assert status_after == status_before, (
+        f"checker modified the already-dirty checkout\nbefore:\n{status_before}\nafter:\n{status_after}"
+    )
+
+
+def test_checker_missing_build_input_returns_two_without_modifying_checkout(tmp_path: Path) -> None:
+    root, _ = _checker_fixture(tmp_path, "same")
+    shutil.rmtree(root / "tools/webassets")
+    status_before = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, capture_output=True, text=True)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "build-webassets.sh failed to run" in result.stderr
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    assert status_after == status_before, (
+        f"checker modified checkout with missing build input\nbefore:\n{status_before}\nafter:\n{status_after}"
+    )
+
+
+def test_checker_build_failure_does_not_modify_checkout(tmp_path: Path) -> None:
+    root, status_before = _checker_fixture(tmp_path, "failure")
+
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, capture_output=True, text=True)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "build-webassets.sh failed (exit 9)" in result.stderr
+    status_after = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    assert status_after == status_before, (
+        f"checker modified its checkout on build failure\nbefore:\n{status_before}\nafter:\n{status_after}"
+    )
+
+
 def _manifest_entries() -> dict[str, str]:
     assert MANIFEST.is_file(), f"missing manifest: {MANIFEST}"
     entries: dict[str, str] = {}

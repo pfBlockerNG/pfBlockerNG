@@ -15,8 +15,8 @@ thing that may write that vendor tree.
 This mirrors ``scripts/check_composer_vendor.py``'s role for the PHP vendor/
 tree, but the drift can only be proven by actually rebuilding (there's no
 single upstream file to hash-compare -- the bundle is esbuild's own output) --
-so this checker re-runs the build script and diffs its output, rather than
-comparing lockfile metadata.
+so this checker copies the build inputs to a temporary directory, re-runs the
+build script there, and diffs its output against the committed tree.
 
 Exit status: 0 = the vendor tree matches its pinned source, 1 = it has
 drifted (regenerate with ``scripts/build-webassets.sh`` and commit the
@@ -25,8 +25,10 @@ result), 2 = the build itself failed to run.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 VENDOR_DIR = "src/usr/local/www/pfblockerng/vendor/codemirror"
@@ -43,15 +45,32 @@ def main(argv: list[str]) -> int:
         print("usage: check_webassets_vendor.py", file=sys.stderr)
         return 2
     root = _repo_root()
-    build = subprocess.run(["sh", str(root / "scripts" / "build-webassets.sh")], cwd=root)
-    if build.returncode != 0:
-        print(f"build-webassets.sh failed (exit {build.returncode})", file=sys.stderr)
-        return 2
-    diff = subprocess.run(["git", "diff", "--exit-code", "--", VENDOR_DIR], cwd=root)
-    if diff.returncode != 0:
-        print(f"vendor tree drifted from its pinned source -- {REMEDIATION}", file=sys.stderr)
-        return 1
-    return 0
+    with tempfile.TemporaryDirectory(prefix="pfb-webassets-") as temp:
+        build_root = Path(temp)
+        try:
+            (build_root / "scripts").mkdir()
+            shutil.copy2(root / "scripts" / "build-webassets.sh", build_root / "scripts")
+            shutil.copytree(
+                root / "tools" / "webassets",
+                build_root / "tools" / "webassets",
+                ignore=shutil.ignore_patterns("node_modules"),
+            )
+        except (OSError, shutil.Error) as error:
+            print(f"build-webassets.sh failed to run: {error}", file=sys.stderr)
+            return 2
+        build = subprocess.run(["sh", str(build_root / "scripts" / "build-webassets.sh")], cwd=build_root)
+        if build.returncode != 0:
+            print(f"build-webassets.sh failed (exit {build.returncode})", file=sys.stderr)
+            return 2
+        diff = subprocess.run(
+            ["git", "diff", "--no-index", "--exit-code", "--", root / VENDOR_DIR, build_root / VENDOR_DIR]
+        )
+        if diff.returncode == 0:
+            diff = subprocess.run(["git", "diff", "--exit-code", "--", VENDOR_DIR], cwd=root)
+        if diff.returncode != 0:
+            print(f"vendor tree drifted from its pinned source -- {REMEDIATION}", file=sys.stderr)
+            return 1
+        return 0
 
 
 if __name__ == "__main__":
