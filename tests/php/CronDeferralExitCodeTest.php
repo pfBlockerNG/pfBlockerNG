@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc';
 require_once __DIR__ . '/support/FailingFlockStream.php';
+require_once __DIR__ . '/DeferralLockHarnessTrait.php';
 
 /**
  * Issue #2591: pfblockerng_sync_cron() keeps its established bool while exposing
@@ -16,15 +17,13 @@ require_once __DIR__ . '/support/FailingFlockStream.php';
  */
 final class CronDeferralExitCodeTest extends TestCase
 {
+	use DeferralLockHarnessTrait;
+
 	private string $dbdir = '';
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
 	private bool $hadConfig = FALSE;
 	private mixed $originalConfig = NULL;
-
-	/** Raw fds simulating ANOTHER process holding a lock. */
-	private $feedLockFp = NULL;
-	private $dispatchLockFp = NULL;
 
 	protected function setUp(): void
 	{
@@ -46,27 +45,12 @@ final class CronDeferralExitCodeTest extends TestCase
 		]);
 		$GLOBALS['config'] = [];
 
-		// No inherited locks: a leaked handle would make a deferral row pass vacuously
-		// (the reentrancy short-circuit returns TRUE without ever reaching the guard).
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->resetDeferralLocks();
 	}
 
 	protected function tearDown(): void
 	{
-		foreach ([$this->feedLockFp, $this->dispatchLockFp] as $fp) {
-			if (is_resource($fp)) {
-				@flock($fp, LOCK_UN);
-				@fclose($fp);
-			}
-		}
-		$this->feedLockFp = $this->dispatchLockFp = NULL;
-
-		pfb_feed_pass_release();
-		if (isset($GLOBALS['pfb_schedule_dispatch_lock']) && is_resource($GLOBALS['pfb_schedule_dispatch_lock'])) {
-			@flock($GLOBALS['pfb_schedule_dispatch_lock'], LOCK_UN);
-			@fclose($GLOBALS['pfb_schedule_dispatch_lock']);
-		}
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->releaseDeferralLocks();
 
 		foreach (glob("{$this->dbdir}/*") ?: [] as $path) {
 			is_dir($path) ? @rmdir($path) : @unlink($path);
@@ -85,17 +69,9 @@ final class CronDeferralExitCodeTest extends TestCase
 		}
 	}
 
-	private function mainLog(): string
-	{
-		$log = $GLOBALS['pfb']['log'];
-		return is_file($log) ? (string) file_get_contents($log) : '';
-	}
-
 	public function testDispatcherLockPreservesScheduledTrueAndNamesLock(): void
 	{
-		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
-		$this->assertIsResource($this->dispatchLockFp, 'test setup: could not open the dispatcher lock');
-		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
+		$this->holdDispatcherLock();
 		$deferredBy = NULL;
 
 		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
@@ -108,9 +84,7 @@ final class CronDeferralExitCodeTest extends TestCase
 
 	public function testFeedPassLockPreservesScheduledTrueAndNamesLock(): void
 	{
-		$this->feedLockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
-		$this->assertIsResource($this->feedLockFp, 'test setup: could not open the feed-pass lock');
-		$this->assertTrue(flock($this->feedLockFp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
+		$this->holdFeedPassLock();
 		$deferredBy = NULL;
 
 		$result = pfblockerng_sync_cron(FALSE, 'both', FALSE, FALSE, $deferredBy);
@@ -123,9 +97,7 @@ final class CronDeferralExitCodeTest extends TestCase
 
 	public function testForceCheckFeedPassDeferralPreservesFalseAndNamesLock(): void
 	{
-		$this->feedLockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
-		$this->assertIsResource($this->feedLockFp, 'test setup: could not open the feed-pass lock');
-		$this->assertTrue(flock($this->feedLockFp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
+		$this->holdFeedPassLock();
 		$deferredBy = NULL;
 
 		$result = pfblockerng_sync_cron(TRUE, 'both', FALSE, FALSE, $deferredBy);
@@ -138,9 +110,7 @@ final class CronDeferralExitCodeTest extends TestCase
 
 	public function testForceCheckDispatcherDeferralPreservesFalseAndNamesLock(): void
 	{
-		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
-		$this->assertIsResource($this->dispatchLockFp, 'test setup: could not open the dispatcher lock');
-		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
+		$this->holdDispatcherLock();
 		$deferredBy = NULL;
 
 		$result = pfblockerng_sync_cron(TRUE, 'both', FALSE, FALSE, $deferredBy);

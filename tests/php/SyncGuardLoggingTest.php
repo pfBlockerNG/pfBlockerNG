@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/SyncPrereqSeedTrait.php';
+require_once __DIR__ . '/DeferralLockHarnessTrait.php';
 
 use PHPUnit\Framework\TestCase;
 
@@ -32,6 +33,7 @@ use PHPUnit\Framework\TestCase;
 final class SyncGuardLoggingTest extends TestCase
 {
 	use SyncPrereqSeedTrait;
+	use DeferralLockHarnessTrait;
 
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const EXTRA = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
@@ -43,8 +45,6 @@ final class SyncGuardLoggingTest extends TestCase
 	// leak into a later test (CLAUDE.md: self-encapsulated, never order-dependent).
 	private bool $hadChrootPath = FALSE;
 	private mixed $originalChrootPath = NULL;
-	/** @var array<int, resource> */
-	private array $rawFps = [];
 
 	public static function setUpBeforeClass(): void
 	{
@@ -71,8 +71,7 @@ final class SyncGuardLoggingTest extends TestCase
 			'log'                => "{$this->dir}/pfblockerng.log",
 			'errlog'             => "{$this->dir}/error.log",
 		]);
-		// A previous test (or a reentrant caller) must not lend us its locks.
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->resetDeferralLocks();
 
 		// Seed the config keys pfb_global() reads, so these rows do not add
 		// "Undefined array key" trigger listings to the suite's warning detail.
@@ -81,23 +80,7 @@ final class SyncGuardLoggingTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach ($this->rawFps as $fp) {
-			if (is_resource($fp)) {
-				@flock($fp, LOCK_UN);
-				@fclose($fp);
-			}
-		}
-		$this->rawFps = [];
-		// Release anything the function under test acquired before its guard fired.
-		if (isset($GLOBALS['pfb_feed_pass_lock']) && is_resource($GLOBALS['pfb_feed_pass_lock'])) {
-			@flock($GLOBALS['pfb_feed_pass_lock'], LOCK_UN);
-			@fclose($GLOBALS['pfb_feed_pass_lock']);
-		}
-		if (isset($GLOBALS['pfb_schedule_dispatch_lock']) && is_resource($GLOBALS['pfb_schedule_dispatch_lock'])) {
-			@flock($GLOBALS['pfb_schedule_dispatch_lock'], LOCK_UN);
-			@fclose($GLOBALS['pfb_schedule_dispatch_lock']);
-		}
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->releaseDeferralLocks();
 
 		$paths = array_merge(
 			glob("{$this->dir}/db/*") ?: [],
@@ -127,18 +110,9 @@ final class SyncGuardLoggingTest extends TestCase
 		}
 	}
 
-	private function mainLog(): string
-	{
-		$log = $GLOBALS['pfb']['log'];
-		return is_file($log) ? (string) file_get_contents($log) : '';
-	}
-
 	public function testDispatchLockUnavailableLogsThePrecondition(): void
 	{
-		$holder = fopen("{$this->dir}/state/pfb_schedule_dispatch.lock", 'c');
-		$this->assertIsResource($holder, 'test setup: could not open the dispatch lock');
-		$this->rawFps[] = $holder;
-		$this->assertTrue(flock($holder, LOCK_EX), 'test setup: could not hold the dispatch lock');
+		$this->holdDispatcherLock();
 
 		$this->assertFalse(sync_package_pfblockerng('noupdates'),
 			'before-state: a held dispatcher lock must abort the sync');

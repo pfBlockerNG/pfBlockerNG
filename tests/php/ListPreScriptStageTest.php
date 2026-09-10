@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/DeferralLockHarnessTrait.php';
+
 /**
  * issue #1925: pfb_list_pre_script_run() stages a COPY of the normalized feed
  * for the per-feed pre-script — the script rewrites the copy in place; the
@@ -18,6 +20,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_list_pre_script_run')]
 final class ListPreScriptStageTest extends TestCase
 {
+	use DeferralLockHarnessTrait;
+
 	private string $tmp;
 	/** @var array<string, mixed> */
 	private array $originalPfb;
@@ -57,11 +61,6 @@ final class ListPreScriptStageTest extends TestCase
 		file_put_contents($path, "#!/bin/sh\n{$body}\n");
 		chmod($path, 0755);
 		return $path;
-	}
-
-	private function mainLog(): string
-	{
-		return (string) @file_get_contents("{$this->tmp}/pfblockerng.log");
 	}
 
 	public function testSuccessfulRewriteStagesTheCopyAndLeavesTheSourceUntouched(): void

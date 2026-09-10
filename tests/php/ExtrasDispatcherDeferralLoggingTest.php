@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/support/FailingFlockStream.php';
+require_once __DIR__ . '/DeferralLockHarnessTrait.php';
 
 use PHPUnit\Framework\TestCase;
 
@@ -35,15 +36,14 @@ use PHPUnit\Framework\TestCase;
  */
 final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 {
+	use DeferralLockHarnessTrait;
+
 	/** The syslog wording the sibling guards use, with this guard's label. */
 	private const NOTICE = 'Feed pass [ extras ] deferred - the scheduler dispatcher lock is unavailable.';
 
 	private string $dir = '';
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
-
-	/** Raw fds simulating ANOTHER process holding a lock -- closed in tearDown. */
-	private array $rawFps = [];
 
 	protected function setUp(): void
 	{
@@ -61,10 +61,7 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 			'extraslog'          => "{$this->dir}/extras.log",
 		]);
 
-		// No inherited locks: a leaked handle makes pfb_schedule_dispatch_begin()
-		// short-circuit on its reentrancy check, so the guard under test is never
-		// reached and a deferral row would pass vacuously.
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->resetDeferralLocks();
 
 		// Fresh syslog capture (pfsense_doubles.php logger() double).
 		$GLOBALS['pfb_test_logger_calls'] = [];
@@ -72,18 +69,7 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach ($this->rawFps as $fp) {
-			if (is_resource($fp)) {
-				@flock($fp, LOCK_UN);
-				@fclose($fp);
-			}
-		}
-		$this->rawFps = [];
-
-		// Never leave this process holding a lock across tests (self-encapsulation).
-		pfb_feed_pass_release();
-		pfb_schedule_dispatch_release();
-		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+		$this->releaseDeferralLocks();
 		unset($GLOBALS['pfb_test_logger_calls']);
 
 		foreach (glob("{$this->dir}/*") ?: [] as $path) {
@@ -96,36 +82,6 @@ final class ExtrasDispatcherDeferralLoggingTest extends TestCase
 		} else {
 			unset($GLOBALS['pfb']);
 		}
-	}
-
-	private function mainLog(): string
-	{
-		$log = $GLOBALS['pfb']['log'];
-		return is_file($log) ? (string) file_get_contents($log) : '';
-	}
-
-	/** The syslog messages captured by the logger() double, one per line. */
-	private function syslogMessages(): string
-	{
-		return implode("\n", array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
-	}
-
-	/** ANOTHER process wedges the scheduler dispatcher lock. */
-	private function holdDispatcherLock(): void
-	{
-		$fp = fopen("{$this->dir}/pfb_schedule_dispatch.lock", 'c');
-		$this->assertIsResource($fp, 'test setup: could not open the dispatcher lock');
-		$this->rawFps[] = $fp;
-		$this->assertTrue(flock($fp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
-	}
-
-	/** ANOTHER process wedges the feed-pass lock. */
-	private function holdFeedPassLock(): void
-	{
-		$fp = fopen("{$this->dir}/pfb_feed_pass.lock", 'c');
-		$this->assertIsResource($fp, 'test setup: could not open the feed-pass lock');
-		$this->rawFps[] = $fp;
-		$this->assertTrue(flock($fp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
 	}
 
 	// -----------------------------------------------------------------------
