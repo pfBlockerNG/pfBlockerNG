@@ -272,12 +272,6 @@ jobs:
           path: pfblockerng-src
           persist-credentials: false
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
-
-      - name: Install the Graphify merge driver
-        run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .
-
       # Automated commits must hit the same local gates as a human commit.
       - name: Activate git hooks
         run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/setup-hooks.sh"
