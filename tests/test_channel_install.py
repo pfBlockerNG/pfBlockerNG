@@ -1701,7 +1701,9 @@ def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
+        pgid = os.getpgid(proc.pid)
         seen: list[str] = []
         stream = proc.stdout
         assert stream is not None
@@ -1715,12 +1717,7 @@ def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
             still_running = proc.poll() is None
         finally:
             sentinel.write_text("")
-            try:
-                proc.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=30)
-            reader.join(timeout=10)
+            _finish_install_process(proc, pgid, reader, completion_timeout=60.0)
 
         output = "".join(seen)
         assert proc.returncode == 0, output
@@ -1785,6 +1782,77 @@ def _install_sh_pids(pgid: int) -> list[str]:
     return [line for line in found.stdout.split() if line]
 
 
+def _process_group_members(pgid: int) -> list[tuple[int, str]]:
+    """Return every PID and state in one process group."""
+    found = subprocess.run(
+        ["ps", "-eo", "pid=,pgid=,stat="],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    members: list[tuple[int, str]] = []
+    for line in found.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and int(fields[1]) == pgid:
+            members.append((int(fields[0]), fields[2]))
+    return members
+
+
+def _wait_for_no_live_process_group_members(pgid: int, *, timeout: float = 10.0) -> None:
+    """Wait until a process group has no members capable of doing more work."""
+    deadline = time.monotonic() + timeout
+    while True:
+        live = [(pid, state) for pid, state in _process_group_members(pgid) if not state.startswith("Z")]
+        if not live:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "salvage cap expired / stuck or environment: "
+                f"expected no live process-group members for pgid={pgid}; actual={live}"
+            )
+        time.sleep(min(0.05, remaining))
+
+
+def _finish_install_process(
+    proc: subprocess.Popen[str],
+    pgid: int,
+    reader: threading.Thread,
+    *,
+    completion_timeout: float,
+) -> None:
+    """Bound normal completion, then stop and reap every owned process and reader."""
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=completion_timeout)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(pgid, signal.SIGKILL)
+
+    group_error: RuntimeError | None = None
+    try:
+        _wait_for_no_live_process_group_members(pgid)
+    except RuntimeError as exc:
+        group_error = exc
+
+    parent_timeout: subprocess.TimeoutExpired | None = None
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        parent_timeout = exc
+
+    reader.join(timeout=10)
+    if reader.is_alive() and proc.stdout is not None:
+        proc.stdout.close()
+        reader.join(timeout=1)
+    if proc.stdout is not None and not proc.stdout.closed:
+        proc.stdout.close()
+    if reader.is_alive():
+        raise RuntimeError(f"Python output reader outlived installer cleanup for pgid={pgid}") from group_error
+    if group_error is not None:
+        raise group_error
+    if parent_timeout is not None:
+        raise RuntimeError(f"installer parent could not be reaped for pgid={pgid}") from parent_timeout
+
+
 def test_output_reader_does_not_outlive_the_run() -> None:
     """install.sh streams pkg's output from a background reader. A background reader is
     an untracked wait, so it has to die with its task -- not reparent to PID 1 and poll
@@ -1808,13 +1876,12 @@ def test_output_reader_does_not_outlive_the_run() -> None:
             start_new_session=True,
         )
         pgid = os.getpgid(proc.pid)
+        seen: list[str] = []
+        stream = proc.stdout
+        assert stream is not None
+        reader = threading.Thread(target=lambda: seen.extend(stream), daemon=True)
+        reader.start()
         try:
-            seen: list[str] = []
-            stream = proc.stdout
-            assert stream is not None
-            reader = threading.Thread(target=lambda: seen.extend(stream), daemon=True)
-            reader.start()
-
             deadline = time.monotonic() + 15.0
             while time.monotonic() < deadline and not any(_STREAM_MARKER in ln for ln in seen):
                 time.sleep(0.05)
@@ -1836,13 +1903,89 @@ def test_output_reader_does_not_outlive_the_run() -> None:
                 f"the output reader outlived install.sh (pids {survivors}); it must stop when its parent is gone"
             )
         finally:
-            sentinel.write_text("")
-            for pid in _install_sh_pids(pgid):
-                with contextlib.suppress(ProcessLookupError, ValueError):
-                    os.kill(int(pid), signal.SIGKILL)
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=30)
+            _finish_install_process(proc, pgid, reader, completion_timeout=0.0)
+
+
+def test_install_process_cleanup_runs_after_assertion_failure() -> None:
+    """Failure cleanup kills a real non-install.sh descendant without touching another group."""
+    ready = threading.Event()
+    seen: list[str] = []
+    proc = subprocess.Popen(
+        ["sh", "-c", "printf 'ready\\n'; while :; do sleep 1; done"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    stream = proc.stdout
+    assert stream is not None
+
+    def read_output() -> None:
+        for line in stream:
+            seen.append(line)
+            if line == "ready\n":
+                ready.set()
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    unrelated = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        with pytest.raises(AssertionError, match="forced body failure"):
+            try:
+                assert ready.wait(timeout=5), f"fixture broken: target emitted no readiness line; got {seen!r}"
+                assert reader.is_alive(), "fixture broken: Python output reader exited before cleanup"
+                assert _process_group_members(proc.pid), "fixture broken: target group was not live"
+                raise AssertionError("forced body failure")
+            finally:
+                _finish_install_process(proc, proc.pid, reader, completion_timeout=0.0)
+
+        assert not [member for member in _process_group_members(proc.pid) if not member[1].startswith("Z")], (
+            "target process group remained live after failure cleanup"
+        )
+        assert not reader.is_alive(), "Python output reader remained live after failure cleanup"
+        assert stream.closed, "Python output stream remained open after failure cleanup"
+        assert unrelated.poll() is None, "cleanup killed an unrelated process group"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(unrelated.pid, signal.SIGKILL)
+        unrelated.wait(timeout=5)
+
+
+def test_process_group_wait_treats_zombie_as_finished_and_absent_as_finished() -> None:
+    """A zombie cannot write, and a fully absent target is already clean."""
+    proc = subprocess.Popen(["sh", "-c", "exit 0"], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5.0
+        members = _process_group_members(proc.pid)
+        while not any(state.startswith("Z") for _, state in members) and time.monotonic() < deadline:
+            time.sleep(0.05)
+            members = _process_group_members(proc.pid)
+        assert any(state.startswith("Z") for _, state in members), (
+            f"fixture broken: child never became a zombie; members={members}"
+        )
+
+        _wait_for_no_live_process_group_members(proc.pid, timeout=0.0)
+        proc.wait(timeout=5)
+        assert not _process_group_members(proc.pid)
+        _wait_for_no_live_process_group_members(proc.pid, timeout=0.0)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+
+
+def test_process_group_wait_reports_live_member_at_bound() -> None:
+    """The salvage deadline fails loudly while a real group member can still work."""
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        with pytest.raises(RuntimeError, match="expected no live process-group members") as caught:
+            _wait_for_no_live_process_group_members(proc.pid, timeout=0.0)
+        assert f"pgid={proc.pid}" in str(caught.value)
+        assert str(proc.pid) in str(caught.value)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
 
 
 # --------------------------------------------------------------------------- #
