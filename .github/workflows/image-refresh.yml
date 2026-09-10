@@ -233,15 +233,9 @@ jobs:
           persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
-
-      - name: Install the Graphify merge driver
-        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
-
-      # Automated commits must hit the same local gates as a human commit.
+      # Persist compatible hooks outside the orphan metadata worktree.
       - name: Activate git hooks
-        run: sh scripts/setup-hooks.sh
+        run: sh scripts/setup-hooks.sh --writer ci-metadata "$RUNNER_TEMP/pfb-writer-hooks"
 
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is

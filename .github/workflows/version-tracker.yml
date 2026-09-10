@@ -275,15 +275,9 @@ jobs:
           persist-credentials: true   # push the tracker/* matrix-PR branches
           fetch-depth: 0
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
-
-      - name: Install the Graphify merge driver
-        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
-
-      # Automated commits must hit the same local gates as a human commit.
+      # Persist compatible hooks before checkout-B removes the devel corpus.
       - name: Activate git hooks
-        run: sh scripts/setup-hooks.sh
+        run: sh scripts/setup-hooks.sh --writer ci-metadata "$RUNNER_TEMP/pfb-writer-hooks"
 
       # The reconcile needs EVERY family, one row per version: build_matrix is
       # deduped to one row per runtime tuple (issue #2926), which hides the

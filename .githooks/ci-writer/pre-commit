@@ -1,0 +1,31 @@
+#!/bin/sh
+# Writer profiles replace devel's graph gates only for their named generated paths.
+# Installed beside the existing identity and message guards by setup-hooks.sh --writer.
+
+set -u
+
+hook_dir=$(dirname -- "$0")
+fail() {
+	printf '[ci-writer/pre-commit] FAILED: %s\n' "$1" >&2
+	exit 1
+}
+
+identity_checker=$hook_dir/check-commit-identity.sh
+[ -x "$identity_checker" ] || fail "commit identity checker missing or not executable: $identity_checker"
+"$identity_checker" || fail 'commit identity & signing prerequisites'
+git diff --cached --check || fail 'staged whitespace or conflict-marker error'
+
+profile=$(cat "$hook_dir/PROFILE") || fail 'writer profile file missing or unreadable'
+case "$profile" in
+ci-metadata)
+	set -- ':(exclude)supported-versions.json'
+	;;
+ports)
+	set -- ':(exclude)net/pfSense-pkg-pfBlockerNG/Makefile' \
+		':(exclude)net/pfSense-pkg-pfBlockerNG-testing/Makefile' \
+		':(exclude)net/pfSense-pkg-pfBlockerNG-edge/Makefile'
+	;;
+*) fail "unknown writer profile: $profile" ;;
+esac
+# Native pathspecs keep unusual filenames intact, including embedded newlines.
+git diff --cached --quiet -- . "$@" || fail "staged paths outside the '$profile' writer allowlist"

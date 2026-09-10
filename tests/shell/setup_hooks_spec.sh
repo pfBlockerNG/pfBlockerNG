@@ -107,9 +107,7 @@ CODEGRAPH
   End
 
   It 'still activates Git hooks when the git root and helper checkout have no pyproject.toml'
-    # release-published.yml runs setup-hooks.sh from a scripts-only sparse
-    # checkout of pfBlockerNG while CWD is the FreeBSD-ports fork. Graphify
-    # cannot install without pyproject.toml; hook activation still must.
+    # The no-argument developer setup still supports project-less checkouts.
     foreign="$fixture/ports"
     helper="$foreign/pfblockerng-src"
     git_fixture init -q "$foreign" || return 1
