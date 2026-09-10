@@ -113,10 +113,9 @@ final class WidgetSubmitPostGuardTest extends TestCase
 		// classes instead glob sys_get_temp_dir() and filter by the child's PID from
 		// proc_get_status(); that works, but the glob sees every concurrent class's shims,
 		// so it needs a before/after snapshot and is still exposed to PID reuse. A private
-		// base needs neither. #2849 extracts these five sites into one trait and should
-		// take this shape, not the glob -- the exemplar deliberately diverges from its
-		// four copies until then. The mkdir guard, the random suffix and the shutdown
-		// hook are unchanged.
+		// base needs neither. #2849 now shares only the four full PID-keyed copies; this
+		// #2846 exemplar keeps its parent-owned base because its assertions observe cleanup
+		// across exit(0). The mkdir guard, the random suffix and the shutdown hook are unchanged.
 		//
 		// Recorded for the tearDown() sweep before it is created: every assertion between
 		// here and the cleanup below aborts the method and skips that cleanup, so a
