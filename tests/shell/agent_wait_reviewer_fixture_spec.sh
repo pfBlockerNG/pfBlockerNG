@@ -15,4 +15,19 @@ Describe 'wait-reviewer.sh historical quota fixture'
     When call classify
     The output should equal 'QUOTA 6'
   End
+
+  Parameters
+    '1 minute' 'QUOTA 1'
+    '1 hour' 'QUOTA 60'
+  End
+  It "accepts the singular duration $1"
+    handle='coderabbitai'
+    mode='finished'
+    inline=''
+    review=''
+    issuec="Review limit reached. Next included review available in $1."
+    sinfo=''
+    When call classify
+    The output should equal "$2"
+  End
 End
