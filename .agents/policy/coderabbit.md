@@ -73,6 +73,10 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
      nudge — a nudge inside a live window refreshes the countdown.
      Otherwise post one more `@coderabbitai review` and re-arm. A second
      quota notice ends it: record the miss, do not loop.
+   - **Exit 1 with a quota/Snyk classification diagnostic** is not a verdict:
+     do not guess a wait, re-ask, or record a miss. Read the reported state;
+     update the matcher when a real duration exists, otherwise report the
+     unclassifiable notice/error and stop.
    - **NOACK / NOTPRESENT / TIMEOUT** → re-ask **once** with a fresh
      window. Still silent → CodeRabbit is unavailable; the legs
      carry the review step. Never a second silent-nudge.

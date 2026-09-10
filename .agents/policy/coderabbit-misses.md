@@ -55,20 +55,20 @@ and their order are pinned by `tests/test_context_budget.py`.
 - `888ed710`  www/wizards: put the step-2 callouts in rows  (#2916) — never asked; the hourly slot went to #2917 and test-only PRs were skipped. Five legs, rounds 3-4 each blocking. CI green.
 - `edeb3865`  www/wizards: stop advertising a retired sinkhole VIP range  (#2912) — asked 14:53Z, rate-limited 59 min, not retried. Four legs, mutation table re-run. CI green.
 - `64623d72`  widgets: pair the jQuery-set backgrounds so the scanner sees them  (#2891) — never asked, same slot call. Four legs; helper defects split to #2866/#2892. CI green.
-- `07b4894e`  pfblockerng: name the schedule-cache failure instead of asking for a bug report  (#2887) — one quota notice (999 min), no review; 4 legs over three rounds, two blockers fixed.
-- `a12bae30`  test: repair the UI coverage the DNSBL/IP tab reorganisation broke  (#2885) — one quota notice (999 min), no review; 4 legs over two rounds, one blocker fixed; live-VM gate green.
+- `07b4894e`  pfblockerng: name the schedule-cache failure instead of asking for a bug report  (#2887) — one quota notice (4 min), no review; 4 legs over three rounds, two blockers fixed.
+- `a12bae30`  test: repair the UI coverage the DNSBL/IP tab reorganisation broke  (#2885) — one quota notice (31 min), no review; 4 legs over two rounds, one blocker fixed; live-VM gate green.
 - `ee6c4efe`  pfblockerng: serialize Alerts mutations  (#2883) — two quota notices, no review; 4 legs + verifier PASS; live-VM gate green.
 - `e3cc14df`  pfblockerng: close the script stage when an alias is removed  (#2847) — two quota notices, no review.
 - `e7d66d89`  tests: stop the lint endpoint shim leaking a PID-keyed temp dir  (#2835) — two quota notices (10 min, then 59 min), no review; 8 leg passes over two rounds.
 - `d41cabc1`  extras: name the lost dispatcher lock in the Extras guard  (#2826) — two quota notices, no review; 6 leg rounds + verifier PASS.
 - `38a2332c`  download: drop a refused ingest's promoted validators  (#2831) — one quota notice, no review.
 - `85bb57e3`  download: sanity-scan an archive's extracted payload  (#2819) — two quota notices, no review; 4 legs + verifier PASS.
-- `76b4ecc9`  download: stream the XLSX shared-strings part past the run tmpdir  (#2816) — one quota notice (999 min), no review; 4 legs over two rounds, three blockers fixed.
+- `76b4ecc9`  download: stream the XLSX shared-strings part past the run tmpdir  (#2816) — one quota notice (33 min), no review; 4 legs over two rounds, three blockers fixed.
 - `309b1902`  download: refuse an XLSX extraction that finds no address  (#2806) — two quota notices, no review; 4 legs over two rounds + verifier PASS.
 - `3aa51d4d`  pfblockerng: stage the two direct-write GeoIP extractions  (#2782) — finished review at `aa696272` applied, then rebased; this SHA unreviewed.
-- `4fa68d01`  tests: align the worktree-intelligence pin with the tracked root graph  (#2790) — one quota notice (999 min), no review; 4 legs, one blocking hole fixed.
+- `4fa68d01`  tests: align the worktree-intelligence pin with the tracked root graph  (#2790) — one quota notice (19 min), no review; 4 legs, one blocking hole fixed.
 - `3aab75a1`  install-pkg.sh: fail closed when pkg POST-INSTALL fails  (#2775) — one quota notice, no review; substitute review plus a correctness/test-honesty round.
-- `624e9a75`  install.sh: document fetch-to-file not fetch|sh  (#2756) — two quota notices, no review; 4 legs, one blocking defect fixed.
+- `624e9a75`  install.sh: document fetch-to-file not fetch|sh  (#2756) — two quota notices (59 then 52 min), no review; 4 legs, one blocking defect fixed.
 - `f9a7e158`  pfblockerng: unlink leftover Blacklist orig/hash sidecars  (#2740) — finished review at `aa6567dc` resolved, then rebased twice; this SHA unreviewed.
 - `8bb7d925`  pfblockerng: fail closed on bzip2/zip Blacklist bodies  (#2742) — never asked, never engaged; 4 legs over two rounds.
 - `dc1debe1`  ci: add scripted refresh for artifact-action majors  (#2741) — never asked, never engaged; 4 legs, two blockers discharged.

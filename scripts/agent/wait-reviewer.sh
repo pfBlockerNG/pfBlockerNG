@@ -18,13 +18,14 @@
 # Handle matching is case-insensitive and ANCHORED, so `--handle copilot` matches
 # copilot-pull-request-reviewer[bot] and `coderabbitai` matches coderabbitai[bot], but a
 # login that merely CONTAINS the handle does not count.
-# `--handle snyk` reads the head-SHA commit status/check-runs instead of comments (Snyk
-# posts no review comments); its `error` state reports QUOTA, never a clean pass.
+# `--handle snyk` reads the head-SHA commit status/check-runs instead of comments; a
+# non-terminal error exits nonzero rather than inventing a quota duration.
 # Login match is ANCHORED: == handle, == handle[bot], or startswith(handle-).
 # A wall-clock deadline (max-iter x interval + 300 s slack; PFB_WAIT_DEADLINE overrides)
 # bounds the wait even when individual gh calls stall.
-# Exit codes: see agent_env.sh (0 verdict, 1 GH-ERROR after 3 failed polls, 2 usage,
-# 3 gh unavailable -> MCP fallback, 4 TOOL-MISSING).
+# Exit codes: see agent_env.sh (0 verdict, 1 GH-ERROR after 3 failed polls or an
+# unclassifiable quota/error state, 2 usage, 3 gh unavailable -> MCP fallback,
+# 4 TOOL-MISSING).
 # Self-terminating by construction (CLAUDE.md "No orphaned waits" #1): iteration cap AND
 # wall-clock deadline; run it in the background and read the verdict.
 
@@ -43,8 +44,8 @@ usage() {
 classify() {
 	if [ "$handle" = "snyk" ]; then
 		if printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)'; then
-			printf 'QUOTA 999'
-			return 0
+			printf 'wait-reviewer.sh: non-terminal Snyk state has no authoritative duration\n' >&2
+			return 1
 		fi
 		if printf '%s' "$sinfo" | grep -Eqi '^(success|failure|neutral|completed)'; then
 			printf 'FINISHED'
@@ -61,19 +62,27 @@ classify() {
 		return 0
 	fi
 	if printf '%s' "$issuec" | grep -Eqi 'run out of usage credits|review limit reached|rate limited by coderabbit|reached your .*review (rate )?limit'; then
-		# issue #2837: the colon is optional ("available in 40 minutes"), and the
-		# window must name exactly ONE numeric component -- a compound window
-		# ("1 hour 30 minutes") falls back rather than resuming on one of its parts.
-		win=$(printf '%s' "$issuec" | grep -oEi 'available in:?[^.]{0,48}' | head -1)
-		mins=''
-		if [ "$(printf '%s' "$win" | grep -oE '[0-9]+' | wc -l | tr -d ' ')" = '1' ] &&
-		   printf '%s' "$win" | grep -qEi '[0-9]+ *(minute|hour)'; then
-			mins=$(printf '%s' "$win" | grep -oE '[0-9]+' | head -1)
-			if printf '%s' "$win" | grep -qEi '[0-9]+ *hour'; then
-				mins=$(( mins * 60 ))
-			fi
+		# issue #2837: the colon is optional ("available in 40 minutes").
+		# Accept one complete duration line; partial and compound values are errors.
+		win=$(printf '%s\n' "$issuec" | grep -i 'available in' | head -1 | tr '[:upper:]' '[:lower:]')
+		quota_re='^.*available in:?[[:space:]]*[*]*([0-9]+)[[:space:]]+(minutes?|hours?)[.]?[*]*[[:space:]]*$'
+		if ! printf '%s' "$win" | grep -Eq "$quota_re"; then
+			printf 'wait-reviewer.sh: quota notice has no parseable duration\n' >&2
+			return 1
 		fi
-		printf 'QUOTA %s' "${mins:-999}"
+		parsed=$(printf '%s' "$win" | sed -E "s/$quota_re/\1 \2/")
+		quantity=${parsed%% *}
+		unit=${parsed#* }
+		quantity=$(printf '%s' "$quantity" | sed 's/^0*//')
+		[ -n "$quantity" ] || quantity=0
+		# Seven normalized digits keep an hours conversion inside POSIX's
+		# minimum 32-bit signed arithmetic range.
+		case "$quantity" in
+			????????*) printf 'wait-reviewer.sh: quota notice has no parseable duration\n' >&2; return 1 ;;
+		esac
+		mins=$quantity
+		case "$unit" in hours|hour) mins=$((quantity * 60)) ;; esac
+		printf 'QUOTA %s' "$mins"
 		return 0
 	fi
 	if printf '%s' "$issuec" | grep -qi 'review skipped' &&
@@ -227,6 +236,10 @@ main() {
 		ghfail=0
 		[ -n "${inline_any}${review_any}${issuec_any}$(printf '%s' "$sinfo" | tr -dc '[:lower:]')" ] && seen=1
 		v=$(classify)
+		classify_status=$?
+		if [ "$classify_status" -ne 0 ]; then
+			exit "$classify_status"
+		fi
 		if [ -n "$v" ]; then
 			printf '%s\n' "$issuec" | head -c 3000
 			printf '\n%s\n' "$v"

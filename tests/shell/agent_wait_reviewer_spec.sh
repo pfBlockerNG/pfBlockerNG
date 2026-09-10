@@ -45,12 +45,12 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'QUOTA 120'
   End
 
-  It 'reports QUOTA with the stated minutes when the notice carries no colon'
+  It 'reports QUOTA 6 for the exact duration wording from PR 2809'
     issuec='> ## Review limit reached
 >
-> **Next included review available in 40 minutes.**'
+> **Next included review available in 6 minutes.**'
     When call classify
-    The output should equal 'QUOTA 40'
+    The output should equal 'QUOTA 6'
   End
 
   It 'converts a colonless hours-denominated resume time to minutes'
@@ -61,28 +61,36 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'QUOTA 120'
   End
 
-  It 'falls back rather than reading a multi-unit window as its first number'
+  It 'fails rather than reading a multi-unit window as its first number'
     issuec='Review limit reached. Next included review available in 1 day 30 minutes.'
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
   End
 
-  It 'falls back when the window names an hour and a minute component'
+  It 'fails when the window names an hour and a minute component'
     issuec='Review limit reached. Next included review available in 1 hour 30 minutes.'
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
   End
 
-  It 'falls back when the window names its components in the other order'
+  It 'fails when the window names its components in the other order'
     issuec='Review limit reached. Next included review available in 40 minutes and 2 hours.'
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
   End
 
-  It 'reports QUOTA 999 when the resume time is unparsable'
+  It 'fails when a usage-credit notice carries no resume time'
     issuec='You have run out of usage credits.'
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
   End
 
   It 'reports QUOTA on the PR-review-limit phrasing (no "rate" in the notice)'
@@ -91,23 +99,107 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal 'QUOTA 46'
   End
 
-  It 'reports QUOTA on the rate-limited-by-coderabbit phrasing'
+  It 'fails when the rate-limit notice carries no resume time'
     issuec='This PR is rate limited by CodeRabbit.'
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails when the duration value is empty'
+    issuec='Review limit reached. Next included review available in .'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails when the duration number is absent'
+    issuec='Review limit reached. Next included review available in minutes.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails rather than accepting the numeric substring of a negative duration'
+    issuec='Review limit reached. Next included review available in -6 minutes.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails rather than accepting part of a decimal duration'
+    issuec='Review limit reached. Next included review available in 1.5 hours.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails rather than accepting a mixed-unit duration'
+    issuec='Review limit reached. Next included review available in 6 minutes and 2 hours.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'fails before shell arithmetic can overflow'
+    issuec='Review limit reached. Next included review available in 999999999999999999999 hours.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
+  End
+
+  It 'normalizes leading zeroes without octal arithmetic'
+    issuec='Review limit reached. Next included review available in 0006 minutes.'
+    When call classify
+    The output should equal 'QUOTA 6'
+  End
+
+  It 'accepts Markdown and surrounding whitespace around one duration'
+    issuec='> ## Review limit reached
+>
+> **Next included review available in:   **0002 hours.**   '
+    When call classify
+    The output should equal 'QUOTA 120'
+  End
+
+  It 'ignores unrelated numbers outside the duration line'
+    issuec='Review limit reached.
+Run ID: 123456789
+**Next included review available in 6 minutes.**
+Plan allows 1 review per hour.'
+    When call classify
+    The output should equal 'QUOTA 6'
+  End
+
+  It 'fails rather than accepting a duration prefix'
+    issuec='Review limit reached. Next included review available in 6 minutes remaining.'
+    When call classify
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no parseable duration'
   End
 
   Parameters
+    error
     action_required
     timed_out
     cancelled
     stale
   End
-  It "reports QUOTA for the non-verdict Snyk state $1"
+  It "fails for the non-verdict Snyk state $1 without inventing a wait"
     handle='snyk'
     sinfo="$1 scan did not complete"
     When call classify
-    The output should equal 'QUOTA 999'
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'no authoritative duration'
   End
 
   It 'reports DECLINE on a review-skipped-for-base-branch notice'
@@ -162,12 +254,6 @@ Describe 'wait-reviewer.sh classify()'
     The output should equal ''
   End
 
-  It 'reports QUOTA 999 for a Snyk error status (a skipped scan is never a clean pass)'
-    handle='snyk'
-    sinfo='error Code test limit reached'
-    When call classify
-    The output should equal 'QUOTA 999'
-  End
 
   It 'reports FINISHED for a terminal Snyk verdict'
     handle='snyk'
@@ -342,6 +428,26 @@ STUB
     echo 'Actionable comments posted: 1' > "$GH_STUB_ISSUE_SINCE"
     When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 3
     The output should include 'FINISHED'
+  End
+
+  It 'prints QUOTA 6 as the final CLI verdict for the PR 2809 wording'
+    export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
+    cat > "$GH_STUB_ISSUE_SINCE" <<'NOTICE'
+> ## Review limit reached
+>
+> **Next included review available in 6 minutes.**
+NOTICE
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 1
+    The line 5 of output should equal 'QUOTA 6'
+  End
+
+  It 'propagates an unparsable quota notice as a nonzero CLI result'
+    export GH_STUB_ISSUE_SINCE="$stubdir/issue.txt"
+    echo 'This PR is rate limited by CodeRabbit.' > "$GH_STUB_ISSUE_SINCE"
+    When run sh "$script" --repo o/r --pr 1 --handle coderabbitai --until finished --since x --interval 0 --max-iter 1
+    The status should equal 1
+    The output should not include 'QUOTA 999'
+    The stderr should include 'no parseable duration'
   End
 
   It 'honours the wall-clock deadline even when content would be found (No-orphaned-waits #1)'
