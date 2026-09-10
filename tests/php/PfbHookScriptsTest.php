@@ -136,10 +136,21 @@ final class PfbHookScriptsTest extends TestCase
 	 */
 	private static function makeSymlinkFixture(): array
 	{
-		$tmp    = sys_get_temp_dir() . '/pfb_hook_test_' . getmypid();
-		mkdir($tmp, 0755, TRUE);
+		$tmp = sys_get_temp_dir() . '/pfb_hook_test_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		self::assertTrue(mkdir($tmp, 0755, TRUE), "could not create the test hook dir {$tmp}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
 
 		$outside = self::makeOutsideScript();
+		register_shutdown_function(static function () use ($outside, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				@unlink($outside);
+			}
+		});
 
 		// Plain real file
 		file_put_contents("{$tmp}/hook_pre_real.sh", "#!/bin/sh\n");

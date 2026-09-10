@@ -645,8 +645,14 @@ final class IpPrefetchTest extends TestCase
 	 */
 	public function test_single_file_folder_exact_match_resolves_correctly_per_row_and_batched(): void
 	{
-		$tmp = sys_get_temp_dir() . '/pfb_833_exact_' . getmypid();
-		mkdir($tmp, 0777, true);
+		$tmp = sys_get_temp_dir() . '/pfb_833_exact_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($tmp, 0777, true), "could not create the test fixture dir {$tmp}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
 		file_put_contents("{$tmp}/LoneFeed.txt", "192.0.2.201\n");
 		$folder = "{$tmp}/*.txt";
 
@@ -690,8 +696,14 @@ final class IpPrefetchTest extends TestCase
 	 */
 	public function test_single_file_folder_cidr_only_coverage_resolves_correctly_per_row_and_batched(): void
 	{
-		$tmp = sys_get_temp_dir() . '/pfb_833_cidr_' . getmypid();
-		mkdir($tmp, 0777, true);
+		$tmp = sys_get_temp_dir() . '/pfb_833_cidr_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($tmp, 0777, true), "could not create the test fixture dir {$tmp}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
 		file_put_contents("{$tmp}/LoneCidrFeed.txt", "192.0.2.0/24\n");
 		$folder = "{$tmp}/*.txt";
 
@@ -1133,8 +1145,15 @@ final class IpPrefetchTest extends TestCase
 	public function test_single_file_folder_miss_row_is_correctly_seeded_after_the_833_fix(): void
 	{
 		// Given: a GeoIP cc dir holding exactly ONE feed file that contains the host.
-		$tmp = sys_get_temp_dir() . '/pfb_831_' . getmypid();
-		mkdir("{$tmp}/cc", 0777, true);
+		$tmp = sys_get_temp_dir() . '/pfb_831_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($tmp, 0777, true), "could not create the test fixture root {$tmp}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
+		$this->assertTrue(mkdir("{$tmp}/cc", 0777, true), "could not create the test fixture cc dir {$tmp}/cc");
 		file_put_contents("{$tmp}/cc/LoneFeed.txt", "192.0.2.201\n");
 		$GLOBALS['pfb']['ccdir'] = "{$tmp}/cc";
 
@@ -1239,8 +1258,14 @@ final class IpPrefetchTest extends TestCase
 	 */
 	public function test_et_header_still_listed_ip_is_found_by_the_real_validate_exec(): void
 	{
-		$tmp = sys_get_temp_dir() . '/pfb_832_et_' . getmypid();
-		mkdir($tmp, 0777, true);
+		$tmp = sys_get_temp_dir() . '/pfb_832_et_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($tmp, 0777, true), "could not create the test fixture dir {$tmp}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
 		file_put_contents("{$tmp}/IQRiskFeed.txt", "192.0.2.201\n");
 		$savedEtdir = $GLOBALS['pfb']['etdir'];
 		$GLOBALS['pfb']['etdir'] = $tmp;

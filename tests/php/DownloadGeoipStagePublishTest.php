@@ -38,7 +38,21 @@ final class DownloadGeoipStagePublishTest extends TestCase
 		// Shell-clean on purpose: a fixture path carrying metacharacters would make
 		// every failure ambiguous. The escaping the generated staged target needs is
 		// pinned by its own case below.
-		$this->dir = sys_get_temp_dir() . '/pfb_geoip_stage_' . getmypid();
+		$this->dir = sys_get_temp_dir() . '/pfb_geoip_stage_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($this->dir, 0755, TRUE));
+		$dir = $this->dir;
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($dir, $ownerPid): void {
+			// pcntl_fork() inherits shutdown callbacks; only the process that created this tree owns it.
+			if (getmypid() === $ownerPid) {
+				// A fixture deliberately drops write permission on the share; restore it so
+				// process exit can still remove the tree whatever the test did to it.
+				if (is_dir($dir) && !is_link($dir)) {
+					exec('/bin/chmod -R u+rwx ' . escapeshellarg($dir) . ' 2>/dev/null');
+				}
+				rmdir_recursive($dir);
+			}
+		});
 		$this->share = "{$this->dir}/GeoIP";
 		$this->build = "{$this->dir}/build";
 		$this->assertTrue(mkdir("{$this->share}/cc", 0755, TRUE));

@@ -57,9 +57,16 @@ final class PrivPageMatchesTest extends TestCase
 		// cmp_page_matches() realpath()s the requested file under www_path and 403s
 		// if it does not exist. Recreate just the files the cases below request so
 		// the gate behaves exactly as on the appliance.
-		$wwwRoot = sys_get_temp_dir() . '/pfb_priv_www_' . getmypid();
-		@mkdir($wwwRoot . '/pfblockerng', 0777, true);
-		@mkdir($wwwRoot . '/widgets/widgets', 0777, true);
+		$wwwRoot = sys_get_temp_dir() . '/pfb_priv_www_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($wwwRoot, 0777, true), "priv www root directory creation failed: {$wwwRoot}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($wwwRoot, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($wwwRoot);
+			}
+		});
+		$this->assertTrue(mkdir($wwwRoot . '/pfblockerng', 0777, true), "priv www pfblockerng directory creation failed: {$wwwRoot}/pfblockerng");
+		$this->assertTrue(mkdir($wwwRoot . '/widgets/widgets', 0777, true), "priv www widgets directory creation failed: {$wwwRoot}/widgets/widgets");
 		// Canonicalise: on macOS sys_get_temp_dir() is under /var, a symlink to
 		// /private/var, so realpath()d file paths would not share this prefix and
 		// the www_path strip below would fail. The appliance's /usr/local/www has

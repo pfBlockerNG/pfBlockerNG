@@ -26,8 +26,16 @@ final class DownloadStagePublishDirTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->dir = sys_get_temp_dir() . '/pfb stagedir; ' . getmypid() . " 'fixture'";
+		$this->dir = sys_get_temp_dir() . '/pfb stagedir; ' . getmypid() . '_' . bin2hex(random_bytes(8)) . " 'fixture'";
 		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+		$dir = $this->dir;
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($dir, $ownerPid): void {
+			// pcntl_fork() inherits shutdown callbacks; only the process that created this tree owns it.
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($dir);
+			}
+		});
 	}
 
 	protected function tearDown(): void

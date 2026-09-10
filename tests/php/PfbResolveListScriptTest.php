@@ -28,11 +28,18 @@ final class PfbResolveListScriptTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$base = sys_get_temp_dir() . '/pfb_rls_' . getmypid();
+		$base = sys_get_temp_dir() . '/pfb_rls_' . getmypid() . '_' . bin2hex(random_bytes(8));
 		$this->dir1 = "{$base}_1";
 		$this->dir2 = "{$base}_2";
-		mkdir($this->dir1, 0755, TRUE);
-		mkdir($this->dir2, 0755, TRUE);
+		$ownerPid = getmypid();
+		foreach ([$this->dir1, $this->dir2] as $dir) {
+			$this->assertTrue(mkdir($dir, 0755, TRUE), "resolve list script directory creation failed: {$dir}");
+			register_shutdown_function(static function () use ($dir, $ownerPid): void {
+				if (getmypid() === $ownerPid) {
+					rmdir_recursive($dir);
+				}
+			});
+		}
 	}
 
 	protected function tearDown(): void

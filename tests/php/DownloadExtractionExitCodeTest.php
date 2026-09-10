@@ -459,9 +459,15 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	public function testBlacklistTarFinalizeTreatsDirectoryOnlyTreeAsEmpty(): void
 	{
 		$this->assertTrue(function_exists('pfb_blacklist_tar_finalize_staged'));
-		$staged = sys_get_temp_dir() . '/pfb2764_' . (string) getmypid();
-		@mkdir($staged, 0700, TRUE);
-		@mkdir($staged . '/feed_cat', 0700);
+		$staged = sys_get_temp_dir() . '/pfb2764_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($staged, 0700, TRUE), "could not create the test staging dir {$staged}");
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($staged, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($staged);
+			}
+		});
+		$this->assertTrue(mkdir($staged . '/feed_cat', 0700), "could not create the test feed_cat dir {$staged}/feed_cat");
 		try {
 			$this->assertSame(
 				pfb_download_initial_retval(),

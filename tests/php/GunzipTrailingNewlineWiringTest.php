@@ -17,8 +17,15 @@ final class GunzipTrailingNewlineWiringTest extends TestCase
 
 	protected function setUp(): void
 	{
-		$this->dir = sys_get_temp_dir() . '/pfb gunzip; ' . getmypid() . " 'fixture'";
-		$this->assertTrue(mkdir($this->dir, 0700, TRUE));
+		$this->dir = sys_get_temp_dir() . '/pfb gunzip; ' . getmypid() . '_' . bin2hex(random_bytes(8)) . " 'fixture'";
+		$this->assertTrue(mkdir($this->dir, 0700, TRUE), "gunzip fixture directory creation failed: {$this->dir}");
+		$dir = $this->dir;
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($dir, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($dir);
+			}
+		});
 	}
 
 	protected function tearDown(): void

@@ -22,11 +22,19 @@ final class GeoipPackageGenerationTest extends TestCase
 		$this->hadPfb = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? NULL;
 
-		$this->tmp = sys_get_temp_dir() . '/pfb_geoip_package_' . getmypid();
+		$this->tmp = sys_get_temp_dir() . '/pfb_geoip_package_' . getmypid() . '_' . bin2hex(random_bytes(8));
+		$this->assertTrue(mkdir($this->tmp, 0777, TRUE), "geoip package root directory creation failed: {$this->tmp}");
+		$tmp = $this->tmp;
+		$ownerPid = getmypid();
+		register_shutdown_function(static function () use ($tmp, $ownerPid): void {
+			if (getmypid() === $ownerPid) {
+				rmdir_recursive($tmp);
+			}
+		});
 		$this->ccdir = "{$this->tmp}/cc";
 		$this->output = "{$this->tmp}/www";
-		@mkdir($this->ccdir, 0777, TRUE);
-		@mkdir($this->output, 0777, TRUE);
+		$this->assertTrue(mkdir($this->ccdir, 0777, TRUE), "geoip package cc directory creation failed: {$this->ccdir}");
+		$this->assertTrue(mkdir($this->output, 0777, TRUE), "geoip package www directory creation failed: {$this->output}");
 
 		$GLOBALS['pfb']['ccdir'] = $this->ccdir;
 		$GLOBALS['pfb']['ccdir_tmp'] = "{$this->tmp}/cc-tmp";
