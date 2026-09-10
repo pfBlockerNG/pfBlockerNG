@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `019e16e01`  test: pin singular reviewer quota units  (#3269) — asked twice, two quota notices; condensed review and Copilot finding resolved.
 - `31201726f`  pfblockerng: record post-script staging failures  (#3265) — asked twice, two quota notices; condensed review and Copilot findings resolved.
 - `78a498db9`  fix: isolate webassets reproducibility build  (#3266) — asked twice, two quota notices; condensed review and Copilot approval resolved.
 - `e1aa16c16`  tests: share PID shim harness  (#3264) — asked twice, two quota notices (51 then 58 min); four legs + Copilot approval resolved; rebase CI PASS.
