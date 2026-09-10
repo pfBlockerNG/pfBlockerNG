@@ -9,10 +9,11 @@ Load when: every agent session, from `AGENTS.md`.
   Graphify, and Worktrunk; configures only detected clients; disables Serena's web
   dashboard; and keeps Worktrunk worktrees outside the repository root.
 - Optionally add or refresh the project's curated third-party skills for every
-  supported agent with `sh scripts/agent/setup-agent-skills.sh`. The command is
-  additive: it leaves collaborators' other skills alone. Repository-owned skills
-  under `.agents/skills/` and the vendored `receiving-code-review` installer remain
-  authoritative.
+  supported agent with `sh scripts/agent/setup-agent-skills.sh`. The command
+  leaves other skill names alone and refuses to overwrite an existing selected
+  name unless the skills CLI records it as managed from the expected upstream.
+  Repository-owned skills under `.agents/skills/` and the vendored
+  `receiving-code-review` installer remain authoritative.
 - Every agent tool installs through one command that both installs on a fresh host
   and upgrades an outdated one — `uv tool install --upgrade <tool>`, `codegraph upgrade`,
   or the tool's own installer. A `>=` floor rides along only when a minimum release is
