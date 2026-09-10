@@ -2,23 +2,20 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PidShimHarnessTrait.php';
+
 use PHPUnit\Framework\TestCase;
 
 final class WidgetGetTableArgOrderTest extends TestCase
 {
+	use PidShimHarnessTrait;
+
 	private const ROOT = __DIR__ . '/../..';
 	private const WIDGET = self::ROOT . '/src/usr/local/www/widgets/widgets/pfblockerng.widget.php';
 
-	/** @var list<string> Stale shim paths planted by runWidget(), swept after each test. */
-	private array $planted = [];
-
-	protected function tearDown(): void
+	protected function pidShimPrefix(): string
 	{
-		foreach ($this->planted as $path) {
-			@unlink($path . '/guiconfig.inc');
-			@rmdir($path);
-		}
-		$this->planted = [];
+		return 'pfb_widget_shim_';
 	}
 
 	public function testAjaxWidgetBranchExecutesTheShippedTableCall(): void
@@ -68,13 +65,6 @@ final class WidgetGetTableArgOrderTest extends TestCase
 		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $this->planted));
 	}
 
-	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
-	private function shimResidue(int $pid): array
-	{
-		$prefix = sys_get_temp_dir() . '/pfb_widget_shim_' . $pid;
-		return array_merge(glob($prefix) ?: [], glob($prefix . '_*') ?: []);
-	}
-
 	/** @return array{status:int,stdout:string,stderr:string,pid:int} */
 	private function runWidget(array $get, array $post, bool $plantStaleShim = FALSE): array
 	{
@@ -82,6 +72,7 @@ final class WidgetGetTableArgOrderTest extends TestCase
 		$widget = var_export(self::WIDGET, TRUE);
 		$getCode = var_export($get, TRUE);
 		$postCode = var_export($post, TRUE);
+		$preamble = $this->pidShimPreamble('widget include shim creation failed');
 		$script = <<<PHP
 stream_get_contents(STDIN);
 \$GLOBALS['argv'] = ['widget'];
@@ -89,17 +80,7 @@ error_reporting(E_ERROR | E_PARSE);
 \$_GET = {$getCode};
 \$_POST = {$postCode};
 \$_SERVER = [];\$widgetname = 'pfblockerng';
-\$shim = sys_get_temp_dir() . '/pfb_widget_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
-if (!mkdir(\$shim, 0700, TRUE)) {
-	fwrite(STDERR, "widget include shim creation failed\\n");
-	exit(1);
-}
-register_shutdown_function(static function () use (\$shim): void {
-	@unlink(\$shim . '/guiconfig.inc');
-	@rmdir(\$shim);
-});
-file_put_contents(\$shim . '/guiconfig.inc', "<?php");
-set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
+{$preamble}
 require {$root} . '/tests/php/bootstrap.php';
 require {$widget};
 echo 'after-include';
@@ -111,10 +92,7 @@ PHP;
 		if ($plantStaleShim) {
 			// The child blocks on STDIN until the pipe is closed below, so the
 			// plant always lands before it creates its own shim.
-			$residue = sys_get_temp_dir() . '/pfb_widget_shim_' . $pid;
-			$this->planted[] = $residue;
-			@mkdir($residue, 0777, TRUE);
-			$this->assertDirectoryExists($residue);
+			$this->plantStaleShim($pid);
 		}
 		fclose($pipes[0]);
 		$stdout = stream_get_contents($pipes[1]);

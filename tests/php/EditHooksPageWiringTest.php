@@ -2,15 +2,21 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PidShimHarnessTrait.php';
+
 use PHPUnit\Framework\TestCase;
 
 /** Runtime contracts for the privilege-gated Edit Hooks page. */
 final class EditHooksPageWiringTest extends TestCase
 {
+	use PidShimHarnessTrait;
+
 	private string $dir = '';
 
-	/** @var list<string> Stale shim paths planted by runDeniedPage(), swept after each test. */
-	private array $planted = [];
+	protected function pidShimPrefix(): string
+	{
+		return 'pfb_edit_hooks_shim_';
+	}
 
 	protected function setUp(): void
 	{
@@ -25,11 +31,7 @@ final class EditHooksPageWiringTest extends TestCase
 			@unlink($path);
 		}
 		@rmdir($this->dir);
-		foreach ($this->planted as $path) {
-			@unlink($path . '/guiconfig.inc');
-			@rmdir($path);
-		}
-		$this->planted = [];
+		$this->sweepPlantedShims();
 	}
 
 	private function makeHook(string $name, string $body = "#!/bin/sh\nexit 0\n"): string
@@ -106,32 +108,16 @@ final class EditHooksPageWiringTest extends TestCase
 		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $this->planted));
 	}
 
-	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
-	private function shimResidue(int $pid): array
-	{
-		$prefix = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . $pid;
-		return array_merge(glob($prefix) ?: [], glob($prefix . '_*') ?: []);
-	}
-
 	/** @return array{status:int,stdout:string,stderr:string,pid:int} */
 	private function runDeniedPage(bool $plantStaleShim = FALSE): array
 	{
 		$root = var_export(dirname(__DIR__, 2), TRUE);
 		$page = var_export(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_edit_hooks.php', TRUE);
+		$preamble = $this->pidShimPreamble('edit hooks include shim creation failed');
 		$script = <<<PHP
 stream_get_contents(STDIN);
 require {$root} . '/tests/php/bootstrap.php';
-\$shim = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
-if (!mkdir(\$shim, 0700, TRUE)) {
-	fwrite(STDERR, "edit hooks include shim creation failed\\n");
-	exit(1);
-}
-register_shutdown_function(static function () use (\$shim): void {
-	@unlink(\$shim . '/guiconfig.inc');
-	@rmdir(\$shim);
-});
-file_put_contents(\$shim . '/guiconfig.inc', "<?php");
-set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
+{$preamble}
 error_reporting(E_ERROR | E_PARSE);
 \$GLOBALS['pfb_test_allowed_pages'] = ['diag_command.php' => FALSE];
 register_shutdown_function(static function (): void { echo 'shutdown'; });
@@ -145,10 +131,7 @@ PHP;
 		if ($plantStaleShim) {
 			// The child blocks on STDIN until the pipe is closed below, so the
 			// plant always lands before it creates its own shim.
-			$residue = sys_get_temp_dir() . '/pfb_edit_hooks_shim_' . $pid;
-			$this->planted[] = $residue;
-			@mkdir($residue, 0777, TRUE);
-			$this->assertDirectoryExists($residue);
+			$this->plantStaleShim($pid);
 		}
 		fclose($pipes[0]);
 		$stdout = stream_get_contents($pipes[1]);

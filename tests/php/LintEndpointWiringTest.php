@@ -2,23 +2,20 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/PidShimHarnessTrait.php';
+
 use PHPUnit\Framework\TestCase;
 
 final class LintEndpointWiringTest extends TestCase
 {
+	use PidShimHarnessTrait;
+
 	private const ROOT = __DIR__ . '/../..';
 	private const PAGE = self::ROOT . '/src/usr/local/www/pfblockerng/pfblockerng_lint.php';
 
-	/** @var list<string> Stale shim paths planted by request(), swept after each test. */
-	private array $planted = [];
-
-	protected function tearDown(): void
+	protected function pidShimPrefix(): string
 	{
-		foreach ($this->planted as $path) {
-			@unlink($path . '/guiconfig.inc');
-			@rmdir($path);
-		}
-		$this->planted = [];
+		return 'pfb_lint_shim_';
 	}
 
 	public function testRealPageRejectsWrongMethodBeforeDispatch(): void
@@ -98,35 +95,19 @@ final class LintEndpointWiringTest extends TestCase
 		$this->assertSame([], array_diff($this->shimResidue($result['pid']), $this->planted));
 	}
 
-	/** @return list<string> Shim directories owned by child PID $pid, with or without a per-invocation suffix. */
-	private function shimResidue(int $pid): array
-	{
-		$prefix = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
-		return array_merge(glob($prefix) ?: [], glob($prefix . '_*') ?: []);
-	}
-
 	/** @param array<string,mixed> $post @param array<string,string> $server @param array<string,bool> $allowed @return array{body:array<string,mixed>,pid:int} */
 	private function request(array $post, array $server, array $allowed = [], bool $plantStaleShim = FALSE): array
 	{
 		$payload = json_encode(compact('post', 'server', 'allowed'), JSON_THROW_ON_ERROR);
 		$root = var_export(self::ROOT, TRUE);
 		$page = var_export(self::PAGE, TRUE);
+		$preamble = $this->pidShimPreamble('lint include shim creation failed');
 		$script = <<<PHP
 \$request = json_decode(stream_get_contents(STDIN), TRUE, 512, JSON_THROW_ON_ERROR);
 \$GLOBALS['pfb_test_allowed_pages'] = \$request['allowed'];
 \$_SERVER = \$request['server'];
 \$_POST = \$request['post'];
-\$shim = sys_get_temp_dir() . '/pfb_lint_shim_' . getmypid() . '_' . bin2hex(random_bytes(8));
-if (!mkdir(\$shim, 0700, TRUE)) {
-	fwrite(STDERR, "lint include shim creation failed\\n");
-	exit(1);
-}
-register_shutdown_function(static function () use (\$shim): void {
-	@unlink(\$shim . '/guiconfig.inc');
-	@rmdir(\$shim);
-});
-file_put_contents(\$shim . '/guiconfig.inc', "<?php");
-set_include_path(\$shim . PATH_SEPARATOR . get_include_path());
+{$preamble}
 require {$root} . '/tests/php/bootstrap.php';
 require {$page};
 PHP;
@@ -137,10 +118,7 @@ PHP;
 		if ($plantStaleShim) {
 			// The child blocks on STDIN until the pipe is closed below, so the
 			// plant always lands before it creates its own shim.
-			$residue = sys_get_temp_dir() . '/pfb_lint_shim_' . $pid;
-			$this->planted[] = $residue;
-			@mkdir($residue, 0777, TRUE);
-			$this->assertDirectoryExists($residue);
+			$this->plantStaleShim($pid);
 		}
 		fwrite($pipes[0], $payload);
 		fclose($pipes[0]);
