@@ -46,13 +46,11 @@ def test_output_reader_teardown_kills_surviving_pkg_descendant(monkeypatch: pyte
         done
     fi
 """
-    monkeypatch.setattr(
-        channel_install,
-        "_PKG_STUB",
-        original_stub.replace(stream_start, stream_start_with_marker, 1).replace(
-            '    _repo=""\n', post_unblock + '    _repo=""\n', 1
-        ),
-    )
+    marked_stub = original_stub.replace(stream_start, stream_start_with_marker, 1)
+    assert marked_stub != original_stub, "fixture broken: the stream-start anchor is gone from _PKG_STUB"
+    patched_stub = marked_stub.replace('    _repo=""\n', post_unblock + '    _repo=""\n', 1)
+    assert patched_stub != marked_stub, "fixture broken: the descendant-block anchor is gone from _PKG_STUB"
+    monkeypatch.setattr(channel_install, "_PKG_STUB", patched_stub)
 
     def capture_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[str]:
         proc = original_popen(*args, **kwargs)
