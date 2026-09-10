@@ -29,10 +29,7 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob("{$this->dir}/*") ?: [] as $file) {
-			@unlink($file);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	private function applyScope(string $source, string $start, string $end): string
@@ -250,6 +247,50 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		$this->assertStringContainsString('Post-script FAIL', $open[0]['message']);
 	}
 
+	public function testFailedPostScriptStagingOpensAnEntryThatSurvivesTheAliasClose(): void
+	{
+		$source = "{$this->dir}/feed.orig";
+		$staged = "{$this->dir}/feed.post";
+		file_put_contents($source, "served\n");
+		$this->assertTrue(mkdir($staged, 0700));
+		$state = ['failed' => FALSE];
+
+		$this->assertFalse(pfb_list_post_script_stage(
+			$source, $staged, 'dnsbl', 'DNSBL_Example',
+			'[ DNSBL_Example - feed ] Post-script FAIL - input staging unavailable',
+			$this->dir, $state
+		));
+		$this->assertSame("served\n", file_get_contents($source),
+			'a staging failure must leave the served input byte-identical');
+		$this->assertTrue($state['failed'],
+			'the failed state must stop the alias close from clearing the entry');
+
+		pfb_list_script_failure_close('dnsbl', 'DNSBL_Example', $this->dir, $state);
+		$open = pfb_sync_status_list_open($this->dir, 'dnsbl');
+		$this->assertCount(1, $open);
+		$this->assertSame('script', $open[0]['stage']);
+		$this->assertStringContainsString('input staging unavailable', $open[0]['message']);
+	}
+
+	public function testSuccessfulPostScriptStagingCopiesInputWithoutRecordingAFailure(): void
+	{
+		$source = "{$this->dir}/feed.orig";
+		$staged = "{$this->dir}/feed.post";
+		file_put_contents($source, "served\n");
+		$state = ['failed' => FALSE];
+
+		$this->assertTrue(pfb_list_post_script_stage(
+			$source, $staged, 'ip', 'pfB_Example_v4',
+			'this message must never reach the ledger', $this->dir, $state
+		));
+
+		$this->assertSame("served\n", file_get_contents($source));
+		$this->assertSame("served\n", file_get_contents($staged));
+		$this->assertFalse($state['failed']);
+		$this->assertSame([], pfb_sync_status_list_open($this->dir, 'ip'),
+			'a successful staging copy must not create a false script failure');
+	}
+
 	/**
 	 * The other side of the same branch, and the reason
 	 * pfb_list_post_script_failure_record() owns the exit-status test (rationale
@@ -407,5 +448,41 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 			$this->assertSame(0, substr_count($mutantScope, $needle),
 				"a {$needle} relocation after its post-script branch must fail the scope pin");
 		}
+	}
+
+	public function testEachFamilyStagesPostScriptInputBeforeExecution(): void
+	{
+		$source      = php_strip_whitespace(self::APPLY);
+		$dnsbl_start = 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {';
+		$dnsbl_end   = 'if (isset($csvline)) {';
+		$ip_start    = 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {';
+		$ip_end      = '$file_chk = pfb_ip_script_probe_staged(';
+		$dnsbl_post  = $this->applyScope($source, $dnsbl_start, $dnsbl_end);
+		$ip_post     = $this->applyScope($source, $ip_start, $ip_end);
+
+		$dnsbl_stage = 'if (pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.post", \'dnsbl\', $alias,';
+		$ip_stage    = '$pfb_post_staged = pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.orig.post", \'ip\', $alias,';
+		$this->assertSame(1, substr_count($dnsbl_post, $dnsbl_stage),
+			'the DNSBL loop must stage its throwaway input through the failure-recording seam');
+		$this->assertSame(1, substr_count($ip_post, $ip_stage),
+			'the IP loop must stage its restore point through the failure-recording seam');
+		$this->assertSame(2, substr_count($source, 'pfb_list_post_script_stage("{$file_dwn}.orig",'),
+			'only the DNSBL input and IP restore-point copies use the post-script staging seam');
+
+		$this->assertLessThan(
+			strpos($dnsbl_post, '$pfb_post_status = pfb_list_script_exec('),
+			strpos($dnsbl_post, $dnsbl_stage),
+			'the DNSBL staging guard must precede script execution'
+		);
+		$this->assertSame(1, substr_count($ip_post, 'if ($pfb_post_staged) {'),
+			'the IP script must run only after its restore point was staged');
+		$this->assertLessThan(
+			strpos($ip_post, '$pfb_post_status = pfb_list_script_exec('),
+			strpos($ip_post, 'if ($pfb_post_staged) {'),
+			'the IP staging guard must precede script execution'
+		);
+		$this->assertSame(1,
+			substr_count($source, 'if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {'),
+			'a failed restore-point copy must not make a stale path eligible for restoration');
 	}
 }

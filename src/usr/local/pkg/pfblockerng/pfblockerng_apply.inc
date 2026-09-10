@@ -584,6 +584,17 @@ function pfb_list_post_script_failure_record(int $exit_status, string $facility,
 	pfb_list_script_failure_record($facility, $item, $message, $ledger_dir, NULL, $state);
 }
 
+/** Stage a post-script copy, recording a script failure without a retry marker on failure. */
+function pfb_list_post_script_stage(string $source, string $staged, string $facility, string $item,
+    string $message, string $ledger_dir, array &$state): bool {
+	if (@copy($source, $staged)) {
+		return TRUE;
+	}
+	unlink_if_exists($staged);
+	pfb_list_script_failure_record($facility, $item, $message, $ledger_dir, NULL, $state);
+	return FALSE;
+}
+
 function pfb_list_script_failure_close(string $facility, string $item, string $ledger_dir, array $state): void {
 	if (empty($state['failed'])) {
 		pfb_sync_status_close($facility, $item, 'script', $ledger_dir);
@@ -2651,7 +2662,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								// the IP loop, which discards post-script edits via restore).
 								if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
-									if (@copy("{$file_dwn}.orig", "{$file_dwn}.post")) {
+									if (pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.post", 'dnsbl', $alias,
+									    "[ {$alias} - {$header} ] Post-script input staging unavailable",
+									    $pfb['dbdir'], state: $pfb_script_state)) {
 										$pfb_post_status = pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
 										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
 										unlink_if_exists("{$file_dwn}.post");
@@ -4076,23 +4089,30 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							pfb_logger("\n", 1);
 
 							// IP v4/6 Advanced Tunable - (Post Script processing)
+							$pfb_post_staged = FALSE;
 							if ($pfb_script_post && is_file("{$pfb_script_post}")) {
 								pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 								$file_org_esc = escapeshellarg("{$file_dwn}.orig");
-								@copy("{$file_dwn}.orig", "{$file_dwn}.orig.post"); // Save original file for restoration
-								$pfb_post_status = pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
-								    "{$file_org_esc} {$list['vtype']} {$elog}");
-								if ($pfb_post_status !== 0) {
-									// issue #1927: restore the download now so the empty-feed check
-									// below reads it, not the failed script's leftovers.
-									if (file_exists("{$file_dwn}.orig.post")) {
-										@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
+								$pfb_post_staged = pfb_list_post_script_stage("{$file_dwn}.orig", "{$file_dwn}.orig.post", 'ip', $alias,
+								    "[ {$alias} - {$header} ] Post-script restore point unavailable",
+								    $pfb['dbdir'], state: $pfb_script_state);
+								if ($pfb_post_staged) {
+									$pfb_post_status = pfb_list_script_exec($pfb_script_post, $list['script_post'], 'post', $header,
+									    "{$file_org_esc} {$list['vtype']} {$elog}");
+									if ($pfb_post_status !== 0) {
+										// issue #1927: restore the download now so the empty-feed check
+										// below reads it, not the failed script's leftovers.
+										if (file_exists("{$file_dwn}.orig.post")) {
+											@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
+										}
 									}
+									// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
+									pfb_list_post_script_failure_record($pfb_post_status, 'ip', $alias,
+									    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
+									    $pfb['dbdir'], $pfb_script_state);
+								} else {
+									pfb_logger("\n[ {$header} ] post-script '{$list['script_post']}' could not stage its restore point; skipping\n", 2);
 								}
-								// issue #2059: 'script' stage, never 'download' -- the feed refreshed.
-								pfb_list_post_script_failure_record($pfb_post_status, 'ip', $alias,
-								    "[ {$alias} - {$header} ] Post-script FAIL - feed updated, side effects incomplete",
-								    $pfb['dbdir'], $pfb_script_state);
 							}
 
 							// Check to see if list actually failed download or has no IPs listed.
@@ -4197,7 +4217,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							}
 
 							// Restore Original Downloaded file after Post Script function
-							if (file_exists("{$file_dwn}.orig.post")) {
+							if ($pfb_post_staged && file_exists("{$file_dwn}.orig.post")) {
 								@rename("{$file_dwn}.orig.post", "{$file_dwn}.orig");
 							}
 						}
