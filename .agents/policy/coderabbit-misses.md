@@ -15,6 +15,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `e1aa16c16`  tests: share PID shim harness  (#3264) — asked twice, two quota notices (51 then 58 min); four legs + Copilot approval resolved; rebase CI PASS.
 - `2dce4766b`  gui: point apply guidance at the Update tab's Run Now, not retired Force actions  (#3241) — asked twice, two quota notices; findings of the finished pre-delta review resolved.
 - `01e9baa22`  perf: avoid Python DNS-label charset scans  (#3235) — two quota notices; condensed review and Copilot findings resolved.
 - `52c4ffe68`  tests: replace timing verdicts with controlled events  (#3232) — two quota notices; condensed review and Copilot findings resolved.
