@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 /** Local fixture creation must neither adopt stale roots nor outlive its process. */
 final class FixtureInlineLifecycleTest extends TestCase
 {
@@ -35,15 +37,8 @@ final class FixtureInlineLifecycleTest extends TestCase
 	/** @return array{status:int,stdout:string,stderr:string} */
 	private function runChildScript(string $script, string $base): array
 	{
-		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-		$process = proc_open([PHP_BINARY, '-d', 'sys_temp_dir=' . $base, '-r', $script], $descriptors, $pipes);
-		$this->assertIsResource($process, 'failed to spawn the child PHP process');
-		$stdout = (string) stream_get_contents($pipes[1]);
-		$stderr = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$status = proc_close($process);
-		return ['status' => $status, 'stdout' => $stdout, 'stderr' => $stderr];
+		$result = pfb_test_run_process([PHP_BINARY, '-d', 'sys_temp_dir=' . $base, '-r', $script]);
+		return ['status' => $result['exit'], 'stdout' => $result['stdout'], 'stderr' => $result['stderr']];
 	}
 
 	/** @return array<string, mixed> */

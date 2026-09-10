@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 /** Fixture allocations stay isolated across setup calls and expire with their owning process. */
 final class FixtureSetupLifecycleTest extends TestCase
 {
@@ -77,18 +79,10 @@ final class FixtureSetupLifecycleTest extends TestCase
 	/** @return array<string,mixed> */
 	private function runChild(string $observationRoot, string $script): array
 	{
-		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-		$process = proc_open(
-			[PHP_BINARY, '-d', "sys_temp_dir={$observationRoot}", '-r', $script],
-			$descriptors,
-			$pipes
-		);
-		$this->assertIsResource($process);
-		$stdout = (string) stream_get_contents($pipes[1]);
-		$stderr = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$status = proc_close($process);
+		$result = pfb_test_run_process([PHP_BINARY, '-d', "sys_temp_dir={$observationRoot}", '-r', $script]);
+		$stdout = $result['stdout'];
+		$stderr = $result['stderr'];
+		$status = $result['exit'];
 		$this->assertSame(0, $status, "child process exited {$status}, stderr: {$stderr}");
 		$decoded = json_decode(trim($stdout), TRUE);
 		$this->assertIsArray($decoded, "child stdout was not JSON: {$stdout}\nstderr: {$stderr}");
