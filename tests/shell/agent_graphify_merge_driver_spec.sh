@@ -39,14 +39,16 @@ case "$*" in
   *) exit 9 ;;
 esac
 UV
-    # A tripwire, never a collaborator: the real `graphify hook install` writes
-    # post-commit and post-checkout into `git rev-parse --git-path hooks` (which
-    # honours core.hooksPath), and the driver is registered by the helper itself
-    # (issue #3139). Any call is logged, drops the hooks the way the CLI would,
-    # and fails.
+    # `ensure-graphify.sh` must refresh the generic agents skill through the
+    # resolved pinned launcher. Any other Graphify call remains a tripwire:
+    # `graphify hook install` would recreate retired repository hooks.
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 printf '%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
+if [ "$*" = 'install --platform agents' ]; then
+  [ "${GRAPHIFY_SKILL_FAIL:-0}" = 0 ] || exit 92
+  exit 0
+fi
 hooks_dir=$(git rev-parse --git-path hooks) && mkdir -p "$hooks_dir" && # git-env-scrub-guard: the stub mimics the real CLI, which resolves the hooks dir of the tree under test
   true > "$hooks_dir/post-commit" && true > "$hooks_dir/post-checkout"
 exit 91
@@ -64,7 +66,7 @@ exec "$REAL_GIT" "$@"
 GIT
     chmod +x "$gitstub/git"
     chmod +x "$stubdir/uv" "$stubdir/graphify"
-    export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log"
+    export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log" UV_TOOL_BIN_FIXTURE="$stubdir"
     PATH="$stubdir:$PATH"
     export PATH
   }
@@ -77,9 +79,23 @@ GIT
     When run sh "$script_abs" "$repo"
     The status should equal 0
     The contents of file "$uv_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
-    The file "$graphify_log" should not be exist
+    The contents of file "$graphify_log" should include 'install --platform agents'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+  End
+
+  It 'uses the uv-owned launcher even when another Graphify executable shadows it on PATH'
+    uv_tool_bin="$fixture/uv-tool-bin"
+    mkdir -p "$uv_tool_bin"
+    cp "$stubdir/graphify" "$uv_tool_bin/graphify"
+    cat > "$stubdir/graphify" <<'SHADOW'
+#!/bin/sh
+exit 93
+SHADOW
+    chmod +x "$stubdir/graphify"
+    When run env UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
+    The status should equal 0
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
   End
 
   It 'leaves .githooks/post-commit and .githooks/post-checkout absent: registration never runs `graphify hook install` (issue #3139)'
@@ -89,8 +105,15 @@ GIT
     The status should equal 0
     The path "$repo/.githooks/post-commit" should not be exist
     The path "$repo/.githooks/post-checkout" should not be exist
-    The file "$graphify_log" should not be exist
+    The contents of file "$graphify_log" should include 'install --platform agents'
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+  End
+
+  It 'fails before merge-driver registration when the pinned launcher cannot refresh the agents skill'
+    When run env GRAPHIFY_SKILL_FAIL=1 sh "$script_abs" "$repo"
+    The status should equal 1
+    The stderr should include 'Graphify skill installation failed'
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
   End
 
   Context 'registration failures'

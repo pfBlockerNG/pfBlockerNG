@@ -55,8 +55,14 @@ main() {
 
 	uv tool install --upgrade "$graphify_spec" 1>&2 ||
 		fail 'Graphify installation failed'
-	graphify_bin=$(resolve_graphify_launcher) ||
+	graphify_uv_bin=$(uv tool dir --bin 2>/dev/null) ||
+		fail 'cannot resolve uv tool executable directory'
+	graphify_bin=$(absolutize_graphify_launcher "$graphify_uv_bin/graphify") ||
 		fail 'cannot resolve the installed Graphify launcher'
+	[ -x "$graphify_bin" ] ||
+		fail "installed Graphify launcher '$graphify_bin' is not executable"
+	"$graphify_bin" install --platform agents 1>&2 ||
+		fail 'Graphify skill installation failed'
 	printf '%s\n' "$graphify_bin"
 }
 
