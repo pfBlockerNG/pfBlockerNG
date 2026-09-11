@@ -3288,11 +3288,7 @@ function pfb_maxmind_credential_notice(string $maxmind_key, string $maxmind_acco
 }
 
 
-// issue #2839 row 3: pfb_global() (re)computes the chroot_cmd command below on every
-// call, so a bootstrap-time array default alone cannot survive a later pfb_global()
-// refresh -- unlike PFB_UNBOUND_START_CMD, this was never a fixed value to begin with.
-// Guarding just the binary-invocation prefix, the same idiom as PFB_PKG_BIN, means
-// every pfb_global() call derives the harness-safe command again, not only the first.
+// Keep the harness override effective across repeated pfb_global() calls.
 if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
 	define('PFB_UNBOUND_CONTROL_BIN', '/usr/sbin/chroot -u unbound -g unbound / /usr/local/sbin/unbound-control');
 }
@@ -11642,10 +11638,7 @@ if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 	define('PFB_UNBOUND_CONTROL_WAIT', 30);
 }
 
-// issue #2839 row 1: same overridable idiom as PFB_UNBOUND_START_CMD above -- an
-// installed host has this literal path on disk, and its top level exec()s
-// mount_nullfs/umount four times with no seam to intercept (tests/php/bootstrap.php
-// points this at a harmless double).
+// The installed include executes mounts at load time; unit tests must replace it.
 if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
 }

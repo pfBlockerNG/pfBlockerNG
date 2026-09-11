@@ -92,12 +92,7 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertSame(0, $ret);
 	}
 
-	/**
-	 * issue #2839 row 2: PFB_PKG_BIN was the file's one unguarded constant, so a harness
-	 * could not point it away from the real appliance binary at all -- on a box that
-	 * actually has pfBlockerNG installed, every pfb_pkg_*() query in a phpunit run would
-	 * shell out to the real pkg(8).
-	 */
+	// Package queries must use a runnable double even on hosts with pkg(8) installed.
 	public function testPfbPkgBinIsOverriddenAwayFromTheShippedApplianceBinary(): void
 	{
 		$this->assertTrue(defined('PFB_PKG_BIN'));
@@ -129,7 +124,14 @@ final class PkgCaHookDelegateTest extends TestCase
 		chmod($double, 0o755);
 		file_put_contents($runner, "<?php\n"
 			. "define('PFB_PKG_BIN', " . var_export($double, TRUE) . ");\n"
+			. "set_error_handler(static function (int \$severity, string \$message): bool {\n"
+			. "\tif (str_starts_with(\$message, 'Constant PFB_') && str_ends_with(\$message, 'already defined')) {\n"
+			. "\t\tthrow new ErrorException(\$message, 0, \$severity);\n"
+			. "\t}\n"
+			. "\treturn FALSE;\n"
+			. "});\n"
 			. 'require ' . var_export(__DIR__ . '/bootstrap.php', TRUE) . ";\n"
+			. "restore_error_handler();\n"
 			. "echo pfb_pkg_installed_name(), \"\\n\";\n");
 
 		$output = [];

@@ -88,10 +88,7 @@ if (!defined('PFB_UNBOUND_START_WAIT')) {
 }
 unset($pfb_test_unbound_start_cmd);
 
-// 4c. issue #2839 row 1: neuter the mount-include boundary the same way as the daemon
-//     start above. On a box that has pfBlockerNG actually installed, this literal path
-//     exists and its top level exec()s mount_nullfs/umount four times with no seam to
-//     intercept -- point the constant at a double that only records it ran.
+// 4c. Replace the mount-executing include even on hosts with pfBlockerNG installed.
 $GLOBALS['pfb_test_unbound_include_log'] = "{$pfb_test_tmp}/unbound_include.log";
 $pfb_test_unbound_include_file = "{$pfb_test_tmp}/pfb-unbound-include-double.inc";
 file_put_contents($pfb_test_unbound_include_file, '<?php file_put_contents('
@@ -101,10 +98,7 @@ if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
 }
 unset($pfb_test_unbound_include_file);
 
-// 4d. issue #2839 row 2: PFB_PKG_BIN feeds every pfb_pkg_*() read-only query's exec(). On
-//     a box that has pfBlockerNG installed, the shipped default is a REAL executable;
-//     point it at a double that fails closed -- matching the off-appliance absence this
-//     replaces -- and records what it was asked to run.
+// 4d. Record package commands and preserve the missing-package failure result.
 $GLOBALS['pfb_test_pkg_bin_log'] = "{$pfb_test_tmp}/pkg_bin.log";
 $pfb_test_pkg_bin = "{$pfb_test_tmp}/pkg-bin-double";
 file_put_contents($pfb_test_pkg_bin, "#!/bin/sh\n"
@@ -116,14 +110,7 @@ if (!defined('PFB_PKG_BIN')) {
 }
 unset($pfb_test_pkg_bin);
 
-// 4e. issue #2839 row 3: $pfb['chroot_cmd'] is the unbound-control command prefix; off-
-//     appliance it defaults to unset (a caller that forgets to set it just names a bogus
-//     command), but pfb_global() RECOMPUTES it on every call from PFB_UNBOUND_CONTROL_BIN
-//     -- guard that constant, not just the array key, or a later pfb_global() refresh
-//     (dozens of test files call it) would revert to the real appliance chroot+unbound-
-//     control invocation even after this default is set. A test wanting specific command
-//     expectations keeps overriding $GLOBALS['pfb']['chroot_cmd'] itself, exactly as six
-//     existing suites do; none of them also calls pfb_global(), so nothing here changes.
+// 4e. Override both the initial prefix and the source pfb_global() uses to rebuild it.
 $GLOBALS['pfb_test_chroot_cmd_log'] = "{$pfb_test_tmp}/chroot_cmd.log";
 $pfb_test_chroot_cmd = "{$pfb_test_tmp}/chroot-cmd-double";
 file_put_contents($pfb_test_chroot_cmd, "#!/bin/sh\n"
