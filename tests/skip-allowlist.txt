@@ -93,5 +93,3 @@ smoke:tests.smoke.test_nightly_install::test_install_from_live_nightly_url  # SM
 smoke:tests.smoke.test_repo_install::test_install_from_live_pages_url  # SMOKE_REPO_LIVE_URL is dispatch-only; the schedule never passes it (issue #2389)
 smoke:tests.smoke.test_repo_install::test_live_nightly_downgrade_requires_selected_semantic_repo  # needs both live URLs; the schedule passes neither (issue #2389)
 
-# phpunit -- only on a host that carries the pkg(8) port binary (a FreeBSD/pfSense dev box).
-phpunit:SoftwareFailedCheckStateTest::testPkgLatestReportsAFailedAttemptToItsCaller  # drives the real pkg shellout; its outcome is host repository state where /usr/local/sbin/pkg exists
