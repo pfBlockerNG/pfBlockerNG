@@ -143,7 +143,8 @@ final class UnboundRestartSeamTest extends TestCase
 			. "\$final = pfb_stop_start_unbound('');\n"
 			. 'echo json_encode([\'final\' => $final, \'log\' => (string) @file_get_contents('
 			. var_export($log, TRUE) . '), \'errlog\' => (string) @file_get_contents('
-			. var_export($errlog, TRUE) . ")]), \"\\n\";\n");
+			. var_export($errlog, TRUE) . '), \'mount_include_log\' => (string) @file_get_contents('
+			. '$GLOBALS[\'pfb_test_unbound_include_log\'] ?? \'\')]), "\\n";' . "\n");
 
 		$output = [];
 		$status = 0;
@@ -221,14 +222,18 @@ final class UnboundRestartSeamTest extends TestCase
 	{
 		$this->assertNotSame('/var/unbound/pfb_unbound_include.inc', PFB_UNBOUND_INCLUDE_FILE,
 			'the harness must default this constant away from the shipped path before any test runs');
-		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
 
-		pfb_stop_start_unbound('');
+		// Isolated, never the shared suite process: require_once() only executes the
+		// double ONCE per process, so a shared-process log could already carry an
+		// earlier test's "included" line even if THIS call never reached the seam.
+		$run = $this->runIsolatedStart('true');
 
-		$this->assertStringContainsString('included',
-			(string) @file_get_contents($GLOBALS['pfb_test_unbound_include_log'] ?? ''),
-			'the untouched default double must actually execute -- proving the seam is live '
-			. 'by default, not only when a test explicitly overrides it');
+		$this->assertSame(0, $run['status'],
+			'the isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload'], 'the isolated start runner must return its JSON result');
+		$this->assertStringContainsString('included', $run['payload']['mount_include_log'] ?? '',
+			'the untouched default double must actually execute in THIS call -- proving the '
+			. 'seam is live by default, not only when a test explicitly overrides it');
 	}
 
 	/**

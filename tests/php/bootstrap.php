@@ -118,16 +118,21 @@ unset($pfb_test_pkg_bin);
 
 // 4e. issue #2839 row 3: $pfb['chroot_cmd'] is the unbound-control command prefix; off-
 //     appliance it defaults to unset (a caller that forgets to set it just names a bogus
-//     command), but pfb_global() sets it to the REAL chroot+unbound-control invocation on
-//     an installed host with no test involvement. Default it the same way as the
-//     daemon-start double above; a test wanting specific command expectations keeps
-//     overriding $GLOBALS['pfb']['chroot_cmd'] itself, exactly as six existing suites do.
+//     command), but pfb_global() RECOMPUTES it on every call from PFB_UNBOUND_CONTROL_BIN
+//     -- guard that constant, not just the array key, or a later pfb_global() refresh
+//     (dozens of test files call it) would revert to the real appliance chroot+unbound-
+//     control invocation even after this default is set. A test wanting specific command
+//     expectations keeps overriding $GLOBALS['pfb']['chroot_cmd'] itself, exactly as six
+//     existing suites do; none of them also calls pfb_global(), so nothing here changes.
 $GLOBALS['pfb_test_chroot_cmd_log'] = "{$pfb_test_tmp}/chroot_cmd.log";
 $pfb_test_chroot_cmd = "{$pfb_test_tmp}/chroot-cmd-double";
 file_put_contents($pfb_test_chroot_cmd, "#!/bin/sh\n"
 	. 'printf \'%s\n\' "$*" >> ' . escapeshellarg($GLOBALS['pfb_test_chroot_cmd_log']) . "\n"
 	. "exit 0\n");
 chmod($pfb_test_chroot_cmd, 0755);
+if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
+	define('PFB_UNBOUND_CONTROL_BIN', $pfb_test_chroot_cmd);
+}
 $GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
 unset($pfb_test_chroot_cmd);
 

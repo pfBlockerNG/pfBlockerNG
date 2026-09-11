@@ -12,14 +12,11 @@ use PHPUnit\Framework\TestCase;
  * after whatever verb followed it -- harmless only because that happens to fail too. On an
  * installed host pfb_global() sets it to the REAL chroot(8)+unbound-control invocation with
  * no test involvement at all, which is why six existing suites each have to defuse it
- * themselves before touching it. tests/php/bootstrap.php now seeds an inert recorder
- * default, the same idiom PFB_UNBOUND_START_CMD established for the daemon-start boundary,
- * so a caller that never sets its own override still never reaches the shipped command.
- *
- * Run in an isolated process, never the shared suite process: many other test files call
- * pfb_global() directly, which unconditionally overwrites $pfb['chroot_cmd'] with the real
- * appliance command, so only a fresh process proves the value bootstrap.php itself seeds
- * rather than whatever a same-process neighbour left behind.
+ * themselves before touching it. pfb_global() RECOMPUTES the command on every call (it is
+ * not a one-time load-time value like PFB_UNBOUND_START_CMD), so tests/php/bootstrap.php
+ * guards the binary-invocation prefix itself (PFB_UNBOUND_CONTROL_BIN) rather than only the
+ * array default: a harness override then survives every later pfb_global() refresh, not
+ * only the first one, the same idiom PFB_PKG_BIN established for the package-query boundary.
  */
 #[CoversFunction('pfb_unbound_control_exec')]
 final class ChrootCmdBootstrapDefaultTest extends TestCase
@@ -85,5 +82,45 @@ final class ChrootCmdBootstrapDefaultTest extends TestCase
 		$this->assertSame(0, $payload['retval'], 'the bootstrap default recorder must answer successfully');
 		$this->assertStringContainsString('status', $payload['recorder_log'],
 			'the control verb must actually reach the bootstrap default recorder');
+	}
+
+	/**
+	 * Given a fresh process that requires bootstrap.php, then calls pfb_global() (the
+	 *   function every one of the six existing chroot_cmd-overriding suites, and dozens
+	 *   of unrelated suites, call to refresh $pfb) with the minimum config it needs,
+	 * When it reads $pfb['chroot_cmd'] afterward,
+	 * Then the value pfb_global() just recomputed is still the harness recorder, never
+	 *   the real chroot(8)+unbound-control invocation the shipped code composes.
+	 */
+	public function testChrootCmdSurvivesAPfbGlobalRefreshAfterInitialization(): void
+	{
+		$runner = "{$this->dir}/pfb_global_runner.php";
+		$out = "{$this->dir}/pfb_global_out.json";
+		file_put_contents($runner, "<?php\n"
+			. 'require ' . var_export(__DIR__ . '/bootstrap.php', TRUE) . ";\n"
+			. 'require ' . var_export(__DIR__ . '/SyncPrereqSeedTrait.php', TRUE) . ";\n"
+			. "\$seeder = new class { use SyncPrereqSeedTrait; public function seed(): void { \$this->seedSyncPrereqs(); } };\n"
+			. "\$seeder->seed();\n"
+			. "\$before = \$GLOBALS['pfb']['chroot_cmd'] ?? NULL;\n"
+			. "pfb_global();\n"
+			. "\$after = \$GLOBALS['pfb']['chroot_cmd'] ?? NULL;\n"
+			. 'file_put_contents(' . var_export($out, TRUE)
+			. ", json_encode(['before' => \$before, 'after' => \$after]));\n");
+
+		$output = [];
+		$status = 0;
+		$timeout = (string) ($GLOBALS['pfb']['timeout'] ?? '/usr/bin/timeout');
+		exec(escapeshellarg($timeout) . ' -s TERM -k 2 ' . self::SALVAGE_SECONDS . ' ' .
+			escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1', $output, $status);
+		$this->assertSame(0, $status, 'the isolated runner must exit cleanly: ' . implode("\n", $output));
+
+		$payload = json_decode((string) file_get_contents($out), TRUE);
+		$this->assertIsArray($payload, 'the isolated runner must publish its JSON result');
+		$this->assertNotNull($payload['before'], 'the bootstrap default must be set before pfb_global() ever runs');
+		$this->assertNotNull($payload['after'], 'pfb_global() must still publish a chroot_cmd');
+		$this->assertStringNotContainsString('/usr/local/sbin/unbound-control', $payload['after'],
+			'pfb_global() must never revert an untouched caller to the real appliance command');
+		$this->assertStringContainsString('chroot-cmd-double', $payload['after'],
+			'pfb_global() must recompute the command from the SAME overridden binary, not a stale one');
 	}
 }

@@ -3288,6 +3288,15 @@ function pfb_maxmind_credential_notice(string $maxmind_key, string $maxmind_acco
 }
 
 
+// issue #2839 row 3: pfb_global() (re)computes the chroot_cmd command below on every
+// call, so a bootstrap-time array default alone cannot survive a later pfb_global()
+// refresh -- unlike PFB_UNBOUND_START_CMD, this was never a fixed value to begin with.
+// Guarding just the binary-invocation prefix, the same idiom as PFB_PKG_BIN, means
+// every pfb_global() call derives the harness-safe command again, not only the first.
+if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
+	define('PFB_UNBOUND_CONTROL_BIN', '/usr/sbin/chroot -u unbound -g unbound / /usr/local/sbin/unbound-control');
+}
+
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
 	global $g, $pfb;
@@ -3421,7 +3430,7 @@ function pfb_global() {
 	$pfb['extdns'] = pfb_filter($pfb['config_global']['pfbextdns'], PFB_FILTER_IPV4, 'pfb_global', '8.8.8.8');
 
 	// Unbound chroot cmd
-	$pfb['chroot_cmd'] = "/usr/sbin/chroot -u unbound -g unbound / /usr/local/sbin/unbound-control -c {$g['unbound_chroot_path']}/unbound.conf";
+	$pfb['chroot_cmd'] = PFB_UNBOUND_CONTROL_BIN . " -c {$g['unbound_chroot_path']}/unbound.conf";
 
 	// Define SQLite3 parameters
 	$pfb['sqlite_timeout']	= 100000;
