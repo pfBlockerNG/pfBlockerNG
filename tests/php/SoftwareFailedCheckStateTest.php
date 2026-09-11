@@ -221,6 +221,10 @@ final class SoftwareFailedCheckStateTest extends TestCase
 
 		$this->assertSame('', $latest, 'no pkg binary here, so no version can be read');
 		$this->assertFalse($readOk, 'and the caller is TOLD the attempt failed, not just handed an empty string');
+		$binLog = $GLOBALS['pfb_test_pkg_bin_log'] ?? '';
+		$this->assertStringContainsString('update -f -r',
+			$binLog === '' ? '' : (string) @file_get_contents($binLog),
+			'the untouched default double, never a real pkg(8), must be what actually received the query');
 	}
 
 	/**

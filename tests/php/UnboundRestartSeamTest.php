@@ -212,6 +212,26 @@ final class UnboundRestartSeamTest extends TestCase
 	}
 
 	/**
+	 * Scenario: an untouched caller (no per-test override at all) must still reach the
+	 * harness's default double, never the shipped /var/unbound path -- the same
+	 * "no individual test has to remember to defuse it" guarantee row 2/3's untouched-
+	 * caller proofs give the pkg-bin and chroot_cmd boundaries.
+	 */
+	public function testMountIncludeDefaultDoubleRunsForAnUntouchedCaller(): void
+	{
+		$this->assertNotSame('/var/unbound/pfb_unbound_include.inc', PFB_UNBOUND_INCLUDE_FILE,
+			'the harness must default this constant away from the shipped path before any test runs');
+		$GLOBALS['pfb_test_process_running']['unbound'] = FALSE;
+
+		pfb_stop_start_unbound('');
+
+		$this->assertStringContainsString('included',
+			(string) @file_get_contents($GLOBALS['pfb_test_unbound_include_log'] ?? ''),
+			'the untouched default double must actually execute -- proving the seam is live '
+			. 'by default, not only when a test explicitly overrides it');
+	}
+
+	/**
 	 * Scenario: the stop-wait must not cost a test the appliance's full budget.
 	 *   Given a process-running double that never reports the daemon gone,
 	 *   When pfb_stop_start_unbound() waits for it to terminate,
