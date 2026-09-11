@@ -208,19 +208,14 @@ final class SoftwareFailedCheckStateTest extends TestCase
 	 * with no pkg(8) to run, both calls exit non-zero and the attempt is a recorded FAILURE
 	 * rather than an indistinguishable empty string.
 	 *
-	 * This drives the real shellout, so it asserts a fixed outcome only where that shellout
-	 * cannot succeed. On a host that carries the port binary the result depends on that
-	 * host's repository configuration, which is not this case's subject: it skips there
-	 * rather than reporting a red for an environment difference.
+	 * This drives the real shellout, so it depends on PFB_PKG_BIN never being a real,
+	 * answering `pkg` binary. issue #2839 row 2 made that host-independent: the harness
+	 * unconditionally overrides PFB_PKG_BIN with a double that fails closed exactly like
+	 * the appliance's absence this replaces, so the assertion below no longer needs
+	 * (and no longer skips on) a bare-metal host that happens to carry a real pkg(8).
 	 */
 	public function testPkgLatestReportsAFailedAttemptToItsCaller(): void
 	{
-		if (is_executable(PFB_PKG_BIN)) {
-			$this->markTestSkipped(
-				'host carries ' . PFB_PKG_BIN . ' — the live read outcome is then repository state, not this rule'
-			);
-		}
-
 		$readOk = NULL;
 		$latest = pfb_pkg_latest(self::NAME, self::REPO, $readOk);
 

@@ -5734,7 +5734,9 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * 'pfblockerng' or one of the per-channel 'pfblockerng-<channel>' catalogues), which is
  * now the authoritative channel signal AND the repo latest is read from.
  */
-define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
+if (!defined('PFB_PKG_BIN')) {
+	define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
+}
 
 if (!defined('PFB_REPO_GENERATE_HOOK')) {
 	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
@@ -11631,6 +11633,14 @@ if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
 	define('PFB_UNBOUND_CONTROL_WAIT', 30);
 }
 
+// issue #2839 row 1: same overridable idiom as PFB_UNBOUND_START_CMD above -- an
+// installed host has this literal path on disk, and its top level exec()s
+// mount_nullfs/umount four times with no seam to intercept (tests/php/bootstrap.php
+// points this at a harmless double).
+if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
+	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
+}
+
 // Function to Start Unbound
 function pfb_stop_start_unbound($type) {
 	global $g, $pfb;
@@ -11687,10 +11697,10 @@ function pfb_stop_start_unbound($type) {
 	}
 
 	// Add/Remove additional python mounts
-	if (file_exists('/var/unbound/pfb_unbound_include.inc')) {
+	if (file_exists(PFB_UNBOUND_INCLUDE_FILE)) {
 		$g['pfblockerng_include_verbose'] = TRUE;
 		pfb_logger("\nAdditional mounts{$type}:", 1);
-		require_once('/var/unbound/pfb_unbound_include.inc');
+		require_once(PFB_UNBOUND_INCLUDE_FILE);
 		unset($g['pfblockerng_include_verbose']);
 	}
 

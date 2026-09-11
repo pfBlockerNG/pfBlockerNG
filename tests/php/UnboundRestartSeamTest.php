@@ -109,7 +109,8 @@ final class UnboundRestartSeamTest extends TestCase
 		int $budget = 5,
 		?string $phpCli = NULL,
 		array $ini = [],
-		string $prelude = ''
+		string $prelude = '',
+		?string $includeFile = NULL
 	): array
 	{
 		$phpCli ??= PHP_BINARY;
@@ -119,11 +120,17 @@ final class UnboundRestartSeamTest extends TestCase
 		$errlog = "{$this->dir}/isolated_{$id}.err";
 		$timeout = (string) $GLOBALS['pfb']['timeout'];
 		$bootstrap = __DIR__ . '/bootstrap.php';
+		// issue #2839 row 1: PFB_UNBOUND_INCLUDE_FILE, like PFB_UNBOUND_START_CMD above,
+		// must be defined BEFORE bootstrap.php loads production code -- it is a constant,
+		// fixed at first define() for the whole process.
+		$includeDefine = $includeFile === NULL ? ''
+			: "define('PFB_UNBOUND_INCLUDE_FILE', " . var_export($includeFile, TRUE) . ");\n";
 		file_put_contents($runner, "<?php\n"
 			. "define('PFB_UNBOUND_START_CMD', " . var_export($startCommand, TRUE) . ");\n"
 			. "define('PFB_UNBOUND_STOP_WAIT', 1);\n"
 			. "define('PFB_UNBOUND_START_WAIT', " . var_export($budget, TRUE) . ");\n"
 			. "define('PFB_HOOK_KILL_GRACE', 1);\n"
+			. $includeDefine
 			. 'require ' . var_export($bootstrap, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'timeout\'] = ' . var_export($timeout, TRUE) . ";\n"
 			. '$GLOBALS[\'pfb\'][\'php\'] = ' . var_export($phpCli, TRUE) . ";\n"
@@ -647,6 +654,49 @@ final class UnboundRestartSeamTest extends TestCase
 		$this->assertFalse($run['payload']['final']['start_completed']);
 		$this->assertFileDoesNotExist($startProbe,
 			'an output-staging failure must occur before the configured start command');
+	}
+
+	/**
+	 * Scenario (issue #2839 row 1): the mount-include boundary must be overridable exactly
+	 * like the daemon-start boundary above.
+	 *   Given the harness points PFB_UNBOUND_INCLUDE_FILE at a double with none of the real
+	 *     file's mount_nullfs/umount exec()s,
+	 *   When pfb_stop_start_unbound() reaches its mount-include step,
+	 *   Then the double actually runs -- proving the seam is live, not dormant only because
+	 *     the shipped /var/unbound path happens to be absent off-appliance.
+	 */
+	public function testMountIncludeRunsTheOverriddenFileNotTheShippedPath(): void
+	{
+		$this->assertTrue(defined('PFB_UNBOUND_INCLUDE_FILE'),
+			'the mount-include boundary must be an overridable constant, not a hardcoded literal path');
+		$marker = "{$this->dir}/mount_include_ran";
+		$include = "{$this->dir}/mount-include-double.inc";
+		file_put_contents($include, '<?php touch(' . var_export($marker, TRUE) . ");\n");
+
+		$run = $this->runIsolatedStart('true', includeFile: $include);
+
+		$this->assertSame(0, $run['status'],
+			'the isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+		$this->assertFileExists($marker,
+			'the overridden include must actually execute -- proving the seam is live, '
+			. 'with none of the shipped file\'s exec()s involved');
+	}
+
+	/**
+	 * Scenario: an absent include (today's off-appliance default) must remain a valid,
+	 * silent no-op -- the new seam must not turn "file does not exist" into a failure.
+	 */
+	public function testAbsentMountIncludeRemainsValid(): void
+	{
+		$missing = "{$this->dir}/does-not-exist.inc";
+
+		$run = $this->runIsolatedStart('true', includeFile: $missing);
+
+		$this->assertSame(0, $run['status'],
+			'the isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+		$this->assertIsArray($run['payload'], 'the isolated start runner must return its JSON result');
+		$this->assertTrue($run['payload']['final']['start_completed'] ?? FALSE,
+			'an absent mount-include file must not stop the resolver start from completing');
 	}
 
 

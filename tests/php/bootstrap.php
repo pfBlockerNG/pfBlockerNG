@@ -88,6 +88,49 @@ if (!defined('PFB_UNBOUND_START_WAIT')) {
 }
 unset($pfb_test_unbound_start_cmd);
 
+// 4c. issue #2839 row 1: neuter the mount-include boundary the same way as the daemon
+//     start above. On a box that has pfBlockerNG actually installed, this literal path
+//     exists and its top level exec()s mount_nullfs/umount four times with no seam to
+//     intercept -- point the constant at a double that only records it ran.
+$GLOBALS['pfb_test_unbound_include_log'] = "{$pfb_test_tmp}/unbound_include.log";
+$pfb_test_unbound_include_file = "{$pfb_test_tmp}/pfb-unbound-include-double.inc";
+file_put_contents($pfb_test_unbound_include_file, '<?php file_put_contents('
+	. var_export($GLOBALS['pfb_test_unbound_include_log'], TRUE) . ", \"included\\n\", FILE_APPEND);\n");
+if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
+	define('PFB_UNBOUND_INCLUDE_FILE', $pfb_test_unbound_include_file);
+}
+unset($pfb_test_unbound_include_file);
+
+// 4d. issue #2839 row 2: PFB_PKG_BIN feeds every pfb_pkg_*() read-only query's exec(). On
+//     a box that has pfBlockerNG installed, the shipped default is a REAL executable;
+//     point it at a double that fails closed -- matching the off-appliance absence this
+//     replaces -- and records what it was asked to run.
+$GLOBALS['pfb_test_pkg_bin_log'] = "{$pfb_test_tmp}/pkg_bin.log";
+$pfb_test_pkg_bin = "{$pfb_test_tmp}/pkg-bin-double";
+file_put_contents($pfb_test_pkg_bin, "#!/bin/sh\n"
+	. 'printf \'%s\n\' "$*" >> ' . escapeshellarg($GLOBALS['pfb_test_pkg_bin_log']) . "\n"
+	. "exit 1\n");
+chmod($pfb_test_pkg_bin, 0755);
+if (!defined('PFB_PKG_BIN')) {
+	define('PFB_PKG_BIN', $pfb_test_pkg_bin);
+}
+unset($pfb_test_pkg_bin);
+
+// 4e. issue #2839 row 3: $pfb['chroot_cmd'] is the unbound-control command prefix; off-
+//     appliance it defaults to unset (a caller that forgets to set it just names a bogus
+//     command), but pfb_global() sets it to the REAL chroot+unbound-control invocation on
+//     an installed host with no test involvement. Default it the same way as the
+//     daemon-start double above; a test wanting specific command expectations keeps
+//     overriding $GLOBALS['pfb']['chroot_cmd'] itself, exactly as six existing suites do.
+$GLOBALS['pfb_test_chroot_cmd_log'] = "{$pfb_test_tmp}/chroot_cmd.log";
+$pfb_test_chroot_cmd = "{$pfb_test_tmp}/chroot-cmd-double";
+file_put_contents($pfb_test_chroot_cmd, "#!/bin/sh\n"
+	. 'printf \'%s\n\' "$*" >> ' . escapeshellarg($GLOBALS['pfb_test_chroot_cmd_log']) . "\n"
+	. "exit 0\n");
+chmod($pfb_test_chroot_cmd, 0755);
+$GLOBALS['pfb']['chroot_cmd'] = $pfb_test_chroot_cmd;
+unset($pfb_test_chroot_cmd);
+
 // 2 + load. Define the production functions by including the real source.
 // pfblockerng.inc is legacy code that emits some load-time E_DEPRECATED/E_WARNING
 // notices (e.g. an optional-before-required parameter, a switch `continue`) that
