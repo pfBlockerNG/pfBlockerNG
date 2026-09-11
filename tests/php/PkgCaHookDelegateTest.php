@@ -112,7 +112,7 @@ final class PkgCaHookDelegateTest extends TestCase
 	 *   Then it returns that name (query parsing preserved) and the double -- never
 	 *     /usr/local/sbin/pkg -- is what recorded receiving the query.
 	 */
-	public function testPkgInstalledNameParsesTheOverriddenBinarysOutputNotTheRealPkg(): void
+	public function testPkgInstalledNameParsesTheOverriddenBinaryOutputNotTheRealPkg(): void
 	{
 		$runner = "{$this->root}/pkg_bin_runner.php";
 		$log = "{$this->root}/pkg-bin.log";
