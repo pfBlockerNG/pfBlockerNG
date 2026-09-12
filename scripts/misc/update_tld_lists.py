@@ -40,8 +40,8 @@ localized diff on each re-run.
 
 Usage
 -----
-    python scripts/misc/update_tld_lists.py            # rewrite the file in place
-    python scripts/misc/update_tld_lists.py --check     # exit 1 if out of date, no changes
+    python3 scripts/misc/update_tld_lists.py            # rewrite the file in place
+    python3 scripts/misc/update_tld_lists.py --check     # exit 1 if out of date, no changes
 
 Dev-host tooling: run from the repo root on a dev box (never the appliance).
 """
