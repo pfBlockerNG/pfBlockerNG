@@ -10,8 +10,9 @@ pfSense source tree locally.
 Usage:
     python3 scripts/update-pfsense-stubs.py [--version X.Y.Z] [--output DIR] [--dry-run]
 
-The default version is STUB_SOURCE_VERSION (2.7.2, the newest release on Netgate's
-public mirror); MIN_PFSENSE_VERSION is the minimum release this package supports.
+The default version is STUB_SOURCE_VERSION (the newest release on Netgate's public
+mirror, see its comment); MIN_PFSENSE_VERSION is the minimum release this package
+supports.
 Run this script whenever the minimum supported pfSense CE version is bumped or
 when pfSense API functions used by pfBlockerNG change signature.
 
