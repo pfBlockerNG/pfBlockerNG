@@ -2,7 +2,7 @@
 
 Dev-only reference (not shipped — release archives hold only `src/`). Per-version facts about pfSense CE/Plus affecting pfBlockerNG packaging, deps, ADR-04 smoke-test base image.
 
-How obtained (re-verify — see CLAUDE.md "Investigating the live system"): on live box, `pkg info` (installed set), `pkg info -d <pkg>` (declared deps), `php -v` / `python --version`. Authoritative dep list = port Makefile `RUN_DEPENDS` (`net/pfSense-pkg-pfBlockerNG-edge`, channel devel branch builds — `-devel` recipe retired from ports tree, issue #2166); tables below hand-maintained mirror — confirm against port (or built `.pkg`) when baking image.
+How obtained (re-verify — see `.agents/context/pfsense-live.md`): on live box, `pkg info` (installed set), `pkg info -d <pkg>` (declared deps), `php -v` / `python --version`. Authoritative dep list = port Makefile `RUN_DEPENDS` (`net/pfSense-pkg-pfBlockerNG-edge`, channel devel branch builds — `-devel` recipe retired from ports tree, issue #2166); tables below hand-maintained mirror — confirm against port (or built `.pkg`) when baking image.
 
 ## 2.8.x (CE)
 

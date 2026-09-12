@@ -57,6 +57,10 @@ shipped defect or a session-transcript observation, not theory.
 
 ## What was built (and where it lives)
 
+> Locations below are as of 2026-07. The delegation contract now lives in
+> `.agents/policy/delegation.md`; the custom skills, workflows, and
+> `scripts/check_phase_prompts.py` were retired in `d6054e0c`.
+
 | Piece | Where |
 | ----- | ----- |
 | The delegation contract (BRIEF / HANDOFF / GATE fields, canonical gate table, evidence rules, hypothesis-ledger debugging) | `CLAUDE.md` "The delegation contract" |

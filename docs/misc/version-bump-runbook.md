@@ -2,15 +2,15 @@
 
 Scope: minimum-pfSense-version bump runbook. Load when: bumping min CE/Plus.
 
-Steps for bumping minimum supported pfSense version and regenerating PHP stubs. **Rules** (when to regenerate, stub-over-baseline preference) live in `CLAUDE.md` → "Updating documentation"; this file = step-by-step.
+Steps for bumping minimum supported pfSense version and regenerating PHP stubs. **Rules** (when to regenerate, stub-over-baseline preference) = "Regenerating `stubs/pfsense/`" below; this file = step-by-step.
 
 ## Regenerating `stubs/pfsense/`
 
-Run when min CE bumped:
+Run when min CE bumped (dev host only — never on the appliance):
 
 ```sh
-python scripts/update-pfsense-stubs.py            # newest public source
-python scripts/update-pfsense-stubs.py --version X.Y.Z
+python3 scripts/update-pfsense-stubs.py            # newest public source
+python3 scripts/update-pfsense-stubs.py --version X.Y.Z
 ```
 
 Downloads pfSense source, emits one stub per module (`util.php`, `interfaces.php`, …) with cross-file dedup. Defaults to **2.7.2** (`STUB_SOURCE_VERSION`): public mirror frozen there (no `RELENG_2_8_0`), signatures stable 2.7→2.8, covers all PHPStan level 0 needs (symbol existence). Regenerate from real 2.8 checkout if/when available.

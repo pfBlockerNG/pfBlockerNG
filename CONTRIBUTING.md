@@ -109,11 +109,12 @@ flagging every pfSense call "undefined".
 Regenerate after a pfSense CE bump:
 
 ```sh
-python scripts/update-pfsense-stubs.py --version X.Y.Z
+python3 scripts/update-pfsense-stubs.py --version X.Y.Z
 ```
 
-Default version is the minimum CE this package supports (`MIN_PFSENSE_VERSION` at the script
-top). It fetches the pfSense source from GitHub and rewrites all stub files except the
+Default version is `STUB_SOURCE_VERSION` (2.7.2 — the newest release on Netgate's public
+mirror, which has no `RELENG_2_8_0`); `MIN_PFSENSE_VERSION` at the script top is the
+minimum CE this package supports. It fetches the pfSense source from GitHub and rewrites all stub files except the
 hand-maintained `stubs/pfsense/globals.php`.
 
 A CE version bump also requires updating the **supported-version matrix** and
