@@ -3,28 +3,24 @@
 # and restart the services that need to pick up the changes.
 #
 # Usage:
-#   ./scripts/deploy.sh <ssh-target> [--channel devel|stable]
+#   ./scripts/deploy.sh <ssh-target>
 #
-# Examples:
+# Example:
 #   ./scripts/deploy.sh root@192.168.1.1
-#   ./scripts/deploy.sh root@192.168.1.1 --channel stable
 #
-# The script must be run from the root of the pfBlockerNG repository.
-# It defaults to the devel channel.
+# The script must be run from the root of the pfBlockerNG repository. The
+# package identity is the canonical pfSense-pkg-pfBlockerNG on every channel
+# (issue #2148: the channel comes from the installed repository, never from a
+# name suffix; the -devel port is retired).
 
 set -e
 
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
-CHANNEL="devel"
 SSH_TARGET=""
 
 # Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
-        --channel)
-            CHANNEL="$2"
-            shift 2
-            ;;
         -*)
             echo "Unknown option: $1" >&2
             exit 1
@@ -42,22 +38,16 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$SSH_TARGET" ]; then
-    echo "Usage: $0 <ssh-target> [--channel devel|stable]" >&2
-    exit 1
-fi
-
-if [ "$CHANNEL" != "devel" ] && [ "$CHANNEL" != "stable" ]; then
-    echo "Error: --channel must be 'devel' or 'stable'" >&2
+    echo "Usage: $0 <ssh-target>" >&2
     exit 1
 fi
 
 PKG_PREFIX="/usr/local"
+# Short name: info.xml <name> (what pfSense's get_package_id looks up); the
+# share directory carries the full port name pfSense-pkg-${PKG_NAME}.
 PKG_NAME="pfBlockerNG"
-if [ "$CHANNEL" = "devel" ]; then
-    PKG_NAME="pfBlockerNG-devel"
-fi
 
-echo "==> Deploying pfBlockerNG ($CHANNEL) to $SSH_TARGET"
+echo "==> Deploying pfBlockerNG to $SSH_TARGET"
 
 # Sync all source files. src/ mirrors the filesystem root, so src/usr/local/ maps
 # to /usr/local/ — syncing src/usr/ -> /usr/local/ would land everything under
@@ -81,7 +71,7 @@ rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
     "${REPO_ROOT}/src/etc/" \
     "${SSH_TARGET}:/etc/"
 
-# Substitute %%PKGNAME%% in info.xml and sync to the channel-specific directory
+# Substitute %%PKGNAME%% in info.xml and sync to the package's share directory
 sed "s|%%PKGNAME%%|${PKG_NAME}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${REPO_ROOT}/.info.xml.tmp"
@@ -98,7 +88,7 @@ ssh "$SSH_TARGET" "pfSsh.php playback svc restart unbound"
 # Reload the pfSense package subsystem so PHP changes take effect
 ssh "$SSH_TARGET" "pfSsh.php playback svc restart nginx"
 
-echo "==> Done. pfBlockerNG ($CHANNEL) deployed to $SSH_TARGET"
+echo "==> Done. pfBlockerNG deployed to $SSH_TARGET"
 echo ""
 echo "    Tip: to trigger a pfBlockerNG update from the pfSense shell:"
 echo "    ssh $SSH_TARGET '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update'"

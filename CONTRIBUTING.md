@@ -404,15 +404,17 @@ Push files directly to a running pfSense box over SSH — the script copies chan
 files to their system paths and restarts the relevant services:
 
 ```sh
-./scripts/deploy.sh <pfsense-host> [--channel devel|stable]
+./scripts/deploy.sh <pfsense-host>
 ```
 
 Example:
 
 ```sh
 ./scripts/deploy.sh root@192.168.1.1
-./scripts/deploy.sh root@192.168.1.1 --channel stable
 ```
+
+The package identity is the canonical `pfSense-pkg-pfBlockerNG` on every channel; the
+channel comes from the repository the box is subscribed to, never from the package name.
 
 Defaults to the **devel** channel (this branch's files); pass `--channel stable` from `main`.
 Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
