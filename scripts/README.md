@@ -449,13 +449,13 @@ identically locally and in CI.
 
 | | `install-from-repo.sh` (rsync + hook) | Real `.pkg` (`pkg add`) |
 | --- | --- | --- |
-| Use | CI smoke + local dev | GitHub Release artifact |
-| Deps | none (no VM, no internet) | FreeBSD build VM |
+| Use | image-refresh post-publish smoke + local dev | smoke fan-out (`install-pkg.sh`), GitHub Release artifact |
+| Deps | rsync + `RUN_DEPENDS` from pfSense's repo (egress) | portable Linux builder (`build-pkg-portable.py`) |
 | Tests | runtime behaviour | the shipping artifact + the real `pkg` path |
 | Catches pkg-plist drift | no (rsync copies everything) | **yes** |
 
-For the smoke matrix, `install-from-repo.sh` is enough and faster. Build the real
-`.pkg` for the GitHub Release artifact and as a higher-fidelity packaging gate.
+The smoke fan-out installs the real `.pkg` (`tests/smoke/helpers.py`); `install-from-repo.sh`
+is the faster path for a dev VM and the image-refresh post-publish smoke.
 
 ## ABI: what actually matters for the `.pkg`
 

@@ -51,8 +51,6 @@ done
 
 [ -n "$SSH_TARGET" ] || { echo "Usage: $0 <ssh-target> [--port N] [--ssh-key PATH]" >&2; exit 1; }
 
-# Short name (info.xml <name>, what pfSense's get_package_id looks up) and the
-# full port name (share directory, rc.packages argument).
 PKG_NAME="pfBlockerNG"
 PORTNAME="pfSense-pkg-${PKG_NAME}"
 
@@ -67,7 +65,7 @@ ssh_t() {
     fi
 }
 
-echo "==> Installing pfBlockerNG ($PKG_NAME) onto $SSH_TARGET from repo"
+echo "==> Installing pfBlockerNG onto $SSH_TARGET from repo"
 
 # 0a) rsync — needed twice over: it is a pfBlockerNG RUN_DEPENDS (net/rsync, for
 #     rsync-format feed lists) AND the transport for the overlay sync below; a
@@ -222,6 +220,6 @@ until ssh_t '/usr/local/sbin/unbound-control -c /var/unbound/unbound.conf status
 done
 ssh_t "pfSsh.php playback svc restart nginx"
 
-echo "==> Done. pfBlockerNG ($PKG_NAME) installed on $SSH_TARGET"
+echo "==> Done. pfBlockerNG installed on $SSH_TARGET"
 echo "    Next (harness, per case): inject feeds/addresses/whitelist via the"
 echo "    config API, then: /usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php update"

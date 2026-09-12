@@ -18,34 +18,11 @@ set -e
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 SSH_TARGET=""
 
-# Parse arguments
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -*)
-            echo "Unknown option: $1" >&2
-            exit 1
-            ;;
-        *)
-            if [ -z "$SSH_TARGET" ]; then
-                SSH_TARGET="$1"
-            else
-                echo "Unexpected argument: $1" >&2
-                exit 1
-            fi
-            shift
-            ;;
-    esac
-done
-
-if [ -z "$SSH_TARGET" ]; then
-    echo "Usage: $0 <ssh-target>" >&2
-    exit 1
-fi
+for a; do case "$a" in -*) echo "Unknown option: $a" >&2; exit 1 ;; esac; done
+[ $# -eq 1 ] || { echo "Usage: $0 <ssh-target>" >&2; exit 1; }
+SSH_TARGET="$1"
 
 PKG_PREFIX="/usr/local"
-# Short name: info.xml <name> (what pfSense's get_package_id looks up); the
-# share directory carries the full port name pfSense-pkg-${PKG_NAME}.
-PKG_NAME="pfBlockerNG"
 
 echo "==> Deploying pfBlockerNG to $SSH_TARGET"
 
@@ -71,13 +48,15 @@ rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
     "${REPO_ROOT}/src/etc/" \
     "${SSH_TARGET}:/etc/"
 
-# Substitute %%PKGNAME%% in info.xml and sync to the package's share directory
-sed "s|%%PKGNAME%%|${PKG_NAME}|g" \
+# info.xml: <name> is the SHORT pfBlockerNG (what pfSense's get_package_id looks
+# up; the port renders ${PORTNAME:S/pfSense-pkg-//}), the share directory the full
+# port name.
+sed "s|%%PKGNAME%%|pfBlockerNG|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${REPO_ROOT}/.info.xml.tmp"
-ssh "$SSH_TARGET" mkdir -p "${PKG_PREFIX}/share/pfSense-pkg-${PKG_NAME}"
+ssh "$SSH_TARGET" mkdir -p "${PKG_PREFIX}/share/pfSense-pkg-pfBlockerNG"
 rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" "${REPO_ROOT}/.info.xml.tmp" \
-    "${SSH_TARGET}:${PKG_PREFIX}/share/pfSense-pkg-${PKG_NAME}/info.xml"
+    "${SSH_TARGET}:${PKG_PREFIX}/share/pfSense-pkg-pfBlockerNG/info.xml"
 rm -f "${REPO_ROOT}/.info.xml.tmp"
 
 echo "==> Files synced. Restarting services..."

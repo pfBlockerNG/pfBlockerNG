@@ -416,9 +416,6 @@ Example:
 The package identity is the canonical `pfSense-pkg-pfBlockerNG` on every channel; the
 channel comes from the repository the box is subscribed to, never from the package name.
 
-Defaults to the **devel** channel (this branch's files); pass `--channel stable` from `main`.
-Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
-
 ### How the `pkg` repository is published (GitHub Pages)
 
 The self-hosted repository (installed per the [README](README.md#installation))
@@ -721,7 +718,8 @@ build and drive its disk image — no Packer, since pfBlockerNG compiles nothing
 - [`scripts/install-from-repo.sh`](scripts/install-from-repo.sh) — install
   pfBlockerNG onto a clean pfSense **from this repo's `src/`** (no Netgate pkg),
   via the port's `rc.packages … POST-INSTALL` hook. pfBlockerNG is not baked into
-  the image; the harness runs this after every boot (the disk is immutable).
+  the image; `image-refresh.yml`'s post-publish smoke runs it on a fresh overlay,
+  while the smoke fan-out installs the built `.pkg` through `install-pkg.sh`.
 
 These produce one image per supported minor CE version; CI runs the smoke matrix
 across all of them. See [`scripts/README.md`](scripts/README.md) for the build/ABI
