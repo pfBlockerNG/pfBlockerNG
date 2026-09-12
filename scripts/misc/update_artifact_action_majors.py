@@ -33,8 +33,8 @@ the parsed majors actually change.
 
 Usage
 -----
-    python scripts/misc/update_artifact_action_majors.py           # rewrite in place
-    python scripts/misc/update_artifact_action_majors.py --check   # exit 1 if stale
+    python3 scripts/misc/update_artifact_action_majors.py           # rewrite in place
+    python3 scripts/misc/update_artifact_action_majors.py --check   # exit 1 if stale
 
 Dev-host tooling: run from the repo root on a dev box (never the appliance).
 Optional ``GH_TOKEN`` / ``GITHUB_TOKEN`` raises the unauthenticated rate limit.
