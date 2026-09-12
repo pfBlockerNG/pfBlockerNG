@@ -1,8 +1,6 @@
 # CodeRabbit missed reviews
 
-Append-only, newest first. One line per merged SHA whose only CodeRabbit
-engagement was a quota notice (or none) and that never got a later finished
-review of that SHA.
+Append-only, newest first. One line per merged SHA without a finished CodeRabbit review.
 
 Format, one line of at most 200 bytes: ``- `SHA`  title  (#PR) — one clause``.
 Two spaces separate the fields; the em-dash clause is optional. The clause is a
@@ -15,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `a59563e5c`  Graphify 0.9.59 overrides  (#10) — pfBlockerNG/graphify#10; silent twice.
 - `ea8d3c43a`  Graphify rollback  (#9) — pfBlockerNG/graphify#9; silent twice.
 - `66285ab5c`  Shared Graphify skill  (#2) — andrebrait/ai-harness-settings#2; quota.
 - `c6f52993a`  test: pin singular reviewer quota units  (#3269) — asked twice, two quota notices (2 then 59 min after retry); condensed review and Copilot finding resolved.
