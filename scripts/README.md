@@ -251,12 +251,15 @@ in `read-version-matrix.sh`.
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 
-`install-from-repo.sh` syncs the files then runs the selected static recipe's real
-install hook — for example
-`php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing POST-INSTALL` (exactly what
-`pkg` runs) — which registers the menu/services and runs `pfblockerng_install.inc`.
-It is **all local: no internet, no Netgate pkg**, so it works even with egress blocked
-(and is also handy for installing onto a local dev VM).
+`install-from-repo.sh` syncs the files then runs the package's real install hook —
+`php -f /etc/rc.packages pfSense-pkg-pfBlockerNG POST-INSTALL` (exactly what `pkg`
+runs) — which registers the menu/services and runs `pfblockerng_install.inc`. Both
+scripts register the canonical `pfSense-pkg-pfBlockerNG` identity (the channel comes
+from the subscribed repository, never from the name — issue #2148); `info.xml <name>`
+is the short `pfBlockerNG`, as the port renders it. It needs **no Netgate pkg** for
+pfBlockerNG itself, but it does `pkg install` rsync and the port's `RUN_DEPENDS` from
+pfSense's repository when they are missing, so the box needs egress at install time
+(handy for installing onto a local dev VM).
 
 ## Build the `.pkg`
 

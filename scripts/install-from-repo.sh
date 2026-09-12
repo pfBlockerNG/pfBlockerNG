@@ -2,8 +2,12 @@
 # install-from-repo.sh — install pfBlockerNG onto a FRESH pfSense straight from
 # this repo's src/ (no Netgate pkg): sync the files, register the package from
 # its GUI XML, and run its real install hooks so it is a functional, registered
-# package. The smoke harness runs this after every boot — the disk is immutable
-# (overlay discarded), so every run is a clean install of the branch under test.
+# package. The image-refresh post-publish smoke runs it on a fresh overlay; the
+# smoke fan-out installs the built .pkg through install-pkg.sh instead.
+#
+# The package identity is the canonical pfSense-pkg-pfBlockerNG (issue #2148:
+# every channel publishes that one name and the channel comes from the installed
+# repository, never from a name suffix; the -devel port is retired).
 #
 # It does NOT add feeds / addresses / whitelists / response modes — that is
 # per-case config injection (ADR-04), done later by the test harness.
@@ -20,7 +24,6 @@
 #   ./scripts/install-from-repo.sh root@192.168.1.1
 #
 # Options:
-#   --channel devel|stable   package name to register (default: devel)
 #   --port N                 SSH port (default: 22; the smoke VM uses 2222)
 #   --ssh-key PATH           SSH private key (default: ssh-agent / default keys)
 #
@@ -29,14 +32,12 @@
 set -e
 
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
-CHANNEL="devel"
 PORT=22
 SSH_KEY=""
 SSH_TARGET=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --channel) CHANNEL="$2"; shift 2 ;;
         --port)    PORT="$2"; shift 2 ;;
         --ssh-key) SSH_KEY="$2"; shift 2 ;;
         -*)        echo "Unknown option: $1" >&2; exit 1 ;;
@@ -48,11 +49,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$SSH_TARGET" ] || { echo "Usage: $0 <ssh-target> [--channel devel|stable] [--port N] [--ssh-key PATH]" >&2; exit 1; }
-[ "$CHANNEL" = devel ] || [ "$CHANNEL" = stable ] || { echo "Error: --channel must be devel|stable" >&2; exit 1; }
+[ -n "$SSH_TARGET" ] || { echo "Usage: $0 <ssh-target> [--port N] [--ssh-key PATH]" >&2; exit 1; }
 
+# Short name (info.xml <name>, what pfSense's get_package_id looks up) and the
+# full port name (share directory, rc.packages argument).
 PKG_NAME="pfBlockerNG"
-[ "$CHANNEL" = devel ] && PKG_NAME="pfBlockerNG-devel"
+PORTNAME="pfSense-pkg-${PKG_NAME}"
 
 # Build the remote-shell string (single arg for rsync -e) and an ssh wrapper.
 RSH="ssh -p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
@@ -159,7 +161,7 @@ fi
 echo "==> Python dep flavor for ${BOX_ABI:-unknown ABI}: ${PY_FLAVOR}"
 
 # 0b) Install the package's other RUN_DEPENDS — what `pkg install
-#     pfSense-pkg-pfBlockerNG[-devel]` pulls per the port Makefile — so the
+#     pfSense-pkg-pfBlockerNG` pulls per the port Makefile — so the
 #     installed package is actually functional (jq/grepcidr/iprange for the IP
 #     path, libmaxminddb/py-maxminddb for GeoIP, py-sqlite3 for the DNSBL DB,
 #     lighttpd for the sinkhole webserver; rsync is handled in 0a). Best-effort:
@@ -179,12 +181,13 @@ rsync -az -e "$RSH" \
 
 # info.xml with the package name AND version substituted (the port does both:
 # %%PKGNAME%% in post-extract, %%PKGVERSION%% in do-install). %%PKGNAME%% is the
-# FULL port name (pfSense-pkg-pfBlockerNG[-devel]) — the port substitutes
-# ${PORTNAME}, not the short channel name. Derive the version from git (tags may
-# be absent in a shallow CI checkout -> short hash; fall back to a dev marker).
-PORTNAME="pfSense-pkg-${PKG_NAME}"
+# SHORT name — the port substitutes ${PORTNAME:S/pfSense-pkg-//}, and pfSense
+# looks the package up by that prefix-stripped name (get_package_id); the full
+# name makes rc.packages abort (tests/smoke/test_install_hook.py). Derive the
+# version from git (tags may be absent in a shallow CI checkout -> short hash;
+# fall back to a dev marker).
 PKGVERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo '0.0.0-dev')"
-sed -e "s|%%PKGNAME%%|${PORTNAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
+sed -e "s|%%PKGNAME%%|${PKG_NAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${REPO_ROOT}/.info.xml.tmp"
 ssh_t mkdir -p "/usr/local/share/${PORTNAME}"
@@ -197,7 +200,7 @@ rm -f "${REPO_ROOT}/.info.xml.tmp"
 #        php -f /etc/rc.packages <PORTNAME> POST-INSTALL
 #    and rc.packages registers the package from pfblockerng.xml, installs the
 #    menu/services, and runs the package's custom_php_install_command, which
-#    includes pfblockerng_install.inc. PORTNAME = pfSense-pkg-pfBlockerNG[-devel].
+#    includes pfblockerng_install.inc. PORTNAME = pfSense-pkg-pfBlockerNG.
 echo "==> Running package POST-INSTALL (registration + install hooks)"
 ssh_t "/usr/local/bin/php -f /etc/rc.packages ${PORTNAME} POST-INSTALL"
 
