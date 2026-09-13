@@ -21,11 +21,16 @@ During that Update, pfBlockerNG chooses between two apply paths:
 | Python INI, SafeSearch, generated `unbound.conf`, or mount change | Stop and start Unbound |
 | Data-swap eligibility or application failure | Stop and start Unbound |
 
-The stop/start path sends `SIGTERM`, waits up to 30 seconds, adjusts chroot mounts while Unbound
-is down, then starts `/usr/local/sbin/unbound` again
-([source](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9240-L9277)). It can optionally
-dump and restore the resolver cache around that restart
-([source](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9558-L9608)).
+The stop/start path in
+[`pfb_stop_start_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L11647-L11960)
+sends `SIGTERM` and waits up to `PFB_UNBOUND_STOP_WAIT` seconds (30 by default). If Unbound
+survives, it sends `SIGKILL` and waits up to `PFB_UNBOUND_KILL_WAIT` seconds (5 by default),
+refusing to start a second instance if the old process remains. Once Unbound is down, it
+adjusts chroot mounts and starts the daemon using `PFB_UNBOUND_START_CMD`. The
+[restart seams](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L11609-L11631) can be
+defined before the package is loaded so tests can substitute the command and wait budgets.
+[`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L12326-L12404)
+can optionally dump and restore the resolver cache around that restart.
 
 pfBlockerNG does **not** currently call `unbound-control reload`, `reload_keep_cache`, or
 `fast_reload`.
@@ -45,7 +50,7 @@ For a data-only update, the running Python module remains loaded:
    their validated domain and `www.` sibling regardless of that option.
 
 The implementation and fallback gates are in
-[`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L9465-L9554).
+[`pfb_reload_unbound()`](../../src/usr/local/pkg/pfblockerng/pfblockerng.inc#L12221-L12322).
 The snapshot swap and `decisionDB.clear()` are in
 [`rebuild_and_swap()`](../../src/usr/local/pkg/pfblockerng/pfb_unbound.py#L5605-L5675).
 

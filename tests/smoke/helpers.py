@@ -2446,8 +2446,8 @@ def inject_safesearch_cname_entries(
     each test uses unique domain names (:func:`unique_domain`).
 
     After writing, the Unbound daemon is bounced RAW (TERM the pid, wait, restart)
-    to reload ``safeSearchDB`` from the updated file — identical to
-    ``pfb_stop_start_unbound`` (``pfblockerng.inc:5444``).  This is NOT a pfBlockerNG
+    to reload ``safeSearchDB`` from the updated file — the basic stop/start sequence
+    of ``pfb_stop_start_unbound()`` in ``pfblockerng.inc``. This is NOT a pfBlockerNG
     update (which would overwrite the file with package-generated content); the raw
     bounce re-runs the python module's ``init()`` which re-reads ``pfb_py_ss.txt`` as
     written.  For ``safeSearchDB`` to take effect the DNSBL python module must already
@@ -2471,8 +2471,8 @@ def inject_safesearch_cname_entries(
             f"rc={result.returncode} {result.stderr!r}"
         )
     # Raw Unbound bounce to reload safeSearchDB from the updated file.
-    # Mirrors pfb_stop_start_unbound (pfblockerng.inc:5444): TERM the pid, wait
-    # up to 30 s for exit, then restart the daemon (which re-daemonizes and returns).
+    # Unlike pfb_stop_start_unbound() in pfblockerng.inc, this raw bounce has no
+    # KILL escalation or mount handling: TERM, wait up to 30 s, then start.
     # Fed on stdin to a remote /bin/sh (the php_eval idiom) so the multi-token POSIX
     # script — $(...), `;`, the for-loop — is parsed by sh itself, never the SSH
     # login shell (pfSense root defaults to tcsh, which would mangle it).
@@ -2482,6 +2482,8 @@ def inject_safesearch_cname_entries(
         "  pgrep -x unbound >/dev/null || break\n"
         "  sleep 1\n"
         "done\n"
+        # Mirrors PFB_UNBOUND_START_CMD in pfblockerng.inc, without 2>&1:
+        # subprocess.run captures stderr separately for failure diagnostics.
         "/usr/local/sbin/unbound -c /var/unbound/unbound.conf\n"
     )
     bounce = subprocess.run(
