@@ -804,7 +804,7 @@ jobs:
       fail-fast: false
       matrix:
         # Matrix-derived (supported-only) — the distinct php_version values across
-        # all supported-versions.json entries (CE + Plus). Today: ["8.3","8.5"].
+        # all supported-versions.json build-role entries (CE + Plus).
         php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions) }}
 
     steps:
@@ -892,6 +892,11 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Enable the appliance extraction shell capability
+        # CI only: PHP exec() uses /bin/sh; FreeBSD sh supports pipefail.
+        # Keep the separate ShellSpec job pinned explicitly to dash.
+        run: sudo ln -sf bash /bin/sh
+
       - name: Run PHPUnit (with coverage)
         # Config in phpunit.xml. tests/php/bootstrap.php loads the real
         # pfblockerng.inc via include shims + pfSense doubles — no live box.
@@ -900,7 +905,9 @@ jobs:
         # it). NOT suffixed with `|| true` — that would mask a failing suite.
         # --log-junit feeds the skip-allowlist gate below (issue #2359) --
         # additive only, never changes this step's own pass/fail verdict.
-        run: vendor/bin/phpunit --coverage-text --log-junit /tmp/phpunit-junit.xml
+        run: |
+          php tests/fixtures/phpunit-pipefail.php
+          vendor/bin/phpunit --coverage-text --log-junit /tmp/phpunit-junit.xml
 
       - name: Skip allowlist
         # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
@@ -908,7 +915,7 @@ jobs:
         # this same run: block feeds the fixture's un-allowlistable skip through
         # the identical command shape and requires nonzero before trusting the
         # real report below (testing.md's red-canary rule). This job is matrixed
-        # over PHP 8.3/8.5, so the gate runs once per PHP version too.
+        # over every supported PHP version, so each leg enforces the same gate.
         run: |
           python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt /tmp/phpunit-junit.xml

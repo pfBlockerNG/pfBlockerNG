@@ -674,11 +674,9 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	}
 
 	/**
-	 * The ZIP arm extracts through a `set -o pipefail` pipeline (issue #819) and PHP's
-	 * exec() runs /bin/sh, so a /bin/sh without pipefail cannot exercise that arm at all:
-	 * Debian's dash — the Linux CI runner's /bin/sh — exits on the option error before tar
-	 * runs. Skip loudly rather than report a host property as a product defect; FreeBSD's
-	 * sh has pipefail, so the appliance path is covered live by tests/smoke.
+	 * Keep local capability skips: PHP exec() uses /bin/sh, and older dash aborts on
+	 * the ZIP pipeline's `set -o pipefail`. PHPUnit CI supplies a capable shell;
+	 * FreeBSD sh supports it natively.
 	 */
 	private function requirePipefailShell(): void
 	{
