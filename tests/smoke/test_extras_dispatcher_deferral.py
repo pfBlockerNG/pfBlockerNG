@@ -640,9 +640,12 @@ def test_verb_release_completes_deterministically(deployed_vm: SmokeVM, verb: st
         defers with rc=1 and both diagnostics (established by THIS test, never
         order-dependent on a sibling),
     When the lock is released and <verb> is dispatched again,
-    Then neither deferral sink fires, and the real GeoIP pipeline -- NXDOMAIN-stubbed,
-        credential-less -- completes with a DETERMINISTIC rc=1 (the download/
-        conversion genuinely fails; F4: never a tautological "0 or 1" range).
+    Then neither deferral sink fires, and the real GeoIP pipeline -- NXDOMAIN-
+        stubbed, credential-less -- reaches its own real logic and completes with
+        a DETERMINISTIC, verb-specific outcome: dc's download itself genuinely
+        fails (rc=1); dcc's conversion step never runs at all (database_cc=on
+        skips it -- see deployed_vm), so it reaches a clean rc=0 (F4: never a
+        tautological "0 or 1" range assumed for either).
     """
     vm = deployed_vm
     h.wait_no_active_pfb_task(vm)
@@ -669,6 +672,7 @@ def test_verb_release_completes_deterministically(deployed_vm: SmokeVM, verb: st
     h.wait_no_active_pfb_task(vm)
     sink = _ERROR_LOG if verb == "dc" else _EXTRAS_LOG
     marker = "Invalid URL (cannot resolve)" if verb == "dc" else "Download Process Starting"
+    expected_rc = 1 if verb == "dc" else 0
     main_baseline = _log_window(vm, h.PFB_LOG)
     sink_baseline = _log_window(vm, sink)
     sys_baseline = _log_window(vm, _SYSTEM_LOG)
@@ -685,9 +689,9 @@ def test_verb_release_completes_deterministically(deployed_vm: SmokeVM, verb: st
     assert marker in sink_delta, (
         f"after-state: {verb!r} must reach real pipeline logic: expected {marker!r} in {sink}, got: {sink_delta!r}"
     )
-    assert run.returncode == 1, (
-        f"after-state: {verb!r}'s real GeoIP pipeline deterministically fails under this fixture's "
-        f"NXDOMAIN+credential-less config (F4: never a tautological 0-or-1 range): "
+    assert run.returncode == expected_rc, (
+        f"after-state: {verb!r}'s real pipeline deterministically reaches rc={expected_rc} under this "
+        f"fixture's NXDOMAIN+credential-less config (F4: never a tautological 0-or-1 range assumed): "
         f"got rc={run.returncode} stdout={run.stdout!r} stderr={run.stderr!r}"
     )
     h.wait_no_active_pfb_task(vm)
