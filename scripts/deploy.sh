@@ -16,10 +16,9 @@
 set -e
 
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
-SSH_TARGET=""
 
 for a; do case "$a" in -*) echo "Unknown option: $a" >&2; exit 1 ;; esac; done
-[ $# -eq 1 ] || { echo "Usage: $0 <ssh-target>" >&2; exit 1; }
+[ $# -eq 1 ] && [ -n "$1" ] || { echo "Usage: $0 <ssh-target>" >&2; exit 1; }
 SSH_TARGET="$1"
 
 PKG_PREFIX="/usr/local"
