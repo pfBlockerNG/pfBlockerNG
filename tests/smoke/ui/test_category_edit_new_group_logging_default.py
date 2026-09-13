@@ -255,3 +255,20 @@ def test_existing_dnsbl_alias_legacy_spelling_renders_and_resaves_as_vip(
             )
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+@pytest.mark.ui_e2e
+def test_catalog_feed_append_preserves_existing_group_mode(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """Adding a feed to an existing group must not apply the new-group default."""
+    vm = smoke_vm
+    with _alias_name_parked(vm, CFG_DNSBL, "ADs_Basic"), _global_log_none(vm):
+        rowid = _free_rowid(vm, CFG_DNSBL)
+        try:
+            _post_form(webui, _dnsbl_payload(rowid, "ADs_Basic", logging="nxdomain_log"))
+            response = webui.get(_ADD_DNSBL_PAGE)
+            assert response.ok and not looks_like_login_page(response.text), "catalog append GET failed"
+            fields = scrape_form_fields(response.text)
+            assert fields["rowid"] == str(rowid), "catalog add must reuse the existing group"
+            assert fields["logging"] == "nxdomain_log", "catalog add must preserve the existing group's mode"
+        finally:
+            _del_rowid(vm, CFG_DNSBL, rowid)
