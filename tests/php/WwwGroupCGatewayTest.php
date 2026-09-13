@@ -100,14 +100,15 @@ final class WwwGroupCGatewayTest extends TestCase
 	/**
 	 * global_log round-trip: write a logging mode string, read it back.
 	 *
-	 * Initial state is the registered default 'disabled_log' (issue #3243 -- a fresh
-	 * install starts with a logged-null override rather than deferring to per-group
-	 * modes); the round-trip behaviour itself (write X, read back X) is unchanged.
+	 * Initial state is the registered default '' (No Global mode) — issue #3285
+	 * restores the original v3.2.16 default after #3243's alpha-only mistake
+	 * ('disabled_log' + a 'none' sentinel, never shipped in a stable release);
+	 * the round-trip behaviour itself (write X, read back X) is unchanged.
 	 */
 	public function testGlobalLogRoundTrips(): void
 	{
-		// Before: absent → the registered default 'disabled_log'.
-		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'initial absent -> "disabled_log"');
+		// Before: absent → the registered default '' (No Global mode).
+		$this->assertSame('', PfbConfig::read('dnsbl/global_log'), 'initial absent -> ""');
 
 		// When: write 'enabled'.
 		PfbConfig::write('dnsbl/global_log', 'enabled');
@@ -115,11 +116,11 @@ final class WwwGroupCGatewayTest extends TestCase
 		// Then: read back 'enabled'.
 		$this->assertSame('enabled', PfbConfig::read('dnsbl/global_log'), 'after write "enabled" -> "enabled"');
 
-		// When: write 'none' (no-global-override token).
-		PfbConfig::write('dnsbl/global_log', 'none');
+		// When: write 'disabled_log'.
+		PfbConfig::write('dnsbl/global_log', 'disabled_log');
 
-		// Then: read back 'none'.
-		$this->assertSame('none', PfbConfig::read('dnsbl/global_log'), 'after write "none" -> "none"');
+		// Then: read back 'disabled_log'.
+		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'after write "disabled_log" -> "disabled_log"');
 	}
 
 	/**

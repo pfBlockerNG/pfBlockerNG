@@ -1,17 +1,17 @@
-"""Issue #3243: DNSBL null-blocking-by-default + NODATA, UI coverage.
+"""Issue #3243 (NODATA) / #3285 (default-placement fix), DNSBL blocking-modes UI coverage.
 
 Tier A (``ui_render``): the Global Logging/Blocking Mode select
 (``pfblockerng_dnsbl.php``) and the per-group Logging/Blocking Mode select
 (``pfblockerng_category_edit.php?type=dnsbl``) must expose the two new NODATA
-tokens (``nodata_log``/``nodata``). The global select additionally renames its
-historical empty-string "No Global mode" option to the canonical ``none``
-token (a '' grandfather-map output is banned -- see
-``CfgRegistryGrandfatherGateTest`` -- so the no-override choice gets a new
-spelling); the per-group select never gets ``none`` (a group cannot defer to
-itself).
+tokens (``nodata_log``/``nodata``). The global select's no-override choice
+stays the original empty-string value (issue #3285 reverted #3243's alpha-only,
+never-shipped ``none`` token + grandfather map -- '' was always both the
+registered default AND the "no global override" storage byte, so there is
+nothing to canonicalise); the per-group select never gets that empty value
+(a group cannot defer to itself).
 
-Tier B (``ui_e2e``): a real CSRF-POST proves the tokens are ACCEPTED, not
-silently coerced away by each page's select-options validation loop
+Tier B (``ui_e2e``): a real CSRF-POST proves the NODATA tokens are ACCEPTED,
+not silently coerced away by each page's select-options validation loop
 (``pfblockerng_dnsbl.php``:592-599 / ``pfblockerng_category_edit.php``:564-574
 replace any POSTed value that is not a key of the page's own options array
 with that loop's default) -- and that a reload renders the stored choice back
@@ -69,22 +69,24 @@ def _selected_value(select_block: str) -> str | None:
 
 
 @pytest.mark.ui_render
-def test_global_log_select_exposes_nodata_and_canonical_none(webui: WebUI) -> None:
+def test_global_log_select_exposes_nodata_and_the_no_override_empty_value(webui: WebUI) -> None:
     """The Global Logging/Blocking Mode select carries nodata_log/nodata AND the
-    canonical none no-override value."""
+    original empty-string no-override value (issue #3285 -- not the alpha-only
+    'none' token)."""
     resp = webui.get(DNSBL_PAGE)
     result = evaluate_render(DNSBL_PAGE, resp.status_code, resp.text, ("DNSBL Webserver Configuration",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL page: {result.detail}"
 
     values = _option_values(_select_block(resp.text, "global_log"))
-    for expected in ("none", "nodata_log", "nodata"):
+    for expected in ("", "nodata_log", "nodata"):
         assert expected in values, f"global_log select must expose {expected!r}; got {sorted(values)!r}"
 
 
 @pytest.mark.ui_render
 def test_category_edit_logging_select_exposes_nodata_only(webui: WebUI) -> None:
     """The per-group Logging/Blocking Mode select exposes the two NODATA tokens; it
-    must never carry the global-only none token (a group cannot defer to itself)."""
+    must never carry the global-only empty no-override value (a group cannot defer
+    to itself)."""
     resp = webui.get(CATEGORY_EDIT_DNSBL_PAGE)
     result = evaluate_render(CATEGORY_EDIT_DNSBL_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
     assert result.ok, f"Tier-A render oracle failed for the DNSBL category-edit page: {result.detail}"
@@ -92,7 +94,7 @@ def test_category_edit_logging_select_exposes_nodata_only(webui: WebUI) -> None:
     values = _option_values(_select_block(resp.text, "logging"))
     for expected in ("nodata_log", "nodata"):
         assert expected in values, f"logging select must expose {expected!r}; got {sorted(values)!r}"
-    assert "none" not in values, "the per-group logging select must never carry the global-only none token"
+    assert "" not in values, "the per-group logging select must never carry the global-only empty no-override value"
 
 
 # --------------------------------------------------------------------------- #
@@ -117,22 +119,7 @@ def test_global_log_nodata_tokens_persist_and_render_selected(webui: WebUI, smok
             selected = _selected_value(_select_block(reload.text, "global_log"))
             assert selected == token, f"reload must render {token!r} selected, got {selected!r}"
     finally:
-        webui.post(DNSBL_PAGE, {"global_log": original or "none"}, timeout=POST_TIMEOUT)
-
-
-@pytest.mark.ui_e2e
-def test_global_log_canonical_none_token_persists(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """POSTing the canonical none (no global override) token is accepted verbatim,
-    not coerced to the historical empty-string byte the options loop no longer keys."""
-    vm = smoke_vm
-    original = helpers.config_get(vm, GLOBAL_LOG_CFG)
-    try:
-        resp = webui.post(DNSBL_PAGE, {"global_log": "none"}, timeout=POST_TIMEOUT)
-        assert not looks_like_login_page(resp.text), "global_log=none POST returned the login form"
-        stored = helpers.config_get(vm, GLOBAL_LOG_CFG)
-        assert stored == "none", f"global_log must store 'none' verbatim, got {stored!r}"
-    finally:
-        webui.post(DNSBL_PAGE, {"global_log": original or "none"}, timeout=POST_TIMEOUT)
+        webui.post(DNSBL_PAGE, {"global_log": original or ""}, timeout=POST_TIMEOUT)
 
 
 @pytest.mark.ui_e2e

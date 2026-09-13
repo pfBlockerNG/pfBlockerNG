@@ -213,6 +213,26 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
+	 * global_log: OLD = isset($pfb['dnsblconfig']['global_log'])
+	 *                   ? $pfb['dnsblconfig']['global_log'] : ''.
+	 * When absent: ''.
+	 * Via gateway: PfbConfig::read('dnsbl/global_log') = '' (registered default —
+	 * issue #3285 restores this v3.2.16 default after #3243's alpha-only,
+	 * never-shipped 'disabled_log' mistake).
+	 * PARITY: identical.
+	 */
+	public function testParityGlobalLogAbsentYieldsEmpty(): void
+	{
+		$this->assertNull(
+			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log')
+		);
+
+		$result = PfbConfig::read('dnsbl/global_log');
+
+		$this->assertSame('', $result, 'global_log absent -> ""');
+	}
+
+	/**
 	 * pfb_dnsbl_lenient: OLD = pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_dnsbl_lenient'] ?? '')->value.
 	 * When absent: pfb_cfg_toggle_read('')->value = 'off'.
 	 * Via gateway: PfbConfig::read('dnsbl/pfb_dnsbl_lenient')->value = 'off' (default Off).

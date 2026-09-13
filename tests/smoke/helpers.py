@@ -2882,8 +2882,8 @@ def set_aggregate_types(vm: SmokeVM, types: list[str], *, timeout: float = 60.0)
 
 
 def _dnsbl_mode_settings(mode: DnsblMode) -> dict[str, str]:  # noqa: ARG001
-    """Keep the case's per-group response mode independent of the install default."""
-    return {"global_log": "none"}
+    """Keep the case's per-group response mode independent of global overrides."""
+    return {"global_log": ""}
 
 
 def _dnsbl_list_logging(mode: DnsblMode) -> str:
