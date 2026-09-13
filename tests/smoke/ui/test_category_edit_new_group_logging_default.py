@@ -26,6 +26,8 @@ from .test_category_edit import (
 from .webui import looks_like_login_page, scrape_form_fields
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from .webui import WebUI
 
 CATEGORY_PAGE = "/pfblockerng/pfblockerng_category_edit.php"
@@ -46,7 +48,7 @@ def _alias_suffix_for(spelling: str) -> str:
 
 
 @contextlib.contextmanager
-def _global_log_none(vm: helpers.SmokeVM):
+def _global_log_none(vm: helpers.SmokeVM) -> Iterator[None]:
     """Pin dnsbl/global_log to '' (No Global mode) for the block; restore after."""
     original = helpers.config_get(vm, GLOBAL_LOG_CFG)
     try:
@@ -57,7 +59,7 @@ def _global_log_none(vm: helpers.SmokeVM):
 
 
 @contextlib.contextmanager
-def _alias_name_parked(vm: helpers.SmokeVM, cfg_root: str, aliasname: str):
+def _alias_name_parked(vm: helpers.SmokeVM, cfg_root: str, aliasname: str) -> Iterator[None]:
     """Prevent catalog adds from reusing an existing alias; restore its name afterward."""
     pre = (
         f"$c = config_get_path({helpers._php_str(cfg_root)}, array());\n"
