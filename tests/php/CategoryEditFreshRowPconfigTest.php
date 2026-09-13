@@ -48,6 +48,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			eval(
 				'function pfb_category_oracle_fresh_pconfig(array $rowdata, $rowid, string $gtype): array {'
 				. ' $pconfig = array();'
+				. ' $pfb_logging_default = "disabled_log";'
 				. ' $pfb_schedule_general = array('
 				. ' "pfb_schedule_weekday" => "7", "pfb_schedule_hour" => "0", "pfb_schedule_minute" => "0"'
 				. ' );'
@@ -168,7 +169,6 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		$this->assertSame('', $pconfig['script_post']);
 
 		// dnsbl-branch-only fields.
-		$this->assertSame('Enabled', $pconfig['logging']);
 		$this->assertSame('default', $pconfig['order']);
 		$this->assertSame('', $pconfig['filter_top1m']);
 

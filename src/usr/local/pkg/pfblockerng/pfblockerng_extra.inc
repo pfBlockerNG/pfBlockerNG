@@ -1329,12 +1329,12 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
 		],
 
-		// Existing no-override choices use 'none' so they remain distinct from the new default.
+		// Global logging/blocking mode. Default ''.
 		'dnsbl/global_log' => [
-			'default'       => 'disabled_log',
+			'default'       => '',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'grandfather'   => [PFB_GF_ABSENT => 'none', '' => 'none'],
+			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
 		// ADR-22: scheme-parsing leniency: 'on' | ''. Default 'off'.

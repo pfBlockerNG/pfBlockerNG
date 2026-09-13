@@ -530,7 +530,7 @@ if (isset($savemsg)) {
 									'nodata'	=> 'NODATA (no logging)'];
 
 							// Global DNSBL Logging/Blocking mode
-							if (!empty($pfb['dnsbl_global_log']) && $pfb['dnsbl_global_log'] !== 'none') {
+							if (!empty($pfb['dnsbl_global_log'])) {
 								$logtype		= $pfb['dnsbl_global_log'];
 								$log_options[$logtype]	= "{$log_options[$logtype]} (Global)";
 							}

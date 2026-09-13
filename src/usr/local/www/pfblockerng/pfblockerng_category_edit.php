@@ -335,6 +335,10 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 	}
 }
 
+// Catalog links prepopulate $rowdata; only persisted rows are existing groups.
+$pfb_logging_default = ($gtype == 'dnsbl' &&
+	config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL) ? 'disabled_log' : 'Enabled';
+
 $pgtype = 'IP';
 $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';
 
@@ -555,7 +559,7 @@ if ($_POST && isset($_POST['save'])) {
 					'agateway_in'		=> 'default',
 					'agateway_out'		=> 'default',
 					'order'			=> 'default',
-					'logging'		=> 'Enabled',
+					'logging'		=> $pfb_logging_default,
 					'suppression_cidr'	=> 'Disabled',
 					'suppression_cidr_v6'	=> 'Disabled',
 					'srcint'		=> '',
@@ -889,7 +893,7 @@ if ($_POST && isset($_POST['save'])) {
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/whois_convert", pfb_filter($_POST['whois_convert'], PFB_FILTER_ON_OFF, 'Category_edit'));
 		}
 		else {
-			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/logging", $_POST['logging'] ?: 'Enabled');
+			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/logging", $_POST['logging'] ?: $pfb_logging_default);
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/order", $_POST['order'] ?: 'default');
 			config_set_path("installedpackages/{$conf_type}/config/{$rowid}/filter_top1m", pfb_filter($_POST['filter_top1m'], PFB_FILTER_ON_OFF, 'Category_edit'));
 		}
@@ -1038,7 +1042,7 @@ else {
 		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'] ?? '';
 	}
 	else {
-		$pconfig['logging']		= $rowdata[$rowid]['logging'] ?? 'Enabled';
+		$pconfig['logging']		= $rowdata[$rowid]['logging'] ?? $pfb_logging_default;
 		$pconfig['order']		= $rowdata[$rowid]['order'] ?? 'default';
 		$pconfig['filter_top1m']	= $rowdata[$rowid]['filter_top1m'] ?? '';
 	}
@@ -1689,7 +1693,7 @@ if ($gtype == 'dnsbl') {
 			. 'When set as \'Primary\', this DNSBL Group will be processed before all other DNSBL Groups/Category(s)')
 	  ->setAttribute('style', 'width: auto');
 
-	$log_text = 'Default: <strong>DNSBL WebServer/VIP</strong><br />'
+	$log_text = 'Default: <strong>Null Blocking (logging)</strong> for a brand-new DNSBL Group; an existing Group keeps its currently configured setting.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'

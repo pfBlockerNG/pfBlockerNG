@@ -232,7 +232,7 @@ if (!$alert_summary) {
 
 						// Collect Global DNSBL Logging type, or Group logging setting
 						$g_log = PfbConfig::read('dnsbl/global_log');
-						if (empty($g_log) || $g_log === 'none') {
+						if (empty($g_log)) {
 							// foreign structure: pfblockerngdnsbl/config/{row}/logging is a dynamic per-row key, not in registry
 							$d_log = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging");
 						} else {

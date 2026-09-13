@@ -182,11 +182,10 @@ $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
 $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
-$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting.'
+$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting. Default is no global override.'
 			. '<div class="infoblock">'
-			. 'Default: <strong>Null Blocking (logging)</strong> for new configurations; an existing configuration keeps its current setting (\'No Global mode\' preserved as-is).<br />'
+			. 'Default: <strong>No Global mode</strong><br />'
 			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
-			. '&#8226 <strong>No Global mode</strong>, Each DNSBL Group\'s own Logging/Blocking setting applies; no global override.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
@@ -198,7 +197,7 @@ $options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking settin
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.'
 			. '</div>';
 
-$options_global_log	= [	'none'		=> 'No Global mode',
+$options_global_log	= [	''		=> 'No Global mode',
 				'enabled'	=> 'DNSBL WebServer/VIP',
 				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',

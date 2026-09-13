@@ -2143,8 +2143,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							// absent is treated as 'Deny'.
 							$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
 
-							// 'none' preserves each group's logging/blocking choice.
-							if (!empty($pfb['dnsbl_global_log']) && $pfb['dnsbl_global_log'] != 'none') {
+							// Global DNSBL Logging/Blocking mode
+							if (!empty($pfb['dnsbl_global_log'])) {
 								$list['logging'] = $pfb['dnsbl_global_log'];
 							}
 
