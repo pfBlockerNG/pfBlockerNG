@@ -49,6 +49,10 @@ Load when: every agent session, from `AGENTS.md`.
   verify that its active project root equals `git rev-parse --show-toplevel`; after a
   mid-session worktree switch Serena is forbidden until a fresh top-level session starts
   there. Claude Agent Teams teammates use built-ins.
+- Each index runs its own CodeGraph daemon, registered in `~/.codegraph/daemons/*.json`
+  (`root`, `pid`). Stop it before `wt remove` — the entry whose `root` is the worktree
+  path, `kill -TERM <pid>` (interactive: `codegraph daemon`) — otherwise the removed
+  `codegraph.db` stays pinned on disk until the daemon exits on its own.
 - `graphify-out/graph.json` is tracked, and records under `graphify-out/memory/` are tracked
   with the work that produced them; everything else under `graphify-out/` is ignored and
   regenerated locally.

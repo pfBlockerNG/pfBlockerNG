@@ -23,3 +23,14 @@ Managed remote (web/app) session mints own branch — `claude/<slug>-<rand>`. Wh
 - **Before starting ADR/issue fresh, DISCOVER prior work:** `git fetch origin`; scan remote branches for that item's committed handoffs (`RESULTS/{NN}_*`) and `*-RESUME:` sentinel; select candidate with highest contiguous completed phase.
 - **Resume by fast-forward onto your own branch** (push pinned): replay/cherry-pick discovered commits onto current session branch (shared base `devel` ⇒ clean linear replay), continue remaining phases, push to *your* branch, carry sentinel forward with updated `next-phase`.
 - **Auto-resume WITHOUT asking iff unambiguous:** exactly one viable candidate, valid sentinel, no sign of concurrent live session. `AskUserQuestion` only on genuine ambiguity.
+
+## Leftover worktrees
+
+A session that ends before its cleanup step leaves a finished worktree no later step
+owns. Whoever finds one reaps it on sight under `landing.md`'s conditions, never on
+mtime: clean tree (`git status --porcelain` empty, untracked included), no live process
+under it (`/proc/*/cwd`, `/proc/*/fd`), and either a PR `MERGED` whose head equals or
+descends from the local head with no open PR at that head, or `wt list` reporting the
+branch integrated into `devel`. Stop its CodeGraph daemon
+(`repository-intelligence.md`), run the `landing.md` removal command, observe
+`branch_outcome`; anything else stays and is reported.

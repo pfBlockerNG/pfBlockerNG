@@ -14,15 +14,16 @@ index, `HEAD`, refs). Session layouts (primary checkout vs harness-made session 
 stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/skills/`), **agent
 workflows/configuration** (`.claude/workflows/`, `.claude/settings.json`, `.codex/`),
 **documentation-only**
-changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree and
-lands directly on `devel` only as a clean fast-forward of locally signed commits after
-fetch + rebase. Anything touching `src/`, `tests/`, or CI — ADR *implementation*
-included — requires the full PR flow. The reviewed signed local fast-forward allowed by
-`landing.md` happens only after every PR gate; it is never a shortcut around the PR.
+changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree,
+lands on `devel` only as a clean fast-forward of locally signed commits after fetch +
+rebase, and ends with the worktree removed as in `landing.md`. Anything touching
+`src/`, `tests/`, or CI — ADR *implementation* included — requires the full PR flow. The
+reviewed signed local fast-forward allowed by `landing.md` happens only after every PR
+gate; it is never a shortcut around the PR.
 
 **Agents cut and remove worktrees through `wt`.** Plain `git worktree` is the fallback,
-never a first choice, used only when `wt` is absent, exits non-zero, or reports success
-without leaving one — including recovery from a `wt` cut that half-ran.
+used only when `wt` is absent, exits non-zero, or reports success without leaving one —
+including recovery from a `wt` cut that half-ran.
 
 ```sh
 wt --yes switch --create <branch> --base origin/devel   # cut off the latest base
@@ -40,15 +41,9 @@ not run). CodeGraph and Graphify are mandatory; Serena is skipped when absent or
 routes through `wt` under the same fallback rule. Relative paths stay below that root;
 absolute paths stay exact; initialization failure rolls back the worktree and branch.
 
-For matching Worktrunk placement, set:
-
-```toml
-# ~/.config/worktrunk/config.toml
-worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"
-```
-
-`.config/wt.toml` also prunes metadata after merge/removal. `wt remove` deletes only
-branches it verifies as integrated; landing observes the foreground result.
+Matching Worktrunk placement: `worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"`
+in `~/.config/worktrunk/config.toml`. `wt remove` deletes only branches it verifies as
+integrated; landing observes the foreground result.
 
 **Scratch trees** (probe, mutation, review lanes) have two sanctioned shapes, both taking
 a SHA — an isolated tree at commit X (e.g. one review leg re-running a red half without
@@ -71,7 +66,7 @@ scratch under `/var/tmp/agents`, disk-backed on both platforms.
 **Scratch is reaped by its owner** when the lane ends — agent session scratch included,
 which no worktree rule covers. Delete someone else's only when it is stale by mtime
 **and** unreferenced by a live process (`/proc/*/cwd`, or `lsof +D` on macOS): an idle
-session looks dead by mtime alone.
+session looks dead by mtime alone. Leftovers of ended sessions: `sessions.md`.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.
