@@ -614,7 +614,7 @@ class _LockHolder:
             for sig in ("-TERM", "-KILL"):
                 if exited:
                     break
-                vm.ssh("kill", sig, self.pid)
+                vm.ssh("kill", sig, self.pid, timeout=5.0)
                 deadline = time.monotonic() + 5.0
                 while time.monotonic() < deadline:
                     if not _pid_alive(vm, self.pid):
