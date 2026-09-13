@@ -196,7 +196,7 @@ Describe 'check-agent-config-parity.sh'
   End
 
   It 'allows one nested worker below a direct Codex subagent'
-    When run python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["agents"]["max_depth"])' "$PFB_ROOT/.codex/config.toml"
+    When run uv run --locked python -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["agents"]["max_depth"])' "$PFB_ROOT/.codex/config.toml"
     The status should equal 0
     The output should equal '2'
   End
