@@ -45,8 +45,8 @@ change rewrites the whole file (header + body).
 
 Usage
 -----
-    python scripts/misc/update_public_suffix_list.py           # rewrite the file in place
-    python scripts/misc/update_public_suffix_list.py --check   # exit 1 if out of date, no changes
+    python3 scripts/misc/update_public_suffix_list.py           # rewrite the file in place
+    python3 scripts/misc/update_public_suffix_list.py --check   # exit 1 if out of date, no changes
 
 Dev-host tooling: run from the repo root on a dev box (never the appliance).
 """
