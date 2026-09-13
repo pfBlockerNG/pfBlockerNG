@@ -25,9 +25,10 @@ Dispatch: scripts/local-smoke.sh --filter "test_extras_dispatcher_deferral"
 from __future__ import annotations
 
 import os
+import shlex
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import NamedTuple
 
@@ -117,8 +118,11 @@ _ERROR_LOG = f"{h.PFB_LOGDIR}/error.log"
 # hardcoded here: the WAN DHCP lease that supplies it is environment-specific.
 # The default MaxMind locale CSV pfblockerng_uc_countries() requires
 # (pfblockerng.php:702, locale 'en' when unconfigured -- pfblockerng.inc:3327).
-# The release test's dcc rc=1 depends on this file being ABSENT; the fixture
-# removes it explicitly rather than assuming a fresh appliance never seeded one.
+# The release test's dcc rc=1 depends on this file being ABSENT; the fixture moves
+# it aside (capture+restore, see _capture_file/_restore_file) rather than assuming
+# a fresh appliance/session never seeded one AND rather than a destructive one-way
+# delete -- gate-probed: an unrestored delete leaves a pre-existing CSV gone after
+# both normal and setup-failure teardown.
 _MAXMIND_LOCALE_CSV = "/usr/local/share/GeoIP/GeoLite2-Country-Locations-en.csv"
 
 
@@ -188,19 +192,63 @@ def _restore_section(vm: SmokeVM, path: str, b64_blob: str) -> None:
     )
 
 
+def _capture_file(vm: SmokeVM, path: str) -> str | None:
+    """Base64 content of ``path``, or ``None`` if it does not exist."""
+    exists = vm.ssh("test", "-f", path)
+    if exists.returncode != 0:
+        return None
+    result = vm.ssh(f"base64 < {path}")
+    assert result.returncode == 0, f"capture of {path!r} failed: rc={result.returncode} {result.stderr!r}"
+    return result.stdout
+
+
+def _restore_file(vm: SmokeVM, path: str, b64_content: str | None) -> None:
+    """Restore ``path`` from a :func:`_capture_file` snapshot (``None`` = must end up absent)."""
+    if b64_content is None:
+        result = vm.ssh("rm", "-f", path)
+        assert result.returncode == 0, f"restore-absent of {path!r} failed: rc={result.returncode} {result.stderr!r}"
+        return
+    result = vm.ssh(f"printf %s {shlex.quote(b64_content)} | base64 -d > {shlex.quote(path)}")
+    assert result.returncode == 0, f"restore of {path!r} failed: rc={result.returncode} {result.stderr!r}"
+
+
+def _capture_stub_records(stub: _StubDnsServer, names: Iterable[str]) -> dict[str, "dict[str, object] | None"]:
+    """Snapshot the CURRENT record (or the sentinel ``None``) for each name, keyed
+    by its normalized FQDN, for a later :func:`_restore_stub_records`.
+
+    ``stub_dns`` is session-scoped (shared with any other module that also requests
+    it); a blanket ``clear_cname()`` on teardown erases every OTHER name's override
+    too, not just this fixture's own (gate-probed: an unrelated A record reverted to
+    the stub's sentinel default after `clear_cname()`). Restoring exactly what was
+    there before -- including "nothing" -- is the only safe teardown.
+    """
+    with stub._lock:
+        return {stub._fqdn(name): stub._records.get(stub._fqdn(name)) for name in names}
+
+
+def _restore_stub_records(stub: _StubDnsServer, snapshot: dict[str, "dict[str, object] | None"]) -> None:
+    """Restore exactly the records :func:`_capture_stub_records` observed."""
+    with stub._lock:
+        for fqdn, rec in snapshot.items():
+            if rec is None:
+                stub._records.pop(fqdn, None)
+            else:
+                stub._records[fqdn] = rec
+
+
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy once; route DNS to the controlled stub; pin a credential-less config.
 
     NXDOMAINs every external host a scheduled verb can legitimately reach so a real
     fetch fails FAST and DETERMINISTICALLY through the guest's REAL resolver path —
-    never a live third-party call. Every altered field (DNS config sections +
-    credential fields) is captured before ANY mutation and restored in `finally` —
-    including when setup itself fails partway — and the RESOLVER is re-resynced
+    never a live third-party call. Every altered piece of state (DNS config
+    sections, credential fields, the stub's per-name overrides, the MaxMind locale
+    CSV) is captured before ANY mutation and restored EXACTLY in `finally` —
+    including when setup itself fails partway — and the resolver is re-resynced
     (services_unbound_configure + wait_unbound_ready), not just config.xml, so a
     later module never inherits a live DNS path still pointed at this fixture's
-    (by-then-stopped) stub. ``stub_dns`` itself is session-scoped (shared with any
-    other module that also requests it); its per-name overrides are cleared too.
+    (by-then-stopped) stub.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
@@ -215,6 +263,9 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     )
     dns_originals = [(section, _capture_section(smoke_vm, section)) for section in dns_sections]
     cred_originals = [(path, h.config_get_state(smoke_vm, path)) for path in cred_fields]
+    stub_snapshot: dict[str, "dict[str, object] | None"] = {}
+    csv_backup_captured = False
+    csv_backup_content: str | None = None
 
     def _restore_all() -> None:
         for section, blob in dns_originals:
@@ -229,7 +280,9 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
             f"DNS resync after restore failed: rc={resync.returncode} {resync.stderr!r} {resync.stdout!r}"
         )
         h.wait_unbound_ready(smoke_vm)
-        stub_dns.clear_cname()
+        _restore_stub_records(stub_dns, stub_snapshot)
+        if csv_backup_captured:
+            _restore_file(smoke_vm, _MAXMIND_LOCALE_CSV, csv_backup_content)
 
     try:
         h.use_system_dns_upstream(smoke_vm)
@@ -237,6 +290,7 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         for host in _NXDOMAIN_HOSTS:
             names = (host, f"{host}.{search_domain}") if search_domain else (host,)
             for name in names:
+                stub_snapshot.update(_capture_stub_records(stub_dns, (name,)))
                 stub_dns.register_nxdomain(name)
                 # Unbound is a CACHING resolver; an earlier query for this exact name
                 # (e.g. a package post-install connectivity check) could have cached an
@@ -262,9 +316,11 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         for path in cred_fields:
             h.config_set(smoke_vm, path, "")
         # dcc's release-test rc=1 depends on pfblockerng_uc_countries() finding no
-        # local MaxMind locale CSV (pfblockerng.php:702-707) -- an explicit
-        # precondition, not a module-scoped assumption a prior session/module could
-        # have seeded (e.g. test_smoke_isolation.py's seed_geoip_dataset).
+        # local MaxMind locale CSV (pfblockerng.php:702-707). Move it aside (never a
+        # bare delete) so a pre-existing file from a prior session/module is restored
+        # byte-for-byte, and its absence is restored just as exactly otherwise.
+        csv_backup_content = _capture_file(smoke_vm, _MAXMIND_LOCALE_CSV)
+        csv_backup_captured = True
         smoke_vm.ssh("rm", "-f", _MAXMIND_LOCALE_CSV)
     except Exception:
         _restore_all()
@@ -293,6 +349,13 @@ def _pid_alive(vm: SmokeVM, pid: str) -> bool:
     return vm.ssh("kill", "-0", pid).returncode == 0
 
 
+def _inode(vm: SmokeVM, path: str) -> str:
+    """The guest's inode number for ``path`` (BSD ``stat -f %i``), or ``""`` if absent."""
+    result = vm.ssh(f"[ -f {path} ] && stat -f %i {path} || true")
+    assert result.returncode == 0, f"inode probe failed for {path}: rc={result.returncode} {result.stderr!r}"
+    return result.stdout.strip()
+
+
 def _size(vm: SmokeVM, path: str) -> int:
     """Current byte size of ``path`` (0 when absent)."""
     result = vm.ssh(f"[ -f {path} ] && wc -c < {path} || echo 0")
@@ -300,63 +363,114 @@ def _size(vm: SmokeVM, path: str) -> int:
     return int(result.stdout.strip())
 
 
-def _delta(vm: SmokeVM, path: str, offset: int) -> str:
-    """Content appended to ``path`` after byte ``offset`` (whole file when it rotated shorter).
+def _log_window(vm: SmokeVM, path: str) -> tuple[int, str]:
+    """Capture a (byte offset, inode) baseline for a later :func:`_log_delta` read.
 
-    Scopes every assertion to ONE invocation: a baseline is captured immediately
-    before dispatch and only the delta is inspected, so no assertion can pass on a
-    stale line left by an earlier verb/test in this module.
+    Byte size ALONE cannot detect a newsyslog rotation: a rename-then-regrow can
+    put the fresh file's size back at or above the OLD offset well within one
+    test's window (gate-probed: 288 -> 736 bytes), so a size-only "did it shrink"
+    heuristic silently reads the wrong file region instead of noticing the
+    rotation. The inode is the reliable signal — it changes the instant newsyslog
+    creates the fresh file, independent of size.
     """
-    result = vm.ssh(
-        f"[ -f {path} ] || exit 0; "
-        f'if [ "$(wc -c < {path})" -ge {offset} ]; then tail -c +{offset + 1} {path}; '
-        f"else cat {path}; fi"
-    )
-    assert result.returncode == 0, f"delta read failed for {path}: rc={result.returncode} {result.stderr!r}"
-    return result.stdout
+    return _size(vm, path), _inode(vm, path)
 
 
-def _presence_delta(vm: SmokeVM, path: str, offset: int) -> str:
-    """Like :func:`_delta`, but rotation-safe across a newsyslog turnover mid-test.
+def _log_delta(vm: SmokeVM, path: str, baseline: tuple[int, str]) -> str:
+    """Everything written to ``path`` since ``baseline`` (from :func:`_log_window`).
 
-    newsyslog RENAMES the live file to ``path.0`` (preserving its bytes 1:1) then
-    starts a fresh empty ``path``; a plain byte-offset read of the fresh file alone
-    would silently lose a write that landed just before the rename. This reads the
-    OLD file's tail from the SAME ``offset`` (never the whole backup — that would let
-    an unrelated EARLIER test's line satisfy the current presence/absence check) and
-    appends the ENTIRE new file (all of which postdates the rotation), reconstructing
-    exactly "everything written since offset" whether or not a rotation occurred.
+    Robust across a newsyslog rotation mid-test — plain rename, rename+regrow, or a
+    rotated-away backup already compressed to ``.0.bz2``/``.0.gz``. Identity is
+    tracked by INODE, never by size or by name alone: the live file's CURRENT
+    inode is compared against the baseline's; a match means no rotation occurred
+    (a plain tail suffices); a mismatch means the baseline now lives in the
+    renamed-away ``path.0``, verified by matching ITS inode (never "whichever
+    ``.0`` happens to exist" — a second, later rotation could have reused that
+    name for a different generation; if ``path.0`` exists with a DIFFERENT inode,
+    that is a confirmed, provable loss, not an absence).
+
+    Compression is the one case inode identity cannot reach: bzip2/gzip always
+    write a brand-new file (a new inode), so a compressed backup's OWN inode can
+    never equal the baseline's, by construction — no amount of comparing can
+    verify it. The fallback there rests on newsyslog's own single linear chain:
+    at any instant there is EITHER an uncompressed ``path.0`` OR (once compressed)
+    a ``path.0.bz2``/``path.0.gz`` for the immediately-prior generation, never
+    both — so the ABSENCE of ``path.0`` plus the PRESENCE of a compressed form is
+    itself the identifying signal, not a guess among several candidates.
+
+    This never silently narrows the window: if rotation is detected but neither an
+    inode-verified ``path.0`` nor a presence-inferred compressed form exists, this
+    raises rather than returning a possibly-incomplete delta that could make an
+    absence assertion falsely pass.
     """
-    result = vm.ssh(
-        f"[ -f {path} ] || exit 0; "
-        f"cur=$(wc -c < {path}); "
-        f'if [ "$cur" -ge {offset} ]; then tail -c +{offset + 1} {path}; '
-        f"else "
-        f"if [ -f {path}.0 ]; then "
-        f"old=$(wc -c < {path}.0); "
-        f'if [ "$old" -ge {offset} ]; then tail -c +{offset + 1} {path}.0; fi; '
-        f"fi; "
-        f"cat {path}; "
-        f"fi"
-    )
-    assert result.returncode == 0, f"presence-delta read failed for {path}: rc={result.returncode} {result.stderr!r}"
-    return result.stdout
+    offset, baseline_inode = baseline
+    cur_inode = _inode(vm, path)
+    if baseline_inode == "":
+        # Baseline observed the file absent; whatever exists now is entirely new.
+        if cur_inode == "":
+            return ""
+        result = vm.ssh(f"cat {path}")
+        assert result.returncode == 0, f"log delta read failed for {path}: rc={result.returncode} {result.stderr!r}"
+        return result.stdout
+    if cur_inode == baseline_inode:
+        result = vm.ssh(f"tail -c +{offset + 1} {path}")
+        assert result.returncode == 0, f"log delta read failed for {path}: rc={result.returncode} {result.stderr!r}"
+        return result.stdout
+    old_tail = ""
+    found = False
+    zero_inode = _inode(vm, f"{path}.0")
+    if zero_inode != "":
+        if zero_inode != baseline_inode:
+            raise RuntimeError(
+                f"log rotation boundary lost for {path}: baseline inode {baseline_inode} matches neither "
+                f"the live file (inode {cur_inode!r}) nor {path}.0 (inode {zero_inode!r}) -- a later "
+                f"rotation displaced it -- refusing to guess, since a narrowed window could make an "
+                f"absence assertion falsely pass."
+            )
+        found = True
+        result = vm.ssh(f"cat {path}.0 | tail -c +{offset + 1}")
+        assert result.returncode == 0, (
+            f"rotated-backup read failed for {path}.0: rc={result.returncode} {result.stderr!r}"
+        )
+        old_tail = result.stdout
+    else:
+        for suffix, reader in ((".0.bz2", "bzcat"), (".0.gz", "zcat")):
+            candidate = f"{path}{suffix}"
+            if _inode(vm, candidate) == "":
+                continue
+            found = True
+            result = vm.ssh(f"{reader} {candidate} | tail -c +{offset + 1}")
+            assert result.returncode == 0, (
+                f"rotated-backup read failed for {candidate}: rc={result.returncode} {result.stderr!r}"
+            )
+            old_tail = result.stdout
+            break
+    if not found:
+        raise RuntimeError(
+            f"log rotation boundary lost for {path}: baseline inode {baseline_inode} matches neither "
+            f"the live file (inode {cur_inode!r}) nor {path}.0/.0.bz2/.0.gz -- refusing to guess, since "
+            f"a narrowed window could make an absence assertion falsely pass."
+        )
+    new_content = vm.ssh(f"[ -f {path} ] && cat {path} || true").stdout
+    return old_tail + new_content
 
 
-def _poll_delta_contains(vm: SmokeVM, path: str, offset: int, needle: str, *, timeout: float = 15.0) -> str:
+def _poll_delta_contains(
+    vm: SmokeVM, path: str, baseline: tuple[int, str], needle: str, *, timeout: float = 15.0
+) -> str:
     """Poll ``path``'s delta until it contains ``needle``, or return the last-seen
     delta at the salvage cap. A PRESENCE check taken immediately after a command
     returns can race an asynchronous sink (syslogd); this consumes readiness instead
     of asserting on a single snapshot."""
     deadline = time.monotonic() + timeout
-    delta = _presence_delta(vm, path, offset)
+    delta = _log_delta(vm, path, baseline)
     while needle not in delta and time.monotonic() < deadline:
         time.sleep(1.0)
-        delta = _presence_delta(vm, path, offset)
+        delta = _log_delta(vm, path, baseline)
     return delta
 
 
-def _drained_delta(vm: SmokeVM, path: str, offset: int, *, timeout: float = 15.0) -> str:
+def _drained_delta(vm: SmokeVM, path: str, baseline: tuple[int, str], *, timeout: float = 15.0) -> str:
     """The delta up to (not including) a fresh drain marker — an async-sink barrier
     for ABSENCE checks. ``logger``'s syslogd write is asynchronous; an absence check
     taken immediately after a command returns can race the daemon. Emitting one more,
@@ -366,7 +480,7 @@ def _drained_delta(vm: SmokeVM, path: str, offset: int, *, timeout: float = 15.0
     marker = f"PFB_SMOKE_DRAIN_{uuid.uuid4().hex}"
     sent = vm.ssh("logger", "-p", "user.notice", marker)
     assert sent.returncode == 0, f"drain marker send failed: rc={sent.returncode} {sent.stderr!r}"
-    delta = _poll_delta_contains(vm, path, offset, marker, timeout=timeout)
+    delta = _poll_delta_contains(vm, path, baseline, marker, timeout=timeout)
     assert marker in delta, f"drain marker {marker!r} never landed in {path} within {timeout}s; got: {delta!r}"
     return delta[: delta.index(marker)]
 
@@ -479,18 +593,18 @@ def test_verb_defers_with_rc1_and_both_diagnostics_while_dispatcher_lock_held(de
     vm = deployed_vm
     h.wait_no_active_pfb_task(vm)
     with _held_dispatcher_lock(vm):
-        main_offset = _size(vm, h.PFB_LOG)
-        sys_offset = _size(vm, _SYSTEM_LOG)
+        main_baseline = _log_window(vm, h.PFB_LOG)
+        sys_baseline = _log_window(vm, _SYSTEM_LOG)
         run = vm.ssh(_PHP, _PFB_PHP, verb, timeout=60.0)
         assert run.returncode == 1, (
             f"{verb!r} must exit 1 on a lost dispatcher-lock race: "
             f"got rc={run.returncode} stdout={run.stdout!r} stderr={run.stderr!r}"
         )
-        main_delta = _delta(vm, h.PFB_LOG, main_offset)
+        main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
         assert _MAIN_LOG_LINE in main_delta, (
             f"{verb!r}: expected the guard's diagnostic {_MAIN_LOG_LINE!r} in the main log delta, got: {main_delta!r}"
         )
-        sys_delta = _poll_delta_contains(vm, _SYSTEM_LOG, sys_offset, _SYSLOG_SEVERITY_AND_MESSAGE)
+        sys_delta = _poll_delta_contains(vm, _SYSTEM_LOG, sys_baseline, _SYSLOG_SEVERITY_AND_MESSAGE)
         assert _SYSLOG_SEVERITY_AND_MESSAGE in sys_delta, (
             f"{verb!r}: expected {_SYSLOG_SEVERITY_AND_MESSAGE!r} in the system log delta, got: {sys_delta!r}"
         )
@@ -523,13 +637,13 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
     # <verb> is a real, recognized verb reaching the guard (not an unrecognized-
     # command no-op) -- load-bearing for bl/bls, whose bypass phase has no marker.
     with _held_dispatcher_lock(vm):
-        main_offset = _size(vm, h.PFB_LOG)
+        main_baseline = _log_window(vm, h.PFB_LOG)
         contended = vm.ssh(_PHP, _PFB_PHP, verb, timeout=60.0)
         assert contended.returncode == 1, (
             f"before-state: {verb!r} must defer (rc=1) while the lock is held standalone: "
             f"got rc={contended.returncode} stdout={contended.stdout!r} stderr={contended.stderr!r}"
         )
-        main_delta = _delta(vm, h.PFB_LOG, main_offset)
+        main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
         assert _MAIN_LOG_LINE in main_delta, (
             f"before-state: expected {_MAIN_LOG_LINE!r} in main log delta, got: {main_delta!r}"
         )
@@ -537,12 +651,12 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
     # After-state: scheduled bypass.
     h.wait_no_active_pfb_task(vm)
     with _held_dispatcher_lock(vm):
-        main_offset = _size(vm, h.PFB_LOG)
-        sink_offset = _size(vm, expected.sink) if expected.sink else 0
-        sys_offset = _size(vm, _SYSTEM_LOG)
+        main_baseline = _log_window(vm, h.PFB_LOG)
+        sink_baseline = _log_window(vm, expected.sink) if expected.sink else (0, "")
+        sys_baseline = _log_window(vm, _SYSTEM_LOG)
         run = vm.ssh(_PHP, _PFB_PHP, verb, "scheduled", timeout=90.0)
-        main_delta = _delta(vm, h.PFB_LOG, main_offset)
-        sys_delta = _drained_delta(vm, _SYSTEM_LOG, sys_offset)
+        main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
+        sys_delta = _drained_delta(vm, _SYSTEM_LOG, sys_baseline)
         assert _MAIN_LOG_LINE not in main_delta, (
             f"{verb!r} scheduled must bypass the dispatcher guard entirely: unexpected "
             f"{_MAIN_LOG_LINE!r} in main log delta: {main_delta!r}"
@@ -552,7 +666,7 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
             f"{_SYSLOG_SEVERITY_AND_MESSAGE!r} in drained syslog delta: {sys_delta!r}"
         )
         if expected.marker:
-            sink_delta = _delta(vm, expected.sink, sink_offset)
+            sink_delta = _log_delta(vm, expected.sink, sink_baseline)
             assert expected.marker in sink_delta, (
                 f"{verb!r} scheduled must reach its own real logic (not an unrecognized-"
                 f"command no-op): expected {expected.marker!r} in {expected.sink}, got: {sink_delta!r}"
@@ -586,18 +700,18 @@ def test_verb_release_completes_deterministically(deployed_vm: SmokeVM, verb: st
 
     # Before-state: contended -> deferred.
     with _held_dispatcher_lock(vm):
-        main_offset = _size(vm, h.PFB_LOG)
-        sys_offset = _size(vm, _SYSTEM_LOG)
+        main_baseline = _log_window(vm, h.PFB_LOG)
+        sys_baseline = _log_window(vm, _SYSTEM_LOG)
         contended = vm.ssh(_PHP, _PFB_PHP, verb, timeout=60.0)
         assert contended.returncode == 1, (
             f"before-state: {verb!r} must defer (rc=1) while the lock is held: "
             f"got rc={contended.returncode} stdout={contended.stdout!r} stderr={contended.stderr!r}"
         )
-        main_delta = _delta(vm, h.PFB_LOG, main_offset)
+        main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
         assert _MAIN_LOG_LINE in main_delta, (
             f"before-state: expected {_MAIN_LOG_LINE!r} in main log, got: {main_delta!r}"
         )
-        sys_delta = _poll_delta_contains(vm, _SYSTEM_LOG, sys_offset, _SYSLOG_SEVERITY_AND_MESSAGE)
+        sys_delta = _poll_delta_contains(vm, _SYSTEM_LOG, sys_baseline, _SYSLOG_SEVERITY_AND_MESSAGE)
         assert _SYSLOG_SEVERITY_AND_MESSAGE in sys_delta, (
             f"before-state: expected {_SYSLOG_SEVERITY_AND_MESSAGE!r} in syslog, got: {sys_delta!r}"
         )
@@ -606,19 +720,19 @@ def test_verb_release_completes_deterministically(deployed_vm: SmokeVM, verb: st
     h.wait_no_active_pfb_task(vm)
     sink = _ERROR_LOG if verb == "dc" else _EXTRAS_LOG
     marker = "Invalid URL (cannot resolve)" if verb == "dc" else "Download Process Starting"
-    main_offset = _size(vm, h.PFB_LOG)
-    sink_offset = _size(vm, sink)
-    sys_offset = _size(vm, _SYSTEM_LOG)
+    main_baseline = _log_window(vm, h.PFB_LOG)
+    sink_baseline = _log_window(vm, sink)
+    sys_baseline = _log_window(vm, _SYSTEM_LOG)
     run = vm.ssh(_PHP, _PFB_PHP, verb, timeout=90.0)
-    main_delta = _delta(vm, h.PFB_LOG, main_offset)
-    sys_delta = _drained_delta(vm, _SYSTEM_LOG, sys_offset)
+    main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
+    sys_delta = _drained_delta(vm, _SYSTEM_LOG, sys_baseline)
     assert _MAIN_LOG_LINE not in main_delta, (
         f"after-state: {verb!r} with a free lock must not report a deferral: main log delta {main_delta!r}"
     )
     assert _SYSLOG_SEVERITY_AND_MESSAGE not in sys_delta, (
         f"after-state: {verb!r} with a free lock must not report a deferral: drained syslog delta {sys_delta!r}"
     )
-    sink_delta = _delta(vm, sink, sink_offset)
+    sink_delta = _log_delta(vm, sink, sink_baseline)
     assert marker in sink_delta, (
         f"after-state: {verb!r} must reach real pipeline logic: expected {marker!r} in {sink}, got: {sink_delta!r}"
     )
