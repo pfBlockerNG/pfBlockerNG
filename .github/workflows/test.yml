@@ -472,6 +472,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Sync the dev environment
+        run: uv sync --locked --group dev
+
       - name: Require jq and dash
         # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
         # shellspec run below pins. ubuntu-24.04 ships both, and neither changes a gate
