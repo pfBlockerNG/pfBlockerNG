@@ -31,8 +31,11 @@ directly) and is not duplicated here.
 
 from __future__ import annotations
 
+import base64
 import bz2
 import gzip
+import shlex
+import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,12 +47,32 @@ from tests.smoke import test_extras_dispatcher_deferral as m
 from tests.smoke.conftest import _StubDnsServer
 
 
+def _require_tool(name: str) -> None:
+    """Fail this test's PRECONDITION -- never silently pass, never skip -- if
+    `name` is missing from PATH.
+
+    Without this, a missing decompressor makes `_log_delta` treat EVERY
+    compressed candidate as unreadable and fall through to its own "boundary
+    lost" RuntimeError -- the exact same outcome the corrupt-data and wrong-
+    generation tests below assert on, but for an entirely different (and wrong)
+    reason: environment misconfiguration, not the logic under test. Repo policy
+    gates on a missing required tool rather than skipping past it, so this
+    raises rather than `pytest.skip()`.
+    """
+    assert shutil.which(name) is not None, (
+        f"{name!r} not found on PATH -- required for this test to exercise the real "
+        f"decompression path it pins, not just its RuntimeError side effect"
+    )
+
+
 class _ShellVM:
     """Runs `.ssh()`'s shell commands for real, against a real local file -- the
-    same shape ``SmokeVM.ssh`` presents (a single already-quoted command string in,
-    a ``subprocess.CompletedProcess``-shaped result out) minus the SSH transport."""
+    same shape ``SmokeVM.ssh`` presents (a single already-quoted command string,
+    OR an argv shlex-joined the identical way `SmokeVM.ssh` itself does) minus
+    the SSH transport."""
 
-    def ssh(self, command: str, *, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    def ssh(self, *remote: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        command = remote[0] if len(remote) == 1 else shlex.join(remote)
         return subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, timeout=timeout or 10)
 
 
@@ -144,6 +167,7 @@ def test_log_delta_recovers_from_a_bz2_compressed_backup(vm: m.SmokeVM, tmp_path
         `bzcat` decompression byte-for-byte, proving identity where an inode never
         could (compression always allocates a brand-new inode).
     """
+    _require_tool("bzcat")
     log = tmp_path / "system.log"
     _write(log, "baseline line\n" * 8)
     baseline = m._log_window(vm, str(log))
@@ -163,6 +187,7 @@ def test_log_delta_recovers_from_a_bz2_compressed_backup(vm: m.SmokeVM, tmp_path
 
 def test_log_delta_recovers_from_a_gz_compressed_backup(vm: m.SmokeVM, tmp_path: Path) -> None:
     """Same as the bz2 case, for a `.gz`-compressed backup (`zcat`)."""
+    _require_tool("zcat")
     log = tmp_path / "system.log"
     _write(log, "baseline line\n" * 8)
     baseline = m._log_window(vm, str(log))
@@ -198,6 +223,7 @@ def test_log_delta_raises_after_a_second_rotation_compresses_a_different_generat
         `.0.bz2` that does exist, and no candidate at `.1`/`.1.bz2` is ever
         consulted, so the boundary is correctly reported as lost, not guessed.
     """
+    _require_tool("bzcat")
     log = tmp_path / "system.log"
     _write(log, "baseline line\n" * 8)
     baseline = m._log_window(vm, str(log))
@@ -233,6 +259,7 @@ def test_log_delta_raises_rather_than_silently_accept_a_corrupt_compressed_backu
         masked by piping straight into a downstream reader whose OWN exit status
         would report success regardless.
     """
+    _require_tool("bzcat")
     log = tmp_path / "system.log"
     _write(log, "baseline line\n" * 8)
     baseline = m._log_window(vm, str(log))
@@ -266,6 +293,109 @@ def test_log_window_on_an_absent_file_creates_it_with_only_the_marker(vm: m.Smok
     delta = m._log_delta(vm, str(log), baseline)
 
     assert delta == "first-ever content\n"
+
+
+def test_log_delta_raises_rather_than_silently_mask_a_failed_read_of_an_existing_backup(
+    vm: m.SmokeVM,
+    tmp_path: Path,
+) -> None:
+    """Given `path.0` exists (passes `test -f`) but reading it via `cat` genuinely
+        fails (simulated here by intercepting the exact `cat path.0` command --
+        a real permission-denied read is not portably reproducible as root)
+    When the delta is read
+    Then this raises loudly rather than treating the failed read as an empty or
+        absent backup: a masked `[ -f ... ] && cat ... || true` shape would
+        instead silently proceed with whatever partial output `cat` produced
+        before failing, potentially still finding the marker in a truncated read.
+    """
+    log = tmp_path / "system.log"
+    _write(log, "baseline line\n" * 8)
+    baseline = m._log_window(vm, str(log))
+    log.rename(str(log) + ".0")
+    _write(log, "new generation\n")
+
+    class FailingCatVM(_ShellVM):
+        def ssh(self, *remote: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+            if remote == (f"cat {log}.0",):
+                return subprocess.CompletedProcess(remote, 1, "", "cat: Permission denied")
+            return super().ssh(*remote, timeout=timeout)
+
+    with pytest.raises(AssertionError, match="rotated-backup read failed"):
+        m._log_delta(cast("m.SmokeVM", FailingCatVM()), str(log), baseline)
+
+
+def test_guest_file_exists_raises_on_an_ssh_transport_error_rather_than_report_absence() -> None:
+    """Given the guest probe returns 255 (an SSH transport failure -- neither
+        `test`'s own 0 NOR its own 1)
+    When `_guest_file_exists` checks it
+    Then this raises rather than reporting "absent" -- cleanup trusting a false
+        "absent" here could remove marker files and declare a dispatcher-lock
+        holder released while the real flock-holding process is still live and
+        simply unreachable right now.
+    """
+
+    class TransportFailureVM(_ShellVM):
+        def ssh(self, *remote: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(remote, 255, "", "ssh: connect to host: Connection refused")
+
+    with pytest.raises(RuntimeError, match="likely an SSH transport failure"):
+        m._guest_file_exists(cast("m.SmokeVM", TransportFailureVM()), "/tmp/whatever")
+
+
+def test_pid_alive_raises_on_an_ssh_transport_error_rather_than_report_death() -> None:
+    """Same failure mode as the file-exists probe, for the PID-liveness probe
+    `_LockHolder.stop()` uses to decide whether the owned process has exited."""
+
+    class TransportFailureVM(_ShellVM):
+        def ssh(self, *remote: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(remote, 255, "", "ssh: connect to host: Connection refused")
+
+    with pytest.raises(RuntimeError, match="likely an SSH transport failure"):
+        m._pid_alive(cast("m.SmokeVM", TransportFailureVM()), "12345")
+
+
+# --------------------------------------------------------------------------- #
+# _restore_section: a corrupt capture blob must never silently wipe config.
+# --------------------------------------------------------------------------- #
+
+
+def _php_eval_local(vm: object, snippet: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    """Runs `_restore_section`'s PHP snippet for REAL via a local `php` CLI,
+    stubbing only the two pfSense-specific globals it calls (`config_set_path`,
+    `write_config`) as no-ops -- `json_decode`/`base64_decode`/`is_array` are
+    REAL PHP, so the validation branch is exercised genuinely, never
+    re-implemented in Python."""
+    stub_prelude = (
+        "function config_set_path($path, $value) { echo 'CONFIG_SET_PATH:' . json_encode($value) . \"\\n\"; }\n"
+        "function write_config($msg) { echo 'WRITE_CONFIG' . \"\\n\"; }\n"
+    )
+    result = subprocess.run(
+        ["php", "-r", stub_prelude + snippet], capture_output=True, text=True, timeout=10, check=False
+    )
+    return subprocess.CompletedProcess(result.args, result.returncode, result.stdout, result.stderr)
+
+
+def test_restore_section_refuses_a_corrupt_blob_rather_than_wipe_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given a corrupt/truncated base64 blob (`json_decode()` would return `NULL`)
+    When `_restore_section` is called
+    Then it raises rather than silently writing an empty array over the whole
+    live config section -- exercised through the REAL PHP validation snippet
+    (`is_array()` on the actually-decoded value), not a Python re-implementation.
+    """
+    monkeypatch.setattr(m.h, "php_eval", _php_eval_local)
+
+    with pytest.raises(AssertionError, match="restore of config section"):
+        m._restore_section(cast("m.SmokeVM", _ShellVM()), "system", "not-valid-base64-or-json!!!")
+
+
+def test_restore_section_accepts_a_genuinely_empty_array_blob(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuinely empty array (`json_encode([])` -> `"[]"`, a real, valid capture
+    of a section that really was empty) must NOT be confused with a decode
+    failure -- `is_array([])` is true, so this must NOT raise."""
+    monkeypatch.setattr(m.h, "php_eval", _php_eval_local)
+    blob = base64.b64encode(b"[]").decode()
+
+    m._restore_section(cast("m.SmokeVM", _ShellVM()), "system", blob)  # must not raise
 
 
 # --------------------------------------------------------------------------- #

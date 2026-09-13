@@ -174,15 +174,26 @@ def _capture_section(vm: SmokeVM, path: str) -> str:
 
 
 def _restore_section(vm: SmokeVM, path: str, b64_blob: str) -> None:
-    """Restore a whole config section from a :func:`_capture_section` blob."""
+    """Restore a whole config section from a :func:`_capture_section` blob.
+
+    A corrupt/truncated blob makes `json_decode()` return `NULL`; `?? array()`
+    would then silently substitute an EMPTY array and write THAT over the whole
+    live section instead of failing before any write. Validated explicitly here
+    (`is_array()`, matching PHP's own truthy-empty-array quirk safely) so a
+    decode failure aborts loudly instead of erasing unrelated config.
+    """
     snippet = (
-        f"config_set_path('{path}', json_decode(base64_decode('{b64_blob}'), true) ?? array());\n"
+        f"$__pfb_restore = json_decode(base64_decode('{b64_blob}'), true);\n"
+        "if (!is_array($__pfb_restore)) { echo 'DECODE_FAILED'; exit; }\n"
+        f"config_set_path('{path}', $__pfb_restore);\n"
         "write_config('pfBlockerNG smoke: restore DNS config section');\n"
         "echo 'OK';"
     )
     result = h.php_eval(vm, snippet)
-    assert result.returncode == 0 and "OK" in result.stdout, (
-        f"restore of config section {path!r} failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+    assert result.returncode == 0 and "OK" in result.stdout and "DECODE_FAILED" not in result.stdout, (
+        f"restore of config section {path!r} failed -- possibly a corrupt capture blob, refused "
+        f"rather than risk writing an empty array over live config: rc={result.returncode} "
+        f"{result.stderr!r} {result.stdout!r}"
     )
 
 
@@ -210,6 +221,28 @@ def _restore_stub_records(stub: _StubDnsServer, snapshot: dict[str, "dict[str, o
                 stub._records[fqdn] = rec
 
 
+def _set_registered_toggle(vm: SmokeVM, key: str, *, on: bool) -> None:
+    """Write a registered PfbConfig toggle field through its typed system-context
+    gateway (``PfbConfig::writeSystem``) rather than a raw ``config_set_path`` --
+    matching how the SAME field is written in production (pfblockerng.inc's
+    registered read/write adapters), so this fixture can never drift from that
+    canonical stored representation if either adapter's validation changes.
+    Precedent: ``helpers.set_feed_sanity`` uses the identical pattern for another
+    registered toggle.
+    """
+    value = "PfbToggle::On" if on else "PfbToggle::Off"
+    snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+        f"PfbConfig::writeSystem('{key}', {value});\n"
+        "write_config('pfBlockerNG smoke: set registered field');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    assert result.returncode == 0 and "OK" in result.stdout, (
+        f"_set_registered_toggle({key!r}, on={on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+    )
+
+
 @pytest.fixture(scope="module")
 def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
     """Deploy once; route DNS to the controlled stub; pin a credential-less config.
@@ -228,11 +261,22 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
 
     dns_sections = ("system", "unbound")
-    cred_fields = {
+    # Unregistered credential fields -- no PfbConfig entry exists for these
+    # (confirmed against pfb_cfg_registry()), so a raw config_set/config_get_state
+    # round-trip IS the canonical representation; there is no adapter to bypass.
+    raw_fields = {
         f"{h.CFG_IP_SETTINGS}/maxmind_key": "",
         f"{h.CFG_IP_SETTINGS}/maxmind_account": "",
         f"{h.CFG_IP_SETTINGS}/asn_token": "",
-        f"{h.CFG_DNSBL_SETTINGS}/top1m_enable": "",
+    }
+    # Registered PfbConfig toggle fields -- written through the SAME typed
+    # system-context gateway (`PfbConfig::writeSystem`) production code uses
+    # (precedent: helpers.set_feed_sanity does the identical thing for another
+    # registered toggle), not a raw config_set_path, so this fixture can never
+    # drift from the canonical stored representation if either adapter's
+    # validation changes. (registry key, config.xml path for capture/restore, on)
+    registered_toggle_fields = (
+        ("dnsbl/top1m_enable", f"{h.CFG_DNSBL_SETTINGS}/top1m_enable", False),
         # dcc's release-test rc depends on pfblockerng_uc_countries() (the MaxMind
         # locale CSV conversion) never running at all: with empty MaxMind
         # credentials AND this ON, pfblockerng.php's dc/dcc arm (pfblockerng.inc:
@@ -243,26 +287,49 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         # under a transport failure mid-move) that using this EXISTING, already-
         # supported toggle avoids by construction: nothing on the guest's
         # filesystem is ever touched.
-        f"{h.CFG_IP_SETTINGS}/database_cc": "on",
-    }
+        ("ip/database_cc", f"{h.CFG_IP_SETTINGS}/database_cc", True),
+    )
+    cred_paths = tuple(raw_fields) + tuple(path for _, path, _ in registered_toggle_fields)
     dns_originals = [(section, _capture_section(smoke_vm, section)) for section in dns_sections]
-    cred_originals = [(path, h.config_get_state(smoke_vm, path)) for path in cred_fields]
+    cred_originals = [(path, h.config_get_state(smoke_vm, path)) for path in cred_paths]
     stub_snapshot: dict[str, "dict[str, object] | None"] = {}
 
     def _restore_all() -> None:
+        """Run EVERY independent restore step even when an earlier one raises --
+        a linear abort here would skip the resolver resync and stub-record
+        restore whenever a DNS/credential restore failed, leaving the shared VM
+        pointed at this fixture's test DNS/stub state for whatever runs next.
+        Accumulates every failure and raises them together at the end.
+        """
+        errors: list[Exception] = []
         for section, blob in dns_originals:
-            _restore_section(smoke_vm, section, blob)
+            try:
+                _restore_section(smoke_vm, section, blob)
+            except Exception as exc:  # noqa: BLE001 -- collected, not swallowed; see raise below
+                errors.append(exc)
         for path, state in cred_originals:
-            h.config_restore_state(smoke_vm, path, state)
-        # Config sections alone are the PERSISTED state; the resolver only applies
-        # them on its own reload. Re-run the same resync use_system_dns_upstream()
-        # performs so the box's EFFECTIVE DNS path is restored too.
-        resync = h.php_eval(smoke_vm, "services_unbound_configure(); echo 'OK';")
-        assert resync.returncode == 0 and "OK" in resync.stdout, (
-            f"DNS resync after restore failed: rc={resync.returncode} {resync.stderr!r} {resync.stdout!r}"
-        )
-        h.wait_unbound_ready(smoke_vm)
-        _restore_stub_records(stub_dns, stub_snapshot)
+            try:
+                h.config_restore_state(smoke_vm, path, state)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+        try:
+            # Config sections alone are the PERSISTED state; the resolver only
+            # applies them on its own reload. Re-run the same resync
+            # use_system_dns_upstream() performs so the box's EFFECTIVE DNS path
+            # is restored too.
+            resync = h.php_eval(smoke_vm, "services_unbound_configure(); echo 'OK';")
+            assert resync.returncode == 0 and "OK" in resync.stdout, (
+                f"DNS resync after restore failed: rc={resync.returncode} {resync.stderr!r} {resync.stdout!r}"
+            )
+            h.wait_unbound_ready(smoke_vm)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+        try:
+            _restore_stub_records(stub_dns, stub_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+        if errors:
+            raise ExceptionGroup(f"{len(errors)} independent teardown step(s) failed", errors)
 
     try:
         h.use_system_dns_upstream(smoke_vm)
@@ -278,9 +345,21 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
                 # the verification below is never fooled by a stale cache entry.
                 h.flush_unbound_name(smoke_vm, name)
         for host in _NXDOMAIN_HOSTS:
+            # gethostbyname()'s "unchanged" return proves NOTHING by itself about
+            # WHY the lookup failed -- SERVFAIL and every other resolver failure
+            # mode return the input unchanged too. Pair it with the RCODE the
+            # stub actually sent, via the SAME on-box resolver path (Unbound at
+            # 127.0.0.1, matching how gethostbyname() itself resolves), to prove
+            # this specific host is genuinely NXDOMAIN before trusting anything
+            # downstream on that assumption.
+            answer = h.dns_probe(smoke_vm, host, "A")
+            assert h.is_nxdomain(answer), (
+                f"{host} must resolve NXDOMAIN via the guest's real resolver path for this "
+                f"fixture to be hermetic -- got rcode={answer.rcode!r} records={answer.records!r}"
+            )
             # gethostbyname() rides the SAME real PHP/libc resolver path curl's
-            # default resolver uses (unlike an external `drill`/`host` CLI, which can
-            # take a different path); it returns the input unchanged on failure.
+            # default resolver uses (unlike `drill` above, which can take a
+            # different path); it returns the input unchanged on failure.
             # Delimited: pfSsh.php prints a startup banner before any echoed output.
             snippet = f"echo '{_JSON_OPEN}' . gethostbyname('{host}') . '{_JSON_CLOSE}';"
             check = h.php_eval(smoke_vm, snippet)
@@ -293,8 +372,10 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
                 f"this fixture to be hermetic; gethostbyname returned {resolved!r} (a real "
                 f"answer or the stub's unregistered-name sentinel, either way not NXDOMAIN)"
             )
-        for path, value in cred_fields.items():
+        for path, value in raw_fields.items():
             h.config_set(smoke_vm, path, value)
+        for key, _cfg_path, on in registered_toggle_fields:
+            _set_registered_toggle(smoke_vm, key, on=on)
     except Exception:
         _restore_all()
         raise
@@ -315,11 +396,49 @@ def _guest_search_domain(vm: SmokeVM) -> str:
 
 
 def _guest_file_exists(vm: SmokeVM, path: str) -> bool:
-    return vm.ssh("test", "-f", path).returncode == 0
+    """Whether ``path`` exists on the guest -- a BOUNDED probe (5s, well under the
+    15s poll-loop budgets that call this) accepting only `test`'s own 0/1 exit
+    codes. An SSH transport failure (255) is NEITHER "true" NOR "false" -- it means
+    this probe learned nothing, and treating it as "gone" could let cleanup remove
+    marker files and declare a lock holder released while the real process is
+    still live and unobserved.
+    """
+    result = vm.ssh("test", "-f", path, timeout=5.0)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"file-exists probe for {path!r} got rc={result.returncode} (not test's own 0/1 -- "
+            f"likely an SSH transport failure): {result.stderr!r}"
+        )
+    return result.returncode == 0
 
 
 def _pid_alive(vm: SmokeVM, pid: str) -> bool:
-    return vm.ssh("kill", "-0", pid).returncode == 0
+    """Whether ``pid`` is alive on the guest -- same bounded-probe, same-exit-code
+    discipline as :func:`_guest_file_exists`, and for the same reason: cleanup
+    must never mistake "couldn't ask" for "confirmed dead"."""
+    result = vm.ssh("kill", "-0", pid, timeout=5.0)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"pid-alive probe for pid={pid!r} got rc={result.returncode} (not kill's own 0/1 -- "
+            f"likely an SSH transport failure): {result.stderr!r}"
+        )
+    return result.returncode == 0
+
+
+def _geoip_update_exists(vm: SmokeVM) -> bool:
+    """Whether the on-box ``geoip.update`` marker (pfblockerng.php:376) currently
+    exists -- READ-ONLY: this fixture never creates or removes it. Its presence
+    flips dc/dcc's SCHEDULED exit code (``dcc_changed=true`` routes through the
+    3/2 branch instead of 1/0), and this session's VM persists across smoke
+    modules, so a marker touched by an unrelated earlier run must be observed
+    fresh immediately before dispatch rather than assumed absent.
+    """
+    result = vm.ssh("test", "-f", f"{h.PFB_DBDIR}/geoip.update", timeout=10.0)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"geoip.update existence probe got rc={result.returncode} (not test's own 0/1): {result.stderr!r}"
+        )
+    return result.returncode == 0
 
 
 def _log_window(vm: SmokeVM, path: str) -> str:
@@ -377,11 +496,13 @@ def _log_delta(vm: SmokeVM, path: str, baseline: str) -> str:
     if idx != -1:
         return _after_marker(live.stdout, idx, baseline)
 
-    zero = vm.ssh(f"[ -f {path}.0 ] && cat {path}.0 || true")
-    assert zero.returncode == 0, f"rotated-backup read failed for {path}.0: rc={zero.returncode} {zero.stderr!r}"
-    idx = zero.stdout.rfind(baseline)
-    if idx != -1:
-        return _after_marker(zero.stdout, idx, baseline) + live.stdout
+    zero_exists = vm.ssh(f"test -f {path}.0")
+    if zero_exists.returncode == 0:
+        zero = vm.ssh(f"cat {path}.0")
+        assert zero.returncode == 0, f"rotated-backup read failed for {path}.0: rc={zero.returncode} {zero.stderr!r}"
+        idx = zero.stdout.rfind(baseline)
+        if idx != -1:
+            return _after_marker(zero.stdout, idx, baseline) + live.stdout
 
     for suffix, reader in ((".0.bz2", "bzcat"), (".0.gz", "zcat")):
         candidate = f"{path}{suffix}"
@@ -587,6 +708,7 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
     # command no-op) -- load-bearing for bl/bls, whose bypass phase has no marker.
     with _held_dispatcher_lock(vm):
         main_baseline = _log_window(vm, h.PFB_LOG)
+        sys_baseline = _log_window(vm, _SYSTEM_LOG)
         contended = vm.ssh(_PHP, _PFB_PHP, verb, timeout=60.0)
         assert contended.returncode == 1, (
             f"before-state: {verb!r} must defer (rc=1) while the lock is held standalone: "
@@ -596,6 +718,15 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
         assert _MAIN_LOG_LINE in main_delta, (
             f"before-state: expected {_MAIN_LOG_LINE!r} in main log delta, got: {main_delta!r}"
         )
+        # Drain (not just check) the syslog record HERE: its write is asynchronous,
+        # and the after-state phase below takes its OWN fresh syslog baseline --
+        # an undrained record from THIS run could land after that baseline and get
+        # mis-attributed to the scheduled invocation, failing its absence assertion
+        # intermittently for a completely unrelated reason.
+        sys_delta = _poll_delta_contains(vm, _SYSTEM_LOG, sys_baseline, _SYSLOG_SEVERITY_AND_MESSAGE)
+        assert _SYSLOG_SEVERITY_AND_MESSAGE in sys_delta, (
+            f"before-state: expected {_SYSLOG_SEVERITY_AND_MESSAGE!r} in syslog delta, got: {sys_delta!r}"
+        )
 
     # After-state: scheduled bypass.
     h.wait_no_active_pfb_task(vm)
@@ -603,7 +734,13 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
         main_baseline = _log_window(vm, h.PFB_LOG)
         sink_baseline = _log_window(vm, expected.sink) if expected.sink else ""
         sys_baseline = _log_window(vm, _SYSTEM_LOG)
+        geoip_update_before = _geoip_update_exists(vm) if verb in ("dc", "dcc") else False
         run = vm.ssh(_PHP, _PFB_PHP, verb, "scheduled", timeout=90.0)
+        assert _guest_file_exists(vm, _READY), (
+            f"{verb!r} scheduled: the dispatcher-lock holder self-expired (its 120s cap) before "
+            f"this run completed, so the lock was NOT genuinely held throughout -- a passing "
+            f"bypass assertion here would be vacuous (no contention to bypass), not proof of one"
+        )
         main_delta = _log_delta(vm, h.PFB_LOG, main_baseline)
         sys_delta = _drained_delta(vm, _SYSTEM_LOG, sys_baseline)
         assert _MAIN_LOG_LINE not in main_delta, (
@@ -620,9 +757,17 @@ def test_scheduled_verb_bypasses_dispatcher_lock(deployed_vm: SmokeVM, verb: str
                 f"{verb!r} scheduled must reach its own real logic (not an unrecognized-"
                 f"command no-op): expected {expected.marker!r} in {expected.sink}, got: {sink_delta!r}"
             )
-        assert run.returncode == expected.rc, (
-            f"{verb!r} scheduled: expected deterministic rc={expected.rc} under this fixture's "
-            f"NXDOMAIN+credential-less config, got rc={run.returncode} "
+        # dc/dcc's SCHEDULED rc also depends on a pre-existing geoip.update marker
+        # (pfblockerng.php:376's dcc_changed -> the 3/2 branch instead of 1/0) --
+        # read-only probed just above, immediately before dispatch, never mutated:
+        # this session's VM persists across smoke modules, so a marker touched by
+        # an unrelated earlier run must never silently break a fixed expectation.
+        expected_rc = expected.rc
+        if verb in ("dc", "dcc") and geoip_update_before:
+            expected_rc = 3 if verb == "dc" else 2
+        assert run.returncode == expected_rc, (
+            f"{verb!r} scheduled: expected rc={expected_rc} under this fixture's NXDOMAIN+"
+            f"credential-less config (geoip_update_before={geoip_update_before}), got rc={run.returncode} "
             f"stdout={run.stdout!r} stderr={run.stderr!r}"
         )
 
