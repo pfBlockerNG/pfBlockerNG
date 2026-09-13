@@ -56,6 +56,15 @@ shellspec:tests/shell/pfblockerng_recompute_spec.sh::pfb_recompute() hostile inp
 shellspec:tests/shell/pfblockerng_recompute_spec.sh::pfb_recompute() hostile inputs stops the swap and logs the failing artifact -- without rolling anything back -- when the deny dir denies the mv (EACCES mid-swap, issue #1084 review)  # root bypasses directory permissions — denial cannot be simulated
 shellspec:tests/shell/pfblockerng_closing_producer_spec.sh::closingprocess() deny concatenation producer status (#3165) refuses a verdict when a deny file is genuinely unreadable (S2)  # root bypasses file permissions — a mode-000 deny file stays readable
 
+# ShellSpec -- a minimal Linux host (C, C.utf8, POSIX locales only) lacks the
+# comma-decimal / de_DE.UTF-8 locale data these three probe (issue #3282); CI
+# installs de_DE.UTF-8 and asserts it drives awk's decimal point before running
+# the suite (.github/workflows/test.yml "Install the de_DE.UTF-8 locale"), so
+# the locale coverage these guard runs for real there.
+shellspec:tests/shell/module_durations_spec.sh::module-durations.sh locale independence (issue #861 nitpick: LC_ALL=C on the awk stage) keeps dotted-decimal output even under an ambient comma-decimal locale  # no comma-decimal locale (de_DE.UTF-8/fr_FR.UTF-8/es_ES.UTF-8/it_IT.UTF-8/pt_BR.UTF-8) installed locally; CI installs de_DE.UTF-8 (issue #3282)
+shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — LC_ALL=C dedup is byte-exact (§2.1 guarantee) sorts z before ä under C and ä before z under de_DE.UTF-8  # de_DE.UTF-8 not installed locally; CI installs and probes it (issue #3282)
+shellspec:tests/shell/shard_modules_spec.sh::shard-modules.sh locale independence (issue #861 nitpick: LC_ALL=C on every awk stage) produces the SAME split under an ambient comma-decimal locale as under C  # no comma-decimal locale installed locally; CI installs de_DE.UTF-8 (issue #3282)
+
 # pytest -- 4 observed on the Linux CI runner.
 pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner
 pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present on the runner

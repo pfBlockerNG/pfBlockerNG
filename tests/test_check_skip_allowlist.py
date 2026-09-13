@@ -669,3 +669,86 @@ def test_default_smoke_skips_are_allowlisted(tmp_path: Path, capsys: pytest.Capt
         ]
     )
     assert rc == 0, capsys.readouterr().err
+
+
+def test_issue_3282_locale_skips_are_allowlisted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The three ShellSpec skips issue #3282 reported on a minimal (C/C.utf8/POSIX-only)
+    developer host -- ids and reasons captured VERBATIM from an executed
+    ``shellspec --shell dash -o junit --reportdir locale-report
+    tests/shell/module_durations_spec.sh:192 tests/shell/pfblockerng_adr26_locale_spec.sh:163
+    tests/shell/shard_modules_spec.sh:657`` run on such a host (the issue's own baseline
+    command), never guessed from source. Each self-skips ('Skip if') when the locale it
+    needs (a comma-decimal locale, or de_DE.UTF-8 specifically) is absent -- CI provisions
+    and probes de_DE.UTF-8 (.github/workflows/test.yml "Install the de_DE.UTF-8 locale") and
+    runs them for real there; this allowlisting only covers the local skip superset
+    testing.md's "Divergence shows up as a SKIP" already recognises."""
+    root = Path(__file__).resolve().parents[1]
+    testcases = "".join(
+        f'<testcase time="0" classname="{classname}" name="{name}"><skip message="{message}" /></testcase>'
+        for classname, name, message in (
+            (
+                "tests/shell/module_durations_spec.sh",
+                "module-durations.sh locale independence (issue #861 nitpick: LC_ALL=C on the awk stage) "
+                "keeps dotted-decimal output even under an ambient comma-decimal locale",
+                "no comma-decimal locale installed on this box to demonstrate the guard",
+            ),
+            (
+                "tests/shell/pfblockerng_adr26_locale_spec.sh",
+                "ADR-26 — LC_ALL=C dedup is byte-exact (§2.1 guarantee) sorts z before ä under C "
+                "and ä before z under de_DE.UTF-8",
+                "de_DE.UTF-8 is not installed locally",
+            ),
+            (
+                "tests/shell/shard_modules_spec.sh",
+                "shard-modules.sh locale independence (issue #861 nitpick: LC_ALL=C on every awk stage) "
+                "produces the SAME split under an ambient comma-decimal locale as under C",
+                "no comma-decimal locale installed on this box to demonstrate the guard",
+            ),
+        )
+    )
+    report = _report(tmp_path, "locale.xml", testcases)
+    rc = csa.main(
+        [
+            "--suite",
+            "shellspec",
+            "--allowlist",
+            str(root / "tests/skip-allowlist.txt"),
+            str(report),
+        ]
+    )
+    assert rc == 0, capsys.readouterr().err
+
+
+def test_issue_3282_locale_allowlisting_still_rejects_an_unrelated_shellspec_skip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The three new entries above must not widen into a blanket local-skip allowance
+    (testing.md/#3282 constraint): a genuinely unrelated, never-allowlisted ShellSpec
+    skip observed alongside them is still rejected, and by name -- not swallowed by a
+    fuzzy or suite-wide match."""
+    root = Path(__file__).resolve().parents[1]
+    testcases = (
+        '<testcase time="0" classname="tests/shell/module_durations_spec.sh" '
+        'name="module-durations.sh locale independence (issue #861 nitpick: LC_ALL=C on the awk stage) '
+        'keeps dotted-decimal output even under an ambient comma-decimal locale">'
+        '<skip message="no comma-decimal locale installed on this box to demonstrate the guard" />'
+        "</testcase>"
+        '<testcase time="0" classname="tests/shell/some_other_spec.sh" '
+        'name="a totally unrelated example that skips for a never-allowlisted reason">'
+        '<skip message="issue #3282 regression: this id must never ride the locale entries in" />'
+        "</testcase>"
+    )
+    report = _report(tmp_path, "locale-plus-unrelated.xml", testcases)
+    rc = csa.main(
+        [
+            "--suite",
+            "shellspec",
+            "--allowlist",
+            str(root / "tests/skip-allowlist.txt"),
+            str(report),
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "shellspec:tests/shell/some_other_spec.sh::a totally unrelated example" in err
+    assert "module_durations_spec.sh" not in err
