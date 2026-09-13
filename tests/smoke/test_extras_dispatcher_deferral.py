@@ -115,14 +115,6 @@ _ERROR_LOG = f"{h.PFB_LOGDIR}/error.log"
 # The dispatcher-lock deferral's guest-side search-domain fallback is read live
 # from /etc/resolv.conf per-fixture (see _guest_search_domain) rather than
 # hardcoded here: the WAN DHCP lease that supplies it is environment-specific.
-# The default MaxMind locale CSV pfblockerng_uc_countries() requires
-# (pfblockerng.php:702, locale 'en' when unconfigured -- pfblockerng.inc:3327).
-# The release test's dcc rc=1 depends on this file being ABSENT; the fixture moves
-# it aside (see _move_aside/_restore_moved) rather than assuming a fresh
-# appliance/session never seeded one AND rather than a destructive one-way delete
-# -- gate-probed: an unrestored delete leaves a pre-existing CSV gone after both
-# normal and setup-failure teardown.
-_MAXMIND_LOCALE_CSV = "/usr/local/share/GeoIP/GeoLite2-Country-Locations-en.csv"
 
 
 class _ScheduledExpectation(NamedTuple):
@@ -142,7 +134,10 @@ _SCHEDULED_EXPECTATIONS: dict[str, _ScheduledExpectation] = {
     # NXDOMAIN fails it BEFORE pfb_download_fetch() ever reaches curl, logged (case 2)
     # to error.log AND main log; the distinct, unambiguous line lives in error.log.
     "dc": _ScheduledExpectation(1, _ERROR_LOG, "Invalid URL (cannot resolve)"),
-    "dcc": _ScheduledExpectation(1, _EXTRAS_LOG, "Download Process Starting"),
+    # dcc: with database_cc=on (see deployed_vm's cred_fields) AND empty MaxMind
+    # credentials, pfblockerng_uc_countries() never runs at all (pfblockerng.inc:
+    # 3326, pfblockerng.php:372) -- verified against the real appliance below.
+    "dcc": _ScheduledExpectation(0, _EXTRAS_LOG, "Download Process Starting"),
     # bu/asn/asn_shell: credential/token-less early `return` before any network call.
     "bu": _ScheduledExpectation(0, h.PFB_LOG, "Terminating MaxMind download due to invalid Account or Key"),
     "asn": _ScheduledExpectation(0, h.PFB_LOG, "ASN Token not defined. Terminating Download."),
@@ -191,37 +186,6 @@ def _restore_section(vm: SmokeVM, path: str, b64_blob: str) -> None:
     )
 
 
-def _move_aside(vm: SmokeVM, path: str) -> str:
-    """Move ``path`` to a unique backup name if it exists, leaving ``path`` absent
-    either way. A real filesystem MOVE, never a content capture-and-recreate: `mv`
-    preserves permissions, ownership, and mtime exactly, where a base64-read +
-    redirect-write round-trip does not (gate-probed: 0640 -> 0644, historical mtime
-    reset to now). Returns the backup path used, or ``""`` if ``path`` was already
-    absent (nothing moved, so :func:`_restore_moved` has nothing to move back).
-    """
-    backup = f"{path}.pfb-smoke-backup-{uuid.uuid4().hex}"
-    result = vm.ssh(f"[ -e {path} ] && mv {path} {backup} && echo MOVED || true")
-    assert result.returncode == 0, f"move-aside of {path!r} failed: rc={result.returncode} {result.stderr!r}"
-    return backup if "MOVED" in result.stdout else ""
-
-
-def _restore_moved(vm: SmokeVM, path: str, backup: str) -> None:
-    """Undo :func:`_move_aside`: move the backup back if one was made. When
-    ``backup`` is ``""`` (``path`` was originally absent), ensure ``path`` is
-    STILL absent -- a real download/creation during the test body (e.g. a
-    scheduled dc/dcc run genuinely fetching a fresh CSV) must not leak past this
-    fixture's teardown; nothing else re-creates it in the "was present" case, so
-    that branch's `mv` alone is exact."""
-    if backup:
-        result = vm.ssh(f"mv {backup} {path}")
-        assert result.returncode == 0, (
-            f"restore of {path!r} from {backup!r} failed: rc={result.returncode} {result.stderr!r}"
-        )
-    else:
-        result = vm.ssh(f"rm -f {path}")
-        assert result.returncode == 0, f"restore-absent of {path!r} failed: rc={result.returncode} {result.stderr!r}"
-
-
 def _capture_stub_records(stub: _StubDnsServer, names: Iterable[str]) -> dict[str, "dict[str, object] | None"]:
     """Snapshot the CURRENT record (or the sentinel ``None``) for each name, keyed
     by its normalized FQDN, for a later :func:`_restore_stub_records`.
@@ -253,28 +217,37 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     NXDOMAINs every external host a scheduled verb can legitimately reach so a real
     fetch fails FAST and DETERMINISTICALLY through the guest's REAL resolver path —
     never a live third-party call. Every altered piece of state (DNS config
-    sections, credential fields, the stub's per-name overrides, the MaxMind locale
-    CSV) is captured before ANY mutation and restored EXACTLY in `finally` —
-    including when setup itself fails partway — and the resolver is re-resynced
-    (services_unbound_configure + wait_unbound_ready), not just config.xml, so a
-    later module never inherits a live DNS path still pointed at this fixture's
-    (by-then-stopped) stub.
+    sections, credential fields, the stub's per-name overrides) is captured before
+    ANY mutation and restored EXACTLY in `finally` — including when setup itself
+    fails partway — and the resolver is re-resynced (services_unbound_configure +
+    wait_unbound_ready), not just config.xml, so a later module never inherits a
+    live DNS path still pointed at this fixture's (by-then-stopped) stub.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
 
     dns_sections = ("system", "unbound")
-    cred_fields = (
-        f"{h.CFG_IP_SETTINGS}/maxmind_key",
-        f"{h.CFG_IP_SETTINGS}/maxmind_account",
-        f"{h.CFG_IP_SETTINGS}/asn_token",
-        f"{h.CFG_DNSBL_SETTINGS}/top1m_enable",
-    )
+    cred_fields = {
+        f"{h.CFG_IP_SETTINGS}/maxmind_key": "",
+        f"{h.CFG_IP_SETTINGS}/maxmind_account": "",
+        f"{h.CFG_IP_SETTINGS}/asn_token": "",
+        f"{h.CFG_DNSBL_SETTINGS}/top1m_enable": "",
+        # dcc's release-test rc depends on pfblockerng_uc_countries() (the MaxMind
+        # locale CSV conversion) never running at all: with empty MaxMind
+        # credentials AND this ON, pfblockerng.php's dc/dcc arm (pfblockerng.inc:
+        # 3326, pfblockerng.php:372) skips the conversion call outright. An
+        # earlier fixture revision instead moved the real locale CSV file aside
+        # on disk and restored it afterward -- a whole class of filesystem-
+        # mutation bugs (byte/metadata loss, ambiguous partial-failure states
+        # under a transport failure mid-move) that using this EXISTING, already-
+        # supported toggle avoids by construction: nothing on the guest's
+        # filesystem is ever touched.
+        f"{h.CFG_IP_SETTINGS}/database_cc": "on",
+    }
     dns_originals = [(section, _capture_section(smoke_vm, section)) for section in dns_sections]
     cred_originals = [(path, h.config_get_state(smoke_vm, path)) for path in cred_fields]
     stub_snapshot: dict[str, "dict[str, object] | None"] = {}
-    csv_backup = ""
 
     def _restore_all() -> None:
         for section, blob in dns_originals:
@@ -290,7 +263,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         )
         h.wait_unbound_ready(smoke_vm)
         _restore_stub_records(stub_dns, stub_snapshot)
-        _restore_moved(smoke_vm, _MAXMIND_LOCALE_CSV, csv_backup)
 
     try:
         h.use_system_dns_upstream(smoke_vm)
@@ -321,15 +293,8 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
                 f"this fixture to be hermetic; gethostbyname returned {resolved!r} (a real "
                 f"answer or the stub's unregistered-name sentinel, either way not NXDOMAIN)"
             )
-        for path in cred_fields:
-            h.config_set(smoke_vm, path, "")
-        # dcc's release-test rc=1 depends on pfblockerng_uc_countries() finding no
-        # local MaxMind locale CSV (pfblockerng.php:702-707). Move it aside (never a
-        # base64 capture-and-recreate, which loses permissions/mtime -- gate-probed:
-        # 0640 -> 0644, historical mtime reset to now) so a pre-existing file from a
-        # prior session/module is restored byte- AND metadata-identical, and its
-        # absence is restored just as exactly otherwise.
-        csv_backup = _move_aside(smoke_vm, _MAXMIND_LOCALE_CSV)
+        for path, value in cred_fields.items():
+            h.config_set(smoke_vm, path, value)
     except Exception:
         _restore_all()
         raise
