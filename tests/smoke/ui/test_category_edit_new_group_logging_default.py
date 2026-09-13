@@ -50,12 +50,12 @@ def _alias_suffix_for(spelling: str) -> str:
 @contextlib.contextmanager
 def _global_log_none(vm: helpers.SmokeVM) -> Iterator[None]:
     """Pin dnsbl/global_log to '' (No Global mode) for the block; restore after."""
-    original = helpers.config_get(vm, GLOBAL_LOG_CFG)
+    original = helpers.config_get_state(vm, GLOBAL_LOG_CFG)
     try:
         helpers.config_set(vm, GLOBAL_LOG_CFG, "")
         yield
     finally:
-        helpers.config_set(vm, GLOBAL_LOG_CFG, original)
+        helpers.config_restore_state(vm, GLOBAL_LOG_CFG, original)
 
 
 @contextlib.contextmanager
