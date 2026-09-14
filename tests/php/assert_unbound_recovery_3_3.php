@@ -830,13 +830,8 @@ PHP
 	$p = $run['payload'];
 	check(!str_contains((string) $p['log'], 'completed [ NOW ]'), 'a timed-out status must never report completion');
 	check(str_contains((string) $p['log'], 'Not completed'), 'a timed-out status must be reported not completed');
-	// The status confirm call passes log_nonzero:FALSE (the caller reports the command's
-	// own output itself), so pfb_unbound_control_exec only emits a "[ status ] ..." label
-	// for status===124 specifically. GNU/uutils timeout on this Linux dev box reports 137
-	// for a KILL-escalated command instead of FreeBSD's 124 (documented divergence, see
-	// tests/php/UnboundControlIpcBoundTest.php on devel) -- so on THIS platform no such
-	// label is expected here BY DESIGN. What must hold on every platform: the status
-	// output the caller itself reports never contains the "is running..." success marker.
+	// GNU timeout reports 137 for KILL escalation where FreeBSD reports 124.
+	// Either outcome must leave the resolver unconfirmed.
 	check(!str_contains(implode('', $p['status_result'] ?? []), 'is running...'),
 		'a killed status command must never leave a false "is running..." marker for the caller to read as success');
 	rmdir_recursive_local($run['dir']);
@@ -1008,6 +1003,82 @@ row('Row 9h: failed status with running text cannot confirm success', function (
 	same(['dump_cache', 'status'], $p['calls'] ?? [], 'a failed status must not reach cache restoration');
 	check(!str_contains((string) $p['log'], 'completed [ NOW ]'), 'running text cannot override failed status');
 	check(str_contains((string) $p['log'], 'Not completed'), 'failed status must report incomplete recovery');
+});
+
+row('Row 9i: an empty nonzero status response names the IPC failure', function () use ($src, $timeout_bin) {
+	$run = run_isolated($src, fastConstants(),
+		['pfb_stop_start_unbound', 'pfb_unbound_control_cmd', 'pfb_unbound_control_exec', 'pfb_reload_unbound'],
+		stopStartPrelude() . "\$GLOBALS['pfb']['timeout'] = " . var_export($timeout_bin, true) . ";\n"
+			. row9Body('exit 0', 'exit 1', 'exit 0', false)
+	);
+	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+	check(str_contains((string) $run['payload']['log'], '[ status ] FAILED (exit 1)'),
+		'a silent nonzero status command must report its operation and exit code');
+});
+
+row('Row 9j: a failed dump is never loaded even when its truncation is denied', function () use ($src) {
+	$fixture = <<<'PHP'
+namespace ReadonlyCache;
+function tempnam($dir, $prefix) {
+	$path = \tempnam($GLOBALS['cache_dir'], $prefix);
+	$GLOBALS['cache_path'] = $path;
+	return $path;
+}
+function pfb_stop_start_unbound($type) {
+	return ['retval' => 0, 'start_completed' => true, 'result' => []];
+}
+function pfb_unbound_control_exec($cmd, $label, &$lines = null, $log_nonzero = true) {
+	$GLOBALS['cache_calls'][] = $label;
+	if ($label === 'dump_cache') {
+		$path = $GLOBALS['cache_path'];
+		\file_put_contents($path, 'PARTIAL');
+		if (!\chmod($path, 0400)) { throw new \RuntimeException('cannot create read-only dump fixture'); }
+		\clearstatcache(true, $path);
+		$GLOBALS['cache_readonly'] = !\is_writable($path);
+		return 1;
+	}
+	if ($label === 'status') { $lines = ['is running...']; }
+	return 0;
+}
+function unlink_if_exists($path) {
+	if ($path === $GLOBALS['cache_path']) {
+		$GLOBALS['cache_before_cleanup'] = \file_get_contents($path);
+	}
+	\unlink_if_exists($path);
+}
+PHP;
+	$fixture .= "\n" . function_source($src, 'pfb_reload_unbound');
+	$run = run_isolated($src, fastConstants(), [], stopStartPrelude() . <<<'PHP'
+if (!chmod($dir, 0777)) { throw new RuntimeException('cannot prepare private fixture directory'); }
+if (posix_geteuid() === 0) {
+	$account = posix_getpwnam('nobody');
+	if (!$account || !posix_setgid($account['gid']) || !posix_setuid($account['uid'])) {
+		throw new RuntimeException('cannot drop fixture child privileges to exercise real permission denial');
+	}
+}
+$GLOBALS['cache_dir'] = $dir;
+$GLOBALS['cache_calls'] = [];
+$GLOBALS['pfb']['dnsbldir'] = $dir;
+$GLOBALS['pfb']['dnsbl_file'] = "$dir/dnsbl";
+$GLOBALS['pfb']['dnsbl_py_blacklist'] = false;
+$GLOBALS['pfb']['dnsbl_res_cache'] = 'on';
+$GLOBALS['pfb']['chroot_cmd'] = '/bin/true';
+$GLOBALS['pfb_process_running']['unbound'] = true;
+PHP
+		. "\neval(" . var_export($fixture, true) . ");\n" . <<<'PHP'
+\ReadonlyCache\pfb_reload_unbound('enabled', true, false);
+echo json_encode([
+	'calls' => $GLOBALS['cache_calls'],
+	'readonly' => $GLOBALS['cache_readonly'],
+	'remaining' => $GLOBALS['cache_before_cleanup'],
+]) . "\n";
+PHP
+	);
+	check($run['status'] === 0, 'isolated runner must exit cleanly: ' . implode("\n", $run['output']));
+	$p = $run['payload'];
+	same(true, $p['readonly'] ?? null, 'fixture must genuinely deny writes, even when the suite runs as root');
+	same('PARTIAL', $p['remaining'] ?? null, 'failed truncation must leave the real partial dump intact');
+	same(['dump_cache', 'status'], $p['calls'] ?? null, 'an invalid dump must not reach load_cache');
 });
 
 row('Row 10: conditional install migration reports restart failure without changing its trigger', function () use ($install_src) {

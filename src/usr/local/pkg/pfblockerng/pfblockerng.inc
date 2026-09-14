@@ -3600,6 +3600,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 	}
 
 	$cache_dumpfile = tempnam('/var/tmp/', 'unbound_cache_');
+	$cache_dump_valid = FALSE;
 	if ($mode == 'enabled' && is_process_running('unbound') && !$pfb['dnsbl_python_unmount'] && !$pfbpython) {
 
 		$log = "\nReloading Unbound Resolver{$type}";
@@ -3611,6 +3612,7 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 			// the restore below cannot load a partial dump into the fresh resolver.
 			$dumped = pfb_unbound_control_exec("{$pfb['chroot_cmd']} dump_cache > " .
 				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
+			$cache_dump_valid = ($dumped === 0);
 			if ($dumped !== 0 && is_string($cache_dumpfile)) {
 				@file_put_contents($cache_dumpfile, '');
 			}
@@ -3679,22 +3681,21 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 		$final = pfb_stop_start_unbound($type);
 	}
 
-	// Only a completed successful command can own the daemon observed here -- a failed
-	// or incomplete start may race with an unrelated external restart (issue #3100
-	// backport). The status exec's own retval is kept in a SEPARATE variable so it can
-	// never clobber the outcome pfb_stop_start_unbound() already distinguished.
+	// Confirm service health only after a successful completed start; do not let
+	// a failed attempt borrow another process's status. This is not per-run PID
+	// ownership: independent service restarts may race with this health check.
 	if ($final['start_completed'] && $final['retval'] === 0 && is_process_running('unbound')) {
 		pfb_logger('.', 1);
 
 		$status_result = array();
 		$status_retval = pfb_unbound_control_exec("{$pfb['chroot_cmd']} status 2>&1 < /dev/null",
-			'status', $status_result, FALSE);
+			'status', $status_result);
 		pfb_logger('.', 1);
 		if ($status_retval === 0 && preg_grep("/is running.../", $status_result)) {
 			pfb_logger(" completed [ NOW ]", 1);
 
 			// Restore Resolver cache
-			if ($cache && $pfb['dnsbl_res_cache'] == 'on' && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
+			if ($cache && $pfb['dnsbl_res_cache'] == 'on' && $cache_dump_valid && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
 				$restored = pfb_unbound_control_exec("{$pfb['chroot_cmd']} load_cache < " .
 					escapeshellarg($cache_dumpfile) . ' 2>&1', 'load_cache');
 				if ($restored === 0) {
