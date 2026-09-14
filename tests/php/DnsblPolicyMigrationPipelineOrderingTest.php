@@ -59,9 +59,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 		foreach (PFB_SECTIONS as $section) {
 			$sections[$section] = PfbConfig::readSection($section);
 		}
-		foreach (pfb_registry_pass($sections, NULL, $modes) as $section => $blob) {
-			PfbConfig::writeSectionRawSystem($section, $blob);
-		}
+		pfb_install_registry_writeback($sections, $modes);
 
 		return [
 			'dnsbl'  => PfbConfig::readSection(self::DNSBL_SECTION),
@@ -179,7 +177,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 	{
 		$result = $this->runInstallSequence();
 
-		$this->assertSame('off', $result['dnsbl']['pfb_dnsbl_lenient'] ?? null,
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_dnsbl_lenient'),
 			'a genuinely fresh install must take the NEWCFG default (off), never the OLDCFG grandfather (on)');
 		$this->assertSame([], $result['groups'], 'a genuinely fresh install has no groups to convert');
 	}
@@ -243,7 +241,7 @@ final class DnsblPolicyMigrationPipelineOrderingTest extends TestCase
 
 		$result = $this->runInstallSequence();
 
-		$this->assertSame('on', $result['dnsbl']['pfb_dnsbl_lenient'] ?? null,
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_dnsbl_lenient'),
 			'a box with real DNSBL groups is an existing install for EVERY dnsbl/* field, '
 			. 'not just the two #3288 introduces');
 	}
