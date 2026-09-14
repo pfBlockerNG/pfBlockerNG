@@ -64,7 +64,6 @@ from .test_category_edit import (
     _dnsbl_payload,
     _free_rowid,
     _ipv4_payload,
-    _option_selected,
     _post_form,
 )
 from .webui import looks_like_login_page, scrape_form_fields
@@ -98,6 +97,10 @@ _EXPLICIT_CHOICES = (
     "nodata_log",
     "nodata",
 )
+
+
+def _logging_selected(body: str, value: str) -> bool:
+    return scrape_form_fields(body).get("logging") == value
 
 
 def _alias_suffix_for(spelling: str) -> str:
@@ -215,11 +218,11 @@ def test_add_new_dnsbl_alias_renders_default_selected(webui: WebUI, smoke_vm: he
         resp = webui.get(_ADD_DNSBL_PAGE)
         result = evaluate_render(_ADD_DNSBL_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
         assert result.ok, f"Tier-A render oracle failed for act=add: {result.detail}"
-        assert _option_selected(resp.text, "default"), (
+        assert _logging_selected(resp.text, "default"), (
             "a brand-new DNSBL alias must render Logging/Blocking Mode = 'default' selected (issue #3288)"
         )
-        assert not _option_selected(resp.text, "enabled")
-        assert not _option_selected(resp.text, "disabled_log"), "must not linger on issue #3285's superseded default"
+        assert not _logging_selected(resp.text, "enabled")
+        assert not _logging_selected(resp.text, "disabled_log"), "must not linger on issue #3285's superseded default"
 
 
 @pytest.mark.ui_render
@@ -230,11 +233,11 @@ def test_addgroup_new_dnsbl_alias_renders_default_selected(webui: WebUI, smoke_v
         resp = webui.get(_ADDGROUP_DNSBL_PAGE)
         result = evaluate_render(_ADDGROUP_DNSBL_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
         assert result.ok, f"Tier-A render oracle failed for act=addgroup: {result.detail}"
-        assert _option_selected(resp.text, "default"), (
+        assert _logging_selected(resp.text, "default"), (
             "a brand-new DNSBL alias (addgroup/Feeds tab) must render 'default' selected (issue #3288)"
         )
-        assert not _option_selected(resp.text, "enabled")
-        assert not _option_selected(resp.text, "disabled_log")
+        assert not _logging_selected(resp.text, "enabled")
+        assert not _logging_selected(resp.text, "disabled_log")
 
 
 @pytest.mark.ui_render
@@ -247,11 +250,11 @@ def test_manual_new_dnsbl_group_renders_default_selected(webui: WebUI, smoke_vm:
     resp = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
     result = evaluate_render(CATEGORY_PAGE, resp.status_code, resp.text, ("Override Default Schedule",))
     assert result.ok, f"Tier-A render oracle failed for the manual new-group route: {result.detail}"
-    assert _option_selected(resp.text, "default"), (
+    assert _logging_selected(resp.text, "default"), (
         "a manually-created (no act=add/addgroup) brand-new DNSBL group must default to 'default' too"
     )
-    assert not _option_selected(resp.text, "enabled")
-    assert not _option_selected(resp.text, "disabled_log")
+    assert not _logging_selected(resp.text, "enabled")
+    assert not _logging_selected(resp.text, "disabled_log")
 
 
 @pytest.mark.ui_render
@@ -326,7 +329,7 @@ def test_existing_dnsbl_alias_preserves_explicit_choice_on_get_and_resave(
 
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
-            assert _option_selected(reload.text, choice), f"explicit choice {choice!r} must render selected on reload"
+            assert _logging_selected(reload.text, choice), f"explicit choice {choice!r} must render selected on reload"
 
             _post_form(webui, _dnsbl_payload(rowid, f"smoke3288{choice}", logging=choice))
             assert helpers.config_get(vm, f"{base}/logging") == choice, (
@@ -432,10 +435,10 @@ def test_legacy_group_unchanged_save_migrates_marker_and_persists_default_token(
             mode_before = helpers.config_get_state(vm, GLOBAL_LOG_MODE_CFG)
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
-            assert _option_selected(reload.text, "default"), (
+            assert _logging_selected(reload.text, "default"), (
                 "a genuinely legacy (marker-absent) VIP-equivalent group must render 'default' selected"
             )
-            assert not _option_selected(reload.text, "enabled"), (
+            assert not _logging_selected(reload.text, "enabled"), (
                 "a legacy system must PROJECT 'default', never still show the raw VIP normalization"
             )
             assert helpers.config_get_state(vm, f"{base}/logging") == logging_before, "a GET must never mutate config"
@@ -520,11 +523,11 @@ def test_legacy_group_explicit_vip_save_migrates_marker_and_survives_next_get(
             # (4) A FRESH GET still renders the explicit choice -- the marker flip stuck.
             reload = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
             assert not looks_like_login_page(reload.text), "reload GET returned the login form"
-            assert _option_selected(reload.text, "enabled"), (
+            assert _logging_selected(reload.text, "enabled"), (
                 "a fresh GET after the explicit VIP save must still render 'enabled' selected -- if the marker "
                 "never flipped, the (by-now-stale) legacy projection would wrongly re-render this as 'default'"
             )
-            assert not _option_selected(reload.text, "default"), (
+            assert not _logging_selected(reload.text, "default"), (
                 "the explicit VIP choice must not be visually reverted to 'default' on the next GET"
             )
         finally:
