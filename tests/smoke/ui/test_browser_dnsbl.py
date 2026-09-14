@@ -1092,3 +1092,75 @@ def test_top1m_token_hidden_and_cleared_for_keyless_providers(
     page.evaluate("$('#top1m_source').trigger('change')")
     expect(token).to_be_visible(timeout=JS_TIMEOUT_MS)
     expect(token).to_have_value("", timeout=JS_TIMEOUT_MS)
+
+
+# --------------------------------------------------------------------------- #
+# issue #3288: Global Application Mode (Default/Override) selector -- a
+# structural UI addition, so actual browser proof is required alongside the
+# HTTP-level round-trip already covered by
+# tests/smoke/ui/test_dnsbl_blocking_modes.py::test_global_log_mode_persists_and_renders_selected.
+# --------------------------------------------------------------------------- #
+
+_CFG_GLOBAL_LOG_MODE = "installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode"
+
+
+def _accessible_label_text(select: Locator) -> str:
+    """The control's accessible name: an associated ``<label for=id>``'s text,
+    or its ``aria-label`` -- whichever pfSense's ``Form_Group`` renders."""
+    return select.evaluate(
+        "el => {"
+        ' const lbl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null;'
+        " return (lbl && lbl.textContent.trim()) || el.getAttribute('aria-label') || '';"
+        "}"
+    )
+
+
+def test_global_log_mode_selector_visible_usable_with_label(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready_browser: None,
+    screenshot_dir: Path,
+) -> None:
+    """The new Global Application Mode select is a structural UI addition --
+    prove it in a REAL browser (visible, has an accessible label, and is
+    actually selectable), then drive a REAL Save-button click (not the HTTP
+    ``webui.post`` shortcut the sibling gateway test uses) to prove the
+    control genuinely participates in the page's real submit path, and
+    restore the original config afterward.
+    """
+    page = browser_page
+    original_state = helpers.config_get_state(smoke_vm, _CFG_GLOBAL_LOG_MODE)
+    try:
+        _open(page, webui, DNSBL_PAGE)
+        select = page.locator("#global_log_mode")
+        expect(select).to_be_visible(timeout=JS_TIMEOUT_MS)
+        assert _accessible_label_text(select), (
+            "the global_log_mode select must have an accessible label (<label for=...> or aria-label)"
+        )
+
+        original_value = select.input_value()
+        flipped = "override" if original_value != "override" else "default"
+
+        # USABLE: a real DOM select + a real form submit (native Save button, no
+        # confirm dialog on this pfSense Form page -- see _save_via_ui's category_edit.php analog).
+        select.select_option(flipped)
+        expect(select).to_have_value(flipped, timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_global_log_mode_selected")
+
+        with page.expect_navigation(wait_until="networkidle", timeout=JS_TIMEOUT_MS * 3):
+            page.locator("#save").click()
+        assert page.locator("#usernamefld").count() == 0, "DNSBL settings Save lost the session (login form shown)"
+
+        stored = helpers.config_get(smoke_vm, _CFG_GLOBAL_LOG_MODE)
+        assert stored == flipped, (
+            f"a real browser Save through the global_log_mode select must persist {flipped!r}, got {stored!r}"
+        )
+
+        # DOM oracle: fresh navigation renders the flipped value selected.
+        _open(page, webui, DNSBL_PAGE)
+        reselected = page.locator("#global_log_mode")
+        expect(reselected).to_have_value(flipped, timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "dnsbl_global_log_mode_after_save")
+    finally:
+        helpers.config_restore_state(smoke_vm, _CFG_GLOBAL_LOG_MODE, original_state)

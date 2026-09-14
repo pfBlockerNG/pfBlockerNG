@@ -5,9 +5,12 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * New wizard DNSBL groups use logged null blocking; IP groups stay unchanged.
- * Executes the same source region as ScheduleProducerCanonicalizationTest.
+ * New wizard DNSBL groups seed the Default token (issue #3288: a fresh producer
+ * stores 'default', not a copied concrete mechanism -- Default is LIVE inheritance
+ * of the global mechanism, never a value baked in at creation time). IP groups stay
+ * unchanged. Executes the same source region as ScheduleProducerCanonicalizationTest.
  */
+
 final class WizardNewGroupLoggingDefaultTest extends TestCase
 {
 	private static function sourceRegion(string $path, string $after, string $start, string $end): string
@@ -39,15 +42,15 @@ final class WizardNewGroupLoggingDefaultTest extends TestCase
 		return $add;
 	}
 
-	public function testNewDnsblGroupSeedsDisabledLogLogging(): void
+	public function testNewDnsblGroupSeedsDefaultLogging(): void
 	{
 		$add = $this->wizardGroupAdd('pfblockerngdnsbl');
 		$this->assertArrayHasKey('logging', $add);
 		$this->assertSame(
-			'disabled_log',
+			'default',
 			$add['logging'],
-			"the wizard's default DNSBL group must seed Logging/Blocking Mode to 'disabled_log' (Null Blocking, "
-			. 'logging), not the VIP webserver override (issue #3285)'
+			"the wizard's default DNSBL group must seed Logging/Blocking Mode to 'default' (live inheritance of "
+			. "the global mechanism), not a copied concrete mechanism (issue #3288; supersedes #3285's 'disabled_log' seed)"
 		);
 	}
 
