@@ -3183,24 +3183,91 @@ function tld_analysis() {
 	}
 }
 
-// Function to Start Unbound
+// issue #3055/#3094/#3100/#2879 (backported for #3292): the recovery budgets the
+// supervised stop/start and the bounded unbound-control IPC below run under. Same
+// values devel settled on -- no new operator setting.
+if (!defined('PFB_UNBOUND_STOP_FAILED')) {
+	// A stop refusal is not a broken unbound.conf; give callers a code to tell them apart.
+	define('PFB_UNBOUND_STOP_FAILED', -2);
+}
+if (!defined('PFB_UNBOUND_STOP_WAIT')) {
+	define('PFB_UNBOUND_STOP_WAIT', 30);
+}
+if (!defined('PFB_UNBOUND_KILL_WAIT')) {
+	define('PFB_UNBOUND_KILL_WAIT', 5);
+}
+if (!defined('PFB_UNBOUND_START_WAIT')) {
+	define('PFB_UNBOUND_START_WAIT', 30);
+}
+if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
+	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
+}
+if (!defined('PFB_HOOK_KILL_GRACE')) {
+	define('PFB_HOOK_KILL_GRACE', 5);
+}
+if (!defined('PFB_UNBOUND_START_CMD')) {
+	define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');
+}
+if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
+	define('PFB_UNBOUND_CONTROL_WAIT', 30);
+}
+
+// Function to Start Unbound. issue #3292: backports the devel recovery contract --
+// bounded TERM/KILL stop escalation (refuse a second start while the old daemon
+// survives both), PID-first stop with a name-based fallback when the pidfile is
+// missing/stale, and a supervised start that lets a real daemon detach into its own
+// session while a stuck launcher or ordinary helper is reaped. $final['start_completed']
+// is TRUE only once a start command has actually run to completion; pfb_reload_unbound()
+// uses it together with retval to tell a genuine config failure apart from a stop
+// refusal, a launch/staging failure, or an expiry. See
+// docs/misc/external-process-waits.md "Mixed survivor + transient tree".
 function pfb_stop_start_unbound($type) {
 	global $g, $pfb;
 
-	$final = array();
-	if (file_exists("{$g['varrun_path']}/unbound.pid")) {
+	$final = array('start_completed' => FALSE);
+	$pidfile = "{$g['varrun_path']}/unbound.pid";
+	$term_by_name = !isvalidpid($pidfile);
+	if (!$term_by_name) {
 		pfb_logger("\nStopping Unbound Resolver", 1);
-		sigkillbypid("{$g['varrun_path']}/unbound.pid", 'TERM');
+		sigkillbypid($pidfile, 'TERM');
 	}
 
-	// If unbound is still running, wait up to 30 seconds for it to terminate.
-	for ($i=1; $i <= 30; $i++) {
+	// If unbound is still running, wait up to PFB_UNBOUND_STOP_WAIT seconds for it to terminate.
+	for ($i=1; $i <= PFB_UNBOUND_STOP_WAIT; $i++) {
 		if (is_process_running('unbound')) {
+			if ($term_by_name) {
+				pfb_logger("\nStopping Unbound Resolver", 1);
+				sigkillbyname('unbound', 'TERM');
+				$term_by_name = FALSE;
+			}
 			pfb_logger('.', 1);
 			sleep(1);
 		} else {
 			pfb_logger("\nUnbound stopped in {$i} sec.", 1);
 			break;
+		}
+	}
+
+	// A large DNSBL can keep Unbound inside pythonmod init past the wait above --
+	// starting anyway would double-bind :53, so escalate to KILL and refuse a second
+	// start if the old process still survives that too.
+	if (is_process_running('unbound')) {
+		pfb_logger("\nUnbound did not stop in " . PFB_UNBOUND_STOP_WAIT .
+			" sec; escalating to KILL", 2);
+		sigkillbyname('unbound', 'KILL');
+		for ($i=1; $i <= PFB_UNBOUND_KILL_WAIT; $i++) {
+			if (!is_process_running('unbound')) {
+				pfb_logger("\nUnbound killed after {$i} sec.", 2);
+				break;
+			}
+			sleep(1);
+		}
+		if (is_process_running('unbound')) {
+			$final['result'] = array('Unbound could not be stopped; Resolver not restarted');
+			$final['retval'] = PFB_UNBOUND_STOP_FAILED;
+			pfb_logger("\nUnbound still running after TERM and KILL; not starting a " .
+				"second instance. Resolver NOT restarted", 2);
+			return $final;
 		}
 	}
 
@@ -3218,8 +3285,303 @@ function pfb_stop_start_unbound($type) {
 	}
 
 	pfb_logger("\nStarting Unbound Resolver", 1);
-	exec("/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1", $final['result'], $final['retval']);
+	$outfile = @tempnam(sys_get_temp_dir(), 'pfbus');
+	if ($outfile === FALSE) {
+		$final['result'] = array('could not stage Unbound start output');
+		$final['retval'] = -1;
+		pfb_logger("\nUnbound Resolver start could not stage output; not run", 2);
+		return $final;
+	}
+
+	$ready = "{$outfile}.ready";
+	$release = "{$outfile}.release";
+	$command_started = "{$outfile}.started";
+	$done = "{$outfile}.done";
+	$proc = NULL;
+	$pid = 0;
+	$group_ready = FALSE;
+	$retval = NULL;
+	$failure = '';
+	$expired = FALSE;
+	$start_ack_deadline = NULL;
+	$deadline = NULL;
+
+	// A successful Unbound daemon creates its own session and leaves this group.
+	// Any ordinary helper stays with the launcher, so expiry can reap the whole tree.
+	$stop_group = static function (&$proc, int $pid, bool $group_ready): void {
+		if (!is_resource($proc) || $pid <= 0) {
+			return;
+		}
+		if ($group_ready) {
+			@posix_kill(-$pid, 15);
+		} else {
+			@proc_terminate($proc, 15);
+		}
+
+		$grace_deadline = hrtime(TRUE) + (PFB_HOOK_KILL_GRACE * 1000000000);
+		while (is_resource($proc) && hrtime(TRUE) < $grace_deadline) {
+			$status = @proc_get_status($proc);
+			if (!is_array($status) || !$status['running']) {
+				@proc_close($proc);
+				$proc = NULL;
+				break;
+			}
+			usleep(10000);
+		}
+		if (is_resource($proc)) {
+			if ($group_ready) {
+				@posix_kill(-$pid, 9);
+			}
+			@proc_terminate($proc, 9);
+			@proc_close($proc);
+			$proc = NULL;
+			return;
+		}
+
+		// Once the group leader is reaped, a still-live group is made solely of
+		// descendants; wait out their TERM grace, then kill any that ignored it.
+		if (!$group_ready || !@posix_kill(-$pid, 0)) {
+			return;
+		}
+		while (hrtime(TRUE) < $grace_deadline) {
+			if (!@posix_kill(-$pid, 0)) {
+				return;
+			}
+			usleep(10000);
+		}
+		@posix_kill(-$pid, 9);
+	};
+
+	try {
+		foreach (array('proc_open', 'proc_get_status', 'posix_setpgid', 'posix_getpgid', 'posix_kill') as $required) {
+			if (!function_exists($required)) {
+				throw new RuntimeException("{$required}() unavailable; Unbound start not run");
+			}
+		}
+
+		// The child establishes its own process group, publishes readiness, then waits
+		// for the parent to verify that group before executing the configured command.
+		$launcher_code =
+			'if (!posix_setpgid(0, 0)) { exit(126); } ' .
+			'$pid = getmypid(); putenv("PFB_UNBOUND_START_PGID={$pid}"); ' .
+			'$ready_tmp = $argv[1] . ".new"; ' .
+			'if (@file_put_contents($ready_tmp, (string) $pid) === FALSE || ' .
+			'!@rename($ready_tmp, $argv[1])) { exit(126); } ' .
+			'$barrier_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
+			'while (!file_exists($argv[2])) { ' .
+			'if (hrtime(TRUE) >= $barrier_deadline) { exit(125); } usleep(1000); } ' .
+			'$started_tmp = $argv[5] . ".new"; ' .
+			'if (@file_put_contents($started_tmp, "1") === FALSE || ' .
+			'!@rename($started_tmp, $argv[5])) { exit(126); } ' .
+			'passthru($argv[3], $status); ' .
+			'$done_tmp = $argv[6] . ".new"; ' .
+			'if (@file_put_contents($done_tmp, (string) $status) === FALSE || ' .
+			'!@rename($done_tmp, $argv[6])) { exit(126); } ' .
+			'$linger_deadline = hrtime(TRUE) + ((int) $argv[4] * 1000000000); ' .
+			'while (hrtime(TRUE) < $linger_deadline) { usleep(10000); } exit($status);';
+		$descriptors = array(
+			0 => array('file', '/dev/null', 'r'),
+			1 => array('file', $outfile, 'a'),
+			2 => array('file', $outfile, 'a'),
+		);
+		$pipes = array();
+		// issue #3292: the CLI PHP path, never PHP_BINARY -- under a pfSense web
+		// request PHP_BINARY names php-cgi, which rejects the CLI-only -r option.
+		$php_cli = (string) ($pfb['php'] ?? (PHP_BINDIR . '/php'));
+		$setup_deadline = hrtime(TRUE) + (PFB_UNBOUND_START_SETUP_WAIT * 1000000000);
+		$proc = @proc_open(array(
+			$php_cli,
+			'-r',
+			$launcher_code,
+			'--',
+			$ready,
+			$release,
+			PFB_UNBOUND_START_CMD,
+			(string) (PFB_UNBOUND_START_SETUP_WAIT + PFB_HOOK_KILL_GRACE),
+			$command_started,
+			$done,
+		), $descriptors, $pipes);
+		if (!is_resource($proc)) {
+			throw new RuntimeException('could not launch supervised Unbound start');
+		}
+
+		$status = proc_get_status($proc);
+		$pid = (int) $status['pid'];
+		while (!file_exists($ready)) {
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $setup_deadline) {
+				$failure = 'Unbound start process-group setup TIMED OUT after ' .
+					PFB_UNBOUND_START_SETUP_WAIT . 's; not run';
+				break;
+			}
+			usleep(1000);
+		}
+
+		if ($retval === NULL && $failure === '' && file_exists($ready)) {
+			$published_pid = (int) trim((string) @file_get_contents($ready));
+			$group_ready = @posix_getpgid($pid) === $pid;
+			if ($published_pid !== $pid || !$group_ready) {
+				$failure = 'Unbound start process-group barrier verification failed';
+			} elseif (!@touch($release)) {
+				$failure = 'Unbound start process-group barrier release failed';
+			} else {
+				$start_ack_deadline = hrtime(TRUE) + (PFB_UNBOUND_START_SETUP_WAIT * 1000000000);
+			}
+		}
+
+		while ($retval === NULL && $failure === '' && !file_exists($command_started)) {
+			if ($start_ack_deadline === NULL) {
+				$failure = 'Unbound command-start acknowledgement deadline not armed';
+				break;
+			}
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $start_ack_deadline) {
+				$failure = 'Unbound command-start acknowledgement TIMED OUT after ' .
+					PFB_UNBOUND_START_SETUP_WAIT . 's; not run';
+				break;
+			}
+			usleep(1000);
+		}
+		if ($retval === NULL && $failure === '' && file_exists($command_started)) {
+			$deadline = hrtime(TRUE) + (PFB_UNBOUND_START_WAIT * 1000000000);
+		}
+
+		while ($retval === NULL && !$expired && $failure === '' && !file_exists($done)) {
+			if ($deadline === NULL) {
+				$failure = 'Unbound start deadline not armed';
+				break;
+			}
+			$status = proc_get_status($proc);
+			if (!$status['running']) {
+				$retval = (int) $status['exitcode'];
+				break;
+			}
+			if (hrtime(TRUE) >= $deadline) {
+				$expired = TRUE;
+				break;
+			}
+			usleep(10000);
+		}
+		if ($retval === NULL && !$expired && $failure === '' && file_exists($done)) {
+			$done_status = trim((string) @file_get_contents($done));
+			if (preg_match('/^[0-9]+$/D', $done_status) !== 1) {
+				$failure = 'Unbound start completion status invalid';
+			} else {
+				$retval = (int) $done_status;
+				$final['start_completed'] = TRUE;
+			}
+		}
+
+		if (!$final['start_completed'] && $retval === 0 && $failure === '') {
+			$failure = 'Unbound start supervisor exited without a valid completion status';
+		}
+		if ($expired) {
+			$group_ready = $group_ready || @posix_getpgid($pid) === $pid;
+			$stop_group($proc, $pid, $group_ready);
+			$retval = 124;
+		} elseif ($failure !== '') {
+			$group_ready = $group_ready || @posix_getpgid($pid) === $pid;
+			$stop_group($proc, $pid, $group_ready);
+			$retval = -1;
+		} elseif ($group_ready) {
+			// Reap the supervisor and any completed command's non-daemon helpers.
+			$stop_group($proc, $pid, TRUE);
+		} elseif (is_resource($proc)) {
+			@proc_close($proc);
+			$proc = NULL;
+		}
+	} catch (Throwable $error) {
+		$failure = $error->getMessage();
+		$retval = -1;
+	} finally {
+		if (is_resource($proc)) {
+			$group_ready = $group_ready || ($pid > 0 && @posix_getpgid($pid) === $pid);
+			$stop_group($proc, $pid, $group_ready);
+		}
+		$raw = (string) @file_get_contents($outfile);
+		@unlink("{$done}.new");
+		@unlink($done);
+		@unlink($release);
+		@unlink("{$command_started}.new");
+		@unlink($command_started);
+		@unlink("{$ready}.new");
+		@unlink($ready);
+		@unlink($outfile);
+	}
+
+	if ($failure !== '') {
+		$raw .= ($raw !== '' && !str_ends_with($raw, "\n") ? "\n" : '') . "{$failure}\n";
+		pfb_logger("\n{$failure}", 2);
+	}
+	$final['result'] = ($raw === '') ? array() : explode("\n", $raw);
+	if (end($final['result']) === '') {
+		array_pop($final['result']);
+	}
+	$final['retval'] = (int) ($retval ?? -1);
+
+	if ($final['retval'] === 124 && !$final['start_completed']) {
+		pfb_logger("\nUnbound Resolver start TIMED OUT after " . PFB_UNBOUND_START_WAIT .
+			"s and was killed", 2);
+	}
 	return $final;
+}
+
+
+/*
+ * issue #2879 (backported for #3292): wrap one composed unbound-control command in the
+ * bounded-wait seam. timeout(1) stays in its DEFAULT (reaper) mode: unbound-control is a
+ * transient request/response helper spawned through chroot(8), so an expiry must kill the
+ * whole tree -- --foreground would signal chroot alone and orphan a blocked
+ * unbound-control. $cmd arrives complete, redirections included, and is never re-quoted
+ * here; $budget clips the deadline and is floored at one second so a degenerate value
+ * cannot disable the bound.
+ */
+function pfb_unbound_control_cmd(string $cmd, ?int $budget = NULL): string {
+	global $pfb;
+
+	$timeout_esc = escapeshellarg($pfb['timeout'] ?? '/usr/bin/timeout');
+
+	return "{$timeout_esc} -s TERM -k " . PFB_HOOK_KILL_GRACE . ' ' .
+		max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT) . " {$cmd}";
+}
+
+/*
+ * issue #2879 (backported for #3292): run one bounded control command and NAME what
+ * happened. Returns 124 when the deadline expired (killed), -1 when the wrapper never
+ * launched, else the control command's own exit status -- so an expiry is never conflated
+ * with a non-zero reply, and neither is ever read as success. $lines is handed straight to
+ * exec(), preserving its append-to-an-existing-array contract. $log_nonzero is FALSE for a
+ * site that reports the command's own output itself.
+ */
+function pfb_unbound_control_exec(string $cmd, string $label, ?array &$lines = NULL,
+    bool $log_nonzero = TRUE, ?int $budget = NULL): int {
+
+	$secs   = max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT);
+	$status = 0;
+	if (exec(pfb_unbound_control_cmd($cmd, $secs), $lines, $status) === FALSE && $status === 0) {
+		// exec() itself failed to launch (fork/pipe).
+		$status = -1;
+	}
+
+	if ($status === 124) {
+		pfb_logger("\nUnbound control [ {$label} ] TIMED OUT after {$secs}s and was killed", 2);
+	}
+	elseif ($status === -1) {
+		pfb_logger("\nUnbound control [ {$label} ] could not be run", 2);
+	}
+	elseif ($status !== 0 && $log_nonzero) {
+		pfb_logger("\nUnbound control [ {$label} ] FAILED (exit {$status})", 2);
+	}
+
+	return $status;
 }
 
 
@@ -3244,7 +3606,14 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 		pfb_logger($log, 1);
 
 		if ($cache && $pfb['dnsbl_res_cache'] == 'on') {
-			exec("{$pfb['chroot_cmd']} dump_cache > " . escapeshellarg($cache_dumpfile) . " 2>&1");
+			// issue #2879 (backported for #3292): an expired or refused dump leaves a
+			// truncated cache (or a control error message) in the file -- discard it so
+			// the restore below cannot load a partial dump into the fresh resolver.
+			$dumped = pfb_unbound_control_exec("{$pfb['chroot_cmd']} dump_cache > " .
+				escapeshellarg($cache_dumpfile) . ' 2>&1 < /dev/null', 'dump_cache');
+			if ($dumped !== 0 && is_string($cache_dumpfile)) {
+				@file_put_contents($cache_dumpfile, '');
+			}
 			pfb_logger('.', 1);
 		}
 	}
@@ -3252,7 +3621,23 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 	$final = pfb_stop_start_unbound($type);
 	pfb_logger('.', 1);
 
-	if ($final['retval'] != 0) {
+	// issue #3094/#3100 (backported for #3292): a refused stop, a start timeout, or an
+	// incomplete start are not a bad unbound.conf -- only a genuinely COMPLETED start
+	// that still returned non-zero is eligible for the existing config
+	// quarantine/rollback/retry below.
+	if ($final['retval'] === PFB_UNBOUND_STOP_FAILED) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver could not be stopped; " .
+			"config left unchanged ***\n", 2);
+	}
+	elseif ($final['retval'] === 124) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver start timed out or returned status 124; " .
+			"config left unchanged ***\n", 2);
+	}
+	elseif (!$final['start_completed']) {
+		pfb_logger("\nDNSBL {$mode} FAIL  *** Resolver start did not complete; " .
+			"config left unchanged ***\n", 2);
+	}
+	elseif ($final['retval'] != 0) {
 
 		@copy("{$pfb['dnsbldir']}/unbound.conf", "{$pfb['dnsbldir']}/unbound.conf.error");
 		if ($mode == 'enabled') {
@@ -3294,25 +3679,32 @@ function pfb_reload_unbound($mode, $cache=FALSE, $pfbpython=FALSE) {
 		$final = pfb_stop_start_unbound($type);
 	}
 
-	// Confirm that Resolver is running
-	if (is_process_running('unbound')) {
+	// Only a completed successful command can own the daemon observed here -- a failed
+	// or incomplete start may race with an unrelated external restart (issue #3100
+	// backport). The status exec's own retval is kept in a SEPARATE variable so it can
+	// never clobber the outcome pfb_stop_start_unbound() already distinguished.
+	if ($final['start_completed'] && $final['retval'] === 0 && is_process_running('unbound')) {
 		pfb_logger('.', 1);
 
-		// $final['result'] will be appended with previous result above
-		exec("{$pfb['chroot_cmd']} status 2>&1", $final['result'], $final['retval']);
+		$status_result = array();
+		$status_retval = pfb_unbound_control_exec("{$pfb['chroot_cmd']} status 2>&1 < /dev/null",
+			'status', $status_result, FALSE);
 		pfb_logger('.', 1);
-		if (preg_grep("/is running.../", $final['result'])) {
+		if ($status_retval === 0 && preg_grep("/is running.../", $status_result)) {
 			pfb_logger(" completed [ NOW ]", 1);
 
 			// Restore Resolver cache
 			if ($cache && $pfb['dnsbl_res_cache'] == 'on' && file_exists($cache_dumpfile) && filesize($cache_dumpfile) > 0) {
-				exec("{$pfb['chroot_cmd']} load_cache < " . escapeshellarg($cache_dumpfile) . " 2>&1");
-				$log = "\nResolver cache restored [ NOW ]";
-				pfb_logger($log, 1);
+				$restored = pfb_unbound_control_exec("{$pfb['chroot_cmd']} load_cache < " .
+					escapeshellarg($cache_dumpfile) . ' 2>&1', 'load_cache');
+				if ($restored === 0) {
+					$log = "\nResolver cache restored [ NOW ]";
+					pfb_logger($log, 1);
+				}
 			}
 		}
 		else {
-			$log = htmlspecialchars(implode("\n", $final['result']));
+			$log = htmlspecialchars(implode("\n", $status_result));
 			pfb_logger(" Not completed. [ NOW ]\n{$log}\n", 1);
 		}
 	}

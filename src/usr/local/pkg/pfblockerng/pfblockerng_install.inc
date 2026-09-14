@@ -517,6 +517,11 @@ if (($pfb['dnsbl_mode'] == 'dnsbl_python') && is_dir(g_get('unbound_chroot_path'
 
 if ($ufound) {
 	$final = pfb_stop_start_unbound('');
+	// issue #3094 (backported for #3292): $final used to be assigned and never read, so
+	// an install could finish "successfully" with the resolver never restarted.
+	if (($final['retval'] ?? 0) != 0) {
+		update_status(" Unbound Resolver did not restart; see the pfBlockerNG log.\n");
+	}
 }
 
 // Upgrade EasyList to new Format
