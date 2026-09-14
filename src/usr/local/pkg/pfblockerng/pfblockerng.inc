@@ -3562,7 +3562,7 @@ function pfb_unbound_control_cmd(string $cmd, ?int $budget = NULL): string {
  * site that reports the command's own output itself.
  */
 function pfb_unbound_control_exec(string $cmd, string $label, ?array &$lines = NULL,
-    bool $log_nonzero = TRUE, ?int $budget = NULL): int {
+	bool $log_nonzero = TRUE, ?int $budget = NULL): int {
 
 	$secs   = max(1, $budget ?? PFB_UNBOUND_CONTROL_WAIT);
 	$status = 0;
