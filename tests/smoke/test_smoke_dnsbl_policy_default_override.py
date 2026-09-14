@@ -13,21 +13,7 @@ from tests.test_issue3222_soa_wire import rr_has_type
 
 from . import helpers as h
 from .conftest import SmokeVM
-from .test_repo_install import (
-    NETGATE_REPO_NAME,
-    UPGRADE_REPO_DIR,
-    build_guest_repo,
-    pkg_delete,
-    pkg_install_from_repo,
-    pkg_installed_version,
-    pkg_update,
-    read_compact_version,
-    repo_priority,
-    write_repo_conf,
-)
-from .test_repo_install import (
-    repo_vm as repo_vm,
-)
+from .test_repo_install import pkg_delete, pkg_installed_version, read_compact_version
 from .test_smoke_matrix import _header_counts, _raw_dig, _raw_drill
 from .test_smoke_matrix import deployed_vm as deployed_vm
 
@@ -278,7 +264,7 @@ def _cleanup_policy_migration_config(vm: SmokeVM) -> None:
         )
 
 
-@pytest.mark.repo
+@pytest.mark.smoke
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "global_log,group_logging,missing_settings,expected_mode,expected_group",
@@ -291,7 +277,7 @@ def _cleanup_policy_migration_config(vm: SmokeVM) -> None:
     ids=["active-override", "no-override-empty", "no-override-absent", "groups-without-settings"],
 )
 def test_dnsbl_policy_install_preserves_legacy_mechanisms(
-    repo_vm: SmokeVM,
+    smoke_vm: SmokeVM,
     global_log: str | None,
     group_logging: str,
     missing_settings: bool,
@@ -301,34 +287,29 @@ def test_dnsbl_policy_install_preserves_legacy_mechanisms(
     """The actual installer converts VIP groups without losing overrides or VIP defaults."""
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG must name the branch package"
-    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
     try:
-        pkg_delete(repo_vm)
-        assert pkg_installed_version(repo_vm) is None, "package must be absent before legacy seeding"
+        pkg_delete(smoke_vm)
+        assert pkg_installed_version(smoke_vm) is None, "package must be absent before legacy seeding"
         _seed_pre_migration_config(
-            repo_vm, global_log=global_log, group_logging=group_logging, missing_settings=missing_settings
+            smoke_vm, global_log=global_log, group_logging=group_logging, missing_settings=missing_settings
         )
         expected_global_state = (global_log is not None, global_log or "")
-        assert h.config_get_state(repo_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log") == expected_global_state
-        assert h.config_get_state(repo_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log_mode") == (False, "")
-        assert h.config_get(repo_vm, f"{h.CFG_DNSBL_LISTS}/0/logging") == group_logging
+        assert h.config_get_state(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log") == expected_global_state
+        assert h.config_get_state(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log_mode") == (False, "")
+        assert h.config_get(smoke_vm, f"{h.CFG_DNSBL_LISTS}/0/logging") == group_logging
 
-        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [Path(pkg)])
-        write_repo_conf(repo_vm, UPGRADE_REPO_DIR, ours_priority=pfsense_prio + 100)
-        pkg_update(repo_vm)
-        pkg_install_from_repo(repo_vm)
-        assert pkg_installed_version(repo_vm) == read_compact_version(Path(pkg))
+        h.deploy(smoke_vm, pkg)
+        assert pkg_installed_version(smoke_vm) == read_compact_version(Path(pkg))
 
         actual = (
-            h.config_get(repo_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log_mode"),
-            h.config_get(repo_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log"),
-            h.config_get(repo_vm, f"{h.CFG_DNSBL_LISTS}/0/logging"),
+            h.config_get(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log_mode"),
+            h.config_get(smoke_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log"),
+            h.config_get(smoke_vm, f"{h.CFG_DNSBL_LISTS}/0/logging"),
         )
         assert actual == (expected_mode, "enabled", expected_group), (
             f"installer lost the legacy mechanism: expected {(expected_mode, 'enabled', expected_group)!r}, "
             f"got {actual!r}"
         )
     finally:
-        pkg_delete(repo_vm)
-        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
-        _cleanup_policy_migration_config(repo_vm)
+        pkg_delete(smoke_vm)
+        _cleanup_policy_migration_config(smoke_vm)
