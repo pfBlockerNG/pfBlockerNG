@@ -558,6 +558,11 @@ def test_root_graph_freshness_is_enforced_at_commit_and_push() -> None:
     driver = (ROOT / "scripts/agent/ensure-graphify-merge-driver.sh").read_text(encoding="utf-8")
     assert "hook install" not in driver, "graphify hook install recreates the retired hooks under core.hooksPath"
     assert 'config merge.graphify.driver "$driver"' in driver, "the merge driver must be registered directly"
+    setup_hooks = (ROOT / "scripts/setup-hooks.sh").read_text(encoding="utf-8")
+    assert "graphify hook" not in setup_hooks, (
+        "Graphify CLI commit-hook writer recreates the retired hooks under core.hooksPath"
+    )
+    assert "graphify-hook-start" in setup_hooks, "setup-hooks.sh must strip leftover Graphify commit hooks"
 
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
     for contract in (
