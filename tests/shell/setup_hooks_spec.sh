@@ -23,7 +23,7 @@ Describe 'setup-hooks.sh contributor bootstrap'
     true > "$graphify_log"
     missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
     missing_uv_path="$fixture/no-uv"; mkdir -p "$missing_uv_path"
-    for tool in basename cat chmod dirname git grep mkdir mv rm sed sh tr; do
+    for tool in awk basename cat chmod dirname git grep mkdir mv rm sed sh tr; do
       ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
       ln -s "$(command -v "$tool")" "$missing_uv_path/$tool"
     done
@@ -156,5 +156,28 @@ CODEGRAPH
     The output should include 'core.hooksPath set to: .githooks'
     The contents of file "$primary/.git/hooks/post-commit" should include 'echo keep-me'
     The contents of file "$primary/.git/hooks/post-commit" should include 'echo truncated'
+  End
+
+  It 'leaves a start marker after an earlier end marker untouched'
+    mkdir -p "$primary/.git/hooks"
+    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-end' 'echo after-end' '# graphify-hook-start' 'echo dangling-start' > "$primary/.git/hooks/post-commit"
+    chmod +x "$primary/.git/hooks/post-commit"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo dangling-start'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo after-end'
+  End
+
+  It 'keeps execute permission on a retained mixed post-commit hook'
+    mkdir -p "$primary/.git/hooks"
+    printf '%s\n' '#!/bin/sh' 'echo custom' '# graphify-hook-start' 'echo g' '# graphify-hook-end' > "$primary/.git/hooks/post-commit"
+    chmod +x "$primary/.git/hooks/post-commit"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo custom'
+    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
+    The path "$primary/.git/hooks/post-commit" should be executable
   End
 End

@@ -36,7 +36,11 @@ remove_graphify_git_hook() {
 	_end=$3
 	[ -f "$_file" ] || return 0
 	grep -Fq "$_start" "$_file" || return 0
-	grep -Fq "$_end" "$_file" || return 0
+	awk -v s="$_start" -v e="$_end" '
+		index($0, s) { if (!st) st = NR }
+		st && NR >= st && index($0, e) { ok = 1; exit }
+		END { exit !ok }
+	' "$_file" || return 0
 	_tmp=${_file}.graphify-strip
 	sed "/$_start/,/$_end/d" "$_file" > "$_tmp" || {
 		rm -f "$_tmp"
@@ -46,6 +50,7 @@ remove_graphify_git_hook() {
 	if [ -z "$_leftover" ]; then
 		rm -f "$_file" "$_tmp"
 	else
+		[ -x "$_file" ] && chmod +x "$_tmp"
 		mv "$_tmp" "$_file"
 	fi
 }
