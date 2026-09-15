@@ -36,6 +36,7 @@ remove_graphify_git_hook() {
 	_end=$3
 	[ -f "$_file" ] || return 0
 	grep -Fq "$_start" "$_file" || return 0
+	grep -Fq "$_end" "$_file" || return 0
 	_tmp=${_file}.graphify-strip
 	sed "/$_start/,/$_end/d" "$_file" > "$_tmp" || {
 		rm -f "$_tmp"

@@ -146,4 +146,15 @@ CODEGRAPH
     The contents of file "$graphify_log" should not include 'hook uninstall'
     The contents of file "$install_log" should include 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@'
   End
+
+  It 'leaves a Graphify start marker without its end marker untouched'
+    mkdir -p "$primary/.git/hooks"
+    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-start' 'echo truncated' > "$primary/.git/hooks/post-commit"
+    chmod +x "$primary/.git/hooks/post-commit"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo keep-me'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo truncated'
+  End
 End
