@@ -57,6 +57,7 @@ function pfb_install_settings_family_capture_restore(
 	$replace ??= 'pfb_settings_family_replace';
 	$source_family = $current();
 	$installed_family = $from_version((string) $version());
+	$owned_sections = pfb_settings_family_owned_sections();
 	$bridge_rank = PFB_SETTINGS_FAMILY_RANK['3.3'];
 	$source_rank = (is_string($source_family) && isset(PFB_SETTINGS_FAMILY_RANK[$source_family]))
 		? PFB_SETTINGS_FAMILY_RANK[$source_family]
@@ -68,11 +69,20 @@ function pfb_install_settings_family_capture_restore(
 	// owned sections are empty (first install); current() defaults missing
 	// markers to '3.2', which is indistinguishable from a real 3.2 box.
 	if ($target_rank !== NULL && $target_rank > $bridge_rank && $source_rank < $bridge_rank
-		&& pfb_settings_family_owned_sections() !== []) {
+		&& $owned_sections !== []) {
 		throw new RuntimeException('pfBlockerNG: install the 3.3 bridge before a 4.x family');
 	}
 	if ($source_family === NULL || !$save($source_family)) {
 		throw new RuntimeException('pfBlockerNG: unable to save source settings family');
+	}
+	// issue #3296: an unparseable version predates this 3.3+ settings-family system, so
+	// it is always devel/nightly code with nothing owned to restore -- record the
+	// nightly ceiling, but still fail closed if the source family's snapshot won't restore.
+	if ($installed_family === NULL && $owned_sections === []) {
+		if (!$replace($source_family)) {
+			throw new RuntimeException('pfBlockerNG: unable to restore settings family');
+		}
+		return PFB_NIGHTLY_SETTINGS_FAMILY;
 	}
 	if ($installed_family === NULL || !$replace($installed_family)) {
 		$replace($source_family);

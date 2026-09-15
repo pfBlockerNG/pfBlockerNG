@@ -130,6 +130,67 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.2', 'replace:4.0'], $order);
 	}
 
+	public function testFirstInstallWithNoOwnedSectionsAndUnmappedVersionShapesDoNotThrow(): void
+	{
+		// issue #3296: rc.packages POST-INSTALL sees a missing package entry, a
+		// dev-checkout git SHA, or a shallow-clone marker before any owned config exists.
+		$hostileShapes = [
+			'missing package entry (v??)' => [],
+			'raw git-describe SHA'        => [['name' => 'pfSense-pkg-pfBlockerNG', 'version' => 'b66a25e98']],
+			'shallow-clone dev marker'    => [['name' => 'pfSense-pkg-pfBlockerNG', 'version' => '0.0.0-dev']],
+		];
+		foreach ($hostileShapes as $why => $packages) {
+			$GLOBALS['config'] = ['installedpackages' => ['package' => $packages]];
+			$this->assertSame([], pfb_settings_family_owned_sections(), "owned sections must be empty for {$why}");
+			$this->assertNull(pfb_settings_family_from_version(pfb_pkg_ver()), "from_version must reject {$why}");
+			$installed = pfb_install_settings_family_capture_restore();
+			$this->assertSame(PFB_NIGHTLY_SETTINGS_FAMILY, $installed, "first install must not throw for {$why}");
+		}
+	}
+
+	public function testUpgradeWithOwnedSectionsAndUnmappedVersionStillFailsClosed(): void
+	{
+		// setUp() seeds a non-empty owned 'pfblockerng' section -- real config is at
+		// risk here, unlike the empty-owned case above, so the throw must survive #3296.
+		$GLOBALS['config']['installedpackages']['package'] = [
+			['name' => 'pfSense-pkg-pfBlockerNG', 'version' => 'b66a25e98'],
+		];
+		$this->assertNotSame([], pfb_settings_family_owned_sections());
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('pfBlockerNG: unable to restore settings family');
+		pfb_install_settings_family_capture_restore();
+	}
+
+	public function testFirstInstallRecordsNightlyCeilingSoRealUpgradeSkipsBridgeGuard(): void
+	{
+		// issue #3296 follow-up: recording the registry default '3.2' for an unmapped
+		// dev/smoke version would misrepresent this devel install as pre-3.3 legacy,
+		// tripping the #2158 bridge guard on the box's first REAL versioned upgrade.
+		$GLOBALS['config'] = ['installedpackages' => ['package' => []]];
+		$installed = pfb_install_settings_family_capture_restore();
+		pfb_install_settings_family_finalize($installed, static function (): void {});
+		$this->assertSame(PFB_NIGHTLY_SETTINGS_FAMILY, $installed);
+		$this->assertSame(PFB_NIGHTLY_SETTINGS_FAMILY, pfb_settings_family_current());
+
+		$GLOBALS['config']['installedpackages']['pfblockerng']['config']['0']['pfb_keep'] = 'off';
+		$GLOBALS['config']['installedpackages']['package'] = [
+			['name' => 'pfSense-pkg-pfBlockerNG', 'version' => '4.0.0'],
+		];
+		$this->assertSame('4.0', pfb_install_settings_family_capture_restore());
+	}
+
+	public function testInsecureLeftoverSourceSlotFailsClosedInsteadOfSilentReturn(): void
+	{
+		// issue #3296 follow-up: the empty-owned/unmapped-version branch's best-effort
+		// restore of the recorded source family must still fail closed, not swallow errors.
+		$GLOBALS['config'] = ['installedpackages' => ['package' => []]];
+		file_put_contents($this->root . '/settings-3.2.xml', 'stale');
+		chmod($this->root . '/settings-3.2.xml', 0644);
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('pfBlockerNG: unable to restore settings family');
+		pfb_install_settings_family_capture_restore();
+	}
+
 	public function testProductionCurrentMissingMarkerWithOwnedConfigCannotSkipBridge(): void
 	{
 		$this->assertSame('3.2', pfb_settings_family_current());
