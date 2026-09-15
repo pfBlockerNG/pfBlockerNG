@@ -47,8 +47,8 @@ identical bodies leave the file untouched (no run-to-run header-only diff).
 
 Usage
 -----
-    python scripts/misc/update_hsts_preload_list.py           # rewrite the file in place
-    python scripts/misc/update_hsts_preload_list.py --check   # exit 1 if out of date, no changes
+    python3 scripts/misc/update_hsts_preload_list.py           # rewrite the file in place
+    python3 scripts/misc/update_hsts_preload_list.py --check   # exit 1 if out of date, no changes
 
 Dev-host tooling: run from the repo root on a dev box (never the appliance).
 """
