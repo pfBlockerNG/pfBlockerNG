@@ -192,4 +192,16 @@ CODEGRAPH
     The contents of file "$primary/.git/hooks/post-commit" should include 'echo dangling-after-complete'
     The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
   End
+
+  It 'keeps a later hashbang line after stripping a complete Graphify block'
+    mkdir -p "$primary/.git/hooks"
+    printf '%s\n' '#!/bin/sh' '# graphify-hook-start' 'echo g' '# graphify-hook-end' '#!keep-me-hashbang-line' > "$primary/.git/hooks/post-commit"
+    chmod +x "$primary/.git/hooks/post-commit"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The path "$primary/.git/hooks/post-commit" should be exist
+    The contents of file "$primary/.git/hooks/post-commit" should include '#!keep-me-hashbang-line'
+    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
+  End
 End

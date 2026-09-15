@@ -55,7 +55,7 @@ remove_graphify_git_hook() {
 		rm -f "$_tmp"
 		return 1
 	}
-	_leftover=$(grep -v '^[[:space:]]*$' "$_tmp" | grep -v '^#!' || true)
+	_leftover=$(sed '1{/^#!/d;}' "$_tmp" | grep -v '^[[:space:]]*$' || true)
 	if [ -z "$_leftover" ]; then
 		rm -f "$_file" "$_tmp"
 	else
