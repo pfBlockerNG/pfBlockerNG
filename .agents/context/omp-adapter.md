@@ -12,10 +12,13 @@ directory (normally `~/.omp/agent`), not legacy `~/.pi`.
   bundles that ship hooks; never vendor them into this repository.
 - Repository discovery uses CodeGraph first, then Serena or native LSP for exact
   language semantics, per `.agents/context/repository-intelligence.md`.
-- The user-level OMP hook `~/.omp/agent/hooks/pre/pfblockerng-policy.ts`
-  bridges the existing branch-freshness and Bash-guard scripts into OMP's
-  `session_start` and `tool_call` events. Repository sticky rules replace the
-  Claude `UserPromptSubmit` discipline hook for OMP.
+- The custom user-level `pfblockerng-policy.ts` bridge was retired from the machine
+  profiles on 2026-09-11; this adapter does not require its installation or restoration.
+  `.omp/RULES.md` carries per-turn instructions, not proof of tool-time enforcement.
+  Check the active hook configuration before claiming a guard ran.
+- For maintenance branches, follow
+  [`sessions.md`](../policy/sessions.md#maintenance-branch-policy-delivery): process
+  policy and the code checkout have separate sources, and workers receive both explicitly.
 - Set `OMP_CLI=1` in the active OMP agent `.env`; OMP mirrors it to `PI_CLI=1`.
   Both markers are inherited by child shells and recognized by
   `.githooks/prepare-commit-msg` and `.githooks/pre-push`.

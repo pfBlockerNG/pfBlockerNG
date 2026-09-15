@@ -1,11 +1,50 @@
 # Session layouts and managed-remote sessions
 
-Scope: where session runs, where work-item worktrees go, cross-session resume.
-Load when: starting work in unfamiliar environment, or resuming another session's item.
+Scope: session and worktree layouts, maintenance-branch policy delivery, cross-session resume.
+Load when: starting work in an unfamiliar environment, targeting a maintenance branch, or resuming another session's item.
 
 ## Session layouts (three environments, one rule)
 
 Session may start in primary checkout (CLI, one per terminal) or inside **harness-made session worktree** — rc-mode cuts `<primary>/.claude/worktrees/bridge-<session-id>` (branch `worktree-bridge-*`, locked); managed environments cut one worktree per session, named after first-prompt issue. Detect mechanically, never from memory: `git rev-parse --git-dir --git-common-dir` differing ⇒ you are in linked worktree. Session worktree is harness's **orchestration home, not work-item worktree**: cut per-item worktree from wherever you sit (`scripts/agent/work-branch.sh --worktree` anchors at primary root — never derive placement from `--show-toplevel`, which names session tree and nests worktrees inside harness-lifecycle tree). Sole exception: environment hard-pins pushes to session branch — then that branch replaces convention per managed-remote policy below.
+
+## Maintenance-branch policy delivery
+
+For maintenance work in `pfBlockerNG/pfBlockerNG` (including `release/*` and backports
+to `main`), load current process policy before editing or dispatching. A maintenance
+checkout may contain an older `CLAUDE.md` and no `.agents/` or `.omp/`; that is branch
+content, not permission to fall back to older process rules.
+
+1. Resolve the canonical repository from the task and verified remote URLs. Fetch its
+   `devel` branch and record the resulting commit as the **policy SHA**; an arbitrary
+   fork's `origin/devel` is not automatically canonical. A worker may reuse the
+   snapshot its parent already resolved for this task.
+2. Read that commit's `AGENTS.md`, the active vendor adapter, and the task-relevant
+   routed policy. Use an existing checkout whose relevant files match the policy SHA,
+   or read `git show <policy-sha>:<path>` / the repository API at that SHA. When workers
+   cannot access those sources, supply a session-artifact bundle preserving the
+   repository-relative paths. Resolve further policy references from the same snapshot.
+3. Keep the **code worktree, target branch, and base SHA** separate. Process policy
+   governs evidence, delegation, worktrees, review, and landing. The target branch
+   supplies the actual code, compatibility requirements, and adopted test/tooling
+   surface. Verify any existing gate exemptions there; missing tooling is not a new
+   exemption. A policy lookup never authorizes transplanting `devel` code or test
+   infrastructure into the maintenance branch.
+4. Before dispatch, include the following block and resolved required-reading paths
+   in the task packet. The worker reads them and confirms both roots before editing;
+   parent chat, skill state, and branch-local discovery are not substitutes.
+
+   ```text
+   Policy source: <canonical repository>@<policy SHA>
+   Policy access: <verified checkout, pinned file URLs, or readable artifact bundle>
+   Code target: <absolute worktree>, <target branch>@<base SHA>
+   Required reading: <bootstrap, vendor adapter, and task-relevant policy paths>
+   ```
+
+If the policy source cannot be established or read, report the precise blocker before
+editing or dispatching. A standalone maintenance session performs the same resolution
+itself. Retain the policy SHA and access references in handoffs and resume records.
+Policy material belongs in its canonical repository or session artifacts, not copied
+into the maintenance branch merely to make discovery work.
 
 ## Managed-remote sessions: branch policy + cross-session resume
 

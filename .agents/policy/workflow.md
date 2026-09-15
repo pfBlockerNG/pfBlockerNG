@@ -31,6 +31,11 @@ GitHub issues still go through a work agent even when they are
 docs/config/settings/skills. The work agent runs [`landing.md`](landing.md)'s
 four independent legs and lands.
 
+For a maintenance target, complete
+[`sessions.md`'s policy delivery](sessions.md#maintenance-branch-policy-delivery)
+before dispatch. The work agent receives a readable pinned policy source separately
+from its code worktree; branch-local policy discovery is not assumed.
+
 ## Artifacts and schemas
 
 ### Map
@@ -72,6 +77,8 @@ Conditional fields, mandatory when applicable:
 - **Hostile-input rows** — any new or changed parser, regex, or input guard.
 - **Risk triggers** — when present, name extra verification they require (see Model
   escalation and risk triggers).
+- **Maintenance policy source** — the policy/code source block and resolved reading
+  paths required by [`sessions.md`](sessions.md#maintenance-branch-policy-delivery).
 
 ### Claim
 

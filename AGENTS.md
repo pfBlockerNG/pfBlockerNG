@@ -86,7 +86,7 @@ Graphify routing; per-worktree `.codegraph/` invariants).
 | a ticket / fresh-session execution (orchestrator spawns) | `.agents/policy/workflow.md` (roles: `agent-roles.md`) |
 | waiting on anything external | `.agents/policy/waits.md` |
 | committing, branching, worktrees, attribution | `.agents/policy/git.md` |
-| session layouts, managed-remote, resume | `.agents/policy/sessions.md` |
+| maintenance branches, sessions/remote/resume | `.agents/policy/sessions.md` |
 | landing a PR, review findings | `.agents/policy/landing.md` |
 | a PR review bot / Fair Usage quota notice | `.agents/policy/coderabbit.md` |
 | a GitHub issue (triage gates, lifecycle) | `.agents/policy/issues.md` |
