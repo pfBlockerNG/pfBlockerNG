@@ -75,12 +75,14 @@ function pfb_install_settings_family_capture_restore(
 	if ($source_family === NULL || !$save($source_family)) {
 		throw new RuntimeException('pfBlockerNG: unable to save source settings family');
 	}
-	// issue #3296: an unparseable installed version (dev/smoke build, missing package
-	// registration) leaves nothing to restore when nothing is owned yet -- keep the
-	// recorded family instead of failing an install with no settings at stake.
+	// issue #3296: an unparseable version predates this 3.3+ settings-family system, so
+	// it is always devel/nightly code with nothing owned to restore -- record the
+	// nightly ceiling, but still fail closed if the source family's snapshot won't restore.
 	if ($installed_family === NULL && $owned_sections === []) {
-		$replace($source_family);
-		return $source_family;
+		if (!$replace($source_family)) {
+			throw new RuntimeException('pfBlockerNG: unable to restore settings family');
+		}
+		return PFB_NIGHTLY_SETTINGS_FAMILY;
 	}
 	if ($installed_family === NULL || !$replace($installed_family)) {
 		$replace($source_family);
