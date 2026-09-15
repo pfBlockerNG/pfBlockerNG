@@ -42,7 +42,16 @@ remove_graphify_git_hook() {
 		END { exit !ok }
 	' "$_file" || return 0
 	_tmp=${_file}.graphify-strip
-	sed "/$_start/,/$_end/d" "$_file" > "$_tmp" || {
+	awk -v s="$_start" -v e="$_end" '
+		index($0, s) && !inblock { inblock = 1; buf = $0 ORS; next }
+		inblock {
+			buf = buf $0 ORS
+			if (index($0, e)) { inblock = 0; buf = ""; next }
+			next
+		}
+		{ print }
+		END { if (inblock) printf "%s", buf }
+	' "$_file" > "$_tmp" || {
 		rm -f "$_tmp"
 		return 1
 	}

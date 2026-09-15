@@ -180,4 +180,16 @@ CODEGRAPH
     The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
     The path "$primary/.git/hooks/post-commit" should be executable
   End
+
+  It 'keeps custom text after a complete Graphify block and a dangling start'
+    mkdir -p "$primary/.git/hooks"
+    printf '%s\n' '#!/bin/sh' 'echo keep-me' '# graphify-hook-start' 'echo g' '# graphify-hook-end' '# graphify-hook-start' 'echo dangling-after-complete' > "$primary/.git/hooks/post-commit"
+    chmod +x "$primary/.git/hooks/post-commit"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo keep-me'
+    The contents of file "$primary/.git/hooks/post-commit" should include 'echo dangling-after-complete'
+    The contents of file "$primary/.git/hooks/post-commit" should not include 'echo g'
+  End
 End
