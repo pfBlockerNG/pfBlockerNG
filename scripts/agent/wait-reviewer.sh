@@ -8,6 +8,8 @@
 #   --until ack|finished  ack = ANY message from the handle counts (default: finished)
 #   --since ISO8601       only activity after this instant counts (default: the PR head
 #                         commit time in finished mode; unset = all activity in ack mode)
+#   --head SHA            bind CodeRabbit issue-comment completion to this commit
+#                         (default: the PR head SHA in finished mode)
 #   --presence N          polls with zero engagement before NOTPRESENT (default 10; 0=off)
 #   --interval SECONDS    poll interval (default 30)
 #   --max-iter N          hard iteration cap (default: 20 ack / 60 finished)
@@ -29,18 +31,43 @@
 # Self-terminating by construction (CLAUDE.md "No orphaned waits" #1): iteration cap AND
 # wall-clock deadline; run it in the background and read the verdict.
 
-repo='' pr='' handle='' mode='finished' since='' presence=10 interval=30 max_iter=''
+repo='' pr='' handle='' mode='finished' since='' head='' presence=10 interval=30 max_iter=''
 inline='' review='' issuec='' sinfo=''
 inline_any='' review_any='' issuec_any=''
+need_head=0
 
 usage() {
-	echo "usage: wait-reviewer.sh --repo O/R --pr N --handle LOGIN [--until ack|finished] [--since ISO] [--presence N] [--interval S] [--max-iter N]" >&2
+	echo "usage: wait-reviewer.sh --repo O/R --pr N --handle LOGIN [--until ack|finished] [--since ISO] [--head SHA] [--presence N] [--interval S] [--max-iter N]" >&2
 	exit 2
 }
 
+# Completion phrases count for $head only. No $head, or no "between SHA and SHA"
+# range, keeps content-first. issue #3294: edited quota bodies retain old ranges.
+issuec_completion_for_head() {
+	[ -n "$head" ] || return 0
+	body=$(printf '%s\n' "$issuec" | tr '[:upper:]' '[:lower:]')
+	printf '%s\n' "$body" | grep -qE 'between [0-9a-f]+ and [0-9a-f]+' || return 0
+	hl=$(printf '%s' "$head" | tr '[:upper:]' '[:lower:]')
+	printf '%s\n' "$body" | awk -v h="$hl" '
+		BEGIN { want = 0 }
+		/actionable comments posted|no actionable comments/ { want = 1 }
+		want && match($0, /between [0-9a-f]+ and [0-9a-f]+/) {
+			line = substr($0, RSTART, RLENGTH)
+			n = split(line, a, /[[:space:]]+/)
+			to = a[n]
+			want = 0
+			if (length(h) >= 7 && length(to) >= 7 &&
+			    (index(h, to) == 1 || index(to, h) == 1))
+				found = 1
+		}
+		END { exit found ? 0 : 1 }
+	'
+}
+
 # Decide the verdict from the currently fetched state; prints nothing = keep polling.
-# Order is load-bearing: real review content is checked BEFORE any quota phrase, so a
-# transient/stale rate-limit notice sitting beside actual comments never masks them.
+# Order is load-bearing: current-head review content is checked BEFORE any quota
+# phrase. Historical completion text retained in an edited quota comment (issue #3294)
+# does not authorize FINISHED for a different head.
 classify() {
 	if [ "$handle" = "snyk" ]; then
 		if printf '%s' "$sinfo" | grep -Eqi 'limit reached|^(error|action_required|timed_out|cancelled|stale)'; then
@@ -57,7 +84,12 @@ classify() {
 		[ -n "${inline}${review}${issuec}" ] && printf 'ACK'
 		return 0
 	fi
-	if [ -n "$inline" ] || [ -n "$review" ] || printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments'; then
+	if [ -n "$inline" ] || [ -n "$review" ]; then
+		printf 'FINISHED'
+		return 0
+	fi
+	if printf '%s' "$issuec" | grep -qiE 'actionable comments posted|no actionable comments' &&
+	   issuec_completion_for_head; then
 		printf 'FINISHED'
 		return 0
 	fi
@@ -122,6 +154,14 @@ fetch_state() {
 			return 1
 		fi
 		default_since=0
+	fi
+	if [ "$need_head" -eq 1 ]; then
+		if ! fetch_head=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid); then
+			fetch_error=$fetch_head
+			return 1
+		fi
+		head=$fetch_head
+		need_head=0
 	fi
 	if ! fetch_inline=$(gh_bounded api "repos/$repo/pulls/$pr/comments" --paginate -q "$(jq_filter created_at) | .id"); then
 		fetch_error=$fetch_inline
@@ -188,14 +228,15 @@ main() {
 	. "$(dirname "$0")/agent_env.sh"
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--repo) repo=$2; shift 2 ;;
-			--pr) pr=$2; shift 2 ;;
-			--handle) handle=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-			--until) mode=$2; shift 2 ;;
-			--since) since=$2; shift 2 ;;
-			--presence) presence=$2; shift 2 ;;
-			--interval) interval=$2; shift 2 ;;
-			--max-iter) max_iter=$2; shift 2 ;;
+			--repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
+			--pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
+			--handle) [ $# -ge 2 ] || usage; handle=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+			--until) [ $# -ge 2 ] || usage; mode=$2; shift 2 ;;
+			--since) [ $# -ge 2 ] || usage; since=$2; shift 2 ;;
+			--head) [ $# -ge 2 ] || usage; head=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+			--presence) [ $# -ge 2 ] || usage; presence=$2; shift 2 ;;
+			--interval) [ $# -ge 2 ] || usage; interval=$2; shift 2 ;;
+			--max-iter) [ $# -ge 2 ] || usage; max_iter=$2; shift 2 ;;
 			*) usage ;;
 		esac
 	done
@@ -210,6 +251,9 @@ main() {
 	default_since=0
 	if [ -z "$since" ] && [ "$mode" = "finished" ] && [ "$handle" != "snyk" ]; then
 		default_since=1
+	fi
+	if [ -z "$head" ] && [ "$mode" = "finished" ] && [ "$handle" != "snyk" ]; then
+		need_head=1
 	fi
 
 	# Wall-clock deadline alongside the iteration cap (CLAUDE.md "No orphaned waits" #1):

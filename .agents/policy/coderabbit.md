@@ -86,8 +86,10 @@ Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
      Never re-trigger on a repeat decline.
    - **The bot's wording drifts.** If diagnostics show a finished review the
      matcher missed, read the comment body and adjust the pattern rather than
-     waiting out the timeout. Real review content beside a quota notice is
-     FINISHED — content beats the quota phrase.
+     waiting out the timeout. Real review content **for the requested/current
+     head** beside a quota notice is FINISHED — content beats the quota phrase.
+     Historical review sections retained in an edited quota comment are not;
+     bind with `--head SHA` (default: the PR head).
    - **Multiple handles:** run the wait once per handle and continue when all
      **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask
      machinery is CodeRabbit-specific — other handles use only FINISHED /
