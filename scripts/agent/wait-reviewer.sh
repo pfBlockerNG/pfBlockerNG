@@ -56,7 +56,8 @@ issuec_completion_for_head() {
 			n = split(line, a, /[[:space:]]+/)
 			to = a[n]
 			want = 0
-			if (length(to) >= 7 && (index(h, to) == 1 || index(to, h) == 1))
+			if (length(h) >= 7 && length(to) >= 7 &&
+			    (index(h, to) == 1 || index(to, h) == 1))
 				found = 1
 		}
 		END { exit found ? 0 : 1 }
@@ -227,15 +228,15 @@ main() {
 	. "$(dirname "$0")/agent_env.sh"
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--repo) repo=$2; shift 2 ;;
-			--pr) pr=$2; shift 2 ;;
-			--handle) handle=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-			--until) mode=$2; shift 2 ;;
-			--since) since=$2; shift 2 ;;
-			--head) head=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
-			--presence) presence=$2; shift 2 ;;
-			--interval) interval=$2; shift 2 ;;
-			--max-iter) max_iter=$2; shift 2 ;;
+			--repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
+			--pr) [ $# -ge 2 ] || usage; pr=$2; shift 2 ;;
+			--handle) [ $# -ge 2 ] || usage; handle=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+			--until) [ $# -ge 2 ] || usage; mode=$2; shift 2 ;;
+			--since) [ $# -ge 2 ] || usage; since=$2; shift 2 ;;
+			--head) [ $# -ge 2 ] || usage; head=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
+			--presence) [ $# -ge 2 ] || usage; presence=$2; shift 2 ;;
+			--interval) [ $# -ge 2 ] || usage; interval=$2; shift 2 ;;
+			--max-iter) [ $# -ge 2 ] || usage; max_iter=$2; shift 2 ;;
 			*) usage ;;
 		esac
 	done
