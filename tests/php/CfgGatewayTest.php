@@ -1311,6 +1311,8 @@ final class CfgGatewayTest extends TestCase
 		// regardless.
 		$this->assertArrayHasKey('ip/suppression', $registry,
 			"'ip/suppression' must be registered (issue #1931)");
+		$this->assertArrayHasKey('dnsbl/global_log_mode', $registry,
+			"'dnsbl/global_log_mode' must be registered (issue #3288)");
 
 		// issue #1931: registry keys are now '<alias>/<bare-key>'; this inventory compares
 		// against the bare config.xml names below, so strip the alias prefix back off.
@@ -3055,6 +3057,7 @@ final class CfgGatewayTest extends TestCase
 				'pfb_dnsport' => ['', '8081', '#2994 page/save default 8081'],
 				'pfb_dnsport_ssl' => ['', '8443', '#2994 page/save default 8443'],
 				'aliaslog' => ['', 'enabled', '#2994 page/save/help default enabled'],
+				'global_log' => ['', 'disabled_log', '#3288 fresh-install default disabled_log'],
 			];
 			if (isset($deliberate[$bare])) {
 				[$historical, $current, $why] = $deliberate[$bare];

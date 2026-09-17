@@ -839,6 +839,15 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 		return FALSE;
 	}
 
+	// issue #3288: opportunistically bring a legacy/still-fresh DNSBL policy
+	// state up to date under the held feed-pass lock, before this pass
+	// resolves any group's effective mechanism -- refresh pfb_global() only
+	// when something actually changed, so its cached policy fields never lag
+	// behind config.xml.
+	if (pfb_dnsbl_policy_upgrade()) {
+		pfb_global();
+	}
+
 	// Open the per-run log window for the live viewer (no-op if pfblockerng_sync_cron() already
 	// opened it for a Force Check / cron pass -- see pfb_runlog_begin).
 	pfb_runlog_begin();
@@ -2143,28 +2152,36 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 							// absent is treated as 'Deny'.
 							$mode = (($row['action'] ?? '') === 'Permit') ? 'permit' : 'deny';
 
-							// Global DNSBL Logging/Blocking mode
-							if (!empty($pfb['dnsbl_global_log'])) {
-								$list['logging'] = $pfb['dnsbl_global_log'];
-							}
+							// issue #3288: resolve the group's effective mechanism ONCE --
+							// Default/group-Default live-inherits the global mechanism,
+							// Override always does, otherwise the group's own explicit
+							// choice; $legacy live-projects a still-legacy box's historical
+							// VIP markers so effective behaviour never depends on migration
+							// timing (replaces the old unconditional-override precedence).
+							$effective = pfb_dnsbl_effective_logging(
+								$list['logging'] ?? NULL,
+								$pfb['dnsbl_global_log'],
+								$pfb['dnsbl_global_mode'],
+								$pfb['dnsbl_policy_legacy']
+							);
 
 							// Serialize the selected response mode for the Python matcher.
-							if ($list['logging'] == 'disabled') {
+							if ($effective == 'disabled') {
 								$logging_type	= '2';	// Null Blocking no logging
 							}
-							elseif ($list['logging'] == 'disabled_log') {
+							elseif ($effective == 'disabled_log') {
 								$logging_type	= '0';	// Null Blocking logging
 							}
-							elseif ($list['logging'] == 'nxdomain_log') {
+							elseif ($effective == 'nxdomain_log') {
 								$logging_type	= '3';	// NXDOMAIN logging
 							}
-							elseif ($list['logging'] == 'nxdomain') {
+							elseif ($effective == 'nxdomain') {
 								$logging_type	= '4';	// NXDOMAIN no logging
 							}
-							elseif ($list['logging'] == 'nodata_log') {
+							elseif ($effective == 'nodata_log') {
 								$logging_type	= '5';	// NODATA logging
 							}
-							elseif ($list['logging'] == 'nodata') {
+							elseif ($effective == 'nodata') {
 								$logging_type	= '6';	// NODATA no logging
 							} else {
 								$logging_type	= '1';	// DNSBL VIP logging

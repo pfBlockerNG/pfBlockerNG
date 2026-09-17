@@ -368,6 +368,7 @@ def test_dnsbl_selected_nodata_soa(deployed_vm: SmokeVM, client_vm: SmokeVM, mod
     with h.CaseContext(deployed_vm, spec):
         before = h.dns_probe_client(client_vm, domain, "A")
         assert h.is_null_ip(before), f"{domain} expected initial null block, got {before}"
+        h.config_set(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log_mode", "override")
         h.config_set(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/global_log", mode)
         h.reload(deployed_vm, "updatednsbl")
         for rtype in ("A", "AAAA", "ANY", "HTTPS", "TYPE64", "MX"):

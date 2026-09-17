@@ -230,14 +230,16 @@ if (!$alert_summary) {
 						$clists[$type][$lname]['base64'] = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/custom");
 						$clists[$type][$lname]['base64_idx'] = $row;
 
-						// Collect Global DNSBL Logging type, or Group logging setting
-						$g_log = PfbConfig::read('dnsbl/global_log');
-						if (empty($g_log)) {
+						// issue #3288: the shared resolver every consumer reuses -- resolves
+						// Default live-inheritance / Override precedence / the legacy
+						// projection identically to the DNSBL settings and category pages.
+						$d_log = pfb_dnsbl_effective_logging(
 							// foreign structure: pfblockerngdnsbl/config/{row}/logging is a dynamic per-row key, not in registry
-							$d_log = config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging");
-						} else {
-							$d_log = $g_log;
-						}
+							config_get_path("installedpackages/pfblockerngdnsbl/config/{$row}/logging"),
+							$pfb['dnsbl_global_log'],
+							$pfb['dnsbl_global_mode'],
+							$pfb['dnsbl_policy_legacy']
+						);
 
 						// Mirror the pfblockerng.inc logging_type mapping (issue #31 adds
 						// NXDOMAIN '3'/'4', issue #3243 adds NODATA '5'/'6'); anything else

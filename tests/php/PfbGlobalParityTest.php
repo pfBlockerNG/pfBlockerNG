@@ -213,15 +213,14 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * global_log: OLD = isset($pfb['dnsblconfig']['global_log'])
-	 *                   ? $pfb['dnsblconfig']['global_log'] : ''.
-	 * When absent: ''.
-	 * Via gateway: PfbConfig::read('dnsbl/global_log') = '' (registered default —
-	 * issue #3285 restores this v3.2.16 default after #3243's alpha-only,
-	 * never-shipped 'disabled_log' mistake).
-	 * PARITY: identical.
+	 * global_log: registered default is now 'disabled_log' (issue #3288's
+	 * Default/Override policy seeds fresh installs with the disabled_log
+	 * mechanism, superseding #3285's revert-to-''). pfb_global() derives
+	 * $pfb['dnsbl_global_log'] via pfb_dnsbl_policy_config(), which for a
+	 * genuinely absent section/groups resolves to this same registered
+	 * default. PARITY: identical.
 	 */
-	public function testParityGlobalLogAbsentYieldsEmpty(): void
+	public function testParityGlobalLogAbsentYieldsDisabledLog(): void
 	{
 		$this->assertNull(
 			config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/global_log')
@@ -229,7 +228,7 @@ final class PfbGlobalParityTest extends TestCase
 
 		$result = PfbConfig::read('dnsbl/global_log');
 
-		$this->assertSame('', $result, 'global_log absent -> ""');
+		$this->assertSame('disabled_log', $result, 'global_log absent -> disabled_log');
 	}
 
 	/**

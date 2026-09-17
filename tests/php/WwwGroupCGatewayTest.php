@@ -100,15 +100,15 @@ final class WwwGroupCGatewayTest extends TestCase
 	/**
 	 * global_log round-trip: write a logging mode string, read it back.
 	 *
-	 * Initial state is the registered default '' (No Global mode) — issue #3285
-	 * restores the original v3.2.16 default after #3243's alpha-only mistake
-	 * ('disabled_log' + a 'none' sentinel, never shipped in a stable release);
-	 * the round-trip behaviour itself (write X, read back X) is unchanged.
+	 * Initial state is the registered default 'disabled_log' (Null Blocking,
+	 * logging) -- issue #3288's fresh-install default, retiring the '' no-override
+	 * sentinel entirely; the round-trip behaviour itself (write X, read back X)
+	 * is unchanged.
 	 */
 	public function testGlobalLogRoundTrips(): void
 	{
-		// Before: absent → the registered default '' (No Global mode).
-		$this->assertSame('', PfbConfig::read('dnsbl/global_log'), 'initial absent -> ""');
+		// Before: absent → the registered default 'disabled_log'.
+		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'), 'initial absent -> "disabled_log"');
 
 		// When: write 'enabled'.
 		PfbConfig::write('dnsbl/global_log', 'enabled');

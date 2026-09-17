@@ -45,7 +45,13 @@ $pfb_registry_sections = array();
 foreach (PFB_SECTIONS as $pfb_registry_section) {
 	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
-$pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);
+// issue #3288: real DNSBL groups are existing-install evidence for the dnsbl
+// section even when its own settings section was never saved -- the two are
+// written by entirely separate save handlers.
+$pfb_registry_modes = pfb_registry_section_modes(
+	$pfb_registry_sections,
+	PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config')
+);
 unset($pfb_registry_sections, $pfb_registry_section);
 
 // Set 'Install flag' to skip sync process during installations.

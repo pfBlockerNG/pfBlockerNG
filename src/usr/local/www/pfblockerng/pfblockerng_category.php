@@ -179,6 +179,12 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 			// act=update/reorder flows with no init (the old idiom was a no-op).
 			// No isset($input_errors) consumer downstream -- safe unconditional init.
 			$input_errors = array();
+			// issue #3288: a VALIDATED bulk Save runs the upgrade facade BEFORE
+			// persisting choices. $rowdata (read at :123) is now stale for any row
+			// the facade just converted -- refresh before postdata/ids[] below.
+			if ($gtype == 'dnsbl' && pfb_dnsbl_policy_upgrade()) {
+				$rowdata = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+			}
 			if (is_array($rowdata)) {
 				$cron_values = array(	'Never',
 							'01hour',
@@ -200,6 +206,11 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 							'nodata_log',	// issue #3243: NODATA logging
 							'nodata'	// issue #3243: NODATA no logging
 							);
+
+				// issue #3288: the DNSBL-only 'logging' field additionally accepts the
+				// live-inheritance 'default' token; 'aliaslog' (ipv4/ipv6) does not.
+				$logging_values = array_merge($aliaslog_values, array('default'));
+
 
 				// Parse POST and save new values
 				if (!empty($post_data) && is_array($post_data)) {
@@ -246,9 +257,13 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 									}
 									break;
 								case 'aliaslog':
-								case 'logging':
 									if (!in_array($value, $aliaslog_values)) {
 										$input_errors[] = "Failed Aliaslog: " . htmlspecialchars($value);
+									}
+									break;
+								case 'logging':
+									if (!in_array($value, $logging_values)) {
+										$input_errors[] = "Failed Logging: " . htmlspecialchars($value);
 									}
 									break;
 								default:
@@ -516,12 +531,16 @@ if (isset($savemsg)) {
 							$logtype = $rowdata[$r_id]['aliaslog'];
 						} else {
 							$field = 'logging-' . $r_id;
-							$logtype = $rowdata[$r_id]['logging'];
+							// issue #3288: ALWAYS the row's own normalized choice -- never
+							// substituted with the active global mechanism, or an unchanged
+							// bulk Save would silently erase every group's saved choice.
+							$logtype = pfb_dnsbl_group_logging($rowdata[$r_id]['logging'] ?? NULL, $pfb['dnsbl_policy_legacy']);
 						}
 
 						$log_error = '';
 						if ($gtype == 'dnsbl') {
-							$log_options = ['enabled'	=> 'DNSBL WebServer/VIP',
+							$log_options = ['default'	=> 'Default',
+									'enabled'	=> 'DNSBL WebServer/VIP',
 									'disabled_log'	=> 'Null Blocking (logging)',
 									'disabled'	=> 'Null Blocking (no logging)',
 									'nxdomain_log'	=> 'NXDOMAIN (logging)',
@@ -529,10 +548,14 @@ if (isset($savemsg)) {
 									'nodata_log'	=> 'NODATA (logging)',
 									'nodata'	=> 'NODATA (no logging)'];
 
-							// Global DNSBL Logging/Blocking mode
-							if (!empty($pfb['dnsbl_global_log'])) {
-								$logtype		= $pfb['dnsbl_global_log'];
-								$log_options[$logtype]	= "{$log_options[$logtype]} (Global)";
+							// issue #3288: annotate the EFFECTIVE mechanism's label only --
+							// the SELECTED (and therefore submitted) $logtype above is never
+							// touched, so an unchanged bulk Save can never erase a saved choice.
+							if ($pfb['dnsbl_global_mode'] === PfbDnsblGlobalMode::Override) {
+								$active_mechanism = $pfb['dnsbl_global_log'];
+								$log_options[$active_mechanism] = "{$log_options[$active_mechanism]} (Override)";
+							} else {
+								$log_options['default'] = "Default ({$log_options[$pfb['dnsbl_global_log']]})";
 							}
 						}
 						else {

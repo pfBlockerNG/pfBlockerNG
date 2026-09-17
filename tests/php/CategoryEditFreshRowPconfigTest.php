@@ -47,8 +47,14 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			}
 			eval(
 				'function pfb_category_oracle_fresh_pconfig(array $rowdata, $rowid, string $gtype): array {'
+				. ' global $pfb;'
+				. ' $pfb["dnsbl_policy_legacy"] = FALSE;'
+				// issue #3288: safe for both axes -- Axis 2's populated-key cases
+				// short-circuit past this (their 'logging' key is present); Axis 1
+				// never asserts 'logging''s value, only that no diagnostic fires.
+				. ' $pfb_row_is_fresh = FALSE;'
 				. ' $pconfig = array();'
-				. ' $pfb_logging_default = "disabled_log";'
+				. ' $pfb_logging_default = "default";'
 				. ' $pfb_schedule_general = array('
 				. ' "pfb_schedule_weekday" => "7", "pfb_schedule_hour" => "0", "pfb_schedule_minute" => "0"'
 				. ' );'
@@ -279,7 +285,7 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			'srcint'       => 'wan',
 			'script_pre'   => 'dnsbl_pre_x.py',
 			'script_post'  => 'dnsbl_post_x.py',
-			'logging'      => 'Disabled',
+			'logging'      => 'disabled',
 			'order'        => 'reverse',
 			'filter_top1m' => 'on',
 			'custom'       => base64_encode('example.invalid # existing dnsbl'),

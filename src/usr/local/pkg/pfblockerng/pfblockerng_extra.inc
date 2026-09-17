@@ -171,6 +171,25 @@ enum PfbFeedSuffixPolicy: string implements PfbStoredEnum
 	}
 }
 
+// issue #3288: Default = groups may inherit the global mechanism; Override =
+// every group is forced onto it regardless of its own choice. Neither token
+// carries an 'off' backing value, so toStored() emits both literally.
+enum PfbDnsblGlobalMode: string implements PfbStoredEnum
+{
+	use PfbStoredEnumAdapter;
+
+	case Default  = 'default';
+	case Override = 'override';
+
+	// Parse-fallback (unknown/non-scalar/absent -> Default, the less forceful
+	// policy -- junk must never accidentally force every group onto the global
+	// mechanism). NOT the field's registered default, which is also 'default'.
+	public static function default(): static
+	{
+		return self::Default;
+	}
+}
+
 // PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
 //   Auto    ('auto')    — default; delta for small churn (< ~5%), full replace for
 //                         initial load / boot / large churn.
@@ -1329,12 +1348,23 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'the post-swap flush exists only in the 4.0 no-reload pipeline; latency delta is the accepted zero-downtime redesign itself, not this default; default-off is a uniform decision at introduction',
 		],
 
-		// Global logging/blocking mode. Default ''.
+		// issue #3288: the selected CONCRETE mechanism -- one of the seven tokens;
+		// never '' or 'default' (that's dnsbl/global_log_mode below). Default
+		// 'disabled_log' fresh; existing installs grandfather to 'enabled'.
 		'dnsbl/global_log' => [
-			'default'       => '',
+			'default'       => 'disabled_log',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+			'grandfather'   => [PFB_GF_ABSENT => 'enabled', '' => 'enabled'],
+		],
+
+		// issue #3288: Default (groups may inherit the mechanism above) or
+		// Override (every group is forced onto it). Existing installs' mode is
+		// derived by pfb_dnsbl_policy_migrate() -- a cross-key seed, see EXCEPTIONS.
+		'dnsbl/global_log_mode' => [
+			'default'       => 'default',
+			'read_adapter'  => NULL,
+			'write_adapter' => NULL,
 		],
 
 		// ADR-22: scheme-parsing leniency: 'on' | ''. Default 'off'.
@@ -3163,7 +3193,17 @@ function pfb_migration_registry(): array
 	$dnsbl = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
 	return [
-		// 0. issue #1898: retire the compatibility-only stored per-row key name. The
+		// 0. issue #3288: fold dnsbl/global_log into the Default/Override policy
+		// pair; convert VIP-marked DNSBL groups to 'default'. Runs first --
+		// every entry here is fresh-install-inert, so ordering is defensive only.
+		[
+			'id'       => 'issue3288-dnsbl-policy-migrate',
+			'sections' => [$dnsbl, 'installedpackages/pfblockerngdnsbl/config'],
+			'apply'    => 'pfb_dnsbl_policy_migrate',
+			'message'  => 'pfBlockerNG: migrated DNSBL global logging policy to Default/Override (issue #3288)',
+			'since'    => '4.0.0',
+		],
+		// 1. issue #1898: retire the compatibility-only stored per-row key name. The
 		// scalar-section renames now live as registry 'old_name' slots consumed by
 		// pfb_registry_pass() (issue #1921); this entry keeps only what that pass
 		// cannot reach -- the dynamic per-feed row key. Multi-section ('sections',
@@ -3175,7 +3215,7 @@ function pfb_migration_registry(): array
 			'message'  => 'pfBlockerNG: retire legacy configuration key names (issue #1898)',
 			'since'    => '3.2.0',
 		],
-		// 1. issue #1907: disable pfb_py_reply/pfb_hsts when inert under pre-upgrade
+		// 2. issue #1907: disable pfb_py_reply/pfb_hsts when inert under pre-upgrade
 		// Unbound mode. MUST run immediately before adr02-dnsbl-python-mode -- it reads
 		// 'dnsbl_mode' as pre-upgrade evidence that the very next entry overwrites.
 		[
@@ -3185,7 +3225,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: disable python-gated DNSBL toggles inert under pre-upgrade Unbound mode (issue #1907)',
 			'since'   => '3.2.0',
 		],
-		// 2. ADR-02: force DNSBL to python-only mode.
+		// 3. ADR-02: force DNSBL to python-only mode.
 		[
 			'id'      => 'adr02-dnsbl-python-mode',
 			'section' => $dnsbl,
@@ -3193,7 +3233,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: migrated DNSBL to Python-only mode',
 			'since'   => '2.0.0',
 		],
-		// 3. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
+		// 4. PFBL-03: one-time seed of the deprecated legacy DNS-TXT control toggle --
 		// a cross-key bespoke seed keyed on pfb_control's value, not a simple
 		// absent/''-map, so pfb_registry_pass() cannot express it either
 		// (CfgRegistryGrandfatherGateTest::EXCEPTIONS).
@@ -3204,7 +3244,7 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)',
 			'since'   => '3.2.0',
 		],
-		// issue #2308: one complete General + dynamic-group schedule image.
+		// 5. issue #2308: one complete General + dynamic-group schedule image.
 		[
 			'id'       => 'issue2308-quarter-hour-schedule',
 			'sections' => [

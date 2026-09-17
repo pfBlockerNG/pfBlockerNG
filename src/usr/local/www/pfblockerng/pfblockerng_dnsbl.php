@@ -63,7 +63,11 @@ $pconfig['pfb_dnsport_ssl']	= PfbConfig::read('dnsbl/pfb_dnsport_ssl');
 $pconfig['dnsbl_interface']	= PfbConfig::read('dnsbl/dnsbl_interface');
 $pconfig['pfb_dnsbl_rule']	= PfbConfig::read('dnsbl/pfb_dnsbl_rule');
 $pconfig['dnsbl_allow_int']	= pfb_csv_list(PfbConfig::read('dnsbl/dnsbl_allow_int'));
-$pconfig['global_log']		= PfbConfig::read('dnsbl/global_log');
+// issue #3288: the normalized, grandfather-prefilled policy cache -- NOT a bare
+// PfbConfig::read(), which would show the raw (possibly still-legacy) stored
+// bytes instead of the effective Default/Override-ready values.
+$pconfig['global_log']		= $pfb['dnsbl_global_log'];
+$pconfig['global_log_mode']	= $pfb['dnsbl_global_mode']->toStored();
 $pconfig['dnsbl_webpage']	= $pfb['dconfig']['dnsbl_webpage']			?: 'dnsbl_default.php';
 // Default 'on' owned by the registry (ADR-29, issue #1907); PfbConfig::read applies it
 // when absent.
@@ -182,10 +186,8 @@ $options_dnsbl_dot_block_int	= $options_dnsbl_interface;
 // [ ADR-37 ] DoT/DoQ Block: rule action selector (mirrors the IP-settings Rule Action).
 $options_dnsbl_dot_block_action	= [ 'block' => 'Block', 'reject' => 'Reject' ];
 
-$options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking setting. Default is no global override.'
+$options_global_log_txt = 'The shared DNSBL Logging/Blocking mechanism, applied to every DNSBL Group per the Global Application Mode below.'
 			. '<div class="infoblock">'
-			. 'Default: <strong>No Global mode</strong><br />'
-			. 'Enabling this option will override the individual DNSBL Group "Logging/Blocking" settings!<br /><br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
@@ -197,14 +199,23 @@ $options_global_log_txt = 'Overrides each DNSBL Group\'s Logging/Blocking settin
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update.'
 			. '</div>';
 
-$options_global_log	= [	''		=> 'No Global mode',
-				'enabled'	=> 'DNSBL WebServer/VIP',
+$options_global_log	= [	'enabled'	=> 'DNSBL WebServer/VIP',
 				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
 				'nxdomain'	=> 'NXDOMAIN (no logging)',
 				'nodata_log'	=> 'NODATA (logging)',
 				'nodata'	=> 'NODATA (no logging)'];
+
+$options_global_log_mode_txt = 'Controls how the mechanism above applies to every DNSBL Group.'
+			. '<div class="infoblock">'
+			. '&#8226 <strong>Default</strong>, each Group\'s own Logging/Blocking Mode applies; a Group set to \'Default\' inherits this mechanism live -- a later change here applies to it immediately, without editing the Group.<br />'
+			. '&#8226 <strong>Override</strong>, every Group uses this mechanism, without erasing each group\'s saved choice -- return to Default to restore it.<br /><br />'
+			. 'New installs default to Default policy with Null Blocking (logging); an upgraded install with no prior override is grandfathered to Default policy with DNSBL WebServer/VIP, and an upgraded install with an active override is grandfathered to Override policy with the same enforced mechanism.'
+			. '</div>';
+
+$options_global_log_mode	= [	'default'	=> 'Default',
+					'override'	=> 'Override'];
 
 $options_dnsbl_webpage = array();
 $indexdir = '/usr/local/www/pfblockerng/www';
@@ -577,6 +588,7 @@ if ($_POST) {
 		// Validate Select field options
 		$select_options = array(						'dnsbl_interface'	=> 'lo0',
 						'global_log'		=> $pconfig['global_log'],
+						'global_log_mode'	=> $pconfig['global_log_mode'],
 						'dnsbl_webpage'		=> 'dnsbl_default.php',
 						'top1m_source'		=> 'tranco',
 						'top1m_count'		=> '1000',
@@ -835,6 +847,13 @@ if ($_POST) {
 		$input_errors = array_merge($input_errors, $dot_block_errors);
 
 		if (!$input_errors) {
+			// issue #3288: facade runs BEFORE persisting the submitted policy choice.
+			// Refresh $pfb['dconfig'] if it changed -- the pre-facade snapshot would
+			// otherwise clobber a NEWCFG-seeded bystander field at writeSection() below.
+			if (pfb_dnsbl_policy_upgrade()) {
+				$pfb['dconfig'] = PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0');
+			}
+
 			$pfb_top1m_settings_before = array(
 				'enable'   => PfbConfig::read('dnsbl/top1m_enable')->toStored(),
 				'count'    => PfbConfig::read('dnsbl/top1m_count'),
@@ -872,6 +891,7 @@ if ($_POST) {
 			$pfb['dconfig']['pfb_dnsbl_rule']	= pfb_filter($_POST['pfb_dnsbl_rule'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['dnsbl_allow_int']	= implode(',', (array)$_POST['dnsbl_allow_int'])			?: '';
 			$pfb['dconfig']['global_log']		= $_POST['global_log'];
+			$pfb['dconfig']['global_log_mode']	= $_POST['global_log_mode'];
 			// issue #1907: checkbox-absent is the owner-ruled empty Off token.
 			$pfb['dconfig']['pfb_cache']		= pfb_filter($_POST['pfb_cache'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_cache_flush']	= pfb_filter($_POST['pfb_cache_flush'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
@@ -2842,10 +2862,18 @@ $section->addInput(new Form_Checkbox(
 
 $section->addInput(new Form_Select(
 	'global_log',
-	'Global Logging/Blocking Mode',
+	'Global Logging/Blocking Mechanism',
 	$pconfig['global_log'],
 	$options_global_log
 ))->setHelp($options_global_log_txt)
+  ->setAttribute('style', 'width: auto');
+
+$section->addInput(new Form_Select(
+	'global_log_mode',
+	'Global Application Mode',
+	$pconfig['global_log_mode'],
+	$options_global_log_mode
+))->setHelp($options_global_log_mode_txt)
   ->setAttribute('style', 'width: auto');
 
 $section->addInput(new Form_Checkbox(

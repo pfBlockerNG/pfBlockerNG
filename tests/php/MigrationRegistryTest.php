@@ -89,29 +89,34 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly five entries in the correct declared order (issue #1921
-	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907 adds
-	 * the bespoke python-gated-toggles migration, positioned immediately before ADR-02
-	 * -- it must run while dnsbl_mode still evidences pre-upgrade Unbound mode, which
-	 * ADR-02 overwrites).
+	 * Registry returns exactly six entries in the correct declared order. issue
+	 * #3288's DNSBL policy migration is PREPENDED first (fresh-install-inert, same
+	 * shape as every other DNSBL-section entry here -- ordering position is
+	 * maximally defensive, not load-bearing against these siblings). issue #1921
+	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907
+	 * adds the bespoke python-gated-toggles migration, positioned immediately
+	 * before ADR-02 -- it must run while dnsbl_mode still evidences pre-upgrade
+	 * Unbound mode, which ADR-02 overwrites.
 	 */
-	public function testRegistryHasFiveEntriesInOrder(): void
+	public function testRegistryHasSixEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(5, $registry);
+		$this->assertCount(6, $registry);
 
-		// issue #1898's per-row key rename runs first -- the scalar-section half now
+		// issue #3288: the DNSBL Default/Override policy migration runs first.
+		$this->assertSame('issue3288-dnsbl-policy-migrate', $registry[0]['id']);
+		// issue #1898's per-row key rename runs next -- the scalar-section half now
 		// lives as registry 'old_name' slots consumed by pfb_registry_pass(), which
 		// runs AFTER this whole driver.
-		$this->assertSame('issue1898-legacy-key-rename', $registry[0]['id']);
+		$this->assertSame('issue1898-legacy-key-rename', $registry[1]['id']);
 		// issue #1907: must run BEFORE ADR-02 -- it reads dnsbl_mode as evidence of a
 		// pre-upgrade Unbound install, and ADR-02 immediately overwrites that same key.
-		$this->assertSame('issue1907-python-gated-toggles', $registry[1]['id']);
+		$this->assertSame('issue1907-python-gated-toggles', $registry[2]['id']);
 		// Then the original install.inc sequence for what remains, order unchanged.
-		$this->assertSame('adr02-dnsbl-python-mode',    $registry[2]['id']);
-		$this->assertSame('pfbl03-control-legacy-seed', $registry[3]['id']);
-		$this->assertSame('issue2308-quarter-hour-schedule', $registry[4]['id']);
+		$this->assertSame('adr02-dnsbl-python-mode',    $registry[3]['id']);
+		$this->assertSame('pfbl03-control-legacy-seed', $registry[4]['id']);
+		$this->assertSame('issue2308-quarter-hour-schedule', $registry[5]['id']);
 	}
 
 	/**
@@ -141,8 +146,10 @@ final class MigrationRegistryTest extends TestCase
 	}
 
 	/**
-	 * The issue #1898 rename spans the DNSBL settings section plus the dynamic per-feed
-	 * row section; ADR-02 and PFBL-03 both target the DNSBL section.
+	 * issue #3288's policy migration spans the DNSBL settings section plus the
+	 * dynamic groups section; the issue #1898 rename spans the DNSBL settings
+	 * section plus the dynamic per-feed row section; ADR-02 and PFBL-03 both
+	 * target the DNSBL section.
 	 */
 	public function testRegistryEntriesSectionsAreCorrect(): void
 	{
@@ -151,9 +158,13 @@ final class MigrationRegistryTest extends TestCase
 			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
 			$registry[0]['sections']
 		);
-		$this->assertSame(self::DNSBL_SECTION, $registry[1]['section']);
+		$this->assertSame(
+			[self::DNSBL_SECTION, 'installedpackages/pfblockerngdnsbl/config'],
+			$registry[1]['sections']
+		);
 		$this->assertSame(self::DNSBL_SECTION, $registry[2]['section']);
 		$this->assertSame(self::DNSBL_SECTION, $registry[3]['section']);
+		$this->assertSame(self::DNSBL_SECTION, $registry[4]['section']);
 	}
 
 	// -----------------------------------------------------------------------
@@ -521,6 +532,8 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_py_block'              => 'on',
 			'pfb_control_legacy_seeded' => 'on',
 			'pfb_dnsbl_lenient'         => 'on',
+			'global_log_mode'           => 'default',
+			'global_log'                => 'enabled',
 		]);
 		$this->seedGen([
 			'enable_cb' => 'on', 'pfb_keep' => 'on', 'skipfeed' => '0',

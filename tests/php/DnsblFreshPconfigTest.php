@@ -66,9 +66,21 @@ final class DnsblFreshPconfigTest extends TestCase
 			$diagnostics[] = $errstr;
 			return TRUE;
 		});
+		$hadPfb = array_key_exists('pfb', $GLOBALS);
+		$previousPfb = $GLOBALS['pfb'] ?? NULL;
 		try {
 			$GLOBALS['config'] = [];
-			config_set_path(self::DNSBL_SECTION, $stored ?? $dconfig);
+			$authoritative = $stored ?? $dconfig;
+			config_set_path(self::DNSBL_SECTION, $authoritative);
+			// issue #3288: pfb_global() derives these three fields from the
+			// AUTHORITATIVE stored section (never the page's stale $dconfig
+			// mirror) via the same production resolver -- mirror that here so
+			// the extracted $pconfig block's global_log/global_log_mode
+			// assignments see what the real page would have populated.
+			$policy = pfb_dnsbl_policy_config($authoritative, []);
+			$GLOBALS['pfb']['dnsbl_global_log']    = $policy['mechanism'];
+			$GLOBALS['pfb']['dnsbl_global_mode']   = $policy['mode'];
+			$GLOBALS['pfb']['dnsbl_policy_legacy'] = $policy['legacy'];
 			$pconfig = pfb_dnsbl_oracle_fresh_pconfig($dconfig, $default_tlds);
 		} finally {
 			restore_error_handler();
@@ -76,6 +88,11 @@ final class DnsblFreshPconfigTest extends TestCase
 				$GLOBALS['config'] = $previousConfig;
 			} else {
 				unset($GLOBALS['config']);
+			}
+			if ($hadPfb) {
+				$GLOBALS['pfb'] = $previousPfb;
+			} else {
+				unset($GLOBALS['pfb']);
 			}
 		}
 		return [$pconfig, $diagnostics];

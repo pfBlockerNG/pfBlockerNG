@@ -38,35 +38,35 @@ final class DnsblBlockingModesTest extends TestCase
 		);
 	}
 
-	/** @return array<string,array{0:string}> every recognised storage value: the ''
-	 *  no-override sentinel plus the seven concrete mode tokens (NODATA included). */
+	/** @return array<string,array{0:string}> The seven supported concrete mechanisms. */
 	public static function recognisedTokenProvider(): array
 	{
-		$cases = ['no override (empty string)' => ['']];
+		$cases = [];
 		foreach (['enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata'] as $token) {
 			$cases[$token] = [$token];
 		}
 		return $cases;
 	}
 
+
 	// -----------------------------------------------------------------------
-	// A — pfb_registry_pass(): no grandfather, no NEWCFG/OLDCFG divergence
+	// A — pfb_registry_pass(): issue #3288 grandfather map (ABSENT/'' -> 'enabled')
 	// -----------------------------------------------------------------------
 
 	/**
 	 * A genuinely fresh DNSBL section (NEWCFG) seeds global_log at the registered
-	 * default '' (No Global mode) — the #3243 mistake is reverted — and leaves
-	 * pfb_hsts at its own already-decided On default: the two defaults are
-	 * independent registry rows, and this fix must not regress the other.
+	 * default 'disabled_log' (Null Blocking, logging) -- issue #3288's fresh-install
+	 * default -- and leaves pfb_hsts at its own already-decided On default: the two
+	 * defaults are independent registry rows, and this fix must not regress the other.
 	 */
-	public function testFreshNewcfgDnsblSectionDefaultsGlobalLogToEmptyAndKeepsHstsOn(): void
+	public function testFreshNewcfgDnsblSectionDefaultsGlobalLogToDisabledLogAndKeepsHstsOn(): void
 	{
 		$sections = [self::DNSBL_SECTION => []];
 
 		$result = pfb_registry_pass($sections);
 
-		$this->assertSame('', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
-			'NEWCFG must seed the registered default "" (No Global mode) — not the alpha-only disabled_log'
+		$this->assertSame('disabled_log', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
+			'NEWCFG must seed the registered default "disabled_log" (issue #3288 fresh-install default)'
 		);
 		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_hsts'] ?? NULL,
 			'the HSTS On default must be unaffected by the global_log default fix'
@@ -76,31 +76,29 @@ final class DnsblBlockingModesTest extends TestCase
 	}
 
 	/**
-	 * OLDCFG (a real install), global_log absent entirely: seeds the SAME
-	 * registered default '' as NEWCFG. There is no grandfather map for this key
-	 * (issue #1921 classification 'no_grandfather' — absent-key fallback always
-	 * equalled the current default, v3.2.16 through today), so OLDCFG and NEWCFG
-	 * behave identically here; #3243's mistaken 'none'/grandfather machinery is
-	 * gone, not replaced by another migration.
+	 * OLDCFG (a real install), global_log absent entirely: issue #3288's grandfather
+	 * map (ABSENT -> 'enabled') fires -- the grandfathered WebServer/VIP mechanism
+	 * for an existing install with no prior global override, NOT the fresh
+	 * 'disabled_log' default NEWCFG takes.
 	 */
-	public function testOldcfgAbsentGlobalLogAlsoSeedsEmpty(): void
+	public function testOldcfgAbsentGlobalLogGrandfathersToEnabled(): void
 	{
 		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on']];
 
 		$result = pfb_registry_pass($sections);
 
-		$this->assertSame('', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
-			'an existing install with global_log entirely absent must seed the same "" default as a fresh install — no grandfather divergence'
+		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
+			'an existing install with global_log entirely absent must grandfather to "enabled", never the fresh default'
 		);
 
 		$this->assertSecondPassIsEmpty($sections);
 	}
 
 	/**
-	 * OLDCFG, global_log already an explicit recognised value (the "" no-override
-	 * sentinel included, and both NODATA tokens): every one of them survives the
-	 * pass untouched — an already-present value is never rewritten, and there is
-	 * no map to canonicalise anything into.
+	 * OLDCFG, global_log already an explicit CONCRETE value (NODATA tokens
+	 * included, '' excluded -- see testOldcfgExplicitEmptyGrandfathersToEnabled):
+	 * every one of them survives the pass untouched -- an already-present concrete
+	 * value is never rewritten, and the grandfather map only has ABSENT/'' entries.
 	 */
 	#[DataProvider('recognisedTokenProvider')]
 	public function testOldcfgExplicitRecognisedValuesPreserved(string $token): void
@@ -115,23 +113,39 @@ final class DnsblBlockingModesTest extends TestCase
 		$this->assertSecondPassIsEmpty($sections);
 	}
 
+	/**
+	 * issue #3288: an explicitly-stored '' (the retired no-override sentinel) is
+	 * now grandfathered exactly like ABSENT -- both meant "no override" under the
+	 * retired single-field scheme, so both must land on the SAME grandfathered
+	 * mechanism.
+	 */
+	public function testOldcfgExplicitEmptyGrandfathersToEnabled(): void
+	{
+		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on', 'global_log' => '']];
+
+		$result = pfb_registry_pass($sections);
+
+		$this->assertSame('enabled', $result[self::DNSBL_SECTION]['global_log'] ?? NULL,
+			'an explicitly-stored "" must grandfather to "enabled", the same as an absent key'
+		);
+
+		$this->assertSecondPassIsEmpty($sections);
+	}
+
 	// -----------------------------------------------------------------------
 	// B — PfbConfig gateway: plain-scalar round trip (no adapter)
 	// -----------------------------------------------------------------------
 
-	public function testGlobalLogNotConfiguredDefaultIsEmptyString(): void
+	public function testGlobalLogNotConfiguredDefaultIsDisabledLog(): void
 	{
 		$this->assertNull(config_get_path(self::GLOBAL_LOG_PATH), 'global_log must be absent before read');
 
-		$this->assertSame('', PfbConfig::read('dnsbl/global_log'),
-			'a never-configured install must read the registered default "" (No Global mode)'
+		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'),
+			'a never-configured install must read the registered default "disabled_log" (issue #3288)'
 		);
 	}
 
-	/** Every recognised value (the "" no-override sentinel and both NODATA tokens
-	 *  included) round-trips through PfbConfig::write/read byte-identically — the
-	 *  field carries no adapter, so nothing besides an explicit write ever changes
-	 *  it. */
+	/** Supported concrete mechanisms round-trip through the gateway. */
 	#[DataProvider('recognisedTokenProvider')]
 	public function testGlobalLogRecognisedValuesRoundTripThroughTheGateway(string $token): void
 	{
@@ -173,5 +187,29 @@ final class DnsblBlockingModesTest extends TestCase
 		$this->assertSame('disabled_log', PfbConfig::read('dnsbl/global_log'),
 			'an unrelated field save must not disturb the explicit override choice'
 		);
+	}
+
+	public function testNullPolicyValueDoesNotMakeCurrentConfigurationLegacy(): void
+	{
+		$policy = pfb_dnsbl_policy_config([
+			'global_log_mode' => NULL,
+			'global_log' => 'disabled_log',
+		], []);
+
+		$this->assertFalse($policy['legacy'], 'a present policy key must not reactivate legacy projection');
+		$this->assertSame(PfbDnsblGlobalMode::Default, $policy['mode']);
+		$this->assertSame('enabled', pfb_dnsbl_effective_logging(
+			'enabled', $policy['mechanism'], $policy['mode'], $policy['legacy']
+		), 'invalid current policy must not force an explicit VIP group onto the global null mechanism');
+	}
+
+	public function testLegacyZeroStringDoesNotActivateAnOverride(): void
+	{
+		$policy = pfb_dnsbl_policy_config(['global_log' => '0'], []);
+
+		$this->assertSame(PfbDnsblGlobalMode::Default, $policy['mode']);
+		$this->assertSame('nxdomain', pfb_dnsbl_effective_logging(
+			'nxdomain', $policy['mechanism'], $policy['mode'], $policy['legacy']
+		), 'legacy falsy global values must not mask an explicit group mechanism');
 	}
 }

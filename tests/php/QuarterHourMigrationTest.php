@@ -16,6 +16,7 @@ final class QuarterHourMigrationTest extends TestCase
 	private const V4  = 'installedpackages/pfblockernglistsv4/config';
 	private const V6  = 'installedpackages/pfblockernglistsv6/config';
 	private const DNS = 'installedpackages/pfblockerngdnsbl/config';
+	private const DNS_SETTINGS = 'installedpackages/pfblockerngdnsblsettings/config/0';
 
 	protected function setUp(): void
 	{
@@ -468,8 +469,23 @@ PHP;
 	{
 		$canonical = ['enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '2', 'pfb_schedule_minute' => '30', 'skipfeed' => '0'];
 		config_set_path(self::GEN, $canonical);
+		// issue #3288: the DNSBL policy migration is also registered in
+		// pfb_migration_registry() -- a canonical "everything already migrated"
+		// fixture must carry its completion marker too, or this no-op test
+		// would spuriously observe that migration's own writeback.
+		// Every DNSBL-settings migration (#1907, ADR-02, PFBL-03, #3288) reads this
+		// section too -- a canonical "everything already migrated" fixture carries
+		// each one's own completion marker, or this no-op test would spuriously
+		// observe THAT migration's writeback instead.
+		config_set_path(self::DNS_SETTINGS, [
+			'dnsbl_mode'                => 'dnsbl_python',
+			'pfb_py_block'              => 'on',
+			'pfb_control_legacy_seeded' => 'on',
+			'global_log_mode'           => 'default',
+			'global_log'                => 'enabled',
+		]);
 		foreach ([self::V4, self::V6, self::DNS] as $section) {
-			config_set_path($section, [['action' => 'Deny_Inbound', 'cron' => 'Weekly', 'row' => $GLOBALS['pfb_test_rows'] ?? [['url' => 'https://example.test', 'state' => 'Enabled']], 'schedule_override' => 'on', 'schedule_weekday' => '3', 'schedule_hour' => '2', 'schedule_minute' => '30']]);
+			config_set_path($section, [['action' => 'Deny_Inbound', 'cron' => 'Weekly', 'row' => $GLOBALS['pfb_test_rows'] ?? [['url' => 'https://example.test', 'state' => 'Enabled']], 'schedule_override' => 'on', 'schedule_weekday' => '3', 'schedule_hour' => '2', 'schedule_minute' => '30', 'logging' => 'default']]);
 		}
 		pfb_run_migrations();
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);

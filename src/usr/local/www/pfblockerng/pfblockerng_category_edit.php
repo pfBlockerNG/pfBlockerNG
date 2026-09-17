@@ -336,8 +336,11 @@ if (($action == 'add' || $action == 'addgroup') && !empty($atype) && !isset($_PO
 }
 
 // Catalog links prepopulate $rowdata; only persisted rows are existing groups.
-$pfb_logging_default = ($gtype == 'dnsbl' &&
-	config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL) ? 'disabled_log' : 'Enabled';
+// issue #3288: a fresh row (never persisted) always gets 'default', regardless
+// of legacy state. $pfb_row_is_fresh feeds the render block below, which
+// resolves an EXISTING row's stored choice via the legacy-aware normalizer.
+$pfb_row_is_fresh = ($gtype == 'dnsbl' && config_get_path("installedpackages/{$conf_type}/config/{$rowid}") === NULL);
+$pfb_logging_default = $pfb_row_is_fresh ? 'default' : 'Enabled';
 
 $pgtype = 'IP';
 $pg_url = '/pfblockerng/pfblockerng_category.php?type=ipv4';
@@ -437,7 +440,8 @@ $options_agateway_in		= $options_agateway_out		= pfb_get_gateways();
 
 $options_order			= [ 'default' => 'Default', 'primary' => 'Primary' ];
 
-$options_logging	= [	'enabled'	=> 'DNSBL WebServer/VIP',
+$options_logging	= [	'default'	=> 'Default',
+				'enabled'	=> 'DNSBL WebServer/VIP',
 				'disabled_log'	=> 'Null Blocking (logging)',
 				'disabled'	=> 'Null Blocking (no logging)',
 				'nxdomain_log'	=> 'NXDOMAIN (logging)',
@@ -831,6 +835,13 @@ if ($_POST && isset($_POST['save'])) {
 	}
 
 	if (!$input_errors) {
+		// issue #3288: a VALIDATED per-row Save runs the upgrade facade BEFORE
+		// persisting the submitted choice, or an explicit choice on a still-legacy
+		// box leaves the marker unset and gets reconverted by a later migration.
+		if ($gtype == 'dnsbl') {
+			pfb_dnsbl_policy_upgrade();
+		}
+
 		// issue #1014/#1019/#2060: close the OLD alias's alias-pass-managed ledger entries
 		// (download, script) before aliasname is overwritten -- a rename must not orphan them.
 		$pfb_old_aliasname = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname", '');
@@ -1042,7 +1053,12 @@ else {
 		$pconfig['whois_convert']	= $rowdata[$rowid]['whois_convert'] ?? '';
 	}
 	else {
-		$pconfig['logging']		= $rowdata[$rowid]['logging'] ?? $pfb_logging_default;
+		// issue #3288: a fresh row gets the live-inheritance token; an EXISTING
+		// row's stored choice -- however spelled, including historical
+		// absent/''/'Enabled' -- is resolved via the shared, legacy-aware normalizer.
+		$pconfig['logging']		= $pfb_row_is_fresh
+			? 'default'
+			: pfb_dnsbl_group_logging($rowdata[$rowid]['logging'] ?? NULL, $pfb['dnsbl_policy_legacy']);
 		$pconfig['order']		= $rowdata[$rowid]['order'] ?? 'default';
 		$pconfig['filter_top1m']	= $rowdata[$rowid]['filter_top1m'] ?? '';
 	}
@@ -1693,7 +1709,9 @@ if ($gtype == 'dnsbl') {
 			. 'When set as \'Primary\', this DNSBL Group will be processed before all other DNSBL Groups/Category(s)')
 	  ->setAttribute('style', 'width: auto');
 
-	$log_text = 'Default: <strong>Null Blocking (logging)</strong> for a brand-new DNSBL Group; an existing Group keeps its currently configured setting.<br />'
+	$log_text = '<strong>Default</strong> inherits the Global Logging/Blocking Mode (DNSBL tab) live -- a later '
+			. 'change to the global mechanism applies to this Group immediately, without editing it again. Every '
+			. 'brand-new DNSBL Group starts on Default; an existing Group keeps its currently configured setting.<br />'
 			. '&#8226 <strong>DNSBL WebServer/VIP</strong>, Domains are sinkholed to the DNSBL VIP and logged via the DNSBL WebServer.<br />'
 			. '&#8226 <strong>Null Blocking (logging)</strong>, Utilize \'0.0.0.0\' with logging.<br />'
 			. '&#8226 <strong>Null Blocking (no logging)</strong>, Utilize \'0.0.0.0\' with no logging.<br />'
@@ -1702,7 +1720,7 @@ if ($gtype == 'dnsbl') {
 			. '&#8226 <strong>NODATA (logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with logging. The DNSBL block page is bypassed.<br />'
 			. '&#8226 <strong>NODATA (no logging)</strong>, Reply NOERROR with an empty answer (SOA in authority) with no logging. The DNSBL block page is bypassed.<br /><br />'
 			. 'Blocked domains will be reported to the Alert/Block Table.<br />'
-			. 'Enabling the "Global Logging/Blocking mode" in the DNSBL Tab will override this setting!<br />'
+			. 'The DNSBL tab\'s Global Application Mode, when set to <strong>Override</strong>, forces every Group onto the Global Logging/Blocking Mechanism WITHOUT erasing this saved choice -- return it to Default to restore this setting\'s effect.<br />'
 			. 'A DNSBL reload is required for changes to take effect: run \'Run Now\' (Run Scope: DNSBL or Both) on the Update tab, or wait for the next scheduled update';
 
 	$section->addInput(new Form_Select(

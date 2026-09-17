@@ -17,7 +17,7 @@ final class InstallPrePassWriteOrderTest extends TestCase
 	{
 		$source = php_strip_whitespace(self::INSTALL);
 		$this->assertNotSame('', $source, 'installer source must be readable');
-		$capture = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);');
+		$capture = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes( $pfb_registry_sections,');
 		$this->assertNotFalse($capture, 'installer must capture registry modes before migrations');
 		$restore = strpos($source, 'pfb_install_settings_family_capture_restore();');
 		$this->assertNotFalse($restore, 'installer must restore the target settings family');

@@ -2053,6 +2053,40 @@
             }
         ]
     },
+    "pfb_dnsbl_effective_logging": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "group_logging",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "global_logging",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "mode",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbDnsblGlobalMode",
+                "default": null
+            },
+            {
+                "name": "legacy",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
+    },
     "pfb_dnsbl_extract_host": {
         "returnsRef": false,
         "returnType": "string|false",
@@ -2118,6 +2152,26 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_group_logging": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "legacy",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
@@ -2310,6 +2364,19 @@
             }
         ]
     },
+    "pfb_dnsbl_mechanism_normalize": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_nat_enabled": {
         "returnsRef": false,
         "returnType": "bool",
@@ -2417,6 +2484,64 @@
                 "default": null
             }
         ]
+    },
+    "pfb_dnsbl_policy_config": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_policy_is_fresh_install": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_policy_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_policy_upgrade": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
     },
     "pfb_dnsbl_publish_result": {
         "returnsRef": false,
@@ -10121,6 +10246,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "dnsbl_groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },

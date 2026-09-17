@@ -31,6 +31,10 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		// PFBL-03 cross-key bespoke seed: this field's value depends on pfb_control PLUS its
 		// own run-once marker, not a simple absent/'' -> value map.
 		'dnsbl/pfb_control_legacy' => 'PFBL-03 cross-key bespoke seed (depends on pfb_control + a run-once marker)',
+		// issue #3288 cross-key bespoke seed: this field's value depends on the PRE-migration
+		// dnsbl/global_log value (a DIFFERENT key) via pfb_dnsbl_policy_migrate(), not a
+		// simple absent/'' -> value map this pass could express.
+		'dnsbl/global_log_mode' => 'issue #3288 cross-key bespoke seed (derived from the pre-migration dnsbl/global_log value by pfb_dnsbl_policy_migrate())',
 	];
 
 	/**

@@ -287,7 +287,7 @@ ZXRnYXRlLmNvbQ0K
 			if (strpos($key, 'dnsbl') !== FALSE) {
 				$add['action']		= 'unbound';
 				$add['cron']		= 'EveryDay';
-				$add['logging']		= 'disabled_log';
+				$add['logging']		= 'default';
 				$add['order']		= 'default';
 			} else {
 				$add['action']		= 'Deny_Outbound';

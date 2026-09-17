@@ -3386,7 +3386,15 @@ function pfb_global() {
 	$pfb['dnsbl_top1m_type']	= PfbConfig::read('dnsbl/top1m_source');						// TOP1M type (PfbTop1mSource enum; legacy 'alexa' coalesces to Tranco, #877) (default Tranco)
 	$pfb['dnsbl_res_cache']	= PfbConfig::read('dnsbl/pfb_cache');							// DNSBL Option to backup/restore Resolver cache (default on, issue #1907)
 	$pfb['dnsbl_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');						// Opt-in full cache flush after DNSBL data swaps
-	$pfb['dnsbl_global_log']= PfbConfig::read('dnsbl/global_log');							// Global Logging/Blocking mode (default '')
+	// issue #3288: the DNSBL global policy read-only -- pfb_global() never
+	// writes, so an unmigrated/legacy box (config restore or HA sync bypassing
+	// pfb_run_migrations() entirely) stays correct via pfb_dnsbl_policy_config()'s
+	// own fallback rather than trusting the raw stored fields blindly.
+	$pfb_dnsbl_groups = config_get_path('installedpackages/pfblockerngdnsbl/config', []);
+	$pfb_dnsbl_policy = pfb_dnsbl_policy_config($pfb['dnsblconfig'], is_array($pfb_dnsbl_groups) ? $pfb_dnsbl_groups : []);
+	$pfb['dnsbl_global_log']	= $pfb_dnsbl_policy['mechanism'];	// the concrete mechanism (never '' / 'default')
+	$pfb['dnsbl_global_mode']	= $pfb_dnsbl_policy['mode'];		// PfbDnsblGlobalMode: Default (live-inherit) | Override (enforce)
+	$pfb['dnsbl_policy_legacy']	= $pfb_dnsbl_policy['legacy'];		// TRUE while dnsbl/global_log_mode is genuinely absent (not fresh)
 	// ADR-22: lenient feed parsing. 'on' = permissive scheme strip (today); anything else =
 	// strict RFC 3986 scheme validation + URL-path rejection. New installs default OFF
 	// (strict); existing installs are grandfathered to 'on' by the registry pass at
@@ -14093,6 +14101,156 @@ function pfb_control_legacy_seed($dconfig) {
 	return $dconfig;
 }
 
+// Concrete mechanisms; only group choices may use the inheritance token.
+const PFB_DNSBL_CONCRETE_MECHANISMS = array(
+	'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+);
+
+/** Normalize a concrete mechanism without admitting recursive inheritance. */
+function pfb_dnsbl_mechanism_normalize(mixed $stored): string {
+	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'enabled';
+}
+
+/** Project legacy VIP markers without changing current explicit choices. */
+function pfb_dnsbl_group_logging(mixed $stored, bool $legacy = FALSE): string {
+
+	if ($stored === 'default') {
+		return 'default';
+	}
+
+	$is_vip_marker = ($stored === NULL) || ($stored === '')
+		|| (is_string($stored) && strcasecmp($stored, 'enabled') === 0);
+	if ($is_vip_marker) {
+		return $legacy ? 'default' : 'enabled';
+	}
+
+	if (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) {
+		return $stored;
+	}
+
+	return 'enabled';
+}
+
+/** Resolve once per group/feed, before emitting Python's existing logging flags. */
+function pfb_dnsbl_effective_logging(mixed $group_logging, string $global_logging, PfbDnsblGlobalMode $mode, bool $legacy = FALSE): string {
+	if ($mode === PfbDnsblGlobalMode::Override) {
+		return $global_logging;
+	}
+	$normalized = pfb_dnsbl_group_logging($group_logging, $legacy);
+	return $normalized === 'default' ? $global_logging : $normalized;
+}
+
+/** Existing groups count as domain configuration even without a settings section. */
+function pfb_dnsbl_policy_is_fresh_install(array $dconfig, array $groups): bool {
+	return empty(pfb_gconfig_operator_view($dconfig)) && empty($groups);
+}
+
+/** @return array{mode: PfbDnsblGlobalMode, mechanism: string, legacy: bool} */
+function pfb_dnsbl_policy_config(array $dconfig, array $groups): array {
+	$default_mechanism = pfb_cfg_registry()['dnsbl/global_log']['default'];
+
+	if (pfb_dnsbl_policy_is_fresh_install($dconfig, $groups)) {
+		return array('mode' => PfbDnsblGlobalMode::Default, 'mechanism' => $default_mechanism, 'legacy' => FALSE);
+	}
+
+	if (array_key_exists('global_log_mode', $dconfig)) {
+		$raw_mechanism = $dconfig['global_log'] ?? $default_mechanism;
+		return array(
+			'mode'      => PfbDnsblGlobalMode::fromStored($dconfig['global_log_mode']),
+			'mechanism' => pfb_dnsbl_mechanism_normalize($raw_mechanism),
+			'legacy'    => FALSE,
+		);
+	}
+
+	// Preserve the released single-field policy's falsy/no-override behavior.
+	$raw_mechanism   = $dconfig['global_log'] ?? NULL;
+	$override_active = is_string($raw_mechanism) && !empty($raw_mechanism);
+	return array(
+		'mode'      => $override_active ? PfbDnsblGlobalMode::Override : PfbDnsblGlobalMode::Default,
+		'mechanism' => $override_active ? pfb_dnsbl_mechanism_normalize($raw_mechanism) : 'enabled',
+		'legacy'    => TRUE,
+	);
+}
+
+/**
+ * Return changed raw sections, or NULL for fresh/already-converted policy.
+ * The marker and mechanism travel together with the legacy group conversion.
+ */
+function pfb_dnsbl_policy_migrate(array $sections): ?array {
+
+	$dnsbl_path  = PFB_SECTIONS['dnsbl'];
+	$groups_path = 'installedpackages/pfblockerngdnsbl/config';
+	$dconfig     = is_array($sections[$dnsbl_path] ?? NULL) ? $sections[$dnsbl_path] : array();
+	$raw_groups  = $sections[$groups_path] ?? NULL;
+	$groups      = is_array($raw_groups) ? $raw_groups : array();
+
+	if (pfb_dnsbl_policy_is_fresh_install($dconfig, $groups)) {
+		return NULL;
+	}
+	if (array_key_exists('global_log_mode', $dconfig)) {
+		return NULL;
+	}
+
+	$policy = pfb_dnsbl_policy_config($dconfig, $groups);
+	$dconfig['global_log_mode'] = $policy['mode']->toStored();
+	$dconfig['global_log']      = $policy['mechanism'];
+
+	$changed_groups = FALSE;
+	if (is_array($raw_groups)) {
+		foreach ($raw_groups as $index => $group) {
+			if (!is_array($group)) {
+				continue;
+			}
+			$logging = $group['logging'] ?? NULL;
+			if ($logging !== 'default' && pfb_dnsbl_group_logging($logging, TRUE) === 'default') {
+				$raw_groups[$index]['logging'] = 'default';
+				$changed_groups = TRUE;
+			}
+		}
+	}
+
+	$result = array($dnsbl_path => $dconfig);
+	if ($changed_groups) {
+		$result[$groups_path] = $raw_groups;
+	}
+	return $result;
+}
+
+/**
+ * Initialize or migrate before validated writes/apply, never from read-only loading.
+ * Fresh initialization uses registry defaults; legacy writes preserve raw bystanders.
+ */
+function pfb_dnsbl_policy_upgrade(): bool {
+
+	$dnsbl_path  = PFB_SECTIONS['dnsbl'];
+	$groups_path = 'installedpackages/pfblockerngdnsbl/config';
+	$dconfig     = PfbConfig::readSection($dnsbl_path);
+	$groups      = PfbConfig::readSection($groups_path);
+
+	if (pfb_dnsbl_policy_is_fresh_install($dconfig, $groups)) {
+		$modes = pfb_registry_section_modes([]);
+		$changes = pfb_registry_pass([$dnsbl_path => $dconfig], NULL, $modes);
+		PfbConfig::writeSectionSystem($dnsbl_path, $changes[$dnsbl_path]);
+		write_config('pfBlockerNG: initialized DNSBL mechanism policy');
+		return TRUE;
+	}
+
+	if (array_key_exists('global_log_mode', $dconfig)) {
+		return FALSE;
+	}
+
+	$result = pfb_dnsbl_policy_migrate(array($dnsbl_path => $dconfig, $groups_path => $groups));
+	if ($result === NULL) {
+		return FALSE;
+	}
+	foreach ($result as $section => $blob) {
+		PfbConfig::writeSectionRawSystem($section, $blob);
+	}
+	write_config('pfBlockerNG: migrated DNSBL global logging policy to Default/Override (issue #3288)');
+	return TRUE;
+}
+
+
 
 // issue #2371: fresh-install detector for the feed-at-suffix PSL policy fields
 // (dnsbl/pfb_psl_feed_private_policy, dnsbl/pfb_psl_feed_icann_policy). Same
@@ -14219,13 +14377,16 @@ function pfb_legacy_key_rename_migrate($sections) {
 }
 
 
-/** @return array<string, string> Section path => NEWCFG/OLDCFG map. */
-function pfb_registry_section_modes(array $sections): array {
+/** @return array<string, string> Section path => NEWCFG/OLDCFG, including DNSBL group evidence. */
+function pfb_registry_section_modes(array $sections, array $dnsbl_groups = array()): array {
 
 	$modes = array();
 	foreach (PFB_SECTIONS as $section) {
 		$blob = $sections[$section] ?? array();
 		$modes[$section] = is_array($blob) && !empty(pfb_gconfig_operator_view($blob)) ? 'OLDCFG' : 'NEWCFG';
+	}
+	if (!empty($dnsbl_groups)) {
+		$modes[PFB_SECTIONS['dnsbl']] = 'OLDCFG';
 	}
 	return $modes;
 }

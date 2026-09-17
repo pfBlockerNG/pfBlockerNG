@@ -95,13 +95,13 @@ final class DnsblSuffixHandlingUiTest extends TestCase
 		$suffixPos = strpos($source, "new Form_Section('AdBlock suffix handling'");
 		$privatePos = strpos($source, "gettext('Feed entries at shared-hosting suffixes (PSL PRIVATE)')");
 		$icannPos = strpos($source, "gettext('Feed entries at public suffixes (ICANN)')");
-		$globalLogPos = strpos($source, "'Global Logging/Blocking Mode'");
+		$globalLogPos = strpos($source, "'Global Logging/Blocking Mechanism'");
 		$wildcardPos = strpos($source, "gettext('Wildcard Blocking')");
 
 		$this->assertNotFalse($suffixPos, 'AdBlock suffix handling section missing');
 		$this->assertNotFalse($privatePos, 'PSL PRIVATE feed-policy label missing');
 		$this->assertNotFalse($icannPos, 'ICANN feed-policy label missing');
-		$this->assertNotFalse($globalLogPos, 'Global Logging/Blocking Mode missing');
+		$this->assertNotFalse($globalLogPos, 'Global Logging/Blocking Mechanism missing');
 		$this->assertNotFalse($wildcardPos, 'Wildcard Blocking missing');
 
 		$this->assertLessThan($globalLogPos, $wildcardPos, 'Wildcard Blocking stays in section 1 before Global Logging');

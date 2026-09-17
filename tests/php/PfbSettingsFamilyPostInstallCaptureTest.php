@@ -308,7 +308,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		$source = php_strip_whitespace(self::INSTALL);
 		$this->assertNotSame('', $source, 'installer source must be readable');
 		$capture = strpos($source, 'pfb_install_settings_family_capture_restore();');
-		$modes = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);');
+		$modes = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes( $pfb_registry_sections,');
 		$finalize = strpos($source, 'pfb_install_settings_family_finalize($pfb_installed_family);');
 		$this->assertNotFalse($capture, 'installer must capture and restore settings before migrations');
 		$this->assertNotFalse($modes, 'installer must capture registry modes from the restored settings family');
