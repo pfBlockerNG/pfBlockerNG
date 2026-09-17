@@ -223,7 +223,8 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 							}
 
 							// Validate Variable names
-							if (in_array($k_field[0], array('action', 'cron', 'aliaslog', 'logging'))) {
+							$valid_vars = ($gtype === 'dnsbl') ? array('action', 'cron', 'logging') : array('action', 'cron', 'aliaslog');
+							if (in_array($k_field[0], $valid_vars)) {
 								$variable = $k_field[0];
 							} else {
 								$input_errors[] = "Failed Variable: " . htmlspecialchars($k_field[0]);
@@ -257,12 +258,12 @@ if (!empty($action) && isset($gtype) && isset($rowid)) {
 									}
 									break;
 								case 'aliaslog':
-									if (!in_array($value, $aliaslog_values)) {
+									if ($gtype === 'dnsbl' || !in_array($value, $aliaslog_values)) {
 										$input_errors[] = "Failed Aliaslog: " . htmlspecialchars($value);
 									}
 									break;
 								case 'logging':
-									if (!in_array($value, $logging_values)) {
+									if ($gtype !== 'dnsbl' || !in_array($value, $logging_values)) {
 										$input_errors[] = "Failed Logging: " . htmlspecialchars($value);
 									}
 									break;
