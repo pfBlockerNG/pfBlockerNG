@@ -3480,6 +3480,45 @@ function pfb_global() {
 	}
 }
 
+// issue #3041: top-level const/define() run in file order, never hoisted; the
+// CLI dispatch below calls pfb_global() before reaching a later declaration, so
+// every dispatch-referenced constant must precede it.
+
+// Hidden test/support override for the Software-page provenance gate (ADR-19). A file
+// containing 'on' or 'off' FORCES the gate (case-insensitive, trimmed); absent or any other
+// content => fall through to the auto-detect below. NOT a GUI knob: the webConfigurator never
+// writes it. It lets CI render BOTH the enabled and disabled states deterministically (the
+// Tier-A UI deploy is a sideloaded `pkg add`, whose %R is empty, so auto-detect alone could
+// only ever show the hidden state), and gives support a force-on/off escape-hatch on a real box.
+define('PFB_SOFTWARE_PANEL_OVERRIDE', '/var/db/pfblockerng/.pfb_software_panel');
+
+/** Churn-ratio threshold above which 'auto' mode falls back to -T replace (5%). */
+const PFB_DELTA_CHURN_THRESHOLD = 0.05;
+
+// Concrete mechanisms; only group choices may use the inheritance token.
+const PFB_DNSBL_CONCRETE_MECHANISMS = array(
+	'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
+);
+
+// issue #1898: the compatibility-only stored-key rename this migration still owns -- the
+// dynamic per-feed row key. The scalar-section renames (TOP1M, TLD Allow, TLD Wildcard)
+// now live as registry 'old_name' slots consumed by pfb_registry_pass() (issue #1921);
+// this array covers only what that pass cannot reach, a key inside a per-row list section
+// rather than a flat scalar section.
+const PFB_LEGACY_KEY_RENAMES = array(
+	array(
+		'section' => 'installedpackages/pfblockerngdnsbl/config',
+		'rows'    => TRUE,
+		'keys'    => array('filter_alexa' => 'filter_top1m'),
+	),
+);
+
+// CLI result for a pass deferred before work starts because a feed lock is held.
+define('PFB_EXIT_LOCKED', 75);
+
+// Seconds a package install/uninstall waits for an in-flight feed pass before it proceeds anyway.
+define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
+
 // Function to get pfBlockerNG package version
 function pfb_pkg_ver() {
 	$pkg_ver = 'v??';
@@ -6258,13 +6297,6 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null, ?bool
  * the priv match line all gate on this single predicate so a Netgate-installed
  * add-on shows no Software page anywhere.
  */
-// Hidden test/support override for the Software-page provenance gate (ADR-19). A file
-// containing 'on' or 'off' FORCES the gate (case-insensitive, trimmed); absent or any other
-// content => fall through to the auto-detect below. NOT a GUI knob: the webConfigurator never
-// writes it. It lets CI render BOTH the enabled and disabled states deterministically (the
-// Tier-A UI deploy is a sideloaded `pkg add`, whose %R is empty, so auto-detect alone could
-// only ever show the hidden state), and gives support a force-on/off escape-hatch on a real box.
-define('PFB_SOFTWARE_PANEL_OVERRIDE', '/var/db/pfblockerng/.pfb_software_panel');
 
 /*
  * The forced Software-gate state, or NULL when not forced. Reads the hidden override sentinel
@@ -8457,9 +8489,6 @@ function pfb_ip_suppress_list_present(string $path): bool {
 // ---------------------------------------------------------------------------
 // ADR-40 — forward-delta alias-table apply
 // ---------------------------------------------------------------------------
-
-/** Churn-ratio threshold above which 'auto' mode falls back to -T replace (5%). */
-const PFB_DELTA_CHURN_THRESHOLD = 0.05;
 
 /**
  * Clamp an integer batch-size value to the valid range [64, 4096].
@@ -14101,11 +14130,6 @@ function pfb_control_legacy_seed($dconfig) {
 	return $dconfig;
 }
 
-// Concrete mechanisms; only group choices may use the inheritance token.
-const PFB_DNSBL_CONCRETE_MECHANISMS = array(
-	'enabled', 'disabled_log', 'disabled', 'nxdomain_log', 'nxdomain', 'nodata_log', 'nodata',
-);
-
 /** Normalize a concrete mechanism without admitting recursive inheritance. */
 function pfb_dnsbl_mechanism_normalize(mixed $stored): string {
 	return (is_string($stored) && in_array($stored, PFB_DNSBL_CONCRETE_MECHANISMS, TRUE)) ? $stored : 'enabled';
@@ -14283,20 +14307,6 @@ function pfb_psl_feed_policy_is_fresh_install($dconfig) {
 	}
 	return empty(pfb_gconfig_operator_view($dconfig));
 }
-
-
-// issue #1898: the compatibility-only stored-key rename this migration still owns -- the
-// dynamic per-feed row key. The scalar-section renames (TOP1M, TLD Allow, TLD Wildcard)
-// now live as registry 'old_name' slots consumed by pfb_registry_pass() (issue #1921);
-// this array covers only what that pass cannot reach, a key inside a per-row list section
-// rather than a flat scalar section.
-const PFB_LEGACY_KEY_RENAMES = array(
-	array(
-		'section' => 'installedpackages/pfblockerngdnsbl/config',
-		'rows'    => TRUE,
-		'keys'    => array('filter_alexa' => 'filter_top1m'),
-	),
-);
 
 
 // Rename the retired keys inside ONE flat key => value node (a scalar section, or one feed
@@ -19594,10 +19604,6 @@ function pfb_update_autotail(bool $task_running, bool $run_dispatch, bool $logvi
 	return $task_running && !$run_dispatch && !$logview_posted;
 }
 
-
-// CLI result for a pass deferred before work starts because a feed lock is held.
-define('PFB_EXIT_LOCKED', 75);
-
 function pfb_feed_pass_exit_code(bool $completed, ?string $deferred_by): int {
 	return $deferred_by !== NULL ? PFB_EXIT_LOCKED : ($completed ? 0 : 1);
 }
@@ -19701,10 +19707,6 @@ function pfb_feed_pass_begin(string $label, ?bool &$contended = NULL): bool {
 		LOG_PREFIX_PKG_PFBLOCKERNG);
 	return FALSE;
 }
-
-
-// Seconds a package install/uninstall waits for an in-flight feed pass before it proceeds anyway.
-define('PFB_INSTALL_FEED_PASS_WAIT', 300.0);
 
 // issues #3062/#3090: the install's/uninstall's hold ($op names it in the log) on the feed-pass
 // lock -- waits, then keeps it until this process exits (pfb_feed_pass_release() at shutdown).
