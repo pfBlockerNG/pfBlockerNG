@@ -9,7 +9,9 @@ use PHPUnit\Framework\TestCase;
  * (unlike functions/enums). The CLI dispatch (`if (isset($argv[1])) {`) calls
  * pfb_global() mid-file; a dispatch-referenced constant declared BELOW it is
  * undefined when the dispatch runs, fatalling every CLI invocation
- * (pfblockerng.inc filterlog|dnsbl|index).
+ * (pfblockerng.inc filterlog|dnsbl|index). issue #3304: the guarded
+ * `if (!defined('X')) { define('X', ...); }` form runs mid-include the same way,
+ * so it is held to the same order.
  */
 final class CliDispatchConstantOrderTest extends TestCase
 {
@@ -17,13 +19,14 @@ final class CliDispatchConstantOrderTest extends TestCase
 
 	/**
 	 * Given the real pfblockerng.inc source,
-	 * When every top-level (column-0, unconditional) const/define() declaration
+	 * When every top-level (column-0) const/define()/guarded-define declaration
 	 *   is compared against the CLI dispatch line,
 	 * Then every one of them precedes the dispatch -- a later declaration is
 	 *   unreachable from pfb_global()/the daemon branches the dispatch calls.
 	 *   Pins the whole bug class, not just the six declarations issue #3041 moves.
-	 * Scope: column-0, unconditional declarations only. Guarded `if (!defined())`
-	 *   defines and indented declarations are out of scope (known residue).
+	 * Scope: column-0 declarations -- unconditional `const`/`define()` and the
+	 *   guarded `if (!defined('X'))` form (issue #3304). Indented and in-function
+	 *   declarations stay out of scope (known residue).
 	 */
 	public function testEveryTopLevelConstantPrecedesTheCliDispatch(): void
 	{
@@ -47,7 +50,8 @@ final class CliDispatchConstantOrderTest extends TestCase
 		foreach ($lines as $i => $line) {
 			$lineNo = $i + 1;
 			if (preg_match('/^const\s+([A-Za-z_][A-Za-z0-9_]*)/', $line, $m)
-				|| preg_match('/^define\s*\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $line, $m)) {
+				|| preg_match('/^define\s*\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $line, $m)
+				|| preg_match('/^if\s*\(\s*!\s*defined\s*\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]\s*\)\s*\)/', $line, $m)) {
 				if ($lineNo >= $dispatchLine) {
 					$offenders[] = "{$m[1]} @ {$lineNo}";
 				}
