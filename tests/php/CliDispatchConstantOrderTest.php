@@ -47,7 +47,7 @@ final class CliDispatchConstantOrderTest extends TestCase
 		foreach ($lines as $i => $line) {
 			$lineNo = $i + 1;
 			if (preg_match('/^const\s+([A-Za-z_][A-Za-z0-9_]*)/', $line, $m)
-				|| preg_match('/^define\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $line, $m)) {
+				|| preg_match('/^define\s*\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]/', $line, $m)) {
 				if ($lineNo >= $dispatchLine) {
 					$offenders[] = "{$m[1]} @ {$lineNo}";
 				}
