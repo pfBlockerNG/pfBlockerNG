@@ -22,6 +22,8 @@ final class CliDispatchConstantOrderTest extends TestCase
 	 * Then every one of them precedes the dispatch -- a later declaration is
 	 *   unreachable from pfb_global()/the daemon branches the dispatch calls.
 	 *   Pins the whole bug class, not just the six declarations issue #3041 moves.
+	 * Scope: column-0, unconditional declarations only. Guarded `if (!defined())`
+	 *   defines and indented declarations are out of scope (known residue).
 	 */
 	public function testEveryTopLevelConstantPrecedesTheCliDispatch(): void
 	{
@@ -29,14 +31,17 @@ final class CliDispatchConstantOrderTest extends TestCase
 		$lines = file($path, FILE_IGNORE_NEW_LINES);
 		$this->assertNotFalse($lines, 'failed to read pfblockerng.inc');
 
-		$dispatchLine = null;
+		$dispatchLines = [];
 		foreach ($lines as $i => $line) {
 			if (str_starts_with($line, 'if (isset($argv[1])) {')) {
-				$dispatchLine = $i + 1;
-				break;
+				$dispatchLines[] = $i + 1;
 			}
 		}
-		$this->assertNotNull($dispatchLine, 'CLI dispatch line `if (isset($argv[1])) {` not found');
+		$this->assertNotEmpty($dispatchLines, 'CLI dispatch line `if (isset($argv[1])) {` not found');
+		$this->assertCount(1, $dispatchLines,
+			'a second top-level CLI dispatch would restart the load-order hazard after the constant block: '
+			. implode(', ', $dispatchLines));
+		$dispatchLine = $dispatchLines[0];
 
 		$offenders = [];
 		foreach ($lines as $i => $line) {
