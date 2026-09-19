@@ -3303,6 +3303,121 @@ if (!defined('PFB_UNBOUND_CONTROL_BIN')) {
 	define('PFB_UNBOUND_CONTROL_BIN', '/usr/sbin/chroot -u unbound -g unbound / /usr/local/sbin/unbound-control');
 }
 
+// Default per-hook timeout (seconds) when a hook does not set its own.
+if (!defined('PFB_HOOK_TIMEOUT_DEFAULT')) {
+	define('PFB_HOOK_TIMEOUT_DEFAULT', 60);
+}
+
+// Grace period (seconds) after SIGTERM before timeout(1) sends SIGKILL.
+if (!defined('PFB_HOOK_KILL_GRACE')) {
+	define('PFB_HOOK_KILL_GRACE', 5);
+}
+
+// Ceiling (seconds) for per-feed list pre/post transform scripts.
+if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
+	define('PFB_LIST_SCRIPT_TIMEOUT', 300);
+}
+
+// Ceiling (seconds) for a nested `pfblockerng.php` re-entry launched from inside an
+// update pass (issue #2016). Generous on purpose: it must exceed a full MaxMind +
+// blacklist download pass on a slow link, and its only job is to stop a stalled child
+// from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
+// Since issue #2851 it is also the ABSENT/INVALID value of the configurable budget
+// (General -> Advanced, 'Nested pass timeout'), so a degraded setting lands here.
+if (!defined('PFB_REENTRY_TIMEOUT')) {
+	define('PFB_REENTRY_TIMEOUT', 1800);
+}
+
+// issue #2851: the window (whole seconds) an operator may configure the nested-pass
+// budget to. BBcan177's case is a slow link or low-powered appliance needing longer than
+// the default; the bounds keep that from degrading into an impractical or unbounded wait.
+// pfblockerng.sh's pfb_reentry_timeout() mirrors both values (pinned by
+// ReentryTimeoutSettingTest), so one stored value means the same seconds in both seams.
+if (!defined('PFB_REENTRY_TIMEOUT_MIN')) {
+	define('PFB_REENTRY_TIMEOUT_MIN', 60);
+}
+if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
+	define('PFB_REENTRY_TIMEOUT_MAX', 7200);
+}
+
+// Budget (seconds) for the ADR-10 applied-generation wait. Expiry is NOT a failure:
+// the previous snapshot keeps serving and ADR-61 tick reconciliation retries -- the
+// practical failure latency is that wait's liveness probe (Unbound gone), not this.
+// The value is ANCHORED to PFB_REENTRY_TIMEOUT's precedent for one long-running
+// operator-triggered operation, never derived from it: that knob bounds an external
+// subprocess and kills it on expiry, this bounds an in-process marker poll.
+if (!defined('PFB_DNSBL_SWAP_WAIT')) {
+	define('PFB_DNSBL_SWAP_WAIT', 1800);
+}
+
+// The re-entry target. Single-sourced so no caller composes the child command itself.
+if (!defined('PFB_REENTRY_SCRIPT')) {
+	define('PFB_REENTRY_SCRIPT', '/usr/local/www/pfblockerng/pfblockerng.php');
+}
+
+// Directory holding the admin-authored hook scripts the picker offers and the
+// runner executes (ADR-12 security model: a hook runs a vetted on-box script
+// file, never a GUI-entered command). A dedicated dir, separate from the per-feed
+// list pre/post scripts (list_scripts/), so update hooks and feed transforms don't
+// share a folder; hook scripts are named hook_pre_*/hook_post_* (.sh/.py). Created
+// at install by pfblockerng_install.inc (no shipped files live here).
+if (!defined('PFB_HOOK_SCRIPT_DIR')) {
+	define('PFB_HOOK_SCRIPT_DIR', '/usr/local/pkg/pfblockerng/hooks');
+}
+
+// ADR-19 pkg IO -- path/timeout rationale sits with the pfb_pkg_*() wrappers (issue #2148).
+if (!defined('PFB_PKG_BIN')) {
+	define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
+}
+
+if (!defined('PFB_REPO_GENERATE_HOOK')) {
+	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
+}
+if (!defined('PFB_PKG_TIMEOUT')) {
+	define('PFB_PKG_TIMEOUT', '/usr/bin/timeout -s TERM -k 5 60');
+}
+
+if (!defined('PFB_PYTHON_WRAPPER')) {
+	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
+}
+
+// The daemon-start command and stop/start budgets are named so a harness can override
+// them before this file loads (issue #2613: the unit suite would otherwise start a real
+// resolver or pay the appliance waits).
+if (!defined('PFB_UNBOUND_START_CMD')) {
+	define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');
+}
+if (!defined('PFB_UNBOUND_STOP_WAIT')) {
+	define('PFB_UNBOUND_STOP_WAIT', 30);
+}
+if (!defined('PFB_UNBOUND_KILL_WAIT')) {
+	define('PFB_UNBOUND_KILL_WAIT', 5);
+}
+// issue #3094: callers treat any non-zero retval as a bad unbound.conf. A stop that
+// could not be completed is not that, so it gets its own code to branch on.
+if (!defined('PFB_UNBOUND_STOP_FAILED')) {
+	define('PFB_UNBOUND_STOP_FAILED', -2);
+}
+if (!defined('PFB_UNBOUND_START_WAIT')) {
+	define('PFB_UNBOUND_START_WAIT', 30);
+}
+if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
+	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
+}
+// issue #2879: the wall deadline every synchronous `unbound-control` request/response
+// call in this file runs under -- the same 30 s the sibling resolver waits use
+// (PFB_UNBOUND_STOP_WAIT / PFB_UNBOUND_START_WAIT above, and issue #2015's resolver
+// lookups), so no new operator setting appears. It is ALSO the whole-batch ceiling for
+// pfb_unbound_py_ccache_flush(). Overridable before load, like the budgets above.
+if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
+	define('PFB_UNBOUND_CONTROL_WAIT', 30);
+}
+
+// The installed include executes mounts at load time; unit tests must replace it.
+if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
+	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
+}
+
 // [ $pfb ] pfBlockerNG global array. This needs to be called to get the updated settings.
 function pfb_global() {
 	global $g, $pfb;
@@ -5132,68 +5247,6 @@ function pfb_logger($log, $logtype) {
  * update pass. No die()/exit() here (library code).
  */
 
-// Default per-hook timeout (seconds) when a hook does not set its own.
-if (!defined('PFB_HOOK_TIMEOUT_DEFAULT')) {
-	define('PFB_HOOK_TIMEOUT_DEFAULT', 60);
-}
-
-// Grace period (seconds) after SIGTERM before timeout(1) sends SIGKILL.
-if (!defined('PFB_HOOK_KILL_GRACE')) {
-	define('PFB_HOOK_KILL_GRACE', 5);
-}
-
-// Ceiling (seconds) for per-feed list pre/post transform scripts.
-if (!defined('PFB_LIST_SCRIPT_TIMEOUT')) {
-	define('PFB_LIST_SCRIPT_TIMEOUT', 300);
-}
-
-// Ceiling (seconds) for a nested `pfblockerng.php` re-entry launched from inside an
-// update pass (issue #2016). Generous on purpose: it must exceed a full MaxMind +
-// blacklist download pass on a slow link, and its only job is to stop a stalled child
-// from holding the pass -- and pfblockerng_tick()'s log-maintenance gate -- open forever.
-// Since issue #2851 it is also the ABSENT/INVALID value of the configurable budget
-// (General -> Advanced, 'Nested pass timeout'), so a degraded setting lands here.
-if (!defined('PFB_REENTRY_TIMEOUT')) {
-	define('PFB_REENTRY_TIMEOUT', 1800);
-}
-
-// issue #2851: the window (whole seconds) an operator may configure the nested-pass
-// budget to. BBcan177's case is a slow link or low-powered appliance needing longer than
-// the default; the bounds keep that from degrading into an impractical or unbounded wait.
-// pfblockerng.sh's pfb_reentry_timeout() mirrors both values (pinned by
-// ReentryTimeoutSettingTest), so one stored value means the same seconds in both seams.
-if (!defined('PFB_REENTRY_TIMEOUT_MIN')) {
-	define('PFB_REENTRY_TIMEOUT_MIN', 60);
-}
-if (!defined('PFB_REENTRY_TIMEOUT_MAX')) {
-	define('PFB_REENTRY_TIMEOUT_MAX', 7200);
-}
-
-// Budget (seconds) for the ADR-10 applied-generation wait. Expiry is NOT a failure:
-// the previous snapshot keeps serving and ADR-61 tick reconciliation retries -- the
-// practical failure latency is that wait's liveness probe (Unbound gone), not this.
-// The value is ANCHORED to PFB_REENTRY_TIMEOUT's precedent for one long-running
-// operator-triggered operation, never derived from it: that knob bounds an external
-// subprocess and kills it on expiry, this bounds an in-process marker poll.
-if (!defined('PFB_DNSBL_SWAP_WAIT')) {
-	define('PFB_DNSBL_SWAP_WAIT', 1800);
-}
-
-// The re-entry target. Single-sourced so no caller composes the child command itself.
-if (!defined('PFB_REENTRY_SCRIPT')) {
-	define('PFB_REENTRY_SCRIPT', '/usr/local/www/pfblockerng/pfblockerng.php');
-}
-
-// Directory holding the admin-authored hook scripts the picker offers and the
-// runner executes (ADR-12 security model: a hook runs a vetted on-box script
-// file, never a GUI-entered command). A dedicated dir, separate from the per-feed
-// list pre/post scripts (list_scripts/), so update hooks and feed transforms don't
-// share a folder; hook scripts are named hook_pre_*/hook_post_* (.sh/.py). Created
-// at install by pfblockerng_install.inc (no shipped files live here).
-if (!defined('PFB_HOOK_SCRIPT_DIR')) {
-	define('PFB_HOOK_SCRIPT_DIR', '/usr/local/pkg/pfblockerng/hooks');
-}
-
 /*
  * issue #1927: run a per-feed list pre/post transform script and HONOUR its exit
  * status — a failed transform's leftovers are not feed data; the caller decides
@@ -5796,16 +5849,6 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * 'pfblockerng' or one of the per-channel 'pfblockerng-<channel>' catalogues), which is
  * now the authoritative channel signal AND the repo latest is read from.
  */
-if (!defined('PFB_PKG_BIN')) {
-	define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
-}
-
-if (!defined('PFB_REPO_GENERATE_HOOK')) {
-	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
-}
-if (!defined('PFB_PKG_TIMEOUT')) {
-	define('PFB_PKG_TIMEOUT', '/usr/bin/timeout -s TERM -k 5 60');
-}
 
 /*
  * Regenerate this box's pkg repo conf (and install the catalogue signing key's trusted
@@ -5837,10 +5880,6 @@ function pfb_pkg_exec(string $command, array &$out = [], int &$ret = -1): void {
 	$out = [];
 	$ret = -1;
 	exec($command, $out, $ret);
-}
-
-if (!defined('PFB_PYTHON_WRAPPER')) {
-	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
 }
 
 /*
@@ -11651,43 +11690,6 @@ function pfb_dnsbl_tld_stats_finalize(array $group_counts): void {
 
 	// Save DNSBL Alias statistics
 	dnsbl_save_stats();
-}
-
-// The daemon-start command and stop/start budgets are named so a harness can override
-// them before this file loads (issue #2613: the unit suite would otherwise start a real
-// resolver or pay the appliance waits).
-if (!defined('PFB_UNBOUND_START_CMD')) {
-	define('PFB_UNBOUND_START_CMD', '/usr/local/sbin/unbound -c /var/unbound/unbound.conf 2>&1');
-}
-if (!defined('PFB_UNBOUND_STOP_WAIT')) {
-	define('PFB_UNBOUND_STOP_WAIT', 30);
-}
-if (!defined('PFB_UNBOUND_KILL_WAIT')) {
-	define('PFB_UNBOUND_KILL_WAIT', 5);
-}
-// issue #3094: callers treat any non-zero retval as a bad unbound.conf. A stop that
-// could not be completed is not that, so it gets its own code to branch on.
-if (!defined('PFB_UNBOUND_STOP_FAILED')) {
-	define('PFB_UNBOUND_STOP_FAILED', -2);
-}
-if (!defined('PFB_UNBOUND_START_WAIT')) {
-	define('PFB_UNBOUND_START_WAIT', 30);
-}
-if (!defined('PFB_UNBOUND_START_SETUP_WAIT')) {
-	define('PFB_UNBOUND_START_SETUP_WAIT', 5);
-}
-// issue #2879: the wall deadline every synchronous `unbound-control` request/response
-// call in this file runs under -- the same 30 s the sibling resolver waits use
-// (PFB_UNBOUND_STOP_WAIT / PFB_UNBOUND_START_WAIT above, and issue #2015's resolver
-// lookups), so no new operator setting appears. It is ALSO the whole-batch ceiling for
-// pfb_unbound_py_ccache_flush(). Overridable before load, like the budgets above.
-if (!defined('PFB_UNBOUND_CONTROL_WAIT')) {
-	define('PFB_UNBOUND_CONTROL_WAIT', 30);
-}
-
-// The installed include executes mounts at load time; unit tests must replace it.
-if (!defined('PFB_UNBOUND_INCLUDE_FILE')) {
-	define('PFB_UNBOUND_INCLUDE_FILE', '/var/unbound/pfb_unbound_include.inc');
 }
 
 // Function to Start Unbound
