@@ -1136,8 +1136,10 @@ Describe 'run-gates.sh accepts an explicit empty option value (real git, unstubb
 
   run_gates_in_root() { (cd "$PFB_ROOT" && sh "${PFB_ROOT}/scripts/agent/run-gates.sh" "$@"); }
 
-  It 'accepts an explicit empty --worktree (falls back to cwd) and completes --plan (the ${2?}/[ $# -ge 2 ] accept-empty proof)'
-    When run run_gates_in_root --worktree '' --plan
+  It 'accepts an explicit empty --worktree and still runs --plan'
+    # --diff HEAD: a CI checkout has no origin/devel, and the default base
+    # would exit 2 before --plan. Empty must still be accepted.
+    When run run_gates_in_root --worktree '' --diff HEAD --plan
     The status should equal 0
     The stdout should include 'check-graph-fresh.sh'
     The stderr should not include 'usage: run-gates.sh'
