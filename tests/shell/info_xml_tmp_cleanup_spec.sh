@@ -74,7 +74,7 @@ STUBEOF
   }
 
   Context 'when a later ssh/rsync call fails'
-    force_ssh_mkdir_failure() { : > "$CLEANUP_FAIL_MKDIR"; }
+    force_ssh_mkdir_failure() { true > "$CLEANUP_FAIL_MKDIR"; }
     BeforeEach 'force_ssh_mkdir_failure'
 
     It 'install-from-repo.sh: leaves no temp file in the checkout or in TMPDIR (spaces included)'
