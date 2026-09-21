@@ -189,10 +189,10 @@ PKGVERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo '
 # expects; INT/TERM re-raise the conventional exit status instead of
 # continuing past cleanup.
 INFO_XML_TMP="$(mktemp)"
-chmod 644 "$INFO_XML_TMP"
 trap 'rm -f "$INFO_XML_TMP"' EXIT
 trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 130' INT
 trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 143' TERM
+chmod 644 "$INFO_XML_TMP"
 sed -e "s|%%PKGNAME%%|${PKG_NAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${INFO_XML_TMP}"

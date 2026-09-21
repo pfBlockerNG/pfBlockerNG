@@ -128,6 +128,24 @@ STUBEOF
     End
   End
 
+  Context 'when chmod itself fails (traps must already be active)'
+    add_failing_chmod_stub() {
+      cat > "${WORK}/bin/chmod" <<'STUBEOF'
+#!/bin/sh
+echo "chmod: operation not permitted" >&2
+exit 1
+STUBEOF
+      chmod +x "${WORK}/bin/chmod"
+    }
+    BeforeEach 'add_failing_chmod_stub'
+
+    It 'install-from-repo.sh: leaves no temp file in TMPDIR even when chmod fails'
+      When run env TMPDIR="$TMPHOME" sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+      The status should not equal 0
+      The result of function leftover_tmp_count should equal "0"
+    End
+  End
+
   info_mode() { cat "$CLEANUP_MODE_CAPTURE" 2>/dev/null; }
 
   It 'install-from-repo.sh: uploads info.xml with mode 0644 despite mktemp defaulting to 0600'
@@ -136,7 +154,7 @@ STUBEOF
     The result of function info_mode should equal "-rw-r--r--"
   End
 
-  Context 'when a signal arrives during the network step'
+  Context 'when a SIGINT arrives during the network step'
     send_sigint() { CLEANUP_SEND_SIGNAL=INT; export CLEANUP_SEND_SIGNAL; }
     BeforeEach 'send_sigint'
 
@@ -149,6 +167,23 @@ STUBEOF
     It 'deploy.sh: exits 130 and does not continue past cleanup'
       When run sh "${FAKE_ROOT}/scripts/deploy.sh" root@target
       The status should equal 130
+      The result of function calls should not include 'info.xml'
+    End
+  End
+
+  Context 'when a SIGTERM arrives during the network step'
+    send_sigterm() { CLEANUP_SEND_SIGNAL=TERM; export CLEANUP_SEND_SIGNAL; }
+    BeforeEach 'send_sigterm'
+
+    It 'install-from-repo.sh: exits 143 and does not continue past cleanup'
+      When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+      The status should equal 143
+      The result of function calls should not include 'info.xml'
+    End
+
+    It 'deploy.sh: exits 143 and does not continue past cleanup'
+      When run sh "${FAKE_ROOT}/scripts/deploy.sh" root@target
+      The status should equal 143
       The result of function calls should not include 'info.xml'
     End
   End
