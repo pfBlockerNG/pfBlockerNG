@@ -50,10 +50,12 @@ rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
 # info.xml: <name> is the SHORT pfBlockerNG (what pfSense's get_package_id looks
 # up; the port renders ${PORTNAME:S/pfSense-pkg-//}), the share directory the full
 # port name.
-# issue #3279: mktemp + trap — a later ssh/rsync failure under set -e must
-# not leave this temp file behind.
+# issue #3279 review: INT/TERM re-raise the conventional exit status
+# instead of continuing past cleanup (--no-perms already protects mode).
 INFO_XML_TMP="$(mktemp)"
-trap 'rm -f "$INFO_XML_TMP"' EXIT INT TERM
+trap 'rm -f "$INFO_XML_TMP"' EXIT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 130' INT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 143' TERM
 sed "s|%%PKGNAME%%|pfBlockerNG|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${INFO_XML_TMP}"

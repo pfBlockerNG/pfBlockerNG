@@ -185,10 +185,14 @@ rsync -az -e "$RSH" \
 # version from git (tags may be absent in a shallow CI checkout -> short hash;
 # fall back to a dev marker).
 PKGVERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo '0.0.0-dev')"
-# issue #3279: mktemp + trap — a later ssh/rsync failure under set -e must
-# not leave this temp file behind.
+# issue #3279 review: chmod restores mktemp's 0600 to the 0644 rsync -a
+# expects; INT/TERM re-raise the conventional exit status instead of
+# continuing past cleanup.
 INFO_XML_TMP="$(mktemp)"
-trap 'rm -f "$INFO_XML_TMP"' EXIT INT TERM
+chmod 644 "$INFO_XML_TMP"
+trap 'rm -f "$INFO_XML_TMP"' EXIT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 130' INT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 143' TERM
 sed -e "s|%%PKGNAME%%|${PKG_NAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
     > "${INFO_XML_TMP}"

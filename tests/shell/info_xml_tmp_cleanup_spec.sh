@@ -41,7 +41,10 @@ Describe 'info.xml temp file lifecycle (issue #3279)'
 #!/bin/sh
 printf 'ssh: %s\n' "$*" >> "$CLEANUP_LOG"
 case "$*" in
-    *"mkdir -p"*"share"*) [ ! -f "$CLEANUP_FAIL_MKDIR" ] || exit 1 ;;
+    *"mkdir -p"*"share"*)
+        [ ! -f "$CLEANUP_FAIL_MKDIR" ] || exit 1
+        [ -z "${CLEANUP_SEND_SIGNAL:-}" ] || kill "-${CLEANUP_SEND_SIGNAL}" "$PPID"
+        ;;
 esac
 case "$*" in
     *"pkg config ABI"*) printf 'FreeBSD:15:amd64\n' ;;
@@ -52,12 +55,21 @@ STUBEOF
     cat > "${WORK}/bin/rsync" <<'STUBEOF'
 #!/bin/sh
 printf 'rsync: %s\n' "$*" >> "$CLEANUP_LOG"
+prev=""
+for arg in "$@"; do
+    case "$arg" in
+        -*) ;;
+        */info.xml) [ -z "$CLEANUP_MODE_CAPTURE" ] || ls -ld "$prev" | cut -c1-10 > "$CLEANUP_MODE_CAPTURE" ;;
+        *) prev="$arg" ;;
+    esac
+done
 exit 0
 STUBEOF
     chmod +x "${WORK}/bin/ssh" "${WORK}/bin/rsync"
     CLEANUP_LOG="$LOG"
     CLEANUP_FAIL_MKDIR="${WORK}/fail-mkdir"
-    export CLEANUP_LOG CLEANUP_FAIL_MKDIR
+    CLEANUP_MODE_CAPTURE="${WORK}/info-mode.txt"
+    export CLEANUP_LOG CLEANUP_FAIL_MKDIR CLEANUP_MODE_CAPTURE
     PATH="${WORK}/bin:${PATH}"
     export PATH
   }
@@ -112,6 +124,31 @@ STUBEOF
     It 'deploy.sh: aborts before any info.xml ssh/rsync call'
       When run sh "${FAKE_ROOT}/scripts/deploy.sh" root@target
       The status should not equal 0
+      The result of function calls should not include 'info.xml'
+    End
+  End
+
+  info_mode() { cat "$CLEANUP_MODE_CAPTURE" 2>/dev/null; }
+
+  It 'install-from-repo.sh: uploads info.xml with mode 0644 despite mktemp defaulting to 0600'
+    When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+    The status should equal 0
+    The result of function info_mode should equal "-rw-r--r--"
+  End
+
+  Context 'when a signal arrives during the network step'
+    send_sigint() { CLEANUP_SEND_SIGNAL=INT; export CLEANUP_SEND_SIGNAL; }
+    BeforeEach 'send_sigint'
+
+    It 'install-from-repo.sh: exits 130 and does not continue past cleanup'
+      When run sh "${FAKE_ROOT}/scripts/install-from-repo.sh" root@target --port 2222
+      The status should equal 130
+      The result of function calls should not include 'info.xml'
+    End
+
+    It 'deploy.sh: exits 130 and does not continue past cleanup'
+      When run sh "${FAKE_ROOT}/scripts/deploy.sh" root@target
+      The status should equal 130
       The result of function calls should not include 'info.xml'
     End
   End
