@@ -223,24 +223,24 @@ HEALTH_TIMEOUT=300
 while [ $# -gt 0 ]; do
     # shellcheck disable=SC2034 # PX_* are consumed by the sourced image-lib.sh helpers
     case "$1" in
-        --proxmox)         PX_TARGET="$2"; shift 2 ;;
-        --proxmox-port)    PX_PORT="$2"; shift 2 ;;
-        --proxmox-ssh-key) PX_KEY="$2"; shift 2 ;;
-        --remote-tmpdir)   REMOTE_TMPDIR="$2"; shift 2 ;;
-        --from)            FROM="$2"; shift 2 ;;
-        --to)              TO="$2"; shift 2 ;;
-        --type)            TYPE="$2"; shift 2 ;;
-        --registry)        REGISTRY="$2"; shift 2 ;;
-        --image)           IMAGE="$2"; shift 2 ;;
-        --description)     DESCRIPTION="$2"; shift 2 ;;
-        --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
-        --ssh-key)         GUEST_KEY="$2"; shift 2 ;;
-        --ssh-port)        GUEST_PORT="$2"; shift 2 ;;
-        --mac)             MAC="$2"; shift 2 ;;
-        --smbios-uuid)     SMBIOS_UUID="$2"; shift 2 ;;
-        --compression)     COMPRESSION="$2"; shift 2 ;;
+        --proxmox)         PX_TARGET="${2?--proxmox requires an argument}"; shift 2 ;;
+        --proxmox-port)    PX_PORT="${2?--proxmox-port requires an argument}"; shift 2 ;;
+        --proxmox-ssh-key) PX_KEY="${2?--proxmox-ssh-key requires an argument}"; shift 2 ;;
+        --remote-tmpdir)   REMOTE_TMPDIR="${2?--remote-tmpdir requires an argument}"; shift 2 ;;
+        --from)            FROM="${2?--from requires an argument}"; shift 2 ;;
+        --to)              TO="${2?--to requires an argument}"; shift 2 ;;
+        --type)            TYPE="${2?--type requires an argument}"; shift 2 ;;
+        --registry)        REGISTRY="${2?--registry requires an argument}"; shift 2 ;;
+        --image)           IMAGE="${2?--image requires an argument}"; shift 2 ;;
+        --description)     DESCRIPTION="${2?--description requires an argument}"; shift 2 ;;
+        --artifact-type)   ARTIFACT_TYPE="${2?--artifact-type requires an argument}"; shift 2 ;;
+        --ssh-key)         GUEST_KEY="${2?--ssh-key requires an argument}"; shift 2 ;;
+        --ssh-port)        GUEST_PORT="${2?--ssh-port requires an argument}"; shift 2 ;;
+        --mac)             MAC="${2?--mac requires an argument}"; shift 2 ;;
+        --smbios-uuid)     SMBIOS_UUID="${2?--smbios-uuid requires an argument}"; shift 2 ;;
+        --compression)     COMPRESSION="${2?--compression requires an argument}"; shift 2 ;;
         --upgrade-timeout)
-            UPGRADE_TIMEOUT="$2"
+            UPGRADE_TIMEOUT="${2?--upgrade-timeout requires an argument}"
             case "$UPGRADE_TIMEOUT" in
                 '' | *[!0-9]*) die "--upgrade-timeout must be a decimal integer from 0 to 86400" ;;
             esac
@@ -248,10 +248,10 @@ while [ $# -gt 0 ]; do
                 || die "--upgrade-timeout must be a decimal integer from 0 to 86400"
             shift 2 ;;
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
-        --branch)          BRANCH="$2"; shift 2 ;;
-        --facts-out)       FACTS_OUT="$2"; shift 2 ;;
+        --branch)          BRANCH="${2?--branch requires an argument}"; shift 2 ;;
+        --facts-out)       FACTS_OUT="${2?--facts-out requires an argument}"; shift 2 ;;
         --expect-freebsd-major)
-            EXPECT_FREEBSD_MAJOR="$2"
+            EXPECT_FREEBSD_MAJOR="${2?--expect-freebsd-major requires an argument}"
             case "$EXPECT_FREEBSD_MAJOR" in
                 *[!0-9]*) die "--expect-freebsd-major must be digits only (got '$EXPECT_FREEBSD_MAJOR')" ;;
             esac

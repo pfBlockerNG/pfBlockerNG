@@ -213,8 +213,8 @@ main() {
 	scrub_git_env "$0"
 	while [ $# -gt 0 ]; do
 		case "$1" in
-			--worktree) worktree=$2; shift 2 ;;
-			--diff) base=$2; shift 2 ;;
+			--worktree) [ $# -ge 2 ] || usage; worktree=$2; shift 2 ;;
+			--diff) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			--plan) plan=1; shift ;;
 			--allow-missing) allow_missing=1; shift ;;
 			*) usage ;;

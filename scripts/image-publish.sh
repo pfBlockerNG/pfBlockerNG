@@ -132,22 +132,22 @@ image_px_defaults
 while [ $# -gt 0 ]; do
     # shellcheck disable=SC2034 # PX_* are consumed by the sourced image-lib.sh helpers
     case "$1" in
-        --proxmox)         PX_TARGET="$2"; shift 2 ;;
-        --proxmox-port)    PX_PORT="$2"; shift 2 ;;
-        --proxmox-ssh-key) PX_KEY="$2"; shift 2 ;;
-        --remote-tmpdir)   REMOTE_TMPDIR="$2"; shift 2 ;;
-        --type)            TYPE="$2"; shift 2 ;;
-        --vmid)            VMID="$2"; shift 2 ;;
-        --disk)            DISK="$2"; shift 2 ;;
-        --registry)        REGISTRY="$2"; shift 2 ;;
-        --image)           IMAGE="$2"; shift 2 ;;
-        --compression)     COMPRESSION="$2"; shift 2 ;;
-        --out)             OUT="$2"; shift 2 ;;
+        --proxmox)         PX_TARGET="${2?--proxmox requires an argument}"; shift 2 ;;
+        --proxmox-port)    PX_PORT="${2?--proxmox-port requires an argument}"; shift 2 ;;
+        --proxmox-ssh-key) PX_KEY="${2?--proxmox-ssh-key requires an argument}"; shift 2 ;;
+        --remote-tmpdir)   REMOTE_TMPDIR="${2?--remote-tmpdir requires an argument}"; shift 2 ;;
+        --type)            TYPE="${2?--type requires an argument}"; shift 2 ;;
+        --vmid)            VMID="${2?--vmid requires an argument}"; shift 2 ;;
+        --disk)            DISK="${2?--disk requires an argument}"; shift 2 ;;
+        --registry)        REGISTRY="${2?--registry requires an argument}"; shift 2 ;;
+        --image)           IMAGE="${2?--image requires an argument}"; shift 2 ;;
+        --compression)     COMPRESSION="${2?--compression requires an argument}"; shift 2 ;;
+        --out)             OUT="${2?--out requires an argument}"; shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        --artifact-type)   ARTIFACT_TYPE="$2"; shift 2 ;;
-        --description)     DESCRIPTION="$2"; shift 2 ;;
-        --os-version)      OS_VERSION="$2"; shift 2 ;;
+        --artifact-type)   ARTIFACT_TYPE="${2?--artifact-type requires an argument}"; shift 2 ;;
+        --description)     DESCRIPTION="${2?--description requires an argument}"; shift 2 ;;
+        --os-version)      OS_VERSION="${2?--os-version requires an argument}"; shift 2 ;;
         --print-identity)  PRINT_IDENTITY=1; shift ;;
         -h|--help)         sed -n '2,87p' "$0"; exit 0 ;;
         -*)                die "unknown option: $1" ;;
