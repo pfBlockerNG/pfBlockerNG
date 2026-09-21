@@ -50,13 +50,16 @@ rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" \
 # info.xml: <name> is the SHORT pfBlockerNG (what pfSense's get_package_id looks
 # up; the port renders ${PORTNAME:S/pfSense-pkg-//}), the share directory the full
 # port name.
+# issue #3279: mktemp + trap — a later ssh/rsync failure under set -e must
+# not leave this temp file behind.
+INFO_XML_TMP="$(mktemp)"
+trap 'rm -f "$INFO_XML_TMP"' EXIT INT TERM
 sed "s|%%PKGNAME%%|pfBlockerNG|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
-    > "${REPO_ROOT}/.info.xml.tmp"
+    > "${INFO_XML_TMP}"
 ssh "$SSH_TARGET" mkdir -p "${PKG_PREFIX}/share/pfSense-pkg-pfBlockerNG"
-rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" "${REPO_ROOT}/.info.xml.tmp" \
+rsync -az --no-owner --no-group --no-perms --rsync-path="rsync" "${INFO_XML_TMP}" \
     "${SSH_TARGET}:${PKG_PREFIX}/share/pfSense-pkg-pfBlockerNG/info.xml"
-rm -f "${REPO_ROOT}/.info.xml.tmp"
 
 echo "==> Files synced. Restarting services..."
 
