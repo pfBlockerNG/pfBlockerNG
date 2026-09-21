@@ -90,9 +90,9 @@ other pfBlockerNG repository it finds:
 
 Choose **stable** unless you specifically want to track prerelease builds.
 
-pfBlockerNG is also available from pfSense's built-in Package Manager
-(**System ▸ Package Manager ▸ Available Packages**), built and shipped by
-Netgate — see [Other installation methods](#other-installation-methods).
+pfBlockerNG may also be available from pfSense's built-in Package Manager
+(**System ▸ Package Manager ▸ Available Packages**) — see
+[Other installation methods](#other-installation-methods).
 
 Once installed, the interface lives in the webConfigurator under
 **Firewall ▸ pfBlockerNG**.
@@ -202,11 +202,11 @@ pfblockerng dnsbl-control removebypass <ip>
 
 ### pfSense Package Manager
 
-pfBlockerNG ships in pfSense's built-in package catalog: in the
-webConfigurator go to **System ▸ Package Manager ▸ Available Packages**,
-search for `pfBlockerNG`, and install **pfBlockerNG** (stable) or
-**pfBlockerNG-devel** (development). These builds are published by Netgate and
-generally lag this repository's releases.
+pfBlockerNG may also be available from pfSense's built-in package catalog:
+in the webConfigurator go to **System ▸ Package Manager ▸ Available
+Packages** and search for `pfBlockerNG`. Netgate controls whether — and
+which version of — the canonical `pfSense-pkg-pfBlockerNG` that catalog
+carries, and it generally lags this repository's releases.
 
 ### Migrating a legacy install
 

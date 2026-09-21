@@ -38,8 +38,8 @@ SSH_TARGET=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --port)    PORT="$2"; shift 2 ;;
-        --ssh-key) SSH_KEY="$2"; shift 2 ;;
+        --port)    PORT="${2?--port requires an argument}"; shift 2 ;;
+        --ssh-key) SSH_KEY="${2?--ssh-key requires an argument}"; shift 2 ;;
         -*)        echo "Unknown option: $1" >&2; exit 1 ;;
         *)
             if [ -z "$SSH_TARGET" ]; then SSH_TARGET="$1"; else
@@ -185,13 +185,20 @@ rsync -az -e "$RSH" \
 # version from git (tags may be absent in a shallow CI checkout -> short hash;
 # fall back to a dev marker).
 PKGVERSION="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo '0.0.0-dev')"
+# issue #3279 review: chmod restores mktemp's 0600 to the 0644 rsync -a
+# expects; INT/TERM re-raise the conventional exit status instead of
+# continuing past cleanup.
+INFO_XML_TMP="$(mktemp)"
+trap 'rm -f "$INFO_XML_TMP"' EXIT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 130' INT
+trap 'rm -f "$INFO_XML_TMP"; trap - EXIT; exit 143' TERM
+chmod 644 "$INFO_XML_TMP"
 sed -e "s|%%PKGNAME%%|${PKG_NAME}|g" -e "s|%%PKGVERSION%%|${PKGVERSION}|g" \
     "${REPO_ROOT}/src/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml" \
-    > "${REPO_ROOT}/.info.xml.tmp"
+    > "${INFO_XML_TMP}"
 ssh_t mkdir -p "/usr/local/share/${PORTNAME}"
-rsync -az -e "$RSH" "${REPO_ROOT}/.info.xml.tmp" \
+rsync -az -e "$RSH" "${INFO_XML_TMP}" \
     "${SSH_TARGET}:/usr/local/share/${PORTNAME}/info.xml"
-rm -f "${REPO_ROOT}/.info.xml.tmp"
 
 # 2) Run pfSense's package POST-INSTALL — the EXACT step `pkg` runs after
 #    extracting files. The FreeBSD port's files/pkg-install.in does:

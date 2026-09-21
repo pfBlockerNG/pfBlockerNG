@@ -46,12 +46,17 @@ STUBEOF
     cat > "${WORK}/bin/rsync" <<'STUBEOF'
 #!/bin/sh
 # Log the transfer; keep a copy of the templated info.xml for the assertions.
+# issue #3279: the info.xml source is a mktemp path now (no fixed suffix),
+# so identify it by the DEST ending in /info.xml and take the immediately
+# preceding non-flag positional arg as the source.
 printf 'rsync: %s\n' "$*" >> "$IDENT_LOG"
 src=""
+prev=""
 for arg in "$@"; do
     case "$arg" in
         -*) ;;
-        *.info.xml.tmp) src="$arg" ;;
+        */info.xml) src="$prev" ;;
+        *) prev="$arg" ;;
     esac
 done
 [ -n "$src" ] && cp "$src" "$IDENT_CAPTURE"
