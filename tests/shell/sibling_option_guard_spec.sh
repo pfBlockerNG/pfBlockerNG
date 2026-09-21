@@ -35,7 +35,8 @@ STUBEOF
     done
     PATH="${STUBDIR}:${PATH}"
     export PATH
-    rm -f /var/tmp/agents/issue-3312/pwned
+    PWNED="${WORK}/pwned"
+    rm -f "$PWNED"
   }
   teardown() { rm -rf "$WORK"; }
   BeforeEach 'setup'
@@ -1056,10 +1057,10 @@ STUBEOF
 
   Describe 'hostile inputs (issue #3312 §4)'
     It 'does not evaluate a shell-metacharacter option value (command substitution stays inert)'
-      When run install_pkg root@x --port '$(touch /var/tmp/agents/issue-3312/pwned)' --ssh-key
+      When run install_pkg root@x --port "\$(touch ${PWNED})" --ssh-key
       The status should not equal 0
       The stderr should include '--ssh-key requires an argument'
-      Assert [ ! -e /var/tmp/agents/issue-3312/pwned ]
+      Assert [ ! -e "$PWNED" ]
     End
 
     It 'treats a space-containing quoted value as one argument (issue #3312 hostile row 5)'
