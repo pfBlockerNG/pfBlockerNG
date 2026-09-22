@@ -102,9 +102,9 @@ VARIANT_FILTER=""
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ref)       MATRIX_REF="$2";  shift 2 ;;
-    --file)      MATRIX_FILE="$2"; shift 2 ;;
-    --variant)   VARIANT_FILTER="$2"; shift 2 ;;
+    --ref)       MATRIX_REF="${2?--ref requires an argument}";  shift 2 ;;
+    --file)      MATRIX_FILE="${2?--file requires an argument}"; shift 2 ;;
+    --variant)   VARIANT_FILTER="${2?--variant requires an argument}"; shift 2 ;;
     --github-output) DO_GITHUB_OUTPUT=1; shift ;;
     --print-build)   DO_PRINT_BUILD=1;   shift ;;
     --print-ci)      DO_PRINT_CI=1;      shift ;;

@@ -145,12 +145,22 @@ VARVER=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --in)            IN="$2"; shift 2 ;;
-        --out)           OUT="$2"; shift 2 ;;
-        --varver)        VARVER="$2"; shift 2 ;;
+        --in)
+            [ $# -ge 2 ] || { echo "build-repo: --in requires a value" >&2; exit 2; }
+            IN="$2"; shift 2 ;;
+        --out)
+            [ $# -ge 2 ] || { echo "build-repo: --out requires a value" >&2; exit 2; }
+            OUT="$2"; shift 2 ;;
+        --varver)
+            [ $# -ge 2 ] || { echo "build-repo: --varver requires a value" >&2; exit 2; }
+            VARVER="$2"; shift 2 ;;
         --print-conf)    PRINT_CONF=1; shift ;;
-        --base-url)      BASE_URL="$2"; shift 2 ;;
-        --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
+        --base-url)
+            [ $# -ge 2 ] || { echo "build-repo: --base-url requires a value" >&2; exit 2; }
+            BASE_URL="$2"; shift 2 ;;
+        --catalog-path)
+            [ $# -ge 2 ] || { echo "build-repo: --catalog-path requires a value" >&2; exit 2; }
+            CATALOG_PATH="$2"; shift 2 ;;
         --channel)
             [ $# -ge 2 ] || { echo "build-repo: --channel requires a value" >&2; exit 2; }
             case "$2" in

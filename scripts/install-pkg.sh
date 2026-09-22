@@ -39,9 +39,9 @@ PKGFILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --pkg)     PKGFILE="$2"; shift 2 ;;
-        --port)    PORT="$2"; shift 2 ;;
-        --ssh-key) SSH_KEY="$2"; shift 2 ;;
+        --pkg)     PKGFILE="${2?--pkg requires an argument}"; shift 2 ;;
+        --port)    PORT="${2?--port requires an argument}"; shift 2 ;;
+        --ssh-key) SSH_KEY="${2?--ssh-key requires an argument}"; shift 2 ;;
         -*)        echo "install-pkg: unknown option: $1" >&2; exit 1 ;;
         *)
             if [ -z "$SSH_TARGET" ]; then SSH_TARGET="$1"; else
