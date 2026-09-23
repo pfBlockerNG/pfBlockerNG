@@ -55,7 +55,7 @@ main() {
 	[ -n "$graphify_spec" ] ||
 		fail "graphify package specification not found in '$pyproject'"
 	case "$graphify_spec" in
-		*graphifyy\[leiden\]*) ;;
+		*graphifyy\[leiden\]*@*) ;;
 		*) fail "graphify package specification extracted from '$pyproject' is not a valid requirement (got: '$graphify_spec')" ;;
 	esac
 

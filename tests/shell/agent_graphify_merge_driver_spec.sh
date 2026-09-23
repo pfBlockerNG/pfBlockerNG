@@ -189,6 +189,17 @@ TOML
       The file "$uv_log" should not be exist
     End
 
+    It 'fails loudly when an earlier line quotes the bare package name and shadows the real pin'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+# TODO(followup): bump "graphifyy[leiden]" once the org fork tags a release
+"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 1
+      The stderr should include 'is not a valid requirement'
+      The file "$uv_log" should not be exist
+    End
+
     It 'strips a trailing comment with no embedded quote from the extracted pin spec (regression)'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
 "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",  # bump pin per issue 1234
