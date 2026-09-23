@@ -44,14 +44,20 @@ main() {
 	while IFS= read -r line || [ -n "$line" ]; do
 		case "$line" in
 			*\"graphifyy\[leiden\]*)
+				# issue #3309: %% takes the FIRST quoted span, not the LAST -- a trailing
+				# comment (even one holding a quote) can no longer leak into the spec.
 				graphify_spec=${line#*\"}
-				graphify_spec=${graphify_spec%\"*}
+				graphify_spec=${graphify_spec%%\"*}
 				break
 				;;
 		esac
 	done < "$pyproject"
 	[ -n "$graphify_spec" ] ||
 		fail "graphify package specification not found in '$pyproject'"
+	case "$graphify_spec" in
+		*graphifyy\[leiden\]*) ;;
+		*) fail "graphify package specification extracted from '$pyproject' is not a valid requirement (got: '$graphify_spec')" ;;
+	esac
 
 	uv tool install --upgrade "$graphify_spec" 1>&2 ||
 		fail 'Graphify installation failed'

@@ -154,4 +154,84 @@ SHADOW
       The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should equal ''
     End
   End
+
+  Context 'pin specification parsing hardening (issue #3309)'
+    It 'strips a trailing comment containing a quote from the extracted pin spec'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",  # see "notes.md" for context
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+    End
+
+    It 'fails loudly instead of installing a single-character spec when the pin value is a triple-quoted multi-line string'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+tools = [
+    """graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4
+    """,
+]
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 1
+      The stderr should include 'graphify package specification not found'
+      The file "$uv_log" should not be exist
+    End
+
+    It 'fails loudly rather than installing a whitespace-only pin spec'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+    " ",  # relocated: was "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@sha" previously
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 1
+      The stderr should include 'is not a valid requirement'
+      The file "$uv_log" should not be exist
+    End
+
+    It 'strips a trailing comment with no embedded quote from the extracted pin spec (regression)'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",  # bump pin per issue 1234
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+    End
+
+    It 'extracts the clean pin spec around extra surrounding whitespace (regression)'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+        "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4"   ,
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+    End
+
+    It 'extracts the clean pin spec from a CRLF-terminated line (regression)'
+      printf '%s\r\n' '"graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",' > "$fixture/suite/pyproject.toml"
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+    End
+
+    It 'fails loudly on a single-quoted (TOML literal string) pin spec (regression)'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+    'graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4',
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 1
+      The stderr should include 'graphify package specification not found'
+      The file "$uv_log" should not be exist
+    End
+
+    It 'extracts the same pin spec as today from the committed pyproject.toml (regression)'
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
+    End
+  End
 End
