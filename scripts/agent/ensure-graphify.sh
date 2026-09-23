@@ -54,8 +54,11 @@ main() {
 	done < "$pyproject"
 	[ -n "$graphify_spec" ] ||
 		fail "graphify package specification not found in '$pyproject'"
+	# The pin is a git source: the org-fork commit from pyproject.toml is the only
+	# valid install target, so the spec must carry the pinned git+https:// URL
+	# with a revision, not a bare name, a version pin, or an unpinned URL.
 	case "$graphify_spec" in
-		*graphifyy\[leiden\]*@*) ;;
+		*graphifyy\[leiden\]*git+https://*@[0-9a-f]*) ;;
 		*) fail "graphify package specification extracted from '$pyproject' is not a valid requirement (got: '$graphify_spec')" ;;
 	esac
 
