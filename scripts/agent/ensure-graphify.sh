@@ -42,7 +42,9 @@ main() {
 		fail "required project configuration '$pyproject' is missing"
 	graphify_spec=''
 	while IFS= read -r line || [ -n "$line" ]; do
+		line=${line#"${line%%[![:space:]]*}"}
 		case "$line" in
+			\#*) continue ;;
 			*\"graphifyy\[leiden\]*)
 				# issue #3309: %% takes the FIRST quoted span, not the LAST -- a trailing
 				# comment (even one holding a quote) can no longer leak into the spec.

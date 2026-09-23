@@ -189,15 +189,15 @@ TOML
       The file "$uv_log" should not be exist
     End
 
-    It 'fails loudly when an earlier line quotes the bare package name and shadows the real pin'
+    It 'skips an earlier comment quoting the bare package name'
       cat > "$fixture/suite/pyproject.toml" <<'TOML'
 # TODO(followup): bump "graphifyy[leiden]" once the org fork tags a release
 "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4",
 TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
-      The status should equal 1
-      The stderr should include 'is not a valid requirement'
-      The file "$uv_log" should not be exist
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4'
     End
 
     It 'fails loudly when the git source has no pinned revision'
@@ -208,6 +208,17 @@ TOML
       The status should equal 1
       The stderr should include 'is not a valid requirement'
       The file "$uv_log" should not be exist
+    End
+
+    It 'skips an earlier comment containing a complete stale pin'
+      cat > "$fixture/suite/pyproject.toml" <<'TOML'
+    # Previous pin: "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@9d8432863e2ee375b4354620eb1d4ac62eaf1ad4"
+    "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@7b1ec6623a5c118a4e71475bd7d920aad6e15bb6",
+TOML
+      When run sh "$script_home/ensure-graphify.sh" "$repo"
+      The status should equal 0
+      The output should equal "$stubdir/graphify"
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@7b1ec6623a5c118a4e71475bd7d920aad6e15bb6'
     End
 
     It 'strips a trailing comment with no embedded quote from the extracted pin spec (regression)'
