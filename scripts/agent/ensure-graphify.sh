@@ -42,16 +42,27 @@ main() {
 		fail "required project configuration '$pyproject' is missing"
 	graphify_spec=''
 	while IFS= read -r line || [ -n "$line" ]; do
+		line=${line#"${line%%[![:space:]]*}"}
 		case "$line" in
+			\#*) continue ;;
 			*\"graphifyy\[leiden\]*)
+				# issue #3309: %% takes the FIRST quoted span, not the LAST -- a trailing
+				# comment (even one holding a quote) can no longer leak into the spec.
 				graphify_spec=${line#*\"}
-				graphify_spec=${graphify_spec%\"*}
+				graphify_spec=${graphify_spec%%\"*}
 				break
 				;;
 		esac
 	done < "$pyproject"
 	[ -n "$graphify_spec" ] ||
 		fail "graphify package specification not found in '$pyproject'"
+	# The pin is a git source: the org-fork commit from pyproject.toml is the only
+	# valid install target, so the spec must carry the pinned git+https:// URL
+	# with a revision, not a bare name, a version pin, or an unpinned URL.
+	case "$graphify_spec" in
+		*graphifyy\[leiden\]*git+https://*@[0-9a-f]*) ;;
+		*) fail "graphify package specification extracted from '$pyproject' is not a valid requirement (got: '$graphify_spec')" ;;
+	esac
 
 	uv tool install --upgrade "$graphify_spec" 1>&2 ||
 		fail 'Graphify installation failed'
