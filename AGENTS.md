@@ -1,8 +1,8 @@
 # pfBlockerNG — agent bootstrap (canonical)
 
-This file = **canonical, vendor-neutral agent policy bootstrap**. Claude Code load it
-through `CLAUDE.md` (`@AGENTS.md` import), Codex and Grok native, Copilot via
-`.github/copilot-instructions.md`. Detailed policy live in `.agents/policy/`, domain
+This file = **canonical, vendor-neutral agent policy bootstrap**, loaded natively by Claude
+Code, Codex and Grok, and by Copilot via `.github/copilot-instructions.md`. Detailed policy
+live in `.agents/policy/`, domain
 context in `.agents/context/` and `docs/misc/` — load per routing table below, never
 all at once. Shared behavior change land there, never in vendor copy.
 
@@ -151,8 +151,8 @@ one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; �
 Vendor-specific surfaces live in each vendor's own adapter, never in this neutral file.
 Read the named adapter at session start:
 
-- **Claude Code** → `CLAUDE.md` (`@AGENTS.md` import; hooks `.claude/settings.json`,
-  skills `.claude/skills/` → `.agents/skills/`, marker `CLAUDECODE=1`).
+- **Claude Code** → `.agents/context/claude-adapter.md` (native `AGENTS.md` bootstrap; hooks
+  `.claude/settings.json`, skills `.claude/skills/` → `.agents/skills/`, marker `CLAUDECODE=1`).
 - **Codex** → `.agents/context/codex-adapter.md` (native bootstrap; noun table,
   subagents, attribution, resume, hook/marker).
 - **OMP** → `.agents/context/omp-adapter.md`.

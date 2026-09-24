@@ -14,7 +14,7 @@ index, `HEAD`, refs). Session layouts (primary checkout vs harness-made session 
 stage: **ADR text** (`legacy/ADRs/`), **skills** (`.claude/skills/`, `.agents/skills/`), **agent
 workflows/configuration** (`.claude/workflows/`, `.claude/settings.json`, `.codex/`),
 **documentation-only**
-changes (`**/*.md`, `docs/`, `AGENTS.md`, `CLAUDE.md`). Each still uses a worktree,
+changes (`**/*.md`, `docs/`, `AGENTS.md`). Each still uses a worktree,
 lands on `devel` only as a clean fast-forward of locally signed commits after fetch +
 rebase, and ends with the worktree removed as in `landing.md`. Anything touching
 `src/`, `tests/`, or CI — ADR *implementation* included — requires the full PR flow. The
