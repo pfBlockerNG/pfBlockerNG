@@ -570,8 +570,8 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # forwards to the stub_dns mock (adr65_vm) and must come back as its
             # non-block sentinel -- never the VIP or NULL block shape.
             broken = h.dns_probe(adr65_vm, domain)
-            assert not h.is_vip(broken) and not h.is_null_ip(broken), (
-                f"expected a non-block answer for {domain!r} with the manifest absent "
+            assert h.resolves_to(broken, h.STUB_DNS_A), (
+                f"expected the stub_dns sentinel {h.STUB_DNS_A} for {domain!r} with the manifest absent "
                 f"(no stale serve, ADR-65 D3), got {broken!r}"
             )
 
