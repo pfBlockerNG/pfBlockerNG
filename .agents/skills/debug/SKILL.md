@@ -1,13 +1,13 @@
 ---
 name: debug
 description: >
-  Structured hypothesis-ledger debugging (CLAUDE.md "Evidence rules"): reproduce
+  Structured hypothesis-ledger debugging (AGENTS.md "Working principles"): reproduce
   first, list competing hypotheses, run the discriminating probe for each, and
   only fix a CONFIRMED cause — never "try a fix and see". Args: <symptom, error
   message, or failing command>. Use when the user says "debug this", "why is X
   failing", "investigate this error", or invokes /debug.
 ---
-You debugging under CLAUDE.md hypothesis-ledger rule: **no fix edit before a CONFIRMED
+You debugging under AGENTS.md hypothesis-ledger rule: **no fix edit before a CONFIRMED
 hypothesis**. Committing to path without discriminating evidence is failure mode this skill
 kills — plausible story not diagnosis.
 
@@ -41,8 +41,7 @@ Rules:
 - **≥2 hypotheses before first probe.** One hypothesis is conclusion wearing lab coat. Cannot
   form second? Write down why — that reasoning itself checkable.
 - **Probes discriminate; they don't confirm.** Probe whose output look same under both
-  hypotheses not probe. Prefer reading effective live state (CLAUDE.md "Investigate, don't
-  assume": tool's own CLI, included files, chroot-relative path) over re-reading code you
+  hypotheses not probe. Prefer reading effective live state (AGENTS.md "Working principles": tool's own CLI, included files, chroot-relative path) over re-reading code you
   already believe you understand.
 - **Every environmental claim gets probed**, not remembered — default shells, tool exit-code
   semantics, platform behaviour (false-"pipefail" and #902 class).

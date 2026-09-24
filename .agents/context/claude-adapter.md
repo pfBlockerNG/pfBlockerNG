@@ -3,7 +3,7 @@
 Scope: Claude Code surfaces + canonical-noun translation. Canonical policy = `AGENTS.md` +
 routed `.agents/policy/` / `.agents/context/` files; adapter only maps them onto Claude Code
 mechanics. Load when: every Claude Code session, at start (AGENTS.md Vendor-adapters pointer
-send you here).
+send you here). Non-Claude sessions never read this file.
 
 Claude Code reads `AGENTS.md` natively — no import shim.
 
