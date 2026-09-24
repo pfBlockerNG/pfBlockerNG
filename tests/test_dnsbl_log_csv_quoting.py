@@ -236,3 +236,16 @@ def test_hostile_qname_is_one_php_csv_row(
         "+",
         "A",
     ], f"{label}: PHP fgetcsv fields shifted or changed: {actual!r}"
+
+
+def test_quote_in_unescaped_column_is_still_doubled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1648 quote-doubling, now reached through the admin-set feed column that _log_text() leaves alone."""
+    lines = _capture_log(monkeypatch)
+
+    _log_idn_alert("plain.example", "192.0.2.7", ('a,"q"_feed', "real_group", "xn--eval"), "A")
+
+    (raw,) = _dnsbl_lines(lines)
+    assert '""' in raw, f"embedded quote was not doubled: {raw!r}"
+    expected = _parse(raw)
+    assert _parse_with_php(raw) == expected
+    assert expected[8] == 'a,"q"_feed'

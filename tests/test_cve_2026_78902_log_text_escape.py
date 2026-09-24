@@ -65,6 +65,14 @@ class TestLogTextHelper:
             ("a\tb", "a\\009b"),
             ("a\x7fb", "a\\127b"),
             ("a\x9bb", "a\\155b"),  # C1 CSI, reachable via latin-1 decode in convert_other
+            ("x\\", "x\\092"),  # a trailing backslash would escape a syslog closing quote
+            ("back\\slash\\046", "back\\092slash\\092046"),  # so \\DDD stays unambiguous
+            ("a\u2028b", "a\\226\\128\\168b"),  # line/paragraph separators split rows
+            ("a\u2029b", "a\\226\\128\\169b"),
+            ("a\u202eb", "a\\226\\128\\174b"),  # RLO: the bidi set pfb_hsc() strips
+            ("a\u061cb", "a\\216\\156b"),
+            ("a\u200bb", "a\\226\\128\\139b"),  # zero-width space
+            ("a\u2066b", "a\\226\\129\\166b"),
         ],
     )
     def test_control_characters_are_escaped(self, raw: str, escaped: str) -> None:
@@ -78,17 +86,15 @@ class TestLogTextHelper:
             "a b",
             "a\r\nb",  # CR/LF are folded to a space by _csv_row
             "xn--80ak6aa92e.com [аррӏе.com] Cyrillic",  # decoded IDN stays readable
+            "a\u00a0b",  # U+00A0 is the first code point past the C1 range; it stays
+            "café.example",  # Latin-1 letters above U+009F stay
             "192.0.2.1",
             "2001:db8::1",
-            "back\\slash\\046",  # existing presentation escapes are not doubled
+            "a\u200cb\u200dc",  # ZWNJ/ZWJ are legitimate in some IDN scripts; they stay
         ],
     )
     def test_ordinary_values_are_unchanged(self, value: str) -> None:
         assert pfb_unbound._log_text(value) == value
-
-    def test_non_string_values_are_stringified(self) -> None:
-        assert pfb_unbound._log_text(None) == "None"
-        assert pfb_unbound._log_text(300) == "300"
 
 
 class TestDnsReplyWriter:
@@ -147,8 +153,8 @@ class TestDnsblWriters:
             log_type="1",
             b_type="DNSBL_Python",
             p_type="Python",
-            feed="Feed_1",
-            group="Group_1",
+            feed="Tom's_feed",
+            group="Tom's_group",
             b_eval="<i>.example",
         )
         qstate = types.SimpleNamespace(
@@ -158,11 +164,13 @@ class TestDnsblWriters:
 
         pfb_unbound.get_details_dnsbl("dnsbl", None, qstate, {"pfb_addr": "192.0.2.7"}, decision)
 
-        fields = _row(lines, "dnsbl.log")
+        # Parsed directly: the admin-set feed and group keep their apostrophe by design.
+        (raw,) = [line for path, line in lines if path.endswith("dnsbl.log")]
+        fields = next(csv.reader([raw]))
         assert fields[2] == "a.\\060i\\062.example"
-        assert fields[6] == "Group_1"
+        assert fields[6] == "Tom's_group"
         assert fields[7] == "\\060i\\062.example"
-        assert fields[8] == "Feed_1"
+        assert fields[8] == "Tom's_feed"
 
     def test_feed_and_group_names_are_not_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Admin-set names are matched against config by the Alerts page; an
@@ -199,6 +207,34 @@ class TestDnsblWriters:
 
         fields = _row(lines, "dnsbl.log")
         assert fields[8] == "\\060img src=x onerror=alert(1)\\062"
+
+    def test_upstream_block_escapes_qname_and_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The classifier's labels are literals today; the column is escaped like every other b_eval.
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        lines = _capture_log(monkeypatch)
+
+        _log_upstream_block(
+            "a<b>.example", "192.0.2.7", UpstreamBlock(signal="EDE15", label="EDE15 <x>", provider="p"), "A"
+        )
+
+        fields = _row(lines, "dnsbl.log")
+        assert fields[2] == "a\\060b\\062.example"
+        assert fields[7] == "EDE15 \\060x\\062"
+
+    def test_upstream_block_trailing_backslash_in_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Left raw, the backslash escapes the closing quote pfb_syslog_escape() adds.
+        monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)
+        lines = _capture_log(monkeypatch)
+
+        _log_upstream_block(
+            "blocked.example",
+            "192.0.2.7",
+            UpstreamBlock(signal="EDE15", label="EDE15 (Blocked)", provider="Filtered by x\\"),
+            "A",
+        )
+
+        fields = _row(lines, "dnsbl.log")
+        assert fields[8] == "Filtered by x\\092"
 
     def test_upstream_block_empty_provider_still_logs_external(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(pfb_unbound.pfb, "sqlite3_dnsbl_con", False)

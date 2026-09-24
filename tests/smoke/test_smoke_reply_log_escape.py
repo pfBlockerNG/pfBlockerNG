@@ -185,4 +185,5 @@ class TestDnsReplyLogEscape:
         rows = _wait_rows(vm, _DNSBL_LOG, "DNSBL-python,", seed, 2)
         for row in rows:
             assert len(row) == 11, row
-            assert row[8] not in ("", "Unknown"), row  # feed column still resolved
+            assert row[2] == seed, row
+            assert row[8] == "smokereplylog", row  # the header= of the fixture's feed

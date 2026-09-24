@@ -3268,7 +3268,7 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
             "Python",  # p_type
             "Upstream_Block",  # b_type -- greppable prefix, distinct from feed blocks
             "Upstream",  # group
-            result.label,  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
+            _log_text(result.label),  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
             _log_text(result.provider) or "External",  # feed -- EDE EXTRA-TEXT is off the wire
             "+",  # dupEntry (dedup follow-up)
             q_type,
@@ -3284,33 +3284,52 @@ def make_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-# CVE-2026-78902 defence in depth: characters in attacker-controlled log fields that
-# HTML, a terminal or the CSV reader treat as special. Each maps to the DNS
-# presentation-format escape \DDD (RFC 1035 s5.1), so the log still shows what came in.
 _LOG_TEXT_ESCAPE = str.maketrans(
     {
-        c: "\\{:03d}".format(c)
-        for c in (*range(0x00, 0x20), 0x22, 0x26, 0x27, 0x3C, 0x3E, 0x7F, *range(0x80, 0xA0))
+        c: "".join(f"\\{b:03d}" for b in chr(c).encode("latin-1" if c < 0x100 else "utf-8"))
+        for c in (
+            *range(0x00, 0x20),
+            0x22,
+            0x26,
+            0x27,
+            0x3C,
+            0x3E,
+            0x5C,
+            0x7F,
+            *range(0x80, 0xA0),
+            0x061C,
+            0x200B,
+            0x200E,
+            0x200F,
+            0x2028,
+            0x2029,
+            *range(0x202A, 0x202F),
+            *range(0x2066, 0x206A),
+        )
         if c not in (0x0A, 0x0D)  # CR/LF stay with _csv_row, which folds them to a space
     }
 )
 
 
-def _log_text(v: Any) -> str:
+def _log_text(v: str) -> str:
     """Escape one attacker-controlled log field before it is written.
 
-    The PHP pages escape every log field they render (pfb_hsc/pfb_js_string), which is
-    what closes CVE-2026-78902. This is a second layer, so a new reader that forgets
-    to escape cannot reopen the bug. It rewrites < > " ' & to \\DDD, plus C0/C1
-    control characters and DEL (terminal escapes seen by anyone who tails the log).
-    Commas are left alone -- _csv_row quotes them (issue #1648). Non-ASCII text
-    above U+009F is left alone so decoded IDN names stay readable.
+    The Alerts/Reports sinks encode these fields on output (pfb_hsc/pfb_js_string),
+    which is what closes CVE-2026-78902. This is a second layer, so a new reader that
+    forgets to encode, or a non-web consumer such as syslog, cannot be fed markup,
+    terminal escapes or a stray quote. It rewrites < > " ' & and backslash, C0/C1
+    control characters and DEL, the line/paragraph separators U+2028/U+2029, U+200B
+    and the bidi controls pfb_hsc() strips, using the RFC 1035 presentation escape:
+    a code point up to U+00FF becomes one \\DDD of its value, anything above becomes
+    the \\DDD of each UTF-8 octet. Backslash is escaped too, so the result reads back
+    unambiguously. Commas and CR/LF are left to _csv_row (issue #1648). Other text
+    above U+009F, including ZWNJ/ZWJ, is left alone so decoded IDN names stay readable.
 
     Apply it only to fields that come off the wire or from third parties (query name,
     reply data, evaluated name, EDE text) -- not to admin-set names like feed or group,
     which the Alerts page matches against config.
     """
-    return "{}".format(v).translate(_LOG_TEXT_ESCAPE)
+    return str(v).translate(_LOG_TEXT_ESCAPE)
 
 
 def _csv_row(fields: tuple[Any, ...]) -> str:
