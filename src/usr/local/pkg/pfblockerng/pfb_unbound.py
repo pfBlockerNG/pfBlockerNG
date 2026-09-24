@@ -3202,12 +3202,12 @@ def get_details_dnsbl(
             (
                 "DNSBL-python",
                 timestamp,
-                q_name,
+                _log_text(q_name),
                 q_ip,
                 dnsbl.p_type,
                 dnsbl.b_type,
                 dnsbl.group,
-                dnsbl.b_eval,
+                _log_text(dnsbl.b_eval),
                 dnsbl.feed,
                 dupEntry,
                 q_type,
@@ -3234,12 +3234,12 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
         (
             "DNSBL-python",
             make_timestamp(),
-            q_name,
+            _log_text(q_name),
             q_ip,
             "Python",  # p_type
             "Homoglyph_Alert",  # b_type -- distinguishes an alert from a block
             group,
-            b_eval,
+            _log_text(b_eval),
             feed,
             "+",  # dupEntry
             q_type,
@@ -3263,13 +3263,13 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
         (
             "DNSBL-python",
             make_timestamp(),
-            q_name,
+            _log_text(q_name),
             q_ip,
             "Python",  # p_type
             "Upstream_Block",  # b_type -- greppable prefix, distinct from feed blocks
             "Upstream",  # group
             result.label,  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
-            result.provider or "External",  # feed -- provider name or generic sentinel
+            _log_text(result.provider) or "External",  # feed -- EDE EXTRA-TEXT is off the wire
             "+",  # dupEntry (dedup follow-up)
             q_type,
         )
@@ -3282,6 +3282,35 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
 
 def make_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# CVE-2026-78902 defence in depth: characters in attacker-controlled log fields that
+# HTML, a terminal or the CSV reader treat as special. Each maps to the DNS
+# presentation-format escape \DDD (RFC 1035 s5.1), so the log still shows what came in.
+_LOG_TEXT_ESCAPE = str.maketrans(
+    {
+        c: "\\{:03d}".format(c)
+        for c in (*range(0x00, 0x20), 0x22, 0x26, 0x27, 0x3C, 0x3E, 0x7F, *range(0x80, 0xA0))
+        if c not in (0x0A, 0x0D)  # CR/LF stay with _csv_row, which folds them to a space
+    }
+)
+
+
+def _log_text(v: Any) -> str:
+    """Escape one attacker-controlled log field before it is written.
+
+    The PHP pages escape every log field they render (pfb_hsc/pfb_js_string), which is
+    what closes CVE-2026-78902. This is a second layer, so a new reader that forgets
+    to escape cannot reopen the bug. It rewrites < > " ' & to \\DDD, plus C0/C1
+    control characters and DEL (terminal escapes seen by anyone who tails the log).
+    Commas are left alone -- _csv_row quotes them (issue #1648). Non-ASCII text
+    above U+009F is left alone so decoded IDN names stay readable.
+
+    Apply it only to fields that come off the wire or from third parties (query name,
+    reply data, evaluated name, EDE text) -- not to admin-set names like feed or group,
+    which the Alerts page matches against config.
+    """
+    return "{}".format(v).translate(_LOG_TEXT_ESCAPE)
 
 
 def _csv_row(fields: tuple[Any, ...]) -> str:
@@ -3556,7 +3585,9 @@ def get_details_reply(
 
     timestamp = make_timestamp()
 
-    csv_line = _csv_row(("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
+    csv_line = _csv_row(
+        ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, _log_text(q_name), q_ip, _log_text(r_addr), iso_code)
+    )
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
 
     return True
