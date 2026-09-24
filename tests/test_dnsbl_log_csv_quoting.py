@@ -211,11 +211,14 @@ def test_hostile_qname_is_one_php_csv_row(
     _log_idn_alert(hostile_name, "192.0.2.7", ("real_feed", "real_group", "xn--eval"), "A")
 
     (raw,) = _dnsbl_lines(lines)
-    expected_name = hostile_name.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    # CVE-2026-78902: _log_text() rewrites '"' to \034 before _csv_row sees it, so
+    # the comma still forces quoting but no quote is left inside the field to double.
+    expected_name = hostile_name.replace("\r\n", " ").replace("\r", " ").replace("\n", " ").replace('"', "\\034")
     assert raw.count("\n") == 0, f"{label}: row contains a physical newline: {raw!r}"
     assert raw.count("\r") == 0, f"{label}: row contains a carriage return: {raw!r}"
     if label == "quote-doubling":
-        assert '""' in raw, f"{label}: embedded quote was not doubled: {raw!r}"
+        assert '""' not in raw, f"{label}: raw quote reached the log: {raw!r}"
+        assert "\\034" in raw, f"{label}: embedded quote was not escaped: {raw!r}"
 
     expected = _parse(raw)
     actual = _parse_with_php(raw)

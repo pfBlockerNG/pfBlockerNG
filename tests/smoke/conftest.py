@@ -1255,6 +1255,8 @@ class _StubDnsServer:
         ``pfb_unbound.py``'s CNAME walk reads — a raw Unbound ``local-data`` CNAME
         can't stand in (Unbound returns the bare CNAME, a single rrset).
       * :meth:`register_nxdomain` — deny the name exists.
+      * :meth:`register_txt` — serve raw TXT character-strings (CVE-2026-78902 reply log).
+      * :meth:`register_rdata` — serve any qtype from presentation-format rdata.
 
     Because every domain has its OWN addresses, a probe can assert the EXACT IPs and
     know which name was forwarded at each stage (no inference); :meth:`received` /
@@ -1368,6 +1370,22 @@ class _StubDnsServer:
     def register_a(self, name: str, *ips: str) -> None:
         """Answer A for ``name`` with the given IPv4(s) (convenience for set_records)."""
         self.set_records(name, a=ips)
+
+    def register_txt(self, name: str, *strings: bytes) -> None:
+        """Answer TXT for ``name`` with one character-string per entry, bytes verbatim.
+
+        A/AAAA for the name become NODATA. Replaces any prior record for the name.
+        """
+        with self._lock:
+            self._records[self._fqdn(name)] = {"txt": tuple(strings)}
+
+    def register_rdata(self, name: str, rtype: str, *rdata: str) -> None:
+        """Answer ``rtype`` for ``name`` with presentation-format rdata (e.g. a CNAME target).
+
+        Other qtypes for the name become NODATA. Replaces any prior record for the name.
+        """
+        with self._lock:
+            self._records[self._fqdn(name)] = {"rdata": {rtype.upper(): tuple(rdata)}}
 
     def register_cname(self, src: str, target: str) -> None:
         """Answer ``src`` with a CNAME to ``target``; the chain resolves to the target's

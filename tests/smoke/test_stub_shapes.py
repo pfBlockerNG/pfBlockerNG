@@ -150,3 +150,50 @@ class TestStubResolvingBranches:
         resp = _response({}, "mx-267.example.", "MX")
         assert resp.flags == 0x8180
         assert len(resp.answer) == 0
+
+
+class TestStubTxtShape:
+    """A registered TXT record is served verbatim as one character-string per entry.
+
+    The CVE-2026-78902 reply-log smoke feeds an HTML payload through this path, so the
+    stub must hand Unbound the exact bytes -- quotes and angle brackets included.
+    """
+
+    PAYLOAD = b"\"><script src='//x.example/a.js'></script>&"
+
+    def test_registered_txt_carries_raw_bytes(self) -> None:
+        resp = _response({"txt-78902.example.": {"txt": (self.PAYLOAD,)}}, "txt-78902.example.", "TXT")
+        assert resp.flags == 0x8180
+        strings = [
+            s for rrset in resp.answer if rrset.rdtype == dns.rdatatype.TXT for item in rrset for s in item.strings
+        ]
+        assert strings == [self.PAYLOAD]
+
+    def test_txt_only_name_is_nodata_for_a(self) -> None:
+        resp = _response({"txt-78902.example.": {"txt": (self.PAYLOAD,)}}, "txt-78902.example.", "A")
+        assert resp.flags == 0x8180
+        assert len(resp.answer) == 0
+
+
+class TestStubRdataShape:
+    """A name registered with presentation-format rdata answers that qtype verbatim.
+
+    The CVE-2026-78902 reply-log smoke uses it for non-TXT targets (a CNAME whose
+    target label carries quote and angle brackets).
+    """
+
+    def test_registered_cname_rdata_keeps_hostile_label_bytes(self) -> None:
+        records: dict[str, dict[str, object]] = {
+            "cn-78902.example.": {"rdata": {"CNAME": ('we\\"ird\\<x\\>.example.',)}}
+        }
+        resp = _response(records, "cn-78902.example.", "CNAME")
+        assert resp.flags == 0x8180
+        (rrset,) = resp.answer
+        assert rrset.rdtype == dns.rdatatype.CNAME
+        assert rrset[0].target.labels[0] == b'we"ird<x>'
+
+    def test_rdata_only_name_is_nodata_for_other_types(self) -> None:
+        records: dict[str, dict[str, object]] = {"cn-78902.example.": {"rdata": {"CNAME": ("target.example.",)}}}
+        resp = _response(records, "cn-78902.example.", "A")
+        assert resp.flags == 0x8180
+        assert len(resp.answer) == 0
