@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 
 from . import helpers as h
-from .conftest import SmokeVM
+from .conftest import SmokeVM, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -61,18 +61,24 @@ _MANIFEST_NOTICE_ID = "pfBlockerNG DNSBL"
 
 
 @pytest.fixture(scope="module")
-def adr65_vm(smoke_vm: SmokeVM) -> Iterator[SmokeVM]:
+def adr65_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:  # noqa: ARG001
     """Deploy the branch .pkg once for this module + inject the DNSBL sinkhole VIP.
 
     Mirrors ``test_smoke_adr40.py``'s ``adr40_vm``: egress stays OPEN throughout
     (each ``CaseContext`` manages its own per-case block); ``inject()`` writes a
     SINGLE-element DNSBL list config (replacing, not appending), so no other feed
     ever competes for egress during a reload here.
+
+    ``use_system_dns_upstream`` forwards Unbound to the runner-side ``stub_dns`` mock
+    (issue #3321): under the per-case egress block a non-blocked name otherwise has
+    no reachable upstream and hangs until Unbound gives up, so the manifest-absent
+    probes only passed when an earlier module had left forwarding on.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
+    h.use_system_dns_upstream(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -560,10 +566,9 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             assert rm.returncode == 0, f"failed to remove {_MANIFEST_PATH}: rc={rm.returncode} stderr={rm.stderr!r}"
             _restart_unbound(adr65_vm)
 
-            # NO STALE BLOCK: with the manifest absent, DNSBL is empty -- egress is
-            # blocked inside CaseContext, so the honest expectation for a domain that
-            # is no longer matched is a non-block-shaped answer (SERVFAIL/NXDOMAIN
-            # both satisfy it -- there is no upstream to resolve it either way).
+            # NO STALE BLOCK: with the manifest absent, DNSBL is empty, so the domain
+            # forwards to the stub_dns mock (adr65_vm) and must come back as its
+            # non-block sentinel -- never the VIP or NULL block shape.
             broken = h.dns_probe(adr65_vm, domain)
             assert not h.is_vip(broken) and not h.is_null_ip(broken), (
                 f"expected a non-block answer for {domain!r} with the manifest absent "
@@ -593,9 +598,9 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
             # it never appears). The default only polls `unbound-control status`, which the
             # restart already satisfied -- the probe would race the module's rebuild.
             h.reload(adr65_vm, "updatednsbl", data_path=True)
-            # The no-stale-block probe above provoked an NXDOMAIN for this exact name, which
-            # Unbound negative-caches; a feed allow->block is TTL-bounded by design, so clear
-            # that one cached answer to observe the swapped block inside the test window.
+            # The no-stale-block probe above cached the mock's sentinel answer for this
+            # exact name; a feed allow->block is TTL-bounded by design, so clear that one
+            # cached answer to observe the swapped block inside the test window.
             h.flush_unbound_name(adr65_vm, domain)
             # The update pass can leave the resolver briefly unreachable on the CI boxes too
             # (same async-restart gap as above) -- gate on a real answer before the probe
