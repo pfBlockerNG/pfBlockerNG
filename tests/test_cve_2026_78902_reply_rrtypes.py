@@ -10,6 +10,11 @@ These cases drive the writer itself, so on unpatched code they fail on the logge
 value, not on a missing helper. "All types" means every branch that builds the
 column, not every IANA type code: any other type falls into the same name walk.
 
+Real Unbound renders ``qname_str`` with ``dname_str()``, which turns every byte outside
+``[A-Za-z0-9-_*]`` into ``?``, so a live query name never carries ``<>`` (the live smoke
+pins ``a?b?``). The raw-``<`` query-name cases below feed the writer input Unbound does
+not produce; they pin the writer's own escaping as defence in depth only.
+
 The MX-class (``Unknown``), DNSSEC and post-walk overwrite rows are preservation
 pins. They show those values stay literal; they are not proof that rdata from those
 types is escaped, because that rdata never reaches the column.
@@ -278,3 +283,12 @@ def test_noaaaa_nxdomain_logs_noaaaa(monkeypatch: pytest.MonkeyPatch) -> None:
     _, fields = _log_reply(monkeypatch, "q.example.", "AAAA", _reply([]))
 
     assert fields[8] == "noAAAA"
+
+
+def test_unbound_sanitised_query_name_is_logged_as_is(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The form Unbound's dname_str() actually hands the module for a name with brackets.
+    rep = _reply([("A", [_rr(bytes([192, 0, 2, 41]))])])
+
+    _, fields = _log_reply(monkeypatch, "a?b?.example.", "A", rep)
+
+    assert fields[6] == "a?b?.example"

@@ -9,7 +9,9 @@ row is written. These cases prove, on a real Unbound + python module, that:
   ``dns_reply.log`` row holds the escaped payload in the reply column;
 * a CNAME answer whose target label carries quote and angle brackets is logged
   escaped the same way (every non-address type shares that reply column);
-* a queried name carrying angle brackets is logged escaped in the name column;
+* a queried name carrying angle brackets reaches the log as Unbound's own
+  ``qname_str`` rendering (``dname_str()`` turns every byte outside
+  ``[A-Za-z0-9-_*]`` into ``?``), so the name column never carries raw ``<>``;
 * an ordinary A answer is logged exactly as before (10 columns, plain name, IP);
 * a DNSBL block is logged exactly as before (11 columns, plain name).
 
@@ -139,7 +141,7 @@ class TestDnsReplyLogEscape:
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if name in line]
         assert not any(c in line for line in raw for c in "<>\"'"), raw
 
-    def test_hostile_query_name_is_logged_escaped(
+    def test_hostile_query_name_is_sanitised_by_unbound(
         self, deployed_vm: tuple[SmokeVM, SmokeVM], stub_dns: _StubDnsServer
     ) -> None:
         vm, cvm = deployed_vm
@@ -152,7 +154,8 @@ class TestDnsReplyLogEscape:
         rows = _wait_rows(vm, _DNS_REPLY_LOG, "DNS-reply,", f".{suffix}", 6, suffix=True)
         for row in rows:
             assert len(row) == 10, row
-            assert row[6] == f"a\\060b\\062.{suffix}", row
+            # Unbound, not pfBlockerNG, rewrites the brackets (dname_str); the row sees "?".
+            assert row[6] == f"a?b?.{suffix}", row
             assert row[8] == "203.0.113.42", row
         raw = [line for line in h.read_log_file(vm, _DNS_REPLY_LOG).splitlines() if suffix in line]
         assert not any(c in line for line in raw for c in "<>"), raw
