@@ -108,7 +108,8 @@ def _read_dns_config(vm: SmokeVM) -> dict[str, dict[str, object]]:
     )
     result = h.php_eval(vm, snippet, timeout=30.0)
     out = result.stdout
-    start, end = out.find(_JSON_OPEN), out.find(_JSON_CLOSE)
+    start = out.find(_JSON_OPEN)
+    end = out.find(_JSON_CLOSE, start + len(_JSON_OPEN)) if start != -1 else -1
     if result.returncode != 0 or start == -1 or end == -1:
         raise RuntimeError(f"_read_dns_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
     payload: dict[str, dict[str, object]] = json.loads(out[start + len(_JSON_OPEN) : end])

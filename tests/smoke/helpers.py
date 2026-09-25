@@ -2263,6 +2263,8 @@ def _remember_dns_baseline(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """
     global _DNS_BASELINE
     if _DNS_BASELINE is not None:
+        if _DNS_BASELINE[0] is not vm:
+            raise RuntimeError("_remember_dns_baseline: a DNS baseline is already held for a different VM")
         return
     php_paths = ", ".join(_php_str(p) for p in _DNS_CONFIG_KEYS)
     snippet = (
@@ -2277,7 +2279,7 @@ def _remember_dns_baseline(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     result = php_eval(vm, snippet, timeout=timeout)
     out = result.stdout
     start = out.find(_CFG_VAL_OPEN)
-    end = out.find(_CFG_VAL_CLOSE)
+    end = out.find(_CFG_VAL_CLOSE, start + len(_CFG_VAL_OPEN)) if start != -1 else -1
     if result.returncode != 0 or start == -1 or end == -1:
         raise RuntimeError(f"_remember_dns_baseline failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
     _DNS_BASELINE = (vm, out[start + len(_CFG_VAL_OPEN) : end])
