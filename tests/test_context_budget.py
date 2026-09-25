@@ -164,6 +164,16 @@ def test_rules_budget_over_fires_and_at_budget_passes(tmp_path: Path) -> None:
     assert violations == [".claude/rules/x.md: 401 bytes > budget 400"]
 
 
+def test_ledger_has_its_own_larger_budget_than_the_policy_default(tmp_path: Path) -> None:
+    # issue #3329: the append-only ledger outgrew the 12,288-byte policy default.
+    _write(tmp_path, ".agents/policy/coderabbit-misses.md", "x" * 16_384)
+    assert ccb.check_sizes(tmp_path, [".agents/policy/coderabbit-misses.md"]) == []
+    _write(tmp_path, ".agents/policy/coderabbit-misses.md", "x" * 16_385)
+    assert ccb.check_sizes(tmp_path, [".agents/policy/coderabbit-misses.md"]) == [
+        ".agents/policy/coderabbit-misses.md: 16385 bytes > budget 16384"
+    ]
+
+
 # --- the append-only CodeRabbit ledger keeps its one-line format (#2829) -------
 
 

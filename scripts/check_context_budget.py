@@ -17,6 +17,7 @@ routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 - `.claude/rules/*.md` (Claude soft routing backstops) 400 B
 - each hook-capsule `additionalContext` payload     1,800 B
 - any single hook command (pre-tokenization cap)   11,000 B
+- `coderabbit-misses.md` (append-only ledger)      16,384 B (owner-raised, #3329)
 - each `coderabbit-misses.md` ledger entry            200 B
 - that ledger's header prose (above the list)      1,200 B
 
@@ -85,11 +86,14 @@ FILE_BUDGETS = {
     ".agents/policy/landing.md": 26_000,
     ".agents/policy/agent-roles.md": 19_000,
     ".agents/policy/delegation.md": 18_000,
+    # Append-only ledger (#3329): grows one capped line per missed review; the
+    # owner raised its cap once it filled the policy default.
+    ".agents/policy/coderabbit-misses.md": 16_384,
 }
 
 # The append-only missed-review ledger (coderabbit.md "Missed-review backlog").
 # It gains one line per missed review forever, so the only thing keeping it
-# inside POLICY_BUDGET is the one-line format its own header documents. Entries
+# inside its FILE_BUDGETS cap is the one-line format its own header documents. Entries
 # that drifted into 1,500-2,000-byte review narratives ate the whole budget and
 # left 17 bytes of headroom (#2829); the narrative belongs in that PR's audit
 # comments, and the ledger carries the pointer newest first.

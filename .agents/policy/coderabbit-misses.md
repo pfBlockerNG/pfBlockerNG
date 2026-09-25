@@ -10,9 +10,10 @@ The list opens at the first line that begins with a dash and a space, and from
 there the file is entries only (blank lines aside).
 This header is prose and is capped at 1,200 bytes, which is the one place a
 narrative could otherwise park. `scripts/check_context_budget.py` enforces both
-caps, the shape, and this file's 12,288-byte policy budget; the recorded SHAs
+caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `654b9f463`  smoke: restore the DNS config at each module end so forwarding no longer leaks  (#3326) — quota twice on the ask.
 - `2babdcbf9`  src: define dispatch-referenced constants before the CLI dispatch  (#3303) — finished review pre-fix, quota on the landed head; two review rounds, Copilot approval.
 - `a59563e5c`  Graphify 0.9.59 overrides  (#10) — pfBlockerNG/graphify#10; silent twice.
 - `ea8d3c43a`  Graphify rollback  (#9) — pfBlockerNG/graphify#9; silent twice.
