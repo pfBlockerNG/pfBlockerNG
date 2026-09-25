@@ -31,8 +31,8 @@ Grok specifics:
   [`git.md`](../policy/git.md) and [`landing.md`](../policy/landing.md).
 - **No session hooks are wired.** Grok auto-load `AGENTS.md` plus `.grok/rules/*.md`
   (`<dir>/.grok/rules/` "Always scanned" — Grok 1.0.4 user-guide
-  `12-project-rules.md`). `GROK.md` is the thin adapter (Claude's `CLAUDE.md`
-  twin); `.grok/rules/harness.md` injects the pointer so the adapter cannot be
+  `12-project-rules.md`). `GROK.md` is the thin adapter (Claude's
+  `.agents/context/claude-adapter.md` twin); `.grok/rules/harness.md` injects the pointer so the adapter cannot be
   skipped. Skills already discovered from `.agents/skills/` — do not copy them
   under `.grok/skills/`.
 - **Reviews** use an independent spawned reviewer per `.agents/policy/landing.md`.

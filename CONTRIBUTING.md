@@ -7,8 +7,8 @@ design records (one Architecture Decision Record per subsystem) live under
 
 ## Principles & standards (read first)
 
-Before changing code, read **[`CLAUDE.md`](CLAUDE.md)** — the operating contract for this
-repo. This guide is the *how-to* (setup, subsystems, build, test, release); `CLAUDE.md` is the
+Before changing code, read **[`AGENTS.md`](AGENTS.md)** — the operating contract for this
+repo. This guide is the *how-to* (setup, subsystems, build, test, release); `AGENTS.md` is the
 *rules*, and wins where they overlap. Key sections to internalise:
 
 - **Working principles — don't guess.** Investigate the source of truth and the live state

@@ -106,7 +106,7 @@ role's contract; Codex kinds: `agent` = `.codex/agents/<name>.toml`, plus
   command with pasted output.
 - **Permissions & mutation:** read-only as role: briefs and gates, not edits.
   Session hosting it may switch roles in place — implementer for small direct fix or
-  docs/config/skills work (CLAUDE.md carve-out), publisher/coordinator for landing and
+  docs/config/skills work (git.md dev-only class), publisher/coordinator for landing and
   bookkeeping — but planner never grade its own implementation work.
 - **Context & skills:** bootstrap (AGENTS.md) and its routed annexes, prior handoffs;
   fresh-session workflow ([`workflow.md`](workflow.md)). Floor:
@@ -308,7 +308,7 @@ Deviations from issue #1387's starting six, with rationale:
 
 ## Out of scope
 
-- Per-role context-slice documents (splitting CLAUDE.md into role-specific required
+- Per-role context-slice documents (splitting the bootstrap into role-specific required
   reading) — tracked by wayfinder map
   [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383).
 - Effort-level policy: tiers select models; procedures own their effort settings.
