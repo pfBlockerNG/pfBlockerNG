@@ -1782,6 +1782,28 @@ def _pfb_module_baseline(request: pytest.FixtureRequest) -> Generator[None, None
     helpers.reset_pfb_baseline(vm)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _restore_dns_config_per_module() -> Generator[None, None, None]:
+    """Restore the DNS-forwarding config keys AFTER each smoke module (cross-module isolation).
+
+    ``use_system_dns_upstream`` / ``set_unbound_forwarding`` / ``use_stub_for_safesearch``
+    (``tests/smoke/helpers.py``) rewrite ``system/dnsserver``, ``system/dnsallowoverride``,
+    ``unbound/forwarding``, ``unbound/dnssec`` and ``unbound/custom_options`` on the SHARED
+    session VM. This teardown calls :func:`helpers.restore_dns_config`, which puts those five
+    keys back to whatever they were before the FIRST such call this module made -- so the
+    invariant holds: each smoke module starts from the same pre-mutation DNS config the
+    previous module found, regardless of what any DNS helper did in between.
+
+    Deliberately does NOT request ``smoke_vm``/``deployed_vm`` (a non-VM module must not boot
+    one just for this teardown): :func:`helpers.restore_dns_config` is a strict no-op unless a
+    DNS mutator actually ran this module, in which case it already holds the VM it needs.
+    """
+    yield
+    from . import helpers  # local import: helpers imports from conftest (avoid cycle)
+
+    helpers.restore_dns_config()
+
+
 @pytest.fixture(autouse=True)
 def _restore_egress() -> Generator[None, None, None]:
     """Restore the runner's egress after every test (cross-test guard).

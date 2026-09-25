@@ -2239,6 +2239,91 @@ def set_feed_sanity(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"set_feed_sanity({on}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+_DNS_CONFIG_KEYS = (
+    "system/dnsserver",
+    "system/dnsallowoverride",
+    "unbound/forwarding",
+    "unbound/dnssec",
+    "unbound/custom_options",
+)
+
+_DNS_BASELINE: tuple[SmokeVM, str] | None = None
+
+
+def _remember_dns_baseline(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Snapshot :data:`_DNS_CONFIG_KEYS` ONCE per module, before the first mutator
+    (:func:`use_system_dns_upstream` / :func:`set_unbound_forwarding` /
+    :func:`use_stub_for_safesearch`) touches them, so :func:`restore_dns_config` can put the
+    SHARED session VM back exactly as it found it at module end.
+
+    A no-op after the first call within a module (the module-scoped teardown clears
+    :data:`_DNS_BASELINE`, so the NEXT module's first mutator snapshots again). Presence vs.
+    absence is preserved per key (json_encode-d as ``{'present': bool, 'value': ...}``) -- a
+    key that was never set must be restored as ABSENT, not written back as an empty value.
+    """
+    global _DNS_BASELINE
+    if _DNS_BASELINE is not None:
+        if _DNS_BASELINE[0] is not vm:
+            raise RuntimeError("_remember_dns_baseline: a DNS baseline is already held for a different VM")
+        return
+    php_paths = ", ".join(_php_str(p) for p in _DNS_CONFIG_KEYS)
+    snippet = (
+        f"$__paths = array({php_paths});\n"
+        "$__snap = array();\n"
+        "foreach ($__paths as $__p) {\n"
+        "    $__v = config_get_path($__p, NULL);\n"
+        "    $__snap[$__p] = array('present' => $__v !== NULL, 'value' => $__v);\n"
+        "}\n"
+        f"echo {_php_str(_CFG_VAL_OPEN)} . json_encode($__snap) . {_php_str(_CFG_VAL_CLOSE)};"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    out = result.stdout
+    start = out.find(_CFG_VAL_OPEN)
+    end = out.find(_CFG_VAL_CLOSE, start + len(_CFG_VAL_OPEN)) if start != -1 else -1
+    if result.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(f"_remember_dns_baseline failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    _DNS_BASELINE = (vm, out[start + len(_CFG_VAL_OPEN) : end])
+
+
+def restore_dns_config(*, timeout: float = 120.0) -> None:
+    """Put :data:`_DNS_CONFIG_KEYS` back to what :func:`_remember_dns_baseline` captured.
+
+    A no-op if no mutator ran this module (:data:`_DNS_BASELINE` is still ``None``) -- the
+    common case for a module that never touches DNS forwarding. Otherwise writes the snapshot
+    back (a present key is restored verbatim, an absent key is unset -- never written back as
+    empty), ``write_config``s, ``services_unbound_configure``s, and waits for Unbound.
+    :data:`_DNS_BASELINE` is cleared ONLY once BOTH the write and :func:`wait_unbound_ready`
+    succeed. On failure it raises and the baseline is KEPT: the next mutator call is a
+    no-op while a baseline is set (see :func:`_remember_dns_baseline`), so a retried or
+    next-module restore still targets the true pre-mutation snapshot instead of a lost one.
+
+    Called once per smoke module by ``conftest.py``'s autouse
+    ``_restore_dns_config_per_module`` teardown.
+    """
+    global _DNS_BASELINE
+    if _DNS_BASELINE is None:
+        return
+    vm, snapshot = _DNS_BASELINE
+    snippet = (
+        f"$__snap = json_decode({_php_str(snapshot)}, true);\n"
+        "foreach ($__snap as $__p => $__entry) {\n"
+        "    if ($__entry['present']) {\n"
+        "        config_set_path($__p, $__entry['value']);\n"
+        "    } else {\n"
+        "        config_del_path($__p);\n"
+        "    }\n"
+        "}\n"
+        "write_config('pfBlockerNG smoke: restore DNS config');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"restore_dns_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    wait_unbound_ready(vm)
+    _DNS_BASELINE = None
+
+
 @timed_step("use_system_dns_upstream")
 def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Point pfSense at the runner-side mock via its REAL System-DNS path (no custom zone).
@@ -2253,8 +2338,9 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
 
     Crucially this needs NO ``/etc/resolv.conf`` override on the runner (the SLIRP virtual
     DNS at 192.168.89.3 would read resolv.conf; the 192.168.89.2 host alias does not) — the runner's
-    own resolver is left fully intact, so nothing on the host loses DNS during the run and
-    there is no teardown to restore. No custom ``forward-zone`` and no guestfwd either. The
+    own resolver is left fully intact, so nothing on the host loses DNS during the run. The
+    guest-side config change made here is restored at module end by :func:`restore_dns_config`
+    (no manual teardown here). No custom ``forward-zone`` and no guestfwd either. The
     mock records every query (``stub.received(...)``), so blocking is read off the upstream.
     Loopback survives the per-case egress block (``-o lo ACCEPT``), so it stays hermetic.
 
@@ -2267,6 +2353,7 @@ def use_system_dns_upstream(vm: SmokeVM, *, timeout: float = 120.0) -> None:
         mark them bogus (SERVFAIL).
       * ``unset unbound/custom_options`` — drop any prior custom forward-zone.
     """
+    _remember_dns_baseline(vm)
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
@@ -2317,15 +2404,15 @@ def set_unbound_forwarding(vm: SmokeVM, on: bool, *, upstream: str = "1.1.1.1", 
 
     The redirect works in BOTH modes (the iterator checks the message cache — where the
     module plants the CNAME — before forwarding or recursing; the chase then forwards/
-    recurses the TARGET). Forcing the mode in the SafeSearch fixture only makes the
-    smoke order-independent on the SHARED session VM (a prior matrix module may have
-    set use_system_dns_upstream's catch-all forward-to-stub, which masks the result by
-    answering every name identically).
+    recurses the TARGET). Forcing the mode here — rather than trusting whatever config the
+    previous test in this module left in place — keeps the comparison varying exactly one
+    thing, independent of test order within the module.
 
     Idempotent; written + ``services_unbound_configure`` (restarts Unbound). NOTE: that
     regenerates the base unbound.conf WITHOUT pfBlockerNG's python module, so the caller
     MUST run a pfBlockerNG reload afterwards to re-add the module + reload safeSearchDB.
     """
+    _remember_dns_baseline(vm)
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(upstream)});\n"
@@ -2391,6 +2478,7 @@ def use_stub_for_safesearch(vm: SmokeVM, forwarding_on: bool, *, timeout: float 
     # save), so encode before writing.
     forward_zone = f'forward-zone:\n    name: "."\n    forward-addr: {GUEST_TO_HOST_ALIAS}\n'
     encoded = base64.b64encode(forward_zone.encode()).decode()
+    _remember_dns_baseline(vm)
     snippet = (
         "$s = config_get_path('system', array());\n"
         f"$s['dnsserver'] = array({_php_str(GUEST_TO_HOST_ALIAS)});\n"
