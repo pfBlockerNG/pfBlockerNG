@@ -3202,12 +3202,12 @@ def get_details_dnsbl(
             (
                 "DNSBL-python",
                 timestamp,
-                q_name,
+                _log_text(q_name),
                 q_ip,
                 dnsbl.p_type,
                 dnsbl.b_type,
                 dnsbl.group,
-                dnsbl.b_eval,
+                _log_text(dnsbl.b_eval),
                 dnsbl.feed,
                 dupEntry,
                 q_type,
@@ -3234,12 +3234,12 @@ def _log_idn_alert(q_name: str, q_ip: str, idn_alert: tuple[Any, Any, str], q_ty
         (
             "DNSBL-python",
             make_timestamp(),
-            q_name,
+            _log_text(q_name),
             q_ip,
             "Python",  # p_type
             "Homoglyph_Alert",  # b_type -- distinguishes an alert from a block
             group,
-            b_eval,
+            _log_text(b_eval),
             feed,
             "+",  # dupEntry
             q_type,
@@ -3263,13 +3263,13 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
         (
             "DNSBL-python",
             make_timestamp(),
-            q_name,
+            _log_text(q_name),
             q_ip,
             "Python",  # p_type
             "Upstream_Block",  # b_type -- greppable prefix, distinct from feed blocks
             "Upstream",  # group
-            result.label,  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
-            result.provider or "External",  # feed -- provider name or generic sentinel
+            _log_text(result.label),  # b_eval, e.g. "NXRA" / "EDE15 (Blocked)"
+            _log_text(result.provider) or "External",  # feed -- EDE EXTRA-TEXT is off the wire
             "+",  # dupEntry (dedup follow-up)
             q_type,
         )
@@ -3282,6 +3282,54 @@ def _log_upstream_block(q_name: str, q_ip: str, result: UpstreamBlock, q_type: s
 
 def make_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+_LOG_TEXT_ESCAPE = str.maketrans(
+    {
+        c: "".join(f"\\{b:03d}" for b in chr(c).encode("latin-1" if c < 0x100 else "utf-8"))
+        for c in (
+            *range(0x00, 0x20),
+            0x22,
+            0x26,
+            0x27,
+            0x3C,
+            0x3E,
+            0x5C,
+            0x7F,
+            *range(0x80, 0xA0),
+            0x061C,
+            0x200B,
+            0x200E,
+            0x200F,
+            0x2028,
+            0x2029,
+            *range(0x202A, 0x202F),
+            *range(0x2066, 0x206A),
+        )
+        if c not in (0x0A, 0x0D)  # CR/LF stay with _csv_row, which folds them to a space
+    }
+)
+
+
+def _log_text(v: str) -> str:
+    """Escape one attacker-controlled log field before it is written.
+
+    The Alerts/Reports sinks encode these fields on output (pfb_hsc/pfb_js_string),
+    which is what closes CVE-2026-78902. This is a second layer, so a new reader that
+    forgets to encode, or a non-web consumer such as syslog, cannot be fed markup,
+    terminal escapes or a stray quote. It rewrites < > " ' & and backslash, C0/C1
+    control characters and DEL, the line/paragraph separators U+2028/U+2029, U+200B
+    and the bidi controls pfb_hsc() strips, using the RFC 1035 presentation escape:
+    a code point up to U+00FF becomes one \\DDD of its value, anything above becomes
+    the \\DDD of each UTF-8 octet. Backslash is escaped too, so the result reads back
+    unambiguously. Commas and CR/LF are left to _csv_row (issue #1648). Other text
+    above U+009F, including ZWNJ/ZWJ, is left alone so decoded IDN names stay readable.
+
+    Apply it only to fields that come off the wire or from third parties (query name,
+    reply data, evaluated name, EDE text) -- not to admin-set names like feed or group,
+    which the Alerts page matches against config.
+    """
+    return str(v).translate(_LOG_TEXT_ESCAPE)
 
 
 def _csv_row(fields: tuple[Any, ...]) -> str:
@@ -3556,7 +3604,9 @@ def get_details_reply(
 
     timestamp = make_timestamp()
 
-    csv_line = _csv_row(("DNS-reply", timestamp, m_type, o_type, q_type, ttl, q_name, q_ip, r_addr, iso_code))
+    csv_line = _csv_row(
+        ("DNS-reply", timestamp, m_type, o_type, q_type, ttl, _log_text(q_name), q_ip, _log_text(r_addr), iso_code)
+    )
     pfb_log("/var/log/pfblockerng/dns_reply.log", csv_line)
 
     return True

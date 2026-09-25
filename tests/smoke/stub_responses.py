@@ -106,6 +106,19 @@ def build_response(
 
     # Non-NXDOMAIN (normal) answers come from a RECURSIVE upstream (Quad9-style), RA=1.
     resp.flags |= dns.flags.RA
+    if q.rdtype == dns.rdatatype.TXT and rec is not None and "txt" in rec:
+        # Built from rdata, not presentation text, so quotes and brackets reach the wire verbatim.
+        import dns.rdataclass
+        from dns.rdtypes.ANY.TXT import TXT
+
+        txt = TXT(dns.rdataclass.IN, dns.rdatatype.TXT, cast("tuple[bytes, ...]", rec["txt"]))
+        resp.answer.append(dns.rrset.from_rdata(q.name, 60, txt))
+        return resp.to_wire(), qlog
+    rdata = cast("dict[str, tuple[str, ...]]", rec.get("rdata", {})) if rec is not None else {}
+    qtype_text = dns.rdatatype.to_text(q.rdtype)
+    if qtype_text in rdata:
+        resp.answer.append(dns.rrset.from_text(q.name, 60, "IN", qtype_text, *rdata[qtype_text]))
+        return resp.to_wire(), qlog
     if q.rdtype not in (dns.rdatatype.A, dns.rdatatype.AAAA):
         return resp.to_wire(), qlog  # other qtypes: empty NOERROR
     want_v6 = q.rdtype == dns.rdatatype.AAAA
