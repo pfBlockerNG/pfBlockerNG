@@ -4,9 +4,11 @@ CVE-2026-78902 (NetSPI): a TXT reply carrying ``"><script ...>`` reached
 dns_reply.log raw and ran as stored XSS in the Reports page, which admin-session
 JS then turned into RCE through diag_command.php. The PHP pages in v4 escape
 every log field on output, which closes the bug. ``_log_text()`` is a second
-layer: the four writers rewrite ``< > " ' &``, C0/C1 controls and DEL to the
-DNS presentation escape ``\\DDD`` before the row is written, so a new reader
-that forgets to escape cannot reopen it.
+layer: the four writers rewrite ``< > " ' &``, backslash, C0/C1 controls, DEL,
+the separators U+2028/U+2029, U+200B and the bidi controls ``pfb_hsc()`` strips
+to the DNS presentation escape ``\\DDD`` (one per octet of the UTF-8 form above
+U+00FF) before the row is written, so a new reader that forgets to escape cannot
+reopen it.
 
 Fields that are escaped: query name, reply data, evaluated name, EDE provider
 text. Fields left alone: admin-set feed and group names, which the Alerts page
