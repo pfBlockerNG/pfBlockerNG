@@ -10,10 +10,12 @@ fixture now calls ``helpers.restore_dns_config()`` after every module, which put
 five keys back to whatever ``helpers._remember_dns_baseline`` captured before the FIRST
 DNS mutator ran this module.
 
-This module proves the restore directly: mutate via ``use_system_dns_upstream``, then call
+This module proves the restore directly and FOR EVERY TRACKED KEY: seed all five keys to
+values that ``use_system_dns_upstream`` is GUARANTEED to change (not just whatever the
+image default happens to already differ on), confirm every key actually moved, then call
 ``restore_dns_config()`` (the same call the autouse teardown makes) and confirm every one
-of the five keys is back to its pre-mutation value -- read through this module's OWN
-independent PHP reader, not the code under test.
+of the five keys is back to its pre-mutation (seeded) value -- read through this module's
+OWN independent PHP reader, not the code under test.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``).
 Run via the smoke workflow or locally::
@@ -26,6 +28,7 @@ the smoke deps; without them these tests skip cleanly.
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -48,6 +51,43 @@ _DNS_KEYS = (
 
 _JSON_OPEN = "<<<DNSISO>>>"
 _JSON_CLOSE = "<<<DNSISOEND>>>"
+
+# Seed state: every key differs from what use_system_dns_upstream (helpers.py) sets, so
+# the mid-mutation assert below proves EVERY key moved -- not just the ones
+# use_system_dns_upstream happened to already change from the image default.
+#
+#   - system/dnsserver: an RFC 5737 TEST-NET-2 address, never
+#     helpers.GUEST_TO_HOST_ALIAS (what use_system_dns_upstream writes).
+#   - system/dnsallowoverride / unbound/dnssec: pfSense saves both checkboxes with the
+#     SAME isset()-boolean pattern -- system.php:388
+#     ``config_set_path('system/dnsallowoverride', $_POST['dnsallowoverride'] ? true : false)``
+#     and services_unbound.php:187
+#     ``config_set_path('unbound/dnssec', isset($pconfig['dnssec']))``. A PHP `true`
+#     round-tripped through the XML writer (xmlparse.inc dump_xml_config_sub(), the
+#     ``(is_bool($val) && ($val == true)) ... "<{$ent}></{$ent}>\n"`` branch) becomes an
+#     EMPTY element, which parses back as ``""`` -- so the real "checked" config.xml
+#     value for either field is present/``""``, never a literal ``'on'`` string.
+#   - unbound/forwarding: ABSENT (use_system_dns_upstream always sets it 'on').
+#   - unbound/custom_options: base64-encoded, matching the pfBlockerNG textarea
+#     convention helpers.use_stub_for_safesearch's forward-zone also uses.
+_SEED_DNSSERVER = ["198.51.100.53"]  # RFC 5737 TEST-NET-2
+_SEED_CUSTOM_OPTIONS_TEXT = "# pfb smoke dns-isolation seed\n"
+
+
+def _seed_state() -> dict[str, dict[str, object]]:
+    """The seed :func:`_read_dns_config`-shaped state every DNS key is set to before
+    mutating, chosen so ``use_system_dns_upstream`` is guaranteed to change every key.
+    """
+    return {
+        "system/dnsserver": {"present": True, "value": _SEED_DNSSERVER},
+        "system/dnsallowoverride": {"present": True, "value": ""},
+        "unbound/forwarding": {"present": False, "value": None},
+        "unbound/dnssec": {"present": True, "value": ""},
+        "unbound/custom_options": {
+            "present": True,
+            "value": base64.b64encode(_SEED_CUSTOM_OPTIONS_TEXT.encode()).decode(),
+        },
+    }
 
 
 def _read_dns_config(vm: SmokeVM) -> dict[str, dict[str, object]]:
@@ -75,31 +115,79 @@ def _read_dns_config(vm: SmokeVM) -> dict[str, dict[str, object]]:
     return payload
 
 
-@pytest.mark.timeout(300)
+def _write_dns_config(vm: SmokeVM, state: dict[str, dict[str, object]]) -> None:
+    """Write ``state`` (the shape :func:`_read_dns_config` returns) back to the guest.
+
+    This module's OWN independent PHP writer -- the seed/cleanup counterpart of
+    :func:`_read_dns_config`, never the code under test. Embeds ``state`` as a
+    json_decode-d string literal (sidesteps PHP-literal escaping for the mixed
+    str/list/None values) then, per key, ``config_set_path``s a present entry or
+    ``config_del_path``s an absent one, exactly mirroring
+    ``helpers.restore_dns_config``'s own restore loop -- a separate implementation of
+    the same shape, not a call into it.
+    """
+    snippet = (
+        f"$__state = json_decode({h._php_str(json.dumps(state))}, true);\n"
+        "foreach ($__state as $__p => $__entry) {\n"
+        "    if ($__entry['present']) {\n"
+        "        config_set_path($__p, $__entry['value']);\n"
+        "    } else {\n"
+        "        config_del_path($__p);\n"
+        "    }\n"
+        "}\n"
+        "write_config('pfBlockerNG smoke: dns isolation seed/cleanup');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=60.0)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_write_dns_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    h.wait_unbound_ready(vm)
+
+
+@pytest.mark.timeout(300)  # seed + mutate + restore + cleanup, each a full Unbound reload/wait
 def test_restore_dns_config_returns_every_key_to_its_pre_mutation_value(
     smoke_vm: SmokeVM, stub_dns: _StubDnsServer
 ) -> None:
-    """``restore_dns_config()`` must put all five DNS-forwarding keys back exactly as
-    ``use_system_dns_upstream`` found them -- the same call the autouse per-module
-    teardown makes, proven directly here rather than only inferred from a later module's
-    behaviour.
+    """``restore_dns_config()`` must put ALL FIVE DNS-forwarding keys back exactly as
+    they were before the mutation. Every tracked key is first seeded to a value
+    ``use_system_dns_upstream`` is guaranteed to change (never a value it happens to
+    already share with the image default), so the mid-mutation assert proves EVERY key
+    actually moved -- not just the ones the mutator happened to touch from the image
+    default -- and the post-restore assert proves every one of them is returned to its
+    pre-mutation value, the same call the autouse per-module teardown makes.
     """
-    before = _read_dns_config(smoke_vm)
+    original = _read_dns_config(smoke_vm)
     try:
+        seed = _seed_state()
+        _write_dns_config(smoke_vm, seed)
+        seeded = _read_dns_config(smoke_vm)
+        assert seeded == seed, (
+            f"precondition failed: seeded DNS config does not match the seed written "
+            f"-- expected={seed!r} actual={seeded!r}"
+        )
+
         h.use_system_dns_upstream(smoke_vm)
         mid = _read_dns_config(smoke_vm)
-        assert mid != before, (
-            f"precondition failed: use_system_dns_upstream did not change the DNS config "
-            f"-- before={before!r} mid={mid!r}"
+        unchanged = {k: seeded[k] for k in _DNS_KEYS if mid[k] == seeded[k]}
+        assert not unchanged, (
+            f"precondition failed: use_system_dns_upstream left these keys unchanged "
+            f"-- unchanged={unchanged!r} seeded={seeded!r} mid={mid!r}"
         )
 
         h.restore_dns_config()
         after = _read_dns_config(smoke_vm)
-        assert after == before, (
-            f"restore_dns_config left the DNS config different from its pre-mutation state "
-            f"-- expected={before!r} actual={after!r}"
+        assert after == seeded, (
+            f"restore_dns_config left the DNS config different from its pre-mutation "
+            f"(seeded) state -- expected={seeded!r} actual={after!r}"
         )
     finally:
         # Never leave forwarding-to-stub on for whatever runs next in this module, whatever
         # the outcome above (e.g. a failed precondition assert leaves it un-restored).
-        h.restore_dns_config()
+        try:
+            h.restore_dns_config()
+        except Exception as exc:  # noqa: BLE001 -- best-effort; _write_dns_config below still runs
+            print(f"[smoke] dns-isolation restore_dns_config teardown failed (non-fatal): {exc!r}")
+        # restore_dns_config() only restores back to the SEED (its own baseline); always
+        # put the VM back to what it looked like before this test ever ran, regardless.
+        _write_dns_config(smoke_vm, original)

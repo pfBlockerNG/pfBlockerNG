@@ -2289,10 +2289,11 @@ def restore_dns_config(*, timeout: float = 120.0) -> None:
     A no-op if no mutator ran this module (:data:`_DNS_BASELINE` is still ``None``) -- the
     common case for a module that never touches DNS forwarding. Otherwise writes the snapshot
     back (a present key is restored verbatim, an absent key is unset -- never written back as
-    empty), ``write_config``s, ``services_unbound_configure``s, and waits for Unbound. Clears
-    :data:`_DNS_BASELINE` in a ``finally`` -- even a broken restore must not leave a stale
-    baseline for the NEXT module to (wrongly) restore to; a genuine failure still raises rather
-    than silently leaving the box dirty.
+    empty), ``write_config``s, ``services_unbound_configure``s, and waits for Unbound.
+    :data:`_DNS_BASELINE` is cleared ONLY once BOTH the write and :func:`wait_unbound_ready`
+    succeed. On failure it raises and the baseline is KEPT: the next mutator call is a
+    no-op while a baseline is set (see :func:`_remember_dns_baseline`), so a retried or
+    next-module restore still targets the true pre-mutation snapshot instead of a lost one.
 
     Called once per smoke module by ``conftest.py``'s autouse
     ``_restore_dns_config_per_module`` teardown.
@@ -2301,26 +2302,24 @@ def restore_dns_config(*, timeout: float = 120.0) -> None:
     if _DNS_BASELINE is None:
         return
     vm, snapshot = _DNS_BASELINE
-    try:
-        snippet = (
-            f"$__snap = json_decode({_php_str(snapshot)}, true);\n"
-            "foreach ($__snap as $__p => $__entry) {\n"
-            "    if ($__entry['present']) {\n"
-            "        config_set_path($__p, $__entry['value']);\n"
-            "    } else {\n"
-            "        config_del_path($__p);\n"
-            "    }\n"
-            "}\n"
-            "write_config('pfBlockerNG smoke: restore DNS config');\n"
-            "services_unbound_configure();\n"
-            "echo 'OK';"
-        )
-        result = php_eval(vm, snippet, timeout=timeout)
-        if result.returncode != 0 or "OK" not in result.stdout:
-            raise RuntimeError(f"restore_dns_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
-        wait_unbound_ready(vm)
-    finally:
-        _DNS_BASELINE = None
+    snippet = (
+        f"$__snap = json_decode({_php_str(snapshot)}, true);\n"
+        "foreach ($__snap as $__p => $__entry) {\n"
+        "    if ($__entry['present']) {\n"
+        "        config_set_path($__p, $__entry['value']);\n"
+        "    } else {\n"
+        "        config_del_path($__p);\n"
+        "    }\n"
+        "}\n"
+        "write_config('pfBlockerNG smoke: restore DNS config');\n"
+        "services_unbound_configure();\n"
+        "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"restore_dns_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    wait_unbound_ready(vm)
+    _DNS_BASELINE = None
 
 
 @timed_step("use_system_dns_upstream")
