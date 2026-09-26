@@ -3329,7 +3329,7 @@ def _log_text(v: str) -> str:
     reply data, evaluated name, EDE text) -- not to admin-set names like feed or group,
     which the Alerts page matches against config.
     """
-    return str(v).translate(_LOG_TEXT_ESCAPE)
+    return v.translate(_LOG_TEXT_ESCAPE)
 
 
 def _csv_row(fields: tuple[Any, ...]) -> str:
