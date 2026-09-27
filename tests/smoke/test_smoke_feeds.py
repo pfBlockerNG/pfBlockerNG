@@ -2977,13 +2977,21 @@ def test_extraction_refuses_archive_supplied_metadata(deployed_vm: SmokeVM) -> N
     assert deployed.stdout.strip() == "1", (
         f"the deployed package does not carry {flags!r} — grep said {deployed.stdout!r}"
     )
-    disk_writing = deployed_vm.ssh(f"/usr/bin/grep -c -e 'tar -x[a-z]*f.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
+    # issue #3305: production now builds the command as `{$tar_bin} -xf ...`, never
+    # the literal `tar -x...` this grep used to key on — it was matching nothing.
+    disk_writing = deployed_vm.ssh(f"/usr/bin/grep -c -e '{{\\$tar_bin}} -x[^O]*f.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
     assert disk_writing.stdout.strip() == "5", (
         f"the deployed package must flag all five disk-writing extractions — grep said {disk_writing.stdout!r}"
     )
-    stdout_sites = deployed_vm.ssh(f"/usr/bin/grep -c -e 'tar -xOf.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
+    stdout_sites = deployed_vm.ssh(f"/usr/bin/grep -c -e '{{\\$tar_bin}} -xOf.*PFB_TAR_EXTRACT_FLAGS' {_PFB_INC}")
     assert stdout_sites.stdout.strip() == "0", (
         f"the deployed package must leave the stdout extractions unflagged — grep said {stdout_sites.stdout!r}"
+    )
+    # Non-vacuous check: a stdout `-xOf` site must actually exist, or the "0" above
+    # would trivially hold because the pattern proves nothing.
+    stdout_sites_exist = deployed_vm.ssh(f"/usr/bin/grep -c -e '{{\\$tar_bin}} -xOf' {_PFB_INC}")
+    assert int(stdout_sites_exist.stdout.strip() or "0") >= 1, (
+        f"expected at least one stdout -xOf extraction site to exist — grep said {stdout_sites_exist.stdout!r}"
     )
 
 
@@ -3334,34 +3342,34 @@ def test_validate_log_zip_inner_reject_line(deployed_vm: SmokeVM, mock_feeds: _M
 
 @pytest.mark.timeout(120)
 def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """Issue #819: a ZIP whose member DATA is corrupt is rejected as a decompression
-    failure, not silently imported as an empty feed.
+    """Issue #819, re-aimed at the ADR-45 structural gate for issue #3305/#3068.
 
-    Before the fix, the non-xlsx ZIP branch ran
-    ``tar -xOf {file} | sed 's/,[[:space:]]/; /g' | tr ',' '\\n' > {file_org}`` without
-    ``pipefail`` -- the ``sh -c`` exit status of a pipeline is its LAST command's, here
-    ``tr``, which always succeeds even when ``tar`` fails mid-stream on a CRC error. So
-    a tar extraction failure left ``$retval == 0``: the (empty) ``.orig`` file passed the
-    inner-content MIME gate (an empty file probes as the allow-listed ``inode/x-empty``)
-    and the feed imported as a silent, member-less "empty feed" with NO error logged.
-    A non-zero extraction status prevents publication. The staged-publish path logs
-    the precise ``zip publish failed`` marker before returning.
+    A ZIP whose member DATA is corrupt must never be silently imported as an empty
+    feed -- issue #819's fix made a genuine ``tar -xOf`` mid-pipeline failure surface
+    as an explicit reject instead of a masked pipeline exit status. Issue #3068 then
+    moved the ADR-45 zip structural probe from ``tar -tf`` (central-directory listing
+    only) to ``unzip -t`` (full inflate + CRC check of every member): the SAME
+    CRC-corrupt fixture this test has always used is now caught THERE, before the
+    ``-xOf`` pipeline this test used to exercise ever runs. Re-target the oracle at
+    that earlier gate -- still never a silent empty import, just refused one stage
+    sooner (the ``-xOf`` pipeline's own pipefail behaviour is unreachable through any
+    small fixture now that the structural probe fully decodes every member first; see
+    ``tests/smoke/fixtures/README.md``'s note on ``archive_partial_extract.zip`` for
+    the sibling arm that stays reachable).
 
     Fixture: a valid single-member DEFLATE zip with one byte flipped a few bytes into
-    the compressed data stream (past the 30-byte local file header + filename). The
-    ADR-45 structural probe (``tar -tf``) reads only the central directory (at the
-    archive's tail) and stays intact, so it still PASSES -- the corruption is invisible
-    to the listing probe and only surfaces as a CRC failure when ``tar -xOf`` actually
-    decompresses the member. That is the live red-before-fix vector this test pins.
+    the compressed data stream (past the 30-byte local file header + filename) --
+    unchanged from the original #819 fixture. ``unzip -t`` inflates the member to
+    verify its CRC and now catches exactly this corruption.
 
-    Given the alias is absent and a delta baseline of ZIP publish-failure lines in
-      the pfB log (module-wide, on purpose -- only the delta across THIS case's own
-      Force Update window is asserted).
+    Given the alias is absent and a delta baseline of this feed's structural-reject
+      lines in the pfB log (module-wide, on purpose -- only the delta across THIS
+      case's own Force Update window is asserted).
     When the case Force-Updates over the corrupt-payload zip (outer MIME gate sees
-      application/zip and the structural listing probe passes, but extraction itself
-      fails on the corrupted member),
-    Then the alias remains absent AND a NEW ZIP publish-failure line appears in the
-      pfB log -- the extraction error surfaced as an error, not a silent empty import.
+      application/zip, but the structural probe inflates the corrupted member and
+      rejects it before extraction ever runs),
+    Then the alias remains absent AND a NEW structural-reject line appears in the
+      pfB log -- the corruption surfaced as an error, not a silent empty import.
     """
     member = "payload.txt"
     buf = io.BytesIO()
@@ -3369,8 +3377,7 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
         z.writestr(member, "x" * 4096)
     raw = bytearray(buf.getvalue())
     # Local file header is 30 bytes + len(member); flip a byte a few bytes into the
-    # deflate stream so the CRC check fails on extraction while the central
-    # directory (at the tail, read by `tar -tf`) stays intact.
+    # deflate stream so `unzip -t` fails to CRC-check the member.
     data_off = 30 + len(member) + 4
     raw[data_off] ^= 0xFF
     zip_bytes = bytes(raw)
@@ -3384,37 +3391,36 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
             f"corrupt-payload zip produced {box_mime!r} on this box's file -b (not application/zip); "
             f"the outer gate would not route to the ZIP branch — test inconclusive"
         )
-    listing_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/tar -tf {remote_tmp}")
-    if listing_rc != 0:
+    # issue #3068: the ADR-45 zip probe is `unzip -t`, not `tar -tf` -- it must
+    # actually reject this corruption, or the structural-reject oracle below proves
+    # nothing (and the archive would instead reach the unreachable extraction arm).
+    probe_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/unzip -t {remote_tmp} >/dev/null 2>&1")
+    if probe_rc == 0:
         pytest.skip(
-            f"tar -tf exited {listing_rc} on this box for the corrupt-payload zip (expected 0); "
-            f"the ADR-45 structural probe would reject first — the extraction path is never reached"
-        )
-    extract_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/tar -xOf {remote_tmp} > /dev/null")
-    if extract_rc == 0:
-        pytest.skip(
-            "tar -xOf exited 0 on this box for the corrupt-payload zip (expected non-zero); "
-            "the corruption did not take -- extraction would succeed and the reject branch is never exercised"
+            "unzip -t exited 0 on this box for the corrupt-payload zip (expected non-zero); "
+            "the corruption did not take -- the structural probe would pass and this fixture proves nothing"
         )
 
     header = "issue819zex"
     feed_url = mock_feeds.register("issue819_zip_extract_fail.zip", zip_bytes)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
-    marker = f"[pfb_download] zip publish failed (tar exit {extract_rc})"
+    # pfblockerng.inc's IP-list loop builds pfb_download()'s $header as
+    # "{row header}{vtype}" and vtype is literally '_v4'/'_v6' (with the underscore).
+    marker = f"pfb_validate: REJECT feed={header}_v4 stage=structural reason=probe_failed detected=application/zip"
 
-    # Given -- alias absent + delta baseline of ZIP publish-failure lines.
+    # Given -- alias absent + delta baseline of this feed's structural-reject lines.
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-payload zip feed"
     before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
 
     with h.CaseContext(deployed_vm, spec):
-        # When -- Force Update; the outer gate + structural probe both pass, extraction fails.
+        # When -- Force Update; the outer gate passes, the structural probe rejects.
         tables_after = h.pfctl_tables(deployed_vm)
         assert spec.alias not in tables_after, (
-            f"expected {spec.alias!r} absent after the corrupt-payload zip (extraction must fail), "
+            f"expected {spec.alias!r} absent after the corrupt-payload zip (structural probe must reject it), "
             f"found it present — tables: {tables_after}"
         )
-        # Then -- a NEW ZIP publish-failure line was logged (the error surfaced,
-        # rather than the feed silently importing as empty).
+        # Then -- a NEW structural-reject line was logged (the corruption surfaced
+        # as an error, rather than the feed silently importing as empty).
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):
             tail = h.read_log_file(deployed_vm, h.PFB_LOG).splitlines()[-20:]
@@ -3959,8 +3965,14 @@ def test_geoip_partway_extraction_keeps_the_published_tree_byte_identical(
     inside the target and moves the members over only once bsdtar exits clean.
 
     The fixture is corrupt in the one way that reaches extraction at all: it lists
-    cleanly (header-only, so ADR-46's member guard passes) and fails on the second
-    member's CRC, with the first member already written.
+    cleanly (header-only, so ADR-46's member guard passes) and passes the ADR-45
+    `unzip -t` structural probe (issue #3068 made that probe inflate + CRC-check
+    every member, which is why a CRC-corrupt fixture no longer reaches this arm --
+    see the sibling `test_zip_extraction_failure_rejected_not_empty`). The
+    corruption instead is a filesystem path conflict invisible to a CRC probe:
+    member `geoip/x` is a regular file, member `geoip/x/y` needs `x` to be a
+    directory. `--strip=1` writes `x` to disk first, then `mkdir x` fails because
+    `x` is already a file -- one member already written when tar exits non-zero.
 
     Given a published tree in service and a corrupt two-member GeoIP archive
     When  pfb_download() fetches it as a geoip extra
