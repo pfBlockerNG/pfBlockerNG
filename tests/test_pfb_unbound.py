@@ -5182,6 +5182,59 @@ class TestBuiltinLogFlagTransport:
         dec2 = evaluate_domain("evil.com", "evil.com", "com", False, cfg2, pfb_unbound._snapshot.containers())
         assert dec2.log_type == "3", f"expected '3', got {dec2.log_type!r}"
 
+    def test_real_build_swap_snapshot_carries_builtin_log_flag(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # PR #3331 review: catches a mutant that drops builtin_log_flag= from
+        # _build_swap_snapshot()'s own Snapshot(...) construction -- every other
+        # test above hand-builds the Snapshot or uses dataclasses.replace, so none
+        # of them exercise that real call site.
+        manifest = tmp_path / "pfb_py_sources.json"
+        manifest.write_text(
+            json.dumps({"version": 1, "config": {"builtin_log_flag": "4"}, "feeds": []}), encoding="utf-8"
+        )
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_py_sources", str(manifest))
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_unbound.ini", str(tmp_path / "absent.ini"))
+        pfb_unbound.pfb["python_idn"] = True
+
+        snap = pfb_unbound._build_swap_snapshot()
+
+        assert snap is not None
+        assert snap.builtin_log_flag == "4", f"expected '4', got {snap.builtin_log_flag!r}"
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        dec = evaluate_domain("xn--evil.com", "xn--evil.com", "com", False, cfg, snap.containers())
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
+        assert dec.log_type == "4", f"expected '4', got {dec.log_type!r}"
+
+    def test_real_init_standard_installs_builtin_log_flag_into_live_snapshot(
+        self, tmp_path: Any, monkeypatch: Any
+    ) -> None:
+        # PR #3331 review: catches a mutant that drops builtin_log_flag= from
+        # _init_build_snapshot()'s Snapshot(...) construction inside init_standard --
+        # drives the REAL init path (tests/test_issue1718_regex_transport.py's
+        # _initial_load pattern), not a hand-built Snapshot.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pfb_unbound.ini").write_text("[MAIN]\npython_enable = true\npython_idn = true\n", encoding="utf-8")
+        (tmp_path / "pfb_py_sources.json").write_text(
+            json.dumps({"version": 1, "config": {"builtin_log_flag": "4"}, "feeds": []}), encoding="utf-8"
+        )
+        pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+        pfb_unbound.pfb["mod_threading_e"] = "stub"
+        pfb_unbound.pfb["mod_sqlite3_e"] = "stub"
+        pfb_unbound.pfb["mod_sqlite3"] = False
+        pfb_unbound.pfb["mod_threading"] = False
+        try:
+            assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+            assert pfb_unbound._snapshot.builtin_log_flag == "4", (
+                f"expected '4', got {pfb_unbound._snapshot.builtin_log_flag!r}"
+            )
+            cfg = pfb_unbound._evaluate_cfg(pfb_unbound._snapshot)
+            dec = evaluate_domain("xn--evil.com", "xn--evil.com", "com", False, cfg, pfb_unbound._snapshot.containers())
+            assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+            assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
+            assert dec.log_type == "4", f"expected '4', got {dec.log_type!r}"
+        finally:
+            pfb_unbound.deinit(0)
+
 
 class TestBuiltinLogFlagWire:
     """operate()-level (issue #3291 §4 Wire row): a regex BUILT-IN block's wire shape
