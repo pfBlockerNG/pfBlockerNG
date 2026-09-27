@@ -1104,18 +1104,15 @@ def test_top1m_token_hidden_and_cleared_for_keyless_providers(
 _CFG_GLOBAL_LOG_MODE = "installedpackages/pfblockerngdnsblsettings/config/0/global_log_mode"
 
 
-def _accessible_label_text(select: Locator) -> str:
-    """The control's accessible name: the enclosing Form_Group's
-    ``label.control-label`` text (pfSense's ``Form_Group::__toString`` only
-    emits ``for=`` when the user setting ``webgui/webguileftcolumnhyper`` is
-    on -- off by default, so the smoke VM's label has no ``for``), falling
-    back to ``aria-label`` if present."""
+def _form_group_label_text(select: Locator) -> str:
+    """The visible row label of the control's enclosing Form_Group
+    (``label.control-label``). This is not the programmatic accessible name:
+    pfSense's ``Form_Group::__toString`` only emits ``for=`` when the user
+    setting ``webgui/webguileftcolumnhyper`` is on, which is off by default."""
     return select.evaluate(
         "el => {"
-        " const grp = el.closest('.form-group');"
-        " const lbl = grp ? grp.querySelector('label.control-label')"
-        '   : (el.id ? document.querySelector(`label[for="${el.id}"]`) : null);'
-        " return (lbl && lbl.textContent.trim()) || el.getAttribute('aria-label') || '';"
+        " const lbl = el.closest('.form-group')?.querySelector('label.control-label');"
+        " return lbl ? lbl.textContent.trim() : '';"
         "}"
     )
 
@@ -1128,7 +1125,7 @@ def test_global_log_mode_selector_visible_usable_with_label(
     screenshot_dir: Path,
 ) -> None:
     """The new Global Application Mode select is a structural UI addition --
-    prove it in a REAL browser (visible, has an accessible label, and is
+    prove it in a REAL browser (visible, has its row label, and is
     actually selectable), then drive a REAL Save-button click (not the HTTP
     ``webui.post`` shortcut the sibling gateway test uses) to prove the
     control genuinely participates in the page's real submit path, and
@@ -1140,9 +1137,9 @@ def test_global_log_mode_selector_visible_usable_with_label(
         _open(page, webui, DNSBL_PAGE)
         select = page.locator("#global_log_mode")
         expect(select).to_be_visible(timeout=JS_TIMEOUT_MS)
-        assert _accessible_label_text(select) == "Global Application Mode", (
-            f"the global_log_mode select's accessible label must read "
-            f"'Global Application Mode', got {_accessible_label_text(select)!r}"
+        assert _form_group_label_text(select) == "Global Application Mode", (
+            f"the global_log_mode select's Form_Group label must read "
+            f"'Global Application Mode', got {_form_group_label_text(select)!r}"
         )
 
         original_value = select.input_value()
