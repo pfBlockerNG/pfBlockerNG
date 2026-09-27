@@ -3352,8 +3352,8 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     CRC-corrupt fixture this test has always used is now caught THERE, before the
     ``-xOf`` pipeline this test used to exercise ever runs. Re-target the oracle at
     that earlier gate -- still never a silent empty import, just refused one stage
-    sooner (the ``-xOf`` pipeline's own pipefail behaviour is unreachable through any
-    small fixture now that the structural probe fully decodes every member first; see
+    sooner (a CRC-corrupt member can no longer reach the ``-xOf`` pipeline's pipefail
+    arm, because the structural probe fully decodes every member first; see
     ``tests/smoke/fixtures/README.md``'s note on ``archive_partial_extract.zip`` for
     the sibling arm that stays reachable).
 
@@ -3393,7 +3393,7 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
         )
     # issue #3068: the ADR-45 zip probe is `unzip -t`, not `tar -tf` -- it must
     # actually reject this corruption, or the structural-reject oracle below proves
-    # nothing (and the archive would instead reach the unreachable extraction arm).
+    # nothing (and the archive would instead reach the extraction arm).
     probe_rc = _box_cmd_rc(deployed_vm, zip_bytes, remote_tmp, f"/usr/bin/unzip -t {remote_tmp} >/dev/null 2>&1")
     if probe_rc == 0:
         pytest.skip(
