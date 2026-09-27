@@ -484,21 +484,26 @@ def test_dnsbl_builtin_mechanism_confusable_idn(deployed_vm: SmokeVM, client_vm:
         assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_idn_block_malicious") == "on"
         h.reload(deployed_vm, "updatednsbl")
 
+        # The name is shared with test_smoke_matrix; flush any answer an earlier module cached.
+        h.flush_unbound_name(deployed_vm, CONFUSABLE_MALICIOUS_DOMAIN)
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
         h.reload(deployed_vm, "updatednsbl")
+        h.flush_unbound_name(deployed_vm, CONFUSABLE_MALICIOUS_DOMAIN)
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nxdomain_log")
         h.reload(deployed_vm, "updatednsbl")
+        h.flush_unbound_name(deployed_vm, CONFUSABLE_MALICIOUS_DOMAIN)
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 3, "nxdomain")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nodata_log")
         h.reload(deployed_vm, "updatednsbl")
+        h.flush_unbound_name(deployed_vm, CONFUSABLE_MALICIOUS_DOMAIN)
         with _hermetic_probe():
             _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 4, "nodata")
     finally:
