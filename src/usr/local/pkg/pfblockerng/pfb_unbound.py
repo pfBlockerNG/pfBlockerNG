@@ -5740,7 +5740,7 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
         if flag_field in config and not isinstance(config[flag_field], bool):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
     # issue #3291: the effective global DNSBL mechanism's Python logging flag for
-    # built-in blocks (TLD Allow/IDN/regex); absent -> "1" (today's VIP behaviour).
+    # built-in blocks (TLD Allow/IDN/regex/TLD Blacklist); absent -> "1" (VIP behaviour).
     if "builtin_log_flag" in config and (
         not isinstance(config["builtin_log_flag"], str)
         or config["builtin_log_flag"] not in ("0", "1", "2", "3", "4", "5", "6")
