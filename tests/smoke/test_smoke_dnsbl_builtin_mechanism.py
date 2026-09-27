@@ -159,10 +159,9 @@ def _write_builtin_config(
     (user regex, All-IDN, TLD Blacklist, HSTS), and the shared policy fields.
 
     Mirrors ``test_smoke_dnsbl_policy_default_override._write_policy_config``'s
-    shape (a raw ``config_set_path`` write — ``inject()`` hardcodes
-    ``global_log_mode='default'``/``global_log='disabled_log'``
-    (``helpers._dnsbl_mode_settings``), which would defeat the whole point of
-    driving the shared mechanism through its four values).
+    shape (a raw ``config_set_path`` write — ``inject()`` derives ``global_log``
+    from the case's mode (``helpers._dnsbl_mode_settings``), so this module writes
+    the policy fields directly to drive all four mechanism values.
     """
     alias, hdr, url = group
     settings = {
