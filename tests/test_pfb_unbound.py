@@ -5296,3 +5296,190 @@ class TestBuiltinLogFlagWire:
         pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
         assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
         assert lines == [], f"flag {flag} expected no log line, got {lines!r}"
+
+
+# --------------------------------------------------------------------------- #
+# issue #3332: the synthetic DNSBL_TLD zone entry build() writes for
+# config.tld_wildcard_blacklist must inherit config.builtin_log_flag instead of
+# hardcoding "1" -- same coverage-matrix pattern as #3291, through the REAL
+# dnsbl_build_from_manifest()/build() write path (the bug is at the WRITE site).
+# --------------------------------------------------------------------------- #
+
+
+def _tld_blacklist_snapshot(result: Any, *, hsts_on: bool) -> Any:
+    return pfb_unbound.Snapshot(
+        data_db=result.data_db,
+        zone_db=result.zone_db,
+        white_db=result.white_db,
+        regex_db=result.regex_db,
+        allow_regex_db=result.allow_regex_db,
+        feed_group_index_db=result.feed_group_index_db,
+        hsts_db=({"x.bad": 0} if hsts_on else {}),
+        builtin_log_flag=result.builtin_log_flag,
+    )
+
+
+class TestTldBlacklistLogFlag:
+    """issue #3332 coverage matrix: the DNSBL_TLD zone entry's "log" must equal
+    config.builtin_log_flag, not the hardcoded "1" -- RED on every flag != "1"."""
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_dnsbl_tld_zone_entry(self, tmp_path: Any, monkeypatch: Any, flag: str, hsts_on: bool) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path, tld_wildcard_blacklist=["bad"], builtin_log_flag=flag)
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        if hsts_on:
+            monkeypatch.setitem(pfb_unbound.pfb, "hsts_tlds", ("bad",))
+        pfb_unbound.pfb["python_blocking"] = True
+        snap = _tld_blacklist_snapshot(result, hsts_on=hsts_on)
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, snap.containers())
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_TLD", f"expected 'DNSBL_TLD', got {dec.group!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+
+class TestTldBlacklistLogFlagPreservation:
+    """Guards, not red proofs (issue #3332): each passes BEFORE and AFTER the fix."""
+
+    def test_manifest_without_builtin_log_flag_zone_entry_defaults_to_one(self, tmp_path: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path, tld_wildcard_blacklist=["bad"])
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        assert result.zone_db["bad"]["log"] == "1", f"expected '1', got {result.zone_db['bad']['log']!r}"
+
+    def test_whitelisted_blacklisted_tld_is_not_blocked(self, tmp_path: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(
+            tmp_path, tld_wildcard_blacklist=["bad"], user_whitelist=["x.bad"], builtin_log_flag="3"
+        )
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        pfb_unbound.pfb["python_blocking"] = True
+        snap = _tld_blacklist_snapshot(result, hsts_on=False)
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, snap.containers())
+        # Actual existing contract (fast path, not important_rules): is_found stays
+        # True (a zone match happened); in_whitelist overrides it at the caller.
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
+
+    def test_feed_zone_entry_log_not_overridden_by_builtin_log_flag(self) -> None:
+        manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "9"}]}
+        config: dict[str, object] = {
+            "psl_rules": _psl_rules(["com"]),
+            "tld_wildcard_blacklist": ["bad"],
+            "builtin_log_flag": "3",
+        }
+        result = pfb_unbound.build(manifest, config, line_reader=lambda raw: ["evil.com"])
+        assert "evil.com" in result.zone_db, "evil.com must classify as wildcard ZONE"
+        assert result.zone_db["evil.com"]["log"] == "9", f"expected '9', got {result.zone_db['evil.com']['log']!r}"
+
+
+class TestTldBlacklistRealBuilders:
+    """issue #3332: mirrors #3291's real-builder tests (5185/5208) -- the live
+    snapshot a background swap / init_standard installs must decide a blacklisted
+    TLD's log_type from config.builtin_log_flag, not the hardcoded "1"."""
+
+    def test_real_build_swap_snapshot_carries_flag_for_tld_blacklist(self, tmp_path: Any, monkeypatch: Any) -> None:
+        manifest = tmp_path / "pfb_py_sources.json"
+        manifest.write_text(
+            json.dumps(
+                {"version": 1, "config": {"tld_wildcard_blacklist": ["bad"], "builtin_log_flag": "4"}, "feeds": []}
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_py_sources", str(manifest))
+        monkeypatch.setitem(pfb_unbound.pfb, "pfb_unbound.ini", str(tmp_path / "absent.ini"))
+        pfb_unbound.pfb["python_blocking"] = True
+
+        snap = pfb_unbound._build_swap_snapshot()
+
+        assert snap is not None
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, snap.containers())
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.group == "DNSBL_TLD", f"expected 'DNSBL_TLD', got {dec.group!r}"
+        assert dec.log_type == "4", f"expected '4', got {dec.log_type!r}"
+
+    def test_real_init_standard_installs_flag_for_tld_blacklist(self, tmp_path: Any, monkeypatch: Any) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pfb_unbound.ini").write_text(
+            "[MAIN]\npython_enable = true\npython_blocking = true\n", encoding="utf-8"
+        )
+        (tmp_path / "pfb_py_sources.json").write_text(
+            json.dumps(
+                {"version": 1, "config": {"tld_wildcard_blacklist": ["bad"], "builtin_log_flag": "4"}, "feeds": []}
+            ),
+            encoding="utf-8",
+        )
+        pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+        pfb_unbound.pfb["mod_threading_e"] = "stub"
+        pfb_unbound.pfb["mod_sqlite3_e"] = "stub"
+        pfb_unbound.pfb["mod_sqlite3"] = False
+        pfb_unbound.pfb["mod_threading"] = False
+        try:
+            assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+            cfg = pfb_unbound._evaluate_cfg(pfb_unbound._snapshot)
+            dec = evaluate_domain("x.bad", "x.bad", "bad", False, cfg, pfb_unbound._snapshot.containers())
+            assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+            assert dec.group == "DNSBL_TLD", f"expected 'DNSBL_TLD', got {dec.group!r}"
+            assert dec.log_type == "4", f"expected '4', got {dec.log_type!r}"
+        finally:
+            pfb_unbound.deinit(0)
+
+
+class TestTldBlacklistLogFlagWire:
+    """operate()-level (issue #3332): a TLD Blacklist BUILT-IN block's wire shape and
+    dnsbl.log emission must track builtin_log_flag exactly like #3291's regex-block
+    harness (TestBuiltinLogFlagWire) already proves for other built-ins."""
+
+    def _set_up_tld_block(self, monkeypatch: Any, flag: str) -> list[tuple[str, str]]:
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+        result = pfb_unbound.build(
+            {"feeds": []}, {"tld_wildcard_blacklist": ["bad"], "builtin_log_flag": flag}, line_reader=lambda raw: ()
+        )
+        pfb_unbound._snapshot.zone_db.update(result.zone_db)
+        pfb_unbound._snapshot.feed_group_index_db.update(result.feed_group_index_db)
+        pfb_unbound.pfb["zoneDB"] = True
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        return lines
+
+    def test_flag_three_is_bare_nxdomain(self, monkeypatch: Any) -> None:
+        lines = self._set_up_tld_block(monkeypatch, "3")
+        qstate = make_qstate("x.bad.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NXDOMAIN, f"expected {RCODE_NXDOMAIN!r}, got {qstate.return_rcode!r}"
+        assert qstate.return_msg is None, f"expected None, got {qstate.return_msg!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    def test_flag_five_is_noerror_empty_answer_with_soa(self, monkeypatch: Any) -> None:
+        lines = self._set_up_tld_block(monkeypatch, "5")
+        qstate = make_qstate("x.bad.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("x.bad", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    def test_flag_zero_is_null_zero_answer(self, monkeypatch: Any) -> None:
+        lines = self._set_up_tld_block(monkeypatch, "0")
+        qstate = make_qstate("x.bad.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        answers = DNSMessage.instances[-1].answer
+        assert any("0.0.0.0" in a for a in answers), f"expected a 0.0.0.0 match in {answers!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    @pytest.mark.parametrize("flag", ["2", "4", "6"])
+    def test_silent_flags_emit_no_log_line(self, monkeypatch: Any, flag: str) -> None:
+        lines = self._set_up_tld_block(monkeypatch, flag)
+        qstate = make_qstate("x.bad.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert lines == [], f"flag {flag} expected no log line, got {lines!r}"

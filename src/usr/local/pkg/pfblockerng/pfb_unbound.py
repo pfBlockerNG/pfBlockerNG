@@ -5442,13 +5442,14 @@ def build(
         return idx
 
     # Whole-TLD block: a blacklisted TLD becomes a synthetic DNSBL_TLD zone entry
-    # (feed/group ``DNSBL_TLD``, log ``1``) -- the sole writer of this row shape
-    # since ADR-65 retired PHP's own equivalent write.
+    # (feed/group ``DNSBL_TLD``) carrying the global mechanism flag (issue #3332) --
+    # the sole writer of this row shape since ADR-65 retired PHP's own equivalent write.
+    builtin_log_flag = str(config.get("builtin_log_flag", "1"))
     for tld in sorted(blacklist_roots):  # sorted: a set would insert in hash-seed order
         if not tld:
             continue
         idx = index_for("DNSBL_TLD", "DNSBL_TLD")
-        zone_db[tld] = {"log": "1", "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
+        zone_db[tld] = {"log": builtin_log_flag, "index": idx, "important": False, "band": PRIO_FEED_BLOCK}
 
     # ADR-06 (#51): the temporary per-alert Unlock store (config.user_unlock, fed from
     # the pfb_unlock state by the alerts dnsbl_remove handler) loads into whiteDB
@@ -5685,7 +5686,7 @@ def build(
         regex_count=regex_count,
         rejects=rejects,
         psl_rules=psl_rules,
-        builtin_log_flag=str(config.get("builtin_log_flag", "1")),
+        builtin_log_flag=builtin_log_flag,
     )
 
 
