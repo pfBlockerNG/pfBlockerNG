@@ -1105,11 +1105,16 @@ _CFG_GLOBAL_LOG_MODE = "installedpackages/pfblockerngdnsblsettings/config/0/glob
 
 
 def _accessible_label_text(select: Locator) -> str:
-    """The control's accessible name: an associated ``<label for=id>``'s text,
-    or its ``aria-label`` -- whichever pfSense's ``Form_Group`` renders."""
+    """The control's accessible name: the enclosing Form_Group's
+    ``label.control-label`` text (pfSense's ``Form_Group::__toString`` only
+    emits ``for=`` when the user setting ``webgui/webguileftcolumnhyper`` is
+    on -- off by default, so the smoke VM's label has no ``for``), falling
+    back to ``aria-label`` if present."""
     return select.evaluate(
         "el => {"
-        ' const lbl = el.id ? document.querySelector(`label[for="${el.id}"]`) : null;'
+        " const grp = el.closest('.form-group');"
+        " const lbl = grp ? grp.querySelector('label.control-label')"
+        '   : (el.id ? document.querySelector(`label[for="${el.id}"]`) : null);'
         " return (lbl && lbl.textContent.trim()) || el.getAttribute('aria-label') || '';"
         "}"
     )
@@ -1135,8 +1140,9 @@ def test_global_log_mode_selector_visible_usable_with_label(
         _open(page, webui, DNSBL_PAGE)
         select = page.locator("#global_log_mode")
         expect(select).to_be_visible(timeout=JS_TIMEOUT_MS)
-        assert _accessible_label_text(select), (
-            "the global_log_mode select must have an accessible label (<label for=...> or aria-label)"
+        assert _accessible_label_text(select) == "Global Application Mode", (
+            f"the global_log_mode select's accessible label must read "
+            f"'Global Application Mode', got {_accessible_label_text(select)!r}"
         )
 
         original_value = select.input_value()
