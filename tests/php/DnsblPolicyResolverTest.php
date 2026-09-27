@@ -11,6 +11,7 @@ use PHPUnit\Framework\TestCase;
  * Defaults and overrides must preserve explicit choices without copying values.
  */
 #[CoversFunction('pfb_dnsbl_mechanism_normalize')]
+#[CoversFunction('pfb_dnsbl_mechanism_flag')]
 #[CoversFunction('pfb_dnsbl_group_logging')]
 #[CoversFunction('pfb_dnsbl_effective_logging')]
 #[CoversFunction('pfb_dnsbl_policy_config')]
@@ -507,6 +508,48 @@ final class DnsblPolicyResolverTest extends TestCase
 		$effective = pfb_dnsbl_effective_logging($token, $global, PfbDnsblGlobalMode::Default, TRUE);
 
 		$this->assertSame($token, $effective);
+	}
+
+	// -----------------------------------------------------------------------
+	// H — pfb_dnsbl_mechanism_flag (issue #3291: PHP token -> Python logging flag)
+	// -----------------------------------------------------------------------
+
+	/** @return array<string,array{0:string,1:string}> mechanism token => its Python logging flag. */
+	public static function mechanismFlagProvider(): array
+	{
+		return [
+			'enabled'      => ['enabled', '1'],
+			'disabled_log' => ['disabled_log', '0'],
+			'disabled'     => ['disabled', '2'],
+			'nxdomain_log' => ['nxdomain_log', '3'],
+			'nxdomain'     => ['nxdomain', '4'],
+			'nodata_log'   => ['nodata_log', '5'],
+			'nodata'       => ['nodata', '6'],
+		];
+	}
+
+	#[DataProvider('mechanismFlagProvider')]
+	public function testMechanismFlagMapsEveryConcreteToken(string $token, string $flag): void
+	{
+		$this->assertSame($flag, pfb_dnsbl_mechanism_flag($token));
+	}
+
+	/** @return array<string,array{0:string}> unrecognised-but-still-string tokens; baseline-safe. */
+	public static function unknownMechanismStringProvider(): array
+	{
+		return [
+			'empty string' => [''],
+			'case variant' => ['Enabled'],
+			'legacy junk'  => ['default'],
+			'whitespace'   => [' enabled'],
+		];
+	}
+
+	/** Unknown/malformed tokens fail closed to '1' (VIP+log), same fail-closed shape as the other resolvers. */
+	#[DataProvider('unknownMechanismStringProvider')]
+	public function testMechanismFlagFailsSafeToOneForUnknownTokens(string $stored): void
+	{
+		$this->assertSame('1', pfb_dnsbl_mechanism_flag($stored));
 	}
 
 }

@@ -268,6 +268,30 @@ final class UnboundPythonSourcesTest extends TestCase
 		$this->assertSame([], $m['config']['user_whitelist']);
 		$this->assertSame([], $m['config']['user_unlock']);
 		$this->assertFalse($m['config']['top1m_enabled']);
+		// issue #3291: no configured global mechanism -> the '?? enabled' fallback -> flag '1'.
+		$this->assertSame('1', $m['config']['builtin_log_flag']);
+	}
+
+	// issue #3291: built-in DNSBL blocks (TLD Allow/IDN/regex) inherit the effective
+	// global DNSBL response mechanism, carried through the manifest as this flag.
+
+	/** @return array<string,array{0:string,1:string}> global mechanism token => manifest builtin_log_flag. */
+	public static function globalMechanismFlagProvider(): array
+	{
+		return [
+			'enabled'      => ['enabled', '1'],
+			'disabled'     => ['disabled', '2'],
+			'nxdomain_log' => ['nxdomain_log', '3'],
+			'nodata'       => ['nodata', '6'],
+		];
+	}
+
+	#[DataProvider('globalMechanismFlagProvider')]
+	public function testBuiltinLogFlagTracksTheGlobalMechanism(string $mechanism, string $flag): void
+	{
+		$GLOBALS['pfb']['dnsbl_global_log'] = $mechanism;
+		$m = pfb_unbound_python_sources($this->feeds());
+		$this->assertSame($flag, $m['config']['builtin_log_flag']);
 	}
 
 	// issue #1255: the TLD-Wildcard oracle leaves the manifest entirely (HSTS parity) --

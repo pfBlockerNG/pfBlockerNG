@@ -2165,27 +2165,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 								$pfb['dnsbl_policy_legacy']
 							);
 
-							// Serialize the selected response mode for the Python matcher.
-							if ($effective == 'disabled') {
-								$logging_type	= '2';	// Null Blocking no logging
-							}
-							elseif ($effective == 'disabled_log') {
-								$logging_type	= '0';	// Null Blocking logging
-							}
-							elseif ($effective == 'nxdomain_log') {
-								$logging_type	= '3';	// NXDOMAIN logging
-							}
-							elseif ($effective == 'nxdomain') {
-								$logging_type	= '4';	// NXDOMAIN no logging
-							}
-							elseif ($effective == 'nodata_log') {
-								$logging_type	= '5';	// NODATA logging
-							}
-							elseif ($effective == 'nodata') {
-								$logging_type	= '6';	// NODATA no logging
-							} else {
-								$logging_type	= '1';	// DNSBL VIP logging
-							}
+							// issue #3291: single mapping shared with the built-in manifest flag
+							// (pfb_dnsbl_mechanism_flag) -- no second policy model.
+							$logging_type	= pfb_dnsbl_mechanism_flag($effective);
 
 							// Determine 'list' details (return array $pfbarr)
 							pfb_determine_list_detail($list['action'], $header, 'pfblockerngdnsblsettings', '0');

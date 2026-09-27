@@ -1,4 +1,6 @@
 import builtins
+import dataclasses
+import json
 import queue
 import random
 import re
@@ -40,6 +42,10 @@ import pfb_unbound
 from pfb_unbound import (
     DNSBL_CLASS_DATA,
     DNSBL_CLASS_ZONE,
+    IDN_FEED_MALICIOUS,
+    IDN_GROUP_MALICIOUS,
+    IDN_MODE_CONFUSABLE,
+    PRIO_FEED_BLOCK_IMPORTANT,
     _parse_ini_int,
     convert_ipv4,
     convert_ipv6,
@@ -4906,3 +4912,334 @@ class TestTldWildcardClassifyMultiLabelPublicSuffix:
         # Moot in production: _normalise_verdict() strips the trailing dot
         # before any domain reaches tld_wildcard_classify().
         assert tld_wildcard_classify("act.edu.au.", self._tlds(), set()) == (DNSBL_CLASS_DATA, "act.edu.au.")
+
+
+# --------------------------------------------------------------------------- #
+# issue #3291: built-in DNSBL blocks (TLD Allow / IDN / regex / numeric
+# re-attribution) inherit the effective global DNSBL response mechanism
+# (config.builtin_log_flag) instead of hardcoding VIP+log ("1").
+# --------------------------------------------------------------------------- #
+
+
+def _assert_builtin_shape(dec: Any, flag: str, hsts_on: bool) -> None:
+    assert dec.log_type == flag, f"expected {flag!r}, got {dec.log_type!r}"
+    if flag == "1":
+        if not hsts_on:
+            assert dec.null_blocking is False, f"expected False, got {dec.null_blocking!r}"
+            assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+        else:
+            assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
+            assert dec.in_hsts is True, f"expected True, got {dec.in_hsts!r}"
+    elif flag in ("0", "2"):
+        assert dec.null_blocking is True, f"expected True, got {dec.null_blocking!r}"
+        assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+        if hsts_on:
+            assert dec.in_hsts is True, f"expected True, got {dec.in_hsts!r}"
+    elif flag in ("3", "4"):
+        assert dec.nxdomain is True, f"expected True, got {dec.nxdomain!r}"
+        assert dec.in_hsts is False, f"expected False, got {dec.in_hsts!r}"
+        assert dec.p_type == "Python", f"expected 'Python', got {dec.p_type!r}"
+    else:  # "5", "6"
+        assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+        assert dec.in_hsts is False, f"expected False, got {dec.in_hsts!r}"
+
+
+_BUILTIN_FLAGS = ["0", "1", "2", "3", "4", "5", "6"]
+
+
+class TestBuiltinLogFlagCoverageMatrix:
+    """Every built-in DNSBL path (ADR none -- issue #3291 §4 coverage matrix) must
+    log_type == cfg["builtin_log_flag"] and shape its response exactly like a feed
+    row already does for that same flag -- one test per path, parametrized over
+    every flag and both HSTS states. Each parametrized case FAILS today (pre-fix)
+    for every flag != "1": the two evaluate_domain call sites hardcode log_type="1"
+    regardless of cfg.
+    """
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_tld_allow(self, flag: str, hsts_on: bool) -> None:
+        cfg = _make_cfg(tld_allow=True, tld_allow_list=["com"], builtin_log_flag=flag, hstsDB=hsts_on, hsts_tlds=())
+        containers = _make_containers(hstsDB=({"example.net": 0} if hsts_on else {}))
+        dec = evaluate_domain("example.net", "example.net", "net", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "TLD_Allow", f"expected 'TLD_Allow', got {dec.feed!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_all_idn(self, flag: str, hsts_on: bool) -> None:
+        q = "xn--evil.com"
+        cfg = _make_cfg(python_idn=True, builtin_log_flag=flag, hstsDB=hsts_on, hsts_tlds=())
+        containers = _make_containers(hstsDB=({q: 0} if hsts_on else {}))
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "IDN", f"expected 'IDN', got {dec.feed!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_confusable_idn_block(self, flag: str, hsts_on: bool) -> None:
+        # xn--pple-43d = "аpple" (Latin+Cyrillic homograph) -- same fixture domain as
+        # test_adr08_confusable_matcher.py's MALICIOUS_NAME.
+        q = "xn--pple-43d.com"
+        cfg = _make_cfg(
+            idn_mode=IDN_MODE_CONFUSABLE,
+            python_idn_block_malicious=True,
+            builtin_log_flag=flag,
+            hstsDB=hsts_on,
+            hsts_tlds=(),
+        )
+        containers = _make_containers(hstsDB=({q: 0} if hsts_on else {}))
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == IDN_FEED_MALICIOUS, f"expected {IDN_FEED_MALICIOUS!r}, got {dec.feed!r}"
+        assert dec.group == IDN_GROUP_MALICIOUS, f"expected {IDN_GROUP_MALICIOUS!r}, got {dec.group!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_user_regex_bare_pattern(self, flag: str, hsts_on: bool) -> None:
+        q = "tracker.evil.com"
+        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        cfg = _make_cfg(regexDB=True, builtin_log_flag=flag, hstsDB=hsts_on, hsts_tlds=())
+        containers = _make_containers(regexDB=regex_db, hstsDB=({q: 0} if hsts_on else {}))
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "bad-pattern", f"expected 'bad-pattern', got {dec.feed!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_abp_feed_regex_dict_payload(self, flag: str, hsts_on: bool) -> None:
+        q = "tracker.evil.com"
+        regex_db: dict = {
+            "abp-rule": {"re": re.compile(r"tracker"), "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}
+        }
+        cfg = _make_cfg(regexDB=True, builtin_log_flag=flag, hstsDB=hsts_on, hsts_tlds=())
+        containers = _make_containers(regexDB=regex_db, hstsDB=({q: 0} if hsts_on else {}))
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.feed == "abp-rule", f"expected 'abp-rule', got {dec.feed!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+    @pytest.mark.parametrize("hsts_on", [False, True])
+    @pytest.mark.parametrize("flag", _BUILTIN_FLAGS)
+    def test_numeric_reattribution_to_higher_band_regex(self, flag: str, hsts_on: bool) -> None:
+        # important_rules True: a lower-band data hit is discovered first, but the
+        # numeric scan finds a STRICTLY higher-band regex match on the same name and
+        # re-attributes feed/group/log_type to the regex rule (issue #47).
+        q = "evil.com"
+        data_db: dict = {q: {"log": "9", "index": 0}}  # sentinel: must be overridden
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        regex_db: dict = {
+            "important-rule": {"re": re.compile(r"evil"), "important": True, "band": PRIO_FEED_BLOCK_IMPORTANT}
+        }
+        cfg = _make_cfg(
+            dataDB=True,
+            regexDB=True,
+            important_rules=True,
+            builtin_log_flag=flag,
+            hstsDB=hsts_on,
+            hsts_tlds=(),
+        )
+        containers = _make_containers(
+            dataDB=data_db, regexDB=regex_db, feedGroupIndexDB=fgi_db, hstsDB=({q: 0} if hsts_on else {})
+        )
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is True, f"expected True, got {dec.is_found!r}"
+        assert dec.in_whitelist is False, f"expected False, got {dec.in_whitelist!r}"
+        assert dec.feed == "important-rule", f"expected 'important-rule', got {dec.feed!r}"
+        assert dec.group == "DNSBL_Regex", f"expected 'DNSBL_Regex', got {dec.group!r}"
+        _assert_builtin_shape(dec, flag, hsts_on)
+
+
+class TestBuiltinLogFlagPreservation:
+    """Guards, not red proofs (issue #3291 §4 preservation rows): each of these
+    passes BEFORE and AFTER the fix -- pinned here so a future change cannot
+    silently break what builtin_log_flag threading must never touch."""
+
+    def test_cfg_without_builtin_log_flag_defaults_to_one(self) -> None:
+        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        cfg = _make_cfg(regexDB=True)  # no builtin_log_flag key at all
+        containers = _make_containers(regexDB=regex_db)
+        dec = evaluate_domain("tracker.evil.com", "tracker.evil.com", "com", False, cfg, containers)
+        assert dec.log_type == "1", f"expected '1', got {dec.log_type!r}"
+
+    def test_whitelisted_builtin_with_flag_three_still_whitelists(self) -> None:
+        q = "tracker.evil.com"
+        regex_db: dict = {"bad-pattern": re.compile(r"tracker")}
+        white_db: dict = {q: False}
+        cfg = _make_cfg(regexDB=True, whiteDB=True, builtin_log_flag="3")
+        containers = _make_containers(regexDB=regex_db, whiteDB=white_db)
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.in_whitelist is True, f"expected True, got {dec.in_whitelist!r}"
+        assert dec.nxdomain is False, f"expected False, got {dec.nxdomain!r}"
+
+    def test_confusable_alert_only_flag_three_stays_false_log_type(self) -> None:
+        # xn--bnk-1ce = "bաnk" (Latin+Armenian suspicious mix) -- alerts, never blocks,
+        # by default (same fixture domain as test_adr08_confusable_matcher.py's
+        # SUSPICIOUS_NAME).
+        q = "xn--bnk-1ce.com"
+        cfg = _make_cfg(idn_mode=IDN_MODE_CONFUSABLE, builtin_log_flag="3")
+        containers = _make_containers()
+        dec = evaluate_domain(q, q, "com", False, cfg, containers)
+        assert dec.is_found is False, f"expected False, got {dec.is_found!r}"
+        assert dec.idn_alert is not None, "expected an alert attribution, got None"
+        assert dec.log_type is False, f"expected False, got {dec.log_type!r}"
+
+    def test_feed_data_entry_log_not_overridden_by_builtin_log_flag(self) -> None:
+        data_db: dict = {"evil.com": {"log": "3", "index": 0}}
+        fgi_db: dict = {0: {"feed": "F", "group": "G"}}
+        cfg = _make_cfg(dataDB=True, builtin_log_flag="5")
+        containers = _make_containers(dataDB=data_db, feedGroupIndexDB=fgi_db)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, containers)
+        assert dec.log_type == "3", f"expected '3', got {dec.log_type!r}"
+
+
+def _write_minimal_dnsbl_manifest(tmp_path: Any, name: str = "pfb_py_sources.json", **config_overrides: Any) -> str:
+    manifest = {
+        "version": 1,
+        "config": {
+            "tld_wildcard_blacklist": [],
+            "tld_wildcard_exclusion": [],
+            "user_whitelist": [],
+            "user_unlock": [],
+            "top1m_enabled": False,
+            **config_overrides,
+        },
+        "feeds": [],
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return str(path)
+
+
+class TestBuiltinLogFlagTransport:
+    """issue #3291 §4 Transport rows: config.builtin_log_flag must reach BuildResult,
+    the Snapshot built from it, and _evaluate_cfg -- and a live swap must refresh it
+    (decisionDB is already cleared on swap, so no stale-memo re-serve is possible)."""
+
+    def test_manifest_builtin_log_flag_reaches_build_result(self, tmp_path: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path, builtin_log_flag="4")
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        assert result.builtin_log_flag == "4", f"expected '4', got {result.builtin_log_flag!r}"
+
+    def test_manifest_absent_builtin_log_flag_defaults_to_one(self, tmp_path: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path)
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        assert result.builtin_log_flag == "1", f"expected '1', got {result.builtin_log_flag!r}"
+
+    def test_snapshot_and_evaluate_cfg_carry_builtin_log_flag(self, tmp_path: Any) -> None:
+        path = _write_minimal_dnsbl_manifest(tmp_path, builtin_log_flag="4")
+        result = pfb_unbound.dnsbl_build_from_manifest(path)
+        assert result is not None
+        snap = pfb_unbound.Snapshot(
+            data_db=result.data_db,
+            zone_db=result.zone_db,
+            white_db=result.white_db,
+            regex_db=result.regex_db,
+            allow_regex_db=result.allow_regex_db,
+            feed_group_index_db=result.feed_group_index_db,
+            hsts_db={},
+            builtin_log_flag=result.builtin_log_flag,
+        )
+        assert snap.builtin_log_flag == "4", f"expected '4', got {snap.builtin_log_flag!r}"
+        cfg = pfb_unbound._evaluate_cfg(snap)
+        assert cfg["builtin_log_flag"] == "4", f"expected '4', got {cfg['builtin_log_flag']!r}"
+
+    def test_swap_freshness_flips_builtin_log_flag_for_a_regex_block(self, tmp_path: Any) -> None:
+        def _snap_from_manifest(name: str, flag: str) -> Any:
+            path = _write_minimal_dnsbl_manifest(tmp_path, name=name, builtin_log_flag=flag)
+            result = pfb_unbound.dnsbl_build_from_manifest(path)
+            assert result is not None
+            return pfb_unbound.Snapshot(
+                data_db=result.data_db,
+                zone_db=result.zone_db,
+                white_db=result.white_db,
+                regex_db={"builtin-swap": re.compile(r"evil")},
+                allow_regex_db=result.allow_regex_db,
+                feed_group_index_db=result.feed_group_index_db,
+                hsts_db={},
+                builtin_log_flag=result.builtin_log_flag,
+            )
+
+        pfb_unbound.pfb["python_blocking"] = True
+
+        # Before-state: snapshot A carries flag "1".
+        assert pfb_unbound.rebuild_and_swap(lambda: _snap_from_manifest("a.json", "1"), emit_counts=False) is True
+        cfg = pfb_unbound._evaluate_cfg(pfb_unbound._snapshot)
+        dec = evaluate_domain("evil.com", "evil.com", "com", False, cfg, pfb_unbound._snapshot.containers())
+        assert dec.log_type == "1", f"expected '1', got {dec.log_type!r}"
+
+        # After the swap to snapshot B (flag "3"), the SAME regex block reflects the
+        # new mechanism -- the memo (decisionDB) was cleared by the swap, so this is
+        # not a stale re-serve.
+        assert pfb_unbound.rebuild_and_swap(lambda: _snap_from_manifest("b.json", "3"), emit_counts=False) is True
+        cfg2 = pfb_unbound._evaluate_cfg(pfb_unbound._snapshot)
+        dec2 = evaluate_domain("evil.com", "evil.com", "com", False, cfg2, pfb_unbound._snapshot.containers())
+        assert dec2.log_type == "3", f"expected '3', got {dec2.log_type!r}"
+
+
+class TestBuiltinLogFlagWire:
+    """operate()-level (issue #3291 §4 Wire row): a regex BUILT-IN block's wire shape
+    and dnsbl.log emission must track builtin_log_flag exactly like a feed row's own
+    log flag already does for issues #31/#3222/#3224's shapes."""
+
+    def _set_up_regex_block(self, monkeypatch: Any, flag: str) -> list[tuple[str, str]]:
+        pfb_unbound.pfb["python_blacklist"] = True
+        pfb_unbound.pfb["python_blocking"] = True
+        monkeypatch.setattr(pfb_unbound, "pfb_db_enqueue", lambda *a: None)
+        pfb_unbound._snapshot.regex_db["builtin-wire"] = re.compile(r"evil")
+        pfb_unbound.pfb["regexDB"] = True
+        pfb_unbound._snapshot = dataclasses.replace(pfb_unbound._snapshot, builtin_log_flag=flag)
+        lines: list[tuple[str, str]] = []
+        monkeypatch.setattr(pfb_unbound, "pfb_log", lambda path, line: lines.append((path, line)))
+        return lines
+
+    def test_flag_one_is_vip_a_answer(self, monkeypatch: Any) -> None:
+        lines = self._set_up_regex_block(monkeypatch, "1")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        answers = DNSMessage.instances[-1].answer
+        assert any(pfb_unbound.pfb["dnsbl_ipv4"] in a for a in answers), f"expected a match in {answers!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    def test_flag_zero_is_null_zero_answer(self, monkeypatch: Any) -> None:
+        lines = self._set_up_regex_block(monkeypatch, "0")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        answers = DNSMessage.instances[-1].answer
+        assert any("0.0.0.0" in a for a in answers), f"expected a 0.0.0.0 match in {answers!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    def test_flag_three_is_bare_nxdomain(self, monkeypatch: Any) -> None:
+        lines = self._set_up_regex_block(monkeypatch, "3")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NXDOMAIN, f"expected {RCODE_NXDOMAIN!r}, got {qstate.return_rcode!r}"
+        assert qstate.return_msg is None, f"expected None, got {qstate.return_msg!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    def test_flag_five_is_noerror_empty_answer_with_soa(self, monkeypatch: Any) -> None:
+        lines = self._set_up_regex_block(monkeypatch, "5")
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.return_rcode == RCODE_NOERROR, f"expected {RCODE_NOERROR!r}, got {qstate.return_rcode!r}"
+        msg = DNSMessage.instances[-1]
+        assert msg.answer == [], f"expected [], got {msg.answer!r}"
+        expected_soa = "{}. 3600 IN SOA {}".format("evil.com", pfb_unbound.DNSBL_NODATA_SOA_RDATA)
+        assert msg.authority == [expected_soa], f"expected {[expected_soa]!r}, got {msg.authority!r}"
+        assert any(path.endswith("dnsbl.log") for path, _ in lines), f"expected a log line, got {lines!r}"
+
+    @pytest.mark.parametrize("flag", ["2", "4", "6"])
+    def test_silent_flags_emit_no_log_line(self, monkeypatch: Any, flag: str) -> None:
+        lines = self._set_up_regex_block(monkeypatch, flag)
+        qstate = make_qstate("evil.com.", qtype=RR_A)
+        pfb_unbound.operate(0, MODULE_EVENT_NEW, qstate, None)
+        assert qstate.ext_state[0] == MODULE_FINISHED, f"expected {MODULE_FINISHED!r}, got {qstate.ext_state[0]!r}"
+        assert lines == [], f"flag {flag} expected no log line, got {lines!r}"

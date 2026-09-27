@@ -143,6 +143,17 @@ def test_empty_group_and_log_flag_are_valid(tmp_path: Path) -> None:
         (lambda m: m["feeds"][0].__setitem__("provenance", []), "feeds[0].provenance"),
         (lambda m: m["feeds"][0].__setitem__("mode", "other"), "feeds[0].mode"),
         (lambda m: m["feeds"][0].__setitem__("mode", {}), "feeds[0].mode"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", "7"), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", ""), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", " 1"), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", "1 "), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", "01"), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", "\uff11"), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", 1), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", True), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", None), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", []), "config.builtin_log_flag"),
+        (lambda m: m["config"].__setitem__("builtin_log_flag", {}), "config.builtin_log_flag"),
     ],
 )
 def test_invalid_v1_shape_is_rejected_before_build(

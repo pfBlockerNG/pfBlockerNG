@@ -882,6 +882,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         psl_allow_private=bool(pfb.get("psl_allow_private", False)),
         psl_feed_private_policy=str(pfb.get("psl_feed_private_policy", "honor")),
         psl_feed_icann_policy=str(pfb.get("psl_feed_icann_policy", "honor")),
+        builtin_log_flag=build_result.builtin_log_flag,
     )
 
 
@@ -2049,6 +2050,7 @@ def init_standard(id: int, env: module_env) -> bool:
             # the loud ledger entry opened below signals the failure instead.
             dnsbl_built = False
             psl_rules = PslRules()
+            builtin_log_flag = "1"
             build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
             if build_result is not None:
                 # Atomic assign of the freshly-built structures into the module
@@ -2058,6 +2060,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 feedGroupIndexDB = build_result.feed_group_index_db
                 whiteDB = build_result.white_db
                 psl_rules = build_result.psl_rules
+                builtin_log_flag = build_result.builtin_log_flag
 
                 # ADR-07: MERGE the ABP feed block-regex into regexDB, preserving user-regex
                 # patterns compiled from MAIN.regex_list above, and load
@@ -2174,6 +2177,7 @@ def init_standard(id: int, env: module_env) -> bool:
             psl_allow_private=bool(pfb.get("psl_allow_private", False)),
             psl_feed_private_policy=str(pfb.get("psl_feed_private_policy", "honor")),
             psl_feed_icann_policy=str(pfb.get("psl_feed_icann_policy", "honor")),
+            builtin_log_flag=builtin_log_flag,
         )
 
     rebuild_and_swap(_init_build_snapshot, emit_counts=False)
@@ -4159,6 +4163,9 @@ class BuildResult:
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
     psl_rules: PslRules = field(default_factory=PslRules)
+    # issue #3291: the effective global DNSBL mechanism's Python logging flag for
+    # built-in blocks (TLD Allow/IDN/regex); "1" (VIP+log) preserves pre-#3291 behaviour.
+    builtin_log_flag: str = "1"
 
 
 # issue #1074: every built Snapshot gets a unique, monotonically-advancing generation
@@ -4231,6 +4238,9 @@ class Snapshot:
     # without passing these explicitly; build() reads them from the manifest config.
     psl_feed_private_policy: str = "honor"
     psl_feed_icann_policy: str = "honor"
+    # issue #3291: the effective global DNSBL mechanism's Python logging flag for
+    # built-in blocks (TLD Allow/IDN/regex); "1" (VIP+log) preserves pre-#3291 behaviour.
+    builtin_log_flag: str = "1"
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
     # never passed by builders.
     gen: int = field(default_factory=lambda: next(_snapshot_gen))
@@ -5675,6 +5685,7 @@ def build(
         regex_count=regex_count,
         rejects=rejects,
         psl_rules=psl_rules,
+        builtin_log_flag=str(config.get("builtin_log_flag", "1")),
     )
 
 
@@ -5727,6 +5738,13 @@ def _dnsbl_validate_manifest_raws(manifest: dict[str, Any], base_dir: str) -> No
     for flag_field in ("top1m_enabled", "regex_cap"):
         if flag_field in config and not isinstance(config[flag_field], bool):
             raise _DnsblGenerationError("DNSBL manifest/v1 config.{} must be bool".format(flag_field))
+    # issue #3291: the effective global DNSBL mechanism's Python logging flag for
+    # built-in blocks (TLD Allow/IDN/regex); absent -> "1" (today's VIP behaviour).
+    if "builtin_log_flag" in config and (
+        not isinstance(config["builtin_log_flag"], str)
+        or config["builtin_log_flag"] not in ("0", "1", "2", "3", "4", "5", "6")
+    ):
+        raise _DnsblGenerationError('DNSBL manifest/v1 config.builtin_log_flag must be one of "0".."6"')
 
     feeds = manifest.get("feeds")
     if not isinstance(feeds, list):
@@ -5947,6 +5965,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         # ADR-06 (#51): the temporary per-alert unlock set -> band-6 whiteDB allows.
         "user_unlock": list(config.get("user_unlock", [])),
         "regex_cap": regex_cap,
+        "builtin_log_flag": config.get("builtin_log_flag", "1"),
     }
 
 
@@ -6906,7 +6925,7 @@ def evaluate_domain(
 
         if is_found:
             b_eval = q_name
-            log_type = "1"
+            log_type = cfg.get("builtin_log_flag", "1")  # issue #3291: built-ins inherit the global mechanism
             # ADR-08: a Confusable BLOCK reports the dual-form (xn-- [decoded] script)
             # instead of the bare A-label, so the dnsbl.log line / alerts page are
             # actionable. Only set on the homoglyph block path; the All-IDN feed and every
@@ -6943,7 +6962,7 @@ def evaluate_domain(
                 if scan_meta["kind"] == "regex":
                     feed = scan_meta["key"]
                     group = "DNSBL_Regex"
-                    log_type = "1"
+                    log_type = cfg.get("builtin_log_flag", "1")  # issue #3291
                     b_type = "Python"
                     b_eval = q_name
                 else:
@@ -7047,6 +7066,7 @@ def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
         "python_tld_seg": pfb["python_tld_seg"],
         "hstsDB": bool(snap.hsts_db),
         "hsts_tlds": pfb["hsts_tlds"],
+        "builtin_log_flag": snap.builtin_log_flag,
     }
 
 

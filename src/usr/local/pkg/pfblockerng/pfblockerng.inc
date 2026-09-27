@@ -11207,7 +11207,12 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 			// "re-locked on Cron/Force" semantic. Only pfb_unbound_python_sources_unlock()
 			// (the incremental alerts dnsbl_remove path) repopulates user_unlock.
 			'user_unlock'	=> array(),
-			'top1m_enabled'	=> $top1m_enabled
+			'top1m_enabled'	=> $top1m_enabled,
+			// issue #3291: built-ins (TLD Allow/IDN/regex) have no group, so this is
+			// simply the effective global mechanism's Python flag -- Default and
+			// Override modes both resolve to it; a legacy/no-global box's '?? enabled'
+			// fallback preserves today's VIP+log behaviour.
+			'builtin_log_flag'	=> pfb_dnsbl_mechanism_flag($pfb['dnsbl_global_log'] ?? 'enabled')
 		),
 		'feeds'		=> $manifest_feeds
 	);
@@ -14164,6 +14169,22 @@ function pfb_dnsbl_effective_logging(mixed $group_logging, string $global_loggin
 	}
 	$normalized = pfb_dnsbl_group_logging($group_logging, $legacy);
 	return $normalized === 'default' ? $global_logging : $normalized;
+}
+
+/** issue #3291: map a concrete mechanism to its Python DNSBL logging flag -- the single
+ * source pfblockerng_apply.inc's per-list serializer and the manifest's builtin_log_flag
+ * both call, so a built-in block (TLD Allow/IDN/regex) and a per-list block always agree
+ * on the SAME mechanism's wire shape. Unknown/malformed input fails closed to '1' (VIP+log). */
+function pfb_dnsbl_mechanism_flag(string $mechanism): string {
+	return match ($mechanism) {
+		'disabled_log' => '0',
+		'disabled'     => '2',
+		'nxdomain_log' => '3',
+		'nxdomain'     => '4',
+		'nodata_log'   => '5',
+		'nodata'       => '6',
+		default        => '1',
+	};
 }
 
 /** Existing groups count as domain configuration even without a settings section. */

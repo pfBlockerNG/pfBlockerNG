@@ -2364,6 +2364,19 @@
             }
         ]
     },
+    "pfb_dnsbl_mechanism_flag": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "mechanism",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_mechanism_normalize": {
         "returnsRef": false,
         "returnType": "string",
