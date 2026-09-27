@@ -1,30 +1,45 @@
 """Live proof: built-in DNSBL blocks inherit the global response mechanism.
 
-Issues #3291 / #3332: TLD Allow, All-IDN, user-regex (and ABP feed-regex, not
-exercised here — same code path as user-regex) and TLD Blacklist blocks used to
-hardcode ``log_type = "1"`` (VIP+log) in ``pfb_unbound.py``, ignoring the
-operator's configured DNSBL Logging/Blocking mechanism (``dnsbl/global_log``).
-They now read ``cfg["builtin_log_flag"]`` — the SAME flag
-``pfb_dnsbl_mechanism_flag()`` computes for ordinary per-list blocks — carried
-manifest -> ``BuildResult`` -> ``Snapshot`` -> ``_evaluate_cfg``.
+Issues #3291 / #3332: TLD Allow, All-IDN, Confusable-IDN, and user-regex blocks
+(plus TLD Blacklist, a separate build-time site) used to hardcode
+``log_type = "1"`` (VIP+log) in ``pfb_unbound.py``, ignoring the operator's
+configured DNSBL Logging/Blocking mechanism (``dnsbl/global_log``). They now
+read ``cfg["builtin_log_flag"]`` — the SAME flag ``pfb_dnsbl_mechanism_flag()``
+computes for ordinary per-list blocks — carried manifest -> ``BuildResult`` ->
+``Snapshot`` -> ``_evaluate_cfg``.
+
+ABP feed-regex (``$important``/``@@``) is deliberately NOT loaded here even
+though it reaches the same ``evaluate_domain`` call sites as user-regex: any
+ABP grammar flips ``important_rules`` True for the WHOLE snapshot, which
+reroutes every row in this module (regex/IDN/TLD Blacklist/TLD Allow) onto the
+numeric 6-band re-attribution site (``pfb_unbound.py`` ~6966) instead of the
+fast-path site (~6929) this module actually puts under live proof. That numeric
+path is already pinned off-appliance by
+``TestBuiltinLogFlagCoverageMatrix::test_numeric_reattribution_to_higher_band_regex``;
+loading a feed-regex here would silently swap which code path this module
+exercises and leave the fast path unprobed live.
 
 This module drives the shared mechanism through all four concrete values
 (``enabled``/``disabled_log``/``nxdomain_log``/``nodata_log``) and asserts every
-built-in tracks it, on a REAL pfSense VM. TLD Allow gets its own test
-(``test_dnsbl_builtin_mechanism_tld_allow``): its synthetic block fires for
-EVERY name whose TLD is not in the allow list, so combining it with the other
-built-ins in one config write would make it double-block the TLD Blacklist
-probe (different mechanism, same response shape — a confound, not a bug) rather
-than proving each built-in independently.
+built-in tracks it, on a REAL pfSense VM. Three built-ins get their own test
+instead of sharing the main settings write:
+
+* TLD Allow (``test_dnsbl_builtin_mechanism_tld_allow``): its synthetic block
+  fires for EVERY name whose TLD is not in the allow list, so combining it
+  with the other built-ins would make it double-block the TLD Blacklist probe
+  (different mechanism, same response shape — a confound, not a bug).
+* Confusable-IDN (``test_dnsbl_builtin_mechanism_confusable_idn``): ``pfb_idn``
+  stores exactly ONE ``PfbIdnMode`` token (``'on'`` = All, ``'confusable'`` =
+  Confusable, ``''`` = Off — ``pfblockerng_extra.inc``), so All-IDN and
+  Confusable cannot coexist in one settings write either.
 """
 
 from __future__ import annotations
 
-import contextlib
-import os
 import re
 import uuid
-from collections.abc import Iterator
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -32,43 +47,101 @@ from tests.test_issue3222_soa_wire import rr_has_type
 
 from . import helpers as h
 from .conftest import SmokeVM
+from .test_smoke_dnsbl_policy_default_override import _group_php, _hermetic_probe
 from .test_smoke_matrix import _header_counts, _raw_dig, _raw_drill
 from .test_smoke_matrix import deployed_vm as deployed_vm
 
-
-@contextlib.contextmanager
-def _hermetic_probe() -> Iterator[None]:
-    """Bracket a DNS probe with the egress block (mirrors CaseContext's gate)."""
-    if os.environ.get("SMOKE_HERMETIC_PROBE", "1") != "0":
-        h.block_egress()
-    try:
-        yield
-    finally:
-        h.unblock_egress()
+# xn--pple-43d = "аpple" (Latin+Cyrillic homograph) — the SAME fixed fixture
+# domain test_pfb_unbound.py's TestBuiltinLogFlagCoverageMatrix::test_confusable_idn_block
+# and test_adr08_confusable_matcher.py's MALICIOUS_NAME use. Not unique-able like
+# unique_domain(): the Confusable analyzer needs this specific mixed-script shape
+# to classify as malicious, a random uuid label would not. Safe under the two
+# smoke.md domain rules regardless: '.com' is not an RFC 6761 reserved TLD, and
+# the punycode label is not a real HSTS-preload host (only literal apple.com is).
+CONFUSABLE_MALICIOUS_DOMAIN = "xn--pple-43d.com"
 
 
-def _assert_nodata_soa(client_vm: SmokeVM, vm: SmokeVM, domain: str, *, context: str) -> None:
-    """NOERROR + ANSWER=0 + AUTHORITY=1 (a synthetic SOA) on BOTH the LAN and
-    on-box paths — the NODATA/NODATA_LOG block shape (issue #3243), here reached
-    via a built-in (flag '5') rather than a per-list ``logging``."""
-    for raw in (_raw_dig(client_vm, domain, "A"), _raw_drill(vm, domain, "A")):
-        assert "NOERROR" in raw, f"{context}: {domain} expected NOERROR NODATA, got:\n{raw}"
+def _nodata_soa_ok(client_vm: SmokeVM, vm: SmokeVM, domain: str) -> tuple[bool, str]:
+    """Non-asserting twin of ``test_smoke_dnsbl_policy_default_override._assert_nodata_soa``.
+
+    That helper raises on the first miss; this module collects every row's
+    verdict and asserts ONCE per phase (never hiding a later row behind an
+    earlier failure), so a per-row check here must return a verdict instead.
+    Checks the NOERROR + ANSWER=0 + AUTHORITY=1 SOA shape on BOTH the LAN
+    (``dig``) and on-box (``drill``) paths, exactly like the asserting twin.
+    """
+    for raw, source in ((_raw_dig(client_vm, domain, "A"), "dig/LAN"), (_raw_drill(vm, domain, "A"), "drill/on-box")):
+        if "NOERROR" not in raw:
+            return False, f"{source}: not NOERROR:\n{raw}"
         answers, authority, _ = _header_counts(raw)
-        assert (answers, authority) == (0, 1), (
-            f"{context}: {domain} expected ANSWER=0 AUTHORITY=1 (SOA), got ANSWER={answers} AUTHORITY={authority}:\n"
-            f"{raw}"
-        )
-        assert rr_has_type(raw, "SOA"), f"{context}: {domain} expected an authority SOA:\n{raw}"
+        if (answers, authority) != (0, 1):
+            return False, f"{source}: ANSWER={answers} AUTHORITY={authority} (want 0/1):\n{raw}"
+        if not rr_has_type(raw, "SOA"):
+            return False, f"{source}: no authority SOA in answer:\n{raw}"
+    return True, "NODATA+SOA confirmed on both dig/LAN and drill/on-box"
 
 
-def _builtin_group_php(*, aliasname: str, header: str, url: str) -> str:
-    """An inert, ``logging='default'`` DNSBL list-group — DNSBL needs at least one
-    group to build at all, but this module's assertions are all about BUILT-IN
-    blocks (TLD Allow/IDN/regex/TLD Blacklist), which have no group of their own."""
-    row = h._php_kv_array({"header": header, "url": url, "state": "Enabled", "format": "auto"})
-    return (
-        f"array('aliasname' => {h._php_str(aliasname)}, 'action' => 'unbound', 'cron' => 'EveryDay', "
-        f"'order' => 'default', 'logging' => {h._php_str('default')}, 'row' => array({row}))"
+def _probe_row(client_vm: SmokeVM, vm: SmokeVM, domain: str, expected_shape: str) -> tuple[bool, str]:
+    """Probe ``domain`` and report whether it matches ``expected_shape``.
+
+    ``expected_shape`` is one of ``"vip"``/``"null"``/``"nxdomain"``/``"nodata"``.
+    Returns ``(matched, actual_description)`` — never raises, so callers can
+    collect every row's verdict before asserting (issue #3334 review F3).
+    """
+    if expected_shape == "vip":
+        a = h.dns_probe_client(client_vm, domain, "A")
+        return h.is_vip(a), str(a)
+    if expected_shape == "null":
+        a = h.dns_probe_client(client_vm, domain, "A")
+        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
+        matched = h.is_null_ip(a) and h.is_null_ip(aaaa, null_ip="::0")
+        return matched, f"A={a} AAAA={aaaa}"
+    if expected_shape == "nxdomain":
+        a = h.dns_probe_client(client_vm, domain, "A")
+        aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
+        matched = h.is_nxdomain(a) and not h.is_vip(a) and not h.is_null_ip(a) and h.is_nxdomain(aaaa)
+        return matched, f"A={a} AAAA={aaaa}"
+    if expected_shape == "nodata":
+        return _nodata_soa_ok(client_vm, vm, domain)
+    raise ValueError(f"unknown expected_shape {expected_shape!r}")
+
+
+@dataclass
+class _Row:
+    """One built-in's probe domain, plus any PHASE-NUMBER -> shape overrides.
+
+    The override is for the HSTS row only: it matches the phase's default
+    shape everywhere except phase 1, where HSTS forces VIP (flag '1') to NULL.
+    """
+
+    name: str
+    domain: str
+    phase_shape_override: dict[int, str] = field(default_factory=dict)
+
+
+def _assert_all_rows_match_phase(
+    client_vm: SmokeVM,
+    vm: SmokeVM,
+    rows: Sequence[_Row],
+    phase_num: int,
+    default_shape: str,
+) -> None:
+    """Probe EVERY row for this phase and assert ONCE, listing every mismatch.
+
+    issue #3334 review F3: asserting inside the per-row loop let the first
+    failing row hide every other row's answer (the RED run only ever showed
+    the ``regex`` row). Collecting first means a single RED run's failure
+    message enumerates every built-in that is still wrong, not just the first.
+    """
+    mismatches: list[str] = []
+    for row in rows:
+        expected = row.phase_shape_override.get(phase_num, default_shape)
+        matched, actual = _probe_row(client_vm, vm, row.domain, expected)
+        if not matched:
+            mismatches.append(f"{row.name}: expected {expected!r}, got: {actual}")
+    assert not mismatches, (
+        f"phase{phase_num} ({default_shape!r} mechanism) — {len(mismatches)} row(s) mismatched:\n"
+        + "\n".join(mismatches)
     )
 
 
@@ -109,7 +182,7 @@ def _write_builtin_config(
         f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"
         f"{h._dnsbl_settings_replace_php(settings)}"
         f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, "
-        f"array({_builtin_group_php(aliasname=alias, header=hdr, url=url)}));\n"
+        f"array({_group_php(aliasname=alias, header=hdr, url=url, logging='default')}));\n"
         "write_config('pfBlockerNG smoke: issue-3291/3332 builtin mechanism config');\n"
         "echo 'OK';"
     )
@@ -142,7 +215,7 @@ def _write_tld_allow_config(
         f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"
         f"{h._dnsbl_settings_replace_php(settings)}"
         f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, "
-        f"array({_builtin_group_php(aliasname=alias, header=hdr, url=url)}));\n"
+        f"array({_group_php(aliasname=alias, header=hdr, url=url, logging='default')}));\n"
         "write_config('pfBlockerNG smoke: issue-3291 TLD Allow builtin mechanism config');\n"
         "echo 'OK';"
     )
@@ -153,10 +226,50 @@ def _write_tld_allow_config(
         )
 
 
+def _write_confusable_config(
+    vm: SmokeVM,
+    *,
+    group: tuple[str, str, str],
+    global_log_mode: str,
+    global_log: str,
+    timeout: float = 90.0,
+) -> None:
+    """One-shot write for the Confusable-IDN test: the inert group + Confusable
+    mode (with malicious-block on) + the shared policy fields — nothing else.
+
+    ``pfb_idn`` = ``'confusable'`` (``PfbIdnMode::Confusable``'s backing value,
+    ``pfblockerng_extra.inc``) — mutually exclusive with All-IDN's ``'on'``, so
+    this cannot share a settings write with :func:`_write_builtin_config`.
+    """
+    alias, hdr, url = group
+    settings = {
+        "global_log_mode": global_log_mode,
+        "global_log": global_log,
+        "pfb_dnsbl": "on",
+        "pfb_idn": "confusable",
+        "pfb_idn_block_malicious": "on",
+    }
+    snippet = (
+        f"$g = config_get_path({h._php_str(h.CFG_GLOBAL)}, array());\n"
+        "$g['enable_cb'] = 'on';\n"
+        f"config_set_path({h._php_str(h.CFG_GLOBAL)}, $g);\n"
+        f"{h._dnsbl_settings_replace_php(settings)}"
+        f"config_set_path({h._php_str(h.CFG_DNSBL_LISTS)}, "
+        f"array({_group_php(aliasname=alias, header=hdr, url=url, logging='default')}));\n"
+        "write_config('pfBlockerNG smoke: issue-3291 Confusable-IDN builtin mechanism config');\n"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_write_confusable_config failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
+
+
 def _set_global_mechanism(vm: SmokeVM, *, mode: str, mechanism: str, timeout: float = 60.0) -> None:
     """Flip ONLY the shared policy fields (mode + mechanism) — every built-in
-    toggle written by :func:`_write_builtin_config`/:func:`_write_tld_allow_config`
-    is left untouched (a read-modify-write merge, mirrors
+    toggle written by the ``_write_*_config`` helpers above is left untouched (a
+    read-modify-write merge, mirrors
     ``test_smoke_dnsbl_policy_default_override._set_global_policy``)."""
     snippet = (
         f"$s = config_get_path({h._php_str(h.CFG_DNSBL_SETTINGS)}, array());\n"
@@ -188,7 +301,7 @@ def _tld_label(prefix: str) -> str:
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(600)  # 4 restart-class updatednsbl reloads + ~30 probes (3 built-ins x 4 phases + 2 HSTS rows).
+@pytest.mark.timeout(600)  # 4 restart-class updatednsbl reloads + 4 rows x 4 phases, collected + asserted once each.
 def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Issues #3291/#3332 end-to-end: user-regex, All-IDN, and TLD Blacklist
     blocks all track the shared DNSBL mechanism, across its four concrete
@@ -202,6 +315,10 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
       NXDOMAIN block into an address (the override only fires for flag '1').
     Phase 4 (``nodata_log``, flag '5'): every built-in -> NOERROR ANSWER=0
       AUTHORITY=1 SOA.
+
+    Each phase probes EVERY row and asserts once (issue #3334 review F3): a
+    RED run's single failure message lists every built-in still hardcoding VIP,
+    not just the first one the old per-row loop happened to hit.
     """
     regex_domain = h.unique_domain("bir")
     regex_label = regex_domain.split(".", 1)[0]
@@ -216,6 +333,13 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
     # regex anchors on the unique label (not the bare full-domain string) so this
     # is a genuine regex match, not a literal-string comparison in disguise.
     regex_patterns = [f"^{re.escape(regex_label)}\\.", f"^{re.escape(hsts_label)}\\."]
+
+    rows = [
+        _Row("regex", regex_domain),
+        _Row("all-idn", idn_domain),
+        _Row("tld-blacklist", blacklist_domain),
+        _Row("hsts-regex", hsts_domain, phase_shape_override={1: "null"}),
+    ]
 
     h.add_hsts_name(deployed_vm, hsts_domain)
 
@@ -239,13 +363,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
 
         # ---- Phase 1: enabled (flag '1') -> VIP; HSTS regex name -> NULL ----
         with _hermetic_probe():
-            for name, domain in (("regex", regex_domain), ("all-idn", idn_domain), ("tld-blacklist", blacklist_domain)):
-                a = h.dns_probe_client(client_vm, domain, "A")
-                assert h.is_vip(a), f"phase1 ({name}): expected VIP (flag '1'), got {a} for {domain}"
-            hsts_a = h.dns_probe_client(client_vm, hsts_domain, "A")
-            assert h.is_null_ip(hsts_a), f"phase1 (hsts regex): expected NULL (HSTS forces VIP->NULL), got {hsts_a}"
-            hsts_aaaa = h.dns_probe_client(client_vm, hsts_domain, "AAAA")
-            assert h.is_null_ip(hsts_aaaa, null_ip="::0"), f"phase1 (hsts regex) AAAA: expected ::0, got {hsts_aaaa}"
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
 
         # ---- Phase 2: disabled_log (flag '0') -> NULL. Swap-freshness observation ----
         # (not asserted either way — the answer change below is the load-bearing proof).
@@ -258,34 +376,19 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
             f"(restarted={pid_before != pid_after}) across a mechanism-only reload"
         )
         with _hermetic_probe():
-            for name, domain in (("regex", regex_domain), ("all-idn", idn_domain), ("tld-blacklist", blacklist_domain)):
-                a = h.dns_probe_client(client_vm, domain, "A")
-                assert h.is_null_ip(a), f"phase2 ({name}): expected NULL (flag '0'), got {a} for {domain}"
-                aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
-                assert h.is_null_ip(aaaa, null_ip="::0"), f"phase2 ({name}) AAAA: expected ::0, got {aaaa}"
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")
 
         # ---- Phase 3: nxdomain_log (flag '3') -> NXDOMAIN, even for the HSTS name ----
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nxdomain_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():
-            for name, domain in (
-                ("regex", regex_domain),
-                ("all-idn", idn_domain),
-                ("tld-blacklist", blacklist_domain),
-                ("hsts regex", hsts_domain),
-            ):
-                a = h.dns_probe_client(client_vm, domain, "A")
-                assert h.is_nxdomain(a), f"phase3 ({name}): expected NXDOMAIN (flag '3'), got {a} for {domain}"
-                assert not h.is_vip(a) and not h.is_null_ip(a), (
-                    f"phase3 ({name}): must be a bare NXDOMAIN, not VIP/NULL: {a}"
-                )
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 3, "nxdomain")
 
         # ---- Phase 4: nodata_log (flag '5') -> NOERROR ANSWER=0 AUTHORITY=1 SOA ----
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nodata_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():
-            for name, domain in (("regex", regex_domain), ("all-idn", idn_domain), ("tld-blacklist", blacklist_domain)):
-                _assert_nodata_soa(client_vm, deployed_vm, domain, context=f"phase4 ({name})")
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 4, "nodata")
     finally:
         h.reset(deployed_vm)
 
@@ -297,7 +400,7 @@ def test_dnsbl_builtin_mechanism_regex_idn_tld_blacklist(deployed_vm: SmokeVM, c
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(300)  # 4 restart-class updatednsbl reloads + 1 built-in x 4 phases (up to 2 probes each).
+@pytest.mark.timeout(300)  # 4 restart-class updatednsbl reloads + 1 row x 4 phases, collected + asserted once each.
 def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
     """Issue #3291: TLD Allow's synthetic block also tracks the shared mechanism.
 
@@ -309,6 +412,7 @@ def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: Smok
     allow_domain = f"pfballow-{uuid.uuid4().hex}.net"
     inert_alias = "smoketldallowinert"
     inert_feed = h.write_local_feed(deployed_vm, "smoke_tld_allow_inert.txt", f"{h.unique_domain('tldallowinert')}\n")
+    rows = [_Row("tld-allow", allow_domain)]
 
     try:
         _write_tld_allow_config(
@@ -324,29 +428,78 @@ def test_dnsbl_builtin_mechanism_tld_allow(deployed_vm: SmokeVM, client_vm: Smok
         h.reload(deployed_vm, "updatednsbl")
 
         with _hermetic_probe():
-            a = h.dns_probe_client(client_vm, allow_domain, "A")
-            assert h.is_vip(a), f"phase1 (tld-allow): expected VIP (flag '1'), got {a} for {allow_domain}"
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():
-            a = h.dns_probe_client(client_vm, allow_domain, "A")
-            assert h.is_null_ip(a), f"phase2 (tld-allow): expected NULL (flag '0'), got {a} for {allow_domain}"
-            aaaa = h.dns_probe_client(client_vm, allow_domain, "AAAA")
-            assert h.is_null_ip(aaaa, null_ip="::0"), f"phase2 (tld-allow) AAAA: expected ::0, got {aaaa}"
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nxdomain_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():
-            a = h.dns_probe_client(client_vm, allow_domain, "A")
-            assert h.is_nxdomain(a), f"phase3 (tld-allow): expected NXDOMAIN (flag '3'), got {a} for {allow_domain}"
-            assert not h.is_vip(a) and not h.is_null_ip(a), (
-                f"phase3 (tld-allow): must be a bare NXDOMAIN, not VIP/NULL: {a}"
-            )
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 3, "nxdomain")
 
         _set_global_mechanism(deployed_vm, mode="default", mechanism="nodata_log")
         h.reload(deployed_vm, "updatednsbl")
         with _hermetic_probe():
-            _assert_nodata_soa(client_vm, deployed_vm, allow_domain, context="phase4 (tld-allow)")
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 4, "nodata")
+    finally:
+        h.reset(deployed_vm)
+
+
+# --------------------------------------------------------------------------- #
+# 3) Confusable-IDN — its own test (mutually exclusive with All-IDN; see
+#    module docstring)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(300)  # 4 restart-class updatednsbl reloads + 1 row x 4 phases, collected + asserted once each.
+def test_dnsbl_builtin_mechanism_confusable_idn(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #3291: the Confusable-IDN homoglyph BLOCK also tracks the shared
+    mechanism — a distinct code path from All-IDN's blunt "every xn-- blocks"
+    gate (``idn_mode_decision``): Confusable runs the TR39 analyzer
+    (``classify_idn`` / ``idn_confusable_action``) and only blocks a name whose
+    per-label severity is malicious (or escalated), attributing to
+    ``IDN_FEED_MALICIOUS``/``IDN_GROUP_MALICIOUS`` rather than the blunt "IDN"
+    feed/group All-IDN uses.
+    """
+    inert_alias = "smokeconfusableinert"
+    inert_feed = h.write_local_feed(
+        deployed_vm, "smoke_confusable_inert.txt", f"{h.unique_domain('confusableinert')}\n"
+    )
+    rows = [_Row("confusable-idn", CONFUSABLE_MALICIOUS_DOMAIN)]
+
+    try:
+        _write_confusable_config(
+            deployed_vm,
+            group=(inert_alias, inert_alias, inert_feed),
+            global_log_mode="default",
+            global_log="enabled",
+        )
+        # Verify the key semantics this test relies on before trusting the DNS
+        # shape below to attribute a failure correctly.
+        assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_idn") == "confusable"
+        assert h.config_get(deployed_vm, f"{h.CFG_DNSBL_SETTINGS}/pfb_idn_block_malicious") == "on"
+        h.reload(deployed_vm, "updatednsbl")
+
+        with _hermetic_probe():
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 1, "vip")
+
+        _set_global_mechanism(deployed_vm, mode="default", mechanism="disabled_log")
+        h.reload(deployed_vm, "updatednsbl")
+        with _hermetic_probe():
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 2, "null")
+
+        _set_global_mechanism(deployed_vm, mode="default", mechanism="nxdomain_log")
+        h.reload(deployed_vm, "updatednsbl")
+        with _hermetic_probe():
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 3, "nxdomain")
+
+        _set_global_mechanism(deployed_vm, mode="default", mechanism="nodata_log")
+        h.reload(deployed_vm, "updatednsbl")
+        with _hermetic_probe():
+            _assert_all_rows_match_phase(client_vm, deployed_vm, rows, 4, "nodata")
     finally:
         h.reset(deployed_vm)
