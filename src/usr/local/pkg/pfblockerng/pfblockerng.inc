@@ -14680,7 +14680,10 @@ function pfb_ip_is_self($ip) {
 // (default) blocks every other internal/private-resolving feed.
 // libcurl and PHP's URL wrappers parse a non-canonical IPv4 spelling ('2130706433', '0x7f000001',
 // '127.1') as an IPv4 literal and connect to the decoded address, so it is never vetted as a name; a
-// numeric-shaped host that is not a valid address is refused too. A host containing '%' is refused
+// numeric-shaped host that is not a valid address is refused too. Canonical rule: a host is a
+// canonical IPv4 literal only when pfb_ipv4_numeric_host()'s decoded quad equals the host string
+// itself -- anything numeric-shaped that decodes to a DIFFERENT string (or fails to decode at all)
+// is refused as a non-canonical IP literal. A host containing '%' is refused
 // outright: libcurl percent-decodes it and dials the decoded address, but parse_url() keeps the '%'
 // bytes, so this helper would otherwise vet (and the guard resolve/pin) a different string than the
 // one curl connects to. A non-ASCII host is UTS46-mapped first, as IDN-enabled libcurl does
@@ -14701,8 +14704,7 @@ function pfb_feed_host_literal_reason(string $host): string {
 	if ($non_ascii && $ascii_host === FALSE) {
 		return 'feed host is not a valid IDN name';
 	}
-	if (is_string($ascii_host) && ($ascii_host !== $host || !is_ipaddrv4($host)) &&
-	    pfb_ipv4_numeric_host($ascii_host) !== NULL) {
+	if (is_string($ascii_host) && ($num = pfb_ipv4_numeric_host($ascii_host)) !== NULL && $num['ip'] !== $host) {
 		return 'feed host is a non-canonical IP literal';
 	}
 	return '';
