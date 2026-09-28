@@ -27,7 +27,7 @@ final class PkgCaHookDelegateTest extends TestCase
 		// bound, a salvage-only watchdog, so a loaded host cannot turn "ran" into "killed".
 		// Only the hanging row uses a bound meant to fire.
 		$timeout = escapeshellarg(trim((string) shell_exec('command -v timeout')));
-		$this->timeout = $timeout . ' -s TERM -k 5 60';
+		$this->timeout = str_replace('/usr/bin/timeout', $timeout, PFB_PKG_TIMEOUT);
 		$this->hangBound = $timeout . ' -s TERM -k 1 1';
 		file_put_contents(
 			$this->hook,
@@ -67,7 +67,7 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertTrue(
 			pfb_repo_conf_regenerate($this->hook, $this->timeout),
 			'hook onestart must exit 0; calls logged: ' . var_export(@file_get_contents($this->log), TRUE)
-				. ' (FALSE with no call logged after 60s = STUCK/ENVIRONMENT)'
+				. ' (FALSE with no call logged: hook never started, or the watchdog killed it = STUCK/ENVIRONMENT)'
 		);
 		$this->assertSame("onestart\n", file_get_contents($this->log));
 	}
