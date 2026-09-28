@@ -18,7 +18,9 @@ Load when: every agent session, from `AGENTS.md`.
 - CodeGraph and Graphify are mandatory. Canonical post-clone setup is
   `sh scripts/setup-hooks.sh`: it calls `scripts/agent/ensure-graphify.sh`, which
   installs or upgrades the pinned org fork declared in `pyproject.toml`
-  before activating `.githooks`.
+  before activating `.githooks`. Outside GitHub Actions it keeps an installed uv tool
+  `graphifyy` newer than the pin and says so on stderr (#3339): the higher version
+  wins, then the later commit; an order it cannot establish keeps the installed build.
 - `scripts/agent/resolve-graphify.sh` prefers the launcher selected by `PATH`,
   physically absolutizes a relative selection before returning it, and only when none
   exists resolves `uv tool dir --bin/graphify`; an arbitrary PATH wrapper remains
