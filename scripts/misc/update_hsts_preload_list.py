@@ -66,12 +66,12 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import http.client
 import json
 import os
 import stringprep
 import sys
 import unicodedata
-import urllib.error
 import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -302,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         text = decode_body(fetch_hsts_json())
-    except (urllib.error.URLError, TimeoutError) as e:
+    except (OSError, http.client.HTTPException) as e:  # URLError/timeouts/resets + mid-response read failures
         print(f"Primary fetch failed ({e}); falling back to the GitHub Chromium mirror.", file=sys.stderr)
         ours = synced_date(old_text)
         if ours is None:
