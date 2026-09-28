@@ -27,28 +27,24 @@ final class FeedEntryVettingLiteralHostTest extends TestCase
 	/** @var string[] temp files to remove in tearDown */
 	private array $tmpfiles = [];
 
-	/** @var array<string,array{bool,mixed}> saved $GLOBALS['pfb'] keys (key => [existed, value]) */
-	private array $savedPfb = [];
+	private $savedPfb;
 
 	protected function setUp(): void
 	{
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [self::CONFIGURED_IP];
 		$GLOBALS['pfb_test_resolve_map'] = [];
-		foreach (['errlog'] as $k) {
-			$this->savedPfb[$k] = [array_key_exists($k, $GLOBALS['pfb'] ?? []), $GLOBALS['pfb'][$k] ?? null];
-		}
+		// Isolate from whatever a sibling test left in these globals.
+		$this->savedPfb = $GLOBALS['pfb'] ?? null;
 	}
 
 	protected function tearDown(): void
 	{
 		unset($GLOBALS['config'], $GLOBALS['pfb_test_configured_ips'], $GLOBALS['pfb_test_resolve_map']);
-		foreach ($this->savedPfb as $k => [$existed, $value]) {
-			if (!$existed) {
-				unset($GLOBALS['pfb'][$k]);
-			} else {
-				$GLOBALS['pfb'][$k] = $value;
-			}
+		if ($this->savedPfb === null) {
+			unset($GLOBALS['pfb']);
+		} else {
+			$GLOBALS['pfb'] = $this->savedPfb;
 		}
 		foreach ($this->tmpfiles as $f) {
 			if (is_file($f)) {
@@ -191,10 +187,8 @@ final class FeedEntryVettingLiteralHostTest extends TestCase
 	/**
 	 * @return array<string, array{string}>
 	 *
-	 * Includes a host that reaches the guard's numeric-literal check by way of the
-	 * fullwidth-digit / IDN mapping (moved here from provider A: PHP's own URL wrappers
-	 * already refuse a non-ASCII URL as malformed before parse_url() ever runs, at both
-	 * escape modes, on the parent -- so it is a pre-existing control here, not a RED row).
+	 * A fullwidth-digit host is a control here: FILTER_VALIDATE_URL refuses a
+	 * non-ASCII URL as malformed before parse_url() ever runs, at both escape modes.
 	 */
 	public static function malformedOrNonAsciiUrlProvider(): array
 	{
