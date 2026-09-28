@@ -7415,6 +7415,19 @@
             }
         ]
     },
+    "pfb_ipv4_numeric_host": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_is_blank": {
         "returnsRef": false,
         "returnType": "bool",

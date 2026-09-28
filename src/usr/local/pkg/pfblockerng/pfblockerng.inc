@@ -9863,6 +9863,77 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 }
 
 
+// Decode a host the way the WHATWG URL parser (browsers) and libcurl do, so hex/octal/DWORD and
+// short spellings ('0xC0A80164', '0300.0250.01.0144', '192.168.356') map to the address a client
+// actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
+// 0x-hex, or any ':' -- IPv6 is not an IPv4 spelling), array('ip' => 'a.b.c.d') when valid, and
+// array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, more than four parts).
+// Canonical dotted quads return themselves. Twin: pfb_unbound.py _dnsbl_is_numeric_host();
+// shared table tests/fixtures/ipv4_numeric_host.json.
+function pfb_ipv4_numeric_host(string $host): ?array {
+	if (str_contains($host, ':')) {
+		return NULL;
+	}
+	$parts = explode('.', $host);
+	if (count($parts) > 1 && end($parts) === '') {
+		array_pop($parts);
+	}
+	$last = end($parts);
+	if (!ctype_digit($last) &&
+	    !(strncasecmp($last, '0x', 2) === 0 && (strlen($last) === 2 || ctype_xdigit(substr($last, 2))))) {
+		return NULL;
+	}
+
+	// WHATWG "IPv4 number parser": 0x = hex, leading 0 = octal, else decimal; NULL = failure.
+	// intval() saturates at PHP_INT_MAX, which the range checks below then reject.
+	$number = static function (string $part): ?int {
+		$radix = 10;
+		if (strncasecmp($part, '0x', 2) === 0) {
+			$part  = substr($part, 2);
+			$radix = 16;
+		} elseif (strlen($part) > 1 && $part[0] === '0') {
+			$part  = substr($part, 1);
+			$radix = 8;
+		} elseif ($part === '') {
+			return NULL;
+		}
+		if ($part === '') {
+			return 0;
+		}
+		$valid = match ($radix) {
+			16	=> ctype_xdigit($part),
+			8	=> strspn($part, '01234567') === strlen($part),
+			default	=> ctype_digit($part),
+		};
+		return $valid ? intval($part, $radix) : NULL;
+	};
+
+	$invalid = array('ip' => NULL);
+	if (count($parts) > 4) {
+		return $invalid;
+	}
+	$numbers = array();
+	foreach ($parts as $part) {
+		$value = $number($part);
+		if ($value === NULL) {
+			return $invalid;
+		}
+		$numbers[] = $value;
+	}
+	$ip = array_pop($numbers);
+	if ($ip >= 256 ** (4 - count($numbers))) {
+		return $invalid;
+	}
+	foreach ($numbers as $i => $value) {
+		if ($value > 255) {
+			return $invalid;
+		}
+		$ip += $value * 256 ** (3 - $i);
+	}
+	return array('ip' => long2ip($ip));
+}
+
+
 // A blank line, or one led by a well-known full-line comment marker: '#' (hosts-style),
 // '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
 // together regardless of the list's own declared format. Callers whose '#' handling
