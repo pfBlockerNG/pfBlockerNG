@@ -201,8 +201,8 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recdedup.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -231,6 +231,17 @@ Describe 'pfb_recompute() v4 cross-feed dedup (Stage A/B/D/E)'
 		The contents of file "$masterfile" should include 'FeedA_v4 192.0.2.10'
 		The contents of file "$masterfile" should not include 'FeedB_v4 192.0.2.10'
 		The result of "pfb_counts_line()" should equal 'FeedB_v4 1'
+	End
+
+	It 'writes the swap stamp under pfbsnap, never into the working directory'
+		printf '192.0.2.10\n' > "${snap}/FeedA_v4.orig"
+		printf '%s\n' "${snap}/FeedA_v4.orig" > "$memberlist"
+		cd "$work" || return 1
+
+		When call silently pfb_recompute recompute v4 "$memberlist" "$countsfile" on off
+		The status should be success
+		The path "${work}/FeedA_v4.rec" should not be exist
+		The contents of file "${pfbsnap:-unset/}FeedA_v4.rec" should equal "$(cksum < "${pfbdeny}FeedA_v4.txt")"
 	End
 
 	It 'prunes via CIDR containment, not exact string match (a host inside an aggregated /24)'
@@ -493,8 +504,8 @@ Describe 'pfb_recompute() suffix-sibling aliases (issue #714/#730 class, family-
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recsuffix.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -541,8 +552,8 @@ Describe 'pfb_recompute() v6 dedup (same Stage A/B/D/E loop, per family)'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recv6.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -627,8 +638,8 @@ Describe 'pfb_recompute() dMax block-mode (class-wide offender collapse, priorit
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recdmaxblock.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -703,9 +714,9 @@ Describe 'pfb_recompute() dMax match-mode + GeoIP-unavailable bail + pMax'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recdmaxmatch.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
 		pfbmatchgen="${work}/match/generated/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -866,8 +877,8 @@ Describe 'pfb_recompute() hostile inputs'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rechostile.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -1006,8 +1017,8 @@ Describe 'pfb_recompute() mastercat consistency + empty-pass edges'
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/reccat.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -1062,8 +1073,8 @@ Describe 'pfb_recompute() continent/Uber alias exclusion from reputation (issue 
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recpfbexcl.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -1128,9 +1139,9 @@ Describe 'pfb_recompute() finish-arm reputation reconcile (issue #1084 review: s
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recfinisharm.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
 		pfbmatchgen="${work}/match/generated/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbmatchgen" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -1220,8 +1231,8 @@ Describe 'pfb_recompute() coverage-matrix gap rows (issue #1084 review: dedup=of
 	# placeholder-as-data row were unpinned. Pins existing behaviour as-is.
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recgaprows.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
@@ -1277,9 +1288,9 @@ Describe 'pfb_recompute() renders a per-feed Original/Final stats table on stdou
 	# shellcheck disable=SC2034  # consumed by the sourced pfb_recompute()
 	setup() {
 		work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/recstats.XXXXXX")"
-		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"
+		snap="${work}/snap"; pfbdeny="${work}/deny/"; pfbmatch="${work}/match/"; pfbsnap="${work}/stamp/"
 		pfborig="${work}/orig/"
-		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfborig"
+		mkdir -p "$snap" "$pfbdeny" "$pfbmatch" "$pfborig" "$pfbsnap"
 		tmpdir="${work}/tmp"; mkdir -p "$tmpdir"
 		masterfile="${work}/master"; mastercat="${work}/mastercat"
 		errorlog="${work}/err.log"
