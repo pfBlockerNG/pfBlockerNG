@@ -16,6 +16,14 @@ are stripped before parsing). License: BSD-style, The Chromium Authors --
 https://chromium.googlesource.com/chromium/src/+/main/LICENSE (redistribution
 with attribution permitted; both URLs are carried in the output header).
 
+Fallback: if the primary gitiles fetch fails at the network level (e.g. issue
+#3349's Gitiles-wide 503 outage), the script falls back to the official GitHub
+mirror (chromium/chromium). The mirror snapshot is applied ONLY if it is newer
+than the shipped file's '# SYNCED:' date; otherwise the run changes nothing and
+exits 0 (fails closed if the shipped file carries no SYNCED date to compare
+against). A non-network refusal from the primary fetch (bad base64/JSON on a
+200 response) never falls back.
+
 Extraction
 ----------
 Only entries with 'mode' == 'force-https' are kept -- 'entries' historically
@@ -59,16 +67,25 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import stringprep
 import sys
 import unicodedata
+import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 SOURCE_URL = "https://chromium.googlesource.com/chromium/src/+/main/net/http/transport_security_state_static.json"
 LICENSE_URL = "https://chromium.googlesource.com/chromium/src/+/main/LICENSE"
 FETCH_URL = SOURCE_URL + "?format=TEXT"
+GITHUB_COMMITS_URL = (
+    "https://api.github.com/repos/chromium/chromium/commits"
+    "?path=net/http/transport_security_state_static.json&sha=main&per_page=1"
+)
+GITHUB_RAW_URL = (
+    "https://raw.githubusercontent.com/chromium/chromium/{sha}/net/http/transport_security_state_static.json"
+)
 
 # Plausibility floor: the live force-https set holds ~94,256 names (2026-07-13). A
 # fetch that returns far fewer (an empty-but-200 body, a captive-portal/proxy
@@ -209,6 +226,19 @@ def existing_body(text: str) -> list[str]:
     return [line for line in text.splitlines() if not line.startswith("#")]
 
 
+def synced_date(text: str) -> date | None:
+    """Parse an existing pfb_py_hsts.txt's '# SYNCED: YYYY-MM-DD' header line,
+    or None if absent -- the newer-than-SYNCED gate for the GitHub mirror
+    fallback."""
+    for line in text.splitlines():
+        if line.startswith("# SYNCED: "):
+            try:
+                return datetime.strptime(line.removeprefix("# SYNCED: "), "%Y-%m-%d").date()
+            except ValueError:
+                return None
+    return None
+
+
 def render_output(synced: str, body: list[str]) -> str:
     """Render the full pfb_py_hsts.txt file content: header then one name per line."""
     return HEADER_TEMPLATE.format(synced=synced) + "\n".join(body) + "\n"
@@ -235,6 +265,27 @@ def decode_body(raw_b64: str) -> str:
         raise SystemExit(f"Refusing to rewrite: fetched body failed base64/utf-8 decode: {e}") from None
 
 
+def fetch_github_mirror(timeout: float = 15) -> tuple[date, str]:
+    """Fetch the raw HSTS source file from the GitHub Chromium mirror -- used
+    only when the primary gitiles fetch fails at the network level (issue
+    #3349: a Gitiles-wide 503 outage). Finds the newest commit touching the
+    file, then fetches the raw file AT THAT COMMIT so the returned date and
+    content stay consistent. Errors propagate: this fallback fails closed too.
+    """
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(GITHUB_COMMITS_URL, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed https host)
+        commit = json.loads(resp.read().decode("utf-8"))[0]
+    sha = commit["sha"]
+    committed = datetime.fromisoformat(commit["commit"]["committer"]["date"].replace("Z", "+00:00"))
+    with urllib.request.urlopen(GITHUB_RAW_URL.format(sha=sha), timeout=timeout) as resp:  # noqa: S310 (fixed https host)
+        text = resp.read().decode("utf-8")
+    return committed.astimezone(timezone.utc).date(), text
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
@@ -247,12 +298,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    text = decode_body(fetch_hsts_json())
+    old_text = DEFAULT_HSTS_FILE.read_text(encoding="utf-8") if DEFAULT_HSTS_FILE.exists() else ""
+
+    try:
+        text = decode_body(fetch_hsts_json())
+    except (urllib.error.URLError, TimeoutError) as e:
+        print(f"Primary fetch failed ({e}); falling back to the GitHub Chromium mirror.", file=sys.stderr)
+        ours = synced_date(old_text)
+        if ours is None:
+            raise SystemExit(
+                "Refusing to use the GitHub mirror: existing pfb_py_hsts.txt has no "
+                "'# SYNCED:' header to compare against."
+            )
+        mirror_date, text = fetch_github_mirror()
+        if mirror_date <= ours:
+            print(f"GitHub mirror last changed {mirror_date}, not newer than SYNCED {ours}; nothing to propose.")
+            return 0
+        print(f"Using GitHub mirror snapshot last changed {mirror_date} (newer than SYNCED {ours}).")
+
     entries = parse_entries(strip_json_comments(text))
     body = build_body(entries)
     require_plausible(body)
 
-    old_text = DEFAULT_HSTS_FILE.read_text(encoding="utf-8") if DEFAULT_HSTS_FILE.exists() else ""
     if existing_body(old_text) == body:
         print("pfb_py_hsts.txt is up to date (body unchanged).")
         return 0

@@ -10,6 +10,7 @@ Scope: maintain vendored `pfb_py_hsts.txt` HSTS exclusion list. Load when: refre
   — Chromium HSTS preload source (gitiles serves base64-encoded via `?format=TEXT`); keep only entries with `mode == "force-https"` (pinning-only rows with no `mode` skipped).
 - **License:** BSD-style, The Chromium Authors —
   <https://chromium.googlesource.com/chromium/src/+/main/LICENSE> (redistribution with attribution permitted; both URLs carried in generated file header).
+- **Fallback (issue #3349):** if the primary gitiles fetch fails at the network level (e.g. a Gitiles-wide outage), the script falls back to the official GitHub mirror `chromium/chromium`, applied ONLY if the mirror's copy is newer than the shipped file's `# SYNCED:` date — otherwise the run changes nothing and exits 0.
 
 ## What is automated vs manual
 
@@ -17,7 +18,7 @@ Scope: maintain vendored `pfb_py_hsts.txt` HSTS exclusion list. Load when: refre
 - **A churn guard skips a header-only refresh:** upstream has no retrievable revision marker, so run compares generated body against shipped file body and leaves file untouched when match — no weekly no-op diff.
 - **Automated (weekly):** `.github/workflows/hsts-refresh.yml` runs script every Monday, and on drift opens/updates PR against `devel` from bot-owned branch. Never pushes to `devel`/`main`. GitHub runs no automatic CI on GITHUB_TOKEN-created PR (and dispatched run checks never attach to its Checks tab), so workflow dispatches unit suite (`test.yml`) onto branch head and posts PR comment linking run; merge once linked run green. Diff touches data file only, so no Tier-A `ui_render` gate dispatched.
 - **Manual:** from repo root, `python3 scripts/misc/update_hsts_preload_list.py` (rewrites file) or `python3 scripts/misc/update_hsts_preload_list.py --check` (exit 1 + status line if out of date, no write).
-- **Safety:** script refuses to rewrite when fetched body isn't valid base64/JSON, has no `entries`, or yields fewer than `MIN_PLAUSIBLE_ENTRIES` (50000) force-https names. Truncated/malformed upstream response can never silently blank exclusion list.
+- **Safety:** script refuses to rewrite when fetched body isn't valid base64/JSON, has no `entries`, or yields fewer than `MIN_PLAUSIBLE_ENTRIES` (50000) force-https names. Truncated/malformed upstream response can never silently blank exclusion list. The GitHub mirror fallback fails closed too: refuses if the shipped file carries no `# SYNCED:` date to compare against, and a non-network refusal (bad base64/JSON on a 200) never triggers it.
 
 ## Out of scope (issue #1303)
 
