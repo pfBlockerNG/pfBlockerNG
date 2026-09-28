@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import datetime
 import email.message
+import http.client
 import importlib.util
 import sys
 import urllib.error
@@ -647,3 +648,30 @@ def test_main_falls_back_to_newer_github_mirror_on_primary_timeout(
     assert rc == 0
     new_text = target.read_text(encoding="utf-8")
     assert uhpl.existing_body(new_text) == ["aaa.example", "example.com"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        http.client.IncompleteRead(b"partial", 100),
+        ConnectionResetError("reset by peer"),
+    ],
+)
+def test_main_falls_back_on_mid_response_primary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    # urllib wraps only connect/send errors in URLError; failures while reading the
+    # response surface as raw http.client / OSError types and must fall back too.
+    def _raise(timeout: float = 15) -> str:
+        raise error
+
+    target = tmp_path / "pfb_py_hsts.txt"
+    target.write_text(_SYNCED_HEADER + "aaa.example\n", encoding="utf-8")
+    monkeypatch.setattr(uhpl, "DEFAULT_HSTS_FILE", target)
+    monkeypatch.setattr(uhpl, "MIN_PLAUSIBLE_ENTRIES", 1)
+    monkeypatch.setattr(uhpl, "fetch_hsts_json", _raise)
+    monkeypatch.setattr(uhpl, "fetch_github_mirror", lambda timeout=15: (datetime.date(2026, 9, 20), _FAKE_FETCH_JSON))
+
+    assert uhpl.main([]) == 0
+    assert uhpl.existing_body(target.read_text(encoding="utf-8")) == ["aaa.example", "example.com"]
