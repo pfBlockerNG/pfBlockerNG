@@ -72,6 +72,7 @@ import os
 import stringprep
 import sys
 import unicodedata
+import urllib.error
 import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -299,10 +300,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     old_text = DEFAULT_HSTS_FILE.read_text(encoding="utf-8") if DEFAULT_HSTS_FILE.exists() else ""
+    synced = datetime.now(timezone.utc).date()
 
     try:
         text = decode_body(fetch_hsts_json())
     except (OSError, http.client.HTTPException) as e:  # URLError/timeouts/resets + mid-response read failures
+        if isinstance(e, urllib.error.HTTPError) and e.code < 500:
+            raise  # 4xx: the source moved or access changed -- fail loud, never mask it with the mirror
         print(f"Primary fetch failed ({e}); falling back to the GitHub Chromium mirror.", file=sys.stderr)
         ours = synced_date(old_text)
         if ours is None:
@@ -315,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"GitHub mirror last changed {mirror_date}, not newer than SYNCED {ours}; nothing to propose.")
             return 0
         print(f"Using GitHub mirror snapshot last changed {mirror_date} (newer than SYNCED {ours}).")
+        synced = mirror_date  # SYNCED records the applied snapshot, so the next newer-than gate is exact
 
     entries = parse_entries(strip_json_comments(text))
     body = build_body(entries)
@@ -331,8 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    synced = datetime.now(timezone.utc).date().isoformat()
-    DEFAULT_HSTS_FILE.write_text(render_output(synced, body), encoding="utf-8")
+    DEFAULT_HSTS_FILE.write_text(render_output(synced.isoformat(), body), encoding="utf-8")
     print(f"pfb_py_hsts.txt regenerated: {len(body)} force-https entries.")
     return 0
 
