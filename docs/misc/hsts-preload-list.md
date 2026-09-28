@@ -10,7 +10,7 @@ Scope: maintain vendored `pfb_py_hsts.txt` HSTS exclusion list. Load when: refre
   — Chromium HSTS preload source (gitiles serves base64-encoded via `?format=TEXT`); keep only entries with `mode == "force-https"` (pinning-only rows with no `mode` skipped).
 - **License:** BSD-style, The Chromium Authors —
   <https://chromium.googlesource.com/chromium/src/+/main/LICENSE> (redistribution with attribution permitted; both URLs carried in generated file header).
-- **Fallback (issue #3349):** if the primary gitiles fetch fails at the network level (e.g. a Gitiles-wide outage), the script falls back to the official GitHub mirror `chromium/chromium`, applied ONLY if the mirror's copy is newer than the shipped file's `# SYNCED:` date — otherwise the run changes nothing and exits 0.
+- **Fallback (issue #3349):** if the primary gitiles fetch fails at the network level or with HTTP 5xx (e.g. a Gitiles-wide outage), the script falls back to the official GitHub mirror `chromium/chromium`, applied ONLY if the mirror's last commit to the file is newer than the shipped file's `# SYNCED:` date (then written as the new SYNCED date) — otherwise the run changes nothing and exits 0. A primary HTTP 4xx fails loud instead (the source moved or access changed).
 
 ## What is automated vs manual
 

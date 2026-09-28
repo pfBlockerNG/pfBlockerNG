@@ -16,13 +16,14 @@ are stripped before parsing). License: BSD-style, The Chromium Authors --
 https://chromium.googlesource.com/chromium/src/+/main/LICENSE (redistribution
 with attribution permitted; both URLs are carried in the output header).
 
-Fallback: if the primary gitiles fetch fails at the network level (e.g. issue
-#3349's Gitiles-wide 503 outage), the script falls back to the official GitHub
-mirror (chromium/chromium). The mirror snapshot is applied ONLY if it is newer
-than the shipped file's '# SYNCED:' date; otherwise the run changes nothing and
-exits 0 (fails closed if the shipped file carries no SYNCED date to compare
-against). A non-network refusal from the primary fetch (bad base64/JSON on a
-200 response) never falls back.
+Fallback: if the primary gitiles fetch fails at the network level or with an
+HTTP 5xx (e.g. issue #3349's Gitiles-wide 503 outage), the script falls back to
+the official GitHub mirror (chromium/chromium). The mirror snapshot is applied
+ONLY if its commit date is newer than the shipped file's '# SYNCED:' date, and
+is then written with that commit date as SYNCED; otherwise the run changes
+nothing and exits 0 (fails closed if the shipped file carries no SYNCED date to
+compare against). A primary HTTP 4xx, or a refusal of a 200 response (bad
+base64/JSON), never falls back.
 
 Extraction
 ----------
