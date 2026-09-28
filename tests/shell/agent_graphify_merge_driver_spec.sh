@@ -263,7 +263,7 @@ TOML
       When run sh "$script_home/ensure-graphify.sh" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
-      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@cf5c15db739d02d6e6d464f3ef25de7263ed6989'
+      The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@414cf00a23d0a594a217f59b844dbf242b599889'
     End
   End
 End
