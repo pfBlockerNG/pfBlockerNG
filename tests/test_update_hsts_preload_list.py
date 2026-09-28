@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import email.message
 import importlib.util
 import sys
 import urllib.error
@@ -525,7 +526,9 @@ _SYNCED_HEADER = (
 
 
 def _raise_primary_503(timeout: float = 15) -> str:
-    raise urllib.error.HTTPError("https://chromium.googlesource.com/x", 503, "Service Unavailable", {}, None)
+    raise urllib.error.HTTPError(
+        "https://chromium.googlesource.com/x", 503, "Service Unavailable", email.message.Message(), None
+    )
 
 
 def _raise_primary_timeout(timeout: float = 15) -> str:
