@@ -14680,16 +14680,27 @@ function pfb_ip_is_self($ip) {
 // (default) blocks every other internal/private-resolving feed.
 // libcurl and PHP's URL wrappers parse a non-canonical IPv4 spelling ('2130706433', '0x7f000001',
 // '127.1') as an IPv4 literal and connect to the decoded address, so it is never vetted as a name; a
-// numeric-shaped host that is not a valid address is refused too. A non-ASCII host is UTS46-mapped
-// first, as IDN-enabled libcurl does ('10.0.0.１' -> '10.0.0.1'). parse_url() keeps an IPv6 host
-// bracketed ('[2001:db8::1]'), which is_ipaddr() does not accept; it is refused, not looked up.
+// numeric-shaped host that is not a valid address is refused too. A host containing '%' is refused
+// outright: libcurl percent-decodes it and dials the decoded address, but parse_url() keeps the '%'
+// bytes, so this helper would otherwise vet (and the guard resolve/pin) a different string than the
+// one curl connects to. A non-ASCII host is UTS46-mapped first, as IDN-enabled libcurl does
+// ('10.0.0.１' -> '10.0.0.1'); a host the mapping itself rejects is refused rather than passed on as
+// a name. parse_url() keeps an IPv6 host bracketed ('[2001:db8::1]'), which is_ipaddr() does not
+// accept; it is refused, not looked up.
 // Returns the reason, or '' when the host may be vetted as a name or a canonical address.
 function pfb_feed_host_literal_reason(string $host): string {
 
 	if (str_starts_with($host, '[')) {
 		return 'feed host is a bracketed IPv6 literal';
 	}
-	$ascii_host = preg_match('/[^\x00-\x7F]/', $host) ? idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) : $host;
+	if (str_contains($host, '%')) {
+		return 'feed host is percent-encoded';
+	}
+	$non_ascii  = preg_match('/[^\x00-\x7F]/', $host) === 1;
+	$ascii_host = $non_ascii ? idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) : $host;
+	if ($non_ascii && $ascii_host === FALSE) {
+		return 'feed host is not a valid IDN name';
+	}
 	if (is_string($ascii_host) && ($ascii_host !== $host || !is_ipaddrv4($host)) &&
 	    pfb_ipv4_numeric_host($ascii_host) !== NULL) {
 		return 'feed host is a non-canonical IP literal';
