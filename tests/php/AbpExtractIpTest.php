@@ -30,6 +30,7 @@ final class AbpExtractIpTest extends TestCase
 			'abp anchor bracketed v6'  => ['||[2001:db8::1]^', '2001:db8::1'],
 			'abp anchor bracketed v6 + options' => ['||[2001:db8::1]^$important', '2001:db8::1'],
 			'abp anchor bracketed mapped v6' => ['||[::ffff:c0a8:164]^', '::ffff:c0a8:164'],
+			'abp anchor bracketed v6 space before caret' => ['||[2001:db8::1] ^', '2001:db8::1'],
 			'abp anchor unclosed bracket -> none' => ['||[2001:db8::1', ''],
 			'abp anchor bracketed non-ip -> none' => ['||[not-an-ip]^', ''],
 			'abp anchor bracketed v4 -> none' => ['||[192.0.2.1]^', ''],

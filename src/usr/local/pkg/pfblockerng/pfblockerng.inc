@@ -9721,6 +9721,7 @@ function pfb_dnsbl_unlock_lines() {
 // Recognises:
 //   ||1.2.3.4^            -> '1.2.3.4'   (ABP network anchor with an IP host)
 //   ||1.2.3.4^$options    -> '1.2.3.4'   (options stripped before the IP test)
+//   ||[2001:db8::1]^      -> '2001:db8::1' (URI-bracketed IPv6 anchor, unwrapped)
 //   <sink-ip> <ip>        -> the second token (hosts line whose target is an IP)
 // Returns the IP string when the line carries one, else ''.
 function pfb_dnsbl_abp_extract_ip($line) {

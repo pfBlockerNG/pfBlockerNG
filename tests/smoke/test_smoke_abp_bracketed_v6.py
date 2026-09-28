@@ -9,7 +9,10 @@ silently dropped and the address was never firewalled.
 The address comes from the RFC 3849 documentation range. ``sanitize_ipaddr()`` drops that
 range only when IP Suppression is on (issue #760); ``deploy()`` pins Suppression off.
 
-DESELECTED from the default ``python -m pytest``; select with ``-k bracketed_v6``.
+DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
+pyproject.toml). Run only by the smoke workflow; select it there with ``-k bracketed_v6``::
+
+    python -m pytest tests/smoke -m smoke --override-ini="addopts=" -k bracketed_v6
 """
 
 from __future__ import annotations
