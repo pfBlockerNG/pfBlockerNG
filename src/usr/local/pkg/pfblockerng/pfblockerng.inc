@@ -9741,7 +9741,8 @@ function pfb_dnsbl_abp_extract_ip($line) {
 		if (($cpos = strpos($host, '^')) !== FALSE) {
 			$host = substr($host, 0, $cpos);
 		}
-		$host = trim($host);
+		// A URI-bracketed IPv6 anchor ('||[2001:db8::1]^') is unwrapped as on the plain path (#938).
+		$host = pfb_dnsbl_unbracket_ip6(trim($host));
 		if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
 			return $host;
 		}
