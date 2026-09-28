@@ -4674,6 +4674,19 @@
             }
         ]
     },
+    "pfb_feed_host_literal_reason": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_feed_internal_allowlist": {
         "returnsRef": false,
         "returnType": null,

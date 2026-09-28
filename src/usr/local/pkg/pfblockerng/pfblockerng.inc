@@ -1896,6 +1896,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 				} elseif (!isset($data['host']) || empty($data['host'])) {
 					pfb_logger("{$header} Invalid URL (missing hostname) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
 					return FALSE;
+				} elseif (($literal_reason = pfb_feed_host_literal_reason($data['host'])) !== '') {
+					pfb_logger("{$header} Invalid URL ({$literal_reason}) [ " . htmlspecialchars(pfb_redact_url($input)) . " ]", 6);
+					return FALSE;
 				} elseif (is_ipaddr($data['host'])) {
 					$validate_list = array(array('type' => 'IP', 'data' => $data['host']));
 				} else {
@@ -14675,6 +14678,26 @@ function pfb_ip_is_self($ip) {
 // permitted when public, self-hosted (firewall's own address/loopback), or allowlisted (exact
 // IP or CIDR containment, General settings 'internal-address exemptions'); an empty allowlist
 // (default) blocks every other internal/private-resolving feed.
+// libcurl and PHP's URL wrappers parse a non-canonical IPv4 spelling ('2130706433', '0x7f000001',
+// '127.1') as an IPv4 literal and connect to the decoded address, so it is never vetted as a name; a
+// numeric-shaped host that is not a valid address is refused too. A non-ASCII host is UTS46-mapped
+// first, as IDN-enabled libcurl does ('10.0.0.１' -> '10.0.0.1'). parse_url() keeps an IPv6 host
+// bracketed ('[2001:db8::1]'), which is_ipaddr() does not accept; it is refused, not looked up.
+// Returns the reason, or '' when the host may be vetted as a name or a canonical address.
+function pfb_feed_host_literal_reason(string $host): string {
+
+	if (str_starts_with($host, '[')) {
+		return 'feed host is a bracketed IPv6 literal';
+	}
+	$ascii_host = preg_match('/[^\x00-\x7F]/', $host) ? idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) : $host;
+	if (is_string($ascii_host) && ($ascii_host !== $host || !is_ipaddrv4($host)) &&
+	    pfb_ipv4_numeric_host($ascii_host) !== NULL) {
+		return 'feed host is a non-canonical IP literal';
+	}
+	return '';
+}
+
+
 function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 
 	$reason = '';
@@ -14685,14 +14708,8 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 		return FALSE;
 	}
 
-	// libcurl parses a non-canonical IPv4 spelling ('2130706433', '0x7f000001', '127.1') as an IPv4
-	// literal and connects to the decoded address, so the guard must not treat it as a name. Reject
-	// it before any lookup. A non-ASCII host is UTS46-mapped first, as IDN-enabled libcurl does
-	// ('10.0.0.１' -> '10.0.0.1').
-	$ascii_host = preg_match('/[^\x00-\x7F]/', $host) ? idn_to_ascii($host, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46) : $host;
-	if (is_string($ascii_host) && ($ascii_host !== $host || !is_ipaddrv4($host)) &&
-	    pfb_ipv4_numeric_host($ascii_host) !== NULL) {
-		$reason = 'feed host is a non-canonical IP literal';
+	$reason = pfb_feed_host_literal_reason($host);
+	if ($reason !== '') {
 		return FALSE;
 	}
 
