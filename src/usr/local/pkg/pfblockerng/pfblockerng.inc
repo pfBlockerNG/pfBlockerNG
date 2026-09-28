@@ -9885,7 +9885,8 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 	}
 
 	// WHATWG "IPv4 number parser": 0x = hex, leading 0 = octal, else decimal; NULL = failure.
-	// intval() saturates at PHP_INT_MAX, which the range checks below then reject.
+	// More significant digits than 2^32 needs -> PHP_INT_MAX (range-rejected below); intval()
+	// itself returns 0 past the float range (309+ decimal digits), so it never sees those.
 	$number = static function (string $part): ?int {
 		$radix = 10;
 		if (strncasecmp($part, '0x', 2) === 0) {
@@ -9900,12 +9901,15 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 		if ($part === '') {
 			return 0;
 		}
-		$valid = match ($radix) {
-			16	=> ctype_xdigit($part),
-			8	=> strspn($part, '01234567') === strlen($part),
-			default	=> ctype_digit($part),
+		[$valid, $max_digits] = match ($radix) {
+			16	=> array(ctype_xdigit($part), 8),
+			8	=> array(strspn($part, '01234567') === strlen($part), 11),
+			default	=> array(ctype_digit($part), 10),
 		};
-		return $valid ? intval($part, $radix) : NULL;
+		if (!$valid) {
+			return NULL;
+		}
+		return strlen(ltrim($part, '0')) > $max_digits ? PHP_INT_MAX : intval($part, $radix);
 	};
 
 	$invalid = array('ip' => NULL);
