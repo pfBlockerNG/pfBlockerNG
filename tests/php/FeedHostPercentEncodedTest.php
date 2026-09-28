@@ -342,9 +342,9 @@ final class FeedHostPercentEncodedTest extends TestCase
 				$failures[] = "bind {$bindHost}: process=proc_open failed stderr=(unavailable)";
 				continue;
 			}
-			$port = $this->parseFixturePort($stderr, $bindHost);
+			$port = pfb_test_http_fixture_port($stderr, $bindHost);
 			for ($i = 0; $i < 40; $i++) {
-				if ($port > 0 && $this->fixtureReady($bindHost, $port, $nonce)) {
+				if ($port > 0 && pfb_test_http_fixture_event_received($port, $nonce, $bindHost)) {
 					$this->servers[$port] = $proc;
 					return $port;
 				}
@@ -368,27 +368,6 @@ final class FeedHostPercentEncodedTest extends TestCase
 			);
 		}
 		$this->fail("could not start the {$label} php -S fixture server on {$bindHost}; " . implode(' | ', $failures));
-	}
-
-	/** Parse the async `php -S <bindHost>:0` banner for its assigned port. */
-	private function parseFixturePort(string $stderrPath, string $bindHost): int
-	{
-		$pattern = '#http://' . preg_quote($bindHost, '#') . ':(\d+)\)#';
-		for ($poll = 0; $poll < 40; $poll++) {
-			$banner = @file_get_contents($stderrPath);
-			if (is_string($banner) && preg_match($pattern, $banner, $matches) === 1) {
-				return (int) $matches[1];
-			}
-			usleep(50000);
-		}
-		return 0;
-	}
-
-	private function fixtureReady(string $bindHost, int $port, string $secret): bool
-	{
-		$context = stream_context_create(['http' => ['timeout' => 0.05, 'ignore_errors' => TRUE]]);
-		$body = @file_get_contents("http://{$bindHost}:{$port}/__pfb_ready", FALSE, $context);
-		return is_string($body) && hash_equals($secret, $body);
 	}
 
 	private function router(): string
