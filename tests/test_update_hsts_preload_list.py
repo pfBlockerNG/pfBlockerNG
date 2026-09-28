@@ -675,3 +675,41 @@ def test_main_falls_back_on_mid_response_primary_failure(
 
     assert uhpl.main([]) == 0
     assert uhpl.existing_body(target.read_text(encoding="utf-8")) == ["aaa.example", "example.com"]
+
+
+def test_main_records_mirror_commit_date_as_synced_on_fallback_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SYNCED must be the applied snapshot's date, not the run date: a later mirror
+    # commit dated between the two would otherwise fail the newer-than gate.
+    target = tmp_path / "pfb_py_hsts.txt"
+    target.write_text(_SYNCED_HEADER + "aaa.example\n", encoding="utf-8")
+    monkeypatch.setattr(uhpl, "DEFAULT_HSTS_FILE", target)
+    monkeypatch.setattr(uhpl, "MIN_PLAUSIBLE_ENTRIES", 1)
+    monkeypatch.setattr(uhpl, "fetch_hsts_json", _raise_primary_503)
+    monkeypatch.setattr(uhpl, "fetch_github_mirror", lambda timeout=15: (datetime.date(2026, 9, 20), _FAKE_FETCH_JSON))
+
+    assert uhpl.main([]) == 0
+    assert uhpl.synced_date(target.read_text(encoding="utf-8")) == datetime.date(2026, 9, 20)
+
+
+@pytest.mark.parametrize("code", [403, 404, 410])
+def test_main_does_not_fall_back_on_primary_client_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    # A 4xx means the source moved or access changed: fail loudly instead of
+    # silently no-oping on a mirror whose file may no longer be updated.
+    def _raise(timeout: float = 15) -> str:
+        raise urllib.error.HTTPError("https://chromium.googlesource.com/x", code, "err", email.message.Message(), None)
+
+    existing = _SYNCED_HEADER + "aaa.example\n"
+    target = tmp_path / "pfb_py_hsts.txt"
+    target.write_text(existing, encoding="utf-8")
+    monkeypatch.setattr(uhpl, "DEFAULT_HSTS_FILE", target)
+    monkeypatch.setattr(uhpl, "MIN_PLAUSIBLE_ENTRIES", 1)
+    monkeypatch.setattr(uhpl, "fetch_hsts_json", _raise)
+    monkeypatch.setattr(uhpl, "fetch_github_mirror", lambda timeout=15: (datetime.date(2026, 9, 20), _FAKE_FETCH_JSON))
+
+    with pytest.raises(urllib.error.HTTPError):
+        uhpl.main([])
+    assert target.read_text(encoding="utf-8") == existing
