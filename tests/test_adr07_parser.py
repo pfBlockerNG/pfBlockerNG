@@ -325,7 +325,7 @@ class TestSkip:
 
     @pytest.mark.parametrize(
         "line",
-        ["||203.0.113.7^", "||198.51.100.42^", "0.0.0.0 203.0.113.99", "127.0.0.1 10.0.0.1"],
+        ["||203.0.113.7^", "||198.51.100.42^", "0.0.0.0 203.0.113.99", "127.0.0.1 10.0.0.1", "||[2001:db8::1]^"],
     )
     def test_skip_ip_valued_anchors(self, line: str) -> None:
         # IP-valued anchors -> PHP firewall path; Python returns None (no-leak).

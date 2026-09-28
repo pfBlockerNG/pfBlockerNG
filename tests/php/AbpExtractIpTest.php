@@ -26,6 +26,13 @@ final class AbpExtractIpTest extends TestCase
 			'abp anchor v4 + options'  => ['||192.0.2.4^$third-party', '192.0.2.4'],
 			'abp anchor v4 no caret'   => ['||192.0.2.4', '192.0.2.4'],
 			'abp anchor v6'            => ['||2001:db8::1^', '2001:db8::1'],
+			// URI-bracketed IPv6 anchors: unwrapped like the plain-line path (#938).
+			'abp anchor bracketed v6'  => ['||[2001:db8::1]^', '2001:db8::1'],
+			'abp anchor bracketed v6 + options' => ['||[2001:db8::1]^$important', '2001:db8::1'],
+			'abp anchor bracketed mapped v6' => ['||[::ffff:c0a8:164]^', '::ffff:c0a8:164'],
+			'abp anchor unclosed bracket -> none' => ['||[2001:db8::1', ''],
+			'abp anchor bracketed non-ip -> none' => ['||[not-an-ip]^', ''],
+			'abp anchor bracketed v4 -> none' => ['||[192.0.2.1]^', ''],
 			'abp anchor domain -> none' => ['||example.com^', ''],
 			'hosts sink + ip target'   => ['0.0.0.0 192.0.2.9', '192.0.2.9'],
 			'hosts v6 sink + ip target' => ['::1 2001:db8::1', '2001:db8::1'],
