@@ -1844,6 +1844,11 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 			// scheme allow-list (http/https/rsync/ftp), then a self/local branch, then
 			// — for a non-self remote host — the shared feed-host check.
 			//
+			// pfb_feed_host_literal_reason() runs first, before the self-hosted
+			// classification below: a bracketed/percent-encoded/non-canonical/
+			// unmappable-IDN host is refused outright, in both $escape modes and
+			// regardless of the feed-host filter's on/off state.
+			//
 			// A host counts as self-hosted only when EVERY resolved address is the
 			// firewall itself (own configured address / loopback). A host that also
 			// resolves to a non-self address is not self-hosted and defers to the
@@ -9871,8 +9876,7 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
 // 0x-hex, or any ':' -- IPv6 is not an IPv4 spelling), array('ip' => 'a.b.c.d') when valid, and
 // array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, more than four parts).
-// Canonical dotted quads return themselves. Twin: pfb_unbound.py _dnsbl_is_numeric_host();
-// shared table tests/fixtures/ipv4_numeric_host.json.
+// Canonical dotted quads return themselves. Shared table tests/fixtures/ipv4_numeric_host.json.
 function pfb_ipv4_numeric_host(string $host): ?array {
 	if (str_contains($host, ':')) {
 		return NULL;
@@ -14792,10 +14796,12 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned) {
 
 // Issue #811: shared entry-reject logger. When a feed URL fails PFB_FILTER_URL vetting,
 // pfb_filter() logs its reject to error.log only — so when the CAUSE is the feed-host
-// guard (an internal-resolving host), the reason never reaches the main log. Every
-// entry-reject site calls this to re-run the guard and, iff the guard is why vetting
-// failed, land the same header-scoped "[ header ] <reason> — skipped" line the
-// fetch-time gates in pfb_download() emit. Any other rejection reason logs nothing here.
+// guard, the reason never reaches the main log. The guard's reasons cover both an
+// internal-resolving host and a literal-host refusal (bracketed/percent-encoded/
+// non-canonical/unmappable-IDN, pfb_feed_host_literal_reason()). Every entry-reject
+// site calls this to re-run the guard and, iff the guard is why vetting failed, land
+// the same header-scoped "[ header ] <reason> — skipped" line the fetch-time gates in
+// pfb_download() emit. Any other rejection reason logs nothing here.
 function pfb_log_feed_host_reject($list_url, $header, $logtype) {
 
 	if (!pfb_feed_filter_enabled()) {
