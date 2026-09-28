@@ -161,21 +161,37 @@ GRAPHIFY
       'a build without direct_url.json'          none
       'a commit the fork cannot serve'           absent
       'a commit committed in the same second'    twin
+      'a fetch that outlasts its time bound'     stalled
+      'two installed dist-info directories'      ambiguous
+      'metadata without a version'               versionless
     End
 
-    It "keeps the installed same-version build ($1) and says why"
+    It "keeps the installed build ($1) and says why"
+      version=0.9.70
       case "$2" in
         local) installed 0.9.70 '{"url":"file:///home/dev/graphify","dir_info":{"editable":true}}'; label=unknown ;;
         none) installed 0.9.70; label=unknown ;;
         absent) installed 0.9.70 "$(vcs "$absent")"; label=$absent ;;
         twin) installed 0.9.70 "$(vcs "$twin")"; label=$twin ;;
+        stalled)
+          # timeout(1) reports that the bound fired, as it does for a silent peer.
+          installed 0.9.70 "$(vcs "$early")"; label=$early
+          printf '%s\n' '#!/bin/sh' 'exit 124' > "$stubdir/timeout"
+          chmod +x "$stubdir/timeout" ;;
+        ambiguous)
+          installed 0.9.70 "$(vcs "$early")"; installed 0.9.71 "$(vcs "$early")"
+          version=unknown label=unknown ;;
+        versionless)
+          installed 0.9.70 "$(vcs "$early")"
+          printf '%s\n' 'Metadata-Version: 2.4' 'Name: graphifyy' > "$dist/METADATA"
+          version=unknown label=unknown ;;
       esac
       pin 0.9.70 "$late"
       When run sh "$script_abs" "$repo"
       The status should equal 0
       The output should equal "$stubdir/graphify"
       The file "$uv_log" should not be exist
-      The stderr should equal "ensure-graphify.sh: keeping installed Graphify 0.9.70@$label over pin 0.9.70@$late (order unknown)"
+      The stderr should equal "ensure-graphify.sh: keeping installed Graphify $version@$label over pin 0.9.70@$late (order unknown)"
       The contents of file "$graphify_log" should equal 'install --platform agents'
     End
   End

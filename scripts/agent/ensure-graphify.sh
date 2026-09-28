@@ -11,8 +11,9 @@
 # uncomparable versions fall back to committer time, fetched shallowly from the
 # pin's URL: the fork's integration branch is force-rebuilt, so ancestry cannot
 # order builds. The identical commit reinstalls as before. Fail-safe: when the
-# order cannot be established (no commit recorded, fetch failure, same second),
-# the installed build is kept, so the pin never replaces a build that may be newer.
+# order cannot be established (an unidentifiable install, no commit recorded, a
+# failed fetch or one past its 30-second bound, same second), the installed build
+# is kept, so the pin never replaces a build that may be newer.
 
 set -eu
 
@@ -29,20 +30,22 @@ fail() {
 # Succeeds, naming why in $keep_reason, when the installed uv tool `graphifyy`
 # must be kept instead of installing $pin_commit.
 installed_beats_pin() {
-	installed_commit='' pin_version='' installed_time='' pin_time=''
+	installed_version='' installed_commit='' pin_version='' installed_time='' pin_time=''
+	keep_reason='order unknown'
 	graphify_tools=$(uv tool dir 2>/dev/null) || return 1
 	set -- "$graphify_tools"/graphifyy/lib/python*/site-packages/graphifyy-*.dist-info
-	[ "$#" -eq 1 ] && [ -f "$1/METADATA" ] || return 1
-	installed_version=$(sed -n '/^Version: /{s///p;q;}' "$1/METADATA")
-	[ -n "$installed_version" ] || return 1
-	[ ! -f "$1/direct_url.json" ] ||
-		installed_commit=$(sed -n 's/.*"commit_id": *"\([0-9a-f]\{40\}\)".*/\1/p' "$1/direct_url.json")
-	[ "$installed_commit" != "$pin_commit" ] || return 1
+	[ -d "$1" ] || return 1
 	[ ! -f "${pyproject%/*}/uv.lock" ] ||
 		pin_version=$(awk -v source="#$pin_commit\"" '
 			/^version = "/ { version = $3 }
 			/^source = / && index($0, source) { gsub(/"/, "", version); print version; exit }
 		' "${pyproject%/*}/uv.lock")
+	[ "$#" -eq 1 ] || return 0
+	installed_version=$(sed -n '/^Version: /{s///p;q;}' "$1/METADATA" 2>/dev/null)
+	[ -n "$installed_version" ] || return 0
+	[ ! -f "$1/direct_url.json" ] ||
+		installed_commit=$(sed -n 's/.*"commit_id": *"\([0-9a-f]\{40\}\)".*/\1/p' "$1/direct_url.json")
+	[ "$installed_commit" != "$pin_commit" ] || return 1
 	installed_release=${installed_version%%[!0-9.]*}
 	pin_release=${pin_version%%[!0-9.]*}
 	if [ -n "$installed_release" ] && [ -n "$pin_release" ]; then
@@ -55,11 +58,10 @@ installed_beats_pin() {
 			older) return 1 ;;
 		esac
 	fi
-	keep_reason='order unknown'
 	[ -n "$installed_commit" ] || return 0
 	graphify_scratch=$(mktemp -d "${TMPDIR:-/tmp}/ensure-graphify.XXXXXX") || return 0
 	if git init -q --bare "$graphify_scratch" &&
-		GIT_TERMINAL_PROMPT=0 git -C "$graphify_scratch" fetch -q --depth=1 --filter=tree:0 \
+		GIT_TERMINAL_PROMPT=0 timeout 30 git -C "$graphify_scratch" fetch -q --depth=1 --filter=tree:0 \
 			"$pin_url" "$installed_commit" "$pin_commit" 2>/dev/null; then
 		installed_time=$(git -C "$graphify_scratch" log -1 --no-show-signature --format=%ct "$installed_commit")
 		pin_time=$(git -C "$graphify_scratch" log -1 --no-show-signature --format=%ct "$pin_commit")
@@ -126,7 +128,7 @@ main() {
 	pin_url=${pin_url%@*}
 
 	if [ -z "${GITHUB_ACTIONS:-}" ] && installed_beats_pin; then
-		echo "ensure-graphify.sh: keeping installed Graphify $installed_version@${installed_commit:-unknown} over pin ${pin_version:-unknown}@$pin_commit ($keep_reason)" >&2
+		echo "ensure-graphify.sh: keeping installed Graphify ${installed_version:-unknown}@${installed_commit:-unknown} over pin ${pin_version:-unknown}@$pin_commit ($keep_reason)" >&2
 	else
 		uv tool install --upgrade "$graphify_spec" 1>&2 ||
 			fail 'Graphify installation failed'
