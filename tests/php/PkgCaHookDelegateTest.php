@@ -13,6 +13,7 @@ final class PkgCaHookDelegateTest extends TestCase
 	private string $hook;
 	private string $log;
 	private string $timeout;
+	private string $hangBound;
 	private bool $hadConfig;
 	private mixed $originalConfig;
 
@@ -22,8 +23,12 @@ final class PkgCaHookDelegateTest extends TestCase
 		mkdir($this->root, 0o755, TRUE);
 		$this->hook = $this->root . '/hook';
 		$this->log = $this->root . '/calls.log';
-		$timeout = trim((string) shell_exec('command -v timeout'));
-		$this->timeout = escapeshellarg($timeout) . ' -s TERM -k 1 1';
+		// issue #2828: rows whose hook exits on its own get the shipped PFB_PKG_TIMEOUT
+		// bound, a salvage-only watchdog, so a loaded host cannot turn "ran" into "killed".
+		// Only the hanging row uses a bound meant to fire.
+		$timeout = escapeshellarg(trim((string) shell_exec('command -v timeout')));
+		$this->timeout = $timeout . ' -s TERM -k 5 60';
+		$this->hangBound = $timeout . ' -s TERM -k 1 1';
 		file_put_contents(
 			$this->hook,
 			"#!/bin/sh\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($this->log)
@@ -59,7 +64,11 @@ final class PkgCaHookDelegateTest extends TestCase
 		// runs it rather than waiting for the next boot -- the fingerprint and the
 		// signed-repo conf land together. Until then this is a no-op on a box whose
 		// package predates hook delivery, which is why an absent hook is not an error.
-		$this->assertTrue(pfb_repo_conf_regenerate($this->hook, $this->timeout));
+		$this->assertTrue(
+			pfb_repo_conf_regenerate($this->hook, $this->timeout),
+			'hook onestart must exit 0; calls logged: ' . var_export(@file_get_contents($this->log), TRUE)
+				. ' (FALSE with no call logged after 60s = STUCK/ENVIRONMENT)'
+		);
 		$this->assertSame("onestart\n", file_get_contents($this->log));
 	}
 
@@ -80,7 +89,7 @@ final class PkgCaHookDelegateTest extends TestCase
 	public function testRepoConfRegenerateBoundsAHangingHook(): void
 	{
 		putenv('PFB_HOOK_SLEEP=1');
-		$this->assertFalse(pfb_repo_conf_regenerate($this->hook, $this->timeout));
+		$this->assertFalse(pfb_repo_conf_regenerate($this->hook, $this->hangBound));
 	}
 
 	public function testPkgExecRunsTheCommandDirectlyWithNoSyncGate(): void
