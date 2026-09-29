@@ -38,7 +38,11 @@ final class FeedHostNumericLiteralTest extends TestCase
 
 	private function answer(string $host, string $ip): void
 	{
-		$GLOBALS['pfb_test_resolve_map']["{$host}."] = [['type' => 'A', 'data' => $ip]];
+		// A real resolver has no IDN handling, so seed the mapped ASCII spelling only.
+		$ascii = preg_match('/[^\x00-\x7F]/', $host) === 1
+		    ? idn_to_ascii($host, IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46)
+		    : $host;
+		$GLOBALS['pfb_test_resolve_map']["{$ascii}."] = [['type' => 'A', 'data' => $ip]];
 	}
 
 	/** @return array<string, array{string}> */

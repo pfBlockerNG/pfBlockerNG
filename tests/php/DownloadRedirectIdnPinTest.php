@@ -19,8 +19,8 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  *
  * Exercised through the REAL pfb_download() against two local `php -S`
  * fixtures. Host names resolve through $GLOBALS['pfb_test_resolve_map'] under
- * the RAW spelling the guard looks up (loopback first, plus a public address so
- * the host is not classified self-hosted). Every request is recorded as
+ * the mapped ASCII spelling only, as a real resolver does (loopback first, plus
+ * a public address so the host is not classified self-hosted). Every request is recorded as
  * [port, uri, HTTP_HOST, PHP_AUTH_USER, PHP_AUTH_PW].
  */
 #[CoversFunction('pfb_download')]
@@ -52,7 +52,7 @@ final class DownloadRedirectIdnPinTest extends TestCase
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
-		foreach ([self::ORIGIN_HOST, 'xn--bcher-kva.example', "b\u{FC}cher.example", "fa\u{DF}.example"] as $host) {
+		foreach ([self::ORIGIN_HOST, 'xn--bcher-kva.example', "xn--fa-hia.example"] as $host) {
 			$GLOBALS['pfb_test_resolve_map']["{$host}."] = [
 				['type' => 'A', 'data' => '127.0.0.1'],
 				['type' => 'A', 'data' => '203.0.113.21'],

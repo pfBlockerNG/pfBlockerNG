@@ -127,8 +127,8 @@ final class FeedRedirectTargetTest extends TestCase
 	/**
 	 * A non-ASCII redirect host is handed back in its UTS 46 mapped (ASCII) form,
 	 * the string libcurl keys its address lookup on; the URL is rebuilt to match.
-	 * The resolver is seeded under the RAW spelling because the guard resolves the
-	 * host as written.
+	 * The resolver is seeded under the mapped spelling only, as a real resolver
+	 * (a bare dns_get_record) has no IDN handling.
 	 *
 	 * @return array<string,array{0:string,1:string,2:string,3:string}>
 	 */
@@ -148,7 +148,7 @@ final class FeedRedirectTargetTest extends TestCase
 	#[DataProvider('mappedHostProvider')]
 	public function testNonAsciiRedirectHostIsReturnedMapped(string $location, string $rawHost, string $mappedHost, string $mappedUrl): void
 	{
-		$GLOBALS['pfb_test_resolve_map']["{$rawHost}."] = [
+		$GLOBALS['pfb_test_resolve_map']["{$mappedHost}."] = [
 			['type' => 'A', 'data' => '203.0.113.41'],
 		];
 		[$result, $reason, $pinned] = $this->redirect($location, 'https://feed.example/list.txt');
@@ -187,7 +187,7 @@ final class FeedRedirectTargetTest extends TestCase
 
 	public function testMappedRedirectKeepsDefaultPortOfScheme(): void
 	{
-		$GLOBALS['pfb_test_resolve_map']['ascii.bücher.example.'] = [
+		$GLOBALS['pfb_test_resolve_map']['ascii.xn--bcher-kva.example.'] = [
 			['type' => 'A', 'data' => '203.0.113.41'],
 		];
 		[$result] = $this->redirect('http://ascii.bücher.example/x', 'https://feed.example/list.txt');
