@@ -15412,6 +15412,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			if ($file_data === FALSE) {
 				$error = error_get_last();
+				$error['message'] = preg_replace('/[\x00-\x1F\x7F]/', ' ', (string) ($error['message'] ?? '')) ?? '';
 				$log = "\n[ {$header} ] {$error['message']}\n";
 				pfb_logger("{$log}", "{$logtype}");
 				return PfbDownloadResult::failure();

@@ -345,6 +345,24 @@ PHP));
 		$this->assertDoesNotMatchRegularExpression('/[\x00-\x09\x0B-\x1F\x7F]/', $log, $msg);
 	}
 
+	/** A 404 whose reason phrase carries control bytes fails and is logged as one clean line. */
+	public function testFailedReadReasonControlBytesAreStrippedFromLog(): void
+	{
+		$reason = "Not Found\r[ Other ] Downloading update .......... completed .\x1b[2J\x7f\tTAIL";
+		$port   = $this->startRawServer("HTTP/1.1 404 {$reason}\r\nContent-Length: 2\r\nConnection: close\r\n\r\nNO");
+		$result = $this->fetch("http://127.0.0.1:{$port}/missing-ctl");
+		$msg    = $this->failureMessage($result);
+
+		$this->assertFalse($result->success, $msg);
+		$this->assertFileDoesNotExist("{$this->workdir}/feed.txt.raw", $msg);
+
+		$log   = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$lines = array_values(array_filter(explode("\n", $log), static fn(string $l): bool => str_contains($l, 'HTTP/1.1 404')));
+		$this->assertCount(1, $lines, $msg);
+		$this->assertStringContainsString('TAIL', $lines[0], $msg);
+		$this->assertDoesNotMatchRegularExpression('/[\x00-\x09\x0B-\x1F\x7F]/', $log, $msg);
+	}
+
 	/** Control: a plain file path under the data directory is read as before. */
 	public function testPlainFilePathIsSaved(): void
 	{
