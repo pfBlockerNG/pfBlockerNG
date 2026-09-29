@@ -115,6 +115,12 @@ function pfb_ip_parse_line_replay(string $raw_line, array $config, int $line_num
     string &$ip_data, bool $ip_suppressed, int $parse_fail): array {
 	$parsed = pfb_ip_parse_line($raw_line, $config);
 	foreach ($parsed['entries'] as $entry) {
+		// An IPv4-mapped entry on a v6 list never matches a packet: drop it and count it.
+		if ($config['vtype'] == '_v6' && pfb_ipv4_from_mapped(explode('/', $entry, 2)[0]) !== NULL) {
+			$parsed['parse_fail_delta']++;
+			$parsed['detailed_parse_fail'] = TRUE;
+			continue;
+		}
 		$ip_data .= $entry . "\n";
 	}
 	return [
@@ -349,6 +355,38 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 		$line = trim($line);
 	}
 
+	if ($vtype == '_v4') {
+		$pfb_whole = trim($raw_line);
+		if (preg_match('/^[a-z][a-z0-9+.\-]*:\/\//i', $pfb_whole, $pfb_scheme)) {
+			// 'scheme://' + a non-canonical IPv4 host: decode it the way a client does (WHATWG);
+			// the regex below then reads only the rest of the line, never the host or userinfo.
+			// ponytail: a URL mid-line (regex/HTML feeds) is not decoded.
+			$pfb_rest	= substr($pfb_whole, strlen($pfb_scheme[0]));
+			$pfb_authority	= substr($pfb_rest, 0, strcspn($pfb_rest, "/?# \t\n\r\v\f"));
+			$pfb_at		= strrpos($pfb_authority, '@');
+			$pfb_host	= preg_replace('/:[0-9]*$/', '', $pfb_at === FALSE ? $pfb_authority : substr($pfb_authority, $pfb_at + 1));
+			$pfb_numeric	= pfb_ipv4_numeric_host($pfb_host);
+			if ($pfb_numeric !== NULL && !is_ipaddrv4($pfb_host)) {
+				if ($pfb_numeric['ip'] === NULL) {
+					$result['parse_fail_delta']++;
+					$result['detailed_parse_fail'] = TRUE;
+				} else {
+					$sanitized = pfb_sanitize_ipaddr($pfb_numeric['ip'], $custom, $pfbcidr, $suppression);
+					$result['messages'] = array_merge($result['messages'], $sanitized['messages'],
+					    ["\n  IP literal decoded: [ {$pfb_host} ] -> [ {$pfb_numeric['ip']} ]"]);
+					if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+						$result['entries'][] = $sanitized['address'];
+					}
+				}
+				$raw_line = substr($pfb_rest, strlen($pfb_authority));
+			}
+		} elseif (($pfb_mapped = pfb_ipv4_from_mapped($pfb_whole)) !== NULL) {
+			// A whole-line IPv4-mapped IPv6 address on a v4 list is its IPv4 address.
+			$result['messages'][] = "\n  IP literal decoded: [ {$pfb_whole} ] -> [ {$pfb_mapped} ]";
+			$line = $raw_line = $pfb_mapped;
+		}
+	}
+
 	// issue #2604: DShield start<TAB>end<TAB>prefix rows declare their own
 	// family; accept only one exact CIDR and leave opposite-family rows alone.
 	if ($pftype == 'auto' && strpos($line, "\t") !== FALSE) {
@@ -530,7 +568,14 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 		}
 	}
 
-	if (!empty($line) && !preg_match('/[a-zA-Z,;|\"\'?]/', $line) && !pfb_ip_is_opposite_family($line, $vtype)) {
+	// A bare hex/DWORD token ('0xC0A80164', '0xc0.0xa8.0x1.0x64') is a parse failure despite its
+	// letters. Single-token lines only: regex-mode text such as 'version 1.2.3' is not a host.
+	// ponytail: only when the line yields nothing ('0xC0A80164 1.2.3.4' is not logged).
+	$pfb_bare_numeric = $vtype == '_v4' && empty($result['entries']) && strpbrk($line, " \t") === FALSE &&
+	    (str_contains($line, "\0") || (!is_ipaddrv4($line) && pfb_ipv4_numeric_host($line) !== NULL));
+	// A NUL byte never makes an address (is_ipaddrv4()/ip2long() throw on it): a parse failure.
+	if (!empty($line) && (!preg_match('/[a-zA-Z,;|\"\'?]/', $line) || $pfb_bare_numeric) &&
+	    !pfb_ip_is_opposite_family($line, $vtype)) {
 		$result['parse_fail_delta']++;
 		$result['detailed_parse_fail'] = TRUE;
 	}

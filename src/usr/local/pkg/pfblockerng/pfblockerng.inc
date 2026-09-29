@@ -9978,6 +9978,10 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 // The IPv4 address inside an IPv4-mapped IPv6 literal (::ffff:0:0/96), else NULL. A client
 // connecting to one sends an IPv4 packet, which no v6 table entry matches.
 function pfb_ipv4_from_mapped(string $ip): ?string {
+	// inet_pton() throws ValueError on a NUL byte (feed lines can carry one); '@' does not stop it.
+	if (str_contains($ip, "\0")) {
+		return NULL;
+	}
 	$bin = @inet_pton($ip);
 	if ($bin === FALSE || !str_starts_with($bin, str_repeat("\x00", 10) . "\xff\xff")) {
 		return NULL;
