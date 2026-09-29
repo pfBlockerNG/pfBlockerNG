@@ -136,6 +136,11 @@ if ($uri === '/ok-with-location') {
 	echo 'BODY';
 	return;
 }
+if ($uri === '/boom') {
+	http_response_code(500);
+	echo 'BOOM';
+	return;
+}
 if ($uri === '/missing') {
 	http_response_code(404);
 	echo 'NOTFOUND';
@@ -257,13 +262,27 @@ PHP;
 		$this->assertSame('200', $result->responseMeta['status'] ?? NULL, $this->failureMessage($result));
 	}
 
-	/** Control: a not-found answer fails and saves nothing. */
-	public function testNotFoundFails(): void
+	/** @return array<string, array{string, string}> */
+	public static function failedReadProvider(): array
+	{
+		return [
+			'404' => ['/missing', '404'],
+			'500' => ['/boom', '500'],
+		];
+	}
+
+	/** Control: a failed read fails, saves nothing and keeps the wrapper message (not the redirect one). */
+	#[DataProvider('failedReadProvider')]
+	public function testFailedReadKeepsWrapperMessage(string $path, string $code): void
 	{
 		$port   = $this->startFixtures();
-		$result = $this->fetch("http://127.0.0.1:{$port}/missing");
-		$this->assertFalse($result->success, $this->failureMessage($result));
+		$result = $this->fetch("http://127.0.0.1:{$port}{$path}");
+		$msg    = $this->failureMessage($result);
+		$this->assertFalse($result->success, $msg);
 		$this->assertFileDoesNotExist("{$this->workdir}/feed.txt.raw");
+		$log = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$this->assertStringNotContainsString(self::REASON, $log, $msg);
+		$this->assertStringContainsString("HTTP/1.1 {$code}", $log, $msg);
 	}
 
 	/** Control: a plain file path under the data directory is read as before. */
