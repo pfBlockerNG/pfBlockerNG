@@ -339,11 +339,12 @@ final class CategoryScheduleUiTest extends TestCase
 		$sentinel = '{"active":"must remain byte-identical"}';
 		file_put_contents($active . '/pfb_due_ledger.json', $sentinel);
 		$before = file_get_contents($active . '/pfb_due_ledger.json');
-		$before_candidates = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
 		try {
-			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time(), ['fail_rename' => TRUE]));
+			[$ok, $seen, $left] = $this->validateInPrivateTemp($model, $state, 'UTC', ['fail_rename' => TRUE]);
+			$this->assertFalse($ok);
 			$this->assertSame($before, file_get_contents($active . '/pfb_due_ledger.json'));
-			$this->assertSame($before_candidates, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
+			$this->assertCount(1, $seen, 'the candidate must be staged in the private temp dir');
+			$this->assertSame([], $left, 'a failed candidate must leave no temporary artifact');
 		} finally {
 			@unlink($active . '/pfb_due_ledger.json');
 			@rmdir($active);
@@ -366,15 +367,17 @@ final class CategoryScheduleUiTest extends TestCase
 		mkdir($active, 0700, TRUE);
 		$sentinel = '{"active":"must remain byte-identical"}';
 		file_put_contents($active . '/pfb_due_ledger.json', $sentinel);
-		$before_candidates = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
 		set_error_handler(static function (): bool { throw new RuntimeException('unexpected warning'); });
 		try {
-			$this->assertTrue(pfb_schedule_cache_candidate_validate($model, ['schema' => 1, 'items' => []], 'UTC', time(), ['active_dir' => $active]));
+			[$ok, $seen, $left] = $this->validateInPrivateTemp($model, ['schema' => 1, 'items' => []], 'UTC', ['active_dir' => $active]);
+			$this->assertTrue($ok);
 		} finally {
 			restore_error_handler();
 		}
 		$this->assertSame($sentinel, file_get_contents($active . '/pfb_due_ledger.json'));
-		$this->assertSame($before_candidates, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
+		$this->assertCount(1, $seen, 'the candidate must be staged in the private temp dir');
+		$this->assertNotSame($active, rtrim($seen[0], '/'));
+		$this->assertSame([], $left, 'a successful candidate must leave no temporary artifact');
 		$warnings = [];
 		set_error_handler(static function (int $severity, string $message) use (&$warnings): bool { $warnings[] = $message; return TRUE; });
 		try {
@@ -395,13 +398,43 @@ final class CategoryScheduleUiTest extends TestCase
 			['ipv4' => [$group], 'ipv6' => [], 'dnsbl' => []]
 		);
 		$this->assertNotNull($model);
-		$before = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
+		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
+		mkdir($private, 0700);
 		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => [
 			'last_completed_occurrence' => PHP_INT_MAX,
 			'completion_outcome' => 'success',
 		]]];
 		$this->assertTrue(pfb_schedule_state_valid($state));
-		$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time()));
-		$this->assertSame($before, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
+		try {
+			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time(), ['temp_dir' => $private]));
+			$this->assertSame([], array_values(array_diff(scandir($private) ?: [], ['.', '..'])),
+				'an extreme-state candidate must leave no temporary artifact');
+		} finally {
+			rmdir_recursive($private);
+		}
+	}
+
+	/**
+	 * Issue #3352: run the candidate validator against a temp dir only this test owns, so a
+	 * concurrent suite's candidates in the shared system temp dir cannot enter the listing.
+	 *
+	 * @return array{0: bool, 1: list<string>, 2: list<string>} result, candidates present
+	 *         when the cache document was built, entries left after the call
+	 */
+	private function validateInPrivateTemp(?array $model, array $state, mixed $timezone, array $io): array
+	{
+		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
+		mkdir($private, 0700);
+		$seen = [];
+		$io['temp_dir'] = $private;
+		$io['before_document'] = static function () use ($private, &$seen): void {
+			$seen = glob($private . '/pfb_sched_*') ?: [];
+		};
+		try {
+			$ok = pfb_schedule_cache_candidate_validate($model, $state, $timezone, time(), $io);
+			return [$ok, $seen, array_values(array_diff(scandir($private) ?: [], ['.', '..']))];
+		} finally {
+			rmdir_recursive($private);
+		}
 	}
 }

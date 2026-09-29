@@ -5711,7 +5711,9 @@ function pfb_schedule_cache_candidate_stage(
 			$timezone = NULL;
 		}
 	}
-	$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
+	// $io['temp_dir'] (tests only) replaces the system temp dir, which concurrent runs share.
+	$temp_base = is_string($io['temp_dir'] ?? NULL) ? $io['temp_dir'] : sys_get_temp_dir();
+	$candidate_file = @tempnam($temp_base, 'pfb_sched_');
 	$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
 	if ($candidate_file !== FALSE) {
 		@unlink($candidate_file);
