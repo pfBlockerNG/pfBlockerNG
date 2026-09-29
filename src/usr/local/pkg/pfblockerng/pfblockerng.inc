@@ -15464,9 +15464,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			$local_write_failed = FALSE;
 			$local_out = FALSE;
 			if (!$local_conflict && $local_declared <= $local_ceiling) {
-				// 'c' + flock + truncate keeps the LOCK_EX the old file_put_contents() took.
+				// 'c' + bounded lock + truncate keeps the exclusive lock the old file_put_contents() took (issue #1780: no unbounded flock).
 				$local_out = @fopen("{$file_download}", 'c');
-				if ($local_out !== FALSE && (!flock($local_out, LOCK_EX) || !ftruncate($local_out, 0))) {
+				if ($local_out !== FALSE && (!pfb_flock_bounded($local_out, LOCK_EX, 5.0) || !ftruncate($local_out, 0))) {
 					fclose($local_out);
 					$local_out = FALSE;
 				}
