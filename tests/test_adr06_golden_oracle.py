@@ -46,8 +46,9 @@ retired shell/PHP preprocessing semantics inventoried in Phase 1
     classifier; historically ``tld_analysis()`` / ``tld_search()``), incl. TLD
     blacklist (whole-TLD zone) and TLD exclusion
     (force exact data);
-  * user-whitelist normalisation (``pfb_unbound_python_whitelist()``:
-    www-strip, leading-dot -> wildcard) feeding the query-time ``whiteDB``; and
+  * user-whitelist normalisation (as the live build() does it, #3367: case-insensitive
+    www-strip, leading-dot -> wildcard, then normalise() lower-case + shape gate; the
+    PHP ``pfb_unbound_python_whitelist()`` does only the first two) feeding the query-time ``whiteDB``; and
   * TOP1M -> ``whiteDB`` only when enabled.
 
 The reference preprocessor then loads the production matcher's runtime structures
@@ -281,20 +282,23 @@ class ReferencePipeline:
     # -- whitelist layer ---------------------------------------------------- #
 
     def _build_whitelist(self) -> None:
-        """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()):
-        www-strip, leading-dot -> wildcard '1' else '0'. TOP1M -> whiteDB only when
-        enabled. whiteDB value is the wildcard bool the manifest build's
-        user_whitelist entries carry from that '1'/'0' encoding."""
-        for line in self.config.get("user_whitelist", []):
-            line = line.strip()
+        """User-whitelist normalisation as the live build() does it (#3367): case-insensitive
+        www-strip (a name whose remainder is not a valid domain, e.g. www.com, keeps its
+        whole form), leading-dot -> wildcard True else False, then normalise() lower-case +
+        shape gate (rejected lines dropped). TOP1M -> whiteDB only when enabled. whiteDB
+        value is the wildcard bool."""
+        for raw in self.config.get("user_whitelist", []):
+            line = raw.strip()
             if not line:
                 continue
-            if line.startswith("www."):
-                line = line[4:]
-            if line.startswith("."):
-                self.white_db[line.lstrip(".")] = True  # wildcard '1'
-            else:
-                self.white_db[line] = False  # exact '0'
+            body = line[4:] if line[:4].lower() == "www." else line
+            domain = pfb_unbound.normalise(body.lstrip("."))
+            if domain is None and body is not line:
+                body = line
+                domain = pfb_unbound.normalise(line.lstrip("."))
+            if domain is None:
+                continue
+            self.white_db[domain] = body.startswith(".")
 
         if self.top1m_enabled:
             for dom in self.config.get("top1m_list", []):
@@ -675,6 +679,15 @@ class TestReferencePipelineSanity:
         assert pipeline.white_db.get("phishing.net") is False
         # TOP1M domain NOT in whiteDB when disabled
         assert "popularcdn.com" not in pipeline.white_db
+
+    def test_whitelist_normalisation_case_and_invalid(self) -> None:
+        pipeline = ReferencePipeline(
+            {"feeds": []},
+            {"user_whitelist": ["WWW.Example.COM", ".Wild.ORG", "example.net.", "www.com", "bad domain!", ".com"]},
+            top1m_enabled=False,
+        )
+        pipeline._build_whitelist()
+        assert pipeline.white_db == {"example.com": False, "wild.org": True, "example.net": False, "www.com": False}
 
     def test_top1m_loads_whitelist_when_enabled(self) -> None:
         pipeline, _ = _make_pipeline(top1m_enabled=True)

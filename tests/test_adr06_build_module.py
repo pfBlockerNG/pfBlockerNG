@@ -27,7 +27,8 @@ WHAT THE TESTS COVER
   * ``classify`` data/zone via the public-suffix oracle, incl. the multi-label
     public suffix (``co.uk``), deep-subdomain -> exact DATA, and TLD-exclusion ->
     forced exact DATA.
-  * whitelist normalisation (www-strip, leading-dot wildcard, TOP1M-when-enabled).
+  * whitelist normalisation (case-insensitive www-strip, leading-dot wildcard, normalise() lower-case +
+    shape gate with per-list reject tally, TOP1M-when-enabled).
   * ``build()`` end-to-end == the Phase-2 decision oracle, BOTH TOP1M scenarios,
     plus the noAAAA decisions and the no-IP-leak guarantee.
   * ``build()`` is PURE / REENTRANT: two calls yield equal structures and mutate
@@ -318,13 +319,17 @@ class TestWhitelistNormalisation:
     def test_single_label_wildcard_is_dropped(self) -> None:
         assert pfb_unbound._dnsbl_normalise_whitelist([".com"], [], False) == {}
 
-    def test_rejected_entry_is_logged_with_list_and_entry(self, monkeypatch: Any) -> None:
-        logged: list[str] = []
-        monkeypatch.setattr(builtins, "log_info", logged.append, raising=False)
-        pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"], [], False, source="user_unlock")
-        assert len(logged) == 1
-        assert "user_unlock" in logged[0]
-        assert "bad domain!" in logged[0]
+    def test_www_single_label_remainder_keeps_matching(self) -> None:
+        # www.com / www.org / www.example: the remainder is one label, which normalise()
+        # rejects, but the whole name is a valid domain and base matched it.
+        for entry in ("www.com", "WWW.Org", "www.example"):
+            wl = pfb_unbound._dnsbl_normalise_whitelist([entry], [], False)
+            name = entry.lower()
+            assert list(wl) == [name]
+            assert pfb_unbound.whitelist_lookup_domain(name, wl, 2)[0] is True
+
+    def test_www_prefix_of_invalid_name_still_dropped(self) -> None:
+        assert pfb_unbound._dnsbl_normalise_whitelist(["www.-bad.com", "www.bad domain"], [], False) == {}
 
     def test_top1m_only_when_enabled(self) -> None:
         disabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], False)
@@ -606,6 +611,27 @@ class TestEntryRejectTally:
             line_reader=lambda raw: ["good.example.com", "no-dot-host"],
         )
         assert result.rejects == {("PlainFeed", "PlainGroup"): {"shape": 1, "wire_cap": 0}}
+
+
+class TestUserListRejectTally:
+    """User whitelist / unlock lines normalise() drops are tallied through the same
+    ADR-48 reject channel as feed rejects, keyed by the list, and build() stays
+    free of direct logging."""
+
+    def test_dropped_user_lines_tallied_per_list_without_logging(self, monkeypatch: Any) -> None:
+        logged: list[str] = []
+        monkeypatch.setattr(builtins, "log_info", logged.append, raising=False)
+        config = {
+            "user_whitelist": ["bad domain!", "ok.com"],
+            "user_unlock": ["-bad.com", "also-bad", "ok2.com"],
+        }
+        result = pfb_unbound.build({"feeds": []}, config, line_reader=lambda raw: [])
+        assert result.rejects == {
+            ("user_whitelist", "DNSBL"): {"shape": 1, "wire_cap": 0},
+            ("user_unlock", "DNSBL"): {"shape": 2, "wire_cap": 0},
+        }
+        assert sorted(result.white_db) == ["ok.com", "ok2.com"]
+        assert logged == []
 
 
 class TestSkipClassesTallyZero:
