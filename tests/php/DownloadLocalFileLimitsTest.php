@@ -68,6 +68,7 @@ final class DownloadLocalFileLimitsTest extends TestCase
 			}
 		}
 		$this->savedPfb = [];
+		@rmdir("{$this->workdir}/feed.txt.raw");
 		foreach ((array) glob("{$this->workdir}/*") as $f) {
 			@unlink((string) $f);
 		}
@@ -96,6 +97,7 @@ while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 	while (($line = fgets($conn)) !== FALSE && rtrim($line, "\r\n") !== '') {
 	}
 	usleep((int) $hdelay);
+	file_put_contents("{$portFile}.replied", '1');
 	$resp = (string) file_get_contents($responseFile);
 	if ((int) $drip > 0) {
 		// Headers at once, then the body one byte per $drip microseconds.
@@ -235,7 +237,7 @@ PHP));
 		$port   = $this->serve('200 OK', 'ab', TRUE, 10);
 		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
 		$this->assertRefusedNothingSaved($result, 'body shorter than Content-Length');
-		$this->assertStringContainsString('skipped', $this->logText());
+		$this->assertStringContainsString('body incomplete (2 of 10 bytes)', $this->logText());
 	}
 
 	/** A read that stalls past the request timeout is a failed download. */
@@ -333,34 +335,18 @@ PHP));
 		$this->assertStringContainsString('HTTP/1.1 404', $this->logText());
 	}
 
-	/** Like cURL's CURLOPT_TIMEOUT, a request timeout of 0 means no limit: a normal body is saved. */
-	public function testZeroTimeoutMeansNoDeadline(): void
-	{
-		$port   = $this->serve('200 OK', "BODY\n");
-		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
-		$this->assertTrue($result->success, $this->logText());
-		$this->assertSame("BODY\n", file_get_contents("{$this->workdir}/feed.txt.raw"));
-	}
-
 	/**
 	 * A complete known-length body is saved as soon as its declared length has been
 	 * read, without waiting for the peer to close (the peer holds the socket 5 s,
 	 * hard cap, and writes `port.closed` when it lets go).
 	 */
-	#[DataProvider('heldOpenTimeoutProvider')]
-	public function testCompleteBodyOnAHeldOpenConnectionIsSavedWithoutWaitingForClose(int $timeout): void
+	public function testCompleteBodyOnAHeldOpenConnectionIsSavedWithoutWaitingForClose(): void
 	{
 		$port   = $this->serve('200 OK', "BODY\n", TRUE, -1, 5);
-		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", $timeout);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 1);
 		$this->assertFileDoesNotExist("{$this->workdir}/port.closed", 'the fetch returned only after the peer closed');
 		$this->assertTrue($result->success, $this->logText());
 		$this->assertSame("BODY\n", file_get_contents("{$this->workdir}/feed.txt.raw"));
-	}
-
-	/** @return array<string, array{int}> */
-	public static function heldOpenTimeoutProvider(): array
-	{
-		return ['timeout 1' => [1], 'timeout 0 (no limit)' => [0]];
 	}
 
 	/** Like cURL, reading stops at the declared Content-Length: surplus bytes are not saved. */
@@ -391,33 +377,84 @@ PHP));
 	}
 
 	/**
-	 * Like cURL's CURLOPT_TIMEOUT=0, a request timeout of 0 lifts every wait,
-	 * including PHP's ambient default_socket_timeout: a body that arrives after
-	 * 1.5 s is saved with the ambient default at 1 s.
-	 */
-	public function testZeroTimeoutIsNotCutByTheAmbientSocketTimeout(): void
-	{
-		ini_set('default_socket_timeout', '1');
-		$port   = $this->serve('200 OK', 'a', TRUE, -1, 0, 1500000);
-		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
-		$this->assertTrue($result->success, $this->logText());
-		$this->assertSame('a', file_get_contents("{$this->workdir}/feed.txt.raw"));
-	}
-
-	/**
 	 * The request timeout is one budget for the whole fetch: 1.2 s waiting for the
-	 * headers leaves under 0.8 s of a 2 s budget for a body that arrives 1.2 s after
-	 * them, so the fetch is refused near the timeout, not at header wait + timeout.
+	 * headers leaves 0.8 s of a 2 s budget for a body that would arrive 4 s later
+	 * (hard cap), so the fetch is refused near the timeout, not 2 s after the headers.
 	 */
 	public function testHeaderWaitCountsAgainstTheWholeTransferBudget(): void
 	{
-		$port  = $this->serve('200 OK', 'a', TRUE, -1, 0, 1200000, 1200000);
+		$port  = $this->serve('200 OK', 'a', TRUE, -1, 0, 4000000, 1200000);
 		$start = hrtime(TRUE);
 		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 2);
 		$elapsed = (hrtime(TRUE) - $start) / 1e9;
 		$this->assertRefusedNothingSaved($result, 'header wait plus body wait over the request timeout');
 		$this->assertStringContainsString('read timed out', $this->logText());
 		$this->assertLessThan(3.0, $elapsed, 'refusal must come near the 2 s timeout, not after a second full budget');
+	}
+
+	/** A server that stays silent before the response headers is cut at the request timeout (the peer replies 3 s later, hard cap). */
+	public function testSilenceBeforeTheHeadersIsCutAtTheRequestTimeout(): void
+	{
+		$port   = $this->serve('200 OK', 'ab', TRUE, -1, 0, 0, 3000000);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 1);
+		$this->assertFileDoesNotExist("{$this->workdir}/port.replied", 'the fetch returned only after the peer replied');
+		$this->assertRefusedNothingSaved($result, 'silence before the headers');
+	}
+
+	/**
+	 * A degenerate timeout can never disable the bound (as the rsync path's max(1, budget)):
+	 * timeout 0 behaves as 1 s, so a body stalled for 4 s (hard cap) is refused as timed out.
+	 */
+	public function testZeroTimeoutIsStillBounded(): void
+	{
+		$port   = $this->serve('200 OK', 'ab', TRUE, 10, 4);
+		$start  = hrtime(TRUE);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
+		$elapsed = (hrtime(TRUE) - $start) / 1e9;
+		$this->assertRefusedNothingSaved($result, 'timeout 0 must not lift the bound');
+		$this->assertStringContainsString('read timed out', $this->logText());
+		$this->assertLessThan(3.0, $elapsed);
+	}
+
+	/** With the test seam unset, the production default ceiling refuses a declared length one byte over PFB_DOWNLOAD_MAX_BYTES. */
+	public function testDefaultCeilingIsTheSharedDownloadLimit(): void
+	{
+		unset($GLOBALS['pfb']['local_max_bytes']);
+		$port   = $this->serve('200 OK', 'ab', TRUE, PFB_DOWNLOAD_MAX_BYTES + 1);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertRefusedNothingSaved($result, 'declared length over the default ceiling');
+		$this->assertStringContainsString('stage=size reason=local_too_large', $this->logText());
+	}
+
+	/** The size refusal logs the URL redacted: no userinfo, no query token. */
+	public function testSizeRefusalLogRedactsTheUrl(): void
+	{
+		$port   = $this->serve('200 OK', str_repeat('A', self::CEILING + 1));
+		$result = $this->fetch("http://feeduser:hunter2@127.0.0.1:{$port}/list.txt?token=SECRETTOKEN");
+		$this->assertRefusedNothingSaved($result, 'over-ceiling body from a URL with credentials');
+		$log = $this->logText();
+		$this->assertStringContainsString('local_too_large', $log);
+		$this->assertStringNotContainsString('hunter2', $log);
+		$this->assertStringNotContainsString('SECRETTOKEN', $log);
+	}
+
+	/** When the .raw target cannot be opened for writing the download fails as "could not be saved". */
+	public function testUnwritableRawTargetIsRefused(): void
+	{
+		$this->assertTrue(mkdir("{$this->workdir}/feed.txt.raw"));
+		$port   = $this->serve('200 OK', "BODY\n");
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertFalse($result->success, $this->logText());
+		$this->assertStringContainsString('could not be saved', $this->logText());
+	}
+
+	/** RFC 7230 3.3.3: with Transfer-Encoding chunked, Content-Length is ignored and a valid chunked body is saved. */
+	public function testChunkedBodyWithContentLengthIsSaved(): void
+	{
+		$port   = $this->startRawServer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame('hello', file_get_contents("{$this->workdir}/feed.txt.raw"));
 	}
 
 	/** Control: a plain local file path is read as before. */
