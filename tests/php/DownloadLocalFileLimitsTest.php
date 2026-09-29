@@ -107,6 +107,7 @@ while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 	}
 	sleep((int) $hold);
 	fclose($conn);
+	file_put_contents("{$portFile}.closed", '1');
 }
 PHP));
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
@@ -333,6 +334,54 @@ PHP));
 		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
 		$this->assertTrue($result->success, $this->logText());
 		$this->assertSame("BODY\n", file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
+	/**
+	 * A complete known-length body is saved as soon as its declared length has been
+	 * read, without waiting for the peer to close (the peer holds the socket 5 s,
+	 * hard cap, and writes `port.closed` when it lets go).
+	 */
+	#[DataProvider('heldOpenTimeoutProvider')]
+	public function testCompleteBodyOnAHeldOpenConnectionIsSavedWithoutWaitingForClose(int $timeout): void
+	{
+		$port   = $this->serve('200 OK', "BODY\n", TRUE, -1, 5);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", $timeout);
+		$this->assertFileDoesNotExist("{$this->workdir}/port.closed", 'the fetch returned only after the peer closed');
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame("BODY\n", file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
+	/** @return array<string, array{int}> */
+	public static function heldOpenTimeoutProvider(): array
+	{
+		return ['timeout 1' => [1], 'timeout 0 (no limit)' => [0]];
+	}
+
+	/** Like cURL, reading stops at the declared Content-Length: surplus bytes are not saved. */
+	public function testBytesPastTheDeclaredLengthAreNotSaved(): void
+	{
+		$port   = $this->serve('200 OK', 'abcdefghij', TRUE, 2);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame('ab', file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
+	/** Conflicting Content-Length headers are a failed download (a smaller second one must not mask truncation). */
+	public function testConflictingContentLengthIsRefused(): void
+	{
+		$port   = $this->startRawServer("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nContent-Length: 2\r\nConnection: close\r\n\r\nab");
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertRefusedNothingSaved($result, 'conflicting Content-Length');
+		$this->assertStringContainsString('conflicting Content-Length', $this->logText());
+	}
+
+	/** Control: repeated but identical Content-Length headers are fine. */
+	public function testIdenticalDuplicateContentLengthIsSaved(): void
+	{
+		$port   = $this->startRawServer("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\nConnection: close\r\n\r\nab");
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame('ab', file_get_contents("{$this->workdir}/feed.txt.raw"));
 	}
 
 	/** Control: a plain local file path is read as before. */

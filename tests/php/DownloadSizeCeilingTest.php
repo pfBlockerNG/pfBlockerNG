@@ -409,6 +409,24 @@ final class DownloadSizeCeilingTest extends TestCase
 	}
 
 	/**
+	 * Scenario: the self-hosted fetch obeys the same ceiling (issue #3362)
+	 *
+	 * Given  the self-hosted (local-file) branch of the download function
+	 * When   the source is read
+	 * Then   its ceiling defaults to PFB_DOWNLOAD_MAX_BYTES, the copy loop is bounded
+	 *        by it, and an over-ceiling body is refused with the named size reason
+	 *        (behaviour rows: DownloadLocalFileLimitsTest).
+	 */
+	public function test_self_hosted_fetch_is_bounded_by_the_shared_ceiling(): void
+	{
+		$this->assertStringContainsString(
+			"(int) \$GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;", self::$downloadBody);
+		$this->assertStringContainsString('$local_copied <= $local_ceiling', self::$downloadBody);
+		$this->assertStringContainsString(
+			"pfb_validate_log(\$header, 'size', 'local_too_large'", self::$downloadBody);
+	}
+
+	/**
 	 * Scenario: the staging filesystem is checked before anything is written
 	 *
 	 * Given  a downloaded body about to be decompressed
