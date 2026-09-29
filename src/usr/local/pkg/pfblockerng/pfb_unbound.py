@@ -4711,7 +4711,7 @@ def _dnsbl_within_wire_caps(host: str) -> bool:
     return len(host) <= 253 and all(len(label) <= 63 for label in host.split("."))
 
 
-def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
+def _normalise_verdict(value: str, single_label_ok: bool = False) -> tuple[str | None, str | None]:
     """The classified body of ``normalise()``: returns ``(domain, None)`` on
     accept, or ``(None, bucket)`` on reject where ``bucket`` is ``'shape'`` (no
     dot / edge hyphen / empty label / bad char -- a domain-SHAPE defect) or
@@ -4719,9 +4719,11 @@ def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
     Split out of ``normalise()`` so callers that need the #789 reject tally
     (``build()`` / ``parse_abp()`` / ``reconcile()``) can bucket it; ``normalise()``
     itself stays a pure ``str | None`` wrapper (public contract unchanged).
+    ``single_label_ok`` lifts only the has-a-dot rule (#3378: a user-whitelist wildcard
+    such as ``.lan``); charset, hyphen, numeric-label and length checks still apply.
     """
     host = value.strip().strip(".").lower()
-    if "." not in host or (_dnsbl_is_numeric_host(host) and not _dnsbl_is_ipv4(host)):
+    if ("." not in host and not single_label_ok) or (_dnsbl_is_numeric_host(host) and not _dnsbl_is_ipv4(host)):
         # A numeric last label makes clients parse the name as an IPv4 literal. Canonical quads
         # stay accepted here: parse() owns the bare-IP skip (test_adr06_build_module).
         return None, "shape"
@@ -5110,8 +5112,12 @@ def _dnsbl_normalise_whitelist(
     source: str = "user-whitelist",
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation into the query-time whiteDB shape: case-insensitive
-    www-strip; leading-dot -> wildcard True else False; then normalise() lower-cases and
-    applies the domain-shape gate (#3367; PHP's pfb_unbound_python_whitelist() does neither).
+    www-strip; leading-dot -> wildcard True else False; then the domain-shape gate (#3367).
+    The GUI path (pfb_text_area_decode()) already lower-cases, strips ``#`` comments and
+    punycodes IDN; this normalisation runs again as a failsafe for entries that reach the
+    stored configuration by other means (shell edits, imports), and it also handles a
+    trailing dot. A wildcard single label (``.lan``, ``.internal``) is kept -- only the
+    has-a-dot rule is lifted for it (#3378); a non-wildcard single label is dropped.
     An entry normalise() rejects is dropped and, when ``tally`` is given, counted under
     (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied);
     ``source`` holds a hyphen so it can never equal a legal feed name.
@@ -5135,12 +5141,12 @@ def _dnsbl_normalise_whitelist(
             continue
         body = line[4:] if line[:4].lower() == "www." else line
         # issue #3367: lower-case + domain-shape gate, like the block-list keys and TOP1M.
-        domain, bucket = _normalise_verdict(body.lstrip("."))
+        domain, bucket = _normalise_verdict(body, body.startswith("."))
         if domain is None and body is not line:
             # `www.com`: the remainder is one label but the whole name is valid; the query-time
             # lookup matches it exactly, as the pre-#3367 www-strip did via the remainder.
             body = line
-            domain, bucket = _normalise_verdict(line.lstrip("."))
+            domain, bucket = _normalise_verdict(line, line.startswith("."))
         if domain is None:
             if tally is not None and bucket is not None:
                 _tally_reject(tally, source, "DNSBL", bucket)

@@ -201,10 +201,11 @@ class ReferencePipeline:
         return line, None
 
     @staticmethod
-    def _validate_domain(host: str) -> str | None:
-        """Lower-case + PFB_FILTER_DOMAIN shape gate (mirrors pfb_filter()'s PFB_FILTER_DOMAIN case)."""
+    def _validate_domain(host: str, single_label_ok: bool = False) -> str | None:
+        """Lower-case + PFB_FILTER_DOMAIN shape gate (mirrors pfb_filter()'s PFB_FILTER_DOMAIN case);
+        ``single_label_ok`` admits a wildcard single label for the user whitelist (#3378)."""
         host = host.strip().strip(".").lower()
-        if "." not in host:
+        if "." not in host and not single_label_ok:
             return None
         # Representative domain-shape gate (labels of [a-z0-9_-], underscore per
         # #723 — parity with pfb_filter()'s PFB_FILTER_DOMAIN case).
@@ -284,18 +285,19 @@ class ReferencePipeline:
     def _build_whitelist(self) -> None:
         """User-whitelist normalisation as the live build() does it (#3367): case-insensitive
         www-strip (a name whose remainder is not a valid domain, e.g. www.com, keeps its
-        whole form), leading-dot -> wildcard True else False, then normalise() lower-case +
-        shape gate (rejected lines dropped). TOP1M -> whiteDB only when enabled. whiteDB
+        whole form), leading-dot -> wildcard True else False, then the oracle's own
+        _validate_domain lower-case + shape gate (rejected lines dropped; a wildcard single
+        label such as `.lan` is kept). TOP1M -> whiteDB only when enabled. whiteDB
         value is the wildcard bool."""
         for raw in self.config.get("user_whitelist", []):
             line = raw.strip()
             if not line:
                 continue
             body = line[4:] if line[:4].lower() == "www." else line
-            domain = pfb_unbound.normalise(body.lstrip("."))
+            domain = self._validate_domain(body, body.startswith("."))
             if domain is None and body is not line:
                 body = line
-                domain = pfb_unbound.normalise(line.lstrip("."))
+                domain = self._validate_domain(line, line.startswith("."))
             if domain is None:
                 continue
             self.white_db[domain] = body.startswith(".")

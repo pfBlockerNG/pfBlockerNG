@@ -9673,8 +9673,10 @@ function pfb_unbound_python_whitelist($mode='') {
 
 
 // ADR-06: Collect the user DNSBL whitelist as normalised source lines for the Python build
-// manifest (config.user_whitelist); Python does the www-strip/leading-dot->wildcard
-// normalisation and the lower-case + domain-shape gate itself, so this hands the RAW suppression lines through. PFBL-01: each line
+// manifest (config.user_whitelist); pfb_text_area_decode() below already lower-cases, strips
+// '#' comments and punycodes IDN. Python does the www-strip/leading-dot->wildcard
+// normalisation, trailing-dot handling and the domain-shape gate, and re-normalises as a
+// failsafe for entries that reach the stored configuration by other means. PFBL-01: each line
 // (free-form textarea input) must validate via pfb_filter(PFB_FILTER_DOMAIN) — accepting the
 // leading-dot wildcard form — before it reaches the manifest and query-time whiteDB; a failing
 // line is SKIPPED + logged, never silently dropped.

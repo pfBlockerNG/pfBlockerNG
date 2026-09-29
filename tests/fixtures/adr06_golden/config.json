@@ -8,7 +8,7 @@
   "_tld_wildcard_exclusion_doc": "Force exact DATA (transparent) classification for this whole domain even though as a 2-label registrable domain it would otherwise be a wildcard ZONE (the manifest build's TLD-exclusion branch since ADR-65). Present in feed_extra.txt.",
 
   "user_whitelist": ["www.adblock.com", ".wildwhite.org", "phishing.net"],
-  "_user_whitelist_doc": "User DNSBL whitelist (dnsblconfig['suppression']). Normalised by PHP's pfb_unbound_python_whitelist(): www-strip, leading-dot -> wildcard '1' else '0'. Applied at QUERY TIME via whiteDB (un-blocks), never as a build-time removal in ADR-06's target.",
+  "_user_whitelist_doc": "User DNSBL whitelist (dnsblconfig['suppression']). PHP's pfb_text_area_decode() lower-cases, strips comments and punycodes IDN; the Python build then re-normalises as a failsafe for entries stored by other means: it applies the www-strip, leading-dot -> wildcard True else False, trailing-dot handling and the domain-shape gate (a wildcard single label such as .lan is kept). Applied at QUERY TIME via whiteDB (un-blocks), never as a build-time removal in ADR-06's target.",
 
   "top1m_list": ["popularcdn.com"],
   "_top1m_doc": "TOP1M (Alexa/Tranco) popularity whitelist. Loaded into whiteDB ONLY when TOP1M is enabled; un-blocks popular domains at query time. When disabled, these domains block normally.",
