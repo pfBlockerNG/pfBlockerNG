@@ -5106,9 +5106,12 @@ def _dnsbl_normalise_whitelist(
     user_whitelist: Iterable[str],
     top1m_lines: Iterable[str],
     top1m_enabled: bool,
+    source: str = "user_whitelist",
 ) -> dict[str, dict[str, Any]]:
-    """User-whitelist normalisation (mirrors PHP's pfb_unbound_python_whitelist()) into the
-    query-time whiteDB shape: www-strip; leading-dot -> wildcard True else False.
+    """User-whitelist normalisation into the query-time whiteDB shape: case-insensitive
+    www-strip; leading-dot -> wildcard True else False; then normalise() lower-cases and
+    applies the domain-shape gate (#3367; PHP's pfb_unbound_python_whitelist() does neither).
+    An entry normalise() rejects is dropped with one log_info line naming ``source``.
     Colliding lines that collapse to one apex widen (broadest wildcard, any important,
     max band) rather than last-wins. TOP1M entries are loaded ONLY when enabled as
     validated canonical bare domains; retired comma-framed records and invalid
@@ -5133,6 +5136,7 @@ def _dnsbl_normalise_whitelist(
         # issue #3367: lower-case + domain-shape gate, like the block-list keys and TOP1M.
         domain = normalise(line.lstrip("."))
         if domain is None:
+            log_info("[pfBlockerNG]: DNSBL {}: skipping invalid whitelist entry '{}'".format(source, raw.strip()))
             continue
         new_entry: dict[str, Any] = {"wildcard": wildcard, "important": True, "band": PRIO_USER_ALLOW}
         existing = white_db.get(domain)
@@ -5492,7 +5496,9 @@ def build(
     # and a plain last-wins concat would downgrade the wildcard to exact. Widen on
     # collision instead -- the same monotonic merge the feed @@ allows use below (keep
     # the broadest wildcard/important, highest band; both sides are band-6 user allows).
-    for domain, unlock_entry in _dnsbl_normalise_whitelist(config.get("user_unlock", []), (), False).items():
+    for domain, unlock_entry in _dnsbl_normalise_whitelist(
+        config.get("user_unlock", []), (), False, "user_unlock"
+    ).items():
         existing = white_db.get(domain)
         if existing is None:
             white_db[domain] = unlock_entry
