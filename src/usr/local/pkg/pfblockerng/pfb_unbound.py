@@ -5107,13 +5107,14 @@ def _dnsbl_normalise_whitelist(
     top1m_lines: Iterable[str],
     top1m_enabled: bool,
     tally: RejectTally | None = None,
-    source: str = "user_whitelist",
+    source: str = "user-whitelist",
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation into the query-time whiteDB shape: case-insensitive
     www-strip; leading-dot -> wildcard True else False; then normalise() lower-cases and
     applies the domain-shape gate (#3367; PHP's pfb_unbound_python_whitelist() does neither).
     An entry normalise() rejects is dropped and, when ``tally`` is given, counted under
-    (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied).
+    (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied);
+    ``source`` holds a hyphen so it can never equal a legal feed name.
     Colliding lines that collapse to one apex widen (broadest wildcard, any important,
     max band) rather than last-wins. TOP1M entries are loaded ONLY when enabled as
     validated canonical bare domains; retired comma-framed records and invalid
@@ -5505,7 +5506,7 @@ def build(
     # collision instead -- the same monotonic merge the feed @@ allows use below (keep
     # the broadest wildcard/important, highest band; both sides are band-6 user allows).
     for domain, unlock_entry in _dnsbl_normalise_whitelist(
-        config.get("user_unlock", []), (), False, rejects, "user_unlock"
+        config.get("user_unlock", []), (), False, rejects, "user-unlock"
     ).items():
         existing = white_db.get(domain)
         if existing is None:
