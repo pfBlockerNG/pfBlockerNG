@@ -36,6 +36,7 @@ WHAT THE TESTS COVER
 
 from __future__ import annotations
 
+import builtins
 from typing import Any
 
 import pfb_unbound
@@ -308,6 +309,22 @@ class TestWhitelistNormalisation:
     def test_entry_rejected_by_normalise_is_dropped(self) -> None:
         wl = pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"], [], False)
         assert list(wl) == ["ok.com"]
+
+    def test_trailing_dot_entry_stored_without_dot_and_matches(self) -> None:
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["example.com."], [], False)
+        assert list(wl) == ["example.com"]
+        assert pfb_unbound.whitelist_lookup_domain("example.com", wl, 2)[0] is True
+
+    def test_single_label_wildcard_is_dropped(self) -> None:
+        assert pfb_unbound._dnsbl_normalise_whitelist([".com"], [], False) == {}
+
+    def test_rejected_entry_is_logged_with_list_and_entry(self, monkeypatch: Any) -> None:
+        logged: list[str] = []
+        monkeypatch.setattr(builtins, "log_info", logged.append, raising=False)
+        pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"], [], False, source="user_unlock")
+        assert len(logged) == 1
+        assert "user_unlock" in logged[0]
+        assert "bad domain!" in logged[0]
 
     def test_top1m_only_when_enabled(self) -> None:
         disabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], False)
