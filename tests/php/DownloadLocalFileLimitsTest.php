@@ -28,8 +28,11 @@ final class DownloadLocalFileLimitsTest extends TestCase
 	/** @var array<string,mixed> saved $GLOBALS['pfb'] keys (sentinel FALSE = was unset) */
 	private array $savedPfb = [];
 
+	private string $savedSocketTimeout = '';
+
 	protected function setUp(): void
 	{
+		$this->savedSocketTimeout = (string) ini_get('default_socket_timeout');
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [];
@@ -49,6 +52,7 @@ final class DownloadLocalFileLimitsTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		ini_set('default_socket_timeout', $this->savedSocketTimeout);
 		foreach ($this->servers as $server) {
 			if (is_resource($server)) {
 				proc_terminate($server);
@@ -75,12 +79,12 @@ final class DownloadLocalFileLimitsTest extends TestCase
 	 * Answers one request with $response verbatim, then holds the connection open
 	 * for $holdSeconds (hard cap, the process is also reaped in tearDown) before closing.
 	 */
-	private function startRawServer(string $response, int $holdSeconds = 0, int $dripMicros = 0): int
+	private function startRawServer(string $response, int $holdSeconds = 0, int $dripMicros = 0, int $headerDelayMicros = 0): int
 	{
 		$script = "{$this->workdir}/raw.php";
 		$this->assertNotFalse(file_put_contents($script, <<<'PHP'
 <?php
-[, $portFile, $responseFile, $hold, $drip] = $argv;
+[, $portFile, $responseFile, $hold, $drip, $hdelay] = $argv;
 $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
 if ($server === FALSE) {
 	exit(1);
@@ -91,6 +95,7 @@ rename("{$portFile}.tmp", $portFile);
 while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 	while (($line = fgets($conn)) !== FALSE && rtrim($line, "\r\n") !== '') {
 	}
+	usleep((int) $hdelay);
 	$resp = (string) file_get_contents($responseFile);
 	if ((int) $drip > 0) {
 		// Headers at once, then the body one byte per $drip microseconds.
@@ -113,7 +118,7 @@ PHP));
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
 		$portFile = "{$this->workdir}/port";
 		$proc = proc_open(
-			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds, (string) $dripMicros],
+			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds, (string) $dripMicros, (string) $headerDelayMicros],
 			[1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
 			$pipes
 		);
@@ -127,10 +132,10 @@ PHP));
 		return $port;
 	}
 
-	private function serve(string $status, string $body, bool $withLength = TRUE, int $declared = -1, int $holdSeconds = 0, int $dripMicros = 0): int
+	private function serve(string $status, string $body, bool $withLength = TRUE, int $declared = -1, int $holdSeconds = 0, int $dripMicros = 0, int $headerDelayMicros = 0): int
 	{
 		$len = $withLength ? 'Content-Length: ' . ($declared >= 0 ? $declared : strlen($body)) . "\r\n" : '';
-		return $this->startRawServer("HTTP/1.1 {$status}\r\n{$len}Connection: close\r\n\r\n{$body}", $holdSeconds, $dripMicros);
+		return $this->startRawServer("HTTP/1.1 {$status}\r\n{$len}Connection: close\r\n\r\n{$body}", $holdSeconds, $dripMicros, $headerDelayMicros);
 	}
 
 	private function fetch(string $listUrl, int $timeout = 30): PfbDownloadResult
@@ -382,6 +387,36 @@ PHP));
 		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
 		$this->assertTrue($result->success, $this->logText());
 		$this->assertSame('ab', file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
+	/**
+	 * Like cURL's CURLOPT_TIMEOUT=0, a request timeout of 0 lifts every wait,
+	 * including PHP's ambient default_socket_timeout: a body that arrives after
+	 * 1.5 s is saved with the ambient default at 1 s.
+	 */
+	public function testZeroTimeoutIsNotCutByTheAmbientSocketTimeout(): void
+	{
+		ini_set('default_socket_timeout', '1');
+		$port   = $this->serve('200 OK', 'a', TRUE, -1, 0, 1500000);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame('a', file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
+	/**
+	 * The request timeout is one budget for the whole fetch: 1.2 s waiting for the
+	 * headers leaves under 0.8 s of a 2 s budget for a body that arrives 1.2 s after
+	 * them, so the fetch is refused near the timeout, not at header wait + timeout.
+	 */
+	public function testHeaderWaitCountsAgainstTheWholeTransferBudget(): void
+	{
+		$port  = $this->serve('200 OK', 'a', TRUE, -1, 0, 1200000, 1200000);
+		$start = hrtime(TRUE);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 2);
+		$elapsed = (hrtime(TRUE) - $start) / 1e9;
+		$this->assertRefusedNothingSaved($result, 'header wait plus body wait over the request timeout');
+		$this->assertStringContainsString('read timed out', $this->logText());
+		$this->assertLessThan(3.0, $elapsed, 'refusal must come near the 2 s timeout, not after a second full budget');
 	}
 
 	/** Control: a plain local file path is read as before. */
