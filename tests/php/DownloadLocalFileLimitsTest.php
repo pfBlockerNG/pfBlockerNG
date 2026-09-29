@@ -75,12 +75,12 @@ final class DownloadLocalFileLimitsTest extends TestCase
 	 * Answers one request with $response verbatim, then holds the connection open
 	 * for $holdSeconds (hard cap, the process is also reaped in tearDown) before closing.
 	 */
-	private function startRawServer(string $response, int $holdSeconds = 0): int
+	private function startRawServer(string $response, int $holdSeconds = 0, int $dripMicros = 0): int
 	{
 		$script = "{$this->workdir}/raw.php";
 		$this->assertNotFalse(file_put_contents($script, <<<'PHP'
 <?php
-[, $portFile, $responseFile, $hold] = $argv;
+[, $portFile, $responseFile, $hold, $drip] = $argv;
 $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
 if ($server === FALSE) {
 	exit(1);
@@ -91,7 +91,20 @@ rename("{$portFile}.tmp", $portFile);
 while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 	while (($line = fgets($conn)) !== FALSE && rtrim($line, "\r\n") !== '') {
 	}
-	fwrite($conn, (string) file_get_contents($responseFile));
+	$resp = (string) file_get_contents($responseFile);
+	if ((int) $drip > 0) {
+		// Headers at once, then the body one byte per $drip microseconds.
+		$cut = strpos($resp, "\r\n\r\n") + 4;
+		fwrite($conn, substr($resp, 0, $cut));
+		foreach (str_split(substr($resp, $cut)) as $byte) {
+			usleep((int) $drip);
+			if (@fwrite($conn, $byte) === FALSE) {
+				break;
+			}
+		}
+	} else {
+		fwrite($conn, $resp);
+	}
 	sleep((int) $hold);
 	fclose($conn);
 }
@@ -99,7 +112,7 @@ PHP));
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
 		$portFile = "{$this->workdir}/port";
 		$proc = proc_open(
-			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds],
+			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds, (string) $dripMicros],
 			[1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
 			$pipes
 		);
@@ -113,10 +126,10 @@ PHP));
 		return $port;
 	}
 
-	private function serve(string $status, string $body, bool $withLength = TRUE, int $declared = -1, int $holdSeconds = 0): int
+	private function serve(string $status, string $body, bool $withLength = TRUE, int $declared = -1, int $holdSeconds = 0, int $dripMicros = 0): int
 	{
 		$len = $withLength ? 'Content-Length: ' . ($declared >= 0 ? $declared : strlen($body)) . "\r\n" : '';
-		return $this->startRawServer("HTTP/1.1 {$status}\r\n{$len}Connection: close\r\n\r\n{$body}", $holdSeconds);
+		return $this->startRawServer("HTTP/1.1 {$status}\r\n{$len}Connection: close\r\n\r\n{$body}", $holdSeconds, $dripMicros);
 	}
 
 	private function fetch(string $listUrl, int $timeout = 30): PfbDownloadResult
@@ -225,7 +238,46 @@ PHP));
 		$port   = $this->serve('200 OK', 'ab', TRUE, 10, 5);
 		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 1);
 		$this->assertRefusedNothingSaved($result, 'stalled read');
-		$this->assertStringContainsString('skipped', $this->logText());
+		$this->assertStringContainsString('read timed out', $this->logText());
+	}
+
+	/**
+	 * A body that keeps dripping under the per-read timeout but overruns the whole
+	 * request timeout is refused, like cURL's CURLOPT_TIMEOUT. 20 bytes at 0.3 s
+	 * each (about 6 s, hard cap) against a 1 s timeout; the length is complete and
+	 * under the ceiling, so only the whole-transfer deadline can refuse it.
+	 */
+	public function testSlowDripBodyIsRefusedAtTheWholeTransferDeadline(): void
+	{
+		$port   = $this->serve('200 OK', str_repeat('A', 20), TRUE, -1, 0, 300000);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 1);
+		$this->assertRefusedNothingSaved($result, 'slow drip past the request timeout');
+		$this->assertStringContainsString('read timed out', $this->logText());
+	}
+
+	/** A declared length over the ceiling is refused on the header alone, even though the body sent is under it. */
+	public function testOverCeilingDeclaredLengthWithSmallBodyIsRefused(): void
+	{
+		$port   = $this->serve('200 OK', 'ab', TRUE, self::CEILING + 1);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertRefusedNothingSaved($result, 'declared length over the ceiling');
+		$this->assertStringContainsString('stage=size reason=local_too_large', $this->logText());
+	}
+
+	/** @return array<string, array{string}> */
+	public static function earlyFailureProvider(): array
+	{
+		return ['404' => ['404 Not Found'], '201' => ['201 Created']];
+	}
+
+	/** A refusal before any byte is read still leaves no stale .raw from an earlier run. */
+	#[DataProvider('earlyFailureProvider')]
+	public function testEarlyRefusalRemovesStaleRaw(string $status): void
+	{
+		$this->assertNotFalse(file_put_contents("{$this->workdir}/feed.txt.raw", 'STALE'));
+		$port   = $this->serve($status, 'NO');
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
+		$this->assertRefusedNothingSaved($result, "early refusal {$status}");
 	}
 
 	/** @return array<string, array{string}> */
