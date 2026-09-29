@@ -92,12 +92,25 @@ final class IpParseLineNumericHostTest extends TestCase
 			'text token x.1' => ['x.1', [], FALSE],
 			'ipv6 literal host' => ['http://[::1]:80/x', [], FALSE],
 			'ipv6 literal hex host' => ['http://[0x7f000001]/', [], FALSE],
+			// Text with a numeric last label only (round 5): uncounted, as on base.
+			'text example.com.1'         => ['example.com.1', [], FALSE],
+			'text path x.1'              => ['/var/lib/x.1', [], FALSE],
+			'text key=value'             => ['version=0.9.70', [], FALSE],
+			'text quote-prefixed'        => ["'3.3.2", [], FALSE],
+			// Pins for the URL-host parser.
+			'userinfo with two @'        => ['http://u:p@ss@0x7f000001/', ['127.0.0.1'], FALSE],
+			'canonical host + userinfo'  => ['http://1.2.3.4@5.6.7.8/', ['1.2.3.4', '5.6.7.8'], FALSE],
+			'trailing NUL after path'    => ["http://0x7f000001/\x00", ['127.0.0.1'], FALSE],
+			'query ends the authority'   => ['http://0x7f000001?to=1.2.3.4', ['127.0.0.1', '1.2.3.4'], FALSE],
+			'fragment ends the authority' => ['http://0x7f000001#1.2.3.4', ['127.0.0.1', '1.2.3.4'], FALSE],
+			'fragment after port'        => ['http://0x7f000001:80#f', ['127.0.0.1'], FALSE],
+			'scheme starts with a digit' => ['1http://0x7f000001/x', [], FALSE],
 			'bare hex + quad (ceiling)'  => ['0xC0A80164 1.2.3.4', ['1.2.3.4'], FALSE],
 			// An interior NUL byte is a parse failure, never an exception.
 			'bare quad with NUL'         => ["1.2\x00.3.4", [], TRUE],
-			'NUL with colon and percent'   => ["ab\x00\x01:%\x02z", [], TRUE],
-			'NUL with v6-shaped text'    => ["fe80::\x00a%eth0", [], TRUE],
-			'bare hex with NUL'          => ["0xC0A8\x00164", [], TRUE],
+			'NUL with colon and percent'   => ["ab\x00\x01:%\x02z", [], FALSE],
+			'NUL with v6-shaped text'    => ["fe80::\x00a%eth0", [], FALSE],
+			'bare hex with NUL'          => ["0xC0A8\x00164", [], FALSE],
 			// Bare zero-padded quads keep the decimal reading.
 			'padded 08'                  => ['08.08.08.08', ['8.8.8.8'], FALSE],
 			'padded 010 octet'           => ['192.168.010.100', ['192.168.10.100'], FALSE],
@@ -138,6 +151,41 @@ final class IpParseLineNumericHostTest extends TestCase
 		$this->assertSame(['127.0.0.1'], $control['entries'], 'control: with suppression off the mapped loopback is unwrapped');
 		$result = pfb_ip_parse_line('::ffff:7f00:1', self::config('_v4', 'auto', custom: FALSE, suppression: 'on'));
 		$this->assertSame([], $result['entries'], 'mapped loopback must still be suppressed');
+	}
+
+	/**
+	 * A huge dot-separated URL host or bare token is rejected before it is split into labels.
+	 * ponytail: a bare token in auto mode costs ~49 MB on base already (unrelated to the numeric
+	 * host path), so its memory is not bounded here; only its result is.
+	 */
+	public function testHugeTokenIsRejectedCheaply(): void
+	{
+		$dots = str_repeat('1.', 1_000_000) . '1';
+		foreach (['auto', 'regex'] as $pftype) {
+			foreach (['bare' => $dots, 'url' => "http://{$dots}/x", 'hex url' => "http://0x{$dots}/x"] as $kind => $line) {
+				memory_reset_peak_usage();
+				$before = memory_get_peak_usage();
+				$result = pfb_ip_parse_line($line, self::config('_v4', $pftype));
+				$this->assertSame([], $result['entries'], "{$pftype} {$kind}: huge line yields no entry");
+				if ($kind !== 'bare' || $pftype === 'regex') {
+					$this->assertLessThan(12 * 1024 * 1024, memory_get_peak_usage() - $before, "{$pftype} {$kind}: peak memory while parsing a huge line");
+				}
+			}
+		}
+	}
+
+	/** A binary blob is not a feed of addresses: its NUL-bearing lines are not counted as parse failures. */
+	public function testBinaryFixtureLinesAreNotCounted(): void
+	{
+		$counted = [];
+		foreach (['auto', 'regex'] as $pftype) {
+			foreach (explode("\n", (string) file_get_contents(__DIR__ . '/../fixtures/pkg-signing/pfblockerng-repo.pub.der')) as $no => $line) {
+				if (pfb_ip_parse_line($line, self::config('_v4', $pftype))['parse_fail_delta'] !== 0) {
+					$counted[] = "{$pftype}:" . ($no + 1);
+				}
+			}
+		}
+		$this->assertSame([], $counted);
 	}
 
 	/** @return array<string, array{string, string}> */
@@ -197,6 +245,8 @@ final class IpParseLineNumericHostTest extends TestCase
 		return [
 			'mapped dotted tail' => ['::ffff:192.168.1.100', '', TRUE],
 			'mapped hex tail'    => ['::ffff:c0a8:164', '', TRUE],
+			'mapped with prefix len' => ['::ffff:1.2.3.4/128', '', TRUE],
+			'bare hex on a v6 list' => ['0xC0A80164', '', FALSE],
 			'plain v6'           => ['2001:db8::1', "2001:db8::1\n", FALSE],
 			'compatible v6'      => ['::192.168.1.100', "::192.168.1.100\n", FALSE],
 		];
