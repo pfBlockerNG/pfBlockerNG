@@ -5118,7 +5118,7 @@ def _dnsbl_normalise_whitelist(
     stored configuration by other means (shell edits, imports), and it also handles a
     trailing dot. A wildcard single label (``.lan``, ``.internal``) is kept -- only the
     has-a-dot rule is lifted for it (#3378); a non-wildcard single label is dropped.
-    An entry normalise() rejects is dropped and, when ``tally`` is given, counted under
+    An entry the shape gate (_normalise_verdict) rejects is dropped and, when ``tally`` is given, counted under
     (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied);
     ``source`` holds a hyphen so it can never equal a legal feed name.
     Colliding lines that collapse to one apex widen (broadest wildcard, any important,
@@ -5145,8 +5145,9 @@ def _dnsbl_normalise_whitelist(
         if domain is None and body is not line:
             # `www.com`: the remainder is one label but the whole name is valid; the query-time
             # lookup matches it exactly, as the pre-#3367 www-strip did via the remainder.
+            # `line` starts with "www." here, so it is never a wildcard: no single-label allowance.
             body = line
-            domain, bucket = _normalise_verdict(line, line.startswith("."))
+            domain, bucket = _normalise_verdict(line)
         if domain is None:
             if tally is not None and bucket is not None:
                 _tally_reject(tally, source, "DNSBL", bucket)
