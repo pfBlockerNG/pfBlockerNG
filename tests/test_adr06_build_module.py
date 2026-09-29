@@ -291,6 +291,24 @@ class TestWhitelistNormalisation:
         wl = pfb_unbound._dnsbl_normalise_whitelist([".wildwhite.org"], [], False)
         assert wl == {"wildwhite.org": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
 
+    def test_mixed_case_entry_matches_lowercase_query(self) -> None:
+        # issue #3367: block keys are lower-cased, so the whitelist key must be too.
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["Example.COM"], [], False)
+        assert list(wl) == ["example.com"]
+        assert pfb_unbound.whitelist_lookup_domain("example.com", wl, 2)[0] is True
+
+    def test_mixed_case_wildcard_keeps_wildcard(self) -> None:
+        wl = pfb_unbound._dnsbl_normalise_whitelist([".Example.COM"], [], False)
+        assert wl == {"example.com": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
+
+    def test_www_prefix_mixed_case(self) -> None:
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["WWW.Example.COM"], [], False)
+        assert list(wl) == ["example.com"]
+
+    def test_entry_rejected_by_normalise_is_dropped(self) -> None:
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["bad domain!", "ok.com"], [], False)
+        assert list(wl) == ["ok.com"]
+
     def test_top1m_only_when_enabled(self) -> None:
         disabled = pfb_unbound._dnsbl_normalise_whitelist([], ["popularcdn.com"], False)
         assert "popularcdn.com" not in disabled
