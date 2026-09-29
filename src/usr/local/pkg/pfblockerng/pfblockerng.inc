@@ -13253,6 +13253,9 @@ function validate_ipv4($ipaddr) {
 
 // Validate IPv6 IP addresses
 function validate_ipv6($ipaddr) {
+	if (str_contains($ipaddr, "\0")) {
+		return FALSE;
+	}
 	if (strpos($ipaddr, '/') !== FALSE) {
 		return is_subnetv6($ipaddr);
 	}
