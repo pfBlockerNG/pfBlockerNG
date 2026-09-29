@@ -158,6 +158,33 @@ final class FeedRedirectTargetTest extends TestCase
 		$this->assertSame('203.0.113.41', $pinned);
 	}
 
+	/** @return array<string,array{0:string}> */
+	public static function delimiterMappedHostProvider(): array
+	{
+		return [
+			'fullwidth commercial at' => ["foo\u{FF20}bar.example"],
+			'fullwidth solidus after name' => ["example.com\u{FF0F}x.example"],
+			'fullwidth solidus after address' => ["10.0.0.1\u{FF0F}24"],
+		];
+	}
+
+	#[DataProvider('delimiterMappedHostProvider')]
+	public function testHostMappingToUrlDelimiterIsRefused(string $rawHost): void
+	{
+		// The raw spelling resolves; only the mapped form is the problem.
+		$GLOBALS['pfb_test_resolve_map']["{$rawHost}."] = [
+			['type' => 'A', 'data' => '203.0.113.43'],
+		];
+		[$result, $reason, $pinned] = $this->redirect("http://{$rawHost}/x", 'https://feed.example/list.txt');
+		$this->assertFalse($result);
+		$this->assertSame('feed host is not a valid IDN name', $reason);
+		$this->assertSame('', $pinned);
+
+		$ascii = 'unset';
+		$this->assertFalse(pfb_feed_host_allowed($rawHost, $reason, $pinned, $ascii));
+		$this->assertSame('', $ascii);
+	}
+
 	public function testMappedRedirectKeepsDefaultPortOfScheme(): void
 	{
 		$GLOBALS['pfb_test_resolve_map']['ascii.bücher.example.'] = [

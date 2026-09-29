@@ -14758,6 +14758,10 @@ function pfb_feed_host_literal_reason(string $host, string &$mapped_host = ''): 
 	if (str_contains($ascii_host, '%')) {
 		return 'feed host is percent-encoded';
 	}
+	// The mapping can yield URL delimiters ('@', '/'); accept only a plain DNS host name.
+	if ($ascii_host !== $host && filter_var($ascii_host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) === FALSE) {
+		return 'feed host is not a valid IDN name';
+	}
 	if (($num = pfb_ipv4_numeric_host($ascii_host)) !== NULL && $num['ip'] !== $host) {
 		return 'feed host is a non-canonical IP literal';
 	}
