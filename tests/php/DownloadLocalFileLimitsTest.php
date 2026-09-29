@@ -326,6 +326,15 @@ PHP));
 		$this->assertStringContainsString('HTTP/1.1 404', $this->logText());
 	}
 
+	/** Like cURL's CURLOPT_TIMEOUT, a request timeout of 0 means no limit: a normal body is saved. */
+	public function testZeroTimeoutMeansNoDeadline(): void
+	{
+		$port   = $this->serve('200 OK', "BODY\n");
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 0);
+		$this->assertTrue($result->success, $this->logText());
+		$this->assertSame("BODY\n", file_get_contents("{$this->workdir}/feed.txt.raw"));
+	}
+
 	/** Control: a plain local file path is read as before. */
 	public function testPlainFilePathIsSaved(): void
 	{
