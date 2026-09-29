@@ -47,8 +47,9 @@ retired shell/PHP preprocessing semantics inventoried in Phase 1
     blacklist (whole-TLD zone) and TLD exclusion
     (force exact data);
   * user-whitelist normalisation (as the live build() does it, #3367: case-insensitive
-    www-strip, leading-dot -> wildcard, then normalise() lower-case + shape gate; the
-    PHP ``pfb_unbound_python_whitelist()`` does only the first two) feeding the query-time ``whiteDB``; and
+    www-strip, leading-dot -> wildcard, then the oracle's own ``_validate_domain``
+    lower-case + shape gate, keeping a wildcard single label, #3378; the PHP
+    ``pfb_unbound_python_whitelist()`` does only the first two) feeding the query-time ``whiteDB``; and
   * TOP1M -> ``whiteDB`` only when enabled.
 
 The reference preprocessor then loads the production matcher's runtime structures
