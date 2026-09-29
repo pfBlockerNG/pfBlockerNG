@@ -110,8 +110,16 @@ final class IpParseLineNumericHostTest extends TestCase
 			'backslash ends the authority' => ['http://0x7f000001\\x', ['127.0.0.1'], FALSE],
 			'backslash after octal host' => ['http://010.010.010.010\\x', ['8.8.8.8'], FALSE],
 			'backslash then quad'        => ['http://0x7f000001\\1.2.3.4', ['127.0.0.1', '1.2.3.4'], FALSE],
-			'NUL ends the authority'     => ["http://0x7f000001\x00/x", ['127.0.0.1'], FALSE],
-			'NUL then quad'              => ["http://0x7f000001\x001.2.3.4", ['127.0.0.1', '1.2.3.4'], FALSE],
+			// WHATWG: U+0000 is a forbidden host code point, so a NUL in the authority makes the URL invalid
+			// (a client reaches nothing): counted failure, no entry from the host.
+			'NUL after a hex host'       => ["http://0x7f000001\x00/x", [], TRUE],
+			'NUL between host and quad'  => ["http://0x7f000001\x001.2.3.4", [], TRUE],
+			'NUL inside an octet pair'   => ["http://1.2\x003.4.5.6", [], TRUE],
+			'NUL inside a short host'    => ["http://1.2.3\x004/x", [], TRUE],
+			// WHATWG treats a backslash as '/' for http(s): the host ends there and is decoded
+			// ('1.2' -> 1.0.0.2, '192.168.1' -> 192.168.0.1). Pins current behaviour.
+			'backslash after short host' => ['http://1.2\\.3.4/x', ['1.0.0.2'], FALSE],
+			'backslash after 3-part host' => ['http://192.168.1\\2', ['192.168.0.1'], FALSE],
 			'canonical host range stays expanded' => ['http://1.2.3.4-1.2.3.10', ['1.2.3.4/30', '1.2.3.8/31', '1.2.3.10'], FALSE],
 			'fragment after port'        => ['http://0x7f000001:80#f', ['127.0.0.1'], FALSE],
 			'scheme starts with a digit' => ['1http://0x7f000001/x', [], FALSE],
