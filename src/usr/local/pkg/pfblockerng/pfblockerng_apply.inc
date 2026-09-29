@@ -375,14 +375,15 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 			// the regex below then reads only the rest of the line, never the host or userinfo.
 			// ponytail: a URL mid-line (regex/HTML feeds) is not decoded.
 			$pfb_rest	= substr($pfb_whole, strlen($pfb_scheme[0]));
-			$pfb_authority	= substr($pfb_rest, 0, strcspn($pfb_rest, "/\\?# \t\n\r\v\f\0"));
+			$pfb_authority	= substr($pfb_rest, 0, strcspn($pfb_rest, "/\\?# \t\n\r\v\f"));
 			$pfb_at		= strrpos($pfb_authority, '@');
 			$pfb_host	= preg_replace('/:[0-9]*$/', '', $pfb_at === FALSE ? $pfb_authority : substr($pfb_authority, $pfb_at + 1));
 			// A host longer than a DNS name (253) is no address; skip the label split.
 			$pfb_numeric	= strlen($pfb_host) <= 253 && !str_contains($pfb_host, '-') ? pfb_ipv4_numeric_host($pfb_host) : NULL;
-			// 'host<NUL>.3.4': the NUL sits inside the host, not after it; no cut host is decoded.
-			if ($pfb_numeric !== NULL && $pfb_numeric['ip'] !== $pfb_host && str_starts_with(substr($pfb_rest, strlen($pfb_authority)), "\0") &&
-			    str_starts_with(ltrim(substr($pfb_rest, strlen($pfb_authority)), "\0"), '.')) {
+			// WHATWG: U+0000 is a forbidden host code point, so a NUL in the authority of an otherwise
+			// numeric host makes the URL invalid: a detailed failure, like any invalid numeric host.
+			if ($pfb_numeric === NULL && str_contains($pfb_host, "\0") && !str_contains($pfb_host, "-") &&
+			    pfb_ipv4_numeric_host(str_replace("\0", '', $pfb_host)) !== NULL) {
 				$pfb_numeric = array('ip' => NULL);
 			}
 			if ($pfb_numeric !== NULL && $pfb_numeric['ip'] !== $pfb_host) {
