@@ -15424,26 +15424,65 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 
 		// Download localfile format
 		if ($localfile) {
+			// Issues #3362, #3368: the local fetch obeys the same limits as the cURL path. One
+			// bounded read streams to {file}.raw (never the whole body in memory), the request
+			// $timeout bounds a stalled read, a body shorter than its Content-Length is a
+			// failed download, and only 200/221/226 succeed. Any refusal removes {file}.raw.
 			// A local feed does not redirect: a 3xx answer is refused on its status, never followed.
-			$file_data = @file_get_contents("{$list_download}", FALSE, stream_context_create(array('http' => array('follow_location' => 0))));
-			$status_line = ($file_data !== FALSE) ? ($http_response_header[0] ?? '') : '';
-			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+2#', $status_line)) {
+			// $pfb['local_max_bytes'] is the test seam, mirroring $pfb['rsync_max_bytes'].
+			$local_ceiling = isset($GLOBALS['pfb']['local_max_bytes']) ? (int) $GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
+			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0, 'timeout' => $timeout))));
+			$status_line = ($local_in !== FALSE) ? ($http_response_header[0] ?? '') : '';
+			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+(200|221|226)(\s|$)#', $status_line)) {
 				// Control bytes -> space, as pfb_validate_log_line() does: the status line is received text.
 				$status_line = preg_replace('/[\x00-\x1F\x7F]/', ' ', $status_line) ?? '';
 				$log = "\n[ {$header} ] local feed answered with {$status_line} \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
+				fclose($local_in);
 				return PfbDownloadResult::failure();
 			}
-			if ($file_data === FALSE) {
+			if ($local_in === FALSE) {
 				$error = error_get_last();
 				$error['message'] = preg_replace('/[\x00-\x1F\x7F]/', ' ', (string) ($error['message'] ?? '')) ?? '';
 				$log = "\n[ {$header} ] {$error['message']}\n";
 				pfb_logger("{$log}", "{$logtype}");
 				return PfbDownloadResult::failure();
+			}
+			$local_declared = -1;
+			// Indexed reads (not the bare variable): a plain file path sets no response headers.
+			for ($local_i = 1; ($local_hdr = $http_response_header[$local_i] ?? '') !== ''; $local_i++) {
+				if (preg_match('/^Content-Length:\s*(\d+)\s*$/i', $local_hdr, $local_m)) {
+					$local_declared = (int) $local_m[1];
+				}
+			}
+			$local_copied = 0;
+			$local_out = FALSE;
+			if ($local_declared <= $local_ceiling) {
+				$local_out = @fopen("{$file_download}", 'w');
+			}
+			if ($local_out !== FALSE) {
+				// ponytail: per-read timeout, not a whole-transfer deadline; add one if a slow drip matters.
+				stream_set_timeout($local_in, $timeout);
+				// One byte past the ceiling is enough to tell "over" from "at".
+				$local_copied = (int) stream_copy_to_stream($local_in, $local_out, $local_ceiling + 1);
+				fclose($local_out);
+			}
+			$local_timed_out = !empty(stream_get_meta_data($local_in)['timed_out']);
+			fclose($local_in);
+			if ($local_declared > $local_ceiling || $local_copied > $local_ceiling) {
+				pfb_validate_log($header, 'size', 'local_too_large', pfb_redact_url($list_download));
+			} elseif ($local_out === FALSE) {
+				pfb_logger("\n[ {$header} ] local feed could not be saved \xe2\x80\x94 skipped\n", "{$logtype}");
+			} elseif ($local_timed_out) {
+				pfb_logger("\n[ {$header} ] local feed read timed out \xe2\x80\x94 skipped\n", "{$logtype}");
+			} elseif ($local_declared >= 0 && $local_copied < $local_declared) {
+				pfb_logger("\n[ {$header} ] local feed body incomplete ({$local_copied} of {$local_declared} bytes) \xe2\x80\x94 skipped\n", "{$logtype}");
 			} else {
-				// Save original downloaded file
-				@file_put_contents("{$file_download}", $file_data, LOCK_EX);
 				$http_status = '200';
+			}
+			if ($http_status !== '200') {
+				unlink_if_exists("{$file_download}");
+				return PfbDownloadResult::failure();
 			}
 		}
 
