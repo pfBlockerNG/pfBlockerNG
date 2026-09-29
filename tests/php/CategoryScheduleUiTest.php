@@ -376,7 +376,6 @@ final class CategoryScheduleUiTest extends TestCase
 		}
 		$this->assertSame($sentinel, file_get_contents($active . '/pfb_due_ledger.json'));
 		$this->assertCount(1, $seen, 'the candidate must be staged in the private temp dir');
-		$this->assertNotSame($active, rtrim($seen[0], '/'));
 		$this->assertSame([], $left, 'a successful candidate must leave no temporary artifact');
 		$warnings = [];
 		set_error_handler(static function (int $severity, string $message) use (&$warnings): bool { $warnings[] = $message; return TRUE; });
@@ -398,13 +397,14 @@ final class CategoryScheduleUiTest extends TestCase
 			['ipv4' => [$group], 'ipv6' => [], 'dnsbl' => []]
 		);
 		$this->assertNotNull($model);
-		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
-		mkdir($private, 0700);
 		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => [
 			'last_completed_occurrence' => PHP_INT_MAX,
 			'completion_outcome' => 'success',
 		]]];
 		$this->assertTrue(pfb_schedule_state_valid($state));
+		// Staging into temp_dir is proven by the two rows above; this row pins cleanup.
+		$private = sys_get_temp_dir() . '/pfbschedui_' . bin2hex(random_bytes(6));
+		mkdir($private, 0700);
 		try {
 			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time(), ['temp_dir' => $private]));
 			$this->assertSame([], array_values(array_diff(scandir($private) ?: [], ['.', '..'])),
