@@ -175,6 +175,7 @@ final class DnsblNumericHostTest extends TestCase
 			'invalid octal digit' => ['08.08.08.08'],
 			'non-number part'     => ['a.0x1'],
 			'five parts'          => ['1.2.3.4.5'],
+			'NUL in a label'      => ["1.2\x00.3.4"],
 		];
 	}
 

@@ -59,6 +59,7 @@ final class IpParseLineNumericHostTest extends TestCase
 			'space after octal host'     => ['http://010.010.010.010 1.2.3.4', ['8.8.8.8', '1.2.3.4'], FALSE],
 			'path copy stays bare quad'  => ['http://010.010.010.010/goto/010.010.010.010', ['8.8.8.8', '10.10.10.10'], FALSE],
 			'invalid host + query quad'  => ['http://08.08.08.08/?to=9.9.9.9', ['9.9.9.9'], TRUE],
+			'url host with NUL label'   => ["http://1.2\x00.3.4/x", [], TRUE],
 			'invalid host alone'         => ['http://08.08.08.08/x', [], TRUE],
 			// Unchanged: canonical host keeps the regex path; a mid-line URL is not decoded.
 			'canonical host + query quad' => ['http://1.2.3.4/?to=5.6.7.8', ['1.2.3.4', '5.6.7.8'], FALSE],
@@ -74,6 +75,9 @@ final class IpParseLineNumericHostTest extends TestCase
 			'bare dotted hex'            => ['0xc0.0xa8.0x1.0x64', [], TRUE],
 			'bare dword'                 => ['3232235876', [], TRUE],
 			'bare short form'            => ['192.168.356', [], TRUE],
+			'bare hex with prefix len'  => ['0xC0A80164/32', [], TRUE],
+			'text ending in a number'    => ['version 1.2.3', [], FALSE],
+			'tabbed text ending in number' => ["version\t1.2.3", [], FALSE],
 			'bare hex + quad (ceiling)'  => ['0xC0A80164 1.2.3.4', ['1.2.3.4'], FALSE],
 			// An interior NUL byte is a parse failure, never an exception.
 			'bare quad with NUL'         => ["1.2\x00.3.4", [], TRUE],
