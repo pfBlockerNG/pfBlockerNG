@@ -328,6 +328,15 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 		return $result;
 	}
 
+	// A NUL inside a single-token v6 line cut the address short (the match would keep 'fe80::' of
+	// 'fe80::<NUL>a%eth0'): a parse failure, never a collected prefix. Range lines ('-', tab) keep the
+	// per-endpoint fall-through that IpParseLineTest pins.
+	if ($config['vtype'] == '_v6' && str_contains($line, "\0") && !preg_match('/[-\t]/', $line)) {
+		$result['parse_fail_delta']++;
+		$result['detailed_parse_fail'] = TRUE;
+		return $result;
+	}
+
 	$vtype       = $config['vtype'];
 	$pftype      = $config['pftype'];
 	$custom      = $config['custom'];
