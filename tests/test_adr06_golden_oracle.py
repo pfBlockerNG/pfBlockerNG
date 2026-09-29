@@ -683,11 +683,27 @@ class TestReferencePipelineSanity:
     def test_whitelist_normalisation_case_and_invalid(self) -> None:
         pipeline = ReferencePipeline(
             {"feeds": []},
-            {"user_whitelist": ["WWW.Example.COM", ".Wild.ORG", "example.net.", "www.com", "bad domain!", ".com"]},
+            {
+                "user_whitelist": [
+                    "WWW.Example.COM",
+                    ".Wild.ORG",
+                    "example.net.",
+                    "www.com",
+                    "bad domain!",
+                    ".com",
+                    ". example.com",
+                ]
+            },
             top1m_enabled=False,
         )
         pipeline._build_whitelist()
-        assert pipeline.white_db == {"example.com": False, "wild.org": True, "example.net": False, "www.com": False}
+        assert pipeline.white_db == {
+            "example.com": False,
+            "wild.org": True,
+            "example.net": False,
+            "www.com": False,
+            "com": True,
+        }
 
     def test_top1m_loads_whitelist_when_enabled(self) -> None:
         pipeline, _ = _make_pipeline(top1m_enabled=True)

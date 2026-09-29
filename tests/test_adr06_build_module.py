@@ -316,8 +316,69 @@ class TestWhitelistNormalisation:
         assert list(wl) == ["example.com"]
         assert pfb_unbound.whitelist_lookup_domain("example.com", wl, 2)[0] is True
 
-    def test_single_label_wildcard_is_dropped(self) -> None:
-        assert pfb_unbound._dnsbl_normalise_whitelist([".com"], [], False) == {}
+    def test_single_label_wildcard_is_kept_and_matches_children(self) -> None:
+        # #3378 (replaces test_single_label_wildcard_is_dropped, deliberately): a wildcard
+        # single label such as `.lan` / `.internal` exempts a whole TLD via
+        # whitelist_lookup_domain (shipped python_tld_seg = 1), as it did before #3370.
+        wl = pfb_unbound._dnsbl_normalise_whitelist([".lan", ".Internal"], [], False)
+        entry = {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}
+        assert wl == {"lan": entry, "internal": entry}
+        assert pfb_unbound.whitelist_lookup_domain("printer.lan", wl, 1)[0] is True
+        assert pfb_unbound.whitelist_lookup_domain("a.b.internal", wl, 1)[0] is True
+        assert pfb_unbound.whitelist_lookup_domain("printer.lan", wl, 2)[0] is False
+
+    def test_single_label_without_wildcard_dot_is_dropped(self) -> None:
+        assert pfb_unbound._dnsbl_normalise_whitelist(["lan", "com."], [], False) == {}
+
+    def test_single_label_wildcard_still_validates_the_label(self) -> None:
+        bad = [".-bad", ".bad-", "." + "a" * 64, ". example.com", ". lan", ".bad!", ".123", ".", ".."]
+        for entry in bad:
+            assert pfb_unbound._dnsbl_normalise_whitelist([entry], [], False) == {}, entry
+        assert list(pfb_unbound._dnsbl_normalise_whitelist(["." + "a" * 63], [], False)) == ["a" * 63]
+
+    def test_space_after_leading_dot_is_not_a_wildcard(self) -> None:
+        assert pfb_unbound._dnsbl_normalise_whitelist([". example.com"], [], False) == {}
+
+    def test_wildcard_flag_follows_the_www_stripped_body(self) -> None:
+        # `www..example.com` strips to `.example.com`: a wildcard although the raw line
+        # does not start with a dot.
+        wl = pfb_unbound._dnsbl_normalise_whitelist(["www..example.com"], [], False)
+        assert wl == {"example.com": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
+
+    def test_single_label_wildcard_end_to_end_with_tld_allow(self) -> None:
+        result = pfb_unbound.build({"feeds": []}, {"user_whitelist": [".lan"]}, line_reader=lambda raw: [])
+        cfg = {
+            "python_blocking": True,
+            "dataDB": False,
+            "zoneDB": False,
+            "tld_allow": True,
+            "tld_allow_list": ["com"],
+            "dnsbl_ipv4": "10.10.10.1",
+            "dnsbl_ipv6": "::1",
+            "python_idn": False,
+            "regexDB": False,
+            "whiteDB": True,
+            "allowRegexDB": False,
+            "important_rules": False,
+            "python_tld_seg": 1,
+            "hstsDB": False,
+            "hsts_tlds": ("app", "dev"),
+        }
+        containers = {
+            "dataDB": {},
+            "zoneDB": {},
+            "whiteDB": result.white_db,
+            "hstsDB": {},
+            "regexDB": {},
+            "allowRegexDB": {},
+            "feedGroupIndexDB": {},
+        }
+        allowed = pfb_unbound.evaluate_domain("printer.lan", "printer.lan", "lan", False, cfg, containers)
+        assert allowed.feed == "TLD_Allow"
+        assert allowed.in_whitelist is True  # whitelisted: the TLD_Allow block is overridden
+        blocked = pfb_unbound.evaluate_domain("printer.xyz", "printer.xyz", "xyz", False, cfg, containers)
+        assert blocked.feed == "TLD_Allow"
+        assert blocked.in_whitelist is False
 
     def test_www_single_label_remainder_keeps_matching(self) -> None:
         # www.com / www.org / www.example: the remainder is one label, which normalise()
@@ -328,7 +389,7 @@ class TestWhitelistNormalisation:
             assert list(wl) == [name]
             assert pfb_unbound.whitelist_lookup_domain(name, wl, 2)[0] is True
 
-    def test_www_prefix_of_invalid_name_still_dropped(self) -> None:
+    def test_invalid_names_behind_www_prefix_are_rejected(self) -> None:
         assert pfb_unbound._dnsbl_normalise_whitelist(["www.-bad.com", "www.bad domain"], [], False) == {}
 
     def test_top1m_only_when_enabled(self) -> None:
@@ -632,6 +693,15 @@ class TestUserListRejectTally:
         }
         assert sorted(result.white_db) == ["ok.com", "ok2.com"]
         assert logged == []
+
+    def test_over_length_user_lines_tally_wire_cap_not_shape(self) -> None:
+        long_label = "a" * 64 + ".com"
+        config = {"user_whitelist": [long_label, "." + "a" * 64], "user_unlock": [long_label]}
+        result = pfb_unbound.build({"feeds": []}, config, line_reader=lambda raw: [])
+        assert result.rejects == {
+            ("user-whitelist", "DNSBL"): {"shape": 0, "wire_cap": 2},
+            ("user-unlock", "DNSBL"): {"shape": 0, "wire_cap": 1},
+        }
 
     def test_real_feed_named_like_a_user_list_keeps_its_own_row(self) -> None:
         # Feed names are [A-Za-z0-9_]+, so the user-list tally keys must not be a legal feed name.
