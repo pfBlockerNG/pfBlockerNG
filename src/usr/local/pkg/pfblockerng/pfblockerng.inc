@@ -15450,24 +15450,33 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			$local_declared = -1;
+			$local_conflict = FALSE;
 			// Indexed reads (not the bare variable): a plain file path sets no response headers.
 			for ($local_i = 1; ($local_hdr = $http_response_header[$local_i] ?? '') !== ''; $local_i++) {
 				if (preg_match('/^Content-Length:\s*(\d+)\s*$/i', $local_hdr, $local_m)) {
+					// cURL refuses conflicting lengths; the wrapper honours only the first.
+					$local_conflict = $local_conflict || ($local_declared >= 0 && $local_declared !== (int) $local_m[1]);
 					$local_declared = (int) $local_m[1];
 				}
 			}
 			$local_copied = 0;
 			$local_timed_out = FALSE;
+			$local_write_failed = FALSE;
 			$local_out = FALSE;
-			if ($local_declared <= $local_ceiling) {
-				$local_out = @fopen("{$file_download}", 'w');
+			if (!$local_conflict && $local_declared <= $local_ceiling) {
+				// 'c' + flock + truncate keeps the LOCK_EX the old file_put_contents() took.
+				$local_out = @fopen("{$file_download}", 'c');
+				if ($local_out !== FALSE && (!flock($local_out, LOCK_EX) || !ftruncate($local_out, 0))) {
+					fclose($local_out);
+					$local_out = FALSE;
+				}
 			}
 			if ($local_out !== FALSE) {
 				// Whole-transfer deadline, as cURL's CURLOPT_TIMEOUT: each read waits at most
 				// the time left, so a body dripping under a per-read timeout still fails.
 				// $timeout <= 0 means no limit, as with CURLOPT_TIMEOUT.
 				$local_deadline = hrtime(TRUE) + $timeout * 1000000000;
-				while (!feof($local_in) && $local_copied <= $local_ceiling) {
+				while (!feof($local_in) && $local_copied <= $local_ceiling && ($local_declared < 0 || $local_copied < $local_declared)) {
 					if ($timeout > 0) {
 						$local_left = ($local_deadline - hrtime(TRUE)) / 1e9;
 						if ($local_left <= 0) {
@@ -15477,10 +15486,14 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 						stream_set_timeout($local_in, (int) $local_left, (int) (fmod($local_left, 1) * 1000000));
 					}
 					// One byte past the ceiling is enough to tell "over" from "at".
-					$local_chunk = fread($local_in, min(8192, $local_ceiling + 1 - $local_copied));
+					// Read no further than the declared length (a keep-alive peer sends no EOF) or ceiling+1.
+					$local_chunk = fread($local_in, min(8192, ($local_declared >= 0 ? $local_declared : $local_ceiling + 1) - $local_copied));
 					if ($local_chunk !== FALSE && $local_chunk !== '') {
 						$local_copied += strlen($local_chunk);
-						fwrite($local_out, $local_chunk);
+						if (fwrite($local_out, $local_chunk) !== strlen($local_chunk)) {
+							$local_write_failed = TRUE;
+							break;
+						}
 					}
 					// A read that hit its (remaining-time) timeout returns FALSE with timed_out set.
 					if (!empty(stream_get_meta_data($local_in)['timed_out'])) {
@@ -15496,7 +15509,9 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			fclose($local_in);
 			if ($local_declared > $local_ceiling || $local_copied > $local_ceiling) {
 				pfb_validate_log($header, 'size', 'local_too_large', pfb_redact_url($list_download));
-			} elseif ($local_out === FALSE) {
+			} elseif ($local_conflict) {
+				pfb_logger("\n[ {$header} ] local feed sent conflicting Content-Length headers \xe2\x80\x94 skipped\n", "{$logtype}");
+			} elseif ($local_out === FALSE || $local_write_failed) {
 				pfb_logger("\n[ {$header} ] local feed could not be saved \xe2\x80\x94 skipped\n", "{$logtype}");
 			} elseif ($local_timed_out) {
 				pfb_logger("\n[ {$header} ] local feed read timed out \xe2\x80\x94 skipped\n", "{$logtype}");
