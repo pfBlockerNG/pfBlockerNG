@@ -328,7 +328,7 @@ class TestWhitelistNormalisation:
         assert pfb_unbound.whitelist_lookup_domain("printer.lan", wl, 2)[0] is False
 
     def test_single_label_without_wildcard_dot_is_dropped(self) -> None:
-        assert pfb_unbound._dnsbl_normalise_whitelist(["lan", "com."], [], False) == {}
+        assert pfb_unbound._dnsbl_normalise_whitelist(["lan", "com.", "www.", "www.."], [], False) == {}
 
     def test_single_label_wildcard_still_validates_the_label(self) -> None:
         bad = [".-bad", ".bad-", "." + "a" * 64, ". example.com", ". lan", ".bad!", ".123", ".", ".."]
