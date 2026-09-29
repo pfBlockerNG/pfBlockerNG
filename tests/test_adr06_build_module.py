@@ -627,11 +627,23 @@ class TestUserListRejectTally:
         }
         result = pfb_unbound.build({"feeds": []}, config, line_reader=lambda raw: [])
         assert result.rejects == {
-            ("user_whitelist", "DNSBL"): {"shape": 1, "wire_cap": 0},
-            ("user_unlock", "DNSBL"): {"shape": 2, "wire_cap": 0},
+            ("user-whitelist", "DNSBL"): {"shape": 1, "wire_cap": 0},
+            ("user-unlock", "DNSBL"): {"shape": 2, "wire_cap": 0},
         }
         assert sorted(result.white_db) == ["ok.com", "ok2.com"]
         assert logged == []
+
+    def test_real_feed_named_like_a_user_list_keeps_its_own_row(self) -> None:
+        # Feed names are [A-Za-z0-9_]+, so the user-list tally keys must not be a legal feed name.
+        feed_row = {"feed": "user_whitelist", "group": "DNSBL", "log_flag": "1", "raw": "r"}
+        result = pfb_unbound.build(
+            {"feeds": [feed_row]},
+            {"user_whitelist": ["bad domain!"], "user_unlock": ["also-bad"]},
+            line_reader=lambda raw: ["good.example.com", "no-dot-host"],
+        )
+        assert result.rejects[("user_whitelist", "DNSBL")] == {"shape": 1, "wire_cap": 0}
+        assert result.rejects[("user-whitelist", "DNSBL")] == {"shape": 1, "wire_cap": 0}
+        assert result.rejects[("user-unlock", "DNSBL")] == {"shape": 1, "wire_cap": 0}
 
 
 class TestSkipClassesTallyZero:
