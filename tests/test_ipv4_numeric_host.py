@@ -21,3 +21,8 @@ _TABLE = json.loads((Path(__file__).parent / "fixtures" / "ipv4_numeric_host.jso
 def test_shape_matches_shared_table(host: str, expected: str | bool | None) -> None:
     want = expected is not None
     assert P._dnsbl_is_numeric_host(host) is want, f"host {host!r}: expected {want}, PHP result {expected!r}"
+
+
+@pytest.mark.parametrize("host", ["1.2.3.\u00b2", "1.2.3.\u0663", "\uff11.\uff12.\uff13.\uff14"])
+def test_unicode_digits_are_not_numeric_shaped(host: str) -> None:
+    assert P._dnsbl_is_numeric_host(host) is False, host

@@ -227,6 +227,8 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testSuppressionStillAppliesToADecodedAddress(): void
 	{
+		$control = $this->runRegion(self::$plainRegion, '0xC0A80164', custom: FALSE, supp: PfbToggle::Off);
+		$this->assertContains('192.168.1.100', $control['ip4'], 'control: without suppression the decode collects the address');
 		$out = $this->runRegion(self::$plainRegion, '0xC0A80164', custom: FALSE, supp: PfbToggle::On);
 		$this->assertSame([[], []], [$out['rows'], $out['ip4']], 'a suppressed RFC1918 decode must not be collected or become a domain');
 	}
