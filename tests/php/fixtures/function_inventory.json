@@ -4671,6 +4671,13 @@
                 "variadic": false,
                 "type": null,
                 "default": null
+            },
+            {
+                "name": "ascii_host",
+                "byRef": true,
+                "variadic": false,
+                "type": null,
+                "default": "''"
             }
         ]
     },
@@ -4684,6 +4691,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "mapped_host",
+                "byRef": true,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
             }
         ]
     },

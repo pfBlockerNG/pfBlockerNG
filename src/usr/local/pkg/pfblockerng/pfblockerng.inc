@@ -14739,9 +14739,12 @@ function pfb_ip_is_self($ip) {
 // the '%' bytes, so this helper would otherwise vet (and the guard resolve/pin) a different string
 // than the one curl connects to. parse_url() keeps an IPv6 host bracketed ('[2001:db8::1]'), which is_ipaddr() does not
 // accept; it is refused, not looked up.
-// Returns the reason, or '' when the host may be vetted as a name or a canonical address.
-function pfb_feed_host_literal_reason(string $host): string {
+// Returns the reason, or '' when the host may be vetted as a name or a canonical address. On '' the
+// mapped (ASCII) host -- the key libcurl looks addresses up under -- is stored in $mapped_host; on any
+// refusal $mapped_host is ''.
+function pfb_feed_host_literal_reason(string $host, string &$mapped_host = ''): string {
 
+	$mapped_host = '';
 	if (str_starts_with($host, '[')) {
 		return 'feed host is a bracketed IPv6 literal';
 	}
@@ -14758,21 +14761,23 @@ function pfb_feed_host_literal_reason(string $host): string {
 	if (($num = pfb_ipv4_numeric_host($ascii_host)) !== NULL && $num['ip'] !== $host) {
 		return 'feed host is a non-canonical IP literal';
 	}
+	$mapped_host = $ascii_host;
 	return '';
 }
 
 
-function pfb_feed_host_allowed($host, &$reason, &$pinned) {
+function pfb_feed_host_allowed($host, &$reason, &$pinned, &$ascii_host = '') {
 
 	$reason = '';
 	$pinned = '';
+	$ascii_host = '';
 
 	if (!is_string($host) || $host === '') {
 		$reason = 'feed host is empty';
 		return FALSE;
 	}
 
-	$reason = pfb_feed_host_literal_reason($host);
+	$reason = pfb_feed_host_literal_reason($host, $ascii_host);
 	if ($reason !== '') {
 		return FALSE;
 	}
@@ -14911,9 +14916,19 @@ function pfb_feed_redirect_target($location, $current_url, &$reason, &$pinned) {
 		return FALSE;
 	}
 
-	if (!pfb_feed_host_allowed($host, $reason, $pinned)) {
+	if (!pfb_feed_host_allowed($host, $reason, $pinned, $ascii_host)) {
 		// $reason already carries the neutral guard reason.
 		return FALSE;
+	}
+
+	// A non-ASCII host is returned (and dialled) in its mapped form, the one the guard vetted.
+	if ($ascii_host !== $host) {
+		$target = "{$scheme}://"
+		    . (isset($parts['user']) ? $parts['user'] . (isset($parts['pass']) ? ":{$parts['pass']}" : '') . '@' : '')
+		    . $ascii_host
+		    . (isset($parts['port']) ? ":{$parts['port']}" : '')
+		    . ($parts['path'] ?? '')
+		    . (isset($parts['query']) ? "?{$parts['query']}" : '');
 	}
 
 	$scheme_ports	= array('http' => 80, 'https' => 443);
@@ -14921,7 +14936,7 @@ function pfb_feed_redirect_target($location, $current_url, &$reason, &$pinned) {
 
 	return array(
 		'url'    => $target,
-		'host'   => $host,
+		'host'   => $ascii_host,
 		'scheme' => $scheme,
 		'port'   => $port,
 	);

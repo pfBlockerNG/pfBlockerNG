@@ -21,6 +21,8 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_feed_redirect_target')]
 #[CoversFunction('pfb_resolve_relative_url')]
+#[CoversFunction('pfb_feed_host_allowed')]
+#[CoversFunction('pfb_feed_host_literal_reason')]
 final class FeedRedirectTargetTest extends TestCase
 {
 	protected function setUp(): void
@@ -120,5 +122,82 @@ final class FeedRedirectTargetTest extends TestCase
 		[$result, $reason] = $this->redirect('', 'https://feed.example/list.txt');
 		$this->assertFalse($result);
 		$this->assertSame('feed redirect has no target', $reason);
+	}
+
+	/**
+	 * A non-ASCII redirect host is handed back in its UTS 46 mapped (ASCII) form,
+	 * the string libcurl keys its address lookup on; the URL is rebuilt to match.
+	 * The resolver is seeded under the RAW spelling because the guard resolves the
+	 * host as written.
+	 *
+	 * @return array<string,array{0:string,1:string,2:string,3:string}>
+	 */
+	public static function mappedHostProvider(): array
+	{
+		return [
+			'plain mapped host with port' => ['http://bücher.example:8081/x', 'bücher.example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081/x'],
+			'userinfo, query kept, fragment dropped' => ['http://u:p@bücher.example:8081/x?q=a%20b#f', 'bücher.example', 'xn--bcher-kva.example', 'http://u:p@xn--bcher-kva.example:8081/x?q=a%20b'],
+			'trailing dot kept' => ['http://bücher.example.:8081/x', 'bücher.example.', 'xn--bcher-kva.example.', 'http://xn--bcher-kva.example.:8081/x'],
+			'uppercase lowercased' => ['http://BÜCHER.Example:8081/x', 'BÜCHER.Example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081/x'],
+			'mixed labels, no port' => ['http://ascii.bücher.example/x', 'ascii.bücher.example', 'ascii.xn--bcher-kva.example', 'http://ascii.xn--bcher-kva.example/x'],
+			'empty path' => ['http://bücher.example:8081', 'bücher.example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081'],
+			'https scheme kept' => ['https://bücher.example/x', 'bücher.example', 'xn--bcher-kva.example', 'https://xn--bcher-kva.example/x'],
+		];
+	}
+
+	#[DataProvider('mappedHostProvider')]
+	public function testNonAsciiRedirectHostIsReturnedMapped(string $location, string $rawHost, string $mappedHost, string $mappedUrl): void
+	{
+		$GLOBALS['pfb_test_resolve_map']["{$rawHost}."] = [
+			['type' => 'A', 'data' => '203.0.113.41'],
+		];
+		[$result, $reason, $pinned] = $this->redirect($location, 'https://feed.example/list.txt');
+		$this->assertIsArray($result, "reason: {$reason}");
+		$this->assertSame($mappedHost, $result['host']);
+		$this->assertSame($mappedUrl, $result['url']);
+		$this->assertSame('203.0.113.41', $pinned);
+	}
+
+	public function testMappedRedirectKeepsDefaultPortOfScheme(): void
+	{
+		$GLOBALS['pfb_test_resolve_map']['ascii.bücher.example.'] = [
+			['type' => 'A', 'data' => '203.0.113.41'],
+		];
+		[$result] = $this->redirect('http://ascii.bücher.example/x', 'https://feed.example/list.txt');
+		$this->assertIsArray($result);
+		$this->assertSame(80, $result['port']);
+	}
+
+	/** @return array<string,array{0:string,1:string}> */
+	public static function refusedHostProvider(): array
+	{
+		return [
+			'fullwidth digit' => ["10.0.0.\u{FF11}", 'feed host is a non-canonical IP literal'],
+			'CONTEXTJ failure' => ["10.0.0.1\u{200C}", 'feed host is not a valid IDN name'],
+			'maps to percent' => ["10.0.0.\u{FF05}31", 'feed host is percent-encoded'],
+		];
+	}
+
+	#[DataProvider('refusedHostProvider')]
+	public function testRefusedHostLeavesMappedOutParamEmpty(string $host, string $expectedReason): void
+	{
+		$reason = '';
+		$pinned = '';
+		$ascii  = 'unset';
+		$this->assertFalse(pfb_feed_host_allowed($host, $reason, $pinned, $ascii));
+		$this->assertSame($expectedReason, $reason);
+		$this->assertSame('', $ascii);
+	}
+
+	public function testAsciiHostIsReturnedUntouchedInMappedOutParam(): void
+	{
+		$GLOBALS['pfb_test_resolve_map']['Feeds.Example.'] = [
+			['type' => 'A', 'data' => '203.0.113.42'],
+		];
+		$reason = '';
+		$pinned = '';
+		$ascii  = '';
+		$this->assertTrue(pfb_feed_host_allowed('Feeds.Example', $reason, $pinned, $ascii));
+		$this->assertSame('Feeds.Example', $ascii);
 	}
 }
