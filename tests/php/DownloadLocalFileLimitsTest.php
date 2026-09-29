@@ -111,8 +111,9 @@ while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 		fwrite($conn, $resp);
 	}
 	sleep((int) $hold);
-	fclose($conn);
+	// Marker first: a fetch that waited for EOF must not be able to return before it exists.
 	file_put_contents("{$portFile}.closed", '1');
+	fclose($conn);
 }
 PHP));
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
