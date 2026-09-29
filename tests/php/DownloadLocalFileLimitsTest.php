@@ -80,12 +80,12 @@ final class DownloadLocalFileLimitsTest extends TestCase
 	 * Answers one request with $response verbatim, then holds the connection open
 	 * for $holdSeconds (hard cap, the process is also reaped in tearDown) before closing.
 	 */
-	private function startRawServer(string $response, int $holdSeconds = 0, int $dripMicros = 0, int $headerDelayMicros = 0): int
+	private function startRawServer(string $response, int $holdSeconds = 0, int $dripMicros = 0, int $headerDelayMicros = 0, int $headerDripMicros = 0): int
 	{
 		$script = "{$this->workdir}/raw.php";
 		$this->assertNotFalse(file_put_contents($script, <<<'PHP'
 <?php
-[, $portFile, $responseFile, $hold, $drip, $hdelay] = $argv;
+[, $portFile, $responseFile, $hold, $drip, $hdelay, $hdrip] = $argv;
 $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
 if ($server === FALSE) {
 	exit(1);
@@ -99,6 +99,15 @@ while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
 	usleep((int) $hdelay);
 	file_put_contents("{$portFile}.replied", '1');
 	$resp = (string) file_get_contents($responseFile);
+	if ((int) $hdrip > 0) {
+		// Header lines one per $hdrip microseconds, then the body at once.
+		$cut = strpos($resp, "\r\n\r\n") + 4;
+		foreach (explode("\r\n", substr($resp, 0, $cut - 4)) as $hline) {
+			usleep((int) $hdrip);
+			@fwrite($conn, "{$hline}\r\n");
+		}
+		$resp = "\r\n" . substr($resp, $cut);
+	}
 	if ((int) $drip > 0) {
 		// Headers at once, then the body one byte per $drip microseconds.
 		$cut = strpos($resp, "\r\n\r\n") + 4;
@@ -121,7 +130,7 @@ PHP));
 		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
 		$portFile = "{$this->workdir}/port";
 		$proc = proc_open(
-			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds, (string) $dripMicros, (string) $headerDelayMicros],
+			['php', $script, $portFile, "{$this->workdir}/response.bin", (string) $holdSeconds, (string) $dripMicros, (string) $headerDelayMicros, (string) $headerDripMicros],
 			[1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
 			$pipes
 		);
@@ -390,6 +399,19 @@ PHP));
 		$this->assertRefusedNothingSaved($result, 'header wait plus body wait over the request timeout');
 		$this->assertStringContainsString('read timed out', $this->logText());
 		$this->assertLessThan(3.0, $elapsed, 'refusal must come near the 2 s timeout, not after a second full budget');
+	}
+
+	/**
+	 * Header lines dripping 0.6 s apart (each under the 1 s wait) reach the body phase with the
+	 * 1 s budget already spent: the fetch is refused as timed out even though the body is
+	 * complete and immediate. (A drip that lasts longer is still only cut once fopen returns: #3377.)
+	 */
+	public function testBudgetSpentOnHeadersRefusesBeforeReadingTheBody(): void
+	{
+		$port = $this->startRawServer("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-A: 1\r\nConnection: close\r\n\r\nab", 0, 0, 0, 600000);
+		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt", 1);
+		$this->assertRefusedNothingSaved($result, 'budget spent on the headers');
+		$this->assertStringContainsString('read timed out', $this->logText());
 	}
 
 	/** A server that stays silent before the response headers is cut at the request timeout (the peer replies 3 s later, hard cap). */
