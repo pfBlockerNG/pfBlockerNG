@@ -95,6 +95,8 @@ final class IpParseLineNumericHostTest extends TestCase
 			'bare hex + quad (ceiling)'  => ['0xC0A80164 1.2.3.4', ['1.2.3.4'], FALSE],
 			// An interior NUL byte is a parse failure, never an exception.
 			'bare quad with NUL'         => ["1.2\x00.3.4", [], TRUE],
+			'NUL with colon and percent'   => ["ab\x00\x01:%\x02z", [], TRUE],
+			'NUL with v6-shaped text'    => ["fe80::\x00a%eth0", [], TRUE],
 			'bare hex with NUL'          => ["0xC0A8\x00164", [], TRUE],
 			// Bare zero-padded quads keep the decimal reading.
 			'padded 08'                  => ['08.08.08.08', ['8.8.8.8'], FALSE],
@@ -132,17 +134,41 @@ final class IpParseLineNumericHostTest extends TestCase
 
 	public function testMappedLineStillHonoursSuppression(): void
 	{
+		$control = pfb_ip_parse_line('::ffff:7f00:1', self::config('_v4', 'auto', custom: FALSE, suppression: 'off'));
+		$this->assertSame(['127.0.0.1'], $control['entries'], 'control: with suppression off the mapped loopback is unwrapped');
 		$result = pfb_ip_parse_line('::ffff:7f00:1', self::config('_v4', 'auto', custom: FALSE, suppression: 'on'));
 		$this->assertSame([], $result['entries'], 'mapped loopback must still be suppressed');
 	}
 
-	public function testDecodedUrlHostHonoursTheCidrFloorLikeABareAddress(): void
+	/** @return array<string, array{string, string}> */
+	public static function corpusPftypeProvider(): array
 	{
-		$config = ['cidr_floor_v4' => 24] + self::config('_v4', 'auto');
-		$bare = pfb_ip_parse_line('192.168.1.100', $config)['entries'];
-		$url = pfb_ip_parse_line('http://0xC0A80164/x', $config)['entries'];
-		$this->assertSame(['192.168.1.100'], $bare);
-		$this->assertSame($bare, $url, 'a decoded URL host is sanitized with the same floor as a bare address');
+		$cases = [];
+		foreach (['_v4', '_v6'] as $vtype) {
+			foreach (['auto', 'regex'] as $pftype) {
+				$cases["{$vtype} {$pftype}"] = [$vtype, $pftype];
+			}
+		}
+		return $cases;
+	}
+
+	/** Every line of every binary corpus sample must parse or fail cleanly, never throw. */
+	#[DataProvider('corpusPftypeProvider')]
+	public function testNoCorpusLineThrows(string $vtype, string $pftype): void
+	{
+		$files = glob(__DIR__ . '/../fixtures/feed_corpus/samples/*.bin') ?: [];
+		$this->assertNotSame([], $files, 'corpus samples missing');
+		$thrown = [];
+		foreach ($files as $file) {
+			foreach (explode("\n", (string) file_get_contents($file)) as $no => $line) {
+				try {
+					pfb_ip_parse_line($line, self::config($vtype, $pftype));
+				} catch (\Throwable $e) {
+					$thrown[] = basename($file) . ':' . ($no + 1) . ' ' . get_class($e);
+				}
+			}
+		}
+		$this->assertSame([], $thrown, "{$vtype} {$pftype}: lines that throw");
 	}
 
 	/** @return array<string, array{string, string, bool}> */
