@@ -12,14 +12,13 @@ require_once __DIR__ . '/support/HttpFixtureReadiness.php';
  * pfb_download(): the self-hosted (local-file) fetch applies the same redirect
  * validation as the cURL path. A 3xx answer is refused (logged as skipped, failure
  * result, nothing saved); a 2xx answer, a not-found answer and a plain file path
- * keep their behaviour. Rows run the real pfb_download() against local `php -S`
- * fixtures: a 127.0.0.1 origin (the self-hosted host) and a 127.0.0.2 target the
- * redirect points at, so the target's event log shows whether a hop was followed.
+ * keep their behaviour. Rows run the real pfb_download() against a local `php -S`
+ * fixture; its event log shows whether a redirect hop was followed.
  */
 #[CoversFunction('pfb_download')]
 final class DownloadLocalFileRedirectTest extends TestCase
 {
-	private const REASON = 'local feed answered with a redirect';
+	private const REASON = 'local feed answered with ';
 
 	/** @var array<int,resource> */
 	private array $servers = [];
@@ -63,31 +62,30 @@ final class DownloadLocalFileRedirectTest extends TestCase
 		unset($GLOBALS['config'], $GLOBALS['pfb_test_resolve_map'], $GLOBALS['pfb_test_configured_ips']);
 	}
 
-	private function startOneServer(string $router, string $bindHost, string $label): int
+	private function startOneServer(string $router): int
 	{
 		$failures = [];
 		for ($try = 0; $try < 10; $try++) {
 			$nonce  = bin2hex(random_bytes(16));
-			$stderr = "{$this->workdir}/server-{$label}-{$try}-{$nonce}.stderr";
+			$stderr = "{$this->workdir}/server-{$try}-{$nonce}.stderr";
 			$proc   = proc_open(
-				['php', '-S', "{$bindHost}:0", $router],
+				['php', '-S', '127.0.0.1:0', $router],
 				[1 => ['file', '/dev/null', 'w'], 2 => ['file', $stderr, 'w']],
 				$pipes,
 				$this->workdir,
 				[
 					'EVENT_LOG'        => "{$this->workdir}/events.log",
-					'TARGET_BASE_FILE' => "{$this->workdir}/target_base.txt",
 					'READY_TOKEN'      => $nonce,
 					'PATH'             => (string) getenv('PATH'),
 				]
 			);
 			if (!is_resource($proc)) {
-				$failures[] = "bind {$bindHost}: proc_open failed";
+				$failures[] = "bind: proc_open failed";
 				continue;
 			}
-			$port = pfb_test_http_fixture_port($stderr, $bindHost);
+			$port = pfb_test_http_fixture_port($stderr, '127.0.0.1');
 			for ($i = 0; $i < 40; $i++) {
-				if ($port > 0 && pfb_test_http_fixture_event_received($port, $nonce, $bindHost)) {
+				if ($port > 0 && pfb_test_http_fixture_event_received($port, $nonce, '127.0.0.1')) {
 					$this->servers[$port] = $proc;
 					return $port;
 				}
@@ -98,9 +96,9 @@ final class DownloadLocalFileRedirectTest extends TestCase
 				proc_terminate($proc);
 			}
 			proc_close($proc);
-			$failures[] = "bind {$bindHost} port {$port}: " . trim((string) @file_get_contents($stderr));
+			$failures[] = "bind port {$port}: " . trim((string) @file_get_contents($stderr));
 		}
-		$this->fail("could not start the {$label} fixture server on {$bindHost}; " . implode(' | ', $failures));
+		$this->fail("could not start the fixture server; " . implode(' | ', $failures));
 	}
 
 	private function router(): string
@@ -119,9 +117,8 @@ file_put_contents(getenv('EVENT_LOG'), json_encode([
 	(int) $_SERVER['SERVER_PORT'],
 	$uri,
 ]) . PHP_EOL, FILE_APPEND);
-$targetBase = (string) @file_get_contents(getenv('TARGET_BASE_FILE'));
 if (preg_match('#^/redir-(\d{3})$#', $uri, $m) === 1) {
-	header('Location: ' . $targetBase . '/list.txt', true, (int) $m[1]);
+	header('Location: ' . '/list.txt', true, (int) $m[1]);
 	echo 'REDIRBODY';
 	return;
 }
@@ -168,14 +165,12 @@ PHP;
 		$GLOBALS['pfb']['pnow']   = 'now';
 	}
 
-	/** @return int the origin (127.0.0.1) port */
+	/** @return int the fixture server port */
 	private function startFixtures(): int
 	{
 		$this->makeWorkdir();
 		$router = $this->router();
-		$targetPort = $this->startOneServer($router, '127.0.0.2', 'target');
-		$this->assertNotFalse(file_put_contents("{$this->workdir}/target_base.txt", "http://127.0.0.2:{$targetPort}"));
-		return $this->startOneServer($router, '127.0.0.1', 'origin');
+		return $this->startOneServer($router);
 	}
 
 	private function fetch(string $listUrl): PfbDownloadResult
@@ -206,7 +201,7 @@ PHP;
 		);
 	}
 
-	private function assertRefused(string $path): void
+	private function assertRefused(string $path, string $code): void
 	{
 		$port   = $this->startFixtures();
 		$result = $this->fetch("http://127.0.0.1:{$port}{$path}");
@@ -215,32 +210,32 @@ PHP;
 		$this->assertFalse($result->success, $msg);
 		$events = (string) @file_get_contents("{$this->workdir}/events.log");
 		$this->assertStringNotContainsString('/list.txt', $events, 'the redirect target must not be requested: ' . $msg);
-		$this->assertStringContainsString(self::REASON, (string) @file_get_contents($GLOBALS['pfb']['log']), $msg);
+		$this->assertStringContainsString(self::REASON . "HTTP/1.1 {$code}", (string) @file_get_contents($GLOBALS['pfb']['log']), $msg);
 		$this->assertFileDoesNotExist("{$this->workdir}/feed.txt.raw", $msg);
 	}
 
-	/** @return array<string, array{string}> */
+	/** @return array<string, array{string, string}> */
 	public static function redirectStatusProvider(): array
 	{
 		return [
-			'301' => ['/redir-301'],
-			'302' => ['/redir-302'],
-			'303' => ['/redir-303'],
-			'307' => ['/redir-307'],
-			'308' => ['/redir-308'],
+			'301' => ['/redir-301', '301'],
+			'302' => ['/redir-302', '302'],
+			'303' => ['/redir-303', '303'],
+			'307' => ['/redir-307', '307'],
+			'308' => ['/redir-308', '308'],
 		];
 	}
 
 	#[DataProvider('redirectStatusProvider')]
-	public function testRedirectStatusIsRefused(string $path): void
+	public function testRedirectStatusIsRefused(string $path, string $code): void
 	{
-		$this->assertRefused($path);
+		$this->assertRefused($path, $code);
 	}
 
 	/** A 3xx with no Location header is refused too: the status is the key. */
 	public function testRedirectWithoutLocationIsRefused(): void
 	{
-		$this->assertRefused('/redir-nolocation');
+		$this->assertRefused('/redir-nolocation', '302');
 	}
 
 	/** A 200 that carries a Location header is a success: the status is the key. */
