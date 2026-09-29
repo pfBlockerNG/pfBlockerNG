@@ -15432,10 +15432,14 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// $pfb['local_max_bytes'] is the test seam, mirroring $pfb['rsync_max_bytes'].
 			$local_ceiling = isset($GLOBALS['pfb']['local_max_bytes']) ? (int) $GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
 			unlink_if_exists("{$file_download}");	// a refusal at any point leaves no earlier .raw behind
-			// One budget for the whole fetch, connect and headers included; $timeout <= 0 lifts
-			// every wait (context timeout -1 also overrides the ambient default_socket_timeout).
+			// The timeout budget starts before the request. A degenerate value can never disable
+			// the bound (as the rsync path's max(1, budget), #2876). The http context timeout is
+			// PHP's per-read wait for connect and headers (it also overrides the ambient
+			// default_socket_timeout); a server dripping header lines can stretch that phase
+			// (tracked in #3377). The body phase below is held to the same budget.
+			$local_timeout = max(1, $timeout);
 			$local_start = hrtime(TRUE);
-			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0, 'timeout' => $timeout > 0 ? $timeout : -1))));
+			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0, 'timeout' => $local_timeout))));
 			$status_line = ($local_in !== FALSE) ? ($http_response_header[0] ?? '') : '';
 			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+(200|221|226)(\s|$)#', $status_line)) {
 				// Control bytes -> space, as pfb_validate_log_line() does: the status line is received text.
@@ -15475,19 +15479,16 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 			}
 			if ($local_out !== FALSE) {
-				// Whole-transfer deadline, as cURL's CURLOPT_TIMEOUT: each read waits at most
-				// the time left, so a body dripping under a per-read timeout still fails.
-				// $timeout <= 0 means no limit, as with CURLOPT_TIMEOUT.
-				$local_deadline = $local_start + $timeout * 1000000000;
+				// Body phase: every read waits at most the time left of the budget started
+				// before the request, so a body dripping under the per-read wait still fails.
+				$local_deadline = $local_start + $local_timeout * 1000000000;
 				while (!feof($local_in) && $local_copied <= $local_ceiling && ($local_declared < 0 || $local_copied < $local_declared)) {
-					if ($timeout > 0) {
-						$local_left = ($local_deadline - hrtime(TRUE)) / 1e9;
-						if ($local_left <= 0) {
-							$local_timed_out = TRUE;
-							break;
-						}
-						stream_set_timeout($local_in, (int) $local_left, (int) (fmod($local_left, 1) * 1000000));
+					$local_left = ($local_deadline - hrtime(TRUE)) / 1e9;
+					if ($local_left <= 0) {
+						$local_timed_out = TRUE;
+						break;
 					}
+					stream_set_timeout($local_in, (int) $local_left, (int) (fmod($local_left, 1) * 1000000));
 					// One byte past the ceiling is enough to tell "over" from "at".
 					// Read no further than the declared length (a keep-alive peer sends no EOF) or ceiling+1.
 					$local_chunk = fread($local_in, min(8192, ($local_declared >= 0 ? $local_declared : $local_ceiling + 1) - $local_copied));
