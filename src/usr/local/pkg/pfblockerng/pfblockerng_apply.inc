@@ -2441,7 +2441,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// the generic verbatim capture below.
 											if ($pfb['dnsbl_ip'] != 'Disabled') {
 												$abp_ip = pfb_dnsbl_abp_extract_ip($line);
+												if ($abp_ip === FALSE) {
+													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
+													continue;
+												}
 												if ($abp_ip !== '') {
+													if (!str_contains($line, $abp_ip)) {
+														pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$abp_ip} ]", 1);
+													}
 													if (pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
 														$pfb['updateip'] = TRUE;
 														$ipcount++;
@@ -2579,6 +2586,18 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 												}
 											}
 											$line = trim($line);
+
+											// A non-canonical IPv4 spelling ('0xc0.0xa8.0x1.0x64', '192.168.356')
+											// is the address a client dials, never a domain: decode it (WHATWG
+											// rules) for the IP branch below, or log it when it is invalid.
+											if (!is_ipaddrv4($line) && ($pfb_numeric = pfb_ipv4_numeric_host($line)) !== NULL) {
+												if ($pfb_numeric['ip'] === NULL) {
+													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
+													continue;
+												}
+												pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$pfb_numeric['ip']} ]", 1);
+												$line = $pfb_numeric['ip'];
+											}
 
 											// Collect any IPs (v4 or v6) found in domain feed. The family
 											// check gates the 'continue' regardless of dnsbl_ip -- an IP

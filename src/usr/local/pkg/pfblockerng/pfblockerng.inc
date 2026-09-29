@@ -2711,6 +2711,23 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
+	// RFC 3986 authority of a scheme-bearing line: the host follows the LAST '@' (userinfo is
+	// dropped); a numeric host is the address a client dials whatever the path, so strict mode
+	// keeps its authority alone instead of rejecting the path. A bare 'name@x' row is unchanged.
+	$pos = strpos($line, '://');
+	if ($pos !== FALSE) {
+		$rest = substr($line, $pos + 3);
+		$alen = strcspn($rest, '/?#');
+		if (($at = strrpos(substr($rest, 0, $alen), '@')) !== FALSE) {
+			$rest = substr($rest, $at + 1);
+			$alen -= $at + 1;
+		}
+		if ($strict && pfb_ipv4_numeric_host(pfb_strip_trailing_port(substr($rest, 0, $alen))) !== NULL) {
+			$rest = substr($rest, 0, $alen);
+		}
+		$line = substr($line, 0, $pos + 3) . $rest;
+	}
+
 	// ADR-22: strip the '<scheme>://' prefix. Lenient (toggle ON, the migrated/legacy
 	// default) keeps today's permissive strip; strict (toggle OFF, the new-install default)
 	// validates the scheme against RFC 3986 and rejects URL paths -- a rejected line is
@@ -9723,7 +9740,9 @@ function pfb_dnsbl_unlock_lines() {
 //   ||1.2.3.4^$options    -> '1.2.3.4'   (options stripped before the IP test)
 //   ||[2001:db8::1]^      -> '2001:db8::1' (URI-bracketed IPv6 anchor, unwrapped)
 //   <sink-ip> <ip>        -> the second token (hosts line whose target is an IP)
-// Returns the IP string when the line carries one, else ''.
+//   ||0xC0A80164^         -> '192.168.1.100' (any IPv4 spelling a client decodes, WHATWG rules)
+// Returns the IP string when the line carries one, FALSE for a numeric-shaped but invalid
+// '||' anchor ('||08.08.08.08^', to be logged, never passed to Python), else ''.
 function pfb_dnsbl_abp_extract_ip($line) {
 	$s = trim($line);
 	if ($s === '') {
@@ -9746,6 +9765,11 @@ function pfb_dnsbl_abp_extract_ip($line) {
 		$host = pfb_dnsbl_unbracket_ip6(trim($host));
 		if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
 			return $host;
+		}
+		// Only a bare host can be an IPv4 literal; '||example.com/ads/banner.1^' is a path rule.
+		$numeric = str_contains($host, '/') ? NULL : pfb_ipv4_numeric_host($host);
+		if ($numeric !== NULL) {
+			return $numeric['ip'] ?? FALSE;
 		}
 		return '';
 	}
@@ -9948,6 +9972,17 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 }
 
 
+// The IPv4 address inside an IPv4-mapped IPv6 literal (::ffff:0:0/96), else NULL. A client
+// connecting to one sends an IPv4 packet, which no v6 table entry matches.
+function pfb_ipv4_from_mapped(string $ip): ?string {
+	$bin = @inet_pton($ip);
+	if ($bin === FALSE || strlen($bin) !== 16 || !str_starts_with($bin, str_repeat("\x00", 10) . "\xff\xff")) {
+		return NULL;
+	}
+	return inet_ntop(substr($bin, 12));
+}
+
+
 // A blank line, or one led by a well-known full-line comment marker: '#' (hosts-style),
 // '!' (ABP/uBlock), '//' (C-style) -- the three conventions feeds in this ecosystem mix
 // together regardless of the list's own declared format. Callers whose '#' handling
@@ -10015,9 +10050,15 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 // $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
 // this returns TRUE iff an IP was appended.
 function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {
+	// IPv4-mapped IPv6 is collected as its IPv4 address.
+	if (is_ipaddrv6($guard_value) && validate_ipv6($candidate_value) &&
+	    ($mapped = pfb_ipv4_from_mapped($candidate_value)) !== NULL) {
+		$candidate_value = $guard_value = $mapped;
+	}
 	if (is_ipaddrv4($guard_value)) {
 		$parsed = sanitize_ipaddr($candidate_value, $custom, 'Disabled');
-		if (validate_ipv4($parsed)) {
+		// NULL = dropped by suppression.
+		if ($parsed !== NULL && validate_ipv4($parsed)) {
 			$domain_data_ip[] = $parsed;
 			return TRUE;
 		}

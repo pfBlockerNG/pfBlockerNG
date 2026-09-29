@@ -7428,6 +7428,19 @@
             }
         ]
     },
+    "pfb_ipv4_from_mapped": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "ip",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_ipv4_numeric_host": {
         "returnsRef": false,
         "returnType": "?array",
