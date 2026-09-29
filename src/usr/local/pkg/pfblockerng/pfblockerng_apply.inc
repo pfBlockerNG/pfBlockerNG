@@ -366,7 +366,7 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 			$pfb_at		= strrpos($pfb_authority, '@');
 			$pfb_host	= preg_replace('/:[0-9]*$/', '', $pfb_at === FALSE ? $pfb_authority : substr($pfb_authority, $pfb_at + 1));
 			$pfb_numeric	= pfb_ipv4_numeric_host($pfb_host);
-			if ($pfb_numeric !== NULL && !is_ipaddrv4($pfb_host)) {
+			if ($pfb_numeric !== NULL && $pfb_numeric['ip'] !== $pfb_host) {
 				if ($pfb_numeric['ip'] === NULL) {
 					$result['parse_fail_delta']++;
 					$result['detailed_parse_fail'] = TRUE;
@@ -571,9 +571,13 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	// A bare hex/DWORD token ('0xC0A80164', '0xc0.0xa8.0x1.0x64') is a parse failure despite its
 	// letters. Single-token lines only: regex-mode text such as 'version 1.2.3' is not a host.
 	// ponytail: only when the line yields nothing ('0xC0A80164 1.2.3.4' is not logged).
-	$pfb_bare_numeric = $vtype == '_v4' && empty($result['entries']) && strpbrk($line, " \t") === FALSE &&
-	    (str_contains($line, "\0") || (!is_ipaddrv4($line) && pfb_ipv4_numeric_host($line) !== NULL));
-	// A NUL byte never makes an address (is_ipaddrv4()/ip2long() throw on it): a parse failure.
+	// The numeric helper returns a canonical quad unchanged, so 'ip' !== token means non-canonical
+	// (or invalid); unlike is_ipaddrv4()/ip2long() it never throws on a NUL byte.
+	$pfb_bare_numeric = FALSE;
+	if ($vtype == '_v4' && empty($result['entries']) && $result['parse_fail_delta'] == 0 && strpbrk($line, " \t") === FALSE) {
+		$pfb_bare = pfb_ipv4_numeric_host(preg_replace('/\/[0-9]{1,2}$/', '', $line));
+		$pfb_bare_numeric = str_contains($line, "\0") || ($pfb_bare !== NULL && $pfb_bare['ip'] !== $line);
+	}
 	if (!empty($line) && (!preg_match('/[a-zA-Z,;|\"\'?]/', $line) || $pfb_bare_numeric) &&
 	    !pfb_ip_is_opposite_family($line, $vtype)) {
 		$result['parse_fail_delta']++;
@@ -2636,7 +2640,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// A non-canonical IPv4 spelling ('0xc0.0xa8.0x1.0x64', '192.168.356')
 											// is the address a client dials, never a domain: decode it (WHATWG
 											// rules) for the IP branch below, or log it when it is invalid.
-											if (!is_ipaddrv4($line) && ($pfb_numeric = pfb_ipv4_numeric_host($line)) !== NULL) {
+											if (($pfb_numeric = pfb_ipv4_numeric_host($line)) !== NULL && $pfb_numeric['ip'] !== $line) {
 												if ($pfb_numeric['ip'] === NULL) {
 													pfb_parse_fail_log($header, $line, $oline, $pfb['dnsbl_parse_err'], $dnsbl_lineno);
 													continue;
