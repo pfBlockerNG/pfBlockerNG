@@ -5106,12 +5106,14 @@ def _dnsbl_normalise_whitelist(
     user_whitelist: Iterable[str],
     top1m_lines: Iterable[str],
     top1m_enabled: bool,
+    tally: RejectTally | None = None,
     source: str = "user_whitelist",
 ) -> dict[str, dict[str, Any]]:
     """User-whitelist normalisation into the query-time whiteDB shape: case-insensitive
     www-strip; leading-dot -> wildcard True else False; then normalise() lower-cases and
     applies the domain-shape gate (#3367; PHP's pfb_unbound_python_whitelist() does neither).
-    An entry normalise() rejects is dropped with one log_info line naming ``source``.
+    An entry normalise() rejects is dropped and, when ``tally`` is given, counted under
+    (``source``, "DNSBL") in the ADR-48 reject tally (TOP1M drops are not tallied).
     Colliding lines that collapse to one apex widen (broadest wildcard, any important,
     max band) rather than last-wins. TOP1M entries are loaded ONLY when enabled as
     validated canonical bare domains; retired comma-framed records and invalid
@@ -5130,14 +5132,19 @@ def _dnsbl_normalise_whitelist(
         line = raw.strip()
         if not line:
             continue
-        if line[:4].lower() == "www.":
-            line = line[4:]
-        wildcard = line.startswith(".")
+        body = line[4:] if line[:4].lower() == "www." else line
         # issue #3367: lower-case + domain-shape gate, like the block-list keys and TOP1M.
-        domain = normalise(line.lstrip("."))
+        domain, bucket = _normalise_verdict(body.lstrip("."))
+        if domain is None and body is not line:
+            # `www.com`: the remainder is one label but the whole name is valid; the query-time
+            # lookup matches it exactly, as the pre-#3367 www-strip did via the remainder.
+            body = line
+            domain, bucket = _normalise_verdict(line.lstrip("."))
         if domain is None:
-            log_info("[pfBlockerNG]: DNSBL {}: skipping invalid whitelist entry '{}'".format(source, raw.strip()))
+            if tally is not None and bucket is not None:
+                _tally_reject(tally, source, "DNSBL", bucket)
             continue
+        wildcard = body.startswith(".")
         new_entry: dict[str, Any] = {"wildcard": wildcard, "important": True, "band": PRIO_USER_ALLOW}
         existing = white_db.get(domain)
         # issue #3191: colliding `.apex` / `www.apex` / bare apex widen, never last-wins demote.
@@ -5490,6 +5497,7 @@ def build(
         config.get("user_whitelist", []),
         top1m_lines,
         top1m_enabled,
+        rejects,
     )
     # Merge the unlock set WITHOUT narrowing an existing permanent allow: a domain may be
     # a wildcard in user_whitelist (".x" -> covers subdomains) yet exact in user_unlock,
@@ -5497,7 +5505,7 @@ def build(
     # collision instead -- the same monotonic merge the feed @@ allows use below (keep
     # the broadest wildcard/important, highest band; both sides are band-6 user allows).
     for domain, unlock_entry in _dnsbl_normalise_whitelist(
-        config.get("user_unlock", []), (), False, "user_unlock"
+        config.get("user_unlock", []), (), False, rejects, "user_unlock"
     ).items():
         existing = white_db.get(domain)
         if existing is None:
