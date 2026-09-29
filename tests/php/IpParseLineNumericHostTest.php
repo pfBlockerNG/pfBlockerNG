@@ -141,6 +141,26 @@ final class IpParseLineNumericHostTest extends TestCase
 	}
 
 	/** @return array<string, array{string, string}> */
+	public static function v6NulLineProvider(): array
+	{
+		$cases = [];
+		foreach (['auto', 'regex'] as $pftype) {
+			foreach (["fe80::\x00a%eth0", "2001:db8::1\x00junk", "2001:db8::\x00a"] as $line) {
+				$cases["{$pftype}: " . bin2hex($line)] = [$pftype, $line];
+			}
+		}
+		return $cases;
+	}
+
+	/** An address cut at a NUL byte is not collected: single-token v6 line, no entry, detailed failure. */
+	#[DataProvider('v6NulLineProvider')]
+	public function testV6NulCutAddressIsAParseFailure(string $pftype, string $line): void
+	{
+		$result = pfb_ip_parse_line($line, self::config('_v6', $pftype));
+		$this->assertSame([[], TRUE, 1], [$result['entries'], $result['detailed_parse_fail'], $result['parse_fail_delta']]);
+	}
+
+	/** @return array<string, array{string, string}> */
 	public static function corpusPftypeProvider(): array
 	{
 		$cases = [];
