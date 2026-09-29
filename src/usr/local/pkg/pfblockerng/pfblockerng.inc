@@ -15400,7 +15400,14 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 
 		// Download localfile format
 		if ($localfile) {
-			$file_data = @file_get_contents("{$list_download}");
+			// A local feed does not redirect: a 3xx answer is refused on its status, never followed.
+			$file_data = @file_get_contents("{$list_download}", FALSE, stream_context_create(array('http' => array('follow_location' => 0))));
+			$status_line = $http_response_header[0] ?? '';
+			if ($status_line !== '' && (preg_match('#^HTTP/\d\.\d\s+(\d{3})#', $status_line, $status_match) !== 1 || $status_match[1][0] !== '2')) {
+				$log = "\n[ {$header} ] local feed answered with a redirect \xe2\x80\x94 skipped\n";
+				pfb_logger("{$log}", "{$logtype}");
+				return PfbDownloadResult::failure();
+			}
 			if ($file_data === FALSE) {
 				$error = error_get_last();
 				$log = "\n[ {$header} ] {$error['message']}\n";
