@@ -2705,7 +2705,8 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 }
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
-// `if (!$lite)` branch. Order is load-bearing: scheme strip -> '/'/'#'/'?' truncation ->
+// `if (!$lite)` branch. Order is load-bearing: userinfo/authority cut (strict mode keeps a
+// numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
 // pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
@@ -9976,7 +9977,7 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 // connecting to one sends an IPv4 packet, which no v6 table entry matches.
 function pfb_ipv4_from_mapped(string $ip): ?string {
 	$bin = @inet_pton($ip);
-	if ($bin === FALSE || strlen($bin) !== 16 || !str_starts_with($bin, str_repeat("\x00", 10) . "\xff\xff")) {
+	if ($bin === FALSE || !str_starts_with($bin, str_repeat("\x00", 10) . "\xff\xff")) {
 		return NULL;
 	}
 	return inet_ntop(substr($bin, 12));
@@ -14101,8 +14102,8 @@ function pfb_ip_is_internal($ip) {
 
 	// Unwrap an IPv4-mapped IPv6 address (::ffff:0:0/96) to its IPv4 form so it is
 	// vetted against the IPv4 ranges, not skipped by the v6 set.
-	if (strlen($bin) === 16 && str_starts_with($bin, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff")) {
-		$ip = inet_ntop(substr($bin, 12));
+	if (($v4 = pfb_ipv4_from_mapped($ip)) !== NULL) {
+		$ip = $v4;
 		$bin = substr($bin, 12);
 	}
 

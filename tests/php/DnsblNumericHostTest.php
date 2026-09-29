@@ -27,6 +27,7 @@ final class DnsblNumericHostTest extends TestCase
 {
 	private static string $plainRegion;
 	private static string $abpRegion;
+	private static string $hostsRegion;
 
 	private string $failLog = '';
 	private string $mainLog = '';
@@ -49,6 +50,11 @@ final class DnsblNumericHostTest extends TestCase
 		)) {
 			throw new RuntimeException('test bootstrap: DNSBL ABP-anchor region not found');
 		}
+		// The hosts-line space split runs before the plain region; start there to reach it.
+		if (!preg_match('/(\t+\/\/ Typical Host Feed format.*?@fwrite\(\$dhandle, \$domain_data\);)/s', $src, $hosts)) {
+			throw new RuntimeException('test bootstrap: DNSBL hosts-line region not found');
+		}
+		self::$hostsRegion = "\$rev_format = FALSE;\nforeach ([0] as \$pfb_test_iter) {\n{$hosts[1]}\n}\n";
 		// Both regions drop a line with `continue`; give them a loop of their own inside eval().
 		self::$plainRegion = "foreach ([0] as \$pfb_test_iter) {\n{$plain[1]}\n}\n";
 		self::$abpRegion = "foreach ([0] as \$pfb_test_iter) {\n{$abp[1]}\n}\n";
@@ -180,6 +186,31 @@ final class DnsblNumericHostTest extends TestCase
 		$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
 	}
 
+	/** @return array<string, array{string, string}> */
+	public static function hostsLineProvider(): array
+	{
+		return [
+			'hex target'     => ['0.0.0.0 0xC0A80164', '0xC0A80164'],
+			'dword target'   => ['127.0.0.1 3232235876', '3232235876'],
+			'tab separated'  => ["0.0.0.0 \t0xC0A80164", '0xC0A80164'],
+		];
+	}
+
+	#[DataProvider('hostsLineProvider')]
+	public function testHostsLineNumericTargetIsDecodedOnThePlainPath(string $feedLine, string $target): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, $feedLine);
+		$this->assertSame([[], ['192.168.1.100'], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']]);
+		$this->assertStringContainsString("IP literal decoded: [ {$target} ] -> [ 192.168.1.100 ]", $out['log']);
+	}
+
+	public function testHostsLineInvalidNumericTargetIsLoggedNotEmitted(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 08.08.08.08');
+		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']]);
+		$this->assertStringContainsString('08.08.08.08', $out['fail']);
+	}
+
 	public function testUserinfoIsRemovedSoTheRealDomainIsBlocked(): void
 	{
 		$out = $this->runRegion(self::$plainRegion, 'http://user@evil.com/');
@@ -298,6 +329,7 @@ final class DnsblNumericHostTest extends TestCase
 			'@ in the query strict'     => ['http://3232235876?x=a@b', TRUE, '3232235876'],
 			'@ in the fragment strict'  => ['http://3232235876#a@b/', TRUE, '3232235876'],
 			'several @ strict'          => ['http://a@b@c@192.168.010.100/x', TRUE, '192.168.010.100'],
+			'canonical quad + path strict' => ['http://192.168.1.100/login', TRUE, '192.168.1.100'],
 			'name host + path strict'   => ['http://evil.com/login', TRUE, FALSE],
 			'userinfo name + path strict' => ['http://user@evil.com/login', TRUE, FALSE],
 			'empty port + path strict'  => ['http://0x7f000001:/x', TRUE, FALSE],

@@ -4556,7 +4556,7 @@ def parse_abp(
         tail = anchor.split("^", 1)[1] if "^" in anchor else ""
         if "/" in host or "*" in host or "/" in tail or tail.strip("^"):
             return None
-        if _dnsbl_is_ipv4(host) or _dnsbl_is_numeric_host(host):
+        if _dnsbl_is_numeric_host(host):
             return None  # IP-anchored (any IPv4 spelling) -> PHP firewall path; Python skips (no leak)
         dom, bucket = _normalise_verdict(host)
         if dom is None:
@@ -4593,7 +4593,7 @@ def parse_abp(
         first, target = parts[0], parts[1].strip()
         if not _dnsbl_is_ipv4(first):
             return None  # not a hosts line (a real ABP line never has a bare space)
-        if _dnsbl_is_ipv4(target) or _dnsbl_is_numeric_host(target):
+        if _dnsbl_is_numeric_host(target):
             return None  # "<ip> <ip>" -> firewall path
         dom, bucket = _normalise_verdict(target)
         if dom is None:
