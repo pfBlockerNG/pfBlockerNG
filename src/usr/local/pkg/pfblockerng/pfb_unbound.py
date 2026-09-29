@@ -4286,6 +4286,25 @@ def _dnsbl_is_ipv4(token: str) -> bool:
     return True
 
 
+def _dnsbl_is_numeric_host(token: str) -> bool:
+    """Shape twin of PHP pfb_ipv4_numeric_host() (non-NULL result): WHATWG "ends in a number".
+
+    True when the last label (one trailing empty label dropped) is all ASCII digits or 0x-hex, so
+    a client parses the whole host as an IPv4 literal ('0xc0.0xa8.0x1.0x64', '192.168.356').
+    Any ':' is False. Such names are never domains; the PHP side owns them. Shared table:
+    tests/fixtures/ipv4_numeric_host.json.
+    """
+    if ":" in token:
+        return False
+    parts = token.split(".")
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    last = parts[-1]
+    if last.isascii() and last.isdigit():
+        return True
+    return last[:2].lower() == "0x" and all(c in "0123456789abcdefABCDEF" for c in last[2:])
+
+
 # --------------------------------------------------------------------------- #
 # ADR-07 Stage-A: DNS-only ABP option / scope classification. A ``$options``
 # tail is KEPT only if EVERY option is DNS-relevant ($important / $badfilter).
@@ -4537,8 +4556,8 @@ def parse_abp(
         tail = anchor.split("^", 1)[1] if "^" in anchor else ""
         if "/" in host or "*" in host or "/" in tail or tail.strip("^"):
             return None
-        if _dnsbl_is_ipv4(host):
-            return None  # IP-anchored -> PHP firewall path; Python skips (no leak)
+        if _dnsbl_is_ipv4(host) or _dnsbl_is_numeric_host(host):
+            return None  # IP-anchored (any IPv4 spelling) -> PHP firewall path; Python skips (no leak)
         dom, bucket = _normalise_verdict(host)
         if dom is None:
             if tally is not None and bucket is not None:
@@ -4574,7 +4593,7 @@ def parse_abp(
         first, target = parts[0], parts[1].strip()
         if not _dnsbl_is_ipv4(first):
             return None  # not a hosts line (a real ABP line never has a bare space)
-        if _dnsbl_is_ipv4(target):
+        if _dnsbl_is_ipv4(target) or _dnsbl_is_numeric_host(target):
             return None  # "<ip> <ip>" -> firewall path
         dom, bucket = _normalise_verdict(target)
         if dom is None:
@@ -4702,7 +4721,9 @@ def _normalise_verdict(value: str) -> tuple[str | None, str | None]:
     itself stays a pure ``str | None`` wrapper (public contract unchanged).
     """
     host = value.strip().strip(".").lower()
-    if "." not in host:
+    if "." not in host or (_dnsbl_is_numeric_host(host) and not _dnsbl_is_ipv4(host)):
+        # A numeric last label makes clients parse the name as an IPv4 literal. Canonical quads
+        # stay accepted here: parse() owns the bare-IP skip (test_adr06_build_module).
         return None, "shape"
     if not _dnsbl_within_wire_caps(host):
         return None, "wire_cap"

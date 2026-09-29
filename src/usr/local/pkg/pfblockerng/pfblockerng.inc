@@ -9878,7 +9878,8 @@ function pfb_dnsbl_unbracket_ip6(string $line): string {
 // actually dials. Returns NULL when $host is not numeric-shaped (last label neither all digits nor
 // 0x-hex, or any ':' -- IPv6 is not an IPv4 spelling), array('ip' => 'a.b.c.d') when valid, and
 // array('ip' => NULL) when numeric-shaped but invalid (bad digit, overflow, more than four parts).
-// Canonical dotted quads return themselves. Shared table tests/fixtures/ipv4_numeric_host.json.
+// Canonical dotted quads return themselves. Twin: pfb_unbound.py _dnsbl_is_numeric_host();
+// shared table tests/fixtures/ipv4_numeric_host.json.
 function pfb_ipv4_numeric_host(string $host): ?array {
 	if (str_contains($host, ':')) {
 		return NULL;

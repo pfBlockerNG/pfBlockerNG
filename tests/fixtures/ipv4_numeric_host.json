@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared table for tests/php/Ipv4NumericHostTest.php (pfb_ipv4_numeric_host). Each case is [host, expected]: null = not numeric-shaped (PHP NULL); a dotted quad = valid (PHP ['ip' => quad]); false = numeric-shaped but invalid (PHP ['ip' => NULL]). Valid decodes follow the WHATWG URL-standard IPv4 parser.",
+  "_comment": "Shared by tests/php/Ipv4NumericHostTest.php (pfb_ipv4_numeric_host) and tests/test_ipv4_numeric_host.py (_dnsbl_is_numeric_host). Each case is [host, expected]: null = not numeric-shaped (PHP NULL, Python False); a dotted quad = valid (PHP ['ip' => quad], Python True); false = numeric-shaped but invalid (PHP ['ip' => NULL], Python True). Valid decodes follow the WHATWG URL-standard IPv4 parser.",
   "cases": [
     ["", null],
     ["example.com", null],

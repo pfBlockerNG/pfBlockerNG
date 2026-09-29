@@ -11,7 +11,8 @@ use PHPUnit\Framework\TestCase;
  *
  * Hex/octal/DWORD and short spellings of an IPv4 address ('0xC0A80164', '192.168.356') reach a
  * real address in every client, so ingest and the feed-host guard must see that address, not a
- * name. The table lives in tests/fixtures/ipv4_numeric_host.json.
+ * name. The table in tests/fixtures/ipv4_numeric_host.json is shared with the Python shape twin
+ * (tests/test_ipv4_numeric_host.py) so both halves classify the same inputs the same way.
  */
 #[CoversFunction('pfb_ipv4_numeric_host')]
 final class Ipv4NumericHostTest extends TestCase
