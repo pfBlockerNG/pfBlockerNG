@@ -15404,6 +15404,8 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			$file_data = @file_get_contents("{$list_download}", FALSE, stream_context_create(array('http' => array('follow_location' => 0))));
 			$status_line = ($file_data !== FALSE) ? ($http_response_header[0] ?? '') : '';
 			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+2#', $status_line)) {
+				// Control bytes -> space, as pfb_validate_log_line() does: the status line is received text.
+				$status_line = preg_replace('/[\x00-\x1F\x7F]/', ' ', $status_line) ?? '';
 				$log = "\n[ {$header} ] local feed answered with {$status_line} \xe2\x80\x94 skipped\n";
 				pfb_logger("{$log}", "{$logtype}");
 				return PfbDownloadResult::failure();

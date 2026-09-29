@@ -280,6 +280,71 @@ PHP;
 		$this->assertStringContainsString("HTTP/1.1 {$code}", $log, $msg);
 	}
 
+	/**
+	 * Starts a raw-socket server that answers one request with $response verbatim
+	 * (`php -S` normalises reason phrases, so it cannot serve control bytes).
+	 */
+	private function startRawServer(string $response): int
+	{
+		$this->makeWorkdir();
+		$script = "{$this->workdir}/raw.php";
+		$this->assertNotFalse(file_put_contents($script, <<<'PHP'
+<?php
+[, $portFile, $eventLog, $responseFile] = $argv;
+$server = stream_socket_server('tcp://127.0.0.1:0', $errno, $error);
+if ($server === FALSE) {
+	exit(1);
+}
+$name = (string) stream_socket_get_name($server, FALSE);
+file_put_contents("{$portFile}.tmp", substr($name, strrpos($name, ':') + 1));
+rename("{$portFile}.tmp", $portFile);
+while (($conn = @stream_socket_accept($server, 30)) !== FALSE) {
+	file_put_contents($eventLog, (string) fgets($conn), FILE_APPEND);
+	while (($line = fgets($conn)) !== FALSE && rtrim($line, "\r\n") !== '') {
+	}
+	fwrite($conn, (string) file_get_contents($responseFile));
+	fclose($conn);
+}
+PHP));
+		$this->assertNotFalse(file_put_contents("{$this->workdir}/response.bin", $response));
+		$portFile = "{$this->workdir}/port";
+		$proc = proc_open(
+			['php', $script, $portFile, "{$this->workdir}/events.log", "{$this->workdir}/response.bin"],
+			[1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+			$pipes
+		);
+		$this->assertIsResource($proc);
+		$this->servers[] = $proc;
+		for ($i = 0; $i < 100 && !is_file($portFile); $i++) {
+			usleep(50000);
+		}
+		$port = (int) @file_get_contents($portFile);
+		$this->assertGreaterThan(0, $port, 'raw fixture server did not start');
+		return $port;
+	}
+
+	/** A 3xx whose reason phrase carries control bytes is refused and logged as one clean line. */
+	public function testRedirectReasonControlBytesAreStrippedFromLog(): void
+	{
+		$reason = "Found\r[ Other ] Downloading update .......... completed .\x1b[2J\x7f\x00\tTAIL";
+		$port   = $this->startRawServer(
+			"HTTP/1.1 302 {$reason}\r\nLocation: /list.txt\r\nContent-Length: 2\r\nConnection: close\r\n\r\nRB"
+		);
+		$result = $this->fetch("http://127.0.0.1:{$port}/redir-ctl");
+		$msg    = $this->failureMessage($result);
+
+		$this->assertFalse($result->success, $msg);
+		$this->assertFileDoesNotExist("{$this->workdir}/feed.txt.raw", $msg);
+		$this->assertStringNotContainsString('/list.txt', (string) @file_get_contents("{$this->workdir}/events.log"), $msg);
+
+		$log   = (string) @file_get_contents($GLOBALS['pfb']['log']);
+		$lines = array_values(array_filter(explode("\n", $log), static fn(string $l): bool => str_contains($l, self::REASON)));
+		$this->assertCount(1, $lines, $msg);
+		$this->assertStringContainsString(self::REASON . 'HTTP/1.1 302 Found', $lines[0], $msg);
+		$this->assertStringEndsWith("TAIL \xe2\x80\x94 skipped", $lines[0], $msg);
+		$this->assertDoesNotMatchRegularExpression('/[\x00-\x09\x0B-\x1F\x7F]/', $log, $msg);
+	}
+
 	/** Control: a plain file path under the data directory is read as before. */
 	public function testPlainFilePathIsSaved(): void
 	{
