@@ -211,7 +211,12 @@ class ReferencePipeline:
         host = host.strip().strip(".").lower()
         if "." not in host and not single_label_ok:
             return None
-        if host.rsplit(".", 1)[-1].isdigit():
+        if len(host) > 253:
+            return None
+        last = host.rsplit(".", 1)[-1]
+        if last[:2] == "0x" and all(c in "0123456789abcdef" for c in last[2:]):
+            return None  # a 0x-hex last label parses as an IPv4 literal
+        if last.isdigit():
             try:
                 ipaddress.IPv4Address(host)
             except ValueError:
@@ -304,7 +309,7 @@ class ReferencePipeline:
             domain = self._validate_domain(body, body.startswith("."))
             if domain is None and body is not line:
                 body = line
-                domain = self._validate_domain(line, line.startswith("."))
+                domain = self._validate_domain(line)
             if domain is None:
                 continue
             self.white_db[domain] = body.startswith(".")
@@ -734,13 +739,19 @@ class TestReferencePipelineSanity:
             "01.02.03.04",
             "1.2.3.4",
             ". example.com",
+            ".0x10",
+            "example.0x10",
+            ".".join(["a" * 63] * 3 + ["b" * 59, "co"]),
         ]
+        assert len(entries[-1]) == 254
         pipeline = ReferencePipeline({"feeds": []}, {"user_whitelist": entries}, top1m_enabled=False)
         pipeline._build_whitelist()
         prod = pfb_unbound._dnsbl_normalise_whitelist(entries, [], False)
         assert {k: v["wildcard"] for k, v in prod.items()} == pipeline.white_db
         assert {"lan", "internal", "a" * 63, "www.com", "1.2.3.4"} <= set(pipeline.white_db)
-        assert not {"123", "1", "a" * 64, "example.123", "01.02.03.04"} & set(pipeline.white_db)
+        assert not {"123", "1", "a" * 64, "example.123", "01.02.03.04", "0x10", "example.0x10", entries[-1]} & set(
+            pipeline.white_db
+        )
 
     def test_top1m_loads_whitelist_when_enabled(self) -> None:
         pipeline, _ = _make_pipeline(top1m_enabled=True)
