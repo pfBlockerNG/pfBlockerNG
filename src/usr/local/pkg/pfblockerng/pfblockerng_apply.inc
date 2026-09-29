@@ -365,8 +365,8 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	}
 
 	if ($vtype == '_v4') {
-		$pfb_whole = trim($raw_line);
-		if (preg_match('/^[a-z][a-z0-9+.\-]*:\/\//i', $pfb_whole, $pfb_scheme)) {
+		$pfb_whole = $result['line'];	// the trimmed raw line ($line may already be cut at a space)
+		if (str_contains($pfb_whole, '://') && preg_match('/^[a-z][a-z0-9+.\-]*:\/\//i', $pfb_whole, $pfb_scheme)) {
 			// 'scheme://' + a non-canonical IPv4 host: decode it the way a client does (WHATWG);
 			// the regex below then reads only the rest of the line, never the host or userinfo.
 			// ponytail: a URL mid-line (regex/HTML feeds) is not decoded.
@@ -374,7 +374,8 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 			$pfb_authority	= substr($pfb_rest, 0, strcspn($pfb_rest, "/?# \t\n\r\v\f"));
 			$pfb_at		= strrpos($pfb_authority, '@');
 			$pfb_host	= preg_replace('/:[0-9]*$/', '', $pfb_at === FALSE ? $pfb_authority : substr($pfb_authority, $pfb_at + 1));
-			$pfb_numeric	= pfb_ipv4_numeric_host($pfb_host);
+			// A host longer than a DNS name (253) is no address; skip the label split.
+			$pfb_numeric	= strlen($pfb_host) <= 253 ? pfb_ipv4_numeric_host($pfb_host) : NULL;
 			if ($pfb_numeric !== NULL && $pfb_numeric['ip'] !== $pfb_host) {
 				if ($pfb_numeric['ip'] === NULL) {
 					$result['parse_fail_delta']++;
@@ -577,17 +578,14 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 		}
 	}
 
-	// A bare hex/DWORD token ('0xC0A80164', '0xc0.0xa8.0x1.0x64') is a parse failure despite its
-	// letters. Whitespace-free lines whose every dot-label is a number only: 'Mozilla/5.0',
-	// 'v1.2.3' and 'foo.123' are text, not hosts.
-	// ponytail: only when the line yields nothing ('0xC0A80164 1.2.3.4' is not logged).
-	// The numeric helper returns a canonical quad unchanged, so 'ip' !== token means non-canonical
-	// (or invalid); unlike is_ipaddrv4()/ip2long() it never throws on a NUL byte.
+	// A bare hex/DWORD token ('0xC0A80164') is a parse failure despite its letters, but only when
+	// every dot-label is a number: 'v1.2.3', 'foo.123' and 'version 1.2.3' are text.
 	$pfb_bare_numeric = FALSE;
-	if ($vtype == '_v4' && empty($result['entries']) && $result['parse_fail_delta'] == 0 && strpbrk($line, " \t") === FALSE) {
+	if ($vtype == '_v4') {
 		$pfb_tok = preg_replace('/\/[0-9]{1,2}$/', '', $line);
-		$pfb_bare = preg_match('/^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$/i', $pfb_tok) ? pfb_ipv4_numeric_host($pfb_tok) : NULL;
-		$pfb_bare_numeric = str_contains($line, "\0") || ($pfb_bare !== NULL && $pfb_bare['ip'] !== $line);
+		$pfb_bare = strlen($pfb_tok) <= 253 && preg_match('/^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$/i', $pfb_tok) ?
+		    pfb_ipv4_numeric_host($pfb_tok) : NULL;
+		$pfb_bare_numeric = $pfb_bare !== NULL && $pfb_bare['ip'] !== $line;
 	}
 	if (!empty($line) && (!preg_match('/[a-zA-Z,;|\"\'?]/', $line) || $pfb_bare_numeric) &&
 	    !pfb_ip_is_opposite_family($line, $vtype)) {
