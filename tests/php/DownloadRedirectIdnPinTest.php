@@ -52,7 +52,7 @@ final class DownloadRedirectIdnPinTest extends TestCase
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [];
 		$GLOBALS['pfb_test_resolve_map'] = [];
-		foreach ([self::ORIGIN_HOST, 'xn--bcher-kva.example', "b\u{FC}cher.example", "fa\u{DF}.example", 'xn--fa-hia.example'] as $host) {
+		foreach ([self::ORIGIN_HOST, 'xn--bcher-kva.example', "b\u{FC}cher.example", "fa\u{DF}.example"] as $host) {
 			$GLOBALS['pfb_test_resolve_map']["{$host}."] = [
 				['type' => 'A', 'data' => '127.0.0.1'],
 				['type' => 'A', 'data' => '203.0.113.21'],
@@ -233,7 +233,7 @@ PHP;
 		$this->assertTrue($result->success, $this->failureMessage($result, $rows));
 		$this->assertSame(
 			[
-				[$this->originPort, $rows[0][1] ?? '', self::ORIGIN_HOST . ":{$this->originPort}", NULL, NULL],
+				[$this->originPort, '/redir?' . http_build_query(['host' => $hopHost, 'port' => $this->targetPort]), self::ORIGIN_HOST . ":{$this->originPort}", NULL, NULL],
 				[$this->targetPort, '/list.txt', "{$mappedHost}:{$this->targetPort}", NULL, NULL],
 			],
 			$rows,
@@ -264,5 +264,13 @@ PHP;
 			$rows[1],
 			'a hop to a different host must carry no credentials'
 		);
+	}
+
+	public function testUnicodeOriginFeedUrlIsRefusedAtEntryValidation(): void
+	{
+		// A non-ASCII host in the feed URL itself never reaches a fetch, so only redirect hops carry one.
+		[$result, $rows] = $this->downloadVia("b\u{FC}cher.example", 'xn--bcher-kva.example', $this->targetPort);
+		$this->assertFalse($result->success);
+		$this->assertSame([], $rows, 'no request may reach either fixture');
 	}
 }

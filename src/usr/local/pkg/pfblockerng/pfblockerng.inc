@@ -14922,6 +14922,7 @@ function pfb_feed_redirect_target($location, $current_url, &$reason, &$pinned) {
 	}
 
 	// A non-ASCII host is returned (and dialled) in its mapped form, the one the guard vetted.
+	// The URL is rebuilt too, so the request stays on the vetted name where libcurl lacks IDN support.
 	if ($ascii_host !== $host) {
 		$target = "{$scheme}://"
 		    . (isset($parts['user']) ? $parts['user'] . (isset($parts['pass']) ? ":{$parts['pass']}" : '') . '@' : '')

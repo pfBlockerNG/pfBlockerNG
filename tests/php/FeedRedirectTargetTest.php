@@ -187,6 +187,7 @@ final class FeedRedirectTargetTest extends TestCase
 		$this->assertFalse(pfb_feed_host_allowed($host, $reason, $pinned, $ascii));
 		$this->assertSame($expectedReason, $reason);
 		$this->assertSame('', $ascii);
+		$this->assertSame('', $pinned, 'a refused host is never pinned');
 	}
 
 	public function testAsciiHostIsReturnedUntouchedInMappedOutParam(): void
