@@ -34,6 +34,7 @@ final class AbpExtractIpTest extends TestCase
 			'abp anchor unclosed bracket -> none' => ['||[2001:db8::1', ''],
 			'abp anchor bracketed non-ip -> none' => ['||[not-an-ip]^', ''],
 			'abp anchor bracketed v4 -> none' => ['||[192.0.2.1]^', ''],
+			'abp anchor bracketed v6 + port -> none' => ['||[2001:db8::1]:443^', ''],
 			'abp anchor domain -> none' => ['||example.com^', ''],
 			'hosts sink + ip target'   => ['0.0.0.0 192.0.2.9', '192.0.2.9'],
 			'hosts v6 sink + ip target' => ['::1 2001:db8::1', '2001:db8::1'],
