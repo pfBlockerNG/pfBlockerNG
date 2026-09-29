@@ -272,5 +272,11 @@ PHP;
 		[$result, $rows] = $this->downloadVia("b\u{FC}cher.example", 'xn--bcher-kva.example', $this->targetPort);
 		$this->assertFalse($result->success);
 		$this->assertSame([], $rows, 'no request may reach either fixture');
+		$errors = (string) @file_get_contents("{$this->workdir}/error.log");
+		$this->assertStringContainsString(
+			'[PFB_FILTER - ' . PFB_FILTER_URL . '] Invalid URL',
+			$errors,
+			'the refusal must come from the PFB_FILTER_URL entry gate, not a downstream fetch failure'
+		);
 	}
 }
