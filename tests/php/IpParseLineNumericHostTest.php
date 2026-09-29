@@ -193,14 +193,14 @@ final class IpParseLineNumericHostTest extends TestCase
 	{
 		$cases = [];
 		foreach (['auto', 'regex'] as $pftype) {
-			foreach (["fe80::\x00a%eth0", "2001:db8::1\x00junk", "2001:db8::\x00a"] as $line) {
+			foreach (["fe80::\x00a%eth0", "2001:db8::1\x00junk", "2001:db8::\x00a", "fe80::\x00a%eth0 -x", "fe80::\x00a\tfoo", "fe80::\x00a-eth0", "fe80::1\x00x-fe80::2", "fe80::1-fe80::\x002"] as $line) {
 				$cases["{$pftype}: " . bin2hex($line)] = [$pftype, $line];
 			}
 		}
 		return $cases;
 	}
 
-	/** An address cut at a NUL byte is not collected: single-token v6 line, no entry, detailed failure. */
+	/** An address cut at a NUL byte (text continues past it within a token or range endpoint) is not collected. */
 	#[DataProvider('v6NulLineProvider')]
 	public function testV6NulCutAddressIsAParseFailure(string $pftype, string $line): void
 	{
