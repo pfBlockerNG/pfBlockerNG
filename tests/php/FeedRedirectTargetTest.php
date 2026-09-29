@@ -138,6 +138,7 @@ final class FeedRedirectTargetTest extends TestCase
 			'plain mapped host with port' => ['http://bücher.example:8081/x', 'bücher.example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081/x'],
 			'userinfo, query kept, fragment dropped' => ['http://u:p@bücher.example:8081/x?q=a%20b#f', 'bücher.example', 'xn--bcher-kva.example', 'http://u:p@xn--bcher-kva.example:8081/x?q=a%20b'],
 			'trailing dot kept' => ['http://bücher.example.:8081/x', 'bücher.example.', 'xn--bcher-kva.example.', 'http://xn--bcher-kva.example.:8081/x'],
+			'ascii trailing dot kept' => ['http://feed.example.:8081/x', 'feed.example.', 'feed.example.', 'http://feed.example.:8081/x'],
 			'uppercase lowercased' => ['http://BÜCHER.Example:8081/x', 'BÜCHER.Example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081/x'],
 			'mixed labels, no port' => ['http://ascii.bücher.example/x', 'ascii.bücher.example', 'ascii.xn--bcher-kva.example', 'http://ascii.xn--bcher-kva.example/x'],
 			'empty path' => ['http://bücher.example:8081', 'bücher.example', 'xn--bcher-kva.example', 'http://xn--bcher-kva.example:8081'],
@@ -148,7 +149,7 @@ final class FeedRedirectTargetTest extends TestCase
 	#[DataProvider('mappedHostProvider')]
 	public function testNonAsciiRedirectHostIsReturnedMapped(string $location, string $rawHost, string $mappedHost, string $mappedUrl): void
 	{
-		$GLOBALS['pfb_test_resolve_map']["{$mappedHost}."] = [
+		$GLOBALS['pfb_test_resolve_map'][rtrim($mappedHost, '.') . '.'] = [
 			['type' => 'A', 'data' => '203.0.113.41'],
 		];
 		[$result, $reason, $pinned] = $this->redirect($location, 'https://feed.example/list.txt');

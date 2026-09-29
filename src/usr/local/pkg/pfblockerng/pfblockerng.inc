@@ -14795,7 +14795,7 @@ function pfb_feed_host_allowed($host, &$reason, &$pinned, &$ascii_host = '') {
 	} else {
 		// Resolve the mapped ASCII form: the resolver has no IDN handling, and it is
 		// the name the caller pins and dials.
-		$records = resolve_host_addresses("{$ascii_host}.");
+		$records = resolve_host_addresses(rtrim($ascii_host, ".") . ".");
 		if (empty($records) || !is_array($records)) {
 			$reason = 'feed host did not resolve';
 			return FALSE;

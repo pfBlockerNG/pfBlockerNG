@@ -88,7 +88,7 @@ final class FeedHostPercentEncodedTest extends TestCase
 		$ascii = preg_match('/[^\x00-\x7F]/', $host) === 1
 		    ? idn_to_ascii($host, IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_ASCII, INTL_IDNA_VARIANT_UTS46)
 		    : $host;
-		$GLOBALS['pfb_test_resolve_map']["{$ascii}."] = [['type' => 'A', 'data' => $ip]];
+		$GLOBALS['pfb_test_resolve_map'][rtrim((string) $ascii, '.') . '.'] = [['type' => 'A', 'data' => $ip]];
 	}
 
 	// --- G: pfb_feed_host_allowed(), percent-encoded hosts (T1 + ADDENDUM A) ---
