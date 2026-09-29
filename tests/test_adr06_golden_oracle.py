@@ -65,6 +65,7 @@ documented (each ``feed_*.txt`` header says what it encodes; ``config.json`` /
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from collections import defaultdict
@@ -203,15 +204,20 @@ class ReferencePipeline:
 
     @staticmethod
     def _validate_domain(host: str, single_label_ok: bool = False) -> str | None:
-        """Lower-case + PFB_FILTER_DOMAIN shape gate (mirrors pfb_filter()'s PFB_FILTER_DOMAIN case);
-        ``single_label_ok`` admits a wildcard single label for the user whitelist (#3378)."""
+        """Lower-case + domain-shape gate, written independently of production normalise():
+        label charset ``[a-z0-9_-]`` (underscore per #723), no edge hyphen, labels <= 63, a
+        numeric last label only for a canonical IPv4 quad (parse() owns those); ``single_label_ok``
+        admits a wildcard single label for the user whitelist (#3378)."""
         host = host.strip().strip(".").lower()
         if "." not in host and not single_label_ok:
             return None
-        # Representative domain-shape gate (labels of [a-z0-9_-], underscore per
-        # #723 — parity with pfb_filter()'s PFB_FILTER_DOMAIN case).
+        if host.rsplit(".", 1)[-1].isdigit():
+            try:
+                ipaddress.IPv4Address(host)
+            except ValueError:
+                return None
         for label in host.split("."):
-            if not label or label[0] == "-" or label[-1] == "-":
+            if not label or len(label) > 63 or label[0] == "-" or label[-1] == "-":
                 return None
             if any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for c in label):
                 return None
@@ -707,6 +713,34 @@ class TestReferencePipelineSanity:
             "www.com": False,
             "com": True,
         }
+
+    def test_oracle_and_production_agree_on_edge_whitelist_entries(self) -> None:
+        # Independent validators must agree on the label-length cap, numeric labels, single
+        # labels and hand-edited stored shapes, so dropping a check in either one fails here.
+        entries = [
+            ".123",
+            ".1",
+            ".lan",
+            ".internal",
+            "lan",
+            "a" * 64 + ".com",
+            "." + "a" * 64,
+            "." + "a" * 63,
+            ".-bad",
+            ".bad-",
+            "www..lan",
+            "www.com",
+            "example.123",
+            "01.02.03.04",
+            "1.2.3.4",
+            ". example.com",
+        ]
+        pipeline = ReferencePipeline({"feeds": []}, {"user_whitelist": entries}, top1m_enabled=False)
+        pipeline._build_whitelist()
+        prod = pfb_unbound._dnsbl_normalise_whitelist(entries, [], False)
+        assert {k: v["wildcard"] for k, v in prod.items()} == pipeline.white_db
+        assert {"lan", "internal", "a" * 63, "www.com", "1.2.3.4"} <= set(pipeline.white_db)
+        assert not {"123", "1", "a" * 64, "example.123", "01.02.03.04"} & set(pipeline.white_db)
 
     def test_top1m_loads_whitelist_when_enabled(self) -> None:
         pipeline, _ = _make_pipeline(top1m_enabled=True)

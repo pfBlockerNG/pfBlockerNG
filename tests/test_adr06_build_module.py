@@ -336,14 +336,13 @@ class TestWhitelistNormalisation:
             assert pfb_unbound._dnsbl_normalise_whitelist([entry], [], False) == {}, entry
         assert list(pfb_unbound._dnsbl_normalise_whitelist(["." + "a" * 63], [], False)) == ["a" * 63]
 
-    def test_space_after_leading_dot_is_not_a_wildcard(self) -> None:
-        assert pfb_unbound._dnsbl_normalise_whitelist([". example.com"], [], False) == {}
-
     def test_wildcard_flag_follows_the_www_stripped_body(self) -> None:
         # `www..example.com` strips to `.example.com`: a wildcard although the raw line
         # does not start with a dot.
         wl = pfb_unbound._dnsbl_normalise_whitelist(["www..example.com"], [], False)
         assert wl == {"example.com": {"wildcard": True, "important": True, "band": pfb_unbound.PRIO_USER_ALLOW}}
+        # A single label behind the strip is a wildcard too; a first-call flag read from the raw line drops it.
+        assert list(pfb_unbound._dnsbl_normalise_whitelist(["www..lan"], [], False)) == ["lan"]
 
     def test_single_label_wildcard_end_to_end_with_tld_allow(self) -> None:
         result = pfb_unbound.build({"feeds": []}, {"user_whitelist": [".lan"]}, line_reader=lambda raw: [])
@@ -355,14 +354,9 @@ class TestWhitelistNormalisation:
             "tld_allow_list": ["com"],
             "dnsbl_ipv4": "10.10.10.1",
             "dnsbl_ipv6": "::1",
-            "python_idn": False,
-            "regexDB": False,
             "whiteDB": True,
-            "allowRegexDB": False,
-            "important_rules": False,
             "python_tld_seg": 1,
             "hstsDB": False,
-            "hsts_tlds": ("app", "dev"),
         }
         containers = {
             "dataDB": {},
@@ -370,7 +364,6 @@ class TestWhitelistNormalisation:
             "whiteDB": result.white_db,
             "hstsDB": {},
             "regexDB": {},
-            "allowRegexDB": {},
             "feedGroupIndexDB": {},
         }
         allowed = pfb_unbound.evaluate_domain("printer.lan", "printer.lan", "lan", False, cfg, containers)
