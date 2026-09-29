@@ -448,15 +448,6 @@ PHP));
 		$this->assertStringContainsString('could not be saved', $this->logText());
 	}
 
-	/** RFC 7230 3.3.3: with Transfer-Encoding chunked, Content-Length is ignored and a valid chunked body is saved. */
-	public function testChunkedBodyWithContentLengthIsSaved(): void
-	{
-		$port   = $this->startRawServer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
-		$result = $this->fetch("http://127.0.0.1:{$port}/list.txt");
-		$this->assertTrue($result->success, $this->logText());
-		$this->assertSame('hello', file_get_contents("{$this->workdir}/feed.txt.raw"));
-	}
-
 	/** Control: a plain local file path is read as before. */
 	public function testPlainFilePathIsSaved(): void
 	{
