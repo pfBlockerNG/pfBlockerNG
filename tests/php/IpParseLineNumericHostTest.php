@@ -107,6 +107,12 @@ final class IpParseLineNumericHostTest extends TestCase
 			'carriage return ends the authority' => ["http://0x7f000001\r1.2.3.4", ['127.0.0.1', '1.2.3.4'], FALSE],
 			'form feed ends the authority' => ["http://0x7f000001\f1.2.3.4", ['127.0.0.1', '1.2.3.4'], FALSE],
 			'newline ends the authority' => ["http://0x7f000001\n1.2.3.4", ['127.0.0.1', '1.2.3.4'], FALSE],
+			'backslash ends the authority' => ['http://0x7f000001\\x', ['127.0.0.1'], FALSE],
+			'backslash after octal host' => ['http://010.010.010.010\\x', ['8.8.8.8'], FALSE],
+			'backslash then quad'        => ['http://0x7f000001\\1.2.3.4', ['127.0.0.1', '1.2.3.4'], FALSE],
+			'NUL ends the authority'     => ["http://0x7f000001\x00/x", ['127.0.0.1'], FALSE],
+			'NUL then quad'              => ["http://0x7f000001\x001.2.3.4", ['127.0.0.1', '1.2.3.4'], FALSE],
+			'canonical host range stays expanded' => ['http://1.2.3.4-1.2.3.10', ['1.2.3.4/30', '1.2.3.8/31', '1.2.3.10'], FALSE],
 			'fragment after port'        => ['http://0x7f000001:80#f', ['127.0.0.1'], FALSE],
 			'scheme starts with a digit' => ['1http://0x7f000001/x', [], FALSE],
 			'bare hex + quad (ceiling)'  => ['0xC0A80164 1.2.3.4', ['1.2.3.4'], FALSE],
@@ -192,24 +198,44 @@ final class IpParseLineNumericHostTest extends TestCase
 		$this->assertSame([], $counted);
 	}
 
-	/** @return array<string, array{string, string}> */
+	/** @return array<string, array{string, string, list<string>}> */
 	public static function v6NulLineProvider(): array
 	{
+		$rows = [
+			// An interior NUL cuts the token: no entry, and NUL alone is not a counted failure.
+			["fe80::\x00a%eth0", []],
+			["2001:db8::1\x00junk", []],
+			["2001:db8::\x00a", []],
+			["fe80::\x00a%eth0 -x", []],
+			["fe80::\x00a\tfoo", []],
+			["fe80::\x00a-eth0", []],
+			["fe80::1\x00x-fe80::2", []],
+			["fe80::1-fe80::\x002", []],
+			// Other tokens on the line are unaffected.
+			["2001:db8::1 xx\x00yy", ['2001:db8::1']],
+			["xx\x00yy 2001:db8::1", ['2001:db8::1']],
+		];
 		$cases = [];
 		foreach (['auto', 'regex'] as $pftype) {
-			foreach (["fe80::\x00a%eth0", "2001:db8::1\x00junk", "2001:db8::\x00a", "fe80::\x00a%eth0 -x", "fe80::\x00a\tfoo", "fe80::\x00a-eth0", "fe80::1\x00x-fe80::2", "fe80::1-fe80::\x002"] as $line) {
-				$cases["{$pftype}: " . bin2hex($line)] = [$pftype, $line];
+			foreach ($rows as [$line, $entries]) {
+				$cases["{$pftype}: " . bin2hex($line)] = [$pftype, $line, $entries];
 			}
 		}
 		return $cases;
 	}
 
-	/** An address cut at a NUL byte (text continues past it within a token or range endpoint) is not collected. */
+	/**
+	 * A token with an interior NUL never yields an address cut at the NUL; other tokens are kept.
+	 * The counting follows the v4 side: NUL alone is not a parse failure (rows that used to expect
+	 * a counted failure now expect none, since the cut token is dropped and the rest is empty).
+	 *
+	 * @param list<string> $entries
+	 */
 	#[DataProvider('v6NulLineProvider')]
-	public function testV6NulCutAddressIsAParseFailure(string $pftype, string $line): void
+	public function testV6NulCutTokenYieldsNoAddress(string $pftype, string $line, array $entries): void
 	{
 		$result = pfb_ip_parse_line($line, self::config('_v6', $pftype));
-		$this->assertSame([[], TRUE, 1], [$result['entries'], $result['detailed_parse_fail'], $result['parse_fail_delta']]);
+		$this->assertSame([$entries, 0], [$result['entries'], $result['parse_fail_delta']]);
 	}
 
 	/** @return array<string, array{string, string}> */
