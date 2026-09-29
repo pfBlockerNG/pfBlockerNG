@@ -15432,7 +15432,10 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// $pfb['local_max_bytes'] is the test seam, mirroring $pfb['rsync_max_bytes'].
 			$local_ceiling = isset($GLOBALS['pfb']['local_max_bytes']) ? (int) $GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
 			unlink_if_exists("{$file_download}");	// a refusal at any point leaves no earlier .raw behind
-			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0) + ($timeout > 0 ? array('timeout' => $timeout) : array()))));
+			// One budget for the whole fetch, connect and headers included; $timeout <= 0 lifts
+			// every wait (context timeout -1 also overrides the ambient default_socket_timeout).
+			$local_start = hrtime(TRUE);
+			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0, 'timeout' => $timeout > 0 ? $timeout : -1))));
 			$status_line = ($local_in !== FALSE) ? ($http_response_header[0] ?? '') : '';
 			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+(200|221|226)(\s|$)#', $status_line)) {
 				// Control bytes -> space, as pfb_validate_log_line() does: the status line is received text.
@@ -15475,7 +15478,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				// Whole-transfer deadline, as cURL's CURLOPT_TIMEOUT: each read waits at most
 				// the time left, so a body dripping under a per-read timeout still fails.
 				// $timeout <= 0 means no limit, as with CURLOPT_TIMEOUT.
-				$local_deadline = hrtime(TRUE) + $timeout * 1000000000;
+				$local_deadline = $local_start + $timeout * 1000000000;
 				while (!feof($local_in) && $local_copied <= $local_ceiling && ($local_declared < 0 || $local_copied < $local_declared)) {
 					if ($timeout > 0) {
 						$local_left = ($local_deadline - hrtime(TRUE)) / 1e9;
