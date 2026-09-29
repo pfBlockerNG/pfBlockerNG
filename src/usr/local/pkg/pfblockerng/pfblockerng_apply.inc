@@ -569,13 +569,15 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	}
 
 	// A bare hex/DWORD token ('0xC0A80164', '0xc0.0xa8.0x1.0x64') is a parse failure despite its
-	// letters. Single-token lines only: regex-mode text such as 'version 1.2.3' is not a host.
+	// letters. Whitespace-free lines whose every dot-label is a number only: 'Mozilla/5.0',
+	// 'v1.2.3' and 'foo.123' are text, not hosts.
 	// ponytail: only when the line yields nothing ('0xC0A80164 1.2.3.4' is not logged).
 	// The numeric helper returns a canonical quad unchanged, so 'ip' !== token means non-canonical
 	// (or invalid); unlike is_ipaddrv4()/ip2long() it never throws on a NUL byte.
 	$pfb_bare_numeric = FALSE;
 	if ($vtype == '_v4' && empty($result['entries']) && $result['parse_fail_delta'] == 0 && strpbrk($line, " \t") === FALSE) {
-		$pfb_bare = pfb_ipv4_numeric_host(preg_replace('/\/[0-9]{1,2}$/', '', $line));
+		$pfb_tok = preg_replace('/\/[0-9]{1,2}$/', '', $line);
+		$pfb_bare = preg_match('/^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$/i', $pfb_tok) ? pfb_ipv4_numeric_host($pfb_tok) : NULL;
 		$pfb_bare_numeric = str_contains($line, "\0") || ($pfb_bare !== NULL && $pfb_bare['ip'] !== $line);
 	}
 	if (!empty($line) && (!preg_match('/[a-zA-Z,;|\"\'?]/', $line) || $pfb_bare_numeric) &&
