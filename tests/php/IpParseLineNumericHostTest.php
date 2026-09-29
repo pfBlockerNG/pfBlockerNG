@@ -78,6 +78,20 @@ final class IpParseLineNumericHostTest extends TestCase
 			'bare hex with prefix len'  => ['0xC0A80164/32', [], TRUE],
 			'text ending in a number'    => ['version 1.2.3', [], FALSE],
 			'tabbed text ending in number' => ["version\t1.2.3", [], FALSE],
+			// Text whose last dot-label is numeric is not an address token: uncounted, as before.
+			'text token Mozilla/5.0' => ['Mozilla/5.0', [], FALSE],
+			'text token apache/2.4' => ['apache/2.4', [], FALSE],
+			'text token v1.2.3' => ['v1.2.3', [], FALSE],
+			'text token v1.2.3.4' => ['v1.2.3.4', [], FALSE],
+			'text token Section2.5' => ['Section2.5', [], FALSE],
+			'text token release-2.10' => ['release-2.10', [], FALSE],
+			'text token foo.123' => ['foo.123', [], FALSE],
+			'text token x.0x1f' => ['x.0x1f', [], FALSE],
+			'text token Generated-2024.09.29' => ['Generated-2024.09.29', [], FALSE],
+			'text token build.0x1f' => ['build.0x1f', [], FALSE],
+			'text token x.1' => ['x.1', [], FALSE],
+			'ipv6 literal host' => ['http://[::1]:80/x', [], FALSE],
+			'ipv6 literal hex host' => ['http://[0x7f000001]/', [], FALSE],
 			'bare hex + quad (ceiling)'  => ['0xC0A80164 1.2.3.4', ['1.2.3.4'], FALSE],
 			// An interior NUL byte is a parse failure, never an exception.
 			'bare quad with NUL'         => ["1.2\x00.3.4", [], TRUE],
@@ -114,6 +128,21 @@ final class IpParseLineNumericHostTest extends TestCase
 	{
 		$result = pfb_ip_parse_line('http://0x7f000001/x', self::config('_v4', 'auto', custom: FALSE, suppression: 'on'));
 		$this->assertSame([], $result['entries'], 'loopback decoded from a URL must still be suppressed');
+	}
+
+	public function testMappedLineStillHonoursSuppression(): void
+	{
+		$result = pfb_ip_parse_line('::ffff:7f00:1', self::config('_v4', 'auto', custom: FALSE, suppression: 'on'));
+		$this->assertSame([], $result['entries'], 'mapped loopback must still be suppressed');
+	}
+
+	public function testDecodedUrlHostHonoursTheCidrFloorLikeABareAddress(): void
+	{
+		$config = ['cidr_floor_v4' => 24] + self::config('_v4', 'auto');
+		$bare = pfb_ip_parse_line('192.168.1.100', $config)['entries'];
+		$url = pfb_ip_parse_line('http://0xC0A80164/x', $config)['entries'];
+		$this->assertSame(['192.168.1.100'], $bare);
+		$this->assertSame($bare, $url, 'a decoded URL host is sanitized with the same floor as a bare address');
 	}
 
 	/** @return array<string, array{string, string, bool}> */
