@@ -5127,10 +5127,13 @@ def _dnsbl_normalise_whitelist(
         line = raw.strip()
         if not line:
             continue
-        if line.startswith("www."):
+        if line[:4].lower() == "www.":
             line = line[4:]
         wildcard = line.startswith(".")
-        domain = line.lstrip(".")
+        # issue #3367: lower-case + domain-shape gate, like the block-list keys and TOP1M.
+        domain = normalise(line.lstrip("."))
+        if domain is None:
+            continue
         new_entry: dict[str, Any] = {"wildcard": wildcard, "important": True, "band": PRIO_USER_ALLOW}
         existing = white_db.get(domain)
         # issue #3191: colliding `.apex` / `www.apex` / bare apex widen, never last-wins demote.
