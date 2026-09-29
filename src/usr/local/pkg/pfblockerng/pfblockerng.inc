@@ -15431,6 +15431,7 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 			// A local feed does not redirect: a 3xx answer is refused on its status, never followed.
 			// $pfb['local_max_bytes'] is the test seam, mirroring $pfb['rsync_max_bytes'].
 			$local_ceiling = isset($GLOBALS['pfb']['local_max_bytes']) ? (int) $GLOBALS['pfb']['local_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
+			unlink_if_exists("{$file_download}");	// a refusal at any point leaves no earlier .raw behind
 			$local_in = @fopen("{$list_download}", 'r', FALSE, stream_context_create(array('http' => array('follow_location' => 0, 'timeout' => $timeout))));
 			$status_line = ($local_in !== FALSE) ? ($http_response_header[0] ?? '') : '';
 			if ($status_line !== '' && !preg_match('#^HTTP/\d\.\d\s+(200|221|226)(\s|$)#', $status_line)) {
@@ -15456,18 +15457,39 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 			}
 			$local_copied = 0;
+			$local_timed_out = FALSE;
 			$local_out = FALSE;
 			if ($local_declared <= $local_ceiling) {
 				$local_out = @fopen("{$file_download}", 'w');
 			}
 			if ($local_out !== FALSE) {
-				// ponytail: per-read timeout, not a whole-transfer deadline; add one if a slow drip matters.
-				stream_set_timeout($local_in, $timeout);
-				// One byte past the ceiling is enough to tell "over" from "at".
-				$local_copied = (int) stream_copy_to_stream($local_in, $local_out, $local_ceiling + 1);
+				// Whole-transfer deadline, as cURL's CURLOPT_TIMEOUT: each read waits at most
+				// the time left, so a body dripping under a per-read timeout still fails.
+				$local_deadline = microtime(TRUE) + $timeout;
+				while (!feof($local_in) && $local_copied <= $local_ceiling) {
+					$local_left = $local_deadline - microtime(TRUE);
+					if ($local_left <= 0) {
+						$local_timed_out = TRUE;
+						break;
+					}
+					stream_set_timeout($local_in, (int) $local_left, (int) (fmod($local_left, 1) * 1000000));
+					// One byte past the ceiling is enough to tell "over" from "at".
+					$local_chunk = fread($local_in, min(8192, $local_ceiling + 1 - $local_copied));
+					if ($local_chunk !== FALSE && $local_chunk !== '') {
+						$local_copied += strlen($local_chunk);
+						fwrite($local_out, $local_chunk);
+					}
+					// A read that hit its (remaining-time) timeout returns FALSE with timed_out set.
+					if (!empty(stream_get_meta_data($local_in)['timed_out'])) {
+						$local_timed_out = TRUE;
+						break;
+					}
+					if ($local_chunk === FALSE) {
+						break;
+					}
+				}
 				fclose($local_out);
 			}
-			$local_timed_out = !empty(stream_get_meta_data($local_in)['timed_out']);
 			fclose($local_in);
 			if ($local_declared > $local_ceiling || $local_copied > $local_ceiling) {
 				pfb_validate_log($header, 'size', 'local_too_large', pfb_redact_url($list_download));
