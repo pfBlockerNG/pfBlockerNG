@@ -123,4 +123,44 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		$this->assertSame(['192.0.2.9'], $ip4);
 		$this->assertSame(['2001:db8::1'], $ip6);
 	}
+
+	/** @return array<string, array{string}> */
+	public static function mappedV6Provider(): array
+	{
+		return [
+			'dotted tail' => ['::ffff:192.168.1.100'],
+			'hex tail'    => ['::ffff:c0a8:164'],
+			'upper case'  => ['::FFFF:C0A8:164'],
+			'long form'   => ['0:0:0:0:0:ffff:c0a8:164'],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider('mappedV6Provider')]
+	public function testMappedV6IsCollectedAsItsIpv4(string $mapped): void
+	{
+		// A client connecting to ::ffff:a.b.c.d sends an IPv4 packet, which never matches a
+		// v6 table entry -- the address belongs in the v4 list.
+		$ip4 = [];
+		$ip6 = [];
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip($mapped, $mapped, TRUE, $ip4, $ip6));
+		$this->assertSame([['192.168.1.100'], []], [$ip4, $ip6], "mapped {$mapped}");
+	}
+
+	public function testMappedV6UnwrapStillHonoursSuppression(): void
+	{
+		$GLOBALS['pfb']['supp'] = PfbToggle::On;
+		$ip4 = [];
+		$ip6 = [];
+		pfb_dnsbl_collect_feed_ip('::ffff:192.168.1.100', '::ffff:192.168.1.100', FALSE, $ip4, $ip6);
+		$this->assertSame([[], []], [$ip4, $ip6], 'a suppressed RFC1918 address must not land in either list');
+	}
+
+	public function testCompatibleV6StaysV6(): void
+	{
+		// ::a.b.c.d (IPv4-compatible, deprecated) is not unwrapped; pfb_ip_is_internal() treats it the same.
+		$ip4 = [];
+		$ip6 = [];
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('::192.168.1.100', '::192.168.1.100', TRUE, $ip4, $ip6));
+		$this->assertSame([[], ['::192.168.1.100']], [$ip4, $ip6]);
+	}
 }

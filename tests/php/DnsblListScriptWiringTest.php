@@ -53,7 +53,7 @@ final class DnsblListScriptWiringTest extends TestCase
 			'example.com', 'sub.example.org', '192.0.2.10', '198.51.100.20',
 			'2001:db8::1', '2001:db8::dead:beef', '||ads.example.net^',
 			'@@||allow.example.net^', 'another-domain.test', '203.0.113.5',
-			'||192.0.2.9^', '||2001:db8::9^',
+			'||192.0.2.9^', '||2001:db8::9^', '||08.08.08.08^',
 		];
 	}
 
@@ -67,6 +67,9 @@ final class DnsblListScriptWiringTest extends TestCase
 				continue;
 			}
 			$abpIp = pfb_dnsbl_abp_extract_ip($line);
+			if ($abpIp === FALSE) {
+				continue;	// numeric but invalid anchor: logged by the loop, never collected
+			}
 			if ($abpIp !== '') {
 				pfb_dnsbl_collect_feed_ip($abpIp, $abpIp, FALSE, $ip4, $ip6);
 				continue;
