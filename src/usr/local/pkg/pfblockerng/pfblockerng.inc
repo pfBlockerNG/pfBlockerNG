@@ -5031,7 +5031,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 
 	// issue #3382 (opt-in): locally originated packets never ENTER an interface, so the client rule
 	// cannot see them. Twin = floating 'out' rule from (self); no Custom Source, no gateway (route-to).
-	if ($rule_out !== null && ($pfb['fw_self'] ?? '') == 'on' && empty($asrc_out)) {
+	if ($rule_out !== null && $pfb['fw_self'] == 'on' && empty($asrc_out)) {
 		$twin = array_merge($pfb['base_rule_float'], array_intersect_key($rule_out,
 		    array_flip(array('type', 'ipprotocol', 'descr', 'destination', 'protocol', 'log', 'created'))));
 		$twin['direction'] = 'out';
@@ -10685,10 +10685,14 @@ function sync_package_pfblockerng($cron='') {
 							$new_rules[] = $cb_rules;
 						}
 					}
-					foreach ($pfb['deny_self'] ?? array() as $cb_rules) {
-						$cb_rules['interface'] = $inbound_interface;
-						$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_self');
-						$new_rules[] = $cb_rules;
+					// order_2 without Floating Rules: the user's floating rules sit between the pfB pass and block
+					// twins, so the deny twins follow them below.
+					if (!($pfb['float'] == '' && $pfb['order'] == 'order_2')) {
+						foreach ($pfb['deny_self'] ?? array() as $cb_rules) {
+							$cb_rules['interface'] = $inbound_interface;
+							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_self');
+							$new_rules[] = $cb_rules;
+						}
 					}
 				}
 			}
@@ -10759,6 +10763,15 @@ function sync_package_pfblockerng($cron='') {
 			if ($pfb['float'] == '' && $pfb['order'] != 'order_1' && !empty($fother_rules)) {
 				foreach ($fother_rules as $cb_rules) {
 					$new_rules[] = $cb_rules;
+				}
+			}
+			if ($pfb['float'] == '' && $pfb['order'] == 'order_2') {
+				foreach ($pfb['inbound_interfaces'] as $inbound_interface) {
+					foreach ($pfb['deny_self'] ?? array() as $cb_rules) {
+						$cb_rules['interface'] = $inbound_interface;
+						$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_self');
+						$new_rules[] = $cb_rules;
+					}
 				}
 			}
 			if ($pfb['order'] == 'order_4' && !empty($other_rules)) {

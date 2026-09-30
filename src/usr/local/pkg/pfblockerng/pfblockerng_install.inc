@@ -402,7 +402,7 @@ if (config_get_path('installedpackages/pfblockerng/config/0') != null &&
 
 	$settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',
 				'inbound_interface', 'inbound_deny_action', 'outbound_interface', 'outbound_deny_action',
-				'enable_float', 'fw_self_outbound', 'pass_order', 'autorule_suffix', 'killstates' );
+				'enable_float', 'pass_order', 'autorule_suffix', 'killstates' );
 
 	foreach ($settings as $setting) {
 		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting] ?: '';

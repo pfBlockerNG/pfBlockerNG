@@ -15,8 +15,13 @@ declare(strict_types=1);
  * inline rule-assembly / IP-page-handler slices straight out of the shipped sources, with
  * behavioural doubles for the pfSense platform functions.
  *   A  direction matrix           B  twin shape and suppression
- *   C  assembly guard, per-inbound-interface twin placement, bucket reset, setting read
- *   D  IP page: toggle validated before side effects, persisted, re-render guard
+ *   C  assembly guard, per-inbound-interface twin placement, bucket reset, setting read, and the WHOLE
+ *      assign-rules block over pass_order order_0..4 x Floating Rules on/off with user floating rules
+ *   D  IP page (settings read through the Save handler): toggle validated before side effects,
+ *      persisted, read back on the next load, re-render guard
+ *
+ * NOT covered: the checkbox itself (Form_Checkbox rendering, its checked state and help text) and a
+ * live pfctl ruleset -- release/3.3 has no UI tier and no smoke seat.
  */
 
 $root = dirname(__DIR__, 2);
@@ -141,9 +146,22 @@ function mwexec_bg($command)
 	$GLOBALS['ip_calls']['mwexec_bg'][] = $command;
 }
 
+function config_get_path($path, $default = null)
+{
+	if ($path === 'filter/rule') {
+		return $GLOBALS['filter_rules'] ?? $default;
+	}
+	return $GLOBALS['config_store'][$path] ?? $default;
+}
+
 function config_set_path($path, $value)
 {
+	$GLOBALS['config_store'][$path] = $value;
 	$GLOBALS['ip_calls']['config'][$path] = $value;
+}
+
+function config_read_file($cache = false, $force = false)
+{
 }
 
 function write_config($message)
@@ -176,8 +194,8 @@ const BUCKETS = [
 	'match_outbound', 'match_inbound', 'deny_self', 'permit_self', 'match_self',
 ];
 
-/** Reset $pfb as sync_package_pfblockerng() leaves it for pfb_firewall_rule(); $fw_self null = key never set. */
-function fixture(string $float, ?string $fw_self = ''): void
+/** Reset $pfb as sync_package_pfblockerng() leaves it for pfb_firewall_rule(). */
+function fixture(string $float, string $fw_self = ''): void
 {
 	$reg = production_base_rule('base_rule_reg');
 	$flt = production_base_rule('base_rule_float');
@@ -190,10 +208,8 @@ function fixture(string $float, ?string $fw_self = ''): void
 		'float'                => $float,
 		'suffix'               => ' Auto Rule',
 		'global_log'           => '',
+		'fw_self'              => $fw_self,
 	];
-	if ($fw_self !== null) {
-		$pfb['fw_self'] = $fw_self;
-	}
 	$GLOBALS['pfb'] = $pfb;
 }
 
@@ -339,15 +355,6 @@ foreach (OUTBOUND_TWINS as $action => [$bucket, $type, $clients]) {
 		only_rules(array_fill_keys($clients, 1));
 	});
 
-	row("B no twin and no diagnostic for {$action} when the toggle key was never set", static function () use ($action, $clients): void {
-		fixture('', null);
-		$seen = diagnostics_of(static function () use ($action): void {
-			pfb_firewall_rule($action, 'pfB_A', '_v4', 'off');
-		});
-		same([], $seen, 'an install that never saved the setting must not raise a diagnostic');
-		only_rules(array_fill_keys($clients, 1));
-	});
-
 	row("B no twin for {$action} with a Custom Source", static function () use ($action, $clients): void {
 		fixture('', 'on');
 		// A Custom Source scopes the client rule to specific hosts; a (self) twin would contradict it.
@@ -362,6 +369,7 @@ foreach (OUTBOUND_TWINS as $action => [$bucket, $type, $clients]) {
 $guard_code = source_slice($source, "\$message = '';", 'if (empty($message)) {', (int) strpos($source, '$pfb_active_aliases = [];'));
 $inbound_loop = source_slice($source, '// Define inbound interface rules', '// Define outbound interface rules');
 $reset_code = source_slice($source, "unset(\$pfb['permit_inbound']", 'unset($cb_rules');
+$assembly_code = source_slice($source, '$new_rules = $permit_rules = $match_rules', "// Remove 'created' tag (New vs old rules array comparison)");
 
 function guard_message(array $pfb): string
 {
@@ -417,6 +425,21 @@ function label(array $rule): string
 	]);
 }
 
+/** Every twin carries the tracker requested for its own descr, Inbound entry and role. */
+function assert_twin_trackers(array $rules): void
+{
+	foreach ($rules as $rule) {
+		if (!isset($rule['source']['network'])) {
+			continue;
+		}
+		$role = ['pass' => 'permit_self', 'match' => 'match_self', 'reject' => 'deny_self'][$rule['type']];
+		$call = [$rule['descr'], $rule['interface'], $role];
+		$index = array_search($call, $GLOBALS['tracker_calls'], true);
+		check($index !== false, 'tracker requested for ' . json_encode($call));
+		same(1770000000 + $index + 1, $rule['tracker'], 'twin carries the tracker built for its own interface and role');
+	}
+}
+
 function generate_all_both_actions(string $float, string $fw_self): void
 {
 	fixture($float, $fw_self);
@@ -443,16 +466,7 @@ row('C twins are emitted per Inbound interface after permit_inbound and after de
 		'reject out opt1 (self)',
 	], array_map('label', $rules), 'rule sequence');
 
-	foreach ($rules as $rule) {
-		if (!isset($rule['source']['network'])) {
-			continue;
-		}
-		$role = ['pass' => 'permit_self', 'match' => 'match_self', 'reject' => 'deny_self'][$rule['type']];
-		$call = [$rule['descr'], $rule['interface'], $role];
-		$index = array_search($call, $GLOBALS['tracker_calls'], true);
-		check($index !== false, 'tracker requested for ' . json_encode($call));
-		same(1770000000 + $index + 1, $rule['tracker'], 'twin carries the tracker built for its own interface and role');
-	}
+	assert_twin_trackers($rules);
 });
 
 row('C with Floating Rules on the single comma-joined Inbound entry carries one twin per role', static function (): void {
@@ -501,13 +515,166 @@ row('C the toggle is read from ip/fw_self_outbound, absent reads off', static fu
 	same([], $seen, 'and raises no diagnostic');
 });
 
+// --- C (cont.): the WHOLE assign-rules block over pass_order x Floating Rules ---------------
+// The inbound-interface loop cannot see the user's floating rules or the trailing emission blocks
+// that order them, so twin placement per pass_order is pinned through the entire block.
+
+/** Floating pass/match/block rules the user owns (spanning both Inbound interfaces), plus interface rules. */
+function user_rules(): array
+{
+	$base = ['ipprotocol' => 'inet', 'source' => ['any' => ''], 'destination' => ['any' => '']];
+	return [
+		array_merge($base, ['type' => 'pass',  'floating' => 'yes', 'quick' => 'yes', 'interface' => 'lan,opt1', 'descr' => 'U_float_pass']),
+		array_merge($base, ['type' => 'match', 'floating' => 'yes', 'interface' => 'lan,opt1', 'descr' => 'U_float_match']),
+		array_merge($base, ['type' => 'block', 'floating' => 'yes', 'quick' => 'yes', 'interface' => 'lan,opt1', 'descr' => 'U_float_block']),
+		array_merge($base, ['type' => 'pass', 'interface' => 'lan', 'descr' => 'U_lan_pass']),
+		array_merge($base, ['type' => 'block', 'interface' => 'opt1', 'descr' => 'U_opt1_block']),
+	];
+}
+
+/**
+ * Tier of each floating-group class per Floating Rules setting and pass_order: devel's ORDER table
+ * (pfb_build_autorule_list) in class form. A lower tier is evaluated first; one tier is unordered.
+ * Tiers read as the IP page's labels: pfB pass/match | pfB block/reject | user pass/match | user block.
+ * With Floating Rules off every user floating rule is one class, whatever its type.
+ */
+const FLOATING_TIERS = [
+	'on' => [
+		'order_0' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_pass' => 2, 'user_match' => 2, 'user_block' => 2],
+		'order_1' => ['user_pass' => 0, 'user_match' => 0, 'twin_pass' => 1, 'twin_match' => 1, 'twin_deny' => 2, 'user_block' => 3],
+		'order_2' => ['twin_pass' => 0, 'twin_match' => 0, 'user_pass' => 1, 'user_match' => 1, 'twin_deny' => 2, 'user_block' => 3],
+		'order_3' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_pass' => 2, 'user_match' => 2, 'user_block' => 3],
+		'order_4' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_block' => 2, 'user_pass' => 3, 'user_match' => 3],
+	],
+	'off' => [
+		'order_0' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_pass' => 2, 'user_match' => 2, 'user_block' => 2],
+		'order_1' => ['user_pass' => 0, 'user_match' => 0, 'user_block' => 0, 'twin_pass' => 1, 'twin_match' => 1, 'twin_deny' => 2],
+		'order_2' => ['twin_pass' => 0, 'twin_match' => 0, 'user_pass' => 1, 'user_match' => 1, 'user_block' => 1, 'twin_deny' => 2],
+		'order_3' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_pass' => 2, 'user_match' => 2, 'user_block' => 2],
+		'order_4' => ['twin_pass' => 0, 'twin_match' => 0, 'twin_deny' => 1, 'user_pass' => 2, 'user_match' => 2, 'user_block' => 2],
+	],
+];
+
+/**
+ * Run the WHOLE assign-rules block on the buckets pfb_firewall_rule() generated for the three Both actions.
+ *
+ * @return array{0: list<array>, 1: list<string>} [new_rules, diagnostics]
+ */
+function assemble_all(string $order, string $float, string $fw_self): array
+{
+	global $assembly_code;
+	generate_all_both_actions($float, $fw_self);
+	$GLOBALS['tracker_calls'] = [];
+	$GLOBALS['filter_rules'] = user_rules();
+	$pfb = $GLOBALS['pfb'];
+	$pfb['order'] = $order;
+	$pfb['enable'] = '';
+	$pfb['dnsbl'] = '';
+	$pfb['inbound_interfaces'] = $float === 'on' ? ['lan,opt1'] : ['lan', 'opt1'];
+	$pfb['outbound_interfaces'] = ['opt2'];
+	$pfb['inbound_floating'] = 'lan,opt1';
+	$pfb['outbound_floating'] = 'opt2';
+	$new_rules = [];
+	// The legacy block reads keys config.xml rules do not carry (source/address ...): those notices are
+	// pre-existing, so callers assert only on what concerns the twins.
+	$seen = diagnostics_of(static function () use ($assembly_code, $pfb, &$new_rules): void {
+		$new_rules = run_slice($assembly_code, ['pfb' => $pfb, 'pfb_active_aliases' => []])['new_rules'];
+	});
+	return [$new_rules, $seen];
+}
+
+/**
+ * Class and interface of every twin and user floating rule in emitted order; pfB client rules are not classified.
+ *
+ * @return list<array{0: string, 1: string}>
+ */
+function floating_classes(array $rules): array
+{
+	$classes = [];
+	foreach ($rules as $rule) {
+		if (($rule['floating'] ?? '') !== 'yes') {
+			continue;
+		}
+		if (isset($rule['source']['network'])) {
+			$classes[] = ['twin_' . match ($rule['type']) {
+				'pass' => 'pass',
+				'match' => 'match',
+				default => 'deny',
+			}, $rule['interface']];
+		} elseif (str_starts_with($rule['descr'], 'U_')) {
+			$classes[] = ['user_' . match ($rule['type']) {
+				'pass' => 'pass',
+				'match' => 'match',
+				default => 'block',
+			}, $rule['interface']];
+		}
+	}
+	return $classes;
+}
+
+function class_counts(array $classes): array
+{
+	$counts = array_count_values(array_column($classes, 0));
+	ksort($counts);
+	return $counts;
+}
+
+foreach (['order_0', 'order_1', 'order_2', 'order_3', 'order_4'] as $order) {
+	foreach (['on', ''] as $float) {
+		$name = sprintf('C whole assembly %s float %s: twins exist per Inbound entry and sit in their pass_order tier', $order, $float === 'on' ? 'on' : 'off');
+		row($name, static function () use ($order, $float): void {
+			$tiers = FLOATING_TIERS[$float === 'on' ? 'on' : 'off'][$order];
+			$users = ['user_block' => 1, 'user_match' => 1, 'user_pass' => 1];
+
+			// Before: with the toggle off the block carries the user floating rules and no twin.
+			[$rules] = assemble_all($order, $float, '');
+			same($users, class_counts(floating_classes($rules)), 'toggle off: user floating rules only');
+
+			[$rules, $seen] = assemble_all($order, $float, 'on');
+			$entries = $float === 'on' ? ['lan,opt1'] : ['lan', 'opt1'];
+			$expected = $users + ['twin_deny' => count($entries), 'twin_match' => count($entries), 'twin_pass' => count($entries)];
+			ksort($expected);
+			$classes = floating_classes($rules);
+			same($expected, class_counts($classes), 'toggle on: one twin per Inbound entry and role, every user floating rule kept once');
+
+			foreach (['pass', 'match', 'reject'] as $type) {
+				$interfaces = array_column(array_filter($rules, static fn (array $r): bool => isset($r['source']['network']) && $r['type'] === $type), 'interface');
+				sort($interfaces);
+				same($entries, $interfaces, "interfaces of the {$type} twins");
+			}
+
+			// Every pair that can match the same packets keeps devel's order: a twin against any user
+			// floating rule, and twins of one interface among themselves. Twins on different interfaces
+			// never co-match, so the per-interface emission of 3.3 may interleave them.
+			foreach ($classes as $i => [$first, $first_interface]) {
+				foreach (array_slice($classes, $i + 1) as [$second, $second_interface]) {
+					$twins = (int) str_starts_with($first, 'twin') + (int) str_starts_with($second, 'twin');
+					if ($twins === 0 || ($twins === 2 && $first_interface !== $second_interface)) {
+						continue;
+					}
+					if ($tiers[$second] < $tiers[$first]) {
+						throw new RuntimeException(sprintf(
+							'%s@%s is emitted before %s@%s, but %s evaluates %s first; emitted: %s',
+							$first, $first_interface, $second, $second_interface, $order, $second,
+							implode(', ', array_map(static fn (array $c): string => "{$c[0]}@{$c[1]}", $classes))
+						));
+					}
+				}
+			}
+
+			assert_twin_trackers($rules);
+			same([], array_values(array_filter($seen, static fn (string $m): bool => str_contains($m, '_self'))), 'no diagnostic about a twin bucket');
+		});
+	}
+}
+
 // --- D: IP page handler --------------------------------------------------------------------
 
-/** The IP page option arrays + Save handler, with doubles for exit, header() and the ps listing. */
+/** The IP page from its settings read through the Save handler, with doubles for exit, header() and the ps listing. */
 function ip_page_code(): string
 {
 	global $ip_page;
-	$code = source_slice($ip_page, '// Select array options', '$pgtitle = ');
+	$code = source_slice($ip_page, "\$pfb['iconfig'] = config_get_path(", '$pgtitle = ');
 	foreach (['exit;' => 1, 'header(' => 2, "exec('/bin/ps -wx', \$result_cron);" => 1] as $needle => $expected) {
 		same($expected, substr_count($code, $needle), "occurrences of {$needle} in the IP page slice");
 	}
@@ -518,11 +685,54 @@ function ip_page_code(): string
 	);
 }
 
-/** Post an IP-settings Save; $omit lists POST keys a browser would not send. */
-function ip_save(array $post, array $omit = []): array
+/** A saved 3.3 IP configuration that pre-dates fw_self_outbound (the key is absent). */
+function ip_seed_config(): void
+{
+	$GLOBALS['config_store'] = ['installedpackages/pfblockerngipsettings/config/0' => [
+		'enable_dup' => '', 'enable_agg' => '', 'suppression' => 'on', 'enable_log' => '', 'ip_placeholder' => '127.1.7.7',
+		'maxmind_locale' => 'en', 'asn_reporting' => 'disabled', 'asn_token' => '', 'database_cc' => '',
+		'maxmind_account' => '', 'maxmind_key' => '', 'inbound_interface' => 'lan', 'inbound_deny_action' => 'block',
+		'outbound_interface' => 'opt1', 'outbound_deny_action' => 'reject', 'enable_float' => '', 'pass_order' => 'order_0',
+		'autorule_suffix' => 'autorule', 'killstates' => '', 'v4suppression' => '',
+	]];
+}
+
+/** Run the IP page against the $_POST the caller set. */
+function ip_page_run(): array
 {
 	$ip_code = ip_page_code();
 	$GLOBALS['ip_calls'] = ['mwexec_bg' => [], 'config' => [], 'header' => [], 'write' => []];
+	$pconfig = [];
+	$input_errors = [];
+	$exited = false;
+	$seen = diagnostics_of(static function () use ($ip_code, &$pconfig, &$input_errors, &$exited): void {
+		try {
+			$vars = run_slice($ip_code, ['pfb' => ['extraslog' => '/dev/null']]);
+			$pconfig = $vars['pconfig'];
+			$input_errors = $vars['input_errors'] ?? [];
+		} catch (PfbTestExit) {
+			$exited = true;
+		}
+	});
+	return [
+		'errors' => $input_errors, 'pconfig' => $pconfig, 'exited' => $exited,
+		'diagnostics' => $seen, 'calls' => $GLOBALS['ip_calls'],
+	];
+}
+
+/** GET the IP page: what a browser is shown from the stored configuration. */
+function ip_load(): array
+{
+	$_POST = [];
+	return ip_page_run();
+}
+
+/** Post an IP-settings Save; $omit lists POST keys a browser would not send, $fresh reseeds the stored configuration. */
+function ip_save(array $post, array $omit = [], bool $fresh = true): array
+{
+	if ($fresh) {
+		ip_seed_config();
+	}
 	$_POST = array_merge([
 		'save' => 'Save', 'asn_reporting' => 'disabled', 'maxmind_locale' => 'fr', 'inbound_deny_action' => 'block',
 		'outbound_deny_action' => 'reject', 'pass_order' => 'order_0', 'autorule_suffix' => 'autorule',
@@ -534,23 +744,7 @@ function ip_save(array $post, array $omit = []): array
 	foreach ($omit as $key) {
 		unset($_POST[$key]);
 	}
-	$pconfig = ['maxmind_locale' => 'en'];
-	$pfb = ['iconfig' => [], 'extraslog' => '/dev/null'];
-	$exited = false;
-	$seen = diagnostics_of(static function () use ($ip_code, &$pconfig, &$pfb, &$exited, &$input_errors): void {
-		try {
-			$vars = run_slice($ip_code, ['pconfig' => $pconfig, 'pfb' => $pfb]);
-			$pconfig = $vars['pconfig'];
-			$pfb = $vars['pfb'];
-			$input_errors = $vars['input_errors'] ?? [];
-		} catch (PfbTestExit) {
-			$exited = true;
-		}
-	});
-	return [
-		'errors' => $input_errors ?? [], 'pconfig' => $pconfig, 'exited' => $exited,
-		'diagnostics' => $seen, 'calls' => $GLOBALS['ip_calls'],
-	];
+	return ip_page_run();
 }
 
 const FW_SELF_ERROR = 'Apply outbound rules to firewall traffic requires at least one Inbound interface.';
@@ -591,6 +785,19 @@ row('D toggle off needs no Inbound interface and persists off', static function 
 	same([], (array) $result['errors'], 'no input error');
 	check($result['exited'], 'Save redirects after persisting');
 	same('', $result['calls']['config']['installedpackages/pfblockerngipsettings/config/0']['fw_self_outbound'] ?? null, 'the toggle persists Off');
+});
+
+row('D the saved toggle reads back on the next page load', static function (): void {
+	ip_seed_config();
+	$page = ip_load();
+	same('', $page['pconfig']['fw_self_outbound'], 'before: a saved 3.3 configuration without the key shows Off');
+	same([], $page['diagnostics'], 'and loading it raises no PHP diagnostic');
+
+	ip_save(['fw_self_outbound' => 'on', 'inbound_interface' => ['lan']], [], false);
+	same('on', ip_load()['pconfig']['fw_self_outbound'], 'after saving On the page shows On');
+
+	ip_save([], ['fw_self_outbound', 'inbound_interface'], false);
+	same('', ip_load()['pconfig']['fw_self_outbound'], 'after unchecking and saving the page shows Off again');
 });
 
 echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURE(S)\n";
