@@ -883,6 +883,35 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6').
+// The key order is the stored order used by sync change detection.
+function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
+	$v4 = ($family === 'inet');
+
+	// #3400: FreeBSD drops ::1 redirected from a non-loopback interface. pfSense
+	// resolves <iface>ip to an assigned interface's current IPv6 on each filter reload.
+	if ($v4) {
+		$target = '127.0.0.1';
+	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {
+		$target = "{$iface}ip";
+	} else {
+		$target = '::1';
+	}
+
+	return [
+		'source'             => pfb_redirect_exclude_source($exclude_alias, "DNS Redirect on {$iface} " . ($v4 ? 'IPv4' : 'IPv6')),
+		'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
+		'ipprotocol'         => $family,
+		'protocol'           => 'tcp/udp',
+		'target'             => $target,
+		'local-port'         => '53',
+		'interface'          => $iface,
+		'descr'              => PFB_DNS_REDIR_DESCR_V4_PFX . $iface . ($v4 ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX),
+		'associated-rule-id' => 'pass',
+		'natreflection'      => 'disable',
+	];
+}
+
 // Allowlist the alias-type suffix ($vtype) before it is interpolated into an
 // alias name or filesystem path. The only legitimate values are '_v4' and '_v6';
 // any other value is rejected so a stray/unexpected suffix can never reach a

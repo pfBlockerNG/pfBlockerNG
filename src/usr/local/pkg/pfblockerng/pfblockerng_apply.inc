@@ -3204,30 +3204,14 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 					}
 				}
 
-				// Build new NAT rdr rules for each interface × family. Resolve the exception
-				// source PER rule with a context label (interface + IP version), so when the
-				// exception alias is not usable the log names the specific rule that dropped it
+				// Build new NAT rdr rules for each interface × family. The builder resolves the
+				// exception source PER rule with a context label (interface + IP version), so when
+				// the exception alias is not usable the log names the specific rule that dropped it
 				// (#664) instead of an identical line per grid cell. The lookup itself is cheap.
 				$redir_new_owned = [];
 				foreach ($redir_ifaces as $redir_iface) {
 					foreach (['inet', 'inet6'] as $redir_family) {
-						$redir_sfx    = ($redir_family === 'inet') ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX;
-						$redir_target = ($redir_family === 'inet') ? '127.0.0.1' : '::1';
-						$redir_ver    = ($redir_family === 'inet') ? 'IPv4' : 'IPv6';
-						$redir_descr  = PFB_DNS_REDIR_DESCR_V4_PFX . $redir_iface . $redir_sfx;
-						$redir_source = pfb_redirect_exclude_source($redir_exception, "DNS Redirect on {$redir_iface} {$redir_ver}");
-						$redir_new_owned[] = [
-							'source'             => $redir_source,
-							'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
-							'ipprotocol'         => $redir_family,
-							'protocol'           => 'tcp/udp',
-							'target'             => $redir_target,
-							'local-port'         => '53',
-							'interface'          => $redir_iface,
-							'descr'              => $redir_descr,
-							'associated-rule-id' => 'pass',
-							'natreflection'      => 'disable',
-						];
+						$redir_new_owned[] = pfb_dns_redirect_rule($redir_iface, $redir_family, $redir_exception);
 					}
 				}
 
