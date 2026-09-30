@@ -8105,6 +8105,19 @@ function pfb_pfctl_test_match_count(string $output): int {
 	return (int) $output;
 }
 
+// Sum only the states pfctl reports as killed. Missing/error output means zero, never
+// the number of candidate state lines collected before the kill (issue #3406).
+function pfb_pfctl_killed_count(array $output): int {
+	foreach ($output as $line) {
+		$line = trim($line);
+		if (str_starts_with($line, 'killed ')) {
+			return (int) substr($line, 7);
+		}
+	}
+	return 0;
+}
+
+
 
 // ONE `pfctl -vvsTables` exec. Full dump — do not pipe through grep -A4 (that
 // truncation drops the In/Out packet lines the parser is meant to read).
@@ -17973,18 +17986,25 @@ function pfb_remove_states() {
 					if ($count > 0) {
 
 						$pfbfound = TRUE;
-						$log = "\n\n\t[ {$s_table} ] Removed " . count($state) . " state(s) for [ {$s_ip} ]\n\n";
+						$killed = 0;
+
+						// Kill states from the IP, then states to it. pfctl requires both
+						// destination-kill hosts to use the same address family (issue #3406).
+						$output = [];
+						exec("{$pfb['pfctl']} -k {$s_ip_esc} 2>&1", $output);
+						$killed += pfb_pfctl_killed_count($output);
+
+						$any_ip_esc = escapeshellarg($ip_version == 6 ? '::/0' : '0.0.0.0/0');
+						$output = [];
+						exec("{$pfb['pfctl']} -k {$any_ip_esc} -k {$s_ip_esc} 2>&1", $output);
+						$killed += pfb_pfctl_killed_count($output);
+
+						$log = "\n\n\t[ {$s_table} ] Removed {$killed} state(s) for [ {$s_ip} ]\n\n";
 						pfb_logger("{$log}", 1);
 
 						foreach ($state as $line) {
 							pfb_logger("\t\t{$line}\n", 1);
 						}
-
-						// Kill all state entries originating from $s_ip
-						exec("{$pfb['pfctl']} -k {$s_ip_esc} 2>&1");
-
-						// Kill all state entries to the target $s_ip
-						exec("{$pfb['pfctl']} -k 0.0.0.0/0 -k {$s_ip_esc} 2>&1");
 
 						break;
 					}
