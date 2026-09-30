@@ -186,9 +186,9 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['a/b://8.8.8.8', 'pe', 'pe', 'RED'],
 			['a/b://evil.com', 'pe', 'pe', 'RED'],
 			['?u=http://8.8.8.8', 'pe', 'pe', 'RED'],
+			['://user:pass@1.2.3.4^$third-party', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 
 			// Controls: outcome identical before and after the separator rule.
-			['://user:pass@1.2.3.4^$third-party', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'control'],
 			['http://user@1.2.3.4/', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'control'],
 			['://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
 			['://2001:db8::1', 'ip6=2001:db8::1', 'pe', 'control'],
