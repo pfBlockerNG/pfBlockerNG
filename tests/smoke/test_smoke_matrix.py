@@ -229,8 +229,8 @@ def test_dnsbl_python_vip_aaaa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fe
     domain = h.unique_domain("vipaaaa")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_vip_aaaa.txt", f"{domain}\n")
     spec = h.DnsblCase(aliasname="smokevipaaaa", feed_url=feed_url, header="smokevipaaaa", mode=h.DnsblMode.VIP)
-    h.set_dnsbl_vip6(deployed_vm, present=True)
     try:
+        h.set_dnsbl_vip6(deployed_vm, present=True)
         with h.CaseContext(deployed_vm, spec):
             aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
             got = {ipaddress.ip_address(r) for r in aaaa.records}
