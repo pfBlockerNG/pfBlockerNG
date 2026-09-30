@@ -412,7 +412,7 @@ def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
     archive_start = release_job.index(archive_name)
     pin_step = extract_before(release_job[pin_start:], "\n      - name:")
 
-    assert "uses: actions/setup-python@v6" in pin_step
+    assert "uses: actions/setup-python@v7" in pin_step
     assert 'python-version: "3.11.15"' in pin_step
     assert pin_start < archive_start, "the exact source-archive Python pin must precede the archive build"
 

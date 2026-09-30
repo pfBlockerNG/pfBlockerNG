@@ -234,7 +234,7 @@ jobs:
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .

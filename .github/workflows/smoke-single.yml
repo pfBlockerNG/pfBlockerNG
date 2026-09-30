@@ -508,7 +508,7 @@ jobs:
 
       - name: Restore cached pfSense image
         id: pfcache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
@@ -527,7 +527,7 @@ jobs:
       # a later step fails. Key = the resolved digest, so it never serves stale.
       - name: Save pfSense image to cache
         if: steps.pfcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
@@ -558,7 +558,7 @@ jobs:
 
       - name: Restore cached civm image
         id: civmcache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: client-image
           key: civm-img-${{ steps.civm.outputs.k }}
@@ -574,7 +574,7 @@ jobs:
 
       - name: Save civm image to cache
         if: steps.civmcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: client-image
           key: civm-img-${{ steps.civm.outputs.k }}
@@ -652,7 +652,7 @@ jobs:
         # activate-environment puts the project environment on PATH, so the `python3`
         # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
         # pins the same minor the appliance carries).
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
           activate-environment: true

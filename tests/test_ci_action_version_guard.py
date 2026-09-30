@@ -32,7 +32,7 @@ def test_version_guard_accepts_valid_yaml_scalar_shapes(tmp_path: Path) -> None:
         ("- uses: actions/checkout@v7", "actions/checkout"),
         ("- uses : actions/checkout@v7", "actions/checkout"),
         ('- uses: "actions/checkout@v7" # comment', "actions/checkout"),
-        ("- uses: 'astral-sh/setup-uv@v10.0.1' # comment", "astral-sh/setup-uv"),
+        ("- uses: 'astral-sh/setup-uv@v10.2.0' # comment", "astral-sh/setup-uv"),
     )
     for index, (uses, action) in enumerate(cases):
         seen, offenders = scan([_workflow(tmp_path / f"good-{index}.yml", uses)])

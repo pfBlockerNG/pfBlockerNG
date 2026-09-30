@@ -62,7 +62,7 @@ jobs:
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the Graphify merge driver
         run: sh scripts/agent/ensure-graphify-merge-driver.sh .
