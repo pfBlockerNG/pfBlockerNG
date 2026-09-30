@@ -29,9 +29,9 @@ via ``_discover_non_wan_ifaces()`` — never hardcoded.
 
 All cases use config.xml reads via the pfSense config API (``php_eval`` /
 ``config_get_path``). ``pfctl -sn`` rdr confirmation is the on-box live gate for
-Cases 1 and 2. Full client-redirect behaviour (a host bypassing the redirect is
-redirected and answered by Unbound) requires a second host and is a documented
-maintainer manual-smoke item — not a CI gate.
+Cases 1 and 2. **Case 10** drives the client-redirect behaviour itself for IPv6: civm
+sends a query to a foreign IPv6 resolver through pfSense, and only the redirect makes
+pfSense answer it.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``). Run
 only by the smoke workflow::
@@ -44,6 +44,7 @@ smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Iterator
 
@@ -1278,3 +1279,83 @@ def test_dns_redirect_uninstall_keep_on_removes_rules_retains_sections(
         # _cleanup_redirect is internally best-effort: its config write turns the toggle off
         # even with the package uninstalled, and its reload no-ops when the package is gone.
         _cleanup_redirect(vm)
+
+
+# --------------------------------------------------------------------------- #
+# Case 10 — live IPv6 client: a query to a foreign resolver is answered by pfSense
+# --------------------------------------------------------------------------- #
+
+# RFC 3849 documentation space: nothing answers DNS there, with or without a route.
+_FOREIGN_RESOLVER6 = "2001:db8:dead:beef::53"
+
+
+@pytest.mark.timeout(180)  # two full reloads + filter syncs exceed the 30s cap
+def test_dns_redirect_answers_foreign_ipv6_resolver_query(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #3400: the IPv6 redirect makes pfSense answer a query sent to a foreign resolver.
+
+    Scenario: a LAN client hardcodes an IPv6 resolver that is not pfSense.
+
+      Given a VIP-mode list carrying the domain,
+        And civm routes the foreign resolver via pfSense's LAN IPv6 (read from config),
+        And DNS redirect is off for ``lan``,
+      Then the query gets no DNS response (before-state),
+      When DNS redirect is enabled for ``lan``,
+      Then pfSense answers the same query with the VIP,
+        And dnsbl.log attributes the block to civm's pinned IPv6 source.
+    """
+    vm = deployed_vm
+    lan6 = h.get_lan_ipv6(vm)
+    domain = h.unique_domain("redir6")
+    feed_url = h.write_local_feed(vm, "smoke_dns_redirect_v6.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokeredir6", feed_url=feed_url, header="smokeredir6")
+    dig = f"dig +tries=1 +time=5 A {domain} @{_FOREIGN_RESOLVER6}"
+
+    def blocked_rows() -> list[list[str]]:
+        rows = (row.split(",") for row in h.read_log_file(vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines())
+        return [row for row in rows if row[2:3] == [domain]]
+
+    src6 = h.pin_client_route6(client_vm, _FOREIGN_RESOLVER6, lan6)
+    try:
+        try:
+            # GIVEN — inject() replaces the DNSBL settings node, so the redirect keys go after it.
+            h.inject(vm, spec)
+            _set_dns_redirect(vm, enabled=False, ifaces=["lan"])
+            h.reload(vm, "update")
+            h.apply_filter_sync(vm)
+            assert _pfctl_sn_redir_absent(vm, "lan"), (
+                "rdr rule on lan before enable — before-state not clean\n"
+                + _redir_match_report(vm, "lan", expected_present=False)
+            )
+            before = client_vm.ssh(dig)
+            assert "status:" not in before.stdout, (
+                f"expected no DNS response from {_FOREIGN_RESOLVER6} with redirect off, "
+                f"got rc={before.returncode}:\n{before.stdout}"
+            )
+
+            # WHEN — redirect on for lan.
+            _set_dns_redirect(vm, enabled=True, ifaces=["lan"])
+            h.reload(vm, "update")
+            h.apply_filter_sync(vm)
+            assert _pfctl_sn_has_redir(vm, "lan"), "no rdr rule on lan after enable\n" + _redir_match_report(
+                vm, "lan", expected_present=True
+            )
+
+            # THEN — the same query is answered by pfSense with the block shape.
+            after = client_vm.ssh(dig)
+            assert h.is_vip(h._parse_dig(after.stdout, "A")), (
+                f"expected A {h.DEFAULT_DNSBL_VIP4} from {_FOREIGN_RESOLVER6} with redirect on, "
+                f"got rc={after.returncode}:\n{after.stdout}"
+            )
+            # dnsbl.log is written off the DNS path: wait for the row, then check who it names.
+            try:
+                h.wait_until(lambda: bool(blocked_rows()))
+            except RuntimeError:
+                raise AssertionError(f"dnsbl.log rows for {domain}: expected one from {src6}, got none") from None
+            clients = {ipaddress.ip_address(row[3]) for row in blocked_rows()}
+            assert clients == {ipaddress.ip_address(src6)}, (
+                f"dnsbl.log client for {domain}: expected {src6}, got {sorted(map(str, clients))}"
+            )
+        finally:
+            _cleanup_redirect(vm)
+    finally:
+        h.unpin_client_route6(client_vm, _FOREIGN_RESOLVER6)
