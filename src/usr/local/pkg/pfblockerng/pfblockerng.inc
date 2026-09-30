@@ -15746,17 +15746,28 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 								$log = curl_error($ch) . " Retry [{$retries}] in 5 seconds...\n";
 							}
 							pfb_logger("{$log}", "{$logtype}");
-							sleep(5);
+							sleep($pfb['curl_retry_sleep'] ?? 5);	// $pfb['curl_retry_sleep'] is the test seam, mirroring $pfb['rsync_max_bytes']
 							pfb_logger('.', "{$logtype}");
 						}
+					}
+
+					// Issue #3374: every attempt failed. libcurl still reports the status of the
+					// response it cut short, so the file holds at most a partial body: refuse it.
+					if (!$hop_ok) {
+						pfb_validate_log($header, 'fetch', 'curl_incomplete', "curl={$curl_error} " . pfb_redact_url($current_url));
+						// No curl_close(): it is a no-op since PHP 8.0 and deprecated in 8.5
+						// (Plus ships php85); the handle frees when this frame returns.
+						@fclose($fhandle);
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
 					}
 
 					// Collect RFC7231 http status code for this hop
 					$http_status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 
-					// Not a redirect (or the request failed) -> this is the final
-					// response; stop and treat what was written as the download.
-					if (!$hop_ok || $http_status < 300 || $http_status >= 400 || $redirect_location === '') {
+					// Not a redirect -> this is the final response; stop and treat what
+					// was written as the download.
+					if ($http_status < 300 || $http_status >= 400 || $redirect_location === '') {
 						break;
 					}
 
