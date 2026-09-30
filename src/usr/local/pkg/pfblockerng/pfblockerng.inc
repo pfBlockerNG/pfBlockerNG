@@ -2744,7 +2744,7 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	// RFC 3986 authority of a scheme-bearing line: the host follows the LAST '@' (userinfo is
 	// dropped); a numeric host is the address a client dials whatever the path, so strict mode
 	// keeps its authority alone instead of rejecting the path. A bare 'name@x' row is unchanged.
-	$pos = strpos($line, '://');
+	$pos = pfb_dnsbl_scheme_pos($line);
 	if ($pos !== FALSE) {
 		$rest = substr($line, $pos + 3);
 		$alen = strcspn($rest, '/?#');
@@ -9840,38 +9840,49 @@ function pfb_strip_trailing_port($line) {
 }
 
 
-// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle. No '://' ->
-// line unchanged. $strict === FALSE (lenient, today's default/byte-identical): strip through
-// the FIRST '://' (permissive: '123://evil.com', '://evil.com', mid-token schemes all accepted,
-// matching legacy behaviour). $strict === TRUE (lenient OFF): the text before '://' must match
-// the RFC 3986 scheme grammar; a single trailing '/' is normalised away, any other '/' is a
-// real path -> FALSE. FALSE tells the caller to skip + log the line (ADR §2.3/§2.4).
-function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
+// A '://' separates a scheme only when nothing before it is path, query or fragment: the
+// first '://' of a line whose prefix holds none of '/', '?', '#'. FALSE = no scheme separator
+// (an embedded URL such as '?u=http://x' is data of the path/query, not this line's scheme).
+function pfb_dnsbl_scheme_pos(string $line): int|false {
 	$pos = strpos($line, '://');
+	if ($pos === FALSE || strcspn($line, '/?#') < $pos) {
+		return FALSE;
+	}
+	return $pos;
+}
+
+
+// ADR-22: the non-lite scheme strip, gated on the 'pfb_dnsbl_lenient' toggle. No scheme
+// separator (pfb_dnsbl_scheme_pos) -> line unchanged. Empty scheme ('://<ip>[^[$opts]]', both
+// modes): an IPv4 literal or a bracketed IPv6 literal, with one trailing '^' or a '^$opts' tail
+// dropped (options are never scanned), returns the bare address; any other empty-scheme
+// remainder is FALSE in strict and returned as-is in lenient. $strict === FALSE (lenient, the
+// migrated/legacy default): strip through the separator (permissive: '123://evil.com',
+// mid-token schemes accepted). $strict === TRUE: the text before '://' must match the RFC 3986
+// scheme grammar; a single trailing '/' is normalised away, any other '/' is a real path ->
+// FALSE. FALSE tells the caller to skip + log the line (ADR §2.3/§2.4).
+function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|false {
+	$pos = pfb_dnsbl_scheme_pos($line);
 	if ($pos === FALSE) {
 		return $line;
 	}
-	if ($strict) {
-		$scheme = substr($line, 0, $pos);
-		if ($scheme === '') {
-			// DandelionSprouts' "block regardless of scheme" shape: a bare '://' in
-			// front of a bracketed IPv6 literal. Return the bare address directly
-			// (already unwrapped and validated here); any other empty scheme is rejected.
-			$remainder = substr($line, $pos + 3);
-			if (str_starts_with($remainder, '[') && str_ends_with($remainder, ']')) {
-				$inner = substr($remainder, 1, -1);
-				if (is_ipaddrv6($inner)) {
-					return $inner;
-				}
-			}
-			return FALSE;
-		}
-		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
-			return FALSE;
-		}
-	}
 	$remainder = substr($line, $pos + 3);
+	if ($pos === 0) {
+		$caret = strpos($remainder, '^$');
+		$cand = $caret !== FALSE ? substr($remainder, 0, $caret)
+			: (str_ends_with($remainder, '^') ? substr($remainder, 0, -1) : $remainder);
+		if (str_starts_with($cand, '[') && str_ends_with($cand, ']') && is_ipaddrv6(substr($cand, 1, -1))) {
+			return substr($cand, 1, -1);
+		}
+		if (is_ipaddrv4($cand)) {
+			return $cand;
+		}
+		return $strict ? FALSE : $remainder;
+	}
 	if ($strict) {
+		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', substr($line, 0, $pos))) {
+			return FALSE;
+		}
 		// A single trailing '/' is the root path -- normalise it away.
 		if (str_ends_with($remainder, '/')) {
 			$remainder = substr($remainder, 0, -1);
