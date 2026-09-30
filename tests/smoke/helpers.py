@@ -3162,10 +3162,10 @@ def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
     )
 
 
-# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsvip_auto),
-# not per-case behaviour. _dnsbl_settings_replace_php preserves these across a settings
-# replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
-_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
+# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsbl_vip6 /
+# set_dnsvip_auto), not per-case behaviour. _dnsbl_settings_replace_php preserves these across
+# a settings replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
+_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
 
 
 def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:
