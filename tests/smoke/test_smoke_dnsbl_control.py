@@ -25,7 +25,8 @@ These tests drive the REAL paths on a live VM:
   applied marker is frozen, proving ``python_control`` is a real gate, not an always-on path.
 * The deprecated DNS-TXT control path is inert by default (a TXT ``python_control.disable``
   leaves blocking unchanged), and turning its sub-toggle on re-enables that path — proving
-  it is a real gate, not an always-off branch.
+  it is a real gate, not an always-off branch. Both run once per loopback (``127.0.0.1``,
+  ``::1``) the gate accepts.
 
 Probed ON-BOX (``drill @127.0.0.1``): python-mode DNSBL has no localhost exemption, so a
 blocked name returns its block shape even from 127.0.0.1; the per-client bypass keys on the
@@ -245,13 +246,22 @@ def test_dnsbl_control_off_makes_cli_channel_inert(control_vm: tuple[SmokeVM, st
                 raise
 
 
-def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
+# The legacy DNS-TXT gate accepts a query from either loopback (pfb_unbound.py operate()).
+# The IPv4-mapped ``::ffff:127.0.0.1`` is unit-pinned only: with the appliance's
+# net.inet6.ip6.v6only=1, ``drill @::ffff:127.0.0.1`` cannot even open a socket.
+LOOPBACKS = pytest.mark.parametrize("loopback", ["127.0.0.1", "::1"], ids=["ipv4", "ipv6"])
+
+
+@LOOPBACKS
+def test_legacy_dns_txt_control_inert_by_default(
+    control_vm: tuple[SmokeVM, str], client_vm: SmokeVM, loopback: str
+) -> None:
     """Scenario: the deprecated DNS-TXT control path is inert by default.
 
     Background: DNSBL Control is on but the legacy DNS-TXT sub-toggle is OFF (its default),
     so the ini has ``python_control_legacy = off``.
     Given the domain is VIP-blocked,
-    When an in-band ``python_control.disable`` TXT query is issued on-box,
+    When an in-band ``python_control.disable`` TXT query arrives over ``loopback``,
     Then DNSBL blocking is UNCHANGED — the domain STAYS VIP-blocked (the DNS-TXT path does
     nothing). The before/after pair proves it is the disabled gate, not a missed query.
     """
@@ -263,22 +273,26 @@ def test_legacy_dns_txt_control_inert_by_default(control_vm: tuple[SmokeVM, str]
     assert h.is_vip(before), f"{blocked} expected VIP block before the TXT query, got {before}"
 
     # WHEN: issue the in-band TXT control query. THEN: still VIP-blocked (path inert).
-    h.drill_txt(vm, "python_control.disable")
+    h.drill_txt(vm, "python_control.disable", server=loopback)
     h.flush_unbound_cache(vm)
     after = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(after), (
-        f"{blocked} should STAY VIP-blocked — the legacy DNS-TXT control path must be inert by default, got {after}"
+        f"{blocked} should STAY VIP-blocked — the legacy DNS-TXT control path must be inert by default "
+        f"(query over {loopback}), got {after}"
     )
 
 
-def test_legacy_dns_txt_control_active_when_enabled(control_vm: tuple[SmokeVM, str], client_vm: SmokeVM) -> None:
+@LOOPBACKS
+def test_legacy_dns_txt_control_active_when_enabled(
+    control_vm: tuple[SmokeVM, str], client_vm: SmokeVM, loopback: str
+) -> None:
     """Scenario (branch coverage): turning the legacy sub-toggle on re-activates DNS-TXT control.
 
     Background: the same VM, but the legacy DNS-TXT sub-toggle is flipped ON (ini
     ``python_control_legacy = on``) and reloaded — proving the default-off behaviour above
     is a real gate, not an always-off path.
-    Given (after the reload re-initialises blocking) the domain is VIP-blocked,
-    When an in-band ``python_control.disable`` TXT query is issued on-box,
+    Given the domain is VIP-blocked (blocking re-enabled through the CLI channel),
+    When an in-band ``python_control.disable`` TXT query arrives over ``loopback``,
     Then DNSBL blocking IS disabled — the domain now resolves clean.
 
     Run LAST: it mutates the module config + reloads; the fixture finalizer restores the
@@ -286,22 +300,23 @@ def test_legacy_dns_txt_control_active_when_enabled(control_vm: tuple[SmokeVM, s
     """
     vm, blocked = control_vm
 
-    # Flip the legacy sub-toggle on and reload so the ini regenerates with it on. The reload
-    # restarts Unbound, re-initialising python_blacklist (blocking back on) — so the BEFORE
-    # state below is a fresh block, and the TXT disable's effect is causal.
     h.set_dnsbl_control_legacy(vm, True)
     h.reload(vm, "update")
     h.assert_control_ini(vm, control=True, legacy=True)
+    # Re-enable blocking through the CLI channel so the BEFORE state is a fresh block,
+    # whatever an earlier run's TXT disable left in the running module.
+    h.wait_control_applied(vm, h.dnsbl_control_cli(vm, "enable"))
+    h.flush_unbound_cache(vm)
 
-    # GIVEN: blocked first (the reload re-enabled blocking).
+    # GIVEN: blocked first.
     before = h.dns_probe_client(client_vm, blocked, "A")
     assert h.is_vip(before), f"{blocked} expected VIP block after legacy-on reload, got {before}"
 
     # WHEN: the in-band TXT control query. THEN: blocking is disabled — resolves clean.
-    h.drill_txt(vm, "python_control.disable")
+    h.drill_txt(vm, "python_control.disable", server=loopback)
     h.flush_unbound_cache(vm)
     after = h.dns_probe_client(client_vm, blocked, "A")
     assert not h.is_vip(after), (
         f"{blocked} should resolve clean — with the legacy sub-toggle ON the DNS-TXT control path "
-        f"must disable DNSBL, still blocked: {after}"
+        f"must disable DNSBL for a query over {loopback}, still blocked: {after}"
     )
