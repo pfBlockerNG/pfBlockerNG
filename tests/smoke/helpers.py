@@ -5091,14 +5091,17 @@ def wait_control_applied(vm: SmokeVM, seq: int, *, timeout: float = 30.0, interv
     )
 
 
-def drill_txt(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
-    """Issue a TXT query for ``name`` against the on-box resolver (``drill <name> TXT @127.0.0.1``).
+def drill_txt(
+    vm: SmokeVM, name: str, *, server: str = "127.0.0.1", timeout: float = 30.0
+) -> subprocess.CompletedProcess[str]:
+    """Issue a TXT query for ``name`` against the on-box resolver (``drill <name> TXT @<server>``).
 
     Used to drive the deprecated in-band ``python_control.<cmd>`` DNS-TXT path: the side
     effect (whether DNSBL blocking changes) is what the test asserts via a follow-up
     A-record probe, NOT the TXT answer — so this returns the raw process for diagnostics.
+    ``server`` picks the loopback the query arrives from (``127.0.0.1`` or ``::1``).
     """
-    return vm.ssh(f"{DRILL_BIN} {shlex.quote(name)} TXT @127.0.0.1", timeout=timeout)
+    return vm.ssh(f"{DRILL_BIN} {shlex.quote(name)} TXT @{shlex.quote(server)}", timeout=timeout)
 
 
 # --------------------------------------------------------------------------- #
@@ -6288,3 +6291,76 @@ def get_live_ipv4(vm: SmokeVM, iface: str = "lan", *, timeout: float = 30.0) -> 
         f"get_interface_ip({_php_str(iface)}) ?: ''",
         timeout=timeout,
     )
+
+
+def get_lan_ipv6(vm: SmokeVM, *, timeout: float = 60.0) -> str:
+    """pfSense's static LAN IPv6 (``interfaces/lan/ipaddrv6``), read live from config.
+
+    Never a constant: ``test_smoke_ipv6_alerts`` swaps this address while it runs. Raises
+    unless the stored value is an IPv6 address (``track6``/``dhcp6``/empty give a client
+    nothing to query).
+    """
+    addr = config_get(vm, "interfaces/lan/ipaddrv6", timeout=timeout)
+    try:
+        ipaddress.IPv6Address(addr)
+    except ValueError:
+        raise RuntimeError(f"interfaces/lan/ipaddrv6 is not a static IPv6 address: {addr!r}") from None
+    return addr
+
+
+# --------------------------------------------------------------------------- #
+# civm IPv6 transport — issue #3392
+# --------------------------------------------------------------------------- #
+
+
+def _client_lan_nic_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> tuple[str, str]:
+    """civm's LAN NIC (the one holding its 192.168.1.x lease) and its usable global IPv6."""
+    res = client_vm.ssh("ip -4 -o addr show | awk '/ 192\\.168\\.1\\./{print $2; exit}'", timeout=timeout)
+    nic = res.stdout.strip()
+    if res.returncode != 0 or not nic:
+        raise RuntimeError(f"civm has no NIC holding 192.168.1.x: rc={res.returncode} {res.stdout!r} {res.stderr!r}")
+    res = client_vm.ssh("ip", "-6", "-o", "addr", timeout=timeout)
+    for line in res.stdout.splitlines():
+        fields = line.split()
+        if len(fields) > 3 and fields[1] == nic and fields[2] == "inet6" and "global" in fields:
+            if not {"tentative", "dadfailed", "deprecated", "temporary"} & set(fields):
+                return nic, fields[3].split("/")[0]
+    raise RuntimeError(
+        f"civm LAN NIC {nic} has no usable global IPv6 address; `ip -6 -o addr` "
+        f"(rc={res.returncode}):\n{res.stdout}{res.stderr}"
+    )
+
+
+def client_lan_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> str:
+    """civm's global IPv6 address on its LAN NIC, discovered at runtime.
+
+    The NIC holds a SLAAC and a DHCPv6 address and the lease is dynamic, so this is the
+    first stable one ``ip -6 -o addr`` lists (DAD finished; not deprecated, not a privacy
+    address). :func:`pin_client_route6` makes it the source of every pinned probe. None
+    usable raises with the raw ``ip -6 -o addr`` output.
+    """
+    return _client_lan_nic_ipv6(client_vm, timeout=timeout)[1]
+
+
+def pin_client_route6(client_vm: SmokeVM, dst: str, via: str, *, timeout: float = 30.0) -> str:
+    """Route civm's traffic for ``dst`` via ``via`` out its LAN NIC; return the pinned source.
+
+    A ``/128`` host route sourced from :func:`client_lan_ipv6`. Needed for destinations
+    outside the LAN prefix: civm's MGMT NIC can carry an IPv6 default route too, so such a
+    probe may otherwise leave through QEMU user networking instead of pfSense. The route's
+    ``src`` fixes which LAN address pfSense sees. Undo with :func:`unpin_client_route6`.
+    """
+    nic, src = _client_lan_nic_ipv6(client_vm, timeout=timeout)
+    res = client_vm.ssh(
+        "ip", "-6", "route", "replace", f"{dst}/128", "via", via, "dev", nic, "src", src, timeout=timeout
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"pinning {dst} via {via} dev {nic} src {src} failed: rc={res.returncode} {res.stderr!r}")
+    return src
+
+
+def unpin_client_route6(client_vm: SmokeVM, dst: str, *, timeout: float = 30.0) -> None:
+    """Remove the civm host route :func:`pin_client_route6` installed for ``dst``."""
+    res = client_vm.ssh("ip", "-6", "route", "del", f"{dst}/128", timeout=timeout)
+    if res.returncode != 0:
+        raise RuntimeError(f"unpinning {dst} failed: rc={res.returncode} {res.stderr!r}")

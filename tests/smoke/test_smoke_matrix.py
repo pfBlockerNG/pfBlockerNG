@@ -72,7 +72,7 @@ import pytest
 from tests.test_issue3222_soa_wire import rr_has_type
 
 from . import helpers as h
-from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import PFSENSE_LAN_IP, STUB_DNS_A, STUB_DNS_AAAA, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -242,6 +242,60 @@ def test_dnsbl_python_vip_aaaa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_fe
     finally:
         h.set_dnsbl_vip6(deployed_vm, present=False)
         h.reload(deployed_vm, "updatednsbl")
+
+
+def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Issue #3392 row A1: DNSBL answers a query that reaches pfSense over IPv6.
+
+    Given the v6 sinkhole VIP selected as ``pfb_dnsvip6`` and a VIP-mode list carrying the domain,
+      And civm's route to pfSense's LAN IPv6 (read from config) pinned to its LAN address,
+    When civm queries that address for A and AAAA,
+    Then A is the v4 VIP and AAAA is the v6 VIP,
+      And an unlisted name resolves to the stub upstream's sentinels over the same transport,
+      And dnsbl.log attributes both blocks to civm's pinned IPv6 source.
+    """
+    lan6 = h.get_lan_ipv6(deployed_vm)
+    domain = h.unique_domain("vip6transport")
+    unlisted = h.unique_domain("v6transportpass")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_v6_transport.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokev6transport", feed_url=feed_url, header="smokev6transport")
+    expected = {
+        (domain, "A"): h.DEFAULT_DNSBL_VIP4,
+        (domain, "AAAA"): h.DNSBL_VIP6,
+        (unlisted, "A"): STUB_DNS_A,
+        (unlisted, "AAAA"): STUB_DNS_AAAA,
+    }
+
+    def blocked_rows() -> list[list[str]]:
+        rows = (row.split(",") for row in h.read_log_file(deployed_vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines())
+        return [row for row in rows if row[2:3] == [domain]]
+
+    src6 = h.pin_client_route6(client_vm, lan6, lan6)
+    try:
+        try:
+            h.set_dnsbl_vip6(deployed_vm, present=True)
+            with h.CaseContext(deployed_vm, spec):
+                for (name, rtype), want in expected.items():
+                    got = h.dns_probe_client(client_vm, name, rtype, server=lan6)
+                    assert {ipaddress.ip_address(r) for r in got.records} == {ipaddress.ip_address(want)}, (
+                        f"{rtype} {name} @{lan6}: expected {want}, got {got}"
+                    )
+                # dnsbl.log is written off the DNS path: wait for both rows, then check who they name.
+                try:
+                    h.wait_until(lambda: {row[-1] for row in blocked_rows()} >= {"A", "AAAA"})
+                except RuntimeError:
+                    raise AssertionError(
+                        f"dnsbl.log rows for {domain}: expected A and AAAA from {src6}, got {blocked_rows()}"
+                    ) from None
+                clients = {ipaddress.ip_address(row[3]) for row in blocked_rows()}
+                assert clients == {ipaddress.ip_address(src6)}, (
+                    f"dnsbl.log client for {domain}: expected {src6}, got {sorted(map(str, clients))}"
+                )
+        finally:
+            h.set_dnsbl_vip6(deployed_vm, present=False)
+            h.reload(deployed_vm, "updatednsbl")
+    finally:
+        h.unpin_client_route6(client_vm, lan6)
 
 
 _SECTION_COUNTS = re.compile(
