@@ -1215,7 +1215,7 @@ function pfb_octet_recover_type(string $file, array $supported_types, callable $
 
 // ADR-48: pure formatter for the canonical download-validation reject line — a single
 // greppable line naming feed/stage/reason + raw detected detail. $stage is one of
-// mime|structural|inner|member|plaintext|entries|size (caller-owned vocabulary, unvalidated here).
+// mime|structural|inner|member|plaintext|entries|size|fetch (caller-owned vocabulary, unvalidated here).
 // Shape: "\npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>"
 // (leading "\n" per pfb_logger() convention). Each value has control bytes -> space (blocks
 // forging/splitting the line via attacker-influenced detail) — HTML-escaping is NOT applied
@@ -15755,8 +15755,6 @@ function pfb_download_fetch(PfbDownloadRequest $request): PfbDownloadResult {
 					// response it cut short, so the file holds at most a partial body: refuse it.
 					if (!$hop_ok) {
 						pfb_validate_log($header, 'fetch', 'curl_incomplete', "curl={$curl_error} " . pfb_redact_url($current_url));
-						// No curl_close(): it is a no-op since PHP 8.0 and deprecated in 8.5
-						// (Plus ships php85); the handle frees when this frame returns.
 						@fclose($fhandle);
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();

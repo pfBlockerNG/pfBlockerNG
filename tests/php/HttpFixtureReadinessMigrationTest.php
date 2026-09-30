@@ -45,6 +45,7 @@ final class HttpFixtureReadinessMigrationTest extends TestCase
 			'extracted payload archive' => [DownloadExtractedPayloadSanityTest::class, __DIR__ . '/DownloadExtractedPayloadSanityTest.php', 'downloadArchive'],
 			'rejected validator origin' => [DownloadRejectValidatorClearTest::class, __DIR__ . '/DownloadRejectValidatorClearTest.php', 'startOrigin'],
 			'retry body reset origin' => [DownloadRetryBodyResetTest::class, __DIR__ . '/DownloadRetryBodyResetTest.php', 'startFlakyServer'],
+			'cURL incomplete origin' => [DownloadCurlIncompleteTest::class, __DIR__ . '/DownloadCurlIncompleteTest.php', 'startServer'],
 			'download size refusal origin' => [DownloadSizeRefusalTest::class, __DIR__ . '/DownloadSizeRefusalTest.php', 'startServer'],
 			'GeoIP ZIP publication' => [GeoipZipPublicationTest::class, __DIR__ . '/GeoipZipPublicationTest.php', 'downloadGeoip'],
 			'TOP1M change-detect probe' => [Top1mDccDetectorTest::class, __DIR__ . '/Top1mDccDetectorTest.php', 'testChangeDetectUsesActualHttpProbeBodyAndMetadata'],

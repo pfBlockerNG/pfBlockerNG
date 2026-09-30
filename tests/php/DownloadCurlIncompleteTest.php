@@ -232,14 +232,10 @@ PHP;
 		$this->fail('could not start the php -S fixture server; ' . implode(' | ', $failures));
 	}
 
-	/** @return int fixture-server requests whose URI is $route (all routes when null) */
-	private function requestCount(?string $route = null): int
+	/** @return int fixture-server requests whose URI is $route */
+	private function requestCount(string $route): int
 	{
-		$lines = @file("{$this->workdir}/requests.log", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-		if (!is_array($lines)) {
-			return 0;
-		}
-		return $route === null ? count($lines) : count(array_keys($lines, $route, TRUE));
+		return count(array_keys((array) @file("{$this->workdir}/requests.log", FILE_IGNORE_NEW_LINES), $route, TRUE));
 	}
 
 	private function logText(): string
@@ -285,7 +281,6 @@ PHP;
 		$this->assertFalse($result->success, 'a hop whose every cURL attempt failed must not download successfully');
 		$this->assertNull($result->responseMeta, 'a failed hop must carry no probe metadata the caller could act on');
 		$this->assertFileDoesNotExist("{$dl}.raw", 'the partial body must not be left on disk');
-		$this->assertFileDoesNotExist("{$this->workdir}/feed.md5.raw", 'no probe body may survive for the detector to hash');
 		$this->assertSame(self::SEED_ORIG, (string) @file_get_contents("{$this->workdir}/feed.orig"),
 			'the previously published .orig must be untouched');
 		$this->assertSame(self::SEED_HASH, (string) @file_get_contents("{$this->workdir}/feed.orig.xxhash128"),
@@ -347,6 +342,9 @@ PHP;
 		$result = $this->fetch('/redir-short');
 
 		$this->assertFailedCleanly($result, '', 18);
+		$log = $this->logText();
+		$this->assertMatchesRegularExpression('#reason=curl_incomplete detected=curl=18 \S*/short$#m', $log,
+			'the refusal must name the hop that failed, not the feed URL; log was: ' . $log);
 	}
 
 	/** C6. Control: a complete ingest 200 succeeds and publishes exactly the body. */

@@ -314,6 +314,8 @@ final class DownloadRejectValidatorClearTest extends TestCase
 	 * successful publication (pfblockerng.php's TOP1M detector), so no rejected body's
 	 * validator can survive there — Top1mSemanticMatrixTest pins that retention.
 	 * stage=size is covered by its own test below (it needs the transfer ceiling).
+	 * stage=fetch (every cURL attempt failed, #3374) leaves through the same single clear
+	 * point: its body is never whole, so DownloadCurlIncompleteTest owns its fixture.
 	 *
 	 * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
 	 */
