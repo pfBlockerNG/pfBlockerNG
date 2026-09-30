@@ -3,7 +3,7 @@
 A DNSBL feed line ``://192.0.2.10^`` (the "block regardless of scheme" shape) lists that IPv4
 address, and ``://[2001:db8::10]^$third-party`` that IPv6 address (options dropped), in both
 lenient and strict mode. A ``://`` after a ``/``, ``?`` or ``#`` is part of the path or query,
-so ``evil.com/x?u=http://198.51.100.20/`` lists the domain only, never 198.51.100.20.
+so ``<redirector>/x?u=http://198.51.100.20/`` lists the domain only, never 198.51.100.20.
 
 The addresses come from the RFC 5737 / RFC 3849 documentation ranges; ``deploy()`` pins IP
 Suppression off, so they are collected.
@@ -60,7 +60,7 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
 
     Given a DNSBL feed, loaded with DNSBL IP = Deny_Both in the given scheme mode, that holds
       ``://192.0.2.10^``, ``://[2001:db8::10]^$third-party``,
-      ``evil.com/x?u=http://198.51.100.20/`` and a control domain,
+      ``<redirector>/x?u=http://198.51.100.20/`` and a control domain,
     When the feed is reloaded,
     Then the control domain is VIP-blocked (the feed loaded),
       pfB_DNSBLIP_v4 holds 192.0.2.10 and pfB_DNSBLIP_v6 holds 2001:db8::10,
@@ -71,8 +71,9 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
     # Per-mode header and feed: with a shared one, the second case's control never got the VIP block.
     header = f"{HEADER}{mode}"
     control = h.unique_domain("emptyscheme")
+    redirector = h.unique_domain("redirector")
     body = (
-        "\n".join([f"://{V4_IP}^", f"://[{V6_IP}]^$third-party", "evil.com/x?u=http://" + EMBEDDED_IP + "/", control])
+        "\n".join([f"://{V4_IP}^", f"://[{V6_IP}]^$third-party", f"{redirector}/x?u=http://{EMBEDDED_IP}/", control])
         + "\n"
     )
     feed_url = h.write_local_feed(vm, f"smoke_dnsbl_empty_scheme_ip_{mode}.txt", body)
@@ -85,8 +86,11 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
         h.reload(vm, "update")
 
         h.flush_unbound_name(vm, control)
-        ans = h.dns_probe_client_until(client_vm, control, h.is_vip)
+        # reload() waits for the swap, so the first answer is authoritative.
+        ans = h.dns_probe_client(client_vm, control, "A")
         assert h.is_vip(ans), f"control {control} expected VIP block (feed loaded), got {ans}"
+        ans = h.dns_probe_client(client_vm, redirector, "A")
+        assert h.is_vip(ans), f"{mode}: redirector {redirector} expected VIP block (domain listed), got {ans}"
 
         h.apply_filter_sync(vm)
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")
