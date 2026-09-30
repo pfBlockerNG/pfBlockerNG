@@ -74,7 +74,7 @@ final class DnsblSchemeSeparatorTest extends TestCase
 	 * @return array{ip4: list<string>, ip6: list<string>, domains: list<string>, pe: bool}
 	 */
 	private function parseLine(string $feedLine, bool $lenient, PfbToggle $supp = PfbToggle::Off,
-		string $dnsblIp = 'Deny_Both'): array
+		string $dnsblIp = 'Deny_Both', bool $custom = TRUE): array
 	{
 		$pfb = [
 			'dnsbl_lenient'   => $lenient ? PfbToggle::On : PfbToggle::Off,
@@ -93,7 +93,6 @@ final class DnsblSchemeSeparatorTest extends TestCase
 		$domain_data_ip6 = [];
 		$ipcount = 0;
 		$dnsbl_skip = [];
-		$custom = TRUE;
 		$csv_parser = FALSE;
 		$run_once = TRUE;
 		$csv_type = '';
@@ -186,7 +185,7 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4:443^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]:443^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]/path^', 'ip6=2001:db8::1', 'pe', 'control'],
-			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'pe', 'control'],
+			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['http://1.2.3.4^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
@@ -214,7 +213,7 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			["://1.2.3.4\t^", 'pe', 'pe', 'control'],
 			['://' . str_repeat('a', 5000), 'pe', 'pe', 'control'],
 			['://[ｆｅ80::1]^', 'pe', 'pe', 'control'],
-			['://1.2.3.4^ #c', 'pe', 'pe', 'control'],
+			['://1.2.3.4^ #c', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 		];
 		$out = [];
 		foreach ($rows as [$line, $l, $s, $status]) {
@@ -232,14 +231,15 @@ final class DnsblSchemeSeparatorTest extends TestCase
 		}
 	}
 
-	public function testSuppressedRfc3849AddressIsNotCollectedFromEmptySchemeLine(): void
+	public function testSuppressedPrivateAddressIsNotCollectedFromEmptySchemeLine(): void
 	{
 		// Before-state: suppression off lists it, so suppression on is what drops it.
-		$this->assertSame('ip6=2001:db8::1', self::summarize($this->parseLine('://[2001:db8::1]^', TRUE, PfbToggle::Off)));
+		$this->assertSame('ip4=192.168.1.100',
+			self::summarize($this->parseLine('://192.168.1.100^', TRUE, PfbToggle::Off, 'Deny_Both', FALSE)));
 		foreach ([TRUE, FALSE] as $lenient) {
-			$r = $this->parseLine('://[2001:db8::1]^', $lenient, PfbToggle::On);
-			$this->assertSame([], $r['ip6'], 'RFC 3849 address collected with suppression on');
-			$this->assertSame([], $r['ip4']);
+			$r = $this->parseLine('://192.168.1.100^', $lenient, PfbToggle::On, 'Deny_Both', FALSE);
+			$this->assertSame([], $r['ip4'], 'RFC1918 address collected with suppression on');
+			$this->assertSame([], $r['domains']);
 		}
 	}
 }
