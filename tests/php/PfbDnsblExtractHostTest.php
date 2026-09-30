@@ -235,6 +235,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 		// '@' after the first '^' is option text; it must not replace the host.
 		foreach ([TRUE, FALSE] as $strict) {
 			$this->assertSame('1.2.3.4', $this->extract('://1.2.3.4^$domain=a@9.9.9.9', $strict));
+			$this->assertNotSame('9.9.9.9', $this->extract('://1.2.3.4^x@9.9.9.9', $strict));
 		}
 	}
 }

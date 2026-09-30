@@ -167,6 +167,9 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4^$domain=a@evil.com', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['://1.2.3.4^$csp=x@[2001:db8::99]', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['http://evil.com^$x@9.9.9.9', 'pe', 'pe', 'RED'],
+			// A bare '^' (no '$' after it) also ends the userinfo search.
+			['://1.2.3.4^@evil.com', 'pe', 'pe', 'RED'],
+			['://1.2.3.4^x@9.9.9.9', 'pe', 'pe', 'RED'],
 
 			// RED: path or trailing text after an empty-scheme IPv4.
 			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
