@@ -883,20 +883,13 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
-// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6'):
-// port-53 traffic to anything but the firewall ('(self)', negated) is redirected to the
-// firewall's resolver on port 53, with an inline 'pass' and NAT reflection off. A usable
-// $exclude_alias becomes a negated source; otherwise the source is 'any'. The key order is
-// the stored order, so the sync's change-detection compare stays stable.
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6').
+// The key order is the stored order used by sync change detection.
 function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
 	$v4 = ($family === 'inet');
 
-	// IPv6 cannot use ::1: FreeBSD drops a packet redirected to ::1 that arrived on a
-	// non-loopback interface (ip6_input scope check, #3400). An assigned interface targets
-	// pfSense's own "<Iface> address" NAT keyword, which filter.inc resolves to the
-	// interface's current IPv6 on every filter reload (static, track6, SLAAC, DHCPv6).
-	// Unassigned pseudo-interfaces (enc0, openvpn, l2tp) have no such keyword and keep ::1:
-	// their IPv6 DNS stays dropped instead of passing unredirected.
+	// #3400: FreeBSD drops ::1 redirected from a non-loopback interface. pfSense
+	// resolves <iface>ip to an assigned interface's current IPv6 on each filter reload.
 	if ($v4) {
 		$target = '127.0.0.1';
 	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {

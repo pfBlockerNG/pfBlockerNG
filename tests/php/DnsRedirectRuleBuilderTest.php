@@ -6,19 +6,7 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-/**
- * ADR-36: the DNS-redirect NAT rdr row builder, pfb_dns_redirect_rule().
- *
- * Issue #3400: FreeBSD drops a packet that pf redirects to ::1 when it arrived on a
- * non-loopback interface (ip6_input scope check), so the IPv6 rule must not target ::1.
- * On an assigned interface (wan/lan/optN) it targets pfSense's own "<Iface> address"
- * NAT keyword, '<iface>ip'. filter.inc resolves that keyword to the interface's current
- * IPv6 address on every filter reload, so static, track6, SLAAC and DHCPv6 addresses all
- * resolve. The unassigned pseudo-interfaces the redirect list offers (enc0, openvpn,
- * l2tp) have no such keyword. They keep ::1: IPv6 DNS there stays dropped (fails
- * closed) instead of the rule being skipped, which would let IPv6 DNS through
- * unredirected.
- */
+/** ADR-36/#3400: pin each assigned-interface and fallback IPv6 redirect target. */
 #[CoversFunction('pfb_dns_redirect_rule')]
 final class DnsRedirectRuleBuilderTest extends TestCase
 {
@@ -70,26 +58,29 @@ final class DnsRedirectRuleBuilderTest extends TestCase
 		);
 	}
 
-	#[DataProvider('optInterfaces')]
-	public function testIpv6TargetOnOptInterfaceIsItsAddressKeyword(string $iface): void
+	#[DataProvider('assignedInterfaces')]
+	public function testIpv6TargetOnAssignedInterfaceIsItsAddressKeyword(string $iface): void
 	{
 		$this->assertSame("{$iface}ip", pfb_dns_redirect_rule($iface, 'inet6', '')['target']);
 	}
 
-	public static function optInterfaces(): array
+	public static function assignedInterfaces(): array
 	{
-		return ['opt1' => ['opt1'], 'opt12' => ['opt12']];
+		return ['wan' => ['wan'], 'lan' => ['lan'], 'opt1' => ['opt1'], 'opt12' => ['opt12']];
 	}
 
-	#[DataProvider('pseudoInterfaces')]
-	public function testIpv6TargetOnUnassignedPseudoInterfaceStaysLoopback(string $iface): void
+	#[DataProvider('fallbackInterfaces')]
+	public function testIpv6TargetOnOtherInterfaceStaysLoopback(string $iface): void
 	{
 		$this->assertSame('::1', pfb_dns_redirect_rule($iface, 'inet6', '')['target']);
 	}
 
-	public static function pseudoInterfaces(): array
+	public static function fallbackInterfaces(): array
 	{
-		return ['enc0' => ['enc0'], 'openvpn' => ['openvpn'], 'l2tp' => ['l2tp']];
+		return [
+			'enc0' => ['enc0'], 'openvpn' => ['openvpn'], 'l2tp' => ['l2tp'],
+			'wireguard' => ['wireguard'], 'wlan0' => ['wlan0'], 'lan2' => ['lan2'], 'opt1x' => ['opt1x'],
+		];
 	}
 
 	public function testUsableExceptionAliasBecomesNegatedSourceForBothFamilies(): void

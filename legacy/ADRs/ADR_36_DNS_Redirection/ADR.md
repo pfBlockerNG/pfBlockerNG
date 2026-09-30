@@ -395,11 +395,14 @@ The inet6 target now depends on the interface:
   reloads the filter when such an address changes (`rc.newwanipv6`). When the interface has no
   global IPv6 address, pfSense skips the rule as `# Unresolvable alias` and loads the rest of
   the ruleset.
-- **Unassigned pseudo-interface (`enc0`, `openvpn`, `l2tp`):** keeps `::1`. pfSense has no
-  address keyword for these, so there is no answerable per-interface target. With `::1`, IPv6
-  DNS to a foreign resolver there is still dropped: it fails closed, as before. A keyword target
-  would make pfSense skip the rule instead, and IPv6 DNS would pass unredirected. Options are
-  tracked in #3403.
+- **Unassigned pseudo-interface with a pfSense filter-list entry (`enc0`, `openvpn`, `l2tp`):**
+  keeps `::1`. pfSense has no address keyword for these, so there is no answerable
+  per-interface target. With `::1`, IPv6 DNS to a foreign resolver there is still dropped: it
+  fails closed, as before. A keyword target would make pfSense skip the rule instead, and IPv6
+  DNS would pass unredirected.
+- **WireGuard:** the builder also returns `::1`, but pfSense has no `wireguard` entry in its
+  filter interface list and skips the rule before resolving the target. Options for all
+  unassigned pseudo-interfaces are tracked in #3403.
 - **inet** stays `127.0.0.1`.
 
 The §2.2 invariant "Target is family-specific" now reads: inet → `127.0.0.1`; inet6 →

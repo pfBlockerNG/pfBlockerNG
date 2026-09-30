@@ -1342,11 +1342,11 @@ half-written state those paths may have left; (2) **on deinstall**, before
 is load-bearing: the VIP teardown reads the pfBlockerNG config sections to resolve the VIP double-guard
 reference; if the config were wiped first, the reference would be gone and the guard would skip orphans.
 
-There is no per-feature registration seam. ADR-36 (DNS-redirect) and ADR-37 (DoT/DoQ block) reuse this
-layer directly: each builds its rules inline and calls `pfb_find_managed_obj` / `pfb_remove_managed_obj`
-with its own `pfB_DNS_Redirect_<iface>_{v4,v6}` or `pfB_DoT_Block_<iface>` marker for reconcile and
-teardown. User objects (no pfB marker) are **never** touched by any remove pass — asserted by smoke
-tests that seed sibling user rows and prove they survive.
+There is no per-feature registration seam. ADR-36 (DNS redirect) and ADR-37 (DoT/DoQ block)
+reuse this layer directly: each owns its reconcile loop and calls `pfb_find_managed_obj` /
+`pfb_remove_managed_obj` with its own `pfB_DNS_Redirect_<iface>_{v4,v6}` or
+`pfB_DoT_Block_<iface>` marker. User objects (no pfB marker) are **never** touched by any remove
+pass — asserted by smoke tests that seed sibling user rows and prove they survive.
 
 Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 
@@ -1358,14 +1358,17 @@ selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for 
 cannot target `::1`: FreeBSD drops a packet redirected to `::1` that arrived on a non-loopback
 interface (#3400). On an assigned interface (`wan`/`lan`/`optN`) it targets pfSense's
 `<iface>ip` keyword, which `filter.inc` resolves to the interface's current IPv6 address on every
-filter reload. On an unassigned pseudo-interface (`enc0`/`openvpn`/`l2tp`) it keeps `::1`, so
-IPv6 DNS there fails closed (#3403). `pfb_dns_redirect_rule()` builds each rule. The firewall
-itself is structurally exempt: every generated rule carries a negated
-`(self)` destination so the firewall's own outbound DNS queries are never intercepted, making
-upstream resolution immune to the redirect. All four config.xml entries per interface (2 NAT
-rdr + 2 associated filter PASS rules) carry a `pfB_DNS_Redirect_<iface>_{v4,v6}` marker and
-are reconciled / torn down via the ADR-35 managed-object helpers (`pfb_find_managed_obj` /
-`pfb_remove_managed_obj`), so their full lifecycle is handled without bespoke teardown code. The feature is
+filter reload. On `enc0`/`openvpn`/`l2tp` it keeps `::1`, so IPv6 DNS there fails closed. The
+builder also returns `::1` for WireGuard, but pfSense has no `wireguard` entry in its filter
+interface list and skips the rule; that sibling case is tracked in #3403.
+`pfb_dns_redirect_rule()` builds each rule. The firewall itself is structurally exempt: every
+generated rule carries a negated `(self)` destination so the firewall's own outbound DNS queries
+are never intercepted, making upstream resolution immune to the redirect. The two `nat/rule`
+config entries per interface carry a `pfB_DNS_Redirect_<iface>_{v4,v6}` marker and
+`associated-rule-id='pass'`, which makes pfSense emit an inline `rdr pass` without companion
+`filter/rule` entries. They are reconciled / torn down via the ADR-35 managed-object helpers
+(`pfb_find_managed_obj` / `pfb_remove_managed_obj`), so their full lifecycle is handled without
+bespoke teardown code. The feature is
 complementary to DoH/DoT domain-level NXDOMAIN blocking (DNSBL feeds) and to ADR-37's
 port-853 blocking: this ADR closes only the plaintext port-53 bypass path.
 
