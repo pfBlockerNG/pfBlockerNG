@@ -2734,12 +2734,19 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 }
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
-// `if (!$lite)` branch. Order is load-bearing: userinfo/authority cut (strict mode keeps a
+// `if (!$lite)` branch. Order is load-bearing: a scheme-less '<IP>/<digits>' line is rejected
+// first (a CIDR is not a host; never collected as the bare address) -> userinfo/authority cut (strict mode keeps a
 // numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
 // pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
+
+	if (pfb_dnsbl_scheme_pos($line) === FALSE && preg_match('#^(.+)/[0-9]+$#D', $line, $cidr) &&
+	    (is_ipaddrv4($cidr[1]) || is_ipaddrv6($cidr[1]))) {
+		pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
+		return FALSE;
+	}
 
 	// RFC 3986 authority of a scheme-bearing line (a '://' found by pfb_dnsbl_scheme_pos()): the
 	// host follows the LAST '@' before the first '^' (unencoded '^' is illegal in userinfo, so an
