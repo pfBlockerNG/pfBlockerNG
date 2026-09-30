@@ -16,10 +16,11 @@ disables silently. These gates cover what actionlint cannot:
    proves it usable before the suite runs (issue #2261).
 3. The ``actionlint`` job keeps its embedded ShellCheck pass over ``run:``
    bodies, and no config filters that pass's findings away (issue #2241).
-4. Dispatchable workflows own top-level concurrency; artifact chains keep one
-   upload/download action major at the highest major both actions publish
-   (issue #2725); container invocations pass ``--init``; and downstream jobs
-   consume prepared SHA pins (issue #2413).
+4. Dispatchable workflows own top-level concurrency; artifact actions pin the
+   latest published major of each action, and producer/consumer chains never
+   straddle the v3/v4 artifact-backend break (issue #2725); container
+   invocations pass ``--init``; and downstream jobs consume prepared SHA pins
+   (issue #2413).
 """
 
 from __future__ import annotations
@@ -444,7 +445,7 @@ def test_lossless_operational_workflows_keep_every_pending_event(workflow: str) 
 
 
 # --------------------------------------------------------------------------- #
-# 5. Artifact producer/consumer chains keep one action major.
+# 5. Artifact producer/consumer chains stay on one artifact backend.
 # --------------------------------------------------------------------------- #
 
 
@@ -465,12 +466,15 @@ _DownloadKey = tuple[str, str, int, int, tuple[tuple[str, str], ...], tuple[str,
 
 _ARTIFACT_ACTION_REF = re.compile(r"^actions/(?P<kind>upload|download)-artifact@.+$")
 _ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}$")
-# Frozen 2026-08-27 from the GitHub API (issue #2728). Highest common is v7.
+# Frozen 2026-08-27 from the GitHub API (issue #2728). Latest: upload v7, download v8.
 _KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {
     "upload": frozenset({1, 2, 3, 4, 5, 6, 7}),
     "download": frozenset({1, 2, 3, 4, 5, 6, 7, 8}),
 }
-_HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] & _KNOWN_ARTIFACT_MAJORS["download"])
+_LATEST_ARTIFACT_MAJOR = {kind: max(majors) for kind, majors in _KNOWN_ARTIFACT_MAJORS.items()}
+# v4 moved both actions to a new artifact backend; v4+ artifacts are invisible to
+# v1-v3 and vice versa. Majors on the same side of that break interoperate.
+_FIRST_V4_BACKEND_MAJOR = 4
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
@@ -769,7 +773,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                     by_name: dict[str, set[tuple[str, str]]] = {}
                     for artifact in matched:
                         by_name.setdefault(artifact.name, set()).add((artifact.workflow, artifact.job))
-                        if artifact.major != major:
+                        if (artifact.major >= _FIRST_V4_BACKEND_MAJOR) != (major >= _FIRST_V4_BACKEND_MAJOR):
                             major_mismatches.setdefault(key, set()).add(
                                 (artifact.workflow, artifact.job, artifact.major)
                             )
@@ -889,7 +893,7 @@ def _iter_step_uses(document: Mapping[object, object], where: str) -> list[tuple
 
 def _live_artifact_offences(sources: dict[str, str]) -> list[str]:
     """issue #2725: every live upload/download-artifact pin must exist upstream
-    and sit at the highest major both actions publish.
+    and sit at the latest major that action publishes.
 
     Walks parsed YAML so quoted ``uses:``, folded scalars, and composite-action
     steps are visible; comment lines are not pins.
@@ -909,24 +913,23 @@ def _live_artifact_offences(sources: dict[str, str]) -> list[str]:
                     f"{location}: actions/{kind}-artifact@v{major} is not a known "
                     f"upstream major (known: {sorted(known)})"
                 )
-            elif major != _HIGHEST_COMMON_ARTIFACT_MAJOR:
+            elif major != _LATEST_ARTIFACT_MAJOR[kind]:
                 offences.append(
                     f"{location}: pin actions/{kind}-artifact to "
-                    f"v{_HIGHEST_COMMON_ARTIFACT_MAJOR} (highest common existing major), "
+                    f"v{_LATEST_ARTIFACT_MAJOR[kind]} (latest published major), "
                     f"not v{major}"
                 )
     return offences
 
 
-def test_live_artifact_actions_use_highest_common_existing_major() -> None:
+def test_live_artifact_actions_use_latest_existing_major() -> None:
     """issue #2725: producer/consumer major matching does not prove the pin
     exists upstream. ``upload-artifact@v8`` matched ``download-artifact@v8``
     and passed every gate, then failed at Set up job.
 
     Live workflow pins must be a known upstream major for that action and use
-    the highest major both actions publish, so the pair stays matched at a
-    resolvable ref. Fixture YAML in this file is out of scope — those literals
-    exercise the scanner, not GitHub's tag namespace.
+    the latest major that action publishes. Fixture YAML in this file is out of
+    scope — those literals exercise the scanner, not GitHub's tag namespace.
     """
     offences = _live_artifact_offences(_live_yaml_sources())
     assert not offences, "live artifact pins failed:\n  " + "\n  ".join(offences)
@@ -971,7 +974,7 @@ runs:
     assert any("quoted.yml" in item and "upload-artifact@v8" in item and "not a known" in item for item in offences), (
         offences
     )
-    assert any("quoted.yml" in item and "download-artifact" in item and "not v8" in item for item in offences), offences
+    assert not any("download-artifact" in item for item in offences), offences
     assert any("action.yml" in item and "upload-artifact@v8" in item and "not a known" in item for item in offences), (
         offences
     )
@@ -1056,7 +1059,7 @@ jobs:
     steps:
       - uses: actions/upload-artifact@v7
         with: {name: pkg}
-      - uses: actions/upload-artifact@v8
+      - uses: actions/upload-artifact@v3
         with: {name: family-two}
 """,
         "root.yaml": """\
@@ -1093,7 +1096,7 @@ jobs:
     )
     assert any(
         "root.yaml:pattern:step-0: rule=artifact-major: download v7 mismatches producers" in item
-        and "('producer.yml', 'duplicate', 8)" in item
+        and "('producer.yml', 'duplicate', 3)" in item
         for item in offences
     )
 
@@ -1186,7 +1189,7 @@ on: workflow_dispatch
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v8
+      - uses: actions/upload-artifact@v3
         with: {name: pkg}
 """,
         "callback.yml": """\
@@ -1203,7 +1206,7 @@ jobs:
     assert _artifact_chain_offences(sources) == [
         "callback.yml:consume:step-0: rule=artifact-major: ambiguous producers for 'pkg': "
         "[('one.yml', 'upload'), ('two.yml', 'upload')]",
-        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 7)]",
+        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('two.yml', 'upload', 3)]",
     ]
 
 

@@ -393,7 +393,7 @@ def _download_steps_with_pattern(workflow: dict) -> list[tuple[str, dict]]:
         (job_name, step)
         for job_name, job in workflow["jobs"].items()
         for step in job.get("steps", [])
-        if step.get("uses") == "actions/download-artifact@v7"
+        if step.get("uses") == "actions/download-artifact@v8"
         and (step.get("with") or {}).get("pattern") == "nightly-result-*"
     ]
 

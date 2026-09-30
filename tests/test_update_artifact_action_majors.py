@@ -27,12 +27,12 @@ _spec.loader.exec_module(uaam)
 
 _HYGIENE_SNIPPET = """\
 # Frozen 2026-08-26 from the GitHub API (issue #2725). upload-artifact has no v8
-# tag (latest v7.0.1); download-artifact does (v8.0.1). Highest common is v7.
+# tag (latest v7.0.1); download-artifact does (v8.0.1).
 _KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {
     "upload": frozenset({4, 5, 6, 7}),
     "download": frozenset({3, 4, 5, 6, 7, 8}),
 }
-_HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] & _KNOWN_ARTIFACT_MAJORS["download"])
+_LATEST_ARTIFACT_MAJOR = {kind: max(majors) for kind, majors in _KNOWN_ARTIFACT_MAJORS.items()}
 """
 
 _V7_LIVE_PINS = """\
@@ -55,7 +55,7 @@ def _refs(*tags: str) -> list[dict[str, str]]:
 
 
 def _current_api_fixture() -> dict[str, list[dict[str, str]]]:
-    """Recorded shape: upload has no v8; download does. Highest common is 7."""
+    """Recorded shape: upload has no v8; download does."""
     return {
         "upload": _refs("1.0.0", "v3-node20", "v4", "v4.3.4", "v5", "v6", "v7", "v7.0.1"),
         "download": _refs("v3", "v4", "v5", "v6", "v7", "v8", "v8.0.1"),
@@ -94,37 +94,21 @@ def test_parse_tag_refs_accepts_json_text() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# highest common — intersection, never union (issue #2385 / #2728)
+# latest — per action; one action's new major never moves the other
 # --------------------------------------------------------------------------- #
 
 
-def test_highest_common_stays_7_when_upload_has_no_v8() -> None:
+def test_latest_majors_are_per_action() -> None:
     majors = {kind: uaam.parse_tag_refs(payload) for kind, payload in _current_api_fixture().items()}
     assert majors["upload"] == frozenset({4, 5, 6, 7})
-    assert 8 not in majors["upload"]
-    assert uaam.highest_common(majors) == 7
+    assert uaam.latest_majors(majors) == {"upload": 7, "download": 8}
 
 
-def test_highest_common_becomes_8_when_fixture_adds_upload_v8() -> None:
-    payloads = _current_api_fixture()
-    payloads["upload"] = payloads["upload"] + _refs("v8", "v8.0.0")
-    majors = {kind: uaam.parse_tag_refs(payload) for kind, payload in payloads.items()}
-    assert uaam.highest_common(majors) == 8
-
-
-def test_one_sided_new_major_does_not_raise_highest_common() -> None:
+def test_one_sided_new_major_moves_only_that_action() -> None:
     payloads = _current_api_fixture()
     payloads["download"] = payloads["download"] + _refs("v9")
     majors = {kind: uaam.parse_tag_refs(payload) for kind, payload in payloads.items()}
-    assert 9 in majors["download"]
-    assert 9 not in majors["upload"]
-    assert uaam.highest_common(majors) == 7
-
-
-def test_empty_intersection_is_refused() -> None:
-    majors = {"upload": frozenset({4}), "download": frozenset({8})}
-    with pytest.raises(SystemExit, match="empty intersection"):
-        uaam.highest_common(majors)
+    assert uaam.latest_majors(majors) == {"upload": 7, "download": 9}
 
 
 def test_empty_action_majors_are_refused() -> None:
@@ -133,20 +117,18 @@ def test_empty_action_majors_are_refused() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# rewrite — table only; highest-common stays derived
+# rewrite — table only; latest-major line stays derived
 # --------------------------------------------------------------------------- #
 
 
 def test_replace_table_rewrites_known_majors_and_leaves_derivation() -> None:
     majors = {"upload": frozenset({4, 5, 6, 7, 8}), "download": frozenset({3, 4, 5, 6, 7, 8})}
-    rendered = uaam.render_table(majors, synced="2026-08-27", highest=8)
+    rendered = uaam.render_table(majors, synced="2026-08-27")
     updated = uaam.replace_table(_HYGIENE_SNIPPET, rendered)
     assert "_KNOWN_ARTIFACT_MAJORS" in updated
     assert "frozenset({4, 5, 6, 7, 8})" in updated
-    assert (
-        '_HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] '
-        '& _KNOWN_ARTIFACT_MAJORS["download"])' in updated
-    )
+    assert "_LATEST_ARTIFACT_MAJOR = {kind: max(majors) for kind, majors in _KNOWN_ARTIFACT_MAJORS.items()}" in updated
+    assert "Latest: upload v8, download v8." in updated
     assert "issue #2728" in updated
     assert "2026-08-27" in updated
     assert "issue #2725" not in updated
@@ -172,7 +154,7 @@ def test_check_exits_1_when_table_is_stale_and_0_when_current(tmp_path: Path, mo
 
 
 # --------------------------------------------------------------------------- #
-# live-pin gate — refresh must not weaken parse + highest-common (issue #2726)
+# live-pin gate — refresh must not weaken parse + latest-major (issue #2726)
 # --------------------------------------------------------------------------- #
 
 
@@ -180,59 +162,46 @@ def test_upload_v8_fixture_reports_drift_on_remaining_v7_pins(monkeypatch: pytes
     payloads = _current_api_fixture()
     payloads["upload"] = payloads["upload"] + _refs("v8")
     majors = {kind: uaam.parse_tag_refs(payload) for kind, payload in payloads.items()}
-    highest = uaam.highest_common(majors)
-    assert highest == 8
     monkeypatch.setattr(hygiene, "_KNOWN_ARTIFACT_MAJORS", majors)
-    monkeypatch.setattr(hygiene, "_HIGHEST_COMMON_ARTIFACT_MAJOR", highest)
+    monkeypatch.setattr(hygiene, "_LATEST_ARTIFACT_MAJOR", uaam.latest_majors(majors))
     offences = hygiene._live_artifact_offences({"w.yml": _V7_LIVE_PINS})
     assert any("upload-artifact" in item and "v8" in item and "not v7" in item for item in offences), offences
     assert any("download-artifact" in item and "v8" in item and "not v7" in item for item in offences), offences
 
 
-def test_one_sided_major_does_not_silently_allow_a_mismatched_pair(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A refresh that adds v9 to download only must not accept a v9/v9 pair:
-    upload@v9 is still unpublished, so the parse-based existence gate must
-    reject it. Highest common stays 7 (#2385 / #2728).
+def test_one_sided_major_admits_only_the_published_side(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refresh that adds v9 to download only must not accept upload@v9: it is
+    still unpublished, so the parse-based existence gate rejects it. A v7
+    upload feeding a v9 download shares the v4+ backend and is accepted; a
+    v3 upload feeding it straddles the backend break and is rejected.
     """
     payloads = _current_api_fixture()
     payloads["download"] = payloads["download"] + _refs("v9")
     majors = {kind: uaam.parse_tag_refs(payload) for kind, payload in payloads.items()}
-    highest = uaam.highest_common(majors)
-    assert highest == 7
     monkeypatch.setattr(hygiene, "_KNOWN_ARTIFACT_MAJORS", majors)
-    monkeypatch.setattr(hygiene, "_HIGHEST_COMMON_ARTIFACT_MAJOR", highest)
-    sources = {
-        "w.yml": """\
+    monkeypatch.setattr(hygiene, "_LATEST_ARTIFACT_MAJOR", uaam.latest_majors(majors))
+
+    def pair(upload: int, download: int) -> dict[str, str]:
+        return {
+            "w.yml": f"""\
 on: workflow_dispatch
 jobs:
   up:
     steps:
-      - uses: actions/upload-artifact@v9
-        with: {name: pkg}
+      - uses: actions/upload-artifact@v{upload}
+        with: {{name: pkg}}
   down:
     needs: up
     steps:
-      - uses: actions/download-artifact@v9
-        with: {name: pkg}
+      - uses: actions/download-artifact@v{download}
+        with: {{name: pkg}}
 """
-    }
-    offences = hygiene._live_artifact_offences(sources)
+        }
+
+    offences = hygiene._live_artifact_offences(pair(9, 9))
     assert any("upload-artifact@v9" in item and "not a known" in item for item in offences), offences
-    assert any("download-artifact" in item and "not v9" in item for item in offences), offences
-    mismatched = {
-        "w.yml": """\
-on: workflow_dispatch
-jobs:
-  up:
-    steps:
-      - uses: actions/upload-artifact@v7
-        with: {name: pkg}
-  down:
-    needs: up
-    steps:
-      - uses: actions/download-artifact@v9
-        with: {name: pkg}
-"""
-    }
-    chain = hygiene._artifact_chain_offences(mismatched)
+    assert not any("download-artifact" in item for item in offences), offences
+    assert hygiene._live_artifact_offences(pair(7, 9)) == []
+    assert hygiene._artifact_chain_offences(pair(7, 9)) == []
+    chain = hygiene._artifact_chain_offences(pair(3, 9))
     assert any("mismatches producers" in item for item in chain), chain

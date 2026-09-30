@@ -103,7 +103,7 @@ on: workflow_dispatch
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v7.1.2
+      - uses: actions/upload-artifact@v3.1.2
         with: {name: pkg}
   download:
     needs: upload
@@ -114,7 +114,7 @@ jobs:
     }
     assert hygiene._artifact_chain_offences(sources) == [
         "semver.yml:download:step-0: rule=artifact-major: download v8 mismatches producers "
-        "[('semver.yml', 'upload', 7)]"
+        "[('semver.yml', 'upload', 3)]"
     ]
     with pytest.raises(
         AssertionError, match=r"unknown.yml:upload:step-0: rule=artifact-major: unclassified action ref"
@@ -340,7 +340,7 @@ on: workflow_call
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v3
         with: {name: pkg}
   download:
     needs: upload
@@ -350,7 +350,7 @@ jobs:
 """
     assert hygiene._artifact_chain_offences({"reusable.yml": source}) == [
         "reusable.yml:download:step-0: rule=artifact-major: "
-        "download v8 mismatches producers [('reusable.yml', 'upload', 7)]"
+        "download v8 mismatches producers [('reusable.yml', 'upload', 3)]"
     ]
 
 
@@ -518,7 +518,7 @@ on: workflow_dispatch
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v3
         with: {name: pkg}
 """,
         "two.yml": """\
@@ -544,7 +544,7 @@ jobs:
     assert hygiene._artifact_chain_offences(sources) == [
         "callback.yml:consume:step-0: rule=artifact-major: ambiguous producers for 'pkg': "
         "[('one.yml', 'upload'), ('two.yml', 'upload')]",
-        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 7)]",
+        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 3)]",
     ]
 
 
@@ -554,7 +554,7 @@ on: merge_group
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v3
         with: {name: pkg}
   download:
     needs: upload
@@ -563,7 +563,7 @@ jobs:
         with: {name: pkg}
 """
     assert hygiene._artifact_chain_offences({"merge.yml": source}) == [
-        "merge.yml:download:step-0: rule=artifact-major: download v8 mismatches producers [('merge.yml', 'upload', 7)]"
+        "merge.yml:download:step-0: rule=artifact-major: download v8 mismatches producers [('merge.yml', 'upload', 3)]"
     ]
 
 

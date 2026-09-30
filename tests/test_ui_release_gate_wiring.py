@@ -594,9 +594,10 @@ def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
     )
 
 
-def test_release_yml_upload_and_download_artifact_majors_match() -> None:
-    """issue #2385: a download-artifact major behind upload-artifact misses the
-    .pkg artifacts and used to publish a Release with none attached."""
+def test_release_yml_upload_and_download_artifacts_share_a_backend() -> None:
+    """issue #2385: a download-artifact on the other side of the v3/v4 artifact
+    backend break misses the .pkg artifacts and used to publish a Release with
+    none attached. v4+ majors interoperate."""
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     uploads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "upload"]
     downloads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "download"]
@@ -604,8 +605,8 @@ def test_release_yml_upload_and_download_artifact_majors_match() -> None:
     assert downloads, "release.yml must use actions/download-artifact"
     assert len(set(uploads)) == 1, f"upload-artifact majors {sorted(set(uploads))} must be uniform"
     assert len(set(downloads)) == 1, f"download-artifact majors {sorted(set(downloads))} must be uniform"
-    assert uploads[0] == downloads[0], (
-        f"upload-artifact major {uploads[0]} must equal download-artifact major {downloads[0]}"
+    assert int(uploads[0]) >= 4 and int(downloads[0]) >= 4, (
+        f"upload-artifact v{uploads[0]} and download-artifact v{downloads[0]} must both be on the v4+ backend"
     )
 
 

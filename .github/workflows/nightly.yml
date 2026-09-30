@@ -378,13 +378,13 @@ jobs:
           path: trusted
 
       - name: Download pinned plan
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nightly-plan
           path: plan
 
       - name: Download every BUILD result
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: nightly-result-*
           path: results
@@ -439,12 +439,12 @@ jobs:
     outputs:
       artifact_ref: ${{ steps.push.outputs.artifact_ref }}
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: nightly-handoff-${{ github.run_id }}
           path: oci
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: nightly-result-*
           path: oci/results

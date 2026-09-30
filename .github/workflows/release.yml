@@ -1530,7 +1530,7 @@ jobs:
         # py311-charset-normalizer) are deliberate release assets, frozen
         # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
         # story. The draft healthcheck counts only the effective asset matrix.
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: pfBlockerNG-relpkg-*
           merge-multiple: true

@@ -3,10 +3,10 @@
 
 ``tests/test_issue2231_workflow_hygiene.py`` freezes the published major tags of
 ``actions/upload-artifact`` and ``actions/download-artifact``. The live-pin gate
-requires every ``uses:`` to exist upstream and sit at the highest major both
-actions publish (issue #2725 / #2726). This script refreshes that table from
-GitHub's git matching-refs API so a future upload-artifact v8 (or the next
-common major) can be adopted without hand-editing the two frozensets.
+requires every ``uses:`` to exist upstream and sit at the latest major that action
+publishes (issue #2725 / #2726). This script refreshes that table from GitHub's
+git matching-refs API so a new major of either action can be adopted without
+hand-editing the two frozensets.
 
 Data source
 -----------
@@ -20,15 +20,15 @@ A tag contributes its major only when the ref is ``refs/tags/vN`` or
 ``refs/tags/vN.N.N`` (optional patch). Unprefixed tags (``1.0.0``) and suffix
 variants (``v3-node20``) are ignored — they are not pin-able ``@vN`` refs.
 
-Highest common is ``max(upload & download)``. A major that exists on only one
-action must not raise the pin and must not silently allow a mismatched pair
-(issue #2385 / #2728). An empty intersection is refused.
+Each action is pinned to its own latest major. Since v4 both actions share one
+artifact backend, so a v7 upload is readable by a v8 download; the chain gate
+still rejects pairs that straddle the v3/v4 backend break.
 
 Output
 ------
 Rewrites the ``_KNOWN_ARTIFACT_MAJORS`` assignment (and its Frozen comment) in
-the hygiene test. The derived ``_HIGHEST_COMMON_ARTIFACT_MAJOR = max(...)``
-line is left untouched. Churn guard: the Frozen date is rewritten only when
+the hygiene test. The derived ``_LATEST_ARTIFACT_MAJOR`` line is left
+untouched. Churn guard: the Frozen date is rewritten only when
 the parsed majors actually change.
 
 Usage
@@ -93,12 +93,9 @@ def parse_tag_refs(payload: object) -> frozenset[int]:
     return frozenset(majors)
 
 
-def highest_common(majors: Mapping[str, frozenset[int]]) -> int:
-    """Highest major both actions publish. Union is never used."""
-    shared = majors["upload"] & majors["download"]
-    if not shared:
-        raise SystemExit("Refusing to rewrite: upload and download majors have an empty intersection")
-    return max(shared)
+def latest_majors(majors: Mapping[str, frozenset[int]]) -> dict[str, int]:
+    """Latest published major per action."""
+    return {kind: max(values) for kind, values in majors.items()}
 
 
 def require_plausible(majors: Mapping[str, frozenset[int]]) -> None:
@@ -106,17 +103,21 @@ def require_plausible(majors: Mapping[str, frozenset[int]]) -> None:
     for kind, values in majors.items():
         if not values:
             raise SystemExit(f"Refusing to rewrite: {kind}-artifact has no published majors")
-    highest_common(majors)
 
 
 def _frozenset_literal(values: frozenset[int]) -> str:
     return "frozenset({" + ", ".join(str(v) for v in sorted(values)) + "})"
 
 
-def render_table(majors: Mapping[str, frozenset[int]], synced: str, highest: int) -> str:
+def _latest_summary(majors: Mapping[str, frozenset[int]]) -> str:
+    latest = latest_majors(majors)
+    return f"upload v{latest['upload']}, download v{latest['download']}"
+
+
+def render_table(majors: Mapping[str, frozenset[int]], synced: str) -> str:
     """Render the Frozen comment plus the ``_KNOWN_ARTIFACT_MAJORS`` assignment."""
     return (
-        f"# Frozen {synced} from the GitHub API (issue #2728). Highest common is v{highest}.\n"
+        f"# Frozen {synced} from the GitHub API (issue #2728). Latest: {_latest_summary(majors)}.\n"
         "_KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {\n"
         f'    "upload": {_frozenset_literal(majors["upload"])},\n'
         f'    "download": {_frozenset_literal(majors["download"])},\n'
@@ -125,7 +126,7 @@ def render_table(majors: Mapping[str, frozenset[int]], synced: str, highest: int
 
 
 def replace_table(source: str, table_block: str) -> str:
-    """Replace the Frozen comment + table assignment; leave the max(...) derivation."""
+    """Replace the Frozen comment + table assignment; leave the latest-major derivation."""
     if _TABLE_RE.search(source) is None:
         raise SystemExit("Refusing to rewrite: _KNOWN_ARTIFACT_MAJORS table not found")
     return _TABLE_RE.sub(table_block.rstrip(), source, count=1)
@@ -177,24 +178,24 @@ def main(argv: list[str] | None = None) -> int:
 
     majors = {kind: parse_tag_refs(fetch_tag_payload(kind)) for kind in KINDS}
     require_plausible(majors)
-    highest = highest_common(majors)
+    latest = _latest_summary(majors)
 
     old = target.read_text(encoding="utf-8")
     current = existing_majors(old)
     if current == majors:
-        print(f"_KNOWN_ARTIFACT_MAJORS is up to date (highest common v{highest}).")
+        print(f"_KNOWN_ARTIFACT_MAJORS is up to date ({latest}).")
         return 0
     if args.check:
         print(
             f"_KNOWN_ARTIFACT_MAJORS is OUT OF DATE "
             f"(upload {sorted(majors['upload'])} download {sorted(majors['download'])}; "
-            f"highest common v{highest})."
+            f"latest {latest})."
         )
         return 1
 
     synced = datetime.now(timezone.utc).date().isoformat()
-    target.write_text(replace_table(old, render_table(majors, synced, highest)), encoding="utf-8")
-    print(f"_KNOWN_ARTIFACT_MAJORS regenerated; highest common is v{highest}.")
+    target.write_text(replace_table(old, render_table(majors, synced)), encoding="utf-8")
+    print(f"_KNOWN_ARTIFACT_MAJORS regenerated; latest is {latest}.")
     return 0
 
 
