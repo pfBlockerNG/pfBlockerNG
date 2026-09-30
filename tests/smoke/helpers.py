@@ -1650,6 +1650,64 @@ def ensure_dnsbl_vip(vm: SmokeVM, *, ip4: str = DEFAULT_DNSBL_VIP4, timeout: flo
         raise RuntimeError(f"ensure_dnsbl_vip failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
+# The v6 DNSBL sinkhole VIP (issue #3388): what a VIP-mode AAAA block answers with once
+# pfb_dnsvip6 points at it (ini ``dnsbl_ipv6``). RFC 3849, never routed. Without it,
+# pfb_unbound.py falls back to ``::`` — indistinguishable from the NULL shape.
+DNSBL_VIP6 = "2001:db8:53::1"
+SMOKE_VIP6_UNIQID = "pfbsmokevip6"
+
+
+@timed_step("set_dnsbl_vip6")
+def set_dnsbl_vip6(vm: SmokeVM, present: bool, *, ip6: str = DNSBL_VIP6, timeout: float = 120.0) -> None:
+    """Add (``present``) or remove the lo0 /128 IP-Alias VIP and set/clear ``pfb_dnsvip6``.
+
+    The v6 sibling of :func:`ensure_dnsbl_vip`, kept separate because the v4 VIP is
+    session infrastructure while this one is per-test: callers remove it in ``finally``.
+    Verifies the OS alias via ``ifconfig`` and applies the same direct-alias fallback
+    (issue #1013) in both directions.
+    """
+    vip = {
+        "mode": "ipalias",
+        "interface": SMOKE_VIP_IFACE,
+        "type": "single",
+        "subnet": ip6,
+        "subnet_bits": "128",
+        "descr": "pfBlockerNG DNSBL v6",
+        "uniqid": SMOKE_VIP6_UNIQID,
+    }
+    add = (
+        f"$vip = {_php_kv_array(vip)};\n$keep[] = $vip;\n$d['pfb_dnsvip6'] = {_php_str('_vip' + SMOKE_VIP6_UNIQID)};\n"
+        if present
+        else "unset($d['pfb_dnsvip6']);\n"
+    )
+    snippet = (
+        "require_once('interfaces.inc');\n"
+        "$keep = array();\n"
+        "foreach (config_get_path('virtualip/vip', array()) as $v) {\n"
+        f"  if (($v['uniqid'] ?? '') === {_php_str(SMOKE_VIP6_UNIQID)}) {{\n"
+        "    if (function_exists('interface_vip_bring_down')) { interface_vip_bring_down($v); }\n"
+        "    continue;\n"
+        "  }\n"
+        "  $keep[] = $v;\n"
+        "}\n"
+        f"$d = config_get_path({_php_str(CFG_DNSBL_SETTINGS)}, array());\n"
+        f"{add}"
+        "config_set_path('virtualip/vip', $keep);\n"
+        f"config_set_path({_php_str(CFG_DNSBL_SETTINGS)}, $d);\n"
+        "write_config('pfBlockerNG smoke: DNSBL v6 VIP');\n"
+        + ("if (function_exists('interface_vip_configure')) { interface_vip_configure($vip); }\n" if present else "")
+        + "echo 'OK';"
+    )
+    result = php_eval(vm, snippet, timeout=timeout)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"set_dnsbl_vip6 failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
+    if vip_alias_live(vm, ip6) != present:
+        verb = "alias" if present else "-alias"
+        vm.ssh(f"/sbin/ifconfig {SMOKE_VIP_IFACE} inet6 {shlex.quote(ip6)} prefixlen 128 {verb}", timeout=timeout)
+    if vip_alias_live(vm, ip6) != present:
+        raise RuntimeError(f"set_dnsbl_vip6: {ip6} live on {SMOKE_VIP_IFACE} != {present} after fallback")
+
+
 # --------------------------------------------------------------------------- #
 # ADR-13 auto-VIP ("Create VIPs automatically") — live introspection helpers
 # --------------------------------------------------------------------------- #
@@ -3104,10 +3162,10 @@ def _dnsbl_list_php(spec: DnsblCase, row_action: str = "Deny") -> str:
     )
 
 
-# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsvip_auto),
-# not per-case behaviour. _dnsbl_settings_replace_php preserves these across a settings
-# replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
-_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
+# DNSBL settings keys that are INFRASTRUCTURE (set by ensure_dnsbl_vip / set_dnsbl_vip6 /
+# set_dnsvip_auto), not per-case behaviour. _dnsbl_settings_replace_php preserves these across
+# a settings replace — dropping them would leave DNSBL with no VIP/ports and force-disable it.
+_DNSBL_INFRA_KEYS = ("pfb_dnsvip4", "pfb_dnsvip6", "pfb_dnsport", "pfb_dnsport_ssl", "pfb_dnsvip_auto")
 
 
 def _dnsbl_settings_replace_php(settings: dict[str, str]) -> str:

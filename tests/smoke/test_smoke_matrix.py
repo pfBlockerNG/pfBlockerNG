@@ -59,6 +59,7 @@ and the smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -213,6 +214,34 @@ def test_dnsbl_python_exact_vip(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_f
         passed = h.dns_probe_client(client_vm, sub, "A")
         assert h.resolves_to(passed, sub_ip), f"{sub} should resolve to {sub_ip} (exact != wildcard), got {passed}"
         assert not h.is_vip(passed), f"{sub} wrongly VIP-blocked (exact match, not wildcard): {passed}"
+
+
+def test_dnsbl_python_vip_aaaa(deployed_vm: SmokeVM, client_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """Issue #3388 gap 2: a VIP-mode block answers AAAA with the configured v6 sinkhole VIP.
+
+    Given a v6 lo0 IP-Alias VIP selected as ``pfb_dnsvip6`` (ini ``dnsbl_ipv6``)
+      And a VIP-mode list carrying the domain,
+    When the client queries the domain for AAAA,
+    Then the answer is exactly that v6 VIP, not the ``::`` fallback pfb_unbound.py
+      uses when ``dnsbl_ipv6`` is empty (the same bytes as the NULL shape),
+      And the A answer is still the v4 VIP.
+    """
+    domain = h.unique_domain("vipaaaa")
+    feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_vip_aaaa.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokevipaaaa", feed_url=feed_url, header="smokevipaaaa", mode=h.DnsblMode.VIP)
+    try:
+        h.set_dnsbl_vip6(deployed_vm, present=True)
+        with h.CaseContext(deployed_vm, spec):
+            aaaa = h.dns_probe_client(client_vm, domain, "AAAA")
+            got = {ipaddress.ip_address(r) for r in aaaa.records}
+            assert got == {ipaddress.ip_address(h.DNSBL_VIP6)}, (
+                f"{domain} AAAA expected v6 VIP {h.DNSBL_VIP6}, got {aaaa}"
+            )
+            a = h.dns_probe_client(client_vm, domain, "A")
+            assert h.is_vip(a), f"{domain} A expected VIP {h.DEFAULT_DNSBL_VIP4}, got {a}"
+    finally:
+        h.set_dnsbl_vip6(deployed_vm, present=False)
+        h.reload(deployed_vm, "updatednsbl")
 
 
 _SECTION_COUNTS = re.compile(
