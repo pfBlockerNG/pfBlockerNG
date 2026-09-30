@@ -2741,14 +2741,16 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
-	// RFC 3986 authority of a scheme-bearing line: the host follows the LAST '@' (userinfo is
-	// dropped); a numeric host is the address a client dials whatever the path, so strict mode
-	// keeps its authority alone instead of rejecting the path. A bare 'name@x' row is unchanged.
+	// RFC 3986 authority of a scheme-bearing line (a '://' found by pfb_dnsbl_scheme_pos()): the
+	// host follows the LAST '@' before the first '^' (unencoded '^' is illegal in userinfo, so an
+	// '@' in a '^$options' tail is option text); userinfo is dropped. A numeric host is the
+	// address a client dials whatever the path, so strict mode keeps its authority alone instead
+	// of rejecting the path. A bare 'name@x' row is unchanged.
 	$pos = pfb_dnsbl_scheme_pos($line);
 	if ($pos !== FALSE) {
 		$rest = substr($line, $pos + 3);
 		$alen = strcspn($rest, '/?#');
-		if (($at = strrpos(substr($rest, 0, $alen), '@')) !== FALSE) {
+		if (($at = strrpos(substr($rest, 0, min($alen, strcspn($rest, '^'))), '@')) !== FALSE) {
 			$rest = substr($rest, $at + 1);
 			$alen -= $at + 1;
 		}
