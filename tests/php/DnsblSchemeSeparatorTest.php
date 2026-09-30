@@ -160,6 +160,14 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4^$', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['://[2001:db8::1]^$/http://9.9.9.9', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
 
+			// RED: an '@' in the '^$options' tail is option text, not userinfo.
+			['://1.2.3.4^$domain=a@9.9.9.9', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['://[2001:db8::1]^$domain=a@9.9.9.9', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
+			['://[2001:db8::1]^$x@[2001:db8::2]^', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
+			['://1.2.3.4^$domain=a@evil.com', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['://1.2.3.4^$csp=x@[2001:db8::99]', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['http://evil.com^$x@9.9.9.9', 'pe', 'pe', 'RED'],
+
 			// RED: a '://' after '/', '?' or '#' is not a scheme separator.
 			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'd=evil.com', 'RED'],
 			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
@@ -173,6 +181,8 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['?u=http://8.8.8.8', 'pe', 'pe', 'RED'],
 
 			// Controls: outcome identical before and after the separator rule.
+			['://user:pass@1.2.3.4^$third-party', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'control'],
+			['http://user@1.2.3.4/', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'control'],
 			['://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
 			['://2001:db8::1', 'ip6=2001:db8::1', 'pe', 'control'],
 			['://2001:db8::1^', 'pe', 'pe', 'control'],

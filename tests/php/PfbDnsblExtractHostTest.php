@@ -229,4 +229,12 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertFalse($result);
 		$this->assertSame(1, $skipped);
 	}
+
+	public function testOptionsTailAtSignIsNotUserinfo(): void
+	{
+		// '@' after the first '^' is option text; it must not replace the host.
+		foreach ([TRUE, FALSE] as $strict) {
+			$this->assertSame('1.2.3.4', $this->extract('://1.2.3.4^$domain=a@9.9.9.9', $strict));
+		}
+	}
 }
