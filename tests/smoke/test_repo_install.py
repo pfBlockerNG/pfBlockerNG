@@ -1457,7 +1457,10 @@ def _live_repo_state(vm: SmokeVM) -> str:
         "echo '== pkg rquery'; pkg rquery -a '%R %n %v' | grep -i pfblockerng; "
         f"echo '== pkg install -n'; pkg install -n {CANONICAL_PKG_NAME}"
     )
-    result = vm.ssh("/bin/sh", "-c", script, timeout=120.0)
+    try:
+        result = vm.ssh("/bin/sh", "-c", script, timeout=120.0)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return f"live repo state unavailable: {exc!r}"
     return f"live repo state (rc={result.returncode}):\n{result.stdout}\n{result.stderr}"
 
 
