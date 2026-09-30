@@ -2925,6 +2925,19 @@
             }
         ]
     },
+    "pfb_dnsbl_scheme_pos": {
+        "returnsRef": false,
+        "returnType": "int|false",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_scheme_skip_warn": {
         "returnsRef": false,
         "returnType": null,
