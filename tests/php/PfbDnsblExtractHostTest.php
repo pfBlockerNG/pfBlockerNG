@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -237,5 +238,68 @@ final class PfbDnsblExtractHostTest extends TestCase
 			$this->assertSame('1.2.3.4', $this->extract('://1.2.3.4^$domain=a@9.9.9.9', $strict));
 			$this->assertNotSame('9.9.9.9', $this->extract('://1.2.3.4^x@9.9.9.9', $strict));
 		}
+	}
+
+	// -- issue #3366: scheme-less '<canonical IP>/<digits>' is rejected, not collected as the bare address --
+
+	/** @return array<string, array{string, bool}> */
+	public static function plainCidrRejectProvider(): array
+	{
+		$lines = [
+			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '192.168.1.0/024',
+			'192.168.1.0/99', '192.168.1.0/00000000000000000000024', '192.168.1.0/' . str_repeat('9', 5000),
+			'2001:db8::/32', '2001:db8::1/128', '::/0', '::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+		];
+		$rows = [];
+		foreach ($lines as $line) {
+			foreach ([TRUE, FALSE] as $strict) {
+				$rows[substr($line, 0, 40) . ($strict ? ' strict' : ' lenient')] = [$line, $strict];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('plainCidrRejectProvider')]
+	public function testPlainCidrLineIsRejectedWithParseErrorAndNoSkipCount(string $line, bool $strict): void
+	{
+		$skipped = 0;
+		$result  = $this->extract($line, $strict, $skipped);
+
+		$this->assertFalse($result, 'a scheme-less IP/mask line must be rejected in both modes');
+		$this->assertSame(0, $skipped, 'the strict-path skip counter must not be bumped');
+		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
+	}
+
+	/** @return array<string, array{string, string}> */
+	public static function plainCidrControlProvider(): array
+	{
+		$controls = [
+			'192.168.1.0/' => '192.168.1.0', '192.168.1.0/abc' => '192.168.1.0', '192.168.1.0/24/' => '192.168.1.0',
+			'192.168.1.0/24#x' => '192.168.1.0', '192.168.1.0/+24' => '192.168.1.0', '192.168.1.0//24' => '192.168.1.0',
+			'192.168.1.0/24;x' => '192.168.1.0', '192.168.1.0/24?x' => '192.168.1.0', '192.168.1.0/24:80' => '192.168.1.0',
+			"192.168.1.0/2\u{FF14}" => '192.168.1.0', '192.168.1.0/24^' => '192.168.1.0', '192.168.1.0/-1' => '192.168.1.0',
+			'0xc0.0xa8.1.0/24' => '0xc0.0xa8.1.0', '192.168.001.0/24' => '192.168.001.0',
+			'http://192.168.1.0/24' => '192.168.1.0', '://192.168.1.0/24' => '192.168.1.0',
+			'192.168.1.0:80/24' => '192.168.1.0', "192.168.1.0/24\t" => '192.168.1.0',
+			'3232235876/' => '3232235876', '3232235876/24' => '3232235876', '[2001:db8::]/32' => '2001:db8::',
+			'example.com/24' => 'example.com', '999.1.1.1/24' => '999.1.1.1', '/24' => '',
+			'2001:db8::1%em0/64' => '2001:db8::1%em0',
+		];
+		$rows = [];
+		foreach ($controls as $line => $expected) {
+			foreach ([TRUE, FALSE] as $strict) {
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [(string) $line, $expected, $strict];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('plainCidrControlProvider')]
+	public function testNearMissCidrShapesKeepTodaysResult(string $line, string $expected, bool $strict): void
+	{
+		$skipped = 0;
+		$this->assertSame($expected, $this->extract($line, $strict, $skipped));
+		$this->assertSame(0, $skipped);
+		$this->assertFileDoesNotExist($this->parseErr, 'the CIDR reject must not fire for a near-miss shape');
 	}
 }
