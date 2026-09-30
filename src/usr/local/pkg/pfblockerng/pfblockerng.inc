@@ -9847,10 +9847,7 @@ function pfb_strip_trailing_port($line) {
 // (an embedded URL such as '?u=http://x' is data of the path/query, not this line's scheme).
 function pfb_dnsbl_scheme_pos(string $line): int|false {
 	$pos = strpos($line, '://');
-	if ($pos === FALSE || strcspn($line, '/?#') < $pos) {
-		return FALSE;
-	}
-	return $pos;
+	return ($pos !== FALSE && strcspn($line, '/?#') > $pos) ? $pos : FALSE;
 }
 
 
@@ -9870,14 +9867,10 @@ function pfb_dnsbl_strip_scheme(string $line, bool $strict = FALSE): string|fals
 	}
 	$remainder = substr($line, $pos + 3);
 	if ($pos === 0) {
-		$caret = strpos($remainder, '^$');
-		$cand = $caret !== FALSE ? substr($remainder, 0, $caret)
-			: (str_ends_with($remainder, '^') ? substr($remainder, 0, -1) : $remainder);
-		if (str_starts_with($cand, '[') && str_ends_with($cand, ']') && is_ipaddrv6(substr($cand, 1, -1))) {
-			return substr($cand, 1, -1);
-		}
-		if (is_ipaddrv4($cand)) {
-			return $cand;
+		$cand = preg_replace('/\^(\$.*)?$/', '', $remainder);
+		$ip = pfb_dnsbl_unbracket_ip6($cand);
+		if ($ip !== $cand || is_ipaddrv4($ip)) {
+			return $ip;
 		}
 		return $strict ? FALSE : $remainder;
 	}

@@ -40,7 +40,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 
 	public function testSchemeStripLenientPermitsAnySchemeShape(): void
 	{
-		// Lenient (strict=FALSE) strips through the first '://' unconditionally, even a
+		// Lenient (strict=FALSE) strips through the scheme separator ('://' before any '/', '?', '#') unconditionally, even a
 		// non-RFC-3986 leading-digit scheme.
 		$this->assertSame('d.com', $this->extract('http://d.com/path', FALSE));
 		$this->assertSame('d.com', $this->extract('123://d.com', FALSE));

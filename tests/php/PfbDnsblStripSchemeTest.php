@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * pfb_dnsbl_strip_scheme() — ADR-22 Phase 1 oracle tests.
  *
  * Phase 1 is a behaviour-preserving extraction of the former inline non-lite scheme
- * strip: if '<scheme>://' is present, strip up to and including the FIRST '://' and
+ * strip: if '<scheme>://' is present, strip up to and including the first '://' that pfb_dnsbl_scheme_pos() accepts and
  * return the remainder; otherwise return the line unchanged. These tests PIN the
  * CURRENT (permissive) behaviour for every input class so the Phase-2 tightening (a
  * $strict toggle that validates the RFC 3986 scheme + rejects paths, returning
@@ -193,8 +193,8 @@ final class PfbDnsblStripSchemeTest extends TestCase
 		$this->assertSame('evil.com', pfb_dnsbl_strip_scheme('evil.com', true));
 	}
 
-	// --- Empty scheme + bracketed IPv6: DandelionSprouts' "block regardless of
-	//     scheme" shape (confirmed live: 4 identical-shaped lines in a real feed). ---
+	// --- Empty scheme + IP literal ('://<ipv4>', '://[ipv6]', optional '^'/'^$opts' tail):
+	//     DandelionSprouts' "block regardless of scheme" shape (live feed). ---
 
 	public function testEmptySchemeBracketedIpv6ReturnsBareAddressWhenStrict(): void
 	{

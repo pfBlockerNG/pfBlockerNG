@@ -168,6 +168,10 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4^$csp=x@[2001:db8::99]', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['http://evil.com^$x@9.9.9.9', 'pe', 'pe', 'RED'],
 
+			// RED: path or trailing text after an empty-scheme IPv4.
+			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['://1.2.3.4^ #c', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+
 			// RED: a '://' after '/', '?' or '#' is not a scheme separator.
 			['evil.com/x?u=http://8.8.8.8/', 'd=evil.com', 'd=evil.com', 'RED'],
 			['evil.com/r#http://8.8.8.8', 'd=evil.com', 'd=evil.com', 'RED'],
@@ -195,7 +199,6 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['://1.2.3.4:443^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]:443^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]/path^', 'ip6=2001:db8::1', 'pe', 'control'],
-			['://1.2.3.4/path^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 			['http://1.2.3.4^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
@@ -223,11 +226,13 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			["://1.2.3.4\t^", 'pe', 'pe', 'control'],
 			['://' . str_repeat('a', 5000), 'pe', 'pe', 'control'],
 			['://[ｆｅ80::1]^', 'pe', 'pe', 'control'],
-			['://1.2.3.4^ #c', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 		];
 		$out = [];
 		foreach ($rows as [$line, $l, $s, $status]) {
-			$out[$status . ' ' . substr($line, 0, 60)] = [$line, $l, $s, $status];
+			if (isset($out[$status . ' ' . $line])) {
+				throw new \LogicException('duplicate provider row: ' . $line);
+			}
+			$out[$status . ' ' . $line] = [$line, $l, $s, $status];
 		}
 		return $out;
 	}

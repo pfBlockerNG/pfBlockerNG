@@ -22,9 +22,8 @@ use PHPUnit\Framework\TestCase;
  * got logged as a parse error.
  *
  * Also pins that a scheme-less bracketed-IPv6 line ('://[...]', no leading '#'/'!'/'//')
- * is NOT swallowed here -- it must keep flowing to the strict-scheme validator, which is
- * the correct place to reject it (empty scheme before '://' is invalid URI syntax; this
- * is a separate, upstream-feed-defect concern from comment-line skipping).
+ * is NOT swallowed here -- it must keep flowing to pfb_dnsbl_strip_scheme(), which accepts
+ * an empty-scheme IP literal in both modes (comment-line skipping is a separate concern).
  */
 #[CoversFunction('pfb_is_blank_or_comment_line')]
 final class BlankOrCommentLineTest extends TestCase
@@ -78,8 +77,8 @@ final class BlankOrCommentLineTest extends TestCase
 
 	public function testSchemeLessBracketedIpv6IsNotSwallowedAsAComment(): void
 	{
-		// ':' is not '#'/'!'/'//' -- must fall through to the strict-scheme validator,
-		// which is the correct layer to reject this (empty scheme before '://').
+		// ':' is not '#'/'!'/'//' -- must fall through to pfb_dnsbl_strip_scheme(),
+		// which owns the empty-scheme IP-literal decision.
 		$this->assertFalse(pfb_is_blank_or_comment_line('://[2604:2dc0:100:4ed8::]'));
 	}
 }
