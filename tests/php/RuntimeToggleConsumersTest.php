@@ -53,6 +53,7 @@ final class RuntimeToggleConsumersTest extends TestCase
 	{
 		$fields = [
 			'enable_float' => 'float',
+			'fw_self_outbound' => 'fw_self',
 			'enable_dup' => 'dup',
 			'enable_agg' => 'agg',
 			'enable_log' => 'global_log',

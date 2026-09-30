@@ -1256,6 +1256,32 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame(PfbToggle::Off, $result, 'log_syslog absent -> Off (default)');
 	}
 
+	/**
+	 * fw_self_outbound (issue #3382) is an opt-in toggle: absent reads Off and Off stores
+	 * the canonical empty token.
+	 *
+	 * Scenario:
+	 *   Given the key was never stored (an install upgrading from before the setting).
+	 *   Then it reads Off, so the upgrade adds no firewall-traffic rule.
+	 *   When On is written through the gateway, Then 'on' is stored and reads back On.
+	 *   When Off is written, Then '' is stored and reads back Off.
+	 */
+	public function testFwSelfOutboundDefaultsOffAndRoundTrips(): void
+	{
+		$path = 'installedpackages/pfblockerngipsettings/config/0/fw_self_outbound';
+
+		$this->assertNull(config_get_path($path), 'before: fw_self_outbound must be absent');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('ip/fw_self_outbound'), 'absent -> Off (opt-in)');
+
+		PfbConfig::write('ip/fw_self_outbound', PfbToggle::On);
+		$this->assertSame('on', config_get_path($path), 'On stores the canonical on token');
+		$this->assertSame(PfbToggle::On, PfbConfig::read('ip/fw_self_outbound'));
+
+		PfbConfig::write('ip/fw_self_outbound', PfbToggle::Off);
+		$this->assertSame('', config_get_path($path), 'Off stores the canonical empty token');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('ip/fw_self_outbound'));
+	}
+
 	// -----------------------------------------------------------------------
 	// C — Inventory completeness
 	// -----------------------------------------------------------------------
@@ -1541,6 +1567,7 @@ final class CfgGatewayTest extends TestCase
 			'inbound_deny_action',
 			'outbound_deny_action',
 			'enable_float',
+			'fw_self_outbound',
 			'enable_dup',
 			'enable_agg',
 			'pass_order',

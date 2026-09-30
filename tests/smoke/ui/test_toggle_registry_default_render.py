@@ -54,6 +54,7 @@ ALERTS_PAGE = "/pfblockerng/pfblockerng_alerts.php"
 SYNC_PAGE = "/pfblockerng/pfblockerng_sync.php"
 
 CFG_ENABLE_DUP = "installedpackages/pfblockerngipsettings/config/0/enable_dup"
+CFG_FW_SELF = "installedpackages/pfblockerngipsettings/config/0/fw_self_outbound"
 CFG_ALERTREFRESH = "installedpackages/pfblockerngglobal/alertrefresh"
 CFG_SYNCINTERFACES = "installedpackages/pfblockerngsync/config/0/syncinterfaces"
 
@@ -193,6 +194,33 @@ def test_absent_ip_toggle_renders_unchecked_from_the_registered_default(
     assert not _checkbox_is_checked(html, "enable_dup"), (
         "an absent enable_dup must render UNCHECKED -- the registered '' default "
         "must reproduce the page default #2123 deleted"
+    )
+
+
+def test_fw_self_outbound_checkbox_renders_with_its_help_and_defaults_unchecked(
+    smoke_vm: SmokeVM, webui: WebUI, node_state: Callable[[str, str | None], None]
+) -> None:
+    """Scenario: issue #3382's 'Apply outbound rules to firewall traffic' checkbox.
+
+    Given ``fw_self_outbound`` is stored 'on'.
+    When the IP page renders.
+    Then the checkbox is checked and carries its label, the self-caution help and the
+      Outbound-interface sentence telling the operator to select the client-facing interfaces.
+    And given the key is absent, it renders UNCHECKED — opt-in, so an upgrade adds no rule.
+    """
+    node_state(CFG_FW_SELF, "on")
+    html = _render(smoke_vm, webui, IP_PAGE, "pfBlockerNG")
+    assert _checkbox_is_checked(html, "fw_self_outbound"), "before: a stored 'on' fw_self_outbound must render checked"
+    assert "Apply outbound rules to firewall traffic" in html, "the checkbox label must render"
+    assert "This Firewall (self)" in html, "the help must name the (self) source"
+    assert "select the client-facing (e.g. LAN) interfaces" in html, (
+        "the Outbound interface help must say where client traffic enters"
+    )
+
+    node_state(CFG_FW_SELF, None)
+    html = _render(smoke_vm, webui, IP_PAGE, "pfBlockerNG")
+    assert not _checkbox_is_checked(html, "fw_self_outbound"), (
+        "an absent fw_self_outbound must render UNCHECKED -- the toggle is opt-in"
     )
 
 

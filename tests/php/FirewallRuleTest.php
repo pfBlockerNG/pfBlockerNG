@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -43,14 +44,17 @@ use PHPUnit\Framework\TestCase;
  *   - Alias_Native and an unknown action → no auto-rule (zero rules in every
  *     bucket), which is the intended Invert Source/Destination behaviour.
  *   - vtype: _v4 → ipprotocol stays 'inet'; _v6 → 'inet6'.
- *   - float off → no 'direction' key on Deny/Permit; float on → 'direction' set.
- *   - Match rules: 'direction' always set even with float off; no 'quick' key
+ *   - float off → no 'direction' key on Deny/Permit; float on → direction 'in' on
+ *     EVERY Deny/Permit, inbound or outbound (issue #3382).
+ *   - Match rules: direction 'in' always, even with float off; no 'quick' key
  *     even though base_rule_float has it.
  *   - log: global_log off + pfb_log default → absent; global_log on → present;
  *     pfb_log 'enabled' with global off → present.
  *   - created: username === 'Auto', 'time' key is an int.
  *   - deny action type: Deny_Inbound uses deny_action_inbound; Deny_Outbound
  *     uses deny_action_outbound (fixture sets distinct values).
+ *   - firewall-traffic twins (issue #3382): with fw_self on, each outbound action
+ *     pushes one floating 'out' rule sourced from (self) onto its *_self bucket.
  */
 #[CoversFunction('pfb_firewall_rule')]
 final class FirewallRuleTest extends TestCase
@@ -66,6 +70,9 @@ final class FirewallRuleTest extends TestCase
 		'permit_inbound',
 		'match_outbound',
 		'match_inbound',
+		'deny_self',
+		'permit_self',
+		'match_self',
 	];
 
 	protected function setUp(): void
@@ -83,6 +90,7 @@ final class FirewallRuleTest extends TestCase
 			'deny_action_inbound'  => 'block',
 			'deny_action_outbound' => 'reject',
 			'float'                => 'off',
+			'fw_self'              => PfbToggle::Off,
 			'suffix'               => ' Auto Rule',
 			'global_log'           => 'off',
 		]);
@@ -223,7 +231,7 @@ final class FirewallRuleTest extends TestCase
 		$rule = $this->lastRule('match_outbound');
 
 		$this->assertSame('match',          $rule['type']);
-		$this->assertSame('out',            $rule['direction'],              'Match_Outbound always has direction=out');
+		$this->assertSame('in',             $rule['direction'],              'Match_Outbound has direction=in: client egress ENTERS the selected interface (issue #3382)');
 		$this->assertArrayNotHasKey('quick', $rule,                          'Match rule must not have quick key');
 		$this->assertSame(['any' => ''],    $rule['source']);
 		$this->assertSame(['address' => 'pfB_MatchAlias'], $rule['destination']);
@@ -274,7 +282,7 @@ final class FirewallRuleTest extends TestCase
 		$ruleIn  = $this->assertBucketGrew('match_inbound');
 
 		$this->assertSame('match', $ruleOut['type']);
-		$this->assertSame('out',   $ruleOut['direction']);
+		$this->assertSame('in',    $ruleOut['direction']);
 		$this->assertSame('match', $ruleIn['type']);
 		$this->assertSame('in',    $ruleIn['direction']);
 		$this->assertArrayNotHasKey('quick', $ruleOut, 'Match_Both outbound must not have quick');
@@ -661,11 +669,11 @@ final class FirewallRuleTest extends TestCase
 			'after: Deny_Inbound direction=in when float=on');
 	}
 
-	public function testDenyOutboundFloatOnSetsDirectionOut(): void
+	public function testDenyOutboundFloatOnSetsDirectionIn(): void
 	{
 		$GLOBALS['pfb']['float'] = PfbToggle::On;
 		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
-		$this->assertSame('out', $this->lastRule('deny_outbound')['direction']);
+		$this->assertSame('in', $this->lastRule('deny_outbound')['direction']);
 	}
 
 	public function testPermitInboundFloatOffLeavesNoDirectionKey(): void
@@ -674,11 +682,11 @@ final class FirewallRuleTest extends TestCase
 		$this->assertArrayNotHasKey('direction', $this->lastRule('permit_inbound'));
 	}
 
-	public function testPermitOutboundFloatOnSetsDirectionOut(): void
+	public function testPermitOutboundFloatOnSetsDirectionIn(): void
 	{
 		$GLOBALS['pfb']['float'] = PfbToggle::On;
 		pfb_firewall_rule('Permit_Outbound', 'pfB_A', '_v4', 'off');
-		$this->assertSame('out', $this->lastRule('permit_outbound')['direction']);
+		$this->assertSame('in', $this->lastRule('permit_outbound')['direction']);
 	}
 
 	// -------------------------------------------------------------------------
@@ -702,8 +710,8 @@ final class FirewallRuleTest extends TestCase
 		$this->assertSame('off', $GLOBALS['pfb']['float']);
 		pfb_firewall_rule('Match_Outbound', 'pfB_A', '_v4', 'off');
 		$rule = $this->lastRule('match_outbound');
-		$this->assertSame('out', $rule['direction'],
-			'Match_Outbound must always have direction=out regardless of float');
+		$this->assertSame('in', $rule['direction'],
+			'Match_Outbound must always have direction=in regardless of float');
 		$this->assertArrayNotHasKey('quick', $rule);
 	}
 
@@ -765,5 +773,240 @@ final class FirewallRuleTest extends TestCase
 	{
 		pfb_firewall_rule('Match_Outbound', 'pfB_A', '_v4', 'enabled');
 		$this->assertArrayHasKey('log', $this->lastRule('match_outbound'));
+	}
+
+	// -------------------------------------------------------------------------
+	// issue #3382 — every floating auto-rule is a direction-'in' rule.
+	//
+	// A floating `out` rule scoped to LAN only sees traffic LEAVING LAN, while a client's
+	// egress ENTERS LAN 'in': the selected interface is where client traffic enters, so the
+	// direction is 'in' whatever the rule's inbound/outbound role. Non-floating Deny/Permit
+	// carry no direction key (pfSense forces 'in' on interface rules).
+	// -------------------------------------------------------------------------
+
+	/** @return iterable<string, array{string, string, bool, string, ?string}> */
+	public static function issue3382DirectionMatrix(): iterable
+	{
+		foreach (['Deny', 'Permit', 'Match'] as $family) {
+			foreach (['Inbound', 'Outbound'] as $role) {
+				foreach ([TRUE, FALSE] as $float) {
+					foreach (['default', 'WAN_DHCP'] as $gateway) {
+						// Match is always floating, so it is 'in' even with float off.
+						$expected = ($float || $family === 'Match') ? 'in' : NULL;
+						$label = sprintf('%s_%s float %s gw %s', $family, $role, $float ? 'on' : 'off', $gateway);
+						yield $label => ["{$family}_{$role}", strtolower("{$family}_{$role}"), $float, $gateway, $expected];
+					}
+				}
+			}
+		}
+	}
+
+	#[DataProvider('issue3382DirectionMatrix')]
+	public function testIssue3382FloatingAutoRuleDirectionIsIn(
+		string $action,
+		string $bucket,
+		bool $float,
+		string $gateway,
+		?string $expected
+	): void {
+		$GLOBALS['pfb']['float'] = $float ? PfbToggle::On : PfbToggle::Off;
+
+		pfb_firewall_rule($action, 'pfB_A', '_v4', 'off', $gateway, $gateway);
+		$rule = $this->lastRule($bucket);
+
+		if ($expected === NULL) {
+			$this->assertArrayNotHasKey('direction', $rule,
+				"{$action} with float off must carry no direction key (pfSense forces 'in')");
+		} else {
+			$this->assertSame($expected, $rule['direction'],
+				"{$action} (float " . ($float ? 'on' : 'off') . ") must be a direction-'in' rule");
+		}
+		if ($gateway === 'default') {
+			$this->assertArrayNotHasKey('gateway', $rule, 'default gateway leaves no gateway key');
+		} else {
+			$this->assertSame($gateway, $rule['gateway'], 'a custom gateway is still applied on the direction-in rule');
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// issue #3382 — firewall-traffic twins ('Apply outbound rules to firewall traffic').
+	//
+	// Locally originated packets never ENTER an interface, so the direction-'in' client rule
+	// cannot see them. With fw_self on, every OUTBOUND action also emits a floating `out`
+	// rule whose source is the firewall itself, onto a *_self bucket the assembler places
+	// on the selected INBOUND interfaces.
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Outbound action => [twin bucket, twin type, client buckets the call fills].
+	 *
+	 * @var array<string, array{0: string, 1: string, 2: list<string>}>
+	 */
+	private const OUTBOUND_TWINS = [
+		'Deny_Outbound'   => ['deny_self',   'reject', ['deny_outbound']],
+		'Deny_Both'       => ['deny_self',   'reject', ['deny_outbound', 'deny_inbound']],
+		'Permit_Outbound' => ['permit_self', 'pass',   ['permit_outbound']],
+		'Permit_Both'     => ['permit_self', 'pass',   ['permit_outbound', 'permit_inbound']],
+		'Match_Outbound'  => ['match_self',  'match',  ['match_outbound']],
+		'Match_Both'      => ['match_self',  'match',  ['match_outbound', 'match_inbound']],
+	];
+
+	/** @return iterable<string, array{string, string, string, list<string>}> */
+	public static function issue3382OutboundActions(): iterable
+	{
+		foreach (self::OUTBOUND_TWINS as $action => [$bucket, $type, $clients]) {
+			yield $action => [$action, $bucket, $type, $clients];
+		}
+	}
+
+	/** @return iterable<string, array{string, string, string, list<string>, bool}> */
+	public static function issue3382OutboundActionsByFloat(): iterable
+	{
+		foreach (self::OUTBOUND_TWINS as $action => [$bucket, $type, $clients]) {
+			foreach ([TRUE, FALSE] as $float) {
+				yield $action . ' float ' . ($float ? 'on' : 'off') => [$action, $bucket, $type, $clients, $float];
+			}
+		}
+	}
+
+	/** @return iterable<string, array{string}> */
+	public static function issue3382InboundActions(): iterable
+	{
+		foreach (['Deny_Inbound', 'Permit_Inbound', 'Match_Inbound'] as $action) {
+			yield $action => [$action];
+		}
+	}
+
+	#[DataProvider('issue3382OutboundActionsByFloat')]
+	public function testIssue3382OutboundActionEmitsOneFirewallTrafficTwin(
+		string $action,
+		string $bucket,
+		string $type,
+		array $clients,
+		bool $float
+	): void {
+		$GLOBALS['pfb']['fw_self'] = PfbToggle::On;
+		$GLOBALS['pfb']['float']   = $float ? PfbToggle::On : PfbToggle::Off;
+
+		// Every Advanced Outbound setting, plus a custom gateway: all of them except the
+		// gateway (route-to has no meaning for a locally originated packet) reach the twin.
+		pfb_firewall_rule($action, 'pfB_A', '_v4', 'off',
+			'default', 'GW_WAN_OUT', '', '', '', '', '', 'on', '', '443', 'tcp', '');
+
+		$twin = $this->assertBucketGrew($bucket);
+
+		$this->assertSame('yes', $twin['floating'], 'the twin is floating even when float mode is off');
+		$this->assertSame('out', $twin['direction'], 'the twin matches traffic LEAVING the firewall');
+		$this->assertSame($type, $twin['type'], 'the twin has the client rule\'s disposition');
+		if ($type === 'match') {
+			$this->assertArrayNotHasKey('quick', $twin, 'a match twin must not be quick');
+		} else {
+			$this->assertSame('yes', $twin['quick'], 'a deny/permit twin is quick');
+		}
+		$this->assertSame(['network' => '(self)'], $twin['source'], 'the twin source is This Firewall (self)');
+		$this->assertSame(['address' => 'pfB_A', 'port' => '443', 'not' => ''], $twin['destination'],
+			'destination alias, port and invert flag mirror the client rule');
+		$this->assertSame('tcp', $twin['protocol']);
+		$this->assertSame('inet', $twin['ipprotocol']);
+		$this->assertSame('pfB_A Auto Rule', $twin['descr'], 'the twin shares the client rule descr');
+		$this->assertArrayNotHasKey('gateway', $twin, 'a locally originated packet must not be route-to a gateway');
+		$this->assertSame('Auto', $twin['created']['username']);
+		$this->assertIsInt($twin['created']['time']);
+
+		// The client rule keeps its own gateway; the twin neither replaces nor mutates it.
+		$client = $this->lastRule($clients[0]);
+		$this->assertSame('GW_WAN_OUT', $client['gateway']);
+
+		// Exactly one twin per call, and no other bucket (incl. the other *_self ones) gained a rule.
+		$this->assertOtherBucketsEmpty(...array_merge($clients, [$bucket]));
+	}
+
+	public function testIssue3382TwinFollowsVtype(): void
+	{
+		$GLOBALS['pfb']['fw_self'] = PfbToggle::On;
+
+		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
+		$this->assertSame('inet', $this->lastRule('deny_self')['ipprotocol'], '_v4 twin is inet');
+
+		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v6', 'off');
+		$this->assertSame('inet6', $this->lastRule('deny_self')['ipprotocol'], '_v6 twin is inet6');
+	}
+
+	public function testIssue3382TwinLogsExactlyWhenTheClientRuleLogs(): void
+	{
+		$GLOBALS['pfb']['fw_self'] = PfbToggle::On;
+
+		// Before: neither global nor per-list logging -> neither rule logs.
+		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
+		$this->assertArrayNotHasKey('log', $this->lastRule('deny_outbound'), 'before: client rule does not log');
+		$this->assertArrayNotHasKey('log', $this->lastRule('deny_self'), 'before: twin does not log');
+
+		// Per-list logging.
+		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'enabled');
+		$this->assertArrayHasKey('log', $this->lastRule('deny_outbound'));
+		$this->assertArrayHasKey('log', $this->lastRule('deny_self'), 'per-list logging must carry to the twin');
+
+		// Global logging.
+		$GLOBALS['pfb']['global_log'] = PfbToggle::On;
+		pfb_firewall_rule('Deny_Outbound', 'pfB_A', '_v4', 'off');
+		$this->assertArrayHasKey('log', $this->lastRule('deny_self'), 'global logging must carry to the twin');
+	}
+
+	#[DataProvider('issue3382InboundActions')]
+	public function testIssue3382InboundActionEmitsNoTwin(string $action): void
+	{
+		$GLOBALS['pfb']['fw_self'] = PfbToggle::On;
+
+		foreach ([PfbToggle::On, PfbToggle::Off] as $float) {
+			$GLOBALS['pfb']['float'] = $float;
+			pfb_firewall_rule($action, 'pfB_A', '_v4', 'off');
+		}
+
+		$this->assertOtherBucketsEmpty(strtolower($action));
+	}
+
+	#[DataProvider('issue3382OutboundActions')]
+	public function testIssue3382ToggleOffEmitsNoTwin(string $action, string $bucket, string $type, array $clients): void
+	{
+		// fixture: fw_self Off.
+		pfb_firewall_rule($action, 'pfB_A', '_v4', 'off');
+
+		$this->assertOtherBucketsEmpty(...$clients);
+		$this->assertNotEmpty($GLOBALS['pfb'][$clients[0]], 'the client rule is still emitted');
+	}
+
+	#[DataProvider('issue3382OutboundActions')]
+	public function testIssue3382MissingToggleKeyEmitsNoTwinAndNoDiagnostic(string $action, string $bucket, string $type, array $clients): void
+	{
+		unset($GLOBALS['pfb']['fw_self']);
+
+		$diagnostics = [];
+		set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+			$diagnostics[] = $errstr;
+			return TRUE;
+		});
+		try {
+			pfb_firewall_rule($action, 'pfB_A', '_v4', 'off');
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame([], $diagnostics, 'a config that never set fw_self must not raise a diagnostic');
+		$this->assertOtherBucketsEmpty(...$clients);
+	}
+
+	#[DataProvider('issue3382OutboundActions')]
+	public function testIssue3382CustomSourceEmitsNoTwin(string $action, string $bucket, string $type, array $clients): void
+	{
+		$GLOBALS['pfb']['fw_self'] = PfbToggle::On;
+
+		// A Custom Source scopes the client rule to specific hosts; a (self)-sourced twin
+		// would contradict it, so there is none.
+		pfb_firewall_rule($action, 'pfB_A', '_v4', 'off',
+			'default', 'default', '', '', '', '', '', '', '10.0.0.1');
+
+		$this->assertSame(['address' => '10.0.0.1'], $this->lastRule($clients[0])['source'],
+			'the client rule keeps its Custom Source');
+		$this->assertOtherBucketsEmpty(...$clients);
 	}
 }

@@ -360,8 +360,8 @@ final class AutoruleListOracleTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfB-generated templates (direction-faithful: inbound rules carry
-	// direction='in', outbound direction='out' — as filter.inc emits them)
+	// pfB-generated templates (the assembler carries 'direction' through untouched; the
+	// values here only make the shapes readable — inbound 'in', outbound 'out')
 	// -----------------------------------------------------------------------
 
 	/** @param string $float 'on' makes the per-interface permit/deny floating (base_rule_float). */
@@ -841,6 +841,157 @@ final class AutoruleListOracleTest extends TestCase
 				$gen   = $this->genPermitDeny($float);
 				$first = pfb_build_autorule_list($existing, $gen, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1']);
 				$this->assertIdempotent($first, $gen, $order, $float, ['lan'], ['opt1'], "{$order} float='{$float}'");
+			}
+		}
+	}
+
+	// =======================================================================
+	// issue #3382 — firewall-traffic twins ('permit_self' / 'deny_self' / 'match_self').
+	// They are floating `out` rules sourced from (self), placed on the INBOUND interfaces,
+	// and ALWAYS floating: with float off they join the floating group, never the interface
+	// group. Absent *_self keys behave as empty (every oracle above passes none).
+	// =======================================================================
+
+	/** The client Permit/Deny Outbound rules plus a permit/deny/match twin of each kind. */
+	private function genWithSelfTwins(string $float = ''): array
+	{
+		$g = $this->genPermitDeny($float);
+		$g['permit_inbound'] = [];
+		$g['deny_inbound']   = [];
+		$twin = static fn (string $list, string $type): array => [
+			'descr' => "pfB_{$list}_v4 Auto Rule", 'type' => $type, 'interface' => '', 'direction' => 'out',
+			'ipprotocol' => 'inet', 'floating' => 'yes', 'source' => ['network' => '(self)'],
+			'destination' => ['address' => "pfB_{$list}_v4"]];
+		$g['permit_self'] = [$twin('PermitList', 'pass')];
+		$g['deny_self']   = [$twin('DenyList', 'reject')];
+		$g['match_self']  = [$twin('MatchList', 'match')];
+		return $g;
+	}
+
+	private function row(string $descr, string $type, string $iface, string $floating, string $direction): array
+	{
+		return ['descr' => $descr, 'type' => $type, 'interface' => $iface, 'floating' => $floating, 'direction' => $direction];
+	}
+
+	public function testIssue3382TwinsJoinTheFloatingGroupInEveryOrderWithFloatOff(): void
+	{
+		// in=[lan], out=[opt1]: the client rules ride opt1's INTERFACE group, the twins ride
+		// lan's FLOATING group next to the user's floating rule.
+		$existing = [$this->userPass('U-pass', 'opt1'), $this->userBlock('U-block', 'opt1'),
+		             $this->userBlock('U-float', 'lan', 'yes')];
+		$permitSelf = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'lan',  'yes', 'out');
+		$matchSelf  = $this->row('pfB_MatchList_v4 Auto Rule',  'match',  'lan',  'yes', 'out');
+		$denySelf   = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out');
+		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', '',    'out');
+		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', '',    'out');
+		$uFloat     = $this->row('U-float', 'block', 'lan',  'yes', '');
+		$uPass      = $this->row('U-pass',  'pass',  'opt1', '',    '');
+		$uBlock     = $this->row('U-block', 'block', 'opt1', '',    '');
+
+		$expected = [
+			'order_0' => [$permitSelf, $matchSelf, $denySelf, $uFloat, $permitOut, $denyOut, $uPass, $uBlock],
+			'order_1' => [$uFloat, $permitSelf, $matchSelf, $denySelf, $uPass, $permitOut, $denyOut, $uBlock],
+			'order_2' => [$permitSelf, $matchSelf, $uFloat, $denySelf, $permitOut, $uPass, $denyOut, $uBlock],
+			'order_3' => [$permitSelf, $matchSelf, $denySelf, $uFloat, $permitOut, $denyOut, $uPass, $uBlock],
+			'order_4' => [$permitSelf, $matchSelf, $denySelf, $uFloat, $permitOut, $denyOut, $uBlock, $uPass],
+		];
+		$gen = $this->genWithSelfTwins('');
+		foreach ($expected as $order => $shape) {
+			$result = pfb_build_autorule_list($existing, $gen, $order, PfbToggle::Off, ['lan'], ['opt1']);
+			$this->assertShapes($shape, $result, "twins float-off {$order}");
+			$this->assertUserRulesIntact($existing, $result, "twins float-off {$order}");
+			$this->assertTrackersSet($result, "twins float-off {$order}");
+			$this->assertIdempotent($result, $gen, $order, '', ['lan'], ['opt1'], "twins float-off {$order}");
+		}
+	}
+
+	public function testIssue3382TwinsJoinTheFloatingPfbBucketsInEveryOrderWithFloatOn(): void
+	{
+		// Float on: the client rules are floating too; twins sit in the same pfB pass/match and
+		// block/reject buckets, behind the client rules of their kind.
+		$existing = [$this->userPass('U-fpass', 'lan', 'yes'), $this->userBlock('U-fblock', 'lan', 'yes')];
+		$permitSelf = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'lan',  'yes', 'out');
+		$matchSelf  = $this->row('pfB_MatchList_v4 Auto Rule',  'match',  'lan',  'yes', 'out');
+		$denySelf   = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out');
+		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', 'yes', 'out');
+		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', 'yes', 'out');
+		$uFPass     = $this->row('U-fpass',  'pass',  'lan', 'yes', '');
+		$uFBlock    = $this->row('U-fblock', 'block', 'lan', 'yes', '');
+
+		$expected = [
+			'order_0' => [$permitOut, $permitSelf, $matchSelf, $denyOut, $denySelf, $uFPass, $uFBlock],
+			'order_1' => [$uFPass, $permitOut, $permitSelf, $matchSelf, $denyOut, $denySelf, $uFBlock],
+			'order_2' => [$permitOut, $permitSelf, $matchSelf, $uFPass, $denyOut, $denySelf, $uFBlock],
+			'order_3' => [$permitOut, $permitSelf, $matchSelf, $denyOut, $denySelf, $uFPass, $uFBlock],
+			'order_4' => [$permitOut, $permitSelf, $matchSelf, $denyOut, $denySelf, $uFBlock, $uFPass],
+		];
+		$gen = $this->genWithSelfTwins('on');
+		foreach ($expected as $order => $shape) {
+			$result = pfb_build_autorule_list($existing, $gen, $order, PfbToggle::On, ['lan'], ['opt1']);
+			$this->assertShapes($shape, $result, "twins float-on {$order}");
+			$this->assertUserRulesIntact($existing, $result, "twins float-on {$order}");
+			$this->assertTrackersSet($result, "twins float-on {$order}");
+			$this->assertIdempotent($result, $gen, $order, 'on', ['lan'], ['opt1'], "twins float-on {$order}");
+		}
+	}
+
+	public function testIssue3382TwinsAreEmittedOncePerInboundInterfaceAndNeverOnOutboundOnes(): void
+	{
+		// Two inbound interfaces, one outbound: twins (match included, unlike the once-only
+		// client match rule) get one rule per INBOUND interface named after it; opt2 gets none.
+		$result = pfb_build_autorule_list([], $this->genWithSelfTwins(''), 'order_0', PfbToggle::Off, ['lan', 'opt1'], ['opt2']);
+
+		$this->assertShapes([
+			$this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'lan',  'yes', 'out'),
+			$this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', 'yes', 'out'),
+			$this->row('pfB_MatchList_v4 Auto Rule',  'match',  'lan',  'yes', 'out'),
+			$this->row('pfB_MatchList_v4 Auto Rule',  'match',  'opt1', 'yes', 'out'),
+			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out'),
+			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', 'yes', 'out'),
+			$this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt2', '',    'out'),
+			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt2', '',    'out'),
+		], $result, 'twins per inbound interface');
+	}
+
+	public function testIssue3382TwinTrackersAreDistinctAndKeyedOnTheSelfRole(): void
+	{
+		// The twin shares its descr with the client rule, so only the tracker tells them apart:
+		// every pfB rule gets a unique one, and a twin's is the deterministic '*_self' derivation
+		// (stable across syncs) rather than a reuse of the client rule's '*_out' text.
+		$result = pfb_build_autorule_list([], $this->genWithSelfTwins(''), 'order_0', PfbToggle::Off, ['lan'], ['lan']);
+
+		$trackers = array_column($result, 'tracker');
+		$this->assertCount(count($result), $trackers, 'every pfB rule carries a tracker');
+		$this->assertSame(count($trackers), count(array_unique($trackers)), 'trackers must be unique across client rules and twins');
+
+		$derive = static function (string $descr, string $text): int {
+			$GLOBALS['pfb']['trackerids'] = [];
+			return pfb_tracker($descr, 'lan', $text);
+		};
+		$byKey = [];
+		foreach ($result as $r) {
+			$byKey[$r['descr'] . '|' . $r['direction'] . '|' . $r['floating']] = $r['tracker'];
+		}
+		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_self'), $byKey['pfB_PermitList_v4 Auto Rule|out|yes']);
+		$this->assertSame($derive('pfB_MatchList_v4 Auto Rule',  'match_self'),  $byKey['pfB_MatchList_v4 Auto Rule|out|yes']);
+		$this->assertSame($derive('pfB_DenyList_v4 Auto Rule',   'deny_self'),   $byKey['pfB_DenyList_v4 Auto Rule|out|yes']);
+		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_out'),  $byKey['pfB_PermitList_v4 Auto Rule|out|'],
+			'the client rule keeps its own permit_out tracker');
+	}
+
+	public function testIssue3382AbsentSelfBucketsBehaveAsEmptyOnes(): void
+	{
+		$existing = [$this->userPass('U-pass', 'opt1'), $this->userBlock('U-float', 'lan', 'yes')];
+		foreach (['order_0', 'order_1', 'order_2', 'order_3', 'order_4'] as $order) {
+			foreach (['', 'on'] as $float) {
+				$absent = $this->genPermitDeny($float);
+				$empty  = $absent + ['permit_self' => [], 'deny_self' => [], 'match_self' => []];
+
+				$this->assertSame(
+					$this->shapes(pfb_build_autorule_list($existing, $empty, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1'])),
+					$this->shapes(pfb_build_autorule_list($existing, $absent, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1'])),
+					"absent *_self keys must equal empty ones ({$order}, float='{$float}')"
+				);
 			}
 		}
 	}

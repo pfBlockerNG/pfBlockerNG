@@ -1022,6 +1022,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	$pfb['deny_action_outbound'] = $pfb['ipconfig']['outbound_deny_action']	?: 'reject';
 
 	$pfb['float']		= PfbConfig::read('ip/enable_float');				// Enable/Disable floating autorules
+	$pfb['fw_self']		= PfbConfig::read('ip/fw_self_outbound');			// Also apply outbound autorules to the firewall's own traffic
 	$pfb['dup']		= PfbConfig::read('ip/enable_dup');				// Enable remove of duplicate IPs utilizing grepcidr
 	$pfb['agg']		= PfbConfig::read('ip/enable_agg');				// Enable aggregation of CIDRs
 	$pfb['order']		= $pfb['ipconfig']['pass_order'] ?: 'order_0';			// Order of the autorules (default order_0, matching the IP-settings UI; an empty value drops user pass-rules on a managed interface — issue #532)
@@ -4681,7 +4682,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 	if ($pfb['autorules'] || $pfb['enable'] !== PfbToggle::On || $pfb['remove']) {
 		$pfb_active_aliases = [];
 		$message = '';
-		if (!empty($pfb['deny_inbound']) || !empty($pfb['permit_inbound']) || !empty($pfb['match_inbound'])) {
+		if (!empty($pfb['deny_inbound']) || !empty($pfb['permit_inbound']) || !empty($pfb['match_inbound']) ||
+		    !empty($pfb['deny_self']) || !empty($pfb['permit_self']) || !empty($pfb['match_self'])) {
 			if (empty($pfb['inbound_interfaces'])) {
 				$message = " Unable to apply rules. Inbound interface option not configured.";
 			}
@@ -4765,6 +4767,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 				'deny_outbound'     => $pfb['deny_outbound']     ?? [],
 				'match_inbound'     => $pfb['match_inbound']     ?? [],
 				'match_outbound'    => $pfb['match_outbound']    ?? [],
+				'permit_self'       => $pfb['permit_self']       ?? [],
+				'deny_self'         => $pfb['deny_self']         ?? [],
+				'match_self'        => $pfb['match_self']        ?? [],
 				'inbound_floating'  => $pfb['inbound_floating']  ?? '',
 				'outbound_floating' => $pfb['outbound_floating'] ?? '',
 				'dnsbl_float'       => $pfb_dnsbl_float,
@@ -4797,7 +4802,8 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 			);
 
 			unset($pfb['permit_inbound'], $pfb['permit_outbound'], $pfb['deny_inbound'],
-			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound']);
+			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound'],
+			    $pfb['permit_self'], $pfb['deny_self'], $pfb['match_self']);
 
 			// Remove 'created' tag (New vs old rules array comparison)
 			foreach ($new_rules as $rule) {

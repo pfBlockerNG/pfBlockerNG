@@ -184,6 +184,12 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngipsettings/config/0/enable_float",
     ),
     ToggleFlow(
+        name="ip_fw_self_outbound",
+        page=IP_PAGE,
+        field="fw_self_outbound",
+        config_path="installedpackages/pfblockerngipsettings/config/0/fw_self_outbound",
+    ),
+    ToggleFlow(
         name="ip_killstates",
         page=IP_PAGE,
         field="killstates",
@@ -1356,6 +1362,49 @@ def test_ip_inbound_interface_multiselect_comma_join_and_empty_clear(
         assert got_clear == "", f"empty inbound_interface selection should store '', got {got_clear!r}"
     finally:
         webui.post(IP_PAGE, {"inbound_interface": original}, timeout=SAVE_TIMEOUT)
+
+
+FW_SELF_CFG = "installedpackages/pfblockerngipsettings/config/0/fw_self_outbound"
+FW_SELF_NEEDS_INBOUND = "Apply outbound rules to firewall traffic requires at least one Inbound interface."
+
+
+def test_ip_fw_self_outbound_requires_an_inbound_interface(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """'Apply outbound rules to firewall traffic' needs an Inbound interface (issue #3382).
+
+    Given the toggle is stored Off and no Inbound interface is stored (before-state, seeded
+      directly so it does not depend on the save path under test).
+    When it is ticked with NO Inbound interface selected, Then the page shows the input error
+      and the toggle is NOT saved.
+    When it is ticked with an Inbound interface selected, Then the toggle persists On together
+      with that interface (the twin rules ride the Inbound interfaces).
+    """
+    inbound_cfg = "installedpackages/pfblockerngipsettings/config/0/inbound_interface"
+    original_toggle = helpers.config_get_state(smoke_vm, FW_SELF_CFG)
+    original_inbound = helpers.config_get_state(smoke_vm, inbound_cfg)
+    try:
+        helpers.config_set(smoke_vm, FW_SELF_CFG, "")
+        helpers.config_set(smoke_vm, inbound_cfg, "")
+        assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "", "seed did not take: toggle must start Off"
+
+        rejected = webui.post(IP_PAGE, {"fw_self_outbound": "on", "inbound_interface": ""}, timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(rejected.text), "the rejected Save lost its authenticated session"
+        assert FW_SELF_NEEDS_INBOUND in rejected.text, (
+            "ticking the toggle with no Inbound interface must show the input error"
+        )
+        assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "", "a rejected Save must not persist the toggle"
+
+        accepted = webui.post(IP_PAGE, {"fw_self_outbound": "on", "inbound_interface": "lan"}, timeout=SAVE_TIMEOUT)
+        assert FW_SELF_NEEDS_INBOUND not in accepted.text, "an Inbound interface is selected: no input error expected"
+        assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "on", (
+            "the toggle must persist once an Inbound interface is selected"
+        )
+        assert helpers.config_get(smoke_vm, inbound_cfg) == "lan"
+    finally:
+        helpers.config_restore_state(smoke_vm, inbound_cfg, original_inbound)
+        helpers.config_restore_state(smoke_vm, FW_SELF_CFG, original_toggle)
 
 
 # --------------------------------------------------------------------------- #

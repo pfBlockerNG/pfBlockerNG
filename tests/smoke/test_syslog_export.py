@@ -8,7 +8,7 @@ Proves the §2.2 contract (as revised by Amendment 1) on a real pfSense CE VM:
      ``pfb_daemon_filterlog`` — not by the chrooted python.
   3. Toggle ON + IP path ⇒ a ``pfblockerng`` record per IP Block event, exercised
      LIVE: civm reaches a blocked WAN-subnet IP through a floating, logged
-     Deny_Outbound rule on WAN, and the host daemon exports the act=block event.
+     Deny_Outbound rule on LAN (where client egress enters), and the host daemon exports the act=block event.
   4. CSV logging is unchanged in both states (export is purely additive).
   5. The toggle takes effect LIVE — no service restart between flipping it and
      the next event (the daemon re-reads config on config.xml change).
@@ -135,10 +135,9 @@ def deployed_vm(
 
     # IP feed: a floating, LOGGED Deny_Outbound rule for a WAN-subnet victim IP.
     # inject() wires inbound/outbound_interface=wan (SMOKE_IP_IFACE);
-    # _enable_ip_floating_logged_rule then flips it to a floating `block out quick log`
-    # on WAN — which catches civm's forwarded SYN leaving WAN (a non-floating WAN rule
-    # is block-IN and never matches forwarded-out traffic; a LAN-interface rule breaks
-    # civm connectivity) and emits a filter.log line the daemon can export.
+    # _enable_ip_floating_logged_rule moves the Outbound interface to LAN and floats the rule:
+    # `block in quick log on lan` matches civm's SYN ENTERING LAN (a WAN rule never sees it)
+    # and emits a filter.log line the daemon can export.
     _ip_feed_path = h.write_local_feed(smoke_vm, "pfb_syslog_ip.txt", f"{TEST_IP_BLOCK_RANGE}\n")
     h.inject(
         smoke_vm,
@@ -229,16 +228,16 @@ def _set_syslog_enabled(vm: SmokeVM, *, on: bool, timeout: float = 60.0) -> None
 
 
 def _enable_ip_floating_logged_rule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
-    """Make pfBlockerNG emit the IP deny rule as a FLOATING, LOGGED ``out`` rule.
+    """Make pfBlockerNG emit the IP deny rule as a FLOATING, LOGGED rule on the client-facing LAN.
 
-    Two ipsettings flags, both required for the IP-block syslog leg:
+    Three ipsettings, all required for the IP-block syslog leg:
 
-    * ``enable_float``: inject() wires inbound/outbound_interface=wan (SMOKE_IP_IFACE).
-      A *non*-floating Deny_Outbound on WAN is a block-IN rule (pfblockerng.inc:8142) —
-      it never sees civm's forwarded traffic LEAVING via WAN. enable_float flips it to
-      ``direction=out`` (inc:8148): a floating ``block out quick`` on WAN that DOES match
-      the forwarded SYN. Floating-on-WAN also leaves the LAN allow intact — a
-      per-interface LAN rule rebuild drops the "allow LAN→any" and breaks civm's DNS.
+    * ``outbound_interface=lan``: inject() wires inbound/outbound_interface=wan (SMOKE_IP_IFACE).
+      A floating Deny_Outbound is a direction-``in`` rule (issue #3382): it matches traffic
+      ENTERING the selected interface. civm's forwarded SYN enters LAN, so LAN is the Outbound
+      interface; on WAN the rule would never see it.
+    * ``enable_float``: floating-on-LAN leaves the LAN allow intact — a per-interface LAN rule
+      rebuild drops the "allow LAN→any" and breaks civm's DNS.
     * ``enable_log`` (global IP logging): pfBlockerNG only stamps ``log`` on the rule when
       global logging is on or the list's aliaslog='enabled' (inc:8175). Without it the
       rule blocks SILENTLY — no filter.log line — so the host filterlog daemon never sees
@@ -246,6 +245,7 @@ def _enable_ip_floating_logged_rule(vm: SmokeVM, *, timeout: float = 60.0) -> No
     """
     snippet = (
         f"$ip = config_get_path({h._php_str(h.CFG_IP_SETTINGS)}, array());\n"
+        "$ip['outbound_interface'] = 'lan';\n"
         "$ip['enable_float'] = 'on';\n"
         "$ip['enable_log'] = 'on';\n"
         f"config_set_path({h._php_str(h.CFG_IP_SETTINGS)}, $ip);\n"
@@ -420,13 +420,13 @@ def _trigger_ip_block(client: SmokeVM, *, port: int = 80, timeout: float = 30.0)
 
     The block must be triggered by PASS-THROUGH traffic — a client BEHIND the
     firewall (civm) reaching the blocked WAN IP — not by pfSense's own stack: the
-    floating Deny_Outbound rule acts on forwarded traffic leaving WAN, so a curl
+    floating Deny_Outbound rule acts on forwarded traffic entering LAN, so a curl
     from pfSense itself would not hit it.
 
     civm has TWO equal-metric default routes (mgmt ens4 via the QEMU mgmt SLIRP,
     and LAN ens5 via pfSense), so a bare curl may egress the mgmt NIC and never
     reach pfSense. Pin a host route for the victim via pfSense (192.168.1.1) out
-    the LAN device first, forcing the SYN civm -> pfSense -> WAN-out -> the block.
+    the LAN device first, forcing the SYN civm -> pfSense (LAN in) -> the block.
     """
     client.ssh(
         "/bin/sh",
@@ -660,17 +660,17 @@ def test_syslog_on_dnsbl_event_exported(deployed_vm: SmokeVM, client_vm: SmokeVM
 # Test 2: ON ⇒ IP Block event exported to the dedicated file (LIVE).
 #
 # The IP-block leg is exercised live via a FLOATING, LOGGED Deny_Outbound rule on
-# WAN (_enable_ip_floating_logged_rule) blocking a WAN-subnet victim (TEST_IP_BLOCK_DST):
-#   * a LAN-interface pfB rule was found to break ALL civm->pfSense traffic (the
+# LAN (_enable_ip_floating_logged_rule) blocking a WAN-subnet victim (TEST_IP_BLOCK_DST):
+#   * a NON-floating LAN-interface pfB rule was found to break ALL civm->pfSense traffic (the
 #     LAN filter rebuild drops the permissive allow; civm DNS/ICMP then hit the
 #     default block, rule 1000000103 — filterlog-confirmed);
-#   * a NON-floating WAN Deny_Outbound is a block-IN rule (inc:8142), so it never
-#     matches civm's forwarded traffic LEAVING via WAN;
+#   * a Deny_Outbound rule on WAN never matches civm's forwarded traffic: it is a
+#     direction-in rule (issue #3382) and civm's SYN enters LAN, not WAN;
 #   * a non-WAN TEST-NET dst depends on the (flaky) SLIRP default gateway and
 #     never traverses the WAN-out path;
 #   * without global IP logging the rule blocks SILENTLY (no `log`, inc:8175), so
 #     filter.log/the daemon never see it — enable_log is what makes it exportable.
-# The floating `block out quick log` on WAN matches the forwarded SYN AND leaves the
+# The floating `block in quick log` on LAN matches the forwarded SYN AND leaves the
 # LAN allow intact (it matches only dst=<alias>); the WAN-subnet victim is
 # directly connected so it routes out WAN with no default-gateway dependency.
 # --------------------------------------------------------------------------- #
@@ -684,7 +684,7 @@ def test_syslog_on_ip_block_event_exported(deployed_vm: SmokeVM, client_vm: Smok
            sibling, #1396); the filterlog daemon running; the civm client
            behind the firewall.
     When:  the civm client curls the blocked WAN IP (pass-through traffic pf blocks
-           + logs on WAN-out — NOT pfSense's own traffic, which the rule misses).
+           + logs entering LAN — NOT pfSense's own traffic, which the rule misses).
     Then:  a new pfblockerng record appears in the dedicated file that references the
            victim dst IP (TEST_IP_BLOCK_DST) LITERALLY and carries an IP action token
            (act=block/pass/match) — not merely any new pfB event (#814: a resolved

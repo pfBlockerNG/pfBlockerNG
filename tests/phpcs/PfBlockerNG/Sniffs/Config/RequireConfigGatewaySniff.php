@@ -255,6 +255,8 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngipsettings/config/0/database_cc',
 		'installedpackages/pfblockerngipsettings/config/0/enable_float',
 		'installedpackages/pfblockerngipsettings/config/0/killstates',
+		// issue #3382: IP page "Apply outbound rules to firewall traffic" toggle
+		'installedpackages/pfblockerngipsettings/config/0/fw_self_outbound',
 		// issue #2123: the DNSBL "Advanced In/Outbound Firewall Rule Settings" checkboxes.
 		// The per-feed-row and per-continent keys of the same bare name live under
 		// DYNAMIC paths, so they are unreachable by this exact-path check and stay on the

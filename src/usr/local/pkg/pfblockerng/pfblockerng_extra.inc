@@ -1973,6 +1973,15 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => '#2123 relocated pfblockerng_ip.php:75\'s own off default into the registry; absent behaviour unchanged',
 		],
 
+		// issue #3382: also apply the outbound auto-rules to the firewall's own traffic (a floating
+		// 'out' rule from (self) on the Inbound interfaces). Opt-in: default '' (off).
+		'ip/fw_self_outbound' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			'no_grandfather' => 'new opt-in setting (#3382); absent on upgrade reads Off, the behaviour before the setting existed',
+		],
+
 		'ip/killstates' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',

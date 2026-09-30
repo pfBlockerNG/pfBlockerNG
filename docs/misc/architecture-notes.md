@@ -1299,6 +1299,25 @@ emission on every dup-free config) is pinned off-appliance in
 `tests/smoke/test_smoke_autorule_immutable.py` (ADR-04). Design + the corrected pf-precedence
 analysis: `legacy/ADRs/ADR_41_Immutable_User_Firewall_Rules/` (`RESULTS/05`).
 
+### Rule direction and firewall-traffic twins (issue #3382)
+
+A floating rule matches on the interface a packet **enters**, so every floating auto-rule
+(Deny/Permit/Match, Inbound and Outbound alike) is direction `in`. A client's egress enters LAN
+`in`, which makes the Outbound interfaces the client-facing ones; a floating `out` rule scoped to
+LAN never saw that traffic, and one left at `any` over-matches (a `from <alias>` rule on WAN also
+sees post-NAT egress). Interface (non-floating) rules carry no `direction` key: pfSense forces `in`.
+
+The opt-in **Apply outbound rules to firewall traffic** toggle (`ip/fw_self_outbound`, default off)
+covers the firewall's own connections, which never enter an interface. Every outbound auto-rule
+(Deny/Permit/Match Outbound and the outbound leg of the Both actions) gets a twin,
+`<action> out quick on <each Inbound interface> from (self) to <alias>` (Match: no `quick`), always
+floating whatever the Floating Rules setting, carrying no gateway, and skipped when the list has a
+Custom Source. `pfb_firewall_rule()` emits the twins into `permit_self`/`deny_self`/`match_self`;
+`pfb_build_autorule_list()` places one per Inbound interface in the floating group's pfB pass/match
+and block/reject buckets. Floating rules run after NAT, so on IPv4 NAT'd LAN clients leaving those
+interfaces match too. Pinned by `tests/php/FirewallRuleTest.php` and `AutoruleListOracleTest.php`;
+live in `tests/smoke/test_smoke_3382_float_direction.py`.
+
 ## Managed firewall object ownership and teardown (ADR-35)
 
 A small shared ownership-and-teardown layer for pfBlockerNG-managed objects in pfSense-core sections

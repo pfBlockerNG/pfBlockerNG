@@ -18,12 +18,13 @@ real two-VM pfSense CE setup (civm = the LAN client behind the firewall):
 
 Non-obvious facts this exercises (each cost a live investigation):
 
-* The pfB Deny_Outbound rule is FLOATING (on WAN), not on the LAN interface. A LAN-
-  interface pfB IP rule was found to DROP the baked "Default allow LAN to any" rule on a
-  second reload — cutting the client off entirely (a real, reproducible side effect). A
-  floating Deny_Outbound blocks the client's forwarded traffic at WAN egress without
-  touching the LAN ruleset, so the client stays connected across reloads. killstates
-  kills states by the blocked IP regardless of which interface the rule is on.
+* The pfB Deny_Outbound rule is FLOATING on the Outbound interfaces LAN and WAN, direction
+  ``in`` (issue #3382): the client's forwarded traffic ENTERS LAN, so the LAN leg blocks it
+  at ingress; WAN stays listed so the states the kill walk validates (its pfB-interface gate,
+  ``pfb_filterrules``) are the ones bound to WAN. A NON-floating LAN-interface pfB IP rule was
+  found to DROP the baked "Default allow LAN to any" rule on a second reload — cutting the
+  client off entirely — while a floating one leaves the LAN ruleset alone, so the client stays
+  connected across reloads. killstates kills states by the blocked IP regardless of interface.
 * The victim is a PUBLIC IP (RFC 5737 TEST-NET-3). killstates deliberately EXCLUDES
   RFC1918 / local-subnet / reserved IPs (pfblockerng.inc:8827-8838), so a private or
   WAN-subnet victim would never be cleared — a public dst is what a real blocked
@@ -164,21 +165,22 @@ def _victim_states(vm: SmokeVM, ip: str = VICTIM, *, timeout: float = 30.0) -> s
 
 
 def _rule_block_packets(vm: SmokeVM, *, timeout: float = 30.0) -> int:
-    """Packets the floating pfB reject rule has actually dropped (its pf counter).
+    """Packets the floating pfB reject rules have actually dropped (their pf counters, summed).
 
     ``pfctl -sr -vv`` prints each rule followed by a ``[ Evaluations: N Packets: M ... ]``
-    line; M is the count the rule has matched (= blocked, for this `block` rule). Reading it
-    before/after a connection attempt proves the rule DROPPED the traffic, not just that the
-    victim is listed in the alias. Returns -1 if the counter can't be read.
+    line; M is the count the rule has matched (= blocked, for this `block` rule). The floating
+    rule expands per interface (LAN, WAN), so the counters are summed — only the LAN leg sees
+    the client's egress, whichever order pf lists them in. Reading it before/after a connection
+    attempt proves the rules DROPPED the traffic, not just that the victim is listed in the
+    alias. Returns -1 if no counter can be read.
     """
     out = vm.ssh(
         "/bin/sh",
         "-c",
-        f"pfctl -sr -vv 2>/dev/null | grep -A1 '{ALIAS_TABLE}' "
-        "| grep -oE 'Packets: [0-9]+' | head -1 | grep -oE '[0-9]+'",
+        f"pfctl -sr -vv 2>/dev/null | grep -A1 '{ALIAS_TABLE}' | grep -oE 'Packets: [0-9]+' | grep -oE '[0-9]+'",
         timeout=timeout,
-    ).stdout.strip()
-    return int(out or -1)
+    ).stdout.split()
+    return sum(int(n) for n in out) if out else -1
 
 
 def _state_diag(vm: SmokeVM) -> str:
@@ -203,8 +205,8 @@ def _state_diag(vm: SmokeVM) -> str:
 def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
     """Prove the floating reject rule actually DROPS a fresh connection to the victim.
 
-    A brand-new connection (no matching state) must traverse the rules and be dropped at
-    WAN egress, bumping the rule's packet counter. Asserting the delta — not just alias
+    A brand-new connection (no matching state) must traverse the rules and be dropped as it
+    enters LAN, bumping the rule's packet counter. Asserting the delta — not just alias
     membership — is the behavioural proof that the block is live, not inert.
     """
     pkts_before = _rule_block_packets(vm)
@@ -253,9 +255,10 @@ def _append_permit_customlist(vm: SmokeVM, aliasname: str, ip: str, *, timeout: 
     contains ``Permit_`` and whose ``custom`` (a base64 textarea) is non-empty — the
     row itself is the #705 input; no feed row is needed. The action is deliberately
     INBOUND: the suppression is direction-agnostic (any ``Permit_*``), but a
-    Permit_OUTBOUND list would add a floating ``pass out quick`` rule that then
-    CREATES the outbound test state — and a floating-pass state binds to interface
-    'all', which the kill walk's pfB-interface gate skips, so the state would
+    Permit_OUTBOUND list would add a floating ``pass in quick`` rule (direction in on the
+    Outbound interfaces, LAN included) that then CREATES the outbound test state — and a
+    floating-pass state binds to interface 'all', which the kill walk's pfB-interface gate
+    skips, so the state would
     survive for a reason unrelated to #705 (observed live: the pre-fix code passed
     the survival assert that way). With an inbound-only permit rule the outbound
     state is created by the default pass-out path and binds to the WAN interface,
@@ -291,13 +294,13 @@ PERMIT_ROW = 1
 
 
 # --------------------------------------------------------------------------- #
-# Module fixture: deploy once, wire a floating WAN Deny_Outbound rule (victim unblocked)
+# Module fixture: deploy once, wire a floating LAN+WAN Deny_Outbound rule (victim unblocked)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture(scope="module")
 def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM]:
-    """Deploy the branch .pkg; wire a floating WAN Deny_Outbound (reject) rule, victim unblocked.
+    """Deploy the branch .pkg; wire a floating LAN+WAN Deny_Outbound (reject) rule, victim unblocked.
 
     Given: the smoke VM is booted and the branch .pkg is available; civm is up.
     When:  we deploy and inject one IP block feed (header ``pfbkillstates``) whose alias
@@ -322,11 +325,12 @@ def ip_block_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
         h.IpCase(aliasname=HEADER, feed_url=feed, action="Deny_Outbound", family="v4", header=HEADER),
     )
     _append_permit_customlist(smoke_vm, PERMIT_ALIAS, PERMIT_VICTIM)
-    # FLOATING rule (inject wired the interface to wan): enable_float flips Deny_Outbound to
-    # a floating `block out quick` on WAN that catches the client's forwarded traffic without
-    # disturbing the LAN allow. Global IP logging on so the block is visible in filter.log.
+    # FLOATING rule on LAN+WAN (inject wired both to wan): enable_float makes Deny_Outbound a
+    # floating `block in quick` that catches the client's forwarded traffic as it ENTERS LAN
+    # without disturbing the LAN allow; WAN stays selected for the kill walk's interface gate.
+    # Global IP logging on so the block is visible in filter.log.
     # outbound_deny_action defaults to 'reject'.
-    _set_ipcfg(smoke_vm, {"enable_float": "on", "enable_log": "on"})
+    _set_ipcfg(smoke_vm, {"outbound_interface": "lan,wan", "enable_float": "on", "enable_log": "on"})
     h.reload(smoke_vm, "update")
     yield smoke_vm
 

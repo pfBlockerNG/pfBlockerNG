@@ -16965,7 +16965,10 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 
 	global $pfb;
 	$rule = array();
+	$rule_out = NULL;
 
+	// issue #3382: a floating rule matches on the interface traffic ENTERS, so every floating
+	// auto-rule is direction 'in', outbound ones included (a floating 'out' never saw client egress).
 	switch ($action) {
 		case 'Deny_Both':
 		case 'Deny_Outbound':
@@ -16975,7 +16978,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] === PfbToggle::On) {
-				$rule['direction'] = 'out';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -17005,6 +17008,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['deny_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Deny_Both') {
 				break;
 			}
@@ -17054,7 +17058,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] === PfbToggle::On) {
-				$rule['direction'] = 'out';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -17084,6 +17088,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['permit_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Permit_Both') {
 				break;
 			}
@@ -17133,7 +17138,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			$rule['direction'] = 'out';
+			$rule['direction'] = 'in';
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
 				$rule['source'] = array('address' => "{$asrc_out}");
@@ -17162,6 +17167,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['match_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Match_Both') {
 				break;
 			}
@@ -17202,6 +17208,24 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			$rule['created'] = array('time' => (int)microtime(TRUE), 'username' => 'Auto');
 			$pfb['match_inbound'][] = $rule;
 			break;
+	}
+
+	// issue #3382 (opt-in): locally originated packets never ENTER an interface, so the client rule
+	// cannot see them. Twin = floating 'out' rule from (self); no Custom Source, no gateway (route-to).
+	if ($rule_out !== NULL && ($pfb['fw_self'] ?? NULL) === PfbToggle::On && empty($asrc_out)) {
+		$twin = array_merge($pfb['base_rule_float'], array_intersect_key($rule_out,
+		    array_flip(array('type', 'ipprotocol', 'descr', 'destination', 'protocol', 'log', 'created'))));
+		$twin['direction'] = 'out';
+		$twin['source']    = array('network' => '(self)');
+		if ($twin['type'] === 'match') {
+			unset($twin['quick']);
+		}
+		$bucket = match ($twin['type']) {
+			'pass'  => 'permit_self',
+			'match' => 'match_self',
+			default => 'deny_self',
+		};
+		$pfb[$bucket][] = $twin;
 	}
 	return;
 }
@@ -20461,10 +20485,10 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
  * rules are regenerated from $pfb_generated; user rules pass through verbatim.
  *
  * The reorder is applied INDEPENDENTLY to the two pf rule groups, because pf evaluates them
- * separately: the FLOATING group (always carries the DNSBL/match pass rules; also the pfB
- * permit/deny when float mode is on, since the call site then builds them from base_rule_float)
- * and the INTERFACE group (the per-interface pfB permit/deny when float mode is off). Each group
- * orders its own four buckets by the same ORDER table:
+ * separately: the FLOATING group (always carries the DNSBL/match pass rules and the firewall-traffic
+ * twins; also the pfB permit/deny when float mode is on, since the call site then builds them from
+ * base_rule_float) and the INTERFACE group (the per-interface pfB permit/deny when float mode is
+ * off). Each group orders its own four buckets by the same ORDER table:
  *
  *   order_0 | pfB pass/match | pfB block/reject | user (not split) |
  *   order_1 | user pass/match | pfB pass/match | pfB block/reject | user block/reject |
@@ -20486,6 +20510,11 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
  *                                  'inbound_floating' => interface string for match_inbound floating
  *                                  'outbound_floating'=> interface string for match_outbound floating
  *                                  'dnsbl_float'      => array of 0-2 pre-built DNSBL ping/permit rules
+ *                                  'permit_self'      => (optional, absent = []) pfB pass twins of the outbound rules
+ *                                  'deny_self'        => (optional, absent = []) pfB block/reject twins
+ *                                  'match_self'       => (optional, absent = []) pfB match twins
+ *                                Twins are floating `out` rules sourced from (self): one per INBOUND
+ *                                interface, in the floating group whatever $float (issue #3382).
  * @param ?string $order          The pass_order value ('order_0' .. 'order_4'). The production
  *                                call site already passes `$pfb['order'] ?: 'order_0'`, so this is
  *                                never null/empty there (#532); nullable + the order_0 normalisation
@@ -20638,6 +20667,19 @@ function pfb_build_autorule_list(
 		}
 	}
 
+	// issue #3382: firewall-traffic twins ride the INBOUND interfaces (one rule each) and are
+	// floating whatever the float mode; the assembly below places them.
+	$twins = ['permit_self' => [], 'match_self' => [], 'deny_self' => []];
+	foreach ($in_ifaces as $inbound_interface) {
+		foreach (array_keys($twins) as $role) {
+			foreach ($pfb_generated[$role] ?? [] as $cb_rules) {
+				$cb_rules['interface'] = $inbound_interface;
+				$cb_rules['tracker']   = pfb_tracker($cb_rules['descr'], $inbound_interface, $role);
+				$twins[$role][]        = $cb_rules;
+			}
+		}
+	}
+
 	// --- Assemble each pf group's four buckets in pass_order sequence -----------------------
 	// $apply moves whole buckets per the ORDER table; order_0 and order_3 share a sequence
 	// (order_0 leaves $upm empty by construction, so user pass/match is never split out).
@@ -20653,14 +20695,15 @@ function pfb_build_autorule_list(
 	if ($float === PfbToggle::On) {
 		// Float mode on: the pfB permit/deny are floating too, so the whole pass_order reorder
 		// happens in the floating group; the interface group carries only non-floating user rules.
-		$float_seq = $apply($order, array_merge($dnsbl, $ppermit, $pmatch), $pdeny,
-		                    array_merge($fpermit, $fmatch), $fother);
+		$float_seq = $apply($order, array_merge($dnsbl, $ppermit, $pmatch, $twins['permit_self'], $twins['match_self']),
+		                    array_merge($pdeny, $twins['deny_self']), array_merge($fpermit, $fmatch), $fother);
 		$iface_seq = $apply($order, [], [], [], $user_br);
 	} else {
-		// Float mode off: pfB permit/deny are interface rules; only DNSBL/match are floating.
-		// In the floating group the user's floating rules ($fother) historically lead for
-		// order_1 and trail otherwise — the $upm slot reproduces exactly that placement.
-		$float_seq = $apply($order, array_merge($dnsbl, $pmatch), [], $fother, []);
+		// Float mode off: pfB permit/deny are interface rules; only DNSBL/match and the
+		// always-floating twins are floating. In the floating group the user's floating rules
+		// ($fother) historically lead for order_1 and trail otherwise — the $upm slot reproduces that.
+		$float_seq = $apply($order, array_merge($dnsbl, $pmatch, $twins['permit_self'], $twins['match_self']),
+		                    $twins['deny_self'], $fother, []);
 		$iface_seq = $apply($order, $ppermit, $pdeny, $user_pm, $user_br);
 	}
 
