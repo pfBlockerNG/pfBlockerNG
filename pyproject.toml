@@ -12,6 +12,14 @@ requires-python = "==3.11.*"
 [tool.uv]
 package = false
 
+# Transitive pin (via semgrep, mcp): >=2.15 clears all 12 pyjwt 2.13.0 advisories
+# (11 fixed in 2.14, GHSA-42vr-xj54-vc7v only in 2.15; #3398). Semgrep 1.157.0
+# through 1.178.0 cap pyjwt below 2.14, so a dependency-group floor would
+# roll semgrep back to 1.156.0 instead; the override bypasses that pin. Keep the
+# [crypto] extra: an override replaces the requirement, extras included. Drop
+# this once semgrep accepts pyjwt>=2.15.
+override-dependencies = ["pyjwt[crypto]>=2.15.1"]
+
 # PEP 735 groups. `uv sync --locked` resolves against uv.lock, which pins the
 # TRANSITIVE graph as well -- the gap a requirements file of direct `==` pins leaves
 # open, and the one that let a gate move with no diff.
