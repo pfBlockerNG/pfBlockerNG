@@ -20,6 +20,7 @@ use PHPUnit\Framework\TestCase;
  * intentionally returns the remainder WITH any path intact.
  */
 #[CoversFunction('pfb_dnsbl_strip_scheme')]
+#[CoversFunction('pfb_dnsbl_scheme_pos')]
 final class PfbDnsblStripSchemeTest extends TestCase
 {
 	public function testHttpSchemeStripped(): void
@@ -224,5 +225,76 @@ final class PfbDnsblStripSchemeTest extends TestCase
 		// Anything beyond the exact '[...]' shape (a path, trailing text) is still
 		// an invalid URI and rejected -- only the clean whole-line form is special-cased.
 		$this->assertFalse(pfb_dnsbl_strip_scheme('://[2604:2dc0:100:4ed8::]/path', true));
+	}
+
+	// --- Empty-scheme IP shapes ('://<ip>[^[$opts]]') are the bare address in BOTH modes.
+
+	/** @return array<string, array{string, string|false, string|false}> line, lenient, strict */
+	public static function emptySchemeIpProvider(): array
+	{
+		return [
+			'v4 bare'                  => ['://1.2.3.4', '1.2.3.4', '1.2.3.4'],
+			'v4 caret'                 => ['://1.2.3.4^', '1.2.3.4', '1.2.3.4'],
+			'v4 caret options'         => ['://1.2.3.4^$third-party', '1.2.3.4', '1.2.3.4'],
+			'v4 caret empty options'   => ['://1.2.3.4^$', '1.2.3.4', '1.2.3.4'],
+			'v6 bracketed'             => ['://[2001:db8::1]', '2001:db8::1', '2001:db8::1'],
+			'v6 bracketed caret'       => ['://[2001:db8::1]^', '2001:db8::1', '2001:db8::1'],
+			'v6 caret options'         => ['://[2001:db8::1]^$important,dnstype=A', '2001:db8::1', '2001:db8::1'],
+			'options never scanned'    => ['://[2001:db8::1]^$/http://9.9.9.9', '2001:db8::1', '2001:db8::1'],
+			'v6 bare not bracketed'    => ['://2001:db8::1^', '2001:db8::1^', FALSE],
+			'v4 bracketed rejected'    => ['://[192.0.2.1]^', '[192.0.2.1]^', FALSE],
+			'double caret rejected'    => ['://1.2.3.4^^', '1.2.3.4^^', FALSE],
+			'host:port rejected'       => ['://1.2.3.4:443^', '1.2.3.4:443^', FALSE],
+			'domain untouched'         => ['://evil.com^', 'evil.com^', FALSE],
+		];
+	}
+
+	#[DataProvider('emptySchemeIpProvider')]
+	public function testEmptySchemeIpShapes(string $line, string|false $lenient, string|false $strict): void
+	{
+		$this->assertSame($lenient, pfb_dnsbl_strip_scheme($line, FALSE), "lenient {$line}");
+		$this->assertSame($strict, pfb_dnsbl_strip_scheme($line, TRUE), "strict {$line}");
+	}
+
+	/** @return array<string, array{string}> */
+	public static function embeddedSeparatorProvider(): array
+	{
+		return [
+			'after path'     => ['evil.com/x?u=http://8.8.8.8/'],
+			'after query'    => ['evil.com?u=http://8.8.8.8'],
+			'after fragment' => ['evil.com/r#http://8.8.8.8'],
+			'empty host'     => ['?u=http://8.8.8.8'],
+			'slash first'    => ['a/b://evil.com'],
+		];
+	}
+
+	#[DataProvider('embeddedSeparatorProvider')]
+	public function testSeparatorAfterPathQueryOrFragmentIsNotAScheme(string $line): void
+	{
+		$this->assertSame($line, pfb_dnsbl_strip_scheme($line, FALSE));
+		$this->assertSame($line, pfb_dnsbl_strip_scheme($line, TRUE));
+	}
+
+	/** @return array<string, array{string, int|false}> */
+	public static function schemePosProvider(): array
+	{
+		return [
+			'plain scheme'        => ['http://x', 4],
+			'empty scheme'        => ['://x', 0],
+			'first separator'     => ['a://b://c', 1],
+			'no separator'        => ['evil.com', FALSE],
+			'slash before'        => ['a/b://x', FALSE],
+			'query before'        => ['a?b://x', FALSE],
+			'fragment before'     => ['a#b://x', FALSE],
+			'slash after only'    => ['http://x/y://z', 4],
+			'slash then empty'    => ['/://x', FALSE],
+			'empty line'          => ['', FALSE],
+		];
+	}
+
+	#[DataProvider('schemePosProvider')]
+	public function testSchemePos(string $line, int|false $expected): void
+	{
+		$this->assertSame($expected, pfb_dnsbl_scheme_pos($line));
 	}
 }
