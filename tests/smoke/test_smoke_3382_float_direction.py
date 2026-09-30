@@ -114,10 +114,12 @@ def _rule_packets(vm: SmokeVM, alias: str, direction: str, *, timeout: float = 3
     """
     lines = vm.ssh("/bin/sh", "-c", "pfctl -sr -vv 2>/dev/null", timeout=timeout).stdout.splitlines()
     rule = re.compile(rf"^@\d+ \w+(?: \w+)? {direction}\b")
+    # -vv prints a table as <name:count>; anchor the name so a prefix-sharing alias cannot match.
+    table = re.compile(rf"<{re.escape(alias)}[:>]")
     counters = [
         int(m.group(1))
         for line, nxt in pairwise(lines)
-        if rule.match(line) and f"<{alias}" in line and (m := re.search(r"Packets: (\d+)", nxt))
+        if rule.match(line) and table.search(line) and (m := re.search(r"Packets: (\d+)", nxt))
     ]
     return sum(counters) if counters else -1
 
