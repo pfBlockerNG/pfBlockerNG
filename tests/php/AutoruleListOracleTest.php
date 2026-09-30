@@ -361,8 +361,9 @@ final class AutoruleListOracleTest extends TestCase
 
 	// -----------------------------------------------------------------------
 	// pfB-generated templates (the assembler carries 'direction' through untouched). The shared
-	// Outbound templates stay 'out' for the frozen-reference differential; genWithSelfTwins()
-	// models production's 'in' (issue #3382).
+	// Outbound templates stay 'out': the frozen reference's evalSeq() keys legs by direction, so
+	// 'in' merges the Inbound and Outbound legs on an interface selected as both and diverges from
+	// the reference's interleave. genWithSelfTwins() models production's 'in' (issue #3382).
 	// -----------------------------------------------------------------------
 
 	/** @param string $float 'on' makes the per-interface permit/deny floating (base_rule_float). */

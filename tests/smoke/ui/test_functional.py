@@ -1390,6 +1390,11 @@ def test_ip_fw_self_outbound_requires_an_inbound_interface(
         )
         assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "", "a rejected Save must not persist the toggle"
 
+        # A name that is not a selectable interface cannot satisfy the requirement either.
+        bogus = webui.post(IP_PAGE, {"fw_self_outbound": "on", "inbound_interface": "bogus"}, timeout=SAVE_TIMEOUT)
+        assert FW_SELF_NEEDS_INBOUND in bogus.text, "an unknown Inbound interface must not satisfy the toggle"
+        assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "", "a rejected Save must not persist the toggle"
+
         accepted = webui.post(IP_PAGE, {"fw_self_outbound": "on", "inbound_interface": "lan"}, timeout=SAVE_TIMEOUT)
         assert FW_SELF_NEEDS_INBOUND not in accepted.text, "an Inbound interface is selected: no input error expected"
         assert helpers.config_get(smoke_vm, FW_SELF_CFG) == "on", (
