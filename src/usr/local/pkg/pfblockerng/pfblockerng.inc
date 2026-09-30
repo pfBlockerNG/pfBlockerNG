@@ -891,12 +891,26 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
 	$v4 = ($family === 'inet');
 
+	// IPv6 cannot use ::1: FreeBSD drops a packet redirected to ::1 that arrived on a
+	// non-loopback interface (ip6_input scope check, #3400). An assigned interface targets
+	// pfSense's own "<Iface> address" NAT keyword, which filter.inc resolves to the
+	// interface's current IPv6 on every filter reload (static, track6, SLAAC, DHCPv6).
+	// Unassigned pseudo-interfaces (enc0, openvpn, l2tp) have no such keyword and keep ::1:
+	// their IPv6 DNS stays dropped instead of passing unredirected.
+	if ($v4) {
+		$target = '127.0.0.1';
+	} elseif (preg_match('/^(wan|lan|opt\d+)$/', $iface) === 1) {
+		$target = "{$iface}ip";
+	} else {
+		$target = '::1';
+	}
+
 	return [
 		'source'             => pfb_redirect_exclude_source($exclude_alias, "DNS Redirect on {$iface} " . ($v4 ? 'IPv4' : 'IPv6')),
 		'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
 		'ipprotocol'         => $family,
 		'protocol'           => 'tcp/udp',
-		'target'             => $v4 ? '127.0.0.1' : '::1',
+		'target'             => $target,
 		'local-port'         => '53',
 		'interface'          => $iface,
 		'descr'              => PFB_DNS_REDIR_DESCR_V4_PFX . $iface . ($v4 ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX),
