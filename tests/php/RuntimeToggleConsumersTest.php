@@ -101,6 +101,47 @@ final class RuntimeToggleConsumersTest extends TestCase
 		}
 	}
 
+	/** @return iterable<string, array{string}> */
+	public static function firewallTrafficBuckets(): iterable
+	{
+		foreach (['deny_self', 'permit_self', 'match_self'] as $bucket) {
+			yield $bucket => [$bucket];
+		}
+	}
+
+	/**
+	 * issue #3382: a firewall-traffic twin rides the Inbound interfaces, so a twin with none
+	 * selected must trip the same "Inbound interface option not configured" stop as an inbound rule.
+	 */
+	#[DataProvider('firewallTrafficBuckets')]
+	public function testFirewallTrafficTwinsNeedAnInboundInterface(string $bucket): void
+	{
+		$source = self::readSource(self::APPLY);
+		$this->assertSame(1, preg_match(
+			"/(?<block>\\\$message = '';\\s*if \\(!empty\\(\\\$pfb\\['deny_inbound'\\]\\).*?)"
+			. "(?=\\s*if \\(!empty\\(\\\$pfb\\['deny_outbound'\\]\\))/s",
+			$source,
+			$match
+		), 'the live inbound-interface guard must be extractable');
+
+		$rule = ['descr' => 'pfB_A Auto Rule'];
+		$message = static function (array $pfb) use ($match): string {
+			eval($match['block']);
+			return $message;
+		};
+		$needle = 'Inbound interface option not configured';
+
+		// Before-state (control): an inbound rule with no interface trips the stop, an empty
+		// ruleset does not, so the extracted guard is the real one and can fail either way.
+		$this->assertStringContainsString($needle, $message(['deny_inbound' => [$rule], 'inbound_interfaces' => []]));
+		$this->assertSame('', $message(['inbound_interfaces' => []]));
+
+		$this->assertStringContainsString($needle, $message([$bucket => [$rule], 'inbound_interfaces' => []]),
+			"a {$bucket} twin with no Inbound interface must stop the apply");
+		$this->assertSame('', $message([$bucket => [$rule], 'inbound_interfaces' => ['lan']]),
+			"a {$bucket} twin with an Inbound interface must not stop the apply");
+	}
+
 	#[DataProvider('rawToggleStates')]
 	public function testDatabaseCountryConsumerUsesGatewayVerdict(mixed $raw, bool $enabled): void
 	{

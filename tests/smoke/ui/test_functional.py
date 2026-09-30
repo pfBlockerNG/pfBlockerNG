@@ -184,12 +184,6 @@ FLOWS: tuple[ToggleFlow, ...] = (
         config_path="installedpackages/pfblockerngipsettings/config/0/enable_float",
     ),
     ToggleFlow(
-        name="ip_fw_self_outbound",
-        page=IP_PAGE,
-        field="fw_self_outbound",
-        config_path="installedpackages/pfblockerngipsettings/config/0/fw_self_outbound",
-    ),
-    ToggleFlow(
         name="ip_killstates",
         page=IP_PAGE,
         field="killstates",

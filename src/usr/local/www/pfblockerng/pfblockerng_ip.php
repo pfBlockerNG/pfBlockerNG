@@ -221,6 +221,14 @@ if ($_POST) {
 			}
 		}
 
+		// issue #3382: the firewall-traffic rules are applied on the Inbound interfaces. Validated
+		// before the MaxMind block below, which starts a background conversion when no error is set.
+		$pfb_fw_self_post = pfb_filter($_POST['fw_self_outbound'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+		if (pfb_cfg_toggle_read($pfb_fw_self_post) === PfbToggle::On &&
+		    !array_intersect((array)($_POST['inbound_interface'] ?? array()), array_keys($options_inbound_interface))) {
+			$input_errors[] = 'Apply outbound rules to firewall traffic requires at least one Inbound interface.';
+		}
+
 		// Apply MaxMind locale changes if required
 		if (in_array($_POST['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es')) &&
 		    in_array($pconfig['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es'))) {
@@ -248,13 +256,6 @@ if ($_POST) {
 		}
 		else {
 			$input_errors[] = 'MaxMind Locale is not valid!';
-		}
-
-		// issue #3382: the firewall-traffic rules are applied on the Inbound interfaces.
-		$pfb_fw_self_post = pfb_filter($_POST['fw_self_outbound'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
-		if (pfb_cfg_toggle_read($pfb_fw_self_post) === PfbToggle::On &&
-		    implode(',', (array)($_POST['inbound_interface'] ?? array())) === '') {
-			$input_errors[] = 'Apply outbound rules to firewall traffic requires at least one Inbound interface.';
 		}
 
 		if (!$input_errors) {
@@ -327,6 +328,9 @@ if ($_POST) {
 		}
 		else {
 			$pconfig = $_POST;
+			// A browser posts no key at all when nothing is selected.
+			$pconfig['inbound_interface']	= (array)($_POST['inbound_interface'] ?? array());
+			$pconfig['outbound_interface']	= (array)($_POST['outbound_interface'] ?? array());
 		}
 	}
 }
@@ -512,7 +516,9 @@ $section->addInput(new Form_Checkbox(
 		. 'DNS upstreams, VPN endpoints); a large GeoIP outbound list can cut the firewall off from the Internet.<br />'
 		. '<strong>Note:</strong> <em>self</em> is an address match. Floating rules are evaluated after NAT, so on IPv4, '
 		. 'NAT\'d LAN clients leaving those interfaces also match (their translated source is the firewall\'s address) '
-		. 'and are logged with that address. Clients on selected Outbound interfaces are already blocked on ingress.'
+		. 'and are logged with that address. Clients on selected Outbound interfaces are already blocked on ingress. '
+		. 'In practice this only newly affects clients on interfaces not selected as Outbound. '
+		. 'IPv6 without NAT matches only the firewall.'
 );
 
 $section->addInput(new Form_Select(

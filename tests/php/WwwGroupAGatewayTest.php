@@ -287,6 +287,7 @@ final class WwwGroupAGatewayTest extends TestCase
 			'outbound_interface'   => '',
 			'outbound_deny_action' => 'reject',
 			'enable_float'         => '',
+			'fw_self_outbound'     => '',
 			'pass_order'           => 'order_0',
 			'autorule_suffix'      => 'autorule',
 			'killstates'           => '',

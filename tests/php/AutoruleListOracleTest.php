@@ -360,8 +360,9 @@ final class AutoruleListOracleTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// pfB-generated templates (the assembler carries 'direction' through untouched; the
-	// values here only make the shapes readable — inbound 'in', outbound 'out')
+	// pfB-generated templates (the assembler carries 'direction' through untouched). The shared
+	// Outbound templates stay 'out' for the frozen-reference differential; genWithSelfTwins()
+	// models production's 'in' (issue #3382).
 	// -----------------------------------------------------------------------
 
 	/** @param string $float 'on' makes the per-interface permit/deny floating (base_rule_float). */
@@ -412,7 +413,7 @@ final class AutoruleListOracleTest extends TestCase
 		    'direction' => 'in', 'ipprotocol' => 'inet', 'floating' => 'yes',
 		    'source' => ['address' => 'pfB_MatchList_v4'], 'destination' => ['any' => '']]];
 		$g['match_outbound'] = [['descr' => 'pfB_MatchList_v4 Auto Rule', 'type' => 'match', 'interface' => '',
-		    'direction' => 'out', 'ipprotocol' => 'inet', 'floating' => 'yes',
+		    'direction' => 'in', 'ipprotocol' => 'inet', 'floating' => 'yes',
 		    'source' => ['any' => ''], 'destination' => ['address' => 'pfB_MatchList_v4']]];
 		$g['inbound_floating']  = 'lan';
 		$g['outbound_floating'] = 'lan';
@@ -856,6 +857,8 @@ final class AutoruleListOracleTest extends TestCase
 	private function genWithSelfTwins(string $float = ''): array
 	{
 		$g = $this->genPermitDeny($float);
+		$g['permit_outbound'][0]['direction'] = 'in';
+		$g['deny_outbound'][0]['direction']   = 'in';
 		$g['permit_inbound'] = [];
 		$g['deny_inbound']   = [];
 		$twin = static fn (string $list, string $type): array => [
@@ -882,8 +885,8 @@ final class AutoruleListOracleTest extends TestCase
 		$permitSelf = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'lan',  'yes', 'out');
 		$matchSelf  = $this->row('pfB_MatchList_v4 Auto Rule',  'match',  'lan',  'yes', 'out');
 		$denySelf   = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out');
-		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', '',    'out');
-		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', '',    'out');
+		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', '',    'in');
+		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', '',    'in');
 		$uFloat     = $this->row('U-float', 'block', 'lan',  'yes', '');
 		$uPass      = $this->row('U-pass',  'pass',  'opt1', '',    '');
 		$uBlock     = $this->row('U-block', 'block', 'opt1', '',    '');
@@ -913,8 +916,8 @@ final class AutoruleListOracleTest extends TestCase
 		$permitSelf = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'lan',  'yes', 'out');
 		$matchSelf  = $this->row('pfB_MatchList_v4 Auto Rule',  'match',  'lan',  'yes', 'out');
 		$denySelf   = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out');
-		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', 'yes', 'out');
-		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', 'yes', 'out');
+		$permitOut  = $this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt1', 'yes', 'in');
+		$denyOut    = $this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', 'yes', 'in');
 		$uFPass     = $this->row('U-fpass',  'pass',  'lan', 'yes', '');
 		$uFBlock    = $this->row('U-fblock', 'block', 'lan', 'yes', '');
 
@@ -948,8 +951,8 @@ final class AutoruleListOracleTest extends TestCase
 			$this->row('pfB_MatchList_v4 Auto Rule',  'match',  'opt1', 'yes', 'out'),
 			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'lan',  'yes', 'out'),
 			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt1', 'yes', 'out'),
-			$this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt2', '',    'out'),
-			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt2', '',    'out'),
+			$this->row('pfB_PermitList_v4 Auto Rule', 'pass',   'opt2', '',    'in'),
+			$this->row('pfB_DenyList_v4 Auto Rule',   'reject', 'opt2', '',    'in'),
 		], $result, 'twins per inbound interface');
 	}
 
@@ -970,12 +973,12 @@ final class AutoruleListOracleTest extends TestCase
 		};
 		$byKey = [];
 		foreach ($result as $r) {
-			$byKey[$r['descr'] . '|' . $r['direction'] . '|' . $r['floating']] = $r['tracker'];
+			$byKey[$r['descr'] . '|' . (isset($r['source']['network']) ? 'self' : 'client')] = $r['tracker'];
 		}
-		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_self'), $byKey['pfB_PermitList_v4 Auto Rule|out|yes']);
-		$this->assertSame($derive('pfB_MatchList_v4 Auto Rule',  'match_self'),  $byKey['pfB_MatchList_v4 Auto Rule|out|yes']);
-		$this->assertSame($derive('pfB_DenyList_v4 Auto Rule',   'deny_self'),   $byKey['pfB_DenyList_v4 Auto Rule|out|yes']);
-		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_out'),  $byKey['pfB_PermitList_v4 Auto Rule|out|'],
+		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_self'), $byKey['pfB_PermitList_v4 Auto Rule|self']);
+		$this->assertSame($derive('pfB_MatchList_v4 Auto Rule',  'match_self'),  $byKey['pfB_MatchList_v4 Auto Rule|self']);
+		$this->assertSame($derive('pfB_DenyList_v4 Auto Rule',   'deny_self'),   $byKey['pfB_DenyList_v4 Auto Rule|self']);
+		$this->assertSame($derive('pfB_PermitList_v4 Auto Rule', 'permit_out'),  $byKey['pfB_PermitList_v4 Auto Rule|client'],
 			'the client rule keeps its own permit_out tracker');
 	}
 
@@ -987,9 +990,24 @@ final class AutoruleListOracleTest extends TestCase
 				$absent = $this->genPermitDeny($float);
 				$empty  = $absent + ['permit_self' => [], 'deny_self' => [], 'match_self' => []];
 
+				// A caller that never passes *_self must not raise a diagnostic: the shapes alone
+				// cannot tell `?? []` from a bare read, which only warns.
+				$diagnostics = [];
+				set_error_handler(static function (int $errno, string $errstr) use (&$diagnostics): bool {
+					$diagnostics[] = $errstr;
+					return TRUE;
+				});
+				try {
+					$fromEmpty  = pfb_build_autorule_list($existing, $empty, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1']);
+					$fromAbsent = pfb_build_autorule_list($existing, $absent, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1']);
+				} finally {
+					restore_error_handler();
+				}
+
+				$this->assertSame([], $diagnostics, "absent *_self keys must raise no diagnostic ({$order}, float='{$float}')");
 				$this->assertSame(
-					$this->shapes(pfb_build_autorule_list($existing, $empty, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1'])),
-					$this->shapes(pfb_build_autorule_list($existing, $absent, $order, pfb_cfg_toggle_read($float), ['lan'], ['opt1'])),
+					$this->shapes($fromEmpty),
+					$this->shapes($fromAbsent),
 					"absent *_self keys must equal empty ones ({$order}, float='{$float}')"
 				);
 			}

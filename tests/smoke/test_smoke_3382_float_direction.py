@@ -5,9 +5,11 @@ Real two-VM pfSense CE setup (civm = the LAN client behind the firewall). The vi
 the runner's WAN-subnet host alias (``192.168.89.2``): it answers HTTP for the mock feed
 server, so "blocked" is a real reachable -> unreachable transition, not an inert address.
 
-  1. Deny Outbound on LAN blocks the client's egress with floating ON (the regression:
-     the rule was pinned to ``out`` and never saw traffic ENTERING LAN) and with floating
-     OFF (the control: an interface rule was always ``in``).
+  1. Deny Outbound blocks the client's egress when the Outbound interface is the client-facing
+     LAN, with floating ON (the regression: the rule was pinned to ``out`` and never saw
+     traffic ENTERING LAN) and OFF (the control: an interface rule was always ``in``). With
+     WAN as the Outbound interface and floating ON it must NOT block (the documented
+     behaviour change: the old ``out`` rule on WAN did).
   2. A Deny Inbound alias on WAN that holds the firewall's WAN (post-NAT) address must not
      touch the client's egress: only a floating rule left at direction ``any`` would.
   3. 'Apply outbound rules to firewall traffic': with WAN as the Inbound interface, the
@@ -32,7 +34,7 @@ from itertools import pairwise
 import pytest
 
 from . import helpers as h
-from .conftest import PFSENSE_LAN_IP, SmokeVM, _MockFeedServer, _StubDnsServer
+from .conftest import GUEST_TO_HOST_ALIAS, PFSENSE_LAN_IP, SmokeVM, _MockFeedServer, _StubDnsServer
 
 pytestmark = pytest.mark.smoke
 
@@ -40,7 +42,7 @@ CFG_IP_SETTINGS = "installedpackages/pfblockerngipsettings/config/0"
 
 # The runner's WAN-subnet host alias: reachable from civm (LAN -> NAT -> WAN) and from
 # pfSense itself, and it hosts the mock feed server the probes fetch.
-VICTIM = "192.168.89.2"
+VICTIM = GUEST_TO_HOST_ALIAS
 # RFC 5737 TEST-NET-3: keeps a rule's alias non-empty while the victim is NOT yet in it.
 DUMMY = "203.0.113.77"
 PROBE_NAME = "pfb3382_probe.txt"
@@ -162,50 +164,68 @@ def probe_url(mock_feeds: _MockFeedServer) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# 1. Client egress is blocked by a Deny Outbound rule on the CLIENT-facing interface
+# 1. Client egress is blocked by a Deny Outbound rule on the CLIENT-facing interface only
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("float_on", [True, False], ids=["floating-on", "floating-off"])
-def test_deny_outbound_on_lan_blocks_client_egress(
-    deployed_vm: SmokeVM, client_vm: SmokeVM, probe_url: str, float_on: bool
+@pytest.mark.parametrize(
+    ("outbound", "float_on", "blocked"),
+    [("lan", True, True), ("lan", False, True), ("wan", True, False)],
+    ids=["lan-floating-on", "lan-floating-off", "wan-floating-on"],
+)
+def test_deny_outbound_blocks_client_egress_only_on_the_client_facing_interface(
+    deployed_vm: SmokeVM, client_vm: SmokeVM, probe_url: str, outbound: str, float_on: bool, blocked: bool
 ) -> None:
-    """Scenario: Deny Outbound with LAN as the Outbound interface.
+    """Scenario: Deny Outbound with LAN, or WAN, as the Outbound interface.
 
     Given the alias does not yet hold the victim, civm reaches it (before-state).
     When  the victim joins the alias and pfBlockerNG updates.
-    Then  civm can no longer reach it, and the rule's packet counter moved — the rule is
-          direction ``in`` on LAN, where client egress enters, with floating on AND off.
+    Then  on LAN civm can no longer reach it and the rule's packet counter moved — the rule is
+          direction ``in`` there, where client egress enters, with floating on AND off.
+    And   on WAN with floating on civm still reaches it and the counter did not move: the
+          rule is ``in`` on an interface the egress only LEAVES (the old ``out`` rule blocked it).
     """
     vm = deployed_vm
-    header = f"pfb3382lan{'fl' if float_on else 'if'}"
+    header = f"pfb3382{outbound}{'fl' if float_on else 'if'}"
     case = _wire(
         vm,
         header,
         "Deny_Outbound",
         (DUMMY,),
         inbound=h.SMOKE_IP_IFACE,
-        outbound="lan",
+        outbound=outbound,
         float_on=float_on,
         fw_self=False,
     )
+    where = f"outbound={outbound} float_on={float_on}"
 
     assert _civm_fetch_ok(client_vm, probe_url), (
-        f"before: civm must reach {probe_url} while {VICTIM} is not in {case.alias}"
+        f"before: civm must reach {probe_url} while {VICTIM} is not in {case.alias} ({where})"
     )
     counter_before = _rule_packets(vm, case.alias, "in")
-    assert counter_before >= 0, f"no direction-in rule for {case.alias} is loaded (float_on={float_on})"
+    assert counter_before >= 0, f"no direction-in rule for {case.alias} is loaded ({where})"
 
     _add_victim(vm, case, (DUMMY, VICTIM))
+    members = {m.split("/")[0] for m in h.pfctl_table_members(vm, case.alias)}
+    assert VICTIM in members, f"{VICTIM} is not in {case.alias} after the update: {sorted(members)} ({where})"
 
-    assert not _civm_fetch_ok(client_vm, probe_url), (
-        f"civm still reached {probe_url} with {VICTIM} in {case.alias} (float_on={float_on})"
-    )
+    reached = _civm_fetch_ok(client_vm, probe_url)
     counter_after = _rule_packets(vm, case.alias, "in")
-    assert counter_after > counter_before, (
-        f"the LAN direction-in rule for {case.alias} never matched the client's egress "
-        f"(before={counter_before}, after={counter_after}, float_on={float_on})"
-    )
+    if blocked:
+        assert not reached, f"civm still reached {probe_url} with {VICTIM} in {case.alias} ({where})"
+        assert counter_after > counter_before, (
+            f"the direction-in rule for {case.alias} never matched the client's egress "
+            f"(before={counter_before}, after={counter_after}, {where})"
+        )
+    else:
+        assert reached, (
+            f"civm could not reach {probe_url}: the WAN rule blocked egress that only LEAVES WAN, "
+            f"as the old direction-out rule did ({where})"
+        )
+        assert counter_after == counter_before, (
+            f"the direction-in rule on {outbound} matched the client's egress "
+            f"(before={counter_before}, after={counter_after}, {where})"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -232,6 +252,8 @@ def test_deny_inbound_on_wan_does_not_match_client_egress(
 
     counter_before = _rule_packets(vm, case.alias, "in")
     assert counter_before >= 0, f"no direction-in rule for {case.alias} is loaded"
+    members = {m.split("/")[0] for m in h.pfctl_table_members(vm, case.alias)}
+    assert wan_ip in members, f"the WAN address {wan_ip} is not in {case.alias}: {sorted(members)}"
 
     assert _civm_fetch_ok(client_vm, probe_url), (
         f"civm could not reach {probe_url}: the WAN Deny Inbound rule over-matched its post-NAT egress"
@@ -265,15 +287,20 @@ def test_fw_self_outbound_blocks_the_firewalls_own_connection(deployed_vm: Smoke
         f"before: the firewall must reach {probe_url} while the toggle is OFF (pfBlockerNG does not filter it)"
     )
 
-    _set_ipcfg(vm, {"fw_self_outbound": "on"})
-    h.reload(vm, "update")
+    try:
+        _set_ipcfg(vm, {"fw_self_outbound": "on"})
+        h.reload(vm, "update")
 
-    counter_before = _rule_packets(vm, case.alias, "out")
-    assert counter_before >= 0, f"no out twin for {case.alias} is loaded with the toggle ON"
-    assert not _firewall_fetch_ok(vm, probe_url), (
-        f"the firewall still reached {probe_url} with the toggle ON and {VICTIM} in {case.alias}"
-    )
-    counter_after = _rule_packets(vm, case.alias, "out")
-    assert counter_after > counter_before, (
-        f"the out twin never matched the firewall's own connection (before={counter_before}, after={counter_after})"
-    )
+        counter_before = _rule_packets(vm, case.alias, "out")
+        assert counter_before >= 0, f"no out twin for {case.alias} is loaded with the toggle ON"
+        assert not _firewall_fetch_ok(vm, probe_url), (
+            f"the firewall still reached {probe_url} with the toggle ON and {VICTIM} in {case.alias}"
+        )
+        counter_after = _rule_packets(vm, case.alias, "out")
+        assert counter_after > counter_before, (
+            f"the out twin never matched the firewall's own connection (before={counter_before}, after={counter_after})"
+        )
+    finally:
+        # The twin cuts the firewall off from the runner host (feeds, stub DNS): never leave it on.
+        _set_ipcfg(vm, {"fw_self_outbound": ""})
+        h.reload(vm, "update")

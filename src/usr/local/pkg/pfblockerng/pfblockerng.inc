@@ -20513,8 +20513,9 @@ function pfb_diff_managed_rules(array $old_rules, array $new_rules): array {
  *                                  'permit_self'      => (optional, absent = []) pfB pass twins of the outbound rules
  *                                  'deny_self'        => (optional, absent = []) pfB block/reject twins
  *                                  'match_self'       => (optional, absent = []) pfB match twins
- *                                Twins are floating `out` rules sourced from (self): one per INBOUND
- *                                interface, in the floating group whatever $float (issue #3382).
+ *                                Twins are floating `out` rules sourced from (self): one per $in_ifaces
+ *                                entry (with float on that entry is the comma-joined floating list, as for
+ *                                permit_inbound/deny_inbound), in the floating group whatever $float (issue #3382).
  * @param ?string $order          The pass_order value ('order_0' .. 'order_4'). The production
  *                                call site already passes `$pfb['order'] ?: 'order_0'`, so this is
  *                                never null/empty there (#532); nullable + the order_0 normalisation
@@ -20667,8 +20668,8 @@ function pfb_build_autorule_list(
 		}
 	}
 
-	// issue #3382: firewall-traffic twins ride the INBOUND interfaces (one rule each) and are
-	// floating whatever the float mode; the assembly below places them.
+	// issue #3382: firewall-traffic twins ride the INBOUND interfaces (one rule per $in_ifaces entry,
+	// which is the comma-joined list with float on) and are floating whatever the float mode.
 	$twins = ['permit_self' => [], 'match_self' => [], 'deny_self' => []];
 	foreach ($in_ifaces as $inbound_interface) {
 		foreach (array_keys($twins) as $role) {

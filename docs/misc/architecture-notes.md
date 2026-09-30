@@ -1313,8 +1313,10 @@ covers the firewall's own connections, which never enter an interface. Every out
 `<action> out quick on <each Inbound interface> from (self) to <alias>` (Match: no `quick`), always
 floating whatever the Floating Rules setting, carrying no gateway, and skipped when the list has a
 Custom Source. `pfb_firewall_rule()` emits the twins into `permit_self`/`deny_self`/`match_self`;
-`pfb_build_autorule_list()` places one per Inbound interface in the floating group's pfB pass/match
-and block/reject buckets. Floating rules run after NAT, so on IPv4 NAT'd LAN clients leaving those
+`pfb_build_autorule_list()` places one per Inbound interface entry in the floating group's pfB
+pass/match and block/reject buckets. With Floating Rules on that entry is the comma-joined floating
+list, as for `permit_inbound`/`deny_inbound`, so it is one rule over all Inbound interfaces.
+Floating rules run after NAT, so on IPv4 NAT'd LAN clients leaving those
 interfaces match too. Pinned by `tests/php/FirewallRuleTest.php` and `AutoruleListOracleTest.php`;
 live in `tests/smoke/test_smoke_3382_float_direction.py`.
 
