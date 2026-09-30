@@ -2,10 +2,10 @@
 
 civm opens a TCP connection to a public IPv6 victim listed in a logged, floating
 Deny_Outbound v6 list. pf blocks the SYN as it enters LAN and logs it, and the filterlog
-daemon (``pfb_daemon_filterlog``) turns that line into an ip_block.log row laid out as
-``helpers.IP_BLOCK_LOG_FIELDS``: the layout ``ui/test_alerts.py``'s
-``test_ipv6_alert_external_host_attribution`` seeds and proves the Alerts page renders. This
-is the IPv6 twin of ``test_syslog_export``'s IPv4 real-filterlog path.
+daemon (``pfb_daemon_filterlog``) turns that line into an ip_block.log row matching
+``ui/test_alerts.py``'s ``_ipv6_alert_seed_fields`` layout: the synthetic row
+``test_ipv6_alert_external_host_attribution`` proves the Alerts page renders. This is the
+IPv6 twin of ``test_syslog_export``'s IPv4 real-filterlog path.
 
 The victim is public and never answered. pfSense has an IPv6 default route through SLIRP,
 so a temporary blackhole host route keeps a SYN that a regression let through off the
@@ -30,6 +30,7 @@ import pytest
 from . import helpers as h
 from .conftest import SmokeVM
 from .test_syslog_export import _enable_ip_floating_logged_rule, _filterlog_pid
+from .ui.test_alerts import _ipv6_alert_seed_fields
 
 pytestmark = pytest.mark.smoke
 
@@ -110,8 +111,8 @@ def _wait_victim_rows(vm: SmokeVM, case: h.IpCase, src: str) -> list[list[str]]:
     return rows
 
 
-def _alerts_shape(row: list[str]) -> dict[str, object]:
-    """The row's field count plus the columns the Alerts page attributes an IPv6 block by, by name."""
+def _alerts_shape(row: list[str], seed: dict[str, str]) -> dict[str, object]:
+    """Map the real row with the field order used by the Alerts test's synthetic seed."""
 
     def addr(text: str | None) -> object:
         try:
@@ -119,7 +120,7 @@ def _alerts_shape(row: list[str]) -> dict[str, object]:
         except ValueError:
             return text
 
-    named = dict(zip(h.IP_BLOCK_LOG_FIELDS, row))
+    named = dict(zip(seed, row))
     return {
         "fields": len(row),
         "action": named.get("action"),
@@ -138,10 +139,10 @@ def test_real_ipv6_block_reaches_ip_block_log(smoke_vm: SmokeVM, client_vm: Smok
       running, and civm's route to VICTIM pinned via pfSense's LAN IPv6,
       And ip_block.log holding no row for VICTIM,
     When civm opens a TCP connection to VICTIM,
-    Then a ``block`` row lands laid out as ``h.IP_BLOCK_LOG_FIELDS``, the layout the Alerts
-      IPv6 attribution test seeds: all 23 fields, family 6, direction ``out``, VICTIM in the
-      ``dst_ip`` column the page reads an outbound external host from, civm's pinned IPv6 in
-      ``src_ip`` (the local host), and the list's alias.
+    Then a ``block`` row lands in the layout the Alerts IPv6 attribution test seeds:
+      all 23 fields, family 6, direction ``out``, VICTIM in the ``dst_ip`` column the page
+      reads an outbound external host from, civm's pinned IPv6 in ``src_ip`` (the local
+      host), and the list's alias.
     """
     vm = smoke_vm
     lan6 = h.get_lan_ipv6(vm)
@@ -159,14 +160,15 @@ def test_real_ipv6_block_reaches_ip_block_log(smoke_vm: SmokeVM, client_vm: Smok
     finally:
         _set_victim_blackhole(vm, present=False)
 
+    seed = _ipv6_alert_seed_fields("", src, VICTIM, "out", VICTIM)
     want = {
-        "fields": len(h.IP_BLOCK_LOG_FIELDS),
-        "action": "block",
-        "ipv": "6",
-        "src_ip": ipaddress.ip_address(src),
-        "dst_ip": ipaddress.ip_address(VICTIM),
-        "dir": "out",
+        "fields": len(seed),
+        "action": seed["action"],
+        "ipv": seed["ipv"],
+        "src_ip": ipaddress.ip_address(seed["src_ip"]),
+        "dst_ip": ipaddress.ip_address(seed["dst_ip"]),
+        "dir": seed["dir"],
         "alias": v6_deny_list.alias,
     }
-    got = _alerts_shape(row)
+    got = _alerts_shape(row, seed)
     assert got == want, f"ip_block.log row for {VICTIM}: expected {want}, got {got}; row={row}"

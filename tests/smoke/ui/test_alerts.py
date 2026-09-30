@@ -2405,6 +2405,41 @@ def test_upstream_block_renders_cloud_icon_and_correct_group(
 # --------------------------------------------------------------------------- #
 
 
+def _ipv6_alert_seed_fields(
+    timestamp: str,
+    src_ip: str,
+    dst_ip: str,
+    direction: str,
+    foreign: str,
+) -> dict[str, str]:
+    """Build the IPv6 ip_block.log seed in the field order the Alerts page consumes."""
+    return {
+        "ts": timestamp,
+        "rule": "100",
+        "real_iface": "em0",
+        "friendly_iface": "WAN",
+        "action": "block",
+        "ipv": "6",
+        "proto_id": "58",
+        "proto": "ICMPV6",
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "src_port": "",
+        "dst_port": "",
+        "dir": direction,
+        "geoip": "US",
+        "alias": "pfB_Deny_v6",
+        "ip_eval": foreign,
+        "feed": "pfB_TestFeed_v6",
+        "rhost": "Unknown",
+        "chost": "Unknown",
+        "asn": "Unknown",
+        "asn_domain": "",
+        "asn_name": "",
+        "dup": "+",
+    }
+
+
 @pytest.mark.parametrize(
     ("direction", "src_ip", "dst_ip"),
     [
@@ -2469,35 +2504,10 @@ def test_ipv6_alert_external_host_attribution(
     foreign = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside the /64
     local = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside the /64
 
-    # One ip_block.log row in helpers.IP_BLOCK_LOG_FIELDS order: the layout a real IPv6 block
-    # is checked against in test_smoke_ipv6_filterlog.py. ip_eval is the evaluated (blocked)
-    # host = the foreign address in both cases.
-    seed = {
-        "ts": ts,
-        "rule": "100",
-        "real_iface": "em0",
-        "friendly_iface": "WAN",
-        "action": "block",
-        "ipv": "6",
-        "proto_id": "58",
-        "proto": "ICMPV6",
-        "src_ip": src_ip,
-        "dst_ip": dst_ip,
-        "src_port": "",
-        "dst_port": "",
-        "dir": direction,
-        "geoip": "US",
-        "alias": "pfB_Deny_v6",
-        "ip_eval": foreign,
-        "feed": "pfB_TestFeed_v6",
-        "rhost": "Unknown",
-        "chost": "Unknown",
-        "asn": "Unknown",
-        "asn_domain": "",
-        "asn_name": "",
-        "dup": "+",
-    }
-    csv_line = ",".join(seed[field] for field in helpers.IP_BLOCK_LOG_FIELDS) + "\n"
+    # The real-filterlog smoke imports this builder, so its field mapping cannot drift from
+    # the synthetic IPv6 row this test proves the Alerts page consumes.
+    seed = _ipv6_alert_seed_fields(ts, src_ip, dst_ip, direction, foreign)
+    csv_line = ",".join(seed.values()) + "\n"
 
     ip_block_log = helpers.IP_BLOCK_LOG
 

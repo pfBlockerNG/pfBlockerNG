@@ -6039,32 +6039,6 @@ IPV6_FOREIGN = "2001:db8:dead:beef::1"  # OUTSIDE the /64 → must be foreign
 
 # ip_block.log lives here on a pfSense guest (pfblockerng.inc:81).
 IP_BLOCK_LOG = "/var/log/pfblockerng/ip_block.log"
-# Its 23 columns, in the order pfb_daemon_filterlog() writes them and convert_ip_log() reads them.
-IP_BLOCK_LOG_FIELDS = (
-    "ts",
-    "rule",
-    "real_iface",
-    "friendly_iface",
-    "action",
-    "ipv",
-    "proto_id",
-    "proto",
-    "src_ip",
-    "dst_ip",
-    "src_port",
-    "dst_port",
-    "dir",
-    "geoip",
-    "alias",
-    "ip_eval",
-    "feed",
-    "rhost",
-    "chost",
-    "asn",
-    "asn_domain",
-    "asn_name",
-    "dup",
-)
 
 
 def set_interface_ipv6(
