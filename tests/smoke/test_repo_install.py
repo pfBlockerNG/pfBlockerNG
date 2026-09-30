@@ -1449,21 +1449,6 @@ def _ensure_live_pages_packages_absent(vm: SmokeVM) -> None:
     _raise_live_pages_errors("live Pages package cleanup failed", errors)
 
 
-def _live_repo_state(vm: SmokeVM) -> str:
-    """Repo confs, effective repos, pfBlockerNG rows and the install plan, as one report."""
-    script = (
-        'for f in /etc/pkg/*.conf /usr/local/etc/pkg/repos/*.conf; do echo "== $f"; cat "$f"; done; '
-        "echo '== pkg -vv'; pkg -vv | sed -n '/^Repositories:/,$p'; "
-        "echo '== pkg rquery'; pkg rquery -a '%R %n %v' | grep -i pfblockerng; "
-        f"echo '== pkg install -n'; pkg install -n {CANONICAL_PKG_NAME}"
-    )
-    try:
-        result = vm.ssh("/bin/sh", "-c", script, timeout=120.0)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        return f"live repo state unavailable: {exc!r}"
-    return f"live repo state (rc={result.returncode}):\n{result.stdout}\n{result.stderr}"
-
-
 def _cleanup_live_pages(vm: SmokeVM, prior_hosts: str) -> None:
     errors: list[tuple[str, Exception]] = []
     try:
@@ -1521,9 +1506,6 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
             f"{CANONICAL_PKG_NAME} unexpectedly present before the live-URL install"
         )
-        # Issue #3382 follow-up: record which repos and rows pkg resolves from, so a wrong
-        # installed version shows its source in the failure output.
-        print(_live_repo_state(repo_vm))
 
         # THEN: install resolves from our LIVE repo, deps included, .pkg checksum validated.
         proc = pkg_install_from_repo(repo_vm, pkg_name=CANONICAL_PKG_NAME)
