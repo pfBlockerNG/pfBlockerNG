@@ -9691,6 +9691,19 @@
             }
         ]
     },
+    "pfb_pfctl_killed_count": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "output",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_pfctl_op_failed": {
         "returnsRef": false,
         "returnType": "bool",
