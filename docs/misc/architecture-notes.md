@@ -1353,9 +1353,14 @@ Live-VM smoke: `tests/smoke/test_smoke_managed_objects.py` (marker `smoke`).
 ## Optional NAT DNS-redirection (ADR-36)
 
 When enabled, pfBlockerNG creates and maintains a pair of NAT port-forward (rdr) rules per
-selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`,
-target `::1:53`) — that redirect all outbound port-53 DNS traffic to the firewall's own
-resolver. The firewall itself is structurally exempt: every generated rule carries a negated
+selected interface — one for IPv4 (`inet`, target `127.0.0.1:53`) and one for IPv6 (`inet6`)
+— that redirect all outbound port-53 DNS traffic to the firewall's own resolver. The IPv6 rule
+cannot target `::1`: FreeBSD drops a packet redirected to `::1` that arrived on a non-loopback
+interface (#3400). On an assigned interface (`wan`/`lan`/`optN`) it targets pfSense's
+`<iface>ip` keyword, which `filter.inc` resolves to the interface's current IPv6 address on every
+filter reload. On an unassigned pseudo-interface (`enc0`/`openvpn`/`l2tp`) it keeps `::1`, so
+IPv6 DNS there fails closed (#3403). `pfb_dns_redirect_rule()` builds each rule. The firewall
+itself is structurally exempt: every generated rule carries a negated
 `(self)` destination so the firewall's own outbound DNS queries are never intercepted, making
 upstream resolution immune to the redirect. All four config.xml entries per interface (2 NAT
 rdr + 2 associated filter PASS rules) carry a `pfB_DNS_Redirect_<iface>_{v4,v6}` marker and

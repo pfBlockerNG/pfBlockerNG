@@ -542,7 +542,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
         And each nat/rule entry carries the correct §2.2 field values:
             - associated-rule-id: 'pass'
             - ipprotocol: inet (v4) / inet6 (v6)
-            - target: 127.0.0.1 (v4) / ::1 (v6)
+            - target: 127.0.0.1 (v4) / <iface>ip (v6: the interface's own address, #3400)
             - protocol: tcp/udp
             - local-port: 53
             - natreflection: disable
@@ -629,7 +629,7 @@ def test_dns_redirect_enable_creates_nat_and_filter_rules(deployed_vm: SmokeVM, 
 
         # THEN — field-by-field verification on the v6 rule.
         assert _nat_rule_field(vm, descr_v6, "ipprotocol") == "inet6", f"{descr_v6}: ipprotocol != 'inet6'"
-        assert _nat_rule_field(vm, descr_v6, "target") == "::1", f"{descr_v6}: target != '::1'"
+        assert _nat_rule_field(vm, descr_v6, "target") == f"{iface}ip", f"{descr_v6}: target != '{iface}ip'"
         assert _nat_rule_field(vm, descr_v6, "protocol") == "tcp/udp", f"{descr_v6}: protocol != 'tcp/udp'"
         assert _nat_rule_field(vm, descr_v6, "local-port") == "53", f"{descr_v6}: local-port != '53'"
         assert _nat_rule_field(vm, descr_v6, "natreflection") == "disable", f"{descr_v6}: natreflection != 'disable'"

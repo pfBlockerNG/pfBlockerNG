@@ -377,3 +377,33 @@ and a verify-both-exist assertion on every reconcile.
 DNS-redirection behaviour and current configuration round trips are unchanged. The old-package
 ignore/preserve promise and inherited `RollbackContractTest` requirement are superseded. Package
 downgrade is unsupported; forward upgrade and grandfathering remain supported.
+
+## Amendment — 2026-09-30: IPv6 target is the interface address, not `::1` (issue #3400)
+
+The inet6 target `::1` in §1, §2.1 and §2.2 never worked. FreeBSD's `ip6_input()` drops a packet
+whose destination pf rewrote to `::1` when it arrived on a non-loopback interface, and
+`netstat -s -p ip6` counts it under "packets that violated scope rules". Measured live on CE 2.8,
+CE 2.9 and Plus 26.03: the IPv6 query got no answer, while its IPv4 twin to `127.0.0.1` was
+answered.
+
+The inet6 target now depends on the interface:
+
+- **Assigned interface (`wan`, `lan`, `optN`):** `<iface>ip`, for example `lanip`. This is
+  pfSense's own "<Interface> address" port-forward target (the GUI's `SPECIALNET_IFADDR`
+  option). `filter.inc` resolves it on every filter reload from `get_interface_ipv6()`, so a
+  static, track6, SLAAC or DHCPv6 address is followed without a pfBlockerNG resync; pfSense
+  reloads the filter when such an address changes (`rc.newwanipv6`). When the interface has no
+  global IPv6 address, pfSense skips the rule as `# Unresolvable alias` and loads the rest of
+  the ruleset.
+- **Unassigned pseudo-interface (`enc0`, `openvpn`, `l2tp`):** keeps `::1`. pfSense has no
+  address keyword for these, so there is no answerable per-interface target. With `::1`, IPv6
+  DNS to a foreign resolver there is still dropped: it fails closed, as before. A keyword target
+  would make pfSense skip the rule instead, and IPv6 DNS would pass unredirected. Options are
+  tracked in #3403.
+- **inet** stays `127.0.0.1`.
+
+The §2.2 invariant "Target is family-specific" now reads: inet → `127.0.0.1`; inet6 →
+`<iface>ip` on an assigned interface, `::1` on an unassigned pseudo-interface. The builder is
+`pfb_dns_redirect_rule()` in `pfblockerng.inc`, pinned by `tests/php/DnsRedirectRuleBuilderTest.php`.
+The §3 risk "redirect with no active DNS resolver" now applies to the interface's IPv6 address:
+Unbound must listen on it, which it does with its network interfaces set to "All" (the default).
