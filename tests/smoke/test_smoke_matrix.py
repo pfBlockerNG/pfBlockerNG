@@ -255,7 +255,6 @@ def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: S
       And dnsbl.log attributes both blocks to civm's pinned IPv6 source.
     """
     lan6 = h.get_lan_ipv6(deployed_vm)
-    src6 = h.client_lan_ipv6(client_vm)
     domain = h.unique_domain("vip6transport")
     unlisted = h.unique_domain("v6transportpass")
     feed_url = h.write_local_feed(deployed_vm, "smoke_dnsbl_v6_transport.txt", f"{domain}\n")
@@ -268,27 +267,34 @@ def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: S
     }
 
     def blocked_rows() -> list[list[str]]:
-        log = h.read_log_file(deployed_vm, f"{h.PFB_LOGDIR}/dnsbl.log")
-        return [row.split(",") for row in log.splitlines() if row.split(",")[2:3] == [domain]]
+        rows = (row.split(",") for row in h.read_log_file(deployed_vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines())
+        return [row for row in rows if row[2:3] == [domain]]
 
-    h.pin_client_route6(client_vm, lan6, lan6)
+    src6 = h.pin_client_route6(client_vm, lan6, lan6)
     try:
-        h.set_dnsbl_vip6(deployed_vm, present=True)
-        with h.CaseContext(deployed_vm, spec):
-            for (name, rtype), want in expected.items():
-                got = h.dns_probe_client(client_vm, name, rtype, server=lan6)
-                assert {ipaddress.ip_address(r) for r in got.records} == {ipaddress.ip_address(want)}, (
-                    f"{rtype} {name} @{lan6}: expected {want}, got {got}"
+        try:
+            h.set_dnsbl_vip6(deployed_vm, present=True)
+            with h.CaseContext(deployed_vm, spec):
+                for (name, rtype), want in expected.items():
+                    got = h.dns_probe_client(client_vm, name, rtype, server=lan6)
+                    assert {ipaddress.ip_address(r) for r in got.records} == {ipaddress.ip_address(want)}, (
+                        f"{rtype} {name} @{lan6}: expected {want}, got {got}"
+                    )
+                # dnsbl.log is written off the DNS path: wait for both rows, then check who they name.
+                try:
+                    h.wait_until(lambda: {row[-1] for row in blocked_rows()} >= {"A", "AAAA"})
+                except RuntimeError:
+                    raise AssertionError(
+                        f"dnsbl.log rows for {domain}: expected A and AAAA from {src6}, got {blocked_rows()}"
+                    ) from None
+                clients = {ipaddress.ip_address(row[3]) for row in blocked_rows()}
+                assert clients == {ipaddress.ip_address(src6)}, (
+                    f"dnsbl.log client for {domain}: expected {src6}, got {sorted(map(str, clients))}"
                 )
-            # dnsbl.log is written off the DNS path: wait for both rows, then check who they name.
-            h.wait_until(lambda: {row[-1] for row in blocked_rows()} >= {"A", "AAAA"})
-            clients = {ipaddress.ip_address(row[3]) for row in blocked_rows()}
-            assert clients == {ipaddress.ip_address(src6)}, (
-                f"dnsbl.log client for {domain}: expected {src6}, got {sorted(map(str, clients))}"
-            )
+        finally:
+            h.set_dnsbl_vip6(deployed_vm, present=False)
+            h.reload(deployed_vm, "updatednsbl")
     finally:
-        h.set_dnsbl_vip6(deployed_vm, present=False)
-        h.reload(deployed_vm, "updatednsbl")
         h.unpin_client_route6(client_vm, lan6)
 
 

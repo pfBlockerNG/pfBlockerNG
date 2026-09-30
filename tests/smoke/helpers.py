@@ -6323,7 +6323,7 @@ def _client_lan_nic_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> tuple[
     for line in res.stdout.splitlines():
         fields = line.split()
         if len(fields) > 3 and fields[1] == nic and fields[2] == "inet6" and "global" in fields:
-            if "tentative" not in fields and "dadfailed" not in fields:
+            if not {"tentative", "dadfailed", "deprecated", "temporary"} & set(fields):
                 return nic, fields[3].split("/")[0]
     raise RuntimeError(
         f"civm LAN NIC {nic} has no usable global IPv6 address; `ip -6 -o addr` "
@@ -6335,20 +6335,20 @@ def client_lan_ipv6(client_vm: SmokeVM, *, timeout: float = 30.0) -> str:
     """civm's global IPv6 address on its LAN NIC, discovered at runtime.
 
     The NIC holds a SLAAC and a DHCPv6 address and the lease is dynamic, so this is the
-    first one ``ip -6 -o addr`` lists that has finished duplicate address detection.
-    :func:`pin_client_route6` makes it the source of every pinned probe. None usable
-    raises with the raw ``ip -6 -o addr`` output.
+    first stable one ``ip -6 -o addr`` lists (DAD finished; not deprecated, not a privacy
+    address). :func:`pin_client_route6` makes it the source of every pinned probe. None
+    usable raises with the raw ``ip -6 -o addr`` output.
     """
     return _client_lan_nic_ipv6(client_vm, timeout=timeout)[1]
 
 
-def pin_client_route6(client_vm: SmokeVM, dst: str, via: str, *, timeout: float = 30.0) -> None:
-    """Route civm's traffic for ``dst`` via ``via`` out its LAN NIC, sourced from :func:`client_lan_ipv6`.
+def pin_client_route6(client_vm: SmokeVM, dst: str, via: str, *, timeout: float = 30.0) -> str:
+    """Route civm's traffic for ``dst`` via ``via`` out its LAN NIC; return the pinned source.
 
-    A ``/128`` host route: civm's MGMT NIC can carry an IPv6 default route too, so an
-    unpinned probe may leave through QEMU user networking instead of pfSense, and the
-    route's ``src`` fixes which of the LAN addresses pfSense sees. Undo with
-    :func:`unpin_client_route6`.
+    A ``/128`` host route sourced from :func:`client_lan_ipv6`. Needed for destinations
+    outside the LAN prefix: civm's MGMT NIC can carry an IPv6 default route too, so such a
+    probe may otherwise leave through QEMU user networking instead of pfSense. The route's
+    ``src`` fixes which LAN address pfSense sees. Undo with :func:`unpin_client_route6`.
     """
     nic, src = _client_lan_nic_ipv6(client_vm, timeout=timeout)
     res = client_vm.ssh(
@@ -6356,6 +6356,7 @@ def pin_client_route6(client_vm: SmokeVM, dst: str, via: str, *, timeout: float 
     )
     if res.returncode != 0:
         raise RuntimeError(f"pinning {dst} via {via} dev {nic} src {src} failed: rc={res.returncode} {res.stderr!r}")
+    return src
 
 
 def unpin_client_route6(client_vm: SmokeVM, dst: str, *, timeout: float = 30.0) -> None:
