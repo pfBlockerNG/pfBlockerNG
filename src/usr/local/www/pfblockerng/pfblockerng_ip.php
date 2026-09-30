@@ -49,6 +49,7 @@ $pconfig['inbound_deny_action']	= $pfb['iconfig']['inbound_deny_action']		?: 'bl
 $pconfig['outbound_interface']	= explode(',', $pfb['iconfig']['outbound_interface'])	?: array();
 $pconfig['outbound_deny_action']= $pfb['iconfig']['outbound_deny_action']		?: 'reject';
 $pconfig['enable_float']	= $pfb['iconfig']['enable_float']			?: '';
+$pconfig['fw_self_outbound']	= $pfb['iconfig']['fw_self_outbound']			?? '';
 $pconfig['pass_order']		= $pfb['iconfig']['pass_order']				?: 'order_0';
 $pconfig['autorule_suffix']	= $pfb['iconfig']['autorule_suffix']			?: 'autorule';
 $pconfig['killstates']		= $pfb['iconfig']['killstates']				?: '';
@@ -150,6 +151,14 @@ if ($_POST) {
 			}
 		}
 
+		// issue #3382: the firewall-traffic rules are applied on the Inbound interfaces. Validated
+		// before the MaxMind block below, which starts a background conversion when no error is set.
+		$pfb_fw_self_post = pfb_filter($_POST['fw_self_outbound'] ?? '', PFB_FILTER_ON_OFF, 'ip') ?: '';
+		if ($pfb_fw_self_post === 'on' &&
+		    !array_intersect((array)($_POST['inbound_interface'] ?? array()), array_keys($options_inbound_interface))) {
+			$input_errors[] = 'Apply outbound rules to firewall traffic requires at least one Inbound interface.';
+		}
+
 		// Apply MaxMind locale changes if required
 		if (in_array($_POST['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es')) &&
 		    in_array($pconfig['maxmind_locale'], array('en', 'fr', 'de', 'pt-BR', 'ja', 'zh-CN', 'es'))) {
@@ -197,6 +206,7 @@ if ($_POST) {
 			$pfb['iconfig']['outbound_interface']	= implode(',', (array)$_POST['outbound_interface'])		?: '';
 			$pfb['iconfig']['outbound_deny_action']	= $_POST['outbound_deny_action']				?: '';
 			$pfb['iconfig']['enable_float']		= pfb_filter($_POST['enable_float'], PFB_FILTER_ON_OFF, 'ip')	?: '';
+			$pfb['iconfig']['fw_self_outbound']	= $pfb_fw_self_post;
 			$pfb['iconfig']['pass_order']		= $_POST['pass_order']						?: 'order_0';
 			$pfb['iconfig']['autorule_suffix']	= $_POST['autorule_suffix']					?: 'autorule';
 			$pfb['iconfig']['killstates']		= pfb_filter($_POST['killstates'], PFB_FILTER_ON_OFF, 'ip')	?: '';
@@ -213,6 +223,9 @@ if ($_POST) {
 		}
 		else {
 			$pconfig = $_POST;
+			// A browser posts no key at all when nothing is selected.
+			$pconfig['inbound_interface']	= (array)($_POST['inbound_interface'] ?? array());
+			$pconfig['outbound_interface']	= (array)($_POST['outbound_interface'] ?? array());
 		}
 	}
 }
@@ -466,7 +479,8 @@ $group->add(new Form_Select(
 	$pconfig['outbound_interface'],
 	$options_outbound_interface,
 	TRUE
-))->setHelp('Select the Outbound interface(s) you want to apply auto rules to:')
+))->setHelp('Select the Outbound interface(s) you want to apply auto rules to:<br />'
+		. 'Outbound rules apply to traffic entering the selected interfaces, so select the client-facing (e.g. LAN) interfaces.')
   ->setAttribute('size', $options_interface_cnt);
 
 $group->add(new Form_Select(
@@ -486,6 +500,25 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('<strong>Enabled:</strong> Auto-rules will be generated in the \'Floating Rules\' tab.<br />'
 		. '<strong>Disabled:</strong> Auto-rules will be generated in the selected Inbound/Outbound interfaces.'
+);
+
+$section->addInput(new Form_Checkbox(
+	'fw_self_outbound',
+	'Apply outbound rules to firewall traffic',
+	'Enable',
+	($pconfig['fw_self_outbound'] ?? '') === 'on' ? true:false,
+	'on'
+))->setHelp('Default: <strong>Off</strong><br />'
+		. 'When enabled, every outbound auto-rule (Deny/Permit/Match Outbound and the outbound part of the Both actions) '
+		. 'is also applied to traffic originating from the firewall itself, as a floating <em>out</em> rule on the '
+		. 'selected Inbound interfaces with source <em>This Firewall (self)</em>.<br />'
+		. '<strong>Caution:</strong> this affects the firewall\'s own connections (package updates, feed downloads, NTP, '
+		. 'DNS upstreams, VPN endpoints); a large GeoIP outbound list can cut the firewall off from the Internet.<br />'
+		. '<strong>Note:</strong> <em>self</em> is an address match. Floating rules are evaluated after NAT, so on IPv4, '
+		. 'NAT\'d LAN clients leaving those interfaces also match (their translated source is the firewall\'s address) '
+		. 'and are logged with that address. Clients on selected Outbound interfaces are already blocked on ingress. '
+		. 'In practice this only newly affects clients on interfaces not selected as Outbound. '
+		. 'IPv6 without NAT matches only the firewall.'
 );
 
 $section->addInput(new Form_Select(

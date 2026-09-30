@@ -4784,7 +4784,10 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 
 	global $pfb;
 	$rule = array();
+	$rule_out = null;
 
+	// issue #3382: a floating rule matches on the interface traffic ENTERS, so every floating
+	// auto-rule is direction 'in', outbound ones included (a floating 'out' never saw client egress).
 	switch ($action) {
 		case 'Deny_Both':
 		case 'Deny_Outbound':
@@ -4794,7 +4797,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'out';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -4824,6 +4827,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['deny_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Deny_Both') {
 				break;
 			}
@@ -4873,7 +4877,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 				$rule['ipprotocol'] = 'inet6';
 			}
 			if ($pfb['float'] == 'on') {
-				$rule['direction'] = 'out';
+				$rule['direction'] = 'in';
 			}
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
@@ -4903,6 +4907,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['permit_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Permit_Both') {
 				break;
 			}
@@ -4952,7 +4957,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			if ($vtype == '_v6') {
 				$rule['ipprotocol'] = 'inet6';
 			}
-			$rule['direction'] = 'out';
+			$rule['direction'] = 'in';
 			$rule['descr'] = "{$pfb_alias}{$pfb['suffix']}";
 			if (!empty($asrc_out)) {
 				$rule['source'] = array('address' => "{$asrc_out}");
@@ -4981,6 +4986,7 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			}
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['match_outbound'][] = $rule;
+			$rule_out = $rule;
 			if ($action != 'Match_Both') {
 				break;
 			}
@@ -5021,6 +5027,24 @@ function pfb_firewall_rule($action, $pfb_alias, $vtype, $pfb_log, $agateway_in='
 			$rule['created'] = array('time' => (int)microtime(true), 'username' => 'Auto');
 			$pfb['match_inbound'][] = $rule;
 			break;
+	}
+
+	// issue #3382 (opt-in): locally originated packets never ENTER an interface, so the client rule
+	// cannot see them. Twin = floating 'out' rule from (self); no Custom Source, no gateway (route-to).
+	if ($rule_out !== null && ($pfb['fw_self'] ?? '') == 'on' && empty($asrc_out)) {
+		$twin = array_merge($pfb['base_rule_float'], array_intersect_key($rule_out,
+		    array_flip(array('type', 'ipprotocol', 'descr', 'destination', 'protocol', 'log', 'created'))));
+		$twin['direction'] = 'out';
+		$twin['source']    = array('network' => '(self)');
+		if ($twin['type'] == 'match') {
+			unset($twin['quick']);
+		}
+		$bucket = match ($twin['type']) {
+			'pass'  => 'permit_self',
+			'match' => 'match_self',
+			default => 'deny_self',
+		};
+		$pfb[$bucket][] = $twin;
 	}
 	return;
 }
@@ -7394,6 +7418,7 @@ function sync_package_pfblockerng($cron='') {
 	$pfb['deny_action_outbound'] = $pfb['ipconfig']['outbound_deny_action']	?: 'reject';
 
 	$pfb['float']		= $pfb['ipconfig']['enable_float'];				// Enable/Disable floating autorules
+	$pfb['fw_self']		= $pfb['ipconfig']['fw_self_outbound'] ?? '';			// Also apply outbound autorules to the firewall's own traffic
 	$pfb['dup']		= $pfb['ipconfig']['enable_dup'];				// Enable remove of duplicate IPs utilizing grepcidr
 	$pfb['agg']		= $pfb['ipconfig']['enable_agg'];				// Enable aggregation of CIDRs
 	$pfb['order']		= $pfb['ipconfig']['pass_order'];				// Order of the autorules
@@ -10443,7 +10468,8 @@ function sync_package_pfblockerng($cron='') {
 	if ($pfb['autorules'] || $pfb['enable'] == '' || $pfb['remove']) {
 		$pfb_active_aliases = [];
 		$message = '';
-		if (!empty($pfb['deny_inbound']) || !empty($pfb['permit_inbound']) || !empty($pfb['match_inbound'])) {
+		if (!empty($pfb['deny_inbound']) || !empty($pfb['permit_inbound']) || !empty($pfb['match_inbound']) ||
+		    !empty($pfb['deny_self']) || !empty($pfb['permit_self']) || !empty($pfb['match_self'])) {
 			if (empty($pfb['inbound_interfaces'])) {
 				$message = " Unable to apply rules. Inbound interface option not configured.";
 			}
@@ -10619,6 +10645,14 @@ function sync_package_pfblockerng($cron='') {
 							$new_rules[] = $cb_rules;
 						}
 					}
+					// issue #3382: firewall-traffic twins ride the Inbound interfaces (floating 'out' from (self)).
+					foreach (array('permit_self', 'match_self') as $self_role) {
+						foreach ($pfb[$self_role] ?? array() as $cb_rules) {
+							$cb_rules['interface'] = $inbound_interface;
+							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, $self_role);
+							$new_rules[] = $cb_rules;
+						}
+					}
 					// Match inbound rules defined as floating only.
 					if ($pfbrunonce && !empty($pfb['match_inbound'])) {
 						foreach ($pfb['match_inbound'] as $cb_rules) {
@@ -10650,6 +10684,11 @@ function sync_package_pfblockerng($cron='') {
 							$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_in');
 							$new_rules[] = $cb_rules;
 						}
+					}
+					foreach ($pfb['deny_self'] ?? array() as $cb_rules) {
+						$cb_rules['interface'] = $inbound_interface;
+						$cb_rules['tracker'] = pfb_tracker($cb_rules['descr'], $inbound_interface, 'deny_self');
+						$new_rules[] = $cb_rules;
 					}
 				}
 			}
@@ -10744,7 +10783,8 @@ function sync_package_pfblockerng($cron='') {
 			}
 
 			unset($pfb['permit_inbound'], $pfb['permit_outbound'], $pfb['deny_inbound'],
-			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound']);
+			    $pfb['deny_outbound'], $pfb['match_inbound'], $pfb['match_outbound'],
+			    $pfb['permit_self'], $pfb['deny_self'], $pfb['match_self']);
 			unset($cb_rules, $other_rules, $fother_rules, $permit_rules, $fpermit_rules, $match_rules, $fmatch_rules);
 
 			// Remove 'created' tag (New vs old rules array comparison)
