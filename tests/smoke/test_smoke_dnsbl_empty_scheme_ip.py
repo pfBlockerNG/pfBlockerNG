@@ -67,14 +67,17 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
       and 198.51.100.20 is in neither table.
     """
     vm = deployed_vm
+    mode = "lenient" if lenient else "strict"
+    # Per-mode header and feed: with a shared one, the second case's control never got the VIP block.
+    header = f"{HEADER}{mode}"
     control = h.unique_domain("emptyscheme")
     body = (
         "\n".join([f"://{V4_IP}^", f"://[{V6_IP}]^$third-party", "evil.com/x?u=http://" + EMBEDDED_IP + "/", control])
         + "\n"
     )
-    feed_url = h.write_local_feed(vm, "smoke_dnsbl_empty_scheme_ip.txt", body)
+    feed_url = h.write_local_feed(vm, f"smoke_dnsbl_empty_scheme_ip_{mode}.txt", body)
     spec = h.DnsblCase(
-        aliasname=HEADER, feed_url=feed_url, header=HEADER, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
+        aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
     )
     try:
         h.inject(vm, spec)
@@ -88,7 +91,6 @@ def test_empty_scheme_ip_collected_and_embedded_url_ignored(
         h.apply_filter_sync(vm)
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")
         v6 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v6")
-        mode = "lenient" if lenient else "strict"
         assert h.member_present(v4, V4_IP), f"{mode}: expected {V4_IP} in pfB_DNSBLIP_v4, got {v4}"
         assert h.member_present(v6, V6_IP), f"{mode}: expected {V6_IP} in pfB_DNSBLIP_v6, got {v6}"
         assert not h.member_present(v4, EMBEDDED_IP), f"{mode}: {EMBEDDED_IP} from a query string in v4: {v4}"
