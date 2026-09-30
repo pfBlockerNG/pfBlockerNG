@@ -883,6 +883,28 @@ function pfb_dot_block_floating_rule(array $ifaces, string $exclude_alias, strin
 	];
 }
 
+// Build one ADR-36 DNS-redirect NAT rdr row for $iface and $family ('inet' | 'inet6'):
+// port-53 traffic to anything but the firewall ('(self)', negated) is redirected to the
+// firewall's resolver on port 53, with an inline 'pass' and NAT reflection off. A usable
+// $exclude_alias becomes a negated source; otherwise the source is 'any'. The key order is
+// the stored order, so the sync's change-detection compare stays stable.
+function pfb_dns_redirect_rule(string $iface, string $family, string $exclude_alias): array {
+	$v4 = ($family === 'inet');
+
+	return [
+		'source'             => pfb_redirect_exclude_source($exclude_alias, "DNS Redirect on {$iface} " . ($v4 ? 'IPv4' : 'IPv6')),
+		'destination'        => ['network' => '(self)', 'not' => '', 'port' => '53'],
+		'ipprotocol'         => $family,
+		'protocol'           => 'tcp/udp',
+		'target'             => $v4 ? '127.0.0.1' : '::1',
+		'local-port'         => '53',
+		'interface'          => $iface,
+		'descr'              => PFB_DNS_REDIR_DESCR_V4_PFX . $iface . ($v4 ? PFB_DNS_REDIR_DESCR_V4_SFX : PFB_DNS_REDIR_DESCR_V6_SFX),
+		'associated-rule-id' => 'pass',
+		'natreflection'      => 'disable',
+	];
+}
+
 // Allowlist the alias-type suffix ($vtype) before it is interpolated into an
 // alias name or filesystem path. The only legitimate values are '_v4' and '_v6';
 // any other value is rejected so a stray/unexpected suffix can never reach a

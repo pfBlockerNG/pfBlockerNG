@@ -1675,6 +1675,33 @@
             }
         ]
     },
+    "pfb_dns_redirect_rule": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "iface",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "exclude_alias",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_abp_extract_ip": {
         "returnsRef": false,
         "returnType": null,
