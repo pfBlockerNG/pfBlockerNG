@@ -36,9 +36,6 @@ name: Smoke (single leg, live pfSense VM)
 # Optional (match the baked image; defaults track RESULTS/02):
 #   SMOKE_DNSBL_VIP4     var/secret  baked pfb_dnsvip4 (VIP cases); default 10.10.10.1
 #   SMOKE_CONTROL_NAME / SMOKE_CONTROL_IP  baked Unbound control local-data
-#   SMOKE_ADMIN_PASSWORD secret  webConfigurator admin password (the Alerts smoke case
-#                        logs in; it is value-redacted from the diagnostics)
-#   SMOKE_ADMIN_USER     var  webConfigurator user (default "admin")
 
 on:
   workflow_dispatch:
@@ -756,16 +753,11 @@ jobs:
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
           # identity" step — the CE pin for a CE image (byte-identical to a bare
           # dispatch), the SMOKE_PLUS_* secrets for a Plus image. SMOKE_REDACT_VALUES
-          # is what the diagnostics scrub value-redacts: that identity (EMPTY for CE when
-          # no civm MAC secret is set; the civm MAC is redacted on CE too) plus the
-          # webConfigurator admin password.
+          # is the (masked) Plus identity the diagnostics scrub value-redacts; EMPTY
+          # for CE when no civm MAC secret is set (the civm MAC is redacted on CE too).
           SMOKE_VM_MAC: ${{ env.RESOLVED_VM_MAC }}
           SMOKE_VM_SMBIOS_UUID: ${{ env.RESOLVED_VM_SMBIOS_UUID }}
-          SMOKE_REDACT_VALUES: |-
-            ${{ env.RESOLVED_REDACT }}
-            ${{ secrets.SMOKE_ADMIN_PASSWORD }}
-          SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
-          SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
           # civm client VM (ADR-04): the pre-pulled image dir + its data-NIC MAC
           # (the static-lease key). conftest's client_vm fixture boots it after
           # pfSense and auto-allocates the shared LAN socket port.
@@ -804,8 +796,9 @@ jobs:
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +
           # pfctl + rules.debug) — ON by default; snapshots are secret-scrubbed
           # (same pass as the diagnostics bundle) before diffing, so the job log
-          # carries no secrets. The value-redaction set is the SMOKE_REDACT_VALUES
-          # already exported above for this step.
+          # carries no secrets. SMOKE_REDACT_VALUES mirrors the diagnostics-bundle
+          # value-redaction (Plus MAC/uuid) — SMOKE_REDACT_VALUES is already exported
+          # above for this step; CE legs: empty only when no civm MAC secret is set.
           SMOKE_STATE_DIFF: "1"
           # Match the baked image (RESULTS/02); harmless if unset.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
@@ -875,16 +868,14 @@ jobs:
           retention-days: 1
 
       # ADR-24 / ADR-47 P5: runner-side scrub delegated to the shared script.
-      # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion and
-      # literal-redaction of the SMOKE_REDACT_VALUES set the pytest step also redacts.
+      # resolve-legs.sh scrub --root smoke-diag handles: non-CE screenshot deletion,
+      # literal-redaction of RESOLVED_REDACT values, and CE no-op (empty RESOLVED_REDACT).
       - name: Scrub Plus secret identity from diagnostics (runner side)
         if: always()
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
           INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-          SMOKE_REDACT_VALUES: |-
-            ${{ env.RESOLVED_REDACT }}
-            ${{ secrets.SMOKE_ADMIN_PASSWORD }}
+          SMOKE_REDACT_VALUES: ${{ env.RESOLVED_REDACT }}
         run: |
           set -eu
           # ADR-47 P5: scrub delegated to the shared script.

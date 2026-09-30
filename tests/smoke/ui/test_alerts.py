@@ -2469,17 +2469,35 @@ def test_ipv6_alert_external_host_attribution(
     foreign = helpers.IPV6_FOREIGN  # 2001:db8:dead:beef::1 — outside the /64
     local = helpers.IPV6_LOCAL_HOST  # 2001:db8:51:1::1234   — inside the /64
 
-    # ip_block.log IPv6 CSV format (23 fields):
-    # ts,rule,real_iface,friendly_iface,action,ipv,proto_id,proto,
-    # src_ip,dst_ip,src_port,dst_port,
-    # dir,geoip,alias,ip_eval,feed,rhost,chost,asn,asn_domain,asn_name,dup
-    # ip_eval is the evaluated (blocked) host = the foreign address in both cases.
-    csv_line = (
-        f"{ts},100,em0,WAN,block,6,58,ICMPV6,"
-        f"{src_ip},{dst_ip},,"
-        f",{direction},US,pfB_Deny_v6,"
-        f"{foreign},pfB_TestFeed_v6,Unknown,Unknown,Unknown,,,+\n"
-    )
+    # One ip_block.log row in helpers.IP_BLOCK_LOG_FIELDS order: the layout a real IPv6 block
+    # is checked against in test_smoke_ipv6_filterlog.py. ip_eval is the evaluated (blocked)
+    # host = the foreign address in both cases.
+    seed = {
+        "ts": ts,
+        "rule": "100",
+        "real_iface": "em0",
+        "friendly_iface": "WAN",
+        "action": "block",
+        "ipv": "6",
+        "proto_id": "58",
+        "proto": "ICMPV6",
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "src_port": "",
+        "dst_port": "",
+        "dir": direction,
+        "geoip": "US",
+        "alias": "pfB_Deny_v6",
+        "ip_eval": foreign,
+        "feed": "pfB_TestFeed_v6",
+        "rhost": "Unknown",
+        "chost": "Unknown",
+        "asn": "Unknown",
+        "asn_domain": "",
+        "asn_name": "",
+        "dup": "+",
+    }
+    csv_line = ",".join(seed[field] for field in helpers.IP_BLOCK_LOG_FIELDS) + "\n"
 
     ip_block_log = helpers.IP_BLOCK_LOG
 
