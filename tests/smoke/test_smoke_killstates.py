@@ -164,7 +164,7 @@ def _victim_states(vm: SmokeVM, ip: str = VICTIM, *, timeout: float = 30.0) -> s
     return vm.ssh("/bin/sh", "-c", cmd, timeout=timeout).stdout.strip()
 
 
-def _rule_block_packets(vm: SmokeVM, *, timeout: float = 30.0) -> int:
+def _rule_block_packets(vm: SmokeVM, *, table: str = ALIAS_TABLE, timeout: float = 30.0) -> int:
     """Packets the floating pfB reject rules have actually dropped (their pf counters, summed).
 
     ``pfctl -sr -vv`` prints each rule followed by a ``[ Evaluations: N Packets: M ... ]``
@@ -177,13 +177,13 @@ def _rule_block_packets(vm: SmokeVM, *, timeout: float = 30.0) -> int:
     out = vm.ssh(
         "/bin/sh",
         "-c",
-        f"pfctl -sr -vv 2>/dev/null | grep -A1 '{ALIAS_TABLE}' | grep -oE 'Packets: [0-9]+' | grep -oE '[0-9]+'",
+        f"pfctl -sr -vv 2>/dev/null | grep -A1 '{table}' | grep -oE 'Packets: [0-9]+' | grep -oE '[0-9]+'",
         timeout=timeout,
     ).stdout.split()
     return sum(int(n) for n in out) if out else -1
 
 
-def _state_diag(vm: SmokeVM) -> str:
+def _state_diag(vm: SmokeVM, *, table: str = ALIAS_TABLE) -> str:
     """On-box diagnostics for a killstates failure. Never raises."""
 
     def _try(cmd: str) -> str:
@@ -192,14 +192,14 @@ def _state_diag(vm: SmokeVM) -> str:
         except Exception:
             return "(error)"
 
-    tbl = _try(f"pfctl -t {ALIAS_TABLE} -T show 2>/dev/null | tr -d ' ' || true")
-    rule = _try(f"pfctl -sr 2>/dev/null | grep -i {HEADER} || echo '(no rule)'")
+    tbl = _try(f"pfctl -t {table} -T show 2>/dev/null | tr -d ' ' || true")
+    rule = _try(f"pfctl -sr 2>/dev/null | grep -i {table} || echo '(no rule)'")
     lan_allow = _try("pfctl -sr 2>/dev/null | grep -i 'Default Allow LAN' || echo '(no LAN allow!)'")
     log = _try(
         "grep -iE 'Removed .* state|Kill States|Filter Reload' "
         "/var/log/pfblockerng/pfblockerng.log 2>/dev/null | tail -6 || true"
     )
-    return f"  alias {ALIAS_TABLE}: {tbl!r}\n  rule: {rule!r}\n  lan_allow: {lan_allow!r}\n  log:\n{log}"
+    return f"  alias {table}: {tbl!r}\n  rule: {rule!r}\n  lan_allow: {lan_allow!r}\n  log:\n{log}"
 
 
 def _assert_fresh_connection_blocked(vm: SmokeVM, cl: SmokeVM) -> None:
@@ -248,8 +248,10 @@ def _unblock_baseline(vm: SmokeVM, *, kill_on: bool, timeout: float = 600.0) -> 
     h.reload(vm, "update", timeout=timeout)
 
 
-def _append_permit_customlist(vm: SmokeVM, aliasname: str, ip: str, *, timeout: float = 60.0) -> None:
-    """Append a 'Permit_Inbound' CUSTOM list row holding ``ip`` to the IPv4 lists.
+def _append_permit_customlist(
+    vm: SmokeVM, aliasname: str, ip: str, *, lists: str = h.CFG_IP_V4_LISTS, timeout: float = 60.0
+) -> None:
+    """Append a 'Permit_Inbound' CUSTOM list row holding ``ip`` to ``lists`` (the IPv4 lists by default).
 
     pfb_remove_states builds its suppression set from config rows whose ``action``
     contains ``Permit_`` and whose ``custom`` (a base64 textarea) is non-empty — the
@@ -275,11 +277,11 @@ def _append_permit_customlist(vm: SmokeVM, aliasname: str, ip: str, *, timeout: 
         "custom": h._b64_textarea([ip]),
     }
     snippet = (
-        f"$lists = config_get_path({h._php_str(h.CFG_IP_V4_LISTS)}, array());\n"
+        f"$lists = config_get_path({h._php_str(lists)}, array());\n"
         f"$lists = array_values(array_filter($lists, "
         f"fn($l) => ($l['aliasname'] ?? '') !== {h._php_str(aliasname)}));\n"
         f"$lists[] = {h._php_kv_array(row)};\n"
-        f"config_set_path({h._php_str(h.CFG_IP_V4_LISTS)}, $lists);\n"
+        f"config_set_path({h._php_str(lists)}, $lists);\n"
         "write_config('pfBlockerNG smoke: killstates permit custom list');\n"
         "echo 'OK';"
     )
