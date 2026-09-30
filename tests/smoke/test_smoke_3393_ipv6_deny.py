@@ -150,6 +150,7 @@ def _restore_v6_rules(deployed_vm: SmokeVM) -> Iterator[None]:
         f"$ip = config_get_path({settings}, array());\n"
         "$ip['enable_float'] = '';\n"
         "$ip['fw_self_outbound'] = '';\n"
+        "$ip['enable_log'] = '';\n"
         f"config_set_path({settings}, $ip);\n"
         "write_config('pfBlockerNG smoke: #3393 restore');\n"
         "echo 'OK';"
