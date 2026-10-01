@@ -2738,7 +2738,7 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 // host) handled first -> userinfo/authority cut (strict mode keeps a numeric host's
 // authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned whole
-// for the IP sanitizers; a bad mask or a non-canonical numeric network is a reject. Returns
+// (mask canonicalised, no leading zeros) for the IP sanitizers; a bad mask or a non-canonical numeric network is a reject. Returns
 // FALSE on any reject (CIDR, both modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
@@ -2747,7 +2747,7 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		if (is_ipaddr($cidr[1])) {
 			// is_subnet() accepts a mask too long to parse; a real prefix length is at most 3 digits.
 			if (is_subnet($line) && strlen(ltrim($cidr[2], '0')) <= 3) {
-				return $line;
+				return "{$cidr[1]}/" . (int) $cidr[2];
 			}
 			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 			return FALSE;
