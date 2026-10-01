@@ -2733,10 +2733,27 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 	return FALSE;
 }
 
+// A scheme-less '<IP>/<digits>' line: NULL = not a CIDR, FALSE = reject (a valid address with a bad
+// mask, or a numeric network -- no '/', else a URL path -- that is not a canonical dotted quad),
+// else the range with an unpadded network and a canonical mask. Padded octets are decimal (IP-feed rule).
+function pfb_dnsbl_cidr(string $line): string|false|null {
+	if (!preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
+		return NULL;
+	}
+	$net = pfb_ipv4_unpad($cidr[1]) ?? $cidr[1];
+	if (is_ipaddr($net) && is_subnet("{$net}/{$cidr[2]}")) {
+		return "{$net}/" . (int) $cidr[2];
+	}
+	if (is_ipaddr($net) || (!str_contains($net, '/') && pfb_ipv4_numeric_host($net) !== NULL)) {
+		return FALSE;
+	}
+	return NULL;
+}
+
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
 // `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
-// host) handled first -> userinfo/authority cut (strict mode keeps a numeric host's
-// authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
+// host) handled first -> empty-scheme IP anchor ('://<ip>[:port][^]') -> userinfo/authority cut
+// (strict mode keeps a numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned
 // whole (padded octets unpadded, mask canonicalised) for the IP sanitizers; a bad mask or
 // a non-canonical numeric network is a reject. Returns FALSE on any reject (CIDR, both
@@ -2744,17 +2761,24 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
-	if (preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
-		// Padded octets are decimal (IP-feed rule), so they are unpadded before is_ipaddr() sees them.
-		$net = pfb_ipv4_unpad($cidr[1]) ?? $cidr[1];
-		if (is_ipaddr($net) && is_subnet("{$net}/{$cidr[2]}")) {
-			return "{$net}/" . (int) $cidr[2];
-		}
-		// A valid address with a bad mask, or a numeric network (no '/': else a URL path) that
-		// is not a canonical dotted quad, is no range.
-		if (is_ipaddr($net) || (!str_contains($net, '/') && pfb_ipv4_numeric_host($net) !== NULL)) {
+	$cidr = pfb_dnsbl_cidr($line);
+	if ($cidr === FALSE) {
+		pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
+		return FALSE;
+	}
+	if ($cidr !== NULL) {
+		return $cidr;
+	}
+
+	// Empty-scheme IP anchor ('://1.2.3.4:443^'): port dropped, CIDR honoured, as the '||' anchor.
+	if (str_starts_with($line, '://')) {
+		$ip = pfb_dnsbl_anchor_ip(preg_replace('/\^(\$.*)?$/D', '', substr($line, 3)));
+		if ($ip === FALSE) {
 			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 			return FALSE;
+		}
+		if ($ip !== '') {
+			return $ip;
 		}
 	}
 
@@ -9782,6 +9806,28 @@ function pfb_dnsbl_unlock_lines() {
 	return $out;
 }
 
+// The address of an ABP '||' / empty-scheme '://' anchor host: port dropped, CIDR honoured
+// (pfb_dnsbl_cidr), URI-bracketed IPv6 unwrapped (#938), padded octets decimal, any client-decoded
+// IPv4 spelling. Address or range string, FALSE for a numeric-shaped but invalid host or CIDR, else ''.
+function pfb_dnsbl_anchor_ip(string $host): string|false {
+	$host = pfb_strip_trailing_port($host);
+	$cidr = pfb_dnsbl_cidr($host);
+	if ($cidr !== NULL) {
+		return $cidr;
+	}
+	$host = pfb_dnsbl_unbracket_ip6($host);
+	$host = pfb_ipv4_unpad($host) ?? $host;
+	if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
+		return $host;
+	}
+	// Only a bare host can be an IPv4 literal; '||example.com/ads/banner.1^' is a path rule.
+	$numeric = str_contains($host, '/') ? NULL : pfb_ipv4_numeric_host($host);
+	if ($numeric !== NULL) {
+		return $numeric['ip'] ?? FALSE;
+	}
+	return '';
+}
+
 // ADR-07: extract an IP from an ABP-anchored / hosts line for the DNSBL-IP
 // firewall pass (coexistence). The raw ABP line itself still flows to Python, which
 // SKIPS IP-valued anchors (parse_abp returns None) -- so IP -> firewall only,
@@ -9792,8 +9838,11 @@ function pfb_dnsbl_unlock_lines() {
 //   ||[2001:db8::1]^      -> '2001:db8::1' (URI-bracketed IPv6 anchor, unwrapped)
 //   <sink-ip> <ip>        -> the second token (hosts line whose target is an IP)
 //   ||0xC0A80164^         -> '192.168.1.100' (any IPv4 spelling a client decodes, WHATWG rules)
+//   ||1.2.3.4:8080^       -> '1.2.3.4'   (port dropped)
+//   ||10.0.0.0/8^         -> '10.0.0.0/8' (CIDR kept, FALSE on a bad mask)
+//   ||192.168.010.1^      -> '192.168.10.1' (padded octets are decimal)
 // Returns the IP string when the line carries one, FALSE for a numeric-shaped but invalid
-// '||' anchor ('||08.08.08.08^', to be logged, never passed to Python), else ''.
+// '||' anchor ('||192.168.256.1^', to be logged, never passed to Python), else ''.
 function pfb_dnsbl_abp_extract_ip($line) {
 	$s = trim($line);
 	if ($s === '') {
@@ -9812,17 +9861,7 @@ function pfb_dnsbl_abp_extract_ip($line) {
 		if (($cpos = strpos($host, '^')) !== FALSE) {
 			$host = substr($host, 0, $cpos);
 		}
-		// A URI-bracketed IPv6 anchor ('||[2001:db8::1]^') is unwrapped as on the plain path (#938).
-		$host = pfb_dnsbl_unbracket_ip6(trim($host));
-		if (is_ipaddrv4($host) || is_ipaddrv6($host)) {
-			return $host;
-		}
-		// Only a bare host can be an IPv4 literal; '||example.com/ads/banner.1^' is a path rule.
-		$numeric = str_contains($host, '/') ? NULL : pfb_ipv4_numeric_host($host);
-		if ($numeric !== NULL) {
-			return $numeric['ip'] ?? FALSE;
-		}
-		return '';
+		return pfb_dnsbl_anchor_ip(trim($host));
 	}
 
 	// hosts line: "<sink-ip> <target>" where the target is itself an IP. Gate on

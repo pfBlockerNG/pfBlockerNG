@@ -1795,6 +1795,19 @@
             }
         ]
     },
+    "pfb_dnsbl_anchor_ip": {
+        "returnsRef": false,
+        "returnType": "string|false",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_dnsbl_anchor_layout_render": {
         "returnsRef": false,
         "returnType": "array",
@@ -1819,6 +1832,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_dnsbl_cidr": {
+        "returnsRef": false,
+        "returnType": "string|false|null",
+        "params": [
+            {
+                "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]

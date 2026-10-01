@@ -2518,7 +2518,7 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 													if (!str_contains($line, $abp_ip)) {
 														pfb_logger("\n  IP literal decoded: [ {$line} ] -> [ {$abp_ip} ]", 1);
 													}
-													if (pfb_dnsbl_collect_feed_ip($abp_ip, $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
+													if (pfb_dnsbl_collect_feed_ip(explode('/', $abp_ip, 2)[0], $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
 														$pfb['updateip'] = TRUE;
 														$ipcount++;
 													}
