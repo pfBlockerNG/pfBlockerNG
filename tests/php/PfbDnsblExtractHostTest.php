@@ -243,28 +243,34 @@ final class PfbDnsblExtractHostTest extends TestCase
 	// -- issue #3366: scheme-less '<canonical IP>/<valid mask>' is returned whole; a bad mask or a
 	// non-canonical numeric network is a parse error --
 
-	/** @return array<string, array{string, bool}> */
+	/** @return array<string, array{string, bool, string}> */
 	public static function plainCidrHonoredProvider(): array
 	{
 		$lines = [
-			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '192.168.1.0/024',
-			'192.168.1.0/00000000000000000000024', '2001:db8::/32', '2001:db8::1/128', '::/0',
-			'::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '2001:db8::/32',
+			'2001:db8::1/128', '::/0', '::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+		];
+		// A leading-zero mask is returned with its canonical spelling.
+		$lines = array_combine($lines, $lines) + [
+			'192.168.1.0/024' => '192.168.1.0/24',
+			'192.168.1.0/00000000000000000000024' => '192.168.1.0/24',
+			'192.168.1.0/08' => '192.168.1.0/8',
+			'2001:db8::/032' => '2001:db8::/32',
 		];
 		$rows = [];
-		foreach ($lines as $line) {
+		foreach ($lines as $line => $expected) {
 			foreach ([TRUE, FALSE] as $strict) {
-				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict];
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict, $expected];
 			}
 		}
 		return $rows;
 	}
 
 	#[DataProvider('plainCidrHonoredProvider')]
-	public function testPlainCidrLineIsReturnedWholeWithNoParseError(string $line, bool $strict): void
+	public function testPlainCidrLineIsReturnedWholeWithNoParseError(string $line, bool $strict, string $expected): void
 	{
 		$skipped = 0;
-		$this->assertSame($line, $this->extract($line, $strict, $skipped));
+		$this->assertSame($expected, $this->extract($line, $strict, $skipped));
 		$this->assertSame(0, $skipped);
 		$this->assertFileDoesNotExist($this->parseErr);
 	}
