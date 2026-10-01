@@ -25,9 +25,13 @@ override-dependencies = ["pyjwt[crypto]>=2.15.1"]
 # open, and the one that let a gate move with no diff.
 [dependency-groups]
 # Agent and developer CLI tools. Single source of truth for versions/pins.
+# serena-agent is deliberately NOT resolved here: every release past the GHSA-37h2-6p4f-mp3q
+# fix (1.5.2) exact-pins its whole dependency fleet (requests, urllib3, pathspec, mcp, ...),
+# which cannot coexist in this lock with the smoke/dev security pins. Its supported install
+# path is the machine-level `uv tool install --upgrade serena-agent` in
+# scripts/agent/setup-agent-tools.sh, which is decoupled from this lock (#3414).
 tools = [
     "graphifyy[leiden] @ git+https://github.com/pfBlockerNG/graphify@58f57162775a2b8626a2920462960244bc024682",
-    "serena-agent",
     "ast-grep-cli",
     "semgrep",
 ]
