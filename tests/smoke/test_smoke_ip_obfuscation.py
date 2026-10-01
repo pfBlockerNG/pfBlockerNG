@@ -4,8 +4,11 @@ A client dials ``||0xC0000204^``, ``0xc6.0x33.0x64.0x9`` and ``203.0.28942`` as 
 address it decodes under WHATWG URL rules (192.0.2.4, 198.51.100.9, 203.0.113.14). With
 DNSBL IP enabled, pfBlockerNG collects each one into ``pfB_DNSBLIP_v4``:
 ``pfb_dnsbl_abp_extract_ip()`` decodes ``||`` anchors, and ``pfb_ipv4_numeric_host()`` decodes
-plain lines. None of them is staged for Python. Previously the two anchors were staged as ABP rows that ``parse_abp()``
-silently dropped, and the two plain spellings became domain rules that matched no real traffic.
+plain lines. An ABP ``||ip:port^`` or empty-scheme ``://ip:port^`` anchor drops the port, a
+``||net/mask^`` anchor is collected as a range, and padded octets are read as decimal, as on the
+plain path; a bad mask is a parse error. None of them is staged for Python. Previously the two
+anchors were staged as ABP rows that ``parse_abp()`` silently dropped, and the two plain
+spellings became domain rules that matched no real traffic.
 
 The addresses come from the RFC 5737/3849 documentation ranges. ``sanitize_ipaddr()`` drops
 those ranges only when IP Suppression is on (issue #760); ``deploy()`` pins Suppression off.
@@ -33,11 +36,30 @@ V4_LINES = {
     "203.0.28942": "203.0.113.14",  # plain line, short form (last part fills the low 16 bits)
     "::ffff:c633:6405": "198.51.100.5",  # plain line, IPv4-mapped IPv6 (used to land in the v6 table)
     "198.51.100.77": "198.51.100.77",  # canonical control: collected before this change too
+    "||192.0.2.50:8080^": "192.0.2.50",  # ABP anchor + port: port dropped
+    "||198.051.100.033^": "198.51.100.33",  # ABP anchor, padded octets read as decimal
+    "://203.0.113.60:80^": "203.0.113.60",  # empty-scheme anchor + port
 }
-# Numeric but invalid (08 is not octal): parse-error log on the branch, never a rule.
-INVALID_LINE = "||08.08.08.08^"
+V6_LINE = "||[2001:db8::50]:443^"  # bracketed IPv6 anchor + port
+V6_MEMBER = "2001:db8::50"
+CIDR_LINE = "||198.18.5.0/24^"  # honoured as a range, matched exactly below
+CIDR_MEMBER = "198.18.5.0/24"
+BAD_CIDR_LINE = "||198.18.6.0/33^"  # mask past /32: parse error, host not collected
+# Numeric but invalid (octet past 255): parse-error log on the branch, never a rule.
+INVALID_LINE = "||192.168.256.1^"
 # The obfuscated hosts, as they would appear in the Python staging file (compared lower-cased).
-NUMERIC_HOSTS = ("0xc0000204", "0xc6.0x33.0x64.0x9", "203.0.28942", "08.08.08.08")
+NUMERIC_HOSTS = (
+    "0xc0000204",
+    "0xc6.0x33.0x64.0x9",
+    "203.0.28942",
+    "192.168.256.1",
+    "192.0.2.50:8080",
+    "198.051.100.033",
+    "203.0.113.60:80",
+    "2001:db8::50]:443",
+    "198.18.5.0/24",
+    "198.18.6.0/33",
+)
 # Plain spellings that used to become domain rules. They are fixed literals, not unique_domain(),
 # because the whole point is that they are IPv4 spellings; they are neither RFC 6761 names nor
 # HSTS-preload names, and each is flushed from the Unbound cache before its probe.
@@ -71,16 +93,19 @@ def test_ip_obfuscation_spellings_collect_into_dnsblip_tables(deployed_vm: Smoke
 
     Given a DNSBL feed, loaded with DNSBL IP = Deny_Both, that holds a hex-DWORD anchor,
       a dotted-hex line, a short-form line, an IPv4-mapped IPv6 line, an invalid numeric
-      anchor, one canonical IPv4 and a control domain,
+      anchor, one canonical IPv4, ported and padded anchors (v4 and bracketed v6), a CIDR
+      anchor, an anchor with a bad mask and a control domain,
     When a Force Reload loads it,
     Then the control domain is VIP-blocked (the feed loaded),
-      pfB_DNSBLIP_v4 holds every decoded address and pfB_DNSBLIP_v6 holds none of them,
-      the Python staging file carries none of the obfuscated hosts,
+      pfB_DNSBLIP_v4 holds every decoded address and the CIDR range exactly, pfB_DNSBLIP_v6 holds
+      the bracketed v6 address and none of the decoded v4 ones, the bad-mask and invalid lines are
+      in the parse-error log and collected nowhere,
+      the Python staging file carries none of the obfuscated or ported hosts,
       and the plain numeric spellings resolve upstream instead of hitting a domain rule.
     """
     vm = deployed_vm
     control = h.unique_domain("ipobf")
-    body = h.abp_feed(*V4_LINES, INVALID_LINE, control)
+    body = h.abp_feed(*V4_LINES, V6_LINE, CIDR_LINE, BAD_CIDR_LINE, INVALID_LINE, control)
     feed_url = h.write_local_feed(vm, "smoke_ip_obfuscation.txt", body)
     spec = h.DnsblCase(
         aliasname=HEADER, feed_url=feed_url, header=HEADER, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
@@ -95,9 +120,16 @@ def test_ip_obfuscation_spellings_collect_into_dnsblip_tables(deployed_vm: Smoke
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")
         missing = {line: ip for line, ip in V4_LINES.items() if not h.member_present(v4, ip)}
         assert not missing, f"pfB_DNSBLIP_v4 lacks {missing} (feed line -> expected IP); actual members: {v4}"
-        # A decimal misread of the invalid 08.08.08.08 would add 8.8.8.8; nothing else here decodes to it.
-        assert not h.member_present(v4, "8.8.8.8"), f"{INVALID_LINE} must not be collected; pfB_DNSBLIP_v4: {v4}"
-        assert not h.member_present(v6, "8.8.8.8"), f"{INVALID_LINE} must not be collected; pfB_DNSBLIP_v6: {v6}"
+        assert V6_MEMBER in v6, f"{V6_LINE} must land in pfB_DNSBLIP_v6 as {V6_MEMBER}; members: {v6}"
+        # Exact string, not member_present(): that one also passes on a narrowed host.
+        assert CIDR_MEMBER in v4, f"{CIDR_LINE} must land in pfB_DNSBLIP_v4 as {CIDR_MEMBER}; members: {v4}"
+        assert not h.member_present(v4, "198.18.6.0"), f"{BAD_CIDR_LINE} must not be collected; members: {v4}"
+        assert not h.member_present(v4, "192.168.256.1"), f"{INVALID_LINE} must not be collected; members: {v4}"
+        err_log = vm.ssh("cat", h.DNSBL_PARSE_ERR_LOG)
+        for rejected in (BAD_CIDR_LINE, INVALID_LINE):
+            assert rejected in err_log.stdout, (
+                f"{rejected} missing from {h.DNSBL_PARSE_ERR_LOG}: {err_log.stdout[-2000:]!r}"
+            )
         # The IPv4-mapped line is an IPv4 packet on the wire: it must not stay in the v6 table.
         bad = [m for m in v6 if "c633:6405" in m.lower() or "198.51.100.5" in m]
         assert not bad, f"mapped line must not stay in pfB_DNSBLIP_v6: {bad}; members {v6}"

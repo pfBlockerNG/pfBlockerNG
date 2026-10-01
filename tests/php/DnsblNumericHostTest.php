@@ -296,6 +296,7 @@ final class DnsblNumericHostTest extends TestCase
 			'dotted hex anchor + option' => ['||0xc0.0xa8.0x1.0x64^$important', '192.168.1.100'],
 			'short form anchor'          => ['||192.168.356^', '192.168.1.100'],
 			'quad trailing dot anchor'   => ['||8.8.8.8.^', '8.8.8.8'],
+			'padded octal-looking quad'  => ['||08.08.08.08^', '8.8.8.8'],
 		];
 	}
 
@@ -311,8 +312,10 @@ final class DnsblNumericHostTest extends TestCase
 	public static function abpInvalidProvider(): array
 	{
 		return [
-			'invalid octal anchor' => ['||08.08.08.08^'],
+			'out-of-range octet anchor' => ['||192.168.256.1^'],
 			'non-number anchor'    => ['||a.0x1^'],
+			'cidr mask past /32'   => ['||10.0.0.0/33^'],
+			'short-form cidr'      => ['||192.168.1/24^'],
 		];
 	}
 
@@ -323,6 +326,39 @@ final class DnsblNumericHostTest extends TestCase
 		$out = $this->runRegion(self::$abpRegion, $feedLine);
 		$this->assertSame([[], []], [$out['rows'], $out['ip4']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 		$this->assertStringContainsString($feedLine, $out['fail']);
+	}
+
+	/** @return array<string, array{string, list<string>, list<string>}> */
+	public static function abpPortCidrProvider(): array
+	{
+		return [
+			'v4 + port'                => ['||192.168.1.100:8080^', ['192.168.1.100'], []],
+			'bracketed v6 + port'      => ['||[2001:db8::1]:443^', [], ['2001:db8::1']],
+			'padded v4 + port'         => ['||192.168.010.1:8080^', ['192.168.10.1'], []],
+			'v4 cidr'                  => ['||10.0.0.0/8^', ['10.0.0.0/8'], []],
+			'v4 cidr keeps host bits'  => ['||10.0.0.1/8^', ['10.0.0.1/8'], []],
+			'/24 host octet zeroed'    => ['||192.168.1.5/24^', ['192.168.1.0/24'], []],
+			'v6 cidr'                  => ['||2001:db8::/32^', [], ['2001:db8::/32']],
+		];
+	}
+
+	/**
+	 * @param list<string> $ip4
+	 * @param list<string> $ip6
+	 */
+	#[DataProvider('abpPortCidrProvider')]
+	public function testAbpPortIsDroppedAndCidrIsCollectedNeverPassedToPython(string $feedLine, array $ip4, array $ip6): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$abpRegion, $feedLine, lenient: $lenient);
+			$this->assertSame([[], $ip4, $ip6, ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
+		}
+	}
+
+	public function testAbpPortAnchorWithDnsblIpDisabledStillGoesToPython(): void
+	{
+		$out = $this->runRegion(self::$abpRegion, '||192.168.1.100:8080^', dnsblIp: 'Disabled');
+		$this->assertSame([[['a', '||192.168.1.100:8080^']], [], ''], [$out['rows'], $out['ip4'], $out['fail']]);
 	}
 
 	public function testAbpDomainAnchorAndHostsLineAreUnchanged(): void

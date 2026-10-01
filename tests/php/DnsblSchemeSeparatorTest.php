@@ -188,24 +188,33 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			['?u=http://8.8.8.8', 'pe', 'pe', 'RED'],
 			['://user:pass@1.2.3.4^$third-party', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
 
+			// RED: an empty-scheme IP anchor drops the port, honours a CIDR and reads padded octets as
+			// decimal, as the plain path and the '||' anchor do; a bad mask is a parse error.
+			['://1.2.3.4:443^', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['://[2001:db8::1]:443^', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
+			['://2001:db8::1^', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
+			['://2001:db8::1', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'RED'],
+			['://0xC0A80164^', 'ip4=192.168.1.100', 'ip4=192.168.1.100', 'RED'],
+			['://1.2.3.4:80', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'RED'],
+			['://10.0.0.0/8^', 'ip4=10.0.0.0/8', 'ip4=10.0.0.0/8', 'RED'],
+			['://192.168.010.1^', 'ip4=192.168.10.1', 'ip4=192.168.10.1', 'RED'],
+			['://10.0.0.0/33^', 'pe', 'pe', 'RED'],
+			['://192.168.1/24^', 'pe', 'pe', 'RED'],
+			['://1.2.3.4/' . str_repeat('9', 5000) . '^', 'pe', 'pe', 'RED'],
+
 			// Controls: outcome identical before and after the separator rule.
 			['http://user@1.2.3.4/', 'ip4=1.2.3.4', 'ip4=1.2.3.4', 'control'],
 			['://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
-			['://2001:db8::1', 'ip6=2001:db8::1', 'pe', 'control'],
-			['://2001:db8::1^', 'pe', 'pe', 'control'],
 			['://1.2.3.4$third-party', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]^^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]^x', 'pe', 'pe', 'control'],
 			['://[not-an-ip]^', 'pe', 'pe', 'control'],
 			['://[192.0.2.1]^', 'pe', 'pe', 'control'],
 			['://[192.0.2.1]', 'pe', 'pe', 'control'],
-			['://1.2.3.4:443^', 'pe', 'pe', 'control'],
-			['://[2001:db8::1]:443^', 'pe', 'pe', 'control'],
 			['://[2001:db8::1]/path^', 'ip6=2001:db8::1', 'pe', 'control'],
 			['http://1.2.3.4^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]^', 'pe', 'pe', 'control'],
 			['http://[2001:db8::1]', 'ip6=2001:db8::1', 'ip6=2001:db8::1', 'control'],
-			['://0xC0A80164^', 'pe', 'pe', 'control'],
 			['1.2.3.4^', 'pe', 'pe', 'control'],
 			['[2001:db8::1]^', 'pe', 'pe', 'control'],
 			['evil.com;url=http://8.8.8.8', 'ip4=8.8.8.8', 'pe', 'control'],
@@ -229,6 +238,8 @@ final class DnsblSchemeSeparatorTest extends TestCase
 			["://1.2.3.4\t^", 'pe', 'pe', 'control'],
 			['://' . str_repeat('a', 5000), 'pe', 'pe', 'control'],
 			['://[ｆｅ80::1]^', 'pe', 'pe', 'control'],
+			['://:80^', 'pe', 'pe', 'control'],
+			['://[2001:db8::1]:^', 'pe', 'pe', 'control'],
 		];
 		$out = [];
 		foreach ($rows as [$line, $l, $s, $status]) {

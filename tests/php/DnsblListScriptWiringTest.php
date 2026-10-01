@@ -53,7 +53,7 @@ final class DnsblListScriptWiringTest extends TestCase
 			'example.com', 'sub.example.org', '192.0.2.10', '198.51.100.20',
 			'2001:db8::1', '2001:db8::dead:beef', '||ads.example.net^',
 			'@@||allow.example.net^', 'another-domain.test', '203.0.113.5',
-			'||192.0.2.9^', '||2001:db8::9^', '||08.08.08.08^',
+			'||192.0.2.9^', '||2001:db8::9^', '||192.168.256.1^',
 		];
 	}
 
