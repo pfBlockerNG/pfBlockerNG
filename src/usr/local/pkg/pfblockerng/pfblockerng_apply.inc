@@ -2671,9 +2671,11 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											// Collect any IPs (v4 or v6) found in domain feed. The family
 											// check gates the 'continue' regardless of dnsbl_ip -- an IP
 											// line never falls through to domain validation either way.
-											if (is_ipaddrv4($line) || is_ipaddrv6($line)) {
+											// A CIDR line is family-checked on its address part and collected whole.
+											$pfb_ip_host = explode('/', $line, 2)[0];
+											if (is_ipaddrv4($pfb_ip_host) || is_ipaddrv6($pfb_ip_host)) {
 												if ($pfb['dnsbl_ip'] != 'Disabled' &&
-												    pfb_dnsbl_collect_feed_ip($line, $line, $custom, $domain_data_ip, $domain_data_ip6)) {
+												    pfb_dnsbl_collect_feed_ip($pfb_ip_host, $line, $custom, $domain_data_ip, $domain_data_ip6)) {
 													$pfb['updateip'] = TRUE;
 													$ipcount++;
 												}

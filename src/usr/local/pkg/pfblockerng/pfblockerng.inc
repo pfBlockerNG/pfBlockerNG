@@ -2735,16 +2735,28 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
 // `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
-// host) rejected first -> userinfo/authority cut (strict mode keeps a numeric host's
+// host) handled first -> userinfo/authority cut (strict mode keeps a numeric host's
 // authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
-// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE on either reject
-// (CIDR, both modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
+// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned whole
+// for the IP sanitizers; a bad mask or a non-canonical numeric network is a reject. Returns
+// FALSE on any reject (CIDR, both modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
-	if (preg_match('#^(.+)/[0-9]+$#D', $line, $cidr) && is_ipaddr($cidr[1])) {
-		pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
-		return FALSE;
+	if (preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
+		if (is_ipaddr($cidr[1])) {
+			// is_subnet() accepts a mask too long to parse; a real prefix length is at most 3 digits.
+			if (is_subnet($line) && strlen(ltrim($cidr[2], '0')) <= 3) {
+				return $line;
+			}
+			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
+			return FALSE;
+		}
+		// A numeric spelling that is not a canonical dotted quad is no range either.
+		if (pfb_ipv4_numeric_host($cidr[1]) !== NULL) {
+			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
+			return FALSE;
+		}
 	}
 
 	// RFC 3986 authority of a scheme-bearing line (a '://' found by pfb_dnsbl_scheme_pos()): the
@@ -10098,10 +10110,15 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 // $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
 // this returns TRUE iff an IP was appended.
 function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value, bool $custom, array &$domain_data_ip, array &$domain_data_ip6): bool {
-	// IPv4-mapped IPv6 is collected as its IPv4 address.
-	if (is_ipaddrv6($guard_value) && validate_ipv6($candidate_value) &&
-	    ($mapped = pfb_ipv4_from_mapped($candidate_value)) !== NULL) {
-		$candidate_value = $guard_value = $mapped;
+	$is_cidr = str_contains($candidate_value, '/');
+	// IPv4-mapped IPv6 is collected as its IPv4 address; a mapped CIDR /96../128 is the IPv4
+	// range of the remaining bits, while a shorter prefix spans more than IPv4 and stays v6.
+	if (is_ipaddrv6($guard_value) && validate_ipv6($candidate_value)) {
+		[$addr, $bits] = $is_cidr ? explode('/', $candidate_value, 2) : [$candidate_value, '128'];
+		if (($mapped = pfb_ipv4_from_mapped($addr)) !== NULL && (int) $bits >= 96) {
+			$guard_value = $mapped;
+			$candidate_value = $is_cidr ? $mapped . '/' . ((int) $bits - 96) : $mapped;
+		}
 	}
 	if (is_ipaddrv4($guard_value)) {
 		$parsed = sanitize_ipaddr($candidate_value, $custom, 'Disabled');
@@ -10113,11 +10130,19 @@ function pfb_dnsbl_collect_feed_ip(string $guard_value, string $candidate_value,
 		return FALSE;
 	}
 	if (is_ipaddrv6($guard_value)) {
-		if (validate_ipv6($candidate_value)) {
-			$domain_data_ip6[] = $candidate_value;
-			return TRUE;
+		if (!validate_ipv6($candidate_value)) {
+			return FALSE;
 		}
-		return FALSE;
+		// A bare v6 stays raw; a CIDR goes through the sanitizer (mask clamp, canonical form).
+		if ($is_cidr) {
+			$parsed = sanitize_ipaddr_v6($candidate_value, $custom, 'Disabled');
+			if ($parsed === NULL) {
+				return FALSE;
+			}
+			$candidate_value = $parsed;
+		}
+		$domain_data_ip6[] = $candidate_value;
+		return TRUE;
 	}
 	return FALSE;
 }
@@ -13066,6 +13091,17 @@ function sanitize_ipaddr($ipaddr, $custom, $pfbcidr) {
 	global $pfb;
 
 	$result = pfb_sanitize_ipaddr($ipaddr, $custom, $pfbcidr, $pfb['supp']);
+	foreach ($result['messages'] as $message) {
+		pfb_logger($message, 1);
+	}
+	return $result['address'];
+}
+
+// IPv6 sibling of sanitize_ipaddr(): logs the sanitizer's messages, returns the address or NULL.
+function sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr) {
+	global $pfb;
+
+	$result = pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, $pfb['supp']);
 	foreach ($result['messages'] as $message) {
 		pfb_logger($message, 1);
 	}
