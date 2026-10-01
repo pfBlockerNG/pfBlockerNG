@@ -248,7 +248,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 	{
 		$lines = [
 			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '2001:db8::/32',
-			'2001:db8::1/128', '::/0', '::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+			'2001:db8::1/128', '::/0', '::ffff:192.168.1.0/120',
 		];
 		// A leading-zero mask is returned with its canonical spelling.
 		$lines = array_combine($lines, $lines) + [
@@ -285,7 +285,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 	public static function plainCidrRejectProvider(): array
 	{
 		$lines = [
-			'192.168.1.0/99', '192.168.1.0/' . str_repeat('9', 5000), '192.168.1.0/00000000000000000000024', '2001:db8::/129', '::ffff:192.168.1.0/999',
+			'192.168.1.0/99', '192.168.1.0/' . str_repeat('9', 5000), '192.168.1.0/00000000000000000000024', 'fe80::1%em0/64', '2001:db8::/129', '::ffff:192.168.1.0/999',
 			'192.168.256.0/24', '000.0.0.0/8', '0xc0.0xa8.1.0/24', '3232235876/24', '192.168.1/24', '999.1.1.1/24',
 		];
 		$rows = [];

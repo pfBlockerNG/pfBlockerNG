@@ -449,7 +449,6 @@ final class DnsblNumericHostTest extends TestCase
 			['::ffff:192.168.1.0/96', FALSE, $off, ['192.168.1.0'], []],
 			['::ffff:192.168.1.0/96', TRUE, $off, ['192.168.1.0/0'], []],
 			['::ffff:0:0/95', FALSE, $off, [], ['::ffff:0.0.0.0/95']],
-			['fe80::1%em0/64', FALSE, $off, [], []],
 			['192.168.1.0/24', FALSE, PfbToggle::On, [], []],
 			['192.0.2.0/24', FALSE, PfbToggle::On, [], []],
 			['2001:db8::/0', FALSE, PfbToggle::On, [], []],
@@ -504,7 +503,7 @@ final class DnsblNumericHostTest extends TestCase
 	public static function plainCidrRejectProvider(): array
 	{
 		$rows = [];
-		foreach (['192.168.1.0/99', '192.168.1.0/00000000000000000000024', '2001:db8::/129', '192.168.256.0/24', '000.0.0.0/8', '0xc0.0xa8.1.0/24', '3232235876/24',
+		foreach (['192.168.1.0/99', '192.168.1.0/00000000000000000000024', 'fe80::1%em0/64', '2001:db8::/129', '192.168.256.0/24', '000.0.0.0/8', '0xc0.0xa8.1.0/24', '3232235876/24',
 			'192.168.1/24', '999.1.1.1/24', '::ffff:192.168.1.0/999', '192.168.1.0/' . str_repeat('9', 5000),
 			'0.0.0.0 192.168.1.0/99'] as $line) {
 			foreach ([TRUE, FALSE] as $lenient) {

@@ -136,7 +136,8 @@ if (!function_exists('is_subnetv6')) {
 			return false;
 		}
 		list($ip, $bits) = explode('/', $subnet, 2);
-		return (is_ipaddrv6($ip) && preg_match('/^\d{1,3}$/', $bits) === 1 && (int) $bits <= 128);
+		// pfSense's is_subnet() regex has no '%', so a zone-id network is not a subnet.
+		return (is_ipaddrv6($ip) && strpos($ip, '%') === false && preg_match('/^\d{1,3}$/', $bits) === 1 && (int) $bits <= 128);
 	}
 }
 
