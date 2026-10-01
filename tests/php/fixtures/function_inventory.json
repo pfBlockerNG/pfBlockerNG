@@ -7508,6 +7508,19 @@
             }
         ]
     },
+    "pfb_ipv4_unpad": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "host",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_is_blank": {
         "returnsRef": false,
         "returnType": "bool",
