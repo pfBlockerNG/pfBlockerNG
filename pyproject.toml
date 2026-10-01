@@ -76,6 +76,9 @@ smoke = [
     "requests==2.34.2",
     # Transitive pin (via requests): >=3.15 fixes CVE-2026-45409.
     "idna==3.18",
+    # Transitive pin (via requests/semgrep): >=2.8.0 fixes GHSA-8988-9cw3-xx77 and
+    # GHSA-vxq7-64xx-v4gw (High), GHSA-gh4c-6fx4-qh6g (Medium).
+    "urllib3==2.8.0",
     # Transitive pin (via pytest): >=2.20.0 fixes CVE-2026-4539 (ReDoS).
     "pygments==2.20.0",
     # ADR-14 Tier-B browser tier. The wheel is the bindings only -- the Chromium
