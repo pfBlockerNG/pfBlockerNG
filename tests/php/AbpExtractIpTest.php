@@ -74,6 +74,8 @@ final class AbpExtractIpTest extends TestCase
 			'abp anchor spaced mask -> none' => ['||1.2.3.4/ 8^', ''],
 			'abp anchor double port -> none' => ['||[2001:db8::1]:443:80^', ''],
 			'abp anchor fullwidth digits -> none' => ['||１.２.３.４:80^', ''],
+			'abp anchor space before port -> none' => ['||1.2.3.4 :8080^', ''],
+			'abp anchor tab before port -> none' => ["||1.2.3.4\t:8080^", ''],
 			'hosts sink + ip target'   => ['0.0.0.0 192.0.2.9', '192.0.2.9'],
 			'hosts v6 sink + ip target' => ['::1 2001:db8::1', '2001:db8::1'],
 			'hosts tab-delimited'      => ["127.0.0.1\t192.0.2.9", '192.0.2.9'],
