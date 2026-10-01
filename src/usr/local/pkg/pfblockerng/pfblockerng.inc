@@ -2734,9 +2734,9 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 }
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
-// `if (!$lite)` branch. Order is load-bearing: a scheme-less '<IP>/<digits>' line is rejected
-// first (a CIDR is not a host; never collected as the bare address) -> userinfo/authority cut (strict mode keeps a
-// numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
+// `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
+// host) rejected first -> userinfo/authority cut (strict mode keeps a numeric host's
+// authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
 // pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
