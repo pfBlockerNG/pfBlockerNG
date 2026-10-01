@@ -2744,6 +2744,11 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
 	if (preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
+		// An all-decimal dotted quad is read with the IP-feed rule: padded zeros are stripped, not octal.
+		if (preg_match('/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/D', $cidr[1]) && max(explode('.', $cidr[1])) <= 255) {
+			$cidr[1] = implode('.', array_map(static fn($o) => (string) (int) $o, explode('.', $cidr[1])));
+			$line = "{$cidr[1]}/{$cidr[2]}";
+		}
 		if (is_ipaddr($cidr[1])) {
 			// is_subnet() accepts a mask too long to parse; a real prefix length is at most 3 digits.
 			if (is_subnet($line) && strlen(ltrim($cidr[2], '0')) <= 3) {
