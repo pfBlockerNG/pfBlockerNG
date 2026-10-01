@@ -133,7 +133,6 @@ final class DnsblNumericHostTest extends TestCase
 			'mixed bases'       => ['192.0xa8.01.100'],
 			'class B short'     => ['192.11010404'],
 			'class C short'     => ['192.168.356'],
-			'leading-zero quad' => ['192.168.01.100'],
 			'dword'             => ['3232235876'],
 			'hex dword'         => ['0xC0A80164'],
 			'octal dword'       => ['030052000544'],
@@ -162,6 +161,37 @@ final class DnsblNumericHostTest extends TestCase
 		};
 	}
 
+	/** @return array<string, array{string, string}> */
+	public static function paddedDecimalQuadProvider(): array
+	{
+		return [
+			'padded last octets'        => ['192.168.010.1', '192.168.10.1'],
+			'padded first octet'        => ['010.0.0.1', '10.0.0.1'],
+			'invalid-octal digit'       => ['192.168.08.1', '192.168.8.1'],
+			'single padded octet'       => ['192.168.01.100', '192.168.1.100'],
+			'all octets padded'         => ['08.08.08.08', '8.8.8.8'],
+			'url + path'                => ['http://192.168.010.1/x', '192.168.10.1'],
+			'url + path, invalid-octal' => ['http://08.08.08.08/login', '8.8.8.8'],
+			'url userinfo + path'       => ['http://user:p@ss@08.08.08.08/login', '8.8.8.8'],
+		];
+	}
+
+	/** A zero-padded all-decimal quad is decimal (the IP-feed rule), not WHATWG octal, in both modes. */
+	#[DataProvider('paddedDecimalQuadProvider')]
+	public function testPaddedDecimalQuadIsReadAsDecimal(string $feedLine, string $ip): void
+	{
+		foreach ([TRUE, FALSE] as $lenient) {
+			$out = $this->runRegion(self::$plainRegion, $feedLine, $lenient);
+			$this->assertSame([[], [$ip], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']], "line {$feedLine}");
+		}
+	}
+
+	public function testHostsLinePaddedDecimalTargetIsReadAsDecimal(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 08.08.08.08');
+		$this->assertSame([[], ['8.8.8.8'], [], ''], [$out['rows'], $out['ip4'], $out['ip6'], $out['fail']]);
+	}
+
 	public function testCanonicalQuadWithTrailingDotIsCollected(): void
 	{
 		$out = $this->runRegion(self::$plainRegion, '8.8.8.8.');
@@ -172,7 +202,7 @@ final class DnsblNumericHostTest extends TestCase
 	public static function invalidPlainLineProvider(): array
 	{
 		return [
-			'invalid octal digit' => ['08.08.08.08'],
+			'out-of-range octet'  => ['192.168.256.1'],
 			'non-number part'     => ['a.0x1'],
 			'five parts'          => ['1.2.3.4.5'],
 			'NUL in a label'      => ["1.2\x00.3.4"],
@@ -207,9 +237,9 @@ final class DnsblNumericHostTest extends TestCase
 
 	public function testHostsLineInvalidNumericTargetIsLoggedNotEmitted(): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 08.08.08.08');
+		$out = $this->runRegion(self::$hostsRegion, '0.0.0.0 1.2.3.4.5');
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']]);
-		$this->assertStringContainsString('08.08.08.08', $out['fail']);
+		$this->assertStringContainsString('1.2.3.4.5', $out['fail']);
 	}
 
 	public function testUserinfoIsRemovedSoTheRealDomainIsBlocked(): void
@@ -368,15 +398,15 @@ final class DnsblNumericHostTest extends TestCase
 	public function testStrictModeDecodesTheHostAfterTheLastAt(): void
 	{
 		$out = $this->runRegion(self::$plainRegion, 'http://a@b@c@192.168.010.100/x', lenient: FALSE);
-		$this->assertSame([[], ['192.168.8.100']], [$out['rows'], $out['ip4']]);
+		$this->assertSame([[], ['192.168.10.100']], [$out['rows'], $out['ip4']]);
 	}
 
 	/** @return array<string, array{string}> */
 	public static function strictRejectedProvider(): array
 	{
 		return [
-			'invalid numeric host + path'    => ['http://08.08.08.08/login'],
-			'invalid numeric host + userinfo' => ['http://user:p@ss@08.08.08.08/login'],
+			'invalid numeric host + path'    => ['http://1.2.3.4.5/login'],
+			'invalid numeric host + userinfo' => ['http://user:p@ss@1.2.3.4.5/login'],
 			'name host + path (control)'     => ['http://evil.com/login'],
 			'userinfo name + path (control)' => ['http://user@evil.com/login'],
 		];
@@ -420,7 +450,7 @@ final class DnsblNumericHostTest extends TestCase
 			['010.0.0.0/8', FALSE, $off, ['10.0.0.0/8'], []],
 			['192.168.08.0/24', FALSE, $off, ['192.168.8.0/24'], []],
 			['192.168.010.5/024', FALSE, $off, ['192.168.10.0/24'], []],
-			['000.0.0.0/8', FALSE, $off, [], []],
+			['0192.168.1.0/24', FALSE, $off, ['192.168.1.0/24'], []],
 			['::/0', FALSE, $off, [], []],
 			['::/0', TRUE, $off, [], []],
 			['::ffff:192.168.1.0/120', FALSE, $off, ['192.168.1.0/24'], []],
@@ -483,7 +513,7 @@ final class DnsblNumericHostTest extends TestCase
 	public static function plainCidrRejectProvider(): array
 	{
 		$rows = [];
-		foreach (['192.168.1.0/99', '2001:db8::/129', '192.168.256.0/24', '0192.168.1.0/24', '0xc0.0xa8.1.0/24', '3232235876/24',
+		foreach (['192.168.1.0/99', '2001:db8::/129', '192.168.256.0/24', '000.0.0.0/8', '0xc0.0xa8.1.0/24', '3232235876/24',
 			'192.168.1/24', '999.1.1.1/24', '::ffff:192.168.1.0/999', '192.168.1.0/' . str_repeat('9', 5000),
 			'0.0.0.0 192.168.1.0/99'] as $line) {
 			foreach ([TRUE, FALSE] as $lenient) {
@@ -524,7 +554,7 @@ final class DnsblNumericHostTest extends TestCase
 				'2001:db8::1' => [[], ['2001:db8::1'], []],
 				'0:0:0:0:0:0:0:1' => [[], ['0:0:0:0:0:0:0:1'], []],
 				'192.168.1.0' => [['192.168.1.0'], [], []],
-				'192.168.010.1' => [['192.168.8.1'], [], []],
+				'192.168.010.1' => [['192.168.10.1'], [], []],
 				'192.168.1.0/24^' => [['192.168.1.0'], [], []],
 				'192.168.1.0/24;x' => [['192.168.1.0'], [], []],
 				'192.168.1.0/24#x' => [['192.168.1.0'], [], []],
