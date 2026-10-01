@@ -270,7 +270,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
 	}
 
-	/** @return array<string, array{string, string}> */
+	/** @return array<string, array{string, string, bool}> */
 	public static function plainCidrControlProvider(): array
 	{
 		$controls = [
