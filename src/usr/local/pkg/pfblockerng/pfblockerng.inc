@@ -2737,28 +2737,22 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 // `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
 // host) handled first -> userinfo/authority cut (strict mode keeps a numeric host's
 // authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
-// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned whole
-// (mask canonicalised, no leading zeros) for the IP sanitizers; a bad mask or a non-canonical numeric network is a reject. Returns
-// FALSE on any reject (CIDR, both modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
+// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned
+// whole (padded octets unpadded, mask canonicalised) for the IP sanitizers; a bad mask or
+// a non-canonical numeric network is a reject. Returns FALSE on any reject (CIDR, both
+// modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
 	if (preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
-		// Padded octets are sanitized (decimal, IP-feed rule) before validation.
-		if (($unpadded = pfb_ipv4_unpad($cidr[1])) !== NULL) {
-			$cidr[1] = $unpadded;
-			$line = "{$unpadded}/{$cidr[2]}";
+		// Padded octets are decimal (IP-feed rule), so they are unpadded before is_ipaddr() sees them.
+		$net = pfb_ipv4_unpad($cidr[1]) ?? $cidr[1];
+		if (is_ipaddr($net) && is_subnet("{$net}/{$cidr[2]}")) {
+			return "{$net}/" . (int) $cidr[2];
 		}
-		if (is_ipaddr($cidr[1])) {
-			// is_subnet() accepts a mask too long to parse; a real prefix length is at most 3 digits.
-			if (is_subnet($line) && strlen(ltrim($cidr[2], '0')) <= 3) {
-				return "{$cidr[1]}/" . (int) $cidr[2];
-			}
-			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
-			return FALSE;
-		}
-		// A numeric spelling that is not a canonical dotted quad is no range either.
-		if (pfb_ipv4_numeric_host($cidr[1]) !== NULL) {
+		// A valid address with a bad mask, or a numeric network (no '/': else a URL path) that
+		// is not a canonical dotted quad, is no range.
+		if (is_ipaddr($net) || (!str_contains($net, '/') && pfb_ipv4_numeric_host($net) !== NULL)) {
 			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 			return FALSE;
 		}
@@ -10040,7 +10034,7 @@ function pfb_ipv4_unpad(string $host): ?string {
 		return NULL;
 	}
 	$address = pfb_sanitize_ipaddr($host, TRUE, 'Disabled', PfbToggle::Off)['address'];
-	return ($address !== NULL && is_ipaddrv4($address)) ? $address : NULL;
+	return is_ipaddrv4($address) ? $address : NULL;
 }
 
 
@@ -10121,7 +10115,9 @@ function pfb_dnsbl_hash_line_classify(string $line): array {
 // ADR-62: the shape shared by the 6 DNSBL IP-collection call sites (3 v4 + 3 v6
 // pairs). Asymmetric by design (kept, not flattened): v4 sanitizes $candidate_value
 // THEN validates the SANITIZED result; v6 validates $candidate_value RAW (never
-// sanitized) and appends it as-is. $guard_value is the family-check target (equal to
+// sanitized) and appends it as-is; a CIDR ('a/N') differs: an IPv4-mapped /96../128 is
+// collected as its IPv4 range, any other v6 CIDR is sanitized, and a bare v6 stays raw.
+// $guard_value is the family-check target (equal to
 // $candidate_value at two sites; a distinct CSV column at the pon-feed CSV site).
 // $pfb['updateip']/$ipcount and any 'continue' differ per call site and stay there;
 // this returns TRUE iff an IP was appended.
