@@ -2744,10 +2744,10 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
 	if (preg_match('#^(.+)/([0-9]+)$#D', $line, $cidr)) {
-		// An all-decimal dotted quad is read with the IP-feed rule: padded zeros are stripped, not octal.
-		if (preg_match('/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/D', $cidr[1]) && max(explode('.', $cidr[1])) <= 255) {
-			$cidr[1] = implode('.', array_map(static fn($o) => (string) (int) $o, explode('.', $cidr[1])));
-			$line = "{$cidr[1]}/{$cidr[2]}";
+		// Padded octets are sanitized (decimal, IP-feed rule) before validation.
+		if (($unpadded = pfb_ipv4_unpad($cidr[1])) !== NULL) {
+			$cidr[1] = $unpadded;
+			$line = "{$unpadded}/{$cidr[2]}";
 		}
 		if (is_ipaddr($cidr[1])) {
 			// is_subnet() accepts a mask too long to parse; a real prefix length is at most 3 digits.
@@ -10030,6 +10030,17 @@ function pfb_ipv4_numeric_host(string $host): ?array {
 		$ip += $value * 256 ** (3 - $i);
 	}
 	return array('ip' => long2ip($ip));
+}
+
+
+// A zero-padded all-decimal dotted quad ('192.168.010.1') read with the IP-feed rule (decimal, padded
+// zeros stripped) through pfb_sanitize_ipaddr(); NULL when the sanitized form is not a valid IPv4.
+function pfb_ipv4_unpad(string $host): ?string {
+	if (!preg_match('/^[0-9]+(\.[0-9]+){3}$/D', $host)) {
+		return NULL;
+	}
+	$address = pfb_sanitize_ipaddr($host, TRUE, 'Disabled', PfbToggle::Off)['address'];
+	return ($address !== NULL && is_ipaddrv4($address)) ? $address : NULL;
 }
 
 

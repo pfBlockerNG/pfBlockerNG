@@ -2656,6 +2656,9 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 											}
 											$line = trim($line);
 
+											// Padded decimal octets ('192.168.010.1') are decimal, as in an IP feed.
+											$line = pfb_ipv4_unpad($line) ?? $line;
+
 											// A non-canonical IPv4 spelling ('0xc0.0xa8.0x1.0x64', '192.168.356')
 											// is the address a client dials, never a domain: decode it (WHATWG
 											// rules) for the IP branch below, or log it when it is invalid.
