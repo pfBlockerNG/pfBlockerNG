@@ -15202,6 +15202,33 @@
             }
         ]
     },
+    "sanitize_ipaddr_v6": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "ipaddr",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "custom",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            },
+            {
+                "name": "pfbcidr",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "sync_package_pfblockerng": {
         "returnsRef": false,
         "returnType": "bool",
