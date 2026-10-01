@@ -125,7 +125,7 @@ if (!function_exists('is_subnetv4')) {
 			return false;
 		}
 		list($ip, $bits) = explode('/', $subnet, 2);
-		return (is_ipaddrv4($ip) && ctype_digit($bits) && (int) $bits >= 0 && (int) $bits <= 32);
+		return (is_ipaddrv4($ip) && preg_match('/^\d{1,3}$/', $bits) === 1 && (int) $bits <= 32);
 	}
 }
 
@@ -136,7 +136,7 @@ if (!function_exists('is_subnetv6')) {
 			return false;
 		}
 		list($ip, $bits) = explode('/', $subnet, 2);
-		return (is_ipaddrv6($ip) && ctype_digit($bits) && (int) $bits >= 0 && (int) $bits <= 128);
+		return (is_ipaddrv6($ip) && preg_match('/^\d{1,3}$/', $bits) === 1 && (int) $bits <= 128);
 	}
 }
 

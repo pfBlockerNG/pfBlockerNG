@@ -253,7 +253,6 @@ final class PfbDnsblExtractHostTest extends TestCase
 		// A leading-zero mask is returned with its canonical spelling.
 		$lines = array_combine($lines, $lines) + [
 			'192.168.1.0/024' => '192.168.1.0/24',
-			'192.168.1.0/00000000000000000000024' => '192.168.1.0/24',
 			'192.168.1.0/08' => '192.168.1.0/8',
 			'2001:db8::/032' => '2001:db8::/32',
 			// A zero-padded all-decimal dotted quad is read as decimal (the IP-feed rule).
@@ -286,7 +285,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 	public static function plainCidrRejectProvider(): array
 	{
 		$lines = [
-			'192.168.1.0/99', '192.168.1.0/' . str_repeat('9', 5000), '2001:db8::/129', '::ffff:192.168.1.0/999',
+			'192.168.1.0/99', '192.168.1.0/' . str_repeat('9', 5000), '192.168.1.0/00000000000000000000024', '2001:db8::/129', '::ffff:192.168.1.0/999',
 			'192.168.256.0/24', '000.0.0.0/8', '0xc0.0xa8.1.0/24', '3232235876/24', '192.168.1/24', '999.1.1.1/24',
 		];
 		$rows = [];
@@ -322,6 +321,8 @@ final class PfbDnsblExtractHostTest extends TestCase
 			'192.168.1.0:80/24' => '192.168.1.0',
 			'3232235876/' => '3232235876', '[2001:db8::]/32' => '2001:db8::',
 			'example.com/24' => 'example.com', '/24' => '',
+			'cdn.example.com/v1.2/3' => 'cdn.example.com', 'example.com/path/setup_1.0/1' => 'example.com',
+			'example.com/1.2.3.4/24' => 'example.com',
 			'2001:db8::1%em0/64' => '2001:db8::1%em0',
 		];
 		$rows = [];

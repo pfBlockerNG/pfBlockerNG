@@ -3,7 +3,8 @@
 A scheme-less ``192.0.2.0/24`` or ``2001:db8::/32`` line used to be collected as the bare address
 (``192.0.2.0``), blocking one host while the feed claimed a network. It is now collected as the
 range into pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6, in lenient and strict mode. A line with an invalid
-mask (``198.51.100.0/99``) is a parse error: it lands in dnsbl_parsed_error.log and in no table.
+mask (``198.51.100.0/99`` or a zero-padded ``/00000000000024``) is a parse error: it lands in
+dnsbl_parsed_error.log and in no table.
 
 The addresses come from the RFC 5737 / RFC 3849 documentation ranges; ``deploy()`` pins IP
 Suppression off, so they are not dropped as documentation space.
@@ -29,6 +30,8 @@ pytestmark = pytest.mark.smoke
 HEADER = "smokeplaincidr"
 V4_CIDR, V6_CIDR, CONTROL_IP = "192.0.2.0/24", "2001:db8::/32", "198.51.100.30"
 BAD_CIDR = "198.51.100.0/99"
+# pfSense is_subnet() reads the mask with \d{1,3}, so a long zero-padded mask is a bad mask.
+PADDED_MASK_CIDR = "198.51.100.64/00000000000024"
 
 
 @pytest.fixture(scope="module")
@@ -73,12 +76,13 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
     # Per-mode header and feed: with a shared one, the second case's control never got the VIP block.
     header = f"{HEADER}{mode}"
     control = h.unique_domain("plaincidr")
-    body = "\n".join([V4_CIDR, V6_CIDR, BAD_CIDR, CONTROL_IP, control]) + "\n"
+    body = "\n".join([V4_CIDR, V6_CIDR, BAD_CIDR, PADDED_MASK_CIDR, CONTROL_IP, control]) + "\n"
     feed_url = h.write_local_feed(vm, f"smoke_dnsbl_plain_cidr_{mode}.txt", body)
     spec = h.DnsblCase(
         aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
     )
     bad_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, BAD_CIDR)
+    padded_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, PADDED_MASK_CIDR)
     v4_cidr_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V4_CIDR)
     v6_cidr_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR)
     try:
@@ -99,6 +103,10 @@ def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
         assert V6_CIDR in v6, f"{mode}: expected {V6_CIDR} in pfB_DNSBLIP_v6, got {v6}"
         assert not h.member_present(v4, "198.51.100.0"), f"{mode}: 198.51.100.0 from {BAD_CIDR} in v4: {v4}"
 
+        assert not h.member_present(v4, "198.51.100.64"), f"{mode}: 198.51.100.64 from {PADDED_MASK_CIDR} in v4: {v4}"
+        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, PADDED_MASK_CIDR) > padded_before, (
+            f"{mode}: {PADDED_MASK_CIDR} missing from the DNSBL parse-error log"
+        )
         assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, BAD_CIDR) > bad_before, (
             f"{mode}: {BAD_CIDR} missing from the DNSBL parse-error log:\n"
             f"{h.read_log_file(vm, h.DNSBL_PARSE_ERR_LOG)[-2000:]}"
