@@ -13,6 +13,7 @@ narrative could otherwise park. `scripts/check_context_budget.py` enforces both
 caps, the shape, and this file's 16,384-byte budget; the recorded SHAs
 and their order are pinned by `tests/test_context_budget.py`.
 
+- `834438b2`  deps: override pyjwt to 2.15.1 past semgrep's ~=2.13.0 pin  (#3399) — two quota notices; condensed review, exact-head CI PASS
 - `654b9f463`  smoke: restore the DNS config at each module end so forwarding no longer leaks  (#3326) — quota twice on the ask.
 - `2babdcbf9`  src: define dispatch-referenced constants before the CLI dispatch  (#3303) — finished review pre-fix, quota on the landed head; two review rounds, Copilot approval.
 - `a59563e5c`  Graphify 0.9.59 overrides  (#10) — pfBlockerNG/graphify#10; silent twice.
