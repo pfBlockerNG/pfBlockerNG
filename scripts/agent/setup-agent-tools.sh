@@ -290,7 +290,13 @@ main() {
 			;;
 	esac
 	require_tool uv
-	uv tool install --upgrade serena-agent
+	# Pin serena-agent (env-overridable for a one-off): serena cannot ride the
+	# repository lockfile -- every release past the GHSA-37h2-6p4f-mp3q fix
+	# (1.5.2) exact-pins its dependency fleet, which cannot coexist with the
+	# lock's smoke/dev pins (#3414) -- so this literal IS the pin. Bump it
+	# deliberately instead of floating a dashboard/advisory regression in.
+	serena_agent_version=${SERENA_AGENT_VERSION:-1.7.0}
+	uv tool install --upgrade "serena-agent==$serena_agent_version"
 	(cd "$root" && sh "$setup_hooks")
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep

@@ -164,7 +164,7 @@ CURL
 #!/bin/sh
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
-  'tool install --upgrade serena-agent')
+  "tool install --upgrade serena-agent=="*)
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
     cp "$DEBIAN_INSTALLABLES/serena" "$uv_tool_bin/serena"
@@ -344,7 +344,7 @@ GROK
     export BREW_UV_PREFIX="$brew_prefix"
     export SERENA_STATE_DIR="$serena_state"
     unset CLAUDECODE CODEX_THREAD_ID COPILOT_CLI GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
-    unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE
+    unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE SERENA_AGENT_VERSION
     unset GROK_DOCTOR_RC AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
     unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME
     PATH="$activebin:$basebin"; export PATH
@@ -391,7 +391,7 @@ GROK
       'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -517,7 +517,7 @@ FAIL_SKILL_PUBLISH
       'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -555,7 +555,7 @@ FAIL_SKILL_PUBLISH
     The contents of file "$curl_log" should equal \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -579,7 +579,7 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:install uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -600,7 +600,7 @@ UNMANAGED_UV
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -610,7 +610,7 @@ UNMANAGED_UV
       'serena:init' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -633,7 +633,7 @@ UNMANAGED_UV
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'brew:list --versions uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade serena-agent==1.7.0' \
       'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
@@ -1074,7 +1074,7 @@ CONFIG
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==1.7.0$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 2 ]
@@ -1085,6 +1085,13 @@ CONFIG
     Assert [ "$(grep -c "^ensure-graphify:$repository$" "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
+  End
+
+  It 'installs the environment-overridden serena-agent version instead of the default pin'
+    When run env SERENA_AGENT_VERSION=9.9.9 sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==9.9.9$' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent==1.7.0$' "$tool_log")" -eq 0 ]
   End
 
   It 'requires every repository setup helper before running any of them'
