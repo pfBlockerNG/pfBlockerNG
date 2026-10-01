@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -162,5 +163,44 @@ final class Adr62DnsblCollectFeedIpTest extends TestCase
 		$ip6 = [];
 		$this->assertTrue(pfb_dnsbl_collect_feed_ip('::192.168.1.100', '::192.168.1.100', TRUE, $ip4, $ip6));
 		$this->assertSame([[], ['::192.168.1.100']], [$ip4, $ip6]);
+	}
+
+	/** @return array<string, array{string, bool, list<string>, list<string>}> */
+	public static function cidrCandidateProvider(): array
+	{
+		return [
+			'mapped /120 is the v4 /24'              => ['::ffff:192.168.1.0/120', FALSE, ['192.168.1.0/24'], []],
+			'mapped /128 is the bare host'           => ['::ffff:192.168.1.7/128', FALSE, ['192.168.1.7'], []],
+			'mapped /96 feed clamps like /0'         => ['::ffff:192.168.1.0/96', FALSE, ['192.168.1.0'], []],
+			'mapped /96 custom keeps the whole family' => ['::ffff:192.168.1.0/96', TRUE, ['192.168.1.0/0'], []],
+			'mapped /95 stays v6'                    => ['::ffff:0:0/95', FALSE, [], ['::ffff:0.0.0.0/95']],
+			'v6 CIDR is sanitized to canonical form' => ['2001:DB8:0::/32', FALSE, [], ['2001:db8::/32']],
+			'v6 feed /0 clamps to the host'          => ['2001:db8::/0', FALSE, [], ['2001:db8::']],
+			'v6 custom /0 is kept'                   => ['2001::/0', TRUE, [], ['2001::/0']],
+			'v6 zone is dropped'                     => ['fe80::1%em0/64', FALSE, [], []],
+			'v6 all-zeros is dropped'                => ['::/0', TRUE, [], []],
+		];
+	}
+
+	/**
+	 * @param list<string> $ip4
+	 * @param list<string> $ip6
+	 */
+	#[DataProvider('cidrCandidateProvider')]
+	public function testCidrCandidateIsCollectedThroughTheSanitizers(string $candidate, bool $custom, array $ip4, array $ip6): void
+	{
+		$got4 = [];
+		$got6 = [];
+		$guard = explode('/', $candidate, 2)[0];
+		$this->assertSame($ip4 !== [] || $ip6 !== [], pfb_dnsbl_collect_feed_ip($guard, $candidate, $custom, $got4, $got6));
+		$this->assertSame([$ip4, $ip6], [$got4, $got6]);
+	}
+
+	public function testBareNonCanonicalV6StaysRaw(): void
+	{
+		$ip4 = [];
+		$ip6 = [];
+		$this->assertTrue(pfb_dnsbl_collect_feed_ip('2001:DB8:0::1', '2001:DB8:0::1', FALSE, $ip4, $ip6));
+		$this->assertSame([[], ['2001:DB8:0::1']], [$ip4, $ip6]);
 	}
 }

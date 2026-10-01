@@ -1,12 +1,12 @@
-"""Live-VM smoke: a plain '<IP>/<mask>' DNSBL line is rejected into the parse-error log (#3366).
+"""Live-VM smoke: a plain '<IP>/<mask>' DNSBL line is collected as that range (#3366).
 
 A scheme-less ``192.0.2.0/24`` or ``2001:db8::/32`` line used to be collected as the bare address
-(``192.0.2.0``), blocking one host while the feed claimed a network. It now lands in
-dnsbl_parsed_error.log and in neither DNSBL IP table, in lenient and strict mode; a plain
-control IP on the same feed is still collected.
+(``192.0.2.0``), blocking one host while the feed claimed a network. It is now collected as the
+range into pfB_DNSBLIP_v4 / pfB_DNSBLIP_v6, in lenient and strict mode. A line with an invalid
+mask (``198.51.100.0/99``) is a parse error: it lands in dnsbl_parsed_error.log and in no table.
 
 The addresses come from the RFC 5737 / RFC 3849 documentation ranges; ``deploy()`` pins IP
-Suppression off, so the control is collected.
+Suppression off, so they are not dropped as documentation space.
 
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke`` in
 pyproject.toml). Run only by the smoke workflow; select it there with ``-k plain_cidr``::
@@ -28,6 +28,7 @@ pytestmark = pytest.mark.smoke
 
 HEADER = "smokeplaincidr"
 V4_CIDR, V6_CIDR, CONTROL_IP = "192.0.2.0/24", "2001:db8::/32", "198.51.100.30"
+BAD_CIDR = "198.51.100.0/99"
 
 
 @pytest.fixture(scope="module")
@@ -53,30 +54,33 @@ def deployed_vm(smoke_vm: SmokeVM, client_vm: SmokeVM, stub_dns: _StubDnsServer)
 
 @pytest.mark.timeout(300)  # same inject + DNSBL-IP reload shape as test_smoke_dnsbl_empty_scheme_ip
 @pytest.mark.parametrize("lenient", [True, False], ids=["lenient", "strict"])
-def test_plain_cidr_lines_rejected_and_control_ip_collected(
+def test_plain_cidr_lines_collected_as_ranges_and_bad_mask_rejected(
     deployed_vm: SmokeVM, client_vm: SmokeVM, lenient: bool
 ) -> None:
-    """Scenario: plain CIDR lines are parse errors; a plain IP on the same feed is firewalled.
+    """Scenario: plain CIDR lines are firewalled as ranges; a bad mask is a parse error.
 
     Given a DNSBL feed, loaded with DNSBL IP = Deny_Both in the given scheme mode, that holds
-      ``192.0.2.0/24``, ``2001:db8::/32``, the control IP ``198.51.100.30`` and a control domain,
+      ``192.0.2.0/24``, ``2001:db8::/32``, ``198.51.100.0/99``, the control IP ``198.51.100.30``
+      and a control domain,
     When the feed is reloaded,
     Then the control domain is VIP-blocked (the feed loaded),
-      pfB_DNSBLIP_v4 holds 198.51.100.30 but not 192.0.2.0, pfB_DNSBLIP_v6 lacks 2001:db8::,
-      and the parse-error log gains a line naming each CIDR.
+      pfB_DNSBLIP_v4 holds the control IP and 192.0.2.0/24, pfB_DNSBLIP_v6 holds 2001:db8::/32,
+      198.51.100.0 from the bad-mask line is in no table,
+      and the parse-error log gains a line naming the bad-mask line only.
     """
     vm = deployed_vm
     mode = "lenient" if lenient else "strict"
     # Per-mode header and feed: with a shared one, the second case's control never got the VIP block.
     header = f"{HEADER}{mode}"
     control = h.unique_domain("plaincidr")
-    body = "\n".join([V4_CIDR, V6_CIDR, CONTROL_IP, control]) + "\n"
+    body = "\n".join([V4_CIDR, V6_CIDR, BAD_CIDR, CONTROL_IP, control]) + "\n"
     feed_url = h.write_local_feed(vm, f"smoke_dnsbl_plain_cidr_{mode}.txt", body)
     spec = h.DnsblCase(
         aliasname=header, feed_url=feed_url, header=header, mode=h.DnsblMode.VIP, dnsbl_ip_action="Deny_Both"
     )
-    v4_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V4_CIDR)
-    v6_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR)
+    bad_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, BAD_CIDR)
+    v4_cidr_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V4_CIDR)
+    v6_cidr_before = h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR)
     try:
         h.inject(vm, spec)
         h.set_dnsbl_lenient(vm, lenient)
@@ -91,15 +95,19 @@ def test_plain_cidr_lines_rejected_and_control_ip_collected(
         v4 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v4")
         v6 = h.pfctl_table_members(vm, "pfB_DNSBLIP_v6")
         assert h.member_present(v4, CONTROL_IP), f"{mode}: expected {CONTROL_IP} in pfB_DNSBLIP_v4, got {v4}"
-        assert not h.member_present(v4, "192.0.2.0"), f"{mode}: 192.0.2.0 from {V4_CIDR} in v4: {v4}"
-        assert not h.member_present(v6, "2001:db8::"), f"{mode}: 2001:db8:: from {V6_CIDR} in v6: {v6}"
+        assert V4_CIDR in v4, f"{mode}: expected {V4_CIDR} in pfB_DNSBLIP_v4, got {v4}"
+        assert V6_CIDR in v6, f"{mode}: expected {V6_CIDR} in pfB_DNSBLIP_v6, got {v6}"
+        assert not h.member_present(v4, "198.51.100.0"), f"{mode}: 198.51.100.0 from {BAD_CIDR} in v4: {v4}"
 
-        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V4_CIDR) > v4_before, (
-            f"{mode}: {V4_CIDR} missing from the DNSBL parse-error log:\n"
+        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, BAD_CIDR) > bad_before, (
+            f"{mode}: {BAD_CIDR} missing from the DNSBL parse-error log:\n"
             f"{h.read_log_file(vm, h.DNSBL_PARSE_ERR_LOG)[-2000:]}"
         )
-        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR) > v6_before, (
-            f"{mode}: {V6_CIDR} missing from the DNSBL parse-error log"
+        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V4_CIDR) == v4_cidr_before, (
+            f"{mode}: valid {V4_CIDR} must not be a parse error"
+        )
+        assert h.count_log_marker(vm, h.DNSBL_PARSE_ERR_LOG, V6_CIDR) == v6_cidr_before, (
+            f"{mode}: valid {V6_CIDR} must not be a parse error"
         )
     finally:
         h.reset(vm)

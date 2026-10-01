@@ -390,58 +390,152 @@ final class DnsblNumericHostTest extends TestCase
 		$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
 	}
 
-	/** @return array<string, array{string, bool, string}> */
-	public static function plainCidrRejectProvider(): array
+	/**
+	 * Issue #3366: a scheme-less '<canonical IP>/<valid mask>' line is a range and is collected as
+	 * one through the sanitizers; every row asserts the whole outcome (ip4, ip6, domain rows).
+	 *
+	 * @return array<string, array{string, bool, PfbToggle, list<string>, list<string>}>
+	 *         line, custom, suppression, expected ip4, expected ip6
+	 */
+	public static function plainCidrHonoredProvider(): array
 	{
+		$off = PfbToggle::Off;
+		$cases = [
+			['192.168.1.0/24', FALSE, $off, ['192.168.1.0/24'], []],
+			['0.0.0.0 192.168.1.0/24', FALSE, $off, ['192.168.1.0/24'], []],
+			['192.168.1.5/24', FALSE, $off, ['192.168.1.0/24'], []],
+			['10.1.2.3/8', FALSE, $off, ['10.1.2.3/8'], []],
+			['192.168.1.0/32', FALSE, $off, ['192.168.1.0'], []],
+			['1.2.3.4/0', FALSE, $off, ['1.2.3.4'], []],
+			['1.2.3.4/0', TRUE, $off, ['1.2.3.4/0'], []],
+			['2001:db8::/32', FALSE, $off, [], ['2001:db8::/32']],
+			['2001::/0', TRUE, $off, [], ['2001::/0']],
+			['2001:db8::/0', FALSE, $off, [], ['2001:db8::']],
+			['::/0', FALSE, $off, [], []],
+			['::/0', TRUE, $off, [], []],
+			['::ffff:192.168.1.0/120', FALSE, $off, ['192.168.1.0/24'], []],
+			['::ffff:192.168.1.7/128', FALSE, $off, ['192.168.1.7'], []],
+			['::ffff:192.168.1.0/96', FALSE, $off, ['192.168.1.0'], []],
+			['::ffff:192.168.1.0/96', TRUE, $off, ['192.168.1.0/0'], []],
+			['::ffff:0:0/95', FALSE, $off, [], ['::ffff:0.0.0.0/95']],
+			['fe80::1%em0/64', FALSE, $off, [], []],
+			['192.168.1.0/24', FALSE, PfbToggle::On, [], []],
+			['192.0.2.0/24', FALSE, PfbToggle::On, [], []],
+			['2001:db8::/0', FALSE, PfbToggle::On, [], []],
+		];
 		$rows = [];
-		foreach (['192.168.1.0/24', '2001:db8::/32', '::ffff:192.168.1.0/120', '0.0.0.0 192.168.1.0/24'] as $line) {
+		foreach ($cases as [$line, $custom, $supp, $ip4, $ip6]) {
 			foreach ([TRUE, FALSE] as $lenient) {
-				foreach (['Deny_Both', 'Disabled'] as $ip) {
-					$rows["{$line} " . ($lenient ? 'lenient' : 'strict') . " {$ip}"] = [$line, $lenient, $ip];
-				}
+				$rows[$line . ($custom ? ' custom' : ' feed') . ($supp === PfbToggle::On ? ' supp' : '')
+					. ($lenient ? ' lenient' : ' strict')] = [$line, $lenient, $custom, $supp, $ip4, $ip6];
 			}
 		}
 		return $rows;
 	}
 
 	/**
-	 * Issue #3366: a scheme-less '<canonical IP>/<digits>' line is a CIDR the DNSBL IP path cannot
-	 * honour, so it goes to the parse-error log instead of being collected as the bare address,
-	 * in both parse modes, whatever the DNSBL IP setting.
+	 * @param list<string> $ip4
+	 * @param list<string> $ip6
 	 */
-	#[DataProvider('plainCidrRejectProvider')]
-	public function testPlainCidrLineCollectsNothingAndWritesParseError(string $feedLine, bool $lenient, string $ip): void
+	#[DataProvider('plainCidrHonoredProvider')]
+	public function testPlainCidrLineIsCollectedAsARange(string $feedLine, bool $lenient, bool $custom,
+		PfbToggle $supp, array $ip4, array $ip6): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, dnsblIp: $ip);
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, $custom, $supp);
+
+		$this->assertSame([$ip4, $ip6, [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
+	}
+
+	public function testFeedV6SlashZeroIsDroppedAndClampLogged(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '::/0', TRUE, FALSE);
+
+		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
+		$this->assertStringContainsString('Feed /0 CIDR clamped to single host', $out['log']);
+	}
+
+	public function testCustomV6SlashZeroIsDroppedWithoutClampLog(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '::/0', TRUE, TRUE);
+
+		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
+		$this->assertStringNotContainsString('clamped', $out['log']);
+	}
+
+	public function testHonoredCidrWithDnsblIpDisabledIsSilent(): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, '192.168.1.0/24', TRUE, FALSE, dnsblIp: 'Disabled');
+
+		$this->assertSame([[], [], [], ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
+	}
+
+	/** @return array<string, array{string, bool, string}> */
+	public static function plainCidrRejectProvider(): array
+	{
+		$rows = [];
+		foreach (['192.168.1.0/99', '2001:db8::/129', '192.168.001.0/24', '0xc0.0xa8.1.0/24', '3232235876/24',
+			'192.168.1/24', '999.1.1.1/24', '::ffff:192.168.1.0/999', '192.168.1.0/' . str_repeat('9', 5000),
+			'0.0.0.0 192.168.1.0/99'] as $line) {
+			foreach ([TRUE, FALSE] as $lenient) {
+				foreach (['Deny_Both', 'Disabled'] as $ip) {
+					$rows[substr($line, 0, 40) . ' ' . ($lenient ? 'lenient' : 'strict') . " {$ip}"] = [$line, $lenient, $ip];
+				}
+			}
+		}
+		return $rows;
+	}
+
+	/** A bad mask or a non-canonical numeric network is a parse error whatever the DNSBL IP setting. */
+	#[DataProvider('plainCidrRejectProvider')]
+	public function testBadCidrLineCollectsNothingAndWritesParseError(string $feedLine, bool $lenient, string $ip): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, FALSE, dnsblIp: $ip);
 
 		$this->assertSame([[], [], []], [$out['ip4'], $out['ip6'], $out['rows']]);
 		$this->assertStringContainsString(
-			trim(substr($feedLine, (int) strrpos($feedLine, ' '))),
+			substr(trim(substr($feedLine, (int) strrpos($feedLine, ' '))), 0, 40),
 			$out['fail'],
 			'the rejected line must be in the DNSBL parse-error log'
 		);
 	}
 
-	/** @return array<string, array{string, bool, list<string>}> */
+	/** @return array<string, array{string, bool, list<string>, list<string>, list<array{string, string}>}> */
 	public static function plainCidrControlProvider(): array
 	{
 		$rows = [];
 		foreach ([TRUE, FALSE] as $lenient) {
 			$m = $lenient ? 'lenient' : 'strict';
-			$rows["192.168.1.0/ {$m}"] = ['192.168.1.0/', $lenient, ['192.168.1.0']];
-			$rows["3232235876/ {$m}"] = ['3232235876/', $lenient, ['192.168.1.100']];
-			$rows["http://192.168.1.0/24 {$m}"] = ['http://192.168.1.0/24', $lenient, ['192.168.1.0']];
+			foreach ([
+				'192.168.1.0/' => [['192.168.1.0'], [], []],
+				'3232235876/' => [['192.168.1.100'], [], []],
+				'http://192.168.1.0/24' => [['192.168.1.0'], [], []],
+				'[2001:db8::]/32' => [[], ['2001:db8::'], []],
+				'example.com/24' => [[], [], [['d', 'example.com']]],
+				'2001:db8::1' => [[], ['2001:db8::1'], []],
+				'0:0:0:0:0:0:0:1' => [[], ['0:0:0:0:0:0:0:1'], []],
+				'192.168.1.0' => [['192.168.1.0'], [], []],
+				'192.168.1.0/24^' => [['192.168.1.0'], [], []],
+				'192.168.1.0/24;x' => [['192.168.1.0'], [], []],
+				'192.168.1.0/24#x' => [['192.168.1.0'], [], []],
+				'192.168.1.0/ 24' => [[], [], []],
+			] as $line => [$ip4, $ip6, $domains]) {
+				$rows["{$line} {$m}"] = [$line, $lenient, $ip4, $ip6, $domains];
+			}
 		}
 		return $rows;
 	}
 
-	/** @param list<string> $expected */
+	/**
+	 * @param list<string> $ip4
+	 * @param list<string> $ip6
+	 * @param list<array{string, string}> $domains
+	 */
 	#[DataProvider('plainCidrControlProvider')]
-	public function testNearMissCidrShapesAreStillCollected(string $feedLine, bool $lenient, array $expected): void
+	public function testNearMissCidrShapesAreStillCollected(string $feedLine, bool $lenient, array $ip4,
+		array $ip6, array $domains): void
 	{
-		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient);
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, FALSE);
 
-		$this->assertSame($expected, $out['ip4']);
-		$this->assertSame('', $out['fail']);
+		$this->assertSame([$ip4, $ip6, $domains, ''], [$out['ip4'], $out['ip6'], $out['rows'], $out['fail']]);
 	}
 }

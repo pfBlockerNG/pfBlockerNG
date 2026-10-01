@@ -207,6 +207,19 @@ final class PfbDnsblCsvExtractTest extends TestCase
 		$this->assertSame(['198.51.100.20'], $ip4);
 	}
 
+	public function testPonWithV6CidrCandidateIsSanitizedBeforeCollection(): void
+	{
+		// The guard (csvline[0]) picks the family; the CIDR candidate (csvline[2]) goes through
+		// the v6 sanitizer, so a non-canonical spelling lands in its canonical form.
+		$csvline = ['2001:db8::1', 'x', '2001:DB8:0::/32', 'd', 'e', 'f', 'g', 'h', 'i'];
+		$ip4 = [];
+		$ip6 = [];
+		$r = pfb_dnsbl_csv_extract('raw', $csvline, 'pon', TRUE, TRUE, $this->alienvaultTypes,
+			TRUE, FALSE, $ip4, $ip6, 'hdr', 'raw', 5, $this->parseErr);
+		$this->assertTrue($r['ip_collected']);
+		$this->assertSame([[], ['2001:db8::/32']], [$ip4, $ip6]);
+	}
+
 	public function testPonIpCollectionGatedByDnsblIpEnabled(): void
 	{
 		$csvline = ['198.51.100.8', 'x', '198.51.100.21', 'd', 'e', 'f', 'g', 'h', 'i'];

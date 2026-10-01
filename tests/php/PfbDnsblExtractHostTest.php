@@ -9,7 +9,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_dnsbl_extract_host() -- issue #1119 (folded into #1117) extraction of the DNSBL
  * download/parse loop's `if (!$lite)` host-munging branch into a pure, unit-testable
- * helper. Pins the pipeline's load-bearing ORDER (CIDR reject -> scheme strip -> '/'/'#'/'?'
+ * helper. Pins the pipeline's load-bearing ORDER (CIDR whole-or-reject -> scheme strip -> '/'/'#'/'?'
  * truncation -> ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
  * FALSE-propagation contract when pfb_dnsbl_scheme_line() rejects a strict-mode URL path.
  */
@@ -240,15 +240,41 @@ final class PfbDnsblExtractHostTest extends TestCase
 		}
 	}
 
-	// -- issue #3366: scheme-less '<canonical IP>/<digits>' is rejected, not collected as the bare address --
+	// -- issue #3366: scheme-less '<canonical IP>/<valid mask>' is returned whole; a bad mask or a
+	// non-canonical numeric network is a parse error --
+
+	/** @return array<string, array{string, bool}> */
+	public static function plainCidrHonoredProvider(): array
+	{
+		$lines = [
+			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '192.168.1.0/024',
+			'192.168.1.0/00000000000000000000024', '2001:db8::/32', '2001:db8::1/128', '::/0',
+			'::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+		];
+		$rows = [];
+		foreach ($lines as $line) {
+			foreach ([TRUE, FALSE] as $strict) {
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $strict];
+			}
+		}
+		return $rows;
+	}
+
+	#[DataProvider('plainCidrHonoredProvider')]
+	public function testPlainCidrLineIsReturnedWholeWithNoParseError(string $line, bool $strict): void
+	{
+		$skipped = 0;
+		$this->assertSame($line, $this->extract($line, $strict, $skipped));
+		$this->assertSame(0, $skipped);
+		$this->assertFileDoesNotExist($this->parseErr);
+	}
 
 	/** @return array<string, array{string, bool}> */
 	public static function plainCidrRejectProvider(): array
 	{
 		$lines = [
-			'192.168.1.0/24', '192.168.1.5/24', '192.168.1.0/32', '1.2.3.4/0', '192.168.1.0/024',
-			'192.168.1.0/99', '192.168.1.0/00000000000000000000024', '192.168.1.0/' . str_repeat('9', 5000),
-			'2001:db8::/32', '2001:db8::1/128', '::/0', '::ffff:192.168.1.0/120', 'fe80::1%em0/64',
+			'192.168.1.0/99', '192.168.1.0/' . str_repeat('9', 5000), '2001:db8::/129', '::ffff:192.168.1.0/999',
+			'192.168.001.0/24', '0xc0.0xa8.1.0/24', '3232235876/24', '192.168.1/24', '999.1.1.1/24',
 		];
 		$rows = [];
 		foreach ($lines as $line) {
@@ -260,14 +286,14 @@ final class PfbDnsblExtractHostTest extends TestCase
 	}
 
 	#[DataProvider('plainCidrRejectProvider')]
-	public function testPlainCidrLineIsRejectedWithParseErrorAndNoSkipCount(string $line, bool $strict): void
+	public function testBadMaskOrNonCanonicalNetworkIsRejectedWithParseErrorAndNoSkipCount(string $line, bool $strict): void
 	{
 		$skipped = 0;
 		$result  = $this->extract($line, $strict, $skipped);
 
-		$this->assertFalse($result, 'a scheme-less IP/mask line must be rejected in both modes');
+		$this->assertFalse($result);
 		$this->assertSame(0, $skipped, 'the strict-path skip counter must not be bumped');
-		$this->assertStringContainsString($line, (string) file_get_contents($this->parseErr));
+		$this->assertStringContainsString(substr($line, 0, 40), (string) file_get_contents($this->parseErr));
 	}
 
 	/** @return array<string, array{string, string, bool}> */
@@ -278,11 +304,11 @@ final class PfbDnsblExtractHostTest extends TestCase
 			'192.168.1.0/24#x' => '192.168.1.0', '192.168.1.0/+24' => '192.168.1.0', '192.168.1.0//24' => '192.168.1.0',
 			'192.168.1.0/24;x' => '192.168.1.0', '192.168.1.0/24?x' => '192.168.1.0', '192.168.1.0/24:80' => '192.168.1.0',
 			"192.168.1.0/2\u{FF14}" => '192.168.1.0', '192.168.1.0/24^' => '192.168.1.0', '192.168.1.0/-1' => '192.168.1.0',
-			'0xc0.0xa8.1.0/24' => '0xc0.0xa8.1.0', '192.168.001.0/24' => '192.168.001.0',
+			'192.168.1.0/ 24' => '192.168.1.0',
 			'http://192.168.1.0/24' => '192.168.1.0', '://192.168.1.0/24' => '192.168.1.0',
 			'192.168.1.0:80/24' => '192.168.1.0',
-			'3232235876/' => '3232235876', '3232235876/24' => '3232235876', '[2001:db8::]/32' => '2001:db8::',
-			'example.com/24' => 'example.com', '999.1.1.1/24' => '999.1.1.1', '/24' => '',
+			'3232235876/' => '3232235876', '[2001:db8::]/32' => '2001:db8::',
+			'example.com/24' => 'example.com', '/24' => '',
 			'2001:db8::1%em0/64' => '2001:db8::1%em0',
 		];
 		$rows = [];
@@ -300,6 +326,6 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$skipped = 0;
 		$this->assertSame($expected, $this->extract($line, $strict, $skipped));
 		$this->assertSame(0, $skipped);
-		$this->assertFileDoesNotExist($this->parseErr, 'the CIDR reject must not fire for a near-miss shape');
+		$this->assertFileDoesNotExist($this->parseErr, 'the CIDR rules must not fire for a near-miss shape');
 	}
 }
