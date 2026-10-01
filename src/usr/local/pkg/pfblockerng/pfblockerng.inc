@@ -2737,13 +2737,12 @@ function pfb_dnsbl_concat_files(string $dest, array $sources): bool {
 // `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
 // host) rejected first -> userinfo/authority cut (strict mode keeps a numeric host's
 // authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
-// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE when
-// pfb_dnsbl_scheme_line rejects (strict mode) -- caller must skip the line.
+// ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. Returns FALSE on either reject
+// (CIDR, both modes; pfb_dnsbl_scheme_line, strict) -- caller must skip the line.
 function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, string $oline,
 	int $dnsbl_lineno, string $parse_err, int &$scheme_skipped): string|false {
 
-	if (pfb_dnsbl_scheme_pos($line) === FALSE && preg_match('#^(.+)/[0-9]+$#D', $line, $cidr) &&
-	    (is_ipaddrv4($cidr[1]) || is_ipaddrv6($cidr[1]))) {
+	if (preg_match('#^(.+)/[0-9]+$#D', $line, $cidr) && is_ipaddr($cidr[1])) {
 		pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
 		return FALSE;
 	}

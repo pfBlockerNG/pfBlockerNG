@@ -389,4 +389,59 @@ final class DnsblNumericHostTest extends TestCase
 		$this->assertSame([[], [], []], [$out['rows'], $out['ip4'], $out['ip6']], "line {$feedLine}: rows=" . json_encode($out['rows']));
 		$this->assertStringContainsString($feedLine, $out['fail'], "line {$feedLine} missing from the parse-error log");
 	}
+
+	/** @return array<string, array{string, bool, string}> */
+	public static function plainCidrRejectProvider(): array
+	{
+		$rows = [];
+		foreach (['192.168.1.0/24', '2001:db8::/32', '::ffff:192.168.1.0/120', '0.0.0.0 192.168.1.0/24'] as $line) {
+			foreach ([TRUE, FALSE] as $lenient) {
+				foreach (['Deny_Both', 'Disabled'] as $ip) {
+					$rows["{$line} " . ($lenient ? 'lenient' : 'strict') . " {$ip}"] = [$line, $lenient, $ip];
+				}
+			}
+		}
+		return $rows;
+	}
+
+	/**
+	 * Issue #3366: a scheme-less '<canonical IP>/<digits>' line is a CIDR the DNSBL IP path cannot
+	 * honour, so it goes to the parse-error log instead of being collected as the bare address,
+	 * in both parse modes, whatever the DNSBL IP setting.
+	 */
+	#[DataProvider('plainCidrRejectProvider')]
+	public function testPlainCidrLineCollectsNothingAndWritesParseError(string $feedLine, bool $lenient, string $ip): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient, dnsblIp: $ip);
+
+		$this->assertSame([[], [], []], [$out['ip4'], $out['ip6'], $out['rows']]);
+		$this->assertStringContainsString(
+			trim(substr($feedLine, (int) strrpos($feedLine, ' '))),
+			$out['fail'],
+			'the rejected line must be in the DNSBL parse-error log'
+		);
+	}
+
+	/** @return array<string, array{string, bool, list<string>}> */
+	public static function plainCidrControlProvider(): array
+	{
+		$rows = [];
+		foreach ([TRUE, FALSE] as $lenient) {
+			$m = $lenient ? 'lenient' : 'strict';
+			$rows["192.168.1.0/ {$m}"] = ['192.168.1.0/', $lenient, ['192.168.1.0']];
+			$rows["3232235876/ {$m}"] = ['3232235876/', $lenient, ['192.168.1.100']];
+			$rows["http://192.168.1.0/24 {$m}"] = ['http://192.168.1.0/24', $lenient, ['192.168.1.0']];
+		}
+		return $rows;
+	}
+
+	/** @param list<string> $expected */
+	#[DataProvider('plainCidrControlProvider')]
+	public function testNearMissCidrShapesAreStillCollected(string $feedLine, bool $lenient, array $expected): void
+	{
+		$out = $this->runRegion(self::$hostsRegion, $feedLine, $lenient);
+
+		$this->assertSame($expected, $out['ip4']);
+		$this->assertSame('', $out['fail']);
+	}
 }

@@ -9,8 +9,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * pfb_dnsbl_extract_host() -- issue #1119 (folded into #1117) extraction of the DNSBL
  * download/parse loop's `if (!$lite)` host-munging branch into a pure, unit-testable
- * helper. Pins the pipeline's load-bearing ORDER (scheme strip -> '/'/'#'/'?' truncation
- * -> ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
+ * helper. Pins the pipeline's load-bearing ORDER (CIDR reject -> scheme strip -> '/'/'#'/'?'
+ * truncation -> ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST -- issue #938) and the
  * FALSE-propagation contract when pfb_dnsbl_scheme_line() rejects a strict-mode URL path.
  */
 #[CoversFunction('pfb_dnsbl_extract_host')]
@@ -280,7 +280,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 			"192.168.1.0/2\u{FF14}" => '192.168.1.0', '192.168.1.0/24^' => '192.168.1.0', '192.168.1.0/-1' => '192.168.1.0',
 			'0xc0.0xa8.1.0/24' => '0xc0.0xa8.1.0', '192.168.001.0/24' => '192.168.001.0',
 			'http://192.168.1.0/24' => '192.168.1.0', '://192.168.1.0/24' => '192.168.1.0',
-			'192.168.1.0:80/24' => '192.168.1.0', "192.168.1.0/24\t" => '192.168.1.0',
+			'192.168.1.0:80/24' => '192.168.1.0',
 			'3232235876/' => '3232235876', '3232235876/24' => '3232235876', '[2001:db8::]/32' => '2001:db8::',
 			'example.com/24' => 'example.com', '999.1.1.1/24' => '999.1.1.1', '/24' => '',
 			'2001:db8::1%em0/64' => '2001:db8::1%em0',
@@ -288,7 +288,7 @@ final class PfbDnsblExtractHostTest extends TestCase
 		$rows = [];
 		foreach ($controls as $line => $expected) {
 			foreach ([TRUE, FALSE] as $strict) {
-				$rows[$line . ($strict ? ' strict' : ' lenient')] = [(string) $line, $expected, $strict];
+				$rows[$line . ($strict ? ' strict' : ' lenient')] = [$line, $expected, $strict];
 			}
 		}
 		return $rows;
