@@ -2752,8 +2752,8 @@ function pfb_dnsbl_cidr(string $line): string|false|null {
 
 // Non-lite DNSBL host-munging pipeline, extracted pure out of the download/parse loop's
 // `if (!$lite)` branch. Order is load-bearing: scheme-less '<IP>/<digits>' (a CIDR, never a
-// host) handled first -> empty-scheme IP anchor ('://<ip>[:port][^]') -> userinfo/authority cut
-// (strict mode keeps a numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
+// host) handled first -> userinfo cut -> empty-scheme IP anchor ('://<ip>[:port][^]') -> authority
+// cut (strict mode keeps a numeric host's authority alone) -> scheme strip -> '/'/'#'/'?' truncation ->
 // ';'-truncation -> trailing-port strip -> IPv6-unbracket LAST. A valid CIDR is returned
 // whole (padded octets unpadded, mask canonicalised) for the IP sanitizers; a bad mask or
 // a non-canonical numeric network is a reject. Returns FALSE on any reject (CIDR, both
@@ -2770,18 +2770,6 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		return $cidr;
 	}
 
-	// Empty-scheme IP anchor ('://1.2.3.4:443^'): port dropped, CIDR honoured, as the '||' anchor.
-	if (str_starts_with($line, '://')) {
-		$ip = pfb_dnsbl_anchor_ip(preg_replace('/\^(\$.*)?$/D', '', substr($line, 3)));
-		if ($ip === FALSE) {
-			pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
-			return FALSE;
-		}
-		if ($ip !== '') {
-			return $ip;
-		}
-	}
-
 	// RFC 3986 authority of a scheme-bearing line (a '://' found by pfb_dnsbl_scheme_pos()): the
 	// host follows the LAST '@' before the first '^' (unencoded '^' is illegal in userinfo, so an
 	// '@' in a '^$options' tail is option text); userinfo is dropped. A numeric host is the
@@ -2794,6 +2782,17 @@ function pfb_dnsbl_extract_host(string $line, bool $strict, string $header, stri
 		if (($at = strrpos(substr($rest, 0, min($alen, strcspn($rest, '^'))), '@')) !== FALSE) {
 			$rest = substr($rest, $at + 1);
 			$alen -= $at + 1;
+		}
+		// Empty-scheme IP anchor ('://1.2.3.4:443^'): port dropped, CIDR honoured, as the '||' anchor.
+		if ($pos === 0) {
+			$ip = pfb_dnsbl_anchor_ip(preg_replace('/\^(\$.*)?$/D', '', $rest));
+			if ($ip === FALSE) {
+				pfb_parse_fail_log($header, $line, $oline, $parse_err, $dnsbl_lineno);
+				return FALSE;
+			}
+			if ($ip !== '') {
+				return $ip;
+			}
 		}
 		if ($strict && pfb_ipv4_numeric_host(pfb_strip_trailing_port(substr($rest, 0, $alen))) !== NULL) {
 			$rest = substr($rest, 0, $alen);
