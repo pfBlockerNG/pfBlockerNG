@@ -119,7 +119,7 @@ if (!function_exists('is_ipaddr')) {
 }
 
 if (!function_exists('is_subnetv4')) {
-	// pfSense util.inc: 'ipv4/bits' with a 0-32 prefix and a valid v4 network part.
+	// pfSense util.inc: 'ipv4/bits' with a 1-3 digit prefix of 0-32 and a valid v4 network part.
 	function is_subnetv4($subnet) {
 		if (!is_string($subnet) || strpos($subnet, '/') === false) {
 			return false;
@@ -130,7 +130,7 @@ if (!function_exists('is_subnetv4')) {
 }
 
 if (!function_exists('is_subnetv6')) {
-	// pfSense util.inc: 'ipv6/bits' with a 0-128 prefix and a valid v6 network part.
+	// pfSense util.inc: 'ipv6/bits' with a 1-3 digit prefix of 0-128 and a valid v6 network part.
 	function is_subnetv6($subnet) {
 		if (!is_string($subnet) || strpos($subnet, '/') === false) {
 			return false;
