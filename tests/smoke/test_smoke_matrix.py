@@ -59,6 +59,7 @@ and the smoke deps; without them they skip cleanly.
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import os
@@ -296,6 +297,235 @@ def test_dnsbl_python_vip_over_ipv6_transport(deployed_vm: SmokeVM, client_vm: S
             h.reload(deployed_vm, "updatednsbl")
     finally:
         h.unpin_client_route6(client_vm, lan6)
+
+
+def test_3407_live_discriminator(deployed_vm: SmokeVM, client_vm: SmokeVM) -> None:
+    """Live-only discriminator for the DNSBL IPv6 VIP web redirect."""
+    vm = deployed_vm
+    lan6 = h.get_lan_ipv6(vm)
+    lan_if = h.config_get(vm, "interfaces/lan/if")
+    domain = h.unique_domain("vip6web3407")
+    feed_url = h.write_local_feed(vm, "smoke_dnsbl_vip6_web_3407.txt", f"{domain}\n")
+    spec = h.DnsblCase(aliasname="smokevip6web3407", feed_url=feed_url, header="smokevip6web3407")
+
+    def scope_violations() -> tuple[int, str]:
+        result = vm.ssh("/usr/bin/netstat", "-s", "-p", "ip6", timeout=30.0)
+        match = re.search(r"^\s*(\d+) packets? that violated scope rules\s*$", result.stdout, re.MULTILINE)
+        assert match is not None, f"scope counter missing from netstat rc={result.returncode}:\n{result.stdout}"
+        return int(match.group(1)), match.group(0).strip()
+
+    def curl_page(scheme: str) -> dict[str, object]:
+        port = 443 if scheme == "https" else 80
+        result = client_vm.ssh(
+            h.GUEST_CURL,
+            "-6",
+            "-g",
+            "--noproxy",
+            "*",
+            "-k",
+            "-sS",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "8",
+            "--resolve",
+            f"{domain}:{port}:[{h.DNSBL_VIP6}]",
+            "-w",
+            r"\nPFB3407_HTTP_CODE=%{http_code}\n",
+            f"{scheme}://{domain}/",
+            timeout=15.0,
+        )
+        return {
+            "rc": result.returncode,
+            "marker": "Site blocked via DNSBL" in result.stdout,
+            "stdout": result.stdout[:800],
+            "stderr": result.stderr,
+        }
+
+    def matching_states() -> list[str]:
+        result = vm.ssh("/sbin/pfctl", "-ss", timeout=30.0)
+        return [line for line in result.stdout.splitlines() if h.DNSBL_VIP6 in line or lan6 in line]
+
+    def matching_log_rows() -> list[str]:
+        return [line for line in h.read_log_file(vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines() if f",{domain}," in line]
+
+    h.set_dnsbl_vip6(vm, present=True)
+    move = h.php_eval(
+        vm,
+        """
+require_once('interfaces.inc');
+$vips = config_get_path('virtualip/vip', array());
+foreach ($vips as &$vip) {
+    if (in_array(($vip['uniqid'] ?? ''), array('pfbsmokevip', 'pfbsmokevip6'), TRUE)) {
+        if (function_exists('interface_vip_bring_down')) {
+            interface_vip_bring_down($vip);
+        }
+        $vip['interface'] = 'lan';
+        if (function_exists('interface_vip_configure')) {
+            interface_vip_configure($vip);
+        }
+    }
+}
+unset($vip);
+config_set_path('virtualip/vip', $vips);
+$d = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', array());
+$d['dnsbl_interface'] = 'lan';
+config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $d);
+write_config('issue 3407 live discriminator: DNSBL VIPs on LAN');
+echo 'OK';
+""",
+        timeout=120.0,
+    )
+    assert move.returncode == 0 and "OK" in move.stdout, (
+        f"could not move DNSBL VIPs to LAN: rc={move.returncode}\n{move.stdout}\n{move.stderr}"
+    )
+    vm.ssh(
+        f"/sbin/ifconfig lo0 -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} >/dev/null 2>&1 || true; "
+        f"/sbin/ifconfig lo0 inet6 {shlex.quote(h.DNSBL_VIP6)} -alias >/dev/null 2>&1 || true; "
+        f"/sbin/ifconfig {shlex.quote(lan_if)} alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} "
+        ">/dev/null 2>&1 || true; "
+        f"/sbin/ifconfig {shlex.quote(lan_if)} inet6 {shlex.quote(h.DNSBL_VIP6)} prefixlen 128 alias "
+        ">/dev/null 2>&1 || true",
+        timeout=30.0,
+    )
+    iface_snapshot = vm.ssh("/sbin/ifconfig", lan_if, timeout=30.0)
+    assert h.DEFAULT_DNSBL_VIP4 in iface_snapshot.stdout and h.DNSBL_VIP6 in iface_snapshot.stdout, (
+        f"DNSBL VIP aliases not live on {lan_if}:\n{iface_snapshot.stdout}{iface_snapshot.stderr}"
+    )
+
+    src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
+    anchor = "tftp-proxy/pfb3407"
+    try:
+        with h.CaseContext(vm, spec, scope="update"):
+            answer = h.dns_probe_client(client_vm, domain, "AAAA", server=lan6)
+            assert {ipaddress.ip_address(record) for record in answer.records} == {
+                ipaddress.ip_address(h.DNSBL_VIP6)
+            }, f"AAAA {domain} @{lan6}: expected {h.DNSBL_VIP6}, got {answer}"
+
+            managed_rules = vm.ssh("/sbin/pfctl", "-vsn", timeout=30.0).stdout
+            assert h.DNSBL_VIP6 in managed_rules and "::1" in managed_rules, (
+                f"managed IPv6 DNSBL VIP rdr row not loaded:\n{managed_rules}"
+            )
+            listeners_before = vm.ssh(
+                "/usr/bin/sockstat -6 -l | /usr/bin/grep -E 'lighttpd|:80|:443|:8081|:8443' || true",
+                timeout=30.0,
+            ).stdout
+
+            before, before_line = scope_violations()
+            original_http = curl_page("http")
+            original_https = curl_page("https")
+            after, after_line = scope_violations()
+            original_states = matching_states()
+            original_rows = matching_log_rows()
+
+            extra_conf = f"""
+$SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT}" {{
+}}
+$SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT_SSL}" {{
+    ssl.engine = "enable"
+    ssl.pemfile = "/var/unbound/dnsbl_cert.pem"
+}}
+"""
+            encoded = base64.b64encode(extra_conf.encode()).decode()
+            appended = vm.ssh(
+                f"printf %s {shlex.quote(encoded)} | /usr/bin/base64 -d >> /var/unbound/pfb_dnsbl_lighty.conf",
+                timeout=30.0,
+            )
+            assert appended.returncode == 0, f"could not add scratch listeners: {appended.stderr}"
+            config_test = vm.ssh(
+                "/usr/local/sbin/lighttpd_pfb -tt -f /var/unbound/pfb_dnsbl_lighty.conf",
+                timeout=30.0,
+            )
+            assert config_test.returncode == 0, (
+                f"scratch lighttpd config invalid:\n{config_test.stdout}\n{config_test.stderr}"
+            )
+            restarted = vm.ssh("/usr/local/etc/rc.d/pfb_dnsbl.sh restart", timeout=30.0)
+            assert restarted.returncode == 0, (
+                f"scratch lighttpd restart failed:\n{restarted.stdout}\n{restarted.stderr}"
+            )
+
+            def scratch_listeners_ready() -> bool:
+                sockets = vm.ssh("/usr/bin/sockstat", "-6", "-l", timeout=15.0).stdout
+                return f":{h.DNSBL_PORT}" in sockets and f":{h.DNSBL_PORT_SSL}" in sockets
+
+            h.wait_until(scratch_listeners_ready, timeout=15.0, interval=0.5)
+            listeners_scratch = vm.ssh(
+                "/usr/bin/sockstat -6 -l | /usr/bin/grep -E 'lighttpd|:80|:443|:8081|:8443' || true",
+                timeout=30.0,
+            ).stdout
+
+            scratch_rules = (
+                f"rdr pass on {lan_if} inet6 proto tcp from any to {h.DNSBL_VIP6} "
+                f"port = 80 -> {lan6} port {h.DNSBL_PORT}\n"
+                f"rdr pass on {lan_if} inet6 proto tcp from any to {h.DNSBL_VIP6} "
+                f"port = 443 -> {lan6} port {h.DNSBL_PORT_SSL}\n"
+            )
+            loaded = vm.ssh(
+                f"printf %s {shlex.quote(scratch_rules)} | /sbin/pfctl -a {shlex.quote(anchor)} -f -",
+                timeout=30.0,
+            )
+            assert loaded.returncode == 0, (
+                f"scratch rdr load failed:\n{loaded.stdout}\n{loaded.stderr}\nrules:\n{scratch_rules}"
+            )
+            loaded_scratch_rules = vm.ssh("/sbin/pfctl", "-a", anchor, "-vsn", timeout=30.0).stdout
+
+            vm.ssh("/sbin/pfctl", "-k", src6, "-k", h.DNSBL_VIP6, timeout=30.0)
+            scratch_before, scratch_before_line = scope_violations()
+            scratch_http = curl_page("http")
+            scratch_https = curl_page("https")
+            scratch_after, scratch_after_line = scope_violations()
+            scratch_states = matching_states()
+            scratch_rows = matching_log_rows()
+
+            evidence = {
+                "domain": domain,
+                "client_source": src6,
+                "lan_ipv6": lan6,
+                "dnsbl_vip6": h.DNSBL_VIP6,
+                "aaaa": answer.records,
+                "managed_rules": [
+                    line
+                    for line in managed_rules.splitlines()
+                    if h.DNSBL_VIP6 in line or ("::1" in line and "rdr" in line)
+                ],
+                "listeners_before": listeners_before.splitlines(),
+                "original": {
+                    "scope_before": before_line,
+                    "scope_after": after_line,
+                    "scope_delta": after - before,
+                    "http": original_http,
+                    "https": original_https,
+                    "states": original_states,
+                    "log_rows": original_rows,
+                },
+                "scratch_rules": loaded_scratch_rules.splitlines(),
+                "listeners_scratch": listeners_scratch.splitlines(),
+                "scratch": {
+                    "scope_before": scratch_before_line,
+                    "scope_after": scratch_after_line,
+                    "scope_delta": scratch_after - scratch_before,
+                    "http": scratch_http,
+                    "https": scratch_https,
+                    "states": scratch_states,
+                    "log_rows": scratch_rows,
+                },
+            }
+            print("PFB3407_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
+
+            assert not original_http["marker"] and not original_https["marker"], (
+                f"managed ::1 path unexpectedly reached the block page: {evidence}"
+            )
+            assert after > before, f"managed ::1 path did not increment scope violations: {evidence}"
+            assert scratch_http["rc"] == 0 and scratch_http["marker"], (
+                f"scratch HTTP path did not reach the block page: {evidence}"
+            )
+            assert scratch_https["rc"] == 0 and scratch_https["marker"], (
+                f"scratch HTTPS path did not reach the block page: {evidence}"
+            )
+            assert scratch_after == scratch_before, f"answerable interface target moved the scope counter: {evidence}"
+    finally:
+        vm.ssh("/sbin/pfctl", "-a", anchor, "-F", "all", timeout=30.0)
+        h.unpin_client_route6(client_vm, h.DNSBL_VIP6)
 
 
 _SECTION_COUNTS = re.compile(
