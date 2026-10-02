@@ -39,8 +39,9 @@ pytestmark = pytest.mark.smoke
 VICTIM = "2606:4700:7777::1111"
 VICTIM_PORT = 80
 FILTER_LOG = "/var/log/filter.log"
-# Salvage cap only: the poll returns as soon as the row lands.
-ROW_WAIT_SECS = 60.0
+# Salvage cap only: the poll returns as soon as the row lands. It stays under run-smoke.sh's
+# 30 s per-test timeout so the salvage diagnostic prints instead of a bare pytest-timeout.
+ROW_WAIT_SECS = 15.0
 
 
 @pytest.fixture(scope="module")
@@ -56,6 +57,7 @@ def v6_deny_list(smoke_vm: SmokeVM) -> h.IpCase:
     h.inject(smoke_vm, case)
     _enable_ip_floating_logged_rule(smoke_vm)
     h.reload(smoke_vm, "update")
+    h.apply_filter_sync(smoke_vm)
     members = h.pfctl_table_members(smoke_vm, case.alias)
     if not h.ip_in(VICTIM, [m.split("/", 1)[0] for m in members]):
         raise RuntimeError(f"precondition: expected {VICTIM} in {case.alias}, got {members}")
@@ -65,7 +67,8 @@ def v6_deny_list(smoke_vm: SmokeVM) -> h.IpCase:
 @pytest.fixture(autouse=True)
 def _empty_ip_block_log(v6_deny_list: h.IpCase, smoke_vm: SmokeVM) -> None:
     """Every test starts from an empty ip_block.log, so no victim row survives from a sibling."""
-    smoke_vm.ssh(f": > {h.IP_BLOCK_LOG}", timeout=30)
+    res = smoke_vm.ssh(f": > {h.IP_BLOCK_LOG}", timeout=30)
+    assert res.returncode == 0, f"ip_block.log reset: expected rc 0, got rc={res.returncode} {res.stderr!r}"
     left = h.read_log_file(smoke_vm, h.IP_BLOCK_LOG)
     assert left == "", f"ip_block.log reset did not take: expected empty, got {left[-400:]!r}"
 
