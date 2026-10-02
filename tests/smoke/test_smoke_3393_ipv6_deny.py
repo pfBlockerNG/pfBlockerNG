@@ -60,7 +60,8 @@ def _wire6(
     """Wire ONE v6 IP list (alias ``pfB_<header>_v6``) + the full rule-shaping settings, then update.
 
     Every setting the scenario depends on is written explicitly, so no case inherits a
-    sibling's interface/float/toggle state.
+    sibling's interface/float/toggle state. The package's own filter reload is detached, so
+    every rule-changing update here is followed by a blocking ``apply_filter_sync``.
     """
     feed = h.write_local_feed(vm, f"{header}.txt", "".join(f"{ip}/128\n" for ip in victims))
     case = h.IpCase(aliasname=header, feed_url=feed, action=action, family="v6", header=header)
@@ -76,6 +77,7 @@ def _wire6(
         },
     )
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
     return case
 
 
@@ -159,6 +161,7 @@ def _restore_v6_rules(deployed_vm: SmokeVM) -> Iterator[None]:
     if r.returncode != 0 or "OK" not in r.stdout:
         raise RuntimeError(f"restoring the v6 lists failed: rc={r.returncode} {r.stderr!r} {r.stdout!r}")
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
     res = vm.ssh(h.PFCTL, "-sr")
     if res.returncode != 0:
         raise RuntimeError(f"pfctl -sr failed: rc={res.returncode} stderr={res.stderr!r}")
@@ -259,6 +262,7 @@ def test_fw_self_outbound_v6_twin_drops_firewall_egress(deployed_vm: SmokeVM) ->
 
     _set_ipcfg(vm, {"fw_self_outbound": "on"})
     h.reload(vm, "update")
+    h.apply_filter_sync(vm)
 
     before = _rule_packets(vm, case.alias, "out")
     assert before >= 0, f"no out twin for {case.alias} is loaded with the toggle ON"
