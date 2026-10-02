@@ -433,10 +433,25 @@ echo 'OK';
             assert h.DNSBL_VIP6 in managed_rules and "::1" in managed_rules, (
                 f"managed IPv6 DNSBL VIP rdr row not loaded:\n{managed_rules}"
             )
+
+            def v6_listening(*sockets: str) -> bool:
+                out = vm.ssh("/usr/bin/sockstat", "-6", "-l", timeout=15.0).stdout
+                return all(f" {sock} " in out for sock in sockets)
+
+            # Measure the managed path with its ::1 listeners up on the regenerated non-lo0 config.
+            managed_restart = vm.ssh("/usr/local/etc/rc.d/pfb_dnsbl.sh restart", timeout=30.0)
+            assert managed_restart.returncode == 0, (
+                f"managed lighttpd restart failed:\n{managed_restart.stdout}\n{managed_restart.stderr}"
+            )
+            h.wait_until(
+                lambda: v6_listening(f"::1:{h.DNSBL_PORT}", f"::1:{h.DNSBL_PORT_SSL}"), timeout=15.0, interval=0.5
+            )
             listeners_before = vm.ssh(
                 "/usr/bin/sockstat -6 -l | /usr/bin/grep -E 'lighttpd|:80|:443|:8081|:8443' || true",
                 timeout=30.0,
             ).stdout
+            onbox_http = onbox_loopback_page("http")
+            onbox_https = onbox_loopback_page("https")
 
             before, before_line = scope_violations()
             original_http = curl_page("http")
@@ -444,8 +459,6 @@ echo 'OK';
             after, after_line = scope_violations()
             original_states = matching_states()
             original_rows = matching_log_rows()
-            onbox_http = onbox_loopback_page("http")
-            onbox_https = onbox_loopback_page("https")
             rdr_order = [line for line in managed_rules.splitlines() if line.startswith("rdr")]
 
             extra_conf = f"""
@@ -474,11 +487,9 @@ $SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT_SSL}" {{
                 f"scratch lighttpd restart failed:\n{restarted.stdout}\n{restarted.stderr}"
             )
 
-            def scratch_listeners_ready() -> bool:
-                sockets = vm.ssh("/usr/bin/sockstat", "-6", "-l", timeout=15.0).stdout
-                return f":{h.DNSBL_PORT}" in sockets and f":{h.DNSBL_PORT_SSL}" in sockets
-
-            h.wait_until(scratch_listeners_ready, timeout=15.0, interval=0.5)
+            h.wait_until(
+                lambda: v6_listening(f"{lan6}:{h.DNSBL_PORT}", f"{lan6}:{h.DNSBL_PORT_SSL}"), timeout=15.0, interval=0.5
+            )
             listeners_scratch = vm.ssh(
                 "/usr/bin/sockstat -6 -l | /usr/bin/grep -E 'lighttpd|:80|:443|:8081|:8443' || true",
                 timeout=30.0,
@@ -544,6 +555,9 @@ $SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT_SSL}" {{
             }
             print("PFB3407_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
 
+            assert onbox_http["marker"] and onbox_https["marker"], (
+                f"managed ::1 listener did not serve the block page on loopback: {evidence}"
+            )
             assert not original_http["marker"] and not original_https["marker"], (
                 f"managed ::1 path unexpectedly reached the block page: {evidence}"
             )
