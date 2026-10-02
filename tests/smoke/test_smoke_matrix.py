@@ -316,8 +316,9 @@ def test_3407_live_discriminator(deployed_vm: SmokeVM, client_vm: SmokeVM) -> No
 
     def curl_page(scheme: str) -> dict[str, object]:
         port = 443 if scheme == "https" else 80
+        # civm is Debian: its curl is on PATH, not the pfSense guest's /usr/local/bin.
         result = client_vm.ssh(
-            h.GUEST_CURL,
+            "curl",
             "-6",
             "-g",
             "--noproxy",
@@ -342,6 +343,25 @@ def test_3407_live_discriminator(deployed_vm: SmokeVM, client_vm: SmokeVM) -> No
             "stderr": result.stderr,
         }
 
+    def onbox_loopback_page(scheme: str) -> dict[str, object]:
+        # Control: the managed rdr target itself answers when reached from loopback.
+        port = h.DNSBL_PORT_SSL if scheme == "https" else h.DNSBL_PORT
+        result = vm.ssh(
+            h.GUEST_CURL,
+            "-g",
+            "-k",
+            "-sS",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "8",
+            "-H",
+            f"Host: {domain}",
+            f"{scheme}://[::1]:{port}/",
+            timeout=15.0,
+        )
+        return {"rc": result.returncode, "marker": "Site blocked via DNSBL" in result.stdout, "stderr": result.stderr}
+
     def matching_states() -> list[str]:
         result = vm.ssh("/sbin/pfctl", "-ss", timeout=30.0)
         return [line for line in result.stdout.splitlines() if h.DNSBL_VIP6 in line or lan6 in line]
@@ -350,9 +370,15 @@ def test_3407_live_discriminator(deployed_vm: SmokeVM, client_vm: SmokeVM) -> No
         return [line for line in h.read_log_file(vm, f"{h.PFB_LOGDIR}/dnsbl.log").splitlines() if f",{domain}," in line]
 
     h.set_dnsbl_vip6(vm, present=True)
-    move = h.php_eval(
-        vm,
-        """
+    src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
+    anchor = "tftp-proxy/pfb3407"
+    try:
+        with h.CaseContext(vm, spec):
+            # CaseContext.inject replaces the DNSBL settings and keeps only the VIP/port
+            # infra keys, so dnsbl_interface must be set after it, followed by a full update.
+            move = h.php_eval(
+                vm,
+                """
 require_once('interfaces.inc');
 $vips = config_get_path('virtualip/vip', array());
 foreach ($vips as &$vip) {
@@ -374,29 +400,30 @@ config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $d);
 write_config('issue 3407 live discriminator: DNSBL VIPs on LAN');
 echo 'OK';
 """,
-        timeout=120.0,
-    )
-    assert move.returncode == 0 and "OK" in move.stdout, (
-        f"could not move DNSBL VIPs to LAN: rc={move.returncode}\n{move.stdout}\n{move.stderr}"
-    )
-    vm.ssh(
-        f"/sbin/ifconfig lo0 -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} >/dev/null 2>&1 || true; "
-        f"/sbin/ifconfig lo0 inet6 {shlex.quote(h.DNSBL_VIP6)} -alias >/dev/null 2>&1 || true; "
-        f"/sbin/ifconfig {shlex.quote(lan_if)} alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} "
-        ">/dev/null 2>&1 || true; "
-        f"/sbin/ifconfig {shlex.quote(lan_if)} inet6 {shlex.quote(h.DNSBL_VIP6)} prefixlen 128 alias "
-        ">/dev/null 2>&1 || true",
-        timeout=30.0,
-    )
-    iface_snapshot = vm.ssh("/sbin/ifconfig", lan_if, timeout=30.0)
-    assert h.DEFAULT_DNSBL_VIP4 in iface_snapshot.stdout and h.DNSBL_VIP6 in iface_snapshot.stdout, (
-        f"DNSBL VIP aliases not live on {lan_if}:\n{iface_snapshot.stdout}{iface_snapshot.stderr}"
-    )
+                timeout=120.0,
+            )
+            assert move.returncode == 0 and "OK" in move.stdout, (
+                f"could not move DNSBL VIPs to LAN: rc={move.returncode}\n{move.stdout}\n{move.stderr}"
+            )
+            vm.ssh(
+                f"/sbin/ifconfig lo0 -alias {shlex.quote(h.DEFAULT_DNSBL_VIP4)} >/dev/null 2>&1 || true; "
+                f"/sbin/ifconfig lo0 inet6 {shlex.quote(h.DNSBL_VIP6)} -alias >/dev/null 2>&1 || true; "
+                f"/sbin/ifconfig {shlex.quote(lan_if)} alias {shlex.quote(h.DEFAULT_DNSBL_VIP4 + '/32')} "
+                ">/dev/null 2>&1 || true; "
+                f"/sbin/ifconfig {shlex.quote(lan_if)} inet6 {shlex.quote(h.DNSBL_VIP6)} prefixlen 128 alias "
+                ">/dev/null 2>&1 || true",
+                timeout=30.0,
+            )
+            iface_snapshot = vm.ssh("/sbin/ifconfig", lan_if, timeout=30.0)
+            assert h.DEFAULT_DNSBL_VIP4 in iface_snapshot.stdout and h.DNSBL_VIP6 in iface_snapshot.stdout, (
+                f"DNSBL VIP aliases not live on {lan_if}:\n{iface_snapshot.stdout}{iface_snapshot.stderr}"
+            )
+            h.unblock_egress()
+            h.reload(vm, "update")
+            h.apply_filter_sync(vm)
+            iface_cfg = h.config_get(vm, f"{h.CFG_DNSBL_SETTINGS}/dnsbl_interface")
+            assert iface_cfg == "lan", f"dnsbl_interface did not stick: {iface_cfg!r}"
 
-    src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
-    anchor = "tftp-proxy/pfb3407"
-    try:
-        with h.CaseContext(vm, spec, scope="update"):
             answer = h.dns_probe_client(client_vm, domain, "AAAA", server=lan6)
             assert {ipaddress.ip_address(record) for record in answer.records} == {
                 ipaddress.ip_address(h.DNSBL_VIP6)
@@ -417,6 +444,9 @@ echo 'OK';
             after, after_line = scope_violations()
             original_states = matching_states()
             original_rows = matching_log_rows()
+            onbox_http = onbox_loopback_page("http")
+            onbox_https = onbox_loopback_page("https")
+            rdr_order = [line for line in managed_rules.splitlines() if line.startswith("rdr")]
 
             extra_conf = f"""
 $SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT}" {{
@@ -489,6 +519,8 @@ $SERVER["socket"] == "[{lan6}]:{h.DNSBL_PORT_SSL}" {{
                     if h.DNSBL_VIP6 in line or ("::1" in line and "rdr" in line)
                 ],
                 "listeners_before": listeners_before.splitlines(),
+                "rdr_order": rdr_order,
+                "onbox_loopback": {"http": onbox_http, "https": onbox_https},
                 "original": {
                     "scope_before": before_line,
                     "scope_after": after_line,
