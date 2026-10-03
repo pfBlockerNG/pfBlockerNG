@@ -134,6 +134,14 @@ gates_for() {
 			src/* | scripts/* | .claude/hooks/*) out="${out}shellcheck $f${nl}" ;;
 			esac
 		done
+	fi
+	# issue #3425: ShellSpec's repository-wide guards scan more than *.sh (truncate_survival:
+	# every file under src/ scripts/ tests/; parity_guard: workflow YAML; agent_config_parity:
+	# agent configs), so select it for every path CI's shell-tests job runs for (all but
+	# Markdown and docs/) plus the Markdown those guards read.
+	# ponytail: the Markdown arm mirrors those specs' scan sets by hand; a new Markdown-reading guard adds its paths here.
+	if printf '%s\n' "$files" | LC_ALL=C grep -Evq '\.md$|^docs/|^$' ||
+		printf '%s\n' "$files" | LC_ALL=C grep -Eq '^((src|scripts|tests)/.*|AGENTS|GROK|CLAUDE|\.github/(copilot-instructions|agents/[^/]+\.agent)|\.(claude|agents)/skills/[^/]+/SKILL|\.agents/(policy/landing|context/[^/]+-adapter))\.md$'; then
 		out="${out}shellspec --shell \$(command -v dash || command -v sh)${nl}"
 	fi
 	if printf '%s\n' "$files" | LC_ALL=C grep -q '\.md$'; then
