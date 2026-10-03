@@ -2523,6 +2523,12 @@ function sync_package_pfblockerng($cron='', ?string &$deferred_by = NULL): bool 
 													}
 													continue;
 												}
+												// issue #3434: a regex rule naming a whole IPv4 /24 also feeds the IP table; the line still goes to Python.
+												$abp_ip = pfb_dnsbl_abp_regex_ip4_24($line);
+												if ($abp_ip !== '' && pfb_dnsbl_collect_feed_ip(explode('/', $abp_ip, 2)[0], $abp_ip, $custom, $domain_data_ip, $domain_data_ip6)) {
+													$pfb['updateip'] = TRUE;
+													$ipcount++;
+												}
 											}
 
 											// ADR-62 Decision 2: any self-identifying ABP shape (||/@@

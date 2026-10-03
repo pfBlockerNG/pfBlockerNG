@@ -9887,6 +9887,36 @@ function pfb_dnsbl_abp_extract_ip($line) {
 	return '';
 }
 
+// issue #3434: '/^A\.B\.C\.<tail>$/' whose pattern matches all 256 of A.B.C.0..A.B.C.255 -> 'A.B.C.0/24', else ''.
+// The tail whitelist keeps out recursion, inline flags, POSIX/\p classes and backreferences, so the one
+// preg_grep() over the 256 addresses is the whole decision. No self-strip, like pfb_dnsbl_is_abp_rule_line().
+function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
+	if (strlen($line) < 2 || !str_starts_with($line, '/') || !str_ends_with($line, '/')) {
+		return '';
+	}
+	$inner = substr($line, 1, -1);
+	if (strlen($inner) > 512 ||
+	    !preg_match('/^\^(\d{1,3})\\\\\.(\d{1,3})\\\\\.(\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$$/D', $inner, $m) ||
+	    str_contains($m[4], '(?')) {
+		return '';
+	}
+	foreach (array_slice($m, 1, 3) as $octet) {
+		if ((int) $octet > 255 || $octet !== (string) (int) $octet) {
+			return '';
+		}
+	}
+	$prefix = "{$m[1]}.{$m[2]}.{$m[3]}.";
+	$hosts = array();
+	for ($i = 0; $i < 256; $i++) {
+		$hosts[] = $prefix . $i;
+	}
+	// A feed-supplied pattern may not compile; keep that warning from reaching any installed handler.
+	set_error_handler(static fn(): bool => TRUE);
+	$hits = preg_grep('~' . $inner . '~', $hosts);
+	restore_error_handler();
+	return (is_array($hits) && count($hits) === 256 && preg_last_error() === PREG_NO_ERROR) ? $prefix . '0/24' : '';
+}
+
 
 // Strip a trailing ":<port>" from a host:port feed line (e.g. 'evil.com:8080' ->
 // 'evil.com'), but NEVER from an IPv6 literal: an address like '2001:db8:5::7' ends
