@@ -123,6 +123,32 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		return $this->assertNoPhpWarning(static fn(): array => pfb_dnsbl_abp_regex_ip4_cidrs($line, 'testfeed'));
 	}
 
+	/**
+	 * Call the helper under a caller-owned error handler; assert it is active again, saw no warning, and the backtrack limit is back.
+	 *
+	 * @return list<string>
+	 */
+	private function callAndAssertStateRestored(string $rule): array
+	{
+		$seen = [];
+		$mine = static function (int $no, string $str) use (&$seen): bool {
+			$seen[] = $str;
+			return TRUE;
+		};
+		set_error_handler($mine);
+		try {
+			$result = pfb_dnsbl_abp_regex_ip4_cidrs($rule, 'testfeed');
+			$active = set_error_handler(static fn(): bool => FALSE);
+			restore_error_handler();
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame($mine, $active, "the caller's error handler is active again after $rule");
+		$this->assertSame([], $seen, "no warning reaches the caller's handler for $rule");
+		$this->assertSame('123456', ini_get('pcre.backtrack_limit'), "pcre.backtrack_limit restored after $rule");
+		return $result;
+	}
+
 	/** @return list<string> the non-empty lines of the main log */
 	private function logLines(): array
 	{
@@ -167,16 +193,6 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	}
 
 	/**
-	 * @param list<string> $cidrs the helper's CIDRs
-	 * @param array{custom?: bool, supp?: PfbToggle, ip4?: list<string>} $opts
-	 * @return array{string, list<string>, array{custom?: bool, supp?: PfbToggle, ip4?: list<string>}}
-	 */
-	private static function row(string $line, array $cidrs, array $opts = []): array
-	{
-		return [$line, $cidrs, $opts];
-	}
-
-	/**
 	 * Every shape the helper decides on: [rule line, expected CIDRs, parse-loop options].
 	 *
 	 * @return array<string, array{string, list<string>, array{custom?: bool, supp?: PfbToggle, ip4?: list<string>}}>
@@ -184,120 +200,130 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	public static function ruleProvider(): array
 	{
 		$hosts256 = array_map(static fn(int $i): string => "5.$i.1.1/32", range(0, 255));
+		// Third-octet values 0..127 each give '.0/31' + '.2/32': 256 CIDRs from 128 intervals, so only the CIDR count decides.
+		$cap256 = [];
+		foreach (range(0, 127) as $c) {
+			$cap256[] = "5.8.$c.0/31";
+			$cap256[] = "5.8.$c.2/32";
+		}
 		$rows = [
-			'full last octet'               => self::row('/^142\.91\.159\.[12]?\d?\d$/', ['142.91.159.0/24']),
-			'\d{1,3} last octet'            => self::row('/^5\.8\.44\.\d{1,3}$/', ['5.8.44.0/24']),
-			'class in third octet'          => self::row('/^5\.8\.4[4-7]\.\d{1,3}$/', ['5.8.44.0/22']),
-			'class with gaps'               => self::row('/^178\.253\.3[04-7]\.[12]?\d?\d$/', ['178.253.30.0/24', '178.253.34.0/23', '178.253.36.0/23']),
-			'wide class in third octet'     => self::row('/^178\.253\.[0-7]\.[12]?\d?\d$/', ['178.253.0.0/21']),
-			'full third and fourth octet'   => self::row('/^5\.8\.\d{1,3}\.\d{1,3}$/', ['5.8.0.0/16']),
-			'partial last octet'            => self::row('/^172\.255\.6\.(\d\d?|(17?|2)[0-689]\d)$/', [
+			'full last octet'               => ['/^142\.91\.159\.[12]?\d?\d$/', ['142.91.159.0/24']],
+			'\d{1,3} last octet'            => ['/^5\.8\.44\.\d{1,3}$/', ['5.8.44.0/24']],
+			'class in third octet'          => ['/^5\.8\.4[4-7]\.\d{1,3}$/', ['5.8.44.0/22']],
+			'class with gaps'               => ['/^178\.253\.3[04-7]\.[12]?\d?\d$/', ['178.253.30.0/24', '178.253.34.0/23', '178.253.36.0/23']],
+			'wide class in third octet'     => ['/^178\.253\.[0-7]\.[12]?\d?\d$/', ['178.253.0.0/21']],
+			'full third and fourth octet'   => ['/^5\.8\.\d{1,3}\.\d{1,3}$/', ['5.8.0.0/16']],
+			'partial last octet'            => ['/^172\.255\.6\.(\d\d?|(17?|2)[0-689]\d)$/', [
 				'172.255.6.0/25', '172.255.6.128/27', '172.255.6.160/29', '172.255.6.168/31',
 				'172.255.6.180/30', '172.255.6.184/29', '172.255.6.192/26',
-			]),
-			'literal fourth octet'          => self::row('/^5\.8\.44\.1$/', ['5.8.44.1/32']),
-			'exactly 256 CIDRs'             => self::row('/^5\.\d+\.1\.1$/', $hosts256),
-			'one CIDR wider than /16'       => self::row('/^5\.[0-1]\.\d{1,3}\.\d{1,3}$/', []),
-			'four wildcard octets'          => self::row('/^\d+\.\d+\.\d+\.\d+$/', []),
-			'0.x network is sanitized away' => self::row('/^0\.1\.2\.\d{1,3}$/', ['0.1.2.0/24']),
-			'reserved inside a /16'         => self::row('/^192\.0\.\d{1,3}\.\d{1,3}$/', ['192.0.0.0/16'],
-				['custom' => FALSE, 'supp' => PfbToggle::On, 'ip4' => ['192.0.0.0/16']]),
-			'one private, one public'       => self::row('/^(5|192)\.168\.0\.\d{1,3}$/', ['5.168.0.0/24', '192.168.0.0/24'],
-				['custom' => FALSE, 'supp' => PfbToggle::On, 'ip4' => ['5.168.0.0/24']]),
-			'brace bound 65536'             => self::row('/^5\.8\.44\.\d{0,65536}$/', []),
-			'brace over the octet limit'    => self::row('/^5\.8\.44\.\d{1,4}$/', []),
-			'brace bound 10'                => self::row('/^5\.8\.44\.\d{10}$/', []),
-			'brace at the octet limit'      => self::row('/^5\.8\.44\.\d{0,3}$/', ['5.8.44.0/24']),
-			'514-byte line'                 => self::row(self::paddedRule(514), ['5.8.44.0/24']),
-			'515-byte line'                 => self::row(self::paddedRule(515), []),
-			'wider than /16'                => self::row('/^5\.\d+\.\d+\.\d+$/', []),
-			'class in first octet'          => self::row('/^(5|6)\.8\.44\.\d+$/', ['5.8.44.0/24', '6.8.44.0/24']),
-			'over the 256-CIDR cap'         => self::row('/^5\.8\.\d+\.(1|3)$/', []),
-			'. in a part'                   => self::row('/^5\.8\.44\..*$/', []),
-			'. in a part, lazy'             => self::row('/^5\.8\.44\..*?$/', []),
-			'top-level |'                   => self::row('/^1\.2\.3\.4|\d$/', []),
-			'\. inside a group'             => self::row('/^5\.8\.(44\.\d+)$/', []),
-			'three parts only'              => self::row('/^5\.8\.44$/', []),
-			'five parts'                    => self::row('/^5\.8\.44\.1\.\d+$/', []),
-			'POSIX class part'              => self::row('/^5\.8\.44\.[[:digit:]]+$/', []),
-			'unicode property part'         => self::row('/^5\.8\.44\.\p{Nd}+$/', []),
-			'recursion (?1) part'           => self::row('/^5\.8\.44\.(\d+)(?1)?$/', []),
-			'inline flag (?i) part'         => self::row('/^5\.8\.44\.(?i)\d+$/', []),
-			'(? in a |-split rule'          => self::row('/^1\.2\.3\.(\d{1,3})|(?1)$/', []),
-			'{,} after |'                   => self::row('/^1\.2\.3\.\d+|{,}$/', []),
-			'{,} after ? then |'            => self::row('/^1\.2\.3\.\d?{,}|\d+$/', []),
-			'{,} inside a group'            => self::row('/^1\.2\.3\.(\d+|{,})$/', []),
-			'empty value set'               => self::row('/^5\.8\.300\.\d$/', []),
-			'padded octet'                  => self::row('/^05\.8\.44\.\d+$/', []),
-			'octet over 255'                => self::row('/^5\.256\.44\.\d+$/', []),
-			'octet 255 is fine'             => self::row('/^255\.255\.255\.\d+$/', ['255.255.255.0/24']),
-			'octet 0 is fine'               => self::row('/^1\.0\.0\.\d+$/', ['1.0.0.0/24']),
-			'class holding |'               => self::row('/^5\.8\.4[4|5]\.\d+$/', []),
-			'( inside a class'              => self::row('/^5\.8\.4[(4]\.\d+$/', []),
-			') inside a class'              => self::row('/^5\.8\.4[)4]\.\d+$/', []),
-			'\. inside a class'             => self::row('/^5\.8\.[\.]44\.\d+$/', []),
-			'[]-led class'                  => self::row('/^5\.8\.44\.([](]|\d)\d*$/', []),
-			'escaped bracket'               => self::row('/^5\.8\.44\.\[\d+$/', []),
-			'$options suffix'               => self::row('/^5\.8\.44\.\d{1,3}$/$important', []),
-			'allow rule'                    => self::row('@@/^5\.8\.44\.\d{1,3}$/', []),
-			'no ^ and no $'                 => self::row('/5\.8\.44\.\d+/', []),
-			'no $'                          => self::row('/^5\.8\.44\.\d+/', []),
-			'domain regex'                  => self::row('/^ads\d+\.example\.com$/', []),
-			'scheme and path wrappers'      => self::row('/^(.*://)?204\.11\.56\.\d{1,3}(/.*)?$/', ['204.11.56.0/24']),
-			'scheme group, no ^, 3-digit'   => self::row('/((https?|tcp|iquic)://)?204\.194\.54\.\d{1,3}([:/].*)?$/', ['204.194.54.0/24']),
-			'escaped-slash path wrapper'    => self::row('/^5\.8\.44\.\d{1,3}(\/.*)?$/', ['5.8.44.0/24']),
-			'no ^, short first octet'       => self::row('/5\.8\.44\.\d+$/', []),
-			'no ^, group first octet'       => self::row('/(200|201)\.8\.44\.\d+$/', []),
-			'wrapper, no ^, short first'    => self::row('/(.*://)?5\.8\.44\.\d+$/', []),
-			'wrapper with ^, short first'   => self::row('/^(.*://)?5\.8\.44\.\d+$/', ['5.8.44.0/24']),
-			'non-optional URL wrapper'      => self::row('/^(.*://)5\.8\.44\.\d+$/', []),
-			'non-URL wrapper'               => self::row('/^(evil\.com/)?5\.8\.44\.\d+$/', []),
-			'colon in the scheme group'     => self::row('/^(a:b://)?5\.8\.44\.\d+$/', []),
-			'two scheme groups'             => self::row('/^(.*://)?(.*://)?5\.8\.44\.\d+$/', []),
-			'| in the scheme group'         => self::row('/^(1|x://)?2\.3\.4\.\d+$/', []),
-			'(*://) scheme group'           => self::row('/^(*://)?5\.8\.44\.\d+$/', []),
-			'(+://) scheme group'           => self::row('/^(+://)?5\.8\.44\.\d+$/', []),
-			'(?+://) scheme group'          => self::row('/^(?+://)?5\.8\.44\.\d+$/', []),
-			'(??://) scheme group'          => self::row('/^(??://)?5\.8\.44\.\d+$/', []),
-			'((?x)://) scheme group'        => self::row('/^((?x)://)?5\.8\.44\.\d+$/', []),
-			'(123://) scheme group'         => self::row('/^(123://)?5\.8\.44\.\d+$/', []),
-			'possessive class holding ('    => self::row('/^5\.8\.4[(-9]++\.\d+$/', []),
-			'class holding , and a bound'   => self::row('/^5\.8\.4[,-9]{1,2}+\.\d+$/', []),
-			'class range from -'            => self::row('/^5\.8\.4[--9]\.\d+$/', []),
-			'empty inner //$'               => self::row('/$/', []),
-			'empty inner after ^'           => self::row('/^$/', []),
-			'single slash'                  => self::row('/', []),
-			'space in a part'               => self::row('/^5\.8\.44\. \d+$/', []),
-			'tab in a part'                 => self::row("/^5\\.8\\.44\\.\t\\d+$/", []),
-			'# in a part'                   => self::row('/^5\.8\.44\.#\d+$/', []),
-			'~ in a part'                   => self::row('/^5\.8\.44\.~\d+$/', []),
-			'/ in a part'                   => self::row('/^5\.8\.44\.\d+\/24$/', []),
-			'empty group part'              => self::row('/^5\.8\.44\.()$/', []),
-			'zero-repeat part'              => self::row('/^5\.8\.44\.\d{0}$/', []),
-			'empty alternative (|\d+)'      => self::row('/^5\.8\.44\.(|\d+)$/', ['5.8.44.0/24']),
-			'nested quantifier (\d+)+'      => self::row('/^5\.8\.44\.(\d+)+$/', ['5.8.44.0/24']),
-			'nested quantifier (\d*)*\d*'   => self::row('/^5\.8\.44\.(\d*)*\d*$/', ['5.8.44.0/24']),
-			'\d* part'                      => self::row('/^5\.8\.44\.\d*$/', ['5.8.44.0/24']),
-			'lazy \d*? part'                => self::row('/^5\.8\.44\.\d*?$/', ['5.8.44.0/24']),
-			'unbalanced ) across parts'     => self::row('/^5)\.(8\.44\.\d$/', []),
-			'unbalanced ( in the last part' => self::row('/^5\.8\.44\.(\d+$/', []),
-			'unterminated class'            => self::row('/^5\.8\.44\.[\d$/', []),
-			'inverted quantifier'           => self::row('/^5\.8\.44\.\d{3,1}$/', []),
-			'non-ASCII digit, first octet'  => self::row('/^٥\.8\.44\.\d+$/', []),
-			'non-ASCII digit, last octet'   => self::row('/^5\.8\.44\.٥$/', []),
-			'non-ASCII digit, third octet'  => self::row('/^5\.8\.٤٤\.\d+$/', []),
-			'uppercase \D part'             => self::row('/^5\.8\.44\.\D*$/', []),
-			'backreference part'            => self::row('/^5\.8\.44\.(\d+)\1?$/', []),
-			'escaped $ at the end'          => self::row('/^5\.8\.44\.\d+\$/', []),
-			'trailing LF'                   => self::row("/^5\\.8\\.44\\.\\d+$/\n", []),
-			'trailing CRLF'                 => self::row("/^5\\.8\\.44\\.\\d+$/\r\n", []),
-			'100 KB inner'                  => self::row('/^5\.8\.44\.' . str_repeat('()', 51200) . '\d+$/', []),
-			'backtrack-heavy part'          => self::row('/^5\.8\.44\.' . self::backtrackHeavyPart() . '$/', []),
-			'empty line'                    => self::row('', []),
-			'bare IP'                       => self::row('1.2.3.4', []),
+			]],
+			'literal fourth octet'          => ['/^5\.8\.44\.1$/', ['5.8.44.1/32']],
+			'exactly 256 CIDRs'             => ['/^5\.\d+\.1\.1$/', $hosts256],
+			'one CIDR wider than /16'       => ['/^5\.[0-1]\.\d{1,3}\.\d{1,3}$/', []],
+			'four wildcard octets'          => ['/^\d+\.\d+\.\d+\.\d+$/', []],
+			'0.x network is sanitized away' => ['/^0\.1\.2\.\d{1,3}$/', ['0.1.2.0/24']],
+			'reserved inside a /16'         => ['/^192\.0\.\d{1,3}\.\d{1,3}$/', ['192.0.0.0/16'],
+				['custom' => FALSE, 'supp' => PfbToggle::On, 'ip4' => ['192.0.0.0/16']]],
+			'one private, one public'       => ['/^(5|192)\.168\.0\.\d{1,3}$/', ['5.168.0.0/24', '192.168.0.0/24'],
+				['custom' => FALSE, 'supp' => PfbToggle::On, 'ip4' => ['5.168.0.0/24']]],
+			'brace bound 65536'             => ['/^5\.8\.44\.\d{0,65536}$/', []],
+			'brace over the octet limit'    => ['/^5\.8\.44\.\d{1,4}$/', []],
+			'brace bound 10'                => ['/^5\.8\.44\.\d{10}$/', []],
+			'brace at the octet limit'      => ['/^5\.8\.44\.\d{0,3}$/', ['5.8.44.0/24']],
+			'514-byte line'                 => [self::paddedRule(514), ['5.8.44.0/24']],
+			'515-byte line'                 => [self::paddedRule(515), []],
+			'wider than /16'                => ['/^5\.\d+\.\d+\.\d+$/', []],
+			'class in first octet'          => ['/^(5|6)\.8\.44\.\d+$/', ['5.8.44.0/24', '6.8.44.0/24']],
+			'256 CIDRs from 128 intervals'  => ['/^5\.8\.(\d{1,2}|1[01]\d|12[0-7])\.[0-2]$/', $cap256],
+			'258 CIDRs from 129 intervals'  => ['/^5\.8\.(\d{1,2}|1[01]\d|12[0-8])\.[0-2]$/', []],
+			'over the 256-CIDR cap'         => ['/^5\.8\.\d+\.(1|3)$/', []],
+			'. in a part'                   => ['/^5\.8\.44\..*$/', []],
+			'. in a part, lazy'             => ['/^5\.8\.44\..*?$/', []],
+			'top-level |'                   => ['/^1\.2\.3\.4|\d$/', []],
+			'\. inside a group'             => ['/^5\.8\.(44\.\d+)$/', []],
+			'three parts only'              => ['/^5\.8\.44$/', []],
+			'five parts'                    => ['/^5\.8\.44\.1\.\d+$/', []],
+			'POSIX class part'              => ['/^5\.8\.44\.[[:digit:]]+$/', []],
+			'unicode property part'         => ['/^5\.8\.44\.\p{Nd}+$/', []],
+			'recursion (?1) part'           => ['/^5\.8\.44\.(\d+)(?1)?$/', []],
+			'inline flag (?i) part'         => ['/^5\.8\.44\.(?i)\d+$/', []],
+			'(? in a |-split rule'          => ['/^1\.2\.3\.(\d{1,3})|(?1)$/', []],
+			'{,} after |'                   => ['/^1\.2\.3\.\d+|{,}$/', []],
+			'{,} after ? then |'            => ['/^1\.2\.3\.\d?{,}|\d+$/', []],
+			'{,} inside a group'            => ['/^1\.2\.3\.(\d+|{,})$/', []],
+			'empty value set'               => ['/^5\.8\.300\.\d$/', []],
+			'padded octet'                  => ['/^05\.8\.44\.\d+$/', []],
+			'octet over 255'                => ['/^5\.256\.44\.\d+$/', []],
+			'octet 255 is fine'             => ['/^255\.255\.255\.\d+$/', ['255.255.255.0/24']],
+			'octet 0 is fine'               => ['/^1\.0\.0\.\d+$/', ['1.0.0.0/24']],
+			'class holding |'               => ['/^5\.8\.4[4|5]\.\d+$/', []],
+			'( inside a class'              => ['/^5\.8\.4[(4]\.\d+$/', []],
+			') inside a class'              => ['/^5\.8\.4[)4]\.\d+$/', []],
+			'\. inside a class'             => ['/^5\.8\.[\.]44\.\d+$/', []],
+			'[]-led class'                  => ['/^5\.8\.44\.([](]|\d)\d*$/', []],
+			'escaped bracket'               => ['/^5\.8\.44\.\[\d+$/', []],
+			'$options suffix'               => ['/^5\.8\.44\.\d{1,3}$/$important', []],
+			'allow rule'                    => ['@@/^5\.8\.44\.\d{1,3}$/', []],
+			'no ^ and no $'                 => ['/5\.8\.44\.\d+/', []],
+			'no $'                          => ['/^5\.8\.44\.\d+/', []],
+			'suppression off, RFC 1918'     => ['/^192\.168\.0\.\d{1,3}$/', ['192.168.0.0/24'], ['custom' => FALSE]],
+			'suppression on, RFC 1918'      => ['/^192\.168\.0\.\d{1,3}$/', ['192.168.0.0/24'], ['custom' => FALSE, 'supp' => PfbToggle::On, 'ip4' => []]],
+			'domain regex'                  => ['/^ads\d+\.example\.com$/', []],
+			'scheme and path wrappers'      => ['/^(.*://)?204\.11\.56\.\d{1,3}(/.*)?$/', ['204.11.56.0/24']],
+			'scheme group, no ^, 3-digit'   => ['/((https?|tcp|iquic)://)?204\.194\.54\.\d{1,3}([:/].*)?$/', ['204.194.54.0/24']],
+			'escaped-slash path wrapper'    => ['/^5\.8\.44\.\d{1,3}(\/.*)?$/', ['5.8.44.0/24']],
+			'no ^, short first octet'       => ['/5\.8\.44\.\d+$/', []],
+			'no ^, group first octet'       => ['/(200|201)\.8\.44\.\d+$/', []],
+			'wrapper, no ^, short first'    => ['/(.*://)?5\.8\.44\.\d+$/', []],
+			'wrapper with ^, short first'   => ['/^(.*://)?5\.8\.44\.\d+$/', ['5.8.44.0/24']],
+			'non-optional URL wrapper'      => ['/^(.*://)5\.8\.44\.\d+$/', []],
+			'non-URL wrapper'               => ['/^(evil\.com/)?5\.8\.44\.\d+$/', []],
+			'colon in the scheme group'     => ['/^(a:b://)?5\.8\.44\.\d+$/', []],
+			'two scheme groups'             => ['/^(.*://)?(.*://)?5\.8\.44\.\d+$/', []],
+			'| in the scheme group'         => ['/^(1|x://)?2\.3\.4\.\d+$/', []],
+			'(*://) scheme group'           => ['/^(*://)?5\.8\.44\.\d+$/', []],
+			'(+://) scheme group'           => ['/^(+://)?5\.8\.44\.\d+$/', []],
+			'(?+://) scheme group'          => ['/^(?+://)?5\.8\.44\.\d+$/', []],
+			'(??://) scheme group'          => ['/^(??://)?5\.8\.44\.\d+$/', []],
+			'((?x)://) scheme group'        => ['/^((?x)://)?5\.8\.44\.\d+$/', []],
+			'(123://) scheme group'         => ['/^(123://)?5\.8\.44\.\d+$/', []],
+			'possessive class holding ('    => ['/^5\.8\.4[(-9]++\.\d+$/', []],
+			'class holding , and a bound'   => ['/^5\.8\.4[,-9]{1,2}+\.\d+$/', []],
+			'class range from -'            => ['/^5\.8\.4[--9]\.\d+$/', []],
+			'empty inner //$'               => ['/$/', []],
+			'empty inner after ^'           => ['/^$/', []],
+			'single slash'                  => ['/', []],
+			'space in a part'               => ['/^5\.8\.44\. \d+$/', []],
+			'tab in a part'                 => ["/^5\\.8\\.44\\.\t\\d+$/", []],
+			'# in a part'                   => ['/^5\.8\.44\.#\d+$/', []],
+			'~ in a part'                   => ['/^5\.8\.44\.~\d+$/', []],
+			'/ in a part'                   => ['/^5\.8\.44\.\d+\/24$/', []],
+			'empty group part'              => ['/^5\.8\.44\.()$/', []],
+			'zero-repeat part'              => ['/^5\.8\.44\.\d{0}$/', []],
+			'empty alternative (|\d+)'      => ['/^5\.8\.44\.(|\d+)$/', ['5.8.44.0/24']],
+			'nested quantifier (\d+)+'      => ['/^5\.8\.44\.(\d+)+$/', ['5.8.44.0/24']],
+			'nested quantifier (\d*)*\d*'   => ['/^5\.8\.44\.(\d*)*\d*$/', ['5.8.44.0/24']],
+			'\d* part'                      => ['/^5\.8\.44\.\d*$/', ['5.8.44.0/24']],
+			'lazy \d*? part'                => ['/^5\.8\.44\.\d*?$/', ['5.8.44.0/24']],
+			'unbalanced ) across parts'     => ['/^5)\.(8\.44\.\d$/', []],
+			'unbalanced ( in the last part' => ['/^5\.8\.44\.(\d+$/', []],
+			'unterminated class'            => ['/^5\.8\.44\.[\d$/', []],
+			'inverted quantifier'           => ['/^5\.8\.44\.\d{3,1}$/', []],
+			'non-ASCII digit, first octet'  => ['/^٥\.8\.44\.\d+$/', []],
+			'non-ASCII digit, last octet'   => ['/^5\.8\.44\.٥$/', []],
+			'non-ASCII digit, third octet'  => ['/^5\.8\.٤٤\.\d+$/', []],
+			'uppercase \D part'             => ['/^5\.8\.44\.\D*$/', []],
+			'backreference part'            => ['/^5\.8\.44\.(\d+)\1?$/', []],
+			'escaped $ at the end'          => ['/^5\.8\.44\.\d+\$/', []],
+			'trailing LF'                   => ["/^5\\.8\\.44\\.\\d+$/\n", []],
+			'trailing CRLF'                 => ["/^5\\.8\\.44\\.\\d+$/\r\n", []],
+			'100 KB inner'                  => ['/^5\.8\.44\.' . str_repeat('()', 51200) . '\d+$/', []],
+			'backtrack-heavy part'          => ['/^5\.8\.44\.' . self::backtrackHeavyPart() . '$/', []],
+			'empty line'                    => ['', []],
+			'bare IP'                       => ['1.2.3.4', []],
 		];
 		foreach (self::oracle() as $lineno => [$rule, $cidrs]) {
-			$rows["oracle $lineno"] = self::row($rule, $cidrs);
+			$rows["oracle $lineno"] = [$rule, $cidrs];
 		}
 		return $rows;
 	}
@@ -369,7 +395,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	 * @param array<string, mixed> $opts
 	 */
 	#[DataProvider('ruleProvider')]
-	public function testHelperReturnsTheMergedCidrs(string $line, array $cidrs, array $opts): void
+	public function testHelperReturnsTheMergedCidrs(string $line, array $cidrs, array $opts = []): void
 	{
 		$this->assertSame($cidrs, $this->helper($line));
 	}
@@ -429,7 +455,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	 * @param array<string, mixed> $opts
 	 */
 	#[DataProvider('ruleProvider')]
-	public function testCollectedAddressesAreExactlyTheAddressesThePatternMatches(string $line, array $cidrs, array $opts): void
+	public function testCollectedAddressesAreExactlyTheAddressesThePatternMatches(string $line, array $cidrs, array $opts = []): void
 	{
 		$set = self::addresses($this->helper($line));
 		$this->assertSame($cidrs === [], $set === []);
@@ -486,7 +512,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 	 * @param array{custom?: bool, supp?: PfbToggle, ip4?: list<string>} $opts
 	 */
 	#[DataProvider('ruleProvider')]
-	public function testParseLoopCollectsTheCidrsAndStagesTheLineUnchanged(string $line, array $cidrs, array $opts): void
+	public function testParseLoopCollectsTheCidrsAndStagesTheLineUnchanged(string $line, array $cidrs, array $opts = []): void
 	{
 		$custom = $opts['custom'] ?? TRUE;
 		$supp = $opts['supp'] ?? PfbToggle::Off;
@@ -502,27 +528,6 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		if ($cidrs !== []) {
 			$this->assertSame([['a', $line]], $out['rows'], 'an eligible rule is staged for Python byte-identical');
 		}
-	}
-
-	public function testParseLoopStagesEveryOracleLineIncludingTheOneItRefuses(): void
-	{
-		foreach (self::oracle() as $lineno => [$rule, $cidrs]) {
-			$out = $this->runRegion($rule);
-			$this->assertSame([['a', $rule]], $out['rows'], "oracle line $lineno is staged");
-			$this->assertSame(self::collected($cidrs), $out['ip4'], "oracle line $lineno");
-		}
-	}
-
-	public function testParseLoopSuppressionDropsAnRfc1918RangeButStillStagesTheLine(): void
-	{
-		$line = '/^192\.168\.0\.\d{1,3}$/';
-		$control = $this->runRegion($line, custom: FALSE, supp: PfbToggle::Off);
-		$this->assertSame(['192.168.0.0/24'], $control['ip4'], 'control: without suppression the range is collected');
-		$out = $this->runRegion($line, custom: FALSE, supp: PfbToggle::On);
-		$this->assertSame([], $out['ip4']);
-		$this->assertSame(0, $out['ipcount']);
-		$this->assertFalse($out['updateip']);
-		$this->assertSame([['a', $line]], $out['rows']);
 	}
 
 	public function testParseLoopWithDnsblIpDisabledCollectsNothingAndStillStages(): void
@@ -544,22 +549,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		$rules = ['/^5\.8\.44\.\d{1,3}$/', '/^5\.8\.44\.\d{3,1}$/', '/^5\.8\.44\.' . self::backtrackHeavyPart() . '$/',
 			'/^5\.8\.44\.\p{Nd}+$/', '@@/^5\.8\.44\.\d{1,3}$/', '/^5\.8\.44\.\d{1,3}$/$important'];
 		foreach ($rules as $rule) {
-			$seen = [];
-			$mine = static function (int $no, string $str) use (&$seen): bool {
-				$seen[] = $str;
-				return TRUE;
-			};
-			set_error_handler($mine);
-			try {
-				pfb_dnsbl_abp_regex_ip4_cidrs($rule, 'testfeed');
-				$active = set_error_handler(static fn(): bool => FALSE);
-				restore_error_handler();
-			} finally {
-				restore_error_handler();
-			}
-			$this->assertSame($mine, $active, "the caller's error handler is active again after $rule");
-			$this->assertSame([], $seen, "no warning reaches the caller's handler for $rule");
-			$this->assertSame('123456', ini_get('pcre.backtrack_limit'), "pcre.backtrack_limit restored after $rule");
+			$this->callAndAssertStateRestored($rule);
 		}
 	}
 
@@ -576,23 +566,7 @@ final class DnsblAbpRegexIp4CidrsTest extends TestCase
 		$rule = '/^5\.8\.44\.\d{1,3}$/';
 		$this->assertSame(['5.8.44.0/24'], $this->helper($rule), 'control: without the fault the rule collects');
 		$GLOBALS['pfb_test_abp_regex_fault'] = new RuntimeException('x');
-		$seen = [];
-		$mine = static function (int $no, string $str) use (&$seen): bool {
-			$seen[] = $str;
-			return TRUE;
-		};
-		set_error_handler($mine);
-		try {
-			$result = pfb_dnsbl_abp_regex_ip4_cidrs($rule, 'testfeed');
-			$active = set_error_handler(static fn(): bool => FALSE);
-			restore_error_handler();
-		} finally {
-			restore_error_handler();
-		}
-		$this->assertSame([], $result);
-		$this->assertSame($mine, $active);
-		$this->assertSame([], $seen);
-		$this->assertSame('123456', ini_get('pcre.backtrack_limit'));
+		$this->assertSame([], $this->callAndAssertStateRestored($rule));
 		$lines = $this->logLines();
 		$this->assertCount(1, $lines);
 		$this->assertStringContainsString('testfeed', $lines[0]);

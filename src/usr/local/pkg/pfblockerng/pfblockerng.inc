@@ -9909,12 +9909,7 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 		if (preg_match('~^\((?:\.\*|\([A-Za-z]+\??(?:\|[A-Za-z]+\??)*\))://\)\?~', $inner, $m)) {
 			$inner = substr($inner, strlen($m[0]));
 		}
-		foreach (['(/.*)?', '(\/.*)?', '([:/].*)?'] as $path) {
-			if (str_ends_with($inner, $path)) {
-				$inner = substr($inner, 0, -strlen($path));
-				break;
-			}
-		}
+		$inner = (string) preg_replace('~\((?:\\\\?/|\[:/\])\.\*\)\?$~D', '', $inner, 1);
 
 		$parts = [];
 		$cur = '';
@@ -9966,10 +9961,9 @@ function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
 			throw $GLOBALS['pfb_test_abp_regex_fault'];
 		}
 
-		$octets = array_map('strval', range(0, 255));
 		$sets = [];
 		foreach ($parts as $part) {
-			$hits = preg_grep('/^(?:' . $part . ')$/', $octets);
+			$hits = preg_grep('/^(?:' . $part . ')$/', range(0, 255));
 			if ($hits === FALSE || $hits === [] || preg_last_error() !== PREG_NO_ERROR) {
 				return [];
 			}
