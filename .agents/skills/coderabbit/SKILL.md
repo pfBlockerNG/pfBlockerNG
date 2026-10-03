@@ -4,11 +4,11 @@ description: >
   Asking CodeRabbit for a review, handling its Fair Usage quota notices, and
   dispatching the CLI-in-CI workflow. Run when a PR is ready to merge, when a
   quota / "Review limit reached" notice appears, or before dispatching the CLI
-  workflow. Loads `.agents/policy/coderabbit.md`. Triggers: "ready to merge",
+  workflow. Loads `.agents/policy/review-bots.md`. Triggers: "ready to merge",
   "Fair Usage", "rate limit", "coderabbit", "@coderabbitai", "/coderabbit".
 ---
 
-Canonical contract: [`.agents/policy/coderabbit.md`](../../policy/coderabbit.md).
+Canonical contract: [`.agents/policy/review-bots.md`](../../policy/review-bots.md).
 Read that file; do not invent mute labels or post `@coderabbitai rate limit`.
 
 ## Automatic review is off

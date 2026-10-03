@@ -88,7 +88,7 @@ Graphify routing; per-worktree `.codegraph/` invariants).
 | committing, branching, worktrees, attribution | `.agents/policy/git.md` |
 | maintenance branches, sessions/remote/resume | `.agents/policy/sessions.md` |
 | landing a PR, review findings | `.agents/policy/landing.md` |
-| a PR review bot / Fair Usage quota notice | `.agents/policy/coderabbit.md` |
+| a PR review bot / Fair Usage quota notice | `.agents/policy/review-bots.md` |
 | a GitHub issue (triage gates, lifecycle) | `.agents/policy/issues.md` |
 | writing/changing tests; running suites | `.agents/policy/testing.md` |
 | writing code (any language) | `.agents/policy/coding.md` + `.agents/context/lang-<php\|python\|shell>.md` per touched language |

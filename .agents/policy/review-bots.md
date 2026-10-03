@@ -1,4 +1,4 @@
-# CodeRabbit — the contract
+# PR review bots (CodeRabbit, Codex) — the contract
 
 Scope: every GitHub PR that carries a product, CI, test, or script change.
 Load when: a PR is ready to be judged, a Fair Usage / "Review limit
@@ -117,6 +117,8 @@ second on-request review bot. It reads the shared rules through the `AGENTS.md`
   owner confirms it in conversation. Otherwise skip it and say so in the audit comment.
 - **Same floors as CodeRabbit:** advisory, never blocks merge, never replaces the legs.
   Codex settings keep **Automatic review** off; reviews spend the owner's ChatGPT quota.
+  Settings: <https://chatgpt.com/codex/cloud/settings/code-review> (the
+  `app.chatgpt.com` link in OpenAI's docs does not sign in).
 - **Ask once, at the same point** as the CodeRabbit ask: one top-level comment holding
   the live handle plus `review`. Write the handle broken (`@ codex`) everywhere else:
   any other live mention starts a Codex cloud task.

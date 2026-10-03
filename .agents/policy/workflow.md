@@ -115,7 +115,7 @@ client's native reviewer surface, plus mechanical gates and CI. Reviewer never e
 Findings return as PR review comments. Loop limits below. Landing mechanics — review
 sources, reviewer contract, CI waits, and signed linear landing — specified in [`landing.md`](landing.md).
   CodeRabbit is not automatic — it is asked for once, when the PR is ready to land
-  ([`coderabbit.md`](coderabbit.md)).
+  ([`review-bots.md`](review-bots.md)).
 
 ### Continuation
 

@@ -341,6 +341,12 @@ def test_ledger_missing_beside_the_policy_that_requires_it_fires(tmp_path: Path)
     assert len(violations) == 1 and "missing" in violations[0], violations
 
 
+def test_ledger_owner_names_the_real_policy_file() -> None:
+    # The missing-ledger guard above only fires while LEDGER_OWNER exists, so a
+    # renamed policy file would switch the guard off without any failure.
+    assert (_REPO_ROOT / ccb.LEDGER_OWNER).is_file(), ccb.LEDGER_OWNER
+
+
 def test_ledger_replaced_by_a_directory_fires(tmp_path: Path) -> None:
     (tmp_path / ccb.LEDGER).mkdir(parents=True)
     violations = ccb.check_ledger_entries(tmp_path)

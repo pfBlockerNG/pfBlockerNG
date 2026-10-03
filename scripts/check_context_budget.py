@@ -91,7 +91,7 @@ FILE_BUDGETS = {
     ".agents/policy/coderabbit-misses.md": 16_384,
 }
 
-# The append-only missed-review ledger (coderabbit.md "Missed-review backlog").
+# The append-only missed-review ledger (review-bots.md "Missed-review backlog").
 # It gains one line per missed review forever, so the only thing keeping it
 # inside its FILE_BUDGETS cap is the one-line format its own header documents. Entries
 # that drifted into 1,500-2,000-byte review narratives ate the whole budget and
@@ -101,7 +101,7 @@ LEDGER = ".agents/policy/coderabbit-misses.md"
 # The policy that mandates the ledger. Present without the ledger means the file
 # was deleted (staged or committed), which drops it out of `git ls-files` and so
 # out of check_sizes's reach — this check is the one that can still fail closed.
-LEDGER_OWNER = ".agents/policy/coderabbit.md"
+LEDGER_OWNER = ".agents/policy/review-bots.md"
 LEDGER_ENTRY_MAX = 200
 LEDGER_ENTRY_RE = re.compile(r"^- `(?P<sha>[0-9a-f]{7,40})`  (?P<title>\S.*\S)  \(#(?P<pr>\d+)\)(?: — \S.*)?$")
 # Everything above the first entry is prose, and prose is where a narrative can

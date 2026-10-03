@@ -5,7 +5,7 @@
 # with an `@coderabbitai review` comment, once the change is finished,
 # self-reviewed and green. Fair Usage slots are scarce enough that
 # spending them on every intermediate push is not worth it.
-# Path: .agents/policy/coderabbit.md.
+# Path: .agents/policy/review-bots.md.
 reviews:
   auto_review:
     enabled: false

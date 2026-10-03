@@ -4,7 +4,7 @@ Scope: PR review and signed-linear landing. Load when: landing a PR or applying 
 
 - **Owner:** repo owner. **Last-verified:** 2026-09-01.
 
-See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`coderabbit.md`](coderabbit.md).
+See [`workflow.md`](workflow.md), [`waits.md`](waits.md), and [`review-bots.md`](review-bots.md).
 
 ## Fixed floors (never weaken)
 
@@ -71,9 +71,9 @@ Mechanics that hold for every pass:
 - **Model by leg**, never by diff size (owner-approved 2026-08-08): correctness + hostile inputs → **top** (cross-system/state/environment catches live here; mid take over iff top unavailable); contract conformance → **mid**; test honesty → **small**, with executed mutations mandatory — execution discipline, not model size, drive that leg. **Mutations run against a private copy under that scratch root; the shared checkout is never edited** — three legs read it concurrently, and a mutated tree hands them the wrong code (#3093); over-engineering → **top** (owner directive 2026-08-21; seeing the shorter form and the platform equivalent is judgment, not scanning — mid take over iff top unavailable, and pony review lens match pony scope).
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
-### CodeRabbit (asked for at the end — path is coderabbit.md)
+### CodeRabbit (asked for at the end)
 
-Automatic review is **off** (`.coderabbit.yaml`): opening or pushing a PR triggers nothing, so there is no acknowledgement window and no auto-review to poll. **[`coderabbit.md`](coderabbit.md) owns the whole path** — the ask precondition, the wait, every verdict (FINISHED / QUOTA / NOACK / NOTPRESENT / TIMEOUT / DECLINE), the spend rule, multiple handles, and the misses ledger. Two things belong to landing:
+Automatic review is **off** (`.coderabbit.yaml`): opening or pushing a PR triggers nothing, so there is no acknowledgement window and no auto-review to poll. **[`review-bots.md`](review-bots.md) owns the whole path** — the ask precondition, the wait, every verdict (FINISHED / QUOTA / NOACK / NOTPRESENT / TIMEOUT / DECLINE), the spend rule, multiple handles, and the misses ledger. Two things belong to landing:
 
 - **Ask once, at the landing gate, when the PR is actually ready.** Ready means all three together: the legs have FULLY reviewed it; everything they found is FIXED (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Not before — an earlier ask spends the slot on code that is going to change.
 - **The ask is not the end of the step.** Wait the review out, then triage and answer every finding exactly like a leg's, before landing. A skipped or quota-only bot is never "PR clean" — surface the miss.
@@ -138,7 +138,7 @@ Proceed to landing ONLY when review step finished cleanly:
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to land while any item lack outcome.
 - **No external reviewer** (CodeRabbit unavailable after the ask, nobody else reviewed): note skip in audit trail; the legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
 - **Catch-all sweep — immediately before the push, never at gate time:** list ALL reviews and inline comments on PR (paginated, no login filter) and triage anything unhandled. The rebase and exact-head CI wait sit between this gate and the push, so a sweep taken before them is STALE: reviewers answer threads inside that window (seen 2026-09-05). Re-run it after the fence. Summary-only review with no findings noted in audit trail.
-- **CodeRabbit at landing:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). Codex: same ask point, [`coderabbit.md`](coderabbit.md#codex). Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
+- **CodeRabbit at landing:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`review-bots.md`](review-bots.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). Codex: same ask point, [`review-bots.md`](review-bots.md#codex). Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
 - Unresolved, contested, or user-decision findings → stop and report; do not land.
 
 ## Merge step
