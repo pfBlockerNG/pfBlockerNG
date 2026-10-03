@@ -36,7 +36,7 @@ Do NOT crawl or read repository documentation, policy files, or architectural no
 
 ### 3. Review Focus & Priorities
 
-Focus exclusively on production code (`src/**`) and test files (`tests/**`):
+Focus exclusively on production code (`src/**`), test files (`tests/**`), and CI (`.github/workflows/**`):
 
 - **Correctness & Logic:** Unhandled edge cases, null/type errors, off-by-one errors, race conditions, memory leaks, resource cleanup failures, and broken control flow.
 - **Security & Validation:** Hostile inputs, unescaped shell execution, command injection, path traversal, and authorization/privilege boundary crossings.
