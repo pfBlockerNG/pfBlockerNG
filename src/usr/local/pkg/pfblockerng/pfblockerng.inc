@@ -9887,31 +9887,154 @@ function pfb_dnsbl_abp_extract_ip($line) {
 	return '';
 }
 
-// issue #3434: '/^A\.B\.C\.<tail>$/' matching all 256 of A.B.C.0..255 -> 'A.B.C.0/24', else ''. No self-strip.
-// The tail whitelist keeps out recursion, inline flags, POSIX/\p classes, backreferences and '{,}' (PCRE accepts it,
-// Python re does not); one preg_grep() over the 256 addresses, capped at 10000 backtracking steps, then decides.
-function pfb_dnsbl_abp_regex_ip4_24(string $line): string {
-	if (strlen($line) > 514 ||
-	    !preg_match('/^\/\^(\d{1,3}\\\\\.\d{1,3}\\\\\.\d{1,3})\\\\\.((?:[\d.?*+{},()\[\]|-]|\\\\[d.])+)\$\/$/D', $line, $m) ||
-	    str_contains($m[2], '(?') || str_contains($m[2], '{,}')) {
-		return '';
+// issue #3434: '/^A\.B\.C\.D$/' regex rule with one pattern per octet -> the exact merged CIDRs it matches, else [].
+// Parts use only digits, ?*+{},()[]|- and \d, so the four 0..255 value sets compose exactly; max /16, 256 CIDRs.
+function pfb_dnsbl_abp_regex_ip4_cidrs(string $line, string $header): array {
+	if (strlen($line) > 514 || !str_starts_with($line, '/') || !str_ends_with($line, '$/')) {
+		return [];
 	}
-	$prefix = str_replace('\\.', '.', $m[1]) . '.';
-	if (!is_ipaddrv4($prefix . '0')) {
-		return '';
-	}
-	// A feed-supplied pattern may not compile (keep the warning from any installed handler), and 10000
-	// backtracking steps cap what one line can cost.
 	$limit = ini_set('pcre.backtrack_limit', '10000');
-	set_error_handler(static fn(): bool => TRUE);
+	$failed = FALSE;
+	set_error_handler(static function () use (&$failed): bool {
+		$failed = TRUE;
+		return TRUE;
+	});
 	try {
-		$hits = preg_grep('~' . substr($line, 1, -1) . '~', array_map(static fn(int $i): string => $prefix . $i, range(0, 255)));
-		$ok = is_array($hits) && count($hits) === 256 && preg_last_error() === PREG_NO_ERROR;
+		$inner = substr($line, 1, -2);
+		$anchored = str_starts_with($inner, '^');
+		if ($anchored) {
+			$inner = substr($inner, 1);
+		}
+		// An optional '(<letters>://)?' can only match empty against a dotted quad.
+		if (preg_match('/^\((?:[A-Za-z.*?+]|\([A-Za-z?|]*\))*:\/\/\)\?/', $inner, $m)) {
+			$inner = substr($inner, strlen($m[0]));
+		}
+		foreach (['(/.*)?', '(\/.*)?', '([:/].*)?'] as $path) {
+			if (str_ends_with($inner, $path)) {
+				$inner = substr($inner, 0, -strlen($path));
+				break;
+			}
+		}
+
+		$parts = [];
+		$cur = '';
+		$depth = 0;
+		$class = FALSE;
+		$classAt = 0;
+		for ($i = 0, $n = strlen($inner); $i < $n; $i++) {
+			$c = $inner[$i];
+			if ($c === '\\') {
+				$token = substr($inner, $i++, 2);
+				if ($token === '\.' && $depth === 0 && !$class) {
+					$parts[] = $cur;
+					$cur = '';
+				} else {
+					$cur .= $token;
+				}
+				continue;
+			}
+			if ($class) {
+				$class = !($c === ']' && $i > $classAt + 1);
+			} elseif ($c === '[') {
+				$class = TRUE;
+				$classAt = $i;
+			} elseif ($c === '(') {
+				$depth++;
+			} elseif ($c === ')') {
+				if (--$depth < 0) {
+					return [];
+				}
+			} elseif ($c === '|' && $depth === 0) {
+				return [];
+			}
+			$cur .= $c;
+		}
+		$parts[] = $cur;
+		if ($class || $depth !== 0 || count($parts) !== 4) {
+			return [];
+		}
+		// Without '^' the first octet must be a literal 100-255: no longer octet can end in it.
+		if (!$anchored && !preg_match('/^(?:1\d\d|2[0-4]\d|25[0-5])$/D', $parts[0])) {
+			return [];
+		}
+		foreach ($parts as $part) {
+			if (!preg_match('/^(?:[\d?*+{},()\[\]|-]|\\\\d)+$/D', $part) || str_contains($part, '(?') || str_contains($part, '{,}')) {
+				return [];
+			}
+			// Brace bounds stay within an octet's 3 digits.
+			foreach (preg_match_all('/\{[^}]*/', $part, $braces) ? $braces[0] : [] as $brace) {
+				if (preg_match_all('/\d+/', $brace, $nums) && max(array_map('intval', $nums[0])) > 3) {
+					return [];
+				}
+			}
+		}
+		// Test seam: forces an internal failure for a rule that passed every check above.
+		if (($GLOBALS['pfb_test_abp_regex_fault'] ?? NULL) instanceof \Throwable) {
+			throw $GLOBALS['pfb_test_abp_regex_fault'];
+		}
+
+		$octets = array_map('strval', range(0, 255));
+		$sets = [];
+		foreach ($parts as $part) {
+			$hits = preg_grep('/^(?:' . $part . ')$/', $octets);
+			if ($hits === FALSE || $hits === [] || preg_last_error() !== PREG_NO_ERROR) {
+				return [];
+			}
+			$sets[] = array_keys($hits);
+		}
+
+		$runs = [];
+		foreach ($sets[3] as $d) {
+			$last = count($runs) - 1;
+			if ($last >= 0 && $runs[$last][1] + 1 === $d) {
+				$runs[$last][1] = $d;
+			} else {
+				$runs[] = [$d, $d];
+			}
+		}
+		if (count($sets[0]) * count($sets[1]) * count($sets[2]) * count($runs) > 65536) {
+			return [];
+		}
+		$merged = [];
+		foreach ($sets[0] as $a) {
+			foreach ($sets[1] as $b) {
+				foreach ($sets[2] as $c) {
+					$base = ($a << 24) | ($b << 16) | ($c << 8);
+					foreach ($runs as [$start, $end]) {
+						$last = count($merged) - 1;
+						if ($last >= 0 && $merged[$last][1] + 1 === $base + $start) {
+							$merged[$last][1] = $base + $end;
+						} else {
+							$merged[] = [$base + $start, $base + $end];
+						}
+						if (count($merged) > 256) {
+							return [];
+						}
+					}
+				}
+			}
+		}
+
+		$cidrs = [];
+		foreach ($merged as [$start, $end]) {
+			foreach (ip_range_to_subnet_array(long2ip($start), long2ip($end)) as $cidr) {
+				if (count($cidrs) >= 256 || (int) substr($cidr, strpos($cidr, '/') + 1) < 16) {
+					return [];
+				}
+				$cidrs[] = $cidr;
+			}
+		}
+		return $failed ? [] : $cidrs;
+	} catch (\Throwable) {
+		try {
+			pfb_logger("\n  ABP IPv4 regex rule expansion failed in [ {$header} ]: " . substr($line, 0, 128), 1);
+		} catch (\Throwable) {
+		}
+		return [];
 	} finally {
 		restore_error_handler();
 		ini_set('pcre.backtrack_limit', (string) $limit);
 	}
-	return $ok ? $prefix . '0/24' : '';
 }
 
 

@@ -1715,12 +1715,19 @@
             }
         ]
     },
-    "pfb_dnsbl_abp_regex_ip4_24": {
+    "pfb_dnsbl_abp_regex_ip4_cidrs": {
         "returnsRef": false,
-        "returnType": "string",
+        "returnType": "array",
         "params": [
             {
                 "name": "line",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "header",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
