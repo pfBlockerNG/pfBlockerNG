@@ -47,7 +47,7 @@ final class DnsblServiceRestartTest extends TestCase
 		"
 			done < "$S/procs"
 			printf '%s' "$keep" > "$S/procs"
-			: > "$S/death"
+			true > "$S/death"
 		}
 		# Schedule death $1 ticks from now unless the process ignores the signal.
 		schedule() {
