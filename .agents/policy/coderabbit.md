@@ -107,6 +107,26 @@ Every quota notice still gets one line on the PR audit saying what spent
 the slot. With automatic review off, the only spend this repo controls is
 the explicit ask above, so the fix is almost always "ask later, once".
 
+## Codex
+
+Codex code review (ChatGPT Codex Connector, login `chatgpt-codex-connector`) is a
+second on-request review bot. It reads the shared rules through the `AGENTS.md`
+"Code Review Rules" pointer and posts only P0/P1 findings.
+
+- **Available** only once this repository shows a Codex review or reaction, or the
+  owner confirms it in conversation. Otherwise skip it and say so in the audit comment.
+- **Same floors as CodeRabbit:** advisory, never blocks merge, never replaces the legs.
+  Codex settings keep **Automatic review** off; reviews spend the owner's ChatGPT quota.
+- **Ask once, at the same point** as the CodeRabbit ask: one top-level comment holding
+  the live handle plus `review`. Write the handle broken (`@ codex`) everywhere else:
+  any other live mention starts a Codex cloud task.
+- **Wait** with `wait-reviewer.sh --handle chatgpt-codex-connector --until finished
+  --since <now>`. FINISHED means any new bot comment, so read it: a usage-limit notice
+  is not a review. Record Codex unavailable for that head and do not re-ask. NOTPRESENT
+  or TIMEOUT → unavailable; the legs carry the review.
+- Triage its findings per [`landing.md`](landing.md). Never ask Codex to fix them:
+  fixes go through the normal APPLY path.
+
 ## Owner override and substitute reviewer
 
 Only the **repo owner**, in conversation, may spend a slot anyway or name

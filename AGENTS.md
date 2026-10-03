@@ -146,6 +146,10 @@ one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; �
 🏗️ implementing ADR · 🤔 investigating · 🛠️ fixing · 👀 awaiting review · ⏳ awaiting CI ·
 🏁 merged/cleanup); omit on plain conversational turns.
 
+## Code Review Rules
+
+Apply `.github/copilot-instructions.md` § "Code Review Rules" (shared by every review bot).
+
 ## Vendor adapters
 
 Vendor-specific surfaces live in each vendor's own adapter, never in this neutral file.
@@ -153,10 +157,9 @@ Read the named adapter at session start:
 
 - **Claude Code** → `.agents/context/claude-adapter.md` (native `AGENTS.md` bootstrap; hooks
   `.claude/settings.json`, skills `.claude/skills/` → `.agents/skills/`, marker `CLAUDECODE=1`).
-- **Codex** → `.agents/context/codex-adapter.md` (native bootstrap; noun table,
-  subagents, attribution, resume, hook/marker).
+- **Codex** → `.agents/context/codex-adapter.md`.
 - **OMP** → `.agents/context/omp-adapter.md`.
 - **GitHub Copilot** → `.github/copilot-instructions.md` plus
-  `.agents/context/copilot-adapter.md` (custom agents `.github/agents/`, attribution).
+  `.agents/context/copilot-adapter.md`.
 - **Grok** → `GROK.md` plus `.agents/context/grok-adapter.md` (native bootstrap;
   markers `GROK_SESSION_ID` / `GROK_AGENT`).

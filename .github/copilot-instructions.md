@@ -1,12 +1,12 @@
 # Copilot instructions — pfBlockerNG
 
-[`AGENTS.md`](../AGENTS.md) is the canonical vendor-neutral agent policy bootstrap; this file is the GitHub Copilot adapter and pull-request review instructions. Copilot noun translation lives in [`.agents/context/copilot-adapter.md`](../.agents/context/copilot-adapter.md).
+[`AGENTS.md`](../AGENTS.md) is the canonical vendor-neutral agent policy bootstrap; this file is the GitHub Copilot adapter and holds the one copy of the pull-request review rules that every review bot applies (Copilot reads it natively; `AGENTS.md` points Codex here). Copilot noun translation lives in [`.agents/context/copilot-adapter.md`](../.agents/context/copilot-adapter.md).
 
 Hard invariants in `AGENTS.md` never-list, not restated here: work in a dedicated worktree, rebase onto live base before each push, land fully gated PRs by squash or fast-forward, keep linear history, ship tests with every change and red-to-green proof, route every config field through `PfbConfig`, never invoke Python directly on the appliance, and use POSIX shell only.
 
-## Copilot Code Review Instructions
+## Code Review Rules
 
-When performing a pull request code review on GitHub, strictly enforce the following scoping boundaries:
+When performing a pull request code review on GitHub, as any review bot, strictly enforce the following scoping boundaries:
 
 ### 1. Explicitly Excluded Paths (DO NOT REVIEW)
 
@@ -41,6 +41,7 @@ Focus exclusively on production code (`src/**`) and test files (`tests/**`):
 - **Correctness & Logic:** Unhandled edge cases, null/type errors, off-by-one errors, race conditions, memory leaks, resource cleanup failures, and broken control flow.
 - **Security & Validation:** Hostile inputs, unescaped shell execution, command injection, path traversal, and authorization/privilege boundary crossings.
 - **Test Integrity:** Ensure tests assert observable behavior and fail on regression; flag coverage theater or vacuous assertions.
+- **Repository invariants:** Flag diffs that break the hard invariants listed above: config access outside `PfbConfig`, a direct Python interpreter call on the appliance instead of `pfb_python.sh`, or non-POSIX shell.
 - **Noise Suppression:** Do NOT flag formatting, whitespace, import ordering, or stylistic preferences that automated linters/formatters (Ruff, PHPCS, markdownlint) enforce.
 
 ## Copilot-only surfaces
