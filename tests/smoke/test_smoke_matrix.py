@@ -431,11 +431,11 @@ echo 'PFB3407_MOVE_HITS=' . $hits;
             f"{result.stdout}\n{result.stderr}"
         )
 
-    h.set_dnsbl_vip6(vm, present=True)
-    src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
+    primary_exc: BaseException | None = None
     try:
-        primary_exc: BaseException | None = None
         try:
+            h.set_dnsbl_vip6(vm, present=True)
+            src6 = h.pin_client_route6(client_vm, h.DNSBL_VIP6, lan6)
             with h.CaseContext(vm, spec):
                 move_vips("lan", (h.SMOKE_VIP_UNIQID, h.SMOKE_VIP6_UNIQID))
                 h.set_dnsbl_interface(vm, "lan")
@@ -491,8 +491,10 @@ echo 'PFB3407_MOVE_HITS=' . $hits;
                 v6_rows = [row for row in nat_rows if row["ipprotocol"] == "inet6"]
                 assert v6_rows == [], f"managed IPv6 DNSBL NAT rows still emitted: {v6_rows}"
 
-                v4_rows = {row["destination_port"]: row for row in nat_rows if row["ipprotocol"] != "inet6"}
-                assert set(v4_rows) == {"80", "443"}, f"managed IPv4 DNSBL NAT rows missing/extra: {nat_rows}"
+                v4_nat_rows = [row for row in nat_rows if row["ipprotocol"] != "inet6"]
+                assert len(v4_nat_rows) == 2, f"managed IPv4 DNSBL NAT rows missing/extra: {nat_rows}"
+                v4_rows = {row["destination_port"]: row for row in v4_nat_rows}
+                assert set(v4_rows) == {"80", "443"}, f"managed IPv4 DNSBL NAT rows have unexpected ports: {nat_rows}"
                 for port, local_port in (("80", h.DNSBL_PORT), ("443", h.DNSBL_PORT_SSL)):
                     row = v4_rows[port]
                     assert row == {
@@ -507,8 +509,12 @@ echo 'PFB3407_MOVE_HITS=' . $hits;
                         "natreflection": "purenat",
                     }, f"managed IPv4 DNSBL NAT row for port {port} changed shape: {row}"
 
-                assert http["marker"], f"VIP6:80 did not serve the DNSBL block page directly: {http}"
-                assert https["marker"], f"VIP6:443 did not serve the DNSBL block page directly: {https}"
+                assert http["rc"] == 0 and http["marker"], (
+                    f"VIP6:80 did not serve the DNSBL block page directly: {http}"
+                )
+                assert https["rc"] == 0 and https["marker"], (
+                    f"VIP6:443 did not serve the DNSBL block page directly: {https}"
+                )
                 assert scope_after == scope_before, (
                     f"IPv6 scope violations moved: before={scope_before} after={scope_after}"
                 )
